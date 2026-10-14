@@ -396,12 +396,16 @@ it already holds through another instance gets `filelock`'s deadlock error inste
 
 **Declared roots (A17 fix round 1).** A step's sandbox binds only the data roots it declares: the roots of its
 `inputs` and data-root `stage` entries, the roots of its `lock_inputs` (registry `root`), and the roots holding the
-hub cache or the URL weights root when it declares `hf_weights` or `url_weights` (`run._bound_roots`). Every other
-root is masked under an empty tmpfs, unless a path the sandbox or the profile needs lies under it or above it
-(`run._unbound_masks`): the binds are onto themselves, so an unbound root would otherwise stay readable through the
-read-only sweep. `{root:<name>}` renders only for a bound root. At load, a `{root:<name>}` path in argv, cwd,
+hub cache or the URL weights root when it declares `hf_weights` or `url_weights` (`run._bound_roots`). The binds are
+onto themselves, so an unbound root would otherwise stay readable through the read-only sweep; every other root is
+masked under an empty tmpfs (`run._unbound_masks`). An undeclared root that holds paths the sandbox needs (a
+declared root nested in it, the step's result dir, the cache, the checkout and venv, the driver's interpreter,
+native dirs) is masked around them instead (`run._masks_around`): each dir not on the way to one of them is masked,
+level by level; a driver-written tree on the way (results, runs or logs root, an `rw_under_roots` entry) is kept
+whole; files and links on the way stay visible. A root under a needed path is left alone. `{root:<name>}` renders only for a bound root. At load, a `{root:<name>}` path in argv, cwd,
 pythonpath or a stage dest must be covered by an `inputs` pattern of that root: a pattern matches it, or reaches
-below it (a dir holding declared files, the root itself included); a path with `..` never is
+below it (a dir holding declared files, the root itself included); a path with a `..` component anywhere before the
+next whitespace or placeholder (also after `:`, `=`, `,`, `;`) never is
 (`spec.undeclared_root_paths`, `E_SPEC_UNDECLARED_ROOT`). A step with `lock_inputs` defers the paths no pattern
 covers to the registry gate (`restricted.undeclared_roots`, in `check_manifest_set` and lint), where a lock input's
 tree, or a dir above it, covers them too.

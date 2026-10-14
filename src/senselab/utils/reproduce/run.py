@@ -560,6 +560,29 @@ def _under(path: str, parent: str) -> bool:
     return path == parent or path.startswith(parent.rstrip("/") + "/")
 
 
+def _masks_around(top: str, needed: Sequence[str], stops: Sequence[str]) -> list[Path]:
+    """The dirs below ``top`` to mask so that only the way to each ``needed`` path (all under ``top``) stays.
+
+    Each dir entry of ``top`` that is not on the way to a needed path is masked; one that is a needed path is kept;
+    one with a needed path below it is entered in turn, unless it lies in a ``stops`` tree (a driver-written tree
+    such as the results root), which is kept whole rather than masked entry by entry. Files and links are left:
+    a mask cannot cover them, and a link into a masked dir reaches the mask.
+    """
+    out: list[Path] = []
+    try:
+        with os.scandir(top) as entries:
+            dirs = sorted(os.path.join(top, e.name) for e in entries if e.is_dir(follow_symlinks=False))
+    except OSError:
+        return out
+    for path in dirs:
+        below = [n for n in needed if _under(n, path)]
+        if not below:
+            out.append(Path(path))
+        elif path not in below and not any(_under(path, s) for s in stops):
+            out += _masks_around(path, below, stops)
+    return out
+
+
 def _read_nofollow(path: Path) -> bytes:
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd, "rb") as handle:
@@ -1538,26 +1561,32 @@ class _Execution:
         return {n: r for n, r in profile.roots.items() if n in names}
 
     def _unbound_masks(self, roots: list[Path], rw: list[Path], extra: list[Path]) -> list[Path]:
-        """The undeclared roots to mask.
+        """The masks that hide the undeclared roots (`_masks_around`).
 
-        Every profile root not bound, unless a path the sandbox or the profile needs lies under it or above it
-        (masking it would hide that path).
+        An undeclared root that holds no path the sandbox needs is masked whole. One that holds some (a declared root
+        nested in it, the step's result dir, the cache) has every dir masked that is not on the way to one of them,
+        level by level (`_masks_around`); the files on the way stay visible. One that lies under a needed path is
+        left alone.
         """
         profile = self.config.profile
-        needed: list[str | Path] = [*roots, *rw, *extra, self.result, self.config.cache, self.tmp]
-        needed += [sys.executable, sys.prefix]
-        needed += [sys.base_prefix, profile.results_root, profile.runs_root, profile.slurm_logs_root]
-        needed += profile.rw_under_roots
+        needed: list[str | Path] = [*roots, *rw, *extra, self.result, self.config.cache, self.tmp, *self.r_bins]
+        needed += [sys.executable, sys.prefix, sys.base_prefix]
         needed += [d for native in profile.native.values() for d in (*native.bin_dirs, *native.lib_dirs)]
-        optional = (profile.modules_init, profile.job_tmp_root, profile.hf_hub_cache, profile.url_weights_root)
-        needed += [p for p in optional if p is not None]
-        real = [os.path.realpath(p) for p in needed]
-        out = []
+        needed += [p for p in (profile.modules_init,) if p is not None]
+        real = sorted({os.path.realpath(p) for p in needed})
+        stops = [profile.results_root, profile.runs_root, profile.slurm_logs_root, *profile.rw_under_roots]
+        stops += [p for p in (profile.restricted_results_root, profile.released_metrics_root) if p is not None]
+        stops += [p for p in (profile.job_tmp_root,) if p is not None]
+        stop_real = [os.path.realpath(p) for p in stops]
+        out: list[Path] = []
         for root in profile.roots.values():
-            top = os.path.realpath(root)
-            if root in roots or any(_under(p, top) or _under(top, p) for p in real):
+            if root in roots:
                 continue
-            out.append(root)
+            top = os.path.realpath(root)
+            if any(_under(top, p) for p in real):
+                continue
+            inside = [p for p in real if _under(p, top)]
+            out += _masks_around(top, inside, stop_real) if inside else [root]
         return out
 
     def _sandbox_args(self, rw: list[Path]) -> tuple[list[Path], list[Path], list[Path]]:

@@ -768,6 +768,8 @@ def test_a_root_path_no_declared_pattern_covers_is_refused_at_load() -> None:
         argv("{root:proj}/y/a.csv"),
         argv("{root:other}/x"),
         argv("{root:proj}/x/../y"),
+        argv("{root:proj}/x:/../../y"),
+        argv("--a={root:proj}/x,../z"),
         {"cwd": "{root:other}"},
         {"pythonpath": ["{root:other}/lib"]},
         {"stage": [{"root": "checkout", "patterns": ["configs/*.yaml"], "dest": "{root:other}/d"}]},
