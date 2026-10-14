@@ -711,8 +711,8 @@ class StepSpec(_Model):
         if len(set(weights)) != len(weights):
             raise ValueError(f"step {self.name!r} has duplicate hf_weights repositories")
         targets = [w.target() for w in self.url_weights]
-        if len(set(targets)) != len(targets):
-            raise ValueError(f"step {self.name!r} has url_weights placed at one path")
+        if any(a == b or a.is_relative_to(b) for i, a in enumerate(targets) for b in targets[i + 1 :] + targets[:i]):
+            raise ValueError(f"step {self.name!r} has url_weights placed at one path, or one inside another")
         literal = [t for t in (*self.argv, *self.pythonpath) if t.startswith("/") and not placeholders(t)]
         if literal:
             raise ValueError(
@@ -986,8 +986,12 @@ class Profile(_Model):
                     raise ValueError(f"{field} lies inside a data root and under no rw_under_roots entry inside it")
         for field in ("hf_hub_cache", "url_weights_root"):
             value = getattr(self, field)
-            if value is not None and not any(_norm(value).is_relative_to(r) for r in roots):
-                raise ValueError(f"{field} must lie under a data root")
+            if value is None:
+                continue
+            real = PurePosixPath(os.path.realpath(value))
+            under = any(real.is_relative_to(os.path.realpath(r)) for r in self.roots.values())
+            if not any(_norm(value).is_relative_to(r) for r in roots) or not under:
+                raise ValueError(f"{field} must lie under a data root, as written and resolved")
         self._restricted_consistent(rw)
         return self
 

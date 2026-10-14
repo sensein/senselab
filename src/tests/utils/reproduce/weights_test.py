@@ -227,6 +227,16 @@ def test_two_steps_with_the_same_weights_hash_once(
     found = weights.verify_hf([*both, wrong], profile, {})
     assert found == expected and len(calls) == 1
     assert _counts(capsys.readouterr().out) == "weights files=2 hashed=1 accepted=0"
+    near = "c" * 39 + "d"
+    make_snapshot(_hub(world), REPO, near, {"weights.bin": b"other"})
+    pair = [
+        _spec(world),
+        StepSpec.model_validate(_step(world, "near", hf_weights=_weights({"weights.bin": WEIGHTS}, revision=near))),
+    ]
+    assert weights.verify_hf(pair, profile, {}) == [
+        f"E_WEIGHTS_MISMATCH {REPO}@cccccccc weights.bin {_sha(WEIGHTS)[:8]}"
+    ]
+    assert _counts(capsys.readouterr().out) == "weights files=2 hashed=2 accepted=0"
 
 
 def _registered_world(tmp_path: Path) -> tuple[World, StepSpec, dict[str, Any]]:
@@ -396,6 +406,48 @@ def test_a_url_weight_sha_mismatch_fails_prefetch(
     registered = StepSpec.model_validate(_url_step(world, lock_inputs=[URL_INPUT]))
     assert weights.verify_url([registered], world.profile(), registry) == []
     assert _counts(capsys.readouterr().out) == "url-weights files=3 hashed=0 accepted=3"
+    (world.data / "tables").mkdir()
+    (world.data / "tables" / "t.csv").write_text("1\n")
+    world.registered["tables"] = register_input(
+        world.base, {"data": world.data}, "tables", root="data", relpath="tables"
+    )
+    verify_input(world.base, world.profile(), "tables")
+    registry["tables"] = inputs.read_registry_entry(world.base, "tables")[0]
+    reads: list[str] = []
+    real_rows = inputs.manifest_rows
+    monkeypatch.setattr(inputs, "manifest_rows", lambda e, p: reads.append(e.id) or real_rows(e, p))
+    both = StepSpec.model_validate(_url_step(world, lock_inputs=["tables", URL_INPUT]))
+    assert weights.verify_url([both], world.profile(), registry) == []
+    assert _counts(capsys.readouterr().out) == "url-weights files=3 hashed=0 accepted=3" and reads == [URL_INPUT]
+    monkeypatch.setattr(inputs, "manifest_rows", real_rows)
+    other = StepSpec.model_validate(_url_step(world, lock_inputs=["tables"]))
+    assert weights.verify_url([other], world.profile(), registry) == []
+    assert _counts(capsys.readouterr().out) == "url-weights files=3 hashed=3 accepted=0"
+    secret = world.restricted_dirs[0] / "w.pt"
+    secret.parent.mkdir(parents=True, exist_ok=True)
+    secret.write_bytes(b"w")
+    (world.data / "model-cache" / "urls" / "leak.pt").symlink_to(secret)
+    leaking = StepSpec.model_validate(
+        _url_step(world, url_weights=[{"file": "leak.pt", "sha256": _sha(b"w"), "place": "torch_hub"}])
+    )
+    assert weights.check_url_present(leaking, world.profile()) == ["E_WEIGHTS_MISSING"]
+    assert weights.verify_url([leaking], world.profile(), {}) == ["E_WEIGHTS_MISSING url leak.pt"]
+    capsys.readouterr()
+    profile_extra = dict(world.profile_extra)
+    world.profile_extra = {}
+    assert weights.check_url_present(good, world.profile()) == ["E_WEIGHTS_MISSING"]
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (world.data / "linked").symlink_to(outside)
+    for root, match in (
+        (tmp_path / "elsewhere", "data root"),
+        (world.data / "linked", "data root"),
+        (secret.parent, "E_PROFILE_RESTRICTED"),
+    ):
+        world.profile_extra = {"url_weights_root": str(root)}
+        with pytest.raises(ValueError, match=match):
+            world.profile()
+    world.profile_extra = profile_extra
 
     monkeypatch.setattr(
         source, "checkout_step", lambda step, **kw: type("Co", (), {"worktree": world.tmp, "submodules": {}})()
@@ -459,6 +511,9 @@ def test_url_weights_change_the_key(tmp_path: Path) -> None:
     clash = [weight, {**weight, "file": "v/model.pt"}]
     with pytest.raises(ValueError, match="url_weights"):
         StepSpec.model_validate({**_step_data(), "url_weights": clash})
+    nested = [{**weight, "place": "path:a"}, {**weight, "file": "v/model.pt", "place": "path:a/b"}]
+    with pytest.raises(ValueError, match="url_weights"):
+        StepSpec.model_validate({**_step_data(), "url_weights": nested})
     step = StepSpec.model_validate({**_step_data(), "url_weights": [weight]})
     unpinned = lock.SourcesLock.model_validate({"schema": lock.LOCK_SCHEMA})
     assert ("E_LOCK_REF", "url_weights w/model.pt") in lock.step_findings(step, unpinned, None)

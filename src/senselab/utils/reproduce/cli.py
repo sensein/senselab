@@ -5,11 +5,10 @@ Subcommands:
 - ``lock``: run the lock builders for each env, in order (first resolve, torch, body, overlays), and
   write each lock's sha256 (and a uv-export body's command) into the manifest.
 - ``prefetch``: lint, then check every declared Hugging Face and URL weights file against its sha256 once
-  (`weights.verify_hf`, `weights.verify_url`; printed as ``weights …`` and ``url-weights files=… hashed=…
-  accepted=…``), then check out every step
-  (with the profile's deny patterns), build or reuse each env with the profile's checks, record a changed
-  ``wheels.lock`` sha256 in the manifest, and install R libraries. CUDA sdists are built as batch jobs
-  (``build-one``) first, unless ``--local-builds``.
+  (`weights.verify_hf`, `weights.verify_url`; printed as ``weights …`` and ``url-weights …`` count lines),
+  then check out every step (with the profile's deny patterns), build or reuse each env with the profile's
+  checks, record a changed ``wheels.lock`` sha256 in the manifest, and install R libraries. CUDA sdists are
+  built as batch jobs (``build-one``) first, unless ``--local-builds``.
   ``--sources-only`` checks out draft manifests with the empty patch set and nothing else (through the
   ``--profile``'s mirror map when one is given).
 - ``build-one``: build or reuse one sdist's wheel and record the new ``wheels.lock`` sha256.

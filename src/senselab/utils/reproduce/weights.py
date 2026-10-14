@@ -104,49 +104,64 @@ class _Registered:
     """What the accept rule needs of one registered input, read once per `verify_hf`."""
 
     def __init__(self, entry: inputs.RegisteredInput, profile: Profile, now: datetime.datetime) -> None:
-        self.usable = False
-        codes, overlay = inputs.accepted(entry, profile, now=now)
-        if codes:
-            return
+        self.entry, self.profile, self.now = entry, profile, now
+        self.top: str | None = None
+        self.state: tuple[dict[str, inputs.Row], dict[str, int]] | None = None
+        self.read = False
         try:
-            rows = inputs.manifest_rows(entry, profile)
             self.top = os.path.realpath(inputs.input_top(entry, profile))
         except inputs.InputError:
-            return
-        self.rows = {r.relpath: r for r in rows}
-        self.overlay = overlay or {}
-        self.usable = True
+            pass
+
+    def _rows(self) -> tuple[dict[str, inputs.Row], dict[str, int]] | None:
+        """The record check and the manifest rows, read on the first file under the input's tree."""
+        if not self.read:
+            self.read = True
+            codes, overlay = inputs.accepted(self.entry, self.profile, now=self.now)
+            if not codes:
+                try:
+                    rows = inputs.manifest_rows(self.entry, self.profile)
+                except inputs.InputError:
+                    return None
+                self.state = {r.relpath: r for r in rows}, overlay or {}
+        return self.state
 
     def accepts(self, blob: str, sha256: str) -> bool:
-        if not self.usable or not _under(blob, self.top):
+        if self.top is None or not _under(blob, self.top):
             return False
+        state = self._rows()
+        if state is None:
+            return False
+        rows, overlay = state
         rel = os.path.relpath(blob, self.top)
-        row = self.rows.get(rel)
+        row = rows.get(rel)
         if row is None or row.sha256 != sha256:
             return False
         try:
             st = os.lstat(blob)
         except OSError:
             return False
-        return st.st_size == row.size and st.st_mtime_ns in (row.mtime_ns, self.overlay.get(rel))
+        return st.st_size == row.size and st.st_mtime_ns in (row.mtime_ns, overlay.get(rel))
 
 
 _Use = tuple[str, tuple[str, ...]]
 """One declaration of a file: its sha256 and the registered inputs that may accept it."""
+_Files = dict[tuple[str, ...], tuple[str, Path | None, list[_Use]]]
+"""Declared files by identity: the label findings print, the file (None without a root) and its declarations."""
 
 
 def _check(
-    files: Mapping[str, tuple[Path | None, list[_Use]]],
+    files: _Files,
     profile: Profile,
     registry: Mapping[str, inputs.RegisteredInput],
     now: datetime.datetime,
 ) -> tuple[list[str], int, int]:
-    """Findings, blobs hashed and files accepted, for ``{label: (file or None, declarations)}``."""
+    """Findings, blobs hashed and files accepted, for each declared file."""
     registered: dict[str, _Registered] = {}
     digests: dict[str, str] = {}
     findings: list[str] = []
     accepted = 0
-    for label, (file, uses) in sorted(files.items()):
+    for _, (label, file, uses) in sorted(files.items()):
         if file is None or not file.is_file():
             findings.append(f"{WEIGHTS_MISSING} {label}")
             continue
@@ -169,8 +184,8 @@ def _check(
     return findings, len(digests), accepted
 
 
-def _add(files: dict[str, tuple[Path | None, list[_Use]]], label: str, file: Path | None, use: _Use) -> None:
-    uses = files.setdefault(label, (file, []))[1]
+def _add(files: _Files, key: tuple[str, ...], label: str, file: Path | None, use: _Use) -> None:
+    uses = files.setdefault(key, (label, file, []))[2]
     if use not in uses:
         uses.append(use)
 
@@ -198,10 +213,11 @@ def verify_hf(
     Returns:
         ``E_WEIGHTS_MISSING <repo>@<revision[:8]> <path>`` per missing file (or every file, with no hub cache)
         and ``E_WEIGHTS_MISMATCH <repo>@<revision[:8]> <path> <declared sha256[:8]>`` per declared sha256 the
-        blob does not have; empty when every file checks.
+        blob does not have (a dataset repository's lines start ``dataset:<repo>``); empty when every file
+        checks.
     """
     hub = profile.hf_hub_cache
-    files: dict[str, tuple[Path | None, list[_Use]]] = {}
+    files: _Files = {}
     for step in steps:
         for w in step.hf_weights:
             snapshot = None if hub is None else hf_snapshot(hub, w)
@@ -210,23 +226,28 @@ def verify_hf(
                 if w.repo_type != "model":
                     label = f"{w.repo_type}:{label}"
                 file = None if snapshot is None else snapshot / f.path
-                _add(files, label, file, (f.sha256, () if w.input is None else (w.input,)))
+                key = (w.repo_type, w.repo, w.revision, f.path)
+                _add(files, key, label, file, (f.sha256, () if w.input is None else (w.input,)))
     findings, hashed, accepted = _check(files, profile, registry, now or datetime.datetime.now(datetime.UTC))
     print(f"weights files={len(files)} hashed={hashed} accepted={accepted}")
     return findings
 
 
 def url_file(profile: Profile, w: UrlWeight) -> Path | None:
-    """``<url_weights_root>/<file>``; None when the profile has no root."""
+    """``<url_weights_root>/<file>``; None when the profile has no root, or the file resolves outside it."""
     root = profile.url_weights_root
-    return None if root is None else root / w.file
+    if root is None:
+        return None
+    file = root / w.file
+    return file if _under(os.path.realpath(file), os.path.realpath(root)) else None
 
 
 def check_url_present(step: StepSpec, profile: Profile) -> list[str]:
     """Whether every ``url_weights`` file of the step exists under the profile's root; no hashing.
 
     Returns:
-        ``["E_WEIGHTS_MISSING"]`` when one is missing or the profile has no ``url_weights_root``; else empty.
+        ``["E_WEIGHTS_MISSING"]`` when one is missing, resolves outside the root, or the profile has no
+        ``url_weights_root``; else empty.
     """
     for w in step.url_weights:
         file = url_file(profile, w)
@@ -258,10 +279,10 @@ def verify_url(
         ``E_WEIGHTS_MISSING url <file>`` and ``E_WEIGHTS_MISMATCH url <file> <declared sha256[:8]>`` lines;
         empty when every file checks.
     """
-    files: dict[str, tuple[Path | None, list[_Use]]] = {}
+    files: _Files = {}
     for step in steps:
         for w in step.url_weights:
-            _add(files, f"url {w.file}", url_file(profile, w), (w.sha256, tuple(step.lock_inputs)))
+            _add(files, (w.file,), f"url {w.file}", url_file(profile, w), (w.sha256, tuple(step.lock_inputs)))
     findings, hashed, accepted = _check(files, profile, registry, now or datetime.datetime.now(datetime.UTC))
     print(f"url-weights files={len(files)} hashed={hashed} accepted={accepted}")
     return findings
