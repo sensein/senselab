@@ -727,7 +727,8 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
     with _umask(submit_umask(profile)), terminate_raises():
         try:
             for name, order in orders.items():
-                snapshots[name] = run.reserve_run_record(profile.runs_root, config.date, name, order, submission)
+                flags = {s.name: s.restricted for s in ordered}
+                snapshots[name] = run.reserve_run_record(profile.runs_root, config.date, name, order, submission, flags)
         except BaseException as error:
             with signals_ignored():
                 for name, snapshot in snapshots.items():

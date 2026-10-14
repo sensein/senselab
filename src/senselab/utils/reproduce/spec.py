@@ -862,10 +862,10 @@ class Profile(_Model):
 
     The restricted fields are set together or not at all (``E_PROFILE_RESTRICTED``): ``restricted_dirs``
     are masked in the sandbox of every public step; ``restricted_results_root`` holds restricted steps'
-    results and claims, lies under a restricted dir and under an ``rw_under_roots`` entry;
+    results and claims, lies strictly under a restricted dir and under an ``rw_under_roots`` entry;
     ``released_metrics_root`` receives released metrics, under an ``rw_under_roots`` entry and no restricted
-    dir; ``scan_hook`` is the argv of the release scan (the file path is appended). No other result,
-    run or log root may lie under a restricted dir.
+    dir; ``scan_hook`` is the argv of the release scan (the file path is appended). No other result, run,
+    log or job tmp root may overlap a restricted dir, as written or resolved.
     """
 
     roots: dict[Name, Path] = Field(min_length=1)
@@ -941,16 +941,20 @@ class Profile(_Model):
         assert self.restricted_results_root is not None and self.released_metrics_root is not None
         dirs = [_norm(d) for d in self.restricted_dirs]
         root, released = _norm(self.restricted_results_root), _norm(self.released_metrics_root)
-        if not any(root.is_relative_to(d) for d in dirs):
-            raise ValueError(f"{code}: restricted_results_root lies under no restricted_dirs entry")
+        if not any(_strictly_under(root, d) for d in dirs):
+            raise ValueError(f"{code}: restricted_results_root lies strictly under no restricted_dirs entry")
         for field, path in (("restricted_results_root", root), ("released_metrics_root", released)):
             if not any(path.is_relative_to(w) for w in rw):
                 raise ValueError(f"{code}: {field} lies under no rw_under_roots entry")
-        public = {"released_metrics_root": released}
-        public |= {f: _norm(getattr(self, f)) for f in ("results_root", "runs_root", "slurm_logs_root")}
-        for field, path in public.items():
-            if any(path.is_relative_to(d) or d.is_relative_to(path) for d in dirs):
-                raise ValueError(f"{code}: {field} overlaps a restricted_dirs entry")
+        dirs += [PurePosixPath(os.path.realpath(d)) for d in self.restricted_dirs]
+        public = {"released_metrics_root": self.released_metrics_root}
+        public |= {f: getattr(self, f) for f in ("results_root", "runs_root", "slurm_logs_root", "job_tmp_root")}
+        for field, value in public.items():
+            if value is None:
+                continue
+            for path in (_norm(value), PurePosixPath(os.path.realpath(value))):
+                if any(path.is_relative_to(d) or d.is_relative_to(path) for d in dirs):
+                    raise ValueError(f"{code}: {field} overlaps a restricted_dirs entry")
 
 
 def check_step_profile(step: StepSpec, profile: Profile) -> None:
