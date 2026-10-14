@@ -392,17 +392,32 @@ def _public_results(profile: Profile) -> list[Path]:
     ]
 
 
+def _dependants(profile: Profile, input_ids: Iterable[str]) -> dict[str, int]:
+    """For each id, the public results whose readable summary's closure holds it or has no closure; one read each."""
+    wanted = set(input_ids)
+    counts = dict.fromkeys(sorted(wanted), 0)
+    if not wanted:
+        return counts
+    for out in _public_results(profile):
+        state = _closure_state(out)
+        if state == _NO_CLOSURE:
+            hit = wanted
+        elif isinstance(state, list):
+            hit = wanted & set(state)
+        else:
+            continue
+        for input_id in hit:
+            counts[input_id] += 1
+    return counts
+
+
 def unpurged_dependants(profile: Profile, input_id: str) -> int:
     """How many public results the purge of ``input_id`` would remove that are not in flight.
 
     Those are results whose readable summary's ``input_closure`` holds the id, or that has no closure (pre-A8);
     a result with no readable summary yet (a run in flight, or one that died) is not counted here.
     """
-    count = 0
-    for out in _public_results(profile):
-        state = _closure_state(out)
-        count += state == _NO_CLOSURE or (isinstance(state, list) and input_id in state)
-    return count
+    return _dependants(profile, [input_id])[input_id]
 
 
 def unpurged_inputs(
@@ -411,7 +426,7 @@ def unpurged_inputs(
     """The restricted lock inputs of ``steps`` (`input_is_restricted`) that still have unpurged public dependants."""
     ids = sorted({i for s in steps for i in s.lock_inputs if i in registry})
     restricted_ids = [i for i in ids if input_is_restricted(registry[i], profile)]
-    return [i for i in restricted_ids if unpurged_dependants(profile, i)]
+    return [i for i, n in _dependants(profile, restricted_ids).items() if n]
 
 
 def _run_links(runs_root: Path) -> list[Path]:

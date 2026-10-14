@@ -1758,7 +1758,9 @@ mid-run fails with `E_SPEC_RESTRICTED` and loses `work/`. A public summary with 
 predates A8) cannot say what it read, so the purge removes it too (A17 fix round 1). Until the purge has run, lint
 (`E_INPUT_UNPURGED <id>` on each step listing it) and every manifest-set check (`check_manifest_set`: submit, run,
 dry run) refuse a set with a restricted lock input that still has public dependants: readable summaries whose
-closure holds it or that have none (`restricted.unpurged_dependants`; a summary-less dir in flight is not counted).
+closure holds it or that have none (`restricted.unpurged_dependants`; a summary-less dir in flight is not counted;
+each public summary is read once per check). One pre-A8 result therefore blocks every restricted input until a purge,
+which removes every pre-A8 public result, related or not: deliberately conservative.
 
 ## Mirror map (A9)
 
