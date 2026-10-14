@@ -249,6 +249,7 @@ def _check(
     """Findings, blobs hashed and files accepted, for each declared file; each verified file is stamped."""
     registered: dict[str, _Registered] = {}
     digests: dict[str, str] = {}
+    befores: dict[str, os.stat_result] = {}
     findings: list[str] = []
     accepted = 0
     for _, (label, file, uses) in sorted(files.items()):
@@ -256,7 +257,7 @@ def _check(
             findings.append(f"{WEIGHTS_MISSING} {label}")
             continue
         blob = os.path.realpath(file)
-        before = os.lstat(blob)
+        before = befores.setdefault(blob, os.lstat(blob))
         pending: list[str] = []
         for sha, ids in uses:
             for input_id in (i for i in ids if i in registry):
@@ -268,7 +269,8 @@ def _check(
                 pending.append(sha)
         if pending and blob not in digests:
             digests[blob] = _sha256(blob)
-        bad = {sha for sha in pending if sha != digests[blob]}
+        # Once the blob is hashed (here, or for another file on it), the digest decides every declaration.
+        bad = {sha for sha, _ in uses if sha != digests[blob]} if blob in digests else set()
         if not pending:
             accepted += 1
         findings += [f"{WEIGHTS_MISMATCH} {label} {sha[:8]}" for sha in sorted(bad)]
