@@ -8,7 +8,9 @@ symlink is recorded by its target and never followed; a file by its size, ``mtim
 
 `precheck` is the gate's cheap check of a registered input against its manifest: ``lstat`` only, no file
 content. It also applies the link rule: a link row's target, resolved against the link's own directory,
-must lie under the input itself or under another registered input the step declares.
+must lie under the input itself or under another registered input the step declares. With ``extras: check``
+it also lists each dir that holds a row (`dirs_sidecar`), so an added file is a mismatch before any full
+verification (`dir_changes`).
 
 `verify` re-hashes a registered input against its manifest. `append_record` stores the outcome in
 ``<verify dir>/<id>.json`` (`verify_dir`) under a lock, with an accepted-mtime overlay
@@ -53,6 +55,10 @@ DESCRIPTION = "dataset_description.json"
 VERIFY_DIR = "input-verify"
 OVERLAY_SUFFIX = ".mtime-overlay.tsv"
 OVERLAY_HEADER = "relpath\tmtime_ns"
+DIRS_SUFFIX = ".dirs.tsv"
+DIRS_HEADER = "reldir\tsubdirs"
+"""The manifest's dirs sidecar, ``<manifest>.dirs.tsv``: each dir holding a row (and its ancestors up to the input's
+top, ``.``), with the number of its subdirs that could hold a selected entry."""
 RECORD_MODE = 0o660
 MAX_AGE = datetime.timedelta(days=31)
 FUTURE_SKEW = datetime.timedelta(minutes=10)
@@ -456,6 +462,7 @@ def write_manifest(
     text = f"# root={top} date={when} host={socket.gethostname()} xxhash={xxhash.VERSION}\n"
     text += "\t".join(header) + "\n" + "".join("\t".join(r) + "\n" for r in rows)
     _atomic_write(Path(out), text.encode())
+    _write_dirs(top, Path(out), found, include, exclude)
     return {
         "entries": len(rows),
         "links": sum(1 for r in rows if r[4]),
@@ -463,6 +470,112 @@ def write_manifest(
         "walk_errors": len(errors),
         "bytes": sum(int(r[1]) for r in rows if r[1]),
     }
+
+
+def _include_patterns(top: str, include: Sequence[str]) -> list[str]:
+    """`_collect`'s selecting patterns: a literal include naming a real directory selects everything below it."""
+    out = []
+    for pattern in include:
+        path = os.path.join(top, pattern)
+        literal_dir = not digest._WILD.search(pattern) and os.path.isdir(path) and not os.path.islink(path)
+        out.append(f"{pattern}/**" if literal_dir else pattern)
+    return out
+
+
+def _may_hold(rel: str, patterns: Sequence[str], exclude: Sequence[str]) -> bool:
+    """Whether the dir ``rel`` could hold a selected entry.
+
+    It could when some pattern reaches below it and no exclude takes it whole (matches it, or matches it with
+    ``/**`` stripped).
+    """
+    parts = rel.split("/")
+    if patterns and not any(digest.reaches_below(p.split("/"), parts) for p in patterns):
+        return False
+    whole = [e[:-3] if e.endswith("/**") else e for e in exclude]
+    return not any(digest.pattern_matches(rel, e) for e in whole)
+
+
+def _row_dirs(relpaths: Iterable[str]) -> dict[str, int]:
+    """Each dir holding a row, and each ancestor up to the top (``.``), with the number of rows directly in it."""
+    out: dict[str, int] = {".": 0}
+    for rel in relpaths:
+        parts = rel.split("/")[:-1]
+        for index in range(len(parts)):
+            out.setdefault("/".join(parts[: index + 1]), 0)
+        parent = "/".join(parts) or "."
+        out[parent] = out.get(parent, 0) + 1
+    return out
+
+
+def _listing(top: str, reldir: str, patterns: Sequence[str], exclude: Sequence[str]) -> tuple[int, int]:
+    """``(selected non-dir entries, subdirs that may hold one)`` directly in ``reldir``; never follows a link.
+
+    Raises:
+        OSError: When the dir cannot be listed.
+    """
+    files = subdirs = 0
+    path = top if reldir == "." else os.path.join(top, reldir)
+    with os.scandir(path) as entries:
+        for entry in entries:
+            rel = entry.name if reldir == "." else f"{reldir}/{entry.name}"
+            if entry.is_dir(follow_symlinks=False):
+                subdirs += _may_hold(rel, patterns, exclude)
+            else:
+                files += _selected(rel, patterns, exclude)
+    return files, subdirs
+
+
+def _write_dirs(top: str, out: Path, relpaths: Iterable[str], include: Sequence[str], exclude: Sequence[str]) -> None:
+    patterns = _include_patterns(top, include)
+    lines = [DIRS_HEADER]
+    for reldir in sorted(_row_dirs(relpaths)):
+        try:
+            subdirs = _listing(top, reldir, patterns, exclude)[1]
+        except OSError:
+            continue
+        lines.append(f"{reldir}\t{subdirs}")
+    _atomic_write(Path(os.fspath(out) + DIRS_SUFFIX), ("\n".join(lines) + "\n").encode())
+
+
+def dirs_sidecar(inp: RegisteredInput, profile: Profile) -> Path:
+    """``<manifest>.dirs.tsv`` of a registered input (see `DIRS_SUFFIX`).
+
+    Raises:
+        InputError: ``E_INPUT_REGISTRY`` when the profile has no such root.
+    """
+    if inp.manifest.root not in profile.roots:
+        raise InputError(CODE)
+    return profile.roots[inp.manifest.root] / (inp.manifest.relpath + DIRS_SUFFIX)
+
+
+def dir_changes(inp: RegisteredInput, profile: Profile, rows: Sequence[Row]) -> bool:
+    """Whether a dir of the input's dirs sidecar now holds another number of selected entries or subdirs.
+
+    Selected non-dir entries are compared with the manifest's rows in that dir, subdirs that may hold one with
+    the sidecar's count; an entry the input's ``include``/``exclude`` leave out is not counted. A dir that cannot
+    be listed counts as changed. No sidecar (a manifest written before it existed) or an unreadable one checks
+    nothing, and nor does ``extras: ignore``.
+    """
+    if inp.extras == "ignore":
+        return False
+    try:
+        lines = dirs_sidecar(inp, profile).read_text().splitlines()
+        if not lines or lines[0] != DIRS_HEADER:
+            return False
+        recorded = {d: int(n) for d, n in (line.split("\t") for line in lines[1:])}
+    except (OSError, ValueError, InputError):
+        return False
+    top = os.fspath(input_top(inp, profile))
+    patterns = _include_patterns(top, inp.include)
+    in_dir = _row_dirs(r.relpath for r in rows)
+    for reldir, subdirs in recorded.items():
+        try:
+            listed = _listing(top, reldir, patterns, inp.exclude)
+        except OSError:
+            return True
+        if listed != (in_dir.get(reldir, 0), subdirs):
+            return True
+    return False
 
 
 def _atomic_write(path: Path, data: bytes, mode: int | None = None) -> None:
@@ -665,18 +778,20 @@ def precheck(
 
     Returns:
         Sorted codes: ``E_INPUT_MISSING`` for a missing row, ``E_INPUT_MISMATCH`` for a size, mtime, link or
-        hardlink difference (`scan`), ``E_INPUT_LINK_UNREGISTERED`` for a link whose target lies in no
+        hardlink difference (`scan`) or an added entry (`dir_changes`), ``E_INPUT_LINK_UNREGISTERED`` for a link
+        whose target lies in no
         declared input, ``E_INPUT_REGISTRY`` when the manifest cannot be read; empty when it passes.
     """
     try:
         rows = manifest_rows(inp, profile)
         found = scan(inp, profile, rows, _tops(step_inputs.values(), profile), overlay)
+        added = dir_changes(inp, profile, rows)
     except InputError as error:
         return [error.code]
     codes = set()
     if found.missing:
         codes.add(MISSING)
-    if found.size_diff or found.mtime_diff or found.link_diff or found.unlinked:
+    if found.size_diff or found.mtime_diff or found.link_diff or found.unlinked or added:
         codes.add(MISMATCH)
     if found.links_out:
         codes.add(LINK_UNREGISTERED)
