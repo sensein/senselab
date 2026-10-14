@@ -1,4 +1,4 @@
-"""Tests for pinned weights: the hub-cache presence check, sha256 verification at prefetch, and the hub view.
+"""Tests for pinned weights: presence checks, sha256 verification at prefetch, the hub view and URL placement.
 
 Every hub cache here is a small fake in the Hugging Face layout under ``tmp_path``; no weights are downloaded.
 """
@@ -14,9 +14,10 @@ from typing import Any
 
 import pytest
 
-from senselab.utils.reproduce import inputs, run, sandbox, slurm, weights
+from senselab.utils.reproduce import cli, env, inputs, lock, run, sandbox, slurm, source, weights
 from senselab.utils.reproduce.spec import StepSpec
-from tests.utils.reproduce.inputs_gate_test import _rows, _submit_config
+from tests.utils.reproduce.cli_test import _venv_result
+from tests.utils.reproduce.inputs_gate_test import _files, _rows, _submit_config, _write_manifest
 from tests.utils.reproduce.run_test import World, _git
 from tests.utils.reproduce.slurm_test import FakeSbatch
 from tests.utils.reproduce.sources_fixture import register_input, verify_input
@@ -97,7 +98,7 @@ def _spec(world: World, **change: Any) -> StepSpec:  # noqa: ANN401
 
 
 def _counts(out: str) -> str:
-    return [line for line in out.splitlines() if line.startswith("weights ")][-1]
+    return [line for line in out.splitlines() if line.startswith(("weights ", "url-weights "))][-1]
 
 
 def test_prefetch_verifies_every_declared_file_sha256(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -298,3 +299,166 @@ def test_a_blob_whose_size_or_mtime_drifted_is_rehashed(tmp_path: Path, capsys: 
         f"E_WEIGHTS_MISMATCH {REPO}@cccccccc weights.bin {_sha(WEIGHTS)[:8]}"
     ]
     assert _counts(capsys.readouterr().out) == "weights files=1 hashed=1 accepted=0"
+
+
+# --- A11: URL weights ---------------------------------------------------------------------------------------
+
+URL_FILES = {"whisper/small.pt": b"whisper weights\n", "torch/resnet.pth": b"resnet weights\n", "other/m.ckpt": b"m\n"}
+URL_INPUT = "mc-urls"
+
+PLACE_SCRIPT = """\
+import json, os, pathlib, sys
+out = pathlib.Path(sys.argv[1])
+tmp = os.environ["REPRO_TMP"]
+paths = {
+    "whisper": pathlib.Path(os.environ["XDG_CACHE_HOME"]) / "whisper" / "small.pt",
+    "torch_hub": pathlib.Path(os.environ["TORCH_HOME"]) / "hub" / "checkpoints" / "resnet.pth",
+    "path": pathlib.Path(tmp) / "weights" / "ckpt" / "m.ckpt",
+}
+report = {name: path.read_text() for name, path in paths.items()}
+try:
+    paths["path"].write_text("x")
+    report["writable"] = True
+except OSError:
+    report["writable"] = False
+report["torch_in_tmp"] = os.environ["TORCH_HOME"].startswith(tmp)
+report["value"] = 1.0
+(out / "result.json").write_text(json.dumps(report))
+"""
+
+
+def _url_world(tmp_path: Path) -> World:
+    world = _world(tmp_path)
+    root = world.data / "model-cache" / "urls"
+    world.profile_extra = {**world.profile_extra, "url_weights_root": str(root)}
+    for rel, data in URL_FILES.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_bytes(data)
+    return world
+
+
+def _url_weights(**sha: bytes) -> list[dict[str, str]]:
+    places = {"whisper/small.pt": "whisper", "torch/resnet.pth": "torch_hub", "other/m.ckpt": "path:ckpt/m.ckpt"}
+    return [{"file": f, "sha256": _sha(sha.get(f.split("/")[0], d)), "place": places[f]} for f, d in URL_FILES.items()]
+
+
+def _url_step(world: World, name: str = "prep", **change: Any) -> dict[str, Any]:  # noqa: ANN401
+    change.setdefault("url_weights", _url_weights())
+    return world.step(name, "prep", "{root:data}/in/a.txt", **change)
+
+
+@needs_userns
+def test_url_weights_are_placed_where_each_loader_looks(tmp_path: Path) -> None:
+    """Whisper, torch hub and declared-path weights appear read-only where their loaders look, under ``{tmp}``."""
+    world = _url_world(tmp_path)
+    (world.repo / "place.py").write_text(PLACE_SCRIPT)
+    _git(world.repo, "add", "-A")
+    _git(world.repo, "commit", "-q", "-m", "place")
+    world.commit = _git(world.repo, "rev-parse", "HEAD").strip()
+    manifest = world.manifest(_url_step(world, argv=["{venv}/bin/python", "{checkout}/place.py", "{out}"]))
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.status == "executed" and outcome.ok, outcome.codes
+    assert outcome.out is not None
+    report = json.loads((outcome.out / "work" / "result.json").read_text())
+    assert report == {
+        "whisper": "whisper weights\n",
+        "torch_hub": "resnet weights\n",
+        "path": "m\n",
+        "writable": False,
+        "torch_in_tmp": True,
+        "value": 1.0,
+    }
+    keyed = sandbox.keyed_templates(StepSpec.model_validate(_url_step(world)), world.profile())
+    assert keyed["TORCH_HOME"] == "{tmp}/torch" and keyed["XDG_CACHE_HOME"] == "{tmp}/cache"
+    plain = sandbox.keyed_templates(StepSpec.model_validate(world.step("p", "prep", "x")), world.profile())
+    assert plain["TORCH_HOME"] == "{cache}/torch"
+
+
+@needs_userns
+def test_a_url_weight_sha_mismatch_fails_prefetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A URL weight whose bytes differ from its declared sha256 fails prefetch; a verified input skips the hash."""
+    world = _url_world(tmp_path)
+    good = StepSpec.model_validate(_url_step(world))
+    assert weights.verify_url([good], world.profile(), {}) == []
+    assert _counts(capsys.readouterr().out) == "url-weights files=3 hashed=3 accepted=0"
+    bad = StepSpec.model_validate(_url_step(world, url_weights=_url_weights(other=b"changed\n")))
+    expected = f"E_WEIGHTS_MISMATCH url other/m.ckpt {_sha(b'changed' + bytes([10]))[:8]}"
+    assert weights.verify_url([bad], world.profile(), {}) == [expected]
+    world.registered[URL_INPUT] = register_input(
+        world.base, {"data": world.data}, URL_INPUT, root="data", relpath="model-cache/urls", sha256=True
+    )
+    verify_input(world.base, world.profile(), URL_INPUT)
+    registry = {URL_INPUT: inputs.read_registry_entry(world.base, URL_INPUT)[0]}
+    capsys.readouterr()
+    registered = StepSpec.model_validate(_url_step(world, lock_inputs=[URL_INPUT]))
+    assert weights.verify_url([registered], world.profile(), registry) == []
+    assert _counts(capsys.readouterr().out) == "url-weights files=3 hashed=0 accepted=3"
+
+    monkeypatch.setattr(
+        source, "checkout_step", lambda step, **kw: type("Co", (), {"worktree": world.tmp, "submodules": {}})()
+    )
+    monkeypatch.setattr(
+        env, "prefetch_env", lambda e, b, c, **kw: env.PrefetchResult(_venv_result(c / "v"), {}, None, False, ())
+    )
+    del world.registered[URL_INPUT]
+    manifest = world.manifest(_url_step(world, url_weights=_url_weights(other=b"changed\n")))
+    profile, _ = _files(world)
+    path = _write_manifest(world, manifest)
+    argv = [
+        "prefetch",
+        str(path),
+        "--profile",
+        str(profile),
+        "--base-dir",
+        str(world.base),
+        "--cache",
+        str(world.cache),
+    ]
+    assert cli.main(argv) == cli.EXIT_FAILED
+    assert expected in capsys.readouterr().err
+
+
+@needs_userns
+def test_a_missing_url_weight_blocks(tmp_path: Path) -> None:
+    """A declared URL weight absent from the profile's root blocks the dry run, the run and the submission."""
+    world = _url_world(tmp_path)
+    manifest = world.manifest(_url_step(world))
+    world.prefetch(manifest)
+    (world.data / "model-cache" / "urls" / "torch" / "resnet.pth").unlink()
+    (plan,) = run.plan_steps([manifest], world.config())
+    assert (plan.status, plan.codes) == ("blocked", ("E_WEIGHTS_MISSING",))
+    fake = FakeSbatch()
+    submission = slurm.submit([manifest], _submit_config(world, manifest), runner=fake)
+    assert fake.calls == [] and submission.refused == {"prep": ("E_WEIGHTS_MISSING",)}
+    outcome = world.run(manifest)["prep"]
+    assert outcome.status == "failed" and outcome.codes == ("E_WEIGHTS_MISSING",)
+
+
+def test_url_weights_change_the_key(tmp_path: Path) -> None:
+    """Adding a URL weight, or changing its sha256 or place, moves the key; the lock must pin each file."""
+    from tests.utils.reproduce.cache_test import _key, _step_data
+
+    weight = {"file": "w/model.pt", "sha256": "1" * 64, "place": "torch_hub"}
+    keys = {_key(tmp_path)}
+    for change in (
+        weight,
+        {**weight, "sha256": "2" * 64},
+        {**weight, "place": "whisper"},
+        {**weight, "place": "path:a/b"},
+    ):
+        data = _step_data()
+        data["url_weights"] = [change]
+        keys.add(_key(tmp_path, data))
+    assert len(keys) == 5
+    for place in ("cache", "path:../x", "path:/abs", "path:"):
+        with pytest.raises(ValueError):
+            StepSpec.model_validate({**_step_data(), "url_weights": [{**weight, "place": place}]})
+    clash = [weight, {**weight, "file": "v/model.pt"}]
+    with pytest.raises(ValueError, match="url_weights"):
+        StepSpec.model_validate({**_step_data(), "url_weights": clash})
+    step = StepSpec.model_validate({**_step_data(), "url_weights": [weight]})
+    unpinned = lock.SourcesLock.model_validate({"schema": lock.LOCK_SCHEMA})
+    assert ("E_LOCK_REF", "url_weights w/model.pt") in lock.step_findings(step, unpinned, None)

@@ -196,7 +196,8 @@ def step_findings(
         ``(code, detail)`` pairs, the detail naming the step field. ``E_LOCK_REF``: a ``lock_inputs`` id
         that is no registered entry, a data-root input or ``stage`` source whose patterns no pattern entry of
         its root lists, or ``hf_weights`` with no models entry of the same repository, type and revision
-        carrying each declared file with its sha256 (the step may declare a subset of the entry's files).
+        carrying each declared file with its sha256 (the step may declare a subset of the entry's files), or a
+        ``url_weights`` file with no ``urls`` entry of the same file and sha256.
         ``E_LOCK_MISMATCH``: no code entry with the step's repository, commit and patch sha256s (and
         submodules, when given), or an env lock missing from ``envs`` or pinned there with another sha256.
     """
@@ -218,6 +219,10 @@ def step_findings(
         ]
         if not any(all(files.get(f.path) == f.sha256 for f in w.files) for files in pinned):
             found.append(("E_LOCK_REF", f"hf_weights {w.repo}"))
+    pinned_urls = {(u.file, u.sha256) for u in lock.urls}
+    found += [
+        ("E_LOCK_REF", f"url_weights {w.file}") for w in step.url_weights if (w.file, w.sha256) not in pinned_urls
+    ]
     patches = [p.sha256 for p in step.patches]
     code = [c for c in lock.code if (c.repo, c.commit, c.patches) == (step.repo, step.commit, patches)]
     if not code or (submodules is not None and all(c.submodules != dict(submodules) for c in code)):

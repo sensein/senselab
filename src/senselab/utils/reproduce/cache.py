@@ -323,6 +323,7 @@ def step_key_payload(
             }
             for w in sorted(step.hf_weights, key=lambda w: (w.repo, w.repo_type))
         ],
+        "url_weights": sorted([w.file, w.sha256, w.place] for w in step.url_weights),
         "r_session_sha256": r_session_sha256,
         "r_module_env_sha256": r_module_env_sha256,
         "metrics_schema": step.metrics_schema.model_dump(mode="json"),

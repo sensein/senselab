@@ -4,8 +4,9 @@ Subcommands:
 
 - ``lock``: run the lock builders for each env, in order (first resolve, torch, body, overlays), and
   write each lock's sha256 (and a uv-export body's command) into the manifest.
-- ``prefetch``: lint, then check every declared Hugging Face file against its sha256 once
-  (`weights.verify_hf`; printed as ``weights files=… hashed=… accepted=…``), then check out every step
+- ``prefetch``: lint, then check every declared Hugging Face and URL weights file against its sha256 once
+  (`weights.verify_hf`, `weights.verify_url`; printed as ``weights …`` and ``url-weights files=… hashed=…
+  accepted=…``), then check out every step
   (with the profile's deny patterns), build or reuse each env with the profile's checks, record a changed
   ``wheels.lock`` sha256 in the manifest, and install R libraries. CUDA sdists are built as batch jobs
   (``build-one``) first, unless ``--local-builds``.
@@ -746,8 +747,10 @@ def _cmd_prefetch_masked(args: argparse.Namespace) -> int:
     rule = profile.policy.headline_rule
     manifests = [load_manifest(p, headline_rule=rule) for p in paths]
     steps = [s for m in manifests for s in m.steps]
-    if any(s.hf_weights for s in steps):
-        failed = weights.verify_hf(steps, profile, _weights_registry(manifests, base))
+    if any(s.hf_weights or s.url_weights for s in steps):
+        registry = _weights_registry(manifests, base)
+        failed = weights.verify_hf(steps, profile, registry) if any(s.hf_weights for s in steps) else []
+        failed += weights.verify_url(steps, profile, registry) if any(s.url_weights for s in steps) else []
         if failed:
             _error("; ".join(failed))
             return EXIT_FAILED
@@ -784,13 +787,14 @@ def _cmd_prefetch_masked(args: argparse.Namespace) -> int:
 
 
 def _weights_registry(manifests: Sequence[Manifest], base: Path) -> dict[str, inputs.RegisteredInput]:
-    """The registry entries the steps' ``HFWeights.input`` name, as each manifest's sources lock pins them.
+    """The entries ``HFWeights.input`` names, and the ``lock_inputs`` of ``url_weights`` steps, as the locks pin them.
 
     An id the lock cannot resolve is left out, so its files are hashed (lint reports the lock problem).
     """
     registry: dict[str, inputs.RegisteredInput] = {}
     for manifest in manifests:
         ids = sorted({w.input for s in manifest.steps for w in s.hf_weights if w.input is not None})
+        ids = sorted({*ids, *(i for s in manifest.steps if s.url_weights for i in s.lock_inputs)})
         if not ids:
             continue
         try:

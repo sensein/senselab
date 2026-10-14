@@ -741,11 +741,11 @@ def gate(
     Returns:
         The gate; ``codes`` is empty when the step may run: ``E_INPUT_UNVERIFIED`` (no current ``ok`` record
         for the registered manifest), the pre-check's codes, and ``E_WEIGHTS_MISSING`` when a declared
-        Hugging Face file is absent from the profile's hub cache (`weights.check_hf_present`). A lock that
-        cannot be used gives its own code,
+        Hugging Face or URL weights file is absent (`weights.check_hf_present`, `weights.check_url_present`).
+        A lock that cannot be used gives its own code,
         and an input naming a root the profile lacks gives ``E_ROOT_MISSING``.
     """
-    missing = weights.check_hf_present(step, config.profile)
+    missing = [*weights.check_hf_present(step, config.profile), *weights.check_url_present(step, config.profile)]
     if entries is None:
         try:
             entries = _registered(step, analysis, config)
@@ -1264,6 +1264,12 @@ class _Execution:
             _mkdir(self.tmp / "hf")
             try:
                 weights.build_hub_view(self.tmp / "hf-hub", step, config.profile)
+            except weights.WeightsError as error:
+                raise RunError(error.code) from None
+        if step.url_weights:
+            _mkdir(self.tmp / "torch")
+            try:
+                weights.place_url_weights(self.tmp, step, config.profile)
             except weights.WeightsError as error:
                 raise RunError(error.code) from None
         self._stage()

@@ -588,6 +588,37 @@ class HFWeights(_Model):
         return value
 
 
+def _url_place(value: str) -> str:
+    if value in ("whisper", "torch_hub"):
+        return value
+    rel = value.removeprefix("path:")
+    if rel == value or PurePosixPath(_relative_path(rel)) == PurePosixPath("."):
+        raise ValueError(f"place is whisper, torch_hub or path:<relative path>: {value!r}")
+    return value
+
+
+class UrlWeight(_Model):
+    """A weights file a loader fetches by URL: its path under the profile's ``url_weights_root``, sha256 and place.
+
+    ``place`` is where the step sees it, as a link under its ``{tmp}``: ``whisper`` at
+    ``$XDG_CACHE_HOME/whisper/<basename>``, ``torch_hub`` at ``$TORCH_HOME/hub/checkpoints/<basename>``, or
+    ``path:<rel>`` at ``{tmp}/weights/<rel>`` (`target`).
+    """
+
+    file: RelPath
+    sha256: Sha256
+    place: Annotated[str, AfterValidator(_url_place)]
+
+    def target(self) -> PurePosixPath:
+        """The link's path relative to ``{tmp}``."""
+        name = PurePosixPath(self.file).name
+        if self.place == "whisper":
+            return PurePosixPath("cache", "whisper", name)
+        if self.place == "torch_hub":
+            return PurePosixPath("torch", "hub", "checkpoints", name)
+        return PurePosixPath("weights", self.place.removeprefix("path:"))
+
+
 _MODEL_REF = re.compile(rf"^{_HF_REPO}(@[0-9a-f]{{40}})?$")
 _LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_+-]{0,63}$")
 
@@ -658,6 +689,7 @@ class StepSpec(_Model):
     patches: list[FileRef] = []
     adapter: str
     hf_weights: list[HFWeights]
+    url_weights: list[UrlWeight] = []
     metrics_schema: MetricsSchema
     expect: list[Expect] = []
     extract: list[ExtractSpec] = []
@@ -678,6 +710,9 @@ class StepSpec(_Model):
         weights = [(w.repo_type, w.repo) for w in self.hf_weights]
         if len(set(weights)) != len(weights):
             raise ValueError(f"step {self.name!r} has duplicate hf_weights repositories")
+        targets = [w.target() for w in self.url_weights]
+        if len(set(targets)) != len(targets):
+            raise ValueError(f"step {self.name!r} has url_weights placed at one path")
         literal = [t for t in (*self.argv, *self.pythonpath) if t.startswith("/") and not placeholders(t)]
         if literal:
             raise ValueError(
@@ -879,7 +914,8 @@ class Profile(_Model):
 
     ``hf_hub_cache`` is the read-only Hugging Face hub cache that holds every step's ``hf_weights``; it lies
     under a data root, so the sandbox shows it read-only, and in no restricted dir (``E_PROFILE_RESTRICTED``),
-    which public steps never see.
+    which public steps never see. ``url_weights_root`` holds every step's ``url_weights`` files, with the same
+    rules.
     """
 
     roots: dict[Name, Path] = Field(min_length=1)
@@ -904,6 +940,7 @@ class Profile(_Model):
     mirror_map: dict[str, Path] = {}
     mirror_map_strict: bool = False
     hf_hub_cache: Path | None = None
+    url_weights_root: Path | None = None
 
     _no_secrets = field_validator("env")(_reject_secret_keys)
 
@@ -924,7 +961,7 @@ class Profile(_Model):
         paths += [p for p in (self.modules_init, self.job_tmp_root) if p is not None]
         paths += [*self.restricted_dirs, *(p for p in (self.restricted_results_root, self.released_metrics_root) if p)]
         paths += list(self.mirror_map.values())
-        paths += [] if self.hf_hub_cache is None else [self.hf_hub_cache]
+        paths += [p for p in (self.hf_hub_cache, self.url_weights_root) if p is not None]
         native = [d for n in self.native.values() for d in (*n.bin_dirs, *n.lib_dirs)]
         relative = sorted(str(p) for p in (*paths, *native) if not p.is_absolute())
         if relative:
@@ -947,8 +984,10 @@ class Profile(_Model):
             for root in (r for r in roots if path.is_relative_to(r)):
                 if not any(path.is_relative_to(w) and _strictly_under(w, root) for w in rw):
                     raise ValueError(f"{field} lies inside a data root and under no rw_under_roots entry inside it")
-        if self.hf_hub_cache is not None and not any(_norm(self.hf_hub_cache).is_relative_to(r) for r in roots):
-            raise ValueError("hf_hub_cache must lie under a data root")
+        for field in ("hf_hub_cache", "url_weights_root"):
+            value = getattr(self, field)
+            if value is not None and not any(_norm(value).is_relative_to(r) for r in roots):
+                raise ValueError(f"{field} must lie under a data root")
         self._restricted_consistent(rw)
         return self
 
@@ -978,7 +1017,14 @@ class Profile(_Model):
         public = {"released_metrics_root": self.released_metrics_root}
         public |= {
             f: getattr(self, f)
-            for f in ("results_root", "runs_root", "slurm_logs_root", "job_tmp_root", "hf_hub_cache")
+            for f in (
+                "results_root",
+                "runs_root",
+                "slurm_logs_root",
+                "job_tmp_root",
+                "hf_hub_cache",
+                "url_weights_root",
+            )
         }
         for field, value in public.items():
             if value is None:
