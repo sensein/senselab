@@ -13,7 +13,6 @@ import datetime
 import hashlib
 import os
 import shlex
-import shutil
 import subprocess
 import tomllib
 import urllib.parse

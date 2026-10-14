@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 import datetime
 import shutil
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -754,7 +756,7 @@ def test_lock_primitives_are_shared_with_venv_lock() -> None:
     assert other == "d73fd3ff4b9d3895011f4554ef0433d43520302045106e7c8c5b553b68c30542"
 
 
-def test_no_duplicate_helpers_remain() -> None:
+def test_no_duplicate_helpers_remain(tmp_path: Path) -> None:
     """No driver module defines the shared helpers again; env and build take exclusive locks as SharedFileLock."""
     import ast
 
@@ -780,3 +782,32 @@ def test_no_duplicate_helpers_remain() -> None:
             )
         ]
         assert exclusive == [], (name, exclusive)
+
+    from senselab.utils.reproduce import build
+
+    resource = tmp_path / "venv"
+    first, reader_in, reader_out, second_in = (threading.Event() for _ in range(4))
+
+    def read() -> None:
+        with build.file_lock(Path(str(resource) + ".lock"), shared=True):
+            reader_in.set()
+            reader_out.wait(30)
+
+    def write() -> None:
+        with build.exclusive_lock(resource):
+            second_in.set()
+
+    with build.exclusive_lock(resource):
+        first.set()
+        reader = threading.Thread(target=read)
+        reader.start()
+        time.sleep(0.5)
+        assert not reader_in.is_set()
+    assert reader_in.wait(30)
+    writer = threading.Thread(target=write)
+    writer.start()
+    assert not second_in.wait(1.5), "a writer entered while a reader held the lock"
+    reader_out.set()
+    assert second_in.wait(30)
+    reader.join()
+    writer.join()
