@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import math
 import statistics
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from senselab.utils.reproduce.bands import evaluate_band
 from senselab.utils.reproduce.spec import Expect
@@ -32,7 +34,7 @@ def _run(
     **kw: Any,  # noqa: ANN401
 ) -> tuple[dict[str, Any], list[str]]:
     unit = expect.band.unit if expect.band is not None else "fraction"
-    names = expect.band.chains if expect.band is not None and expect.band.chains else CHAINS
+    names = expect.band.sources() if expect.band is not None else CHAINS
     upstream = {name: _metrics(value, unit=unit, **kw) for name, value in zip(names, chains)}
     mean = statistics.fmean(chains) if own is None else own
     return evaluate_band(expect, _metrics(mean, unit=unit, **kw), upstream)
@@ -142,3 +144,52 @@ def test_mean_mismatch_is_e_band_mean() -> None:
     assert codes == ["E_BAND_MEAN"]
     _, clean = _run(_expect(stored=0.70), [0.65, 0.66, 0.67], own=0.66 * (1 + 1e-12))
     assert clean == []
+
+
+def _redraw(**band: Any) -> Expect:  # noqa: ANN401
+    spec: dict[str, Any] = {
+        "stored": 0.70,
+        "unit": "fraction",
+        "floor": 0.5,
+        "floor_source": "expected_floor",
+        "redraws": ["r1", "r2", "r3"],
+        "n_subset": 200,
+        "n_full": 2000,
+    }
+    spec.update(band)
+    return Expect.model_validate({"metric": "balanced_accuracy", "kind": "seed_band", "band": spec})
+
+
+def test_redraw_sd_is_scaled_to_the_full_set() -> None:
+    """With re-draws, the mean is the full-set run and ``sd = sd(redraws) * sqrt(n_subset / n_full)``."""
+    result, codes = _run(_redraw(), [0.70, 0.72, 0.74], own=0.70)
+    assert codes == []
+    assert result["sd"] == pytest.approx(0.02 * math.sqrt(0.1))
+    assert result["delta"] == pytest.approx(0.0) and result["verdict"] == "pass"
+    assert result["tolerance"] == pytest.approx(max(0.002, 2 * 0.02 * math.sqrt(0.1), 0.02))
+
+
+def test_redraw_subset_validator() -> None:
+    """``n_subset`` is at least 10 % of ``n_full`` and at least 200 (or all items if fewer), at most ``n_full``."""
+    for n_subset, n_full, ok in ((150, 2000, False), (150, 150, True), (200, 10_000, False), (1000, 10_000, True)):
+        if ok:
+            assert _redraw(n_subset=n_subset, n_full=n_full).band is not None
+        else:
+            with pytest.raises(ValidationError, match="E_SPEC_BAND_SUBSET"):
+                _redraw(n_subset=n_subset, n_full=n_full)
+    with pytest.raises(ValidationError, match="E_SPEC_BAND_SUBSET"):
+        _redraw(n_subset=2001, n_full=2000)
+    with pytest.raises(ValidationError, match="E_SPEC_BAND_SHAPE"):
+        _redraw(n_subset=None)
+    with pytest.raises(ValidationError):
+        _redraw(redraws=["r1", "r2"])
+
+
+def test_redraw_and_chains_are_exclusive() -> None:
+    """A band takes exactly one of ``chains`` and ``redraws``; ``chain1`` is refused with ``redraws``."""
+    with pytest.raises(ValidationError, match="E_SPEC_BAND_SHAPE"):
+        _redraw(chains=CHAINS)
+    with pytest.raises(ValidationError, match="E_SPEC_BAND_SHAPE"):
+        _redraw(redraws=None)
+    with pytest.raises(ValidationError, match="E_SPEC_BAND_SHAPE"):
+        _redraw(chain1="r1")
