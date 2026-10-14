@@ -17,7 +17,7 @@ import hashlib
 import os
 import re
 import stat
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from functools import lru_cache
 from pathlib import PurePosixPath
 from typing import TypeVar
@@ -98,6 +98,21 @@ def pattern_matches(rel: str, pattern: str) -> bool:
         True when the whole path matches.
     """
     return _compile(pattern).fullmatch(rel) is not None
+
+
+def reaches_below(parts: Sequence[str], rel: Sequence[str]) -> bool:
+    """Whether pattern components ``parts`` can match a path that runs through every component of ``rel``.
+
+    With ``rel`` empty this is whether the pattern names anything at all; it is not the same as ``rel`` itself
+    matching (`pattern_matches`): ``in/*.txt`` reaches below ``in`` but does not match it.
+    """
+    if not rel:
+        return bool(parts)
+    if not parts:
+        return False
+    if parts[0] == "**":
+        return True
+    return pattern_matches(rel[0], parts[0]) and reaches_below(parts[1:], rel[1:])
 
 
 def _base(pattern: str) -> str:

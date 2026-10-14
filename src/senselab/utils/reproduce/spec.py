@@ -38,6 +38,7 @@ from pydantic import (
 )
 
 from senselab.utils import vllm_server
+from senselab.utils.reproduce import digest
 from senselab.utils.reproduce.metrics import (
     CLASSIFICATION_KINDS,
     POSITIVE_FLOOR_METRICS,
@@ -145,6 +146,80 @@ def _upstream(template: str) -> list[str]:
 
 def _registered(template: str) -> list[str]:
     return [p.split(":", 1)[1] for p in placeholders(template) if p.startswith("input:")]
+
+
+UNDECLARED_ROOT = "E_SPEC_UNDECLARED_ROOT"
+_PATH_END = re.compile(r"[\s,;:=]")
+
+
+def _root_paths(template: str) -> list[tuple[str, str]]:
+    """Each ``{root:<name>}`` in ``template`` with the path text that follows it.
+
+    The path runs up to the next placeholder or a separator (whitespace, ``,``, ``;``, ``:``, ``=``), e.g.
+    ``("data", "/in/a.txt")``.
+    """
+    found = []
+    for match in _TOKEN.finditer(template):
+        name = match.group(1)
+        if name is None or not name.startswith("root:"):
+            continue
+        rest = template[match.end() :]
+        end = _PATH_END.search(rest)
+        tail = rest[: end.start() if end else len(rest)]
+        brace = min((i for i in (tail.find("{"), tail.find("}")) if i >= 0), default=len(tail))
+        found.append((name.split(":", 1)[1], tail[:brace]))
+    return found
+
+
+def _covered(rel: str, patterns: Iterable[str], trees: Iterable[str]) -> bool:
+    """Whether the root-relative path ``rel`` is covered.
+
+    It is when a pattern matches it or reaches below it, or it is in, or is a dir above, a tree. A path with
+    ``..`` is never covered; the root itself (``""``) is covered by any pattern or tree.
+    """
+    parts = [p for p in rel.split("/") if p not in ("", ".")]
+    if ".." in parts:
+        return False
+    text = "/".join(parts)
+    for pattern in patterns:
+        if (text and digest.pattern_matches(text, pattern)) or digest.reaches_below(pattern.split("/"), parts):
+            return True
+    for tree in trees:
+        top = [p for p in tree.split("/") if p not in ("", ".")]
+        if parts[: len(top)] == top or top[: len(parts)] == parts:
+            return True
+    return False
+
+
+def undeclared_root_paths(step: "StepSpec", trees: Mapping[str, Iterable[str]] | None) -> list[str]:
+    """The ``{root:<name>}`` paths of a step's argv, cwd, pythonpath and stage dests that nothing declared covers.
+
+    A path is covered by a pattern of an ``inputs`` entry with that root (`_covered`), or by the tree
+    (``relpath``) of one of the step's ``lock_inputs`` on that root, given in ``trees`` by root name. With
+    ``trees`` None (the registry is not read yet), the paths a lock input could cover are not reported.
+
+    Returns:
+        The uncovered paths as written (``{root:<name>}<path>``), sorted and without duplicates.
+    """
+    templates = [*step.argv, step.cwd, *step.pythonpath, *(s.dest for s in step.stage)]
+    patterns: dict[str, list[str]] = {}
+    for entry in step.inputs:
+        patterns.setdefault(entry.root, []).extend(entry.patterns)
+    out = set()
+    for template in templates:
+        for root, rel in _root_paths(template):
+            if _covered(rel, patterns.get(root, ()), () if trees is None else trees.get(root, ())):
+                continue
+            if trees is None and step.lock_inputs:
+                continue
+            out.add(f"{{root:{root}}}{rel}")
+    return sorted(out)
+
+
+def declared_roots(step: "StepSpec", entry_roots: Iterable[str]) -> set[str]:
+    """The names of the data roots a step declares: its ``inputs`` and ``stage`` roots and its lock inputs' roots."""
+    named = {i.root for i in step.inputs} | {s.root for s in step.stage} | set(entry_roots)
+    return {n for n in named if not n.startswith("up:") and n not in RESERVED_ROOT_NAMES}
 
 
 def _reject_secret_keys(env: dict[str, str]) -> dict[str, str]:
@@ -917,6 +992,11 @@ class StepSpec(_Model):
         missing = sorted(set(referenced) - needs)
         if missing:
             raise ValueError(f"step {self.name!r} refers to steps outside its needs: {missing}")
+        uncovered = undeclared_root_paths(self, None)
+        if uncovered:
+            raise ValueError(
+                f"{UNDECLARED_ROOT}: step {self.name!r} names root paths no inputs pattern covers: {uncovered}"
+            )
         for expect in self.expect:
             code = metric_address_error(expect.metric, self.metrics_schema)
             if code is not None:

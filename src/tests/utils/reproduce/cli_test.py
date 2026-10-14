@@ -182,7 +182,8 @@ def test_lint_exit_codes(site: Site, capsys: pytest.CaptureFixture[str]) -> None
     assert site.main("lint", str(clean), *site.common()) == cli.EXIT_OK
     assert capsys.readouterr().out == ""
 
-    rooted = site.manifest("demo", _step("prep", inputs=[{"root": "nowhere", "patterns": ["a"]}]), file="r.yaml")
+    nowhere = [{"root": "data", "patterns": ["in/*.txt"]}, {"root": "nowhere", "patterns": ["a"]}]
+    rooted = site.manifest("demo", _step("prep", inputs=nowhere), file="r.yaml")
     assert site.main("lint", str(rooted), *site.common()) == cli.EXIT_FAILED
     assert "root-unknown" in capsys.readouterr().out
 

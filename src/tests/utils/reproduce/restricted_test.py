@@ -38,7 +38,7 @@ if mode == "copy":
     (out / "copy.txt").write_text(text)
     value = float(len(text))
 elif mode == "list":
-    names = sorted(os.listdir(src))
+    names = sorted(os.listdir(src / sys.argv[4] if len(sys.argv) > 4 else src))
     (out / "names.txt").write_text("\\n".join(names))
     value = float(len(names))
 elif mode == "prep":
@@ -150,12 +150,15 @@ def test_a_step_on_a_restricted_input_must_declare_restricted(site: Site) -> Non
     (site.data / "alias").symlink_to("restricted")
     reaching = ["restricted/canary/in.txt", "restricted/*/in.txt", "**/*.txt", "*/canary/*", "alias/canary/in.txt"]
     for pattern in reaching:
-        step = site.step("P", "prep", "{root:data}/in/a.txt", inputs=[{"root": "data", "patterns": [pattern]}])
+        # "in/a.txt" covers the step's own {root:data} path (E_SPEC_UNDECLARED_ROOT otherwise).
+        inputs = [{"root": "data", "patterns": [pattern, "in/a.txt"]}]
+        step = site.step("P", "prep", "{root:data}/in/a.txt", inputs=inputs)
         with pytest.raises(ValueError, match="E_SPEC_RESTRICTED"):
             restricted.check_restricted(_steps(step), registry, profile)
         restricted.check_restricted(_steps({**step, "restricted": True}), registry, profile)
     for pattern in ("in/a.txt", "in/*.txt", "*.txt", "[ab]*/x.txt"):
-        step = site.step("P", "prep", "{root:data}/in/a.txt", inputs=[{"root": "data", "patterns": [pattern]}])
+        inputs = [{"root": "data", "patterns": [pattern, "in/a.txt"]}]
+        step = site.step("P", "prep", "{root:data}/in/a.txt", inputs=inputs)
         restricted.check_restricted(_steps(step), registry, profile)
 
     with pytest.raises(ValueError, match="E_SPEC_RESTRICTED"):
@@ -275,14 +278,17 @@ def test_up_resolves_each_upstream_in_its_own_root(site: Site) -> None:
 
 @needs_userns
 def test_restricted_dirs_are_masked_for_public_steps(site: Site) -> None:
-    """A public step listing ``{root:data}/restricted`` sees an empty dir, with or without a restricted step in the set.
+    """A public step listing the data root's ``restricted`` dir sees it empty, with or without a restricted step.
 
     A restricted step sees the dir's entries. A restricted dir named through a symlink is masked at its target.
     """
     site.register_canary()
     verify_input(site.base, site.profile(), "canary")
-    listing = site.step("L", "list", "{root:data}/restricted")
-    seeing = site.step("S", "list", "{root:data}/restricted", restricted=True)
+    # The data root is named whole and the script lists ``restricted`` below it: a ``{root:data}/restricted``
+    # path is refused at load (``E_SPEC_UNDECLARED_ROOT``), since no declared pattern covers it.
+    argv = ["{venv}/bin/python", "{checkout}/step.py", "list", "{out}", "{root:data}", "restricted"]
+    listing = site.step("L", "list", "", argv=argv)
+    seeing = site.step("S", "list", "", argv=argv, restricted=True)
 
     def names(*steps: dict[str, Any]) -> dict[str, str]:
         manifest = site.manifest(*steps)
@@ -298,7 +304,7 @@ def test_restricted_dirs_are_masked_for_public_steps(site: Site) -> None:
 
     (site.data / "rlink").symlink_to("restricted")
     site.restricted_dirs = [site.data / "rlink"]
-    assert names(site.step("L2", "list", "{root:data}/restricted"))["L2"] == ""
+    assert names(site.step("L2", "list", "", argv=argv))["L2"] == ""
 
 
 def _submit_config(site: Site, manifest: Manifest) -> slurm.SubmitConfig:
