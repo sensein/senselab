@@ -415,7 +415,12 @@ def test_a_url_weight_sha_mismatch_fails_prefetch(
     registry["tables"] = inputs.read_registry_entry(world.base, "tables")[0]
     reads: list[str] = []
     real_rows = inputs.manifest_rows
-    monkeypatch.setattr(inputs, "manifest_rows", lambda e, p: reads.append(e.id) or real_rows(e, p))
+
+    def counted(entry: Any, profile: Any) -> Any:  # noqa: ANN401
+        reads.append(entry.id)
+        return real_rows(entry, profile)
+
+    monkeypatch.setattr(inputs, "manifest_rows", counted)
     both = StepSpec.model_validate(_url_step(world, lock_inputs=["tables", URL_INPUT]))
     assert weights.verify_url([both], world.profile(), registry) == []
     assert _counts(capsys.readouterr().out) == "url-weights files=3 hashed=0 accepted=3" and reads == [URL_INPUT]
