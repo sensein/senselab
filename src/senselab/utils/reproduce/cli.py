@@ -259,7 +259,7 @@ def _deny(profile: Profile) -> list[str]:
 def _uv_environ(cache_dir: Path) -> dict[str, str]:
     values = {key: os.environ.get(key, "") for key in slurm.UV_EXPORTS}
     if not all(values.values()):
-        uv = lockgen.find_uv()
+        uv = lockgen.uv_executable()
         values["UV_CACHE_DIR"] = build._uv_location(uv, "UV_CACHE_DIR", ["cache", "dir"])
         values["UV_PYTHON_INSTALL_DIR"] = build._uv_location(uv, "UV_PYTHON_INSTALL_DIR", ["python", "dir"])
     return {**values, slurm.CACHE_VARIABLE: os.fspath(cache_dir)}

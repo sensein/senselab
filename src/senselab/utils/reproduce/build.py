@@ -43,8 +43,9 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
+from senselab.utils.file_lock import SharedFileLock
 from senselab.utils.reproduce import sandbox
-from senselab.utils.reproduce.lockgen import find_uv
+from senselab.utils.reproduce.lockgen import uv_executable
 from senselab.utils.reproduce.locks import ReproduceLockError, file_sha256, lock_entries, normalize_name, verify_files
 from senselab.utils.reproduce.spec import FileRef, LockRef, Profile, SdistSpec, TorchSpec
 
@@ -612,7 +613,7 @@ def build_wheel(
     if hashlib.sha256(data).hexdigest() != sdist.sha256:
         raise ReproduceLockError(f"sdist {archive}: sha256 changed after download")
 
-    uv = find_uv()
+    uv = uv_executable()
     base = base_environment(uv, work_dir)
     src = _unpack(data, archive.name, work_dir / "src")
     for patch in sdist.patches:
@@ -726,9 +727,20 @@ def file_lock(path: Path, *, shared: bool = False) -> Iterator[None]:
         os.close(fd)
 
 
-def _locked(wheels_lock: Path, shared: bool) -> contextlib.AbstractContextManager[None]:
-    """Hold a :func:`file_lock` on the sidecar ``<wheels.lock>.lock``."""
-    return file_lock(wheels_lock.with_name(wheels_lock.name + ".lock"), shared=shared)
+def exclusive_lock(resource: Path) -> contextlib.AbstractContextManager[object]:
+    """An exclusive `SharedFileLock` over ``resource``: ``flock`` on ``<resource>.lock``, the file `file_lock` takes.
+
+    It waits as long as a holder holds the lock (a reader's shared `file_lock` included), records its holder and
+    heartbeat beside the lock, and leaves the directory's mode alone.
+    """
+    return SharedFileLock(resource, timeout=-1, manage_dir_mode=False)
+
+
+def _locked(wheels_lock: Path, shared: bool) -> contextlib.AbstractContextManager[object]:
+    """Hold the sidecar ``<wheels.lock>.lock``: a shared :func:`file_lock`, or an :func:`exclusive_lock`."""
+    if shared:
+        return file_lock(wheels_lock.with_name(wheels_lock.name + ".lock"), shared=True)
+    return exclusive_lock(wheels_lock)
 
 
 def _read_verified(wheels_lock: Path, expected_sha256: str | None) -> bytes | None:
@@ -1028,7 +1040,7 @@ def render_build_job(
 
     The job starts from an empty environment (``--export=NONE``) and exports only ``PATH``, the
     :data:`BATCH_EXPORTS` variables set in ``environ``, the driver interpreter, ``REPRO_UV`` (the
-    absolute uv, read by :func:`find_uv`) and, when the profile names a ``job_tmp_root``, a per-job ``TMPDIR``
+    absolute uv, read by :func:`uv_executable`) and, when the profile names a ``job_tmp_root``, a per-job ``TMPDIR``
     under it that is removed on exit. Modules are not loaded here: ``build-one`` loads ``build_modules`` itself
     (:func:`in_modules`). The log directory ``<slurm_logs_root>/<date>/`` must exist before submission.
 
@@ -1042,7 +1054,7 @@ def render_build_job(
         base_dir: Passed to ``build-one`` as ``--base-dir`` (the manifest repository prefetch used).
         date: The log date; defaults to today. The job runs in the log dir (``--chdir``).
         driver_python: The interpreter with senselab installed.
-        uv: The uv executable; defaults to :func:`find_uv`, resolved to an absolute path now.
+        uv: The uv executable; defaults to :func:`uv_executable`, resolved to an absolute path now.
         environ: Where the exported variables' values come from; defaults to ``os.environ``.
 
     Returns:
@@ -1052,7 +1064,7 @@ def render_build_job(
         ValueError: If a value would need quoting the script cannot express safely.
     """
     environ = os.environ if environ is None else environ
-    uv = find_uv() if uv is None else uv
+    uv = uv_executable() if uv is None else uv
     if not os.path.isabs(uv):
         raise ValueError(f"uv must be an absolute path: {uv!r}")
     part = profile.partitions[profile.build]

@@ -228,7 +228,7 @@ def fake(monkeypatch: pytest.MonkeyPatch) -> tuple[FakeUv, FakeWheels]:
     monkeypatch.setattr(envmod, "_run", uv)
     monkeypatch.setattr(envmod, "ensure_wheel", wheels)
     monkeypatch.setattr(envmod, "reuse_wheel", wheels.reuse)
-    monkeypatch.setattr(envmod, "find_uv", lambda: UV)
+    monkeypatch.setattr(envmod, "uv_executable", lambda: UV)
     for key, value in CALLER_ENV.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("PYTHONPATH", "/planted")

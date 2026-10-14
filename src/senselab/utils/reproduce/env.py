@@ -50,13 +50,13 @@ from senselab.utils.reproduce.build import (
     base_environment,
     ca_bundle,
     ensure_wheel,
-    file_lock,
+    exclusive_lock,
     modules_init_word,
     reuse_wheel,
     stage_wheel,
     torch_index_url,
 )
-from senselab.utils.reproduce.lockgen import find_uv
+from senselab.utils.reproduce.lockgen import uv_executable
 from senselab.utils.reproduce.locks import (
     ReproduceLockError,
     check_integrity,
@@ -242,8 +242,9 @@ def _run_ok(argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess
     return result
 
 
-def _flock(path: Path) -> contextlib.AbstractContextManager[None]:
-    return file_lock(path, shared=False)
+def _flock(resource: Path) -> contextlib.AbstractContextManager[object]:
+    """Hold ``<resource>.lock`` exclusively (`build.exclusive_lock`), against the steps' shared locks on it."""
+    return exclusive_lock(resource)
 
 
 def _write_json(path: Path, data: object) -> str:
@@ -495,7 +496,7 @@ def record_kernels(venv: Path) -> str:
     Returns:
         The kernels sha256.
     """
-    with _flock(venv.with_name(venv.name + ".lock")):
+    with _flock(venv):
         installed = json.loads((venv / INSTALLED).read_text())
         digest = kernels_sha256(venv)
         installed["kernels_sha256"] = digest
@@ -584,7 +585,7 @@ def _build_or_reuse(
 ) -> VenvResult:
     key = env_key(env)
     overlay_sha = None if overlay is None else overlay.lock_sha256
-    with _flock(path.with_name(path.name + ".lock")):
+    with _flock(path):
         marker = _read_marker(path)
         if marker is not None and (marker.get("env_key"), marker.get("overlay_sha256")) == (key, overlay_sha):
             installed = _installed_ok(path, marker)
@@ -642,7 +643,7 @@ def _build_or_reuse(
 
 def _check_venv(venv: VenvResult, env: EnvSpec, profile: Profile, overlay: LockRef | None) -> VenvResult:
     """Run `check_pip` and `smoke` on a venv unless its marker already records both for the current digest."""
-    with _flock(venv.path.with_name(venv.path.name + ".lock")):
+    with _flock(venv.path):
         if venv_checked(venv.path, env, overlay):
             return venv._replace(checked=True)
         marker = _read_marker(venv.path)
@@ -730,7 +731,7 @@ def _prefetch_env(
     """
     lock_path, expected = _wheels_location(env, base_dir, wheels_lock)
     verified = check_integrity(env, base_dir, uv_lock)
-    uv = find_uv()
+    uv = uv_executable()
     with tempfile.TemporaryDirectory(prefix="reproduce-env-") as tmp:
         work = Path(tmp)
         inputs = work / "inputs"
@@ -824,7 +825,7 @@ def pip_freeze(venv: Path, uv: str | None = None) -> str:
     Raises:
         ReproduceLockError: If uv fails.
     """
-    uv = uv or find_uv()
+    uv = uv or uv_executable()
     result = _uv_in_sandbox(uv, ["pip", "freeze"], venv)
     if result.returncode != 0:
         output = (result.stdout + result.stderr).strip()[-_TAIL:]
@@ -871,7 +872,7 @@ def pip_check(venv: Path) -> list[Violation]:
     Raises:
         ReproduceLockError: If uv fails for another reason than incompatibilities.
     """
-    uv = find_uv()
+    uv = uv_executable()
     result = _uv_in_sandbox(uv, ["pip", "check"], venv)
     found = parse_pip_check(result.stdout + "\n" + result.stderr)
     if result.returncode not in (0, 1) or (result.returncode == 1) != bool(found):
@@ -1278,7 +1279,7 @@ def _prefetch_r(
     key = _r_key(module, build_modules, r_version, repo, declared)
     session_path, module_path = r_lib / SESSION, r_lib / MODULE_ENV
     kernel_ok = venv is None or kind != "ir_notebook" or _kernel(venv).is_file()
-    with _flock(r_lib.with_name(r_lib.name + ".lock")):
+    with _flock(r_lib):
         if _r_reusable(session_path, module_path, key, kernel_ok):
             if kind == "ir_notebook" and venv is not None:
                 record_kernels(venv)

@@ -22,12 +22,16 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from senselab.utils import uv_tools
 from senselab.utils.reproduce.spec import EnvSpec, FileRef
+from senselab.utils.uv_tools import TORCH_NAMES as TORCH_NAMES
+from senselab.utils.uv_tools import TORCH_VARIANT_PREFIXES as TORCH_VARIANT_PREFIXES
+from senselab.utils.uv_tools import is_torch_family as is_torch_family
+from senselab.utils.uv_tools import normalize_name as normalize_name
 
 HEADER_MARKER = "# reproduce lock"
 INDEX_OPTIONS = frozenset({"--index-url", "-i", "--extra-index-url", "--find-links", "-f"})
-TORCH_NAMES = frozenset({"torch", "torchvision", "torchaudio"})
-TORCH_VARIANT_PREFIXES = ("nvidia-", "triton", "pytorch-triton", "cuda-")
+
 
 _HEADER_RE = re.compile(r"^#\s*([a-z0-9-]+):\s*(.*?)\s*$")
 _KEY_RE = re.compile(r"^[a-z0-9-]+$")
@@ -49,11 +53,6 @@ class LockEntry(NamedTuple):
     is_url: bool
     marker: str
     hashes: frozenset[str]
-
-
-def normalize_name(name: str) -> str:
-    """Return a distribution name normalised per PEP 503."""
-    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def file_sha256(path: Path) -> str:
@@ -84,8 +83,7 @@ def requirements_sha256(
     Returns:
         A hex sha256.
     """
-    payload = {
-        "requirements": sorted(requirements),
+    fields = {
         "python": python,
         "max_cuda": max_cuda,
         "exclude_newer": exclude_newer.isoformat(),
@@ -93,7 +91,7 @@ def requirements_sha256(
         "overrides_sha256": overrides_sha,
         "extra_no_emit": sorted(extra_no_emit),
     }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    return uv_tools.requirements_sha256(requirements, header_fields=fields)
 
 
 def write_header(body: str, fields: Mapping[str, str]) -> str:
@@ -222,12 +220,6 @@ def parse_freeze(text: str) -> dict[str, str]:
         ReproduceLockError: For editable installs, source trees, VCS URLs or unpinned lines.
     """
     return {entry.name: _CUDA_LOCAL_RE.sub("", entry_version(entry)) for entry in lock_entries(text)}
-
-
-def is_torch_family(name: str) -> bool:
-    """Whether a distribution belongs in ``torch.lock``: torch, torchvision, torchaudio or a CUDA-variant name."""
-    name = normalize_name(name)
-    return name in TORCH_NAMES or name.startswith(TORCH_VARIANT_PREFIXES)
 
 
 def versions_agree(a: str, b: str) -> bool:

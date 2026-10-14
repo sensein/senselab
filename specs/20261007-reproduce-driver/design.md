@@ -1635,3 +1635,16 @@ copies the rest from the host record and the env values it records, so the block
 A step without `draw` still records the block, with null seeds and empty sampling, so a checker can tell "no seed
 declared" from "not recorded". A training step's batch size is part of its keyed config, not of the draw; the draw's
 `batch_size` is the inference engine's.
+
+## Shared helpers (A15b; completed in A16)
+
+The driver no longer carries its own copies of the uv and lock primitives: `locks.normalize_name`,
+`locks.is_torch_family`, `TORCH_NAMES` and `TORCH_VARIANT_PREFIXES` are `senselab.utils.uv_tools`' own (re-exported),
+and `locks.requirements_sha256` keeps only its reproduce signature, hashing through `uv_tools.requirements_sha256`
+with the same fields, so every committed lock digest is unchanged. `lockgen.uv_executable` (formerly `find_uv`) keeps
+the `REPRO_UV` pin and its `ReproduceLockError`, and otherwise asks `uv_tools.find_uv(home=False)`: a batch job's uv
+comes from its pinned `PATH`, never from a home install. The exclusive locks of `env` and `build` (venv and R library
+rebuilds, `wheels.lock` writes) are `SharedFileLock`s (`build.exclusive_lock`) on the same `<resource>.lock` file the
+steps' shared `file_lock` takes, so readers and writers still exclude each other; they wait with no timeout, as the
+`flock` did, record their holder and heartbeat beside the lock, and leave the directory's mode alone. `file_lock`
+stays for the shared (reader) locks. The host's CUDA version comes from `cuda_probe.detect_host_cuda` (A14).

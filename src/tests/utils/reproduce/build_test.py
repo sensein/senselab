@@ -100,7 +100,7 @@ def fake_run(monkeypatch: pytest.MonkeyPatch) -> FakeRun:
     fake = FakeRun()
     monkeypatch.setattr(build, "_run", fake)
     monkeypatch.setattr(build, "_capture", lambda argv, env=None: f"{Path(argv[-2]).name} 1.0")
-    monkeypatch.setattr(build, "find_uv", lambda: UV)
+    monkeypatch.setattr(build, "uv_executable", lambda: UV)
     for key, value in CALLER_ENV.items():
         monkeypatch.setenv(key, value)
     return fake
@@ -656,7 +656,7 @@ def test_rendered_prologue_runs_in_an_empty_environment(tmp_path: Path) -> None:
     assert not Path(f"/dev/shm/reproduce-build-{job}").exists()
 
 
-def test_find_uv_honours_repro_uv_under_a_minimal_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_uv_executable_honours_repro_uv_under_a_minimal_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``REPRO_UV`` wins over ``PATH``; it must be an absolute path to an executable."""
     fake = tmp_path / "bin" / "uv"
     fake.parent.mkdir()
@@ -664,24 +664,24 @@ def test_find_uv_honours_repro_uv_under_a_minimal_path(tmp_path: Path, monkeypat
     fake.chmod(0o750)
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     monkeypatch.setenv("REPRO_UV", str(fake))
-    assert build.find_uv() == str(fake)
+    assert build.uv_executable() == str(fake)
     for bad in ("uv", str(tmp_path / "absent")):
         monkeypatch.setenv("REPRO_UV", bad)
         with pytest.raises(ReproduceLockError, match="REPRO_UV"):
-            build.find_uv()
+            build.uv_executable()
     fake.chmod(0o640)
     monkeypatch.setenv("REPRO_UV", str(fake))
     with pytest.raises(ReproduceLockError, match="REPRO_UV"):
-        build.find_uv()
+        build.uv_executable()
 
 
-def test_find_uv_in_a_minimal_subprocess(tmp_path: Path) -> None:
+def test_uv_executable_in_a_minimal_subprocess(tmp_path: Path) -> None:
     """A driver started with only the system ``PATH`` and ``REPRO_UV`` finds that uv."""
     uv = shutil.which("uv")
     if uv is None:
         pytest.skip("no uv on PATH")
         return
-    code = "from senselab.utils.reproduce.build import find_uv; print(find_uv())"
+    code = "from senselab.utils.reproduce.build import uv_executable; print(uv_executable())"
     env = {"PATH": "/usr/bin:/bin", "REPRO_UV": uv, "HOME": str(tmp_path)}
     result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr

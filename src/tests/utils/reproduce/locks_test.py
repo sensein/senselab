@@ -680,3 +680,103 @@ def test_parse_freeze_refuses_unpinned_lines(line: str, message: str) -> None:
     """Editable installs, source trees, VCS URLs and ranges are not a pinned installed set."""
     with pytest.raises(ReproduceLockError, match=message):
         parse_freeze(f"six==1.17.0\n{line}\n")
+
+
+# --- shared uv and lock primitives (uv_tools) ------------------------------------------------------
+
+NAMES = (
+    "NumPy",
+    "numpy",
+    "Scikit_Learn",
+    "scikit-learn",
+    "zope.interface",
+    "Zope__Interface",
+    "torch",
+    "TorchAudio",
+    "torchvision",
+    "nvidia-cudnn-cu12",
+    "NVIDIA_NCCL.CU12",
+    "triton",
+    "pytorch_triton",
+    "cuda-python",
+    "pyannote.audio",
+    "a-b_c.d",
+    "torch-audiomentations",
+    "Pillow",
+    "typing_extensions",
+    "ruamel.yaml.clib",
+)
+
+
+def test_reproduce_uses_the_shared_uv_finder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The driver's uv comes from ``uv_tools.find_uv`` (PATH only, made absolute) unless ``REPRO_UV`` pins one."""
+    from senselab.utils import uv_tools
+    from senselab.utils.reproduce import build, env, lockgen
+    from senselab.utils.reproduce.locks import ReproduceLockError
+
+    calls: list[dict[str, Any]] = []
+
+    def shared(**kwargs: Any) -> str:  # noqa: ANN401
+        calls.append(kwargs)
+        return "bin/uv"
+
+    monkeypatch.delenv("REPRO_UV", raising=False)
+    monkeypatch.setattr(uv_tools, "find_uv", shared)
+    monkeypatch.chdir(tmp_path)
+    assert lockgen.uv_executable() == str(tmp_path / "bin" / "uv") and calls == [{"home": False}]
+    assert build.uv_executable is lockgen.uv_executable and env.uv_executable is lockgen.uv_executable
+
+    def missing(**kwargs: Any) -> str:  # noqa: ANN401
+        raise FileNotFoundError("uv")
+
+    monkeypatch.setattr(uv_tools, "find_uv", missing)
+    with pytest.raises(ReproduceLockError, match="uv not found"):
+        lockgen.uv_executable()
+
+
+def test_lock_primitives_are_shared_with_venv_lock() -> None:
+    """Names, the torch family and the requirements digest are `uv_tools`' own, which `venv_lock` also uses."""
+    from senselab.utils import uv_tools, venv_lock
+    from senselab.utils.reproduce import locks
+
+    assert locks.normalize_name is uv_tools.normalize_name is venv_lock.normalize_name
+    assert locks.is_torch_family is uv_tools.is_torch_family
+    assert (locks.TORCH_NAMES, locks.TORCH_VARIANT_PREFIXES) == (uv_tools.TORCH_NAMES, uv_tools.TORCH_VARIANT_PREFIXES)
+    assert len(set(NAMES)) == 20
+    for name in NAMES:
+        assert locks.normalize_name(name) == uv_tools.normalize_name(name)
+        assert locks.is_torch_family(name) == uv_tools.is_torch_family(name)
+    assert sum(locks.is_torch_family(n) for n in NAMES) == 8
+    date = datetime.date(2026, 1, 1)
+    pinned = requirements_sha256(["numpy==2.1.0", "torch>=2"], "3.12", "12.8", date, None, "a" * 64, ["psf", "abc"])
+    assert pinned == "222623317b14cef387f9a3709c3882d0a6044364ff8e3d78245f0981d7187817"
+    other = requirements_sha256([], "3.11", None, datetime.date(2025, 6, 30), "b" * 64, None, [])
+    assert other == "d73fd3ff4b9d3895011f4554ef0433d43520302045106e7c8c5b553b68c30542"
+
+
+def test_no_duplicate_helpers_remain() -> None:
+    """No driver module defines the shared helpers again; env and build take exclusive locks as SharedFileLock."""
+    import ast
+
+    from senselab.utils.reproduce import cache
+
+    root = Path(cache.__file__).parent
+    defined = {
+        node.name
+        for path in root.rglob("*.py")
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert not defined & {"find_uv", "normalize_name", "is_torch_family"}
+    for name in ("env.py", "build.py"):
+        tree = ast.parse((root / name).read_text())
+        exclusive = [
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", getattr(node.func, "attr", None)) == "file_lock"
+            and not any(
+                k.arg == "shared" and isinstance(k.value, ast.Constant) and k.value.value is True for k in node.keywords
+            )
+        ]
+        assert exclusive == [], (name, exclusive)
