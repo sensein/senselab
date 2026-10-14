@@ -628,3 +628,42 @@ def test_a_precheck_mismatch_at_submit_submits_a_verify_job(
     assert cli.main([*argv, "--date", "2026-03-04"]) == cli.EXIT_FAILED
     capsys.readouterr()
     assert (_rows(world)["prep"]["status"], _rows(world)["prep"]["codes"]) == ("never-ran", ["E_INPUT_MISMATCH"])
+
+
+def test_an_added_file_is_a_mismatch_before_any_full_verify(world: World) -> None:
+    """The manifest's dirs sidecar lets the ``lstat`` pre-check see an added file or dir (``E_INPUT_MISMATCH``).
+
+    Each dir holding a row is listed: a selected entry the manifest lacks, or a new subdir that could hold one, is
+    a mismatch; an entry the input's ``exclude`` leaves out is not. ``extras: ignore`` skips the check.
+    """
+    tables = _tables(world)
+    _register(world, exclude=["**/*.tmp"])
+    assert inputs.dirs_sidecar(_entry(world), world.profile()).is_file()
+    assert _precheck(world) == []
+    for added in (tables / "new.csv", tables / "sub" / "v.csv", tables / "sub" / "deeper" / "w.csv"):
+        added.parent.mkdir(exist_ok=True)
+        added.write_text("1\n")
+        assert _precheck(world) == ["E_INPUT_MISMATCH"], added.name
+        added.unlink()
+        if added.parent.name == "deeper":
+            added.parent.rmdir()
+        assert _precheck(world) == []
+    (tables / "sub" / "scratch.tmp").write_text("x\n")
+    assert _precheck(world) == []
+    (tables / "new.csv").write_text("1\n")
+    _register(world, exclude=["**/*.tmp"], extras="ignore")
+    (tables / "other.csv").write_text("1\n")
+    assert _precheck(world) == []
+
+
+@needs_userns
+def test_a_file_added_after_verify_blocks_the_dry_run(world: World) -> None:
+    """A file added to a verified registered input blocks the dry run with ``E_INPUT_MISMATCH``."""
+    tables = _tables(world)
+    _register(world)
+    verify_input(world.base, world.profile(), "tables")
+    manifest = _manifest(world)
+    assert _plan(world, manifest).status == "will-execute"
+    (tables / "sub" / "added.csv").write_text("1\n")
+    plan = _plan(world, manifest)
+    assert (plan.status, plan.codes) == ("blocked", ("E_INPUT_MISMATCH",))
