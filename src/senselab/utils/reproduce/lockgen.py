@@ -21,6 +21,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
+from senselab.utils import uv_tools
 from senselab.utils.reproduce.locks import (
     TORCH_NAMES,
     ReproduceLockError,
@@ -37,8 +38,10 @@ TORCH_PLATFORM = "x86_64-manylinux_2_28"
 UPLOAD_TIMELESS_PREFIX = "nvidia-"
 
 
-def find_uv() -> str:
-    """Return the absolute path of the ``uv`` executable: ``REPRO_UV`` when set, else ``uv`` on ``PATH``.
+def uv_executable() -> str:
+    """Return the absolute path of the ``uv`` executable: ``REPRO_UV`` when set, else `uv_tools.find_uv` on ``PATH``.
+
+    Only ``PATH`` is searched (``home=False``), never a home install the job's environment did not name.
 
     Raises:
         ReproduceLockError: If ``REPRO_UV`` is not an absolute path to an executable file, or it is unset
@@ -49,9 +52,10 @@ def find_uv() -> str:
         if not os.path.isabs(pinned) or not os.path.isfile(pinned) or not os.access(pinned, os.X_OK):
             raise ReproduceLockError(f"REPRO_UV={pinned!r} is not an absolute path to an executable")
         return pinned
-    uv = shutil.which("uv")
-    if uv is None:
-        raise ReproduceLockError("uv not found on PATH; lock generation needs uv")
+    try:
+        uv = uv_tools.find_uv(home=False)
+    except FileNotFoundError:
+        raise ReproduceLockError("uv not found on PATH; lock generation needs uv") from None
     return os.path.abspath(uv)
 
 
@@ -143,7 +147,7 @@ def first_resolve(env: EnvSpec, base_dir: Path) -> list[str]:
     """
     if env.first_resolve is None:
         raise ReproduceLockError("env has no first_resolve file")
-    argv = [find_uv(), "pip", "compile", _requirements_in(env), "--universal", "--no-annotate", "--no-header"]
+    argv = [uv_executable(), "pip", "compile", _requirements_in(env), "--universal", "--no-annotate", "--no-header"]
     argv += _compile_inputs(env)
     return _emit(base_dir, env.first_resolve.file, argv, base_dir, {"source": "first-resolve", "python": env.python})
 
@@ -172,7 +176,16 @@ def torch_lock_from_index(env: EnvSpec, base_dir: Path) -> list[str]:
         raise ReproduceLockError("first_resolve has no torch-family pins")
     torch_in = str(PurePosixPath(env.torch.lock).with_suffix(".in"))
     _write(base_dir, torch_in, "".join(f"{name}=={version}\n" for name, version in pins.items()))
-    argv = [find_uv(), "pip", "compile", torch_in, "--no-deps", "--generate-hashes", "--emit-index-url", "--no-header"]
+    argv = [
+        uv_executable(),
+        "pip",
+        "compile",
+        torch_in,
+        "--no-deps",
+        "--generate-hashes",
+        "--emit-index-url",
+        "--no-header",
+    ]
     argv += ["--python-version", env.python, "--exclude-newer", exclude_newer_timestamp(env.exclude_newer)]
     for name in pins:
         if name.startswith(UPLOAD_TIMELESS_PREFIX):
@@ -260,7 +273,7 @@ def body_lock_from_requirements(env: EnvSpec, base_dir: Path) -> list[str]:
     Raises:
         ReproduceLockError: If the body is not requirements-derived, uv is missing or the compile fails.
     """
-    argv = [find_uv(), "pip", "compile", _requirements_in(env), "--universal", "--generate-hashes", "--no-header"]
+    argv = [uv_executable(), "pip", "compile", _requirements_in(env), "--universal", "--generate-hashes", "--no-header"]
     argv += _compile_inputs(env) + _no_emit([*_resolve_family(env, base_dir), *_held_out(env)])
     fields = {"requirements-sha256": requirements_digest_for(env, base_dir), "python": env.python}
     return _emit(base_dir, env.body.lock, argv, base_dir, fields)
@@ -300,7 +313,7 @@ def body_lock_from_uvlock_export(
             raise ReproduceLockError(f"{env.torch.lock} holds no torch, torchvision or torchaudio")
         packages = tomllib.loads((project_dir / "uv.lock").read_text()).get("package", [])
         family = uv_lock_torch_family(packages, roots)
-    argv = [find_uv(), "export", "--frozen", "--no-emit-project", "--no-dev", "--no-header"]
+    argv = [uv_executable(), "export", "--frozen", "--no-emit-project", "--no-dev", "--no-header"]
     for extra in extras:
         argv += ["--extra", extra]
     for group in groups:
@@ -346,12 +359,12 @@ def overlay_lock(
         if project_dir is None:
             raise ReproduceLockError("a test overlay needs project_dir")
         cwd = project_dir
-        argv = [find_uv(), "export", "--frozen", "--no-emit-project", "--only-group", group, "--no-header"]
+        argv = [uv_executable(), "export", "--frozen", "--no-emit-project", "--only-group", group, "--no-header"]
     else:
         if requirements is None:
             raise ReproduceLockError("a notebook_tools overlay needs its requirements file")
         cwd = base_dir
-        argv = [find_uv(), "pip", "compile", requirements, "--universal", "--generate-hashes", "--no-header"]
+        argv = [uv_executable(), "pip", "compile", requirements, "--universal", "--generate-hashes", "--no-header"]
         argv += ["--python-version", env.python, "--exclude-newer", exclude_newer_timestamp(env.exclude_newer)]
         argv += ["--index-url", env.body.index_url]
         for base in ([env.torch.lock] if env.torch else []) + [env.body.lock]:
