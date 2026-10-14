@@ -196,3 +196,13 @@ def test_tolerance_from_steps_must_declare_the_metric() -> None:
     with pytest.raises(DagError) as info:
         check_expect_sources([_step("s1"), _step("s2", metrics_schema=other), gather])
     assert (info.value.code, info.value.steps) == ("E_DAG_TOLERANCE_METRIC", ("gather",))
+    redraw = {k: v for k, v in band.items() if k != "chains"} | {
+        "redraws": ["s1", "s2", "s3"],
+        "n_subset": 200,
+        "n_full": 2000,
+    }
+    inference = _step("infer", ["s1", "s2", "s3"], expect=[{"metric": "top1", "kind": "seed_band", "band": redraw}])
+    check_expect_sources([_step("s1"), _step("s2"), _step("s3"), inference])
+    with pytest.raises(DagError) as info:
+        check_expect_sources([_step("s1"), _step("s2"), _step("s3", metrics_schema=other), inference])
+    assert (info.value.code, info.value.steps) == ("E_DAG_TOLERANCE_METRIC", ("infer",))
