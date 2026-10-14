@@ -1,8 +1,9 @@
 """The host record: where a step ran, for provenance.
 
 `host_record` returns a fixed set of keys (`HOST_KEYS`): hostname, CPU model and counts, the first
-GPU's name and driver with the GPU count, the venv's Python, torch and torch CUDA versions, and the
-batch job id. A value that cannot be determined is None (GPU count 0).
+GPU's name and driver with the GPU count, the host's CUDA version (`cuda_probe.detect_host_cuda`), the venv's
+Python, torch and torch CUDA versions, and the batch job id. A value that cannot be determined is None (GPU
+count 0).
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from senselab.utils import cuda_probe
+
 Runner = Callable[[Sequence[str]], tuple[int, str]]
 
 HOST_KEYS = (
@@ -25,6 +28,7 @@ HOST_KEYS = (
     "gpu_name",
     "gpu_driver",
     "gpu_count",
+    "host_cuda",
     "python",
     "torch",
     "torch_cuda",
@@ -110,6 +114,11 @@ def _probe(venv: Path, runner: Runner) -> dict[str, Any]:
     return empty
 
 
+def _host_cuda() -> str | None:
+    version = cuda_probe.detect_host_cuda().version
+    return None if version is None else f"{version[0]}.{version[1]}"
+
+
 def host_record(venv: str | os.PathLike[str] | None, *, runner: Runner | None = None) -> dict[str, Any]:
     """Describe this host and a venv's interpreter.
 
@@ -118,7 +127,8 @@ def host_record(venv: str | os.PathLike[str] | None, *, runner: Runner | None = 
             versions in isolated mode with a minimal environment. None leaves those three None, for a
             caller that learns them inside the sandbox instead (the run's preamble).
         runner: Runs an argv and returns ``(returncode, stdout)``; a missing program or timeout is
-            ``(127, "")``. Defaults to a subprocess runner.
+            ``(127, "")``. Defaults to a subprocess runner. The host CUDA version is always probed by
+            `cuda_probe.detect_host_cuda`.
 
     Returns:
         A dict with exactly the keys in `HOST_KEYS`.
@@ -137,6 +147,7 @@ def host_record(venv: str | os.PathLike[str] | None, *, runner: Runner | None = 
         "gpu_name": gpu_name,
         "gpu_driver": gpu_driver,
         "gpu_count": gpu_count,
+        "host_cuda": _host_cuda(),
         **(_probe(Path(venv), run) if venv is not None else {"python": None, "torch": None, "torch_cuda": None}),
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
     }

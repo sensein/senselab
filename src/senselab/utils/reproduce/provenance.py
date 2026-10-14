@@ -62,14 +62,17 @@ _PACKAGE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+!_-]{0,63}$")
 _WORDS = re.compile(r"^[A-Za-z0-9()@.,_+-]+( [A-Za-z0-9()@.,_+-]+)*$")
 _FILE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
-DETAIL_KEYS = ("sources_lock", "sources_lock_sha256")
+DETAIL_KEYS = ("sources_lock", "sources_lock_sha256", "engine")
 """The keys a step record's ``details`` may carry."""
+ENGINE_NAMES = ("vllm", "transformers-batched")
+_SERVER_ARG = re.compile(r"^[!-~]{1,256}$")
 _NUMERIC = re.compile(r"^[0-9]+(\.[0-9]+)*$")
 _HOST_STRINGS: dict[str, re.Pattern[str]] = {
     "hostname": re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,252}[A-Za-z0-9])?$"),
     "cpu_model": _WORDS,
     "gpu_name": _WORDS,
     "gpu_driver": _NUMERIC,
+    "host_cuda": _NUMERIC,
     "python": _VERSION,
     "torch": _VERSION,
     "torch_cuda": _NUMERIC,
@@ -174,6 +177,25 @@ def drop_unrecordable_host_values(host: Mapping[str, Any]) -> tuple[dict[str, An
     return clean, sorted(set(dropped))
 
 
+def _engine_ok(identity: object) -> bool:
+    """Whether ``identity`` has the closed form of `engine.engine_identity`."""
+    if not isinstance(identity, Mapping) or identity.get("name") not in ENGINE_NAMES:
+        return False
+    counts: tuple[str, ...] = ("concurrency", "batch_size")
+    keys = {"name", "version", *counts}
+    if identity["name"] == "vllm":
+        counts += ("servers_per_card",)
+        keys |= {"server_args", "servers_per_card"}
+        args = identity.get("server_args")
+        if not isinstance(args, list) or not all(isinstance(a, str) and _SERVER_ARG.match(a) for a in args):
+            return False
+    return (
+        set(identity) == keys
+        and _matches(identity.get("version"), _VERSION)
+        and all(_is_int(identity.get(k)) and identity[k] >= 1 for k in counts)
+    )
+
+
 def _check_venv(venv: VenvResult) -> str:
     _check(_is_name(venv.path.name, _VENV_NAME), "venv name")
     _check(_matches(venv.env_key, _HEX64), "venv env_key")
@@ -214,7 +236,7 @@ def record_step(
     env_sha256: str | None = None,
     argv_sha256: str | None = None,
     argv: Sequence[str] | None = None,
-    details: Mapping[str, str] | None = None,
+    details: Mapping[str, Any] | None = None,
 ) -> list[Path]:
     """Write one step's provenance into ``prov_dir``.
 
@@ -239,8 +261,8 @@ def record_step(
         argv_sha256: The sha256 of the step's argv.
         argv: The rendered argv, given only under a non-confidential policy; recorded as the activity's
             ``argv``.
-        details: Recorded as the activity's ``details``: ``sources_lock_sha256`` (hex) and ``sources_lock``
-            (the lock file's name), and no other key.
+        details: Recorded as the activity's ``details``: ``sources_lock_sha256`` (hex), ``sources_lock`` (the lock
+            file's name) and ``engine`` (`engine.engine_identity`), and no other key.
 
     Returns:
         The files written: ``store.jsonl``, then the BEP028 files in `write_bep028_files` order. Any
@@ -271,6 +293,7 @@ def record_step(
     _check(set(details) <= set(DETAIL_KEYS), "details")
     _check("sources_lock_sha256" not in details or _matches(details["sources_lock_sha256"], _HEX64), "details")
     _check("sources_lock" not in details or _matches(details["sources_lock"], _FILE_NAME), "details")
+    _check("engine" not in details or _engine_ok(details["engine"]), "details engine")
     installed = _check_venv(venv)
 
     store = ProvStore(run_id=step_key)
