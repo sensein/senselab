@@ -438,17 +438,7 @@ class WorkPool:
         return held
 
     def _known(self, item_id: str) -> bool:
-        if any(
-            _exists(p)
-            for p in (
-                self._d("queue") / f"{item_id}.json",
-                self._d("leases") / item_id,
-                self._d("done") / f"{item_id}.json",
-                self._d("dead") / f"{item_id}.json",
-            )
-        ):
-            return True
-        return any(data.get("id") == item_id for _, data in self._tmp_items())
+        return self.state(item_id) is not None
 
     def state(self, item_id: str) -> Optional[str]:
         """Where one item is now: ``done``, ``dead``, ``leased``, ``queued``, ``staged`` (in ``tmp/``) or None.
