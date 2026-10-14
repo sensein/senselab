@@ -568,13 +568,17 @@ class HFFile(_Model):
 class HFWeights(_Model):
     """Hugging Face weights a step loads: a repository at a 40-hex commit, and every file it reads, hashed.
 
-    ``revision`` is a commit, never a branch or tag, so the snapshot cannot move under the step.
+    ``revision`` is a commit, never a branch or tag, so the snapshot cannot move under the step. ``input``
+    names the registered model-cache input holding the snapshot; it must be one of the step's ``lock_inputs``
+    (``E_SPEC_INPUT_UNDECLARED``), and its verified manifest lets prefetch accept files without hashing them
+    (`weights.verify_hf`).
     """
 
     repo: HFRepo
     repo_type: Literal["model", "dataset"] = "model"
     revision: Commit
     files: list[HFFile] = Field(min_length=1)
+    input: Name | None = None
 
     @field_validator("files")
     @classmethod
@@ -683,7 +687,8 @@ class StepSpec(_Model):
         if self.env.r_lib is not None:
             templates.append(self.env.r_lib)
         referenced = [s for t in templates for s in _upstream(t)]
-        undeclared = sorted({i for t in templates for i in _registered(t)} - set(self.lock_inputs))
+        named = {i for t in templates for i in _registered(t)} | {w.input for w in self.hf_weights if w.input}
+        undeclared = sorted(named - set(self.lock_inputs))
         if undeclared:
             raise ValueError(
                 f"E_SPEC_INPUT_UNDECLARED: step {self.name!r} names inputs outside its lock_inputs: {undeclared}"
@@ -871,6 +876,9 @@ class Profile(_Model):
     of a mapped URL uses instead of the network (`source.mirror`); its keys are stored as
     `source.canonical_repo` names, and two keys naming one repository with different paths are refused.
     Under ``mirror_map_strict`` an unmapped repository or submodule URL is refused (``mirror-unmapped``).
+
+    ``hf_hub_cache`` is the read-only Hugging Face hub cache that holds every step's ``hf_weights``; it lies
+    under a data root, so the sandbox shows it read-only.
     """
 
     roots: dict[Name, Path] = Field(min_length=1)
@@ -894,6 +902,7 @@ class Profile(_Model):
     scan_hook: list[str] = []
     mirror_map: dict[str, Path] = {}
     mirror_map_strict: bool = False
+    hf_hub_cache: Path | None = None
 
     _no_secrets = field_validator("env")(_reject_secret_keys)
 
@@ -914,6 +923,7 @@ class Profile(_Model):
         paths += [p for p in (self.modules_init, self.job_tmp_root) if p is not None]
         paths += [*self.restricted_dirs, *(p for p in (self.restricted_results_root, self.released_metrics_root) if p)]
         paths += list(self.mirror_map.values())
+        paths += [] if self.hf_hub_cache is None else [self.hf_hub_cache]
         native = [d for n in self.native.values() for d in (*n.bin_dirs, *n.lib_dirs)]
         relative = sorted(str(p) for p in (*paths, *native) if not p.is_absolute())
         if relative:
@@ -936,6 +946,8 @@ class Profile(_Model):
             for root in (r for r in roots if path.is_relative_to(r)):
                 if not any(path.is_relative_to(w) and _strictly_under(w, root) for w in rw):
                     raise ValueError(f"{field} lies inside a data root and under no rw_under_roots entry inside it")
+        if self.hf_hub_cache is not None and not any(_norm(self.hf_hub_cache).is_relative_to(r) for r in roots):
+            raise ValueError("hf_hub_cache must lie under a data root")
         self._restricted_consistent(rw)
         return self
 

@@ -53,6 +53,7 @@ RESERVED = frozenset(
         "PATH",
         "PYTHONPATH",
         "TORCH_HOME",
+        "HUGGINGFACE_HUB_CACHE",
         "CUDA_CACHE_PATH",
         "TMPDIR",
         "HOME",
@@ -392,6 +393,10 @@ def _keyed(step: StepSpec, profile: Profile) -> tuple[dict[str, str], dict[str, 
         "REPRO_OUT": "{out}",
         "REPRO_TMP": "{tmp}",
     }
+    if step.hf_weights:
+        templated["HF_HOME"] = "{tmp}/hf"
+        templated["HF_HUB_CACHE"] = "{tmp}/hf-hub"
+        templated["HUGGINGFACE_HUB_CACHE"] = "{tmp}/hf-hub"
     if step.pythonpath:
         templated["PYTHONPATH"] = ":".join(step.pythonpath)
     if _native(step, profile, "lib_dirs"):
