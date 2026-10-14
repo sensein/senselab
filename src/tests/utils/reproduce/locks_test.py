@@ -811,3 +811,75 @@ def test_no_duplicate_helpers_remain(tmp_path: Path) -> None:
     assert second_in.wait(30)
     reader.join()
     writer.join()
+
+
+def test_a_reader_rechecks_the_path_by_opening_it_not_by_stat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A shared `file_lock` waiting on the old file is retaken on the new one even when ``stat`` is stale.
+
+    On NFS ``stat`` can be answered from a cached dentry that still names the released file; the simulated cache
+    answers every ``stat`` of the lock path with the old file. ``open`` plus ``fstat`` sees the file now there.
+    """
+    import fcntl
+    import os
+
+    from senselab.utils.reproduce import build
+
+    resource = tmp_path / "venv"
+    lock = Path(str(resource) + ".lock")
+    opened, released, reader_in, reader_out = (threading.Event() for _ in range(4))
+    real_flock, real_stat = fcntl.flock, os.stat
+    reader: list[threading.Thread] = []
+
+    def flock(fd: int, operation: int) -> None:
+        if reader and threading.current_thread() is reader[0] and not opened.is_set():
+            opened.set()
+            released.wait(10)
+        real_flock(fd, operation)
+
+    def read() -> None:
+        with build.file_lock(lock, shared=True):
+            reader_in.set()
+            reader_out.wait(30)
+
+    first = build.exclusive_lock(resource)
+    first.__enter__()
+    cached = real_stat(lock)
+    monkeypatch.setattr(fcntl, "flock", flock)
+    monkeypatch.setattr(os, "stat", lambda p, *a, **k: cached if str(p) == str(lock) else real_stat(p, *a, **k))
+    try:
+        reader.append(threading.Thread(target=read))
+        reader[0].start()
+        assert opened.wait(10)
+        first.__exit__(None, None, None)
+        released.set()
+        assert reader_in.wait(10)
+        from senselab.utils.file_lock import SharedFileLock
+
+        with pytest.raises(TimeoutError):
+            with SharedFileLock(resource, timeout=1, manage_dir_mode=False):
+                pytest.fail("a writer entered while a reader held the lock")
+    finally:
+        released.set()
+        reader_out.set()
+        if reader:
+            reader[0].join(30)
+
+
+def test_every_exclusive_driver_lock_is_a_shared_file_lock() -> None:
+    """No driver module takes an exclusive raw `file_lock`: exclusive locks go through `build.exclusive_lock`."""
+    import ast
+
+    from senselab.utils.reproduce import cache
+
+    root = Path(cache.__file__).parent
+    exclusive = [
+        (path.name, node.lineno)
+        for path in sorted(root.rglob("*.py"))
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", getattr(node.func, "attr", None)) == "file_lock"
+        and not any(
+            k.arg == "shared" and isinstance(k.value, ast.Constant) and k.value.value is True for k in node.keywords
+        )
+    ]
+    assert exclusive == []

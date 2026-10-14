@@ -43,7 +43,7 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
-from senselab.utils.file_lock import SharedFileLock
+from senselab.utils.file_lock import SharedFileLock, lock_fd_matches_path
 from senselab.utils.reproduce import sandbox
 from senselab.utils.reproduce.lockgen import uv_executable
 from senselab.utils.reproduce.locks import ReproduceLockError, file_sha256, lock_entries, normalize_name, verify_files
@@ -712,24 +712,23 @@ def format_wheels_lock(lines: Iterable[WheelLine]) -> str:
 def file_lock(path: Path, *, shared: bool = False) -> Iterator[None]:
     """Hold a ``flock`` on ``path`` (created if absent, with its directory), shared or exclusive.
 
-    The file is opened read-write: on NFS ``flock`` becomes a POSIX lock, and a shared lock on a
-    write-only descriptor fails with ``EBADF``. A lock taken on a file that is no longer at ``path`` (an
-    `exclusive_lock` unlinks the file as it releases) is dropped and taken again on the file now there.
+    The driver uses it only for shared (reader) locks; its exclusive locks are `exclusive_lock`. The file is
+    opened read-write: on NFS ``flock`` becomes a POSIX lock, and a shared lock on a write-only descriptor fails
+    with ``EBADF``. A lock taken on a file that is no longer at ``path`` (an `exclusive_lock` unlinks the file as
+    it releases; on NFS the old file is silly-renamed and keeps a link) is dropped and taken again on the file now
+    there. The check opens the path and compares ``fstat`` results (`lock_fd_matches_path`), never ``stat``,
+    which NFS can answer from a cached dentry.
     """
     while True:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o666)
         try:
             fcntl.flock(fd, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
-            held = os.fstat(fd)
-            try:
-                current = os.stat(path)
-            except FileNotFoundError:
-                current = None
+            same = lock_fd_matches_path(fd, path)
         except BaseException:
             os.close(fd)
             raise
-        if current is not None and (current.st_dev, current.st_ino) == (held.st_dev, held.st_ino):
+        if same:
             break
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
@@ -745,7 +744,8 @@ def exclusive_lock(resource: Path) -> contextlib.AbstractContextManager[object]:
 
     It waits as long as a holder holds the lock (a reader's shared `file_lock` included), records its holder and
     heartbeat beside the lock, and leaves the directory's mode alone. It unlinks the lock file as it releases, which
-    `file_lock` checks for.
+    `file_lock` checks for; it checks the same itself after each acquire (`SharedFileLock`), so two writers never
+    hold the old and the new file at once.
     """
     return SharedFileLock(resource, timeout=-1, manage_dir_mode=False)
 

@@ -760,7 +760,7 @@ def remove_public_records(input_id: str, profile: Profile) -> None:
     path = _records_path(directory, input_id)
     if not directory.is_dir():
         return
-    with build.file_lock(path.with_name(path.name + ".lock")):
+    with build.exclusive_lock(path):
         for target in (path, directory / f"{input_id}{OVERLAY_SUFFIX}"):
             target.unlink(missing_ok=True)
 
@@ -908,7 +908,7 @@ def append_record(directory: Path, input_id: str, verification: Verification) ->
         InputError: ``E_INPUT_RECORD`` when the records file exists but does not parse (it is left as it is).
     """
     path = _records_path(directory, input_id)
-    with build.file_lock(path.with_name(path.name + ".lock")):
+    with build.exclusive_lock(path):
         try:
             records = _load_records(path)
         except ValueError:
