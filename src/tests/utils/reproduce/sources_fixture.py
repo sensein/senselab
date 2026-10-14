@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any
 import yaml
 
 from senselab.utils.reproduce import inputs, lock
-from senselab.utils.reproduce.spec import RESERVED_ROOT_NAMES, StepSpec
+from senselab.utils.reproduce.spec import RESERVED_ROOT_NAMES, Profile, StepSpec
 
 
 def _sha(data: bytes) -> str:
@@ -84,7 +85,7 @@ def register_input(
     """Freeze ``roots[root]/relpath`` into ``<root>/_manifests``, register it and return its lock entry."""
     manifest_rel = f"_manifests/{input_id}.xxh3.tsv"
     out = roots[root] / manifest_rel
-    inputs.write_manifest(roots[root] / relpath, out)
+    inputs.write_manifest(roots[root] / relpath, out, include=over.get("include", ()), exclude=over.get("exclude", ()))
     entry: dict[str, Any] = {
         "id": input_id,
         "root": root,
@@ -101,3 +102,14 @@ def register_input(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(entry, sort_keys=False))
     return {"registry_sha256": _sha(path.read_bytes()), "manifest_sha256": entry["manifest"]["sha256"]}
+
+
+def verify_input(
+    base: Path, profile: Profile, input_id: str, *, now: datetime.datetime | None = None
+) -> inputs.VerifyRecord:
+    """Verify a registered input as ``verify-inputs`` does and append its record; return the record."""
+    entry, _ = inputs.read_registry_entry(base, input_id)
+    when = now or datetime.datetime.now(datetime.UTC)
+    verification = inputs.verify(entry, profile, now=when)
+    inputs.append_record(inputs.verify_dir(entry, profile), input_id, verification)
+    return verification.record

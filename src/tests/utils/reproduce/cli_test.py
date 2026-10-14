@@ -1,4 +1,4 @@
-"""Tests for ``python -m senselab.utils.reproduce``: the seven subcommands, lint exit codes, status, run chains.
+"""Tests for ``python -m senselab.utils.reproduce``: the eight subcommands, lint exit codes, status, run chains.
 
 Manifests, profiles, repositories and run trees are synthetic files in ``tmp_path``. The lock, prefetch
 and build entry points are checked with their builders replaced by recorders, so nothing is installed.
@@ -26,7 +26,7 @@ from tests.utils.reproduce.run_test import ADAPTER, World
 from tests.utils.reproduce.slurm_test import FakeSbatch, _step
 from tests.utils.reproduce.sources_fixture import lock_data, write_lock
 
-SUBCOMMANDS = ["lock", "prefetch", "build-one", "run", "submit", "lint", "status"]
+SUBCOMMANDS = ["lock", "prefetch", "build-one", "run", "submit", "lint", "status", "verify-inputs"]
 ZERO = "0" * 64
 DATE = "2026-03-04"
 needs_userns = pytest.mark.skipif(not sandbox.userns_available(), reason="unprivileged user namespaces are unavailable")
@@ -145,8 +145,8 @@ def world(tmp_path: Path) -> World:
 # --- the command line ---------------------------------------------------------------------------------
 
 
-def test_help_lists_the_seven_subcommands(capsys: pytest.CaptureFixture[str]) -> None:
-    """``--help`` names exactly lock, prefetch, build-one, run, submit, lint and status."""
+def test_help_lists_the_eight_subcommands(capsys: pytest.CaptureFixture[str]) -> None:
+    """``--help`` names exactly lock, prefetch, build-one, run, submit, lint, status and verify-inputs."""
     with pytest.raises(SystemExit) as info:
         cli.main(["--help"])
     assert info.value.code == 0

@@ -695,7 +695,10 @@ def gate(
     config: RunConfig,
     entries: Mapping[str, inputs.RegisteredInput] | None = None,
 ) -> Gate:
-    """Check every registered input of a step (`inputs.precheck`); nothing is written and no input file is read.
+    """The inputs gate of a step: the submit rule (`inputs.accepted`) and the pre-check (`inputs.precheck`).
+
+    Nothing is written and no input file is read; the pre-check honours the overlay of each input's latest
+    record.
 
     Args:
         step: The step.
@@ -705,8 +708,9 @@ def gate(
             None.
 
     Returns:
-        The gate; ``codes`` is empty when the step may run. A lock that cannot be used gives its own code, and
-        an input naming a root the profile lacks gives ``E_ROOT_MISSING``.
+        The gate; ``codes`` is empty when the step may run: ``E_INPUT_UNVERIFIED`` (no current ``ok`` record
+        for the registered manifest) and the pre-check's codes. A lock that cannot be used gives its own code,
+        and an input naming a root the profile lacks gives ``E_ROOT_MISSING``.
     """
     if entries is None:
         try:
@@ -716,12 +720,15 @@ def gate(
     entries = dict(entries)
     per_input: dict[str, tuple[str, ...]] = {}
     overlays: dict[str, dict[str, int] | None] = {}
+    now = datetime.datetime.now(datetime.UTC)
     for input_id, entry in entries.items():
         overlays[input_id] = None
         if _roots_missing(entry, config.profile):
             per_input[input_id] = ("E_ROOT_MISSING",)
             continue
-        per_input[input_id] = tuple(inputs.precheck(entry, config.profile, entries, overlays[input_id]))
+        unverified, overlays[input_id] = inputs.accepted(entry, config.profile, now=now)
+        found = inputs.precheck(entry, config.profile, entries, overlays[input_id])
+        per_input[input_id] = tuple(sorted({*unverified, *found}))
     codes = tuple(sorted({c for found in per_input.values() for c in found}))
     return Gate(codes, per_input, entries, overlays)
 

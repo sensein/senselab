@@ -37,10 +37,10 @@ import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import FrameType
+from types import FrameType, MappingProxyType
 from typing import Any, NamedTuple
 
-from senselab.utils.reproduce import run
+from senselab.utils.reproduce import inputs, run
 from senselab.utils.reproduce.build import SYSTEM_PATH
 from senselab.utils.reproduce.dag import toposort
 from senselab.utils.reproduce.spec import RESERVED_ROOT_NAMES, Manifest, PartitionSpec, Profile, StepSpec, placeholders
@@ -97,11 +97,18 @@ class Job(NamedTuple):
 
 
 class Submission(NamedTuple):
-    """The step jobs of one submission, in DAG order, the ``--finalize`` job's id, and the submission id."""
+    """The step jobs of one submission, in DAG order, the ``--finalize`` job's id, and the submission id.
+
+    A submission the inputs gate refused has no jobs: ``refused`` maps each step to the codes of its row, and
+    ``verify_jobs`` lists ``(input id, job id)`` for each ``verify-inputs`` job submitted after a pre-check
+    mismatch.
+    """
 
     jobs: list[Job]
     finalize: str | None
     submission: str
+    refused: Mapping[str, tuple[str, ...]] = MappingProxyType({})
+    verify_jobs: tuple[tuple[str, str], ...] = ()
 
 
 def _new_submission() -> str:
@@ -547,6 +554,39 @@ def render_finalize_job(
     return "\n".join(lines) + "\n"
 
 
+def render_verify_job(
+    profile: Profile,
+    *,
+    command: Sequence[str],
+    date: datetime.date,
+    exports: Mapping[str, str],
+    driver_python: str = sys.executable,
+) -> str:
+    """Render a ``verify-inputs`` job: the profile's ``build`` partition entry, its CPUs, memory and time.
+
+    Args:
+        profile: The site profile.
+        command: The driver arguments (`verify_command`).
+        date: The log date.
+        exports: The variables to export.
+        driver_python: The interpreter with senselab installed.
+
+    Returns:
+        The script text.
+    """
+    part = profile.partitions[profile.build]
+    logs = log_dir(profile, date)
+    lines = _header("reproduce-verify-inputs", part.partition, part.cpus, part.mem, part.time, None, logs)
+    lines += _body(exports, driver_python, command, profile)
+    return "\n".join(lines) + "\n"
+
+
+def verify_command(config: SubmitConfig, input_id: str) -> list[str]:
+    """A ``verify-inputs`` job's driver arguments: ``verify-inputs --profile … --base-dir … <id>``."""
+    argv = ["verify-inputs", "--profile", os.fspath(config.profile_path), "--base-dir", os.fspath(config.base_dir)]
+    return [*argv, input_id]
+
+
 def step_command(config: SubmitConfig, step: str | None, *, finalize: bool = False) -> list[str]:
     """A job's driver arguments: ``run <manifests…> --profile … --date … --submission <id> [--pin <sha>…]``.
 
@@ -674,6 +714,9 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
             if partition is not None:
                 script_for(step, partition)
     finalize_script([])
+    refused = _refused_by_gate(manifests, config, ordered, analysis, orders, runner)
+    if refused is not None:
+        return refused
 
     snapshots: dict[str, dict[str, dict[str, Any] | None]] = {}
     submitted: list[str] = []
@@ -730,6 +773,66 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
                 message += "; squeue failed, so jobs with an unrecorded id may remain (tag " + submission + ")"
             raise SlurmError(message) from None
     return Submission(jobs, finalize, submission)
+
+
+_MISMATCH_CODES = frozenset({inputs.MISMATCH, inputs.MISSING})
+ABORTED = "E_SUBMIT_ABORTED"
+
+
+def _refused_by_gate(
+    manifests: Sequence[Manifest],
+    config: SubmitConfig,
+    ordered: Sequence[StepSpec],
+    analysis: Mapping[str, str],
+    orders: Mapping[str, list[str]],
+    runner: Runner,
+) -> Submission | None:
+    """The submit rule: refuse the whole submission when the inputs gate (`run.gate`) has a code for any step.
+
+    Each step's row becomes ``never-ran`` with its own gate codes, else those of the gated steps it depends on,
+    else ``E_SUBMIT_ABORTED``; rows another submission tagged are left alone. For each input whose pre-check
+    found ``E_INPUT_MISMATCH`` or ``E_INPUT_MISSING``, one ``verify-inputs`` job is submitted (not held).
+
+    Returns:
+        None when no step has a gate code; otherwise the refused submission.
+    """
+    profile = config.profile
+    run_config = run.RunConfig(
+        profile=profile,
+        cache=config.cache,
+        base_dir=config.base_dir,
+        date=config.date,
+        sources={m.name: m.sources for m in manifests},
+    )
+    gates = {s.name: run.gate(s, analysis[s.name], run_config) for s in ordered}
+    if not any(g.codes for g in gates.values()):
+        return None
+    refused: dict[str, tuple[str, ...]] = {}
+    for step in ordered:
+        inherited = {c for n in step.needs if refused[n] != (ABORTED,) for c in refused[n]}
+        refused[step.name] = gates[step.name].codes or tuple(sorted(inherited)) or (ABORTED,)
+    mismatched = sorted({i for g in gates.values() for i, codes in g.per_input.items() if _MISMATCH_CODES & set(codes)})
+    verify_jobs: list[tuple[str, str]] = []
+    with _umask(submit_umask(profile)):
+        for name, order in orders.items():
+            rows = [run.never_ran_row(s, refused[s]) for s in order]
+            run.update_run_record(profile.runs_root, config.date, name, rows, order=order, untagged_only=True)
+        if mismatched:
+            prepare_log_dir(profile, config.date)
+        for input_id in mismatched:
+            script = render_verify_job(
+                profile,
+                command=verify_command(config, input_id),
+                date=config.date,
+                exports=config.exports,
+                driver_python=config.driver_python,
+            )
+            result = runner([SBATCH, "--parsable", f"--comment={config.submission}"], script)
+            job_id = (result.stdout or "").strip().split(";", 1)[0]
+            if result.returncode != 0 or not _JOB_ID.match(job_id):
+                raise SlurmError(f"sbatch of the verify-inputs job for {input_id} exited {result.returncode}")
+            verify_jobs.append((input_id, job_id))
+    return Submission([], None, config.submission, refused, tuple(verify_jobs))
 
 
 def _check(result: subprocess.CompletedProcess[str], what: str) -> None:
