@@ -614,3 +614,15 @@ def test_a_precheck_mismatch_at_submit_submits_a_verify_job(
     captured = capsys.readouterr()
     assert "verify-not-submitted\ttables" in captured.out.splitlines()
     assert any(line.startswith("prep\t-\tnever-ran") for line in captured.out.splitlines())
+
+    date = datetime.date(2026, 3, 4)
+    done = {"step": "prep", "key": "ab" * 32, "status": "executed", "exit": 0, "codes": []}
+    run.update_run_record(world.tmp / "runs", date, "demo", [done], order=["prep"])
+    assert cli.main([*argv, "--date", "2026-03-04"]) == cli.EXIT_FAILED
+    capsys.readouterr()
+    assert {k: _rows(world)["prep"][k] for k in done} == done
+    failed = {**done, "status": "failed", "exit": 1, "codes": ["E_STEP_FAILED"]}
+    run.update_run_record(world.tmp / "runs", date, "demo", [failed], order=["prep"])
+    assert cli.main([*argv, "--date", "2026-03-04"]) == cli.EXIT_FAILED
+    capsys.readouterr()
+    assert (_rows(world)["prep"]["status"], _rows(world)["prep"]["codes"]) == ("never-ran", ["E_INPUT_MISMATCH"])
