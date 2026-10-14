@@ -670,6 +670,11 @@ def test_canonical_repo_normalises_ssh_https_and_dot_git(tmp_path: Path) -> None
     (tmp_path / "link").symlink_to(tmp_path / "real")
     assert source.canonical_repo(str(tmp_path / "link")) == os.path.realpath(tmp_path / "real")
     assert source.canonical_repo(f"file://{tmp_path / 'link'}") == os.path.realpath(tmp_path / "real")
+    assert source.canonical_repo("host.example/org/repo") == "host.example/org/repo"
+    assert source.canonical_repo("repo") == "repo"
+    linked = {str(tmp_path / "real"): str(tmp_path / "a.git"), str(tmp_path / "link"): str(tmp_path / "b.git")}
+    with pytest.raises(ValueError, match="mirror_map"):
+        _profile_with_map(tmp_path, linked)
     profile = _profile_with_map(tmp_path, {"git@host.example:org/repo.git": str(tmp_path / "m" / "repo.git")})
     assert profile.mirror_map == {"host.example/org/repo": tmp_path / "m" / "repo.git"}
     same = {
@@ -695,12 +700,19 @@ def mapped(tmp_path: Path) -> dict[str, object]:
     _git(sub, "init", "-q")
     (sub / "lib.py").write_text("VALUE = 1\n")
     sub_sha = _commit_all(sub, "lib")
+    rel = tmp_path / "upstream" / "rel"
+    rel.mkdir(parents=True)
+    _git(rel, "init", "-q")
+    (rel / "rel.py").write_text("VALUE = 2\n")
+    rel_sha = _commit_all(rel, "rel")
     top = tmp_path / "upstream" / "top"
     top.mkdir(parents=True)
     _git(top, "init", "-q")
     (top / "run.py").write_text("print(1)\n")
     _git(top, "submodule", "add", "-q", str(sub), "ext/lib")
     _git(top, "config", "-f", ".gitmodules", "submodule.ext/lib.url", "https://example.invalid/org/lib.git")
+    _git(top, "submodule", "add", "-q", str(rel), "ext/rel")
+    _git(top, "config", "-f", ".gitmodules", "submodule.ext/rel.url", "../rel.git")
     commit = _commit_all(top, "top")
     (top / "run.py").write_text("print(2)\n")
     side = _commit_all(top, "side")
@@ -710,9 +722,14 @@ def mapped(tmp_path: Path) -> dict[str, object]:
     mirrors.mkdir()
     _git(mirrors, "clone", "-q", "--mirror", str(top), "org__top.git")
     _git(mirrors, "clone", "-q", "--mirror", str(sub), "org__lib.git")
+    _git(mirrors, "clone", "-q", "--mirror", str(rel), "org__rel.git")
+    _git(mirrors, "init", "-q", "--bare", "empty.git")
     return {
         "top": mirrors / "org__top.git",
         "lib": mirrors / "org__lib.git",
+        "rel": mirrors / "org__rel.git",
+        "empty": mirrors / "empty.git",
+        "rel_sha": rel_sha,
         "commit": commit,
         "side": side,
         "sub_sha": sub_sha,
@@ -753,6 +770,14 @@ def test_a_mapped_url_is_fetched_from_the_local_mirror_with_a_fresh_cache(
         assert env.get("GIT_ALLOW_PROTOCOL") == "file"
         assert str(mapped["top"]) in argv and "origin" not in argv
         assert "https_proxy" not in env
+    other = source.mirror(
+        "git@example.invalid:a.git",
+        str(mapped["commit"]),
+        cache=tmp_path / "cache",
+        submodules=False,
+        mirror_map=mirror_map,
+    )
+    assert other == path
 
 
 def test_an_unmapped_url_fails_under_strict(mapped: dict[str, object], tmp_path: Path) -> None:
@@ -781,6 +806,7 @@ def test_an_https_submodule_maps_to_an_ssh_keyed_mirror(
     mirror_map = {
         "ssh://git@example.invalid/org/top.git": Path(str(mapped["top"])),
         "git@example.invalid:org/lib.git": Path(str(mapped["lib"])),
+        "https://example.invalid/org/rel": Path(str(mapped["rel"])),
     }
     co = source.checkout(
         "https://example.invalid/org/top.git",
@@ -790,11 +816,12 @@ def test_an_https_submodule_maps_to_an_ssh_keyed_mirror(
         mirror_map=mirror_map,
         strict=True,
     )
-    assert co.submodules == {"ext/lib": mapped["sub_sha"]}
+    assert co.submodules == {"ext/lib": mapped["sub_sha"], "ext/rel": mapped["rel_sha"]}
     assert (co.worktree / "ext" / "lib" / "lib.py").read_text() == "VALUE = 1\n"
+    assert (co.worktree / "ext" / "rel" / "rel.py").read_text() == "VALUE = 2\n"
     lib = tmp_path / "cache" / "src" / "lib"
     assert _git(lib, "config", "--get", "remote.origin.url") == "https://example.invalid/org/lib.git"
-    assert {a[a.index("--no-prune") + 1] for a, _ in fetches} == {str(mapped["top"]), str(mapped["lib"])}
+    assert {a[a.index("--no-prune") + 1] for a, _ in fetches} == {str(mapped[k]) for k in ("top", "lib", "rel")}
     assert all(env.get("GIT_ALLOW_PROTOCOL") == "file" for _, env in fetches)
     urls = source.submodule_urls(
         Path(str(mapped["top"])),
@@ -802,7 +829,16 @@ def test_an_https_submodule_maps_to_an_ssh_keyed_mirror(
         url="https://example.invalid/org/top.git",
         mirror_map=mirror_map,
     )
-    assert urls == ["https://example.invalid/org/lib.git"]
+    assert urls == ["https://example.invalid/org/lib.git", "https://example.invalid/org/rel.git"]
+    hollow = {**mirror_map, "git@example.invalid:org/lib.git": Path(str(mapped["empty"]))}
+    with pytest.raises(ReproduceSourceError) as info:
+        source.submodule_urls(
+            Path(str(mapped["top"])),
+            str(mapped["commit"]),
+            url="https://example.invalid/org/top.git",
+            mirror_map=hollow,
+        )
+    assert info.value.code == source.COMMIT_MISSING
 
 
 def test_an_existing_mirror_with_the_commit_never_fetches(

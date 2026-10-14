@@ -380,6 +380,8 @@ def _mirror_findings(where: str, step: StepSpec, profile: Profile) -> list[str]:
     mapped = table.get(source.canonical_repo(step.repo))
     if mapped is None:
         return [f"{where}: repo-unmapped {step.name}"]
+    if not source.mapped_has_commit(mapped, step.commit):
+        return [f"{where}: {source.COMMIT_MISSING} {step.name}"]
     if not (profile.mirror_map_strict and step.submodules):
         return []
     try:
@@ -419,6 +421,7 @@ def lint_findings(
         ``scan-hook-missing`` when the profile's scan hook cannot run (`restricted.hook_missing`),
         ``E_SPEC_RESTRICTED`` for a step whose ``restricted`` declaration is refused (`restricted.violations`);
         with a mirror map (or ``mirror_map_strict``), ``repo-unmapped <step>`` for a step repository it lacks,
+        ``commit-missing <step>`` when the mapped repository lacks the step's commit,
         and under strict ``submodule-unmapped <step> <count>`` for the submodule URLs at the step's commit,
         read from the mapped repository, that it lacks (or the `source` code when that cannot be read);
         and the warning
