@@ -30,6 +30,7 @@ from __future__ import annotations
 import atexit
 import hashlib
 import json
+import logging
 import os
 import queue
 import subprocess
@@ -38,7 +39,7 @@ import time
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
-from senselab.utils.data_structures.logging import logger
+logger = logging.getLogger("senselab")
 
 _SERVE_PREAMBLE = r"""
 import json as _sv_json
@@ -439,12 +440,19 @@ def serve_in_venv(
             _POOL[key] = worker
     with worker.lock:
         if worker.pid is not None and not worker.alive:
-            _event("died_idle", worker, returncode=worker.returncode(), tail=worker.tail()[-2000:])
+            # Only the first caller to find this worker dead replaces it; a caller queued behind it on the same
+            # lock is served by the current entry instead of replacing that one too.
             with _POOL_LOCK:
-                replacement = VenvWorker(key, label)
-                _POOL[key] = replacement
-                _LOST.add(key)
-            worker.close()
+                replacement = _POOL.get(key)
+                replaced = replacement is worker or replacement is None
+                if replaced:
+                    replacement = VenvWorker(key, label)
+                    _POOL[key] = replacement
+                    _LOST.add(key)
+            assert replacement is not None
+            if replaced:
+                _event("died_idle", worker, returncode=worker.returncode(), tail=worker.tail()[-2000:])
+                worker.close()
             with replacement.lock:
                 return _serve(replacement, python, script, init, request, env, load_timeout_s, request_timeout_s)
         return _serve(worker, python, script, init, request, env, load_timeout_s, request_timeout_s)

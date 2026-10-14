@@ -177,6 +177,21 @@ def test_only_the_cuda_variant_packages_torch_alone_pulls_in_are_left_out() -> N
     ]
 
 
+def test_triton_torch_pulls_in_is_left_out_even_when_another_package_needs_it() -> None:
+    """Triton comes from the torch index with torch whenever torch depends on it; without torch it stays."""
+    packages = {
+        "torch": ("2.13.0", {"vllm"}),
+        "triton": ("3.7.1", {"torch", "vllm", "xgrammar"}),
+        "pytorch-triton-rocm": ("3.7.0", {"torch", "vllm"}),
+        "nvidia-nccl-cu13": ("2.28.3", {"torch", "vllm"}),
+        "vllm": ("0.31.0", set()),
+        "xgrammar": ("0.2.0", {"vllm"}),
+    }
+    assert torch_only_cuda_packages(packages) == ["pytorch-triton-rocm", "torch", "triton"]
+    without_torch = {"triton": ("3.7.1", {"xgrammar"}), "xgrammar": ("0.2.0", set())}
+    assert torch_only_cuda_packages(without_torch) == []
+
+
 def test_torch_is_bounded_down_until_every_index_serves_it(monkeypatch: pytest.MonkeyPatch) -> None:
     """A torch the CUDA or CPU index lacks is excluded and the resolution repeated."""
     compiles: list[str] = []
@@ -189,7 +204,7 @@ def test_torch_is_bounded_down_until_every_index_serves_it(monkeypatch: pytest.M
 
     monkeypatch.setattr(venv_lock, "_compile", fake_compile)
     monkeypatch.setattr(venv_lock, "wheel_on_index", lambda pkg, version, tag, py, platform: version != "2.9.0")
-    monkeypatch.setattr(venv_lock, "_uv", lambda: "uv")
+    monkeypatch.setattr(venv_lock, "find_uv", lambda: "uv")
 
     text = compile_lock("t", ["torch>=2.8", "foo"], "3.12", exclude_newer="2026-10-02T00:00:00Z")
 
@@ -224,3 +239,14 @@ def test_the_newest_index_follows_the_cuda_cap() -> None:
     assert venv_lock.top_cuda_tag(None) == "cu128"
     assert venv_lock.top_cuda_tag((12, 4)) == "cu124"
     assert venv_lock.top_cuda_tag((12, 1)) == "cu121"
+
+
+def test_a_missing_uv_is_a_venv_lock_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without uv, compiling a lock fails with ``VenvLockError``, the module's own error type."""
+
+    def no_uv() -> str:
+        raise FileNotFoundError("uv not found")
+
+    monkeypatch.setattr(venv_lock, "find_uv", no_uv)
+    with pytest.raises(venv_lock.VenvLockError, match="uv not found on PATH or in ~/.local/bin, ~/.cargo/bin"):
+        compile_lock("t", ["foo"], "3.12", exclude_newer="2026-10-02T00:00:00Z")

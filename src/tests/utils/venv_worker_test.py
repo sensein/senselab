@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterator
 
@@ -158,3 +161,61 @@ def test_shutdown_ends_every_worker(tmp_path: Path) -> None:
     assert all(p is not None and p.poll() is not None for p in processes)
     again = _call(tmp_path, {"x": 1}, tag="a")
     assert again["pid"] not in (a["pid"], b["pid"])
+
+
+class _CountingLock:
+    """A worker lock that counts the threads that have asked for it."""
+
+    def __init__(self, inner: Any) -> None:  # noqa: ANN401 — a threading.Lock
+        self.inner, self.asked = inner, 0
+
+    def __enter__(self) -> None:
+        self.asked += 1
+        self.inner.acquire()
+
+    def __exit__(self, *exc: object) -> None:
+        self.inner.release()
+
+
+def test_two_callers_of_a_dead_idle_worker_share_one_replacement(tmp_path: Path) -> None:
+    """Two calls queued on a worker that died idle start one replacement; the second is served by it."""
+    first = _call(tmp_path, {"x": 1})
+    os.kill(first["pid"], 9)
+    worker = next(iter(venv_worker._POOL.values()))
+    worker._process.wait(timeout=10)  # type: ignore[union-attr]
+    gate = _CountingLock(worker.lock)
+    worker.lock = gate  # type: ignore[assignment]
+    replies: list[Dict[str, Any]] = []
+    errors: list[BaseException] = []
+
+    def call(x: int) -> None:
+        try:
+            replies.append(_call(tmp_path, {"x": x}))
+        except BaseException as exc:  # noqa: BLE001 — reported by the assertion below
+            errors.append(exc)
+
+    gate.inner.acquire()
+    threads = [threading.Thread(target=call, args=(x,)) for x in (2, 3)]
+    for thread in threads:
+        thread.start()
+    deadline = time.monotonic() + 30
+    while gate.asked < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert gate.asked == 2
+    gate.inner.release()
+    for thread in threads:
+        thread.join(timeout=60)
+    assert errors == []
+    assert sorted(r["x2"] for r in replies) == [4, 6]
+    assert len({r["pid"] for r in replies}) == 1 and first["pid"] not in {r["pid"] for r in replies}
+    assert len(_loads(tmp_path)) == 2 and len(venv_worker._POOL) == 1
+    assert [e["event"] for e in venv_worker_events()] == ["died_idle", "restart"]
+
+
+def test_importing_venv_worker_pulls_in_neither_torch_nor_the_data_structures() -> None:
+    """The module logs through ``logging.getLogger``, so a lean host can import it without senselab's heavy deps."""
+    heavy = ("torch", "senselab.utils.data_structures")
+    code = f"import sys, senselab.utils.venv_worker; print([m for m in {heavy!r} if m in sys.modules])"
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.strip().splitlines()[-1] == "[]"
