@@ -56,9 +56,10 @@ VERIFY_DIR = "input-verify"
 OVERLAY_SUFFIX = ".mtime-overlay.tsv"
 OVERLAY_HEADER = "relpath\tmtime_ns"
 DIRS_SUFFIX = ".dirs.tsv"
-DIRS_HEADER = "reldir\tsubdirs"
-"""The manifest's dirs sidecar, ``<manifest>.dirs.tsv``: each dir holding a row (and its ancestors up to the input's
-top, ``.``), with the number of its subdirs that could hold a selected entry."""
+DIRS_HEADER = "reldir"
+"""The manifest's dirs sidecar, ``<manifest>.dirs.tsv``: the dirs known when the manifest was written. Those are
+the top (``.``), each dir holding a row and its ancestors, and every dir that may hold a selected entry found by
+walking the open dirs (`_open`) from the top; the pre-check lists the open ones (`dir_changes`)."""
 RECORD_MODE = 0o660
 MAX_AGE = datetime.timedelta(days=31)
 FUTURE_SKEW = datetime.timedelta(minutes=10)
@@ -495,46 +496,88 @@ def _may_hold(rel: str, patterns: Sequence[str], exclude: Sequence[str]) -> bool
     return not any(digest.pattern_matches(rel, e) for e in whole)
 
 
-def _row_dirs(relpaths: Iterable[str]) -> dict[str, int]:
-    """Each dir holding a row, and each ancestor up to the top (``.``), with the number of rows directly in it."""
-    out: dict[str, int] = {".": 0}
+def _row_dirs(relpaths: Iterable[str]) -> dict[str, set[str]]:
+    """Each dir holding a row, and each ancestor up to the top (``.``), with the names of the rows directly in it."""
+    out: dict[str, set[str]] = {".": set()}
     for rel in relpaths:
-        parts = rel.split("/")[:-1]
-        for index in range(len(parts)):
-            out.setdefault("/".join(parts[: index + 1]), 0)
-        parent = "/".join(parts) or "."
-        out[parent] = out.get(parent, 0) + 1
+        parts = rel.split("/")
+        for index in range(len(parts) - 1):
+            out.setdefault("/".join(parts[: index + 1]), set())
+        out.setdefault("/".join(parts[:-1]) or ".", set()).add(parts[-1])
     return out
 
 
-def _listing(top: str, reldir: str, patterns: Sequence[str], exclude: Sequence[str]) -> tuple[int, int]:
-    """``(selected non-dir entries, subdirs that may hold one)`` directly in ``reldir``; never follows a link.
+def _open(reldir: str, patterns: Sequence[str]) -> bool:
+    """Whether a name added in or below ``reldir`` could be selected.
+
+    It could when a pattern reaching below it has ``**``, or a wildcard component at the depth of ``reldir``'s
+    entries or deeper. With every reaching pattern literal (a literal file include), the selected names are fixed,
+    and listing the dir could find nothing.
+    """
+    if not patterns:
+        return True
+    rel = [] if reldir == "." else reldir.split("/")
+    for pattern in patterns:
+        parts = pattern.split("/")
+        if not digest.reaches_below(parts, rel):
+            continue
+        if "**" in parts or any(digest._WILD.search(part) for part in parts[len(rel) :]):
+            return True
+    return False
+
+
+def _join(reldir: str, name: str) -> str:
+    return name if reldir == "." else f"{reldir}/{name}"
+
+
+def _added(
+    top: str, reldir: str, rows: set[str], known: set[str], patterns: Sequence[str], exclude: Sequence[str]
+) -> bool:
+    """Whether ``reldir`` holds an entry added since the manifest was written; never follows a link.
+
+    That is a selected non-dir entry that is not a row, or a subdir that may hold a selected entry and is not
+    ``known``. Entries that went away are the row scan's to report.
 
     Raises:
         OSError: When the dir cannot be listed.
     """
-    files = subdirs = 0
     path = top if reldir == "." else os.path.join(top, reldir)
     with os.scandir(path) as entries:
         for entry in entries:
-            rel = entry.name if reldir == "." else f"{reldir}/{entry.name}"
+            rel = _join(reldir, entry.name)
             if entry.is_dir(follow_symlinks=False):
-                subdirs += _may_hold(rel, patterns, exclude)
-            else:
-                files += _selected(rel, patterns, exclude)
-    return files, subdirs
+                if rel not in known and _may_hold(rel, patterns, exclude):
+                    return True
+            elif entry.name not in rows and _selected(rel, patterns, exclude):
+                return True
+    return False
 
 
 def _write_dirs(top: str, out: Path, relpaths: Iterable[str], include: Sequence[str], exclude: Sequence[str]) -> None:
+    """Write the dirs sidecar of a manifest (see `DIRS_SUFFIX`).
+
+    From the top, each open dir (`_open`) is listed and each subdir that may hold a selected entry (`_may_hold`)
+    is recorded and, when open, walked in turn; a link is never followed. The row dirs are recorded too.
+    """
     patterns = _include_patterns(top, include)
-    lines = [DIRS_HEADER]
-    for reldir in sorted(_row_dirs(relpaths)):
+    known = set(_row_dirs(relpaths))
+    pending = ["."]
+    while pending:
+        reldir = pending.pop()
+        if not _open(reldir, patterns):
+            continue
+        path = top if reldir == "." else os.path.join(top, reldir)
         try:
-            subdirs = _listing(top, reldir, patterns, exclude)[1]
+            with os.scandir(path) as entries:
+                subdirs = [_join(reldir, e.name) for e in entries if e.is_dir(follow_symlinks=False)]
         except OSError:
             continue
-        lines.append(f"{reldir}\t{subdirs}")
-    _atomic_write(Path(os.fspath(out) + DIRS_SUFFIX), ("\n".join(lines) + "\n").encode())
+        for rel in subdirs:
+            if _may_hold(rel, patterns, exclude):
+                known.add(rel)
+                pending.append(rel)
+    text = "\n".join([DIRS_HEADER, *sorted(known)]) + "\n"
+    _atomic_write(Path(os.fspath(out) + DIRS_SUFFIX), text.encode())
 
 
 def dirs_sidecar(inp: RegisteredInput, profile: Profile) -> Path:
@@ -549,31 +592,40 @@ def dirs_sidecar(inp: RegisteredInput, profile: Profile) -> Path:
 
 
 def dir_changes(inp: RegisteredInput, profile: Profile, rows: Sequence[Row]) -> bool:
-    """Whether a dir of the input's dirs sidecar now holds another number of selected entries or subdirs.
+    """Whether a dir of the input's dirs sidecar holds an entry added since the manifest was written.
 
-    Selected non-dir entries are compared with the manifest's rows in that dir, subdirs that may hold one with
-    the sidecar's count; an entry the input's ``include``/``exclude`` leave out is not counted. A dir that cannot
-    be listed counts as changed. No sidecar (a manifest written before it existed) or an unreadable one checks
-    nothing, and nor does ``extras: ignore``.
+    Each listed dir is checked for a selected non-dir entry that is not one of the manifest's rows there, or a
+    subdir that may hold a selected entry (`_may_hold`) and is not in the sidecar; an entry the input's
+    ``include``/``exclude`` leave out is not counted, and one that went away is the row scan's to report. A dir
+    that is gone is skipped (its rows are missing); one that cannot be listed otherwise counts as changed. No
+    sidecar (a manifest written before it existed) checks nothing, nor does ``extras: ignore``; an unreadable or
+    malformed one counts as changed.
     """
     if inp.extras == "ignore":
         return False
     try:
         lines = dirs_sidecar(inp, profile).read_text().splitlines()
-        if not lines or lines[0] != DIRS_HEADER:
-            return False
-        recorded = {d: int(n) for d, n in (line.split("\t") for line in lines[1:])}
-    except (OSError, ValueError, InputError):
+    except FileNotFoundError:
         return False
+    except (OSError, UnicodeDecodeError, InputError):
+        return True
+    if (
+        not lines
+        or lines[0] != DIRS_HEADER
+        or any(not d or d.startswith("/") or ".." in d.split("/") for d in lines[1:])
+    ):
+        return True
+    known = set(lines[1:])
     top = os.fspath(input_top(inp, profile))
     patterns = _include_patterns(top, inp.include)
     in_dir = _row_dirs(r.relpath for r in rows)
-    for reldir, subdirs in recorded.items():
+    for reldir in sorted(d for d in known if _open(d, patterns)):
         try:
-            listed = _listing(top, reldir, patterns, inp.exclude)
+            if _added(top, reldir, in_dir.get(reldir, set()), known, patterns, inp.exclude):
+                return True
+        except (FileNotFoundError, NotADirectoryError):
+            continue
         except OSError:
-            return True
-        if listed != (in_dir.get(reldir, 0), subdirs):
             return True
     return False
 

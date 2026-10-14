@@ -1665,14 +1665,16 @@ pre-reset refusals: any code fails the step with no reset. The after-run repeat,
 overlays the key used (`_Keyed.entries`), gives `E_INPUT_MUTATED`. The dry run shows the gate's codes in every
 not-done branch, beside a missing checkout or a key refusal. A done result is reused without gating.
 
-**Added entries (A17 fix round 1).** `write_manifest` also writes `<manifest>.dirs.tsv`: each dir holding a row and
-its ancestors up to the top (`.`), with the number of its subdirs that could hold a selected entry (an include
-reaches below it, no exclude takes it whole). For an `extras: check` input the pre-check lists each of those dirs
-(`inputs.dir_changes`, `scandir`, no content): a different number of selected non-dir entries than the manifest's
-rows there, or of such subdirs, is `E_INPUT_MISMATCH` before the run and `E_INPUT_MUTATED` after it, so an added
-file is seen without a full verification. The sidecar is not pinned by the registry sha (it is a cheap tripwire;
-`verify`'s `extra` count stays the authority); a manifest with no sidecar, written before it existed, is not
-listed, nor is a dir that holds no row.
+**Added entries (A17 fix round 1).** `write_manifest` also writes `<manifest>.dirs.tsv`, the dirs known at that time:
+the top (`.`), each dir holding a row and its ancestors, and every dir that may hold a selected entry (an include
+reaches below it, no exclude takes it whole) found by walking, from the top, the dirs where a new name could be
+selected (`_open`: a reaching pattern has `**` or a wildcard at that depth or deeper; a literal file include opens
+nothing, so its tree is not listed). For an `extras: check` input the pre-check lists the open known dirs
+(`inputs.dir_changes`, `scandir`, no content): a selected non-dir entry that is not a row there, or a may-hold
+subdir that is not known, is `E_INPUT_MISMATCH` before the run and `E_INPUT_MUTATED` after it, so an added file is
+seen without a full verification. Removals are the row scan's (`E_INPUT_MISSING`); a gone dir is skipped. The
+sidecar is not pinned by the registry sha (a cheap tripwire; `verify`'s `extra` count stays the authority): a
+manifest with no sidecar, written before it existed, is not listed; an unreadable or malformed one is a mismatch.
 
 **Link rule.** A link row's target, resolved against the link's own directory, must lie under the input itself or
 under another registered input the step declares in `lock_inputs`: a link into input B makes the step key on B.

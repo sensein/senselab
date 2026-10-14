@@ -667,3 +667,48 @@ def test_a_file_added_after_verify_blocks_the_dry_run(world: World) -> None:
     (tables / "sub" / "added.csv").write_text("1\n")
     plan = _plan(world, manifest)
     assert (plan.status, plan.codes) == ("blocked", ("E_INPUT_MISMATCH",))
+
+
+def test_the_added_entry_check_lists_only_dirs_where_a_new_name_could_be_selected(world: World) -> None:
+    """With ``*/u.csv`` the top is listed (a new dir could hold a match) but ``sub`` is not (its match is fixed).
+
+    A removed dir is ``E_INPUT_MISSING`` only: the check reports additions, the row scan removals.
+    """
+    tables = _tables(world)
+    _register(world, include=["*/u.csv"])
+    assert _precheck(world) == []
+    (tables / "sub" / "new.csv").write_text("1\n")
+    assert _precheck(world) == []
+    (tables / "other").mkdir()
+    assert _precheck(world) == ["E_INPUT_MISMATCH"]
+    (tables / "other").rmdir()
+    os.rename(tables / "sub", world.data / "sub-away")
+    assert _precheck(world) == ["E_INPUT_MISSING"]
+
+
+def test_a_file_added_to_a_dir_with_no_rows_is_seen_and_a_bad_sidecar_fails_closed(world: World) -> None:
+    """An empty dir at registration is known too, so a file added there is ``E_INPUT_MISMATCH``.
+
+    A malformed sidecar is a mismatch (fails closed); only a missing one checks nothing.
+    """
+    tables = _tables(world)
+    (tables / "s01").mkdir()
+    (tables / "only-tmp").mkdir()
+    (tables / "only-tmp" / "x.tmp").write_text("x\n")
+    _register(world, exclude=["**/*.tmp"])
+    assert _precheck(world) == []
+    (tables / "s01" / "a.csv").write_text("1\n")
+    assert _precheck(world) == ["E_INPUT_MISMATCH"]
+    (tables / "s01" / "a.csv").unlink()
+    (tables / "only-tmp" / "b.csv").write_text("1\n")
+    assert _precheck(world) == ["E_INPUT_MISMATCH"]
+    (tables / "only-tmp" / "b.csv").unlink()
+    sidecar = inputs.dirs_sidecar(_entry(world), world.profile())
+    good = sidecar.read_text()
+    sidecar.write_text("reldir\tsubdirs\n.\t2\n")
+    assert _precheck(world) == ["E_INPUT_MISMATCH"]
+    sidecar.unlink()
+    (tables / "s01" / "a.csv").write_text("1\n")
+    assert _precheck(world) == []
+    sidecar.write_text(good)
+    assert _precheck(world) == ["E_INPUT_MISMATCH"]
