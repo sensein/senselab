@@ -156,7 +156,8 @@ def _root_paths(template: str) -> list[tuple[str, str]]:
     """Each ``{root:<name>}`` in ``template`` with the path text that follows it.
 
     The path runs up to the next placeholder or a separator (whitespace, ``,``, ``;``, ``:``, ``=``), e.g.
-    ``("data", "/in/a.txt")``.
+    ``("data", "/in/a.txt")``. When a ``..`` component follows anywhere before the next whitespace or placeholder
+    (``{root:data}/x:/../y`` resolves to ``x:/../y``), the path is given as ``/..``, which nothing covers.
     """
     found = []
     for match in _TOKEN.finditer(template):
@@ -167,7 +168,9 @@ def _root_paths(template: str) -> list[tuple[str, str]]:
         end = _PATH_END.search(rest)
         tail = rest[: end.start() if end else len(rest)]
         brace = min((i for i in (tail.find("{"), tail.find("}")) if i >= 0), default=len(tail))
-        found.append((name.split(":", 1)[1], tail[:brace]))
+        word = re.split(r"[\s{}]", rest, maxsplit=1)[0]
+        escapes = ".." in re.split(r"[/,;:=]", word)
+        found.append((name.split(":", 1)[1], "/.." if escapes else tail[:brace]))
     return found
 
 

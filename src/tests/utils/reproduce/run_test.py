@@ -1419,3 +1419,38 @@ def test_a_step_sees_only_the_roots_it_declares(world: World) -> None:
         assert outcome.out is not None
         listed[name] = (outcome.out / run.WORK / "names.txt").read_text()
     assert listed == {"blind": "", "seeing": "in"}
+
+
+@needs_userns
+def test_an_undeclared_root_holding_driver_paths_is_masked_around_them(world: World) -> None:
+    """An undeclared root that holds a declared root, the results root and the cache is masked around them.
+
+    The root ``site`` is the whole test tree: ``data`` (declared) is nested in it, and the results, runs and logs
+    roots and the cache lie in it. A step that does not declare ``site`` sees an empty ``secret`` dir there, and its
+    own input still; one that declares a pattern under ``secret`` sees it.
+    """
+    secret = world.tmp / "secret"
+    secret.mkdir()
+    (secret / "s.txt").write_text("1\n")
+    world.extra_roots = {"site": str(world.tmp)}
+    world.restricted_fields = False
+    world.profile_extra = {"rw_under_roots": [str(world.tmp / n) for n in ("results", "runs", "slurm")]}
+    code = LIST_CODE.format(path=str(secret))
+    argv = ["{venv}/bin/python", "-c", code, "{out}"]
+    blind = world.step("blind", "prep", "", argv=argv)
+    seeing = world.step(
+        "seeing",
+        "prep",
+        "",
+        argv=argv,
+        inputs=[{"root": "data", "patterns": ["in/a.txt"]}, {"root": "site", "patterns": ["secret/s.txt"]}],
+    )
+    manifest = world.manifest(blind, seeing)
+    world.prefetch(manifest)
+    outcomes = world.run(manifest)
+    assert all(o.ok for o in outcomes.values()), {n: o.codes for n, o in outcomes.items()}
+    listed = {}
+    for name, outcome in outcomes.items():
+        assert outcome.out is not None
+        listed[name] = (outcome.out / run.WORK / "names.txt").read_text()
+    assert listed == {"blind": "", "seeing": "s.txt"}
