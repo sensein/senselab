@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 import yaml
 
-from senselab.utils.reproduce import cli, inputs, run, sandbox
+from senselab.utils.reproduce import cli, inputs, run, sandbox, source
 from senselab.utils.reproduce.inputs import RegisteredInput
 from tests.utils.reproduce.run_test import World
 from tests.utils.reproduce.sources_fixture import register_input
@@ -85,17 +85,33 @@ def opened(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
 
 
 @needs_userns
-def test_dry_run_with_a_deleted_file_is_blocked_e_input_missing(world: World, opened: list[str]) -> None:
-    """SC1(b): a deleted manifest file makes the dry run ``blocked E_INPUT_MISSING``; no input file is opened."""
+def test_dry_run_with_a_deleted_file_is_blocked_e_input_missing(
+    world: World, opened: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SC1(b): a deleted manifest file makes the dry run ``blocked E_INPUT_MISSING``; no input file is opened.
+
+    The gate's codes are listed beside a missing checkout or a key refusal too.
+    """
     tables = _tables(world)
     _register(world)
     manifest = _manifest(world)
-    assert "E_INPUT_MISSING" not in _plan(world, manifest).codes
+    first = _plan(world, manifest)
+    assert first.status == "will-execute" and first.codes == ()
     (tables / "sub" / "u.csv").unlink()
     opened.clear()
     plan = _plan(world, manifest)
     assert plan.status == "blocked" and "E_INPUT_MISSING" in plan.codes
     assert not [p for p in opened if p == str(tables) or p.startswith(str(tables) + os.sep)]
+
+    (world.base / "adapter.py").rename(world.base / "adapter.moved")
+    assert set(_plan(world, manifest).codes) >= {"E_ADAPTER_MISSING", "E_INPUT_MISSING"}
+    (world.base / "adapter.moved").rename(world.base / "adapter.py")
+
+    def no_checkout(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        raise source.ReproduceSourceError(source.WORKTREE_MISSING)
+
+    monkeypatch.setattr(source, "prefetched_checkout", no_checkout)
+    assert set(_plan(world, manifest).codes) >= {"E_SRC_MISSING", "E_INPUT_MISSING"}
 
 
 def test_a_size_change_is_e_input_mismatch(world: World) -> None:
@@ -151,6 +167,8 @@ def test_a_changed_link_target_is_e_input_mismatch(world: World) -> None:
     (tables / "sub").rename(copy)
     (tables / "sub").symlink_to(copy)
     assert _precheck(world) == ["E_INPUT_MISMATCH"]
+    (tables / "sub").unlink()
+    assert _precheck(world) == ["E_INPUT_MISSING"]
 
 
 def test_a_broken_hardlink_between_derivative_and_original_is_e_input_mismatch(world: World) -> None:
@@ -163,8 +181,14 @@ def test_a_broken_hardlink_between_derivative_and_original_is_e_input_mismatch(w
     (tables / "sub").mkdir(parents=True)
     os.link(original / "t.csv", tables / "t.csv")
     os.link(original / "sub" / "u.csv", tables / "sub" / "u.csv")
+    (original / "sub" / "dataset_description.json").write_text("{}\n")
+    os.link(original / "sub" / "dataset_description.json", tables / "sub" / "dataset_description.json")
     (tables / "dataset_description.json").write_text('{"DatasetType": "derivative"}\n')
     _register(world, original={"root": "data", "relpath": "orig/tables"})
+    assert _precheck(world) == []
+    (original / "sub" / "dataset_description.json").unlink()
+    assert _precheck(world) == ["E_INPUT_MISMATCH"]
+    os.link(tables / "sub" / "dataset_description.json", original / "sub" / "dataset_description.json")
     assert _precheck(world) == []
 
     target = original / "sub" / "u.csv"
@@ -179,6 +203,10 @@ def test_a_broken_hardlink_between_derivative_and_original_is_e_input_mismatch(w
     assert _precheck(world) == ["E_INPUT_MISMATCH"]
     os.link(tables / "sub" / "u.csv", target)
     assert _precheck(world) == []
+
+    _register(world, "orphan", original={"root": "elsewhere", "relpath": "orig/tables"})
+    manifest = world.manifest(world.step("prep", "prep", "{input:orphan}/t.csv", inputs=[], lock_inputs=["orphan"]))
+    assert run.gate(manifest.steps[0], "demo", world.config()).codes == ("E_ROOT_MISSING",)
 
 
 @needs_userns
