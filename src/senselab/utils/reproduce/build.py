@@ -713,17 +713,30 @@ def file_lock(path: Path, *, shared: bool = False) -> Iterator[None]:
     """Hold a ``flock`` on ``path`` (created if absent, with its directory), shared or exclusive.
 
     The file is opened read-write: on NFS ``flock`` becomes a POSIX lock, and a shared lock on a
-    write-only descriptor fails with ``EBADF``.
+    write-only descriptor fails with ``EBADF``. A lock taken on a file that is no longer at ``path`` (an
+    `exclusive_lock` unlinks the file as it releases) is dropped and taken again on the file now there.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o666)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+    while True:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o666)
         try:
-            yield
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            fcntl.flock(fd, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+            held = os.fstat(fd)
+            try:
+                current = os.stat(path)
+            except FileNotFoundError:
+                current = None
+        except BaseException:
+            os.close(fd)
+            raise
+        if current is not None and (current.st_dev, current.st_ino) == (held.st_dev, held.st_ino):
+            break
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    try:
+        yield
     finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
 
 
@@ -731,7 +744,8 @@ def exclusive_lock(resource: Path) -> contextlib.AbstractContextManager[object]:
     """An exclusive `SharedFileLock` over ``resource``: ``flock`` on ``<resource>.lock``, the file `file_lock` takes.
 
     It waits as long as a holder holds the lock (a reader's shared `file_lock` included), records its holder and
-    heartbeat beside the lock, and leaves the directory's mode alone.
+    heartbeat beside the lock, and leaves the directory's mode alone. It unlinks the lock file as it releases, which
+    `file_lock` checks for.
     """
     return SharedFileLock(resource, timeout=-1, manage_dir_mode=False)
 

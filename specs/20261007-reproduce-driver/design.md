@@ -247,7 +247,7 @@ How `build` produces and reuses sdist wheels:
   the profile names a `job_tmp_root`, a `TMPDIR` under `<job_tmp_root>/reproduce-build-<job>` that is
   removed on exit (without one the job keeps the node's default). It also exports `REPRO_UV`, the uv path
   resolved to an absolute path when the script is rendered. uv usually lives in the user's
-  `~/.local/bin`, which a minimal `PATH` lacks; `find_uv` reads `REPRO_UV` first, and every build
+  `~/.local/bin`, which a minimal `PATH` lacks; `uv_executable` (formerly `find_uv`) reads `REPRO_UV` first, and every build
   subprocess runs that absolute uv. The script loads no modules: under `set -u`, sourcing
   the modules init script dies on an unset `MODULEPATH`. `build-one` loads `build_modules`
   itself, in the wrapper above, sourcing the profile's `modules_init`; with modules declared and no
@@ -1647,4 +1647,10 @@ comes from its pinned `PATH`, never from a home install. The exclusive locks of 
 rebuilds, `wheels.lock` writes) are `SharedFileLock`s (`build.exclusive_lock`) on the same `<resource>.lock` file the
 steps' shared `file_lock` takes, so readers and writers still exclude each other; they wait with no timeout, as the
 `flock` did, record their holder and heartbeat beside the lock, and leave the directory's mode alone. `file_lock`
-stays for the shared (reader) locks. The host's CUDA version comes from `cuda_probe.detect_host_cuda` (A14).
+stays for the shared (reader) locks. `filelock` (3.29) unlinks the lock file before it unlocks, so a reader that was
+waiting on the old file would hold a lock no later writer sees: `file_lock` therefore checks, after `flock`, that the
+file it locked is still the one at the path, and retries on the new one otherwise. Side effects of the switch: the
+`.lock`, `.holder` and `.heartbeat` files get `SharedFileLock`'s fixed mode 0o664 rather than 0o666 less the umask
+(the dirs that hold them stay as the umask made them), a killed builder leaves `.holder`/`.heartbeat` beside the lock
+(including `wheels.lock.holder` in a manifest repo, which that repo should ignore), and a thread that blocks on a lock
+it already holds through another instance gets `filelock`'s deadlock error instead of hanging. The host's CUDA version comes from `cuda_probe.detect_host_cuda` (A14).

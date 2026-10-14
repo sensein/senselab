@@ -85,7 +85,7 @@ class FakeUv:
 def fake_uv(monkeypatch: pytest.MonkeyPatch) -> FakeUv:
     """Route every uv call through :class:`FakeUv` and pretend uv is on ``PATH``."""
     fake = FakeUv()
-    monkeypatch.setattr(lockgen.shutil, "which", lambda name: UV if name == "uv" else None)
+    monkeypatch.setattr(shutil, "which", lambda name: UV if name == "uv" else None)
     monkeypatch.setattr(lockgen.subprocess, "run", fake)
     return fake
 
@@ -293,14 +293,14 @@ def test_overlay_needs_its_input(tmp_path: Path, fake_uv: FakeUv) -> None:
 
 def test_missing_uv_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Without ``uv`` on ``PATH`` the builders say so instead of failing inside subprocess."""
-    monkeypatch.setattr(lockgen.shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
     with pytest.raises(ReproduceLockError, match="uv not found on PATH"):
         lockgen.first_resolve(EnvSpec.model_validate(_draft(tmp_path)), tmp_path)
 
 
 def test_uv_failure_is_raised_with_stderr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A failing uv call raises with uv's stderr and writes no lock."""
-    monkeypatch.setattr(lockgen.shutil, "which", lambda name: UV)
+    monkeypatch.setattr(shutil, "which", lambda name: UV)
     monkeypatch.setattr(lockgen.subprocess, "run", FakeUv(returncode=2))
     with pytest.raises(ReproduceLockError, match="resolution failed"):
         lockgen.first_resolve(EnvSpec.model_validate(_draft(tmp_path)), tmp_path)
