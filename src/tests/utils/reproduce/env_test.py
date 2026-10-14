@@ -28,6 +28,7 @@ from senselab.utils.reproduce.locks import (
     write_header,
 )
 from senselab.utils.reproduce.spec import EnvSpec, LockRef, PipCheckExpected, Profile, SdistSpec, TorchSpec
+from tests.utils.reproduce.masks_fixture import _tool_masks as _tool_masks  # autouse, also under --noconftest
 
 DATA = Path(__file__).parent / "data"
 ENV_DIR = "envs/a"

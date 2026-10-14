@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from senselab.utils.reproduce import sandbox
+from tests.utils.reproduce.masks_fixture import _tool_masks as _tool_masks
 
 OPT_IN = ("slow", "network")
 SLOW_VARIABLE = "SENSELAB_REPRO_SLOW"
@@ -88,10 +88,3 @@ def nfs_dir() -> Iterator[Path]:
         yield path
     finally:
         shutil.rmtree(path, ignore_errors=True)
-
-
-@pytest.fixture(autouse=True)
-def _tool_masks() -> Iterator[None]:
-    """Give every test an empty mask set for build and env sandboxes, as an entry point with a profile would."""
-    with sandbox.tool_masks(()):
-        yield

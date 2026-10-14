@@ -21,6 +21,7 @@ from pydantic import ValidationError
 
 from senselab.utils.reproduce import build, env, run, sandbox, source
 from senselab.utils.reproduce.spec import StepSpec
+from tests.utils.reproduce.masks_fixture import _tool_masks as _tool_masks  # autouse, also under --noconftest
 from tests.utils.reproduce.run_test import FIXTURE_ENV, World, _py, _r_step, _session
 
 needs_userns = pytest.mark.skipif(not sandbox.userns_available(), reason="unprivileged user namespaces are unavailable")
