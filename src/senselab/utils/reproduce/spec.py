@@ -726,9 +726,23 @@ def _server_arg_error(arg: str) -> str | None:
     return None
 
 
-SamplingValue = StrictBool | StrictInt | Annotated[StrictFloat, Field(allow_inf_nan=False)] | Label
-"""A sampling parameter's value: a bool, an int, a finite float or a short label."""
-Seed = Annotated[StrictInt, Field(ge=0)]
+def _sampling_label(value: str) -> str:
+    try:
+        float(value)
+    except ValueError:
+        return value
+    raise ValueError(f"sampling label {value!r} reads as a number; write the number unquoted, with a dot")
+
+
+SamplingLabel = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z][A-Za-z0-9_+-]{0,63}$"), AfterValidator(_sampling_label)
+]
+SamplingValue = StrictBool | StrictInt | Annotated[StrictFloat, Field(allow_inf_nan=False)] | SamplingLabel
+"""A sampling parameter's value: a bool, an int, a finite float or a short label that starts with a letter and does
+not read as a number (YAML 1.1 loads ``1e-7`` as a string)."""
+SEED_MAX = 2**32 - 1
+"""The largest seed: what every common seeding call (Python, numpy's legacy one, torch) accepts."""
+Seed = Annotated[StrictInt, Field(ge=0, le=SEED_MAX)]
 
 
 class DrawSpec(_Model):
@@ -736,8 +750,13 @@ class DrawSpec(_Model):
 
     ``seed`` and ``data_order_seed`` reach the step as ``REPRO_SEED`` and ``REPRO_DATA_ORDER_SEED`` and ``sampling``
     (e.g. ``temperature``, ``top_p``, ``top_k``, ``do_sample``, ``max_new_tokens``) as ``REPRO_SAMPLING``, compact
-    JSON with sorted keys; each only when set. The step reads them; the driver does not seed anything itself.
+    JSON with sorted keys; each only when set. The step reads them; the driver does not seed anything itself. A
+    value's type is part of the key (``1`` and ``1.0`` key apart).
     """
+
+    def is_empty(self) -> bool:
+        """Whether nothing is declared: no seed, no data-order seed, no sampling (keyed as no draw)."""
+        return self.seed is None and self.data_order_seed is None and not self.sampling
 
     seed: Seed | None = None
     data_order_seed: Seed | None = None

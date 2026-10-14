@@ -80,11 +80,16 @@ DRAW_KEYS = (
     "env_key",
     "body_lock_sha256",
     "torch_lock_sha256",
+    "overlay_sha256",
     "installed_sha256",
 )
-"""The keys of ``details.draw``: what a re-draw needs (SC8), in one place."""
+"""The keys of a recorded ``details.draw``: what a re-draw needs (SC8), in one place."""
+DRAW_GIVEN = ("seed", "data_order_seed", "sampling", "engine", "concurrency", "batch_size")
+"""The keys a caller gives; `record_step` copies the rest from the host record, the locks and the venv."""
+DRAW_HOST = ("gpu_name", "gpu_driver", "gpu_count", "host_cuda", "torch_cuda")
+SEED_MAX = 2**32 - 1
 _SAMPLING_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_+-]{0,63}$")
+_SAMPLING_LABEL = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]{0,63}$")
 ENGINE_NAMES = ("vllm", "transformers-batched")
 _SERVER_ARG = re.compile(r"^[!-~]{1,256}$")
 _NUMERIC = re.compile(r"^[0-9]+(\.[0-9]+)*$")
@@ -222,29 +227,51 @@ def _sampling_ok(value: object) -> bool:
         return True
     if isinstance(value, float):
         return math.isfinite(value)
-    return _matches(value, _LABEL)
+    if not _matches(value, _SAMPLING_LABEL):
+        return False
+    try:
+        float(str(value))
+    except ValueError:
+        return True
+    return False
 
 
-def _draw_ok(draw: object) -> bool:
-    """Whether ``draw`` has the closed form of `DRAW_KEYS` (seeds, sampling, engine, GPU, CUDA, env lock)."""
-    if not isinstance(draw, Mapping) or set(draw) != set(DRAW_KEYS):
+def _draw_ok(draw: object, engine: object) -> bool:
+    """Whether a caller's draw has the closed form of `DRAW_GIVEN` and agrees with ``details["engine"]``."""
+    if not isinstance(draw, Mapping) or set(draw) != set(DRAW_GIVEN):
         return False
     sampling = draw["sampling"]
+    counts = (draw["concurrency"], draw["batch_size"])
+    expected = (
+        (None, None) if not isinstance(engine, Mapping) else (engine.get("concurrency"), engine.get("batch_size"))
+    )
     checks = [
-        all(draw[k] is None or (_is_int(draw[k]) and draw[k] >= 0) for k in ("seed", "data_order_seed")),
+        all(draw[k] is None or (_is_int(draw[k]) and 0 <= draw[k] <= SEED_MAX) for k in ("seed", "data_order_seed")),
         isinstance(sampling, Mapping)
         and all(_matches(k, _SAMPLING_KEY) and _sampling_ok(v) for k, v in sampling.items()),
-        draw["engine"] is None or _engine_ok(draw["engine"]),
-        all(draw[k] is None or (_is_int(draw[k]) and draw[k] >= 1) for k in ("concurrency", "batch_size")),
-        draw["gpu_count"] is None or (_is_int(draw["gpu_count"]) and draw["gpu_count"] >= 0),
-        all(
-            draw[k] is None or (_matches(draw[k], _HOST_STRINGS[k]) and len(draw[k]) <= _HOST_STRING_MAX)
-            for k in ("gpu_name", "gpu_driver", "host_cuda", "torch_cuda")
-        ),
-        all(draw[k] is None or _matches(draw[k], _HEX64) for k in ("env_key", "torch_lock_sha256", "installed_sha256")),
-        _matches(draw["body_lock_sha256"], _HEX64),
+        draw["engine"] == engine,
+        counts == expected,
     ]
     return all(checks)
+
+
+def _complete_draw(
+    draw: Mapping[str, Any],
+    host: Mapping[str, Any],
+    venv: VenvResult,
+    locks: tuple[str, str | None],
+    installed: str,
+) -> dict[str, Any]:
+    """The recorded draw: the caller's part, then the GPU and CUDA of ``host`` and the env lock, as recorded."""
+    return {
+        **{k: draw[k] for k in DRAW_GIVEN},
+        **{k: host[k] for k in DRAW_HOST},
+        "env_key": venv.env_key,
+        "body_lock_sha256": locks[0],
+        "torch_lock_sha256": locks[1],
+        "overlay_sha256": venv.overlay_sha256,
+        "installed_sha256": installed,
+    }
 
 
 def _check_venv(venv: VenvResult) -> str:
@@ -313,7 +340,10 @@ def record_step(
         argv: The rendered argv, given only under a non-confidential policy; recorded as the activity's
             ``argv``.
         details: Recorded as the activity's ``details``: ``sources_lock_sha256`` (hex), ``sources_lock`` (the lock
-            file's name), ``engine`` (`engine.engine_identity`) and ``draw`` (`DRAW_KEYS`), and no other key.
+            file's name), ``engine`` (`engine.engine_identity`) and ``draw`` (the `DRAW_GIVEN` keys: seeds, sampling,
+            and the engine's identity, concurrency and batch size, which must agree with ``engine``), and no other
+            key. The draw is recorded completed to `DRAW_KEYS` with the host's GPU and CUDA values and the env lock
+            (``env_key``, the lock and overlay sha256s, ``installed_sha256``) exactly as the record holds them.
 
     Returns:
         The files written: ``store.jsonl``, then the BEP028 files in `write_bep028_files` order. Any
@@ -345,7 +375,7 @@ def record_step(
     _check("sources_lock_sha256" not in details or _matches(details["sources_lock_sha256"], _HEX64), "details")
     _check("sources_lock" not in details or _matches(details["sources_lock"], _FILE_NAME), "details")
     _check("engine" not in details or _engine_ok(details["engine"]), "details engine")
-    _check("draw" not in details or _draw_ok(details["draw"]), "details draw")
+    _check("draw" not in details or _draw_ok(details["draw"], details.get("engine")), "details draw")
     installed = _check_venv(venv)
 
     store = ProvStore(run_id=step_key)
@@ -366,6 +396,8 @@ def record_step(
     }
     if argv is not None:
         parameters["argv"] = list(argv)
+    if "draw" in details:
+        details["draw"] = _complete_draw(details["draw"], host, venv, (body_lock_sha256, torch_lock_sha256), installed)
     if details:
         parameters["details"] = dict(sorted(details.items()))
     activity = store.activity(node=NODE, step=step, parameters=parameters, started=started, ended=ended)

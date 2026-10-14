@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from senselab.utils.prov_bep028 import SHA256_ALGORITHM, check_graph, convert_store_file, store_id
 from senselab.utils.prov_store import CHECKSUM_KEY, PATH_KEY, ProvStore
@@ -15,6 +16,7 @@ from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.env import INSTALLED, MARKER, VenvResult, installed_sha256
 from senselab.utils.reproduce.host import HOST_KEYS
 from senselab.utils.reproduce.provenance import (
+    DRAW_KEYS,
     DRIVER_DESCRIPTION,
     LABEL,
     STORE_FILE,
@@ -420,8 +422,8 @@ def _draw_step(world: Any, **change: Any) -> dict[str, Any]:  # noqa: ANN401
     return dict(world.step("infer", "prep", "", **fields))
 
 
-def _parameters(out: Path) -> dict[str, Any]:
-    records = [json.loads(line) for line in (out / "prov" / STORE_FILE).read_text().splitlines()]
+def _parameters(out: Path, prov: str = "prov") -> dict[str, Any]:
+    records = [json.loads(line) for line in (out / prov / STORE_FILE).read_text().splitlines()]
     [parameters] = [r["parameters"] for r in records if "parameters" in r]
     return dict(parameters)
 
@@ -458,6 +460,7 @@ def test_draw_and_engine_are_in_the_details(tmp_path: Path, monkeypatch: pytest.
         "env_key": parameters["env_key"],
         "body_lock_sha256": parameters["body_lock_sha256"],
         "torch_lock_sha256": None,
+        "overlay_sha256": None,
         "installed_sha256": parameters["installed_sha256"],
     }
     plain = world.manifest(world.step("plain", "prep", "{root:data}/in/a.txt"))
@@ -472,9 +475,36 @@ def test_draw_and_engine_are_in_the_details(tmp_path: Path, monkeypatch: pytest.
         DRIVER,
         "13.0",
     )
-    for bad in ({"seed": "7"}, {"sampling": {"temperature": "a b"}}, {"extra": 1}, {"gpu_name": "a/b"}):
+    given = {k: draw[k] for k in ("seed", "data_order_seed", "sampling", "engine", "concurrency", "batch_size")}
+    identity = engine.engine_identity(spec)
+    ok = {**given, "engine": identity, "concurrency": 1, "batch_size": 4}
+    record_step(tmp_path / "ok", **_kwargs(tmp_path, details={"engine": identity, "draw": ok}))
+    recorded = _parameters(tmp_path / "ok", prov="")
+    completed = recorded["details"]["draw"]
+    assert set(completed) == set(DRAW_KEYS) and {k: completed[k] for k in ok} == ok
+    for key in ("env_key", "body_lock_sha256", "torch_lock_sha256", "overlay_sha256", "installed_sha256"):
+        assert completed[key] == recorded[key], key
+    assert {k: completed[k] for k in ("gpu_name", "gpu_driver", "gpu_count")} == {
+        k: recorded["host"][k] for k in ("gpu_name", "gpu_driver", "gpu_count")
+    }
+    bad: dict[str, Any]
+    for bad in (
+        {"seed": "7"},
+        {"seed": True},
+        {"seed": 2**40},
+        {"sampling": {"temperature": "a b"}},
+        {"sampling": {"temperature": "1e-7"}},
+        {"sampling": {"stop": "a/b"}},
+        {"extra": 1},
+        {"gpu_name": "Test GPU"},
+        {"engine": identity},
+        {"concurrency": 0},
+    ):
         with pytest.raises(ValueError, match="draw"):
-            record_step(tmp_path / "bad", **_kwargs(tmp_path, details={"draw": {**draw, **bad}}))
+            record_step(tmp_path / "bad", **_kwargs(tmp_path, details={"draw": {**given, **bad}}))
+    for bad in ({"concurrency": 2}, {"batch_size": 8}, {"engine": None}):
+        with pytest.raises(ValueError, match="draw"):
+            record_step(tmp_path / "bad", **_kwargs(tmp_path, details={"engine": identity, "draw": {**ok, **bad}}))
 
 
 def test_draw_changes_the_key(tmp_path: Path) -> None:
@@ -502,7 +532,8 @@ def test_draw_changes_the_key(tmp_path: Path) -> None:
     assert bare["REPRO_SEED"] == "1" and "REPRO_DATA_ORDER_SEED" not in bare and "REPRO_SAMPLING" not in bare
     assert not {"REPRO_SEED", "REPRO_SAMPLING"} & set(keyed_templates(StepSpec.model_validate(_step_data()), profile))
     base = key(DRAW)
-    assert key(None) != base and key({}) != key(None)
+    assert key(None) != base and key({}) == key(None) and key({"sampling": {}}) == key(None)
+    assert key({**DRAW, "sampling": {"temperature": 1}}) != key({**DRAW, "sampling": {"temperature": 1.0}})
     for change in (
         {"seed": 8},
         {"seed": None},
@@ -519,10 +550,23 @@ def test_draw_changes_the_key(tmp_path: Path) -> None:
         {"sampling": {"temperature": float("nan")}},
         {"sampling": {"stop": "a b"}},
         {"sampling": {"Top-P": 0.9}},
+        {"sampling": {"temperature": "1e-7"}},
+        {"sampling": {"temperature": "inf"}},
+        {"seed": 2**32},
         {"extra": 1},
     ):
         with pytest.raises(ValidationError):
             StepSpec.model_validate(_step_data(draw=bad))
+    assert StepSpec.model_validate(_step_data(draw={"seed": 2**32 - 1, "sampling": {"mode": "greedy"}})).draw
+    loaded = yaml.safe_load("seed: 1\nsampling: {temperature: 1.0e-7, top_k: 5, do_sample: true, mode: beam}\n")
+    assert StepSpec.model_validate(_step_data(draw=loaded)).draw.sampling == {  # type: ignore[union-attr]
+        "temperature": 1e-7,
+        "top_k": 5,
+        "do_sample": True,
+        "mode": "beam",
+    }
+    with pytest.raises(ValidationError):
+        StepSpec.model_validate(_step_data(draw=yaml.safe_load("sampling: {temperature: 1e-7}\n")))
 
 
 @needs_userns

@@ -1616,16 +1616,22 @@ names a toolkit, not the driver's CUDA).
 
 ## Draw provenance (A15; completed in A16)
 
-**Declared, keyed.** `StepSpec.draw` declares `seed`, `data_order_seed` (non-negative ints) and `sampling` (named
-bools, ints, finite floats or short labels: `temperature`, `top_p`, `top_k`, `do_sample`, `max_new_tokens`, ...). It
-is keyed whole, and reaches the step as keyed literals `REPRO_SEED`, `REPRO_DATA_ORDER_SEED` and `REPRO_SAMPLING`
-(compact sorted JSON), each only when set. The driver seeds nothing itself: the step's code reads them, so a draw is
-reproducible only as far as that code honours them. Strings are restricted to labels so that provenance stays a
-closed form; free-text sampling values (stop strings, prompts) belong in the step's config, keyed through its inputs.
+**Declared, keyed.** `StepSpec.draw` declares `seed`, `data_order_seed` (ints from 0 to 2**32 - 1, what Python,
+numpy's legacy seeding and torch all accept) and `sampling` (named bools, ints, finite floats or short labels:
+`temperature`, `top_p`, `top_k`, `do_sample`, `max_new_tokens`, ...). It is keyed whole; a draw that declares nothing
+keys as no draw. A value's type is part of the key (`1` and `1.0` key apart). It reaches the step as keyed literals
+`REPRO_SEED`, `REPRO_DATA_ORDER_SEED` and `REPRO_SAMPLING` (compact sorted JSON), each only when set. The driver
+seeds nothing itself: the step's code reads them, so a draw is reproducible only as far as that code honours them.
+String values are labels that start with a letter and do not read as a number, so provenance stays a closed form and
+YAML 1.1's `1e-7` (a string there; it needs a dot to be a float) is refused rather than recorded as a label.
+Free-text sampling values (stop strings, prompts) belong in the step's config, keyed through its inputs.
 
 **Recorded together.** Every step record's `details.draw` holds, in one place, what a re-draw from provenance alone
 needs (SC8): the seeds and sampling, the engine identity with its concurrency and batch size (None without an
-engine), the GPU model, driver, count, host CUDA and torch CUDA from the host record, and the env lock (`env_key`,
-body and torch lock sha256s, `installed_sha256`). Some of these repeat the record's top-level parameters; the copy
-keeps the draw self-contained. A step without `draw` still records the block, with null seeds and empty sampling,
-so a checker can tell "no seed declared" from "not recorded".
+engine), the GPU model, driver and count, host CUDA and torch CUDA, and the env lock (`env_key`, body and torch lock
+sha256s, `overlay_sha256`, `installed_sha256`). The caller gives only the declared part; `provenance.record_step`
+copies the rest from the host record and the env values it records, so the block cannot disagree with the record
+(after `E_ENV_CHANGED` too), and refuses a draw whose engine, concurrency or batch size differ from `details.engine`.
+A step without `draw` still records the block, with null seeds and empty sampling, so a checker can tell "no seed
+declared" from "not recorded". A training step's batch size is part of its keyed config, not of the draw; the draw's
+`batch_size` is the inference engine's.

@@ -418,7 +418,7 @@ def _keyed(step: StepSpec, profile: Profile) -> tuple[dict[str, str], dict[str, 
     if step.shards is not None:
         literal["REPRO_SHARDS"] = str(step.shards.count)
     if step.draw is not None:
-        literal |= draw_env(step.draw)
+        literal |= _draw_env(step.draw)
     if step.engine is not None:
         literal["REPRO_ENGINE_IDENTITY"] = engine.identity_json(step.engine)
         if step.engine.name == "vllm":
@@ -427,7 +427,7 @@ def _keyed(step: StepSpec, profile: Profile) -> tuple[dict[str, str], dict[str, 
     return {**profile.env, **literal}, templated
 
 
-def draw_env(draw: DrawSpec) -> dict[str, str]:
+def _draw_env(draw: DrawSpec) -> dict[str, str]:
     """``REPRO_SEED``, ``REPRO_DATA_ORDER_SEED`` and ``REPRO_SAMPLING`` (compact sorted JSON), each only when set."""
     out: dict[str, str] = {}
     if draw.seed is not None:
