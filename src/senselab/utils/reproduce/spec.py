@@ -579,6 +579,40 @@ class HFWeights(_Model):
         return value
 
 
+_MODEL_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*(@[0-9a-f]{40})?$")
+_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_+-]{0,63}$")
+
+
+class ExtractSpec(_Model):
+    """One categorical value a step's adapter may emit beside its metrics (``extracted`` in ``summary.json``).
+
+    ``model_id``: one of ``allowed`` (repository ids, optionally ``@<commit>``); ``yesno``: ``yes`` or ``no``;
+    ``index``: a position in ``allowed`` (labels such as run-dir names, never emitted themselves); ``series``:
+    a list of at most ``max_len`` finite numbers; ``count``: a non-negative integer, suppressed below the
+    policy's ``min_cell``. ``allowed`` goes with ``model_id`` and ``index`` only, ``max_len`` with ``series``
+    only (``E_SPEC_EXTRACT``).
+    """
+
+    name: CountName
+    kind: Literal["model_id", "yesno", "index", "series", "count"]
+    allowed: list[str] = []
+    max_len: Annotated[int, Field(ge=1)] | None = None
+
+    @model_validator(mode="after")
+    def _shape(self) -> "ExtractSpec":
+        listed = self.kind in ("model_id", "index")
+        if listed != bool(self.allowed):
+            raise ValueError(f"E_SPEC_EXTRACT: {self.name!r}: allowed is required for model_id and index, else refused")
+        if (self.kind == "series") != (self.max_len is not None):
+            raise ValueError(f"E_SPEC_EXTRACT: {self.name!r}: max_len is required for series, else refused")
+        if len(set(self.allowed)) != len(self.allowed):
+            raise ValueError(f"E_SPEC_EXTRACT: {self.name!r}: allowed has duplicates")
+        pattern = _MODEL_REF if self.kind == "model_id" else _LABEL
+        if any(not pattern.match(a) for a in self.allowed):
+            raise ValueError(f"E_SPEC_EXTRACT: {self.name!r}: an allowed entry is not a {self.kind} value")
+        return self
+
+
 class StepSpec(_Model):
     """One step: a repository commit, an env, an argv template, its inputs, outputs and expectations.
 
@@ -612,10 +646,13 @@ class StepSpec(_Model):
     hf_weights: list[HFWeights]
     metrics_schema: MetricsSchema
     expect: list[Expect] = []
+    extract: list[ExtractSpec] = []
 
     @model_validator(mode="after")
     def _consistent(self) -> "StepSpec":
         needs = set(self.needs)
+        if len({e.name for e in self.extract}) != len(self.extract):
+            raise ValueError(f"E_SPEC_EXTRACT: step {self.name!r} has duplicate extract names")
         if len(needs) != len(self.needs):
             raise ValueError(f"step {self.name!r} has duplicate needs")
         if self.name in needs:

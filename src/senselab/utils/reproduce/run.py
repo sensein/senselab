@@ -26,12 +26,14 @@ A step's result dir ``R = <results_root>/<step_key>`` is laid out by the driver:
    driver-held pipe, and the step is exec'd only when the canary's connect failed (a profile whose policy
    does not require a canary and names none skips the connect).
 6. Digest the inputs again (``E_INPUT_MUTATED``), verify the checkout (``E_SRC_MUTATED``) and the venv
-   (``E_ENV_CHANGED``), and refuse and delete any ``summary.json``, ``metrics.json`` or ``run.json``
-   under ``work/`` (``E_RESERVED_NAME``).
+   (``E_ENV_CHANGED``), and refuse and delete any ``summary.json``, ``metrics.json``, ``run.json`` or
+   ``extracted.json`` under ``work/`` (``E_RESERVED_NAME``).
 7. Run the adapter in the sandbox with the driver's interpreter; it may import nothing from senselab
    outside ``senselab.utils.reproduce`` (``E_ADAPTER_IMPORT``) and returns its metrics on a pipe.
    Validate, evaluate ``expect`` (`evaluate_expect`), validate again as the driver with the same
-   ``policy.min_cell`` of the profile and write ``R/metrics.json``.
+   ``policy.min_cell`` of the profile and write ``R/metrics.json``. A step that declares ``extract``
+   gets ``{"metrics": ..., "extracted": ...}`` from its adapter; the extracted values are checked
+   (`extract.validate_extracted`, ``E_EXTRACT``) and written to ``R/work/extracted.json`` and the summary.
 8. Remove ``R/tmp``, fix the exit, record provenance with that exit (`provenance.record_step`; with
    ``policy.confidential_provenance`` false it also records each input's paths and the rendered argv) and
    write ``R/summary.json`` last.
@@ -66,7 +68,19 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, NamedTuple
 
-from senselab.utils.reproduce import bands, build, cache, digest, env, host, metrics, provenance, sandbox, source
+from senselab.utils.reproduce import (
+    bands,
+    build,
+    cache,
+    digest,
+    env,
+    extract,
+    host,
+    metrics,
+    provenance,
+    sandbox,
+    source,
+)
 from senselab.utils.reproduce.dag import toposort
 from senselab.utils.reproduce.spec import (
     Expect,
@@ -89,11 +103,12 @@ ADAPTER_DIR = "adapter"
 ADAPTER_TMP = "adapter-tmp"
 R_SESSION_DIR = "rsession"
 METRICS = "metrics.json"
+EXTRACTED = "extracted.json"
 DRIVER_LOG = "driver.log"
 RUN_JSON = "run.json"
 RUN_LOCK = ".run.json.lock"
 PENDING = "pending"
-RESERVED_NAMES = frozenset({cache.SUMMARY, METRICS, RUN_JSON})
+RESERVED_NAMES = frozenset({cache.SUMMARY, METRICS, RUN_JSON, EXTRACTED})
 NOTEBOOK_KINDS = frozenset({"notebook", "ir_notebook"})
 EXIT_DRIVER = 1
 EXIT_CWD = 96
@@ -115,6 +130,7 @@ CODES = frozenset(
         "E_ADAPTER_FAILED",
         "E_ADAPTER_IMPORT",
         "E_ADAPTER_NO_METRICS",
+        "E_EXTRACT",
         "E_R_MISSING",
         "E_R_SESSION",
         "E_KEY_INVALID",
@@ -894,6 +910,7 @@ class _Execution:
         self.preamble: dict[str, Any] | None = None
         self.passed: bool | None = None
         self.verdict: str | None = None
+        self.extracted: dict[str, Any] | None = None
         self.frame: tuple[str | None, str | None] = (None, None)
         self.venv: env.VenvResult | None = None
         self.overlay: LockRef | None = None
@@ -984,6 +1001,7 @@ class _Execution:
             "canary_failed": pre.get("canary_failed"),
             "executed": self.executed,
             "verdict": self.verdict,
+            "extracted": self.extracted,
         }
 
     # --- before the step ----------------------------------------------------------------------
@@ -1369,10 +1387,25 @@ class _Execution:
             obj = json.loads(raw.decode())
         except (UnicodeDecodeError, ValueError):
             raise RunError("E_ADAPTER_NO_METRICS") from None
+        extracted: dict[str, Any] | None = None
+        if step.extract:
+            if not isinstance(obj, dict) or "metrics" not in obj:
+                raise RunError("E_ADAPTER_NO_METRICS")
+            if set(obj) != {"metrics", "extracted"}:
+                raise RunError("E_EXTRACT")
+            extracted, found_extract = extract.validate_extracted(
+                obj["extracted"], step.extract, min_cell=self._min_cell()
+            )
+            self.codes.update(found_extract)
+            obj = obj["metrics"]
         clean, found = metrics.validate_metrics(obj, step.metrics_schema, min_cell=self._min_cell(), writer="adapter")
         self.codes.update(found)
-        if clean is None:
+        if clean is None or (step.extract and extracted is None):
             return
+        if extracted is not None:
+            self.codes.update(_scan_values(self.config.profile, extracted))
+            if self._failing():
+                return
         upstream_metrics = {name: self._upstream_metrics(name) for name in _expect_sources(step)}
         final, passed, codes = evaluate_expect(step, clean, upstream_metrics)
         if final is None:
@@ -1385,6 +1418,9 @@ class _Execution:
         if final_clean is None:
             return
         _write_json(self.result / METRICS, final_clean)
+        if extracted is not None:
+            _write_json(self.work / EXTRACTED, extracted)
+            self.extracted = extracted
         self.codes.update(codes)
         if step.expect:
             self.passed = passed
@@ -1470,6 +1506,12 @@ class _Execution:
         except (OSError, TypeError):
             _log().error("provenance failed\n%s", traceback.format_exc())
             self.codes.add("E_DRIVER")
+
+
+def _scan_values(profile: Profile, values: Mapping[str, Any]) -> list[str]:
+    """Run the profile's scan hook over emitted values; codes for any finding. No profile names a hook yet."""
+    del profile, values
+    return []
 
 
 def _drain(fd: int, chunks: list[bytes]) -> None:
