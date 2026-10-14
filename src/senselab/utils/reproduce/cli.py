@@ -7,7 +7,8 @@ Subcommands:
 - ``prefetch``: lint, then check out every step (with the profile's deny patterns), build or reuse each
   env with the profile's checks, record a changed ``wheels.lock`` sha256 in the manifest, and install R
   libraries. CUDA sdists are built as batch jobs (``build-one``) first, unless ``--local-builds``.
-  ``--sources-only`` checks out draft manifests with the empty patch set and nothing else.
+  ``--sources-only`` checks out draft manifests with the empty patch set and nothing else (through the
+  ``--profile``'s mirror map when one is given).
 - ``build-one``: build or reuse one sdist's wheel and record the new ``wheels.lock`` sha256.
 - ``run``: run steps in DAG order. ``--dry-run`` reports each step's key and ``will-execute``, ``skipped`` or
   ``blocked`` with its env and source state, executing and writing nothing (exit 1 when a step is blocked).
@@ -371,6 +372,24 @@ def _link_findings(
     return out
 
 
+def _mirror_findings(where: str, step: StepSpec, profile: Profile) -> list[str]:
+    """``repo-unmapped`` for a step repository the mirror map lacks; under strict, ``submodule-unmapped``."""
+    table = profile.mirror_map
+    if not (table or profile.mirror_map_strict):
+        return []
+    mapped = table.get(source.canonical_repo(step.repo))
+    if mapped is None:
+        return [f"{where}: repo-unmapped {step.name}"]
+    if not (profile.mirror_map_strict and step.submodules):
+        return []
+    try:
+        urls = source.submodule_urls(mapped, step.commit, url=step.repo, mirror_map=table)
+    except source.ReproduceSourceError as error:
+        return [f"{where}: {error.code} {step.name}"]
+    missing = [u for u in urls if source.canonical_repo(u) not in table]
+    return [f"{where}: submodule-unmapped {step.name} {len(missing)}"] if missing else []
+
+
 def lint_findings(
     paths: Sequence[Path],
     profile_path: Path,
@@ -399,6 +418,9 @@ def lint_findings(
         the input id and the number of its manifest's links whose target lies in no input the step declares,
         ``scan-hook-missing`` when the profile's scan hook cannot run (`restricted.hook_missing`),
         ``E_SPEC_RESTRICTED`` for a step whose ``restricted`` declaration is refused (`restricted.violations`);
+        with a mirror map (or ``mirror_map_strict``), ``repo-unmapped <step>`` for a step repository it lacks,
+        and under strict ``submodule-unmapped <step> <count>`` for the submodule URLs at the step's commit,
+        read from the mapped repository, that it lacks (or the `source` code when that cannot be read);
         and the warning
         ``W_BAND_AMIN_WIDE <step> <metric>`` for a band whose ``a_min`` exceeds ``max_width_frac`` times its
         declared lift, which alone does not fail a command (`blocking`).
@@ -451,6 +473,7 @@ def lint_findings(
                 out.append(f"{where}: scan-hook-missing")
             if profile is not None:
                 out += [f"{where}: {f.code} {f.detail}" for f in slurm.step_findings(step, profile)]
+                out += _mirror_findings(where, step, profile)
             if not (base / step.adapter).is_file():
                 out.append(f"{where}: adapter-missing {step.adapter}")
             for expect in step.expect:
@@ -531,14 +554,22 @@ def _torch_roots(uv_lock: Path) -> list[str]:
     return sorted(TORCH_NAMES & names)
 
 
-def _lock_env(step: StepSpec, base: Path, cache_dir: Path, deny: Sequence[str]) -> dict[str, Any]:
+def _lock_env(step: StepSpec, base: Path, cache_dir: Path, deny: Sequence[str], profile: Profile) -> dict[str, Any]:
     """Run the builders for one env in order: first resolve, torch, body, overlays. Returns the field updates."""
     e = step.env
     worktree: list[Path] = []
 
     def project() -> Path:
         if not worktree:
-            worktree.append(source.checkout_step(step, cache=cache_dir, base_dir=base, deny_patterns=deny).worktree)
+            co = source.checkout_step(
+                step,
+                cache=cache_dir,
+                base_dir=base,
+                deny_patterns=deny,
+                mirror_map=profile.mirror_map,
+                strict=profile.mirror_map_strict,
+            )
+            worktree.append(co.worktree)
         return worktree[0]
 
     written: dict[str, Any] = {}
@@ -591,7 +622,7 @@ def _cmd_lock(args: argparse.Namespace) -> int:
             if any(step.env == e for e in done):
                 continue
             done.append(step.env)
-            written = _lock_env(step, base, cache_dir, deny)
+            written = _lock_env(step, base, cache_dir, deny, profile)
 
             def change(raw: dict[str, Any], written: dict[str, Any] = written) -> None:
                 _apply_lock_updates(raw, written, base)
@@ -684,8 +715,14 @@ def _cmd_prefetch_masked(args: argparse.Namespace) -> int:
     _require(paths)
     cache_dir = _cache_dir(args)
     if args.sources_only:
+        site = None if args.profile is None else _profile(args)
+        mirror_map = {} if site is None else site.mirror_map
+        strict = site is not None and site.mirror_map_strict
         for path in paths:
-            for name, co in source.checkout_sources(load_sources(path), cache=cache_dir).items():
+            draft = load_sources(path)
+            for name, co in source.checkout_sources(
+                draft, cache=cache_dir, mirror_map=mirror_map, strict=strict
+            ).items():
                 print(f"{name}\t{co.commit[:8]}\tsources")
         return EXIT_OK
     profile = _profile(args)
@@ -712,7 +749,14 @@ def _cmd_prefetch_masked(args: argparse.Namespace) -> int:
         manifest = load_manifest(path, headline_rule=rule)
         done: list[tuple[EnvSpec, env.PrefetchResult]] = []
         for step in manifest.steps:
-            co = source.checkout_step(step, cache=cache_dir, base_dir=base, deny_patterns=deny)
+            co = source.checkout_step(
+                step,
+                cache=cache_dir,
+                base_dir=base,
+                deny_patterns=deny,
+                mirror_map=profile.mirror_map,
+                strict=profile.mirror_map_strict,
+            )
             sources_lock, _ = lock.load_lock(base, manifest.sources)
             submodules = co.submodules if step.submodules else {}
             found = [f"{c} {d}" for c, d in lock.step_findings(step, sources_lock, submodules)]

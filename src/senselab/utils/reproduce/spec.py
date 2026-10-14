@@ -866,6 +866,11 @@ class Profile(_Model):
     ``released_metrics_root`` receives released metrics, under an ``rw_under_roots`` entry and no restricted
     dir; ``scan_hook`` is the argv of the release scan (the file path is appended). No other result, run,
     log or job tmp root may overlap a restricted dir, as written or resolved.
+
+    ``mirror_map`` maps repository URLs to local bare repositories (absolute paths) that every source fetch
+    of a mapped URL uses instead of the network (`source.mirror`); its keys are stored as
+    `source.canonical_repo` names, and two keys naming one repository with different paths are refused.
+    Under ``mirror_map_strict`` an unmapped repository or submodule URL is refused (``mirror-unmapped``).
     """
 
     roots: dict[Name, Path] = Field(min_length=1)
@@ -887,8 +892,17 @@ class Profile(_Model):
     restricted_results_root: Path | None = None
     released_metrics_root: Path | None = None
     scan_hook: list[str] = []
+    mirror_map: dict[str, Path] = {}
+    mirror_map_strict: bool = False
 
     _no_secrets = field_validator("env")(_reject_secret_keys)
+
+    @field_validator("mirror_map")
+    @classmethod
+    def _canonical_keys(cls, value: dict[str, Path]) -> dict[str, Path]:
+        from senselab.utils.reproduce.source import canonical_map
+
+        return canonical_map(value)
 
     @model_validator(mode="after")
     def _consistent(self) -> "Profile":
@@ -899,6 +913,7 @@ class Profile(_Model):
         paths = [*self.roots.values(), self.results_root, self.runs_root, self.slurm_logs_root, *self.rw_under_roots]
         paths += [p for p in (self.modules_init, self.job_tmp_root) if p is not None]
         paths += [*self.restricted_dirs, *(p for p in (self.restricted_results_root, self.released_metrics_root) if p)]
+        paths += list(self.mirror_map.values())
         native = [d for n in self.native.values() for d in (*n.bin_dirs, *n.lib_dirs)]
         relative = sorted(str(p) for p in (*paths, *native) if not p.is_absolute())
         if relative:

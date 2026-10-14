@@ -3,7 +3,9 @@
 `mirror` keeps a bare mirror of a repository at ``<cache>/src/<name>``, and of every submodule
 named at the pinned commit. Upstream branches are fetched into ``refs/upstream/heads/*``, tags into
 ``refs/tags/*``, and a commit reachable from neither into ``refs/upstream/pinned/<commit>``.
-Fetches never prune, so the throwaway ``refs/heads/repro/*`` refs survive every refresh.
+Fetches never prune, so the throwaway ``refs/heads/repro/*`` refs survive every refresh. A mirror map
+(`canonical_repo` keys to local bare repositories) routes a fetch to the mapped repository with only the
+``file`` protocol allowed; the cache mirror's ``origin`` stays the manifest URL.
 
 `checkout` gives one detached worktree per (commit, patch-set sha256) at
 ``<cache>/wt/<name>-<commit[:8]>-<patch set[:8]>``. On top of ``commit`` it commits
@@ -31,7 +33,8 @@ import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterable, Sequence
+import urllib.parse
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
 
@@ -93,6 +96,7 @@ WORKTREE_MISSING = "worktree-missing"
 REF_MISSING = "ref-missing"
 DENY_PATTERN_INVALID = "deny-pattern-invalid"
 SUBMODULE_NOTEBOOK_OUTPUTS = "submodule-notebook-outputs"
+MIRROR_UNMAPPED = "mirror-unmapped"
 
 LINT_NOTEBOOK_OUTPUTS = "notebook-outputs"
 LINT_DENY_PATTERN = "deny-pattern"
@@ -100,6 +104,7 @@ LINT_BINARY = "binary-patch"
 LINT_SYMLINK = "symlink"
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+_SCP_RE = re.compile(r"^(?:[^@/:]+@)?([^/:]+):(.+)$")
 _OUTPUTS_RE = re.compile(r'^(\s*)"outputs"\s*:\s*\[(.*)$')
 _OUTPUT_TYPE_RE = re.compile(r'"output_type"\s*:')
 _HUNK_RE = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
@@ -195,16 +200,24 @@ class _Git:
         self.home = cache / ".git-home"
 
     def run(
-        self, cwd: Path, *args: str, stdin: bytes | None = None, network: bool = False
+        self, cwd: Path, *args: str, stdin: bytes | None = None, network: bool = False, local_only: bool = False
     ) -> subprocess.CompletedProcess[bytes]:
         argv = ["git", *(a for o in GIT_OPTIONS for a in ("-c", o)), "-C", str(cwd), *args]
         env = git_environment(self.home, network=network)
+        if local_only:
+            env["GIT_ALLOW_PROTOCOL"] = "file"
         return subprocess.run(argv, env=env, input=stdin, capture_output=True, check=False)
 
     def ok(
-        self, cwd: Path, *args: str, stdin: bytes | None = None, network: bool = False, code: str = GIT_FAILED
+        self,
+        cwd: Path,
+        *args: str,
+        stdin: bytes | None = None,
+        network: bool = False,
+        local_only: bool = False,
+        code: str = GIT_FAILED,
     ) -> str:
-        result = self.run(cwd, *args, stdin=stdin, network=network)
+        result = self.run(cwd, *args, stdin=stdin, network=network, local_only=local_only)
         if result.returncode != 0:
             detail = (result.stdout + result.stderr).decode(errors="replace").strip()[-_TAIL:]
             raise ReproduceSourceError(code, f"git {args[0]} ({result.returncode})", detail)
@@ -234,6 +247,61 @@ def repo_name(url: str) -> str:
     if not _NAME_RE.match(name):
         raise ReproduceSourceError(BAD_REPO_NAME, "repository URL gives no usable name")
     return name
+
+
+def canonical_repo(url: str) -> str:
+    """The name a mirror map is keyed by: ``host/owner/repo`` for a remote, the real path for a local one.
+
+    ``git@host:o/r(.git)``, ``ssh://[user@]host[:port]/o/r(.git)``, ``https://…`` and ``http://…`` all give
+    ``host/o/r``, with the host lower-cased and ``.git`` and trailing ``/`` dropped. An absolute path, a
+    ``./`` or ``../`` path and a ``file://`` URL give their ``realpath``. Anything else is taken as already
+    canonical (cleaned the same way), so the function is idempotent.
+
+    Args:
+        url: A git URL, scp-like address or local path.
+
+    Returns:
+        The canonical name.
+    """
+    if url.startswith("file://"):
+        return os.path.realpath(urllib.parse.unquote(urllib.parse.urlsplit(url).path))
+    if url.startswith(("/", "./", "../")):
+        return os.path.realpath(url)
+    if "://" in url:
+        parts = urllib.parse.urlsplit(url)
+        host, path = (parts.hostname or "").lower(), parts.path
+    else:
+        match = _SCP_RE.match(url)
+        if match is not None:
+            host, path = match.group(1).lower(), match.group(2)
+        else:
+            host, _, path = url.partition("/")
+            host = host.lower()
+    path = path.strip("/")
+    if path.endswith(".git"):
+        path = path[: -len(".git")]
+    return f"{host}/{path}"
+
+
+def canonical_map(mirror_map: Mapping[str, Path] | None) -> dict[str, Path]:
+    """A mirror map keyed by `canonical_repo`.
+
+    Args:
+        mirror_map: Repository URLs (any spelling) to local bare repositories; None for no map.
+
+    Returns:
+        A new mapping.
+
+    Raises:
+        ValueError: If two keys name one repository with different paths.
+    """
+    out: dict[str, Path] = {}
+    for key, path in (mirror_map or {}).items():
+        name = canonical_repo(key)
+        if out.get(name, Path(path)) != Path(path):
+            raise ValueError(f"mirror_map: two keys name {name!r} with different paths")
+        out[name] = Path(path)
+    return out
 
 
 def resolve_submodule_url(parent: str, url: str) -> str:
@@ -346,7 +414,7 @@ def _submodules_at(git: _Git, repo: Path, rev: str) -> list[tuple[str, str, str]
     return found
 
 
-def _ensure_mirror(git: _Git, path: Path, url: str, commit: str) -> None:
+def _ensure_mirror(git: _Git, path: Path, url: str, commit: str, mapped: Path | None) -> None:
     if not (path / "HEAD").is_file():
         path.mkdir(parents=True, exist_ok=True)
         git.ok(path, "init", "-q", "--bare")
@@ -358,6 +426,15 @@ def _ensure_mirror(git: _Git, path: Path, url: str, commit: str) -> None:
         raise ReproduceSourceError(MIRROR_URL_CONFLICT, f"mirror {path.name} has another origin")
     if git.has_commit(path, commit):
         return
+    if mapped is not None:
+        refspecs = (f"+refs/heads/*:{UPSTREAM_HEADS}*", "+refs/tags/*:refs/tags/*")
+        git.ok(path, "fetch", "-q", "--no-prune", str(mapped), *refspecs, local_only=True)
+        if not git.has_commit(path, commit):
+            pinned = f"{commit}:{UPSTREAM_PINNED}{commit}"
+            git.run(path, "fetch", "-q", "--no-prune", str(mapped), pinned, local_only=True)
+        if not git.has_commit(path, commit):
+            raise ReproduceSourceError(COMMIT_MISSING, f"{commit[:8]} not found in the mapped mirror of {path.name}")
+        return
     git.ok(path, "fetch", "-q", "--no-prune", "origin", network=True)
     if git.has_commit(path, commit):
         return
@@ -366,38 +443,110 @@ def _ensure_mirror(git: _Git, path: Path, url: str, commit: str) -> None:
         raise ReproduceSourceError(COMMIT_MISSING, f"{commit[:8]} not found in {path.name}")
 
 
-def mirror(url: str, commit: str, *, cache: Path, submodules: bool = True) -> Path:
+def mirror(
+    url: str,
+    commit: str,
+    *,
+    cache: Path,
+    submodules: bool = True,
+    mirror_map: Mapping[str, Path] | None = None,
+    strict: bool = False,
+) -> Path:
     """Mirror ``url`` bare under ``<cache>/src`` so it holds ``commit``, with its submodules.
 
-    No network is used when the mirror already has ``commit`` and every submodule commit.
+    No fetch runs when the mirror already has ``commit`` and every submodule commit. A URL whose
+    `canonical_repo` is in ``mirror_map`` (the repository or a resolved submodule URL) is fetched from the
+    mapped local repository with the same refspecs, then by commit, with only the ``file`` protocol allowed;
+    any other URL is fetched from its origin.
 
     Args:
         url: The repository URL or local path.
         commit: The 40-hex commit that must be present.
         cache: The reproduce cache root.
         submodules: Whether to mirror the submodules named at ``commit``, recursively.
+        mirror_map: Repository URLs (any spelling) to local bare repositories.
+        strict: Refuse a repository or submodule URL with no map entry.
 
     Returns:
         The mirror's path.
 
     Raises:
-        ReproduceSourceError: ``commit-missing`` if the upstream lacks the commit, ``mirror-url-conflict``
-            if the mirror name is taken by another URL, ``git-failed`` otherwise.
+        ReproduceSourceError: ``commit-missing`` if the upstream (or mapped repository) lacks the commit,
+            ``mirror-url-conflict`` if the mirror name is taken by another URL, ``mirror-unmapped`` under
+            ``strict`` for an unmapped URL, ``git-failed`` otherwise.
     """
-    return _mirror(_Git(cache), url, commit, cache, submodules, set())
+    return _mirror(_Git(cache), url, commit, cache, submodules, set(), canonical_map(mirror_map), strict)
 
 
-def _mirror(git: _Git, url: str, commit: str, cache: Path, submodules: bool, seen: set[tuple[str, str]]) -> Path:
+def _mapped(url: str, table: Mapping[str, Path], strict: bool) -> Path | None:
+    found = table.get(canonical_repo(url))
+    if found is None and strict:
+        raise ReproduceSourceError(MIRROR_UNMAPPED, f"no mirror_map entry for {repo_name(url)}")
+    return found
+
+
+def _mirror(
+    git: _Git,
+    url: str,
+    commit: str,
+    cache: Path,
+    submodules: bool,
+    seen: set[tuple[str, str]],
+    table: Mapping[str, Path],
+    strict: bool,
+) -> Path:
     path = mirror_dir(cache, url)
+    mapped = _mapped(url, table, strict)
     seen.add((url, commit))
     with SharedFileLock(path):
-        _ensure_mirror(git, path, url, commit)
+        _ensure_mirror(git, path, url, commit, mapped)
     if submodules:
         for _, sub_url, sha in _submodules_at(git, path, commit):
             resolved = resolve_submodule_url(url, sub_url)
             if (resolved, sha) not in seen:
-                _mirror(git, resolved, sha, cache, True, seen)
+                _mirror(git, resolved, sha, cache, True, seen, table, strict)
     return path
+
+
+def submodule_urls(
+    mapped_repo: Path, commit: str, *, url: str, mirror_map: Mapping[str, Path] | None = None
+) -> list[str]:
+    """Every submodule URL at ``commit``, recursively, read from local repositories only (no fetch).
+
+    Relative URLs resolve against ``url``. A submodule is recursed into when its URL is mapped and its mapped
+    repository holds the gitlink commit.
+
+    Args:
+        mapped_repo: The local repository ``url`` maps to.
+        commit: The pinned commit.
+        url: The repository's manifest URL.
+        mirror_map: Repository URLs (any spelling) to local bare repositories.
+
+    Returns:
+        The resolved URLs, in first-seen order, without duplicates.
+
+    Raises:
+        ReproduceSourceError: ``commit-missing`` if ``mapped_repo`` lacks ``commit``; ``git-failed`` or
+            ``submodule-unknown`` for an unreadable tree.
+    """
+    table = canonical_map(mirror_map)
+    found: list[str] = []
+    with tempfile.TemporaryDirectory() as home:
+        git = _Git(Path(home))
+        if not git.has_commit(mapped_repo, commit):
+            raise ReproduceSourceError(COMMIT_MISSING, f"{commit[:8]} not found in the mapped mirror")
+        pending, seen = [(mapped_repo, commit, url)], {(url, commit)}
+        while pending:
+            repo, rev, parent = pending.pop(0)
+            for _, sub_url, sha in _submodules_at(git, repo, rev):
+                resolved = resolve_submodule_url(parent, sub_url)
+                if resolved not in found:
+                    found.append(resolved)
+                sub_repo = table.get(canonical_repo(resolved))
+                if sub_repo is not None and (resolved, sha) not in seen and git.has_commit(sub_repo, sha):
+                    seen.add((resolved, sha))
+                    pending.append((sub_repo, sha, resolved))
+    return found
 
 
 # --- notebooks ---------------------------------------------------------------------------------
@@ -679,13 +828,20 @@ def _read_marker(path: Path) -> Checkout:
 
 
 def _add_submodules(
-    git: _Git, cache: Path, url: str, worktree: Path, notebooks: list[str], prefix: str = ""
+    git: _Git,
+    cache: Path,
+    url: str,
+    worktree: Path,
+    notebooks: list[str],
+    table: Mapping[str, Path],
+    strict: bool,
+    prefix: str = "",
 ) -> dict[str, str]:
     """Add submodule worktrees recursively; return their shas and append dirty notebook paths."""
     shas: dict[str, str] = {}
     for path, sub_url, sha in _submodules_at(git, worktree, "HEAD"):
         resolved = resolve_submodule_url(url, sub_url)
-        sub_mirror = mirror(resolved, sha, cache=cache)
+        sub_mirror = mirror(resolved, sha, cache=cache, mirror_map=table, strict=strict)
         target = worktree / path
         git.ok(sub_mirror, "worktree", "prune")
         git.ok(sub_mirror, "worktree", "add", "-q", "--detach", str(target), sha)
@@ -693,7 +849,7 @@ def _add_submodules(
             raise ReproduceSourceError(HEAD_MISMATCH, f"submodule {path} is not at its gitlink")
         shas[prefix + path] = sha
         notebooks += [f"{prefix}{path}/{nb}" for nb in _notebooks_needing_clear(git, target)]
-        shas.update(_add_submodules(git, cache, resolved, target, notebooks, f"{prefix}{path}/"))
+        shas.update(_add_submodules(git, cache, resolved, target, notebooks, table, strict, f"{prefix}{path}/"))
     return shas
 
 
@@ -760,6 +916,8 @@ def _build(
     patch_set: str,
     submodules: bool,
     allow_submodule_notebook_outputs: bool,
+    table: Mapping[str, Path],
+    strict: bool,
 ) -> Checkout:
     worktree.parent.mkdir(parents=True, exist_ok=True)
     git.ok(mirror_path, "worktree", "prune")
@@ -777,7 +935,7 @@ def _build(
     head = git.ok(worktree, "rev-parse", "HEAD")
     ref = REPRO_REF_PREFIX + _tag(commit, patch_set)
     notebooks: list[str] = []
-    shas = _add_submodules(git, cache, url, worktree, notebooks) if submodules else {}
+    shas = _add_submodules(git, cache, url, worktree, notebooks, table, strict) if submodules else {}
     if notebooks and not allow_submodule_notebook_outputs:
         raise ReproduceSourceError(
             SUBMODULE_NOTEBOOK_OUTPUTS, f"{len(notebooks)} submodule notebook(s) carry outputs", "\n".join(notebooks)
@@ -810,6 +968,8 @@ def checkout(
     submodules: bool = True,
     deny_patterns: Sequence[str] = (),
     allow_submodule_notebook_outputs: bool = False,
+    mirror_map: Mapping[str, Path] | None = None,
+    strict: bool = False,
 ) -> Checkout:
     """Prepare the detached worktree for (``commit``, ``patches``); run at prefetch, never at run.
 
@@ -826,6 +986,8 @@ def checkout(
         deny_patterns: Extended regexes no patch line may match.
         allow_submodule_notebook_outputs: Accept notebooks with outputs inside submodules, which
             are never cleared; their paths are recorded in the checkout. Refused otherwise.
+        mirror_map: Repository URLs (any spelling) to local bare repositories (`mirror`).
+        strict: Refuse a repository or submodule URL with no map entry (`mirror`).
 
     Returns:
         The checkout, with its tree sha and submodule shas.
@@ -840,7 +1002,8 @@ def checkout(
             raise ReproduceSourceError(PATCH_LINT, "a patch fails lint")
     patch_set = patch_set_sha256(patches)
     git = _Git(cache)
-    mirror_path = mirror(repo, commit, cache=cache, submodules=submodules)
+    table = canonical_map(mirror_map)
+    mirror_path = mirror(repo, commit, cache=cache, submodules=submodules, mirror_map=table, strict=strict)
     worktree = worktree_dir(cache, repo, commit, patch_set)
     marker = _marker_path(worktree)
     worktree.parent.mkdir(parents=True, exist_ok=True)
@@ -871,6 +1034,8 @@ def checkout(
                 patch_set,
                 submodules,
                 allow_submodule_notebook_outputs,
+                table,
+                strict,
             )
         except BaseException:
             _remove_worktree(git, cache, mirror_path, worktree)
@@ -879,7 +1044,15 @@ def checkout(
         return co
 
 
-def checkout_step(step: StepSpec, *, cache: Path, base_dir: Path, deny_patterns: Sequence[str] = ()) -> Checkout:
+def checkout_step(
+    step: StepSpec,
+    *,
+    cache: Path,
+    base_dir: Path,
+    deny_patterns: Sequence[str] = (),
+    mirror_map: Mapping[str, Path] | None = None,
+    strict: bool = False,
+) -> Checkout:
     """`checkout` for a manifest step.
 
     Args:
@@ -887,6 +1060,8 @@ def checkout_step(step: StepSpec, *, cache: Path, base_dir: Path, deny_patterns:
         cache: The reproduce cache root.
         base_dir: The manifest repository.
         deny_patterns: Extended regexes no patch line may match.
+        mirror_map: Repository URLs (any spelling) to local bare repositories (`mirror`).
+        strict: Refuse a repository or submodule URL with no map entry (`mirror`).
 
     Returns:
         The checkout.
@@ -899,6 +1074,8 @@ def checkout_step(step: StepSpec, *, cache: Path, base_dir: Path, deny_patterns:
         base_dir=base_dir,
         submodules=step.submodules,
         deny_patterns=deny_patterns,
+        mirror_map=mirror_map,
+        strict=strict,
     )
 
 
@@ -933,17 +1110,30 @@ def prefetched_checkout(step: StepSpec, *, cache: Path) -> Checkout:
     return co
 
 
-def checkout_sources(sources: Iterable[SourceSpec], *, cache: Path) -> dict[str, Checkout]:
+def checkout_sources(
+    sources: Iterable[SourceSpec],
+    *,
+    cache: Path,
+    mirror_map: Mapping[str, Path] | None = None,
+    strict: bool = False,
+) -> dict[str, Checkout]:
     """Check out draft sources with the empty patch set (``prefetch --sources-only``).
 
     Args:
         sources: The draft source specs.
         cache: The reproduce cache root.
+        mirror_map: Repository URLs (any spelling) to local bare repositories (`mirror`).
+        strict: Refuse a repository or submodule URL with no map entry (`mirror`).
 
     Returns:
         ``{source name: checkout}``, in input order.
     """
-    return {s.name: checkout(s.repo, s.commit, [], cache=cache, submodules=s.submodules) for s in sources}
+    return {
+        s.name: checkout(
+            s.repo, s.commit, [], cache=cache, submodules=s.submodules, mirror_map=mirror_map, strict=strict
+        )
+        for s in sources
+    }
 
 
 def authoring_worktree(repo: str, commit: str, dest: Path, *, cache: Path) -> Path:
