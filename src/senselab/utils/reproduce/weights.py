@@ -16,13 +16,20 @@ declared revision.
 ``url_weights`` files live under the profile's ``url_weights_root``. `check_url_present` and `verify_url` are
 their presence check and prefetch check (the same accept rule, against the step's registered inputs), and
 `place_url_weights` links each where its loader looks under the step's ``{tmp}``.
+
+Stamps: given a stamps dir (``<cache>/weights-stamps``), `verify_hf` and `verify_url` write a stamp for each file
+they verify (by hash or by the accept rule): the blob's real path, the declared sha256, and the blob's ``lstat``
+size, ``mtime_ns``, device and inode. `check_stamps` is the inputs gate's re-check: a declared file with no stamp
+is ``E_WEIGHTS_UNVERIFIED``, one whose blob no longer has the stamped size, mtime or inode is ``E_WEIGHTS_CHANGED``.
 """
 
 from __future__ import annotations
 
 import datetime
 import hashlib
+import json
 import os
+import uuid
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
@@ -33,6 +40,10 @@ from senselab.utils.reproduce.spec import HFWeights, Profile, StepSpec, UrlWeigh
 WEIGHTS_MISSING = "E_WEIGHTS_MISSING"
 WEIGHTS_MISMATCH = "E_WEIGHTS_MISMATCH"
 WEIGHTS_VIEW = "E_WEIGHTS_VIEW"
+WEIGHTS_CHANGED = "E_WEIGHTS_CHANGED"
+WEIGHTS_UNVERIFIED = "E_WEIGHTS_UNVERIFIED"
+STAMPS_DIR = "weights-stamps"
+"""The stamps dir under the driver cache: one ``<sha256 of blob path and declared sha256>.json`` per verified file."""
 CONFIG = "config.json"
 _CHUNK = 8 << 20
 
@@ -144,6 +155,84 @@ class _Registered:
         return st.st_size == row.size and st.st_mtime_ns in (row.mtime_ns, overlay.get(rel))
 
 
+_STAMP_FIELDS = ("st_size", "st_mtime_ns", "st_dev", "st_ino")
+
+
+def _stamp_path(stamps: Path, blob: str, sha256: str) -> Path:
+    name = hashlib.sha256(f"{blob}\n{sha256}".encode()).hexdigest()
+    return stamps / f"{name}.json"
+
+
+def _stamp_of(st: os.stat_result) -> dict[str, int]:
+    return {field: int(getattr(st, field)) for field in _STAMP_FIELDS}
+
+
+def write_stamp(stamps: Path, file: Path, sha256: str, st: os.stat_result | None = None) -> None:
+    """Record that ``file`` (its real path) was verified against ``sha256``: its ``lstat`` size, mtime, device, inode.
+
+    ``st`` is the ``lstat`` taken before the file was hashed; with it, nothing is written when the file changed
+    meanwhile. Written atomically.
+    """
+    blob = os.path.realpath(file)
+    now = os.lstat(blob)
+    if st is not None and _stamp_of(st) != _stamp_of(now):
+        remove_stamp(stamps, file, sha256)
+        return
+    stamps.mkdir(parents=True, exist_ok=True)
+    path = _stamp_path(stamps, blob, sha256)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp.write_text(json.dumps({"blob": blob, "sha256": sha256, **_stamp_of(now)}, sort_keys=True))
+    os.replace(tmp, path)
+
+
+def remove_stamp(stamps: Path, file: Path, sha256: str) -> None:
+    """Remove the stamp of ``file`` against ``sha256``, if there is one."""
+    _stamp_path(stamps, os.path.realpath(file), sha256).unlink(missing_ok=True)
+
+
+def declared_files(step: StepSpec, profile: Profile) -> list[tuple[Path | None, str]]:
+    """Every Hugging Face and URL weights file a step declares, with its declared sha256; None without a root."""
+    hub = profile.hf_hub_cache
+    out: list[tuple[Path | None, str]] = []
+    for w in step.hf_weights:
+        out += [(None if hub is None else hf_snapshot(hub, w) / f.path, f.sha256) for f in w.files]
+    out += [(url_file(profile, w), w.sha256) for w in step.url_weights]
+    return out
+
+
+def check_stamps(step: StepSpec, profile: Profile, stamps: Path) -> list[str]:
+    """The gate's re-check of a step's weights files against the stamps prefetch wrote; no hashing.
+
+    A file that is absent is left to the presence checks (`check_hf_present`, `check_url_present`).
+
+    Returns:
+        Sorted codes: ``E_WEIGHTS_UNVERIFIED`` for a file with no readable stamp for its declared sha256 (prefetch
+        did not verify it), ``E_WEIGHTS_CHANGED`` for one whose blob's size, ``mtime_ns``, device or inode differ
+        from the stamp; empty when every file matches.
+    """
+    codes = set()
+    for file, sha256 in declared_files(step, profile):
+        if file is None or not file.is_file():
+            continue
+        blob = os.path.realpath(file)
+        try:
+            stamp = json.loads(_stamp_path(stamps, blob, sha256).read_text())
+            recorded = {field: int(stamp[field]) for field in _STAMP_FIELDS}
+            matches = stamp["blob"] == blob and stamp["sha256"] == sha256
+        except (OSError, ValueError, KeyError, TypeError):
+            codes.add(WEIGHTS_UNVERIFIED)
+            continue
+        try:
+            current = _stamp_of(os.lstat(blob))
+        except OSError:
+            continue
+        if not matches:
+            codes.add(WEIGHTS_UNVERIFIED)
+        elif current != recorded:
+            codes.add(WEIGHTS_CHANGED)
+    return sorted(codes)
+
+
 _Use = tuple[str, tuple[str, ...]]
 """One declaration of a file: its sha256 and the registered inputs that may accept it."""
 _Files = dict[tuple[str, ...], tuple[str, Path | None, list[_Use]]]
@@ -155,8 +244,9 @@ def _check(
     profile: Profile,
     registry: Mapping[str, inputs.RegisteredInput],
     now: datetime.datetime,
+    stamps: Path | None = None,
 ) -> tuple[list[str], int, int]:
-    """Findings, blobs hashed and files accepted, for each declared file."""
+    """Findings, blobs hashed and files accepted, for each declared file; each verified file is stamped."""
     registered: dict[str, _Registered] = {}
     digests: dict[str, str] = {}
     findings: list[str] = []
@@ -166,6 +256,7 @@ def _check(
             findings.append(f"{WEIGHTS_MISSING} {label}")
             continue
         blob = os.path.realpath(file)
+        before = os.lstat(blob)
         pending: list[str] = []
         for sha, ids in uses:
             for input_id in (i for i in ids if i in registry):
@@ -175,12 +266,18 @@ def _check(
                     break
             else:
                 pending.append(sha)
+        if pending and blob not in digests:
+            digests[blob] = _sha256(blob)
+        bad = {sha for sha in pending if sha != digests[blob]}
         if not pending:
             accepted += 1
-            continue
-        if blob not in digests:
-            digests[blob] = _sha256(blob)
-        findings += [f"{WEIGHTS_MISMATCH} {label} {sha[:8]}" for sha in sorted(set(pending)) if sha != digests[blob]]
+        findings += [f"{WEIGHTS_MISMATCH} {label} {sha[:8]}" for sha in sorted(bad)]
+        if stamps is not None:
+            for sha in {sha for sha, _ in uses}:
+                if sha in bad:
+                    remove_stamp(stamps, file, sha)
+                else:
+                    write_stamp(stamps, file, sha, before)
     return findings, len(digests), accepted
 
 
@@ -196,6 +293,7 @@ def verify_hf(
     registry: Mapping[str, inputs.RegisteredInput],
     *,
     now: datetime.datetime | None = None,
+    stamps: Path | None = None,
 ) -> list[str]:
     """Check every declared Hugging Face file of ``steps`` against its sha256, once per file and blob.
 
@@ -209,6 +307,8 @@ def verify_hf(
         registry: The registry entries the steps' ``HFWeights.input`` name, as their sources locks pin them;
             an input missing here is not used to accept a file.
         now: The time the verification records are judged at; defaults to now.
+        stamps: The stamps dir (`STAMPS_DIR` under the driver cache); each verified file is stamped there, and a
+            mismatching one loses its stamp. None writes no stamp.
 
     Returns:
         ``E_WEIGHTS_MISSING <repo>@<revision[:8]> <path>`` per missing file (or every file, with no hub cache)
@@ -228,7 +328,7 @@ def verify_hf(
                 file = None if snapshot is None else snapshot / f.path
                 key = (w.repo_type, w.repo, w.revision, f.path)
                 _add(files, key, label, file, (f.sha256, () if w.input is None else (w.input,)))
-    findings, hashed, accepted = _check(files, profile, registry, now or datetime.datetime.now(datetime.UTC))
+    findings, hashed, accepted = _check(files, profile, registry, now or datetime.datetime.now(datetime.UTC), stamps)
     print(f"weights files={len(files)} hashed={hashed} accepted={accepted}")
     return findings
 
@@ -262,6 +362,7 @@ def verify_url(
     registry: Mapping[str, inputs.RegisteredInput],
     *,
     now: datetime.datetime | None = None,
+    stamps: Path | None = None,
 ) -> list[str]:
     """Check every ``url_weights`` file of ``steps`` against its sha256, once per file.
 
@@ -274,6 +375,8 @@ def verify_url(
         profile: The site profile; its ``url_weights_root`` holds the files.
         registry: The registry entries of the steps' ``lock_inputs``, as their sources locks pin them.
         now: The time the verification records are judged at; defaults to now.
+        stamps: The stamps dir (`STAMPS_DIR` under the driver cache); each verified file is stamped there, and a
+            mismatching one loses its stamp. None writes no stamp.
 
     Returns:
         ``E_WEIGHTS_MISSING url <file>`` and ``E_WEIGHTS_MISMATCH url <file> <declared sha256[:8]>`` lines;
@@ -283,7 +386,7 @@ def verify_url(
     for step in steps:
         for w in step.url_weights:
             _add(files, (w.file,), f"url {w.file}", url_file(profile, w), (w.sha256, tuple(step.lock_inputs)))
-    findings, hashed, accepted = _check(files, profile, registry, now or datetime.datetime.now(datetime.UTC))
+    findings, hashed, accepted = _check(files, profile, registry, now or datetime.datetime.now(datetime.UTC), stamps)
     print(f"url-weights files={len(files)} hashed={hashed} accepted={accepted}")
     return findings
 

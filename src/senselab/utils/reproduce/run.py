@@ -221,6 +221,8 @@ CODES = frozenset(
         "W_RELEASE_REFUSED",
         "E_WEIGHTS_MISSING",
         "E_WEIGHTS_VIEW",
+        "E_WEIGHTS_CHANGED",
+        "E_WEIGHTS_UNVERIFIED",
         *engine.CODES,
     }
 )
@@ -800,11 +802,15 @@ def gate(
     Returns:
         The gate; ``codes`` is empty when the step may run: ``E_INPUT_UNVERIFIED`` (no current ``ok`` record
         for the registered manifest), the pre-check's codes, and ``E_WEIGHTS_MISSING`` when a declared
-        Hugging Face or URL weights file is absent (`weights.check_hf_present`, `weights.check_url_present`).
+        Hugging Face or URL weights file is absent (`weights.check_hf_present`, `weights.check_url_present`), else
+        ``E_WEIGHTS_UNVERIFIED``/``E_WEIGHTS_CHANGED`` when one has no prefetch stamp or no longer matches it
+        (`weights.check_stamps`).
         A lock that cannot be used gives its own code,
         and an input naming a root the profile lacks gives ``E_ROOT_MISSING``.
     """
     missing = [*weights.check_hf_present(step, config.profile), *weights.check_url_present(step, config.profile)]
+    if not missing:
+        missing = weights.check_stamps(step, config.profile, config.cache / weights.STAMPS_DIR)
     if entries is None:
         try:
             entries = _registered(step, analysis, config)
@@ -1514,12 +1520,6 @@ class _Execution:
             self._r_env()
             self._r_session()
 
-    def _sandbox_args(self, rw: list[Path]) -> tuple[list[Path], list[Path], list[Path]]:
-        gathers = self.keyed.gathers
-        ups = [self.keyed.paths[f"up:{n}"] for n in self.step.needs if n not in gathers]
-        ups += [out / WORK for outs in gathers.values() for out in outs]
-        extra = [self.keyed.checkout.worktree, self.keyed.paths["venv"], *ups]
-        return list(self._bound_roots().values()), rw, extra
     def _bound_roots(self) -> dict[str, Path]:
         """The data roots the sandbox binds.
 
@@ -1560,6 +1560,12 @@ class _Execution:
             out.append(root)
         return out
 
+    def _sandbox_args(self, rw: list[Path]) -> tuple[list[Path], list[Path], list[Path]]:
+        gathers = self.keyed.gathers
+        ups = [self.keyed.paths[f"up:{n}"] for n in self.step.needs if n not in gathers]
+        ups += [out / WORK for outs in gathers.values() for out in outs]
+        extra = [self.keyed.checkout.worktree, self.keyed.paths["venv"], *ups]
+        return list(self._bound_roots().values()), rw, extra
 
     def _inner(self, rw: list[Path], tmp: Path) -> str:
         """Where a sandbox with these writable dirs shows ``tmp``: ``/tmp`` or the short fallback."""
