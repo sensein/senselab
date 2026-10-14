@@ -22,6 +22,7 @@ from senselab.utils.reproduce.provenance import (
     drop_unrecordable_host_values,
     record_step,
 )
+from tests.utils.reproduce.run_test import needs_userns
 
 COMMIT = "c" * 40
 STEP_KEY = "a" * 64
@@ -374,3 +375,164 @@ def test_a_derived_venv_name_is_recorded(tmp_path: Path) -> None:
     derived.rename(odd)
     with pytest.raises(ValueError, match="venv name"):
         record_step(tmp_path / "prov2", **(kwargs | {"venv": kwargs["venv"]._replace(path=odd)}))
+
+
+# --- draw provenance (SC8) ----------------------------------------------------------------------------
+
+DRAW = {"seed": 7, "data_order_seed": 11, "sampling": {"temperature": 0.7, "top_k": 20, "do_sample": True}}
+
+DRAW_STEP = """\
+import json, os, pathlib, sys
+out = pathlib.Path(sys.argv[1])
+seen = {k: os.environ.get(k) for k in ("REPRO_SEED", "REPRO_DATA_ORDER_SEED", "REPRO_SAMPLING")}
+(out / "result.json").write_text(json.dumps({"value": 1.0, "seen": seen}))
+"""
+
+
+def _draw_world(tmp_path: Path) -> Any:  # noqa: ANN401
+    from tests.utils.reproduce.engine_test import _world
+    from tests.utils.reproduce.run_test import _git
+
+    world = _world(tmp_path)
+    (world.repo / "draw_step.py").write_text(DRAW_STEP)
+    _git(world.repo, "add", "-A")
+    _git(world.repo, "commit", "-q", "-m", "draw")
+    world.commit = _git(world.repo, "rev-parse", "HEAD").strip()
+    return world
+
+
+def _draw_step(world: Any, **change: Any) -> dict[str, Any]:  # noqa: ANN401
+    from tests.utils.reproduce.weights_test import REPO, REVISION, WEIGHTS, _weights
+
+    fields: dict[str, Any] = {
+        "argv": ["{venv}/bin/python", "{checkout}/draw_step.py", "{out}"],
+        "hf_weights": _weights({"weights.bin": WEIGHTS}),
+        "engine": {
+            "name": "transformers-batched",
+            "version": "4.57.1",
+            "model": {"repo": REPO, "revision": REVISION},
+            "concurrency": 1,
+            "batch_size": 4,
+        },
+        "draw": DRAW,
+        **change,
+    }
+    return dict(world.step("infer", "prep", "", **fields))
+
+
+def _parameters(out: Path) -> dict[str, Any]:
+    records = [json.loads(line) for line in (out / "prov" / STORE_FILE).read_text().splitlines()]
+    [parameters] = [r["parameters"] for r in records if "parameters" in r]
+    return dict(parameters)
+
+
+@needs_userns
+def test_draw_and_engine_are_in_the_details(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The record's ``draw`` holds seeds, sampling, engine, concurrency, batch size, GPU, CUDA and env lock together."""
+    from senselab.utils import cuda_probe
+    from senselab.utils.reproduce import engine
+    from tests.utils.reproduce.engine_test import DRIVER, _gpu
+
+    monkeypatch.setattr(
+        cuda_probe, "detect_host_cuda", lambda: cuda_probe.HostCuda((13, 0), "nvidia-smi", "CUDA Version: 13.0")
+    )
+    world = _draw_world(tmp_path)
+    manifest = world.manifest(_draw_step(world))
+    world.prefetch(manifest)
+    outcome = world.run(manifest, host_runner=_gpu)["infer"]
+    assert outcome.ok and outcome.out is not None, outcome.codes
+    parameters = _parameters(outcome.out)
+    spec = manifest.steps[0].engine
+    assert spec is not None
+    assert parameters["details"]["engine"] == engine.engine_identity(spec)
+    assert parameters["details"]["draw"] == {
+        **DRAW,
+        "engine": engine.engine_identity(spec),
+        "concurrency": 1,
+        "batch_size": 4,
+        "gpu_name": "Test GPU",
+        "gpu_driver": DRIVER,
+        "gpu_count": 1,
+        "host_cuda": "13.0",
+        "torch_cuda": None,
+        "env_key": parameters["env_key"],
+        "body_lock_sha256": parameters["body_lock_sha256"],
+        "torch_lock_sha256": None,
+        "installed_sha256": parameters["installed_sha256"],
+    }
+    plain = world.manifest(world.step("plain", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(plain)
+    bare = world.run(plain, host_runner=_gpu)["plain"]
+    assert bare.ok and bare.out is not None, bare.codes
+    draw = _parameters(bare.out)["details"]["draw"]
+    assert (draw["seed"], draw["data_order_seed"], draw["sampling"], draw["engine"]) == (None, None, {}, None)
+    assert (draw["concurrency"], draw["batch_size"], draw["gpu_driver"], draw["host_cuda"]) == (
+        None,
+        None,
+        DRIVER,
+        "13.0",
+    )
+    for bad in ({"seed": "7"}, {"sampling": {"temperature": "a b"}}, {"extra": 1}, {"gpu_name": "a/b"}):
+        with pytest.raises(ValueError, match="draw"):
+            record_step(tmp_path / "bad", **_kwargs(tmp_path, details={"draw": {**draw, **bad}}))
+
+
+def test_draw_changes_the_key(tmp_path: Path) -> None:
+    """Each seed and sampling parameter is keyed, and reaches the step env as a keyed literal; bad draws are refused."""
+    from pydantic import ValidationError
+
+    from senselab.utils.reproduce.cache import step_key, step_key_payload
+    from senselab.utils.reproduce.sandbox import keyed_templates
+    from senselab.utils.reproduce.spec import StepSpec
+    from tests.utils.reproduce.cache_test import _kwargs as _key_kwargs
+    from tests.utils.reproduce.cache_test import _profile, _step_data
+
+    profile = _profile(tmp_path)
+
+    def key(draw: dict[str, Any] | None) -> str:
+        return step_key(StepSpec.model_validate(_step_data(draw=draw)), profile, **_key_kwargs())
+
+    step = StepSpec.model_validate(_step_data(draw=DRAW))
+    assert step_key_payload(step, profile, **_key_kwargs())["draw"] == DRAW
+    keyed = keyed_templates(step, profile)
+    assert (keyed["REPRO_SEED"], keyed["REPRO_DATA_ORDER_SEED"]) == ("7", "11")
+    assert json.loads(keyed["REPRO_SAMPLING"]) == DRAW["sampling"]
+    assert keyed["REPRO_SAMPLING"] == '{"do_sample":true,"temperature":0.7,"top_k":20}'
+    bare = keyed_templates(StepSpec.model_validate(_step_data(draw={"seed": 1})), profile)
+    assert bare["REPRO_SEED"] == "1" and "REPRO_DATA_ORDER_SEED" not in bare and "REPRO_SAMPLING" not in bare
+    assert not {"REPRO_SEED", "REPRO_SAMPLING"} & set(keyed_templates(StepSpec.model_validate(_step_data()), profile))
+    base = key(DRAW)
+    assert key(None) != base and key({}) != key(None)
+    for change in (
+        {"seed": 8},
+        {"seed": None},
+        {"data_order_seed": 12},
+        {"sampling": {**DRAW["sampling"], "temperature": 0.8}},  # type: ignore[dict-item]
+        {"sampling": {**DRAW["sampling"], "top_p": 0.9}},  # type: ignore[dict-item]
+        {"sampling": {**DRAW["sampling"], "do_sample": 1}},  # type: ignore[dict-item]
+    ):
+        assert key({**DRAW, **change}) != base, change
+    for bad in (
+        {"seed": "7"},
+        {"seed": True},
+        {"seed": -1},
+        {"sampling": {"temperature": float("nan")}},
+        {"sampling": {"stop": "a b"}},
+        {"sampling": {"Top-P": 0.9}},
+        {"extra": 1},
+    ):
+        with pytest.raises(ValidationError):
+            StepSpec.model_validate(_step_data(draw=bad))
+
+
+@needs_userns
+def test_draw_env_reaches_the_step(tmp_path: Path) -> None:
+    """Inside the sandbox the step sees ``REPRO_SEED``, ``REPRO_DATA_ORDER_SEED`` and ``REPRO_SAMPLING``."""
+    world = _draw_world(tmp_path)
+    manifest = world.manifest(_draw_step(world))
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["infer"]
+    assert outcome.ok and outcome.out is not None, outcome.codes
+    seen = json.loads((outcome.out / "work" / "result.json").read_text())["seen"]
+    assert seen["REPRO_SEED"] == "7" and seen["REPRO_DATA_ORDER_SEED"] == "11"
+    assert json.loads(seen["REPRO_SAMPLING"]) == DRAW["sampling"]
