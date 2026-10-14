@@ -210,9 +210,14 @@ def _profile(args: argparse.Namespace) -> Profile:
     return load_profile(args.profile)
 
 
-def _manifests(paths: Sequence[Path]) -> list[Manifest]:
+def _manifests(paths: Sequence[Path], profile: Profile) -> list[Manifest]:
     _require(paths)
-    return [load_manifest(p) for p in paths]
+    return [load_manifest(p, headline_rule=profile.policy.headline_rule) for p in paths]
+
+
+def _deny(profile: Profile) -> list[str]:
+    """The profile's deny patterns; none when its policy does not require a file and it names none."""
+    return [] if profile.deny_patterns_file is None else source.load_deny_patterns(profile.deny_patterns_file)
 
 
 def _uv_environ(cache_dir: Path) -> dict[str, str]:
@@ -311,13 +316,14 @@ def lint_findings(paths: Sequence[Path], profile_path: Path, base: Path) -> list
     if profile is not None:
         out += [f"{profile_path}: {f.code} {f.detail}" for f in slurm.profile_findings(profile)]
         try:
-            deny = source.load_deny_patterns(profile.deny_patterns_file)
+            deny = _deny(profile)
         except OSError:
             out.append(f"{profile_path}: deny-patterns-unreadable {profile.deny_patterns_file}")
     loaded: list[tuple[Path, Manifest]] = []
     for path in paths:
         try:
-            loaded.append((path, load_manifest(path)))
+            rule = "balanced_accuracy_only" if profile is None else profile.policy.headline_rule
+            loaded.append((path, load_manifest(path, headline_rule=rule)))
         except pydantic.ValidationError as error:
             out.append(f"{path}: manifest-invalid {_validation_text(error)}")
         except (ValueError, yaml.YAMLError) as error:
@@ -342,8 +348,11 @@ def lint_findings(paths: Sequence[Path], profile_path: Path, base: Path) -> list
 
 
 def _edit_envs(path: Path, old: EnvSpec, change: Callable[[dict[str, Any]], None]) -> None:
-    """Apply ``change`` to the raw ``env`` mapping of every step of a manifest file whose env equals ``old``."""
-    manifest = load_manifest(path)
+    """Apply ``change`` to the raw ``env`` mapping of every step of a manifest file whose env equals ``old``.
+
+    The file is matched structurally (its headline rule was checked when the caller loaded it for a profile).
+    """
+    manifest = load_manifest(path, headline_rule="kind_vocabulary")
 
     def edit(data: Any) -> None:  # noqa: ANN401
         for raw, step in zip(data["steps"], manifest.steps):
@@ -448,10 +457,10 @@ def _cmd_lock(args: argparse.Namespace) -> int:
     paths = list(args.manifests)
     _require(paths)
     base, cache_dir = _base_dir(args, paths[0]), _cache_dir(args)
-    deny = source.load_deny_patterns(profile.deny_patterns_file)
+    deny = _deny(profile)
     for path in paths:
         done: list[EnvSpec] = []
-        for step in load_manifest(path).steps:
+        for step in load_manifest(path, headline_rule=profile.policy.headline_rule).steps:
             if any(step.env == e for e in done):
                 continue
             done.append(step.env)
@@ -469,10 +478,15 @@ def _cmd_lock(args: argparse.Namespace) -> int:
 
 
 def _next_cuda_build(
-    paths: Sequence[Path], base: Path, wheelhouse: Path, rebuild: bool, done: set[tuple[str, str, str]]
+    paths: Sequence[Path],
+    base: Path,
+    wheelhouse: Path,
+    rebuild: bool,
+    done: set[tuple[str, str, str]],
+    profile: Profile,
 ) -> tuple[Path, StepSpec, Any] | None:
     for path in paths:
-        for step in load_manifest(path).steps:
+        for step in load_manifest(path, headline_rule=profile.policy.headline_rule).steps:
             for sdist in step.env.sdist_allow:
                 tag = (str(path), step.name, sdist.name)
                 if tag in done or not build.needs_nvcc(sdist):
@@ -506,7 +520,7 @@ def _batch_builds(
     environ = _uv_environ(cache_dir)
     date = _today()
     while True:
-        todo = _next_cuda_build(paths, base, cache_dir / WHEELHOUSE, args.rebuild, done)
+        todo = _next_cuda_build(paths, base, cache_dir / WHEELHOUSE, args.rebuild, done, profile)
         if todo is None:
             return
         path, step, sdist = todo
@@ -522,7 +536,9 @@ def _batch_builds(
             environ=environ,
         )
         slurm.prepare_log_dir(profile, date)
-        slurm.submit_and_wait(script, name=f"reproduce-build-{sdist.name}-{uuid.uuid4().hex[:8]}")
+        slurm.submit_and_wait(
+            script, name=f"reproduce-build-{sdist.name}-{uuid.uuid4().hex[:8]}", umask=slurm.submit_umask(profile)
+        )
         done.add((str(path), step.name, sdist.name))
 
 
@@ -546,15 +562,16 @@ def _cmd_prefetch(args: argparse.Namespace) -> int:
         code = "E_SANDBOX_UNAVAILABLE" if status == "sweep-refused" else "E_NO_USERNS"
         _error(f"{code}: {detail}")
         return EXIT_FAILED
-    weighted = [s.name for p in paths for s in load_manifest(p).steps if s.hf_weights]
+    rule = profile.policy.headline_rule
+    weighted = [s.name for p in paths for s in load_manifest(p, headline_rule=rule).steps if s.hf_weights]
     if weighted:
         _error(f"steps declaring hf_weights cannot be prefetched yet: {', '.join(weighted)}")
         return EXIT_FAILED
     if not args.local_builds:
         _batch_builds(args, paths, profile, base, cache_dir)
-    deny = source.load_deny_patterns(profile.deny_patterns_file)
+    deny = _deny(profile)
     for path in paths:
-        manifest = load_manifest(path)
+        manifest = load_manifest(path, headline_rule=rule)
         done: list[tuple[EnvSpec, env.PrefetchResult]] = []
         for step in manifest.steps:
             co = source.checkout_step(step, cache=cache_dir, base_dir=base, deny_patterns=deny)
@@ -601,7 +618,7 @@ def _prefetch_env(
 def _cmd_build_one(args: argparse.Namespace) -> int:
     path = Path(args.manifest)
     profile = _profile(args)
-    (manifest,) = _manifests([path])
+    (manifest,) = _manifests([path], profile)
     base, cache_dir = _base_dir(args, path), _cache_dir(args)
     step = next((s for s in manifest.steps if s.name == args.step), None)
     if step is None:
@@ -650,10 +667,11 @@ def _read_bytes(paths: Sequence[Path]) -> tuple[list[bytes], list[str]]:
     return data, [hashlib.sha256(d).hexdigest() for d in data]
 
 
-def _read_manifests(paths: Sequence[Path]) -> tuple[list[Manifest], list[str]]:
-    """Each manifest's sha256 and the manifest parsed from the same bytes."""
+def _read_manifests(paths: Sequence[Path], profile: Profile) -> tuple[list[Manifest], list[str]]:
+    """Each manifest's sha256 and the manifest parsed from the same bytes, under the profile's headline rule."""
     data, shas = _read_bytes(paths)
-    return [parse_manifest(d, p.suffix) for d, p in zip(data, paths)], shas
+    rule = profile.policy.headline_rule
+    return [parse_manifest(d, p.suffix, headline_rule=rule) for d, p in zip(data, paths)], shas
 
 
 def _manifest_changed(args: argparse.Namespace, paths: Sequence[Path], profile: Profile, data: list[bytes]) -> int:
@@ -668,7 +686,9 @@ def _manifest_changed(args: argparse.Namespace, paths: Sequence[Path], profile: 
     code = ["E_MANIFEST_CHANGED"]
     steps = list(args.step or [])
     try:
-        manifests = [parse_manifest(d, p.suffix) for d, p in zip(data, paths)]
+        manifests = [
+            parse_manifest(d, p.suffix, headline_rule=profile.policy.headline_rule) for d, p in zip(data, paths)
+        ]
     except (ValueError, yaml.YAMLError, UnicodeDecodeError):
         manifests = None
     if manifests is not None:
@@ -723,7 +743,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     data, shas = _read_bytes(paths)
     if args.pin and not args.finalize and list(args.pin) != shas:
         return _manifest_changed(args, paths, profile, data)
-    manifests = [parse_manifest(d, p.suffix) for d, p in zip(data, paths)]
+    manifests = [parse_manifest(d, p.suffix, headline_rule=profile.policy.headline_rule) for d, p in zip(data, paths)]
     config = _run_config(args, paths, profile)
     if args.dry_run:
         plans = run.plan_steps(manifests, config)
@@ -754,7 +774,7 @@ def _cmd_submit(args: argparse.Namespace) -> int:
     if findings:
         print("\n".join(findings))
         return EXIT_FAILED
-    manifests, shas = _read_manifests(paths)
+    manifests, shas = _read_manifests(paths, profile)
     config = slurm.SubmitConfig(
         profile=profile,
         profile_path=Path(args.profile).absolute(),

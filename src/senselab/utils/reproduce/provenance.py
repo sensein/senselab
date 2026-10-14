@@ -13,6 +13,10 @@ its sorted key list and ``env_sha256``. The activity's parameters carry the lock
 sha256 and the venv's ``installed_sha256`` (the value in its marker), so the record can be checked
 against the venv. Every value is checked against a closed form, and the graph against
 `check_graph`, before anything is written; step stdout and logs are never read.
+
+That is the confidential record. A profile whose policy sets ``confidential_provenance: false`` passes
+each input's ``paths`` and the rendered ``argv`` as well; they are then recorded (the artifact's
+``paths``, the activity's ``argv``) and the activity's description says so (`OPEN_DESCRIPTION`).
 """
 
 from __future__ import annotations
@@ -40,6 +44,11 @@ DRIVER_DESCRIPTION = (
     "arguments can name data files, and is recorded as argv_sha256: {label}"
 )
 """The activity ``Description``; ``{label}`` is replaced by ``reproduce / <step>``."""
+OPEN_DESCRIPTION = (
+    "senselab reproduce step, run as a sandboxed subprocess; its rendered argv and input paths are recorded "
+    "in the activity parameters and the input artifacts: {label}"
+)
+"""The ``Description`` of a record that carries the argv and input paths."""
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
@@ -77,11 +86,14 @@ class Artifact:
         count: ``input_set_digest``'s file count.
         root: The data-root name the input's patterns are relative to (``InputSpec.root``); None for an
             output.
+        paths: The input's patterns joined to its root dir, recorded only for a non-confidential policy;
+            None otherwise and for an output.
     """
 
     digest: str
     count: int
     root: str | None = None
+    paths: tuple[str, ...] | None = None
 
 
 def _check(ok: bool, what: str) -> None:
@@ -115,8 +127,13 @@ def _check_artifacts(artifacts: Sequence[Artifact], role: str) -> None:
         _check(_is_int(artifact.count) and artifact.count >= 0, f"{role} count")
         if role == "input":
             _check(_is_name(artifact.root, _ROOT), "input root")
+            _check(artifact.paths is None or _strings(artifact.paths), "input paths")
         else:
-            _check(artifact.root is None, "output root")
+            _check(artifact.root is None and artifact.paths is None, "output root")
+
+
+def _strings(values: Sequence[object]) -> bool:
+    return all(isinstance(v, str) and v and "\0" not in v for v in values)
 
 
 def _check_host(host: Mapping[str, Any]) -> None:
@@ -193,6 +210,7 @@ def record_step(
     env_keys: Sequence[str] = (),
     env_sha256: str | None = None,
     argv_sha256: str | None = None,
+    argv: Sequence[str] | None = None,
 ) -> list[Path]:
     """Write one step's provenance into ``prov_dir``.
 
@@ -215,6 +233,8 @@ def record_step(
         env_keys: The step environment's variable names.
         env_sha256: The sha256 of the step environment's ``key=value`` pairs.
         argv_sha256: The sha256 of the step's argv.
+        argv: The rendered argv, given only under a non-confidential policy; recorded as the activity's
+            ``argv``.
 
     Returns:
         The files written: ``store.jsonl``, then the BEP028 files in `write_bep028_files` order. Any
@@ -240,6 +260,7 @@ def record_step(
     _check(all(_matches(key, _ENV_KEY) for key in env_keys), "env key")
     for value, what in ((env_sha256, "env_sha256"), (argv_sha256, "argv_sha256")):
         _check(value is None or _matches(value, _HEX64), what)
+    _check(argv is None or (not isinstance(argv, str) and _strings(argv)), "argv")
     installed = _check_venv(venv)
 
     store = ProvStore(run_id=step_key)
@@ -258,16 +279,20 @@ def record_step(
         "argv_sha256": argv_sha256,
         "host": {key: host[key] for key in HOST_KEYS},
     }
+    if argv is not None:
+        parameters["argv"] = list(argv)
     activity = store.activity(node=NODE, step=step, parameters=parameters, started=started, ended=ended)
     store.was_associated_with(activity, agent)
     for index, artifact in enumerate(inputs):
-        attributes = {
+        attributes: dict[str, Any] = {
             "role": "input",
             "declared": f"inputs[{index}]",
             "root": artifact.root,
             CHECKSUM_KEY: artifact.digest,
             "file_count": artifact.count,
         }
+        if artifact.paths is not None:
+            attributes["paths"] = list(artifact.paths)
         store.used(activity, store.entity(prov_type="artifact", extent=None, attributes=attributes))
     for index, artifact in enumerate(outputs):
         attributes = {
@@ -290,7 +315,8 @@ def record_step(
         operating_system=platform.platform(),
         senselab_version=_senselab_version(),
     )
-    graph = to_bep028_graph(store, label=LABEL, description=DRIVER_DESCRIPTION)
+    opened = argv is not None or any(a.paths is not None for a in inputs)
+    graph = to_bep028_graph(store, label=LABEL, description=OPEN_DESCRIPTION if opened else DRIVER_DESCRIPTION)
     problems = check_graph(graph)
     _check(not problems, "graph")
 

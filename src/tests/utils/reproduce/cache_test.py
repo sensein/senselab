@@ -109,6 +109,14 @@ def _profile(tmp_path: Path, native: dict[str, Any] | None = None, **env: str) -
             "build": "cpu",
             "deny_patterns_file": str(tmp_path / "deny.txt"),
             "canary_host": "pypi.org",
+            "policy": {
+                "min_cell": 5,
+                "headline_rule": "balanced_accuracy_only",
+                "require_deny_patterns": True,
+                "require_canary": True,
+                "confidential_provenance": True,
+                "umask": "007",
+            },
         }
     )
 

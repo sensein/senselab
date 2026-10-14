@@ -10,7 +10,6 @@ import pytest
 from senselab.utils.reproduce.metrics import (
     CODES,
     DRIVER_KEYS,
-    MIN_CELL,
     SPLIT_UNITS,
     WARNINGS,
     MetricsError,
@@ -91,7 +90,7 @@ def _obj() -> dict[str, Any]:
 
 
 def _codes(obj: Any, schema: MetricsSchema | None = None, **kw: Any) -> list[str]:  # noqa: ANN401
-    clean, codes = validate_metrics(obj, schema or _schema(), **kw)
+    clean, codes = validate_metrics(obj, schema or _schema(), **{"min_cell": 5, **kw})
     assert (clean is None) == any(c.startswith("E_") for c in codes)
     return codes
 
@@ -103,7 +102,7 @@ def _entry(name: str, value: float, floor: float, **extra: Any) -> dict[str, Any
 def test_valid_output_passes_and_is_suppressed() -> None:
     """Valid output passes; small n, counts, confusion and person-unit n_groups are suppressed, df is not."""
     obj = _obj()
-    clean, codes = validate_metrics(obj, _schema())
+    clean, codes = validate_metrics(obj, _schema(), min_cell=5)
     assert codes == []
     assert clean is not None
     assert clean["confusion"] == {"tp": 10, "fp": 11, "fn": "<5", "tn": 6}
@@ -123,7 +122,7 @@ def test_n_groups_suppressed_for_every_unit(unit: str | None) -> None:
     """A fold's n_groups below min_cell is suppressed whatever the unit, or with none given."""
     obj = _obj()
     obj["split_report"] = _split(unit=unit) if unit else {k: v for k, v in _split().items() if k != "unit"}
-    clean, codes = validate_metrics(obj, _schema())
+    clean, codes = validate_metrics(obj, _schema(), min_cell=5)
     assert codes == []
     assert clean is not None
     assert [f["n_groups"] for f in clean["split_report"]["folds"]] == [12, "<5"]
@@ -134,19 +133,18 @@ def test_a_small_seen_subject_fold_by_recording_is_suppressed() -> None:
     obj = _obj()
     obj["split_report"] = _split(unit="recording")
     obj["split_report"]["folds"][1]["n_groups"] = 3
-    clean, codes = validate_metrics(obj, _schema())
+    clean, codes = validate_metrics(obj, _schema(), min_cell=5)
     assert codes == [] and clean is not None
     assert clean["split_report"]["folds"][1]["n_groups"] == "<5"
 
 
-def test_min_cell_is_one_fixed_constant() -> None:
-    """The threshold is ``MIN_CELL = 5``, not a parameter: 4 becomes ``"<5"``, 5 stays."""
-    assert MIN_CELL == 5
+def test_min_cell_is_a_required_parameter() -> None:
+    """The threshold is the caller's (the profile policy's ``min_cell``), never a default: at 5, 4 becomes ``"<5"``."""
     with pytest.raises(TypeError):
-        validate_metrics(_obj(), _schema(), min_cell=11)  # type: ignore[call-arg]
+        validate_metrics(_obj(), _schema())  # type: ignore[call-arg]
     obj = _obj()
     obj["confusion"] = {"tp": 4, "fp": 5, "fn": 0, "tn": 11}
-    clean, codes = validate_metrics(obj, _schema())
+    clean, codes = validate_metrics(obj, _schema(), min_cell=5)
     assert codes == [] and clean is not None
     assert clean["confusion"] == {"tp": "<5", "fp": 5, "fn": "<5", "tn": 11}
 
@@ -272,7 +270,7 @@ def test_threshold_tuned_on_test_is_a_warning() -> None:
     """``test`` is recorded honestly: the object passes and carries ``W_TUNED_ON_TEST``."""
     obj = _obj()
     obj["threshold_tuning"] = "test"
-    clean, codes = validate_metrics(obj, _schema())
+    clean, codes = validate_metrics(obj, _schema(), min_cell=5)
     assert codes == ["W_TUNED_ON_TEST"]
     assert clean is not None and clean["threshold_tuning"] == "test"
     assert set(codes) <= WARNINGS
@@ -352,7 +350,7 @@ def test_statistic_kind_needs_no_floor_prevalence_or_split() -> None:
     """Statistic kind needs no floor, prevalence or split report."""
     schema = MetricsSchema.model_validate({"kind": "statistic", "headline": ["f_stat"]})
     obj = {"headline": [{"name": "f_stat", "value": 4.2, "numdf": 3, "dendf": 60}, {"name": "f_stat", "value": 1.1}]}
-    clean, codes = validate_metrics(obj, schema)
+    clean, codes = validate_metrics(obj, schema, min_cell=5)
     assert codes == []
     assert clean == obj
 
@@ -374,9 +372,9 @@ def test_count_headline_is_an_integer_and_suppressed() -> None:
     """A ``count`` headline value is an integer and is suppressed below the minimum cell."""
     schema = MetricsSchema.model_validate({"kind": "count", "headline": ["count"]})
     assert _codes({"headline": [{"name": "count", "value": 2.5}]}, schema) == ["E_METRICS_NOT_INT"]
-    clean, codes = validate_metrics({"headline": [{"name": "count", "value": 2}]}, schema)
+    clean, codes = validate_metrics({"headline": [{"name": "count", "value": 2}]}, schema, min_cell=5)
     assert codes == [] and clean == {"headline": [{"name": "count", "value": "<5"}]}
-    clean, _ = validate_metrics({"headline": [{"name": "count", "value": 7}]}, schema)
+    clean, _ = validate_metrics({"headline": [{"name": "count", "value": 7}]}, schema, min_cell=5)
     assert clean == {"headline": [{"name": "count", "value": 7}]}
 
 
@@ -460,7 +458,7 @@ def test_rejection_never_echoes_content() -> None:
     obj = _obj()
     obj["participant_secret_key"] = "secret-value"
     obj["per_class"]["secret_label"] = {"prevalence": 0.1}
-    _, codes = validate_metrics(obj, _schema())
+    _, codes = validate_metrics(obj, _schema(), min_cell=5)
     assert all(c in CODES for c in codes)
     assert not any("secret" in c for c in codes)
 
@@ -500,7 +498,7 @@ def test_metric_address(address: str, error: str | None) -> None:
 
 def test_metric_value_resolves_and_refuses_ambiguity() -> None:
     """Metric value resolves and refuses ambiguity."""
-    clean, _ = validate_metrics(_obj(), _schema())
+    clean, _ = validate_metrics(_obj(), _schema(), min_cell=5)
     assert clean is not None
     assert metric_value(clean, "mcc") == 0.4
     assert metric_value(clean, "balanced_accuracy@sys_b") == 0.7
@@ -538,7 +536,7 @@ def test_absent_class_does_not_lower_the_chance_floor() -> None:
     obj, schema = _three_class(1 / 3)
     assert _codes(obj, schema) == ["E_METRICS_BAD_FLOOR", "W_CLASS_ABSENT"]
     obj, schema = _three_class(0.5)
-    clean, codes = validate_metrics(obj, schema)
+    clean, codes = validate_metrics(obj, schema, min_cell=5)
     assert codes == ["W_CLASS_ABSENT"]
     assert clean is not None
 
