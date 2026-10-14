@@ -54,7 +54,7 @@ from typing import Any
 import pydantic
 import yaml
 
-from senselab.utils.reproduce import bands, build, cache, env, lock, lockgen, run, sandbox, slurm, source
+from senselab.utils.reproduce import bands, build, cache, env, inputs, lock, lockgen, run, sandbox, slurm, source
 from senselab.utils.reproduce.dag import DagError, toposort
 from senselab.utils.reproduce.locks import TORCH_NAMES, ReproduceLockError, file_sha256, normalize_name
 from senselab.utils.reproduce.spec import (
@@ -299,10 +299,13 @@ def _checked_submodules(step: StepSpec, cache_dir: Path | None) -> dict[str, str
     return co.submodules if step.submodules else {}
 
 
-def _lock_findings(path: Path, manifest: Manifest, base: Path, cache_dir: Path | None) -> list[str]:
+def _lock_findings(
+    path: Path, manifest: Manifest, base: Path, cache_dir: Path | None, profile: Profile | None
+) -> list[str]:
     """Each manifest's sources lock: its sha256, and every step's pins and ``lock_inputs`` against it.
 
-    Submodule commits are compared when ``cache_dir`` holds the step's prefetched checkout.
+    Submodule commits are compared when ``cache_dir`` holds the step's prefetched checkout. With a profile,
+    each registered input's manifest is read for the link rule (`inputs.unregistered_links`).
     """
     try:
         sources_lock, _ = lock.load_lock(base, manifest.sources)
@@ -318,6 +321,29 @@ def _lock_findings(path: Path, manifest: Manifest, base: Path, cache_dir: Path |
             except lock.LockError as error:
                 if error.code != "E_LOCK_REF":
                     out.append(f"{path}:{step.name}: {error.code} {input_id}")
+        if profile is not None:
+            out += _link_findings(f"{path}:{step.name}", step, sources_lock, base, profile)
+    return out
+
+
+def _link_findings(
+    where: str, step: StepSpec, sources_lock: lock.SourcesLock, base: Path, profile: Profile
+) -> list[str]:
+    """``input-link-unregistered <id> <count>`` for each declared input with links outside the step's inputs."""
+    try:
+        entries = lock.resolve_inputs(base, sources_lock, step.lock_inputs)
+    except lock.LockError:
+        return []
+    out = []
+    for input_id, entry in entries.items():
+        others = [e for i, e in entries.items() if i != input_id]
+        try:
+            count = inputs.unregistered_links(entry, profile, others)
+        except inputs.InputError as error:
+            out.append(f"{where}: {error.code} {input_id}")
+            continue
+        if count:
+            out.append(f"{where}: input-link-unregistered {input_id} {count}")
     return out
 
 
@@ -345,7 +371,9 @@ def lint_findings(
         codes, ``adapter-missing``, ``patch-missing``, ``patch-sha``, ``patch-lint`` (with the lint code,
         line and pattern index, never patch text), ``deny-pattern-invalid``, and the sources-lock codes
         (``E_LOCK_SHA``/``E_LOCK_INVALID`` with the lock path, ``E_LOCK_REF``/``E_LOCK_MISMATCH`` with the
-        step field, ``E_LOCK_STALE``/``E_INPUT_REGISTRY`` with the input id); and the warning
+        step field, ``E_LOCK_STALE``/``E_INPUT_REGISTRY`` with the input id), ``input-link-unregistered`` with
+        the input id and the number of its manifest's links whose target lies in no input the step declares;
+        and the warning
         ``W_BAND_AMIN_WIDE <step> <metric>`` for a band whose ``a_min`` exceeds ``max_width_frac`` times its
         declared lift, which alone does not fail a command (`blocking`).
 
@@ -398,7 +426,7 @@ def lint_findings(
         out.append(f"{', '.join(str(p) for p in paths)}: W_LOCKS_SKIPPED")
     else:
         for path, manifest in loaded:
-            out += _lock_findings(path, manifest, base, cache_dir)
+            out += _lock_findings(path, manifest, base, cache_dir, profile)
     return out
 
 

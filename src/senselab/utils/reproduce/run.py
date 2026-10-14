@@ -19,17 +19,18 @@ A step's result dir ``R = <results_root>/<step_key>`` is laid out by the driver:
    content, so they are hashed before the done check; registered inputs are keyed by the lock's sha256.
 2. A done result dir (`cache.is_done`) is linked into the dated run and the step is ``skipped``.
    Otherwise the step's claim is taken and done is checked again.
-3. Refuse, before the result dir is reset, unless unprivileged user namespaces work, the prefetched
-   venv passed its checks (`env.venv_checked`), and the host meets the GPU and driver floor.
+3. Refuse, before the result dir is reset, when the inputs gate (`gate`) finds a code for a registered
+   input, unless unprivileged user namespaces work, the prefetched venv passed its checks
+   (`env.venv_checked`), and the host meets the GPU and driver floor.
 4. Reset the dir, stage files, build the env; for an R step, run ``Rscript`` in the same sandbox and
    compare the session with the prefetch ``SESSION.json`` (``E_R_SESSION``).
 5. Run the step in the read-only-by-default sandbox (`sandbox.sandbox_argv`). A preamble in the same
    sandbox reports ``sys.prefix``, Python, torch and its CUDA version and the canary result on a
    driver-held pipe, and the step is exec'd only when the canary's connect failed (a profile whose policy
    does not require a canary and names none skips the connect).
-6. Digest the inputs again (``E_INPUT_MUTATED``), verify the checkout (``E_SRC_MUTATED``) and the venv
-   (``E_ENV_CHANGED``), and refuse and delete any ``summary.json``, ``metrics.json``, ``run.json`` or
-   ``extracted.json`` under ``work/`` (``E_RESERVED_NAME``).
+6. Digest the inputs again and repeat the registered inputs' pre-check (``E_INPUT_MUTATED``), verify the
+   checkout (``E_SRC_MUTATED``) and the venv (``E_ENV_CHANGED``), and refuse and delete any ``summary.json``,
+   ``metrics.json``, ``run.json`` or ``extracted.json`` under ``work/`` (``E_RESERVED_NAME``).
 7. Run the adapter in the sandbox with the driver's interpreter; it may import nothing from senselab
    outside ``senselab.utils.reproduce`` (``E_ADAPTER_IMPORT``) and returns its metrics on a pipe.
    Validate, evaluate ``expect`` (`evaluate_expect`), validate again as the driver with the same
@@ -79,6 +80,7 @@ from senselab.utils.reproduce import (
     env,
     extract,
     host,
+    inputs,
     lock,
     metrics,
     provenance,
@@ -178,7 +180,8 @@ CODES = frozenset(
 )
 """The run's own codes. Digest, cache, metrics and stage codes (``E_DIGEST_*``, ``E_KEY_*``,
 ``E_RESULT_*``, ``E_CLAIM_HELD``, ``E_METRICS_*``, ``E_SPLIT_*``, ``E_STAGE_*``) and sources-lock codes
-(``E_LOCK_*``, ``E_INPUT_REGISTRY``) pass through as their modules name them."""
+(``E_LOCK_*``, ``E_INPUT_REGISTRY``) and the inputs gate's codes (``E_INPUT_MISSING``, ``E_INPUT_MISMATCH``,
+``E_INPUT_LINK_UNREGISTERED``) pass through as their modules name them."""
 
 _VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+!_-]{0,63}$")
 _EXC_CLASS = re.compile(
@@ -646,6 +649,64 @@ def _key(step: StepSpec, analysis: str, config: RunConfig, upstream: Mapping[str
     return _Keyed(key, result, co, input_digests, adapter, adapter_sha, paths, lock_sha, ref_name)
 
 
+# --- the inputs gate ---------------------------------------------------------------------------------
+
+
+class Gate(NamedTuple):
+    """The inputs gate of one step: its codes, each registered input's own codes, and what `_after` repeats."""
+
+    codes: tuple[str, ...]
+    per_input: dict[str, tuple[str, ...]]
+    entries: dict[str, inputs.RegisteredInput]
+    overlays: dict[str, dict[str, int] | None]
+
+
+def _registered(step: StepSpec, analysis: str, config: RunConfig) -> dict[str, inputs.RegisteredInput]:
+    """The registry entries of the step's ``lock_inputs``, as the analysis's lock pins them.
+
+    A step without ``lock_inputs`` reads no lock.
+    """
+    if not step.lock_inputs:
+        return {}
+    ref = config.sources.get(analysis)
+    if ref is None:
+        raise RunError("E_LOCK_REF")
+    try:
+        sources_lock, _ = lock.load_lock(config.base_dir, ref)
+        return lock.resolve_inputs(config.base_dir, sources_lock, step.lock_inputs)
+    except lock.LockError as error:
+        raise RunError(error.code) from None
+
+
+def gate(step: StepSpec, analysis: str, config: RunConfig) -> Gate:
+    """Check every registered input of a step (`inputs.precheck`); nothing is written and no input file is read.
+
+    Args:
+        step: The step.
+        analysis: The name of its manifest.
+        config: The run configuration (its ``sources`` must name the analysis's lock).
+
+    Returns:
+        The gate; ``codes`` is empty when the step may run. A lock that cannot be used gives its own code.
+    """
+    try:
+        entries = _registered(step, analysis, config)
+    except RunError as error:
+        return Gate((error.code,), {}, {}, {})
+    per_input: dict[str, tuple[str, ...]] = {}
+    overlays: dict[str, dict[str, int] | None] = {}
+    for input_id, entry in entries.items():
+        overlays[input_id] = None
+        per_input[input_id] = tuple(inputs.precheck(entry, config.profile, entries, overlays[input_id]))
+    codes = tuple(sorted({c for found in per_input.values() for c in found}))
+    return Gate(codes, per_input, entries, overlays)
+
+
+def gate_codes(step: StepSpec, analysis: str, config: RunConfig) -> list[str]:
+    """The codes of `gate`; empty when the step may run."""
+    return list(gate(step, analysis, config).codes)
+
+
 # --- logging -----------------------------------------------------------------------------------------
 
 
@@ -879,6 +940,9 @@ def _run_step(
                     return _skipped(step, keyed.key, run, result)
                 execution = _Execution(step, analysis, config, upstream, schemas, keyed)
                 with _env_locks(step, analysis, config):
+                    execution.gate = gate(step, analysis, config)
+                    if execution.gate.codes:
+                        return StepOutcome(step.name, keyed.key, "failed", EXIT_DRIVER, execution.gate.codes, None)
                     try:
                         execution.refusals()
                     except RunError as error:
@@ -952,6 +1016,7 @@ class _Execution:
         self.verdict: str | None = None
         self.extracted: dict[str, Any] | None = None
         self.frame: tuple[str | None, str | None] = (None, None)
+        self.gate: Gate | None = None
         self.venv: env.VenvResult | None = None
         self.overlay: LockRef | None = None
         self.installed: str | None = None
@@ -1347,6 +1412,11 @@ class _Execution:
             if not digest.digest_unchanged(before, digest.input_set_digest(root, spec.patterns)):
                 _log().error("input %d changed during the step", i)
                 self.codes.add("E_INPUT_MUTATED")
+        if self.gate is not None:
+            for input_id, entry in self.gate.entries.items():
+                if inputs.precheck(entry, self.config.profile, self.gate.entries, self.gate.overlays[input_id]):
+                    _log().error("a registered input changed during the step")
+                    self.codes.add("E_INPUT_MUTATED")
         try:
             source.verify_checkout(self.keyed.checkout)
         except source.ReproduceSourceError as error:
@@ -2136,11 +2206,11 @@ def plan_steps(manifests: Sequence[Manifest], config: RunConfig) -> list[Plan]:
     """What `run_steps` would do, in DAG order, without executing or writing anything.
 
     Each step is keyed exactly as a run keys it (its inputs are digested) when every upstream step is done;
-    otherwise it waits on its upstream (``will-execute (upstream)``, no key). A keyed step whose result dir
-    is done is ``skipped``. Any other step is checked as a run checks it before reset (`_ready`) and for its
-    program (`_Execution.program_ok`): a refusal makes it ``blocked``, otherwise it is ``will-execute``. No
-    claim is taken, no result dir or run record is touched, and nothing runs in a sandbox but the
-    ``sandbox_status`` probe.
+    otherwise it waits on its upstream (``will-execute (upstream)``, no key), unless the inputs gate (`gate`)
+    blocks it. A keyed step whose result dir is done is ``skipped``. Any other step is checked as a run
+    checks it before reset (the inputs gate and `_ready`) and for its program (`_Execution.program_ok`): a
+    refusal makes it ``blocked``, otherwise it is ``will-execute``. No claim is taken, no result dir or run
+    record is touched, and nothing runs in a sandbox but the ``sandbox_status`` probe.
 
     Args:
         manifests: The manifests.
@@ -2183,6 +2253,7 @@ def _plan(
         upstream = sorted({c for n in blocked_needs for c in plans[n].codes}) or ["E_UPSTREAM_NOT_DONE"]
         return Plan(step.name, None, "blocked", env_state, src_state, tuple(sorted({*codes, *upstream})))
     if any(n not in done for n in step.needs):
+        codes += gate_codes(step, analysis, config)
         status = "blocked" if codes else "will-execute (upstream)"
         return Plan(step.name, None, status, env_state, src_state, tuple(sorted(codes)))
     if src_state != "ok":
@@ -2195,6 +2266,7 @@ def _plan(
     if cache.is_done(keyed.result):
         done[step.name] = StepOutcome(step.name, keyed.key, "skipped", 0, (), keyed.result)
         return Plan(step.name, keyed.key, "skipped", env_state, src_state, ())
+    codes += gate_codes(step, analysis, config)
     execution = _Execution(step, analysis, config, upstream_outcomes, {}, keyed)
     try:
         execution.refusals(log=False)

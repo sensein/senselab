@@ -6,6 +6,10 @@ manifest's sha256. A **manifest** is a TSV: one ``# root=…`` comment line, the
 (optionally followed by ``sha256``), then one row per file or symlink, sorted by relative path. A
 symlink is recorded by its target and never followed; a file by its size, ``mtime_ns`` and xxh3-128.
 
+`precheck` is the gate's cheap check of a registered input against its manifest: ``lstat`` only, no file
+content. It also applies the link rule: a link row's target, resolved against the link's own directory,
+must lie under the input itself or under another registered input the step declares.
+
 Errors are an `InputError` whose message is a fixed code only.
 """
 
@@ -18,7 +22,7 @@ import re
 import socket
 import stat
 import tempfile
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Annotated, Literal, NamedTuple
 
@@ -29,12 +33,16 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, StringConstraints, f
 
 from senselab.utils import fastio
 from senselab.utils.reproduce import digest
-from senselab.utils.reproduce.spec import Name, RelPath, Sha256
+from senselab.utils.reproduce.spec import Name, Profile, RelPath, Sha256
 
 REGISTRY_DIR = "inputs"
 MANIFEST_COLUMNS = ("relpath", "size", "mtime_ns", "xxh3_128", "link_target")
 SHA256_COLUMN = "sha256"
 CODE = "E_INPUT_REGISTRY"
+MISSING = "E_INPUT_MISSING"
+MISMATCH = "E_INPUT_MISMATCH"
+LINK_UNREGISTERED = "E_INPUT_LINK_UNREGISTERED"
+DESCRIPTION = "dataset_description.json"
 _CHUNK = 8 << 20
 _XXH = re.compile(r"^[0-9a-f]{32}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -424,3 +432,217 @@ def _atomic_write(path: Path, data: bytes) -> None:
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
+
+
+# --- the pre-check ---------------------------------------------------------------------------------------
+
+
+def input_top(inp: RegisteredInput, profile: Profile) -> Path:
+    """``<profile root>/<relpath>`` of a registered input.
+
+    Raises:
+        InputError: ``E_INPUT_REGISTRY`` when the profile has no such root.
+    """
+    if inp.root not in profile.roots:
+        raise InputError(CODE)
+    return Path(os.path.normpath(profile.roots[inp.root] / inp.relpath))
+
+
+def original_top(inp: RegisteredInput, profile: Profile) -> Path | None:
+    """The tree a hardlinked derivative mirrors, or None.
+
+    Raises:
+        InputError: ``E_INPUT_REGISTRY`` when the profile has no such root.
+    """
+    if inp.original is None:
+        return None
+    if inp.original.root not in profile.roots:
+        raise InputError(CODE)
+    return Path(os.path.normpath(profile.roots[inp.original.root] / inp.original.relpath))
+
+
+def manifest_rows(inp: RegisteredInput, profile: Profile) -> list[Row]:
+    """The rows of a registered input's manifest, checked against the registered sha256.
+
+    Raises:
+        InputError: As `read_manifest`, or when the profile has no such root.
+    """
+    if inp.manifest.root not in profile.roots:
+        raise InputError(CODE)
+    return read_manifest(profile.roots[inp.manifest.root] / inp.manifest.relpath, inp.manifest.sha256)
+
+
+def _under(path: str, parent: str) -> bool:
+    return path == parent or path.startswith(parent.rstrip("/") + "/")
+
+
+def link_resolves_inside(link: str, target: str, tops: Sequence[str]) -> bool:
+    """Whether a link's target, resolved lexically against the link's own directory, lies under one of ``tops``."""
+    resolved = os.path.normpath(os.path.join(os.path.dirname(link), target))
+    return any(_under(resolved, top) for top in tops)
+
+
+def _tops(entries: Iterable[RegisteredInput], profile: Profile) -> list[str]:
+    return [os.fspath(input_top(e, profile)) for e in entries if e.root in profile.roots]
+
+
+class Scan(NamedTuple):
+    """What an ``lstat`` pass over a manifest found; ``present`` lists file rows whose size still matches."""
+
+    files: int
+    links: int
+    missing: int
+    size_diff: int
+    mtime_diff: int
+    link_diff: int
+    links_out: int
+    unlinked: int
+    paired: int
+    present: list[tuple[Row, str, int]]
+
+
+def _parent_state(top: str, rel: str, seen: dict[str, str]) -> str:
+    """``ok``, ``missing`` or ``changed`` (a component is a symlink or not a directory) for ``rel``'s parent."""
+    parts = rel.split("/")[:-1]
+    for index in range(len(parts)):
+        prefix = "/".join(parts[: index + 1])
+        state = seen.get(prefix)
+        if state is None:
+            try:
+                st = os.lstat(os.path.join(top, prefix))
+                state = "ok" if stat.S_ISDIR(st.st_mode) else "changed"
+            except (FileNotFoundError, NotADirectoryError):
+                state = "missing"
+            except OSError:
+                state = "changed"
+            seen[prefix] = state
+        if state != "ok":
+            return state
+    return "ok"
+
+
+def scan(
+    inp: RegisteredInput,
+    profile: Profile,
+    rows: Sequence[Row],
+    tops: Sequence[str],
+    overlay: Mapping[str, int] | None = None,
+) -> Scan:
+    """``lstat`` every manifest row under the input (and its original), reading no file content.
+
+    Args:
+        inp: The registered input.
+        profile: The site profile.
+        rows: Its manifest rows (`manifest_rows`).
+        tops: The trees a link may point into, besides the input itself.
+        overlay: Accepted ``mtime_ns`` per relpath, which an mtime difference may equal.
+
+    Returns:
+        The counts: ``missing`` (no entry, or a parent dir gone), ``size_diff`` (a file row whose entry is no
+        longer a regular file under real directories, or has another size), ``mtime_diff`` (same size,
+        another mtime, not the accepted one), ``link_diff`` (a link row whose entry is no longer that link),
+        ``links_out`` (a link row whose recorded target lies outside the input and ``tops``), and, for an
+        input with ``original``, ``paired`` (file rows other than the top-level ``dataset_description.json``)
+        and ``unlinked`` (paired rows whose original is missing or another inode).
+
+    Raises:
+        InputError: ``E_INPUT_REGISTRY`` when a root is not in the profile.
+    """
+    top = os.fspath(input_top(inp, profile))
+    original = original_top(inp, profile)
+    allowed = [top, *tops]
+    accepted = overlay or {}
+    seen: dict[str, str] = {}
+    files = links = missing = size_diff = mtime_diff = link_diff = links_out = unlinked = paired = 0
+    present: list[tuple[Row, str, int]] = []
+    for row in rows:
+        path = os.path.join(top, row.relpath)
+        if row.link_target is not None:
+            links += 1
+            if not link_resolves_inside(path, row.link_target, allowed):
+                links_out += 1
+        else:
+            files += 1
+        state = _parent_state(top, row.relpath, seen)
+        if state == "missing":
+            missing += 1
+            continue
+        try:
+            st = None if state != "ok" else os.lstat(path)
+        except (FileNotFoundError, NotADirectoryError):
+            missing += 1
+            continue
+        except OSError:
+            st = None
+        if row.link_target is not None:
+            try:
+                same = st is not None and stat.S_ISLNK(st.st_mode) and os.readlink(path) == row.link_target
+            except OSError:
+                same = False
+            link_diff += not same
+            continue
+        if st is None or not stat.S_ISREG(st.st_mode) or st.st_size != row.size:
+            size_diff += 1
+            continue
+        if st.st_mtime_ns != row.mtime_ns and accepted.get(row.relpath) != st.st_mtime_ns:
+            mtime_diff += 1
+        present.append((row, path, st.st_mtime_ns))
+        if original is not None and row.relpath != DESCRIPTION:
+            paired += 1
+            try:
+                other = os.lstat(os.path.join(original, row.relpath))
+                unlinked += (other.st_dev, other.st_ino) != (st.st_dev, st.st_ino)
+            except OSError:
+                unlinked += 1
+    return Scan(files, links, missing, size_diff, mtime_diff, link_diff, links_out, unlinked, paired, present)
+
+
+def precheck(
+    inp: RegisteredInput,
+    profile: Profile,
+    step_inputs: Mapping[str, RegisteredInput],
+    overlay: Mapping[str, int] | None = None,
+) -> list[str]:
+    """The gate's pre-check of one registered input: ``lstat`` of every manifest row, no file content.
+
+    Args:
+        inp: The registered input.
+        profile: The site profile.
+        step_inputs: The registered inputs the step declares (``lock_inputs``); a link may point into any of
+            them.
+        overlay: Accepted ``mtime_ns`` per relpath (from the latest verification record).
+
+    Returns:
+        Sorted codes: ``E_INPUT_MISSING`` for a missing row, ``E_INPUT_MISMATCH`` for a size, mtime, link or
+        hardlink difference (`scan`), ``E_INPUT_LINK_UNREGISTERED`` for a link whose target lies in no
+        declared input, ``E_INPUT_REGISTRY`` when the manifest cannot be read; empty when it passes.
+    """
+    try:
+        rows = manifest_rows(inp, profile)
+        found = scan(inp, profile, rows, _tops(step_inputs.values(), profile), overlay)
+    except InputError as error:
+        return [error.code]
+    codes = set()
+    if found.missing:
+        codes.add(MISSING)
+    if found.size_diff or found.mtime_diff or found.link_diff or found.unlinked:
+        codes.add(MISMATCH)
+    if found.links_out:
+        codes.add(LINK_UNREGISTERED)
+    return sorted(codes)
+
+
+def unregistered_links(inp: RegisteredInput, profile: Profile, others: Iterable[RegisteredInput]) -> int:
+    """How many link rows of the manifest point outside the input and ``others``; nothing under the input is read.
+
+    Raises:
+        InputError: As `manifest_rows`.
+    """
+    top = os.fspath(input_top(inp, profile))
+    tops = [top, *_tops(others, profile)]
+    rows = manifest_rows(inp, profile)
+    return sum(
+        1
+        for r in rows
+        if r.link_target is not None and not link_resolves_inside(os.path.join(top, r.relpath), r.link_target, tops)
+    )
