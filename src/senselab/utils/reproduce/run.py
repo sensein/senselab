@@ -110,6 +110,7 @@ from senselab.utils.reproduce import (
 )
 from senselab.utils.reproduce.dag import toposort
 from senselab.utils.reproduce.spec import (
+    DRIVER_FILE_NAMES,
     Expect,
     InputSpec,
     LockRef,
@@ -150,7 +151,7 @@ INTEGRITY_CODES = frozenset(
 """Codes on which an attempt's kept store is removed before the summary is written."""
 RUN_LOCK = ".run.json.lock"
 PENDING = "pending"
-RESERVED_NAMES = frozenset({cache.SUMMARY, METRICS, RUN_JSON, EXTRACTED})
+RESERVED_NAMES = DRIVER_FILE_NAMES
 NOTEBOOK_KINDS = frozenset({"notebook", "ir_notebook"})
 EXIT_DRIVER = 1
 EXIT_CWD = 96
@@ -1106,16 +1107,18 @@ def _run_step(
                     try:
                         execution.refusals()
                     except RunError as error:
-                        if attempt and error.code in INTEGRITY_CODES:
-                            with contextlib.suppress(OSError):
+                        if error.code in INTEGRITY_CODES:
+                            try:
                                 _discard_store(result, step)
+                            except OSError:
+                                _log().error("could not remove the resume store\n%s", traceback.format_exc())
                         return _failed(step, error.code, keyed.key)
                     keep = f"{WORK}/{step.resume_dir}" if attempt and step.resume_dir is not None else None
                     cache.reset_result_dir(
                         results_root_of(step, config.profile), keyed.key, keep=keep, keep_attempts=attempt
                     )
                     execution.resumed = os.path.lexists(result / WORK)
-                    execution.attempt = _note_attempt(result, attempt, config)
+                    execution.attempt = _attempt_number(result, attempt)
                     summary = _summary_or_driver_error(execution, log)
         except cache.CacheError as error:
             return _failed(step, error.code, keyed.key)
@@ -1141,14 +1144,18 @@ def _is_attempt(result: Path, leftover: bool, config: RunConfig) -> bool:
     return (leftover or pool_attempt > 1) and not os.path.lexists(result / cache.SUMMARY)
 
 
-def _note_attempt(result: Path, attempt: bool, config: RunConfig) -> int:
-    """Append this run's line to ``R/attempts.jsonl`` and return its number (at least 2 on an attempt)."""
-    path = result / ATTEMPTS
+def _attempt_number(result: Path, attempt: bool) -> int:
+    """This run's attempt number: 1, or on an attempt one more than the kept ``R/attempts.jsonl`` lines (at least 2)."""
     previous = 0
     if attempt:
         with contextlib.suppress(OSError):
-            previous = len(_read_nofollow(path).splitlines())
-    number = max(previous + 1, 2) if attempt else 1
+            previous = len(_read_nofollow(result / ATTEMPTS).splitlines())
+    return max(previous + 1, 2) if attempt else 1
+
+
+def _record_attempt(result: Path, number: int, config: RunConfig) -> None:
+    """Append this run's line to ``R/attempts.jsonl``: attempt, start time, host, Slurm job id and restart count."""
+    path = result / ATTEMPTS
     env = _job_env(config)
     line = {
         "attempt": number,
@@ -1162,7 +1169,6 @@ def _note_attempt(result: Path, attempt: bool, config: RunConfig) -> int:
         os.write(fd, (json.dumps(line, sort_keys=True) + "\n").encode())
     finally:
         os.close(fd)
-    return number
 
 
 def _discard_store(result: Path, step: StepSpec) -> None:
@@ -1203,6 +1209,7 @@ def _summary_or_driver_error(execution: _Execution, log: _Buffer) -> dict[str, A
     try:
         _mkdir(result / LOGS)
         log.open(result / LOGS / DRIVER_LOG)
+        _record_attempt(result, execution.attempt, execution.config)
         summary = execution.run()
         cache.write_summary(result, summary)
         return summary

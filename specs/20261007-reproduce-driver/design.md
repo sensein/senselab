@@ -1535,16 +1535,21 @@ patch text.
 ## Resumable steps (A13; completed in A16)
 
 **Attempt.** A run of a key whose result dir has no `summary.json` and whose claim was taken over a holder that
-never released (`cache.claim` yields `leftover`), or a work-pool item's run with `POOL_ATTEMPT > 1`. The claim test
-is the one `SharedFileLock.__enter__` makes: `.holder` is read before the acquire, and only an uncontended acquire
-(under `_UNCONTENDED_ACQUIRE_THRESHOLD`) over a legible identity means a killed holder. A clean release clears
+never released (`cache.claim` yields `leftover`), or a work-pool item's run with `POOL_ATTEMPT > 1`. `leftover` is
+`SharedFileLock.took_over`, the lock's own verdict: `.holder` is read before the acquire, and only an uncontended
+acquire (under `_UNCONTENDED_ACQUIRE_THRESHOLD`, timed over the acquire alone) over a legible identity means a killed
+holder. Timing the whole `__enter__` from outside also counted its file touches and its stale-takeover warning, which
+on a loaded network filesystem can push a real takeover over the threshold. A clean release clears
 `.holder` before it drops the lock, so a waiter either sees no identity or waits, and its acquire is contended. A
 waiter that saw a holder's identity and got the lock within the threshold is the one misread case; it can only keep
 a store of the same key from a run that wrote no summary, which is what a kill leaves anyway. Every run that gets
 past its reset writes a summary, and a run ended by an integrity code discards its store first, so a kept store is
 always one an interrupted run of the same key left. A run refused before its reset (no user namespaces, a venv not
 checked, a GPU floor) touches nothing and releases the claim cleanly, so the run after it is an attempt only
-through `POOL_ATTEMPT`: a plain job resubmitted after such a refusal starts its store again.
+through `POOL_ATTEMPT`: a plain job resubmitted after such a refusal starts its store again. Two more cases are not
+attempts: a run that starts while a failed node's lock is still held (the acquire waits, so it is contended; a pool
+item still counts through `POOL_ATTEMPT`), and none is needed after a restricted purge killed mid-way, whose key a
+public step can no longer run.
 
 **What survives.** On an attempt the reset keeps `R/attempts.jsonl` and, for a `resumable` step, `work/<resume_dir>`
 (moved to `R/.resume-keep` during the wipe and back, kept only when every component is a real directory; a
@@ -1552,8 +1557,10 @@ through `POOL_ATTEMPT`: a plain job resubmitted after such a refusal starts its 
 is not an attempt resets the whole dir, so `attempts.jsonl` restarts at 1. The summary carries `attempt`.
 
 **Discard.** The store is removed before the summary when the run ends with `E_INPUT_MUTATED`, `E_SRC_MUTATED`,
-`E_ENV_CHANGED`, `E_ENV_MISSING`, `E_ENV_UNCHECKED`, `E_ADAPTER_CHANGED` or `E_ENGINE_FIT`, and when an attempt is
-refused before its reset with one of them. A symlink on the way to the store is removed, never followed.
+`E_ENV_CHANGED`, `E_ENV_MISSING`, `E_ENV_UNCHECKED`, `E_ADAPTER_CHANGED` or `E_ENGINE_FIT`, and when a run is
+refused before its reset with one of them. `resume_dir` may not be or lie in `stage`/`notebooks`, nor have a component
+the driver removes after every step (`summary.json`, `metrics.json`, `run.json`, `extracted.json`). The attempt line
+is written inside the run, so a failure to write it still leaves an `E_DRIVER` summary. A symlink on the way to the store is removed, never followed.
 
 **Item-store contract** (`resumable: items`). The driver keeps the dir and does not read it. The step writes each
 item to `<resume_dir>/<item_id>.tmp`, renames it into place, then creates the completion marker

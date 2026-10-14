@@ -26,7 +26,6 @@ import shutil
 import stat
 import sys
 import sysconfig
-import time
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -37,7 +36,7 @@ from typing import Any
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
-from senselab.utils.file_lock import SharedFileLock, lock_holder
+from senselab.utils.file_lock import SharedFileLock
 from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.env import env_key
 from senselab.utils.reproduce.sandbox import keyed_templates
@@ -541,9 +540,11 @@ def _wipe_keeping(out: Path, keep: str | None, keep_attempts: bool) -> None:
         if entry.name != RESUME_KEEP and not attempts:
             _remove(Path(entry.path))
     if keep is not None and _real_dir(out, RESUME_KEEP) is not None:
-        target = out / keep
-        target.parent.mkdir(mode=0o770, parents=True, exist_ok=True)
-        os.rename(held, target)
+        parent = out
+        for part in PurePosixPath(keep).parts[:-1]:
+            parent = parent / part
+            parent.mkdir(mode=0o770, exist_ok=True)
+        os.rename(held, out / keep)
     elif os.path.lexists(held):
         _remove(held)
 
@@ -606,10 +607,9 @@ def claim(results_root: Path, key: str, *, timeout: float = CLAIM_TIMEOUT_S) -> 
     """Hold the exclusive claim on one step key while it is checked, computed and marked done.
 
     The lock files are ``<results_root>/.claims/<key>.{lock,heartbeat,holder}``; the results root's own
-    mode is never changed. ``.holder`` is read once before the acquire, and the acquire is timed: an identity
-    there and an uncontended acquire (under ``SharedFileLock._UNCONTENDED_ACQUIRE_THRESHOLD``, the test
-    `SharedFileLock` itself makes) mean a holder that never released, i.e. one that was killed, since a clean
-    release clears ``.holder`` and a waiter's acquire is contended.
+    mode is never changed. ``leftover`` is the lock's own takeover verdict (`SharedFileLock.took_over`): an
+    identity in ``.holder`` read before an uncontended acquire means a holder that never released, i.e. one that
+    was killed, since a clean release clears ``.holder`` and a waiter's acquire is contended.
 
     Args:
         results_root: The profile's results root.
@@ -629,15 +629,12 @@ def claim(results_root: Path, key: str, *, timeout: float = CLAIM_TIMEOUT_S) -> 
     claims = results_root / CLAIMS
     claims.mkdir(parents=True, exist_ok=True)
     lock = SharedFileLock(claims / key, timeout=timeout, manage_dir_mode=False)
-    snapshot = lock_holder(claims / f"{key}.holder")
-    started = time.monotonic()
     try:
         lock.__enter__()
     except TimeoutError:
         raise CacheError("E_CLAIM_HELD") from None
-    leftover = snapshot is not None and time.monotonic() - started < SharedFileLock._UNCONTENDED_ACQUIRE_THRESHOLD
     try:
-        yield out, leftover
+        yield out, lock.took_over
     finally:
         lock.__exit__(None, None, None)
 
