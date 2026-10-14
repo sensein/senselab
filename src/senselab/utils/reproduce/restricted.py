@@ -36,6 +36,7 @@ SCAN_LOG = "scan.log"
 HOOK_ENV = {"PATH": "/usr/bin:/bin", "LC_ALL": "C.UTF-8"}
 RELEASED_FILES = ("metrics.json", "summary.json")
 RELEASE_MODE = 0o660
+PURGE_CLAIM_TIMEOUT_S = cache.CLAIM_TIMEOUT_S
 _KEY = re.compile(r"^[0-9a-f]{64}$")
 PROFILE_FIELDS = ("restricted_dirs", "restricted_results_root", "released_metrics_root", "scan_hook")
 _WILD = re.compile(r"[*?\[]")
@@ -49,7 +50,9 @@ def _spellings(path: str | os.PathLike[str]) -> set[str]:
     return {os.path.normpath(path), os.path.realpath(path)}
 
 
-restricted_dir_paths = inputs.restricted_dir_paths
+def restricted_dir_paths(profile: Profile) -> list[str]:
+    """Every restricted dir of the profile, as written and resolved (`inputs.restricted_dir_paths`)."""
+    return inputs.restricted_dir_paths(profile)
 
 
 def mask_dirs(profile: Profile) -> list[Path]:
@@ -268,31 +271,48 @@ def release(result: Path, key: str, profile: Profile, summary: dict[str, object]
         log: Where the hook's output goes.
 
     Returns:
-        True when both files were scanned clean and copied (atomically, mode ``0660``); False otherwise, and
-        then nothing is left under the release dir.
+        True when both files were scanned clean and copied (atomically, mode ``0660``). False otherwise, and
+        then an earlier copy for the key is removed (`withdraw`); a symlink in the key's place, or a
+        ``metrics.json`` that is a symlink, is refused and left as it is.
     """
     root = profile.released_metrics_root
     if root is None or not _KEY.match(key):
         return False
-    staged = result / f".release-{uuid.uuid4().hex}"
     target = root / key
+    if target.is_symlink():
+        return False
+    staged = result / f".release-{uuid.uuid4().hex}"
+    released = False
     try:
         os.mkdir(staged, 0o700)
-        metrics = (result / RELEASED_FILES[0]).read_bytes()
+        fd = os.open(result / RELEASED_FILES[0], os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as handle:
+            metrics = handle.read()
         data = {RELEASED_FILES[0]: metrics, RELEASED_FILES[1]: _summary_bytes(summary)}
         for name, content in data.items():
             _write(staged / name, content)
-        if not all(run_scan_hook(profile, staged / name, log) for name in RELEASED_FILES):
-            return False
-        target.mkdir(parents=True, exist_ok=True)
-        for name, content in data.items():
-            _write(target / name, content)
-        return True
+        if all(run_scan_hook(profile, staged / name, log) for name in RELEASED_FILES):
+            target.mkdir(parents=True, exist_ok=True)
+            for name, content in data.items():
+                _write(target / name, content)
+            released = True
     except OSError:
-        shutil.rmtree(target, ignore_errors=True)
-        return False
+        released = False
     finally:
         shutil.rmtree(staged, ignore_errors=True)
+        if not released:
+            withdraw(profile, key)
+    return released
+
+
+def withdraw(profile: Profile, key: str) -> None:
+    """Remove ``<released_metrics_root>/<key>/`` when it is a directory (a symlink there is left alone)."""
+    root = profile.released_metrics_root
+    if root is None or not _KEY.match(key):
+        return
+    target = root / key
+    if target.is_dir() and not target.is_symlink():
+        shutil.rmtree(target, ignore_errors=True)
 
 
 def _summary_bytes(summary: dict[str, object]) -> bytes:
@@ -303,13 +323,14 @@ def _summary_bytes(summary: dict[str, object]) -> bytes:
 # --- the closure purge -------------------------------------------------------------------------------------
 
 
-def _closure_of(out: Path) -> list[str]:
+def _closure_of(out: Path) -> list[str] | None:
+    """The summary's ``input_closure`` (empty when it has none); None when there is no readable summary."""
     try:
         fd = os.open(out / cache.SUMMARY, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd, "rb") as handle:
             data = json.loads(handle.read())
     except (OSError, ValueError):
-        return []
+        return None
     closure = data.get("input_closure") if isinstance(data, dict) else None
     return [c for c in closure if isinstance(c, str)] if isinstance(closure, list) else []
 
@@ -328,35 +349,56 @@ def _run_links(runs_root: Path) -> list[Path]:
 def purge_closure(profile: Profile, input_id: str) -> int:
     """Remove every public result whose summary's ``input_closure`` holds ``input_id``, and its run links.
 
-    Each result dir is removed under its own claim, after its summary is read again there. Stateless: no
-    earlier record is consulted, so a second call removes nothing.
+    A result with no readable summary (a run in flight, or one that died) is taken under its claim too, which
+    waits for a live run: it is removed unless its summary, read again there, has a closure without the id.
+    A held claim (`PURGE_CLAIM_TIMEOUT_S`) skips that result and the purge goes on. Stateless: no earlier
+    record is consulted, so a second call removes nothing.
 
     Returns:
         The number of result dirs removed.
 
     Raises:
-        CacheError: ``E_CLAIM_HELD`` when a result's claim stays held.
+        CacheError: ``E_CLAIM_HELD`` after the other results, when a claim stayed held.
         OSError: When a dir or link cannot be removed.
     """
     root = profile.results_root
     if not root.is_dir():
         return 0
-    purged = 0
+    purged, held = 0, False
     links = None
     for entry in sorted(os.scandir(root), key=lambda e: e.name):
         if not _KEY.match(entry.name) or not entry.is_dir(follow_symlinks=False):
             continue
         out = Path(entry.path)
-        if input_id not in _closure_of(out):
+        closure = _closure_of(out)
+        if closure is not None and input_id not in closure:
             continue
-        with cache.claim(root, entry.name):
-            if input_id not in _closure_of(out):
-                continue
-            real = os.path.realpath(out)
-            links = _run_links(profile.runs_root) if links is None else links
-            for link in links:
-                if os.path.realpath(link) == real and link.is_symlink():
-                    link.unlink()
-            shutil.rmtree(out)
-            purged += 1
+        try:
+            with cache.claim(root, entry.name, timeout=PURGE_CLAIM_TIMEOUT_S):
+                closure = _closure_of(out)
+                if (closure is not None and input_id not in closure) or not out.is_dir():
+                    continue
+                real = os.path.realpath(out)
+                links = _run_links(profile.runs_root) if links is None else links
+                for link in links:
+                    if link.is_symlink() and os.path.realpath(link) == real:
+                        link.unlink()
+                shutil.rmtree(out)
+                purged += 1
+        except cache.CacheError:
+            held = True
+    if held:
+        raise cache.CacheError("E_CLAIM_HELD")
     return purged
+
+
+def closure_now_restricted(closure: Iterable[str], base_dir: Path, profile: Profile) -> bool:
+    """Whether any id of a closure is now restricted (`input_is_restricted`) or its registry entry unreadable."""
+    for input_id in closure:
+        try:
+            entry = inputs.read_registry_entry(base_dir, input_id)[0]
+        except inputs.InputError:
+            return True
+        if input_is_restricted(entry, profile):
+            return True
+    return False

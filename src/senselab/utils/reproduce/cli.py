@@ -447,6 +447,8 @@ def lint_findings(
             where = f"{path}:{step.name}"
             if step.name in refused:
                 out.append(f"{where}: {restricted.CODE}")
+            if profile is not None and step.extract and restricted.hook_missing(profile):
+                out.append(f"{where}: scan-hook-missing")
             if profile is not None:
                 out += [f"{where}: {f.code} {f.detail}" for f in slurm.step_findings(step, profile)]
             if not (base / step.adapter).is_file():
@@ -1015,8 +1017,9 @@ def _cmd_verify_inputs(args: argparse.Namespace) -> int:
 def _verify_inputs(args: argparse.Namespace, profile: Profile) -> int:
     """Run ``verify-inputs``; each id prints one line, and an ``OSError`` for one id prints ``E_DRIVER``.
 
-    Verifying a restricted input first purges its public closure (`restricted.purge_closure`) and adds
-    ``purged=<n>`` to its line.
+    Verifying a restricted input (flagged, or in a restricted dir) first purges its public closure
+    (`restricted.purge_closure`) and its public verify records, and adds ``purged=<n>`` to its line; an
+    unflagged one is then ``E_INPUT_REGISTRY``.
     """
     base = Path(args.base_dir).absolute()
     stems = sorted(p.stem for p in (base / inputs.REGISTRY_DIR).glob("*.yaml"))
@@ -1036,9 +1039,10 @@ def _verify_inputs(args: argparse.Namespace, profile: Profile) -> int:
         purged: int | None = None
         try:
             entry = inputs.read_registry_entry(base, input_id)[0]
-            inputs.check_flag(entry, profile)
-            if entry.restricted:
+            if restricted.input_is_restricted(entry, profile):
                 purged = restricted.purge_closure(profile, input_id)
+                inputs.remove_public_records(input_id, profile)
+            inputs.check_flag(entry, profile)
             directory = inputs.verify_dir(entry, profile)
             others = [e for i, e in registry.items() if i != input_id]
             verification = inputs.verify(entry, profile, now=datetime.datetime.now(datetime.UTC), others=others)

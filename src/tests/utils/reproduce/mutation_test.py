@@ -72,8 +72,9 @@ def _race_child(base: str, queue: Any, submission: str) -> None:  # noqa: ANN401
     world = World.__new__(World)
     state = json.loads(Path(base, "world.json").read_text())
     world.__dict__.update(state)
-    for name in ("tmp", "repo", "base", "data", "cache"):
+    for name in ("tmp", "repo", "base", "data", "cache", "hook"):
         setattr(world, name, Path(getattr(world, name)))
+    world.restricted_dirs = [Path(p) for p in world.restricted_dirs]
     manifest = world.manifest(_py(world, SLOW))
     outcomes = run.run_steps([manifest], world.config(), only=["prep"], submission=submission)
     queue.put([(o.step, o.status, o.exit, list(o.codes)) for o in outcomes])
@@ -85,7 +86,10 @@ def test_concurrent_drivers_of_one_step_execute_it_once(tmp_path: Path) -> None:
     world = World(tmp_path)
     manifest = world.manifest(_py(world, SLOW))
     world.prefetch(manifest)
-    state = {k: (str(v) if isinstance(v, Path) else v) for k, v in world.__dict__.items()}
+    state = {
+        k: (str(v) if isinstance(v, Path) else [str(p) for p in v] if k == "restricted_dirs" else v)
+        for k, v in world.__dict__.items()
+    }
     (tmp_path / "world.json").write_text(json.dumps(state))
     submission = "abcdef123456"
     run.reserve_run_record(world.profile().runs_root, world.config().date, "demo", ["prep"], submission)
