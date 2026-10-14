@@ -669,6 +669,37 @@ def prefetch_env(
     wheels_lock: Path | None = None,
     rebuild: bool = False,
 ) -> PrefetchResult:
+    """Build (or reuse) an env's venvs (`_prefetch_env`); with a profile, its restricted dirs are masked.
+
+    Every build and env sandbox inside masks the profile's ``restricted_dirs`` (`sandbox.tool_masks`).
+    """
+    masks = [] if profile is None else profile.restricted_dirs
+    with sandbox.tool_masks(masks):
+        return _prefetch_env(
+            env,
+            base_dir,
+            cache,
+            analysis=analysis,
+            wheelhouse=wheelhouse,
+            uv_lock=uv_lock,
+            profile=profile,
+            wheels_lock=wheels_lock,
+            rebuild=rebuild,
+        )
+
+
+def _prefetch_env(
+    env: EnvSpec,
+    base_dir: Path,
+    cache: Path,
+    *,
+    analysis: str,
+    wheelhouse: Path,
+    uv_lock: Path | None = None,
+    profile: Profile | None = None,
+    wheels_lock: Path | None = None,
+    rebuild: bool = False,
+) -> PrefetchResult:
     """Build (or reuse) an env's base venv and its derived venvs from verified copies of its locks.
 
     A venv is reused when its marker names its key and overlay, its ``installed.json`` matches the
@@ -780,7 +811,7 @@ def _uv_in_sandbox(uv: str, args: Sequence[str], venv: Path) -> subprocess.Compl
         cache_dir.mkdir()
         run_env |= {"UV_CACHE_DIR": str(cache_dir), "UV_OFFLINE": "1", "UV_PYTHON_DOWNLOADS": "never"}
         argv = [uv, *args, "--no-config", "--python", str(venv.absolute() / "bin" / "python")]
-        result = _run(sandbox.sandbox_argv(argv, [], [work], [venv.absolute()]), run_env)
+        result = _run(sandbox.tool_argv(argv, [work], [venv.absolute()]), run_env)
     refusal = sandbox.sweep_refusal(result.stderr or "")
     if refusal is not None:
         raise ReproduceLockError(f"E_SANDBOX_UNAVAILABLE: {refusal}")
@@ -930,7 +961,7 @@ def smoke(
         else:
             env = _smoke_env(venv, tmp, profile)
         for module in modules:
-            argv = sandbox.sandbox_argv([str(venv / "bin" / "python"), "-c", f"import {module}"], [], [tmp], [venv])
+            argv = sandbox.tool_argv([str(venv / "bin" / "python"), "-c", f"import {module}"], [tmp], [venv])
             try:
                 result = run(argv, env, cwd)
             except subprocess.TimeoutExpired as error:
@@ -1182,6 +1213,20 @@ def prefetch_r(
     venv: Path | None = None,
     runner: Runner | None = None,
 ) -> RResult:
+    """Install an env's R packages (`_prefetch_r`), with the profile's restricted dirs masked in the sandbox."""
+    with sandbox.tool_masks(profile.restricted_dirs):
+        return _prefetch_r(env, cache, profile, kind=kind, venv=venv, runner=runner)
+
+
+def _prefetch_r(
+    env: EnvSpec,
+    cache: Path,
+    profile: Profile,
+    *,
+    kind: str = "r",
+    venv: Path | None = None,
+    runner: Runner | None = None,
+) -> RResult:
     """Install an env's R packages into its private library under the profile's R module.
 
     The download runs outside the sandbox, with network (`r_download_script` fills a local repository); the
@@ -1284,7 +1329,7 @@ def prefetch_r(
             install_env |= {"R_LIBS": str(r_lib), "R_LIBS_USER": str(r_lib), "R_LIBS_SITE": ""}
             install_argv = [sandbox.SH, "-c", R_INSTALL_SH, "sh", str(r_lib), str(script), str(out)]
             install_argv += [repo_dir.as_uri(), notebook_venv, str(session_script), prefix]
-            argv = sandbox.sandbox_argv(install_argv, [], writable)
+            argv = sandbox.tool_argv(install_argv, writable)
             _checked(run(argv, install_env, work), "Rscript install (sandboxed, offline)")
             if staging is not None and venv is not None:
                 _install_staged_kernel(staging / KERNELS / "ir", venv / KERNELS / "ir")

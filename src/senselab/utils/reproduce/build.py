@@ -354,9 +354,9 @@ def wheel_build_argv(
 ) -> list[str]:
     """The exact argv that builds the wheel: ``uv build --wheel --no-build-isolation`` inside the sandbox.
 
-    The build runs in :func:`sandbox.sandbox_argv`'s namespaces: no network, the build venv mounted
-    read-only, every capability dropped. Modules are not loaded inside; their variables reach the
-    build through :func:`build_environment`.
+    The build runs in :func:`sandbox.tool_argv`'s namespaces: no network, no data root, the restricted
+    dirs masked, the build venv mounted read-only, every capability dropped. Modules are not loaded
+    inside; their variables reach the build through :func:`build_environment`.
 
     Args:
         uv: The uv executable.
@@ -370,7 +370,7 @@ def wheel_build_argv(
         The argv.
     """
     argv = [uv, "build", "--no-config", "--wheel", "--no-build-isolation", "--python", str(build_python)]
-    return sandbox.sandbox_argv([*argv, "--out-dir", str(out_dir), str(src)], [], writable, [venv])
+    return sandbox.tool_argv([*argv, "--out-dir", str(out_dir), str(src)], writable, [venv])
 
 
 _UNRECORDED_VARS = frozenset({"_", "SHLVL", "PWD", "OLDPWD"})

@@ -670,6 +670,16 @@ def _batch_builds(
 
 
 def _cmd_prefetch(args: argparse.Namespace) -> int:
+    with sandbox.tool_masks(_tool_masks(args)):
+        return _cmd_prefetch_masked(args)
+
+
+def _tool_masks(args: argparse.Namespace) -> list[Path]:
+    """The restricted dirs of the command's profile; none without a profile (``prefetch --sources-only``)."""
+    return [] if args.profile is None else _profile(args).restricted_dirs
+
+
+def _cmd_prefetch_masked(args: argparse.Namespace) -> int:
     paths = list(args.manifests)
     _require(paths)
     cache_dir = _cache_dir(args)
@@ -750,6 +760,11 @@ def _prefetch_env(
 
 
 def _cmd_build_one(args: argparse.Namespace) -> int:
+    with sandbox.tool_masks(_tool_masks(args)):
+        return _cmd_build_one_masked(args)
+
+
+def _cmd_build_one_masked(args: argparse.Namespace) -> int:
     path = Path(args.manifest)
     profile = _profile(args)
     (manifest,) = _manifests([path], profile)
