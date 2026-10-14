@@ -839,3 +839,36 @@ def test_build_and_env_sandboxes_never_see_restricted_dirs(site: Site, monkeypat
         )
     assert seen == [tuple(str(p) for p in site.restricted_dirs)]
     assert sandbox.active_tool_masks() is None
+
+
+def test_lint_and_submit_refuse_while_a_restricted_input_has_unpurged_public_dependants(site: Site) -> None:
+    """A public result whose closure holds a restricted input, or that has no closure (pre-A8), blocks the set.
+
+    Lint reports ``E_INPUT_UNPURGED <id>`` and submit refuses before any sbatch; the purge removes both kinds
+    (a summary with no ``input_closure`` is purged), and the set is accepted again.
+    """
+    site.register_canary()
+    verify_input(site.base, site.profile(), "canary")
+    root = site.tmp / "results"
+    dependant = _key_dir(root, ["canary"], "dependant")
+    pre_a8 = _key_dir(root, [], "pre-a8")
+    (pre_a8 / cache.SUMMARY).write_text(json.dumps({"exit": 0}))
+    unrelated = _key_dir(root, ["other"], "unrelated")
+    in_flight = _key_dir(root, None, "in-flight")
+    manifest = site.manifest(_canary_step(site, restricted=True))
+    profile = site.profile()
+    assert restricted.unpurged_dependants(profile, "canary") == 2
+    with pytest.raises(ValueError, match=r"E_INPUT_UNPURGED: \['canary'\]"):
+        restricted.check_manifest_set([manifest], site.base, profile)
+    profile_file, path = site.files(manifest)
+    findings = cli.lint_findings([path], profile_file, site.base, skip_locks=True)
+    assert f"{path}:A: E_INPUT_UNPURGED canary" in findings, findings
+    fake = FakeSbatch()
+    with pytest.raises(ValueError, match="E_INPUT_UNPURGED"):
+        slurm.submit([manifest], _submit_config(site, manifest), runner=fake)
+    assert fake.calls == []
+    assert restricted.purge_closure(profile, "canary") == 3
+    assert not dependant.exists() and not pre_a8.exists() and not in_flight.exists() and unrelated.is_dir()
+    assert restricted.unpurged_dependants(profile, "canary") == 0
+    restricted.check_manifest_set([manifest], site.base, profile)
+    assert not [f for f in cli.lint_findings([path], profile_file, site.base, skip_locks=True) if "UNPURGED" in f]

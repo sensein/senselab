@@ -1748,8 +1748,11 @@ no readable summary is taken under its claim and checked there, dead summary-les
 not stop the purge of the others, after which `E_CLAIM_HELD` is raised (`PURGE_CLAIM_TIMEOUT_S`). Old public verify
 records and overlays are removed under the records lock. Only then is an unflagged input in a restricted dir refused
 (`E_INPUT_REGISTRY`, in `verify_dir`, `accepted` and `registry_codes`). A public run whose closure became restricted
-mid-run fails with `E_SPEC_RESTRICTED` and loses `work/`. Public results whose summary predates `input_closure` are
-not purged; the re-key that introduced the field left none.
+mid-run fails with `E_SPEC_RESTRICTED` and loses `work/`. A public summary with no `input_closure` (one that
+predates A8) cannot say what it read, so the purge removes it too (A17 fix round 1). Until the purge has run, lint
+(`E_INPUT_UNPURGED <id>` on each step listing it) and every manifest-set check (`check_manifest_set`: submit, run,
+dry run) refuse a set with a restricted lock input that still has public dependants: readable summaries whose
+closure holds it or that have none (`restricted.unpurged_dependants`; a summary-less dir in flight is not counted).
 
 ## Mirror map (A9)
 
