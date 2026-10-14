@@ -65,7 +65,7 @@ def test_deny_patterns_are_read_from_every_named_file(tmp_path: Path) -> None:
 
 def test_no_site_names_in_cluster_exec_modules() -> None:
     """No cluster-execution module or its tests matches a pattern of the deny files."""
-    value = os.environ.get(DENY_FILE_ENV)
+    value = os.environ.get(DENY_FILE_ENV, "")
     if not value:
         pytest.skip(f"{DENY_FILE_ENV} is not set: the forbidden patterns live outside this repository")
     patterns = _deny_patterns(value)

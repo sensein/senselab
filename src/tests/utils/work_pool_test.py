@@ -95,7 +95,7 @@ def _wait_for(path: Path, timeout_s: float = 30.0) -> dict[str, Any]:
             return _read(path)
         except (FileNotFoundError, json.JSONDecodeError):
             time.sleep(0.05)
-    pytest.fail(f"{path.name} did not appear")
+    raise AssertionError(f"{path.name} did not appear")
 
 
 def _gone(pid: int) -> bool:
@@ -151,7 +151,7 @@ def test_publish_then_claim_is_exclusive_under_contention(tmp_path: Path) -> Non
 
 def test_claims_are_exclusive_on_shared_storage() -> None:
     """The same race on the shared (NFS) directory named by SENSELAB_WORK_POOL_NFS_DIR."""
-    base = os.environ.get(NFS_ENV)
+    base = os.environ.get(NFS_ENV, "")
     if not base:
         pytest.skip(f"{NFS_ENV} is not set")
     root = Path(base) / f"work-pool-race-{uuid.uuid4().hex[:12]}"
