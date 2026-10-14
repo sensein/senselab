@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from senselab.utils.file_lock import SharedFileLock
 from senselab.utils.reproduce import cache, digest, run
 from senselab.utils.reproduce.cache import CacheError
 from senselab.utils.reproduce.spec import Manifest
@@ -107,6 +108,17 @@ def _attempts(out: Path) -> list[dict[str, Any]]:
 @needs_userns
 def test_a_killed_attempt_keeps_the_item_store(world: World) -> None:
     """A leftover holder and no summary is an attempt: the step sees its two finished items, attempt 2."""
+    died = world.tmp / "died" / SHA
+    (died / cache.RESUME_KEEP).mkdir(parents=True)
+    (died / cache.RESUME_KEEP / "a.done").write_text("")
+    (died / "logs").mkdir()
+    assert cache.reset_result_dir(died.parent, SHA, keep="work/items", keep_attempts=True) == died
+    assert sorted(p.relative_to(died).as_posix() for p in died.rglob("*")) == [
+        "work",
+        "work/items",
+        "work/items/a.done",
+    ]
+
     manifest = _manifest(world)
     out = _killed(world, _key(world, manifest))
     outcome = world.run(manifest, parent_env={"SLURM_JOB_ID": "77", "SLURM_RESTART_COUNT": "1"})["infer"]
@@ -151,6 +163,18 @@ def test_integrity_codes_discard_the_store(world: World, monkeypatch: pytest.Mon
     assert _summary(out)["attempt"] == 2
     assert not (out / run.WORK / "items").exists() and (out / run.WORK / "made.json").exists()
 
+    world.env_map = {"MODE": "b"}
+    manifest = _manifest(world)
+    refused = _killed(world, _key(world, manifest), holder=False)
+
+    def changed(*args: Any) -> Any:  # noqa: ANN401
+        raise run.RunError("E_ENV_CHANGED")
+
+    monkeypatch.setattr(run, "_ready", changed)
+    outcome = world.run(manifest)["infer"]
+    assert outcome.codes == ("E_ENV_CHANGED",) and not (refused / cache.SUMMARY).exists()
+    assert not (refused / run.WORK / "items").exists()
+
 
 @needs_userns
 def test_a_non_resumable_step_is_reset_on_an_attempt(world: World) -> None:
@@ -161,6 +185,19 @@ def test_a_non_resumable_step_is_reset_on_an_attempt(world: World) -> None:
     assert outcome.ok, outcome.codes
     assert _made(out) == {"present": [], "made": ["a", "b", "c", "d"]}
     assert _summary(out)["attempt"] == 2
+
+    world.env_map = {"MODE": "b"}
+    manifest = _manifest(world, resumable=None, resume_dir=None)
+    full = _killed(world, _key(world, manifest))
+
+    def no_space(*args: Any) -> None:  # noqa: ANN401
+        raise OSError(28, "No space left on device")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(run, "_record_attempt", no_space)
+        outcome = world.run(manifest)["infer"]
+    assert outcome.codes == ("E_DRIVER",) and _summary(full)["codes"] == ["E_DRIVER"]
+    assert _summary(full)["attempt"] == 2
 
 
 @needs_userns
@@ -211,8 +248,16 @@ def test_a_fresh_leftover_holder_is_taken_over_without_error(tmp_path: Path) -> 
     beat = claims / f"{SHA}.heartbeat"
     beat.write_text("")
     os.utime(beat, (time.time() - 10, time.time() - 10))
-    with cache.claim(root, SHA) as (out, leftover):
-        assert leftover is True and out == root / SHA
+    real_write = SharedFileLock._write_holder
+
+    def slow_write(self: SharedFileLock) -> None:
+        time.sleep(1.0)
+        real_write(self)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(SharedFileLock, "_write_holder", slow_write)
+        with cache.claim(root, SHA) as (out, leftover):
+            assert leftover is True and out == root / SHA
     with cache.claim(root, SHA) as (_, leftover):
         assert leftover is False
     (claims / f"{SHA}.holder").write_text(json.dumps({"user": "u", "host": "h", "pid": 1}))
@@ -231,10 +276,13 @@ def test_resume_dir_is_required_and_keyed(tmp_path: Path) -> None:
         {"resumable": "items", "resume_dir": "stage/x"},
         {"resumable": "items", "resume_dir": "notebooks"},
         {"resumable": "items", "resume_dir": "."},
+        {"resumable": "items", "resume_dir": "metrics.json"},
+        {"resumable": "items", "resume_dir": "store/summary.json"},
         {"resumable": "nope", "resume_dir": "items"},
     ):
         with pytest.raises(ValueError):
             _spec("infer", **bad)
+    assert run.RESERVED_NAMES == {cache.SUMMARY, run.METRICS, run.RUN_JSON, run.EXTRACTED}
     profile = _profile(tmp_path)
     kwargs: dict[str, Any] = {
         "upstream": {},

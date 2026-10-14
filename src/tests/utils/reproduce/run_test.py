@@ -306,6 +306,7 @@ def test_two_step_dag_runs_then_skips_and_reruns_on_each_keyed_change(world: Wor
         "extracted",
         "released",
         "input_closure",
+        "attempt",
     }
     link = world.tmp / "runs" / world.config().date.strftime("%Y-%m-%d") / "demo" / "score"
     assert link.is_symlink() and link.resolve() == score_out.resolve()

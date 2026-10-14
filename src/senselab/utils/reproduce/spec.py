@@ -58,6 +58,8 @@ ClassName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-
 POOLS_DIR = "pools"
 RESUME_RESERVED = frozenset({"stage", "notebooks"})
 """Dirs under ``{out}`` the driver makes on every run, which a ``resume_dir`` may not be or lie in."""
+DRIVER_FILE_NAMES = frozenset({"summary.json", "metrics.json", "run.json", "extracted.json"})
+"""Names the driver removes anywhere under ``{out}`` after a step (``E_RESERVED_NAME``)."""
 RESERVED_STEP_NAMES = frozenset({POOLS_DIR})
 """Names a step may not take: ``<runs_root>/<date>/<analysis>/pools/`` holds the work pools of sharded steps."""
 
@@ -729,7 +731,7 @@ class StepSpec(_Model):
         if (self.resumable is None) != (self.resume_dir is None):
             raise ValueError(f"E_SPEC_RESUME: step {self.name!r} gives resumable and resume_dir together or neither")
         parts = PurePosixPath(self.resume_dir).parts if self.resume_dir is not None else ("ok",)
-        if not parts or parts[0] in RESUME_RESERVED:
+        if not parts or parts[0] in RESUME_RESERVED or DRIVER_FILE_NAMES & set(parts):
             raise ValueError(f"E_SPEC_RESUME: step {self.name!r} resume_dir names a dir the driver makes")
         if len({e.name for e in self.extract}) != len(self.extract):
             raise ValueError(f"E_SPEC_EXTRACT: step {self.name!r} has duplicate extract names")
