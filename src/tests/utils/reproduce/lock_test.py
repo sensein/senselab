@@ -37,6 +37,21 @@ def test_lock_references_and_pins_must_match(tmp_path: Path) -> None:
     step = StepSpec.model_validate(_step_data(lock_inputs=["tables"], hf_weights=WEIGHTS))
     good = lock_data([step], registered={"tables": TABLES})
     assert _codes(step, good) == []
+    staged = StepSpec.model_validate(
+        _step_data(
+            lock_inputs=["tables"], hf_weights=WEIGHTS, stage=[{"root": "data", "patterns": ["x/*.csv"], "dest": "s"}]
+        )
+    )
+    assert _codes(staged, good) == []
+    unstaged = copy.deepcopy(good)
+    unstaged["data"] = [e for e in good["data"] if e["kind"] != "pattern"]
+    assert sorted(d for c, d in lock.step_findings(staged, SourcesLock.model_validate(unstaged))) == [
+        "inputs[0]",
+        "stage[0]",
+    ]
+    for patterns in (["/abs"], ["a/../b"], [""]):
+        with pytest.raises(ValueError):
+            SourcesLock.model_validate({**good, "data": [{"kind": "pattern", "root": "data", "patterns": patterns}]})
     unknown = StepSpec.model_validate(_step_data(lock_inputs=["other"], hf_weights=WEIGHTS))
     assert _codes(unknown, good) == ["E_LOCK_REF"]
     pattern_only = copy.deepcopy(good)
@@ -134,6 +149,20 @@ def test_provenance_records_the_lock_sha(world: World) -> None:
     text = "".join(p.read_text() for p in (outcome.out / "prov").iterdir())
     assert manifest.sources.sha256 in text and "demo.lock.yaml" in text
     assert str(world.tmp) not in text and "t.csv" not in text
+
+    pins = lock_data(manifest.steps, world.registered)
+    pins["code"][0]["submodules"] = {"lib": "1" * 40}
+    data = {**manifest.model_dump(mode="json"), "sources": write_lock(world.base, "demo", pins)}
+    path = world.base / "m.yaml"
+    path.write_text(yaml.safe_dump(data, sort_keys=False))
+    (world.tmp / "deny.txt").write_text("FORBIDDEN-[0-9]+\n")
+    profile = world.tmp / "profile.yaml"
+    profile.write_text(yaml.safe_dump(world.profile().model_dump(mode="json")))
+    common = ["--profile", str(profile), "--base-dir", str(world.base)]
+    assert cli.main(["lint", str(path), *common, "--cache", str(world.tmp / "empty-cache")]) == cli.EXIT_OK
+    assert cli.main(["lint", str(path), *common, "--cache", str(world.cache)]) == cli.EXIT_FAILED
+    world.sources = manifest.sources.model_dump()
+    write_lock(world.base, "demo", lock_data(manifest.steps, world.registered))
 
     registry = world.base / "inputs" / "tables.yaml"
     registry.write_text(yaml.safe_dump({**yaml.safe_load(registry.read_text()), "licence": "CC-BY-4.0"}))

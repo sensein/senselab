@@ -17,7 +17,7 @@ from typing import Annotated, Literal
 
 import pydantic
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from senselab.utils.reproduce import inputs
 from senselab.utils.reproduce.spec import (
@@ -69,6 +69,8 @@ class PatternEntry(_Model):
     kind: Literal["pattern"]
     root: Name
     patterns: list[str] = Field(min_length=1)
+
+    _grammar = field_validator("patterns")(inputs.check_patterns)
 
 
 class ModelEntry(_Model):
@@ -192,20 +194,22 @@ def step_findings(
 
     Returns:
         ``(code, detail)`` pairs, the detail naming the step field. ``E_LOCK_REF``: a ``lock_inputs`` id
-        that is no registered entry, a data-root input whose patterns no pattern entry of its root lists,
-        or ``hf_weights`` with no models entry of the same repository, type and revision carrying each
-        declared file with its sha256. ``E_LOCK_MISMATCH``: no code entry with the step's repository,
-        commit and patch sha256s (and submodules, when given), or an env lock missing from ``envs`` or
-        pinned there with another sha256.
+        that is no registered entry, a data-root input or ``stage`` source whose patterns no pattern entry of
+        its root lists, or ``hf_weights`` with no models entry of the same repository, type and revision
+        carrying each declared file with its sha256 (the step may declare a subset of the entry's files).
+        ``E_LOCK_MISMATCH``: no code entry with the step's repository, commit and patch sha256s (and
+        submodules, when given), or an env lock missing from ``envs`` or pinned there with another sha256.
     """
     found: list[tuple[str, str]] = []
     registered = {e.id for e in lock.registered()}
     found += [("E_LOCK_REF", f"lock_inputs {i}") for i in step.lock_inputs if i not in registered]
     listed = {(e.root, p) for e in lock.data if isinstance(e, PatternEntry) for p in e.patterns}
-    for index, spec in enumerate(step.inputs):
-        data_root = not spec.root.startswith("up:") and spec.root not in RESERVED_ROOT_NAMES
-        if data_root and any((spec.root, p) not in listed for p in spec.patterns):
-            found.append(("E_LOCK_REF", f"inputs[{index}]"))
+    sourced = [("inputs", i, s.root, s.patterns) for i, s in enumerate(step.inputs)]
+    sourced += [("stage", i, s.root, s.patterns) for i, s in enumerate(step.stage)]
+    for field, index, root, patterns in sourced:
+        data_root = not root.startswith("up:") and root not in RESERVED_ROOT_NAMES
+        if data_root and any((root, p) not in listed for p in patterns):
+            found.append(("E_LOCK_REF", f"{field}[{index}]"))
     for w in step.hf_weights:
         pinned = [
             {f.path: f.sha256 for f in m.files}

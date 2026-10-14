@@ -588,8 +588,7 @@ def _sources(step: StepSpec, analysis: str, config: RunConfig, co: source.Checko
         sources_lock, sha = lock.load_lock(config.base_dir, ref)
         findings = lock.step_findings(step, sources_lock, co.submodules if step.submodules else {})
         if findings:
-            _log().error("sources lock findings: %s", ", ".join(f"{c} {d}" for c, d in findings))
-            raise RunError(findings[0][0])
+            raise RunError(findings[0][0], detail=", ".join(f"{c} {d}" for c, d in findings))
         entries = lock.resolve_inputs(config.base_dir, sources_lock, step.lock_inputs)
     except lock.LockError as error:
         raise RunError(error.code) from None

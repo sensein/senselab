@@ -1524,3 +1524,10 @@ patch text.
   DAG errors), `interrupted`, and otherwise `E_DRIVER (<exception class>)`. No traceback is printed.
 - **`__main__.py`** guards its call to `main`, because the adapter runner imports every module of the
   package and would otherwise run the command line inside the adapter sandbox.
+
+## Sources locks (A4; completed in A16)
+
+- **`hf_weights` against the lock's `models`.** A step's `hf_weights` entry matches a `models` entry with the same
+  repository, type and revision. Each file the step declares must be in that entry with the same sha256. The step may
+  declare a subset of the entry's files: the lock pins the snapshot's files, and steps that read different files of
+  one snapshot share one entry. Every declared file is still pinned.

@@ -62,6 +62,12 @@ def test_write_then_read_manifest_round_trip_with_links_and_excludes(tmp_path: P
     (_, data_sha) = read_manifest(with_sha, _sha(with_sha))
     assert data_sha.sha256 == hashlib.sha256(b"x,y\n1,2\n").hexdigest()
     assert not [p for p in out.parent.iterdir() if p.name.startswith(".")]
+    old = os.umask(0o027)
+    try:
+        write_manifest(root, out, exclude=["**/.*.mp4.*"])
+    finally:
+        os.umask(old)
+    assert out.stat().st_mode & 0o777 == 0o640
 
 
 def test_existing_hash_tree_format_parses(tmp_path: Path) -> None:
@@ -82,6 +88,11 @@ def test_existing_hash_tree_format_parses(tmp_path: Path) -> None:
         text.replace("relpath\tsize", "path\tsize"),
         text.replace("0" * 32, "ERR:PermissionError"),
         text + "short\t1\n",
+        text.replace("a.csv\t", "/abs.csv\t"),
+        text.replace("a.csv\t", "../a.csv\t"),
+        text.replace("a.csv\t", "x/./a.csv\t"),
+        text.replace("b\t\t", "a.csv\t\t"),
+        text.replace("a.csv\t", "c.csv\t"),
     ):
         path.write_text(bad)
         with pytest.raises(InputError) as info:
@@ -118,6 +129,10 @@ def test_registry_id_must_match_file_stem(tmp_path: Path) -> None:
     original = _entry(category="derivative", original={"root": "main", "relpath": "legacy/tables"})
     assert RegisteredInput.model_validate(original).original is not None
     assert RegisteredInput.model_validate(_entry(relpath=".")).relpath == "."
+    assert RegisteredInput.model_validate(_entry(include=["**/*.csv"], exclude=["**/.*"])).include == ["**/*.csv"]
+    for patterns in ({"include": ["/abs"]}, {"include": ["a/../b"]}, {"exclude": ["a//b"]}, {"exclude": [""]}):
+        with pytest.raises(ValidationError):
+            RegisteredInput.model_validate(_entry(**patterns))
 
 
 def test_input_placeholder_must_be_declared() -> None:
@@ -160,6 +175,20 @@ def test_a_literal_include_walks_nothing_else(tmp_path: Path, monkeypatch: pytes
     assert os.fspath(root) not in listed
     rows = read_manifest(tmp_path / "one.xxh3.tsv", _sha(tmp_path / "one.xxh3.tsv"))
     assert [r.relpath for r in rows] == ["one.csv"]
+    monkeypatch.setattr(os, "scandir", real)
+    for missing in (["absent.csv"], ["nodir/x.csv"]):
+        with pytest.raises(InputError) as info:
+            write_manifest(root, tmp_path / "missing.xxh3.tsv", include=missing)
+        assert info.value.code == "E_INPUT_REGISTRY"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "a.csv").write_text("a\n")
+    os.symlink(elsewhere, root / "linked")
+    for include in (["linked/a.csv"], ["linked/*.csv"], ["linked/sub/**"]):
+        out = tmp_path / "linked.xxh3.tsv"
+        assert write_manifest(root, out, include=include)["links"] == 1, include
+        (link,) = read_manifest(out, _sha(out))
+        assert (link.relpath, link.link_target) == ("linked", os.fspath(elsewhere)), include
 
 
 def test_licence_and_rows_grammar() -> None:
