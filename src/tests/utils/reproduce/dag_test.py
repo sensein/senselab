@@ -175,7 +175,7 @@ def test_unit_only_on_a_rate_or_mcc() -> None:
 
 
 def test_tolerance_from_steps_must_declare_the_metric() -> None:
-    """Calibration steps named by tolerance_from must declare the expectation's metric."""
+    """Calibration steps named by tolerance_from, and band chains, must declare the expectation's metric."""
     other = {"kind": "statistic", "headline": ["f_stat"]}
     expect = {
         "metric": "top1",
@@ -190,3 +190,9 @@ def test_tolerance_from_steps_must_declare_the_metric() -> None:
         check_expect_sources([_step("target"), _step("s1"), _step("s2", metrics_schema=other), score])
     assert info.value.code == "E_DAG_TOLERANCE_METRIC"
     assert info.value.steps == ("score",)
+    band = {"stored": 70.0, "unit": "pp", "floor": 50.0, "floor_source": "expected_floor", "chains": ["s1", "s2"]}
+    gather = _step("gather", ["s1", "s2"], expect=[{"metric": "top1", "kind": "seed_band", "band": band}])
+    check_expect_sources([_step("s1"), _step("s2"), gather])
+    with pytest.raises(DagError) as info:
+        check_expect_sources([_step("s1"), _step("s2", metrics_schema=other), gather])
+    assert (info.value.code, info.value.steps) == ("E_DAG_TOLERANCE_METRIC", ("gather",))

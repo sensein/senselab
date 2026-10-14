@@ -3,7 +3,7 @@
 `toposort` orders a manifest set so every step follows its ``needs``; among steps that are ready at
 the same time the lexically smallest name goes first, so the order does not depend on file or step
 order. `check_expect_sources` checks every expectation that reads another step's ``metrics.json``
-(``from_step`` and ``tolerance_from``) against that step's ``metrics_schema``. Errors are a
+(``from_step``, ``tolerance_from`` and band chains) against that step's ``metrics_schema``. Errors are a
 `DagError` with a fixed code and the names of the steps at fault, never a path or a value.
 """
 
@@ -77,8 +77,8 @@ def check_expect_sources(steps: Sequence[StepSpec]) -> None:
     a labelled headline, a count or a per-class field), and name the same quantity as the step's own
     ``metric`` (`metrics.metric_quantity`), so a rate is never compared with a count; that an
     expectation ``unit`` sits only on a rate or ``mcc`` is checked by `StepSpec` itself. Each
-    ``tolerance_from`` step must declare the expectation's own ``metric``, because the spread is taken
-    over that metric.
+    ``tolerance_from`` step and each band chain must declare the expectation's own ``metric``, because the
+    spread is taken over that metric.
 
     Args:
         steps: A manifest set.
@@ -99,10 +99,11 @@ def check_expect_sources(steps: Sequence[StepSpec]) -> None:
                     raise DagError("E_DAG_FROM_STEP_METRIC", [step.name])
                 if metric_quantity(source) != metric_quantity(expect.metric):
                     raise DagError("E_DAG_FROM_STEP_UNIT", [step.name])
-            if expect.tolerance_from is not None:
-                for name in expect.tolerance_from.steps:
-                    if metric_address_error(expect.metric, by_name[name].metrics_schema) is not None:
-                        raise DagError("E_DAG_TOLERANCE_METRIC", [step.name])
+            calibration = list(expect.tolerance_from.steps) if expect.tolerance_from is not None else []
+            calibration += expect.band.sources() if expect.band is not None else []
+            for name in calibration:
+                if metric_address_error(expect.metric, by_name[name].metrics_schema) is not None:
+                    raise DagError("E_DAG_TOLERANCE_METRIC", [step.name])
 
 
 def toposort(steps: Sequence[StepSpec]) -> list[StepSpec]:

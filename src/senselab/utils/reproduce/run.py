@@ -66,7 +66,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, NamedTuple
 
-from senselab.utils.reproduce import build, cache, digest, env, host, metrics, provenance, sandbox, source
+from senselab.utils.reproduce import bands, build, cache, digest, env, host, metrics, provenance, sandbox, source
 from senselab.utils.reproduce.dag import toposort
 from senselab.utils.reproduce.spec import (
     Expect,
@@ -142,6 +142,7 @@ CODES = frozenset(
         "E_OUTPUT_MISSING",
         "E_UPSTREAM_METRICS",
         "E_EXPECT",
+        "E_BAND_MEAN",
         "E_PROV_REFUSED",
         "E_DRIVER",
         "E_UPSTREAM_NOT_DONE",
@@ -151,6 +152,7 @@ CODES = frozenset(
         "E_OUTPUT_SYMLINK",
         "E_JOB_ENDED_WITHOUT_RECORD",
         "W_HOST_VALUE_DROPPED",
+        "W_BAND_AMIN_WIDE",
     }
 )
 """The run's own codes. Digest, cache, metrics and stage codes (``E_DIGEST_*``, ``E_KEY_*``,
@@ -891,6 +893,7 @@ class _Execution:
         self.rc: int | None = None
         self.preamble: dict[str, Any] | None = None
         self.passed: bool | None = None
+        self.verdict: str | None = None
         self.frame: tuple[str | None, str | None] = (None, None)
         self.venv: env.VenvResult | None = None
         self.overlay: LockRef | None = None
@@ -980,6 +983,7 @@ class _Execution:
             "torch_cuda": pre.get("torch_cuda"),
             "canary_failed": pre.get("canary_failed"),
             "executed": self.executed,
+            "verdict": self.verdict,
         }
 
     # --- before the step ----------------------------------------------------------------------
@@ -1371,8 +1375,8 @@ class _Execution:
             return
         upstream_metrics = {name: self._upstream_metrics(name) for name in _expect_sources(step)}
         final, passed, codes = evaluate_expect(step, clean, upstream_metrics)
-        self.codes.update(codes)
         if final is None:
+            self.codes.update(codes)
             return
         final_clean, found = metrics.validate_metrics(
             final, step.metrics_schema, min_cell=self._min_cell(), writer="driver"
@@ -1381,10 +1385,11 @@ class _Execution:
         if final_clean is None:
             return
         _write_json(self.result / METRICS, final_clean)
+        self.codes.update(codes)
         if step.expect:
             self.passed = passed
-        if not passed:
-            self.codes.add("E_EXPECT")
+        verdict = final_clean.get("verdict")
+        self.verdict = verdict if isinstance(verdict, str) else None
 
     def _upstream_metrics(self, name: str) -> dict[str, Any]:
         out = self.upstream[name].out
@@ -1478,6 +1483,7 @@ def _drain(fd: int, chunks: list[bytes]) -> None:
 def _expect_sources(step: StepSpec) -> list[str]:
     names = [e.from_step.step for e in step.expect if e.from_step is not None]
     names += [s for e in step.expect if e.tolerance_from is not None for s in e.tolerance_from.steps]
+    names += [s for e in step.expect if e.band is not None for s in e.band.sources()]
     return sorted(set(names))
 
 
@@ -1542,33 +1548,6 @@ def _traceback(stderr: Path, checkout: Path) -> tuple[str | None, str | None]:
 # --- expectations ------------------------------------------------------------------------------
 
 
-def _metric(obj: Mapping[str, Any], address: str) -> tuple[float, str | None]:
-    """A metric's value and unit.
-
-    The unit is an entry's ``unit`` (default ``fraction``), ``fraction`` for a per-class rate, None for a
-    count or statistic.
-    """
-    value = metrics.metric_value(obj, address)
-    quantity = metrics.metric_quantity(address)
-    if quantity not in metrics.SCALED_QUANTITIES:
-        return value, None
-    if address.startswith("per_class."):
-        return value, "fraction"
-    name, _, label = address.partition("@")
-    entries = [
-        e
-        for e in (*obj.get("headline", []), *obj.get("secondary", []))
-        if e.get("name") == name and (e.get("label") == label if label else True)
-    ]
-    return value, str(entries[0].get("unit", "fraction")) if entries else "fraction"
-
-
-def _convert(value: float, unit: str | None, to: str | None) -> float:
-    if unit is None or to is None or unit == to:
-        return value
-    return value * 100.0 if to == "pp" else value / 100.0
-
-
 def _location(obj: dict[str, Any], address: str) -> dict[str, Any]:
     """The mapping an expectation's results are written into.
 
@@ -1597,9 +1576,10 @@ def evaluate_expect(
     own metric entry; values in the other unit are converted (``pp`` = 100 × ``fraction``). A target
     is ``value`` or the ``from_step`` metric of an upstream step; a tolerance is ``tolerance`` or
     ``max(a, k * sd)`` over the expectation's own metric in the ``tolerance_from`` steps (sample
-    standard deviation). ``abs`` passes when ``|value - target| <= tolerance``; ``exact`` when the two
-    are equal, within a relative ``1e-9`` when a unit was converted; ``none`` always passes and records the
-    delta when it has a target.
+    standard deviation). A ``seed_band`` is judged by `bands.evaluate_band`, which also writes its
+    ``verdict``; the top level gets the worst verdict over the step's bands. ``abs`` passes when
+    ``|value - target| <= tolerance``; ``exact`` when the two are equal, within a relative ``1e-9`` when a
+    unit was converted; ``none`` always passes and records the delta when it has a target.
 
     The results go into the metric's own entry (``target``, ``tolerance``, ``delta``, ``pass``), in that
     entry's own unit (converted back from the comparison unit): its headline or secondary entry, its
@@ -1616,17 +1596,25 @@ def evaluate_expect(
 
     Returns:
         ``(metrics, passed, codes)``: a copy of ``clean`` with the results written in, whether every
-        expectation passed, and fixed codes (`metrics.ADDRESS_CODES`) for a value that cannot be read;
-        ``metrics`` is None when there is such a code.
+        expectation passed, and fixed codes. ``metrics`` is None when a value cannot be read, with that
+        code (`metrics.ADDRESS_CODES`). Otherwise ``codes`` holds ``E_EXPECT`` when an ``abs`` or ``exact``
+        expectation failed or a band's verdict is ``fail`` (an ``uninformative`` or ``characterise`` band
+        does not pass, but is no failure), and the band codes of `bands.evaluate_band`.
     """
     final = json.loads(json.dumps(clean))
-    results: list[tuple[Expect, dict[str, float | bool]]] = []
+    results: list[tuple[Expect, Mapping[str, float | bool | str]]] = []
+    codes: set[str] = set()
     try:
         for expect in step.expect:
-            results.append((expect, _evaluate(expect, final, upstream)))
+            if expect.kind == "seed_band":
+                fields, band_codes = bands.evaluate_band(expect, final, upstream)
+                results.append((expect, fields))
+                codes.update(band_codes)
+            else:
+                results.append((expect, _evaluate(expect, final, upstream)))
     except metrics.MetricsError as error:
         return None, False, [error.code]
-    places: dict[int, list[dict[str, float | bool]]] = {}
+    places: dict[int, list[Mapping[str, float | bool | str]]] = {}
     objects: dict[int, dict[str, Any]] = {}
     for expect, result in results:
         place = _location(final, expect.metric)
@@ -1642,33 +1630,38 @@ def evaluate_expect(
         else:
             place["pass"] = all(bool(r["pass"]) for r in found)
     passed = all(bool(r["pass"]) for _, r in results)
+    if any(r.get("verdict", "fail") == "fail" and not r["pass"] for _, r in results):
+        codes.add("E_EXPECT")
+    verdict = bands.worst_verdict([str(r["verdict"]) for _, r in results if "verdict" in r])
     if results:
         final["pass"] = passed
-    return final, passed, []
+    if verdict is not None:
+        final["verdict"] = verdict
+    return final, passed, sorted(codes)
 
 
 def _evaluate(
     expect: Expect, own: Mapping[str, Any], upstream: Mapping[str, Mapping[str, Any]]
 ) -> dict[str, float | bool]:
-    raw, unit = _metric(own, expect.metric)
+    raw, unit = metrics.metric_with_unit(own, expect.metric)
     work = expect.unit or unit
     converted = unit != work
-    value = _convert(raw, unit, work)
+    value = metrics.convert_unit(raw, unit, work)
     target: float | None = None
     if expect.value is not None:
         target = expect.value
     elif expect.from_step is not None:
-        source_value, source_unit = _metric(upstream[expect.from_step.step], expect.from_step.metric)
+        source_value, source_unit = metrics.metric_with_unit(upstream[expect.from_step.step], expect.from_step.metric)
         converted = converted or source_unit != work
-        target = _convert(source_value, source_unit, work)
+        target = metrics.convert_unit(source_value, source_unit, work)
     tolerance: float | None = expect.tolerance
     if expect.tolerance_from is not None:
         rule = expect.tolerance_from
         spread = []
         for name in rule.steps:
-            calibration, calibration_unit = _metric(upstream[name], expect.metric)
+            calibration, calibration_unit = metrics.metric_with_unit(upstream[name], expect.metric)
             converted = converted or calibration_unit != work
-            spread.append(_convert(calibration, calibration_unit, work))
+            spread.append(metrics.convert_unit(calibration, calibration_unit, work))
         tolerance = max(rule.a, rule.k * statistics.stdev(spread))
     result: dict[str, float | bool] = {}
     if target is None:
@@ -1682,10 +1675,10 @@ def _evaluate(
         passed = math.isclose(value, target, rel_tol=EXACT_RELATIVE, abs_tol=0.0) if converted else value == target
     else:
         passed = True
-    result["target"] = _convert(target, work, unit)
-    result["delta"] = _convert(delta, work, unit)
+    result["target"] = metrics.convert_unit(target, work, unit)
+    result["delta"] = metrics.convert_unit(delta, work, unit)
     if tolerance is not None:
-        result["tolerance"] = _convert(tolerance, work, unit)
+        result["tolerance"] = metrics.convert_unit(tolerance, work, unit)
     result["pass"] = bool(passed) and math.isfinite(delta)
     return result
 

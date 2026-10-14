@@ -328,21 +328,89 @@ class ToleranceFrom(_Model):
         return value
 
 
+Finite = Annotated[float, Field(allow_inf_nan=False)]
+NonNegative = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+BAND_A_MIN = {"fraction": 0.002, "pp": 0.2}
+"""The default ``a_min`` of a band, by unit."""
+
+
+class BandSpec(_Model):
+    """A ``seed_band`` expectation: the stored headline and the chains whose spread sets its half-width.
+
+    ``floor`` (declared) or ``floor_from: entry`` (the metric entry's own ``floor``) gives the chance floor,
+    and ``floor_source`` names where it comes from. ``chains`` are the step names of the independent chains
+    (at least two, all in the step's ``needs``); ``chain1``, when set, is the originally seeded chain and
+    gets a sub-verdict. ``a_min`` defaults by ``unit`` (`BAND_A_MIN`); ``rho`` must be below
+    ``max_width_frac`` (``E_SPEC_BAND_RHO``).
+    """
+
+    stored: Finite
+    unit: Literal["fraction", "pp"]
+    floor: Finite | None = None
+    floor_from: Literal["entry"] | None = None
+    floor_source: Label
+    chains: list[Name] = Field(min_length=2)
+    chain1: Name | None = None
+    k: NonNegative = 2.0
+    rho: NonNegative = 0.10
+    a_min: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+    max_width_frac: Annotated[float, Field(gt=0, le=1, allow_inf_nan=False)] = 0.25
+    characterise: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_a_min(cls, data: object) -> object:
+        if isinstance(data, Mapping) and "a_min" not in data and data.get("unit") in BAND_A_MIN:
+            return {**data, "a_min": BAND_A_MIN[data["unit"]]}
+        return data
+
+    @model_validator(mode="after")
+    def _shape(self) -> "BandSpec":
+        if (self.floor is None) == (self.floor_from is None):
+            raise ValueError("E_SPEC_BAND_SHAPE: a band takes exactly one of floor and floor_from")
+        if len(set(self.chains)) != len(self.chains):
+            raise ValueError("E_SPEC_BAND_SHAPE: band chains have duplicates")
+        if self.chain1 is not None and self.chain1 not in self.chains:
+            raise ValueError("E_SPEC_BAND_SHAPE: chain1 must be one of the chains")
+        if self.rho >= self.max_width_frac:
+            raise ValueError("E_SPEC_BAND_RHO: rho must be below max_width_frac")
+        return self
+
+    def sources(self) -> list[str]:
+        """The upstream steps the band reads."""
+        return list(self.chains)
+
+
+def _check_band_scale(step: str, metric: str, band: BandSpec) -> None:
+    """Refuse ``pp`` on an unscaled metric, and a ``stored`` or ``floor`` outside the metric's range in the unit."""
+    quantity = metric_quantity(metric)
+    if quantity not in SCALED_QUANTITIES:
+        if band.unit == "pp":
+            raise ValueError(f"E_SPEC_EXPECT_UNIT: step {step!r} band on {metric!r} takes unit fraction")
+        return
+    scale = 100.0 if band.unit == "pp" else 1.0
+    low = -scale if quantity == "mcc" else 0.0
+    for value in (band.stored, band.floor):
+        if value is not None and not low <= value <= scale:
+            raise ValueError(f"E_SPEC_BAND_SHAPE: step {step!r} band on {metric!r} is outside its range in {band.unit}")
+
+
 class Expect(_Model):
     """One expected metric.
 
     ``abs`` takes one target (``value`` or ``from_step``) and one tolerance (``tolerance`` or
     ``tolerance_from``); ``exact`` takes one target and no tolerance; ``none`` records the metric
-    and takes no tolerance.
+    and takes no tolerance; ``seed_band`` takes a ``band`` and nothing else (``E_SPEC_BAND_SHAPE``).
     """
 
     metric: str
-    value: Annotated[float, Field(allow_inf_nan=False)] | None = None
+    value: Finite | None = None
     from_step: FromStep | None = None
-    tolerance: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
+    tolerance: NonNegative | None = None
     tolerance_from: ToleranceFrom | None = None
     unit: Literal["fraction", "pp"] | None = None
-    kind: Literal["abs", "exact", "none"]
+    band: BandSpec | None = None
+    kind: Literal["abs", "exact", "none", "seed_band"]
 
     @field_validator("value", "tolerance")
     @classmethod
@@ -353,6 +421,12 @@ class Expect(_Model):
     def _shape(self) -> "Expect":
         targets = (self.value is not None) + (self.from_step is not None)
         tolerances = (self.tolerance is not None) + (self.tolerance_from is not None)
+        if self.kind == "seed_band":
+            if self.band is None or targets or tolerances or self.unit is not None:
+                raise ValueError("E_SPEC_BAND_SHAPE: kind seed_band takes a band and no value, tolerance or unit")
+            return self
+        if self.band is not None:
+            raise ValueError("E_SPEC_BAND_SHAPE: only kind seed_band takes a band")
         if targets > 1 or tolerances > 1:
             raise ValueError("give at most one of value/from_step and one of tolerance/tolerance_from")
         if self.kind == "abs" and (targets, tolerances) != (1, 1):
@@ -545,6 +619,7 @@ class StepSpec(_Model):
         referenced += [r.split(":", 1)[1] for r in roots if r.startswith("up:")]
         referenced += [e.from_step.step for e in self.expect if e.from_step is not None]
         referenced += [s for e in self.expect if e.tolerance_from is not None for s in e.tolerance_from.steps]
+        referenced += [s for e in self.expect if e.band is not None for s in e.band.sources()]
         missing = sorted(set(referenced) - needs)
         if missing:
             raise ValueError(f"step {self.name!r} refers to steps outside its needs: {missing}")
@@ -555,6 +630,13 @@ class StepSpec(_Model):
             if expect.unit is not None and metric_quantity(expect.metric) not in SCALED_QUANTITIES:
                 raise ValueError(
                     f"E_SPEC_EXPECT_UNIT: step {self.name!r} expect metric {expect.metric!r} takes no unit"
+                )
+            if expect.band is not None:
+                _check_band_scale(self.name, expect.metric, expect.band)
+            floor_from_entry = expect.band is not None and expect.band.floor_from == "entry"
+            if floor_from_entry and not (self.metrics_schema.kind in CLASSIFICATION_KINDS and "." not in expect.metric):
+                raise ValueError(
+                    f"E_SPEC_BAND_SHAPE: step {self.name!r} band on {expect.metric!r} has no entry floor to read"
                 )
         digested = {(i.root, p) for i in self.inputs for p in i.patterns}
         for index, stage in enumerate(self.stage):

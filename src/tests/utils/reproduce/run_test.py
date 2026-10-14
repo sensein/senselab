@@ -267,6 +267,7 @@ def test_two_step_dag_runs_then_skips_and_reruns_on_each_keyed_change(world: Wor
         "torch_cuda",
         "canary_failed",
         "executed",
+        "verdict",
     }
     link = world.tmp / "runs" / world.config().date.strftime("%Y-%m-%d") / "demo" / "score"
     assert link.is_symlink() and link.resolve() == score_out.resolve()
@@ -1032,6 +1033,57 @@ def test_from_step_and_tolerance_from_read_upstream_results(world: World) -> Non
     assert score is not None
     entry = json.loads((score / run.METRICS).read_text())["headline"][0]
     assert (entry["target"], entry["tolerance"], entry["delta"], entry["pass"]) == (2.0, 2.5, 2.0, True)
+
+
+def _band_dag(world: World, stored: float) -> Manifest:
+    values = {"c1": 2.0, "c2": 3.0, "c3": 4.0, "gather": 3.0}
+    for name, value in values.items():
+        (world.data / "in" / f"{name}.txt").write_text(f"{value}\n")
+
+    def step(name: str, **change: Any) -> dict[str, Any]:  # noqa: ANN401
+        inputs = [{"root": "data", "patterns": [f"in/{name}.txt"]}]
+        return world.step(name, "prep", f"{{root:data}}/in/{name}.txt", inputs=inputs, **change)
+
+    band = {
+        "stored": stored,
+        "unit": "fraction",
+        "floor": 0.0,
+        "floor_source": "declared-zero",
+        "chains": ["c1", "c2", "c3"],
+    }
+    gather = step("gather", needs=["c1", "c2", "c3"], expect=[{"metric": "f_stat", "kind": "seed_band", "band": band}])
+    after = world.step(
+        "after",
+        "score",
+        "{up:gather}/result.json",
+        needs=["gather"],
+        inputs=[{"root": "up:gather", "patterns": ["result.json"]}],
+    )
+    return world.manifest(step("c1"), step("c2"), step("c3"), gather, after)
+
+
+@needs_userns
+def test_a_band_gather_step_writes_verdict_and_exits_zero_unless_fail(world: World) -> None:
+    """An ``uninformative`` band exits 0 with the verdict in the summary; a ``fail`` is ``E_EXPECT``."""
+    manifest = _band_dag(world, 3.5)
+    world.prefetch(manifest)
+    outcomes = world.run(manifest)
+    assert all(o.ok for o in outcomes.values()), {n: o.codes for n, o in outcomes.items()}
+    gather = outcomes["gather"]
+    summary = _summary(gather)
+    assert summary["exit"] == 0 and summary["verdict"] == "uninformative" and summary["pass"] is False
+    assert gather.out is not None
+    entry = json.loads((gather.out / run.METRICS).read_text())["headline"][0]
+    assert entry["verdict"] == "uninformative" and entry["tolerance"] == pytest.approx(2.0)
+    assert _summary(outcomes["c1"])["verdict"] is None
+
+    failing = _band_dag(world, 10.0)
+    world.prefetch(failing)
+    outcomes = world.run(failing)
+    gather = outcomes["gather"]
+    assert gather.status == "executed" and gather.exit != 0 and "E_EXPECT" in gather.codes
+    assert _summary(gather)["verdict"] == "fail"
+    assert outcomes["after"].status == "never-ran"
 
 
 @needs_userns

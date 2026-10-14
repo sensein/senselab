@@ -54,7 +54,7 @@ from typing import Any
 import pydantic
 import yaml
 
-from senselab.utils.reproduce import build, cache, env, lockgen, run, sandbox, slurm, source
+from senselab.utils.reproduce import bands, build, cache, env, lockgen, run, sandbox, slurm, source
 from senselab.utils.reproduce.dag import DagError, toposort
 from senselab.utils.reproduce.locks import TORCH_NAMES, ReproduceLockError, file_sha256, normalize_name
 from senselab.utils.reproduce.spec import (
@@ -298,7 +298,9 @@ def lint_findings(paths: Sequence[Path], profile_path: Path, base: Path) -> list
         One line per finding, ``<where>: <code> <detail>``; empty when clean. Codes: ``profile-invalid``,
         ``deny-patterns-unreadable``, ``manifest-invalid``, ``dag-invalid``, the `slurm.step_findings`
         codes, ``adapter-missing``, ``patch-missing``, ``patch-sha``, ``patch-lint`` (with the lint code,
-        line and pattern index, never patch text) and ``deny-pattern-invalid``.
+        line and pattern index, never patch text) and ``deny-pattern-invalid``; and the warning
+        ``W_BAND_AMIN_WIDE <step> <metric>`` for a band whose ``a_min`` exceeds ``max_width_frac`` times its
+        declared lift, which alone does not fail a command (`blocking`).
 
     Raises:
         UsageError: If a named file does not exist.
@@ -340,8 +342,17 @@ def lint_findings(paths: Sequence[Path], profile_path: Path, base: Path) -> list
                 out += [f"{where}: {f.code} {f.detail}" for f in slurm.step_findings(step, profile)]
             if not (base / step.adapter).is_file():
                 out.append(f"{where}: adapter-missing {step.adapter}")
+            for expect in step.expect:
+                band = expect.band
+                if band is not None and band.floor is not None and bands.amin_too_wide(band, band.floor):
+                    out.append(f"{where}: W_BAND_AMIN_WIDE {step.name} {expect.metric}")
             out += _patch_findings(where, step, base, deny)
     return out
+
+
+def blocking(findings: Sequence[str]) -> bool:
+    """Whether any lint finding is an error rather than a ``W_`` warning."""
+    return any(not f.partition(": ")[2].startswith("W_") for f in findings)
 
 
 # --- manifest updates -----------------------------------------------------------------------------------
@@ -556,6 +567,7 @@ def _cmd_prefetch(args: argparse.Namespace) -> int:
     findings = lint_findings(paths, Path(args.profile), base)
     if findings:
         print("\n".join(findings))
+    if blocking(findings):
         return EXIT_FAILED
     status, detail = sandbox.sandbox_status()
     if status != "ok":
@@ -773,6 +785,7 @@ def _cmd_submit(args: argparse.Namespace) -> int:
     findings = lint_findings(paths, Path(args.profile), base)
     if findings:
         print("\n".join(findings))
+    if blocking(findings):
         return EXIT_FAILED
     manifests, shas = _read_manifests(paths, profile)
     config = slurm.SubmitConfig(
@@ -840,7 +853,7 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     findings = lint_findings(paths, Path(args.profile), _base_dir(args, paths[0]))
     if findings:
         print("\n".join(findings))
-    return EXIT_FAILED if findings else EXIT_OK
+    return EXIT_FAILED if blocking(findings) else EXIT_OK
 
 
 _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
