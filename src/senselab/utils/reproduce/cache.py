@@ -44,6 +44,7 @@ from senselab.utils.reproduce.spec import Profile, StepSpec
 
 STEP_KEY_SCHEMA = "reproduce-step-key-4"
 REPRODUCE_SOURCE_SCHEMA = "reproduce-source-1"
+SHARDS_KEY_SCHEMA = "reproduce-shards-1"
 DRIVER_PACKAGE = "senselab"
 NATIVE_EXCLUDE = ("**/__pycache__/**", "**/*.pyc")
 SUMMARY = "summary.json"
@@ -61,6 +62,7 @@ CODES = frozenset(
         "E_KEY_R_SESSION",
         "E_KEY_NO_WHEELS",
         "E_KEY_LOCK",
+        "E_KEY_SHARD",
         "E_RESULT_DONE",
         "E_RESULT_UNREADABLE",
         "E_RESULT_NOT_DIR",
@@ -226,6 +228,7 @@ def step_key_payload(
     sources_lock_sha256: str,
     r_session_sha256: str | None = None,
     r_module_env_sha256: str | None = None,
+    shard: int | None = None,
 ) -> dict[str, Any]:
     """The object `step_key` hashes.
 
@@ -247,6 +250,8 @@ def step_key_payload(
         r_session_sha256: The sha256 of the prefetch ``SESSION.json``; required for ``r`` and
             ``ir_notebook`` steps and refused for others.
         r_module_env_sha256: The sha256 of the captured R module env; required and refused likewise.
+        shard: The shard index of a sharded step (``0 <= shard < shards.count``), keyed as ``[shard, count]``;
+            required for a sharded step and refused for others.
 
     Returns:
         A JSON-serialisable dict, tagged with `STEP_KEY_SCHEMA`.
@@ -258,7 +263,8 @@ def step_key_payload(
             ``native`` does not give one hex digest per selected native dir, ``E_KEY_SUBMODULES`` for a commit
             that is not 40-hex or submodules on a step that disables them, ``E_KEY_R_SESSION`` for R
             digests missing on an R step or given on another, ``E_KEY_NO_WHEELS`` for an env with
-            sdist builds and no recorded ``wheels.lock``, ``E_KEY_LOCK`` for a lock sha256 that is not hex.
+            sdist builds and no recorded ``wheels.lock``, ``E_KEY_LOCK`` for a lock sha256 that is not hex,
+            ``E_KEY_SHARD`` for a shard index missing, out of range, or given for a step with no shards.
         ValueError: As `sandbox.keyed_templates`.
     """
     if not _is_sha256(sources_lock_sha256):
@@ -287,6 +293,9 @@ def step_key_payload(
             raise CacheError("E_KEY_R_SESSION")
     elif any(d is not None for d in r_digests):
         raise CacheError("E_KEY_R_SESSION")
+    count = None if step.shards is None else step.shards.count
+    if (count is None) != (shard is None) or (count is not None and shard is not None and not 0 <= shard < count):
+        raise CacheError("E_KEY_SHARD")
     env = step.env
     if env.sdist_allow and env.wheels is None:
         raise CacheError("E_KEY_NO_WHEELS")
@@ -335,6 +344,7 @@ def step_key_payload(
         "sources_lock_sha256": sources_lock_sha256,
         "lock_inputs": sorted(step.lock_inputs),
         "restricted": step.restricted,
+        "shard": None if shard is None else [shard, count],
     }
 
 
@@ -356,6 +366,7 @@ def step_key(
     sources_lock_sha256: str,
     r_session_sha256: str | None = None,
     r_module_env_sha256: str | None = None,
+    shard: int | None = None,
 ) -> str:
     """A step's cache key: the sha256 of `canonical_json` over `step_key_payload`.
 
@@ -371,6 +382,7 @@ def step_key(
         sources_lock_sha256: The sha256 of the manifest's sources lock.
         r_session_sha256: The prefetch ``SESSION.json`` sha256 (R steps only).
         r_module_env_sha256: The captured R module env sha256 (R steps only).
+        shard: The shard index (sharded steps only).
 
     Returns:
         A 64-hex key.
@@ -391,8 +403,26 @@ def step_key(
         sources_lock_sha256=sources_lock_sha256,
         r_session_sha256=r_session_sha256,
         r_module_env_sha256=r_module_env_sha256,
+        shard=shard,
     )
     return hashlib.sha256(canonical_json(payload)).hexdigest()
+
+
+def shards_key(keys: Sequence[str]) -> str:
+    """The key a sharded step stands under for its dependants: a sha256 over its shard keys in shard order.
+
+    Args:
+        keys: Each shard's step key, by index.
+
+    Returns:
+        A 64-hex key; no result dir has it.
+
+    Raises:
+        CacheError: ``E_KEY_BAD`` if a key is not 64 lowercase hex characters.
+    """
+    if not all(_is_sha256(k) for k in keys):
+        raise CacheError("E_KEY_BAD")
+    return hashlib.sha256(canonical_json({"schema": SHARDS_KEY_SCHEMA, "shards": list(keys)})).hexdigest()
 
 
 def result_dir(results_root: Path, key: str) -> Path:

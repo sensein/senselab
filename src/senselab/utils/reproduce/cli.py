@@ -167,6 +167,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print each step's key and whether it would execute, skip or be blocked; execute and write nothing",
     )
+    run_cmd.add_argument("--shard", type=int, help="run only this shard of the one sharded --step (a work-pool item)")
+    run_cmd.add_argument(
+        "--pool",
+        metavar="STEP",
+        help="a sharded step's pool job: publish its shards, run the work-pool controller until they end, settle",
+    )
     run_cmd.add_argument("--submission", help="the submission id (set by submit; printed by submit)")
     run_cmd.add_argument("--pin", action="append", default=[], help="a manifest's sha256 at submission, in order")
     run_cmd.add_argument("--timeout", type=float, help="seconds before a step is killed")
@@ -911,7 +917,11 @@ def _manifest_changed(args: argparse.Namespace, paths: Sequence[Path], profile: 
     """
     config = _run_config(args, paths, profile)
     code = ["E_MANIFEST_CHANGED"]
-    steps = list(args.step or [])
+    steps = list(args.step or ([args.pool] if args.pool else []))
+    if args.shard is not None:
+        for step in steps:
+            print(status_line(step, None, "failed", EXIT_FAILED, code))
+        return EXIT_FAILED
     try:
         manifests = [
             parse_manifest(d, p.suffix, headline_rule=profile.policy.headline_rule) for d, p in zip(data, paths)
@@ -979,6 +989,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         for p in plans:
             print(plan_line(p))
         return EXIT_FAILED if any(p.status == "blocked" for p in plans) else EXIT_OK
+    if args.pool is not None:
+        return _run_pool(args, paths, manifests, config)
     if args.finalize:
         if args.submission is not None:
             cancelled = slurm.cancel_submission(args.submission, run.pending_jobs(manifests, config, args.submission))
@@ -988,10 +1000,32 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 _error(f"squeue failed: jobs tagged {args.submission} with no recorded id may remain")
         run.finalize_run_records(manifests, config, submission=args.submission, state_of=slurm.job_state)
         return EXIT_OK
-    outcomes = run.run_steps(manifests, config, only=args.step or None, submission=args.submission)
+    outcomes = run.run_steps(manifests, config, only=args.step or None, submission=args.submission, shard=args.shard)
     for o in outcomes:
         print(status_line(o.step, o.key, o.status, o.exit, o.codes))
     return EXIT_OK if all(o.ok for o in outcomes) else EXIT_FAILED
+
+
+def _run_pool(args: argparse.Namespace, paths: Sequence[Path], manifests: list[Manifest], config: run.RunConfig) -> int:
+    """``run … --pool <step> --submission <id>``: `slurm.run_pool` with one `slurm.shard_command` per shard."""
+    if args.submission is None or args.step or args.shard is not None:
+        raise UsageError("--pool needs --submission and takes no --step or --shard")
+    spec = next((s for m in manifests for s in m.steps if s.name == args.pool), None)
+    if spec is None or spec.shards is None:
+        raise UsageError(f"--pool {args.pool}: not a sharded step of these manifests")
+    base = slurm.driver_run_argv(
+        manifest_paths=[p.absolute() for p in paths],
+        profile_path=Path(args.profile).absolute(),
+        base_dir=config.base_dir,
+        cache=config.cache,
+        date=config.date,
+        submission=args.submission,
+        pins=args.pin,
+    )
+    commands = [slurm.shard_command(base, spec.name, i, sys.executable) for i in range(spec.shards.count)]
+    outcome = slurm.run_pool(manifests, config, spec.name, args.submission, commands)
+    print(status_line(outcome.step, outcome.key, outcome.status, outcome.exit, outcome.codes))
+    return EXIT_OK if outcome.ok else EXIT_FAILED
 
 
 def _cmd_submit(args: argparse.Namespace) -> int:

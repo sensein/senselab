@@ -12,6 +12,12 @@ tagged with the submission id and job id, submits a ``--finalize`` job ``afteran
 only then releases them all with ``scontrol release``. Any exception or interrupt before the release
 completes cancels every job submitted so far and marks the steps ``never-ran`` with ``E_SUBMIT_ABORTED``.
 
+A **sharded** step (``shards``) is no step job: `submit` creates its work pool
+``<runs_root>/<date>/<analysis>/pools/<step>/`` and submits a held pool job (``afterok`` its needs) on the
+``build`` partition, which runs ``run … --pool <step>`` (`run_pool`): it publishes one item per shard to the
+step's resource class, runs `work_pool.Controller` until the pool drains, and settles the step's row. Its
+dependants depend on the pool job, which exits non-zero unless every shard succeeded.
+
 Every job runs in ``<slurm_logs_root>/<date>`` (``--chdir``), which the driver creates with mode
 ``2777`` less the profile policy's ``umask`` (`log_dir_mode`: ``2770`` for ``007``); sbatch and the job
 script run under that umask (`submit_umask`). ``--output`` and ``--error`` are ``<jobid>.{out,err}`` there.
@@ -33,6 +39,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -40,7 +47,8 @@ from pathlib import Path
 from types import FrameType, MappingProxyType
 from typing import Any, NamedTuple
 
-from senselab.utils.reproduce import inputs, restricted, run
+from senselab.utils import work_pool
+from senselab.utils.reproduce import cache, inputs, restricted, run
 from senselab.utils.reproduce.build import SYSTEM_PATH
 from senselab.utils.reproduce.dag import toposort
 from senselab.utils.reproduce.spec import RESERVED_ROOT_NAMES, Manifest, PartitionSpec, Profile, StepSpec, placeholders
@@ -57,14 +65,25 @@ FINALIZE_STEP = "finalize"
 FINALIZE_CPUS = 1
 FINALIZE_MEM = "1G"
 FINALIZE_TIME = "00:10:00"
+POOLS = "pools"
 SUBMIT_TIMEOUT = 120
-CODES = frozenset({"E_SUBMIT_ABORTED", "E_SUBMIT_OVERLAP", "E_MANIFEST_CHANGED", "E_SCANCEL_FAILED"})
+CODES = frozenset(
+    {
+        "E_SUBMIT_ABORTED",
+        "E_SUBMIT_OVERLAP",
+        "E_MANIFEST_CHANGED",
+        "E_SCANCEL_FAILED",
+        "E_SHARD_DEAD",
+        "E_SHARD_UNFINISHED",
+    }
+)
 """The submission's codes, written into ``run.json`` rows."""
 _SCRIPT_OWNED = frozenset({"PATH", "TMPDIR", "REPRO_DRIVER_PYTHON"})
 _EXPORT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _JOB_ID = re.compile(r"^[0-9]+$")
 _SLURM_WORD = re.compile(r"^[A-Za-z0-9_.+/@:=-]+(,[A-Za-z0-9_.+/@:=-]+)*$")
 _PATH_WORD = re.compile(r"^[A-Za-z0-9_.+/@:=-]+$")
+_NODE_WORD = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*(\[[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*\])?$")
 _STATE = re.compile(r"^[A-Z_]{1,32}$")
 
 Runner = Callable[[list[str], str], "subprocess.CompletedProcess[str]"]
@@ -373,15 +392,37 @@ def _path_word(value: str, what: str) -> str:
     return value
 
 
+def _value_findings(owner: str, key: str, fields: Mapping[str, str | None], exclude: Sequence[str]) -> list[Finding]:
+    found = [
+        Finding(owner, "resource-invalid", f"{key}.{name}")
+        for name, value in fields.items()
+        if value is not None and not _SLURM_WORD.match(value)
+    ]
+    if not all(_NODE_WORD.match(node) for node in exclude):
+        found.append(Finding(owner, "resource-invalid", f"{key}.exclude"))
+    return found
+
+
 def _partition_findings(owner: str, key: str, part: PartitionSpec) -> list[Finding]:
-    found = []
     fields = {"partition": part.partition, "mem": part.mem, "time": part.time, "gres": part.gres}
     fields["fallback"] = part.fallback
-    for name, value in fields.items():
-        if value is not None and not _SLURM_WORD.match(value):
-            found.append(Finding(owner, "resource-invalid", f"{key}.{name}"))
+    found = _value_findings(owner, key, fields, part.exclude)
     if part.fallback is not None and part.fallback == part.partition:
         found.append(Finding(owner, "fallback-invalid", f"{key}.fallback is the partition itself"))
+    return found
+
+
+def _shard_findings(step: StepSpec, profile: Profile) -> list[Finding]:
+    """A sharded step's resource class and the pool settings: present, and every value renderable."""
+    assert step.shards is not None
+    name = step.shards.resource_class
+    spec = profile.resource_classes.get(name)
+    if spec is None:
+        return [Finding(step.name, "resource-class-unknown", name)]
+    found = [] if profile.work_pool is not None else [Finding(step.name, "pool-unset", "work_pool")]
+    for part in spec.partitions:
+        fields = {"partition": part.partition, "mem": part.mem, "time": part.time, "gres": part.gres}
+        found += _value_findings(step.name, f"{name}.{part.partition}", fields, part.exclude)
     return found
 
 
@@ -389,13 +430,16 @@ def profile_findings(profile: Profile) -> list[Finding]:
     """Cross-check what every job's rendering reads from the profile itself.
 
     Returns:
-        ``logs-invalid`` (``slurm_logs_root`` is not a plain path) and the ``build`` partition's
-        ``resource-invalid``/``fallback-invalid`` findings (the finalize and build jobs run there).
+        ``logs-invalid`` (``slurm_logs_root`` is not a plain path), the ``build`` partition's
+        ``resource-invalid``/``fallback-invalid`` findings (the finalize, build and pool jobs run there), and
+        ``resource-invalid`` for a ``work_pool.time`` that cannot render.
     """
     found = []
     if not _PATH_WORD.match(os.fspath(profile.slurm_logs_root)):
         found.append(Finding("<profile>", "logs-invalid", "slurm_logs_root"))
     found += _partition_findings("<profile>", profile.build, profile.partitions[profile.build])
+    if profile.work_pool is not None and not _SLURM_WORD.match(profile.work_pool.time):
+        found.append(Finding("<profile>", "resource-invalid", "work_pool.time"))
     return found
 
 
@@ -418,8 +462,10 @@ def step_findings(step: StepSpec, profile: Profile) -> list[Finding]:
         ``partition-unknown`` (``resources.profile`` is no partition key); ``resource-invalid`` (a
         partition, mem, time, gres or fallback value that is not a plain word or comma list);
         ``fallback-invalid`` (the fallback is the partition itself); ``gpu-no-gres`` (``gpu_arch`` or
-        ``min_driver`` on a partition with no ``gres``); ``native-unknown``; and ``root-unknown`` (an
-        input, stage or ``{root:<name>}`` naming no profile root).
+        ``min_driver`` on a partition with no ``gres``); ``native-unknown``; ``root-unknown`` (an
+        input, stage or ``{root:<name>}`` naming no profile root); and for a sharded step
+        ``resource-class-unknown``, ``pool-unset`` (no ``work_pool`` settings) and ``resource-invalid`` for a
+        class partition value (an ``exclude`` entry must be a node name or a bracketed node range).
     """
     found: list[Finding] = []
     key = step.resources.profile
@@ -436,13 +482,26 @@ def step_findings(step: StepSpec, profile: Profile) -> list[Finding]:
     roots = [r for r in _root_names(step) if r not in profile.roots]
     if roots:
         found.append(Finding(step.name, "root-unknown", ", ".join(roots)))
+    if step.shards is not None:
+        found += _shard_findings(step, profile)
     return found
 
 
 # --- rendering -------------------------------------------------------------------------------------------
 
 
-def _header(name: str, partition: str, cpus: int, mem: str, time: str, gres: str | None, logs: Path) -> list[str]:
+def _header(
+    name: str,
+    partition: str,
+    cpus: int,
+    mem: str,
+    time: str,
+    gres: str | None,
+    logs: Path,
+    *,
+    requeue: bool = False,
+    exclude: Sequence[str] = (),
+) -> list[str]:
     lines = [
         "#!/bin/bash",
         f"#SBATCH --job-name={_path_word(name, 'job name')}",
@@ -453,6 +512,13 @@ def _header(name: str, partition: str, cpus: int, mem: str, time: str, gres: str
     ]
     if gres is not None:
         lines.append(f"#SBATCH --gres={slurm_word(gres, 'gres')}")
+    if requeue:
+        lines.append("#SBATCH --requeue")
+    if exclude:
+        bad = [n for n in exclude if not _NODE_WORD.match(n)]
+        if bad:
+            raise ValueError(f"exclude entries refused: {bad}")
+        lines.append(f"#SBATCH --exclude={','.join(exclude)}")
     logs_text = _path_word(os.fspath(logs), "log dir")
     lines += [
         f"#SBATCH --output={logs_text}/%j.out",
@@ -509,14 +575,25 @@ def render_step_job(
         driver_python: The interpreter with senselab installed.
 
     Returns:
-        The script text; every job carries ``--kill-on-invalid-dep=yes``.
+        The script text; every job carries ``--kill-on-invalid-dep=yes``, and the partition entry's ``requeue``
+        and ``exclude`` as ``--requeue`` and ``--exclude``.
 
     Raises:
         ValueError: If a value would need quoting the script cannot express safely.
     """
     part = profile.partitions[step.resources.profile]
     logs = log_dir(profile, date)
-    lines = _header(f"reproduce-{step.name}", partition, part.cpus, part.mem, part.time, part.gres, logs)
+    lines = _header(
+        f"reproduce-{step.name}",
+        partition,
+        part.cpus,
+        part.mem,
+        part.time,
+        part.gres,
+        logs,
+        requeue=part.requeue,
+        exclude=part.exclude,
+    )
     lines += _dependency("afterok", dependencies)
     lines.append("#SBATCH --kill-on-invalid-dep=yes")
     lines += _body(exports, driver_python, command, profile)
@@ -555,6 +632,49 @@ def render_finalize_job(
     return "\n".join(lines) + "\n"
 
 
+def render_pool_job(
+    step: StepSpec,
+    profile: Profile,
+    *,
+    command: Sequence[str],
+    date: datetime.date,
+    exports: Mapping[str, str],
+    dependencies: Sequence[str],
+    driver_python: str = sys.executable,
+) -> str:
+    """Render a sharded step's pool job: ``run … --pool <step>``, ``afterok`` its needs, on the ``build`` partition.
+
+    It has one CPU and ``1G``, and the profile's ``work_pool.time``, since it runs the controller until the pool
+    drains.
+
+    Args:
+        step: The sharded step.
+        profile: The site profile; it must have ``work_pool`` settings.
+        command: The driver arguments (`step_command` with ``pool=True``).
+        date: The log date.
+        exports: The variables to export.
+        dependencies: The job ids of the step's needs.
+        driver_python: The interpreter with senselab installed.
+
+    Returns:
+        The script text.
+
+    Raises:
+        ValueError: If the profile has no ``work_pool``, or a value cannot be rendered.
+    """
+    if profile.work_pool is None:
+        raise ValueError("a sharded step needs the profile's work_pool settings")
+    part = profile.partitions[profile.build]
+    logs = log_dir(profile, date)
+    lines = _header(
+        f"reproduce-{step.name}-pool", part.partition, FINALIZE_CPUS, FINALIZE_MEM, profile.work_pool.time, None, logs
+    )
+    lines += _dependency("afterok", dependencies)
+    lines.append("#SBATCH --kill-on-invalid-dep=yes")
+    lines += _body(exports, driver_python, command, profile)
+    return "\n".join(lines) + "\n"
+
+
 def render_verify_job(
     profile: Profile,
     *,
@@ -588,21 +708,60 @@ def verify_command(config: SubmitConfig, input_id: str) -> list[str]:
     return [*argv, input_id]
 
 
-def step_command(config: SubmitConfig, step: str | None, *, finalize: bool = False) -> list[str]:
-    """A job's driver arguments: ``run <manifests…> --profile … --date … --submission <id> [--pin <sha>…]``.
-
-    Ends with ``--step <step>``, or ``--finalize``.
-    """
-    argv = ["run", *(os.fspath(p) for p in config.manifest_paths)]
-    argv += ["--profile", os.fspath(config.profile_path), "--base-dir", os.fspath(config.base_dir)]
-    argv += ["--cache", os.fspath(config.cache), "--date", config.date.isoformat()]
-    argv += ["--submission", config.submission]
-    for sha in config.manifest_sha256s:
+def driver_run_argv(
+    *,
+    manifest_paths: Sequence[Path],
+    profile_path: Path,
+    base_dir: Path,
+    cache: Path,
+    date: datetime.date,
+    submission: str,
+    pins: Sequence[str],
+) -> list[str]:
+    """``run <manifests…> --profile … --base-dir … --cache … --date … --submission <id> [--pin <sha>…]``."""
+    argv = ["run", *(os.fspath(p) for p in manifest_paths)]
+    argv += ["--profile", os.fspath(profile_path), "--base-dir", os.fspath(base_dir)]
+    argv += ["--cache", os.fspath(cache), "--date", date.isoformat(), "--submission", submission]
+    for sha in pins:
         argv += ["--pin", sha]
+    return argv
+
+
+def run_argv(config: SubmitConfig) -> list[str]:
+    """`driver_run_argv` for one submission."""
+    return driver_run_argv(
+        manifest_paths=config.manifest_paths,
+        profile_path=config.profile_path,
+        base_dir=config.base_dir,
+        cache=config.cache,
+        date=config.date,
+        submission=config.submission,
+        pins=config.manifest_sha256s,
+    )
+
+
+def step_command(config: SubmitConfig, step: str | None, *, finalize: bool = False, pool: bool = False) -> list[str]:
+    """A job's driver arguments: `run_argv`, then ``--step <step>``, ``--pool <step>`` or ``--finalize``."""
+    argv = run_argv(config)
     if finalize:
         return [*argv, "--finalize"]
     assert step is not None
-    return [*argv, "--step", step]
+    return [*argv, "--pool" if pool else "--step", step]
+
+
+def shard_command(base: Sequence[str], step: str, shard: int, driver_python: str) -> list[str]:
+    """A work-pool item's argv: ``<driver python> -P -m senselab.utils.reproduce <base> --step <step> --shard <i>``.
+
+    Args:
+        base: `driver_run_argv` of the submission.
+        step: The sharded step.
+        shard: The shard index.
+        driver_python: The interpreter with senselab installed.
+
+    Returns:
+        The argv.
+    """
+    return [driver_python, "-P", "-m", DRIVER_MODULE, *base, "--step", step, "--shard", str(shard)]
 
 
 # --- the probe and submission --------------------------------------------------------------------------
@@ -658,7 +817,8 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
        ``pending`` rows (``E_SUBMIT_OVERLAP``) and write placeholder ``pending`` rows tagged with this
        submission (job null); an overlap undoes the reservations already made;
     4. under `submit_umask`, with SIGTERM and SIGHUP raising `Terminated`: create the dated log dir
-       (`log_dir_mode`); probe partitions; submit every step job ``--hold``; fill in the job ids under the lock
+       (`log_dir_mode`); probe partitions; submit every step job ``--hold`` (for a sharded step, create its
+       work pool and submit its pool job instead, `render_pool_job`); fill in the job ids under the lock
        (this submission's rows only); submit the finalize job ``--hold``; ``scontrol release`` them all.
 
     Any exception, Ctrl-C, SIGTERM or SIGHUP in step 4 runs the abort with those signals ignored: every
@@ -701,6 +861,17 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
             driver_python=config.driver_python,
         )
 
+    def pool_script(step: StepSpec, needs: Sequence[str] = ()) -> str:
+        return render_pool_job(
+            step,
+            profile,
+            command=step_command(config, step.name, pool=True),
+            date=config.date,
+            exports=config.exports,
+            dependencies=needs,
+            driver_python=config.driver_python,
+        )
+
     def finalize_script(ids: Sequence[str]) -> str:
         return render_finalize_job(
             profile,
@@ -713,6 +884,9 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
 
     for step in ordered:
         part = profile.partitions[step.resources.profile]
+        if step.shards is not None:
+            pool_script(step)
+            continue
         for partition in (part.partition, part.fallback):
             if partition is not None:
                 script_for(step, partition)
@@ -747,12 +921,21 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
             prepare_log_dir(profile, config.date)
             by_step: dict[str, str] = {}
             for step in ordered:
+                needs = [by_step[n] for n in step.needs]
+                if step.shards is not None:
+                    create_pool(profile, config.date, analysis[step.name], step.name)
+                    partition = profile.partitions[profile.build].partition
+                    job_id = _submit_held(runner, pool_script(step, needs), submission)
+                    submitted.append(job_id)
+                    by_step[step.name] = job_id
+                    jobs.append(Job(step.name, analysis[step.name], job_id, partition))
+                    continue
 
                 def probe_script(partition: str, step: StepSpec = step) -> str:
                     return script_for(step, partition)
 
                 partition = choose_partition(step, profile, probe_script, runner)
-                job_id = _submit_held(runner, script_for(step, partition, [by_step[n] for n in step.needs]), submission)
+                job_id = _submit_held(runner, script_for(step, partition, needs), submission)
                 submitted.append(job_id)
                 by_step[step.name] = job_id
                 jobs.append(Job(step.name, analysis[step.name], job_id, partition))
@@ -777,6 +960,170 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
                 message += "; squeue failed, so jobs with an unrecorded id may remain (tag " + submission + ")"
             raise SlurmError(message) from None
     return Submission(jobs, finalize, submission)
+
+
+# --- sharded steps ----------------------------------------------------------------------------------
+
+
+Drain = Callable[[work_pool.WorkPool, list[work_pool.ResourceClass]], None]
+"""Runs a pool until its items are done or dead (default: `work_pool.Controller`, `run_pool`)."""
+
+
+def pool_dir(profile: Profile, date: datetime.date, analysis: str, step: str) -> Path:
+    """A sharded step's work pool: ``<runs_root>/<date>/<analysis>/pools/<step>``."""
+    return cache.run_dir(profile.runs_root, date, analysis) / POOLS / step
+
+
+def create_pool(profile: Profile, date: datetime.date, analysis: str, step: str) -> work_pool.WorkPool:
+    """Create (or open) a sharded step's pool with the profile's ``work_pool`` settings.
+
+    Raises:
+        ValueError: If the profile has no ``work_pool`` settings, or the pool exists with other settings.
+    """
+    settings = profile.work_pool
+    if settings is None:
+        raise ValueError("a sharded step needs the profile's work_pool settings")
+    return work_pool.WorkPool.create(
+        pool_dir(profile, date, analysis, step),
+        lease_s=settings.lease_s,
+        heartbeat_s=settings.heartbeat_s,
+        max_attempts=settings.max_attempts,
+        max_interrupts=settings.max_interrupts,
+    )
+
+
+def resource_class(profile: Profile, name: str) -> work_pool.ResourceClass:
+    """The profile's resource class ``name`` as a `work_pool.ResourceClass`."""
+    parts = tuple(
+        work_pool.PartitionSpec(
+            partition=p.partition,
+            cpus=p.cpus,
+            mem=p.mem,
+            time=p.time,
+            gres=p.gres,
+            exclude=tuple(p.exclude),
+            requeue=p.requeue,
+            max_workers=p.max_workers,
+        )
+        for p in profile.resource_classes[name].partitions
+    )
+    return work_pool.ResourceClass(name=name, partitions=parts)
+
+
+def shard_item_id(submission: str, shard: int) -> str:
+    """A shard's item id in its pool: ``<submission>-<i>``, so a later submission's items never collide."""
+    return f"{submission}-{shard}"
+
+
+def _controller_drain(profile: Profile, date: datetime.date) -> Drain:
+    settings = profile.work_pool
+    assert settings is not None
+
+    def drain(pool: work_pool.WorkPool, classes: list[work_pool.ResourceClass]) -> None:
+        controller = work_pool.Controller(pool, classes, poll_s=settings.poll_s, log_dir=log_dir(profile, date))
+        while controller.run() == work_pool.CONTROLLER_LOCKED_EXIT:
+            time.sleep(settings.poll_s)
+
+    return drain
+
+
+def run_pool(
+    manifests: Sequence[Manifest],
+    config: run.RunConfig,
+    step: str,
+    submission: str,
+    commands: Sequence[Sequence[str]],
+    *,
+    drain: Drain | None = None,
+) -> run.StepOutcome:
+    """A sharded step's pool job: publish one item per shard, drain the pool, settle the step's row.
+
+    Items already in the pool (a requeued pool job) are not published again. Once the pool drains, the step is
+    ``failed`` with ``E_SHARD_DEAD`` when a shard is dead, or ``E_SHARD_UNFINISHED`` when one is neither done nor
+    dead; otherwise it is resolved (`run.resolve_step`) and, when every shard is done, ``executed`` with the
+    shard keys. Its row is written under this submission and, unless it succeeded, its dependants' pending rows
+    become ``never-ran`` with the same codes.
+
+    Args:
+        manifests: The manifests of the submission.
+        config: The run configuration (its ``date`` is the submission's).
+        step: The sharded step.
+        submission: The submission id.
+        commands: One argv per shard (`shard_command`), by index.
+        drain: Runs the pool until it drains (default: `work_pool.Controller` with the profile's ``poll_s`` and
+            the dated log dir, waiting out a controller that already holds the pool's lock).
+
+    Returns:
+        The step's outcome.
+
+    Raises:
+        ValueError: If ``step`` is not a sharded step of the manifests or ``commands`` is not one per shard.
+    """
+    specs = {s.name: s for m in manifests for s in m.steps}
+    analysis = {s.name: m.name for m in manifests for s in m.steps}
+    spec = specs.get(step)
+    if spec is None or spec.shards is None or len(commands) != spec.shards.count:
+        raise ValueError("run_pool needs a sharded step and one command per shard")
+    profile = config.profile
+    ids = [shard_item_id(submission, i) for i in range(spec.shards.count)]
+    with _umask(submit_umask(profile)):
+        pool = create_pool(profile, config.date, analysis[step], step)
+        fresh = [
+            work_pool.Item(id=item_id, resource_class=spec.shards.resource_class, command=tuple(command))
+            for item_id, command in zip(ids, commands)
+            if pool.state(item_id) is None
+        ]
+        pool.publish(fresh)
+        (drain or _controller_drain(profile, config.date))(pool, [resource_class(profile, spec.shards.resource_class)])
+        states = [pool.state(item_id) for item_id in ids]
+        if "dead" in states:
+            outcome = run.StepOutcome(step, None, "failed", run.EXIT_DRIVER, ("E_SHARD_DEAD",), None)
+        elif any(state != "done" for state in states):
+            outcome = run.StepOutcome(step, None, "failed", run.EXIT_DRIVER, ("E_SHARD_UNFINISHED",), None)
+        else:
+            outcome = run.resolve_steps(manifests, config, [step])[step]
+            if outcome.ok:
+                outcome = outcome._replace(status="executed")
+        _settle(manifests, config, spec, analysis, submission, outcome)
+    return outcome
+
+
+def _settle(
+    manifests: Sequence[Manifest],
+    config: run.RunConfig,
+    spec: StepSpec,
+    analysis: Mapping[str, str],
+    submission: str,
+    outcome: run.StepOutcome,
+) -> None:
+    specs = {s.name: s for m in manifests for s in m.steps}
+    ordered = toposort(list(specs.values()))
+    order_of = {name: [s.name for s in ordered if analysis[s.name] == name] for name in set(analysis.values())}
+    own = analysis[spec.name]
+    run.update_run_record(
+        config.profile.runs_root,
+        config.date,
+        own,
+        [run.step_row(outcome, spec)],
+        order=order_of[own],
+        submission=submission,
+        allow_untagged=True,
+    )
+    if outcome.ok:
+        return
+    dependents = run.descendants(specs, {spec.name})
+    why = outcome.codes or ("E_UPSTREAM_NOT_DONE",)
+    for name in sorted({analysis[d] for d in dependents}):
+        rows = [run.never_ran_row(d, why, specs[d].restricted) for d in order_of[name] if d in dependents]
+        run.update_run_record(
+            config.profile.runs_root,
+            config.date,
+            name,
+            rows,
+            order=order_of[name],
+            pending_only=True,
+            submission=submission,
+        )
 
 
 _MISMATCH_CODES = frozenset({inputs.MISMATCH, inputs.MISSING})

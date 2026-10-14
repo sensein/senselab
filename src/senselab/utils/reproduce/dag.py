@@ -3,7 +3,8 @@
 `toposort` orders a manifest set so every step follows its ``needs``; among steps that are ready at
 the same time the lexically smallest name goes first, so the order does not depend on file or step
 order. `check_expect_sources` checks every expectation that reads another step's ``metrics.json``
-(``from_step``, ``tolerance_from`` and band chains or re-draws) against that step's ``metrics_schema``. Errors are a
+(``from_step``, ``tolerance_from`` and band chains or re-draws) against that step's ``metrics_schema``;
+`check_shard_needs` checks how a step reads a sharded step it needs. Errors are a
 `DagError` with a fixed code and the names of the steps at fault, never a path or a value.
 """
 
@@ -24,6 +25,7 @@ CODES = frozenset(
         "E_DAG_FROM_STEP_METRIC",
         "E_DAG_FROM_STEP_UNIT",
         "E_DAG_TOLERANCE_METRIC",
+        "E_DAG_SHARD_NEED",
     }
 )
 
@@ -106,8 +108,36 @@ def check_expect_sources(steps: Sequence[StepSpec]) -> None:
                     raise DagError("E_DAG_TOLERANCE_METRIC", [step.name])
 
 
+def check_shard_needs(steps: Sequence[StepSpec]) -> None:
+    """Check that a sharded step is read only through ``{up:<step>}``, the gather directory of its shards.
+
+    It has no single result dir, so it may not be an ``up:`` root of ``inputs`` or ``stage``, nor a step whose
+    metrics an expectation reads (``from_step``, ``tolerance_from``, band chains or re-draws).
+
+    Args:
+        steps: A manifest set.
+
+    Raises:
+        DagError: ``E_DAG_SHARD_NEED`` naming the steps that read a sharded step otherwise.
+    """
+    _index(steps)
+    sharded = {s.name for s in steps if s.shards is not None}
+    bad = []
+    for step in steps:
+        roots = [i.root for i in step.inputs] + [s.root for s in step.stage]
+        read = [r.split(":", 1)[1] for r in roots if r.startswith("up:")]
+        for expect in step.expect:
+            read += [expect.from_step.step] if expect.from_step is not None else []
+            read += list(expect.tolerance_from.steps) if expect.tolerance_from is not None else []
+            read += expect.band.sources() if expect.band is not None else []
+        if sharded & set(read):
+            bad.append(step.name)
+    if bad:
+        raise DagError("E_DAG_SHARD_NEED", bad)
+
+
 def toposort(steps: Sequence[StepSpec]) -> list[StepSpec]:
-    """Order a manifest set so every step follows its ``needs``, after `check_expect_sources`.
+    """Order a manifest set so every step follows its ``needs``, after `check_expect_sources` and `check_shard_needs`.
 
     Args:
         steps: A manifest set.
@@ -118,7 +148,7 @@ def toposort(steps: Sequence[StepSpec]) -> list[StepSpec]:
     Raises:
         DagError: ``E_DAG_DUPLICATE_STEP`` for a repeated name, ``E_DAG_UNKNOWN_NEED`` for a need
             naming no step in the set, ``E_DAG_CYCLE`` (naming the steps on one cycle) for a cycle, or
-            as `check_expect_sources`.
+            as `check_expect_sources` and `check_shard_needs`.
     """
     by_name = _index(steps)
     waiting = {s.name: len(s.needs) for s in steps}
@@ -140,4 +170,5 @@ def toposort(steps: Sequence[StepSpec]) -> list[StepSpec]:
         placed = {s.name for s in order}
         raise DagError("E_DAG_CYCLE", _cycle(by_name, set(by_name) - placed))
     check_expect_sources(steps)
+    check_shard_needs(steps)
     return order

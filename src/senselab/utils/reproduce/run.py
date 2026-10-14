@@ -6,7 +6,9 @@ profile's ``restricted_results_root`` for a restricted step (`results_root_of`):
 - ``R/work/``: the only directory the step may write; the ``{out}`` placeholder (argv, ``REPRO_OUT``,
   ``outputs`` patterns, ``{up:<step>}`` of a dependent) names it. Staged files go to ``R/work/stage``.
 - ``R/tmp/``: the step's scratch (``{tmp}``, ``TMPDIR``, ``/tmp`` when possible); removed after the
-  run, and never read by the driver after the step.
+  run, and never read by the driver after the step. For each need that is a sharded step, the driver makes
+  ``R/tmp/up-<step>/``, a read-only dir of links ``<i>`` to each shard's ``work/`` (bound read-only), and
+  ``{up:<step>}`` names it.
 - ``R/logs/``, ``R/prov/``, ``R/adapter/``, ``R/metrics.json`` and ``R/summary.json``: written by the
   driver only, never writable inside a sandbox.
 
@@ -50,6 +52,10 @@ callers get fixed codes only. `run_steps` runs a set of manifests in DAG order; 
 not succeed is ``never-ran``. With ``only`` it runs just the named steps, as one batch job does: their
 upstream steps are keyed and must already be done (`resolve_step`), never run, and ``run.json`` is
 merged under a lock rather than rewritten, so jobs of one analysis can finish in any order.
+
+A sharded step (``shards``) is run shard by shard: shard ``i`` is keyed with ``"shard": [i, count]``, has its own
+result dir, is linked as ``<run>/<step>/<i>`` and sees ``REPRO_SHARD=i``; the step taken whole is keyed by
+`cache.shards_key` (`_combined`). With ``shard`` set, `run_steps` runs one shard (a work-pool item) and writes no row.
 """
 
 from __future__ import annotations
@@ -74,6 +80,7 @@ import uuid
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Any, Literal, NamedTuple
 
 from senselab.utils.reproduce import (
@@ -358,7 +365,8 @@ class StepOutcome(NamedTuple):
     ``status`` is ``executed`` (the step's own process ran; ``exit`` says how it went), ``skipped`` (a done
     result was reused), ``failed`` (the driver refused the step, or the preamble did not hand over to it:
     a missing cwd or a canary that connected) or ``never-ran`` (a need did not succeed). ``out`` is the
-    result dir ``R`` once the key is known.
+    result dir ``R`` once the key is known. A sharded step taken whole has no ``out``: its key is `cache.shards_key`
+    over its shard keys, and ``shards`` lists each shard's result dir, by index, once every shard succeeded.
     """
 
     step: str
@@ -367,6 +375,7 @@ class StepOutcome(NamedTuple):
     exit: int | None
     codes: tuple[str, ...]
     out: Path | None
+    shards: tuple[Path, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -418,6 +427,8 @@ class _Keyed(NamedTuple):
     lock_sha256: str
     lock_name: str
     entries: dict[str, inputs.RegisteredInput]
+    shard: int | None = None
+    gathers: Mapping[str, tuple[Path, ...]] = MappingProxyType({})
 
 
 # --- driver-side file operations under the result dir --------------------------------------------
@@ -636,7 +647,18 @@ def results_root_of(step: StepSpec, profile: Profile) -> Path:
     return profile.restricted_results_root
 
 
-def _key(step: StepSpec, analysis: str, config: RunConfig, upstream: Mapping[str, StepOutcome]) -> _Keyed:
+def _gathers(step: StepSpec, upstream: Mapping[str, StepOutcome]) -> dict[str, tuple[Path, ...]]:
+    """Each need that is a sharded step, with its shards' result dirs."""
+    return {n: upstream[n].shards for n in step.needs if upstream[n].out is None and upstream[n].shards}
+
+
+def _key(
+    step: StepSpec,
+    analysis: str,
+    config: RunConfig,
+    upstream: Mapping[str, StepOutcome],
+    shard: int | None = None,
+) -> _Keyed:
     try:
         co = source.prefetched_checkout(step, cache=config.cache)
     except source.ReproduceSourceError as error:
@@ -673,6 +695,7 @@ def _key(step: StepSpec, analysis: str, config: RunConfig, upstream: Mapping[str
             sources_lock_sha256=lock_sha,
             r_session_sha256=r_session,
             r_module_env_sha256=r_module,
+            shard=shard,
         )
     except ValueError:
         raise RunError("E_KEY_INVALID") from None
@@ -685,10 +708,13 @@ def _key(step: StepSpec, analysis: str, config: RunConfig, upstream: Mapping[str
         "venv": venv_path,
         "cache": config.cache,
     }
-    paths |= {f"up:{name}": _up_work(upstream, name) for name in step.needs}
+    gathers = _gathers(step, upstream)
+    paths |= {f"up:{n}": result / TMP / f"up-{n}" if n in gathers else _up_work(upstream, n) for n in step.needs}
     paths |= registered
     ref_name = PurePosixPath(config.sources[analysis].lock).name
-    return _Keyed(key, result, co, input_digests, adapter, adapter_sha, paths, lock_sha, ref_name, entries)
+    return _Keyed(
+        key, result, co, input_digests, adapter, adapter_sha, paths, lock_sha, ref_name, entries, shard, gathers
+    )
 
 
 # --- the inputs gate ---------------------------------------------------------------------------------
@@ -903,20 +929,55 @@ def _read_summary(out: Path) -> tuple[str, ...]:
     return tuple(c for c in codes if isinstance(c, str)) if isinstance(codes, list) else ()
 
 
-def _unlink_run(config: RunConfig, analysis: str, step: str) -> None:
-    """Remove a stale same-day ``<runs_root>/<date>/<analysis>/<step>`` link (a symlink only)."""
+def _unlink_run(config: RunConfig, analysis: str, step: str, shard: int | None = None) -> None:
+    """Remove a stale same-day ``<runs_root>/<date>/<analysis>/<step>`` link, or a shard's ``<step>/<i>`` link.
+
+    Only symlinks are removed. For a sharded step's dir of shard links, every shard link goes when ``shard`` is
+    None.
+    """
     with contextlib.suppress(OSError, cache.CacheError):
         link = cache.run_dir(config.profile.runs_root, config.date, analysis) / step
+        if shard is not None:
+            link = link / str(shard)
         if link.is_symlink():
             link.unlink()
+        elif shard is None and link.is_dir():
+            for entry in link.iterdir():
+                if entry.is_symlink():
+                    entry.unlink()
 
 
-def _skipped(step: StepSpec, key: str, run: Path, out: Path) -> StepOutcome:
-    try:
+def _link(config: RunConfig, analysis: str, step: StepSpec, shard: int | None, out: Path) -> None:
+    """Link ``<run>/<step>`` to a result dir, or ``<run>/<step>/<i>`` for shard ``i`` (replacing a plain link)."""
+    run = cache.run_dir(config.profile.runs_root, config.date, analysis)
+    if shard is None:
         cache.link_run(run, step.name, out)
+        return
+    parent = run / step.name
+    if parent.is_symlink():
+        parent.unlink()
+    cache.link_run(parent, str(shard), out)
+
+
+def _skipped(step: StepSpec, key: str, config: RunConfig, analysis: str, shard: int | None, out: Path) -> StepOutcome:
+    try:
+        _link(config, analysis, step, shard, out)
     except cache.CacheError as error:
         return _failed(step, error.code, key, out)
     return StepOutcome(step.name, key, "skipped", 0, _read_summary(out), out)
+
+
+def _combined(step: StepSpec, parts: Sequence[StepOutcome]) -> StepOutcome:
+    """A sharded step taken whole: ok only when every shard is, keyed by `cache.shards_key` once every shard is."""
+    keys = [p.key for p in parts if p.key is not None]
+    key = cache.shards_key(keys) if len(keys) == len(parts) else None
+    codes = tuple(sorted({c for p in parts for c in p.codes}))
+    if all(p.ok for p in parts):
+        status: Status = "skipped" if all(p.status == "skipped" for p in parts) else "executed"
+        return StepOutcome(step.name, key, status, 0, codes, None, tuple(p.out for p in parts if p.out is not None))
+    failed = [p for p in parts if not p.ok]
+    status = "executed" if all(p.status == "executed" for p in failed) else "failed"
+    return StepOutcome(step.name, key, status, next((p.exit for p in failed if p.exit), EXIT_DRIVER), codes, None)
 
 
 def run_step(
@@ -925,8 +986,9 @@ def run_step(
     config: RunConfig,
     upstream: Mapping[str, StepOutcome] | None = None,
     upstream_schemas: Mapping[str, MetricsSchema] | None = None,
+    shard: int | None = None,
 ) -> StepOutcome:
-    """Run one step, or reuse its done result.
+    """Run one step, or reuse its done result; a sharded step runs shard by shard unless ``shard`` names one.
 
     Args:
         step: The step.
@@ -935,21 +997,25 @@ def run_step(
         upstream: The outcome of each of ``step.needs``; each must be `StepOutcome.ok`.
         upstream_schemas: The ``metrics_schema`` of each step an expectation reads (``from_step``,
             ``tolerance_from``), to validate its ``metrics.json`` before a value is taken from it.
+        shard: The one shard of a sharded step to run; None runs every shard in order (`_combined`).
 
     Returns:
         The outcome; ``codes`` are fixed codes only, and no exception, message or path reaches the
         caller (any ``OSError``, ``TypeError`` or ``ValueError`` is ``E_DRIVER``). A run that reached its
         result dir has written ``summary.json`` there when it could, and the dated run links ``<step>``
-        to it.
+        (``<step>/<i>`` for shard ``i``) to it.
     """
     upstream = upstream or {}
     if any(name not in upstream or not upstream[name].ok for name in step.needs):
-        _unlink_run(config, analysis, step.name)
+        _unlink_run(config, analysis, step.name, shard)
         return StepOutcome(step.name, None, "never-ran", None, upstream_codes(step, upstream), None)
+    if step.shards is not None and shard is None:
+        parts = [run_step(step, analysis, config, upstream, upstream_schemas, i) for i in range(step.shards.count)]
+        return _combined(step, parts)
     seen: dict[str, Path] = {}
     with _quiet_log():
         try:
-            return _run_step(step, analysis, config, upstream, upstream_schemas or {}, seen)
+            return _run_step(step, analysis, config, upstream, upstream_schemas or {}, seen, shard)
         except (OSError, TypeError, ValueError):
             _append_driver_log(seen.get("result"), "driver error\n" + traceback.format_exc())
             return _failed(step, "E_DRIVER", out=seen.get("result"))
@@ -992,22 +1058,22 @@ def _run_step(
     upstream: Mapping[str, StepOutcome],
     schemas: Mapping[str, MetricsSchema],
     seen: dict[str, Path],
+    shard: int | None = None,
 ) -> StepOutcome:
     try:
-        keyed = _key(step, analysis, config, upstream)
+        keyed = _key(step, analysis, config, upstream, shard)
     except (RunError, digest.DigestError, cache.CacheError) as error:
-        _unlink_run(config, analysis, step.name)
+        _unlink_run(config, analysis, step.name, shard)
         return _failed(step, error.code)
     result = keyed.result
     seen["result"] = result
-    run = cache.run_dir(config.profile.runs_root, config.date, analysis)
     if cache.is_done(result):
-        return _skipped(step, keyed.key, run, result)
+        return _skipped(step, keyed.key, config, analysis, shard, result)
     with _driver_log() as log:
         try:
             with cache.claim(results_root_of(step, config.profile), keyed.key):
                 if cache.is_done(result):
-                    return _skipped(step, keyed.key, run, result)
+                    return _skipped(step, keyed.key, config, analysis, shard, result)
                 execution = _Execution(step, analysis, config, upstream, schemas, keyed)
                 with _env_locks(step, analysis, config):
                     execution.gate = gate(step, analysis, config, keyed.entries)
@@ -1024,7 +1090,7 @@ def _run_step(
     status: Status = "executed" if summary["executed"] else "failed"
     codes, exit_code = tuple(summary["codes"]), summary["exit"]
     try:
-        cache.link_run(run, step.name, result)
+        _link(config, analysis, step, shard, result)
     except cache.CacheError as error:
         codes, exit_code = tuple(sorted({*codes, error.code})), exit_code or EXIT_DRIVER
     return StepOutcome(step.name, keyed.key, status, exit_code, codes, result)
@@ -1150,6 +1216,7 @@ class _Execution:
             self.codes.add("E_NOT_REPORTABLE")
         self._closure_recheck()
         outputs = self._outputs()
+        self._open_gathers()
         for scratch in (self.tmp, self.result / ADAPTER_TMP, self.result / R_SESSION_DIR):
             try:
                 _remove_tree(scratch)
@@ -1161,6 +1228,22 @@ class _Execution:
         if self.step.restricted:
             self._release()
         return self._summary()
+
+    def _open_gathers(self) -> None:
+        """Make each ``tmp/up-<step>`` gather dir writable again, so the scratch removal can empty it."""
+        for name in self.keyed.gathers:
+            path = self.tmp / f"up-{name}"
+            with contextlib.suppress(OSError):
+                if stat.S_ISDIR(os.lstat(path).st_mode):
+                    os.chmod(path, 0o770)
+
+    def _make_gathers(self) -> None:
+        """``tmp/up-<step>`` for each sharded need: links ``<i>`` to each shard's ``work/``, then made read-only."""
+        for name, outs in self.keyed.gathers.items():
+            gather = _mkdir(self.tmp / f"up-{name}")
+            for index, out in enumerate(outs):
+                os.symlink(os.path.realpath(out / WORK), gather / str(index))
+            os.chmod(gather, 0o550)
 
     def _closure_recheck(self) -> None:
         """Fail a public step, and remove its ``work/``, when an input of its closure became restricted mid-run."""
@@ -1181,15 +1264,19 @@ class _Execution:
             return None
         found = set(self.step.lock_inputs)
         for name in self.step.needs:
-            out = self.upstream[name].out
-            try:
-                data = json.loads(_read_nofollow(out / cache.SUMMARY)) if out is not None else None
-            except (OSError, ValueError):
-                data = None
-            closure = data.get("input_closure") if isinstance(data, dict) else None
-            if not isinstance(closure, list) or not all(isinstance(c, str) for c in closure):
+            need = self.upstream[name]
+            outs = [need.out] if need.out is not None else list(need.shards)
+            if not outs:
                 raise RunError("E_UPSTREAM_CLOSURE")
-            found.update(closure)
+            for out in outs:
+                try:
+                    data = json.loads(_read_nofollow(out / cache.SUMMARY))
+                except (OSError, ValueError):
+                    data = None
+                closure = data.get("input_closure") if isinstance(data, dict) else None
+                if not isinstance(closure, list) or not all(isinstance(c, str) for c in closure):
+                    raise RunError("E_UPSTREAM_CLOSURE")
+                found.update(closure)
         return sorted(found)
 
     def _scan_log(self) -> Path | None:
@@ -1258,6 +1345,7 @@ class _Execution:
         for sub in ("home", "ipython", "jupyter", "jupyter/runtime", "jupyter/data", "jupyter/config", "cache"):
             _mkdir(self.tmp / sub)
         _mkdir(self.tmp / "cuda-cache")
+        self._make_gathers()
         if step.kind in NOTEBOOK_KINDS:
             _mkdir(self.work / "notebooks")
         if step.hf_weights:
@@ -1275,7 +1363,7 @@ class _Execution:
         self._stage()
         try:
             self.env, _, self.recorded_sha = sandbox.build_env(
-                step, config.profile, self._inner_paths(), parent=config.parent_env
+                step, config.profile, self._inner_paths(), parent=config.parent_env, shard=self.keyed.shard
             )
         except ValueError:
             raise RunError("E_ENV_BUILD") from None
@@ -1285,7 +1373,9 @@ class _Execution:
             self._r_session()
 
     def _sandbox_args(self, rw: list[Path]) -> tuple[list[Path], list[Path], list[Path]]:
-        ups = [self.keyed.paths[f"up:{n}"] for n in self.step.needs]
+        gathers = self.keyed.gathers
+        ups = [self.keyed.paths[f"up:{n}"] for n in self.step.needs if n not in gathers]
+        ups += [out / WORK for outs in gathers.values() for out in outs]
         extra = [self.keyed.checkout.worktree, self.keyed.paths["venv"], *ups]
         return list(self.config.profile.roots.values()), rw, extra
 
@@ -1426,7 +1516,9 @@ class _Execution:
         not exist yet (a cwd under ``{out}``), so the check cannot be made before the run.
         """
         try:
-            self.env, _, _ = sandbox.build_env(self.step, self.config.profile, self._inner_paths())
+            self.env, _, _ = sandbox.build_env(
+                self.step, self.config.profile, self._inner_paths(), shard=self.keyed.shard
+            )
         except ValueError:
             raise RunError("E_ENV_BUILD") from None
         if self.step.kind in cache.R_KINDS:
@@ -1997,6 +2089,7 @@ def resolve_step(
     analysis: str,
     config: RunConfig,
     upstream: Mapping[str, StepOutcome] | None = None,
+    shard: int | None = None,
 ) -> StepOutcome:
     """Key a step and report its done result, without running, claiming or linking anything.
 
@@ -2009,6 +2102,7 @@ def resolve_step(
         analysis: The name of the manifest the step belongs to.
         config: The run configuration.
         upstream: The outcome of each of ``step.needs``.
+        shard: One shard of a sharded step; None resolves every shard and combines them (`_combined`).
 
     Returns:
         ``skipped`` with exit 0 and the summary's codes when the result dir is done; ``never-ran`` when a
@@ -2018,9 +2112,11 @@ def resolve_step(
     upstream = upstream or {}
     if any(name not in upstream or not upstream[name].ok for name in step.needs):
         return StepOutcome(step.name, None, "never-ran", None, upstream_codes(step, upstream), None)
+    if step.shards is not None and shard is None:
+        return _combined(step, [resolve_step(step, analysis, config, upstream, i) for i in range(step.shards.count)])
     with _quiet_log():
         try:
-            keyed = _key(step, analysis, config, upstream)
+            keyed = _key(step, analysis, config, upstream, shard)
         except (RunError, digest.DigestError, cache.CacheError) as error:
             return _failed(step, error.code)
         except (OSError, TypeError, ValueError):
@@ -2030,8 +2126,32 @@ def resolve_step(
     return StepOutcome(step.name, keyed.key, "skipped", 0, _read_summary(keyed.result), keyed.result)
 
 
-def _row(outcome: StepOutcome, spec: StepSpec) -> dict[str, Any]:
-    return {
+def resolve_steps(manifests: Sequence[Manifest], config: RunConfig, names: Collection[str]) -> dict[str, StepOutcome]:
+    """Key the named steps and every step they depend on, in DAG order, without running anything (`resolve_step`).
+
+    Returns:
+        The outcome of each of those steps, by name.
+    """
+    config = _with_sources(config, manifests)
+    analysis = {s.name: m.name for m in manifests for s in m.steps}
+    specs = {s.name: s for m in manifests for s in m.steps}
+    wanted, stack = set(names), list(names)
+    while stack:
+        for need in specs[stack.pop()].needs:
+            if need not in wanted:
+                wanted.add(need)
+                stack.append(need)
+    outcomes: dict[str, StepOutcome] = {}
+    for step in toposort(list(specs.values())):
+        if step.name in wanted:
+            upstream = {n: outcomes[n] for n in step.needs}
+            outcomes[step.name] = resolve_step(step, analysis[step.name], config, upstream)
+    return outcomes
+
+
+def step_row(outcome: StepOutcome, spec: StepSpec) -> dict[str, Any]:
+    """The ``run.json`` row of a step's outcome; a sharded step's row also lists its shard keys (``shards``)."""
+    row = {
         "step": outcome.step,
         "key": outcome.key,
         "status": outcome.status,
@@ -2039,6 +2159,9 @@ def _row(outcome: StepOutcome, spec: StepSpec) -> dict[str, Any]:
         "codes": list(outcome.codes),
         "restricted": spec.restricted,
     }
+    if outcome.shards:
+        row["shards"] = [out.name for out in outcome.shards]
+    return row
 
 
 def upstream_codes(step: StepSpec, upstream: Mapping[str, StepOutcome]) -> tuple[str, ...]:
@@ -2420,14 +2543,21 @@ def _plan(
         codes += gate_codes(step, analysis, config)
         return Plan(step.name, None, "blocked", env_state, src_state, tuple(sorted(set(codes))))
     upstream_outcomes = {n: done[n] for n in step.needs}
+    shards: list[int | None] = [None] if step.shards is None else list(range(step.shards.count))
     try:
-        keyed = _key(step, analysis, config, upstream_outcomes)
+        keyeds = [_key(step, analysis, config, upstream_outcomes, i) for i in shards]
     except (RunError, digest.DigestError, cache.CacheError) as error:
         codes += [error.code, *gate_codes(step, analysis, config)]
         return Plan(step.name, None, "blocked", env_state, src_state, tuple(sorted(set(codes))))
-    if cache.is_done(keyed.result):
-        done[step.name] = StepOutcome(step.name, keyed.key, "skipped", 0, (), keyed.result)
-        return Plan(step.name, keyed.key, "skipped", env_state, src_state, ())
+    key = keyeds[0].key if step.shards is None else cache.shards_key([k.key for k in keyeds])
+    todo = [k for k in keyeds if not cache.is_done(k.result)]
+    if not todo:
+        if step.shards is None:
+            done[step.name] = StepOutcome(step.name, key, "skipped", 0, (), keyeds[0].result)
+        else:
+            done[step.name] = StepOutcome(step.name, key, "skipped", 0, (), None, tuple(k.result for k in keyeds))
+        return Plan(step.name, key, "skipped", env_state, src_state, ())
+    keyed = todo[0]
     codes += gate_codes(step, analysis, config, keyed.entries)
     execution = _Execution(step, analysis, config, upstream_outcomes, {}, keyed)
     try:
@@ -2437,7 +2567,7 @@ def _plan(
     except RunError as error:
         codes.append(error.code)
     status = "blocked" if codes else "will-execute"
-    return Plan(step.name, keyed.key, status, env_state, src_state, tuple(sorted(set(codes))))
+    return Plan(step.name, key, status, env_state, src_state, tuple(sorted(set(codes))))
 
 
 def run_steps(
@@ -2445,6 +2575,7 @@ def run_steps(
     config: RunConfig,
     only: Collection[str] | None = None,
     submission: str | None = None,
+    shard: int | None = None,
 ) -> list[StepOutcome]:
     """Run every step of a set of manifests in DAG order (`dag.toposort`), or only the named ones.
 
@@ -2463,6 +2594,8 @@ def run_steps(
         config: The run configuration.
         only: Step names to run; None runs every step.
         submission: With ``only``, the submission id whose ``pending`` dependent rows a failure may settle.
+        shard: With ``only`` naming one sharded step, run that shard alone (a work-pool item) and write no row:
+            the step's row is the pool job's (`slurm.run_pool`).
 
     Returns:
         One outcome per step run, in run order (with ``only``, the named steps only).
@@ -2471,8 +2604,9 @@ def run_steps(
     dirs, and never rewrites a row a submission tagged; rows of steps it did not run are kept.
 
     Raises:
-        ValueError: If ``only`` names a step outside the manifests, or ``E_SPEC_RESTRICTED``
-            (`restricted.check_restricted`) before anything runs.
+        ValueError: If ``only`` names a step outside the manifests, ``shard`` comes without exactly one sharded
+            step in ``only`` or is out of its range, or ``E_SPEC_RESTRICTED`` (`restricted.check_restricted`)
+            before anything runs.
         SubmissionOverlap: For a local run while a submission is live in one of the run dirs.
     """
     config = _with_sources(config, manifests)
@@ -2482,8 +2616,13 @@ def run_steps(
     restricted.check_manifest_set(manifests, config.base_dir, config.profile)
     if submission is None:
         check_no_live_submission(config.profile.runs_root, config.date, sorted(set(analysis.values())))
+    if shard is not None:
+        named = specs.get(next(iter(only or ())), None) if only is not None and len(set(only)) == 1 else None
+        shards = None if named is None else named.shards
+        if shards is None or not 0 <= shard < shards.count:
+            raise ValueError("--shard needs one sharded step and an index in its range")
     if only is not None:
-        return _run_only(config, analysis, specs, ordered, set(only), submission)
+        return _run_only(config, analysis, specs, ordered, set(only), submission, shard)
     outcomes: dict[str, StepOutcome] = {}
     for step in ordered:
         upstream = {name: outcomes[name] for name in step.needs}
@@ -2497,7 +2636,7 @@ def run_steps(
                 config.profile.runs_root,
                 config.date,
                 name,
-                [_row(o, specs[o.step]) for o in rows],
+                [step_row(o, specs[o.step]) for o in rows],
                 order=order,
                 untagged_only=True,
             )
@@ -2514,6 +2653,7 @@ def _run_only(
     ordered: Sequence[StepSpec],
     only: set[str],
     submission: str | None,
+    shard: int | None = None,
 ) -> list[StepOutcome]:
     unknown = sorted(only - set(specs))
     if unknown:
@@ -2531,16 +2671,18 @@ def _run_only(
         upstream = {name: outcomes[name] for name in step.needs}
         if step.name in only:
             schemas = {name: specs[name].metrics_schema for name in _expect_sources(step)}
-            outcomes[step.name] = run_step(step, analysis[step.name], config, upstream, schemas)
+            outcomes[step.name] = run_step(step, analysis[step.name], config, upstream, schemas, shard)
         else:
             outcomes[step.name] = resolve_step(step, analysis[step.name], config, upstream)
     selected = [outcomes[s.name] for s in ordered if s.name in only]
+    if shard is not None:
+        return selected
     failed = [o for o in selected if not o.ok]
     dependents = _descendants(specs, {o.step for o in failed}) - only
     why = tuple(sorted({c for o in failed for c in o.codes})) or ("E_UPSTREAM_NOT_DONE",)
     for name in sorted({analysis[o.step] for o in selected} | {analysis[d] for d in dependents}):
         order = [s.name for s in ordered if analysis[s.name] == name]
-        own = [_row(o, specs[o.step]) for o in selected if analysis[o.step] == name]
+        own = [step_row(o, specs[o.step]) for o in selected if analysis[o.step] == name]
         gone = [never_ran_row(d, why, specs[d].restricted) for d in order if d in dependents]
         try:
             if own:
