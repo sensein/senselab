@@ -54,7 +54,7 @@ from typing import Any
 import pydantic
 import yaml
 
-from senselab.utils.reproduce import bands, build, cache, env, lockgen, run, sandbox, slurm, source
+from senselab.utils.reproduce import bands, build, cache, env, lock, lockgen, run, sandbox, slurm, source
 from senselab.utils.reproduce.dag import DagError, toposort
 from senselab.utils.reproduce.locks import TORCH_NAMES, ReproduceLockError, file_sha256, normalize_name
 from senselab.utils.reproduce.spec import (
@@ -155,9 +155,11 @@ def build_parser() -> argparse.ArgumentParser:
     _site_options(submit)
     submit.add_argument("--date", type=_date, help="the run date (default: today, UTC)")
 
-    lint = sub.add_parser("lint", help="check manifests and patches")
-    lint.add_argument("manifests", nargs="+", type=Path)
-    _site_options(lint)
+    lint = sub.add_parser("lint", help="check manifests, their sources locks and patches")
+    lint.add_argument("manifests", nargs="*", type=Path)
+    _site_options(lint, profile_required=False)
+    lint.add_argument("--lock", type=Path, help="lint this sources lock alone")
+    lint.add_argument("--skip-locks", action="store_true", help="skip the sources-lock checks (W_LOCKS_SKIPPED)")
 
     status = sub.add_parser("status", help="per step: key, status, exit, codes")
     status.add_argument("run_dir", type=Path, help="<runs_root>/<date>/<analysis>")
@@ -286,19 +288,40 @@ def _patch_findings(where: str, step: StepSpec, base: Path, deny: Sequence[str])
     return out
 
 
-def lint_findings(paths: Sequence[Path], profile_path: Path, base: Path) -> list[str]:
-    """Check manifests and their patches against a profile.
+def _lock_findings(path: Path, manifest: Manifest, base: Path) -> list[str]:
+    """Each manifest's sources lock: its sha256, and every step's pins and ``lock_inputs`` against it."""
+    try:
+        sources_lock, _ = lock.load_lock(base, manifest.sources)
+    except lock.LockError as error:
+        return [f"{path}: {error.code} {manifest.sources.lock}"]
+    out = []
+    for step in manifest.steps:
+        out += [f"{path}:{step.name}: {code} {detail}" for code, detail in lock.step_findings(step, sources_lock)]
+        for input_id in step.lock_inputs:
+            try:
+                lock.resolve_inputs(base, sources_lock, [input_id])
+            except lock.LockError as error:
+                if error.code != "E_LOCK_REF":
+                    out.append(f"{path}:{step.name}: {error.code} {input_id}")
+    return out
+
+
+def lint_findings(paths: Sequence[Path], profile_path: Path, base: Path, *, skip_locks: bool = False) -> list[str]:
+    """Check manifests, their sources locks and their patches against a profile.
 
     Args:
         paths: The manifest files.
         profile_path: The profile file.
         base: The manifest repository.
+        skip_locks: Leave out the sources-lock checks and report the warning ``W_LOCKS_SKIPPED`` instead.
 
     Returns:
         One line per finding, ``<where>: <code> <detail>``; empty when clean. Codes: ``profile-invalid``,
         ``deny-patterns-unreadable``, ``manifest-invalid``, ``dag-invalid``, the `slurm.step_findings`
         codes, ``adapter-missing``, ``patch-missing``, ``patch-sha``, ``patch-lint`` (with the lint code,
-        line and pattern index, never patch text) and ``deny-pattern-invalid``; and the warning
+        line and pattern index, never patch text), ``deny-pattern-invalid``, and the sources-lock codes
+        (``E_LOCK_SHA``/``E_LOCK_INVALID`` with the lock path, ``E_LOCK_REF``/``E_LOCK_MISMATCH`` with the
+        step field, ``E_LOCK_STALE``/``E_INPUT_REGISTRY`` with the input id); and the warning
         ``W_BAND_AMIN_WIDE <step> <metric>`` for a band whose ``a_min`` exceeds ``max_width_frac`` times its
         declared lift, which alone does not fail a command (`blocking`).
 
@@ -347,6 +370,11 @@ def lint_findings(paths: Sequence[Path], profile_path: Path, base: Path) -> list
                 if band is not None and band.floor is not None and bands.amin_too_wide(band, band.floor):
                     out.append(f"{where}: W_BAND_AMIN_WIDE {step.name} {expect.metric}")
             out += _patch_findings(where, step, base, deny)
+    if skip_locks:
+        out.append(f"{', '.join(str(p) for p in paths)}: W_LOCKS_SKIPPED")
+    else:
+        for path, manifest in loaded:
+            out += _lock_findings(path, manifest, base)
     return out
 
 
@@ -849,8 +877,17 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 def _cmd_lint(args: argparse.Namespace) -> int:
     paths = list(args.manifests)
-    _require(paths)
-    findings = lint_findings(paths, Path(args.profile), _base_dir(args, paths[0]))
+    if not paths and args.lock is None:
+        raise UsageError("give manifests, --lock or both")
+    _require([*paths, *([args.lock] if args.lock is not None else [])])
+    findings: list[str] = []
+    if args.lock is not None:
+        base = _base_dir(args, args.lock)
+        findings += [f"{args.lock}: {code} {detail}" for code, detail in lock.lock_findings(base, args.lock)]
+    if paths:
+        if args.profile is None:
+            raise UsageError("--profile is required with manifests")
+        findings += lint_findings(paths, Path(args.profile), _base_dir(args, paths[0]), skip_locks=args.skip_locks)
     if findings:
         print("\n".join(findings))
     return EXIT_FAILED if blocking(findings) else EXIT_OK

@@ -12,9 +12,11 @@ A step's result dir ``R = <results_root>/<step_key>`` is laid out by the driver:
 `run_step` runs one step:
 
 1. Resolve the prefetched worktree (`source.prefetched_checkout`), open every data root once so an
-   automounted root is mounted before the namespace is entered, digest the declared inputs and the
-   selected native dirs, and compute the step key (`cache.step_key`). Inputs are keyed, so they are
-   hashed before the done check.
+   automounted root is mounted before the namespace is entered, load the analysis's sources lock and
+   check the step's pins against it (`lock.step_findings`), resolve its ``lock_inputs`` to their
+   registered trees (`lock.resolve_inputs`; ``{input:<id>}``), digest the declared inputs and the
+   selected native dirs, and compute the step key (`cache.step_key`). Pattern inputs are keyed by
+   content, so they are hashed before the done check; registered inputs are keyed by the lock's sha256.
 2. A done result dir (`cache.is_done`) is linked into the dated run and the step is ``skipped``.
    Otherwise the step's claim is taken and done is checked again.
 3. Refuse, before the result dir is reset, unless unprivileged user namespaces work, the prefetched
@@ -48,6 +50,7 @@ merged under a lock rather than rewritten, so jobs of one analysis can finish in
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import datetime
 import hashlib
 import json
@@ -76,6 +79,7 @@ from senselab.utils.reproduce import (
     env,
     extract,
     host,
+    lock,
     metrics,
     provenance,
     sandbox,
@@ -89,6 +93,7 @@ from senselab.utils.reproduce.spec import (
     Manifest,
     MetricsSchema,
     Profile,
+    SourcesRef,
     StepSpec,
     render,
 )
@@ -172,8 +177,8 @@ CODES = frozenset(
     }
 )
 """The run's own codes. Digest, cache, metrics and stage codes (``E_DIGEST_*``, ``E_KEY_*``,
-``E_RESULT_*``, ``E_CLAIM_HELD``, ``E_METRICS_*``, ``E_SPLIT_*``, ``E_STAGE_*``) pass through as their
-modules name them."""
+``E_RESULT_*``, ``E_CLAIM_HELD``, ``E_METRICS_*``, ``E_SPLIT_*``, ``E_STAGE_*``) and sources-lock codes
+(``E_LOCK_*``, ``E_INPUT_REGISTRY``) pass through as their modules name them."""
 
 _VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+!_-]{0,63}$")
 _EXC_CLASS = re.compile(
@@ -368,6 +373,8 @@ class RunConfig:
         timeout: Seconds before a step (and separately its adapter) is killed (``E_TIMEOUT``); None waits.
         parent_env: Where the recorded-only job variables are read from; defaults to ``os.environ``.
         host_runner: Runs host probes (`host.host_record`); defaults to subprocesses.
+        sources: Each analysis name mapped to its manifest's sources lock reference; `run_steps` and
+            `plan_steps` fill it from the manifests they are given.
     """
 
     profile: Profile
@@ -378,6 +385,11 @@ class RunConfig:
     timeout: float | None = None
     parent_env: Mapping[str, str] | None = None
     host_runner: host.Runner | None = None
+    sources: Mapping[str, SourcesRef] = field(default_factory=dict)
+
+
+def _with_sources(config: RunConfig, manifests: Sequence[Manifest]) -> RunConfig:
+    return dataclasses.replace(config, sources={**config.sources, **{m.name: m.sources for m in manifests}})
 
 
 class _Keyed(NamedTuple):
@@ -388,6 +400,8 @@ class _Keyed(NamedTuple):
     adapter: Path
     adapter_sha256: str
     paths: dict[str, Path]
+    lock_sha256: str
+    lock_name: str
 
 
 # --- driver-side file operations under the result dir --------------------------------------------
@@ -561,12 +575,36 @@ def _r_digests(step: StepSpec, cache_dir: Path) -> tuple[str | None, str | None]
         raise RunError("E_R_MISSING") from None
 
 
+def _sources(step: StepSpec, analysis: str, config: RunConfig, co: source.Checkout) -> tuple[str, dict[str, Path]]:
+    """Load the analysis's sources lock, check the step's pins against it and resolve its ``lock_inputs``.
+
+    Returns:
+        The lock's sha256 and ``{"input:<id>": <root>/<relpath>}``; no file of a registered input is read.
+    """
+    ref = config.sources.get(analysis)
+    if ref is None:
+        raise RunError("E_LOCK_REF")
+    try:
+        sources_lock, sha = lock.load_lock(config.base_dir, ref)
+        findings = lock.step_findings(step, sources_lock, co.submodules if step.submodules else {})
+        if findings:
+            _log().error("sources lock findings: %s", ", ".join(f"{c} {d}" for c, d in findings))
+            raise RunError(findings[0][0])
+        entries = lock.resolve_inputs(config.base_dir, sources_lock, step.lock_inputs)
+    except lock.LockError as error:
+        raise RunError(error.code) from None
+    if any(e.root not in config.profile.roots for e in entries.values()):
+        raise RunError("E_ROOT_MISSING")
+    return sha, {f"input:{i}": config.profile.roots[e.root] / e.relpath for i, e in entries.items()}
+
+
 def _key(step: StepSpec, analysis: str, config: RunConfig, upstream: Mapping[str, StepOutcome]) -> _Keyed:
     try:
         co = source.prefetched_checkout(step, cache=config.cache)
     except source.ReproduceSourceError as error:
         raise RunError("E_SRC_MISSING" if error.code == source.WORKTREE_MISSING else "E_SRC_MISMATCH") from None
     _touch_roots(config.profile)
+    lock_sha, registered = _sources(step, analysis, config, co)
     input_digests = [
         digest.input_set_digest(_root_dir(i.root, config, upstream, co.worktree), i.patterns, require_nonempty=True)
         for i in step.inputs
@@ -588,6 +626,7 @@ def _key(step: StepSpec, analysis: str, config: RunConfig, upstream: Mapping[str
             adapter_env_sha256=cache.driver_env_sha256(),
             input_digests=[d for d, _ in input_digests],
             native=native,
+            sources_lock_sha256=lock_sha,
             r_session_sha256=r_session,
             r_module_env_sha256=r_module,
         )
@@ -603,7 +642,9 @@ def _key(step: StepSpec, analysis: str, config: RunConfig, upstream: Mapping[str
         "cache": config.cache,
     }
     paths |= {f"up:{name}": _up_work(upstream, name) for name in step.needs}
-    return _Keyed(key, result, co, input_digests, adapter, adapter_sha, paths)
+    paths |= registered
+    ref_name = PurePosixPath(config.sources[analysis].lock).name
+    return _Keyed(key, result, co, input_digests, adapter, adapter_sha, paths, lock_sha, ref_name)
 
 
 # --- logging -----------------------------------------------------------------------------------------
@@ -1511,6 +1552,7 @@ class _Execution:
                 env_sha256=self.recorded_sha,
                 argv_sha256=argv_sha,
                 argv=None if confidential or not self.argv else self.argv,
+                details={"sources_lock": self.keyed.lock_name, "sources_lock_sha256": self.keyed.lock_sha256},
             )
         except ValueError:
             _log().error("provenance refused\n%s", traceback.format_exc())
@@ -2108,6 +2150,7 @@ def plan_steps(manifests: Sequence[Manifest], config: RunConfig) -> list[Plan]:
     Returns:
         One plan per step, in DAG order.
     """
+    config = _with_sources(config, manifests)
     analysis = {s.name: m.name for m in manifests for s in m.steps}
     specs = {s.name: s for m in manifests for s in m.steps}
     ordered = toposort(list(specs.values()))
@@ -2198,6 +2241,7 @@ def run_steps(
         ValueError: If ``only`` names a step outside the manifests.
         SubmissionOverlap: For a local run while a submission is live in one of the run dirs.
     """
+    config = _with_sources(config, manifests)
     analysis = {s.name: m.name for m in manifests for s in m.steps}
     specs = {s.name: s for m in manifests for s in m.steps}
     ordered = toposort(list(specs.values()))

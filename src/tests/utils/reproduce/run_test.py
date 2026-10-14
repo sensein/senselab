@@ -26,7 +26,8 @@ import senselab
 from senselab.utils.reproduce import cache, digest, env, host, provenance, run, sandbox, source
 from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.run import RunConfig, StepOutcome, evaluate_expect, run_step, run_steps
-from senselab.utils.reproduce.spec import Manifest, Profile, StepSpec
+from senselab.utils.reproduce.spec import Manifest, Profile, SourcesRef, StepSpec
+from tests.utils.reproduce.sources_fixture import lock_data, write_lock
 
 SHA = "ab" * 32
 MARKER = "MARKER-STDOUT-7731"
@@ -110,6 +111,8 @@ class World:
         self.env_map = {"MODE": "a"}
         self.canary = OFFLINE_CANARY
         self.wheels_sha: str | None = None
+        self.registered: dict[str, dict[str, str]] = {}
+        self.sources: dict[str, str] | None = None
 
     def write_patch(self, line: str) -> None:
         """Write the patch that changes the step script's first line to ``line``."""
@@ -142,8 +145,9 @@ class World:
         )
 
     def config(self, **change: Any) -> RunConfig:  # noqa: ANN401
-        """A run configuration for this world."""
-        return RunConfig(profile=self.profile(), cache=self.cache, base_dir=self.base, **change)
+        """A run configuration for this world; its sources are those of the latest `manifest`."""
+        sources = {} if self.sources is None else {"demo": SourcesRef.model_validate(self.sources)}
+        return RunConfig(profile=self.profile(), cache=self.cache, base_dir=self.base, sources=sources, **change)
 
     def step(self, name: str, mode: str, src: str, **change: Any) -> dict[str, Any]:  # noqa: ANN401
         """A step running ``step.py <mode> {out} <src>``."""
@@ -173,8 +177,10 @@ class World:
         return data
 
     def manifest(self, *steps: dict[str, Any]) -> Manifest:
-        """A manifest named ``demo``."""
-        return Manifest.model_validate({"name": "demo", "steps": list(steps)})
+        """A manifest named ``demo``, with a sources lock that pins its steps and `registered` inputs."""
+        validated = [StepSpec.model_validate(s) for s in steps]
+        self.sources = write_lock(self.base, "demo", lock_data(validated, self.registered))
+        return Manifest.model_validate({"name": "demo", "sources": self.sources, "steps": list(steps)})
 
     def dag(self, prep_expect: Sequence[dict[str, Any]] = ()) -> Manifest:
         """Two steps: ``prep`` reads the data root, ``score`` reads ``prep``'s result dir through ``{up:prep}``."""

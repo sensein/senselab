@@ -28,6 +28,7 @@ from senselab.utils.reproduce.spec import (
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 SHA = "ab" * 32
+SOURCES = {"lock": "sources/analysis.lock.yaml", "sha256": SHA}
 
 
 def _env() -> dict[str, Any]:
@@ -137,7 +138,7 @@ def _scoring_steps() -> list[dict[str, Any]]:
 
 
 def _manifest() -> dict[str, Any]:
-    return {"name": "analysis", "steps": _scoring_steps()}
+    return {"name": "analysis", "sources": SOURCES, "steps": _scoring_steps()}
 
 
 def _profile(**over: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -258,6 +259,7 @@ def _set_ir_notebook(m: dict[str, Any]) -> None:
 
 
 MANIFEST_COUNTER_EXAMPLES: dict[str, Callable[[dict[str, Any]], None]] = {
+    "sources-missing": lambda m: m.pop("sources"),
     "commit-not-40-hex": _set_commit,
     "sha256-not-64-hex": _set_sha,
     "unknown-placeholder": _set_placeholder,
@@ -374,9 +376,9 @@ def test_escaped_braces_are_not_placeholders() -> None:
 
 def test_manifest_set_requires_unique_names_across_files(tmp_path: Path) -> None:
     """Step names are unique across every manifest in a set."""
-    a = _write(tmp_path / "a.yaml", {"name": "a", "steps": [_step("one"), _step("two")]})
-    b = _write(tmp_path / "b.yaml", {"name": "b", "steps": [_step("three")]})
-    c = _write(tmp_path / "c.yaml", {"name": "c", "steps": [_step("two")]})
+    a = _write(tmp_path / "a.yaml", {"name": "a", "sources": SOURCES, "steps": [_step("one"), _step("two")]})
+    b = _write(tmp_path / "b.yaml", {"name": "b", "sources": SOURCES, "steps": [_step("three")]})
+    c = _write(tmp_path / "c.yaml", {"name": "c", "sources": SOURCES, "steps": [_step("two")]})
     assert [s.name for s in load_manifest_set([a, b])] == ["one", "two", "three"]
     with pytest.raises(ValueError, match="two"):
         load_manifest_set([a, c])

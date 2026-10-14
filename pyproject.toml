@@ -67,7 +67,10 @@ dependencies = [
   "scikit-learn>=1.7",
   "umap-learn>=0.5.4",  # 0.5.0-0.5.3 fail on Python 3.12+
   "python-dotenv>=1.0",
-  "nest-asyncio>=1.6"
+  "nest-asyncio>=1.6",
+  # xxhash was previously transitive through `datasets`; the reproduce driver's input manifests hash
+  # files with xxh3-128 directly, so it must be declared.
+  "xxhash>=3.5"
 ]
 
 [project.optional-dependencies]
