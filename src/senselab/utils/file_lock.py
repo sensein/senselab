@@ -82,7 +82,12 @@ class _PathCheckedFileLock(UnixFileLock):
         super()._acquire()
         fd = self._context.lock_file_fd
         if fd is not None and not lock_fd_matches_path(fd, self.lock_file):
-            self._context.lock_file_fd = None
+            # filelock >= 4 tracks the held descriptor beyond ``lock_file_fd``; clear it the way it does itself.
+            released = getattr(self, "_mark_descriptor_released", None)
+            if callable(released):
+                released()
+            else:
+                self._context.lock_file_fd = None
             os.close(fd)
 
 
