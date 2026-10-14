@@ -58,7 +58,20 @@ from typing import Any
 import pydantic
 import yaml
 
-from senselab.utils.reproduce import bands, build, cache, env, inputs, lock, lockgen, run, sandbox, slurm, source
+from senselab.utils.reproduce import (
+    bands,
+    build,
+    cache,
+    env,
+    inputs,
+    lock,
+    lockgen,
+    restricted,
+    run,
+    sandbox,
+    slurm,
+    source,
+)
 from senselab.utils.reproduce.dag import DagError, toposort
 from senselab.utils.reproduce.locks import TORCH_NAMES, ReproduceLockError, file_sha256, normalize_name
 from senselab.utils.reproduce.spec import (
@@ -383,7 +396,8 @@ def lint_findings(
         line and pattern index, never patch text), ``deny-pattern-invalid``, and the sources-lock codes
         (``E_LOCK_SHA``/``E_LOCK_INVALID`` with the lock path, ``E_LOCK_REF``/``E_LOCK_MISMATCH`` with the
         step field, ``E_LOCK_STALE``/``E_INPUT_REGISTRY`` with the input id), ``input-link-unregistered`` with
-        the input id and the number of its manifest's links whose target lies in no input the step declares;
+        the input id and the number of its manifest's links whose target lies in no input the step declares,
+        ``E_SPEC_RESTRICTED`` for a step whose ``restricted`` declaration is refused (`restricted.violations`);
         and the warning
         ``W_BAND_AMIN_WIDE <step> <metric>`` for a band whose ``a_min`` exceeds ``max_width_frac`` times its
         declared lift, which alone does not fail a command (`blocking`).
@@ -421,9 +435,15 @@ def lint_findings(
             toposort([s for _, m in loaded for s in m.steps])
         except DagError as error:
             out.append(f"{', '.join(str(p) for p in paths)}: dag-invalid {error}")
+    refused: set[str] = set()
+    if profile is not None:
+        steps = [s for _, m in loaded for s in m.steps]
+        refused = set(restricted.violations(steps, restricted.step_registry(steps, base), profile))
     for path, manifest in loaded:
         for step in manifest.steps:
             where = f"{path}:{step.name}"
+            if step.name in refused:
+                out.append(f"{where}: {restricted.CODE}")
             if profile is not None:
                 out += [f"{where}: {f.code} {f.detail}" for f in slurm.step_findings(step, profile)]
             if not (base / step.adapter).is_file():

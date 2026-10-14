@@ -83,6 +83,7 @@ def _step(name: str, **change: Any) -> dict[str, Any]:  # noqa: ANN401
         "resources": {"profile": "cpu"},
         "adapter": "adapter.py",
         "hf_weights": [],
+        "restricted": False,
         "metrics_schema": {"kind": "statistic", "headline": ["f_stat"]},
     }
     data.update(change)

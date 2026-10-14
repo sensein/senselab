@@ -40,6 +40,7 @@ def _step(name: str, needs: list[str] | None = None, **over: Any) -> StepSpec:  
         "resources": {"profile": "cpu"},
         "adapter": "a.py",
         "hf_weights": [],
+        "restricted": False,
         "metrics_schema": CLASSIFICATION,
     }
     data.update(over)

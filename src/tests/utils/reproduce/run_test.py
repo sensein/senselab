@@ -169,6 +169,7 @@ class World:
             "resources": {"profile": "cpu"},
             "adapter": "adapter.py",
             "hf_weights": [],
+            "restricted": False,
             "metrics_schema": {"kind": "statistic", "headline": ["f_stat"]},
         }
         if self.wheels_sha is not None:
@@ -593,6 +594,7 @@ def _schema_step(**change: Any) -> StepSpec:  # noqa: ANN401
         "resources": {"profile": "cpu"},
         "adapter": "a.py",
         "hf_weights": [],
+        "restricted": False,
         "metrics_schema": {
             "kind": "classification",
             "headline": ["balanced_accuracy"],

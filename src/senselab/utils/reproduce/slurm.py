@@ -40,7 +40,7 @@ from pathlib import Path
 from types import FrameType, MappingProxyType
 from typing import Any, NamedTuple
 
-from senselab.utils.reproduce import inputs, run
+from senselab.utils.reproduce import inputs, restricted, run
 from senselab.utils.reproduce.build import SYSTEM_PATH
 from senselab.utils.reproduce.dag import toposort
 from senselab.utils.reproduce.spec import RESERVED_ROOT_NAMES, Manifest, PartitionSpec, Profile, StepSpec, placeholders
@@ -676,7 +676,8 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
 
     Raises:
         SlurmError: On a cross-check finding, an overlap, or an aborted submission.
-        ValueError: If a script cannot be rendered (nothing was written or submitted).
+        ValueError: If a script cannot be rendered, or ``E_SPEC_RESTRICTED`` (`restricted.check_restricted`);
+            nothing was written or submitted.
     """
     runner = default_runner if runner is None else runner
     profile, submission = config.profile, config.submission
@@ -685,6 +686,7 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
     findings = profile_findings(profile) + [f for s in ordered for f in step_findings(s, profile)]
     if findings:
         raise SlurmError(f"{len(findings)} profile cross-check finding(s); run lint")
+    restricted.check_manifest_set(manifests, config.base_dir, profile)
     orders = {name: [s.name for s in ordered if analysis[s.name] == name] for name in sorted(set(analysis.values()))}
 
     def script_for(step: StepSpec, partition: str, needs: Sequence[str] = ()) -> str:
@@ -818,9 +820,10 @@ def _refused_by_gate(
     mismatched = sorted({i for g in gates.values() for i, codes in g.per_input.items() if _MISMATCH_CODES & set(codes)})
     verify_jobs: list[tuple[str, str]] = []
     failed: list[str] = []
+    specs = {s.name: s for s in ordered}
     with _umask(submit_umask(profile)):
         for name, order in orders.items():
-            rows = [run.never_ran_row(s, refused[s]) for s in order]
+            rows = [run.never_ran_row(s, refused[s], specs[s].restricted) for s in order]
             run.update_run_record(
                 profile.runs_root, config.date, name, rows, order=order, untagged_only=True, keep_statuses=_RAN
             )

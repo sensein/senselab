@@ -630,7 +630,10 @@ class StepSpec(_Model):
     path without a placeholder (``E_SPEC_ABSOLUTE_PATH``): a program or module outside the checkout, venv,
     cache and roots would run unkeyed. ``lock_inputs`` names registered inputs of the manifest's sources
     lock, and every ``{input:<id>}`` placeholder must name one of them (``E_SPEC_INPUT_UNDECLARED``);
-    ``extract`` declares the categorical values its adapter may emit (`ExtractSpec`).
+    ``extract`` declares the categorical values its adapter may emit (`ExtractSpec`). ``restricted`` has no
+    default: a restricted step's results live under the profile's ``restricted_results_root``, and a step on
+    a restricted input, on a data-root pattern reaching a restricted dir, or needing a restricted step must
+    declare it (`restricted.check_restricted`).
     """
 
     name: Name
@@ -655,6 +658,7 @@ class StepSpec(_Model):
     expect: list[Expect] = []
     extract: list[ExtractSpec] = []
     lock_inputs: list[Name] = []
+    restricted: bool
 
     _unique_lock_inputs = field_validator("lock_inputs")(_no_duplicates)
 
@@ -855,6 +859,13 @@ class Profile(_Model):
     sdist with ``build_modules`` and by R envs; without it those are refused with ``E_MODULES_INIT``).
     ``job_tmp_root`` is where each batch job makes its private ``TMPDIR`` (removed on exit); without it a
     job keeps the node's default temporary dir.
+
+    The restricted fields are set together or not at all (``E_PROFILE_RESTRICTED``): ``restricted_dirs``
+    are masked in the sandbox of every public step; ``restricted_results_root`` holds restricted steps'
+    results and claims, lies under a restricted dir and under an ``rw_under_roots`` entry;
+    ``released_metrics_root`` receives released metrics, under an ``rw_under_roots`` entry and no restricted
+    dir; ``scan_hook`` is the argv of the release scan (the file path is appended). No other result,
+    run or log root may lie under a restricted dir.
     """
 
     roots: dict[Name, Path] = Field(min_length=1)
@@ -872,6 +883,10 @@ class Profile(_Model):
     modules_init: Path | None = None
     job_tmp_root: Path | None = None
     policy: Policy
+    restricted_dirs: list[Path] = []
+    restricted_results_root: Path | None = None
+    released_metrics_root: Path | None = None
+    scan_hook: list[str] = []
 
     _no_secrets = field_validator("env")(_reject_secret_keys)
 
@@ -883,6 +898,7 @@ class Profile(_Model):
             raise ValueError("E_PROFILE_POLICY: the policy requires canary_host")
         paths = [*self.roots.values(), self.results_root, self.runs_root, self.slurm_logs_root, *self.rw_under_roots]
         paths += [p for p in (self.modules_init, self.job_tmp_root) if p is not None]
+        paths += [*self.restricted_dirs, *(p for p in (self.restricted_results_root, self.released_metrics_root) if p)]
         native = [d for n in self.native.values() for d in (*n.bin_dirs, *n.lib_dirs)]
         relative = sorted(str(p) for p in (*paths, *native) if not p.is_absolute())
         if relative:
@@ -905,7 +921,36 @@ class Profile(_Model):
             for root in (r for r in roots if path.is_relative_to(r)):
                 if not any(path.is_relative_to(w) and _strictly_under(w, root) for w in rw):
                     raise ValueError(f"{field} lies inside a data root and under no rw_under_roots entry inside it")
+        self._restricted_consistent(rw)
         return self
+
+    def _restricted_consistent(self, rw: list[PurePosixPath]) -> None:
+        given = [
+            self.restricted_results_root is not None,
+            bool(self.restricted_dirs),
+            self.released_metrics_root is not None,
+            bool(self.scan_hook),
+        ]
+        if not any(given):
+            return
+        code = "E_PROFILE_RESTRICTED"
+        if not all(given):
+            raise ValueError(
+                f"{code}: restricted_results_root, restricted_dirs, released_metrics_root and scan_hook go together"
+            )
+        assert self.restricted_results_root is not None and self.released_metrics_root is not None
+        dirs = [_norm(d) for d in self.restricted_dirs]
+        root, released = _norm(self.restricted_results_root), _norm(self.released_metrics_root)
+        if not any(root.is_relative_to(d) for d in dirs):
+            raise ValueError(f"{code}: restricted_results_root lies under no restricted_dirs entry")
+        for field, path in (("restricted_results_root", root), ("released_metrics_root", released)):
+            if not any(path.is_relative_to(w) for w in rw):
+                raise ValueError(f"{code}: {field} lies under no rw_under_roots entry")
+        public = {"released_metrics_root": released}
+        public |= {f: _norm(getattr(self, f)) for f in ("results_root", "runs_root", "slurm_logs_root")}
+        for field, path in public.items():
+            if any(path.is_relative_to(d) or d.is_relative_to(path) for d in dirs):
+                raise ValueError(f"{code}: {field} overlaps a restricted_dirs entry")
 
 
 def check_step_profile(step: StepSpec, profile: Profile) -> None:

@@ -725,14 +725,16 @@ class Verification(NamedTuple):
 
 
 def verify_dir(inp: RegisteredInput, profile: Profile) -> Path:
-    """Where an input's records live: ``input-verify/`` beside the results root.
+    """Where an input's records live: ``input-verify/`` beside the results root (the restricted one if restricted).
 
     Raises:
-        InputError: ``E_INPUT_REGISTRY`` for a restricted input (the profile has no restricted results root).
+        InputError: ``E_INPUT_REGISTRY`` for a restricted input on a profile with no restricted results root.
     """
-    if inp.restricted:
+    if not inp.restricted:
+        return profile.results_root.parent / VERIFY_DIR
+    if profile.restricted_results_root is None:
         raise InputError(CODE)
-    return profile.results_root.parent / VERIFY_DIR
+    return profile.restricted_results_root.parent / VERIFY_DIR
 
 
 def _xxh(path: str) -> str | None:
@@ -910,7 +912,8 @@ def accepted(
         ``([], overlay or None)`` when the latest record has the registered manifest sha256, ``status: ok``
         and is at most 31 days old (and not dated more than `FUTURE_SKEW` ahead), and its overlay (if any)
         has the recorded sha256; otherwise
-        ``(["E_INPUT_UNVERIFIED"], None)``, or ``(["E_INPUT_REGISTRY"], None)`` for a restricted input.
+        ``(["E_INPUT_UNVERIFIED"], None)``, or ``(["E_INPUT_REGISTRY"], None)`` for a restricted input on a
+        profile with no restricted results root.
     """
     try:
         directory = verify_dir(inp, profile)
