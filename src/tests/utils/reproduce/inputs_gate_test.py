@@ -531,8 +531,9 @@ def test_verify_output_has_counts_only(world: World, capsys: pytest.CaptureFixtu
         os.umask(saved)
     assert directory.stat().st_mode & 0o070 == 0o070
     assert (directory / "tables.json").stat().st_mode & 0o777 == 0o660
-    # The records lock is an exclusive `SharedFileLock` (A17 fix round 1): released, it leaves no lock files.
-    assert not [p.name for p in directory.iterdir() if p.name.startswith("tables.json.")]
+    # The records lock is an exclusive `SharedFileLock` (A17 fix round 1): released, it leaves no holder or heartbeat
+    # file; filelock 3 also unlinks the lock file, filelock 4 keeps it.
+    assert not [p.name for p in directory.iterdir() if p.name.startswith("tables.json.") and p.suffix != ".lock"]
     directory.chmod(0o500)
     try:
         code, lines = _verify_cli(world, capsys, "tables")
