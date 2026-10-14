@@ -336,7 +336,7 @@ BAND_A_MIN = {"fraction": 0.002, "pp": 0.2}
 
 
 class BandSpec(_Model):
-    """A ``seed_band`` expectation: the stored headline and the chains whose spread sets its half-width.
+    """A ``seed_band`` expectation: the stored headline and the chains or re-draws whose spread sets its half-width.
 
     ``floor`` (declared) or ``floor_from: entry`` (the metric entry's own ``floor``) gives the chance floor,
     and ``floor_source`` names where it comes from. ``chains`` are the step names of the independent chains
@@ -354,7 +354,7 @@ class BandSpec(_Model):
     floor_source: Label
     chains: Annotated[list[Name], Field(min_length=2)] | None = None
     chain1: Name | None = None
-    redraws: Annotated[list[Name], Field(min_length=3, max_length=3)] | None = None
+    redraws: list[Name] | None = None
     n_subset: Annotated[int, Field(ge=1)] | None = None
     n_full: Annotated[int, Field(ge=1)] | None = None
     k: NonNegative = 2.0
@@ -376,6 +376,8 @@ class BandSpec(_Model):
             raise ValueError("E_SPEC_BAND_SHAPE: a band takes exactly one of floor and floor_from")
         if (self.chains is None) == (self.redraws is None):
             raise ValueError("E_SPEC_BAND_SHAPE: a band takes exactly one of chains and redraws")
+        if self.redraws is not None and len(self.redraws) != 3:
+            raise ValueError("E_SPEC_BAND_SHAPE: a band takes exactly three redraws")
         if len(set(self.sources())) != len(self.sources()):
             raise ValueError("E_SPEC_BAND_SHAPE: band steps have duplicates")
         if self.chain1 is not None and (self.chains is None or self.chain1 not in self.chains):

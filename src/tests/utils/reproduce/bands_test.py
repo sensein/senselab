@@ -181,8 +181,9 @@ def test_redraw_subset_validator() -> None:
         _redraw(n_subset=2001, n_full=2000)
     with pytest.raises(ValidationError, match="E_SPEC_BAND_SHAPE"):
         _redraw(n_subset=None)
-    with pytest.raises(ValidationError):
-        _redraw(redraws=["r1", "r2"])
+    for redraws in (["r1", "r2"], ["r1", "r2", "r3", "r4"]):
+        with pytest.raises(ValidationError, match="E_SPEC_BAND_SHAPE"):
+            _redraw(redraws=redraws)
 
 
 def test_redraw_and_chains_are_exclusive() -> None:

@@ -3,7 +3,7 @@
 `toposort` orders a manifest set so every step follows its ``needs``; among steps that are ready at
 the same time the lexically smallest name goes first, so the order does not depend on file or step
 order. `check_expect_sources` checks every expectation that reads another step's ``metrics.json``
-(``from_step``, ``tolerance_from`` and band chains) against that step's ``metrics_schema``. Errors are a
+(``from_step``, ``tolerance_from`` and band chains or re-draws) against that step's ``metrics_schema``. Errors are a
 `DagError` with a fixed code and the names of the steps at fault, never a path or a value.
 """
 
@@ -77,8 +77,8 @@ def check_expect_sources(steps: Sequence[StepSpec]) -> None:
     a labelled headline, a count or a per-class field), and name the same quantity as the step's own
     ``metric`` (`metrics.metric_quantity`), so a rate is never compared with a count; that an
     expectation ``unit`` sits only on a rate or ``mcc`` is checked by `StepSpec` itself. Each
-    ``tolerance_from`` step and each band chain must declare the expectation's own ``metric``, because the
-    spread is taken over that metric.
+    ``tolerance_from`` step and each band chain or re-draw step must declare the expectation's own
+    ``metric``, because the spread is taken over that metric.
 
     Args:
         steps: A manifest set.

@@ -349,6 +349,7 @@ def test_seed_band_shape_rho_and_needs_validators() -> None:
     """A ``seed_band`` takes only a band, ``rho < max_width_frac``, chains in needs, values in range."""
     band = {"stored": 70.0, "unit": "pp", "floor": 50.0, "floor_source": "expected_floor", "chains": ["a", "b"]}
     good = {"metric": "top1", "kind": "seed_band", "band": band}
+    redrawn = {k: v for k, v in band.items() if k != "chains"} | {"n_subset": 200, "n_full": 2000}
     step = StepSpec.model_validate(_step(needs=["a", "b"], expect=[good]))
     assert step.expect[0].band is not None and step.expect[0].band.a_min == 0.2
     cases: list[tuple[dict[str, Any], list[str], str]] = [
@@ -358,6 +359,7 @@ def test_seed_band_shape_rho_and_needs_validators() -> None:
         ({**good, "band": {**band, "chains": ["a", "c"]}}, ["a", "b"], "outside its needs"),
         ({**good, "band": {**band, "stored": 0.7, "unit": "fraction"}}, ["a", "b"], "outside its range"),
         ({**good, "metric": "counts.n_systems"}, ["a", "b"], "E_SPEC_EXPECT_UNIT"),
+        ({**good, "band": {**redrawn, "redraws": ["a", "b", "c"]}}, ["a", "b"], "outside its needs"),
     ]
     for expect, needs, message in cases:
         with pytest.raises(ValidationError, match=message):
