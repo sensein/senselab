@@ -19,7 +19,7 @@ import tempfile
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 import yaml
 from pydantic import (
@@ -34,15 +34,15 @@ from pydantic import (
 )
 
 from senselab.utils.reproduce.metrics import (
-    CLASSIFICATION_HEADLINE,
     CLASSIFICATION_KINDS,
-    HEADLINES_BY_KIND,
     POSITIVE_FLOOR_METRICS,
     SCALED_QUANTITIES,
     SECONDARY_BY_KIND,
+    HeadlineRule,
     MetricName,
     MetricsKind,
     SplitOptOutReason,
+    headline_rule_error,
     metric_address_error,
     metric_quantity,
 )
@@ -364,6 +364,23 @@ class Expect(_Model):
         return self
 
 
+HEADLINE_RULE_CONTEXT = "headline_rule"
+"""The validation-context key that carries the profile policy's ``headline_rule`` into manifest parsing."""
+
+
+def headline_rule_of(info: ValidationInfo) -> HeadlineRule:
+    """The headline rule a manifest is parsed under: the context's, else ``balanced_accuracy_only``.
+
+    Raises:
+        ValueError: If the context names an unknown rule.
+    """
+    context = info.context if isinstance(info.context, Mapping) else {}
+    rule = context.get(HEADLINE_RULE_CONTEXT, "balanced_accuracy_only")
+    if rule not in ("balanced_accuracy_only", "kind_vocabulary"):
+        raise ValueError(f"unknown headline rule {rule!r}")
+    return cast(HeadlineRule, rule)
+
+
 def _no_duplicates(value: list[str], info: ValidationInfo) -> list[str]:
     if len(set(value)) != len(value):
         raise ValueError(f"{info.field_name} has duplicates")
@@ -389,10 +406,14 @@ class MetricsSchema(_Model):
     classification or detection step out of the split report. Only classification and detection steps
     take ``per_class`` and ``positive``.
 
-    A classification step declares at least two classes and exactly ``["balanced_accuracy"]`` as its
-    headline (``E_SPEC_HEADLINE_NOT_BA`` otherwise); accuracy, top-1, macro F1, AUROC, PR-AUC, MCC and
-    F1 are ``secondary`` (``E_SPEC_SECONDARY_NOT_ALLOWED`` for anything else, and for any secondary
-    metric on another kind). A detection step declares at least one class.
+    A classification step declares at least two classes and, under the profile policy's
+    ``headline_rule: balanced_accuracy_only``, exactly ``["balanced_accuracy"]`` as its headline
+    (``E_SPEC_HEADLINE_NOT_BA`` otherwise); under ``kind_vocabulary`` any of the kind's headline or
+    secondary names (none both). The rule comes from the validation context key ``headline_rule``
+    (`headline_rule_of`); without one, the stricter ``balanced_accuracy_only`` applies, and
+    `check_step_profile` checks the step again against its profile's rule. Accuracy, top-1, macro F1,
+    AUROC, PR-AUC, MCC and F1 are ``secondary`` (``E_SPEC_SECONDARY_NOT_ALLOWED`` for anything else, and
+    for any secondary metric on another kind). A detection step declares at least one class.
     """
 
     kind: MetricsKind
@@ -407,19 +428,18 @@ class MetricsSchema(_Model):
     _unique = field_validator("headline", "secondary", "headline_labels", "counts", "per_class")(_no_duplicates)
 
     @model_validator(mode="after")
-    def _kind(self) -> "MetricsSchema":
-        names: set[str] = set(self.headline)
-        if self.kind == "classification" and self.headline != [CLASSIFICATION_HEADLINE]:
-            raise ValueError(
-                f"E_SPEC_HEADLINE_NOT_BA: a classification headline is exactly [{CLASSIFICATION_HEADLINE}]"
-            )
-        foreign = sorted(names - HEADLINES_BY_KIND[self.kind])
-        if foreign:
-            raise ValueError(f"headline names {foreign} do not belong to kind {self.kind}")
+    def _kind(self, info: ValidationInfo) -> "MetricsSchema":
+        rule = headline_rule_of(info)
+        problem = headline_rule_error(self.kind, list(self.headline), rule)
+        if problem is not None:
+            raise ValueError(problem)
         secondary: set[str] = set(self.secondary)
         not_allowed = sorted(secondary - SECONDARY_BY_KIND[self.kind])
         if not_allowed:
             raise ValueError(f"E_SPEC_SECONDARY_NOT_ALLOWED: secondary {not_allowed} not allowed for kind {self.kind}")
+        overlap = sorted(secondary & set(self.headline))
+        if overlap:
+            raise ValueError(f"names {overlap} are both headline and secondary")
         if self.kind in CLASSIFICATION_KINDS and not self.per_class:
             raise ValueError(f"kind {self.kind} needs per_class labels")
         if self.kind == "classification":
@@ -639,8 +659,29 @@ def _strictly_under(path: PurePosixPath, root: PurePosixPath) -> bool:
     return path != root and path.is_relative_to(root)
 
 
+class Policy(_Model):
+    """A site's project rules, stated in its profile; the library implies none.
+
+    Attributes:
+        min_cell: The small-cell threshold: a suppressible count below it is written as ``"<min_cell>"``.
+        headline_rule: Which classification headlines a manifest may declare (`metrics.headline_rule_error`).
+        require_deny_patterns: The profile must name ``deny_patterns_file`` (``E_PROFILE_POLICY`` otherwise).
+        require_canary: The profile must name ``canary_host`` (``E_PROFILE_POLICY`` otherwise).
+        confidential_provenance: True records no paths and only the argv's sha256; False also records each
+            input's paths and the rendered argv.
+        umask: The umask of batch scripts and submissions; the dated log dirs get mode ``2777`` less it.
+    """
+
+    min_cell: int = Field(ge=1)
+    headline_rule: HeadlineRule
+    require_deny_patterns: bool
+    require_canary: bool
+    confidential_provenance: bool
+    umask: Literal["007", "022"]
+
+
 class Profile(_Model):
-    """The caller's site: data roots, result roots, partitions, keyed env, R module, deny patterns.
+    """The caller's site: data roots, result roots, partitions, keyed env, R module, deny patterns, policy.
 
     ``modules_init`` is the environment-modules init script sourced before ``module load`` (needed by any
     sdist with ``build_modules`` and by R envs; without it those are refused with ``E_MODULES_INIT``).
@@ -658,15 +699,20 @@ class Profile(_Model):
     build: str
     native: dict[Name, NativeSpec] = {}
     r: RModule | None = None
-    deny_patterns_file: Path
-    canary_host: str
+    deny_patterns_file: Path | None = None
+    canary_host: str | None = None
     modules_init: Path | None = None
     job_tmp_root: Path | None = None
+    policy: Policy
 
     _no_secrets = field_validator("env")(_reject_secret_keys)
 
     @model_validator(mode="after")
     def _consistent(self) -> "Profile":
+        if self.policy.require_deny_patterns and self.deny_patterns_file is None:
+            raise ValueError("E_PROFILE_POLICY: the policy requires deny_patterns_file")
+        if self.policy.require_canary and self.canary_host is None:
+            raise ValueError("E_PROFILE_POLICY: the policy requires canary_host")
         paths = [*self.roots.values(), self.results_root, self.runs_root, self.slurm_logs_root, *self.rw_under_roots]
         paths += [p for p in (self.modules_init, self.job_tmp_root) if p is not None]
         native = [d for n in self.native.values() for d in (*n.bin_dirs, *n.lib_dirs)]
@@ -702,8 +748,13 @@ def check_step_profile(step: StepSpec, profile: Profile) -> None:
         profile: The caller's profile.
 
     Raises:
-        ValueError: If the step selects a native entry the profile lacks, or names a partition key it lacks.
+        ValueError: If the step selects a native entry the profile lacks, names a partition key it lacks, or
+            declares headline names the profile's ``policy.headline_rule`` refuses.
     """
+    schema = step.metrics_schema
+    problem = headline_rule_error(schema.kind, list(schema.headline), profile.policy.headline_rule)
+    if problem is not None:
+        raise ValueError(f"step {step.name!r}: {problem}")
     missing = sorted(set(step.resources.native) - set(profile.native))
     if missing:
         raise ValueError(f"step {step.name!r} selects native entries the profile lacks: {missing}")
@@ -720,38 +771,43 @@ def _read(path: Path) -> Any:  # noqa: ANN401
     raise ValueError(f"expected a .yaml, .yml or .json file: {path}")
 
 
-def parse_manifest(data: bytes, suffix: str) -> Manifest:
+def parse_manifest(data: bytes, suffix: str, *, headline_rule: HeadlineRule = "balanced_accuracy_only") -> Manifest:
     """Validate a manifest from bytes already read (so they can be hashed first).
 
     Args:
         data: The file's bytes.
         suffix: ``.json``, ``.yaml`` or ``.yml``.
+        headline_rule: The profile policy's headline rule the manifest is checked against.
 
     Returns:
         The validated manifest.
     """
     if suffix not in (".json", ".yaml", ".yml"):
         raise ValueError(f"expected a .yaml, .yml or .json file, not {suffix!r}")
-    return Manifest.model_validate(_parse(data.decode(), suffix))
+    return Manifest.model_validate(_parse(data.decode(), suffix), context={HEADLINE_RULE_CONTEXT: headline_rule})
 
 
-def load_manifest(path: str | os.PathLike[str]) -> Manifest:
+def load_manifest(path: str | os.PathLike[str], *, headline_rule: HeadlineRule = "balanced_accuracy_only") -> Manifest:
     """Load and validate one manifest file.
 
     Args:
         path: A YAML or JSON manifest.
+        headline_rule: The profile policy's headline rule the manifest is checked against.
 
     Returns:
         The validated manifest.
     """
-    return Manifest.model_validate(_read(Path(path)))
+    return Manifest.model_validate(_read(Path(path)), context={HEADLINE_RULE_CONTEXT: headline_rule})
 
 
-def load_manifest_set(paths: Iterable[str | os.PathLike[str]]) -> list[StepSpec]:
+def load_manifest_set(
+    paths: Iterable[str | os.PathLike[str]], *, headline_rule: HeadlineRule = "balanced_accuracy_only"
+) -> list[StepSpec]:
     """Load several manifests as one set of steps.
 
     Args:
         paths: YAML or JSON manifests.
+        headline_rule: The profile policy's headline rule the manifest is checked against.
 
     Returns:
         Every step, in file order then step order.
@@ -759,7 +815,7 @@ def load_manifest_set(paths: Iterable[str | os.PathLike[str]]) -> list[StepSpec]
     Raises:
         ValueError: If a step name occurs in more than one place across the set.
     """
-    return _unique_names([s for p in paths for s in load_manifest(p).steps])
+    return _unique_names([s for p in paths for s in load_manifest(p, headline_rule=headline_rule).steps])
 
 
 def load_sources(path: str | os.PathLike[str]) -> list[SourceSpec]:
@@ -831,7 +887,8 @@ def rewrite_manifest(path: str | os.PathLike[str], edit: Callable[[Any], None]) 
     When every change replaces a plain word (a sha256, say) that occurs once in the file, the file text
     is edited in place, so comments, anchors and layout survive; otherwise the data is dumped again
     (``yaml.safe_dump`` keeps key order but drops comments and expands anchors). The result must still
-    be a valid `Manifest`.
+    be a valid `Manifest` under the most permissive headline rule (the rule is checked where the manifest
+    is loaded for a profile).
 
     Args:
         path: The manifest file (YAML or JSON).
@@ -850,7 +907,7 @@ def rewrite_manifest(path: str | os.PathLike[str], edit: Callable[[Any], None]) 
     edit(new)
     if new == data:
         return False
-    Manifest.model_validate(new)
+    Manifest.model_validate(new, context={HEADLINE_RULE_CONTEXT: "kind_vocabulary"})
     out = _substituted(text, data, new, path.suffix)
     if out is None:
         out = _dump(new, path.suffix)

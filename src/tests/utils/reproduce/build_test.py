@@ -567,6 +567,14 @@ def _profile(tmp_path: Path) -> Profile:
             "build": "builder",
             "deny_patterns_file": "/etc/deny.txt",
             "canary_host": "192.0.2.1",
+            "policy": {
+                "min_cell": 5,
+                "headline_rule": "balanced_accuracy_only",
+                "require_deny_patterns": True,
+                "require_canary": True,
+                "confidential_provenance": True,
+                "umask": "007",
+            },
             "job_tmp_root": "/dev/shm",
             "modules_init": str(INIT),
         }

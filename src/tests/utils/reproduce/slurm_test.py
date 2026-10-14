@@ -51,6 +51,14 @@ def _profile(tmp: Path, **change: Any) -> Profile:  # noqa: ANN401
         "build": "build",
         "deny_patterns_file": str(tmp / "deny.txt"),
         "canary_host": "192.0.2.1:9",
+        "policy": {
+            "min_cell": 5,
+            "headline_rule": "balanced_accuracy_only",
+            "require_deny_patterns": True,
+            "require_canary": True,
+            "confidential_provenance": True,
+            "umask": "007",
+        },
         "job_tmp_root": "/dev/shm",
     }
     data.update(change)
@@ -474,8 +482,8 @@ def test_submit_holds_every_job_writes_rows_then_releases(tmp_path: Path, monkey
     assert [r["step"] for r in _rows(tmp_path, "beta")] == ["lone", "report"]
     assert os.listdir(cwd) == []
     logs = tmp_path / "slurm" / "2026-03-04"
-    assert logs.is_dir() and (logs.stat().st_mode & 0o7777) == slurm.LOG_DIR_MODE
-    assert set(fake.umasks) == {slurm.SUBMIT_UMASK}
+    assert logs.is_dir() and (logs.stat().st_mode & 0o7777) == slurm.log_dir_mode(_profile(tmp_path)) == 0o2770
+    assert set(fake.umasks) == {slurm.submit_umask(_profile(tmp_path))} == {0o007}
 
 
 def test_a_render_error_has_no_side_effect(tmp_path: Path) -> None:
@@ -782,8 +790,8 @@ def test_submit_and_wait_has_no_timeout(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(slurm.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(slurm.subprocess, "run", fake_run)
-    slurm.submit_and_wait("#!/bin/bash\n", name="reproduce-build-x-1")
-    assert seen["timeout"] is None and seen["umask"] == slurm.SUBMIT_UMASK
+    slurm.submit_and_wait("#!/bin/bash\n", name="reproduce-build-x-1", umask=0o007)
+    assert seen["timeout"] is None and seen["umask"] == 0o007
     assert seen["argv"] == ["/usr/bin/sbatch", "--wait", "--parsable", "--job-name=reproduce-build-x-1"]
 
 
@@ -792,14 +800,16 @@ def test_submit_and_wait_failure_and_interrupt(monkeypatch: pytest.MonkeyPatch) 
     cancels: list[list[str]] = []
     monkeypatch.setattr(slurm, "default_runner", lambda argv, script, timeout=None: cancels.append(argv))
     with pytest.raises(slurm.SlurmError, match="failed"):
-        slurm.submit_and_wait("s", name="job-a", runner=lambda a, s: subprocess.CompletedProcess(a, 1, "", ""))
+        slurm.submit_and_wait(
+            "s", name="job-a", umask=0o007, runner=lambda a, s: subprocess.CompletedProcess(a, 1, "", "")
+        )
     assert cancels == []
 
     def interrupted(argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
         raise KeyboardInterrupt
 
     with pytest.raises(KeyboardInterrupt):
-        slurm.submit_and_wait("s", name="job-b", runner=interrupted)
+        slurm.submit_and_wait("s", name="job-b", umask=0o007, runner=interrupted)
     assert len(cancels) == 1 and cancels[0][:2] == ["scancel", "--name=job-b"]
 
 

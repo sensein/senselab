@@ -23,15 +23,17 @@ A step's result dir ``R = <results_root>/<step_key>`` is laid out by the driver:
    compare the session with the prefetch ``SESSION.json`` (``E_R_SESSION``).
 5. Run the step in the read-only-by-default sandbox (`sandbox.sandbox_argv`). A preamble in the same
    sandbox reports ``sys.prefix``, Python, torch and its CUDA version and the canary result on a
-   driver-held pipe, and the step is exec'd only when the canary's connect failed.
+   driver-held pipe, and the step is exec'd only when the canary's connect failed (a profile whose policy
+   does not require a canary and names none skips the connect).
 6. Digest the inputs again (``E_INPUT_MUTATED``), verify the checkout (``E_SRC_MUTATED``) and the venv
    (``E_ENV_CHANGED``), and refuse and delete any ``summary.json``, ``metrics.json`` or ``run.json``
    under ``work/`` (``E_RESERVED_NAME``).
 7. Run the adapter in the sandbox with the driver's interpreter; it may import nothing from senselab
    outside ``senselab.utils.reproduce`` (``E_ADAPTER_IMPORT``) and returns its metrics on a pipe.
    Validate, evaluate ``expect`` (`evaluate_expect`), validate again as the driver with the same
-   `metrics.MIN_CELL` and write ``R/metrics.json``.
-8. Remove ``R/tmp``, fix the exit, record provenance with that exit (`provenance.record_step`) and
+   ``policy.min_cell`` of the profile and write ``R/metrics.json``.
+8. Remove ``R/tmp``, fix the exit, record provenance with that exit (`provenance.record_step`; with
+   ``policy.confidential_provenance`` false it also records each input's paths and the rendered argv) and
    write ``R/summary.json`` last.
 
 Only ``E_*`` codes fail a step; ``W_*`` codes are recorded. Driver errors go to ``R/logs/driver.log``;
@@ -66,7 +68,16 @@ from typing import Any, Literal, NamedTuple
 
 from senselab.utils.reproduce import build, cache, digest, env, host, metrics, provenance, sandbox, source
 from senselab.utils.reproduce.dag import toposort
-from senselab.utils.reproduce.spec import Expect, LockRef, Manifest, MetricsSchema, Profile, StepSpec, render
+from senselab.utils.reproduce.spec import (
+    Expect,
+    InputSpec,
+    LockRef,
+    Manifest,
+    MetricsSchema,
+    Profile,
+    StepSpec,
+    render,
+)
 
 Status = Literal["executed", "skipped", "failed", "never-ran"]
 
@@ -176,6 +187,9 @@ def program_allowed(target, path, rule):
     return inside(where, rule["dirs"]) and inside(real, rule["dirs"] + rule["targets"])
 """
 """The program check, shared by the preamble (inside the sandbox) and the dry run (on the driver side)."""
+
+NO_CANARY_CODE = 'import json\nprint(json.dumps({"canary_failed": True}))\n'
+"""The canary snippet of a profile that names no canary host (its policy does not require one): no connect."""
 
 _PREAMBLE_CODE = """\
 import contextlib, io, json, os, platform, shutil, sys
@@ -1174,7 +1188,9 @@ class _Execution:
         cwd = self._cwd()
         self.argv = argv
         python = os.path.join(self._render("{venv}"), "bin", "python")
-        preamble = _PREAMBLE_CODE.format(canary=sandbox.canary(config.profile.canary_host), rule_code=PROGRAM_RULE_CODE)
+        host = config.profile.canary_host
+        canary = NO_CANARY_CODE if host is None else sandbox.canary(host)
+        preamble = _PREAMBLE_CODE.format(canary=canary, rule_code=PROGRAM_RULE_CODE)
         allowed = json.dumps(self._interpreter_rule())
         read, write = os.pipe()
         wrapped = [sandbox.SH, "-c", WRAPPER, "sh", str(cwd), python, "-I", "-B", "-c", preamble, str(write), allowed]
@@ -1349,7 +1365,7 @@ class _Execution:
             obj = json.loads(raw.decode())
         except (UnicodeDecodeError, ValueError):
             raise RunError("E_ADAPTER_NO_METRICS") from None
-        clean, found = metrics.validate_metrics(obj, step.metrics_schema, writer="adapter")
+        clean, found = metrics.validate_metrics(obj, step.metrics_schema, min_cell=self._min_cell(), writer="adapter")
         self.codes.update(found)
         if clean is None:
             return
@@ -1358,7 +1374,9 @@ class _Execution:
         self.codes.update(codes)
         if final is None:
             return
-        final_clean, found = metrics.validate_metrics(final, step.metrics_schema, writer="driver")
+        final_clean, found = metrics.validate_metrics(
+            final, step.metrics_schema, min_cell=self._min_cell(), writer="driver"
+        )
         self.codes.update(found)
         if final_clean is None:
             return
@@ -1377,10 +1395,13 @@ class _Execution:
             obj = json.loads(_read_nofollow(out / METRICS))
         except (OSError, ValueError):
             raise RunError("E_UPSTREAM_METRICS") from None
-        clean, _ = metrics.validate_metrics(obj, schema, writer="driver")
+        clean, _ = metrics.validate_metrics(obj, schema, min_cell=self._min_cell(), writer="driver")
         if clean is None:
             raise RunError("E_UPSTREAM_METRICS")
         return clean
+
+    def _min_cell(self) -> int:
+        return self.config.profile.policy.min_cell
 
     # --- provenance ----------------------------------------------------------------------------
 
@@ -1400,6 +1421,10 @@ class _Execution:
             artifacts.append(provenance.Artifact(digest=found[0], count=found[1]))
         return artifacts
 
+    def _paths(self, spec: InputSpec) -> tuple[str, ...]:
+        root = _root_dir(spec.root, self.config, self.upstream, self.keyed.checkout.worktree)
+        return tuple(os.fspath(root / p) for p in spec.patterns)
+
     def _record(self, outputs: list[provenance.Artifact]) -> None:
         if self.venv is None or self.host is None:
             return
@@ -1407,8 +1432,9 @@ class _Execution:
         if dropped:
             _log().warning("host values not recorded: %s", ", ".join(dropped))
             self.codes.add("W_HOST_VALUE_DROPPED")
+        confidential = self.config.profile.policy.confidential_provenance
         inputs = [
-            provenance.Artifact(digest=d, count=n, root=spec.root)
+            provenance.Artifact(digest=d, count=n, root=spec.root, paths=None if confidential else self._paths(spec))
             for spec, (d, n) in zip(self.step.inputs, self.keyed.input_digests)
         ]
         argv_sha = hashlib.sha256(json.dumps(self.argv).encode()).hexdigest() if self.argv else None
@@ -1431,6 +1457,7 @@ class _Execution:
                 env_keys=sorted(self.env),
                 env_sha256=self.recorded_sha,
                 argv_sha256=argv_sha,
+                argv=None if confidential or not self.argv else self.argv,
             )
         except ValueError:
             _log().error("provenance refused\n%s", traceback.format_exc())

@@ -164,6 +164,14 @@ def _profile(**over: Any) -> dict[str, Any]:  # noqa: ANN401
         "r": {"module": "R/4.5.2", "version": "4.5.2"},
         "deny_patterns_file": "/etc/repro/deny.txt",
         "canary_host": "example.org:443",
+        "policy": {
+            "min_cell": 5,
+            "headline_rule": "balanced_accuracy_only",
+            "require_deny_patterns": True,
+            "require_canary": True,
+            "confidential_provenance": True,
+            "umask": "007",
+        },
     }
     profile.update(over)
     return profile

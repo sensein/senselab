@@ -13,7 +13,8 @@ only then releases them all with ``scontrol release``. Any exception or interrup
 completes cancels every job submitted so far and marks the steps ``never-ran`` with ``E_SUBMIT_ABORTED``.
 
 Every job runs in ``<slurm_logs_root>/<date>`` (``--chdir``), which the driver creates with mode
-``2770``; sbatch runs under ``umask 007``. ``--output`` and ``--error`` are ``<jobid>.{out,err}`` there.
+``2777`` less the profile policy's ``umask`` (`log_dir_mode`: ``2770`` for ``007``); sbatch and the job
+script run under that umask (`submit_umask`). ``--output`` and ``--error`` are ``<jobid>.{out,err}`` there.
 The job starts from an empty environment (``--export=NONE``) and exports only ``PATH``, the variables of
 `batch_exports`, the driver interpreter and, when the profile names a ``job_tmp_root``, a per-job ``TMPDIR``
 under it.
@@ -57,8 +58,6 @@ FINALIZE_CPUS = 1
 FINALIZE_MEM = "1G"
 FINALIZE_TIME = "00:10:00"
 SUBMIT_TIMEOUT = 120
-LOG_DIR_MODE = 0o2770
-SUBMIT_UMASK = 0o007
 CODES = frozenset({"E_SUBMIT_ABORTED", "E_SUBMIT_OVERLAP", "E_MANIFEST_CHANGED", "E_SCANCEL_FAILED"})
 """The submission's codes, written into ``run.json`` rows."""
 _SCRIPT_OWNED = frozenset({"PATH", "TMPDIR", "REPRO_DRIVER_PYTHON"})
@@ -285,13 +284,23 @@ def job_state(job_id: str, runner: Runner | None = None) -> str | None:
     return words[0]
 
 
+def submit_umask(profile: Profile) -> int:
+    """The umask sbatch and each job script run under: the profile policy's ``umask``."""
+    return int(profile.policy.umask, 8)
+
+
+def log_dir_mode(profile: Profile) -> int:
+    """The dated log dir's mode: setgid ``2777`` less the policy's umask (``2770`` for ``007``)."""
+    return 0o2777 & ~submit_umask(profile)
+
+
 def log_dir(profile: Profile, date: datetime.date) -> Path:
     """``<slurm_logs_root>/<YYYY-MM-DD>``: every job's working dir and where its ``<jobid>.out``/``.err`` go."""
     return profile.slurm_logs_root / date.isoformat()
 
 
 def prepare_log_dir(profile: Profile, date: datetime.date) -> Path:
-    """Create the dated log dir with mode ``2770`` (group-only, setgid), or set that mode on an existing one.
+    """Create the dated log dir with `log_dir_mode` (setgid), or set that mode on an existing one.
 
     Raises:
         SlurmError: If a symlink or a non-directory is in its place.
@@ -299,10 +308,10 @@ def prepare_log_dir(profile: Profile, date: datetime.date) -> Path:
     logs = log_dir(profile, date)
     logs.parent.mkdir(parents=True, exist_ok=True)
     with contextlib.suppress(FileExistsError):
-        os.mkdir(logs, LOG_DIR_MODE)
+        os.mkdir(logs, log_dir_mode(profile))
     if logs.is_symlink() or not logs.is_dir():
         raise SlurmError("the dated Slurm log dir is not a directory")
-    os.chmod(logs, LOG_DIR_MODE)
+    os.chmod(logs, log_dir_mode(profile))
     return logs
 
 
@@ -453,17 +462,15 @@ def _dependency(kind: str, ids: Sequence[str]) -> list[str]:
     return [f"#SBATCH --dependency={kind}:{':'.join(ids)}"] if ids else []
 
 
-def _body(
-    exports: Mapping[str, str], driver_python: str, command: Sequence[str], job_tmp_root: Path | None
-) -> list[str]:
+def _body(exports: Mapping[str, str], driver_python: str, command: Sequence[str], profile: Profile) -> list[str]:
     bad = sorted(k for k in exports if not _EXPORT_NAME.match(k) or k in _SCRIPT_OWNED)
     if bad:
         raise ValueError(f"export names refused: {bad}")
-    lines = ["set -euo pipefail", "umask 007", f"export PATH={SYSTEM_PATH}"]
+    lines = ["set -euo pipefail", f"umask {profile.policy.umask}", f"export PATH={SYSTEM_PATH}"]
     lines += [f"export {key}={shlex.quote(value)}" for key, value in exports.items()]
     lines.append(f"export REPRO_DRIVER_PYTHON={shlex.quote(driver_python)}")
-    if job_tmp_root is not None:
-        root = _path_word(os.fspath(job_tmp_root), "job_tmp_root")
+    if profile.job_tmp_root is not None:
+        root = _path_word(os.fspath(profile.job_tmp_root), "job_tmp_root")
         lines += [f'export TMPDIR="{root}/reproduce-${{SLURM_JOB_ID}}"', 'mkdir -p "$TMPDIR"']
         lines.append("trap 'rm -rf \"$TMPDIR\"' EXIT")
     lines.append('"$REPRO_DRIVER_PYTHON" ' + shlex.join(["-P", "-m", DRIVER_MODULE, *command]))
@@ -504,7 +511,7 @@ def render_step_job(
     lines = _header(f"reproduce-{step.name}", partition, part.cpus, part.mem, part.time, part.gres, logs)
     lines += _dependency("afterok", dependencies)
     lines.append("#SBATCH --kill-on-invalid-dep=yes")
-    lines += _body(exports, driver_python, command, profile.job_tmp_root)
+    lines += _body(exports, driver_python, command, profile)
     return "\n".join(lines) + "\n"
 
 
@@ -536,7 +543,7 @@ def render_finalize_job(
     logs = log_dir(profile, date)
     lines = _header("reproduce-finalize", part.partition, FINALIZE_CPUS, FINALIZE_MEM, FINALIZE_TIME, None, logs)
     lines += _dependency("afterany", dependencies)
-    lines += _body(exports, driver_python, command, profile.job_tmp_root)
+    lines += _body(exports, driver_python, command, profile)
     return "\n".join(lines) + "\n"
 
 
@@ -609,8 +616,8 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
     3. reserve: for each analysis in sorted order, under its ``run.json`` lock, refuse another submission's
        ``pending`` rows (``E_SUBMIT_OVERLAP``) and write placeholder ``pending`` rows tagged with this
        submission (job null); an overlap undoes the reservations already made;
-    4. under ``umask 007``, with SIGTERM and SIGHUP raising `Terminated`: create the dated log dir (mode
-       ``2770``); probe partitions; submit every step job ``--hold``; fill in the job ids under the lock
+    4. under `submit_umask`, with SIGTERM and SIGHUP raising `Terminated`: create the dated log dir
+       (`log_dir_mode`); probe partitions; submit every step job ``--hold``; fill in the job ids under the lock
        (this submission's rows only); submit the finalize job ``--hold``; ``scontrol release`` them all.
 
     Any exception, Ctrl-C, SIGTERM or SIGHUP in step 4 runs the abort with those signals ignored: every
@@ -671,7 +678,7 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
     snapshots: dict[str, dict[str, dict[str, Any] | None]] = {}
     submitted: list[str] = []
     jobs: list[Job] = []
-    with _umask(SUBMIT_UMASK), terminate_raises():
+    with _umask(submit_umask(profile)), terminate_raises():
         try:
             for name, order in orders.items():
                 snapshots[name] = run.reserve_run_record(profile.runs_root, config.date, name, order, submission)
@@ -760,7 +767,7 @@ def _abort(
     return cancelled
 
 
-def submit_and_wait(script: str, *, name: str, runner: Runner | None = None) -> None:
+def submit_and_wait(script: str, *, name: str, umask: int, runner: Runner | None = None) -> None:
     """Submit a batch job with ``sbatch --wait`` and no timeout; cancel it if the wait is interrupted.
 
     The job is named ``name`` on the command line (overriding the script's), so an interrupted wait
@@ -769,6 +776,7 @@ def submit_and_wait(script: str, *, name: str, runner: Runner | None = None) -> 
     Args:
         script: The batch script.
         name: A job name unique to this wait.
+        umask: The umask the sbatch runs under (`submit_umask`).
         runner: Runs the waiting sbatch; defaults to `wait_runner`. ``scancel`` uses `default_runner`.
 
     Raises:
@@ -777,7 +785,7 @@ def submit_and_wait(script: str, *, name: str, runner: Runner | None = None) -> 
     runner = wait_runner if runner is None else runner
     argv = [SBATCH, "--wait", "--parsable", f"--job-name={_path_word(name, 'job name')}"]
     try:
-        with _umask(SUBMIT_UMASK), terminate_raises():
+        with _umask(umask), terminate_raises():
             result = runner(argv, script)
     except BaseException:
         with signals_ignored():

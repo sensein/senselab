@@ -229,8 +229,8 @@ def step_key_payload(
 
     Args:
         step: The step.
-        profile: The caller's profile; only the step's keyed env (`sandbox.keyed_templates`) is taken
-            from it.
+        profile: The caller's profile; only the step's keyed env (`sandbox.keyed_templates`) and its
+            ``policy`` (as `policy_sha256`) are taken from it.
         upstream: Each name in ``step.needs`` mapped to that step's key, and nothing else.
         submodules: Submodule path to 40-hex commit, as the checkout records it; empty when the step
             does not use submodules.
@@ -323,7 +323,13 @@ def step_key_payload(
         "expect": [e.model_dump(mode="json") for e in step.expect],
         "replicate": step.replicate,
         "upstream": dict(sorted(upstream.items())),
+        "policy_sha256": policy_sha256(profile),
     }
+
+
+def policy_sha256(profile: Profile) -> str:
+    """The sha256 of `canonical_json` over the profile's ``policy``, so a policy change re-keys every step."""
+    return hashlib.sha256(canonical_json(profile.policy.model_dump(mode="json"))).hexdigest()
 
 
 def step_key(

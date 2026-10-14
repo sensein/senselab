@@ -130,6 +130,14 @@ class World:
                 "build": "cpu",
                 "deny_patterns_file": str(self.tmp / "deny.txt"),
                 "canary_host": self.canary,
+                "policy": {
+                    "min_cell": 5,
+                    "headline_rule": "balanced_accuracy_only",
+                    "require_deny_patterns": True,
+                    "require_canary": True,
+                    "confidential_provenance": True,
+                    "umask": "007",
+                },
             }
         )
 

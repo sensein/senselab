@@ -58,6 +58,14 @@ def _profile(root: Path, env: dict[str, str] | None = None) -> Profile:
             "build": "cpu",
             "deny_patterns_file": str(root.parent / "deny.txt"),
             "canary_host": "pypi.org",
+            "policy": {
+                "min_cell": 5,
+                "headline_rule": "balanced_accuracy_only",
+                "require_deny_patterns": True,
+                "require_canary": True,
+                "confidential_provenance": True,
+                "umask": "007",
+            },
         }
     )
 

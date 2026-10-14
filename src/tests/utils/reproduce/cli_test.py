@@ -84,6 +84,14 @@ class Site:
             "build": "build",
             "deny_patterns_file": str(self.deny),
             "canary_host": "192.0.2.1:9",
+            "policy": {
+                "min_cell": 5,
+                "headline_rule": "balanced_accuracy_only",
+                "require_deny_patterns": True,
+                "require_canary": True,
+                "confidential_provenance": True,
+                "umask": "007",
+            },
         }
         data.update(change)
         self.profile_path.write_text(yaml.safe_dump(data))
