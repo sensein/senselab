@@ -637,6 +637,12 @@ def _key(step: StepSpec, analysis: str, config: RunConfig, upstream: Mapping[str
         digest.input_set_digest(_root_dir(i.root, config, upstream, co.worktree), i.patterns, require_nonempty=True)
         for i in step.inputs
     ]
+    dirs = [] if step.restricted else restricted.restricted_dir_paths(config.profile)
+    for spec in step.inputs if dirs else []:
+        root = _root_dir(spec.root, config, upstream, co.worktree)
+        for rel in digest.matching_files(root, spec.patterns):
+            if any(_under(os.path.realpath(root / rel), d) for d in dirs):
+                raise RunError(restricted.CODE)
     native = cache.native_digests(step, config.profile)
     adapter = config.base_dir / step.adapter
     try:
@@ -2068,7 +2074,12 @@ class SubmissionOverlap(Exception):
 
 
 def reserve_run_record(
-    runs_root: Path, date: datetime.date, analysis: str, order: Sequence[str], submission: str
+    runs_root: Path,
+    date: datetime.date,
+    analysis: str,
+    order: Sequence[str],
+    submission: str,
+    restricted_flags: Mapping[str, bool] | None = None,
 ) -> dict[str, dict[str, Any] | None]:
     """Under the record's lock: refuse another submission's ``pending`` rows, then write placeholder rows.
 
@@ -2081,6 +2092,7 @@ def reserve_run_record(
         analysis: The manifest name.
         order: The analysis's step names in DAG order.
         submission: This submission's id.
+        restricted_flags: Each step's ``restricted`` flag, written into its placeholder row.
 
     Returns:
         The rows the placeholders replaced (None where there was none), for `release_reservation`.
@@ -2103,7 +2115,8 @@ def reserve_run_record(
             raise SubmissionOverlap(analysis, others)
         snapshot = {name: current.get(name) for name in order}
         for name in order:
-            current[name] = {**never_ran_row(name), "status": PENDING, "job": None, "submission": submission}
+            flag = None if restricted_flags is None else restricted_flags.get(name)
+            current[name] = {**never_ran_row(name, (), flag), "status": PENDING, "job": None, "submission": submission}
         _write_ordered(run, current, order)
     return snapshot
 
@@ -2225,11 +2238,11 @@ def finalize_run_records(
             continue
         upstream_bad = any(not _row_ok(rows.get(n)) for n in step.needs)
         if row.get("job") is None and row.get("submission") is not None:
-            new = never_ran_row(step.name, ("E_SUBMIT_ABORTED",))
+            new = never_ran_row(step.name, ("E_SUBMIT_ABORTED",), step.restricted)
         elif upstream_bad:
-            new = never_ran_row(step.name, ("E_UPSTREAM_NOT_DONE",))
+            new = never_ran_row(step.name, ("E_UPSTREAM_NOT_DONE",), step.restricted)
         else:
-            new = never_ran_row(step.name, ("E_JOB_ENDED_WITHOUT_RECORD",))
+            new = never_ran_row(step.name, ("E_JOB_ENDED_WITHOUT_RECORD",), step.restricted)
             job = row.get("job")
             state = state_of(str(job)) if state_of is not None and job else None
             if state is not None:

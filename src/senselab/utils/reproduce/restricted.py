@@ -1,6 +1,7 @@
 """Restricted steps: the declared ``restricted`` flag, checked at load against inputs, patterns and needs.
 
-A step must declare ``restricted: true`` when it has a registered input with ``restricted: true``, an
+A step must declare ``restricted: true`` when it has a registered input that is restricted (flagged, or its
+tree, manifest or original in a restricted dir), an
 ``inputs`` or ``stage`` entry on a data root whose pattern can name a path in a restricted dir (followed
 through symlinks in the pattern's fixed prefix), or a ``needs`` entry on a restricted step
 (`check_restricted`). A restricted step needs a profile with a restricted results root. A public step's
@@ -15,7 +16,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from senselab.utils.reproduce import digest, inputs
-from senselab.utils.reproduce.spec import RESERVED_ROOT_NAMES, Manifest, Profile, StepSpec
+from senselab.utils.reproduce.spec import RESERVED_ROOT_NAMES, InputSpec, Manifest, Profile, StageSpec, StepSpec
 
 CODE = "E_SPEC_RESTRICTED"
 PROFILE_FIELDS = ("restricted_dirs", "restricted_results_root", "released_metrics_root", "scan_hook")
@@ -73,8 +74,25 @@ def pattern_reaches(top: str | os.PathLike[str], pattern: str, dirs: Iterable[st
     return False
 
 
+def input_is_restricted(entry: inputs.RegisteredInput, profile: Profile) -> bool:
+    """Whether a registered input is flagged restricted, or its tree, manifest or original lies in a restricted dir."""
+    if entry.restricted:
+        return True
+    places = [(entry.root, entry.relpath), (entry.manifest.root, entry.manifest.relpath)]
+    if entry.original is not None:
+        places.append((entry.original.root, entry.original.relpath))
+    dirs = restricted_dir_paths(profile)
+    for root, rel in places:
+        if root in profile.roots:
+            for spelled in _spellings(profile.roots[root] / rel):
+                if any(_under(spelled, d) or _under(d, spelled) for d in dirs):
+                    return True
+    return False
+
+
 def _pattern_violation(step: StepSpec, profile: Profile, dirs: Sequence[str]) -> bool:
-    for entry in [*step.inputs, *step.stage]:
+    entries: list[InputSpec | StageSpec] = [*step.inputs, *step.stage]
+    for entry in entries:
         if entry.root.startswith("up:") or entry.root in RESERVED_ROOT_NAMES or entry.root not in profile.roots:
             continue
         if any(pattern_reaches(profile.roots[entry.root], p, dirs) for p in entry.patterns):
@@ -95,7 +113,7 @@ def violations(
                 bad.add(step.name)
             continue
         if (
-            any(registry[i].restricted for i in step.lock_inputs if i in registry)
+            any(input_is_restricted(registry[i], profile) for i in step.lock_inputs if i in registry)
             or any(n in flagged for n in step.needs)
             or _pattern_violation(step, profile, dirs)
         ):

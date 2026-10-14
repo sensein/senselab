@@ -176,6 +176,27 @@ def test_a_step_on_a_restricted_input_must_declare_restricted(site: Site) -> Non
     with pytest.raises(ValueError, match="E_SPEC_RESTRICTED"):
         restricted.check_restricted(_steps(_canary_step(site, restricted=True)), registry, _plain(site))
 
+    (site.restricted_dir / "unflagged").mkdir()
+    (site.restricted_dir / "unflagged" / "u.txt").write_text("1\n")
+    site.registered["unflagged"] = register_input(
+        site.base, {"data": site.data}, "unflagged", root="data", relpath="restricted/unflagged"
+    )
+    unflagged = site.step("U", "prep", "{input:unflagged}/u.txt", lock_inputs=["unflagged"])
+    with pytest.raises(ValueError, match=r"E_SPEC_RESTRICTED: \['U'\]"):
+        restricted.check_restricted(_steps(unflagged), _registry(site), profile)
+    del site.registered["unflagged"]
+
+    (site.data / "in" / "link.txt").symlink_to("../restricted/canary/in.txt")
+    linked = site.step("Q", "prep", "{root:data}/in/a.txt", inputs=[{"root": "data", "patterns": ["in/*.txt"]}])
+    restricted.check_restricted(_steps(linked), registry, profile)
+    linked_manifest = site.manifest(linked)
+    site.prefetch(linked_manifest)
+    (plan,) = run.plan_steps([linked_manifest], site.config())
+    assert plan.status == "blocked" and plan.codes == ("E_SPEC_RESTRICTED",)
+    (outcome,) = run.run_steps([linked_manifest], site.config())
+    assert (outcome.status, outcome.codes, outcome.key) == ("failed", ("E_SPEC_RESTRICTED",), None)
+    (site.data / "in" / "link.txt").unlink()
+
     manifest = site.manifest(_canary_step(site))
     site.prefetch(manifest)
     with pytest.raises(ValueError, match="E_SPEC_RESTRICTED"):
@@ -361,8 +382,52 @@ def test_profile_validators_for_the_restricted_fields(site: Site) -> None:
         {**good, "rw_under_roots": [f"{data}/reruns"]},
         {**good, "released_metrics_root": f"{data}/restricted/reruns/released"},
         {**good, "results_root": f"{data}/restricted/reruns/public"},
+        {**good, "restricted_results_root": f"{data}/restricted"},
+        {**good, "job_tmp_root": f"{data}/restricted/tmp"},
+        {**good, "runs_root": str(site.tmp / "runs-link" / "runs")},
     ]
+    (site.tmp / "runs-link").symlink_to(site.restricted_dir)
     for case in bad:
         with pytest.raises(ValueError, match="E_PROFILE_RESTRICTED"):
             Profile.model_validate(case)
     _plain(site)
+    entry = inputs.RegisteredInput.model_validate(
+        {
+            "id": "x",
+            "root": "data",
+            "relpath": "restricted/x",
+            "manifest": {"root": "data", "relpath": "m.tsv", "sha256": "0" * 64},
+            "rung": "a",
+            "rows": "none",
+            "restricted": True,
+            "licence": "CC0-1.0",
+            "category": "restricted-derivative",
+        }
+    )
+    assert inputs.verify_dir(entry, site.profile()).is_relative_to(site.restricted_dir)
+
+
+def test_every_run_record_row_carries_the_restricted_flag(site: Site) -> None:
+    """Placeholder, settled and refused rows carry ``restricted`` as run rows do."""
+    site.register_canary()
+    a, b = _canary_step(site, restricted=True), site.step("P", "prep", "{root:data}/in/a.txt")
+    manifest = site.manifest(a, b)
+    site.prefetch(manifest)
+    config = site.config()
+    runs = site.tmp / "runs"
+    record = cache.run_dir(runs, config.date, "demo") / run.RUN_JSON
+
+    def flags() -> dict[str, Any]:
+        return {r["step"]: r.get("restricted") for r in run.read_run_record(record)}
+
+    run.reserve_run_record(runs, config.date, "demo", ["A", "P"], "sub-1", {"A": True, "P": False})
+    assert flags() == {"A": True, "P": False}
+    run.finalize_run_records([manifest], config, submission="sub-1")
+    assert flags() == {"A": True, "P": False}
+    assert {r["status"] for r in run.read_run_record(record)} == {"never-ran"}
+    record.unlink()
+    profile_file, path = site.files(manifest)
+    argv = ["run", str(path), "--profile", str(profile_file), "--base-dir", str(site.base), "--cache", str(site.cache)]
+    run.update_run_record(runs, config.date, "demo", [run.never_ran_row("A"), run.never_ran_row("P")], order=["A"])
+    cli.main([*argv, "--date", config.date.isoformat(), "--pin", "0" * 64, "--step", "A"])
+    assert flags() == {"A": True, "P": None}

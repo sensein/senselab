@@ -837,10 +837,12 @@ def _manifest_changed(args: argparse.Namespace, paths: Sequence[Path], profile: 
         print(status_line(step, None, "failed", EXIT_FAILED, code))
         if step in analysis:
             row = {"step": step, "key": None, "status": "failed", "exit": EXIT_FAILED, "codes": code}
+            if step in specs:
+                row["restricted"] = specs[step].restricted
             write(analysis[step], [row], submission=args.submission, allow_untagged=True)
     dependents = run.descendants(specs, {s for s in steps if s in specs}) - set(steps)
     for name in sorted({analysis[d] for d in dependents}):
-        rows = [run.never_ran_row(d, code) for d in sorted(dependents) if analysis[d] == name]
+        rows = [run.never_ran_row(d, code, specs[d].restricted) for d in sorted(dependents) if analysis[d] == name]
         write(name, rows, pending_only=True, submission=args.submission)
     return EXIT_FAILED
 
