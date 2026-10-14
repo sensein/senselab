@@ -1810,8 +1810,11 @@ step's `lock_inputs` whose tree holds the file, and prints `url-weights files=<n
 
 **Stamps (A17 fix round 1).** Prefetch passes `<cache>/weights-stamps` (`weights.STAMPS_DIR`) to `verify_hf` and
 `verify_url`, which stamp every file they verify, by hash or by the accept rule: one JSON file per (blob realpath,
-declared sha256) holding the blob's `lstat` size, `mtime_ns`, device and inode, taken before the hash and written only
-if unchanged after it; a mismatching sha256 loses its stamp. In `run.gate`, once the presence checks pass,
+declared sha256) holding the blob's `lstat` size, `mtime_ns`, device and inode, taken once per blob before it is
+hashed and written only if unchanged after; once a blob is hashed its digest decides every declaration on it, and a
+mismatching sha256 loses its stamp. A cache prefetched before stamps existed has none, so its weights steps are
+`E_WEIGHTS_UNVERIFIED` until prefetch runs again. A stamp does not record what accepted the file (the hash or a
+registered input's record); it lives until the next prefetch. In `run.gate`, once the presence checks pass,
 `weights.check_stamps` re-checks each declared file's blob against its stamp without hashing: no readable stamp is
 `E_WEIGHTS_UNVERIFIED` (prefetch has not verified it), a different size, mtime or inode is `E_WEIGHTS_CHANGED`.
 
