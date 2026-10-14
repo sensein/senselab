@@ -79,7 +79,8 @@ WORKERS_READING_THROUGH_PORTABLE_AUDIO_IO = {
     "utils/subprocess_venv.py",
 }
 # The parent writes a WAV with ``Audio.save_to_file`` and the worker passes its path to a
-# third-party API that decodes it with the library's own loader.
+# third-party API that decodes it with the library's own loader. ``vllm_server`` is the server
+# form of this: its client sends the caller's audio file as bytes and vLLM decodes it.
 WORKERS_PASSING_A_PARENT_WRITTEN_WAV_TO_A_LIBRARY = {
     "audio/tasks/features_extraction/clearvoice_speechscore.py",
     "audio/tasks/scene_quality/brouhaha.py",
@@ -92,6 +93,7 @@ WORKERS_PASSING_A_PARENT_WRITTEN_WAV_TO_A_LIBRARY = {
     "audio/tasks/speech_to_text/nemo.py",
     "audio/tasks/speech_to_text/qwen.py",
     "audio/tasks/text_to_speech/coqui.py",
+    "utils/vllm_server.py",
 }
 WORKERS_WITH_NO_AUDIO_INPUT = {
     "audio/tasks/text_to_speech/qwen_tts.py",
