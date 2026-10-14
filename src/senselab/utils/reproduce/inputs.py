@@ -754,6 +754,17 @@ def check_flag(inp: RegisteredInput, profile: Profile) -> None:
         raise InputError(CODE)
 
 
+def remove_public_records(input_id: str, profile: Profile) -> None:
+    """Remove an input's records and overlay from the public ``input-verify/``, under the records lock."""
+    directory = profile.results_root.parent / VERIFY_DIR
+    path = _records_path(directory, input_id)
+    if not directory.is_dir():
+        return
+    with build.file_lock(path.with_name(path.name + ".lock")):
+        for target in (path, directory / f"{input_id}{OVERLAY_SUFFIX}"):
+            target.unlink(missing_ok=True)
+
+
 def verify_dir(inp: RegisteredInput, profile: Profile) -> Path:
     """Where an input's records live: ``input-verify/`` beside the results root (the restricted one if restricted).
 

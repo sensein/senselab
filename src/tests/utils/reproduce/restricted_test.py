@@ -7,9 +7,12 @@ under ``data/restricted`` and must never reach a public tree or a command's outp
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import stat
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -590,11 +593,17 @@ def test_reclassifying_an_input_purges_its_whole_public_closure(site: Site, caps
     _flip_input(site)
     outcomes = site.run(_chain(site))
     assert all(o.ok for o in outcomes.values())
+    tree = site.data / "pub" / "flip" / "f.txt"
+    st = os.stat(tree)
+    os.utime(tree, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
     public_line = _verify_line(site, capsys, "flip")
-    assert public_line.startswith("flip\tok\t") and "purged" not in public_line
+    assert public_line.startswith("flip\tok\t") and "purged" not in public_line and "mtime_only=1" in public_line
+    public_records = site.tmp / inputs.VERIFY_DIR
+    assert {"flip.json", f"flip{inputs.OVERLAY_SUFFIX}"} <= {p.name for p in public_records.iterdir()}
     _reflag(site, "flip", restricted=True, category="restricted-derivative")
     line = _verify_line(site, capsys, "flip")
     assert line.startswith("flip\tok\t") and line.endswith(" purged=3"), line
+    assert not {"flip.json", f"flip{inputs.OVERLAY_SUFFIX}"} & {p.name for p in public_records.iterdir()}
     for name in ("A", "B", "C"):
         out = outcomes[name].out
         assert out is not None and not out.exists()
@@ -605,7 +614,7 @@ def test_reclassifying_an_input_purges_its_whole_public_closure(site: Site, caps
 
 @needs_userns
 def test_moving_an_input_under_a_restricted_dir_purges_too(site: Site, capsys: pytest.CaptureFixture[str]) -> None:
-    """A tree moved under a restricted dir: unflagged is ``E_INPUT_REGISTRY``; flagged, its closure is purged."""
+    """A tree moved under a restricted dir purges its closure; left unflagged it is ``E_INPUT_REGISTRY`` too."""
     _flip_input(site)
     outcomes = site.run(_chain(site))
     assert all(o.ok for o in outcomes.values())
@@ -616,7 +625,8 @@ def test_moving_an_input_under_a_restricted_dir_purges_too(site: Site, capsys: p
     now = datetime.datetime.now(datetime.UTC)
     assert inputs.accepted(moved, site.profile(), now=now) == (["E_INPUT_REGISTRY"], None)
     assert inputs.registry_codes(site.base, "flip", site.profile()) == ["E_INPUT_REGISTRY"]
-    assert outcomes["A"].out is not None and outcomes["A"].out.exists()
+    assert all(not (o.out is not None and o.out.exists()) for n, o in outcomes.items() if n != "U")
+    assert outcomes["U"].out is not None and outcomes["U"].out.exists()
     register_input(
         site.base,
         {"data": site.data},
@@ -626,8 +636,7 @@ def test_moving_an_input_under_a_restricted_dir_purges_too(site: Site, capsys: p
         restricted=True,
         category="restricted-derivative",
     )
-    assert _verify_line(site, capsys, "flip").endswith(" purged=3")
-    assert all(not (o.out is not None and o.out.exists()) for n, o in outcomes.items() if n != "U")
+    assert _verify_line(site, capsys, "flip").endswith(" purged=0")
 
 
 @needs_userns
@@ -644,3 +653,128 @@ def test_canary_grep_over_public_trees_is_zero(site: Site, capsys: pytest.Captur
     assert _released(site, released.key).is_dir()
     public = [site.tmp / "results", site.tmp / "runs", site.tmp / "slurm", site.data / "reruns"]
     assert [f for top in public for f in _files_with(top, CANARY)] == []
+
+
+def _key_dir(root: Path, closure: list[str] | None, name: str) -> Path:
+    out = root / hashlib.sha256(name.encode()).hexdigest()
+    (out / run.WORK).mkdir(parents=True)
+    (out / run.WORK / "x.txt").write_text("1\n")
+    if closure is not None:
+        (out / cache.SUMMARY).write_text(json.dumps({"exit": 0, "input_closure": closure}))
+    return out
+
+
+def test_purge_waits_for_a_claim_and_removes_incomplete_results(site: Site, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A result with no summary is purged under its claim: a run in flight is waited for, a dead one removed.
+
+    A held claim does not stop the purge of the other results; the purge then raises ``E_CLAIM_HELD``.
+    """
+    profile = site.profile()
+    root = profile.results_root
+    root.mkdir(parents=True)
+    other = _key_dir(root, ["other"], "other")
+    dead = _key_dir(root, None, "dead")
+    flying = _key_dir(root, None, "flying")
+    started = threading.Event()
+
+    def in_flight() -> None:
+        with cache.claim(root, flying.name):
+            started.set()
+            time.sleep(1.0)
+            (flying / cache.SUMMARY).write_text(json.dumps({"exit": 0, "input_closure": ["flip"]}))
+
+    worker = threading.Thread(target=in_flight)
+    worker.start()
+    started.wait(10)
+    assert restricted.purge_closure(profile, "flip") == 2
+    worker.join()
+    assert not dead.exists() and not flying.exists() and other.exists()
+
+    held, free = _key_dir(root, ["flip"], "held"), _key_dir(root, ["flip"], "free")
+    release = threading.Event()
+
+    def holder() -> None:
+        with cache.claim(root, held.name):
+            started.set()
+            release.wait(10)
+
+    started.clear()
+    worker = threading.Thread(target=holder)
+    worker.start()
+    started.wait(10)
+    monkeypatch.setattr(restricted, "PURGE_CLAIM_TIMEOUT_S", 0.5)
+    with pytest.raises(cache.CacheError, match="E_CLAIM_HELD"):
+        restricted.purge_closure(profile, "flip")
+    release.set()
+    worker.join()
+    assert held.exists() and not free.exists() and other.exists()
+
+
+def test_a_release_leaves_nothing_stale(site: Site) -> None:
+    """A refused release removes an earlier copy of the key; a symlinked release dir is refused untouched."""
+    profile = site.profile()
+    result = site.tmp / "r"
+    result.mkdir()
+    (result / run.METRICS).write_text('{"headline": []}\n')
+    key = "ab" * 32
+    assert restricted.release(result, key, profile, {"exit": 0, "released": True})
+    target = site.data / "reruns" / "restricted-metrics" / key
+    assert sorted(p.name for p in target.iterdir()) == ["metrics.json", "summary.json"]
+    (result / run.METRICS).write_text(f'{{"label": "{CANARY}"}}\n')
+    assert not restricted.release(result, key, profile, {"exit": 0, "released": True})
+    assert not target.exists()
+    elsewhere = site.tmp / "elsewhere"
+    elsewhere.mkdir()
+    target.symlink_to(elsewhere)
+    (result / run.METRICS).write_text('{"headline": []}\n')
+    assert not restricted.release(result, key, profile, {"exit": 0, "released": True})
+    assert target.is_symlink() and list(elsewhere.iterdir()) == []
+    (result / "linked.json").write_text("{}\n")
+    target.unlink()
+    (result / run.METRICS).unlink()
+    (result / run.METRICS).symlink_to("linked.json")
+    assert not restricted.release(result, "cd" * 32, profile, {"exit": 0, "released": True})
+
+
+@needs_userns
+def test_a_failed_summary_write_or_a_restricted_closure_withdraws_the_result(
+    site: Site, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A release whose summary write fails is withdrawn; a step whose closure turned restricted mid-run fails.
+
+    Lint reports ``scan-hook-missing`` for a step with ``extract`` on a profile with no hook.
+    """
+    _verified_canary(site)
+    real = cache.write_summary
+    calls: list[int] = []
+
+    def failing(out: Path, summary: Any) -> Path:  # noqa: ANN401
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("disk full")
+        return real(out, summary)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(cache, "write_summary", failing)
+        outcome = _run_one(site, _canary_step(site, restricted=True))
+    assert "E_DRIVER" in outcome.codes and not _released(site, outcome.key).exists()
+
+    _flip_input(site)
+    outcomes = site.run(_chain(site))
+    assert all(o.ok for o in outcomes.values())
+    _reflag(site, "flip", restricted=True, category="restricted-derivative")
+    late = StepSpec.model_validate(_up_step(site, "D", "C"))
+    after = run.run_step(late, "demo", site.config(), {"C": outcomes["C"]}, {})
+    assert after.status == "executed" and "E_SPEC_RESTRICTED" in after.codes and not after.ok
+    assert after.out is not None and not (after.out / run.WORK).exists()
+
+    (site.base / "adapter_extract.py").write_text("")
+    step = site.step(
+        "X", "prep", "{root:data}/in/a.txt", adapter="adapter_extract.py", extract=[{"name": "m", "kind": "yesno"}]
+    )
+    site.restricted_fields = False
+    manifest = site.manifest(step)
+    profile_file, path = site.files(manifest)
+    capsys.readouterr()
+    assert cli.main(["lint", str(path), "--profile", str(profile_file), "--base-dir", str(site.base)]) == 1
+    assert f"{path}:X: scan-hook-missing" in capsys.readouterr().out

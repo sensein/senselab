@@ -1049,6 +1049,9 @@ def _summary_or_driver_error(execution: _Execution, log: _Buffer) -> dict[str, A
         return summary
     except (OSError, TypeError, ValueError, RunError):
         _log().error("driver error\n%s", traceback.format_exc())
+        if execution.released:
+            restricted.withdraw(execution.config.profile, execution.keyed.key)
+            execution.released = False
         summary = execution.driver_error_summary()
         with contextlib.suppress(OSError, TypeError, ValueError):
             cache.write_summary(result, summary)
@@ -1139,6 +1142,7 @@ class _Execution:
             self.codes.add("E_DRIVER")
         if self.config.no_netns:
             self.codes.add("E_NOT_REPORTABLE")
+        self._closure_recheck()
         outputs = self._outputs()
         for scratch in (self.tmp, self.result / ADAPTER_TMP, self.result / R_SESSION_DIR):
             try:
@@ -1151,6 +1155,19 @@ class _Execution:
         if self.step.restricted:
             self._release()
         return self._summary()
+
+    def _closure_recheck(self) -> None:
+        """Fail a public step, and remove its ``work/``, when an input of its closure became restricted mid-run."""
+        if self.closure is None or not restricted.closure_now_restricted(
+            self.closure, self.config.base_dir, self.config.profile
+        ):
+            return
+        self.codes.add(restricted.CODE)
+        try:
+            _remove_tree(self.work)
+        except OSError:
+            _log().error("could not remove a withdrawn work dir\n%s", traceback.format_exc())
+            self.codes.add("E_DRIVER")
 
     def _input_closure(self) -> list[str] | None:
         """A public step's registered inputs and its upstream steps' closures (from their summaries), sorted."""
