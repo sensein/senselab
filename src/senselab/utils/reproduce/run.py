@@ -20,7 +20,7 @@ A step's result dir ``R = <results_root>/<step_key>`` is laid out by the driver:
 2. A done result dir (`cache.is_done`) is linked into the dated run and the step is ``skipped``.
    Otherwise the step's claim is taken and done is checked again.
 3. Refuse, before the result dir is reset, when the inputs gate (`gate`) finds a code for a registered
-   input, unless unprivileged user namespaces work, the prefetched venv passed its checks
+   input. Refuse also unless unprivileged user namespaces work, the prefetched venv passed its checks
    (`env.venv_checked`), and the host meets the GPU and driver floor.
 4. Reset the dir, stage files, build the env; for an R step, run ``Rscript`` in the same sandbox and
    compare the session with the prefetch ``SESSION.json`` (``E_R_SESSION``).
@@ -405,6 +405,7 @@ class _Keyed(NamedTuple):
     paths: dict[str, Path]
     lock_sha256: str
     lock_name: str
+    entries: dict[str, inputs.RegisteredInput]
 
 
 # --- driver-side file operations under the result dir --------------------------------------------
@@ -578,11 +579,14 @@ def _r_digests(step: StepSpec, cache_dir: Path) -> tuple[str | None, str | None]
         raise RunError("E_R_MISSING") from None
 
 
-def _sources(step: StepSpec, analysis: str, config: RunConfig, co: source.Checkout) -> tuple[str, dict[str, Path]]:
+def _sources(
+    step: StepSpec, analysis: str, config: RunConfig, co: source.Checkout
+) -> tuple[str, dict[str, Path], dict[str, inputs.RegisteredInput]]:
     """Load the analysis's sources lock, check the step's pins against it and resolve its ``lock_inputs``.
 
     Returns:
-        The lock's sha256 and ``{"input:<id>": <root>/<relpath>}``; no file of a registered input is read.
+        The lock's sha256, ``{"input:<id>": <root>/<relpath>}`` and the registry entries; no file of a
+        registered input is read.
     """
     ref = config.sources.get(analysis)
     if ref is None:
@@ -595,9 +599,16 @@ def _sources(step: StepSpec, analysis: str, config: RunConfig, co: source.Checko
         entries = lock.resolve_inputs(config.base_dir, sources_lock, step.lock_inputs)
     except lock.LockError as error:
         raise RunError(error.code) from None
-    if any(e.root not in config.profile.roots for e in entries.values()):
+    if any(_roots_missing(e, config.profile) for e in entries.values()):
         raise RunError("E_ROOT_MISSING")
-    return sha, {f"input:{i}": config.profile.roots[e.root] / e.relpath for i, e in entries.items()}
+    paths = {f"input:{i}": config.profile.roots[e.root] / e.relpath for i, e in entries.items()}
+    return sha, paths, entries
+
+
+def _roots_missing(entry: inputs.RegisteredInput, profile: Profile) -> bool:
+    """Whether the input's root, its manifest's root or its original's root is not a profile root."""
+    roots = [entry.root, entry.manifest.root, *([entry.original.root] if entry.original is not None else [])]
+    return any(r not in profile.roots for r in roots)
 
 
 def _key(step: StepSpec, analysis: str, config: RunConfig, upstream: Mapping[str, StepOutcome]) -> _Keyed:
@@ -606,7 +617,7 @@ def _key(step: StepSpec, analysis: str, config: RunConfig, upstream: Mapping[str
     except source.ReproduceSourceError as error:
         raise RunError("E_SRC_MISSING" if error.code == source.WORKTREE_MISSING else "E_SRC_MISMATCH") from None
     _touch_roots(config.profile)
-    lock_sha, registered = _sources(step, analysis, config, co)
+    lock_sha, registered, entries = _sources(step, analysis, config, co)
     input_digests = [
         digest.input_set_digest(_root_dir(i.root, config, upstream, co.worktree), i.patterns, require_nonempty=True)
         for i in step.inputs
@@ -646,7 +657,7 @@ def _key(step: StepSpec, analysis: str, config: RunConfig, upstream: Mapping[str
     paths |= {f"up:{name}": _up_work(upstream, name) for name in step.needs}
     paths |= registered
     ref_name = PurePosixPath(config.sources[analysis].lock).name
-    return _Keyed(key, result, co, input_digests, adapter, adapter_sha, paths, lock_sha, ref_name)
+    return _Keyed(key, result, co, input_digests, adapter, adapter_sha, paths, lock_sha, ref_name, entries)
 
 
 # --- the inputs gate ---------------------------------------------------------------------------------
@@ -678,33 +689,51 @@ def _registered(step: StepSpec, analysis: str, config: RunConfig) -> dict[str, i
         raise RunError(error.code) from None
 
 
-def gate(step: StepSpec, analysis: str, config: RunConfig) -> Gate:
+def gate(
+    step: StepSpec,
+    analysis: str,
+    config: RunConfig,
+    entries: Mapping[str, inputs.RegisteredInput] | None = None,
+) -> Gate:
     """Check every registered input of a step (`inputs.precheck`); nothing is written and no input file is read.
 
     Args:
         step: The step.
         analysis: The name of its manifest.
         config: The run configuration (its ``sources`` must name the analysis's lock).
+        entries: The registry entries the step was keyed with (`_Keyed.entries`); read from the lock when
+            None.
 
     Returns:
-        The gate; ``codes`` is empty when the step may run. A lock that cannot be used gives its own code.
+        The gate; ``codes`` is empty when the step may run. A lock that cannot be used gives its own code, and
+        an input naming a root the profile lacks gives ``E_ROOT_MISSING``.
     """
-    try:
-        entries = _registered(step, analysis, config)
-    except RunError as error:
-        return Gate((error.code,), {}, {}, {})
+    if entries is None:
+        try:
+            entries = _registered(step, analysis, config)
+        except RunError as error:
+            return Gate((error.code,), {}, {}, {})
+    entries = dict(entries)
     per_input: dict[str, tuple[str, ...]] = {}
     overlays: dict[str, dict[str, int] | None] = {}
     for input_id, entry in entries.items():
         overlays[input_id] = None
+        if _roots_missing(entry, config.profile):
+            per_input[input_id] = ("E_ROOT_MISSING",)
+            continue
         per_input[input_id] = tuple(inputs.precheck(entry, config.profile, entries, overlays[input_id]))
     codes = tuple(sorted({c for found in per_input.values() for c in found}))
     return Gate(codes, per_input, entries, overlays)
 
 
-def gate_codes(step: StepSpec, analysis: str, config: RunConfig) -> list[str]:
+def gate_codes(
+    step: StepSpec,
+    analysis: str,
+    config: RunConfig,
+    entries: Mapping[str, inputs.RegisteredInput] | None = None,
+) -> list[str]:
     """The codes of `gate`; empty when the step may run."""
-    return list(gate(step, analysis, config).codes)
+    return list(gate(step, analysis, config, entries).codes)
 
 
 # --- logging -----------------------------------------------------------------------------------------
@@ -940,7 +969,7 @@ def _run_step(
                     return _skipped(step, keyed.key, run, result)
                 execution = _Execution(step, analysis, config, upstream, schemas, keyed)
                 with _env_locks(step, analysis, config):
-                    execution.gate = gate(step, analysis, config)
+                    execution.gate = gate(step, analysis, config, keyed.entries)
                     if execution.gate.codes:
                         return StepOutcome(step.name, keyed.key, "failed", EXIT_DRIVER, execution.gate.codes, None)
                     try:
@@ -2255,18 +2284,20 @@ def _plan(
     if any(n not in done for n in step.needs):
         codes += gate_codes(step, analysis, config)
         status = "blocked" if codes else "will-execute (upstream)"
-        return Plan(step.name, None, status, env_state, src_state, tuple(sorted(codes)))
+        return Plan(step.name, None, status, env_state, src_state, tuple(sorted(set(codes))))
     if src_state != "ok":
-        return Plan(step.name, None, "blocked", env_state, src_state, tuple(sorted(codes)))
+        codes += gate_codes(step, analysis, config)
+        return Plan(step.name, None, "blocked", env_state, src_state, tuple(sorted(set(codes))))
     upstream_outcomes = {n: done[n] for n in step.needs}
     try:
         keyed = _key(step, analysis, config, upstream_outcomes)
     except (RunError, digest.DigestError, cache.CacheError) as error:
-        return Plan(step.name, None, "blocked", env_state, src_state, tuple(sorted({*codes, error.code})))
+        codes += [error.code, *gate_codes(step, analysis, config)]
+        return Plan(step.name, None, "blocked", env_state, src_state, tuple(sorted(set(codes))))
     if cache.is_done(keyed.result):
         done[step.name] = StepOutcome(step.name, keyed.key, "skipped", 0, (), keyed.result)
         return Plan(step.name, keyed.key, "skipped", env_state, src_state, ())
-    codes += gate_codes(step, analysis, config)
+    codes += gate_codes(step, analysis, config, keyed.entries)
     execution = _Execution(step, analysis, config, upstream_outcomes, {}, keyed)
     try:
         execution.refusals(log=False)
