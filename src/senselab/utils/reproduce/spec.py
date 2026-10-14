@@ -550,7 +550,8 @@ class MetricsSchema(_Model):
         return self
 
 
-HFRepo = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$")]
+_HF_REPO = r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*"
+HFRepo = Annotated[str, StringConstraints(pattern=rf"^{_HF_REPO}$")]
 
 
 class HFFile(_Model):
@@ -579,7 +580,7 @@ class HFWeights(_Model):
         return value
 
 
-_MODEL_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*(@[0-9a-f]{40})?$")
+_MODEL_REF = re.compile(rf"^{_HF_REPO}(@[0-9a-f]{{40}})?$")
 _LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_+-]{0,63}$")
 
 

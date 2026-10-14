@@ -1108,7 +1108,7 @@ def test_extracted_values_reach_summary_and_up_dir(world: World) -> None:
         "score",
         "{up:prep}/result.json",
         needs=["prep"],
-        inputs=[{"root": "up:prep", "patterns": ["result.json", "extracted.json"]}],
+        inputs=[{"root": "up:prep", "patterns": ["extracted.json"]}],
     )
     manifest = world.manifest(prep, after)
     world.prefetch(manifest)
@@ -1131,6 +1131,16 @@ def test_extracted_values_reach_summary_and_up_dir(world: World) -> None:
     summary = _summary(failed)
     assert summary["extracted"] is None and secret not in json.dumps(summary)
     assert outcomes["after"].status == "never-ran"
+
+    (world.base / "adapter_extract.py").write_text(EXTRACT_ADAPTER.replace("EXTRACTED", repr(extracted)))
+    expect = [{"metric": "f_stat", "value": 100.0, "tolerance": 0.1, "kind": "abs"}]
+    failing = world.manifest(
+        world.step("prep", "prep", "{root:data}/in/a.txt", adapter="adapter_extract.py", extract=EXTRACT, expect=expect)
+    )
+    world.prefetch(failing)
+    failed = world.run(failing)["prep"]
+    assert failed.exit != 0 and "E_EXPECT" in failed.codes and failed.out is not None
+    assert _summary(failed)["extracted"] is None and not (failed.out / run.WORK / run.EXTRACTED).exists()
 
 
 @needs_userns

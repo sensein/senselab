@@ -2,8 +2,8 @@
 
 A step that declares ``extract`` (`spec.ExtractSpec`) has an adapter that returns
 ``{"metrics": {...}, "extracted": {...}}``. `validate_extracted` checks the ``extracted`` object: every
-declared name is present and no other; each value has its kind's shape and lies in its allow-list. A
-failure is the single code ``E_EXTRACT``; no value is echoed.
+declared name is present and no other; each value has its kind's shape and lies in its allow-list; no
+integer exceeds `MAX_INT` in magnitude. A failure is the single code ``E_EXTRACT``; no value is echoed.
 """
 
 from __future__ import annotations
@@ -16,14 +16,16 @@ from senselab.utils.reproduce.spec import ExtractSpec
 
 CODE = "E_EXTRACT"
 YESNO = ("yes", "no")
+MAX_INT = 2**53
+"""The largest magnitude an integer value (a count, or an integer in a series) may take."""
 
 
 def _integer(value: object) -> TypeGuard[int]:
-    return isinstance(value, int) and not isinstance(value, bool)
+    return isinstance(value, int) and not isinstance(value, bool) and abs(value) <= MAX_INT
 
 
 def _number(value: object) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    return _integer(value) or (isinstance(value, float) and math.isfinite(value))
 
 
 def _valid(value: object, spec: ExtractSpec) -> bool:

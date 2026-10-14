@@ -13,7 +13,7 @@ from senselab.utils.reproduce.spec import ExtractSpec, StepSpec
 from tests.utils.reproduce.cache_test import _key, _step_data
 
 REV = "1" * 40
-SPECS = [
+SPECS: list[dict[str, Any]] = [
     {"name": "model", "kind": "model_id", "allowed": ["org/model-a", f"org/model-b@{REV}"]},
     {"name": "matched", "kind": "yesno"},
     {"name": "run_dir", "kind": "index", "allowed": ["run-00", "run-01", "run-02"]},
@@ -59,7 +59,6 @@ def test_free_text_and_undeclared_names_are_refused() -> None:
     for obj in cases:
         clean, codes = _check(obj)
         assert clean is None and codes == ["E_EXTRACT"], obj
-        assert secret not in " ".join(codes)
 
 
 def test_index_out_of_range_and_series_too_long_are_refused() -> None:
@@ -76,6 +75,9 @@ def test_index_out_of_range_and_series_too_long_are_refused() -> None:
         {"detections": -1},
         {"detections": 2.5},
         {"detections": "<5"},
+        {"detections": 2**53 + 1},
+        {"map_by_epoch": [10**400]},
+        {"map_by_epoch": [2**53 + 1]},
     ):
         clean, codes = _check({**GOOD, **change})
         assert clean is None and codes == ["E_EXTRACT"], change
@@ -103,5 +105,5 @@ def test_extract_changes_the_step_key(tmp_path: Path) -> None:
     one = _key(tmp_path, _step_data(extract=[SPECS[1]]))
     assert one != base
     assert _key(tmp_path, _step_data(extract=[{"name": "matched_too", "kind": "yesno"}])) != one
-    longer = dict(SPECS[3], max_len=4)
+    longer = {**SPECS[3], "max_len": 4}
     assert _key(tmp_path, _step_data(extract=[longer])) != _key(tmp_path, _step_data(extract=[SPECS[3]]))

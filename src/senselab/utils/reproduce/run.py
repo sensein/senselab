@@ -972,7 +972,19 @@ class _Execution:
                 _log().error("could not remove a scratch dir\n%s", traceback.format_exc())
                 self.codes.add("E_DRIVER")
         self._record(outputs)
+        self._withdraw_extracted()
         return self._summary()
+
+    def _withdraw_extracted(self) -> None:
+        """Remove ``work/extracted.json`` and the summary's values unless the step succeeds."""
+        if self.extracted is None or self._exit() == 0:
+            return
+        self.extracted = None
+        try:
+            (self.work / EXTRACTED).unlink(missing_ok=True)
+        except OSError:
+            _log().error("could not remove extracted values\n%s", traceback.format_exc())
+            self.codes.add("E_DRIVER")
 
     def driver_error_summary(self) -> dict[str, Any]:
         """The summary of a run the driver could not finish: ``E_DRIVER`` and a non-zero exit."""
@@ -1417,10 +1429,10 @@ class _Execution:
         self.codes.update(found)
         if final_clean is None:
             return
-        _write_json(self.result / METRICS, final_clean)
         if extracted is not None:
             _write_json(self.work / EXTRACTED, extracted)
             self.extracted = extracted
+        _write_json(self.result / METRICS, final_clean)
         self.codes.update(codes)
         if step.expect:
             self.passed = passed
