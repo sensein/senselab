@@ -25,7 +25,9 @@ backends (one venv per component, called across a process boundary). On top of t
   versions with no matching index fall back to CPU silently.
 - **`_clean_subprocess_env`.** It passes the caller's whole environment through.
 
-The lock header format and the hashed-compile recipe are shared with `venv_lock`.
+The lock header format and the hashed-compile recipe match `venv_lock`'s, but the reproduce driver writes and
+parses its lock headers with its own code (`locks.write_header`, `locks.parse_header`); `venv_lock`'s parser is not
+reused.
 
 ## The unit: a step
 
@@ -533,6 +535,9 @@ How `sandbox` reads those rules:
     selection order.
   - Only their lib dirs go into a keyed `LD_LIBRARY_PATH`. A step that selects none gets
     `PATH={venv}/bin:/usr/bin:/bin` and no `LD_LIBRARY_PATH`.
+  - In the keyed env each native dir is the template `{native:<name>:<i>}` (`i` counts the entry's `bin_dirs`
+    then its `lib_dirs`, as `cache.native_digests` does), expanded only by `build_env`, so the same tool at
+    another host path keys the same; its content stays keyed through the native digests.
   - `LD_LIBRARY_PATH` is never taken from the profile map.
   - An earlier rule put every native `bin` dir's sibling `lib` on every step's `LD_LIBRARY_PATH`.
     The B5 re-review found that a conda-installed FFmpeg prefix's `lib/` holds 961 libraries,
@@ -743,7 +748,9 @@ the step.
     stage (root, sorted patterns, dest) and outputs
   - the adapter sha256 and `adapter_env_sha256`, the identity of the interpreter that runs the
     adapter. Every adapter runs with the driver's interpreter, so the runner passes
-    `cache.driver_env_sha256()`: a sha256 over `sys.version` and
+    `cache.driver_env_sha256()`: a sha256 over `platform.python_implementation()` and
+    `platform.python_version()` (not `sys.version`, whose build date and compiler differ between builds of one
+    release) and
     the sorted `name==version` of senselab's runtime dependency closure (its requirements with no
     extra, followed transitively; a requirement that asks for extras, such as `dep[x]`, also brings
     in `dep`'s requirements for `x`) as installed in the interpreter's own `purelib`/`platlib`.
@@ -1082,7 +1089,8 @@ It holds no messages, and no paths other than checkout-relative code frames.
   model agents already use; the serializer is unchanged for software agents.
 - **Environments.** The venv: its directory name (`repro-<analysis>-<key8>`, under the cache, not a
   data root), the Python its interpreter reports and its installed packages. The host: the
-  hostname, the driver's own Python, `platform.platform()` and senselab's version. The rest of the
+  hostname (null under confidential provenance, and so is `attempts.jsonl`'s `host`), the driver's own Python,
+  `platform.platform()` and senselab's version. The rest of the
   host record (CPU, GPU, driver, torch, job id) goes into the activity's `parameters`, because
   `Environment` has no fields for it.
 - **What identifies the env (spec §2.3 step 6).** The activity's `parameters` carry
@@ -1402,7 +1410,9 @@ next run.
 - `prefetch`: mirrors, worktrees, venvs, wheels, R libraries. `--sources-only` creates worktrees only.
 - `build-one`: one sdist build, as a batch job
 - `run`: run steps locally, in DAG order; `--step` runs one batch job's step (`--shard <i>` one shard of it),
-  `--pool <step> --submission <id>` drives a sharded step's work pool, `--finalize` settles a submission
+  `--pool <step> --submission <id>` drives a sharded step's work pool, `--finalize` settles a submission;
+  `--timeout <seconds>` kills a step (and separately its adapter) that runs longer, as `E_TIMEOUT`
+  (`RunConfig.timeout`; none by default)
 - `submit`: one batch job per plain step, chained with `afterok`; one pool job per sharded step
 - `lint`: check manifests and patches (`--lock` a sources lock alone, `--skip-locks` without lock findings)
 - `verify-inputs`: re-hash registered inputs against their manifests and record the outcome
@@ -1413,7 +1423,9 @@ executed or skipped with exit 0); `1` lint findings, a step that did not succeed
 prefetch, build or submission; `2` bad arguments or an unreadable named file or run dir; `3` (`status`
 only) nothing failed but a step is still `pending`. `lint`, `prefetch` and `submit` print one finding per
 line, `<where>: <code> <detail>`; a patch finding names the lint code, line and deny-pattern index, never
-patch text.
+patch text. `lint` also applies the deny patterns to the analysis and step names and to each `metrics_schema`
+label, count and positive class (`name-lint deny-pattern <field> pattern <i>`, never the value; a step whose name
+matches is shown as `steps[<i>]`).
 
 ## Batch jobs and the command line (B13)
 
@@ -1624,7 +1636,11 @@ link_target` (optionally `sha256`), then one row per file or symlink in ascendin
 its target and never followed. `read_manifest` refuses absolute, empty, `.`/`..`, duplicate and non-ascending
 relpaths. `write_manifest` `lstat`s every component of a literal path or wildcard base, so a symlinked component
 becomes a link row rather than being followed, and a missing literal include is `E_INPUT_REGISTRY`. The written file
-gets mode `0o666` less the umask.
+gets mode `0o666` less the umask. Its root line is `# root={root:<name>}/<relpath> hash=xxh3_128` (the `label`
+argument): no host path, host name, local date or library version, so identical data gives the same manifest
+sha256 on any site. The writing time, in UTC, is the first line of the unhashed dirs sidecar
+(`# written=<time>Z`). `registry_codes` checks a label against the entry's root and relpath (or its original's),
+and still accepts the existing tree hasher's absolute-path line.
 
 **Sources lock.** A manifest references exactly one lock, `Manifest.sources` (required): `{lock, sha256}`, with
 the path forced to `sources/<name>.lock.yaml` of the manifest repository. The lock (`lock.SourcesLock`, schema
@@ -2037,3 +2053,14 @@ disagree with the record (after `E_ENV_CHANGED` too), and refuses a draw whose e
 differ from `details.engine`. A step without `draw` still records the block, with null seeds and empty sampling, so a
 checker can tell "no seed declared" from "not recorded". A training step's batch size is part of its keyed config, not
 of the draw; the draw's `batch_size` is the inference engine's.
+
+**The key from the record (SC8).** The draw also carries the step key's inputs beyond the step's own fields
+(`provenance.KEY_INPUTS`), as hashes and ids only: the manifest (`{path, sha256}`, the path relative to the base dir
+or null outside it, from `RunConfig.manifest_ids`, which `run` fills; null when a caller gives none),
+`reproduce_source_sha256`, the served model `repo@revision`, the patch-set, policy, adapter and adapter-env
+sha256s, the shard `[index, count]`, the upstream keys, the submodule commits, the native digests and the R digests.
+With the input artifacts' digests and `details.sources_lock_sha256`, the manifest the record names (checked against
+its sha256) and the profile, `cache.step_key` gives the recorded key again (`run_test.rebuild_key`).
+
+**Confidential driver logs.** Under confidential provenance a traceback in `driver.log` is logged as its exception
+class and the sha256 of its text, and a path-bearing detail (a changed checkout's) as its sha256 only.
