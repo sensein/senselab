@@ -1425,7 +1425,7 @@ only) nothing failed but a step is still `pending`. `lint`, `prefetch` and `subm
 line, `<where>: <code> <detail>`; a patch finding names the lint code, line and deny-pattern index, never
 patch text. `lint` also applies the deny patterns to the analysis and step names and to each `metrics_schema`
 label, count and positive class (`name-lint deny-pattern <field> pattern <i>`, never the value; a step whose name
-matches is shown as `steps[<i>]`).
+matches is shown as `steps[<i>]` in every finding, including lock, mirror, band and `dag-invalid` findings).
 
 ## Batch jobs and the command line (B13)
 
@@ -2060,7 +2060,10 @@ or null outside it, from `RunConfig.manifest_ids`, which `run` fills; null when 
 `reproduce_source_sha256`, the served model `repo@revision`, the patch-set, policy, adapter and adapter-env
 sha256s, the shard `[index, count]`, the upstream keys, the submodule commits, the native digests and the R digests.
 With the input artifacts' digests and `details.sources_lock_sha256`, the manifest the record names (checked against
-its sha256) and the profile, `cache.step_key` gives the recorded key again (`run_test.rebuild_key`).
+its sha256) and the profile, `cache.step_key` gives the recorded key again (`run_test.rebuild_key`). `step_key`
+computes `reproduce_source_sha256`, the policy sha256 and the vLLM server module sha256 from the running driver, so
+the rebuild is under the same driver source and profile policy; under another driver the recorded values show
+which of them differ rather than substituting for them.
 
 **Confidential driver logs.** Under confidential provenance a traceback in `driver.log` is logged as its exception
 class and the sha256 of its text, and a path-bearing detail (a changed checkout's) as its sha256 only.
