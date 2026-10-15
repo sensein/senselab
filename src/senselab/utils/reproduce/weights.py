@@ -33,7 +33,7 @@ import uuid
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
-from senselab.utils.dependencies import _point_ref_at, is_hf_model_cached
+from senselab.utils.dependencies import is_hf_model_cached, point_ref_at
 from senselab.utils.reproduce import inputs
 from senselab.utils.reproduce.spec import HFWeights, Profile, StepSpec, UrlWeight
 
@@ -422,7 +422,7 @@ def build_hub_view(view_dir: Path, step: StepSpec, profile: Profile) -> None:
     """Lay out the step's hub cache at ``view_dir``: per declared repository, links to the profile's copy.
 
     ``<view>/<type>s--<org>--<name>/`` holds ``snapshots`` and ``blobs`` as absolute links to the profile's
-    dirs and ``refs/main`` naming the declared revision (`dependencies._point_ref_at`). A repository that
+    dirs and ``refs/main`` naming the declared revision (`dependencies.point_ref_at`). A repository that
     declares ``config.json`` must also be found by `dependencies.is_hf_model_cached` in the profile's cache.
 
     Args:
@@ -455,7 +455,7 @@ def build_hub_view(view_dir: Path, step: StepSpec, profile: Profile) -> None:
                 (root / sub).symlink_to(source / sub)
         except OSError:
             raise WeightsError(WEIGHTS_VIEW) from None
-        _point_ref_at(root, "main", w.revision)
+        point_ref_at(root, "main", w.revision)
         try:
             written = (root / "refs" / "main").read_text()
         except OSError:
