@@ -55,7 +55,7 @@ import subprocess
 import sys
 import tomllib
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -376,29 +376,37 @@ def _checked_submodules(step: StepSpec, cache_dir: Path | None) -> dict[str, str
 
 
 def _lock_findings(
-    path: Path, manifest: Manifest, base: Path, cache_dir: Path | None, profile: Profile | None
+    path: Path,
+    manifest: Manifest,
+    base: Path,
+    cache_dir: Path | None,
+    profile: Profile | None,
+    shown: Mapping[str, str] | None = None,
 ) -> list[str]:
     """Each manifest's sources lock: its sha256, and every step's pins and ``lock_inputs`` against it.
 
     Submodule commits are compared when ``cache_dir`` holds the step's prefetched checkout. With a profile,
-    each registered input's manifest is read for the link rule (`inputs.unregistered_links`).
+    each registered input's manifest is read for the link rule (`inputs.unregistered_links`). ``shown`` maps a
+    step name to how a finding names it (``steps[<i>]`` for a denied name, `_name_findings`).
     """
+    shown = shown or {}
     try:
         sources_lock, _ = lock.load_lock(base, manifest.sources)
     except lock.LockError as error:
         return [f"{path}: {error.code} {manifest.sources.lock}"]
     out = []
     for step in manifest.steps:
+        where = f"{path}:{shown.get(step.name, step.name)}"
         found = lock.step_findings(step, sources_lock, _checked_submodules(step, cache_dir))
-        out += [f"{path}:{step.name}: {code} {detail}" for code, detail in found]
+        out += [f"{where}: {code} {detail}" for code, detail in found]
         for input_id in step.lock_inputs:
             try:
                 lock.resolve_inputs(base, sources_lock, [input_id])
             except lock.LockError as error:
                 if error.code != "E_LOCK_REF":
-                    out.append(f"{path}:{step.name}: {error.code} {input_id}")
+                    out.append(f"{where}: {error.code} {input_id}")
         if profile is not None:
-            out += _link_findings(f"{path}:{step.name}", step, sources_lock, base, profile)
+            out += _link_findings(where, step, sources_lock, base, profile)
     return out
 
 
@@ -423,24 +431,28 @@ def _link_findings(
     return out
 
 
-def _mirror_findings(where: str, step: StepSpec, profile: Profile) -> list[str]:
-    """``repo-unmapped`` for a step repository the mirror map lacks; under strict, ``submodule-unmapped``."""
+def _mirror_findings(where: str, step: StepSpec, profile: Profile, label: str | None = None) -> list[str]:
+    """``repo-unmapped`` for a step repository the mirror map lacks; under strict, ``submodule-unmapped``.
+
+    ``label`` is how the findings name the step (its name by default; ``steps[<i>]`` for a denied name).
+    """
+    name = step.name if label is None else label
     table = profile.mirror_map
     if not (table or profile.mirror_map_strict):
         return []
     mapped = table.get(source.canonical_repo(step.repo))
     if mapped is None:
-        return [f"{where}: repo-unmapped {step.name}"]
+        return [f"{where}: repo-unmapped {name}"]
     if not source.mapped_has_commit(mapped, step.commit):
-        return [f"{where}: {source.COMMIT_MISSING} {step.name}"]
+        return [f"{where}: {source.COMMIT_MISSING} {name}"]
     if not (profile.mirror_map_strict and step.submodules):
         return []
     try:
         urls = source.submodule_urls(mapped, step.commit, url=step.repo, mirror_map=table)
     except source.ReproduceSourceError as error:
-        return [f"{where}: {error.code} {step.name}"]
+        return [f"{where}: {error.code} {name}"]
     missing = [u for u in urls if source.canonical_repo(u) not in table]
-    return [f"{where}: submodule-unmapped {step.name} {len(missing)}"] if missing else []
+    return [f"{where}: submodule-unmapped {name} {len(missing)}"] if missing else []
 
 
 def lint_findings(
@@ -512,11 +524,19 @@ def lint_findings(
             out.append(f"{path}: manifest-invalid {_validation_text(error)}")
         except (ValueError, yaml.YAMLError) as error:
             out.append(f"{path}: manifest-invalid {error}")
+    named: dict[Path, tuple[list[str], set[int]]] = {path: _name_findings(path, m, deny) for path, m in loaded}
+    shown = {
+        step.name: f"steps[{index}]"
+        for path, m in loaded
+        for index, step in enumerate(m.steps)
+        if index in named[path][1]
+    }
     if len(loaded) == len(paths):
         try:
             toposort([s for _, m in loaded for s in m.steps])
         except DagError as error:
-            out.append(f"{', '.join(str(p) for p in paths)}: dag-invalid {error}")
+            text = f"{error.code}: {', '.join(shown.get(s, s) for s in error.steps)}" if shown else str(error)
+            out.append(f"{', '.join(str(p) for p in paths)}: dag-invalid {text}")
     refused: set[str] = set()
     steps = [s for _, m in loaded for s in m.steps]
     registry = restricted.step_registry(steps, base)
@@ -526,10 +546,10 @@ def lint_findings(
         refused = set(restricted.violations(steps, registry, profile))
         unpurged = set(restricted.unpurged_inputs(steps, registry, profile))
     for path, manifest in loaded:
-        named, hidden = _name_findings(path, manifest, deny)
-        out += named
-        for index, step in enumerate(manifest.steps):
-            where = f"{path}:steps[{index}]" if index in hidden else f"{path}:{step.name}"
+        out += named[path][0]
+        for step in manifest.steps:
+            label = shown.get(step.name, step.name)
+            where = f"{path}:{label}"
             if step.name in refused:
                 out.append(f"{where}: {restricted.CODE}")
             if step.name in uncovered:
@@ -539,19 +559,19 @@ def lint_findings(
                 out.append(f"{where}: scan-hook-missing")
             if profile is not None:
                 out += [f"{where}: {f.code} {f.detail}" for f in slurm.step_findings(step, profile)]
-                out += _mirror_findings(where, step, profile)
+                out += _mirror_findings(where, step, profile, label)
             if not (base / step.adapter).is_file():
                 out.append(f"{where}: adapter-missing {step.adapter}")
             for expect in step.expect:
                 band = expect.band
                 if band is not None and band.floor is not None and bands.amin_too_wide(band, band.floor):
-                    out.append(f"{where}: W_BAND_AMIN_WIDE {step.name} {expect.metric}")
+                    out.append(f"{where}: W_BAND_AMIN_WIDE {label} {expect.metric}")
             out += _patch_findings(where, step, base, deny)
     if skip_locks:
         out.append(f"{', '.join(str(p) for p in paths)}: W_LOCKS_SKIPPED")
     else:
         for path, manifest in loaded:
-            out += _lock_findings(path, manifest, base, cache_dir, profile)
+            out += _lock_findings(path, manifest, base, cache_dir, profile, shown)
     return out
 
 

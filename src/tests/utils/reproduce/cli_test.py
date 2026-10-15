@@ -202,6 +202,12 @@ def test_lint_exit_codes(site: Site, capsys: pytest.CaptureFixture[str]) -> None
     assert f"{named}:steps[0]: name-lint deny-pattern name pattern 0" in out
     assert f"{named}:steps[0]: name-lint deny-pattern metrics_schema.headline_labels[1] pattern 0" in out
     assert f"{named}:fine: name-lint" not in out
+    looped = site.manifest(
+        "demo", _step("FORBIDDEN-99", needs=["fine"]), _step("fine", needs=["FORBIDDEN-99"]), file="l.yaml"
+    )
+    assert site.main("lint", str(looped), *site.common()) == cli.EXIT_FAILED
+    out = capsys.readouterr().out
+    assert "FORBIDDEN-" not in out and "dag-invalid" in out and "steps[0]" in out
 
     stale = site.manifest("demo", _step("prep", patches=[{"file": "patches/p.patch", "sha256": ZERO}]), file="s.yaml")
     assert site.main("lint", str(stale), *site.common()) == cli.EXIT_FAILED
