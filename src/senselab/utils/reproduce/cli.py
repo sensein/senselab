@@ -323,6 +323,46 @@ def _patch_findings(where: str, step: StepSpec, base: Path, deny: Sequence[str])
     return out
 
 
+def _named_values(manifest: Manifest) -> list[tuple[int | None, str, str]]:
+    """``(step index or None for the manifest, field, value)`` for each name that leaves the driver in clear.
+
+    The analysis and step names name dirs and batch jobs; the ``metrics_schema`` labels, counts and positive class
+    are copied into ``metrics.json``.
+    """
+    out: list[tuple[int | None, str, str]] = [(None, "name", manifest.name)]
+    for index, step in enumerate(manifest.steps):
+        out.append((index, "name", step.name))
+        schema = step.metrics_schema
+        for field in ("headline_labels", "counts", "per_class"):
+            out += [(index, f"metrics_schema.{field}[{i}]", v) for i, v in enumerate(getattr(schema, field))]
+        if schema.positive is not None:
+            out.append((index, "metrics_schema.positive", schema.positive))
+    return out
+
+
+def _name_findings(path: Path, manifest: Manifest, deny: Sequence[str]) -> tuple[list[str], set[int]]:
+    """``name-lint deny-pattern`` findings for the manifest's names, and the indices of steps whose name is denied.
+
+    A finding names the field and the pattern index, never the value; a step whose own name is denied is
+    named ``steps[<i>]``.
+    """
+    values = _named_values(manifest)
+    try:
+        hits = source.deny_value_hits([v for _, _, v in values], deny)
+    except source.ReproduceSourceError as error:
+        return [f"{path}: {error.code}"], set()
+    hidden = {values[i][0] for i, _ in hits if values[i][1] == "name" and values[i][0] is not None}
+    out = []
+    for value_index, pattern in hits:
+        step, field, _ = values[value_index]
+        if step is None:
+            where = str(path)
+        else:
+            where = f"{path}:steps[{step}]" if step in hidden else f"{path}:{manifest.steps[step].name}"
+        out.append(f"{where}: name-lint deny-pattern {field} pattern {pattern}")
+    return out, {i for i in hidden if i is not None}
+
+
 def _checked_submodules(step: StepSpec, cache_dir: Path | None) -> dict[str, str] | None:
     """The submodule commits of the step's prefetched checkout, when one exists; None otherwise."""
     if cache_dir is None:
@@ -424,7 +464,10 @@ def lint_findings(
         One line per finding, ``<where>: <code> <detail>``; empty when clean. Codes: ``profile-invalid``,
         ``deny-patterns-unreadable``, ``manifest-invalid``, ``dag-invalid``, the `slurm.step_findings`
         codes, ``adapter-missing``, ``patch-missing``, ``patch-sha``, ``patch-lint`` (with the lint code,
-        line and pattern index, never patch text), ``deny-pattern-invalid``, and the sources-lock codes
+        line and pattern index, never patch text), ``name-lint deny-pattern <field> pattern <i>`` for an analysis
+        or step name or a ``metrics_schema`` label, count or positive class that a deny pattern matches (the
+        value is never printed, and a step whose name matches is shown as ``steps[<i>]``),
+        ``deny-pattern-invalid``, and the sources-lock codes
         (``E_LOCK_SHA``/``E_LOCK_INVALID`` with the lock path, ``E_LOCK_REF``/``E_LOCK_MISMATCH`` with the
         step field, ``E_LOCK_STALE``/``E_INPUT_REGISTRY`` with the input id), ``input-link-unregistered`` with
         the input id and the number of its manifest's links whose target lies in no input the step declares,
@@ -482,8 +525,10 @@ def lint_findings(
         refused = set(restricted.violations(steps, registry, profile))
         unpurged = set(restricted.unpurged_inputs(steps, registry, profile))
     for path, manifest in loaded:
-        for step in manifest.steps:
-            where = f"{path}:{step.name}"
+        named, hidden = _name_findings(path, manifest, deny)
+        out += named
+        for index, step in enumerate(manifest.steps):
+            where = f"{path}:steps[{index}]" if index in hidden else f"{path}:{step.name}"
             if step.name in refused:
                 out.append(f"{where}: {restricted.CODE}")
             if step.name in uncovered:

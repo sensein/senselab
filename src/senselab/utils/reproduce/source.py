@@ -670,6 +670,21 @@ def _deny_hits(text: bytes, patterns: Sequence[str]) -> list[LintFinding]:
     return findings
 
 
+def deny_value_hits(values: Sequence[str], deny_patterns: Sequence[str]) -> list[tuple[int, int]]:
+    """``(value index, pattern index)`` for each one-line value a deny pattern matches, in `_deny_hits`' dialect.
+
+    Raises:
+        ReproduceSourceError: ``deny-pattern-invalid`` if a pattern does not compile, or ``ValueError`` for a
+            value holding a line break.
+    """
+    if any("\n" in v or "\r" in v for v in values):
+        raise ValueError("deny_value_hits: values are single lines")
+    if not values:
+        return []
+    hits = _deny_hits(("\n".join(values) + "\n").encode(), deny_patterns)
+    return sorted({(hit.line - 1, hit.pattern) for hit in hits})
+
+
 def unquote_c_path(path: str) -> str:
     r"""Undo git's C-style quoting of a path (``"caf\303\251.ipynb"``); unquoted paths pass through.
 

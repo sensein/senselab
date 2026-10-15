@@ -193,6 +193,16 @@ def test_lint_exit_codes(site: Site, capsys: pytest.CaptureFixture[str]) -> None
     out = capsys.readouterr().out
     assert "patch-lint deny-pattern line 5 pattern 0" in out and secret not in out
 
+    schema = {"kind": "statistic", "headline": ["f_stat"], "headline_labels": ["ok", "FORBIDDEN-42"]}
+    named = site.manifest("FORBIDDEN-7", _step("FORBIDDEN-99", metrics_schema=schema), _step("fine"), file="n.yaml")
+    assert site.main("lint", str(named), "--skip-locks", *site.common()) == cli.EXIT_FAILED
+    out = capsys.readouterr().out
+    assert "FORBIDDEN-" not in out
+    assert f"{named}: name-lint deny-pattern name pattern 0" in out
+    assert f"{named}:steps[0]: name-lint deny-pattern name pattern 0" in out
+    assert f"{named}:steps[0]: name-lint deny-pattern metrics_schema.headline_labels[1] pattern 0" in out
+    assert f"{named}:fine: name-lint" not in out
+
     stale = site.manifest("demo", _step("prep", patches=[{"file": "patches/p.patch", "sha256": ZERO}]), file="s.yaml")
     assert site.main("lint", str(stale), *site.common()) == cli.EXIT_FAILED
     assert "patch-sha" in capsys.readouterr().out
