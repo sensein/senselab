@@ -5,6 +5,10 @@ A **registered input** is a frozen tree under a profile root, described by a reg
 manifest's sha256. A **manifest** is a TSV: one ``# root=…`` comment line, the header `MANIFEST_COLUMNS`
 (optionally followed by ``sha256``), then one row per file or symlink, sorted by relative path. A
 symlink is recorded by its target and never followed; a file by its size, ``mtime_ns`` and xxh3-128.
+`write_manifest` names the tree in that line by registry root, ``# root={root:<name>}/<relpath> hash=xxh3_128``,
+with no host path, host name or date, so identical data gives the same manifest sha256 on any site; the
+writing time (UTC) goes in the unhashed dirs sidecar. The existing tree hasher's line
+(``# root=<abs path> date=… host=… xxhash=…``) is still read.
 
 `precheck` is the gate's cheap check of a registered input against its manifest: ``lstat`` only, no file
 content. It also applies the link rule: a link row's target, resolved against the link's own directory,
@@ -27,7 +31,6 @@ import hashlib
 import json
 import os
 import re
-import socket
 import stat
 import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -60,6 +63,11 @@ DIRS_HEADER = "reldir"
 """The manifest's dirs sidecar, ``<manifest>.dirs.tsv``: the dirs known when the manifest was written. Those are
 the top (``.``), each dir holding a row and its ancestors, and every dir that may hold a selected entry found by
 walking the open dirs (`_open`) from the top; the pre-check lists the open ones (`dir_changes`)."""
+WRITTEN_PREFIX = "# written="
+"""The dirs sidecar's optional first line: ``# written=<UTC time>Z``, when `write_manifest` wrote the manifest."""
+HASH_TAG = " hash=xxh3_128"
+"""The end of `write_manifest`'s root line: the row hash, named by algorithm (not by library version)."""
+_LABEL = re.compile(r"^\{root:([A-Za-z0-9_][A-Za-z0-9_.-]*)\}(?:/([^\n]+))?$")
 RECORD_MODE = 0o660
 MAX_AGE = datetime.timedelta(days=31)
 FUTURE_SKEW = datetime.timedelta(minutes=10)
@@ -434,6 +442,7 @@ def write_manifest(
     include: Sequence[str] = (),
     exclude: Sequence[str] = (),
     sha256: bool = False,
+    label: str | None = None,
 ) -> dict[str, int]:
     """Write the manifest of a tree, atomically; nothing is printed.
 
@@ -447,23 +456,28 @@ def write_manifest(
             and not followed.
         exclude: Patterns whose matches are left out.
         sha256: Also record each file's sha256, as a sixth column.
+        label: The tree as the registry names it, ``{root:<name>}/<relpath>`` (or ``{root:<name>}`` for the
+            root itself), written in the root line in place of the host path; `registry_codes` checks it
+            against the entry. None writes ``unlabelled``, which no registry entry accepts.
 
     Returns:
         ``{"entries", "links", "unreadable", "walk_errors", "bytes"}`` counts.
 
     Raises:
         InputError: ``E_INPUT_REGISTRY`` for a pattern outside the grammar, a root that is not a directory,
-            or a literal include that is missing or cannot be ``lstat``-ed.
+            a literal include that is missing or cannot be ``lstat``-ed, or a ``label`` outside its form.
     """
+    if label is not None and _label_tree(label) is None:
+        raise InputError(CODE)
     top = os.fspath(root)
     found, errors = _collect(top, include, exclude, lambda path, rel: _row(path, rel, sha256))
     rows = [found[k] for k in sorted(found)]
     header = (*MANIFEST_COLUMNS, SHA256_COLUMN) if sha256 else MANIFEST_COLUMNS
-    when = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    text = f"# root={top} date={when} host={socket.gethostname()} xxhash={xxhash.VERSION}\n"
+    when = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    text = f"# root={'unlabelled' if label is None else label}{HASH_TAG}\n"
     text += "\t".join(header) + "\n" + "".join("\t".join(r) + "\n" for r in rows)
     _atomic_write(Path(out), text.encode())
-    _write_dirs(top, Path(out), found, include, exclude)
+    _write_dirs(top, Path(out), found, include, exclude, written=when)
     return {
         "entries": len(rows),
         "links": sum(1 for r in rows if r[4]),
@@ -553,7 +567,30 @@ def _added(
     return False
 
 
-def _write_dirs(top: str, out: Path, relpaths: Iterable[str], include: Sequence[str], exclude: Sequence[str]) -> None:
+def _label_tree(label: str) -> tuple[str, str] | None:
+    """``(root name, normalised relpath)`` of a ``{root:<name>}/<relpath>`` label, or None outside that form.
+
+    The relpath must be relative with no ``..``, no backslash and no `` hash=``; ``{root:<name>}`` alone is ``"."``.
+    """
+    match = _LABEL.fullmatch(label)
+    if match is None:
+        return None
+    rel = match.group(2) or "."
+    parts = rel.split("/")
+    if rel.startswith("/") or "\\" in rel or ".." in parts or " hash=" in rel:
+        return None
+    return match.group(1), os.path.normpath(rel)
+
+
+def _write_dirs(
+    top: str,
+    out: Path,
+    relpaths: Iterable[str],
+    include: Sequence[str],
+    exclude: Sequence[str],
+    *,
+    written: str | None = None,
+) -> None:
     """Write the dirs sidecar of a manifest (see `DIRS_SUFFIX`).
 
     From the top, each open dir (`_open`) is listed and each subdir that may hold a selected entry (`_may_hold`)
@@ -576,7 +613,8 @@ def _write_dirs(top: str, out: Path, relpaths: Iterable[str], include: Sequence[
             if _may_hold(rel, patterns, exclude):
                 known.add(rel)
                 pending.append(rel)
-    text = "\n".join([DIRS_HEADER, *sorted(known)]) + "\n"
+    head = [] if written is None else [f"{WRITTEN_PREFIX}{written}"]
+    text = "\n".join([*head, DIRS_HEADER, *sorted(known)]) + "\n"
     _atomic_write(Path(os.fspath(out) + DIRS_SUFFIX), text.encode())
 
 
@@ -605,6 +643,8 @@ def dir_changes(inp: RegisteredInput, profile: Profile, rows: Sequence[Row]) -> 
         return False
     try:
         lines = dirs_sidecar(inp, profile).read_text().splitlines()
+        if lines and lines[0].startswith(WRITTEN_PREFIX):
+            lines = lines[1:]
     except FileNotFoundError:
         return False
     except (OSError, UnicodeDecodeError, InputError):
@@ -1159,7 +1199,8 @@ def registry_codes(base_dir: Path, input_id: str, profile: Profile) -> list[str]
     Returns:
         ``["E_INPUT_REGISTRY"]`` when the entry does not validate, lies in a restricted dir unflagged
         (`check_flag`), its manifest cannot be read with the registered sha256, or the manifest's ``# root=``
-        names neither the input's tree nor its original;
+        names neither the input's tree nor its original (as a ``{root:<name>}/<relpath>`` label, or as the
+        existing tree hasher's absolute path);
         empty otherwise.
     """
     try:
@@ -1170,10 +1211,24 @@ def registry_codes(base_dir: Path, input_id: str, profile: Profile) -> list[str]
         first = path.read_bytes().split(b"\n", 1)[0].decode()
         if not first.startswith("# root="):
             return [CODE]
-        named = os.path.normpath(first.removeprefix("# root=").partition(" date=")[0])
-        trees = [os.fspath(input_top(entry, profile))]
-        if (other := original_top(entry, profile)) is not None:
-            trees.append(os.fspath(other))
+        line = first.removeprefix("# root=")
+        if line.endswith(HASH_TAG):
+            labelled = _label_tree(line.removesuffix(HASH_TAG))
+            ok = labelled is not None and labelled in _entry_labels(entry)
+        else:
+            named = os.path.normpath(line.partition(" date=")[0])
+            trees = [os.fspath(input_top(entry, profile))]
+            if (other := original_top(entry, profile)) is not None:
+                trees.append(os.fspath(other))
+            ok = named in trees
     except (InputError, OSError, UnicodeDecodeError):
         return [CODE]
-    return [] if named in trees else [CODE]
+    return [] if ok else [CODE]
+
+
+def _entry_labels(entry: RegisteredInput) -> list[tuple[str, str]]:
+    """The `_label_tree` forms of an entry's tree and of the original it mirrors."""
+    out = [(entry.root, os.path.normpath(entry.relpath))]
+    if entry.original is not None:
+        out.append((entry.original.root, os.path.normpath(entry.original.relpath)))
+    return out

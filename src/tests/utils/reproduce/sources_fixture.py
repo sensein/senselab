@@ -93,7 +93,12 @@ def register_input(
     manifest_rel = f"_manifests/{input_id}.xxh3.tsv"
     out = roots[root] / manifest_rel
     inputs.write_manifest(
-        roots[root] / relpath, out, include=over.get("include", ()), exclude=over.get("exclude", ()), sha256=sha256
+        roots[root] / relpath,
+        out,
+        include=over.get("include", ()),
+        exclude=over.get("exclude", ()),
+        sha256=sha256,
+        label=f"{{root:{root}}}/{relpath}",
     )
     entry: dict[str, Any] = {
         "id": input_id,
