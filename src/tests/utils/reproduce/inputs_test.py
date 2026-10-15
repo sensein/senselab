@@ -70,6 +70,33 @@ def test_write_then_read_manifest_round_trip_with_links_and_excludes(tmp_path: P
     assert out.stat().st_mode & 0o777 == 0o640
 
 
+def test_identical_data_gives_the_same_manifest_sha_anywhere(tmp_path: Path) -> None:
+    """The header names the tree by registry root, not host path; no host or date is hashed; the date goes beside."""
+    import datetime
+    import socket
+
+    shas = []
+    for where in ("a", "b/deeper"):
+        root = tmp_path / where / "tree"
+        (root / "sub").mkdir(parents=True)
+        (root / "sub" / "a.csv").write_text("x,y\n1,2\n")
+        os.utime(root / "sub" / "a.csv", ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+        out = tmp_path / where / "m.xxh3.tsv"
+        write_manifest(root, out, label="{root:data}/derivatives/tree")
+        text = out.read_text()
+        assert text.splitlines()[0] == "# root={root:data}/derivatives/tree hash=xxh3_128"
+        assert str(tmp_path) not in text and socket.gethostname() not in text and "date=" not in text
+        assert [r.relpath for r in read_manifest(out, _sha(out))] == ["sub/a.csv"]
+        written = Path(os.fspath(out) + inputs.DIRS_SUFFIX).read_text().splitlines()[0]
+        assert written.startswith("# written=") and written.endswith("Z")
+        datetime.datetime.strptime(written.removeprefix("# written="), "%Y-%m-%dT%H:%M:%SZ")
+        shas.append(_sha(out))
+    assert shas[0] == shas[1]
+    for bad in ("/abs/tree", "{root:data}/../x", "{root:da ta}/x", "data/x", "{root:data}/x hash=y"):
+        with pytest.raises(InputError):
+            write_manifest(tmp_path / "a" / "tree", tmp_path / "bad.tsv", label=bad)
+
+
 def test_existing_hash_tree_format_parses(tmp_path: Path) -> None:
     """The format the existing tree hasher writes: one ``# root=`` line, the header, then rows."""
     text = (
