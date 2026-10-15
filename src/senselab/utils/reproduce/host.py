@@ -125,7 +125,9 @@ def _host_cuda() -> str | None:
     return f"{found.version[0]}.{found.version[1]}"
 
 
-def host_record(venv: str | os.PathLike[str] | None, *, runner: Runner | None = None) -> dict[str, Any]:
+def host_record(
+    venv: str | os.PathLike[str] | None, *, runner: Runner | None = None, hostname: bool = True
+) -> dict[str, Any]:
     """Describe this host and a venv's interpreter.
 
     Args:
@@ -135,6 +137,7 @@ def host_record(venv: str | os.PathLike[str] | None, *, runner: Runner | None = 
         runner: Runs an argv and returns ``(returncode, stdout)``; a missing program or timeout is
             ``(127, "")``. Defaults to a subprocess runner. The host CUDA version is always probed by
             `cuda_probe.detect_host_cuda` and kept only from ``nvidia-smi`` (an ``nvcc`` toolkit is not the driver's).
+        hostname: Record this host's name; False records None (confidential provenance names no host).
 
     Returns:
         A dict with exactly the keys in `HOST_KEYS`.
@@ -146,7 +149,7 @@ def host_record(venv: str | os.PathLike[str] | None, *, runner: Runner | None = 
     except (AttributeError, OSError):
         allowed = None
     return {
-        "hostname": socket.gethostname(),
+        "hostname": socket.gethostname() if hostname else None,
         "cpu_model": _cpu_model(),
         "cpu_count": os.cpu_count(),
         "cpus_allowed": allowed,
