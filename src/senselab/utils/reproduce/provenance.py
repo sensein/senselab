@@ -278,7 +278,21 @@ def _draw_ok(draw: object, engine: object) -> bool:
     return all(checks)
 
 
-_SUBMODULE_PATH = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]*(/[A-Za-z0-9_][A-Za-z0-9_.+-]*)*$")
+MANIFEST_PATH = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]*(/[A-Za-z0-9_][A-Za-z0-9_.+-]*)*$")
+"""A base-relative manifest path as `run.manifest_id` records one: plain names only."""
+_SUBMODULE_PATH_MAX = 1024
+
+
+def _submodule_path_ok(value: object) -> bool:
+    """A submodule path as git records it in the step's repository: relative, no ``..``, no control characters.
+
+    It names a path in public code, not a data file, so any such path is recorded as git gives it.
+    """
+    if not isinstance(value, str) or not value or len(value) > _SUBMODULE_PATH_MAX or value.startswith("/"):
+        return False
+    return not any(ord(c) < 32 or c == "\x7f" for c in value) and ".." not in value.split("/")
+
+
 _SERVED_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*@[0-9a-f]{40}$")
 
 
@@ -295,7 +309,7 @@ def _key_inputs_ok(draw: Mapping[str, Any]) -> bool:
         or (
             isinstance(manifest, Mapping)
             and set(manifest) == {"path", "sha256"}
-            and (manifest["path"] is None or _matches(manifest["path"], _SUBMODULE_PATH))
+            and (manifest["path"] is None or _matches(manifest["path"], MANIFEST_PATH))
             and _matches(manifest["sha256"], _HEX64)
         ),
         all(_matches(draw[k], _HEX64) for k in ("reproduce_source_sha256", "patch_set_sha256", "policy_sha256")),
@@ -312,7 +326,7 @@ def _key_inputs_ok(draw: Mapping[str, Any]) -> bool:
         ),
         isinstance(upstream, Mapping) and all(_is_name(k) and _matches(v, _HEX64) for k, v in upstream.items()),
         isinstance(submodules, Mapping)
-        and all(_matches(k, _SUBMODULE_PATH) and _matches(v, _COMMIT) for k, v in submodules.items()),
+        and all(_submodule_path_ok(k) and _matches(v, _COMMIT) for k, v in submodules.items()),
         isinstance(native, Mapping)
         and all(
             _is_name(k) and isinstance(v, Sequence) and not isinstance(v, str) and all(_matches(d, _HEX64) for d in v)

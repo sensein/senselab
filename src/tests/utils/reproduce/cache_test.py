@@ -367,6 +367,13 @@ def test_driver_env_identity_ignores_the_interpreter_build_string(monkeypatch: p
     monkeypatch.undo()
     monkeypatch.setattr(platform, "python_implementation", lambda: "OtherPython")
     assert driver_env_sha256() != base
+    monkeypatch.undo()
+    import sysconfig
+
+    real = sysconfig.get_config_var
+    monkeypatch.setattr(sysconfig, "get_config_var", lambda name: 1 if name == "Py_GIL_DISABLED" else real(name))
+    if not real("Py_GIL_DISABLED"):
+        assert driver_env_sha256() != base, "a free-threaded build keys apart"
 
 
 def test_reproduce_source_digest_follows_every_source_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

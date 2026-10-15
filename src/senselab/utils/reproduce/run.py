@@ -458,21 +458,23 @@ class ManifestId(NamedTuple):
     sha256: str
 
 
-_MANIFEST_REL = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]*(/[A-Za-z0-9_][A-Za-z0-9_.+-]*)*$")
-
-
 def manifest_id(path: str | os.PathLike[str], data: bytes, base_dir: Path) -> ManifestId:
     """The identity of a manifest read as ``data`` from ``path``: the sha256 of the bytes, and the path.
 
-    The path is recorded relative to ``base_dir`` (both made absolute, not resolved) when it lies there and is
-    made of plain names; otherwise it is None, so no host path reaches a record.
+    The path is recorded relative to ``base_dir`` (both made absolute, then, failing that, both resolved) when it
+    lies there and is made of plain names; otherwise it is None, so no host path reaches a record.
     """
     sha = hashlib.sha256(data).hexdigest()
-    try:
-        rel = Path(os.path.abspath(path)).relative_to(os.path.abspath(base_dir)).as_posix()
-    except ValueError:
-        return ManifestId(None, sha)
-    return ManifestId(rel if _MANIFEST_REL.fullmatch(rel) else None, sha)
+    for here, base in (
+        (os.path.abspath(path), os.path.abspath(base_dir)),
+        (os.path.realpath(path), os.path.realpath(base_dir)),
+    ):
+        try:
+            rel = Path(here).relative_to(base).as_posix()
+        except ValueError:
+            continue
+        return ManifestId(rel if provenance.MANIFEST_PATH.fullmatch(rel) else None, sha)
+    return ManifestId(None, sha)
 
 
 def _with_sources(config: RunConfig, manifests: Sequence[Manifest]) -> RunConfig:
