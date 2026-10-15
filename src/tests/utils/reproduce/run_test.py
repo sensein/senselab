@@ -631,6 +631,9 @@ def rebuild_key(out: Path, profile: Profile, base: Path) -> tuple[str, str]:
     manifest = parse_manifest(data, Path(ident["path"]).suffix, headline_rule=profile.policy.headline_rule)
     [step] = [s for s in manifest.steps if s.name == activity["step"]]
     assert _sha(base / step.adapter) == draw["adapter_sha256"]
+    assert draw["adapter_env_sha256"] == cache.driver_env_sha256()
+    assert draw["native"] == cache.native_digests(step, profile)
+    assert set(draw["upstream"]) == set(step.needs)
     assert draw["reproduce_source_sha256"] == cache.reproduce_source_sha256()
     assert draw["patch_set_sha256"] == source.patch_set_sha256(step.patches)
     assert draw["policy_sha256"] == cache.policy_sha256(profile)
@@ -655,6 +658,12 @@ def rebuild_key(out: Path, profile: Profile, base: Path) -> tuple[str, str]:
         shard=None if shard is None else shard[0],
     )
     return parameters["step_key"], rebuilt
+
+
+def _parameters_of(out: Path) -> dict[str, Any]:
+    records = [json.loads(line) for line in (out / "prov" / provenance.STORE_FILE).read_text().splitlines()]
+    [activity] = [r for r in records if r["record"] == "activity"]
+    return dict(activity["parameters"])
 
 
 def write_manifest_file(world: World, manifest: Manifest) -> tuple[Manifest, dict[str, run.ManifestId]]:
@@ -702,18 +711,29 @@ def test_confidential_provenance_withholds_the_hostname_and_logged_paths(
 @needs_userns
 def test_the_draw_record_alone_rebuilds_the_step_key(world: World) -> None:
     """The draw names the manifest (base-relative path, sha256) and every keyed id and hash, so the key rebuilds."""
-    manifest, ids = write_manifest_file(world, world.dag())
+    tool = world.tmp / "tool" / "bin"
+    tool.mkdir(parents=True)
+    (tool / "probe").write_text("#!/bin/sh\n")
+    world.profile_extra = {"native": {"tool": {"bin_dirs": [str(tool)]}}}
+    data = world.dag().model_dump(mode="json", exclude_unset=True)
+    data["steps"][0]["resources"]["native"] = ["tool"]
+    manifest, ids = write_manifest_file(world, Manifest.model_validate(data))
     world.prefetch(manifest)
     outcomes = world.run(manifest, manifest_ids=ids)
     assert all(o.ok for o in outcomes.values()), {n: o.codes for n, o in outcomes.items()}
+    draws = {}
     for name in ("prep", "score"):
         out = outcomes[name].out
         assert out is not None
         recorded, rebuilt = rebuild_key(out, world.profile(), world.base)
         assert recorded == rebuilt == outcomes[name].key, name
-    text = "".join(p.read_text() for p in (outcomes["score"].out / "prov").iterdir())  # type: ignore[union-attr]
+        draws[name] = _parameters_of(out)["details"]["draw"]
+    assert draws["prep"]["native"]["tool"] and draws["prep"]["patch_set_sha256"] != source.EMPTY_PATCH_SET_SHA256
+    assert draws["score"]["upstream"] == {"prep": outcomes["prep"].key}
+    score_out = outcomes["score"].out
+    assert score_out is not None
+    text = "".join(p.read_text() for p in (score_out / "prov").iterdir())
     assert str(world.tmp) not in text and '"path": "analyses/demo.json"' in text
-    assert outcomes["prep"].key in text, "the upstream key is recorded"
     assert run.manifest_id(world.tmp / "elsewhere.json", b"{}", world.base).path is None
 
 

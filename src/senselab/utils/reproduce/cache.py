@@ -207,9 +207,10 @@ def driver_env_sha256() -> str:
     `DRIVER_PACKAGE` itself is left out; its reproduce code is `reproduce_source_sha256`.
 
     Returns:
-        A hex sha256 over the interpreter's implementation and version (``platform.python_implementation()``,
-        ``platform.python_version()``; not ``sys.version``, whose build date and compiler differ between
-        builds of one release) and the sorted ``name==version`` of that closure.
+        A hex sha256 over the interpreter's implementation, version and free-threading build flag
+        (``platform.python_implementation()``, ``platform.python_version()``, ``Py_GIL_DISABLED``; not
+        ``sys.version``, whose build date and compiler differ between builds of one release) and the sorted
+        ``name==version`` of that closure.
     """
     installed: dict[str, Distribution] = {}
     for dist in distributions(path=_site_dirs()):
@@ -218,7 +219,11 @@ def driver_env_sha256() -> str:
             installed.setdefault(canonicalize_name(name), dist)
     closure = _runtime_closure(installed) - {DRIVER_PACKAGE}
     names = sorted(f"{name}=={installed[name].version}" for name in closure)
-    python = [platform.python_implementation(), platform.python_version()]
+    python = [
+        platform.python_implementation(),
+        platform.python_version(),
+        bool(sysconfig.get_config_var("Py_GIL_DISABLED")),
+    ]
     return hashlib.sha256(canonical_json({"python": python, "distributions": names})).hexdigest()
 
 

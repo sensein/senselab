@@ -484,6 +484,8 @@ def test_draw_and_engine_are_in_the_details(tmp_path: Path, monkeypatch: pytest.
     identity = engine.engine_identity(spec)
     ok = {**given, "engine": identity, "concurrency": 1, "batch_size": 4}
     record_step(tmp_path / "ok", **_kwargs(tmp_path, details={"engine": identity, "draw": ok}))
+    spaced = {**ok, "submodules": {"third party/.vendor/x@1": "c" * 40}}
+    record_step(tmp_path / "spaced", **_kwargs(tmp_path, details={"engine": identity, "draw": spaced}))
     recorded = _parameters(tmp_path / "ok", prov="")
     completed = recorded["details"]["draw"]
     assert set(completed) == set(DRAW_KEYS) and {k: completed[k] for k in ok} == ok
@@ -510,6 +512,8 @@ def test_draw_and_engine_are_in_the_details(tmp_path: Path, monkeypatch: pytest.
         {"shard": [3, 3]},
         {"upstream": {"prep": "/x"}},
         {"submodules": {"../x": "c" * 40}},
+        {"submodules": {"/abs/x": "c" * 40}},
+        {"submodules": {"a\nb": "c" * 40}},
         {"native": {"ffmpeg": ["/opt/ff/bin"]}},
         {"adapter_sha256": None},
         {"r_session_sha256": "x"},
