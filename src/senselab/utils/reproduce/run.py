@@ -434,6 +434,9 @@ class RunConfig:
         host_runner: Runs host probes (`host.host_record`); defaults to subprocesses.
         sources: Each analysis name mapped to its manifest's sources lock reference; `run_steps` and
             `plan_steps` fill it from the manifests they are given.
+        manifest_ids: Each analysis name mapped to its manifest file's identity (`manifest_id`), recorded in
+            each step's draw so the record names the manifest its key was computed from; an analysis without
+            one is recorded with a null manifest.
     """
 
     profile: Profile
@@ -445,6 +448,31 @@ class RunConfig:
     parent_env: Mapping[str, str] | None = None
     host_runner: host.Runner | None = None
     sources: Mapping[str, SourcesRef] = field(default_factory=dict)
+    manifest_ids: Mapping[str, "ManifestId"] = field(default_factory=dict)
+
+
+class ManifestId(NamedTuple):
+    """A manifest file as a record names it: its path relative to the base dir (None outside it) and sha256."""
+
+    path: str | None
+    sha256: str
+
+
+_MANIFEST_REL = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]*(/[A-Za-z0-9_][A-Za-z0-9_.+-]*)*$")
+
+
+def manifest_id(path: str | os.PathLike[str], data: bytes, base_dir: Path) -> ManifestId:
+    """The identity of a manifest read as ``data`` from ``path``: the sha256 of the bytes, and the path.
+
+    The path is recorded relative to ``base_dir`` (both made absolute, not resolved) when it lies there and is
+    made of plain names; otherwise it is None, so no host path reaches a record.
+    """
+    sha = hashlib.sha256(data).hexdigest()
+    try:
+        rel = Path(os.path.abspath(path)).relative_to(os.path.abspath(base_dir)).as_posix()
+    except ValueError:
+        return ManifestId(None, sha)
+    return ManifestId(rel if _MANIFEST_REL.fullmatch(rel) else None, sha)
 
 
 def _with_sources(config: RunConfig, manifests: Sequence[Manifest]) -> RunConfig:
@@ -464,6 +492,8 @@ class _Keyed(NamedTuple):
     entries: dict[str, inputs.RegisteredInput]
     shard: int | None = None
     gathers: Mapping[str, tuple[Path, ...]] = MappingProxyType({})
+    key_inputs: Mapping[str, Any] = MappingProxyType({})
+    """The ids and hashes `cache.step_key` took beyond the manifest, the input digests and the lock (`_details`)."""
 
 
 # --- driver-side file operations under the result dir --------------------------------------------
@@ -740,20 +770,23 @@ def _key(
     except OSError:
         raise RunError("E_ADAPTER_MISSING") from None
     r_session, r_module = _r_digests(step, config.cache)
+    key_inputs: dict[str, Any] = {
+        "upstream": {name: str(upstream[name].key) for name in step.needs},
+        "submodules": dict(co.submodules) if step.submodules else {},
+        "adapter_sha256": adapter_sha,
+        "adapter_env_sha256": cache.driver_env_sha256(),
+        "native": {name: list(digests) for name, digests in native.items()},
+        "r_session_sha256": r_session,
+        "r_module_env_sha256": r_module,
+    }
     try:
         key = cache.step_key(
             step,
             config.profile,
-            upstream={name: str(upstream[name].key) for name in step.needs},
-            submodules=co.submodules if step.submodules else {},
-            adapter_sha256=adapter_sha,
-            adapter_env_sha256=cache.driver_env_sha256(),
             input_digests=[d for d, _ in input_digests],
-            native=native,
             sources_lock_sha256=lock_sha,
-            r_session_sha256=r_session,
-            r_module_env_sha256=r_module,
             shard=shard,
+            **key_inputs,
         )
     except ValueError:
         raise RunError("E_KEY_INVALID") from None
@@ -770,8 +803,29 @@ def _key(
     paths |= {f"up:{n}": result / UP / n if n in gathers else _up_work(upstream, n) for n in step.needs}
     paths |= registered
     ref_name = PurePosixPath(config.sources[analysis].lock).name
+    manifest = config.manifest_ids.get(analysis)
+    key_inputs |= {
+        "manifest": None if manifest is None else {"path": manifest.path, "sha256": manifest.sha256},
+        "reproduce_source_sha256": cache.reproduce_source_sha256(),
+        "served_model": None if step.engine is None else f"{step.engine.model.repo}@{step.engine.model.revision}",
+        "patch_set_sha256": source.patch_set_sha256(step.patches),
+        "policy_sha256": cache.policy_sha256(config.profile),
+        "shard": None if shard is None or step.shards is None else [shard, step.shards.count],
+    }
     return _Keyed(
-        key, result, co, input_digests, adapter, adapter_sha, paths, lock_sha, ref_name, entries, shard, gathers
+        key,
+        result,
+        co,
+        input_digests,
+        adapter,
+        adapter_sha,
+        paths,
+        lock_sha,
+        ref_name,
+        entries,
+        shard,
+        gathers,
+        MappingProxyType(key_inputs),
     )
 
 
@@ -924,6 +978,29 @@ def _log() -> logging.Logger:
     return logging.getLogger("senselab")
 
 
+def _withheld(profile: Profile, text: str) -> str:
+    """``text`` under an open policy; under confidential provenance only its sha256, since it can name paths."""
+    if not profile.policy.confidential_provenance:
+        return text
+    return f"(withheld under confidential provenance, sha256 {hashlib.sha256(text.encode()).hexdigest()})"
+
+
+def _trace(profile: Profile) -> str:
+    """The traceback being handled, for ``driver.log``; under confidential provenance its exception class and sha256.
+
+    A traceback names files (the driver's, the step's and those in exception messages), so a confidential
+    policy logs the class and a digest that an operator re-running the step in the open can match.
+    """
+    text = traceback.format_exc()
+    if not profile.policy.confidential_provenance:
+        return text
+    error = sys.exc_info()[1]
+    name = "None" if error is None else type(error).__name__
+    return (
+        f"{name} (traceback withheld under confidential provenance, sha256 {hashlib.sha256(text.encode()).hexdigest()})"
+    )
+
+
 # --- readiness, shared by run_step and the dry run ------------------------------------------------------
 
 
@@ -964,7 +1041,9 @@ def _ready(
     if status != "ok":
         raise RunError("E_NO_USERNS")
     venv, overlay = _venv_ready(step, analysis, config)
-    record = host.host_record(None, runner=config.host_runner)
+    record = host.host_record(
+        None, runner=config.host_runner, hostname=not config.profile.policy.confidential_provenance
+    )
     resources = step.resources
     if (resources.gpu_arch or resources.min_driver) and (record.get("gpu_count") or 0) < 1:
         raise RunError("E_GPU_MISSING")
@@ -1080,7 +1159,7 @@ def run_step(
         try:
             return _run_step(step, analysis, config, upstream, upstream_schemas or {}, seen, shard)
         except (OSError, TypeError, ValueError):
-            _append_driver_log(seen.get("result"), "driver error\n" + traceback.format_exc())
+            _append_driver_log(seen.get("result"), "driver error\n" + _trace(config.profile))
             return _failed(step, "E_DRIVER", out=seen.get("result"))
 
 
@@ -1150,7 +1229,7 @@ def _run_step(
                             try:
                                 _discard_store(result, step)
                             except OSError:
-                                _log().error("could not remove the resume store\n%s", traceback.format_exc())
+                                _log().error("could not remove the resume store\n%s", _trace(config.profile))
                         return _failed(step, error.code, keyed.key)
                     keep = f"{WORK}/{step.resume_dir}" if attempt and step.resume_dir is not None else None
                     cache.reset_result_dir(
@@ -1193,13 +1272,16 @@ def _attempt_number(result: Path, attempt: bool) -> int:
 
 
 def _record_attempt(result: Path, number: int, config: RunConfig) -> None:
-    """Append this run's line to ``R/attempts.jsonl``: attempt, start time, host, Slurm job id and restart count."""
+    """Append this run's line to ``R/attempts.jsonl``: attempt, start time, host, Slurm job id and restart count.
+
+    The host is null under confidential provenance, as in the step's ``prov/`` record.
+    """
     path = result / ATTEMPTS
     env = _job_env(config)
     line = {
         "attempt": number,
         "started": _now(),
-        "host": socket.gethostname(),
+        "host": None if config.profile.policy.confidential_provenance else socket.gethostname(),
         "slurm_job_id": env.get("SLURM_JOB_ID"),
         "slurm_restart_count": env.get("SLURM_RESTART_COUNT"),
     }
@@ -1253,7 +1335,7 @@ def _summary_or_driver_error(execution: _Execution, log: _Buffer) -> dict[str, A
         cache.write_summary(result, summary)
         return summary
     except (OSError, TypeError, ValueError, RunError):
-        _log().error("driver error\n%s", traceback.format_exc())
+        _log().error("driver error\n%s", _trace(execution.config.profile))
         if execution.released:
             restricted.withdraw(execution.config.profile, execution.keyed.key)
             execution.released = False
@@ -1345,7 +1427,7 @@ class _Execution:
         except (digest.DigestError, cache.CacheError, metrics.MetricsError) as error:
             self.codes.add(error.code)
         except Exception:
-            _log().error("driver error\n%s", traceback.format_exc())
+            _log().error("driver error\n%s", _trace(self.config.profile))
             self.codes.add("E_DRIVER")
         if self.config.no_netns:
             self.codes.add("E_NOT_REPORTABLE")
@@ -1354,7 +1436,7 @@ class _Execution:
             try:
                 _discard_store(self.result, self.step)
             except OSError:
-                _log().error("could not remove the resume store\n%s", traceback.format_exc())
+                _log().error("could not remove the resume store\n%s", _trace(self.config.profile))
                 self.codes.add("E_DRIVER")
         outputs = self._outputs()
         self._engine_logs()
@@ -1362,7 +1444,7 @@ class _Execution:
             try:
                 _remove_tree(scratch)
             except OSError:
-                _log().error("could not remove a scratch dir\n%s", traceback.format_exc())
+                _log().error("could not remove a scratch dir\n%s", _trace(self.config.profile))
                 self.codes.add("E_DRIVER")
         self._record(outputs)
         self._withdraw_extracted()
@@ -1385,7 +1467,7 @@ class _Execution:
         except FileNotFoundError:
             return
         except OSError:
-            _log().error("could not list the engine logs\n%s", traceback.format_exc())
+            _log().error("could not list the engine logs\n%s", _trace(self.config.profile))
             return
         for name in names:
             if not _LOG_NAME.match(name):
@@ -1400,7 +1482,7 @@ class _Execution:
                     with os.fdopen(os.open(target, flags, 0o600), "wb") as handle:
                         handle.write(source_file.read(ENGINE_LOG_MAX))
             except OSError:
-                _log().error("could not copy an engine log\n%s", traceback.format_exc())
+                _log().error("could not copy an engine log\n%s", _trace(self.config.profile))
 
     def _make_gathers(self) -> None:
         """``R/up/<step>`` for each sharded need: links ``<i>`` to each shard's ``work/``."""
@@ -1422,7 +1504,7 @@ class _Execution:
         try:
             _remove_tree(self.work)
         except OSError:
-            _log().error("could not remove a withdrawn work dir\n%s", traceback.format_exc())
+            _log().error("could not remove a withdrawn work dir\n%s", _trace(self.config.profile))
             self.codes.add("E_DRIVER")
 
     def _input_closure(self) -> list[str] | None:
@@ -1468,7 +1550,7 @@ class _Execution:
         try:
             (self.work / EXTRACTED).unlink(missing_ok=True)
         except OSError:
-            _log().error("could not remove extracted values\n%s", traceback.format_exc())
+            _log().error("could not remove extracted values\n%s", _trace(self.config.profile))
             self.codes.add("E_DRIVER")
 
     def driver_error_summary(self) -> dict[str, Any]:
@@ -1915,7 +1997,9 @@ class _Execution:
         try:
             source.verify_checkout(self.keyed.checkout)
         except source.ReproduceSourceError as error:
-            _log().error("checkout changed during the step: %s\n%s", error.code, error.detail)
+            _log().error(
+                "checkout changed during the step: %s\n%s", error.code, _withheld(self.config.profile, error.detail)
+            )
             self.codes.add("E_SRC_MUTATED")
         assert self.venv is not None
         again = env.load_venv(self.venv.path, self.step.env, self.overlay)
@@ -2087,7 +2171,11 @@ class _Execution:
     def _details(self) -> dict[str, Any]:
         """The record's details: the sources lock, the engine identity, and the draw's declared part.
 
-        `provenance.record_step` completes the draw with the GPU, CUDA and env lock it records (`provenance.DRAW_KEYS`).
+        The draw also carries the key's ids and hashes (`_Keyed.key_inputs`: the manifest's base-relative path and
+        sha256, the upstream keys, submodule commits, adapter and adapter-env sha256s, native digests, R digests,
+        the reproduce source, patch-set and policy sha256s, the served model ``repo@revision`` and the shard), so
+        the key can be rebuilt from the record, the manifest and the profile. `provenance.record_step` completes the
+        draw with the GPU, CUDA and env lock it records (`provenance.DRAW_KEYS`).
         """
         step = self.step
         identity = None if step.engine is None else engine.engine_identity(step.engine)
@@ -2101,6 +2189,7 @@ class _Execution:
             "engine": identity,
             "concurrency": None if step.engine is None else step.engine.concurrency,
             "batch_size": None if step.engine is None else step.engine.batch_size,
+            **self.keyed.key_inputs,
         }
         return details
 
@@ -2140,10 +2229,10 @@ class _Execution:
                 details=self._details(),
             )
         except ValueError:
-            _log().error("provenance refused\n%s", traceback.format_exc())
+            _log().error("provenance refused\n%s", _trace(self.config.profile))
             self.codes.add("E_PROV_REFUSED")
         except (OSError, TypeError):
-            _log().error("provenance failed\n%s", traceback.format_exc())
+            _log().error("provenance failed\n%s", _trace(self.config.profile))
             self.codes.add("E_DRIVER")
 
 

@@ -18,7 +18,7 @@ from senselab.utils.reproduce import cache, run, slurm
 from senselab.utils.reproduce.cache import CacheError
 from senselab.utils.reproduce.dag import DagError, toposort
 from senselab.utils.reproduce.spec import Manifest, check_step_profile
-from tests.utils.reproduce.run_test import World, needs_userns
+from tests.utils.reproduce.run_test import World, needs_userns, rebuild_key, write_manifest_file
 from tests.utils.reproduce.slurm_test import (
     CLASSES,
     DATE,
@@ -251,11 +251,15 @@ def test_the_gather_step_sees_every_shard_read_only(world: World) -> None:
     gather = world.step(
         "gather", "prep", "", argv=["{venv}/bin/python", "-c", _escaped(GATHER), "{out}", "{up:parts}"], needs=["parts"]
     )
-    manifest = world.manifest(part, gather)
+    manifest, ids = write_manifest_file(world, world.manifest(part, gather))
     world.prefetch(manifest)
-    outcomes = world.run(manifest)
+    outcomes = world.run(manifest, manifest_ids=ids)
     assert all(o.ok for o in outcomes.values()), {n: o.codes for n, o in outcomes.items()}
     parts = outcomes["parts"]
+    for out in (*parts.shards, outcomes["gather"].out):
+        assert out is not None
+        recorded, rebuilt = rebuild_key(out, world.profile(), world.base)
+        assert recorded == rebuilt == out.name
     assert parts.status == "executed" and parts.out is None and len(parts.shards) == 3
     keys = [p.name for p in parts.shards]
     assert len(set(keys)) == 3 and parts.key == cache.shards_key(keys)

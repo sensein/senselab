@@ -23,10 +23,11 @@ from typing import Any
 import pytest
 
 import senselab
+from senselab.utils.prov_store import CHECKSUM_KEY
 from senselab.utils.reproduce import cache, digest, env, host, provenance, restricted, run, sandbox, source, weights
 from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.run import RunConfig, StepOutcome, evaluate_expect, run_step, run_steps
-from senselab.utils.reproduce.spec import Manifest, Profile, SourcesRef, StepSpec
+from senselab.utils.reproduce.spec import Manifest, Profile, SourcesRef, StepSpec, parse_manifest
 from tests.utils.reproduce.sources_fixture import lock_data, register_input, write_lock
 
 SHA = "ab" * 32
@@ -611,6 +612,109 @@ def test_provenance_records_the_lock_shas_and_no_path(world: World) -> None:
     text = "".join(p.read_text() for p in (outcome.out / "prov").iterdir())
     assert SHA in text and input_set_digest(world.data, ["in/a.txt"])[0] in text
     assert str(world.tmp) not in text and "a.txt" not in text
+
+
+def rebuild_key(out: Path, profile: Profile, base: Path) -> tuple[str, str]:
+    """The recorded step key, and the key rebuilt from the record, the manifest it names, and the profile.
+
+    The manifest is read at the record's base-dir-relative path and checked against its sha256; every other
+    key input comes from the record: the draw's ids and hashes, the input artifacts' digests and the sources
+    lock sha256.
+    """
+    records = [json.loads(line) for line in (out / "prov" / provenance.STORE_FILE).read_text().splitlines()]
+    [activity] = [r for r in records if r["record"] == "activity"]
+    parameters = activity["parameters"]
+    draw = parameters["details"]["draw"]
+    ident = draw["manifest"]
+    data = (base / ident["path"]).read_bytes()
+    assert hashlib.sha256(data).hexdigest() == ident["sha256"]
+    manifest = parse_manifest(data, Path(ident["path"]).suffix, headline_rule=profile.policy.headline_rule)
+    [step] = [s for s in manifest.steps if s.name == activity["step"]]
+    assert _sha(base / step.adapter) == draw["adapter_sha256"]
+    assert draw["reproduce_source_sha256"] == cache.reproduce_source_sha256()
+    assert draw["patch_set_sha256"] == source.patch_set_sha256(step.patches)
+    assert draw["policy_sha256"] == cache.policy_sha256(profile)
+    model = None if step.engine is None else f"{step.engine.model.repo}@{step.engine.model.revision}"
+    assert draw["served_model"] == model
+    shard = draw["shard"]
+    assert shard is None or (step.shards is not None and shard[1] == step.shards.count)
+    artifacts = [r["attributes"] for r in records if r["record"] == "entity" and r["attributes"]["role"] == "input"]
+    artifacts.sort(key=lambda a: int(a["declared"].removeprefix("inputs[").removesuffix("]")))
+    rebuilt = cache.step_key(
+        step,
+        profile,
+        upstream=draw["upstream"],
+        submodules=draw["submodules"],
+        adapter_sha256=draw["adapter_sha256"],
+        adapter_env_sha256=draw["adapter_env_sha256"],
+        input_digests=[a[CHECKSUM_KEY] for a in artifacts],
+        native=draw["native"],
+        sources_lock_sha256=parameters["details"]["sources_lock_sha256"],
+        r_session_sha256=draw["r_session_sha256"],
+        r_module_env_sha256=draw["r_module_env_sha256"],
+        shard=None if shard is None else shard[0],
+    )
+    return parameters["step_key"], rebuilt
+
+
+def write_manifest_file(world: World, manifest: Manifest) -> tuple[Manifest, dict[str, run.ManifestId]]:
+    """``manifest`` as a file in the manifest repository, reloaded, and its identity for `RunConfig.manifest_ids`."""
+    path = world.base / "analyses" / "demo.json"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(manifest.model_dump(mode="json", exclude_unset=True)))
+    data = path.read_bytes()
+    loaded = parse_manifest(data, ".json")
+    return loaded, {"demo": run.manifest_id(path, data, world.base)}
+
+
+@needs_userns
+def test_confidential_provenance_withholds_the_hostname_and_logged_paths(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under confidential provenance ``prov/`` and ``attempts.jsonl`` name no host and the driver log no path."""
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        raise ValueError(f"record_step: refused at {world.tmp}/in/a.txt")
+
+    monkeypatch.setattr(provenance, "record_step", refuse)
+    failed = world.run(manifest)["prep"]
+    assert "E_PROV_REFUSED" in failed.codes and failed.out is not None
+    log = (failed.out / run.LOGS / run.DRIVER_LOG).read_text()
+    assert str(world.tmp) not in log and "a.txt" not in log
+    assert "ValueError (traceback withheld under confidential provenance, sha256 " in log
+    attempts = [json.loads(line) for line in (failed.out / run.ATTEMPTS).read_text().splitlines()]
+    assert attempts and all(a["host"] is None for a in attempts)
+    monkeypatch.undo()
+    outcome = world.run(manifest)["prep"]
+    assert outcome.ok and outcome.out is not None, outcome.codes
+    store = [json.loads(line) for line in (outcome.out / "prov" / provenance.STORE_FILE).read_text().splitlines()]
+    [activity] = [r for r in store if r["record"] == "activity"]
+    assert activity["parameters"]["host"]["hostname"] is None
+    assert [r["label"] for r in store if r["record"] == "environment" and r["kind"] == "host"] == ["unknown"]
+    text = "".join(p.read_text() for p in (outcome.out / "prov").iterdir())
+    assert socket.gethostname() not in text
+    attempts = [json.loads(line) for line in (outcome.out / run.ATTEMPTS).read_text().splitlines()]
+    assert attempts and all(a["host"] is None for a in attempts)
+
+
+@needs_userns
+def test_the_draw_record_alone_rebuilds_the_step_key(world: World) -> None:
+    """The draw names the manifest (base-relative path, sha256) and every keyed id and hash, so the key rebuilds."""
+    manifest, ids = write_manifest_file(world, world.dag())
+    world.prefetch(manifest)
+    outcomes = world.run(manifest, manifest_ids=ids)
+    assert all(o.ok for o in outcomes.values()), {n: o.codes for n, o in outcomes.items()}
+    for name in ("prep", "score"):
+        out = outcomes[name].out
+        assert out is not None
+        recorded, rebuilt = rebuild_key(out, world.profile(), world.base)
+        assert recorded == rebuilt == outcomes[name].key, name
+    text = "".join(p.read_text() for p in (outcomes["score"].out / "prov").iterdir())  # type: ignore[union-attr]
+    assert str(world.tmp) not in text and '"path": "analyses/demo.json"' in text
+    assert outcomes["prep"].key in text, "the upstream key is recorded"
+    assert run.manifest_id(world.tmp / "elsewhere.json", b"{}", world.base).path is None
 
 
 # --- pure parts -----------------------------------------------------------------------------------
@@ -1333,7 +1437,7 @@ try:
 finally:
     day.chmod(0o700)
 log = (outcome.out / "logs" / "driver.log").read_text() if outcome.out else ""
-print(json.dumps({"codes": list(outcome.codes), "logged": "Traceback" in log}))
+print(json.dumps({"codes": list(outcome.codes), "logged": "traceback withheld" in log}))
 """
 
 

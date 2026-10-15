@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import datetime
 import hashlib
 import json
@@ -1040,6 +1041,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return _manifest_changed(args, paths, profile, data)
     manifests = [parse_manifest(d, p.suffix, headline_rule=profile.policy.headline_rule) for d, p in zip(data, paths)]
     config = _run_config(args, paths, profile)
+    ids = {m.name: run.manifest_id(p, d, config.base_dir) for m, p, d in zip(manifests, paths, data)}
+    config = dataclasses.replace(config, manifest_ids=ids)
     if args.dry_run:
         plans = run.plan_steps(manifests, config)
         for p in plans:
