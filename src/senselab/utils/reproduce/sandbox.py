@@ -17,6 +17,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -368,9 +369,44 @@ def _reserved(key: str) -> bool:
     )
 
 
+_TOKEN = re.compile(r"\{\{|\}\}|\{([^{}]*)\}|[{}]")
+"""`spec.render`'s token grammar: ``{{``, ``}}``, one placeholder, or a stray brace."""
+
+
 def _native(step: StepSpec, profile: Profile, kind: str) -> list[str]:
-    selected = [profile.native[name] for name in step.resources.native]
-    return [_escape(os.fspath(d)) for n in selected for d in getattr(n, kind)]
+    """The ``{native:<name>:<i>}`` templates of the selected entries' ``bin_dirs`` or ``lib_dirs``.
+
+    ``i`` counts an entry's ``bin_dirs`` then its ``lib_dirs``, as `cache.native_digests` does, so the keyed env
+    names each dir by entry and position and its host path is not keyed (its content is, by digest).
+    """
+    out = []
+    for name in step.resources.native:
+        entry = profile.native[name]
+        start = 0 if kind == "bin_dirs" else len(entry.bin_dirs)
+        out += [f"{{native:{name}:{start + i}}}" for i in range(len(getattr(entry, kind)))]
+    return out
+
+
+def _native_values(step: StepSpec, profile: Profile) -> dict[str, str]:
+    """Each ``native:<name>:<i>`` placeholder of `_native` mapped to its absolute dir."""
+    values = {}
+    for name in step.resources.native:
+        entry = profile.native[name]
+        for i, path in enumerate([*entry.bin_dirs, *entry.lib_dirs]):
+            values[f"native:{name}:{i}"] = os.fspath(path)
+    return values
+
+
+def _render_native(template: str, values: Mapping[str, str]) -> str:
+    """Expand the ``{native:<name>:<i>}`` placeholders only; every other token is kept for `render`."""
+
+    def expand(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name is not None and name.startswith("native:"):
+            return _escape(values[name])
+        return match.group(0)
+
+    return _TOKEN.sub(expand, template)
 
 
 def _sha(env: Mapping[str, str]) -> str:
@@ -490,7 +526,8 @@ def build_env(
     values = {k: _abs(v) for k, v in paths.items()}
     values |= {f"root:{name}": _abs(root) for name, root in profile.roots.items()}
     literal, templated = _keyed(step, profile)
-    env = literal | {k: render(v, values) for k, v in templated.items()}
+    native = _native_values(step, profile)
+    env = literal | {k: render(_render_native(v, native), values) for k, v in templated.items()}
     env |= {k: render(v, values) for k, v in VOLATILE_TEMPLATES.items()}
     source = os.environ if parent is None else parent
     env |= {k: v for k, v in source.items() if k in INHERITED}

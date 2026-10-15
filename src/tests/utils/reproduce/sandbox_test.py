@@ -376,15 +376,37 @@ def test_native_entries_are_opt_in(tmp_path: Path) -> None:
     assert "LD_LIBRARY_PATH" not in plain
     assert plain["PATH"] == "{venv}/bin:/usr/bin:/bin"
     sox = keyed_templates(_step(resources={"profile": "cpu", "native": ["sox"]}), profile)
-    assert sox["LD_LIBRARY_PATH"] == "/opt/sox/lib:/opt/sox/lib64"
-    assert sox["PATH"] == "{venv}/bin:/usr/bin:/bin:/opt/sox/bin"
+    assert sox["LD_LIBRARY_PATH"] == "{native:sox:1}:{native:sox:2}"
+    assert sox["PATH"] == "{venv}/bin:/usr/bin:/bin:{native:sox:0}"
     both = keyed_templates(_step(resources={"profile": "cpu", "native": ["ffmpeg", "sox"]}), profile)
-    assert both["LD_LIBRARY_PATH"] == "/opt/ff/curated-lib:/opt/sox/lib:/opt/sox/lib64"
+    assert both["LD_LIBRARY_PATH"] == "{native:ffmpeg:1}:{native:sox:1}:{native:sox:2}"
+    step = _step(resources={"profile": "cpu", "native": ["ffmpeg", "sox"]})
+    env, _, _ = build_env(step, profile, _paths(tmp_path), parent={})
+    assert env["LD_LIBRARY_PATH"] == "/opt/ff/curated-lib:/opt/sox/lib:/opt/sox/lib64"
+    assert env["PATH"] == f"{tmp_path}/venv/bin:/usr/bin:/bin:/opt/ff/bin:/opt/sox/bin"
     _, k_plain, _ = build_env(_step(), profile, _paths(tmp_path), parent={})
     _, k_sox, _ = build_env(
         _step(resources={"profile": "cpu", "native": ["sox"]}), profile, _paths(tmp_path), parent={}
     )
     assert k_plain != k_sox
+
+
+def test_native_dirs_are_keyed_by_name_not_by_host_path(tmp_path: Path) -> None:
+    """The same native entry at another host path keys the same: only its digests (`cache.native_digests`) move."""
+    moved = {
+        "ffmpeg": {"bin_dirs": ["/elsewhere/ff/bin"], "lib_dirs": ["/elsewhere/ff/lib"]},
+        "sox": {"bin_dirs": ["/x/{b}/bin"], "lib_dirs": ["/x/lib", "/x/lib64"]},
+    }
+    base = _profile(tmp_path / "root").model_dump(mode="json")
+    here = Profile.model_validate({**base, "native": NATIVE})
+    there = Profile.model_validate({**base, "native": moved})
+    step = _step(resources={"profile": "cpu", "native": ["ffmpeg", "sox"]})
+    assert keyed_templates(step, here) == keyed_templates(step, there)
+    env_here, keyed_here, recorded_here = build_env(step, here, _paths(tmp_path), parent={})
+    env_there, keyed_there, recorded_there = build_env(step, there, _paths(tmp_path), parent={})
+    assert keyed_here == keyed_there and recorded_here != recorded_there
+    assert env_there["PATH"].endswith(":/elsewhere/ff/bin:/x/{b}/bin")
+    assert "/opt/" not in json.dumps(keyed_templates(step, here))
 
 
 def test_unknown_native_entry_is_refused(tmp_path: Path) -> None:
