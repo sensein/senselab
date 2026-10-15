@@ -16,8 +16,10 @@ from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.env import INSTALLED, MARKER, VenvResult, installed_sha256
 from senselab.utils.reproduce.host import HOST_KEYS
 from senselab.utils.reproduce.provenance import (
+    DRAW_GIVEN,
     DRAW_KEYS,
     DRIVER_DESCRIPTION,
+    KEY_INPUTS,
     LABEL,
     STORE_FILE,
     Artifact,
@@ -462,7 +464,10 @@ def test_draw_and_engine_are_in_the_details(tmp_path: Path, monkeypatch: pytest.
         "torch_lock_sha256": None,
         "overlay_sha256": None,
         "installed_sha256": parameters["installed_sha256"],
+        **{k: parameters["details"]["draw"][k] for k in KEY_INPUTS},
     }
+    served = parameters["details"]["draw"]["served_model"]
+    assert spec.model.revision in served and served == f"{spec.model.repo}@{spec.model.revision}"
     plain = world.manifest(world.step("plain", "prep", "{root:data}/in/a.txt"))
     world.prefetch(plain)
     bare = world.run(plain, host_runner=_gpu)["plain"]
@@ -475,7 +480,7 @@ def test_draw_and_engine_are_in_the_details(tmp_path: Path, monkeypatch: pytest.
         DRIVER,
         "13.0",
     )
-    given = {k: draw[k] for k in ("seed", "data_order_seed", "sampling", "engine", "concurrency", "batch_size")}
+    given = {k: draw[k] for k in DRAW_GIVEN}
     identity = engine.engine_identity(spec)
     ok = {**given, "engine": identity, "concurrency": 1, "batch_size": 4}
     record_step(tmp_path / "ok", **_kwargs(tmp_path, details={"engine": identity, "draw": ok}))
@@ -499,6 +504,15 @@ def test_draw_and_engine_are_in_the_details(tmp_path: Path, monkeypatch: pytest.
         {"gpu_name": "Test GPU"},
         {"engine": identity},
         {"concurrency": 0},
+        {"manifest": {"path": "/abs/m.yaml", "sha256": "1" * 64}},
+        {"manifest": {"path": "m.yaml"}},
+        {"served_model": "org/model@main"},
+        {"shard": [3, 3]},
+        {"upstream": {"prep": "/x"}},
+        {"submodules": {"../x": "c" * 40}},
+        {"native": {"ffmpeg": ["/opt/ff/bin"]}},
+        {"adapter_sha256": None},
+        {"r_session_sha256": "x"},
     ):
         with pytest.raises(ValueError, match="draw"):
             record_step(tmp_path / "bad", **_kwargs(tmp_path, details={"draw": {**given, **bad}}))

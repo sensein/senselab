@@ -65,6 +65,26 @@ _WORDS = re.compile(r"^[A-Za-z0-9()@.,_+-]+( [A-Za-z0-9()@.,_+-]+)*$")
 _FILE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 DETAIL_KEYS = ("sources_lock", "sources_lock_sha256", "engine", "draw")
 """The keys a step record's ``details`` may carry."""
+KEY_INPUTS = (
+    "manifest",
+    "reproduce_source_sha256",
+    "served_model",
+    "patch_set_sha256",
+    "policy_sha256",
+    "adapter_sha256",
+    "adapter_env_sha256",
+    "shard",
+    "upstream",
+    "submodules",
+    "native",
+    "r_session_sha256",
+    "r_module_env_sha256",
+)
+"""The step-key inputs a draw records beyond the step's own fields: hashes and ids only, never a host path.
+
+``manifest`` is ``{"path": <base-relative path or null>, "sha256": <hex>}`` or null; ``served_model`` the
+engine's ``repo@revision`` or null; ``shard`` ``[index, count]`` or null; ``upstream`` each need's key;
+``submodules`` path to commit; ``native`` each selected entry's dir digests."""
 DRAW_KEYS = (
     "seed",
     "data_order_seed",
@@ -82,9 +102,11 @@ DRAW_KEYS = (
     "torch_lock_sha256",
     "overlay_sha256",
     "installed_sha256",
+    *KEY_INPUTS,
 )
-"""The keys of a recorded ``details.draw``: what a re-draw needs (SC8), in one place."""
-DRAW_GIVEN = ("seed", "data_order_seed", "sampling", "engine", "concurrency", "batch_size")
+"""The keys of a recorded ``details.draw``: what a re-draw needs (SC8), in one place, with the ids and hashes
+(`KEY_INPUTS`) that rebuild and verify the step key from the record, the manifest it names and the profile."""
+DRAW_GIVEN = ("seed", "data_order_seed", "sampling", "engine", "concurrency", "batch_size", *KEY_INPUTS)
 """The keys a caller gives; `record_step` copies the rest from the host record, the locks and the venv."""
 DRAW_HOST = ("gpu_name", "gpu_driver", "gpu_count", "host_cuda", "torch_cuda")
 SEED_MAX = 2**32 - 1
@@ -251,6 +273,51 @@ def _draw_ok(draw: object, engine: object) -> bool:
         and all(_matches(k, _SAMPLING_KEY) and _sampling_ok(v) for k, v in sampling.items()),
         draw["engine"] == engine,
         counts == expected,
+        _key_inputs_ok(draw),
+    ]
+    return all(checks)
+
+
+_SUBMODULE_PATH = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]*(/[A-Za-z0-9_][A-Za-z0-9_.+-]*)*$")
+_SERVED_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*@[0-9a-f]{40}$")
+
+
+def _hex_or_none(value: object) -> bool:
+    return value is None or _matches(value, _HEX64)
+
+
+def _key_inputs_ok(draw: Mapping[str, Any]) -> bool:
+    """Whether the draw's `KEY_INPUTS` are in their closed form: hashes, commits, plain names and counts."""
+    manifest, shard = draw["manifest"], draw["shard"]
+    upstream, submodules, native = draw["upstream"], draw["submodules"], draw["native"]
+    checks = [
+        manifest is None
+        or (
+            isinstance(manifest, Mapping)
+            and set(manifest) == {"path", "sha256"}
+            and (manifest["path"] is None or _matches(manifest["path"], _SUBMODULE_PATH))
+            and _matches(manifest["sha256"], _HEX64)
+        ),
+        all(_matches(draw[k], _HEX64) for k in ("reproduce_source_sha256", "patch_set_sha256", "policy_sha256")),
+        all(_matches(draw[k], _HEX64) for k in ("adapter_sha256", "adapter_env_sha256")),
+        all(_hex_or_none(draw[k]) for k in ("r_session_sha256", "r_module_env_sha256")),
+        draw["served_model"] is None or _matches(draw["served_model"], _SERVED_MODEL),
+        shard is None
+        or (
+            isinstance(shard, Sequence)
+            and not isinstance(shard, str)
+            and len(shard) == 2
+            and all(_is_int(v) for v in shard)
+            and 0 <= shard[0] < shard[1]
+        ),
+        isinstance(upstream, Mapping) and all(_is_name(k) and _matches(v, _HEX64) for k, v in upstream.items()),
+        isinstance(submodules, Mapping)
+        and all(_matches(k, _SUBMODULE_PATH) and _matches(v, _COMMIT) for k, v in submodules.items()),
+        isinstance(native, Mapping)
+        and all(
+            _is_name(k) and isinstance(v, Sequence) and not isinstance(v, str) and all(_matches(d, _HEX64) for d in v)
+            for k, v in native.items()
+        ),
     ]
     return all(checks)
 
@@ -341,9 +408,10 @@ def record_step(
             ``argv``.
         details: Recorded as the activity's ``details``: ``sources_lock_sha256`` (hex), ``sources_lock`` (the lock
             file's name), ``engine`` (`engine.engine_identity`) and ``draw`` (the `DRAW_GIVEN` keys: seeds, sampling,
-            and the engine's identity, concurrency and batch size, which must agree with ``engine``), and no other
-            key. The draw is recorded completed to `DRAW_KEYS` with the host's GPU and CUDA values and the env lock
-            (``env_key``, the lock and overlay sha256s, ``installed_sha256``) exactly as the record holds them.
+            the engine's identity, concurrency and batch size, which must agree with ``engine``, and the
+            `KEY_INPUTS` ids and hashes), and no other key. The draw is recorded completed to `DRAW_KEYS` with the
+            host's GPU and CUDA values and the env lock (``env_key``, the lock and overlay sha256s,
+            ``installed_sha256``) exactly as the record holds them.
 
     Returns:
         The files written: ``store.jsonl``, then the BEP028 files in `write_bep028_files` order. Any
