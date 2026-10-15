@@ -66,6 +66,7 @@ def test_cpu_node_without_torch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert record["python"] == "3.12.11"
     assert record["slurm_job_id"] == "12345"
     assert isinstance(record["hostname"], str) and record["hostname"]
+    assert host_record(None, runner=runner, hostname=False)["hostname"] is None
     assert isinstance(record["cpu_count"], int) and record["cpu_count"] >= 1
     assert isinstance(record["cpus_allowed"], int) and record["cpus_allowed"] >= 1
     assert runner.calls[0] == ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"]
