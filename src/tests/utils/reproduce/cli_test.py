@@ -386,7 +386,7 @@ def test_prefetch_passes_the_profile_and_deny_patterns_and_records_wheels(
 
     monkeypatch.setattr(source, "checkout_step", checkout_step)
     monkeypatch.setattr(env, "prefetch_env", prefetch_env)
-    monkeypatch.setattr(cli, "_mirror_findings", lambda where, step, profile: [])
+    monkeypatch.setattr(cli, "_mirror_findings", lambda where, step, profile, label=None: [])
     site.write_profile(mirror_map={"git@git.example:org/analysis.git": "/m/analysis.git"}, mirror_map_strict=True)
     sdist_env = dict(_step("x")["env"], sdist_allow=[_sdist(site)])
     path = site.manifest("demo", _step("prep", env=sdist_env), _step("again", env=sdist_env))
