@@ -355,6 +355,20 @@ def test_payload_carries_the_reproduce_source_digest(tmp_path: Path) -> None:
     assert _key(tmp_path, adapter_env_sha256=identity) != _key(tmp_path)
 
 
+def test_driver_env_identity_ignores_the_interpreter_build_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The interpreter is keyed as implementation and version only: a rebuild of the same Python keys the same."""
+    import platform
+
+    base = driver_env_sha256()
+    monkeypatch.setattr(sys, "version", f"{platform.python_version()} (main, Jan 1 2000, 00:00:00) [Other 1.0]")
+    assert driver_env_sha256() == base
+    monkeypatch.setattr(platform, "python_version", lambda: "3.99.0")
+    assert driver_env_sha256() != base
+    monkeypatch.undo()
+    monkeypatch.setattr(platform, "python_implementation", lambda: "OtherPython")
+    assert driver_env_sha256() != base
+
+
 def test_reproduce_source_digest_follows_every_source_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Editing, adding or renaming a ``.py`` file under the package moves the digest; caches do not."""
     pkg = tmp_path / "reproduce"
