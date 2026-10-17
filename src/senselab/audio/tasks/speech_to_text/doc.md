@@ -28,6 +28,20 @@ Popular models include:
   - [Seamless medium](https://huggingface.co/facebook/hf-seamless-m4t-medium)
   - [Seamless large](https://huggingface.co/facebook/seamless-m4t-v2-large)
 
+## Apple silicon (MPS)
+
+CrisperWhisper 2.0 and Qwen3-ASR run on MPS when it is available (the default device is the fastest
+of CUDA, MPS, CPU):
+
+- **CrisperWhisper** uses its transformers backend in float16 (its CTranslate2 fork has no macOS
+  wheels). Fillers are kept as bracketed words (`[UM]`, `[UH]`) with timestamps, and each word chunk
+  carries a confidence `score`.
+- **Qwen3-ASR** loads in float16 and decodes 30 s chunks one at a time; `max_chunk_sec` overrides the
+  chunk length on any device. Off MPS the wrapper's own chunking (180 s with timestamps) is unchanged.
+
+Each audio in a list is one request to a worker that keeps the model loaded, so transcribing many
+long recordings loads each model once. Measurements: `specs/20261017-104000-asr-apple-silicon/`.
+
 ## Evaluation
 ### Metrics
 The primary evaluation metric for ASR systems is the Word Error Rate (WER). WER is calculated as:
