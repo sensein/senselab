@@ -43,6 +43,12 @@ ACT_PRIORITY: Tuple[str, ...] = (
 )
 """Order in which a turn's segment acts compete for the turn's primary act (first wins)."""
 
+SUBSTANTIVE_ACTS = frozenset(QUESTION_ACTS | {DialogueAct.DIRECTIVE.value, DialogueAct.STATEMENT.value})
+"""Acts whose segment, with enough content words, makes the turn substantive."""
+
+MINIMAL_RESPONSE_ACTS = frozenset({DialogueAct.BACKCHANNEL.value, DialogueAct.AGREEMENT.value})
+"""Acts that cannot be the primary act of a substantive turn."""
+
 
 class DialogueActLabeller(Protocol):
     """Anything that labels a sequence of segments, one label per segment, in order."""
@@ -238,16 +244,51 @@ def label_dialogue_acts(
     ]
 
 
-def primary_act(acts: Sequence[str]) -> Optional[str]:
-    """The highest-priority act among a turn's segment acts (see :data:`ACT_PRIORITY`).
+def content_words(text: str, lexicons: Lexicons) -> int:
+    """Number of tokens in ``text`` that are neither stopwords nor fillers.
 
     Args:
-        acts: Segment acts.
+        text: Free text.
+        lexicons: Lexicons supplying ``stopwords`` and ``fillers``.
 
     Returns:
-        The primary act; ``None`` for no acts. Acts outside the rule taxonomy rank after it, first seen wins.
+        The content-word count.
     """
-    if not acts:
+    excluded = lexicons.stopwords | lexicons.fillers
+    return sum(1 for t in tokens_of(text) if t not in excluded)
+
+
+def primary_act(
+    segments: Sequence[DialogueActSegment], config: Optional[ConversationAnalysisConfig] = None
+) -> Optional[str]:
+    """A turn's primary act from its labelled segments.
+
+    Precedence:
+
+    1. A turn is *substantive* when any segment's act is in :data:`SUBSTANTIVE_ACTS` (a question,
+       directive or statement) and its text holds at least ``config.substantive_min_content_words``
+       content words (:func:`content_words`).
+    2. In a substantive turn the acts in :data:`MINIMAL_RESPONSE_ACTS` (backchannel, agreement) are
+       not candidates, so "Sure. I work as a nurse." is a statement.
+    3. The remaining candidates are ranked by :data:`ACT_PRIORITY`; acts outside it rank after it,
+       first seen wins.
+
+    Args:
+        segments: The turn's labelled segments, in order; unlabelled segments are ignored.
+        config: Thresholds and lexicons; packaged defaults when omitted.
+
+    Returns:
+        The primary act; ``None`` when no segment carries an act.
+    """
+    labelled = [s for s in segments if s.act is not None]
+    if not labelled:
         return None
+    config = config or ConversationAnalysisConfig()
+    substantive = any(
+        s.act in SUBSTANTIVE_ACTS and content_words(s.text, config.lexicons) >= config.substantive_min_content_words
+        for s in labelled
+    )
+    acts = [str(s.act) for s in labelled]
+    candidates = [a for a in acts if not (substantive and a in MINIMAL_RESPONSE_ACTS)] or acts
     rank = {act: i for i, act in enumerate(ACT_PRIORITY)}
-    return min(acts, key=lambda a: rank.get(a, len(rank)))
+    return min(candidates, key=lambda a: rank.get(a, len(rank)))

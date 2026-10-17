@@ -58,3 +58,12 @@ thresholds:
   repetition_max_ngram:
     value: 3
     derivation: Immediate repeats of 1-3 tokens (Shriberg 1994 repetitions are overwhelmingly 1-2 words).
+  substantive_min_content_words:
+    value: 2
+    derivation: >-
+      A question, directive or statement segment with at least this many content words (tokens outside
+      the stopword and filler lexicons) makes its turn substantive, so a leading "Sure." or "Yeah."
+      cannot be the turn's primary act. Minimal responses ("yes I do", "that's it") have
+      zero content words under the packaged stopwords and "oh I see" one; one content word can be an echo of the
+      partner ("Sure. Nursing."); two is the smallest count that carries a predicate and an argument
+      ("I work as a nurse" -> work, nurse). Convention, not fitted.
