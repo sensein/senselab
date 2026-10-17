@@ -57,6 +57,7 @@ _WORKER_TOKENS = (
     "ASRModel",
     "CrisperWhisper",
     "SentenceTransformer",
+    "mlx_vlm",
 )
 
 _INPROCESS_HELPERS = {"resolve_model", "load_hf_resilient", "ensure_hf_model"}
@@ -85,6 +86,7 @@ REVIEWED_INPROCESS = {
     # scene-quality / adaptive workflow (branch-only, #536)
     "audio/workflows/audio_analysis/adaptive/audio_io.py",
     "audio/workflows/audio_analysis/adaptive/backends.py",
+    "video/tasks/scene_description/backends.py",
 }
 
 # Subprocess-venv backends whose worker loads a model; the parent stages it via
@@ -109,6 +111,7 @@ REVIEWED_SUBPROCESS = {
     # scene-quality / ASR (branch-only, #536)
     "audio/tasks/scene_quality/brouhaha.py",
     "audio/tasks/speech_to_text/crisperwhisper.py",
+    "video/tasks/scene_description/backends.py",
 }
 
 # Files that intentionally do a RAW load and are exempt from the helper check.
