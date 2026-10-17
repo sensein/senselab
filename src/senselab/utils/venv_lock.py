@@ -28,7 +28,7 @@ import tempfile
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from senselab.utils import uv_tools
 from senselab.utils.uv_tools import find_uv, is_torch_family, normalize_name
@@ -84,7 +84,10 @@ class VenvLock:
 
 
 def requirements_sha256(
-    requirements: list[str], python_version: str, max_cuda_version: Optional[tuple[int, int]] = None
+    requirements: list[str],
+    python_version: str,
+    max_cuda_version: Optional[tuple[int, int]] = None,
+    excluded_packages: Sequence[str] = (),
 ) -> str:
     """Digest of everything a lock is compiled from.
 
@@ -92,15 +95,19 @@ def requirements_sha256(
         requirements: The backend's requirement specs.
         python_version: The venv's ``major.minor`` Python version.
         max_cuda_version: The backend's CUDA index ceiling, if any.
+        excluded_packages: Distributions resolved but left out of the lock body. Enters the digest
+            only when non-empty, so the digest of a backend that excludes nothing is unchanged.
 
     Returns:
         A hex SHA-256.
     """
-    fields = {
+    fields: dict[str, object] = {
         "ipc": list(IPC_REQUIREMENTS),
         "python": python_version,
         "max_cuda": list(max_cuda_version) if max_cuda_version else None,
     }
+    if excluded_packages:
+        fields["exclude"] = sorted(normalize_name(name) for name in excluded_packages)
     return uv_tools.requirements_sha256(requirements, header_fields=fields)
 
 
@@ -152,6 +159,7 @@ def load_lock(
     python_version: Optional[str] = None,
     max_cuda_version: Optional[tuple[int, int]] = None,
     lock_dir: Path = LOCK_DIR,
+    excluded_packages: Sequence[str] = (),
 ) -> VenvLock:
     """Load the committed lock for a venv and check it was compiled from these requirements.
 
@@ -161,6 +169,7 @@ def load_lock(
         python_version: The requested Python version; None takes the lock's.
         max_cuda_version: The backend's CUDA index ceiling.
         lock_dir: Where locks live.
+        excluded_packages: Distributions the lock body leaves out.
 
     Returns:
         The lock.
@@ -177,7 +186,7 @@ def load_lock(
         raise VenvLockError(
             f"Lock for venv '{name}' is for Python {lock.python}, not {python}. " + LOCK_MISSING_HINT.format(name=name)
         )
-    expected = requirements_sha256(requirements, python, max_cuda_version)
+    expected = requirements_sha256(requirements, python, max_cuda_version, excluded_packages)
     if lock.requirements_sha256 != expected:
         raise VenvLockError(
             f"Lock for venv '{name}' was compiled from different requirements. " + LOCK_MISSING_HINT.format(name=name)
@@ -195,6 +204,7 @@ class Backend:
         python: ``major.minor``.
         max_cuda_version: The CUDA index ceiling, or None.
         modules: The modules whose calls name this venv.
+        excluded_packages: Distributions resolved but left out of the lock body.
     """
 
     name: str
@@ -202,6 +212,7 @@ class Backend:
     python: str
     max_cuda_version: Optional[tuple[int, int]]
     modules: list[str] = field(default_factory=list)
+    excluded_packages: tuple[str, ...] = ()
 
 
 _NOT_BACKENDS = frozenset({"senselab.utils.subprocess_venv", "senselab.utils.compatibility_test_runner"})
@@ -264,6 +275,7 @@ def discover_backends(package_root: Optional[Path] = None) -> dict[str, Backend]
             requirements = value(call.args[1] if len(call.args) > 1 else keywords.get("requirements"))
             python = value(call.args[2] if len(call.args) > 2 else keywords.get("python_version"))
             cuda = value(keywords.get("max_cuda_version"))
+            excluded = value(keywords.get("excluded_packages"))
             if not isinstance(name, str) or not isinstance(requirements, list):
                 raise VenvLockError(f"{module_name}: ensure_venv needs a str name and a list of requirements")
             if not isinstance(python, str):
@@ -274,13 +286,15 @@ def discover_backends(package_root: Optional[Path] = None) -> dict[str, Backend]
                 python=python,
                 max_cuda_version=tuple(cuda) if cuda else None,  # type: ignore[arg-type]
                 modules=[module_name],
+                excluded_packages=tuple(excluded) if excluded else (),  # type: ignore[arg-type]
             )
             if name in found:
                 prior = found[name]
-                if (prior.requirements, prior.python, prior.max_cuda_version) != (
+                if (prior.requirements, prior.python, prior.max_cuda_version, prior.excluded_packages) != (
                     backend.requirements,
                     backend.python,
                     backend.max_cuda_version,
+                    backend.excluded_packages,
                 ):
                     raise VenvLockError(f"venv '{name}' has different inputs in {prior.modules} and {module_name}")
                 if module_name not in prior.modules:
@@ -447,6 +461,7 @@ def compile_lock(
     exclude_newer: Optional[str] = None,
     check_torch_index: bool = True,
     max_steps: int = 12,
+    excluded_packages: Sequence[str] = (),
 ) -> str:
     """Compile a lock's full text.
 
@@ -462,6 +477,9 @@ def compile_lock(
         exclude_newer: An RFC 3339 timestamp; distributions uploaded later are ignored.
         check_torch_index: Whether to check the PyTorch indexes (needs network).
         max_steps: How many times ``torch`` may be bounded down.
+        excluded_packages: Distributions resolved but left out of the body, so the ``--no-deps``
+            install never sees them: a dependency the backend declares but never imports, and
+            which cannot be installed everywhere (a GUI toolkit, an audio-device binding).
 
     Returns:
         The lock text, header included.
@@ -498,17 +516,25 @@ def compile_lock(
             extra.append(f"torch<{torch_version}")
         else:
             raise VenvLockError(f"'{name}': no torch within the requirements is served on every index: {notes}")
-        no_emit = tuple(torch_only_cuda_packages(packages)) if pins else ()
+        no_emit = (tuple(torch_only_cuda_packages(packages)) if pins else ()) + tuple(
+            sorted(normalize_name(name) for name in excluded_packages)
+        )
         body = _compile(in_file, python_version, constraints, exclude_newer, hashes=True, no_emit=no_emit)
     uv_version = subprocess.run([_lock_uv(), "--version"], capture_output=True, text=True).stdout.strip()
     lines = [
         f"# senselab subprocess-venv lock: {name}",
-        f"# requirements-sha256: {requirements_sha256(requirements, python_version, max_cuda_version)}",
+        f"# requirements-sha256: "
+        f"{requirements_sha256(requirements, python_version, max_cuda_version, excluded_packages)}",
         f"# python: {python_version}",
         f"# torch: {' '.join(pins) if pins else 'none'}",
         f"# torch-index: {top_cuda_tag(max_cuda_version) if pins else 'none'}",
         f"# exclude-newer: {exclude_newer or 'none'}",
         f"# uv: {uv_version}",
+        *(
+            [f"# exclude: {' '.join(sorted(normalize_name(n) for n in excluded_packages))}"]
+            if excluded_packages
+            else []
+        ),
         *(f"# note: {note}" for note in notes),
         f"# Regenerate: uv run python scripts/lock_subprocess_venvs.py {name}",
     ]
