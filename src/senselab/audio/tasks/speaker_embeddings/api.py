@@ -161,7 +161,7 @@ def estimate_speaker_embedding_from_audios(
             not an error -- it shows up in the returned per-file statistics, which is how a caller
             curates its input.
         model: Embedding model. Defaults to ECAPA.
-        device: CPU or CUDA.
+        device: CPU, CUDA or MPS.
         window_s: Window length. Defaults to the measured profile-centroid value, 2.0 s.
         hop_s: Hop between windows. Defaults to 1.0 s.
         aggregator: ``"spherical_mean"``, ``"trimmed_mean"`` or ``"medoid"``.

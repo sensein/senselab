@@ -114,8 +114,8 @@ def _available_devices() -> List[DeviceType]:
 def _gpu_devices() -> List[DeviceType]:
     """Detect available GPU devices (CUDA only).
 
-    MPS is excluded because most ML backends (speechbrain, pyannote,
-    HF pipelines) don't fully support it with current torch versions.
+    MPS is excluded because MPS support varies by backend; tests that verify a backend on MPS
+    (e.g. ``audio/tasks/mps_parity_test.py``) request it explicitly.
     """
     return [d for d in _available_devices() if d == DeviceType.CUDA]
 
@@ -151,8 +151,7 @@ def gpu_device(request: pytest.FixtureRequest) -> DeviceType:
 def cpu_cuda_device(request: pytest.FixtureRequest) -> DeviceType:
     """Parameterize over CPU and CUDA only (no MPS).
 
-    Use for backends that don't support MPS (speechbrain, pyannote,
-    some HF pipelines). MPS support varies by model — use any_device
+    Use for backends not verified on MPS. MPS support varies by model — use any_device
     only for models verified to work on MPS.
     """
     return request.param
