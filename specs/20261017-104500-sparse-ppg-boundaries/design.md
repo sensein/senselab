@@ -214,19 +214,45 @@ caller's decision. 30 min of events (18 803) take 0.3 s to compute.
 * `CHUNK_BATCH = 16`: on CPU, batch 8–32 were indistinguishable (0.21–0.24 s per minute), and on MPS
   batches of 8 or more ran at 0.06 s per minute.
 
+## Checkpoint pinning
+
+`ppgs.load.model(representation="mel")` called with no checkpoint downloads
+`CameronChurchwell/ppgs/mel-800k.pt` with `hf_hub_download` and no revision, i.e. through
+`refs/main`; an upstream push would have changed the weights under an unchanged provenance record.
+`ppgs.load.model` has no revision parameter but accepts `checkpoint=<local path>`, so:
+
+1. The parent calls `ppgs_checkpoint(revision="main")`: `resolve_revision` (run manifest, then local
+   cache, then Hub) gives the SHA, and `hf_hub_download(repo, "mel-800k.pt", revision=<sha>)` gives
+   `snapshots/<sha>/mel-800k.pt`. A full SHA takes the commit-hash shortcut, so a warm cache makes no
+   network call.
+2. The worker receives that path as `checkpoint` and calls `ppgs.load.model(checkpoint=..., representation="mel")`;
+   it never imports `huggingface_hub`.
+3. `ppgs_model_revision()` returns the same SHA for provenance. `SparsePPG` carries `model_id` and
+   `model_revision` through `save`/`load`, and the triage `ppg_posteriorgram` agent now records
+   `CameronChurchwell/ppgs` at that commit instead of `interactiveaudiolab/ppgs` with an
+   "unresolved" reason (the old reason, "ships with the PyPI release", was wrong: the PyPI wheel holds only
+   similarity and class-weight assets, no model checkpoint, and `LOCAL_CHECKPOINT` defaults to None).
+
+`resolve_model` is not used because it stages the whole repository, which also holds the
+`w2v2fb-425k.pt` checkpoint the `mel` path never reads. `ppg.py` is listed in
+`RAW_LOAD_EXCEPTIONS` (hf_load_coverage_test) and `LOADER_CANNOT_PIN_SUBPROCESS_FILES`
+(revision_pinning_guard_test) for that reason. Verified on the M1 Pro: the commit resolved was
+`407a830baa843ec7f5dbc1cbcc7a819d721c1d4f` and a CPU run on `audio_48khz_mono_16bits.wav` (resampled
+to 16 kHz) returned a `(1, 40, 492)` posteriorgram through the pinned path.
+
 ## Behaviour changes for existing callers
 
 * Posteriors are float32 instead of bfloat16-autocast. Values move by up to 0.34 and about 0.6 % of
   argmax frames change. Cached PPG measurements computed by the old worker are not comparable
   bit-for-bit.
+* The ppgs checkpoint is loaded from the commit `ppgs_checkpoint` resolves (see Checkpoint pinning).
+  On a cold cache this is one `hf_hub_download` of `mel-800k.pt` in the parent instead of in the
+  worker.
 * With `device=None`, Apple Silicon now selects MPS (CUDA → MPS → CPU), whereas before CPU was the
   only non-CUDA option. MPS and CPU agree to 4e-4.
 
 ## Open items
 
-* `ppgs.load.model` downloads `CameronChurchwell/ppgs` with `hf_hub_download` and no revision, so the
-  checkpoint is ref-addressed, not commit-pinned. This predates this change and should be pinned the
-  way CLAUDE.md requires for every model load.
 * `w2v2fb` speed and quality are unmeasured (see Representation).
 * Absolute throughput needs an idle-host re-run (`--matrix`).
 

@@ -105,6 +105,15 @@ DEFAULT_WINDOW_S = 60.0
 CHUNK_BATCH = 16
 """ppgs inference chunks (5 s each) the worker stacks into one forward pass."""
 
+PPGS_REPO_ID = "CameronChurchwell/ppgs"
+"""The Hugging Face repository ppgs downloads its pretrained checkpoints from."""
+
+PPGS_CHECKPOINT_FILE = "mel-800k.pt"
+"""The ``mel`` model's checkpoint inside :data:`PPGS_REPO_ID`."""
+
+PPGS_REVISION = "main"
+"""The ref resolved, through the run manifest, to the commit every checkpoint load is pinned to."""
+
 # Worker script — runs inside the isolated venv (no senselab imports)
 _WORKER_SCRIPT = r"""
 import json
@@ -128,7 +137,7 @@ window_frames = args["window_frames"]
 if window_frames is not None:
     window_frames = -(-int(window_frames) // stride) * stride
 context_frames = stride
-model = ppgs.load.model(representation="mel").to(device).eval()
+model = ppgs.load.model(checkpoint=args["checkpoint"], representation="mel").to(device).eval()
 
 
 chunk_batch = int(args["chunk_batch"])
@@ -243,6 +252,41 @@ def require_posteriorgram(result: "torch.Tensor | PpgsPosteriorgramUnavailable")
     return result
 
 
+def ppgs_checkpoint(revision: str = PPGS_REVISION) -> Tuple[str, Path]:
+    """Resolve the ppgs ``mel`` checkpoint to a commit and stage that commit's file locally.
+
+    The commit comes from :func:`~senselab.utils.model_revision.resolve_revision` (recorded in the
+    run manifest); :data:`PPGS_CHECKPOINT_FILE` is downloaded at that SHA. The worker is handed the
+    local file and makes no Hub call.
+
+    Args:
+        revision: A ref or a 40-hex commit of :data:`PPGS_REPO_ID`.
+
+    Returns:
+        ``(commit_sha, checkpoint_path)``; the path lies under the cache's ``snapshots/<commit_sha>/``.
+    """
+    from huggingface_hub import hf_hub_download
+
+    from senselab.utils.model_revision import resolve_revision
+
+    sha = resolve_revision(PPGS_REPO_ID, revision)
+    return sha, Path(hf_hub_download(PPGS_REPO_ID, PPGS_CHECKPOINT_FILE, revision=sha))
+
+
+def ppgs_model_revision(revision: str = PPGS_REVISION) -> str:
+    """The commit :func:`extract_ppgs_from_audios` loads for ``revision``, for provenance.
+
+    Args:
+        revision: A ref or a 40-hex commit of :data:`PPGS_REPO_ID`.
+
+    Returns:
+        The 40-hex commit SHA (memoized for the run; no I/O after the first resolution).
+    """
+    from senselab.utils.model_revision import resolve_revision
+
+    return resolve_revision(PPGS_REPO_ID, revision)
+
+
 WORKER_STARTUP_S = 300.0
 """Seconds allowed for the worker before it has any audio to read: interpreter, torch, checkpoint."""
 
@@ -267,6 +311,7 @@ def extract_ppgs_from_audios(
     device: Optional[DeviceType] = None,
     timeout_min_s: Optional[float] = None,
     window_s: Optional[float] = DEFAULT_WINDOW_S,
+    revision: str = PPGS_REVISION,
 ) -> List["torch.Tensor | PpgsPosteriorgramUnavailable"]:
     """Extracts phonetic posteriorgrams (PPGs) from every audio.
 
@@ -284,6 +329,9 @@ def extract_ppgs_from_audios(
             allows only the length-scaled budget.
         window_s: Seconds of audio per model call, rounded up to a multiple of ppgs' 4 s chunk stride.
             None runs every recording in one call.
+        revision: Ref or commit of :data:`PPGS_REPO_ID`; resolved to a SHA by :func:`ppgs_checkpoint`
+            and the checkpoint loaded from that commit. :func:`ppgs_model_revision` returns the same
+            SHA for provenance.
 
     Returns:
         One entry per input audio, in input order: a PPG tensor in ``(1, phonemes, frames)`` layout
@@ -309,6 +357,7 @@ def extract_ppgs_from_audios(
             f"ppgs reads every waveform at {PPGS_SAMPLE_RATE} Hz and is given {off_rate}; resample before calling."
         )
 
+    _, checkpoint = ppgs_checkpoint(revision)
     python = venv_python(ensure_ppgs_venv())
     budget = _worker_timeout_s(sum(audio.waveform.shape[-1] / audio.sampling_rate for audio in audios))
     if timeout_min_s is not None:
@@ -331,6 +380,7 @@ def extract_ppgs_from_audios(
                 "device": device.value,
                 "window_frames": None if window_s is None else max(1, round(window_s * PPGS_FRAME_RATE)),
                 "chunk_batch": CHUNK_BATCH,
+                "checkpoint": str(checkpoint),
                 "output_dir": str(tmp),
                 "io_dir": stage_portable_audio_io(tmp),
             }

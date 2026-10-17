@@ -45,6 +45,7 @@ from senselab.audio.workflows.triage.vocabulary import UNDETERMINED, Outcome
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import (
+    FAKE_PPGS_SHA,
     SR,
     _audio,
     _default_samples,
@@ -2325,9 +2326,9 @@ class TestThePosteriorgramAndPraatBlocks:
 
         enhanced_id, _ = resolve_stream(store, tmp_path, "enhanced")
         assert store.derived_from(measurement.id) == [enhanced_id]
-        model_agents = [a for a in store.agents("model") if a.model_id == preprocess_module.PPGS_MODEL_ID]
-        assert model_agents and model_agents[0].commit_sha is None
-        assert model_agents[0].unresolved_reason
+        model_agents = [a for a in store.agents("model") if a.model_id == preprocess_module.PPGS_REPO_ID]
+        assert model_agents and model_agents[0].commit_sha == FAKE_PPGS_SHA
+        assert not model_agents[0].unresolved_reason
 
     def test_praats_scalars_are_attributes_and_the_stream_is_the_enhanced_one(
         self,

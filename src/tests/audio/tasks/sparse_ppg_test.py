@@ -97,3 +97,13 @@ def test_rejects_bad_arguments() -> None:
             phone=np.array([0], dtype=np.uint8),
             prob=np.array([1.0], dtype=np.float16),
         )
+
+
+def test_model_provenance_survives_save_load(tmp_path: Path) -> None:
+    """The producing model's repository and commit round-trip; an unset pair loads as None."""
+    sha = "407a830baa843ec7f5dbc1cbcc7a819d721c1d4f"
+    sparse = sparsify_ppg(_dirichlet_ppg(frames=20), model_id="CameronChurchwell/ppgs", model_revision=sha)
+    loaded = SparsePPG.load(sparse.save(tmp_path / "with"))
+    assert (loaded.model_id, loaded.model_revision) == ("CameronChurchwell/ppgs", sha)
+    bare = SparsePPG.load(sparsify_ppg(_dirichlet_ppg(frames=20)).save(tmp_path / "without"))
+    assert (bare.model_id, bare.model_revision) == (None, None)
