@@ -176,6 +176,16 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         dep_versions={"transformers": ">=5.0", "sentence-transformers": ">=5.1"},
         install_hint="pip install senselab",
     ),
+    "text.tasks.sentiment_analysis.analyze_sentiment": CompatibilityEntry(
+        required_deps=["transformers"],
+        dep_versions={"transformers": ">=5.0"},
+        install_hint="pip install senselab",
+    ),
+    "text.tasks.sentiment_analysis.classify_text_emotions": CompatibilityEntry(
+        required_deps=["transformers"],
+        dep_versions={"transformers": ">=5.0"},
+        install_hint="pip install senselab",
+    ),
     # ── Audio: Data Augmentation ──
     "audio.tasks.data_augmentation.augment_audios": CompatibilityEntry(
         required_deps=["audiomentations", "torch-audiomentations"],
