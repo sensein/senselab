@@ -50,7 +50,7 @@ def build_detector(spec: Dict[str, Any]) -> Any:  # noqa: ANN401
 
 def run(spec: Dict[str, Any]) -> Dict[str, Any]:
     """Run the detector over every tile of every sampled frame and save the arrays."""
-    import torch  # must load its libomp before feat's scikit-learn does (spec D-6)
+    import torch  # must load its OpenMP runtime before feat's xgboost does (spec D-6)
 
     if spec.get("threads"):
         torch.set_num_threads(int(spec["threads"]))
