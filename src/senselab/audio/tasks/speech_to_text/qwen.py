@@ -182,7 +182,9 @@ def _release_mps_cache_after(owner, name):
 
 def handle(state, args):
     return_timestamps = state["return_timestamps"]
-    results = state["asr"].transcribe(audio=args["audio_paths"], return_time_stamps=return_timestamps)
+    results = state["asr"].transcribe(
+        audio=args["audio_paths"], language=args.get("language"), return_time_stamps=return_timestamps
+    )
     serialized = []
     for r in results:
         item = {"text": r.text, "language": r.language}
@@ -287,6 +289,8 @@ class QwenASR:
         device: Optional[DeviceType] = None,
         return_timestamps: bool = True,
         forced_aligner: Optional[str] = None,
+        aligner_revision: Optional[str] = None,
+        language: Optional[str] = None,
         max_chunk_sec: Optional[float] = None,
     ) -> List[ScriptLine]:
         """Transcribe audios with Qwen3-ASR via the dedicated subprocess venv.
@@ -304,6 +308,10 @@ class QwenASR:
             forced_aligner: Override the companion aligner model id.
                 Defaults to ``Qwen/Qwen3-ForcedAligner-0.6B`` when
                 ``return_timestamps=True``.
+            aligner_revision: Ref (branch, tag or commit) of the aligner; default ``main``.
+                Resolved once to a commit SHA, which the worker loads and the run manifest records.
+            language: English language name (for example ``"English"``) to force instead of
+                detecting it; the worker raises if Qwen3-ASR does not support it.
             max_chunk_sec: Longest piece of audio decoded in one pass. ``None`` keeps
                 the device default (the wrapper's 180 s with timestamps, 1200 s
                 without; 30 s on MPS).
@@ -335,7 +343,8 @@ class QwenASR:
         from senselab.utils.model_revision import resolve_revision
 
         revision = model.commit_sha or resolve_revision(model_name, model.revision)
-        aligner_revision = resolve_revision(aligner_name, "main") if return_timestamps else None
+        aligner_ref = aligner_revision or "main"
+        aligner_revision = resolve_revision(aligner_name, aligner_ref) if return_timestamps else None
 
         with tempfile.TemporaryDirectory(prefix="senselab-qwen-asr-") as tmpdir:
             tmp = Path(tmpdir)
@@ -365,7 +374,7 @@ class QwenASR:
             # resolve_model still pins through the run manifest either way, so the staged commit --
             # and the SHA in the payload -- is unchanged; only where refs/<ref> points differs.
             # Matches text_to_speech/qwen_tts.py and the three bare-loader backends.
-            also = [(aligner_name, "main")] if return_timestamps and aligner_revision is not None else None
+            also = [(aligner_name, aligner_ref)] if return_timestamps and aligner_revision is not None else None
             env = hf_subprocess_env(model_name, model.revision, also=also, base_env=_clean_subprocess_env())
             if device_type == DeviceType.MPS:
                 env = {**MPS_ENV, **env}
@@ -407,7 +416,7 @@ class QwenASR:
                         python=python,
                         script=_QWEN_WORKER_SCRIPT,
                         init=init,
-                        request={"audio_paths": [str(path)]},
+                        request={"audio_paths": [str(path)], "language": language},
                         env=env,
                         label="Qwen3-ASR",
                         load_timeout_s=_QWEN_LOAD_TIMEOUT_S,
@@ -484,6 +493,7 @@ class QwenASR:
         levels_to_keep: Optional[dict] = None,  # noqa: ARG003 — accepted for align_transcriptions parity
         aligner_model: Optional[str] = None,
         device: Optional[DeviceType] = None,
+        aligner_revision: Optional[str] = None,
         **_kwargs: Any,  # noqa: ANN401 — parity with align_transcriptions' extra kwargs
     ) -> List[List[ScriptLine]]:
         """Force-align existing (audio, transcript) pairs with Qwen3-ForcedAligner.
@@ -499,6 +509,8 @@ class QwenASR:
                 for signature parity so the caller can swap aligners freely.
             aligner_model: Aligner id (default ``Qwen/Qwen3-ForcedAligner-0.6B``).
             device: CPU or CUDA.
+            aligner_revision: Ref of the aligner (default ``main``), resolved to a commit SHA
+                before the worker loads it.
 
         Returns:
             ``List[List[ScriptLine]]`` mirroring ``align_transcriptions``: one
@@ -519,7 +531,8 @@ class QwenASR:
         # rest of the codebase.
         from senselab.utils.model_revision import resolve_revision
 
-        aligner_revision = resolve_revision(aligner_name, "main")
+        aligner_ref = aligner_revision or "main"
+        aligner_revision = resolve_revision(aligner_name, aligner_ref)
 
         with tempfile.TemporaryDirectory(prefix="senselab-qwen-align-") as tmpdir:
             tmp = Path(tmpdir)
@@ -560,7 +573,7 @@ class QwenASR:
             # commit that stale pointer names while provenance records the pinned one. Passing the
             # ref makes _point_ref_at write refs/<ref> at the pinned commit; the staged commit is
             # unchanged.
-            env = hf_subprocess_env(aligner_name, "main", base_env=_clean_subprocess_env())
+            env = hf_subprocess_env(aligner_name, aligner_ref, base_env=_clean_subprocess_env())
             result = subprocess.run(
                 [python, "-c", _QWEN_ALIGN_WORKER_SCRIPT],
                 input=input_json,
