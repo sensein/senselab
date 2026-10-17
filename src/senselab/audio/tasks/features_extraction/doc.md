@@ -136,3 +136,15 @@ upstream's windowed branch raises `NameError`.
 
 Design, the pin, and the two constraints the worker has to satisfy to import it at all:
 `specs/20260819-clearvoice-integration/design.md` §9.
+
+
+## Phonetic posteriorgrams: sparse storage and phone boundaries
+
+`extract_ppgs_from_audios` runs the ppgs `mel` model (float32; CPU, MPS or CUDA) over windows aligned
+to ppgs' own chunk grid, so memory stays bounded for long recordings and the result equals a one-call
+run. `sparsify_ppg` stores the top phones per frame as a `SparsePPG` (COO arrays, `.save`/`.load`).
+`ppg_phone_events` turns a posteriorgram into phone events with sub-frame onsets/offsets, transition
+widths and logistic-equivalent sigmas; `ppg_boundary_probability` gives a continuous boundary signal.
+`phone_rate_by_speaker`, `phone_class_duration_stats`, `turn_transition_timing` and `filler_support`
+summarise events against speaker spans. Definitions and measurements:
+`specs/20261017-104500-sparse-ppg-boundaries/design.md`.
