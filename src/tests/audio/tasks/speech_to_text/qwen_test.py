@@ -124,3 +124,75 @@ def test_align_with_qwen_maps_worker_output_to_scriptlines(monkeypatch: pytest.M
     assert utt.text == "This is Peter"
     assert utt.start == 0.0 and utt.end == 0.9
     assert utt.chunks is not None and [c.text for c in utt.chunks] == ["This", "is", "Peter"]
+
+
+def _stub_qwen_staging(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr(qwen_mod, "hf_subprocess_env", lambda *a, **k: {"HF_HUB_OFFLINE": "1"})
+    monkeypatch.setattr(qwen_mod, "ensure_venv", lambda *a, **k: "/fake/venv")
+    monkeypatch.setattr(qwen_mod, "venv_python", lambda *a, **k: "/fake/venv/bin/python")
+
+
+def _capture_serve(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    calls: list[dict] = []
+
+    def _serve(identity: tuple, **k: object) -> dict:
+        calls.append({"identity": identity, **k})
+        return {"results": [{"text": "hello", "chunks": [{"text": "hello", "start": 0.0, "end": 0.5}]}]}
+
+    monkeypatch.setattr(qwen_mod, "serve_in_venv", _serve)
+    return calls
+
+
+def test_mps_loads_half_precision_in_short_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On MPS the worker gets float16, 30 s chunks, batch 1 and the allocator limits."""
+    from senselab.utils.data_structures import DeviceType
+
+    _stub_qwen_staging(monkeypatch)
+    calls = _capture_serve(monkeypatch)
+    audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000)
+    model: HFModel = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B", revision="main")
+    QwenASR.transcribe_with_qwen([audio], model=model, device=DeviceType.MPS)
+
+    [call] = calls
+    init = call["init"]
+    assert init["device"] == "mps" and init["dtype"] == "float16"
+    assert init["max_chunk_sec"] == 30.0 and init["max_inference_batch_size"] == 1
+    assert call["env"]["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] == qwen_mod.MPS_ENV["PYTORCH_MPS_HIGH_WATERMARK_RATIO"]
+    assert call["env"]["HF_HUB_OFFLINE"] == "1"
+    assert "float16" in call["identity"]
+
+
+def test_cpu_and_cuda_payloads_are_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Off MPS no dtype/chunk/batch keys reach the worker, so the wrapper keeps its own defaults."""
+    from senselab.utils.data_structures import DeviceType
+
+    _stub_qwen_staging(monkeypatch)
+    calls = _capture_serve(monkeypatch)
+    audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000)
+    model: HFModel = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B", revision="main")
+    for device in (DeviceType.CPU, DeviceType.CUDA):
+        QwenASR.transcribe_with_qwen([audio], model=model, device=device)
+    for call in calls:
+        assert not {"dtype", "max_chunk_sec", "max_inference_batch_size"} & set(call["init"])
+        assert "PYTORCH_MPS_HIGH_WATERMARK_RATIO" not in call["env"]
+        assert "default" in call["identity"]
+
+
+def test_chunk_override_and_one_request_per_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``max_chunk_sec`` overrides the device default; each file is its own request, timeout scaled."""
+    from senselab.utils.data_structures import DeviceType
+
+    _stub_qwen_staging(monkeypatch)
+    calls = _capture_serve(monkeypatch)
+    short = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000)
+    long = Audio(waveform=torch.zeros(1, 16000 * 1000), sampling_rate=16000)
+    model: HFModel = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B", revision="main")
+    out = QwenASR.transcribe_with_qwen([short, long], model=model, device=DeviceType.CPU, max_chunk_sec=45)
+
+    assert len(out) == 2 and len(calls) == 2
+    assert all(c["init"]["max_chunk_sec"] == 45.0 for c in calls)
+    assert all(len(c["request"]["audio_paths"]) == 1 for c in calls)
+    assert calls[1]["request_timeout_s"] == pytest.approx(qwen_mod.REQUEST_SECONDS_PER_AUDIO_SECOND * 1000)
+    assert out[1].chunks is not None and out[1].chunks[0].timestamp_model == qwen_mod._DEFAULT_FORCED_ALIGNER

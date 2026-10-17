@@ -129,8 +129,30 @@ def load(init):
         load_kwargs["forced_aligner"] = aligner_name
         load_kwargs["forced_aligner_kwargs"] = {"revision": init.get("forced_aligner_revision")}
 
+    if init.get("dtype"):
+        load_kwargs["dtype"] = getattr(torch, init["dtype"])
+        if aligner_name:
+            load_kwargs["forced_aligner_kwargs"]["dtype"] = load_kwargs["dtype"]
+    for key in ("max_inference_batch_size", "max_new_tokens"):
+        if init.get(key) is not None:
+            load_kwargs[key] = int(init[key])
+    if init.get("max_chunk_sec"):
+        import qwen_asr.inference.qwen3_asr as qwen3_asr
+
+        qwen3_asr.MAX_ASR_INPUT_SECONDS = float(init["max_chunk_sec"])
+        qwen3_asr.MAX_FORCE_ALIGN_INPUT_SECONDS = float(init["max_chunk_sec"])
+
+    if init["device"] == "mps":
+        load_kwargs["device_map"] = "mps"
+        if aligner_name:
+            load_kwargs["forced_aligner_kwargs"]["device_map"] = "mps"
+
     asr = Qwen3ASRModel.from_pretrained(init["model_name"], **load_kwargs)
-    if init["device"] == "cuda" and torch.cuda.is_available():
+    if init["device"] == "mps":
+        _release_mps_cache_after(asr.model, "generate")
+        if getattr(asr, "forced_aligner", None) is not None:
+            _release_mps_cache_after(asr.forced_aligner, "align")
+    elif init["device"] == "cuda" and torch.cuda.is_available():
         try:
             asr.model = asr.model.cuda()
             if getattr(asr, "forced_aligner", None) is not None:
@@ -142,6 +164,20 @@ def load(init):
                 file=sys.stderr,
             )
     return {"asr": asr, "return_timestamps": bool(init.get("return_timestamps", True))}
+
+
+def _release_mps_cache_after(owner, name):
+    import torch
+
+    method = getattr(owner, name)
+
+    def wrapped(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        finally:
+            torch.mps.empty_cache()
+
+    setattr(owner, name, wrapped)
 
 
 def handle(state, args):
@@ -162,6 +198,34 @@ def handle(state, args):
 _QWEN_LOAD_TIMEOUT_S = 1800
 _QWEN_REQUEST_TIMEOUT_S = 1800
 
+REQUEST_SECONDS_PER_AUDIO_SECOND = 3.0
+"""Per-file request timeout, in seconds per second of audio, when that exceeds ``_QWEN_REQUEST_TIMEOUT_S``."""
+
+MPS_SETTINGS = {"dtype": "float16", "max_chunk_sec": 30.0, "max_inference_batch_size": 1}
+"""Load and chunking settings on Apple-silicon MPS (measurements: specs/20261017-104000-asr-apple-silicon/)."""
+
+MPS_ENV = {"PYTORCH_MPS_HIGH_WATERMARK_RATIO": "0.4", "PYTORCH_MPS_LOW_WATERMARK_RATIO": "0.3"}
+"""MPS allocator limits set in the worker's environment on MPS (same measurements)."""
+
+
+def _runtime_settings(device: DeviceType, max_chunk_sec: Optional[float]) -> dict:
+    """Return the worker's dtype, chunk length and batch size for ``device``.
+
+    Args:
+        device: The device the worker loads onto.
+        max_chunk_sec: Caller override of the chunk length; ``None`` keeps the device default.
+
+    Returns:
+        A mapping of ``dtype``, ``max_chunk_sec`` and ``max_inference_batch_size`` (``None`` keeps
+        the ``qwen-asr`` wrapper's own value).
+    """
+    settings: dict = {"dtype": None, "max_chunk_sec": None, "max_inference_batch_size": None}
+    if device == DeviceType.MPS:
+        settings.update(MPS_SETTINGS)
+    if max_chunk_sec is not None:
+        settings["max_chunk_sec"] = float(max_chunk_sec)
+    return settings
+
 
 class QwenASR:
     """Alibaba Qwen3-ASR transcription via isolated subprocess venv.
@@ -180,18 +244,24 @@ class QwenASR:
         device: Optional[DeviceType] = None,
         return_timestamps: bool = True,
         forced_aligner: Optional[str] = None,
+        max_chunk_sec: Optional[float] = None,
     ) -> List[ScriptLine]:
         """Transcribe audios with Qwen3-ASR via the dedicated subprocess venv.
 
         Args:
             audios: Audio clips to transcribe (mono, 16 kHz expected).
             model: HF model id (default: ``Qwen/Qwen3-ASR-1.7B``).
-            device: CPU or CUDA. CUDA strongly recommended.
+            device: CUDA, MPS or CPU (default: the fastest available). On MPS the
+                models load in float16 and audio is decoded in :data:`MPS_SETTINGS`
+                chunks, one at a time.
             return_timestamps: When True, also load the companion forced
                 aligner and populate per-span ``chunks`` on each ScriptLine.
             forced_aligner: Override the companion aligner model id.
                 Defaults to ``Qwen/Qwen3-ForcedAligner-0.6B`` when
                 ``return_timestamps=True``.
+            max_chunk_sec: Longest piece of audio decoded in one pass. ``None`` keeps
+                the device default (the wrapper's 180 s with timestamps, 1200 s
+                without; 30 s on MPS).
 
         Returns:
             One ``ScriptLine`` per input audio with ``text`` populated. When
@@ -201,8 +271,11 @@ class QwenASR:
         if model is None:
             model = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B")
         model_name = str(model.path_or_uri)
-        device_type = device or _select_device_and_dtype(compatible_devices=[DeviceType.CUDA, DeviceType.CPU])[0]
+        device_type = (
+            device or _select_device_and_dtype(compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU])[0]
+        )
         aligner_name = forced_aligner or _DEFAULT_FORCED_ALIGNER
+        settings = _runtime_settings(device_type, max_chunk_sec)
 
         venv_dir = ensure_venv(_QWEN_VENV, _QWEN_REQUIREMENTS, python_version=_QWEN_PYTHON)
         python = venv_python(venv_dir)
@@ -221,12 +294,6 @@ class QwenASR:
 
         with tempfile.TemporaryDirectory(prefix="senselab-qwen-asr-") as tmpdir:
             tmp = Path(tmpdir)
-
-            audio_paths: List[str] = []
-            for i, audio in enumerate(audios):
-                path = str(tmp / f"audio_{i}.wav")
-                audio.save_to_file(path)
-                audio_paths.append(path)
 
             # Stage the ASR model (and, when timestamps are requested, its forced-aligner
             # companion) once — cross-process — and flip the child to offline so its
@@ -255,35 +322,47 @@ class QwenASR:
             # Matches text_to_speech/qwen_tts.py and the three bare-loader backends.
             also = [(aligner_name, "main")] if return_timestamps and aligner_revision is not None else None
             env = hf_subprocess_env(model_name, model.revision, also=also, base_env=_clean_subprocess_env())
-            output = serve_in_venv(
-                (
-                    Path(venv_dir).name,
-                    model_name,
-                    revision,
-                    device_type.value,
-                    "default",
-                    aligner_name,
-                    aligner_revision,
-                ),
-                python=python,
-                script=_QWEN_WORKER_SCRIPT,
-                init={
-                    "model_name": model_name,
-                    "model_revision": revision,
-                    "device": device_type.value,
-                    "return_timestamps": return_timestamps,
-                    "forced_aligner": aligner_name if return_timestamps else None,
-                    "forced_aligner_revision": aligner_revision,
-                },
-                request={"audio_paths": audio_paths},
-                env=env,
-                label="Qwen3-ASR",
-                load_timeout_s=_QWEN_LOAD_TIMEOUT_S,
-                request_timeout_s=_QWEN_REQUEST_TIMEOUT_S,
+            if device_type == DeviceType.MPS:
+                env = {**MPS_ENV, **env}
+            init = {
+                "model_name": model_name,
+                "model_revision": revision,
+                "device": device_type.value,
+                "return_timestamps": return_timestamps,
+                "forced_aligner": aligner_name if return_timestamps else None,
+                "forced_aligner_revision": aligner_revision,
+            }
+            init.update({k: v for k, v in settings.items() if v is not None})
+            identity = (
+                Path(venv_dir).name,
+                model_name,
+                revision,
+                device_type.value,
+                settings["dtype"] or "default",
+                aligner_name,
+                aligner_revision,
             )
+            entries: List[dict] = []
+            for i, audio in enumerate(audios):
+                path = tmp / f"audio_{i}.wav"
+                audio.save_to_file(str(path))
+                duration_s = audio.waveform.shape[-1] / float(audio.sampling_rate)
+                output = serve_in_venv(
+                    identity,
+                    python=python,
+                    script=_QWEN_WORKER_SCRIPT,
+                    init=init,
+                    request={"audio_paths": [str(path)]},
+                    env=env,
+                    label="Qwen3-ASR",
+                    load_timeout_s=_QWEN_LOAD_TIMEOUT_S,
+                    request_timeout_s=max(_QWEN_REQUEST_TIMEOUT_S, REQUEST_SECONDS_PER_AUDIO_SECOND * duration_s),
+                )
+                path.unlink(missing_ok=True)
+                entries.extend(output.get("results", []))
 
             results: List[ScriptLine] = []
-            for entry in output.get("results", []):
+            for entry in entries:
                 chunks_raw = entry.get("chunks")
                 chunks: Optional[List[ScriptLine]] = None
                 line_start: Optional[float] = None
