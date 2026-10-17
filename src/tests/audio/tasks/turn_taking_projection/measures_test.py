@@ -104,6 +104,16 @@ def test_short_gaps_and_backchannels_do_not_open_pauses() -> None:
     assert len(rows) == 1
     assert rows[0]["outcome"] == "hold"
     assert rows[0]["start"] == pytest.approx(4.0) and rows[0]["end"] == pytest.approx(5.0)
+    assert rows[0]["backchannel_in_pause"] is True
+
+
+def test_pauses_holding_a_backchannel_are_left_out_of_the_score() -> None:
+    """The listener's voice in a pause is not a mutual silence, so the summary does not score it."""
+    vap = frames(20.0, p_now_a=0.2)
+    ipus = [line("A", 0.0, 2.0), line("B", 2.2, 2.5), line("A", 3.0, 5.0), line("A", 6.0, 8.0)]
+    pauses = summarize_projection(vap, [line("A", 0.0, 8.0)], ipus)["overall"]["pauses"]
+    assert pauses["n_pauses"] == 2 and pauses["n_with_backchannel"] == 1
+    assert pauses["n_hold"] == 1 and pauses["accuracy"] == 0.0
 
 
 def test_an_overlapped_ipu_does_not_make_the_shorter_speaker_last() -> None:
