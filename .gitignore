@@ -269,3 +269,6 @@ node_modules
 package-lock.json
 test-results/
 playwright-report/
+# ...and for turn_taking_projection parameters (constants with derivations)
+!src/senselab/audio/tasks/turn_taking_projection/data/
+!src/senselab/audio/tasks/turn_taking_projection/data/**
