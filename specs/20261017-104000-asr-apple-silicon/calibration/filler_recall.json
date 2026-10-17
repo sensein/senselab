@@ -1,0 +1,86 @@
+{
+    "EN2002a_ihmmix.crisperwhisper": {
+        "ref_fillers": 113,
+        "hyp_fillers": 66,
+        "matched": 51,
+        "recall": 0.45132743362831856,
+        "precision": 0.7727272727272727
+    },
+    "EN2002a_ihmmix.qwen3asr": {
+        "ref_fillers": 113,
+        "hyp_fillers": 27,
+        "matched": 26,
+        "recall": 0.23008849557522124,
+        "precision": 0.9629629629629629
+    },
+    "EN2002a_ihmmix_pink5db.crisperwhisper": {
+        "ref_fillers": 113,
+        "hyp_fillers": 48,
+        "matched": 19,
+        "recall": 0.168141592920354,
+        "precision": 0.3958333333333333
+    },
+    "EN2002a_ihmmix_pink5db.qwen3asr": {
+        "ref_fillers": 113,
+        "hyp_fillers": 8,
+        "matched": 2,
+        "recall": 0.017699115044247787,
+        "precision": 0.25
+    },
+    "EN2002a_top2mix.crisperwhisper": {
+        "ref_fillers": 63,
+        "hyp_fillers": 60,
+        "matched": 44,
+        "recall": 0.6984126984126984,
+        "precision": 0.7333333333333333
+    },
+    "EN2002a_top2mix.qwen3asr": {
+        "ref_fillers": 63,
+        "hyp_fillers": 17,
+        "matched": 16,
+        "recall": 0.25396825396825395,
+        "precision": 0.9411764705882353
+    },
+    "EN2002b_ihmmix.crisperwhisper": {
+        "ref_fillers": 143,
+        "hyp_fillers": 87,
+        "matched": 69,
+        "recall": 0.4825174825174825,
+        "precision": 0.7931034482758621
+    },
+    "EN2002b_ihmmix.qwen3asr": {
+        "ref_fillers": 143,
+        "hyp_fillers": 35,
+        "matched": 35,
+        "recall": 0.24475524475524477,
+        "precision": 1.0
+    },
+    "EN2002b_top2mix.crisperwhisper": {
+        "ref_fillers": 110,
+        "hyp_fillers": 79,
+        "matched": 61,
+        "recall": 0.5545454545454546,
+        "precision": 0.7721518987341772
+    },
+    "EN2002b_top2mix.qwen3asr": {
+        "ref_fillers": 110,
+        "hyp_fillers": 35,
+        "matched": 34,
+        "recall": 0.3090909090909091,
+        "precision": 0.9714285714285714
+    },
+    "EN2002b_top2mix_pink10db.crisperwhisper": {
+        "ref_fillers": 110,
+        "hyp_fillers": 54,
+        "matched": 42,
+        "recall": 0.38181818181818183,
+        "precision": 0.7777777777777778
+    },
+    "EN2002b_top2mix_pink10db.qwen3asr": {
+        "ref_fillers": 110,
+        "hyp_fillers": 9,
+        "matched": 8,
+        "recall": 0.07272727272727272,
+        "precision": 0.8888888888888888
+    }
+}
