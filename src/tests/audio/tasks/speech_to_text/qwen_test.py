@@ -196,3 +196,53 @@ def test_chunk_override_and_one_request_per_file(monkeypatch: pytest.MonkeyPatch
     assert all(len(c["request"]["audio_paths"]) == 1 for c in calls)
     assert calls[1]["request_timeout_s"] == pytest.approx(qwen_mod.REQUEST_SECONDS_PER_AUDIO_SECOND * 1000)
     assert out[1].chunks is not None and out[1].chunks[0].timestamp_model == qwen_mod._DEFAULT_FORCED_ALIGNER
+
+
+def test_segment_bounds_cover_the_input_and_cut_at_silence() -> None:
+    """Pieces tile the input exactly; a cut lands in the silent gap nearest each target."""
+    import numpy as np
+
+    sr = 100
+    x = np.ones(1000, dtype=np.float32)
+    x[395:405] = 0.0  # a silent 0.1 s gap near the 4 s target
+    bounds = qwen_mod._segment_bounds(x, sr, 4.0)
+    assert bounds[0][0] == 0 and bounds[-1][1] == len(x)
+    assert all(b0[1] == b1[0] for b0, b1 in zip(bounds, bounds[1:]))
+    assert 395 <= bounds[0][1] <= 405
+    assert qwen_mod._segment_bounds(x[:300], sr, 4.0) == [(0, 300)]
+
+
+def test_long_mps_audio_is_decoded_in_pieces_by_fresh_workers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Over MPS_SEGMENT_SEC the audio goes as pieces, word times are shifted back, workers recycled."""
+    from senselab.utils.data_structures import DeviceType
+
+    _stub_qwen_staging(monkeypatch)
+    calls = _capture_serve(monkeypatch)
+    closed: list[str] = []
+    monkeypatch.setattr(qwen_mod, "close_venv_workers", closed.append)
+    monkeypatch.setattr(qwen_mod, "MPS_SEGMENT_SEC", 2.0)
+    audio = Audio(waveform=torch.ones(1, 16000 * 5), sampling_rate=16000)
+    model: HFModel = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B", revision="main")
+    [line] = QwenASR.transcribe_with_qwen([audio], model=model, device=DeviceType.MPS)
+
+    assert len(calls) == 3 and closed == ["Qwen3-ASR"] * 3
+    assert line.text == "hello hello hello"
+    starts = [c.start for c in line.chunks or []]
+    expected = [a / 16000 for a, _ in qwen_mod._segment_bounds(audio.waveform[0], 16000, 2.0)]
+    assert starts == pytest.approx(expected)
+    assert starts[2] is not None and line.end == pytest.approx(starts[2] + 0.5)
+
+
+def test_short_or_off_mps_audio_is_one_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Below the segment length, or on CPU, one request and no worker recycling."""
+    from senselab.utils.data_structures import DeviceType
+
+    _stub_qwen_staging(monkeypatch)
+    calls = _capture_serve(monkeypatch)
+    closed: list[str] = []
+    monkeypatch.setattr(qwen_mod, "close_venv_workers", closed.append)
+    monkeypatch.setattr(qwen_mod, "MPS_SEGMENT_SEC", 2.0)
+    audio = Audio(waveform=torch.ones(1, 16000 * 5), sampling_rate=16000)
+    model: HFModel = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B", revision="main")
+    QwenASR.transcribe_with_qwen([audio], model=model, device=DeviceType.CPU)
+    assert len(calls) == 1 and closed == []
