@@ -132,7 +132,10 @@ def pause_events(vap: VAPResult, ipus: Sequence[ScriptLine], backchannels: Seque
     The last speaker is the one whose IPU ended last before the silence; the outcome is ``shift``
     when the next IPU is the other speaker's. The score is the other speaker's mean ``p_now`` from
     ``pause_read_offset_seconds`` to ``pause_read_offset_seconds + pause_read_seconds`` into the
-    pause, clipped to the pause.
+    pause, clipped to the pause. A pause with a backchannel anywhere in it is not a mutual silence:
+    its row carries ``backchannel_in_pause=True`` and is left out of the summaries, because the
+    listener's own voice in the read window moves ``p_now`` towards the listener whatever the
+    floor does next.
 
     Args:
         vap: The frames.
@@ -141,7 +144,7 @@ def pause_events(vap: VAPResult, ipus: Sequence[ScriptLine], backchannels: Seque
 
     Returns:
         Rows with ``last``, ``next``, ``start``, ``end``, ``outcome``, ``p_shift``, ``predicted``,
-        ``correct``.
+        ``correct``, ``backchannel_in_pause``.
     """
     params = parameters()
     offset = float(params["pause_read_offset_seconds"])
@@ -172,6 +175,7 @@ def pause_events(vap: VAPResult, ipus: Sequence[ScriptLine], backchannels: Seque
                     "p_shift": score,
                     "predicted": predicted,
                     "correct": None if predicted is None else predicted == outcome,
+                    "backchannel_in_pause": any(a < start and b > latest_end for _, a, b in backchannels),
                 }
             )
         if end >= latest_end:
@@ -256,7 +260,7 @@ def _auc(positive: List[float], negative: List[float]) -> Optional[float]:
 
 
 def _pause_summary(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    scored = [r for r in rows if r["p_shift"] is not None]
+    scored = [r for r in rows if r["p_shift"] is not None and not r["backchannel_in_pause"]]
     shifts = [r["p_shift"] for r in scored if r["outcome"] == "shift"]
     holds = [r["p_shift"] for r in scored if r["outcome"] == "hold"]
     recall = [
@@ -266,6 +270,7 @@ def _pause_summary(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     ]
     return {
         "n_pauses": len(rows),
+        "n_with_backchannel": sum(1 for r in rows if r["backchannel_in_pause"]),
         "n_shift": len(shifts),
         "n_hold": len(holds),
         "accuracy": float(np.mean([r["correct"] for r in scored])) if scored else None,
