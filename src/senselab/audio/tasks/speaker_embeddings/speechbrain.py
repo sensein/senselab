@@ -10,7 +10,9 @@ from senselab.utils.data_structures import DeviceType, SpeechBrainModel, _select
 from senselab.utils.dependencies import (
     resolve_model,
     retry_on_transient_error,
+    speechbrain_load_device,
     speechbrain_loading_cwd,
+    speechbrain_move_to,
     speechbrain_savedir,
 )
 
@@ -38,7 +40,7 @@ class SpeechBrainEmbeddings:
         Args:
             model (SpeechBrainModel): The SpeechBrain model.
             device (Optional[DeviceType]): The device to run the model on.
-                Only CPU and CUDA are supported.
+                CPU, CUDA or MPS; the fastest available when omitted.
 
         Returns:
             EncoderClassifier: The SpeechBrain model.
@@ -53,7 +55,7 @@ class SpeechBrainEmbeddings:
             )
 
         device, _ = _select_device_and_dtype(
-            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU]
         )
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._models:
@@ -66,13 +68,15 @@ class SpeechBrainEmbeddings:
             # immutable snapshot path rather than the mutable repo id.
             _, snapshot_path = resolve_model(str(model.path_or_uri), model.revision or "main")
             savedir = speechbrain_savedir(str(model.path_or_uri), model.revision)
+            target = device_run_opt(device)
             with speechbrain_loading_cwd(savedir):
-                cls._models[key] = retry_on_transient_error(
+                loaded = retry_on_transient_error(
                     EncoderClassifier.from_hparams,
                     source=str(snapshot_path),
                     savedir=str(savedir),
-                    run_opts={"device": device_run_opt(device)},
+                    run_opts={"device": speechbrain_load_device(target)},
                 )
+            cls._models[key] = speechbrain_move_to(loaded, target)
         return cls._models[key]
 
     @classmethod
@@ -89,10 +93,10 @@ class SpeechBrainEmbeddings:
             model (SpeechBrainModel): The model used to compute the embeddings.
                 If None, the default model "speechbrain/spkrec-ecapa-voxceleb" is used.
             device (Optional[DeviceType]): The device to run the model on (default is None).
-                Only CPU and CUDA are supported.
+                CPU, CUDA or MPS; the fastest available when omitted.
 
         Returns:
-            List[torch.Tensor]: A list of tensors containing the speaker embeddings for each audio file.
+            List[torch.Tensor]: CPU tensors, one speaker embedding per audio, whatever the compute device.
 
         Todo:
             - Optimizing the computation by working in batches
@@ -141,6 +145,6 @@ class SpeechBrainEmbeddings:
         embeddings_batch = classifier.encode_batch(waveforms, wav_lens)
 
         # Split the batch embeddings into a list of individual embeddings
-        embeddings = [embedding.squeeze() for embedding in embeddings_batch]
+        embeddings = [embedding.squeeze().detach().cpu() for embedding in embeddings_batch]
 
         return embeddings

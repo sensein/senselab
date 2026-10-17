@@ -30,6 +30,10 @@ from transformers import PretrainedConfig
 
 from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.audio.tasks.classification.huggingface import HuggingFaceAudioClassifier
+from senselab.audio.tasks.classification.speech_emotion_recognition.emotion2vec import (
+    classify_emotions_with_emotion2vec,
+    is_emotion2vec,
+)
 from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.utils.data_structures import (
     DeviceType,
@@ -40,7 +44,14 @@ from senselab.utils.data_structures import (
     device_run_opt,
     logger,
 )
-from senselab.utils.dependencies import hf_subprocess_env, resolve_model, speechbrain_loading_cwd, speechbrain_savedir
+from senselab.utils.dependencies import (
+    hf_subprocess_env,
+    resolve_model,
+    speechbrain_load_device,
+    speechbrain_loading_cwd,
+    speechbrain_move_to,
+    speechbrain_savedir,
+)
 from senselab.utils.subprocess_venv import (
     _clean_subprocess_env,
     ensure_venv,
@@ -92,6 +103,62 @@ _config_memo_locks: dict[tuple[str, str], threading.Lock] = {}
 _config_memo_locks_guard = threading.Lock()
 
 
+def _commit(model: "HFModel") -> str:
+    """The 40-hex commit ``model`` is pinned to (resolved at construction; re-resolved if unset)."""
+    if model.commit_sha:
+        return model.commit_sha
+    from senselab.utils.model_revision import resolve_revision
+
+    return resolve_revision(str(model.path_or_uri), model.revision or "main")
+
+
+def _hub_offline() -> bool:
+    """Whether ``huggingface_hub`` is in offline mode (``HF_HUB_OFFLINE``)."""
+    from huggingface_hub import constants
+
+    return bool(constants.HF_HUB_OFFLINE)
+
+
+def _local_snapshot(model: "HFModel") -> Optional[Path]:
+    """The cached ``snapshots/<commit>/`` directory of ``model``, if this host has one."""
+    from huggingface_hub import constants
+
+    path = (
+        Path(constants.HF_HUB_CACHE)
+        / f"models--{str(model.path_or_uri).replace('/', '--')}"
+        / "snapshots"
+        / _commit(model)
+    )
+    return path if path.is_dir() else None
+
+
+def _model_card_tags(model: "HFModel") -> List[str]:
+    """Tags of ``model``: its cached model card's front matter first, the Hub only when online.
+
+    Args:
+        model: The model.
+
+    Returns:
+        The tags; empty when neither source is available.
+    """
+    from huggingface_hub import hf_hub_download
+    from huggingface_hub.repocard import metadata_load
+
+    try:
+        card = hf_hub_download(str(model.path_or_uri), "README.md", revision=_commit(model))
+        tags = list((metadata_load(Path(card)) or {}).get("tags") or [])
+    except Exception as exc:  # noqa: BLE001 -- a missing/unreadable card means "no card tags"
+        logger.debug("No cached model card for %s: %s", model.path_or_uri, exc)
+        tags = []
+    if tags or _hub_offline():
+        return [str(t) for t in tags]
+    try:
+        return list(model.get_model_info().tags or [])
+    except Exception as exc:  # noqa: BLE001 -- unreachable Hub: route on the config alone
+        logger.warning("Could not read Hub tags for %s: %s", model.path_or_uri, exc)
+        return []
+
+
 def _load_config_cached(model: "HFModel") -> tuple[Optional[PretrainedConfig], Optional[dict]]:
     """Return ``(typed_config_or_None, raw_dict_or_None)`` for ``model``, memoized.
 
@@ -117,12 +184,12 @@ def _load_config_cached(model: "HFModel") -> tuple[Optional[PretrainedConfig], O
         try:
             from transformers import AutoConfig
 
-            config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
+            config = AutoConfig.from_pretrained(model.path_or_uri, revision=_commit(model))
             result: tuple[Optional[PretrainedConfig], Optional[dict]] = (config, None)
         except _CONFIG_LOAD_RECOVERABLE:
             from huggingface_hub import hf_hub_download
 
-            config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
+            config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=_commit(model))
             with open(config_path) as f:
                 raw = json.load(f)
             result = (None, raw)
@@ -365,11 +432,18 @@ def _peek_head_final_layer(model: HFModel, encoder_attr: str) -> Optional[str]:
     a shard index are skipped to avoid pulling hundreds of MB just to read keys.
     """
     name = str(model.path_or_uri)
+    sha = _commit(model)
+    snapshot = _local_snapshot(model)
 
     try:
-        from huggingface_hub import HfApi
+        if _hub_offline():
+            if snapshot is None:
+                return None
+            files = {str(f.relative_to(snapshot)) for f in snapshot.rglob("*") if f.is_file()}
+        else:
+            from huggingface_hub import HfApi
 
-        files = set(HfApi().list_repo_files(name, revision=model.revision))
+            files = set(HfApi().list_repo_files(name, revision=sha))
     except Exception:
         return None
 
@@ -378,19 +452,26 @@ def _peek_head_final_layer(model: HFModel, encoder_attr: str) -> Optional[str]:
         from huggingface_hub import hf_hub_download
 
         if "model.safetensors.index.json" in files:
-            p = hf_hub_download(name, "model.safetensors.index.json", revision=model.revision)
+            p = hf_hub_download(name, "model.safetensors.index.json", revision=sha)
             with open(p) as f:
                 keys = list(json.load(f).get("weight_map", {}).keys())
         elif "pytorch_model.bin.index.json" in files:
-            p = hf_hub_download(name, "pytorch_model.bin.index.json", revision=model.revision)
+            p = hf_hub_download(name, "pytorch_model.bin.index.json", revision=sha)
             with open(p) as f:
                 keys = list(json.load(f).get("weight_map", {}).keys())
         elif "model.safetensors" in files:
-            from huggingface_hub import get_safetensors_metadata
+            local = snapshot / "model.safetensors" if snapshot is not None else None
+            if local is not None and local.is_file():
+                from safetensors import safe_open
 
-            meta = get_safetensors_metadata(name, revision=model.revision)
-            wm = getattr(meta, "weight_map", None) if meta is not None else None
-            keys = list(wm.keys()) if wm else []
+                with safe_open(str(local), framework="pt") as handle:
+                    keys = list(handle.keys())
+            else:
+                from huggingface_hub import get_safetensors_metadata
+
+                meta = get_safetensors_metadata(name, revision=sha)
+                wm = getattr(meta, "weight_map", None) if meta is not None else None
+                keys = list(wm.keys()) if wm else []
     except Exception:
         return None
 
@@ -542,14 +623,13 @@ def classify_emotions_from_speech(
         return _classify_speechbrain_ser(audios, model, device)
 
     if isinstance(model, HFModel):
-        model_info = model.get_model_info()
-        tags = model_info.tags or []
+        if is_emotion2vec(model):
+            return classify_emotions_with_emotion2vec(audios, model, device)
 
         ser_type = _get_ser_type(model)
 
-        if (
-            not ("speech-emotion-recognition" in tags or "emotion-recognition" in tags)
-            and ser_type == SERType.NOT_RECOGNIZED
+        if ser_type == SERType.NOT_RECOGNIZED and not (
+            {"speech-emotion-recognition", "emotion-recognition"} & set(_model_card_tags(model))
         ):
             raise ValueError(
                 f"The model '{model.path_or_uri}' is not suitable for speech emotion recognition. Please "
@@ -598,7 +678,7 @@ def _classify_continuous_ser_venv(
     venv with pinned huggingface-hub<1.0.
     """
     device_type, _ = _select_device_and_dtype(
-        user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+        user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU]
     )
 
     venv_dir = ensure_venv(_CONT_SER_VENV, _CONT_SER_REQUIREMENTS, python_version=_CONT_SER_PYTHON)
@@ -687,7 +767,7 @@ def _classify_wav2vec2_speech_cls_ser(
         head = _HeadEntry()  # default: out_proj/tanh/final_dropout (audeering pattern)
 
     device_type, _ = _select_device_and_dtype(
-        user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+        user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU]
     )
 
     key = f"{model.path_or_uri}-{model.revision or 'main'}-{device_type.value}-{model_type}-{head.final_layer}"
@@ -883,7 +963,7 @@ def _classify_speechbrain_ser(
     from speechbrain.inference import Pretrained
 
     device_type, _ = _select_device_and_dtype(
-        user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+        user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU]
     )
 
     key = f"{model.path_or_uri}-{model.revision or 'main'}-{device_type.value}"
@@ -965,14 +1045,15 @@ def _load_speechbrain_ser_model(model: SpeechBrainModel, device_type: DeviceType
         {"MODULES_NEEDED": modules_needed},
     )
 
-    run_opts = {"device": device_run_opt(device_type)}
+    target = device_run_opt(device_type)
     savedir = speechbrain_savedir(str(model.path_or_uri), model.revision)
     with speechbrain_loading_cwd(savedir):
         recognizer = recognizer_cls.from_hparams(  # type: ignore[attr-defined]
             source=str(snapshot_path),
             savedir=str(savedir),
-            run_opts=run_opts,
+            run_opts={"device": speechbrain_load_device(target)},
         )
+    recognizer = speechbrain_move_to(recognizer, target)
 
     # Extract label names from label_encoder if available
     label_list: List[str] = []

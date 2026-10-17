@@ -315,6 +315,25 @@
   parameters: 315M
   training_data: MSP-Podcast
   recommended_for: Dimensional emotion (valence/arousal/dominance)
+  license: CC-BY-NC-SA-4.0
+
+- name: emotion2vec+ large
+  task: speech_emotion_recognition
+  source: funasr
+  model_id: emotion2vec/emotion2vec_plus_large
+  parameters: 300M
+  training_data: 42.5k h pseudo-labelled speech emotion data
+  recommended_for: Categorical emotion, 9 classes, language-robust
+  license: FunASR Model Open Source License v1.1
+
+- name: emotion2vec+ base
+  task: speech_emotion_recognition
+  source: funasr
+  model_id: emotion2vec/emotion2vec_plus_base
+  parameters: 90M
+  training_data: 4.8k h pseudo-labelled speech emotion data
+  recommended_for: Categorical emotion, 9 classes, smaller and faster
+  license: FunASR Model Open Source License v1.1
 
 # Audio Scene Classification
 - name: Audio Spectrogram Transformer (AST)

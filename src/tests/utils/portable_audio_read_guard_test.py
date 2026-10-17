@@ -66,6 +66,7 @@ UNROUTED_AUDIO_READ: dict[str, str] = {}
 # Subprocess-venv backends, each in exactly one set (relative to ``src/senselab``).
 WORKERS_READING_THROUGH_PORTABLE_AUDIO_IO = {
     "audio/tasks/classification/speech_emotion_recognition/api.py",
+    "audio/tasks/classification/speech_emotion_recognition/emotion2vec.py",
     "audio/tasks/classification/yamnet.py",
     "audio/tasks/features_extraction/ppg.py",
     "audio/tasks/features_extraction/sparc.py",
