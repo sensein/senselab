@@ -16,7 +16,7 @@ import subprocess
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import pytest
 
@@ -120,6 +120,7 @@ def fake_locks(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mon
         python_version: Optional[str],
         max_cuda_version: Optional[tuple[int, int]],
         compile_lock: bool,
+        excluded_packages: Sequence[str] = (),
     ) -> VenvLock:
         return _write_fake_lock(lock_dir, name, requirements, python_version or "3.12")
 
@@ -650,7 +651,7 @@ def test_stage_one_takes_the_pins_from_the_lock_not_the_requirements(
     monkeypatch.setattr(
         subprocess_venv,
         "_resolve_lock",
-        lambda name, requirements, python_version, max_cuda_version, compile_lock: _write_fake_lock(
+        lambda name, requirements, python_version, max_cuda_version, compile_lock, excluded=(): _write_fake_lock(
             fake_locks, name, requirements, "3.12", pins=["torch==2.7.1"]
         ),
     )
@@ -743,7 +744,7 @@ def test_compile_lock_builds_a_probe_venv_from_a_lock_compiled_now(
 
     ensure_venv("t-probe", ["some-pure-python-pkg>=1"], python_version="3.12", compile_lock=True)
 
-    assert seen == {"name": "t-probe", "kwargs": {"check_torch_index": False}}
+    assert seen == {"name": "t-probe", "kwargs": {"check_torch_index": False, "excluded_packages": ()}}
     install = recorder.calls[1]
     assert Path(install[install.index("--requirement") + 1]) == fake_cache_dir / ".locks" / "t-probe.txt"
 

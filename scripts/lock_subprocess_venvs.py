@@ -50,7 +50,13 @@ def main(argv: list[str] | None = None) -> int:
         for name in names:
             backend = backends[name]
             try:
-                load_lock(name, backend.requirements, backend.python, backend.max_cuda_version)
+                load_lock(
+                    name,
+                    backend.requirements,
+                    backend.python,
+                    backend.max_cuda_version,
+                    excluded_packages=backend.excluded_packages,
+                )
                 print(f"ok      {name}")
             except VenvLockError as error:
                 bad += 1
@@ -68,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
                 backend.python,
                 backend.max_cuda_version,
                 exclude_newer=exclude_newer,
+                excluded_packages=backend.excluded_packages,
             )
         except VenvLockError as error:
             failed.append(name)
