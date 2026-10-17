@@ -269,3 +269,6 @@ node_modules
 package-lock.json
 test-results/
 playwright-report/
+# ...and for video-facial-analysis defaults (thresholds with derivations)
+!src/senselab/video/tasks/facial_analysis/data/
+!src/senselab/video/tasks/facial_analysis/data/**
