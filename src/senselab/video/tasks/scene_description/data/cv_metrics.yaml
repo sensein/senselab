@@ -1,0 +1,17 @@
+# Cheap image-metric thresholds. Derivations: specs/20261017-104000-video-scene-description/design.md
+# ("Cheap metrics" and "Camera-off area and letterbox bars"). Luma levels are on a 0-255 scale.
+version: 1
+
+near_black:
+  block: 16       # block side in pixels of the downscaled frame
+  max_mean: 40.0  # a near-black block's mean luma is at most this
+  max_std: 8.0    # and its luma standard deviation at most this
+
+bars:
+  max_mean: 40.0       # a letterbox/pillarbox row or column's mean luma is at most this
+  max_std: 8.0         # and its luma standard deviation at most this
+  max_fraction: 0.75   # bars covering more of an axis than this are not removed on that axis
+  symmetry_tolerance: 0.02  # opposite bars may differ in length by at most this fraction of the axis
+
+camera_off:
+  tile_min_near_black: 0.6  # a tile whose near-black area is at least this fraction is camera-off

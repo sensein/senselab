@@ -19,7 +19,11 @@ The pipeline has four stages, each usable alone:
 1. `sample_frames` decodes the file once (PyAV) and keeps one frame per `interval_s` plus frames
    whose colour histogram jumps by more than `scene_threshold`, downscaled to `long_side`.
 2. `frame_metrics` measures brightness, contrast, blur (variance of the Laplacian), colourfulness,
-   the near-black area (camera-off tiles) and the Haar-cascade face count.
+   the near-black area, the letterbox/pillarbox bar area, the camera-off area and the Haar-cascade
+   face count. `camera_off_fraction` excludes centred edge bars; given tile boxes
+   (`describe_video_scene(..., tile_boxes=[t.box for t in layout.tiles])` with a layout from
+   `facial_analysis.detect_gallery_tiles`) it is the fraction of camera-off tiles instead, with the
+   per-tile flags in `tiles_camera_off`. Thresholds are in `data/cv_metrics.yaml`.
 3. `describe_frames` asks the VLM for strict JSON matching `SceneDescription`, validates it, and
    sends an invalid completion back once with the error; `parse_ok` records the outcome.
 4. `aggregate` reports per-field modes, means and consistency (fraction of frames agreeing with the

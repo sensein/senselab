@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
+import numpy as np
 from pydantic import BaseModel
 
 from senselab.video.data_structures.video import Video
@@ -55,6 +56,18 @@ class VideoSceneReport(BaseModel):
     backend_stats: Dict[str, int] = {}
 
 
+def _scale_boxes(
+    boxes: Optional[Sequence[Tuple[int, int, int, int]]], source_size: Tuple[int, int], image: np.ndarray
+) -> Optional[List[Tuple[int, int, int, int]]]:
+    """Boxes in source pixels mapped onto the downscaled frame."""
+    if not boxes:
+        return None
+    if not source_size[0] or not source_size[1]:
+        return list(boxes)
+    sx, sy = image.shape[1] / source_size[0], image.shape[0] / source_size[1]
+    return [(round(x * sx), round(y * sy), round(w * sx), round(h * sy)) for x, y, w, h in boxes]
+
+
 def describe_video_scene(
     video: Union[str, os.PathLike, Video],
     backend: Optional[VLMBackend] = None,
@@ -65,6 +78,7 @@ def describe_video_scene(
     long_side: int = 896,
     batch_size: int = 8,
     detect_faces: bool = True,
+    tile_boxes: Optional[Sequence[Tuple[int, int, int, int]]] = None,
 ) -> VideoSceneReport:
     """Sample frames from a recording, measure them, describe them with a VLM, and summarise.
 
@@ -82,6 +96,9 @@ def describe_video_scene(
         long_side: Long side of the frames measured and sent to the VLM.
         batch_size: Frames per VLM request.
         detect_faces: Count faces with OpenCV's Haar cascade.
+        tile_boxes: Participant tiles ``(x, y, width, height)`` in source pixels (for example from
+            ``senselab.video.tasks.facial_analysis.detect_gallery_tiles``); camera-off is then
+            measured per tile. Without them it is measured inside the frame's letterbox bars.
 
     Returns:
         The report.
@@ -104,7 +121,9 @@ def describe_video_scene(
                     frame_index=f.frame_index,
                     reason=f.reason,
                     scene_score=f.scene_score,
-                    metrics=frame_metrics(f.image, detect_faces=detect_faces),
+                    metrics=frame_metrics(
+                        f.image, detect_faces=detect_faces, tiles=_scale_boxes(tile_boxes, f.source_size, f.image)
+                    ),
                     vlm=d,
                 )
             )

@@ -269,3 +269,6 @@ node_modules
 package-lock.json
 test-results/
 playwright-report/
+# ...and for video scene-description cheap-metric thresholds
+!src/senselab/video/tasks/scene_description/data/
+!src/senselab/video/tasks/scene_description/data/**

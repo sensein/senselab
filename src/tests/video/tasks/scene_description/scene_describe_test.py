@@ -147,7 +147,15 @@ def test_describe_frames_batches() -> None:
 
 def _metrics(brightness: float = 0.5) -> FrameMetrics:
     return FrameMetrics(
-        brightness=brightness, contrast=0.2, blur=100.0, colourfulness=10.0, near_black_fraction=0.0, n_faces=1
+        brightness=brightness,
+        contrast=0.2,
+        blur=100.0,
+        colourfulness=10.0,
+        near_black_fraction=0.0,
+        bar_fraction=0.0,
+        camera_off_fraction=0.0,
+        tiles_camera_off=[False, True],
+        n_faces=1,
     )
 
 
@@ -184,6 +192,7 @@ def test_aggregate_modes_consistency_and_change_points() -> None:
     assert summary.distractions["children"] == pytest.approx(0.25)
     assert summary.distractions["pets"] == 0.0
     assert summary.metrics["brightness"].mean == pytest.approx(0.3)
+    assert "camera_off_fraction" in summary.metrics and "tiles_camera_off" not in summary.metrics
     changes = [(c.timestamp_s, c.field, c.before, c.after) for c in summary.change_points]
     assert changes == [
         (120, "any_other_people_present", False, True),
