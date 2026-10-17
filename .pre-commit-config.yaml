@@ -70,6 +70,8 @@ repos:
   - id: check-toml
   - id: detect-private-key
   - id: name-tests-test
+    # Shared fixture modules imported by several test files; they hold no tests.
+    exclude: _fixture\.py$
 
 - repo: https://github.com/codespell-project/codespell
   rev: v2.4.1

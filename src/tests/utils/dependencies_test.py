@@ -83,6 +83,14 @@ def test_point_ref_at_does_not_mistake_a_newline_suffixed_sha_for_a_commit(tmp_p
     assert (tmp_path / "refs").is_dir(), "a non-commit ref must get its pointer written"
 
 
+def test_point_ref_at_is_public_with_the_private_alias_kept(tmp_path: Path) -> None:
+    """``point_ref_at`` writes ``refs/<ref>`` naming the commit; ``_point_ref_at`` stays the same function."""
+    sha = "d" * 40
+    dep.point_ref_at(tmp_path, "main", sha)
+    assert (tmp_path / "refs" / "main").read_text() == sha
+    assert dep._point_ref_at is dep.point_ref_at
+
+
 def test_resolve_model_returns_sha_and_snapshot_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """resolve_model returns the immutable SHA + local snapshot dir without re-downloading a cached model."""
     sha = "b" * 40
