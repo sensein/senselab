@@ -10,7 +10,7 @@ are in ``specs/20261017-104500-sparse-ppg-boundaries/``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -33,6 +33,8 @@ class SparsePPG(BaseModel):
         frame: Frame index of each entry, ascending.
         phone: Phone index of each entry; within a frame, entries run from most to least probable.
         prob: Posterior of each entry.
+        model_id: Repository of the model that produced the posteriorgram, when known.
+        model_revision: 40-hex commit of that model, when known.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
@@ -43,6 +45,8 @@ class SparsePPG(BaseModel):
     frame: np.ndarray
     phone: np.ndarray
     prob: np.ndarray
+    model_id: Optional[str] = None
+    model_revision: Optional[str] = None
 
     @model_validator(mode="after")
     def _check_arrays(self) -> "SparsePPG":
@@ -112,6 +116,8 @@ class SparsePPG(BaseModel):
             frame=self.frame,
             phone=self.phone,
             prob=self.prob,
+            model_id=np.array(self.model_id or ""),
+            model_revision=np.array(self.model_revision or ""),
         )
         return path
 
@@ -133,7 +139,14 @@ class SparsePPG(BaseModel):
                 frame=archive["frame"],
                 phone=archive["phone"],
                 prob=archive["prob"],
+                model_id=_optional_text(archive, "model_id"),
+                model_revision=_optional_text(archive, "model_revision"),
             )
+
+
+def _optional_text(archive: Any, key: str) -> Optional[str]:  # noqa: ANN401
+    value = str(archive[key]) if key in archive.files else ""
+    return value or None
 
 
 PosteriorgramLike = Union[torch.Tensor, np.ndarray, SparsePPG]
@@ -166,6 +179,8 @@ def sparsify_ppg(
     dtype: Any = np.float16,  # noqa: ANN401
     frame_rate: float = PPGS_FRAME_RATE,
     phones: Tuple[str, ...] = PHONEME_LABELS,
+    model_id: Optional[str] = None,
+    model_revision: Optional[str] = None,
 ) -> SparsePPG:
     """Keep each frame's ``top_k`` most probable phones whose posterior is at least ``min_prob``.
 
@@ -179,6 +194,8 @@ def sparsify_ppg(
         dtype: Storage dtype of the probabilities.
         frame_rate: Frames per second of ``ppg``.
         phones: The phone vocabulary of ``ppg``'s phone axis.
+        model_id: Repository of the model that produced ``ppg`` (e.g. :data:`PPGS_REPO_ID`).
+        model_revision: Its commit (e.g. :func:`ppgs_model_revision`).
 
     Returns:
         The sparse posteriorgram.
@@ -206,6 +223,8 @@ def sparsify_ppg(
         frame=frame_index[keep].astype(np.uint32),
         phone=order[keep].astype(phone_dtype),
         prob=values[keep].astype(dtype),
+        model_id=model_id,
+        model_revision=model_revision,
     )
 
 
