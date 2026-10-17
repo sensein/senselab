@@ -144,6 +144,47 @@ class FrameTable(BaseModel):
         frames = [df.assign(tile_id=tile_id) for tile_id, df in self.tiles.items()]
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
+    @classmethod
+    def from_long(
+        cls,
+        df: pd.DataFrame,
+        *,
+        kind: Literal["geometry", "affect"],
+        fps: float,
+        layout: GalleryLayout,
+        provenance: Optional[Dict[str, Any]] = None,
+        timing: Optional[Dict[str, float]] = None,
+    ) -> "FrameTable":
+        """Inverse of :meth:`to_long`: split a stacked frame back into one DataFrame per tile.
+
+        Args:
+            df: A frame with a ``tile_id`` column, as returned by :meth:`to_long`.
+            kind: ``"geometry"`` or ``"affect"``.
+            fps: Sampling rate the frames were taken at.
+            layout: The tile layout used.
+            provenance: Backend identity; empty when ``None``.
+            timing: Pass timing; empty when ``None``.
+
+        Returns:
+            A table whose tiles keep first-appearance order, with the ``tile_id`` column removed.
+        """
+        tiles = (
+            {
+                str(tile_id): group.drop(columns="tile_id").reset_index(drop=True)
+                for tile_id, group in df.groupby("tile_id", sort=False)
+            }
+            if "tile_id" in df.columns
+            else {}
+        )
+        return cls(
+            kind=kind,
+            fps=fps,
+            layout=layout,
+            tiles=tiles,
+            provenance=dict(provenance or {}),
+            timing=dict(timing or {}),
+        )
+
 
 class TileSummary(BaseModel):
     """Per-tile summary over a whole recording.

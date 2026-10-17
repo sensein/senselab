@@ -361,6 +361,18 @@ class TestSpeakerLinking:
         mouths = {"T0": rng.normal(0.1, 0.05, t.size), "T1": rng.normal(0.1, 0.05, t.size)}
         assert link_tiles_to_speakers(mouths, activity, self.fps).p_value > 0.05
 
+    def test_surrogate_controls_pass_through(self) -> None:
+        """``n_shifts=0`` skips the null (p_value 1.0); the signals-module defaults are unchanged."""
+        turns = [("A" if i % 2 else "B", 5.0 * i, 5.0 * i + 4.0) for i in range(12)]
+        t, activity = _turns(self.fps, 60, turns)
+        mouths = {"T0": self._mouth(t, activity["B"], 1), "T1": self._mouth(t, activity["A"], 2)}
+        default = link_tiles_to_speakers(mouths, activity, self.fps)
+        explicit = link_tiles_to_speakers(mouths, activity, self.fps, n_shifts=200, min_shift_s=10.0)
+        assert explicit.p_value == default.p_value
+        assert link_tiles_to_speakers(mouths, activity, self.fps, n_shifts=0).p_value == 1.0
+        assert link_tiles_to_speakers(mouths, activity, self.fps, n_shifts=10).p_value >= 1 / 11
+        assert link_tiles_to_speakers(mouths, activity, self.fps, min_shift_s=1000.0).p_value == 1.0
+
 
 class TestConfigAndSummaries:
     """Defaults, overrides, and summaries over a synthetic geometry table."""
@@ -403,3 +415,17 @@ class TestConfigAndSummaries:
         assert summary.toward_camera_fraction == 1.0
         long = table.to_long()
         assert set(long["tile_id"]) == {"T0"} and len(long) == t.size
+
+    def test_from_long_inverts_to_long(self) -> None:
+        """to_long then from_long returns the original tiles, columns and dtypes."""
+        t = np.arange(5) / 2.0
+        tiles = {
+            "T1": pd.DataFrame({"time_s": t, "face_present": t > 0.5, "bs_jawOpen": t * 0.1}),
+            "T0": pd.DataFrame({"time_s": t, "face_present": t > 1.0, "bs_jawOpen": t * 0.2}),
+        }
+        layout = layout_from_estimates([], 640, 360)
+        table = FrameTable(kind="geometry", fps=2.0, layout=layout, tiles=tiles)
+        back = FrameTable.from_long(table.to_long(), kind="geometry", fps=2.0, layout=layout)
+        assert list(back.tiles) == ["T1", "T0"]
+        for tile_id, frame in tiles.items():
+            pd.testing.assert_frame_equal(back.tiles[tile_id], frame)
