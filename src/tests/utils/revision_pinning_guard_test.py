@@ -101,6 +101,11 @@ LOADER_CANNOT_PIN_SUBPROCESS_FILES = {
     # no Hub call, so its payload carries no revision-shaped key and the sweep cannot see it; hence
     # the entry here rather than an omission. See specs/20260819-clearvoice-integration/design.md D-6.
     "utils/clearvoice.py",
+    # ppgs.load.model takes a checkpoint path and no revision; left alone it downloads mel-800k.pt
+    # through refs/main. The parent resolves the commit (resolve_revision), downloads that commit's
+    # file with hf_hub_download(..., revision=<sha>) and hands the worker the snapshots/<sha>/ path,
+    # so it is pinned by the path. The worker makes no Hub call; see ppg_revision_test.py.
+    "audio/tasks/features_extraction/ppg.py",
 }
 
 

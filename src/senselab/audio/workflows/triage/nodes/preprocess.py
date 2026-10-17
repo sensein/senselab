@@ -47,9 +47,11 @@ from senselab.audio.tasks.envelope.api import (
 )
 from senselab.audio.tasks.features_extraction.ppg import (
     PHONEME_LABELS,
+    PPGS_REPO_ID,
     PPGS_SAMPLE_RATE,
     PpgsPosteriorgramUnavailable,
     extract_ppgs_from_audios,
+    ppgs_model_revision,
     require_posteriorgram,
     to_frame_major_posteriorgram,
 )
@@ -156,7 +158,6 @@ QWEN_TIMESTAMP_MODEL = "Qwen/Qwen3-ForcedAligner-0.6B"
 AST_ID = "MIT/ast-finetuned-audioset-10-10-0.4593"
 YAMNET_MODEL_URI = "https://tfhub.dev/google/yamnet/1"
 FRCRN_ID = "alibabasglab/FRCRN_SE_16K"
-PPGS_MODEL_ID = "interactiveaudiolab/ppgs"
 PPG_MEASUREMENT = "ppg_posteriorgram"
 PRAAT_MEASUREMENT = "praat_features"
 STIMULUS_MEASUREMENT = "stimulus_alignment"
@@ -743,7 +744,7 @@ def write_clip_spans(
 
 
 def ppg_model_agent(store: ProvStore) -> str:
-    """The ppgs agent: a model whose checkpoint ships with the PyPI release, so no commit resolves.
+    """The ppgs agent: the checkpoint repository and the commit :func:`extract_ppgs_from_audios` loads.
 
     Args:
         store: The provenance store.
@@ -751,11 +752,7 @@ def ppg_model_agent(store: ProvStore) -> str:
     Returns:
         The agent's id.
     """
-    return store.agent(
-        agent_type="model",
-        model_id=PPGS_MODEL_ID,
-        unresolved_reason="ppgs ships its checkpoint with the PyPI release; no commit exists to resolve",
-    )
+    return store.agent(agent_type="model", model_id=PPGS_REPO_ID, commit_sha=ppgs_model_revision())
 
 
 def ppg_input(store: ProvStore, run_dir: Path) -> tuple[str, Audio]:
@@ -806,7 +803,7 @@ def write_ppg_posteriorgram(
     frames, phonemes = int(frame_major.shape[0]), int(frame_major.shape[1])
     duration_s = audio.waveform.shape[-1] / int(audio.sampling_rate)
     agent = ppg_model_agent(store)
-    activity = _activity(store, "ppg_posteriorgram", {"model": PPGS_MODEL_ID}, (enhanced_id,), agent)
+    activity = _activity(store, "ppg_posteriorgram", {"model": PPGS_REPO_ID}, (enhanced_id,), agent)
     relative = f"derivatives/{PPG_MEASUREMENT}.npz"
     np.savez(
         run_dir / relative,
