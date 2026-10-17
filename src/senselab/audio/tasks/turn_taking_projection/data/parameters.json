@@ -1,0 +1,59 @@
+{
+    "version": 1,
+    "scope": "Constants of the turn_taking_projection task: how a mono mix is split into one channel per speaker, and how VAP frames are read against caller-given turns, IPUs and backchannels. None is fitted to labelled turn-taking data; each derivation says what it was chosen from. Measurements behind the separation default are in specs/20261017-110000-dyadic-turn-taking/.",
+    "mask_ramp_seconds": {
+        "value": 0.05,
+        "derivation": "Owner's specification (50 ms raised-cosine ramps outside each diarization segment). Half of one VAP frame at 10 Hz, so a ramp never spans a full frame and a segment edge moves the projection by at most one frame."
+    },
+    "assignment_hop_seconds": {
+        "value": 0.02,
+        "derivation": "Energy-envelope hop for matching separated sources to diarization speakers. 20 ms is the conventional short-time analysis hop for speech energy; five per VAP frame, so the envelope resolves every frame-level segment boundary."
+    },
+    "separation_chunk_seconds": {
+        "value": 60.0,
+        "derivation": "Length of the windows a separator sees. Each window is assigned to the caller's speakers on its own, so a separator's arbitrary source order cannot swap channels for the rest of a recording; 60 s holds several turns of each speaker in a conversation, which the assignment needs to tell the two sources apart."
+    },
+    "separation_overlap_seconds": {
+        "value": 2.0,
+        "derivation": "Cross-fade between consecutive separation windows: long enough to cover one IPU boundary, short against the 60 s window (3 % recomputed)."
+    },
+    "projection_window_seconds": {
+        "value": 0.5,
+        "derivation": "Window before a speaker change over which the next speaker's p_now is read as the shift prediction. Inside p_now's own 0-600 ms horizon, so a frame in the window projects onto the moment of the change."
+    },
+    "pause_read_offset_seconds": {
+        "value": 0.05,
+        "derivation": "Hold/shift is read starting this long after a pause opens, so the frame that still contains the last syllable's tail is skipped. Half a VAP frame."
+    },
+    "pause_read_seconds": {
+        "value": 0.2,
+        "derivation": "How long into a pause p_now is averaged for the hold/shift call: two VAP frames, the earliest a response could be made after the pause opens."
+    },
+    "min_pause_seconds": {
+        "value": 0.25,
+        "derivation": "Shortest mutual silence counted as a hold/shift opportunity: offset plus read window plus no less than one frame of margin; shorter gaps are within-word stops, not floor-transfer points."
+    },
+    "shift_probability_threshold": {
+        "value": 0.5,
+        "derivation": "p_now is normalised across the two speakers, so 0.5 is the point at which the model says the other speaker is more likely to hold the floor next; not a tuned operating point. The continuous score is reported beside every call, so a caller can choose another."
+    },
+    "bc_peak_threshold": {
+        "value": 0.5,
+        "derivation": "A backchannel opportunity is a local maximum of p_bc above this. 0.5 is where the backchannel head's sigmoid favours a backchannel; not tuned. Peak heights are reported, so a caller can apply another."
+    },
+    "bc_peak_min_separation_seconds": {
+        "value": 1.0,
+        "derivation": "Minimum spacing between two opportunities of one listener: shorter than an IPU, so consecutive IPUs each get their own, and longer than one backchannel token, so one rising edge is not counted twice."
+    },
+    "bc_response_window_seconds": {
+        "value": [
+            -0.5,
+            1.0
+        ],
+        "derivation": "A backchannel answers an opportunity when its onset falls this long before to after the peak. The early side admits a listener who anticipates the model (the model is causal and peaks on evidence the listener may already have); the late side allows a one-second reaction, the order of a listener's response latency after a pause opens."
+    },
+    "backchannel_max_seconds": {
+        "value": 1.0,
+        "derivation": "When the caller gives no backchannel list, a listener IPU at most this long that lies inside the other speaker's turn is taken as a backchannel. Single-token backchannels (yeah, mm-hm, right) run 0.2-0.7 s."
+    }
+}
