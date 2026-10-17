@@ -9,6 +9,7 @@ from .clearvoice_speechscore import (  # noqa: F401
 )
 from .ppg import (  # noqa: F401
     PHONEME_LABELS,
+    PPGS_FRAME_RATE,
     PPGS_SAMPLE_RATE,
     PpgsPosteriorgramUnavailable,
     ensure_ppgs_venv,
@@ -20,7 +21,20 @@ from .ppg import (  # noqa: F401
     require_posteriorgram,
     to_frame_major_posteriorgram,
 )
+from .ppg_events import (  # noqa: F401
+    PHONE_CLASSES,
+    FillerSupport,
+    PhoneEvents,
+    TurnTransitionTiming,
+    filler_support,
+    phone_class_duration_stats,
+    phone_rate_by_speaker,
+    ppg_boundary_probability,
+    ppg_phone_events,
+    turn_transition_timing,
+)
 from .sparc import SparcFeatureExtractor  # noqa: F401
+from .sparse_ppg import SparsePPG, sparse_ppg_fidelity, sparsify_ppg  # noqa: F401
 
 __all__ = [
     "extract_features_from_audios",
@@ -29,6 +43,7 @@ __all__ = [
     "NO_REFERENCE_METRICS",
     "REFERENCE_METRICS",
     "PHONEME_LABELS",
+    "PPGS_FRAME_RATE",
     "PPGS_SAMPLE_RATE",
     "PpgsPosteriorgramUnavailable",
     "ensure_ppgs_venv",
@@ -40,4 +55,17 @@ __all__ = [
     "require_posteriorgram",
     "to_frame_major_posteriorgram",
     "SparcFeatureExtractor",
+    "SparsePPG",
+    "sparsify_ppg",
+    "sparse_ppg_fidelity",
+    "PHONE_CLASSES",
+    "PhoneEvents",
+    "ppg_phone_events",
+    "ppg_boundary_probability",
+    "phone_rate_by_speaker",
+    "phone_class_duration_stats",
+    "TurnTransitionTiming",
+    "turn_transition_timing",
+    "FillerSupport",
+    "filler_support",
 ]
