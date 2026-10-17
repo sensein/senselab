@@ -101,6 +101,10 @@ LOADER_CANNOT_PIN_SUBPROCESS_FILES = {
     # no Hub call, so its payload carries no revision-shaped key and the sweep cannot see it; hence
     # the entry here rather than an omission. See specs/20260819-clearvoice-integration/design.md D-6.
     "utils/clearvoice.py",
+    # MaAI's Maai(local_model=...) takes a file path and no revision. The parent fetches each checkpoint
+    # with hf_hub_download(..., revision=<literal SHA in MaaiCheckpoint>) and the CPC encoder by URL with
+    # a SHA-256 check, and hands the worker both paths; the worker makes no Hub call.
+    "audio/tasks/turn_taking_projection/maai.py",
 }
 
 
