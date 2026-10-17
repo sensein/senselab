@@ -386,11 +386,15 @@ def venv_worker_stats() -> List[Dict[str, Any]]:
     ]
 
 
-def shutdown_venv_workers() -> None:
-    """End every worker this process started. A later call starts new ones."""
+def shutdown_venv_workers(identity_prefix: Optional[Tuple[Any, ...]] = None) -> None:
+    """End the workers this process started. A later call starts new ones.
+
+    Args:
+        identity_prefix: End only workers whose identity starts with this tuple; None ends all.
+    """
     with _POOL_LOCK:
-        workers = list(_POOL.values())
-        _POOL.clear()
+        keys = [k for k in _POOL if identity_prefix is None or k[: len(identity_prefix)] == tuple(identity_prefix)]
+        workers = [_POOL.pop(k) for k in keys]
     for worker in workers:
         worker.close()
 

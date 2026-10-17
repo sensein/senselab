@@ -101,6 +101,16 @@ def test_identities_are_served_by_separate_workers(tmp_path: Path) -> None:
     assert len(_loads(tmp_path, "a")) == 1 and len(_loads(tmp_path, "b")) == 1
 
 
+def test_shutdown_by_identity_prefix_ends_only_matching_workers(tmp_path: Path) -> None:
+    """An identity prefix ends that model's worker and leaves the others resident."""
+    a = _call(tmp_path, {"x": 1}, tag="a")
+    b = _call(tmp_path, {"x": 1}, tag="b")
+    shutdown_venv_workers(("test-venv", "model-a"))
+    assert [s["identity"][1] for s in venv_worker_stats()] == ["model-b"]
+    assert _call(tmp_path, {"x": 1}, tag="b")["pid"] == b["pid"]
+    assert _call(tmp_path, {"x": 1}, tag="a")["pid"] != a["pid"]
+
+
 def test_a_crash_during_a_request_raises_and_the_next_call_restarts(tmp_path: Path) -> None:
     """A worker that dies mid-request fails that call, is recorded, and is replaced on the next one."""
     first = _call(tmp_path, {"x": 1})
