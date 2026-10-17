@@ -483,7 +483,7 @@ than <code>audios</code>, or if no window survived extraction.</li>
 </span><span id="extract_speaker_embeddings_from_audios-65"><a href="#extract_speaker_embeddings_from_audios-65"><span class="linenos"> 65</span></a><span class="sd">            If ``None``, a default is chosen by the backend.</span>
 </span><span id="extract_speaker_embeddings_from_audios-66"><a href="#extract_speaker_embeddings_from_audios-66"><span class="linenos"> 66</span></a>
 </span><span id="extract_speaker_embeddings_from_audios-67"><a href="#extract_speaker_embeddings_from_audios-67"><span class="linenos"> 67</span></a><span class="sd">    Returns:</span>
-</span><span id="extract_speaker_embeddings_from_audios-68"><a href="#extract_speaker_embeddings_from_audios-68"><span class="linenos"> 68</span></a><span class="sd">        list[torch.Tensor]: One 1-D tensor per input audio (e.g., shape ``[192]`` for ECAPA).</span>
+</span><span id="extract_speaker_embeddings_from_audios-68"><a href="#extract_speaker_embeddings_from_audios-68"><span class="linenos"> 68</span></a><span class="sd">        list[torch.Tensor]: One 1-D CPU tensor per input audio (e.g., shape ``[192]`` for ECAPA), on every device.</span>
 </span><span id="extract_speaker_embeddings_from_audios-69"><a href="#extract_speaker_embeddings_from_audios-69"><span class="linenos"> 69</span></a>
 </span><span id="extract_speaker_embeddings_from_audios-70"><a href="#extract_speaker_embeddings_from_audios-70"><span class="linenos"> 70</span></a><span class="sd">    Raises:</span>
 </span><span id="extract_speaker_embeddings_from_audios-71"><a href="#extract_speaker_embeddings_from_audios-71"><span class="linenos"> 71</span></a><span class="sd">        NotImplementedError:</span>
@@ -562,7 +562,7 @@ If <code>None</code>, a default is chosen by the backend.</li>
 <h6 id="returns">Returns:</h6>
 
 <blockquote>
-  <p>list[torch.Tensor]: One 1-D tensor per input audio (e.g., shape <code>[192]</code> for ECAPA).</p>
+  <p>list[torch.Tensor]: One 1-D CPU tensor per input audio (e.g., shape <code>[192]</code> for ECAPA), on every device.</p>
 </blockquote>
 
 <h6 id="raises">Raises:</h6>
