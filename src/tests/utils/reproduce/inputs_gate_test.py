@@ -156,7 +156,7 @@ def test_a_one_byte_change_with_size_and_mtime_restored_passes_the_precheck(worl
     _register(world)
     path = tables / "sub" / "u.csv"
     st = os.stat(path)
-    path.write_text("abd\n")
+    path.write_text("abe\n")
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
     assert _precheck(world) == []
 
@@ -352,7 +352,7 @@ def test_one_byte_change_with_size_and_mtime_restored_is_caught_by_verify_and_bl
 
     path = tables / "sub" / "u.csv"
     st = os.stat(path)
-    path.write_text("abd\n")
+    path.write_text("abe\n")
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
     assert _precheck(world) == []
     code, lines = _verify_cli(world, capsys, "tables")

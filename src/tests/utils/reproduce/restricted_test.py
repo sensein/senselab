@@ -850,7 +850,7 @@ def test_lint_and_submit_refuse_while_a_restricted_input_has_unpurged_public_dep
     site.register_canary()
     verify_input(site.base, site.profile(), "canary")
     root = site.tmp / "results"
-    dependant = _key_dir(root, ["canary"], "dependant")
+    dependent = _key_dir(root, ["canary"], "dependent")
     pre_a8 = _key_dir(root, [], "pre-a8")
     (pre_a8 / cache.SUMMARY).write_text(json.dumps({"exit": 0}))
     unrelated = _key_dir(root, ["other"], "unrelated")
@@ -868,7 +868,7 @@ def test_lint_and_submit_refuse_while_a_restricted_input_has_unpurged_public_dep
         slurm.submit([manifest], _submit_config(site, manifest), runner=fake)
     assert fake.calls == []
     assert restricted.purge_closure(profile, "canary") == 3
-    assert not dependant.exists() and not pre_a8.exists() and not in_flight.exists() and unrelated.is_dir()
+    assert not dependent.exists() and not pre_a8.exists() and not in_flight.exists() and unrelated.is_dir()
     assert restricted.unpurged_dependants(profile, "canary") == 0
     restricted.check_manifest_set([manifest], site.base, profile)
     assert not [f for f in cli.lint_findings([path], profile_file, site.base, skip_locks=True) if "UNPURGED" in f]
