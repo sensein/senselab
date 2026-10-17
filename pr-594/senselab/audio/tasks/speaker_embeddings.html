@@ -1,0 +1,794 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="pdoc 16.0.0"/>
+    <title>senselab.audio.tasks.speaker_embeddings API documentation</title>
+            <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
+
+    <style>/*! * Bootstrap Reboot v5.0.0 (https://getbootstrap.com/) * Copyright 2011-2021 The Bootstrap Authors * Copyright 2011-2021 Twitter, Inc. * Licensed under MIT (https://github.com/twbs/bootstrap/blob/main/LICENSE) * Forked from Normalize.css, licensed MIT (https://github.com/necolas/normalize.css/blob/master/LICENSE.md) */*,::after,::before{box-sizing:border-box}@media (prefers-reduced-motion:no-preference){:root{scroll-behavior:smooth}}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans","Liberation Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";font-size:1rem;font-weight:400;line-height:1.5;color:#212529;background-color:#fff;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}hr{margin:1rem 0;color:inherit;background-color:currentColor;border:0;opacity:.25}hr:not([size]){height:1px}h1,h2,h3,h4,h5,h6{margin-top:0;margin-bottom:.5rem;font-weight:500;line-height:1.2}h1{font-size:calc(1.375rem + 1.5vw)}@media (min-width:1200px){h1{font-size:2.5rem}}h2{font-size:calc(1.325rem + .9vw)}@media (min-width:1200px){h2{font-size:2rem}}h3{font-size:calc(1.3rem + .6vw)}@media (min-width:1200px){h3{font-size:1.75rem}}h4{font-size:calc(1.275rem + .3vw)}@media (min-width:1200px){h4{font-size:1.5rem}}h5{font-size:1.25rem}h6{font-size:1rem}p{margin-top:0;margin-bottom:1rem}abbr[data-bs-original-title],abbr[title]{-webkit-text-decoration:underline dotted;text-decoration:underline dotted;cursor:help;-webkit-text-decoration-skip-ink:none;text-decoration-skip-ink:none}address{margin-bottom:1rem;font-style:normal;line-height:inherit}ol,ul{padding-left:2rem}dl,ol,ul{margin-top:0;margin-bottom:1rem}ol ol,ol ul,ul ol,ul ul{margin-bottom:0}dt{font-weight:700}dd{margin-bottom:.5rem;margin-left:0}blockquote{margin:0 0 1rem}b,strong{font-weight:bolder}small{font-size:.875em}mark{padding:.2em;background-color:#fcf8e3}sub,sup{position:relative;font-size:.75em;line-height:0;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}a{color:#0d6efd;text-decoration:underline}a:hover{color:#0a58ca}a:not([href]):not([class]),a:not([href]):not([class]):hover{color:inherit;text-decoration:none}code,kbd,pre,samp{font-family:SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:1em;direction:ltr;unicode-bidi:bidi-override}pre{display:block;margin-top:0;margin-bottom:1rem;overflow:auto;font-size:.875em}pre code{font-size:inherit;color:inherit;word-break:normal}code{font-size:.875em;color:#d63384;word-wrap:break-word}a>code{color:inherit}kbd{padding:.2rem .4rem;font-size:.875em;color:#fff;background-color:#212529;border-radius:.2rem}kbd kbd{padding:0;font-size:1em;font-weight:700}figure{margin:0 0 1rem}img,svg{vertical-align:middle}table{caption-side:bottom;border-collapse:collapse}caption{padding-top:.5rem;padding-bottom:.5rem;color:#6c757d;text-align:left}th{text-align:inherit;text-align:-webkit-match-parent}tbody,td,tfoot,th,thead,tr{border-color:inherit;border-style:solid;border-width:0}label{display:inline-block}button{border-radius:0}button:focus:not(:focus-visible){outline:0}button,input,optgroup,select,textarea{margin:0;font-family:inherit;font-size:inherit;line-height:inherit}button,select{text-transform:none}[role=button]{cursor:pointer}select{word-wrap:normal}select:disabled{opacity:1}[list]::-webkit-calendar-picker-indicator{display:none}[type=button],[type=reset],[type=submit],button{-webkit-appearance:button}[type=button]:not(:disabled),[type=reset]:not(:disabled),[type=submit]:not(:disabled),button:not(:disabled){cursor:pointer}::-moz-focus-inner{padding:0;border-style:none}textarea{resize:vertical}fieldset{min-width:0;padding:0;margin:0;border:0}legend{float:left;width:100%;padding:0;margin-bottom:.5rem;font-size:calc(1.275rem + .3vw);line-height:inherit}@media (min-width:1200px){legend{font-size:1.5rem}}legend+*{clear:left}::-webkit-datetime-edit-day-field,::-webkit-datetime-edit-fields-wrapper,::-webkit-datetime-edit-hour-field,::-webkit-datetime-edit-minute,::-webkit-datetime-edit-month-field,::-webkit-datetime-edit-text,::-webkit-datetime-edit-year-field{padding:0}::-webkit-inner-spin-button{height:auto}[type=search]{outline-offset:-2px;-webkit-appearance:textfield}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-color-swatch-wrapper{padding:0}::file-selector-button{font:inherit}::-webkit-file-upload-button{font:inherit;-webkit-appearance:button}output{display:inline-block}iframe{border:0}summary{display:list-item;cursor:pointer}progress{vertical-align:baseline}[hidden]{display:none!important}</style>
+    <style>/*! syntax-highlighting.css */@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');body{font-family:'Roboto', sans-serif;}pre{line-height:1.5;font-family:'Roboto', sans-serif;}span.linenos{color:inherit;background-color:transparent;padding-left:5px;padding-right:20px;}.pdoc-code .hll{background-color:#ffffcc;}.pdoc-code{background:#f5f5f5;font-family:'Roboto Mono', monospace;}.pdoc-code .c{color:#6a737d;font-style:italic;}.pdoc-code .err{border:1px solid #ff0000;}.pdoc-code .k{color:#d73a49;font-weight:bold;}.pdoc-code .o{color:#6a737d;}.pdoc-code .ch{color:#6a737d;font-style:italic;}.pdoc-code .cm{color:#6a737d;font-style:italic;}.pdoc-code .cp{color:#999988;}.pdoc-code .cpf{color:#6a737d;font-style:italic;}.pdoc-code .c1{color:#6a737d;font-style:italic;}.pdoc-code .cs{color:#6a737d;font-style:italic;}.pdoc-code .gd{color:#a00000;}.pdoc-code .ge{font-style:italic;}.pdoc-code .gr{color:#e40000;}.pdoc-code .gh{color:#005cc5;font-weight:bold;}.pdoc-code .gi{color:#22863a;}.pdoc-code .go{color:#6a737d;}.pdoc-code .gp{color:#005cc5;font-weight:bold;}.pdoc-code .gs{font-weight:bold;}.pdoc-code .gu{color:#005cc5;font-weight:bold;}.pdoc-code .gt{color:#d73a49;}.pdoc-code .kc{color:#d73a49;font-weight:bold;}.pdoc-code .kd{color:#d73a49;font-weight:bold;}.pdoc-code .kn{color:#d73a49;font-weight:bold;}.pdoc-code .kp{color:#d73a49;}.pdoc-code .kr{color:#d73a49;font-weight:bold;}.pdoc-code .kt{color:#b31d28;}.pdoc-code .m{color:#005cc5;}.pdoc-code .s{color:#032f62;}.pdoc-code .na{color:#6f42c1;}.pdoc-code .nb{color:#d73a49;}.pdoc-code .nc{color:#005cc5;font-weight:bold;}.pdoc-code .no{color:#d73a49;}.pdoc-code .nd{color:#6f42c1;}.pdoc-code .ni{color:#6a737d;font-weight:bold;}.pdoc-code .ne{color:#e36209;font-weight:bold;}.pdoc-code .nf{color:#005cc5;}.pdoc-code .nl{color:#6a737d;}.pdoc-code .nn{color:#005cc5;font-weight:bold;}.pdoc-code .nt{color:#22863a;font-weight:bold;}.pdoc-code .nv{color:#e36209;}.pdoc-code .ow{color:#d73a49;font-weight:bold;}.pdoc-code .w{color:#bbbbbb;}.pdoc-code .mb{color:#005cc5;}.pdoc-code .mf{color:#005cc5;}.pdoc-code .mh{color:#005cc5;}.pdoc-code .mi{color:#005cc5;}.pdoc-code .mo{color:#005cc5;}.pdoc-code .sa{color:#032f62;}.pdoc-code .sb{color:#032f62;}.pdoc-code .sc{color:#032f62;}.pdoc-code .dl{color:#032f62;}.pdoc-code .sd{color:#032f62;font-style:italic;}.pdoc-code .s2{color:#032f62;}.pdoc-code .se{color:#005cc5;font-weight:bold;}.pdoc-code .sh{color:#032f62;}.pdoc-code .si{color:#6a737d;font-weight:bold;}.pdoc-code .sx{color:#22863a;}.pdoc-code .sr{color:#6a737d;}.pdoc-code .s1{color:#032f62;}.pdoc-code .ss{color:#22863a;}.pdoc-code .bp{color:#d73a49;}.pdoc-code .fm{color:#005cc5;}.pdoc-code .vc{color:#e36209;}.pdoc-code .vg{color:#e36209;}.pdoc-code .vi{color:#e36209;}.pdoc-code .vm{color:#e36209;}.pdoc-code .il{color:#005cc5;}.tutorial-button{background-color:#3660a5;border:1px solid #3660a5;color:white;padding:5px 10px;text-align:center;text-decoration:none;display:inline-block;font-size:16px;margin:4px 2px;cursor:pointer;border-radius:12px;transition-duration:0.4s;}.tutorial-button:hover{background-color:white;color:black;border:1px solid #3660a5;}@media (prefers-color-scheme:dark){pre{line-height:1.5;font-family:'Roboto', sans-serif;}span.linenos{color:inherit;background-color:transparent;padding-left:5px;padding-right:20px;}.pdoc-code .hll{background-color:#49483e;}.pdoc-code{background:#272822;color:#f8f8f2;font-family:'Roboto Mono', monospace;}.pdoc-code .c{color:#75715e;}.pdoc-code .err{color:#960050;background-color:#1e0010;}.pdoc-code .esc{color:#f8f8f2;}.pdoc-code .g{color:#f8f8f2;}.pdoc-code .k{color:#66d9ef;}.pdoc-code .l{color:#ae81ff;}.pdoc-code .n{color:#f8f8f2;}.pdoc-code .o{color:#f92672;}.pdoc-code .x{color:#f8f8f2;}.pdoc-code .p{color:#f8f8f2;}.pdoc-code .ch{color:#75715e;}.pdoc-code .cm{color:#75715e;}.pdoc-code .cp{color:#75715e;}.pdoc-code .cpf{color:#75715e;}.pdoc-code .c1{color:#75715e;}.pdoc-code .cs{color:#75715e;}.pdoc-code .gd{color:#f92672;}.pdoc-code .ge{color:#f8f8f2;font-style:italic;}.pdoc-code .gr{color:#f8f8f2;}.pdoc-code .gh{color:#f8f8f2;}.pdoc-code .gi{color:#a6e22e;}.pdoc-code .go{color:#66d9ef;}.pdoc-code .gp{color:#f92672;font-weight:bold;}.pdoc-code .gs{color:#f8f8f2;font-weight:bold;}.pdoc-code .gu{color:#75715e;}.pdoc-code .gt{color:#f8f8f2;}.pdoc-code .kc{color:#66d9ef;}.pdoc-code .kd{color:#66d9ef;}.pdoc-code .kn{color:#f92672;}.pdoc-code .kp{color:#66d9ef;}.pdoc-code .kr{color:#66d9ef;}.pdoc-code .kt{color:#66d9ef;}.pdoc-code .ld{color:#e6db74;}.pdoc-code .m{color:#ae81ff;}.pdoc-code .s{color:#e6db74;}.pdoc-code .na{color:#a6e22e;}.pdoc-code .nb{color:#f8f8f2;}.pdoc-code .nc{color:#a6e22e;}.pdoc-code .no{color:#66d9ef;}.pdoc-code .nd{color:#a6e22e;}.pdoc-code .ni{color:#f8f8f2;}.pdoc-code .ne{color:#a6e22e;}.pdoc-code .nf{color:#a6e22e;}.pdoc-code .nl{color:#f8f8f2;}.pdoc-code .nn{color:#f8f8f2;}.pdoc-code .nx{color:#a6e22e;}.pdoc-code .py{color:#f8f8f2;}.pdoc-code .nt{color:#f92672;}.pdoc-code .nv{color:#f8f8f2;}.pdoc-code .ow{color:#f92672;}.pdoc-code .w{color:#f8f8f2;}.pdoc-code .mb{color:#ae81ff;}.pdoc-code .mf{color:#ae81ff;}.pdoc-code .mh{color:#ae81ff;}.pdoc-code .mi{color:#ae81ff;}.pdoc-code .mo{color:#ae81ff;}.pdoc-code .sa{color:#e6db74;}.pdoc-code .sb{color:#e6db74;}.pdoc-code .sc{color:#e6db74;}.pdoc-code .dl{color:#e6db74;}.pdoc-code .sd{color:#e6db74;font-style:italic;}.pdoc-code .s2{color:#e6db74;}.pdoc-code .se{color:#ae81ff;}.pdoc-code .sh{color:#e6db74;}.pdoc-code .si{color:#e6db74;}.pdoc-code .sx{color:#e6db74;}.pdoc-code .sr{color:#e6db74;}.pdoc-code .s1{color:#e6db74;}.pdoc-code .ss{color:#e6db74;}.pdoc-code .bp{color:#f8f8f2;}.pdoc-code .fm{color:#a6e22e;}.pdoc-code .vc{color:#f8f8f2;}.pdoc-code .vg{color:#f8f8f2;}.pdoc-code .vi{color:#f8f8f2;}.pdoc-code .vm{color:#f8f8f2;}}.pdoc-button.module-list-button{background-color:#0072b2;color:#ffffff !important;border:2px solid #0072b2;padding:10px 20px;font-size:16px;font-weight:500;text-align:center;cursor:pointer;transition:background-color 0.3s ease, border-color 0.3s ease;border-radius:20px; box-shadow:none; }.pdoc-button.module-list-button:hover{background-color:#005ea6;border-color:#005ea6;}</style>
+    <style>/*! theme.css */:root{--pdoc-background:#ffffff;}.pdoc{--text:#000000; --muted:#6d6d6d; --link:#0072b2; --link-hover:#004d80; --code:#f5f5f5; --active:#ffd700; --accent:#3989b529; --accent2:#b3b3b3; --nav-hover:rgba(245, 245, 245, 0.5); --name:#d55e00; --def:#009e73; --annotation:#cc79a7; }@media (prefers-color-scheme:dark){:root{--pdoc-background:#202020; }.pdoc{--text:#e0e0e0; --muted:#a0a0a0; --link:#56b4e9; --link-hover:#1f78b4; --code:#2a2a2a; --active:#ffd700; --accent:#3a3a3a; --accent2:#555555; --nav-hover:rgba(50, 50, 50, 0.5); --name:#e69f00; --def:#009e73; --annotation:#f0e442; }}</style>
+    <style>/*! layout.css */html, body{width:100%;height:100%;}html, main{scroll-behavior:smooth;}body{background-color:var(--pdoc-background);}@media (max-width:769px){#navtoggle{cursor:pointer;position:absolute;width:50px;height:40px;top:1rem;right:1rem;border-color:var(--text);color:var(--text);display:flex;opacity:0.8;z-index:999;}#navtoggle:hover{opacity:1;}#togglestate + div{display:none;}#togglestate:checked + div{display:inherit;}main, header{padding:2rem 3vw;}header + main{margin-top:-3rem;}.git-button{display:none !important;}nav input[type="search"]{max-width:77%;}nav input[type="search"]:first-child{margin-top:-6px;}nav input[type="search"]:valid ~ *{display:none !important;}}@media (min-width:770px){:root{--sidebar-width:clamp(12.5rem, 28vw, 22rem);}nav{position:fixed;overflow:auto;height:100vh;width:var(--sidebar-width);}main, header{padding:3rem 2rem 3rem calc(var(--sidebar-width) + 3rem);width:calc(54rem + var(--sidebar-width));max-width:100%;}header + main{margin-top:-4rem;}#navtoggle{display:none;}}#togglestate{position:absolute;height:0;opacity:0;}nav.pdoc{--pad:clamp(0.5rem, 2vw, 1.75rem);--indent:1.5rem;background-color:var(--accent);border-right:1px solid var(--accent2);box-shadow:0 0 20px rgba(50, 50, 50, .2) inset;padding:0 0 0 var(--pad);overflow-wrap:anywhere;scrollbar-width:thin; scrollbar-color:var(--accent2) transparent; z-index:1}nav.pdoc::-webkit-scrollbar{width:.4rem; }nav.pdoc::-webkit-scrollbar-thumb{background-color:var(--accent2); }nav.pdoc > div{padding:var(--pad) 0;}nav.pdoc .module-list-button{display:inline-flex;align-items:center;color:var(--text);border-color:var(--muted);margin-bottom:1rem;}nav.pdoc .module-list-button:hover{border-color:var(--text);}nav.pdoc input[type=search]{display:block;outline-offset:0;width:calc(100% - var(--pad));}nav.pdoc .logo{max-width:calc(100% - var(--pad));max-height:35vh;display:block;margin:0 auto 1rem;transform:translate(calc(-.5 * var(--pad)), 0);}nav.pdoc ul{list-style:none;padding-left:0;}nav.pdoc > div > ul{margin-left:calc(0px - var(--pad));}nav.pdoc li a{padding:.2rem 0 .2rem calc(var(--pad) + var(--indent));}nav.pdoc > div > ul > li > a{padding-left:var(--pad);}nav.pdoc li{transition:all 100ms;}nav.pdoc li:hover{background-color:var(--nav-hover);}nav.pdoc a, nav.pdoc a:hover{color:var(--text);}nav.pdoc a{display:block;}nav.pdoc > h2:first-of-type{margin-top:1.5rem;}nav.pdoc .class:before{content:"class ";color:var(--muted);}nav.pdoc .function:after{content:"()";color:var(--muted);}nav.pdoc footer:before{content:"";display:block;width:calc(100% - var(--pad));border-top:solid var(--accent2) 1px;margin-top:1.5rem;padding-top:.5rem;}nav.pdoc footer{font-size:small;}</style>
+    <style>/*! content.css */.pdoc{color:var(--text);box-sizing:border-box;line-height:1.5;background:none;}.pdoc .pdoc-button{cursor:pointer;display:inline-block;border:solid black 1px;border-radius:2px;font-size:.75rem;padding:calc(0.5em - 1px) 1em;transition:100ms all;}.pdoc .alert{padding:1rem 1rem 1rem calc(1.5rem + 24px);border:1px solid transparent;border-radius:.25rem;background-repeat:no-repeat;background-position:.75rem center;margin-bottom:1rem;}.pdoc .alert > em{display:none;}.pdoc .alert > *:last-child{margin-bottom:0;}.pdoc .alert.note{color:#084298;background-color:#cfe2ff;border-color:#b6d4fe;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20fill%3D%22%23084298%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20d%3D%22M8%2016A8%208%200%201%200%208%200a8%208%200%200%200%200%2016zm.93-9.412-1%204.705c-.07.34.029.533.304.533.194%200%20.487-.07.686-.246l-.088.416c-.287.346-.92.598-1.465.598-.703%200-1.002-.422-.808-1.319l.738-3.468c.064-.293.006-.399-.287-.47l-.451-.081.082-.381%202.29-.287zM8%205.5a1%201%200%201%201%200-2%201%201%200%200%201%200%202z%22/%3E%3C/svg%3E");}.pdoc .alert.tip{color:#0a3622;background-color:#d1e7dd;border-color:#a3cfbb;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20fill%3D%22%230a3622%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20d%3D%22M2%206a6%206%200%201%201%2010.174%204.31c-.203.196-.359.4-.453.619l-.762%201.769A.5.5%200%200%201%2010.5%2013a.5.5%200%200%201%200%201%20.5.5%200%200%201%200%201l-.224.447a1%201%200%200%201-.894.553H6.618a1%201%200%200%201-.894-.553L5.5%2015a.5.5%200%200%201%200-1%20.5.5%200%200%201%200-1%20.5.5%200%200%201-.46-.302l-.761-1.77a2%202%200%200%200-.453-.618A5.98%205.98%200%200%201%202%206m6-5a5%205%200%200%200-3.479%208.592c.263.254.514.564.676.941L5.83%2012h4.342l.632-1.467c.162-.377.413-.687.676-.941A5%205%200%200%200%208%201%22/%3E%3C/svg%3E");}.pdoc .alert.important{color:#055160;background-color:#cff4fc;border-color:#9eeaf9;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20fill%3D%22%23055160%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20d%3D%22M2%200a2%202%200%200%200-2%202v12a2%202%200%200%200%202%202h12a2%202%200%200%200%202-2V2a2%202%200%200%200-2-2zm6%204c.535%200%20.954.462.9.995l-.35%203.507a.552.552%200%200%201-1.1%200L7.1%204.995A.905.905%200%200%201%208%204m.002%206a1%201%200%201%201%200%202%201%201%200%200%201%200-2%22/%3E%3C/svg%3E");}.pdoc .alert.warning{color:#664d03;background-color:#fff3cd;border-color:#ffecb5;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20fill%3D%22%23664d03%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20d%3D%22M8.982%201.566a1.13%201.13%200%200%200-1.96%200L.165%2013.233c-.457.778.091%201.767.98%201.767h13.713c.889%200%201.438-.99.98-1.767L8.982%201.566zM8%205c.535%200%20.954.462.9.995l-.35%203.507a.552.552%200%200%201-1.1%200L7.1%205.995A.905.905%200%200%201%208%205zm.002%206a1%201%200%201%201%200%202%201%201%200%200%201%200-2z%22/%3E%3C/svg%3E");}.pdoc .alert.caution{color:#842029;background-color:#f8d7da;border-color:#f5c2c7;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20fill%3D%22%23842029%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20d%3D%22M11.46.146A.5.5%200%200%200%2011.107%200H4.893a.5.5%200%200%200-.353.146L.146%204.54A.5.5%200%200%200%200%204.893v6.214a.5.5%200%200%200%20.146.353l4.394%204.394a.5.5%200%200%200%20.353.146h6.214a.5.5%200%200%200%20.353-.146l4.394-4.394a.5.5%200%200%200%20.146-.353V4.893a.5.5%200%200%200-.146-.353zM8%204c.535%200%20.954.462.9.995l-.35%203.507a.552.552%200%200%201-1.1%200L7.1%204.995A.905.905%200%200%201%208%204m.002%206a1%201%200%201%201%200%202%201%201%200%200%201%200-2%22/%3E%3C/svg%3E");}.pdoc .alert.danger{color:#842029;background-color:#f8d7da;border-color:#f5c2c7;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20fill%3D%22%23842029%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20d%3D%22M5.52.359A.5.5%200%200%201%206%200h4a.5.5%200%200%201%20.474.658L8.694%206H12.5a.5.5%200%200%201%20.395.807l-7%209a.5.5%200%200%201-.873-.454L6.823%209.5H3.5a.5.5%200%200%201-.48-.641l2.5-8.5z%22/%3E%3C/svg%3E");}.pdoc .visually-hidden{position:absolute !important;width:1px !important;height:1px !important;padding:0 !important;margin:-1px !important;overflow:hidden !important;clip:rect(0, 0, 0, 0) !important;white-space:nowrap !important;border:0 !important;}.pdoc h1, .pdoc h2, .pdoc h3{font-weight:300;margin:.3em 0;padding:.2em 0;}.pdoc > section:not(.module-info) h1{font-size:1.5rem;font-weight:500;}.pdoc > section:not(.module-info) h2{font-size:1.4rem;font-weight:500;}.pdoc > section:not(.module-info) h3{font-size:1.3rem;font-weight:500;}.pdoc > section:not(.module-info) h4{font-size:1.2rem;}.pdoc > section:not(.module-info) h5{font-size:1.1rem;}.pdoc a{text-decoration:none;color:var(--link);}.pdoc a:hover{color:var(--link-hover);}.pdoc blockquote{margin-left:2rem;}.pdoc pre{border-top:1px solid var(--accent2);border-bottom:1px solid var(--accent2);margin-top:0;margin-bottom:1em;padding:.5rem 0 .5rem .5rem;overflow-x:auto;background-color:var(--code);}.pdoc code{color:var(--text);padding:.2em .4em;margin:0;font-size:85%;background-color:var(--accent);border-radius:6px;}.pdoc a > code{color:inherit;}.pdoc pre > code{display:inline-block;font-size:inherit;background:none;border:none;padding:0;}.pdoc > section:not(.module-info){margin-bottom:1.5rem;}.pdoc .modulename{margin-top:0;font-weight:bold;}.pdoc .modulename a{color:var(--link);transition:100ms all;}.pdoc .git-button{float:right;border:solid var(--link) 1px;}.pdoc .git-button:hover{background-color:var(--link);color:var(--pdoc-background);}.view-source-toggle-state,.view-source-toggle-state ~ .pdoc-code{display:none;}.view-source-toggle-state:checked ~ .pdoc-code{display:block;}.view-source-button{display:inline-block;float:right;font-size:.75rem;line-height:1.5rem;color:var(--muted);padding:0 .4rem 0 1.3rem;cursor:pointer;text-indent:-2px;}.view-source-button > span{visibility:hidden;}.module-info .view-source-button{float:none;display:flex;justify-content:flex-end;margin:-1.2rem .4rem -.2rem 0;}.view-source-button::before{position:absolute;content:"View Source";display:list-item;list-style-type:disclosure-closed;}.view-source-toggle-state:checked ~ .attr .view-source-button::before,.view-source-toggle-state:checked ~ .view-source-button::before{list-style-type:disclosure-open;}.pdoc .docstring{margin-bottom:1.5rem;}.pdoc section:not(.module-info) .docstring{margin-left:clamp(0rem, 5vw - 2rem, 1rem);}.pdoc .docstring .pdoc-code{margin-left:1em;margin-right:1em;}.pdoc h1:target,.pdoc h2:target,.pdoc h3:target,.pdoc h4:target,.pdoc h5:target,.pdoc h6:target,.pdoc .pdoc-code > pre > span:target{background-color:var(--active);box-shadow:-1rem 0 0 0 var(--active);}.pdoc .pdoc-code > pre > span:target{display:block;}.pdoc div:target > .attr,.pdoc section:target > .attr,.pdoc dd:target > a{background-color:var(--active);}.pdoc *{scroll-margin:2rem;}.pdoc .pdoc-code .linenos{user-select:none;}.pdoc .attr:hover{filter:contrast(0.95);}.pdoc section, .pdoc .classattr{position:relative;}.pdoc .headerlink{--width:clamp(1rem, 3vw, 2rem);position:absolute;top:0;left:calc(0rem - var(--width));transition:all 100ms ease-in-out;opacity:0;}.pdoc .headerlink::before{content:"#";display:block;text-align:center;width:var(--width);height:2.3rem;line-height:2.3rem;font-size:1.5rem;}.pdoc .attr:hover ~ .headerlink,.pdoc *:target > .headerlink,.pdoc .headerlink:hover{opacity:1;}.pdoc .attr{display:block;margin:.5rem 0 .5rem;padding:.4rem .4rem .4rem 1rem;background-color:var(--accent);overflow-x:auto;}.pdoc .classattr{margin-left:2rem;}.pdoc .decorator-deprecated{color:#842029;}.pdoc .decorator-deprecated ~ span{filter:grayscale(1) opacity(0.8);}.pdoc .name{color:var(--name);font-weight:bold;}.pdoc .def{color:var(--def);font-weight:bold;}.pdoc .signature{background-color:transparent;}.pdoc .param, .pdoc .return-annotation{white-space:pre;}.pdoc .signature.multiline .param{display:block;}.pdoc .signature.condensed .param{display:inline-block;}.pdoc .annotation{color:var(--annotation);}.pdoc .view-value-toggle-state,.pdoc .view-value-toggle-state ~ .default_value{display:none;}.pdoc .view-value-toggle-state:checked ~ .default_value{display:inherit;}.pdoc .view-value-button{font-size:.5rem;vertical-align:middle;border-style:dashed;margin-top:-0.1rem;}.pdoc .view-value-button:hover{background:white;}.pdoc .view-value-button::before{content:"show";text-align:center;width:2.2em;display:inline-block;}.pdoc .view-value-toggle-state:checked ~ .view-value-button::before{content:"hide";}.pdoc .inherited{margin-left:2rem;}.pdoc .inherited dt{font-weight:700;}.pdoc .inherited dt, .pdoc .inherited dd{display:inline;margin-left:0;margin-bottom:.5rem;}.pdoc .inherited dd:not(:last-child):after{content:", ";}.pdoc .inherited .class:before{content:"class ";}.pdoc .inherited .function a:after{content:"()";}.pdoc .search-result .docstring{overflow:auto;max-height:25vh;}.pdoc .search-result.focused > .attr{background-color:var(--active);}.pdoc .attribution{margin-top:2rem;display:block;opacity:0.5;transition:all 200ms;filter:grayscale(100%);}.pdoc .attribution:hover{opacity:1;filter:grayscale(0%);}.pdoc .attribution img{margin-left:5px;height:27px;vertical-align:bottom;width:50px;transition:all 200ms;}.pdoc table{display:block;width:max-content;max-width:100%;overflow:auto;margin-bottom:1rem;}.pdoc table th{font-weight:600;}.pdoc table th, .pdoc table td{padding:6px 13px;border:1px solid var(--accent2);}</style>
+    <style>/*! custom.css */</style></head>
+<body>
+    <nav class="pdoc">
+        <label id="navtoggle" for="togglestate" class="pdoc-button"><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'><path stroke-linecap='round' stroke="currentColor" stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/></svg></label>
+        <input id="togglestate" type="checkbox" aria-hidden="true" tabindex="-1">
+        <div>            <a class="pdoc-button module-list-button" href="../tasks.html">
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-box-arrow-in-left" viewBox="0 0 16 16">
+  <path fill-rule="evenodd" d="M10 3.5a.5.5 0 0 0-.5-.5h-8a.5.5 0 0 0-.5.5v9a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 1 1 0v2A1.5 1.5 0 0 1 9.5 14h-8A1.5 1.5 0 0 1 0 12.5v-9A1.5 1.5 0 0 1 1.5 2h8A1.5 1.5 0 0 1 11 3.5v2a.5.5 0 0 1-1 0v-2z"/>
+  <path fill-rule="evenodd" d="M4.146 8.354a.5.5 0 0 1 0-.708l3-3a.5.5 0 1 1 .708.708L5.707 7.5H14.5a.5.5 0 0 1 0 1H5.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3z"/>
+</svg>                &nbsp;senselab.audio.tasks</a>
+
+
+            <input type="search" placeholder="Search..." role="searchbox" aria-label="search"
+                   pattern=".+" required>
+
+            <h2>Contents</h2>
+            <ul>
+  <li><a href="#speaker-embedding-extraction">Speaker embedding extraction</a>
+  <ul>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#model-architecture">Model Architecture:</a></li>
+    <li><a href="#two-entry-points">Two entry points</a></li>
+    <li><a href="#two-window-settings-two-separate-measurements">Two window settings, two separate measurements</a></li>
+    <li><a href="#reading-the-statistics-block-against-its-analytic-nulls">Reading the statistics block against its analytic nulls</a></li>
+    <li><a href="#contamination-rejection">Contamination rejection</a></li>
+    <li><a href="#suggested-vocabulary-for-hint-tags">Suggested vocabulary for hint tags</a></li>
+    <li><a href="#learn-more">Learn more:</a></li>
+  </ul></li>
+</ul>
+
+
+
+            <h2>API Documentation</h2>
+                <ul class="memberlist">
+            <li>
+                    <a class="function" href="#estimate_speaker_embedding_from_audios">estimate_speaker_embedding_from_audios</a>
+            </li>
+            <li>
+                    <a class="function" href="#extract_speaker_embeddings_from_audios">extract_speaker_embeddings_from_audios</a>
+            </li>
+    </ul>
+
+
+
+        <a class="attribution" title="pdoc: Python API documentation generator" href="https://pdoc.dev" target="_blank">
+            built with <span class="visually-hidden">pdoc</span><img
+                alt="pdoc logo"
+                src="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20role%3D%22img%22%20aria-label%3D%22pdoc%20logo%22%20width%3D%22300%22%20height%3D%22160%22%20viewBox%3D%220%200%20150%2080%22%3E%3Ctitle%3Epdoc%3C/title%3E%3Cpath%20d%3D%22M132.316%2048.886c.276-4.679%202.342-6.698%204.409-7.982s4.27-1.165%206.751-1.055c1.586.07%203.044.156%204.222-.482%201.142-.619%202.026-1.932%202.162-3.739.268-3.576-1.929-5.368-5.006-5.551s-7.599.524-10.517%201.606c-4.455%201.652-8.588%206.606-9.552%208.992s-2.342%206.193-1.745%2010.873%202.664%209.221%205.878%2011.79%205.878%203.808%2010.103%204.312%203.444.229%206.062.229%205.006-2.202%204.914-4.909-2.296-5.001-4.501-4.863-3.077.505-5.281.229-7.715-2.064-7.899-9.451z%22%20fill%3D%22%23198754%22/%3E%3Ccircle%20cx%3D%22101.504%22%20cy%3D%2248.943%22%20r%3D%2214.208%22%20fill%3D%22none%22%20stroke%3D%22%23198754%22%20stroke-width%3D%229.354%22/%3E%3Cpath%20d%3D%22M87.81.002c-3.637.065-5.001.454-7.014%201.232s-3.443%201.363-6.3%204.282c-1.723%201.76-3.148%205.019-3.776%207.329-.413%201.521-.316%202.63-.316%202.63l-.195%2034.612c.065%205.774-6.755%208.305-9.612%208.37s-9.678-1.038-9.743-9.408%207.128-9.521%208.362-9.521c1.413-.13%202.526-.021%203.718-.016%202.071.009%204.157-.778%204.092-4.671s-4.157-4.736-4.157-4.736c-6.3-.843-11.43%202.206-11.43%202.206S40.917%2038.15%2041.372%2049.634%2051.568%2068.19%2061.311%2068.125s18.316-7.007%2018.445-17.193l.13-22.772c.046-2.291%202.683-3.644%204.476-4.203.745-.232%201.694-.274%201.694-.274l10.457-.13s4.871-.324%207.729-3.114%204.352-6.294%204.352-6.294.974-3.049.13-4.606-.195-1.233-2.792-3.309-8.573-4.477-8.573-4.477S91.447-.063%2087.81.002zM0%2047.169l.065%2028.417S0%2080.127%204.481%2079.997s5.072-3.866%205.049-4.152l-.113-28.482s1.624-7.656%209.937-7.721%2010.002%206.942%2010.002%208.499-.909%2010.51-9.093%2010.51c-.948%200-2.99-.567-4.145-.272-3.919%201-3.194%204.554-3.194%204.554s.065%205.061%207.404%204.996%2018.575-6.034%2018.575-19.074S26.953%2030.04%2019.549%2029.91%201.234%2035.296%200%2047.169z%22%20fill%3D%22%23198754%22/%3E%3Cg%20transform%3D%22matrix%28.325601%200%200%20.325256%20-10.32669%20-45.802786%29%22%3E%3Ccircle%20cx%3D%22297.554%22%20cy%3D%22172.286%22%20r%3D%2216.5%22%20fill%3D%22%23fff%22/%3E%3Cellipse%20cx%3D%22297.709%22%20cy%3D%22172.642%22%20rx%3D%2211.071%22%20ry%3D%2210.871%22%20fill%3D%22%23105a48%22/%3E%3Ccircle%20cx%3D%22304.104%22%20cy%3D%22167.667%22%20r%3D%224.5%22%20fill%3D%22%23fff%22/%3E%3C/g%3E%3Cpath%20d%3D%22M94.661%2017.032l.893-1.476s.99.714%201.916.925%201.575.114%202.955.114l14.565-.162c1.283-.032%203.085-.762%203.02-3.293s-.373-3.503-.373-3.503l1.283-.487s.52.503.877%201.573.309%201.995.292%202.66-.227%201.541-.227%201.541%201.564-.308%202.359-1.038.823-.779%201.489-1.508.812-.86.812-.86.552-.13.877.26.341.957.065%201.46-1.672%202.206-3.247%203.066-2.76%201.427-3.929%201.768-3.848.73-7.063.714l-10.944-.114s-2.143-.081-3.02-.373-2.241-.973-2.598-1.265z%22%20fill%3D%22%23d36d49%22/%3E%3Cg%20fill%3D%22%23105a48%22%3E%3Cellipse%20cx%3D%2293.052%22%20cy%3D%2243.567%22%20rx%3D%22.869%22%20ry%3D%221.014%22%20transform%3D%22rotate%28341.022%29%22/%3E%3Cellipse%20cx%3D%22104.3%22%20cy%3D%22-16.184%22%20rx%3D%22.865%22%20ry%3D%221.009%22%20transform%3D%22rotate%2814.786%29%22/%3E%3C/g%3E%3C/svg%3E"/>
+        </a>
+</div>
+    </nav>
+    <main class="pdoc">
+            <section class="module-info">
+                    <h1 class="modulename">
+<a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../audio.html">audio</a><wbr>.<a href="./../tasks.html">tasks</a><wbr>.speaker_embeddings    </h1>
+
+                        <div class="docstring"><h1 id="speaker-embedding-extraction">Speaker embedding extraction</h1>
+
+<p><button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/audio/extract_speaker_embeddings.ipynb'">Tutorial</button></p>
+
+<h2 id="overview">Overview</h2>
+
+<p>Speaker embeddings are fixed-dimensional vector representations that capture the unique characteristics of a speaker's
+voice, allowing for tasks such as speaker identification, verification, and diarization.</p>
+
+<p>Speaker embedding extraction is a crucial task in speaker recognition systems. It involves transforming variable-length
+audio signals into fixed-size vector representations that encapsulate speaker-specific information while being robust
+to variations in speech content, background noise, and recording conditions.</p>
+
+<h2 id="model-architecture">Model Architecture:</h2>
+
+<p>The default model used in this module (speechbrain/spkrec-ecapa-voxceleb) is based on the ECAPA-TDNN architecture,
+which has shown strong performance across various speaker recognition tasks.
+Other supported models include ResNet TDNN (speechbrain/spkrec-resnet-voxceleb) and
+xvector (speechbrain/spkrec-xvect-voxceleb).</p>
+
+<p><strong>Note</strong>: Performance can vary significantly depending on the specific dataset, task, and evaluation protocol used.
+Always refer to the most recent literature for up-to-date benchmarks.</p>
+
+<h2 id="two-entry-points">Two entry points</h2>
+
+<ul>
+<li><strong><code><a href="#extract_speaker_embeddings_from_audios">extract_speaker_embeddings_from_audios</a></code></strong> returns one embedding per input <code>Audio</code>, whole-file. Reach for this
+when the caller already knows each file is a single, clean utterance from one speaker and only wants the vector --
+e.g. scoring a verification pair, or feeding a downstream classifier that expects exactly one vector per file.
+It makes no windowing decision and reports no statistics: it is the plain per-audio extractor everything else in
+this module is built from.</li>
+<li><strong><code><a href="#estimate_speaker_embedding_from_audios">estimate_speaker_embedding_from_audios</a></code></strong> takes a <em>set</em> of files that may contain the target speaker, windows
+and embeds each one, pools the windows, and returns a <code>TargetSpeakerEmbedding</code> carrying both the centroid and the
+<code>EmbeddingDistribution</code> it was estimated from. Reach for this for profile enrollment: several recordings of one
+person, of unknown per-file purity, where the caller wants both an estimate and the evidence for how well-supported
+it is. It decides nothing about whether the input set was clean -- see "Contamination rejection" below for the one
+place a decision is made, and only on request.</li>
+</ul>
+
+<h2 id="two-window-settings-two-separate-measurements">Two window settings, two separate measurements</h2>
+
+<p>Windowing appears in two places in this task family, tuned for two different jobs, and the two settings must not be
+collapsed into one "the" default:</p>
+
+<ul>
+<li><strong>Detection / temporal resolution</strong> -- <code>windowing.extract_per_window_embeddings</code>'s own fallback defaults,
+<code>window_s=1.0, hop_s=0.5</code>, exercised only when a caller passes nothing. Neither production caller does:
+<code>audio_analysis</code>'s <code>data/run_config/default.yaml</code> runs the workflow at <code>window_s=0.5, hop_s=0.25</code>, and that file's
+own derivation measured 1.0 s as <em>worse</em> for this job -- ARI 0.70 at 0.5 s against 0.48 at 1.0 s on a 4-speaker
+validation clip, because a 1.0 s window straddles turn boundaries. See
+<code>workflows/audio_analysis/embeddings.py</code>'s "Why 1.0 s / 0.5 s defaults" section for the function-level rationale
+behind the fallback pair, and <code>default.yaml</code>'s own derivation comment for the measurement that supersedes it in
+every real run.</li>
+<li><strong>Profile enrollment / centroid stability</strong> -- <code><a href="#estimate_speaker_embedding_from_audios">estimate_speaker_embedding_from_audios</a></code>'s defaults,
+<code>window_s=2.0, hop_s=1.0</code> (<code>PROFILE_WINDOW_S</code>, <code>PROFILE_HOP_S</code> in <code>api.py</code>). Measured directly for this job: a
+2.0 s window on a 1.0 s hop gave cross-file centroid stability 0.890 and cross-subject separation 0.168, against
+0.331 for a finer 0.5/0.25 grid carrying four times the windows. Finer windows do not make a better centroid here
+-- they make a noisier one, because each window is a shorter, less certain sample of the same speaker.</li>
+</ul>
+
+<p>Both defaults can be overridden by the caller; neither is "the" senselab default, because they were fitted for
+different trade-offs (temporal resolution against centroid stability), not for the same objective at different
+resolutions.</p>
+
+<h2 id="reading-the-statistics-block-against-its-analytic-nulls">Reading the statistics block against its analytic nulls</h2>
+
+<p><code>EmbeddingDistribution</code> (<code><a href="../../utils/tasks/embedding_distribution.html">senselab.utils.tasks.embedding_distribution</a></code>) <strong>describes and never decides</strong>: there is no
+verdict field, no boolean, no thresholded label. Every statistic is either bounded on an interpretable scale, or
+paired with a closed-form null it should be read against rather than against a fitted or remembered number:</p>
+
+<ul>
+<li><code>nulls.cos_sd_null = 1/sqrt(d)</code> (0.0722 at ECAPA's d=192) -- the sd of pairwise cosines between <em>independent random
+directions</em> at this dimension.</li>
+<li><code>nulls.rbar_null = 1/sqrt(n)</code> -- the mean resultant length <code>n</code> independent directions would produce.</li>
+<li><code>nulls.participation_ratio_null = d*n/(d+n)</code> -- the Marchenko-Pastur value for white noise at this shape.</li>
+<li><code>nulls.auc_null = 0.5</code> -- the Mann-Whitney AUC of same-file vs. different-file cosines under exchangeability.</li>
+</ul>
+
+<p><strong>The counter-intuitive one, worth stating explicitly</strong>: a <em>small</em> sd of cosines is not evidence of a coherent
+speaker. At d=192, independent random directions already give sd ~= 0.072 (<code>nulls.cos_sd_null</code>); an observed sd of
+0.05 is <em>below</em> that random-vector null, which is a property of the dimensionality, not of the speaker. This is why
+<code>sd</code> is never reported as a headline dispersion figure on its own in this codebase -- only next to
+<code>nulls.cos_sd_null</code>, so a reader compares the two rather than reading <code>sd</code> as if lower always meant tighter.</p>
+
+<p>The rest of the block follows the same discipline: <code>spectrum.participation_ratio</code> reads against
+<code>nulls.participation_ratio_null</code>; <code>file_effect.auc_same_file_vs_diff_file</code> reads against <code>nulls.auc_null</code>; and
+<code>file_effect.permutation_quantile</code> is a block-permutation reference built from the data itself rather than a second
+closed-form null, because windows overlap and shuffling individual vectors would destroy dependence the observed
+statistic retains. See the module docstring in <code>embedding_distribution.py</code> for the full derivation, including why
+silhouette, k-NN purity, intrinsic-dimensionality estimators, and von Mises-Fisher concentration are all deliberately
+absent from this block (each for a specific, mechanical reason, not a judgement call).</p>
+
+<h2 id="contamination-rejection">Contamination rejection</h2>
+
+<p><code>select_dominant_vectors</code> groups the pooled windows (agglomerative clustering on geodesic angular distance) and
+returns the dominant group -- <strong>this is the one function in the distribution-statistics module that decides
+something</strong>, which is why it is a separate, opt-in call rather than folded into <code>describe_embedding_distribution</code>.
+<code>estimate_speaker_embedding_from_audios(..., reject_contamination=True)</code> calls it and keeps only the dominant group
+before describing the result; it is off by default, because choosing a dominant group is a decision the function
+does not make on the caller's behalf unasked.</p>
+
+<p>What it removed is recorded, not silently discarded: <code>provenance.method</code> gains a <code>+dominant_cluster</code> suffix,
+<code>provenance.n_windows_dropped</code> counts what was cut, and the full <code>DominantSelection</code> (cluster summaries, the merge
+heights, which cut rule fired) is available from <code>select_dominant_vectors</code> directly if the caller wants to inspect
+the decision rather than just its outcome.</p>
+
+<p>Once contamination rejection has run, <strong>the statistics describe the curated set, not the raw input</strong>. A caller
+reading <code>EmbeddingDistribution</code> off a contamination-rejected pool is reading "how coherent is what we kept", not
+"how coherent was everything we were given" -- the two questions look identical in the returned fields and are not
+the same question.</p>
+
+<h2 id="suggested-vocabulary-for-hint-tags">Suggested vocabulary for hint tags</h2>
+
+<p><code>AudioHints.may_contain</code> and <code>AudioHints.environment</code> (<code><a href="../data_structures/audio_hints.html">senselab.audio.data_structures.audio_hints</a></code>) are open
+strings, not an enum, because a closed vocabulary here would be a taxonomy nobody fitted: every corpus that didn't
+fit it would force an edit to a type definition rather than to a tag. The following is a <strong>suggestion, not a
+contract</strong> -- nothing downstream validates against it, and a caller is free to use any string:</p>
+
+<ul>
+<li><code>may_contain</code>: <code>read-speech</code>, <code>spontaneous-speech</code>, <code>sustained-vowel</code>, <code>cough</code>, <code>breath</code>, <code>singing</code>, <code>music</code>,
+<code>multiple-speakers</code>, <code>silence</code></li>
+<li><code>environment</code>: <code>quiet-room</code>, <code>clinic</code>, <code>home</code>, <code>telephone</code>, <code>outdoors</code>, <code>unknown</code></li>
+</ul>
+
+<p>Using this vocabulary where it fits is useful for cross-corpus consistency, but it should be extended or ignored
+freely rather than treated as exhaustive.</p>
+
+<h2 id="learn-more">Learn more:</h2>
+
+<ul>
+<li><a href="https://speechbrain.github.io/">SpeechBrain</a></li>
+<li><a href="https://arxiv.org/abs/2005.07143">ECAPA-TDNN</a></li>
+<li><a href="https://doi.org/10.1016/j.csl.2019.101026">ResNet TDNN</a></li>
+<li><a href="https://doi.org/10.21437/Odyssey.2018-15">xvector</a></li>
+</ul>
+</div>
+
+                        <input id="mod-speaker_embeddings-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+
+                        <label class="view-source-button" for="mod-speaker_embeddings-view-source"><span>View Source</span></label>
+
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">estimate_speaker_embedding_from_audios</span><span class="p">,</span> <span class="n">extract_speaker_embeddings_from_audios</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;estimate_speaker_embedding_from_audios&quot;</span><span class="p">,</span> <span class="s2">&quot;extract_speaker_embeddings_from_audios&quot;</span><span class="p">]</span>
+</span></pre></div>
+
+
+            </section>
+                <section id="estimate_speaker_embedding_from_audios">
+                            <input id="estimate_speaker_embedding_from_audios-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">estimate_speaker_embedding_from_audios</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>,</span><span class="param">	<span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/model.html#SenselabModel">senselab.utils.data_structures.model.SenselabModel</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/device.html#DeviceType">senselab.utils.data_structures.device.DeviceType</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">window_s</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">2.0</span>,</span><span class="param">	<span class="n">hop_s</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span>,</span><span class="param">	<span class="n">aggregator</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;spherical_mean&#39;</span>,</span><span class="param">	<span class="n">reject_contamination</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>,</span><span class="param">	<span class="n">created_at</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">file_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="n"><a href="../data_structures/audio_hints.html#TargetSpeakerEmbedding">senselab.audio.data_structures.audio_hints.TargetSpeakerEmbedding</a></span>:</span></span>
+
+                <label class="view-source-button" for="estimate_speaker_embedding_from_audios-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#estimate_speaker_embedding_from_audios"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="estimate_speaker_embedding_from_audios-143"><a href="#estimate_speaker_embedding_from_audios-143"><span class="linenos">143</span></a><span class="k">def</span><span class="w"> </span><span class="nf">estimate_speaker_embedding_from_audios</span><span class="p">(</span>
+</span><span id="estimate_speaker_embedding_from_audios-144"><a href="#estimate_speaker_embedding_from_audios-144"><span class="linenos">144</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
+</span><span id="estimate_speaker_embedding_from_audios-145"><a href="#estimate_speaker_embedding_from_audios-145"><span class="linenos">145</span></a>    <span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">SenselabModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-146"><a href="#estimate_speaker_embedding_from_audios-146"><span class="linenos">146</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-147"><a href="#estimate_speaker_embedding_from_audios-147"><span class="linenos">147</span></a>    <span class="n">window_s</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">PROFILE_WINDOW_S</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-148"><a href="#estimate_speaker_embedding_from_audios-148"><span class="linenos">148</span></a>    <span class="n">hop_s</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">PROFILE_HOP_S</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-149"><a href="#estimate_speaker_embedding_from_audios-149"><span class="linenos">149</span></a>    <span class="n">aggregator</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;spherical_mean&quot;</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-150"><a href="#estimate_speaker_embedding_from_audios-150"><span class="linenos">150</span></a>    <span class="n">reject_contamination</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-151"><a href="#estimate_speaker_embedding_from_audios-151"><span class="linenos">151</span></a>    <span class="n">created_at</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-152"><a href="#estimate_speaker_embedding_from_audios-152"><span class="linenos">152</span></a>    <span class="n">file_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-153"><a href="#estimate_speaker_embedding_from_audios-153"><span class="linenos">153</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TargetSpeakerEmbedding</span><span class="p">:</span>
+</span><span id="estimate_speaker_embedding_from_audios-154"><a href="#estimate_speaker_embedding_from_audios-154"><span class="linenos">154</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Estimate one speaker embedding from files that *may* contain that speaker.</span>
+</span><span id="estimate_speaker_embedding_from_audios-155"><a href="#estimate_speaker_embedding_from_audios-155"><span class="linenos">155</span></a>
+</span><span id="estimate_speaker_embedding_from_audios-156"><a href="#estimate_speaker_embedding_from_audios-156"><span class="linenos">156</span></a><span class="sd">    Windows each file, embeds every window, pools them, and describes the resulting distribution.</span>
+</span><span id="estimate_speaker_embedding_from_audios-157"><a href="#estimate_speaker_embedding_from_audios-157"><span class="linenos">157</span></a><span class="sd">    The returned statistics are what let a caller judge how well-supported the centroid is: this</span>
+</span><span id="estimate_speaker_embedding_from_audios-158"><a href="#estimate_speaker_embedding_from_audios-158"><span class="linenos">158</span></a><span class="sd">    function reaches no verdict about whether the file set was clean.</span>
+</span><span id="estimate_speaker_embedding_from_audios-159"><a href="#estimate_speaker_embedding_from_audios-159"><span class="linenos">159</span></a>
+</span><span id="estimate_speaker_embedding_from_audios-160"><a href="#estimate_speaker_embedding_from_audios-160"><span class="linenos">160</span></a><span class="sd">    Args:</span>
+</span><span id="estimate_speaker_embedding_from_audios-161"><a href="#estimate_speaker_embedding_from_audios-161"><span class="linenos">161</span></a><span class="sd">        audios: The recordings to enroll from. A file that does not contain the target speaker is</span>
+</span><span id="estimate_speaker_embedding_from_audios-162"><a href="#estimate_speaker_embedding_from_audios-162"><span class="linenos">162</span></a><span class="sd">            not an error -- it shows up in the returned per-file statistics, which is how a caller</span>
+</span><span id="estimate_speaker_embedding_from_audios-163"><a href="#estimate_speaker_embedding_from_audios-163"><span class="linenos">163</span></a><span class="sd">            curates its input.</span>
+</span><span id="estimate_speaker_embedding_from_audios-164"><a href="#estimate_speaker_embedding_from_audios-164"><span class="linenos">164</span></a><span class="sd">        model: Embedding model. Defaults to ECAPA.</span>
+</span><span id="estimate_speaker_embedding_from_audios-165"><a href="#estimate_speaker_embedding_from_audios-165"><span class="linenos">165</span></a><span class="sd">        device: CPU or CUDA.</span>
+</span><span id="estimate_speaker_embedding_from_audios-166"><a href="#estimate_speaker_embedding_from_audios-166"><span class="linenos">166</span></a><span class="sd">        window_s: Window length. Defaults to the measured profile-centroid value, 2.0 s.</span>
+</span><span id="estimate_speaker_embedding_from_audios-167"><a href="#estimate_speaker_embedding_from_audios-167"><span class="linenos">167</span></a><span class="sd">        hop_s: Hop between windows. Defaults to 1.0 s.</span>
+</span><span id="estimate_speaker_embedding_from_audios-168"><a href="#estimate_speaker_embedding_from_audios-168"><span class="linenos">168</span></a><span class="sd">        aggregator: ``&quot;spherical_mean&quot;``, ``&quot;trimmed_mean&quot;`` or ``&quot;medoid&quot;``.</span>
+</span><span id="estimate_speaker_embedding_from_audios-169"><a href="#estimate_speaker_embedding_from_audios-169"><span class="linenos">169</span></a><span class="sd">        reject_contamination: When ``True``, group the pooled windows and keep only the dominant</span>
+</span><span id="estimate_speaker_embedding_from_audios-170"><a href="#estimate_speaker_embedding_from_audios-170"><span class="linenos">170</span></a><span class="sd">            group before describing. Off by default, because selecting a dominant group is a</span>
+</span><span id="estimate_speaker_embedding_from_audios-171"><a href="#estimate_speaker_embedding_from_audios-171"><span class="linenos">171</span></a><span class="sd">            decision. What it removed is recorded in ``provenance.method`` and</span>
+</span><span id="estimate_speaker_embedding_from_audios-172"><a href="#estimate_speaker_embedding_from_audios-172"><span class="linenos">172</span></a><span class="sd">            ``provenance.n_windows_dropped``.</span>
+</span><span id="estimate_speaker_embedding_from_audios-173"><a href="#estimate_speaker_embedding_from_audios-173"><span class="linenos">173</span></a><span class="sd">        created_at: ISO-8601 timestamp for provenance. Not defaulted to &quot;now&quot;: a library that</span>
+</span><span id="estimate_speaker_embedding_from_audios-174"><a href="#estimate_speaker_embedding_from_audios-174"><span class="linenos">174</span></a><span class="sd">            stamps wall-clock time makes its own output unreproducible.</span>
+</span><span id="estimate_speaker_embedding_from_audios-175"><a href="#estimate_speaker_embedding_from_audios-175"><span class="linenos">175</span></a><span class="sd">        file_ids: Optional caller-supplied id per audio, same length and order as ``audios``.</span>
+</span><span id="estimate_speaker_embedding_from_audios-176"><a href="#estimate_speaker_embedding_from_audios-176"><span class="linenos">176</span></a><span class="sd">            Preferred over the positional fallback below: ``Audio.filepath()`` is empty for any</span>
+</span><span id="estimate_speaker_embedding_from_audios-177"><a href="#estimate_speaker_embedding_from_audios-177"><span class="linenos">177</span></a><span class="sd">            in-memory or preprocessed audio -- ``resample_audios``, which this module&#39;s own</span>
+</span><span id="estimate_speaker_embedding_from_audios-178"><a href="#estimate_speaker_embedding_from_audios-178"><span class="linenos">178</span></a><span class="sd">            docstring recommends running first, drops ``filepath`` entirely -- so the positional</span>
+</span><span id="estimate_speaker_embedding_from_audios-179"><a href="#estimate_speaker_embedding_from_audios-179"><span class="linenos">179</span></a><span class="sd">            form (``&quot;audio-0&quot;``, ``&quot;audio-1&quot;``, ...) is unmappable back to a real recording. Those</span>
+</span><span id="estimate_speaker_embedding_from_audios-180"><a href="#estimate_speaker_embedding_from_audios-180"><span class="linenos">180</span></a><span class="sd">            same ids key ``vectors_per_file``, ``within_file``, ``cross_file`` and</span>
+</span><span id="estimate_speaker_embedding_from_audios-181"><a href="#estimate_speaker_embedding_from_audios-181"><span class="linenos">181</span></a><span class="sd">            ``leave_one_file_out_cos`` in the returned distribution, so an uninformative id makes</span>
+</span><span id="estimate_speaker_embedding_from_audios-182"><a href="#estimate_speaker_embedding_from_audios-182"><span class="linenos">182</span></a><span class="sd">            the whole per-file block uninterpretable, not just ``source_files``.</span>
+</span><span id="estimate_speaker_embedding_from_audios-183"><a href="#estimate_speaker_embedding_from_audios-183"><span class="linenos">183</span></a>
+</span><span id="estimate_speaker_embedding_from_audios-184"><a href="#estimate_speaker_embedding_from_audios-184"><span class="linenos">184</span></a><span class="sd">    Returns:</span>
+</span><span id="estimate_speaker_embedding_from_audios-185"><a href="#estimate_speaker_embedding_from_audios-185"><span class="linenos">185</span></a><span class="sd">        A :class:`TargetSpeakerEmbedding` carrying the vector, its provenance, and the</span>
+</span><span id="estimate_speaker_embedding_from_audios-186"><a href="#estimate_speaker_embedding_from_audios-186"><span class="linenos">186</span></a><span class="sd">        distribution it was estimated from.</span>
+</span><span id="estimate_speaker_embedding_from_audios-187"><a href="#estimate_speaker_embedding_from_audios-187"><span class="linenos">187</span></a>
+</span><span id="estimate_speaker_embedding_from_audios-188"><a href="#estimate_speaker_embedding_from_audios-188"><span class="linenos">188</span></a><span class="sd">    Raises:</span>
+</span><span id="estimate_speaker_embedding_from_audios-189"><a href="#estimate_speaker_embedding_from_audios-189"><span class="linenos">189</span></a><span class="sd">        ValueError: If ``audios`` is empty, if ``file_ids`` is supplied with a different length</span>
+</span><span id="estimate_speaker_embedding_from_audios-190"><a href="#estimate_speaker_embedding_from_audios-190"><span class="linenos">190</span></a><span class="sd">            than ``audios``, or if no window survived extraction.</span>
+</span><span id="estimate_speaker_embedding_from_audios-191"><a href="#estimate_speaker_embedding_from_audios-191"><span class="linenos">191</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="estimate_speaker_embedding_from_audios-192"><a href="#estimate_speaker_embedding_from_audios-192"><span class="linenos">192</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">audios</span><span class="p">:</span>
+</span><span id="estimate_speaker_embedding_from_audios-193"><a href="#estimate_speaker_embedding_from_audios-193"><span class="linenos">193</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;estimate_speaker_embedding_from_audios needs at least one audio&quot;</span><span class="p">)</span>
+</span><span id="estimate_speaker_embedding_from_audios-194"><a href="#estimate_speaker_embedding_from_audios-194"><span class="linenos">194</span></a>    <span class="k">if</span> <span class="n">file_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">file_ids</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">audios</span><span class="p">):</span>
+</span><span id="estimate_speaker_embedding_from_audios-195"><a href="#estimate_speaker_embedding_from_audios-195"><span class="linenos">195</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;file_ids has </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">file_ids</span><span class="p">)</span><span class="si">}</span><span class="s2"> entries for </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">audios</span><span class="p">)</span><span class="si">}</span><span class="s2"> audios&quot;</span><span class="p">)</span>
+</span><span id="estimate_speaker_embedding_from_audios-196"><a href="#estimate_speaker_embedding_from_audios-196"><span class="linenos">196</span></a>
+</span><span id="estimate_speaker_embedding_from_audios-197"><a href="#estimate_speaker_embedding_from_audios-197"><span class="linenos">197</span></a>    <span class="n">model_id</span><span class="p">,</span> <span class="n">commit_sha</span><span class="p">,</span> <span class="n">unresolved</span> <span class="o">=</span> <span class="n">_resolve_embedding_model</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+</span><span id="estimate_speaker_embedding_from_audios-198"><a href="#estimate_speaker_embedding_from_audios-198"><span class="linenos">198</span></a>    <span class="c1"># `extract_per_window_embeddings`&#39;s contract is `models: list[str]` -- plain ids, not model</span>
+</span><span id="estimate_speaker_embedding_from_audios-199"><a href="#estimate_speaker_embedding_from_audios-199"><span class="linenos">199</span></a>    <span class="c1"># objects. It constructs its own `SpeechBrainModel` per id internally, so passing the id</span>
+</span><span id="estimate_speaker_embedding_from_audios-200"><a href="#estimate_speaker_embedding_from_audios-200"><span class="linenos">200</span></a>    <span class="c1"># string here is what keeps this function from ever constructing a network-validated model at</span>
+</span><span id="estimate_speaker_embedding_from_audios-201"><a href="#estimate_speaker_embedding_from_audios-201"><span class="linenos">201</span></a>    <span class="c1"># all: no `SpeechBrainModel`/`HFModel` object is built anywhere in this function, on any path.</span>
+</span><span id="estimate_speaker_embedding_from_audios-202"><a href="#estimate_speaker_embedding_from_audios-202"><span class="linenos">202</span></a>    <span class="c1"># (An earlier version of this code passed a `SenselabModel` object instead, matching neither</span>
+</span><span id="estimate_speaker_embedding_from_audios-203"><a href="#estimate_speaker_embedding_from_audios-203"><span class="linenos">203</span></a>    <span class="c1"># the callee&#39;s declared type nor its runtime expectations -- mypy flagged the mismatch via a</span>
+</span><span id="estimate_speaker_embedding_from_audios-204"><a href="#estimate_speaker_embedding_from_audios-204"><span class="linenos">204</span></a>    <span class="c1"># `# type: ignore` that should have been read as &quot;this call is wrong&quot; rather than suppressed;</span>
+</span><span id="estimate_speaker_embedding_from_audios-205"><a href="#estimate_speaker_embedding_from_audios-205"><span class="linenos">205</span></a>    <span class="c1"># the object&#39;s `path_or_uri` was never reachable inside `extract_per_window_embeddings`&#39;s own</span>
+</span><span id="estimate_speaker_embedding_from_audios-206"><a href="#estimate_speaker_embedding_from_audios-206"><span class="linenos">206</span></a>    <span class="c1"># `SpeechBrainModel(path_or_uri=model_id, ...)` construction, so every real, unmocked call</span>
+</span><span id="estimate_speaker_embedding_from_audios-207"><a href="#estimate_speaker_embedding_from_audios-207"><span class="linenos">207</span></a>    <span class="c1"># raised `KeyError`/`TypeError` before returning a single vector.)</span>
+</span><span id="estimate_speaker_embedding_from_audios-208"><a href="#estimate_speaker_embedding_from_audios-208"><span class="linenos">208</span></a>
+</span><span id="estimate_speaker_embedding_from_audios-209"><a href="#estimate_speaker_embedding_from_audios-209"><span class="linenos">209</span></a>    <span class="n">vectors</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="estimate_speaker_embedding_from_audios-210"><a href="#estimate_speaker_embedding_from_audios-210"><span class="linenos">210</span></a>    <span class="n">row_file_ids</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="estimate_speaker_embedding_from_audios-211"><a href="#estimate_speaker_embedding_from_audios-211"><span class="linenos">211</span></a>    <span class="n">starts</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="estimate_speaker_embedding_from_audios-212"><a href="#estimate_speaker_embedding_from_audios-212"><span class="linenos">212</span></a>    <span class="n">source_files</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="estimate_speaker_embedding_from_audios-213"><a href="#estimate_speaker_embedding_from_audios-213"><span class="linenos">213</span></a>    <span class="n">extraction_failures</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="estimate_speaker_embedding_from_audios-214"><a href="#estimate_speaker_embedding_from_audios-214"><span class="linenos">214</span></a>    <span class="k">for</span> <span class="n">idx</span><span class="p">,</span> <span class="n">audio</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">audios</span><span class="p">):</span>
+</span><span id="estimate_speaker_embedding_from_audios-215"><a href="#estimate_speaker_embedding_from_audios-215"><span class="linenos">215</span></a>        <span class="k">if</span> <span class="n">file_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="estimate_speaker_embedding_from_audios-216"><a href="#estimate_speaker_embedding_from_audios-216"><span class="linenos">216</span></a>            <span class="n">file_id</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">file_ids</span><span class="p">[</span><span class="n">idx</span><span class="p">])</span>
+</span><span id="estimate_speaker_embedding_from_audios-217"><a href="#estimate_speaker_embedding_from_audios-217"><span class="linenos">217</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="estimate_speaker_embedding_from_audios-218"><a href="#estimate_speaker_embedding_from_audios-218"><span class="linenos">218</span></a>            <span class="c1"># `Audio.filepath` is a method, not a property (`getattr(audio, &quot;filepath&quot;)` alone</span>
+</span><span id="estimate_speaker_embedding_from_audios-219"><a href="#estimate_speaker_embedding_from_audios-219"><span class="linenos">219</span></a>            <span class="c1"># returns the bound-method object, which is truthy for every audio and stringifies</span>
+</span><span id="estimate_speaker_embedding_from_audios-220"><a href="#estimate_speaker_embedding_from_audios-220"><span class="linenos">220</span></a>            <span class="c1"># off the object&#39;s *field* repr rather than its identity or path -- two audios with</span>
+</span><span id="estimate_speaker_embedding_from_audios-221"><a href="#estimate_speaker_embedding_from_audios-221"><span class="linenos">221</span></a>            <span class="c1"># equal metadata then collide onto one file id). Calling it is required to get the</span>
+</span><span id="estimate_speaker_embedding_from_audios-222"><a href="#estimate_speaker_embedding_from_audios-222"><span class="linenos">222</span></a>            <span class="c1"># actual path, or `None` for an in-memory audio with no backing file. This positional</span>
+</span><span id="estimate_speaker_embedding_from_audios-223"><a href="#estimate_speaker_embedding_from_audios-223"><span class="linenos">223</span></a>            <span class="c1"># form is the fallback of last resort -- pass `file_ids` to keep the per-file block</span>
+</span><span id="estimate_speaker_embedding_from_audios-224"><a href="#estimate_speaker_embedding_from_audios-224"><span class="linenos">224</span></a>            <span class="c1"># mappable back to a real recording.</span>
+</span><span id="estimate_speaker_embedding_from_audios-225"><a href="#estimate_speaker_embedding_from_audios-225"><span class="linenos">225</span></a>            <span class="n">file_id</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">filepath</span><span class="p">()</span> <span class="ow">or</span> <span class="sa">f</span><span class="s2">&quot;audio-</span><span class="si">{</span><span class="n">idx</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="estimate_speaker_embedding_from_audios-226"><a href="#estimate_speaker_embedding_from_audios-226"><span class="linenos">226</span></a>        <span class="n">source_files</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">file_id</span><span class="p">)</span>
+</span><span id="estimate_speaker_embedding_from_audios-227"><a href="#estimate_speaker_embedding_from_audios-227"><span class="linenos">227</span></a>        <span class="c1"># A fresh dict per file: `extract_per_window_embeddings` keys its `failures` output by</span>
+</span><span id="estimate_speaker_embedding_from_audios-228"><a href="#estimate_speaker_embedding_from_audios-228"><span class="linenos">228</span></a>        <span class="c1"># `model_id`, which is the same single value on every call in this loop, so reusing one</span>
+</span><span id="estimate_speaker_embedding_from_audios-229"><a href="#estimate_speaker_embedding_from_audios-229"><span class="linenos">229</span></a>        <span class="c1"># dict across files would let a later file&#39;s success silently erase an earlier file&#39;s</span>
+</span><span id="estimate_speaker_embedding_from_audios-230"><a href="#estimate_speaker_embedding_from_audios-230"><span class="linenos">230</span></a>        <span class="c1"># failure under that shared key.</span>
+</span><span id="estimate_speaker_embedding_from_audios-231"><a href="#estimate_speaker_embedding_from_audios-231"><span class="linenos">231</span></a>        <span class="n">this_file_failures</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="estimate_speaker_embedding_from_audios-232"><a href="#estimate_speaker_embedding_from_audios-232"><span class="linenos">232</span></a>        <span class="n">per_model</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="n">WindowEmbedding</span><span class="p">]]</span> <span class="o">=</span> <span class="n">extract_per_window_embeddings</span><span class="p">(</span>
+</span><span id="estimate_speaker_embedding_from_audios-233"><a href="#estimate_speaker_embedding_from_audios-233"><span class="linenos">233</span></a>            <span class="n">audio</span><span class="o">=</span><span class="n">audio</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-234"><a href="#estimate_speaker_embedding_from_audios-234"><span class="linenos">234</span></a>            <span class="n">models</span><span class="o">=</span><span class="p">[</span><span class="n">model_id</span><span class="p">],</span>
+</span><span id="estimate_speaker_embedding_from_audios-235"><a href="#estimate_speaker_embedding_from_audios-235"><span class="linenos">235</span></a>            <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-236"><a href="#estimate_speaker_embedding_from_audios-236"><span class="linenos">236</span></a>            <span class="n">window_s</span><span class="o">=</span><span class="n">window_s</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-237"><a href="#estimate_speaker_embedding_from_audios-237"><span class="linenos">237</span></a>            <span class="n">hop_s</span><span class="o">=</span><span class="n">hop_s</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-238"><a href="#estimate_speaker_embedding_from_audios-238"><span class="linenos">238</span></a>            <span class="n">revision</span><span class="o">=</span><span class="n">commit_sha</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-239"><a href="#estimate_speaker_embedding_from_audios-239"><span class="linenos">239</span></a>            <span class="n">failures</span><span class="o">=</span><span class="n">this_file_failures</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-240"><a href="#estimate_speaker_embedding_from_audios-240"><span class="linenos">240</span></a>        <span class="p">)</span>
+</span><span id="estimate_speaker_embedding_from_audios-241"><a href="#estimate_speaker_embedding_from_audios-241"><span class="linenos">241</span></a>        <span class="k">if</span> <span class="n">model_id</span> <span class="ow">in</span> <span class="n">this_file_failures</span><span class="p">:</span>
+</span><span id="estimate_speaker_embedding_from_audios-242"><a href="#estimate_speaker_embedding_from_audios-242"><span class="linenos">242</span></a>            <span class="n">extraction_failures</span><span class="p">[</span><span class="n">file_id</span><span class="p">]</span> <span class="o">=</span> <span class="n">this_file_failures</span><span class="p">[</span><span class="n">model_id</span><span class="p">]</span>
+</span><span id="estimate_speaker_embedding_from_audios-243"><a href="#estimate_speaker_embedding_from_audios-243"><span class="linenos">243</span></a>        <span class="k">for</span> <span class="n">windows</span> <span class="ow">in</span> <span class="n">per_model</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+</span><span id="estimate_speaker_embedding_from_audios-244"><a href="#estimate_speaker_embedding_from_audios-244"><span class="linenos">244</span></a>            <span class="k">for</span> <span class="n">w</span> <span class="ow">in</span> <span class="n">windows</span><span class="p">:</span>
+</span><span id="estimate_speaker_embedding_from_audios-245"><a href="#estimate_speaker_embedding_from_audios-245"><span class="linenos">245</span></a>                <span class="n">vectors</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">w</span><span class="o">.</span><span class="n">vector</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">))</span>
+</span><span id="estimate_speaker_embedding_from_audios-246"><a href="#estimate_speaker_embedding_from_audios-246"><span class="linenos">246</span></a>                <span class="n">row_file_ids</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">file_id</span><span class="p">)</span>
+</span><span id="estimate_speaker_embedding_from_audios-247"><a href="#estimate_speaker_embedding_from_audios-247"><span class="linenos">247</span></a>                <span class="n">starts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">w</span><span class="o">.</span><span class="n">start_s</span><span class="p">))</span>
+</span><span id="estimate_speaker_embedding_from_audios-248"><a href="#estimate_speaker_embedding_from_audios-248"><span class="linenos">248</span></a>
+</span><span id="estimate_speaker_embedding_from_audios-249"><a href="#estimate_speaker_embedding_from_audios-249"><span class="linenos">249</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">vectors</span><span class="p">:</span>
+</span><span id="estimate_speaker_embedding_from_audios-250"><a href="#estimate_speaker_embedding_from_audios-250"><span class="linenos">250</span></a>        <span class="k">if</span> <span class="n">extraction_failures</span><span class="p">:</span>
+</span><span id="estimate_speaker_embedding_from_audios-251"><a href="#estimate_speaker_embedding_from_audios-251"><span class="linenos">251</span></a>            <span class="c1"># Every file that failed extraction has a recorded reason -- surface it instead of</span>
+</span><span id="estimate_speaker_embedding_from_audios-252"><a href="#estimate_speaker_embedding_from_audios-252"><span class="linenos">252</span></a>            <span class="c1"># the generic &quot;shorter than window_s?&quot; guess, which misdiagnoses a load failure (a</span>
+</span><span id="estimate_speaker_embedding_from_audios-253"><a href="#estimate_speaker_embedding_from_audios-253"><span class="linenos">253</span></a>            <span class="c1"># missing model, an unresolvable revision, ...) as a duration problem.</span>
+</span><span id="estimate_speaker_embedding_from_audios-254"><a href="#estimate_speaker_embedding_from_audios-254"><span class="linenos">254</span></a>            <span class="n">detail</span> <span class="o">=</span> <span class="s2">&quot;; &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">fid</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">reason</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">fid</span><span class="p">,</span> <span class="n">reason</span> <span class="ow">in</span> <span class="n">extraction_failures</span><span class="o">.</span><span class="n">items</span><span class="p">())</span>
+</span><span id="estimate_speaker_embedding_from_audios-255"><a href="#estimate_speaker_embedding_from_audios-255"><span class="linenos">255</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;no embedding windows were produced -- every file failed extraction (</span><span class="si">{</span><span class="n">detail</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+</span><span id="estimate_speaker_embedding_from_audios-256"><a href="#estimate_speaker_embedding_from_audios-256"><span class="linenos">256</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;no embedding windows were produced; are the inputs shorter than window_s?&quot;</span><span class="p">)</span>
+</span><span id="estimate_speaker_embedding_from_audios-257"><a href="#estimate_speaker_embedding_from_audios-257"><span class="linenos">257</span></a>
+</span><span id="estimate_speaker_embedding_from_audios-258"><a href="#estimate_speaker_embedding_from_audios-258"><span class="linenos">258</span></a>    <span class="n">pooled</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">vstack</span><span class="p">(</span><span class="n">vectors</span><span class="p">)</span>
+</span><span id="estimate_speaker_embedding_from_audios-259"><a href="#estimate_speaker_embedding_from_audios-259"><span class="linenos">259</span></a>    <span class="n">n_input</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pooled</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+</span><span id="estimate_speaker_embedding_from_audios-260"><a href="#estimate_speaker_embedding_from_audios-260"><span class="linenos">260</span></a>    <span class="n">method</span> <span class="o">=</span> <span class="n">aggregator</span>
+</span><span id="estimate_speaker_embedding_from_audios-261"><a href="#estimate_speaker_embedding_from_audios-261"><span class="linenos">261</span></a>
+</span><span id="estimate_speaker_embedding_from_audios-262"><a href="#estimate_speaker_embedding_from_audios-262"><span class="linenos">262</span></a>    <span class="k">if</span> <span class="n">reject_contamination</span><span class="p">:</span>
+</span><span id="estimate_speaker_embedding_from_audios-263"><a href="#estimate_speaker_embedding_from_audios-263"><span class="linenos">263</span></a>        <span class="n">selection</span> <span class="o">=</span> <span class="n">select_dominant_vectors</span><span class="p">(</span><span class="n">pooled</span><span class="p">,</span> <span class="n">row_file_ids</span><span class="p">)</span>
+</span><span id="estimate_speaker_embedding_from_audios-264"><a href="#estimate_speaker_embedding_from_audios-264"><span class="linenos">264</span></a>        <span class="n">keep</span> <span class="o">=</span> <span class="n">selection</span><span class="o">.</span><span class="n">kept_indices</span>
+</span><span id="estimate_speaker_embedding_from_audios-265"><a href="#estimate_speaker_embedding_from_audios-265"><span class="linenos">265</span></a>        <span class="n">pooled</span> <span class="o">=</span> <span class="n">pooled</span><span class="p">[</span><span class="n">keep</span><span class="p">]</span>
+</span><span id="estimate_speaker_embedding_from_audios-266"><a href="#estimate_speaker_embedding_from_audios-266"><span class="linenos">266</span></a>        <span class="n">row_file_ids</span> <span class="o">=</span> <span class="p">[</span><span class="n">row_file_ids</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">keep</span><span class="p">]</span>
+</span><span id="estimate_speaker_embedding_from_audios-267"><a href="#estimate_speaker_embedding_from_audios-267"><span class="linenos">267</span></a>        <span class="n">starts</span> <span class="o">=</span> <span class="p">[</span><span class="n">starts</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">keep</span><span class="p">]</span>
+</span><span id="estimate_speaker_embedding_from_audios-268"><a href="#estimate_speaker_embedding_from_audios-268"><span class="linenos">268</span></a>        <span class="n">method</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">aggregator</span><span class="si">}</span><span class="s2">+dominant_cluster&quot;</span>
+</span><span id="estimate_speaker_embedding_from_audios-269"><a href="#estimate_speaker_embedding_from_audios-269"><span class="linenos">269</span></a>
+</span><span id="estimate_speaker_embedding_from_audios-270"><a href="#estimate_speaker_embedding_from_audios-270"><span class="linenos">270</span></a>    <span class="n">centroid</span><span class="p">,</span> <span class="n">distribution</span> <span class="o">=</span> <span class="n">describe_embedding_distribution</span><span class="p">(</span>
+</span><span id="estimate_speaker_embedding_from_audios-271"><a href="#estimate_speaker_embedding_from_audios-271"><span class="linenos">271</span></a>        <span class="n">pooled</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-272"><a href="#estimate_speaker_embedding_from_audios-272"><span class="linenos">272</span></a>        <span class="n">row_file_ids</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-273"><a href="#estimate_speaker_embedding_from_audios-273"><span class="linenos">273</span></a>        <span class="n">aggregator</span><span class="o">=</span><span class="n">aggregator</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-274"><a href="#estimate_speaker_embedding_from_audios-274"><span class="linenos">274</span></a>        <span class="n">window_s</span><span class="o">=</span><span class="n">window_s</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-275"><a href="#estimate_speaker_embedding_from_audios-275"><span class="linenos">275</span></a>        <span class="n">hop_s</span><span class="o">=</span><span class="n">hop_s</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-276"><a href="#estimate_speaker_embedding_from_audios-276"><span class="linenos">276</span></a>        <span class="n">window_starts_s</span><span class="o">=</span><span class="n">starts</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-277"><a href="#estimate_speaker_embedding_from_audios-277"><span class="linenos">277</span></a>    <span class="p">)</span>
+</span><span id="estimate_speaker_embedding_from_audios-278"><a href="#estimate_speaker_embedding_from_audios-278"><span class="linenos">278</span></a>
+</span><span id="estimate_speaker_embedding_from_audios-279"><a href="#estimate_speaker_embedding_from_audios-279"><span class="linenos">279</span></a>    <span class="k">return</span> <span class="n">TargetSpeakerEmbedding</span><span class="p">(</span>
+</span><span id="estimate_speaker_embedding_from_audios-280"><a href="#estimate_speaker_embedding_from_audios-280"><span class="linenos">280</span></a>        <span class="n">vector</span><span class="o">=</span><span class="n">centroid</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-281"><a href="#estimate_speaker_embedding_from_audios-281"><span class="linenos">281</span></a>        <span class="n">provenance</span><span class="o">=</span><span class="n">SpeakerEmbeddingProvenance</span><span class="p">(</span>
+</span><span id="estimate_speaker_embedding_from_audios-282"><a href="#estimate_speaker_embedding_from_audios-282"><span class="linenos">282</span></a>            <span class="n">model_id</span><span class="o">=</span><span class="n">model_id</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-283"><a href="#estimate_speaker_embedding_from_audios-283"><span class="linenos">283</span></a>            <span class="n">model_commit_sha</span><span class="o">=</span><span class="n">commit_sha</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-284"><a href="#estimate_speaker_embedding_from_audios-284"><span class="linenos">284</span></a>            <span class="n">unresolved_reason</span><span class="o">=</span><span class="n">unresolved</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-285"><a href="#estimate_speaker_embedding_from_audios-285"><span class="linenos">285</span></a>            <span class="n">method</span><span class="o">=</span><span class="n">method</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-286"><a href="#estimate_speaker_embedding_from_audios-286"><span class="linenos">286</span></a>            <span class="n">source_files</span><span class="o">=</span><span class="n">source_files</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-287"><a href="#estimate_speaker_embedding_from_audios-287"><span class="linenos">287</span></a>            <span class="n">window_s</span><span class="o">=</span><span class="n">window_s</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-288"><a href="#estimate_speaker_embedding_from_audios-288"><span class="linenos">288</span></a>            <span class="n">hop_s</span><span class="o">=</span><span class="n">hop_s</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-289"><a href="#estimate_speaker_embedding_from_audios-289"><span class="linenos">289</span></a>            <span class="n">n_windows_used</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">distribution</span><span class="o">.</span><span class="n">counts</span><span class="o">.</span><span class="n">n_scored</span><span class="p">),</span>
+</span><span id="estimate_speaker_embedding_from_audios-290"><a href="#estimate_speaker_embedding_from_audios-290"><span class="linenos">290</span></a>            <span class="n">n_windows_dropped</span><span class="o">=</span><span class="n">n_input</span> <span class="o">-</span> <span class="nb">int</span><span class="p">(</span><span class="n">distribution</span><span class="o">.</span><span class="n">counts</span><span class="o">.</span><span class="n">n_scored</span><span class="p">),</span>
+</span><span id="estimate_speaker_embedding_from_audios-291"><a href="#estimate_speaker_embedding_from_audios-291"><span class="linenos">291</span></a>            <span class="n">created_at</span><span class="o">=</span><span class="n">created_at</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-292"><a href="#estimate_speaker_embedding_from_audios-292"><span class="linenos">292</span></a>            <span class="n">extraction_failures</span><span class="o">=</span><span class="n">extraction_failures</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-293"><a href="#estimate_speaker_embedding_from_audios-293"><span class="linenos">293</span></a>        <span class="p">),</span>
+</span><span id="estimate_speaker_embedding_from_audios-294"><a href="#estimate_speaker_embedding_from_audios-294"><span class="linenos">294</span></a>        <span class="n">distribution</span><span class="o">=</span><span class="n">distribution</span><span class="p">,</span>
+</span><span id="estimate_speaker_embedding_from_audios-295"><a href="#estimate_speaker_embedding_from_audios-295"><span class="linenos">295</span></a>    <span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Estimate one speaker embedding from files that <em>may</em> contain that speaker.</p>
+
+<p>Windows each file, embeds every window, pools them, and describes the resulting distribution.
+The returned statistics are what let a caller judge how well-supported the centroid is: this
+function reaches no verdict about whether the file set was clean.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audios:</strong>  The recordings to enroll from. A file that does not contain the target speaker is
+not an error -- it shows up in the returned per-file statistics, which is how a caller
+curates its input.</li>
+<li><strong>model:</strong>  Embedding model. Defaults to ECAPA.</li>
+<li><strong>device:</strong>  CPU or CUDA.</li>
+<li><strong>window_s:</strong>  Window length. Defaults to the measured profile-centroid value, 2.0 s.</li>
+<li><strong>hop_s:</strong>  Hop between windows. Defaults to 1.0 s.</li>
+<li><strong>aggregator:</strong>  <code>"spherical_mean"</code>, <code>"trimmed_mean"</code> or <code>"medoid"</code>.</li>
+<li><strong>reject_contamination:</strong>  When <code>True</code>, group the pooled windows and keep only the dominant
+group before describing. Off by default, because selecting a dominant group is a
+decision. What it removed is recorded in <code>provenance.method</code> and
+<code>provenance.n_windows_dropped</code>.</li>
+<li><strong>created_at:</strong>  ISO-8601 timestamp for provenance. Not defaulted to "now": a library that
+stamps wall-clock time makes its own output unreproducible.</li>
+<li><strong>file_ids:</strong>  Optional caller-supplied id per audio, same length and order as <code>audios</code>.
+Preferred over the positional fallback below: <code>Audio.filepath()</code> is empty for any
+in-memory or preprocessed audio -- <code>resample_audios</code>, which this module's own
+docstring recommends running first, drops <code>filepath</code> entirely -- so the positional
+form (<code>"audio-0"</code>, <code>"audio-1"</code>, ...) is unmappable back to a real recording. Those
+same ids key <code>vectors_per_file</code>, <code>within_file</code>, <code>cross_file</code> and
+<code>leave_one_file_out_cos</code> in the returned distribution, so an uninformative id makes
+the whole per-file block uninterpretable, not just <code>source_files</code>.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>A <code>TargetSpeakerEmbedding</code> carrying the vector, its provenance, and the
+  distribution it was estimated from.</p>
+</blockquote>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>ValueError:</strong>  If <code>audios</code> is empty, if <code>file_ids</code> is supplied with a different length
+than <code>audios</code>, or if no window survived extraction.</li>
+</ul>
+</div>
+
+
+                </section>
+                <section id="extract_speaker_embeddings_from_audios">
+                            <input id="extract_speaker_embeddings_from_audios-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+                    <div class="decorator decorator-requires_compatibility">@requires_compatibility(&#39;audio.tasks.speaker_embeddings.extract_speaker_embeddings_from_audios&#39;)</div>
+
+        <span class="def">def</span>
+        <span class="name">extract_speaker_embeddings_from_audios</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>,</span><span class="param">	<span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/model.html#SpeechBrainModel">senselab.utils.data_structures.model.SpeechBrainModel</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/device.html#DeviceType">senselab.utils.data_structures.device.DeviceType</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]</span>:</span></span>
+
+                <label class="view-source-button" for="extract_speaker_embeddings_from_audios-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#extract_speaker_embeddings_from_audios"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="extract_speaker_embeddings_from_audios-32"><a href="#extract_speaker_embeddings_from_audios-32"><span class="linenos"> 32</span></a><span class="nd">@requires_compatibility</span><span class="p">(</span><span class="s2">&quot;audio.tasks.speaker_embeddings.extract_speaker_embeddings_from_audios&quot;</span><span class="p">)</span>
+</span><span id="extract_speaker_embeddings_from_audios-33"><a href="#extract_speaker_embeddings_from_audios-33"><span class="linenos"> 33</span></a><span class="k">def</span><span class="w"> </span><span class="nf">extract_speaker_embeddings_from_audios</span><span class="p">(</span>
+</span><span id="extract_speaker_embeddings_from_audios-34"><a href="#extract_speaker_embeddings_from_audios-34"><span class="linenos"> 34</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
+</span><span id="extract_speaker_embeddings_from_audios-35"><a href="#extract_speaker_embeddings_from_audios-35"><span class="linenos"> 35</span></a>    <span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">SpeechBrainModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="extract_speaker_embeddings_from_audios-36"><a href="#extract_speaker_embeddings_from_audios-36"><span class="linenos"> 36</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="extract_speaker_embeddings_from_audios-37"><a href="#extract_speaker_embeddings_from_audios-37"><span class="linenos"> 37</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]:</span>
+</span><span id="extract_speaker_embeddings_from_audios-38"><a href="#extract_speaker_embeddings_from_audios-38"><span class="linenos"> 38</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute fixed-dimensional speaker embeddings for a batch of `Audio` objects.</span>
+</span><span id="extract_speaker_embeddings_from_audios-39"><a href="#extract_speaker_embeddings_from_audios-39"><span class="linenos"> 39</span></a>
+</span><span id="extract_speaker_embeddings_from_audios-40"><a href="#extract_speaker_embeddings_from_audios-40"><span class="linenos"> 40</span></a><span class="sd">    By default, this uses a SpeechBrain speaker-recognition model</span>
+</span><span id="extract_speaker_embeddings_from_audios-41"><a href="#extract_speaker_embeddings_from_audios-41"><span class="linenos"> 41</span></a><span class="sd">    (``speechbrain/spkrec-ecapa-voxceleb``, revision ``&quot;main&quot;``) to extract</span>
+</span><span id="extract_speaker_embeddings_from_audios-42"><a href="#extract_speaker_embeddings_from_audios-42"><span class="linenos"> 42</span></a><span class="sd">    one embedding per input audio. The order of outputs matches the order of</span>
+</span><span id="extract_speaker_embeddings_from_audios-43"><a href="#extract_speaker_embeddings_from_audios-43"><span class="linenos"> 43</span></a><span class="sd">    the inputs.</span>
+</span><span id="extract_speaker_embeddings_from_audios-44"><a href="#extract_speaker_embeddings_from_audios-44"><span class="linenos"> 44</span></a>
+</span><span id="extract_speaker_embeddings_from_audios-45"><a href="#extract_speaker_embeddings_from_audios-45"><span class="linenos"> 45</span></a><span class="sd">    Notes:</span>
+</span><span id="extract_speaker_embeddings_from_audios-46"><a href="#extract_speaker_embeddings_from_audios-46"><span class="linenos"> 46</span></a><span class="sd">        - Many pretrained speaker models are trained on **mono, 16 kHz** audio.</span>
+</span><span id="extract_speaker_embeddings_from_audios-47"><a href="#extract_speaker_embeddings_from_audios-47"><span class="linenos"> 47</span></a><span class="sd">          For best results, consider preprocessing inputs with</span>
+</span><span id="extract_speaker_embeddings_from_audios-48"><a href="#extract_speaker_embeddings_from_audios-48"><span class="linenos"> 48</span></a><span class="sd">          `downmix_audios_to_mono(...)` and `resample_audios(..., 16000)`.</span>
+</span><span id="extract_speaker_embeddings_from_audios-49"><a href="#extract_speaker_embeddings_from_audios-49"><span class="linenos"> 49</span></a><span class="sd">        - `device` must be a `DeviceType` (`CPU` or `CUDA`). If `None`,</span>
+</span><span id="extract_speaker_embeddings_from_audios-50"><a href="#extract_speaker_embeddings_from_audios-50"><span class="linenos"> 50</span></a><span class="sd">          the backend will choose `CUDA` if available, otherwise `CPU`.</span>
+</span><span id="extract_speaker_embeddings_from_audios-51"><a href="#extract_speaker_embeddings_from_audios-51"><span class="linenos"> 51</span></a><span class="sd">        - The embedding dimensionality depends on the model</span>
+</span><span id="extract_speaker_embeddings_from_audios-52"><a href="#extract_speaker_embeddings_from_audios-52"><span class="linenos"> 52</span></a><span class="sd">          (e.g., ECAPA-TDNN often returns 192-D vectors).</span>
+</span><span id="extract_speaker_embeddings_from_audios-53"><a href="#extract_speaker_embeddings_from_audios-53"><span class="linenos"> 53</span></a>
+</span><span id="extract_speaker_embeddings_from_audios-54"><a href="#extract_speaker_embeddings_from_audios-54"><span class="linenos"> 54</span></a><span class="sd">    Args:</span>
+</span><span id="extract_speaker_embeddings_from_audios-55"><a href="#extract_speaker_embeddings_from_audios-55"><span class="linenos"> 55</span></a><span class="sd">        audios (list[Audio]):</span>
+</span><span id="extract_speaker_embeddings_from_audios-56"><a href="#extract_speaker_embeddings_from_audios-56"><span class="linenos"> 56</span></a><span class="sd">            Input audio objects to embed.</span>
+</span><span id="extract_speaker_embeddings_from_audios-57"><a href="#extract_speaker_embeddings_from_audios-57"><span class="linenos"> 57</span></a><span class="sd">        model (SpeechBrainModel, optional):</span>
+</span><span id="extract_speaker_embeddings_from_audios-58"><a href="#extract_speaker_embeddings_from_audios-58"><span class="linenos"> 58</span></a><span class="sd">            SpeechBrain model handle (path or HF Hub URI + revision).</span>
+</span><span id="extract_speaker_embeddings_from_audios-59"><a href="#extract_speaker_embeddings_from_audios-59"><span class="linenos"> 59</span></a><span class="sd">            If ``None``, defaults to</span>
+</span><span id="extract_speaker_embeddings_from_audios-60"><a href="#extract_speaker_embeddings_from_audios-60"><span class="linenos"> 60</span></a><span class="sd">            ``SpeechBrainModel(path_or_uri=&quot;speechbrain/spkrec-ecapa-voxceleb&quot;, revision=&quot;main&quot;)``.</span>
+</span><span id="extract_speaker_embeddings_from_audios-61"><a href="#extract_speaker_embeddings_from_audios-61"><span class="linenos"> 61</span></a><span class="sd">        device (DeviceType, optional):</span>
+</span><span id="extract_speaker_embeddings_from_audios-62"><a href="#extract_speaker_embeddings_from_audios-62"><span class="linenos"> 62</span></a><span class="sd">            Target device for inference:</span>
+</span><span id="extract_speaker_embeddings_from_audios-63"><a href="#extract_speaker_embeddings_from_audios-63"><span class="linenos"> 63</span></a><span class="sd">              * ``DeviceType.CPU``</span>
+</span><span id="extract_speaker_embeddings_from_audios-64"><a href="#extract_speaker_embeddings_from_audios-64"><span class="linenos"> 64</span></a><span class="sd">              * ``DeviceType.CUDA`` (GPU, if available)</span>
+</span><span id="extract_speaker_embeddings_from_audios-65"><a href="#extract_speaker_embeddings_from_audios-65"><span class="linenos"> 65</span></a><span class="sd">            If ``None``, a default is chosen by the backend.</span>
+</span><span id="extract_speaker_embeddings_from_audios-66"><a href="#extract_speaker_embeddings_from_audios-66"><span class="linenos"> 66</span></a>
+</span><span id="extract_speaker_embeddings_from_audios-67"><a href="#extract_speaker_embeddings_from_audios-67"><span class="linenos"> 67</span></a><span class="sd">    Returns:</span>
+</span><span id="extract_speaker_embeddings_from_audios-68"><a href="#extract_speaker_embeddings_from_audios-68"><span class="linenos"> 68</span></a><span class="sd">        list[torch.Tensor]: One 1-D tensor per input audio (e.g., shape ``[192]`` for ECAPA).</span>
+</span><span id="extract_speaker_embeddings_from_audios-69"><a href="#extract_speaker_embeddings_from_audios-69"><span class="linenos"> 69</span></a>
+</span><span id="extract_speaker_embeddings_from_audios-70"><a href="#extract_speaker_embeddings_from_audios-70"><span class="linenos"> 70</span></a><span class="sd">    Raises:</span>
+</span><span id="extract_speaker_embeddings_from_audios-71"><a href="#extract_speaker_embeddings_from_audios-71"><span class="linenos"> 71</span></a><span class="sd">        NotImplementedError:</span>
+</span><span id="extract_speaker_embeddings_from_audios-72"><a href="#extract_speaker_embeddings_from_audios-72"><span class="linenos"> 72</span></a><span class="sd">            If a non-SpeechBrain model is provided (only SpeechBrain is supported currently).</span>
+</span><span id="extract_speaker_embeddings_from_audios-73"><a href="#extract_speaker_embeddings_from_audios-73"><span class="linenos"> 73</span></a>
+</span><span id="extract_speaker_embeddings_from_audios-74"><a href="#extract_speaker_embeddings_from_audios-74"><span class="linenos"> 74</span></a><span class="sd">    Example (default model on CPU):</span>
+</span><span id="extract_speaker_embeddings_from_audios-75"><a href="#extract_speaker_embeddings_from_audios-75"><span class="linenos"> 75</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="extract_speaker_embeddings_from_audios-76"><a href="#extract_speaker_embeddings_from_audios-76"><span class="linenos"> 76</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="extract_speaker_embeddings_from_audios-77"><a href="#extract_speaker_embeddings_from_audios-77"><span class="linenos"> 77</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.data_structures import DeviceType</span>
+</span><span id="extract_speaker_embeddings_from_audios-78"><a href="#extract_speaker_embeddings_from_audios-78"><span class="linenos"> 78</span></a><span class="sd">        &gt;&gt;&gt; a1 = Audio(filepath=Path(&quot;sample1.wav&quot;).resolve())</span>
+</span><span id="extract_speaker_embeddings_from_audios-79"><a href="#extract_speaker_embeddings_from_audios-79"><span class="linenos"> 79</span></a><span class="sd">        &gt;&gt;&gt; a2 = Audio(filepath=Path(&quot;sample2.wav&quot;).resolve())</span>
+</span><span id="extract_speaker_embeddings_from_audios-80"><a href="#extract_speaker_embeddings_from_audios-80"><span class="linenos"> 80</span></a><span class="sd">        &gt;&gt;&gt; embs = extract_speaker_embeddings_from_audios([a1, a2], device=DeviceType.CPU)</span>
+</span><span id="extract_speaker_embeddings_from_audios-81"><a href="#extract_speaker_embeddings_from_audios-81"><span class="linenos"> 81</span></a><span class="sd">        &gt;&gt;&gt; embs[0].shape</span>
+</span><span id="extract_speaker_embeddings_from_audios-82"><a href="#extract_speaker_embeddings_from_audios-82"><span class="linenos"> 82</span></a><span class="sd">        torch.Size([192])</span>
+</span><span id="extract_speaker_embeddings_from_audios-83"><a href="#extract_speaker_embeddings_from_audios-83"><span class="linenos"> 83</span></a>
+</span><span id="extract_speaker_embeddings_from_audios-84"><a href="#extract_speaker_embeddings_from_audios-84"><span class="linenos"> 84</span></a><span class="sd">    Example (explicit model on CUDA):</span>
+</span><span id="extract_speaker_embeddings_from_audios-85"><a href="#extract_speaker_embeddings_from_audios-85"><span class="linenos"> 85</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="extract_speaker_embeddings_from_audios-86"><a href="#extract_speaker_embeddings_from_audios-86"><span class="linenos"> 86</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="extract_speaker_embeddings_from_audios-87"><a href="#extract_speaker_embeddings_from_audios-87"><span class="linenos"> 87</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.data_structures import DeviceType, SpeechBrainModel</span>
+</span><span id="extract_speaker_embeddings_from_audios-88"><a href="#extract_speaker_embeddings_from_audios-88"><span class="linenos"> 88</span></a><span class="sd">        &gt;&gt;&gt; a1 = Audio(filepath=Path(&quot;sample1.wav&quot;).resolve())</span>
+</span><span id="extract_speaker_embeddings_from_audios-89"><a href="#extract_speaker_embeddings_from_audios-89"><span class="linenos"> 89</span></a><span class="sd">        &gt;&gt;&gt; model = SpeechBrainModel(path_or_uri=&quot;speechbrain/spkrec-ecapa-voxceleb&quot;, revision=&quot;main&quot;)</span>
+</span><span id="extract_speaker_embeddings_from_audios-90"><a href="#extract_speaker_embeddings_from_audios-90"><span class="linenos"> 90</span></a><span class="sd">        &gt;&gt;&gt; embs = extract_speaker_embeddings_from_audios([a1], model=model, device=DeviceType.CUDA)</span>
+</span><span id="extract_speaker_embeddings_from_audios-91"><a href="#extract_speaker_embeddings_from_audios-91"><span class="linenos"> 91</span></a><span class="sd">        &gt;&gt;&gt; len(embs), embs[0].ndim</span>
+</span><span id="extract_speaker_embeddings_from_audios-92"><a href="#extract_speaker_embeddings_from_audios-92"><span class="linenos"> 92</span></a><span class="sd">        (1, 1)</span>
+</span><span id="extract_speaker_embeddings_from_audios-93"><a href="#extract_speaker_embeddings_from_audios-93"><span class="linenos"> 93</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="extract_speaker_embeddings_from_audios-94"><a href="#extract_speaker_embeddings_from_audios-94"><span class="linenos"> 94</span></a>    <span class="k">if</span> <span class="n">model</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="extract_speaker_embeddings_from_audios-95"><a href="#extract_speaker_embeddings_from_audios-95"><span class="linenos"> 95</span></a>        <span class="n">model</span> <span class="o">=</span> <span class="n">SpeechBrainModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="s2">&quot;speechbrain/spkrec-ecapa-voxceleb&quot;</span><span class="p">,</span> <span class="n">revision</span><span class="o">=</span><span class="s2">&quot;main&quot;</span><span class="p">)</span>
+</span><span id="extract_speaker_embeddings_from_audios-96"><a href="#extract_speaker_embeddings_from_audios-96"><span class="linenos"> 96</span></a>
+</span><span id="extract_speaker_embeddings_from_audios-97"><a href="#extract_speaker_embeddings_from_audios-97"><span class="linenos"> 97</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">SpeechBrainModel</span><span class="p">):</span>
+</span><span id="extract_speaker_embeddings_from_audios-98"><a href="#extract_speaker_embeddings_from_audios-98"><span class="linenos"> 98</span></a>        <span class="k">return</span> <span class="n">SpeechBrainEmbeddings</span><span class="o">.</span><span class="n">extract_speechbrain_speaker_embeddings_from_audios</span><span class="p">(</span>
+</span><span id="extract_speaker_embeddings_from_audios-99"><a href="#extract_speaker_embeddings_from_audios-99"><span class="linenos"> 99</span></a>            <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
+</span><span id="extract_speaker_embeddings_from_audios-100"><a href="#extract_speaker_embeddings_from_audios-100"><span class="linenos">100</span></a>        <span class="p">)</span>
+</span><span id="extract_speaker_embeddings_from_audios-101"><a href="#extract_speaker_embeddings_from_audios-101"><span class="linenos">101</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="extract_speaker_embeddings_from_audios-102"><a href="#extract_speaker_embeddings_from_audios-102"><span class="linenos">102</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+</span><span id="extract_speaker_embeddings_from_audios-103"><a href="#extract_speaker_embeddings_from_audios-103"><span class="linenos">103</span></a>            <span class="s2">&quot;Only SpeechBrain models are supported for now. We aim to support more models in the future.&quot;</span>
+</span><span id="extract_speaker_embeddings_from_audios-104"><a href="#extract_speaker_embeddings_from_audios-104"><span class="linenos">104</span></a>        <span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Compute fixed-dimensional speaker embeddings for a batch of <code>Audio</code> objects.</p>
+
+<p>By default, this uses a SpeechBrain speaker-recognition model
+(<code>speechbrain/spkrec-ecapa-voxceleb</code>, revision <code>"main"</code>) to extract
+one embedding per input audio. The order of outputs matches the order of
+the inputs.</p>
+
+<h6 id="notes">Notes:</h6>
+
+<blockquote>
+  <ul>
+  <li>Many pretrained speaker models are trained on <strong>mono, 16 kHz</strong> audio.
+  For best results, consider preprocessing inputs with
+  <code>downmix_audios_to_mono(...)</code> and <code>resample_audios(..., 16000)</code>.</li>
+  <li><code>device</code> must be a <code>DeviceType</code> (<code>CPU</code> or <code>CUDA</code>). If <code>None</code>,
+  the backend will choose <code>CUDA</code> if available, otherwise <code>CPU</code>.</li>
+  <li>The embedding dimensionality depends on the model
+  (e.g., ECAPA-TDNN often returns 192-D vectors).</li>
+  </ul>
+</blockquote>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audios (list[Audio]):</strong>  Input audio objects to embed.</li>
+<li><strong>model (SpeechBrainModel, optional):</strong>  SpeechBrain model handle (path or HF Hub URI + revision).
+If <code>None</code>, defaults to
+<code>SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")</code>.</li>
+<li><strong>device (DeviceType, optional):</strong>  Target device for inference:
+<ul>
+<li><code>DeviceType.CPU</code></li>
+<li><code>DeviceType.CUDA</code> (GPU, if available)
+If <code>None</code>, a default is chosen by the backend.</li>
+</ul></li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>list[torch.Tensor]: One 1-D tensor per input audio (e.g., shape <code>[192]</code> for ECAPA).</p>
+</blockquote>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>NotImplementedError:</strong>  If a non-SpeechBrain model is provided (only SpeechBrain is supported currently).</li>
+</ul>
+
+<p>Example (default model on CPU):</p>
+
+<blockquote>
+  <blockquote>
+    <blockquote>
+      <p>from pathlib import Path
+      from <a href="../data_structures.html">senselab.audio.data_structures</a> import Audio
+      from <a href="../../utils/data_structures.html">senselab.utils.data_structures</a> import DeviceType
+      a1 = Audio(filepath=Path("sample1.wav").resolve())
+      a2 = Audio(filepath=Path("sample2.wav").resolve())
+      embs = extract_speaker_embeddings_from_audios([a1, a2], device=DeviceType.CPU)
+      embs[0].shape
+          torch.Size([192])</p>
+    </blockquote>
+  </blockquote>
+</blockquote>
+
+<p>Example (explicit model on CUDA):</p>
+
+<blockquote>
+  <blockquote>
+    <blockquote>
+      <p>from pathlib import Path
+      from <a href="../data_structures.html">senselab.audio.data_structures</a> import Audio
+      from <a href="../../utils/data_structures.html">senselab.utils.data_structures</a> import DeviceType, SpeechBrainModel
+      a1 = Audio(filepath=Path("sample1.wav").resolve())
+      model = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
+      embs = extract_speaker_embeddings_from_audios([a1], model=model, device=DeviceType.CUDA)
+      len(embs), embs[0].ndim
+          (1, 1)</p>
+    </blockquote>
+  </blockquote>
+</blockquote>
+</div>
+
+
+                </section>
+    </main>
+<script>
+    function escapeHTML(html) {
+        return document.createElement('div').appendChild(document.createTextNode(html)).parentNode.innerHTML;
+    }
+
+    const originalContent = document.querySelector("main.pdoc");
+    let currentContent = originalContent;
+
+    function setContent(innerHTML) {
+        let elem;
+        if (innerHTML) {
+            elem = document.createElement("main");
+            elem.classList.add("pdoc");
+            elem.innerHTML = innerHTML;
+        } else {
+            elem = originalContent;
+        }
+        if (currentContent !== elem) {
+            currentContent.replaceWith(elem);
+            currentContent = elem;
+        }
+    }
+
+    function getSearchTerm() {
+        return (new URL(window.location)).searchParams.get("search");
+    }
+
+    const searchBox = document.querySelector(".pdoc input[type=search]");
+    searchBox.addEventListener("input", function () {
+        let url = new URL(window.location);
+        if (searchBox.value.trim()) {
+            url.hash = "";
+            url.searchParams.set("search", searchBox.value);
+        } else {
+            url.searchParams.delete("search");
+        }
+        history.replaceState("", "", url.toString());
+        onInput();
+    });
+    window.addEventListener("popstate", onInput);
+
+
+    let search, searchErr;
+
+    async function initialize() {
+        try {
+            search = await new Promise((resolve, reject) => {
+                const script = document.createElement("script");
+                script.type = "text/javascript";
+                script.async = true;
+                script.onload = () => resolve(window.pdocSearch);
+                script.onerror = (e) => reject(e);
+                script.src = "../../../search.js";
+                document.getElementsByTagName("head")[0].appendChild(script);
+            });
+        } catch (e) {
+            console.error("Cannot fetch pdoc search index");
+            searchErr = "Cannot fetch search index.";
+        }
+        onInput();
+
+        document.querySelector("nav.pdoc").addEventListener("click", e => {
+            if (e.target.hash) {
+                searchBox.value = "";
+                searchBox.dispatchEvent(new Event("input"));
+            }
+        });
+    }
+
+    function onInput() {
+        setContent((() => {
+            const term = getSearchTerm();
+            if (!term) {
+                return null
+            }
+            if (searchErr) {
+                return `<h3>Error: ${searchErr}</h3>`
+            }
+            if (!search) {
+                return "<h3>Searching...</h3>"
+            }
+
+            window.scrollTo({top: 0, left: 0, behavior: 'auto'});
+
+            const results = search(term);
+
+            let html;
+            if (results.length === 0) {
+                html = `No search results for '${escapeHTML(term)}'.`
+            } else {
+                html = `<h4>${results.length} search result${results.length > 1 ? "s" : ""} for '${escapeHTML(term)}'.</h4>`;
+            }
+            for (let result of results.slice(0, 10)) {
+                let doc = result.doc;
+                let url = `../../../${doc.modulename.replaceAll(".", "/")}.html`;
+                if (doc.qualname) {
+                    url += `#${doc.qualname}`;
+                }
+
+                let heading;
+                switch (result.doc.kind) {
+                    case "function":
+                        if (doc.fullname.endsWith(".__init__")) {
+                            heading = `<span class="name">${doc.fullname.replace(/\.__init__$/, "")}</span>${doc.signature}`;
+                        } else {
+                            heading = `<span class="def">${doc.funcdef}</span> <span class="name">${doc.fullname}</span>${doc.signature}`;
+                        }
+                        break;
+                    case "class":
+                        heading = `<span class="def">class</span> <span class="name">${doc.fullname}</span>`;
+                        if (doc.bases)
+                            heading += `<wbr>(<span class="base">${doc.bases}</span>)`;
+                        heading += `:`;
+                        break;
+                    case "variable":
+                        heading = `<span class="name">${doc.fullname}</span>`;
+                        if (doc.annotation)
+                            heading += `<span class="annotation">${doc.annotation}</span>`;
+                        if (doc.default_value)
+                            heading += `<span class="default_value"> = ${doc.default_value}</span>`;
+                        break;
+                    default:
+                        heading = `<span class="name">${doc.fullname}</span>`;
+                        break;
+                }
+                html += `
+                        <section class="search-result">
+                        <a href="${url}" class="attr ${doc.kind}">${heading}</a>
+                        <div class="docstring">${doc.doc}</div>
+                        </section>
+                    `;
+
+            }
+            return html;
+        })());
+    }
+
+    if (getSearchTerm()) {
+        initialize();
+        searchBox.value = getSearchTerm();
+        onInput();
+    } else {
+        searchBox.addEventListener("focus", initialize, {once: true});
+    }
+
+    searchBox.addEventListener("keydown", e => {
+        if (["ArrowDown", "ArrowUp", "Enter"].includes(e.key)) {
+            let focused = currentContent.querySelector(".search-result.focused");
+            if (!focused) {
+                currentContent.querySelector(".search-result").classList.add("focused");
+            } else if (
+                e.key === "ArrowDown"
+                && focused.nextElementSibling
+                && focused.nextElementSibling.classList.contains("search-result")
+            ) {
+                focused.classList.remove("focused");
+                focused.nextElementSibling.classList.add("focused");
+                focused.nextElementSibling.scrollIntoView({
+                    behavior: "smooth",
+                    block: "nearest",
+                    inline: "nearest"
+                });
+            } else if (
+                e.key === "ArrowUp"
+                && focused.previousElementSibling
+                && focused.previousElementSibling.classList.contains("search-result")
+            ) {
+                focused.classList.remove("focused");
+                focused.previousElementSibling.classList.add("focused");
+                focused.previousElementSibling.scrollIntoView({
+                    behavior: "smooth",
+                    block: "nearest",
+                    inline: "nearest"
+                });
+            } else if (
+                e.key === "Enter"
+            ) {
+                focused.querySelector("a").click();
+            }
+        }
+    });
+</script></body>
+</html>
