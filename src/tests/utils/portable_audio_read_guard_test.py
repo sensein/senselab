@@ -96,6 +96,7 @@ WORKERS_PASSING_A_PARENT_WRITTEN_WAV_TO_A_LIBRARY = {
     "utils/vllm_server.py",
 }
 WORKERS_WITH_NO_AUDIO_INPUT = {
+    "video/tasks/scene_description/backends.py",
     "audio/tasks/text_to_speech/qwen_tts.py",
     "text/tasks/pii_detection/redaction_review.py",
     "text/tasks/pii_detection/redaction_review_vllm.py",
