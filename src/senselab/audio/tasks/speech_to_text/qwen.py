@@ -25,7 +25,7 @@ from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
-from senselab.utils.venv_worker import serve_in_venv
+from senselab.utils.venv_worker import close_venv_workers, serve_in_venv
 
 _QWEN_VENV = "qwen-asr"
 _QWEN_REQUIREMENTS = [
@@ -204,6 +204,49 @@ REQUEST_SECONDS_PER_AUDIO_SECOND = 3.0
 MPS_SETTINGS = {"dtype": "float16", "max_chunk_sec": 30.0, "max_inference_batch_size": 1}
 """Load and chunking settings on Apple-silicon MPS (measurements: specs/20261017-104000-asr-apple-silicon/)."""
 
+MPS_SEGMENT_SEC = 1200.0
+"""On MPS, audio longer than this is decoded in pieces of about this length, each by a fresh worker."""
+
+_SEGMENT_SEARCH_SEC = 5.0
+_SEGMENT_WINDOW_SEC = 0.1
+
+
+def _segment_bounds(samples: Any, sampling_rate: int, segment_sec: float) -> List[Tuple[int, int]]:  # noqa: ANN401
+    """Cut points about ``segment_sec`` apart, each at the quietest 100 ms near its target.
+
+    Args:
+        samples: A 1-D array or tensor of audio samples.
+        sampling_rate: Samples per second.
+        segment_sec: Target piece length in seconds.
+
+    Returns:
+        ``(start, end)`` sample indices covering the input exactly, in order.
+    """
+    import numpy as np
+
+    x = np.abs(np.asarray(samples, dtype=np.float32))
+    n = len(x)
+    step = int(segment_sec * sampling_rate)
+    if n <= step:
+        return [(0, n)]
+    search = min(int(_SEGMENT_SEARCH_SEC * sampling_rate), step // 4)
+    win = max(1, int(_SEGMENT_WINDOW_SEC * sampling_rate))
+    bounds: List[Tuple[int, int]] = []
+    start = 0
+    while n - start > step:
+        target = start + step
+        lo, hi = max(start + win, target - search), min(n - win, target + search)
+        if hi - lo <= win:
+            cut = target
+        else:
+            energy = np.convolve(x[lo:hi], np.ones(win, dtype=np.float32), mode="valid")
+            cut = lo + int(np.argmin(energy)) + win // 2
+        bounds.append((start, cut))
+        start = cut
+    bounds.append((start, n))
+    return bounds
+
+
 MPS_ENV = {"PYTORCH_MPS_HIGH_WATERMARK_RATIO": "0.4", "PYTORCH_MPS_LOW_WATERMARK_RATIO": "0.3"}
 """MPS allocator limits set in the worker's environment on MPS (same measurements)."""
 
@@ -252,8 +295,10 @@ class QwenASR:
             audios: Audio clips to transcribe (mono, 16 kHz expected).
             model: HF model id (default: ``Qwen/Qwen3-ASR-1.7B``).
             device: CUDA, MPS or CPU (default: the fastest available). On MPS the
-                models load in float16 and audio is decoded in :data:`MPS_SETTINGS`
-                chunks, one at a time.
+                models load in float16, audio is decoded in :data:`MPS_SETTINGS`
+                chunks one at a time, and audio longer than :data:`MPS_SEGMENT_SEC`
+                is split at quiet points into pieces, each decoded by a fresh worker,
+                whose word times are shifted back onto the input's timeline.
             return_timestamps: When True, also load the companion forced
                 aligner and populate per-span ``chunks`` on each ScriptLine.
             forced_aligner: Override the companion aligner model id.
@@ -344,22 +389,50 @@ class QwenASR:
             )
             entries: List[dict] = []
             for i, audio in enumerate(audios):
-                path = tmp / f"audio_{i}.wav"
-                audio.save_to_file(str(path))
-                duration_s = audio.waveform.shape[-1] / float(audio.sampling_rate)
-                output = serve_in_venv(
-                    identity,
-                    python=python,
-                    script=_QWEN_WORKER_SCRIPT,
-                    init=init,
-                    request={"audio_paths": [str(path)]},
-                    env=env,
-                    label="Qwen3-ASR",
-                    load_timeout_s=_QWEN_LOAD_TIMEOUT_S,
-                    request_timeout_s=max(_QWEN_REQUEST_TIMEOUT_S, REQUEST_SECONDS_PER_AUDIO_SECOND * duration_s),
+                sr = int(audio.sampling_rate)
+                waveform = audio.waveform
+                segmented = device_type == DeviceType.MPS and waveform.shape[-1] > MPS_SEGMENT_SEC * sr
+                bounds = (
+                    _segment_bounds(waveform.mean(dim=0), sr, MPS_SEGMENT_SEC)
+                    if segmented
+                    else [(0, waveform.shape[-1])]
                 )
-                path.unlink(missing_ok=True)
-                entries.extend(output.get("results", []))
+                pieces: List[dict] = []
+                for j, (a, b) in enumerate(bounds):
+                    path = tmp / f"audio_{i}_{j}.wav"
+                    piece = audio if not segmented else Audio(waveform=waveform[:, a:b], sampling_rate=sr)
+                    piece.save_to_file(str(path))
+                    output = serve_in_venv(
+                        identity,
+                        python=python,
+                        script=_QWEN_WORKER_SCRIPT,
+                        init=init,
+                        request={"audio_paths": [str(path)]},
+                        env=env,
+                        label="Qwen3-ASR",
+                        load_timeout_s=_QWEN_LOAD_TIMEOUT_S,
+                        request_timeout_s=max(_QWEN_REQUEST_TIMEOUT_S, REQUEST_SECONDS_PER_AUDIO_SECOND * (b - a) / sr),
+                    )
+                    path.unlink(missing_ok=True)
+                    if segmented:
+                        close_venv_workers("Qwen3-ASR")
+                    offset = a / sr
+                    for result in output.get("results", []):
+                        for c in result.get("chunks") or []:
+                            c["start"] = float(c["start"]) + offset
+                            c["end"] = float(c["end"]) + offset
+                        pieces.append(result)
+                if len(pieces) == 1:
+                    entries.append(pieces[0])
+                else:
+                    merged_chunks = [c for p in pieces for c in (p.get("chunks") or [])]
+                    entries.append(
+                        {
+                            "text": " ".join((p.get("text") or "").strip() for p in pieces).strip(),
+                            "language": pieces[0].get("language") if pieces else None,
+                            "chunks": merged_chunks or None,
+                        }
+                    )
 
             results: List[ScriptLine] = []
             for entry in entries:
