@@ -44,6 +44,35 @@ over YuNet because it needs no model download; it misses small or turned faces, 
 lower bound and the VLM's `n_people_visible` is the primary count. These levels are first choices,
 not fitted thresholds; nothing downstream gates on them.
 
+### Camera-off area and letterbox bars
+
+A privacy-preserving pilot on a 1920x1080 Zoom gallery recording (two live tiles, letterboxed)
+reported `near_black_fraction` median 0.432 per frame and a camera-off rate of 0.875 from this
+metric against 0.125 from the VLM: the dark bars above and below the tile band are dark and flat,
+so the whole-image near-black area counted them as camera-off. 28 of 30 corpus recordings share
+the format.
+
+`near_black_fraction` keeps its whole-image meaning; `camera_off_fraction` is measured either per
+tile or inside the bars:
+
+- **Bars** (`find_bars`): runs of full-width rows from the top and bottom edges, then full-height
+  columns from the left and right within the remaining rows, each line with mean luma <= 40 and
+  standard deviation <= 8 over its whole length (the near-black block levels, applied per line).
+  Bars are removed on an axis only as a centred pair: both present, lengths within 2 % of the axis
+  (Zoom centres the tile band; letterboxing is symmetric), and together <= 75 % of the axis. The
+  pair rule keeps a camera-off tile at one edge from being read as a pillarbox (a dark right tile
+  otherwise lost its outer 420 of 953 px), and the 75 % cap keeps a camera-off speaker view, dark
+  everywhere but its centred name, from being read as bars around the name. The pilot band
+  (526 of 1080 rows, bars 277 above and below) is 49 % of the height. All three values are first
+  choices, not fitted.
+- **Tiles**: with tile boxes, a tile is camera-off when at least 0.6 of its area is near-black. A
+  Zoom camera-off card is flat dark grey with a centred name (in the synthetic check, 0.96 of the
+  tile); a live tile in a dim room fails the flatness test. 0.6 is a first choice, not fitted.
+
+Synthetic checks (`scene_cv_metrics_test.py`): letterboxed live pair (camera-off 0, bar fraction
+0.51); the same with one dark named tile (about half the content area without tiles; flags
+`[False, True]` and 0.5 with tiles); a pillarboxed 4:3 picture; a full-frame camera-off card.
+
 ## Schema
 
 `SceneDescription` (Pydantic, `extra="forbid"`):

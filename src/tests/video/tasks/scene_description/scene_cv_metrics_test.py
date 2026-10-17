@@ -84,3 +84,63 @@ def test_faces_found_in_public_photo() -> None:
     img = np.array(Image.open(REPO / "tutorial_images" / "three_people.jpg").convert("RGB"))
     assert frame_metrics(img).n_faces >= 1
     assert frame_metrics(np.array(Image.open(REPO / "tutorial_images" / "no_people.jpeg").convert("RGB"))).n_faces == 0
+
+
+def _zoom_pair(right_tile_dark: bool = False) -> np.ndarray:
+    """A 1920x1080 letterboxed gallery with two 953x526 textured tiles, downscaled to 896x504."""
+    rng = np.random.default_rng(1)
+    img = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    img[277:803] = 26
+    img[277:803, 7:960] = rng.integers(60, 220, size=(526, 953, 3), dtype=np.uint8)
+    img[277:803, 961:1914] = rng.integers(60, 220, size=(526, 953, 3), dtype=np.uint8)
+    if right_tile_dark:
+        img[277:803, 961:1914] = 30
+        img[530:550, 1380:1500] = 230  # the participant's name
+    return cv2.resize(img, (896, 504), interpolation=cv2.INTER_AREA)
+
+
+PAIR_TILES = [(3, 129, 445, 245), (448, 129, 445, 245)]
+
+
+def test_letterbox_bars_are_not_camera_off() -> None:
+    """Black bars above and below two live tiles: large near-black area, no camera-off area."""
+    m = frame_metrics(_zoom_pair(), detect_faces=False)
+    assert m.near_black_fraction > 0.4
+    assert m.bar_fraction == pytest.approx((1080 - 526) / 1080, abs=0.02)
+    assert m.camera_off_fraction < 0.05
+    assert m.tiles_camera_off == []
+
+
+def test_one_dark_tile_in_a_letterboxed_pair_is_camera_off() -> None:
+    """Without tiles about half the content area is near-black; with tiles one of two is off."""
+    image = _zoom_pair(right_tile_dark=True)
+    m = frame_metrics(image, detect_faces=False)
+    assert 0.35 < m.camera_off_fraction < 0.55
+    tiled = frame_metrics(image, detect_faces=False, tiles=PAIR_TILES)
+    assert tiled.tiles_camera_off == [False, True]
+    assert tiled.camera_off_fraction == 0.5
+
+
+def test_live_tiles_with_bars_are_all_on() -> None:
+    """Tile boxes over two live tiles: none camera-off."""
+    m = frame_metrics(_zoom_pair(), detect_faces=False, tiles=PAIR_TILES)
+    assert m.tiles_camera_off == [False, False] and m.camera_off_fraction == 0.0
+
+
+def test_pillarbox_bars_are_removed() -> None:
+    """A 4:3 picture pillarboxed in 16:9: the side bars are excluded."""
+    rng = np.random.default_rng(2)
+    img = np.zeros((360, 640, 3), dtype=np.uint8)
+    img[:, 80:560] = rng.integers(60, 220, size=(360, 480, 3), dtype=np.uint8)
+    m = frame_metrics(img, detect_faces=False)
+    assert m.bar_fraction == pytest.approx(0.25, abs=0.01)
+    assert m.camera_off_fraction == 0.0
+
+
+def test_camera_off_speaker_view_keeps_its_area() -> None:
+    """A full-frame camera-off card with a centred name is not mistaken for bars around the name."""
+    img = np.full((360, 640, 3), 30, dtype=np.uint8)
+    img[170:190, 260:380] = 230
+    m = frame_metrics(img, detect_faces=False)
+    assert m.bar_fraction == 0.0
+    assert m.camera_off_fraction > 0.9

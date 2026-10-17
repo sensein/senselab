@@ -90,7 +90,7 @@ class VideoSceneSummary(BaseModel):
         categorical: Summaries of :data:`CATEGORICAL_FIELDS`.
         numeric: Summaries of :data:`NUMERIC_FIELDS`.
         distractions: Fraction of described frames in which any tile lists each distraction.
-        metrics: Summaries of each ``FrameMetrics`` field over all frames.
+        metrics: Summaries of each numeric ``FrameMetrics`` field over all frames.
         change_points: Changes in :data:`CHANGE_FIELDS` between consecutive described frames.
     """
 
@@ -237,7 +237,9 @@ def aggregate(
     }
     present = [m for m in metrics if m is not None]
     metric_summary = {
-        name: summarise_numeric([float(getattr(m, name)) for m in present]) for name in FrameMetrics.model_fields
+        name: summarise_numeric([float(getattr(m, name)) for m in present])
+        for name, field in FrameMetrics.model_fields.items()
+        if field.annotation in (int, float)
     }
     n = len(timestamps)
     return VideoSceneSummary(
