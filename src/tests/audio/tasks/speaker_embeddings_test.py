@@ -1,6 +1,7 @@
 """Tests for speaker_embeddings.py."""
 
 import pytest
+import torch
 from torch import Tensor
 
 from senselab.audio.data_structures import Audio
@@ -164,3 +165,14 @@ def test_extract_speechbrain_speaker_embeddings_from_stereo_audio(
         )
     with pytest.raises(ValueError):
         extract_speaker_embeddings_from_audios(audios=[stereo_audio_sample], model=resnet_model, device=cpu_cuda_device)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
+def test_extract_speaker_embeddings_on_mps_returns_cpu_tensors(
+    resampled_mono_audio_sample: Audio, ecapa_model: SpeechBrainModel
+) -> None:
+    """Embeddings computed on MPS are handed back on the CPU."""
+    embeddings = extract_speaker_embeddings_from_audios(
+        audios=[resampled_mono_audio_sample], model=ecapa_model, device=DeviceType.MPS
+    )
+    assert embeddings and all(embedding.device.type == "cpu" for embedding in embeddings)
