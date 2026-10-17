@@ -105,3 +105,29 @@ For a given reference "hello world" and hypothesis "hello duck":
   ```math
   MER = (1)/(2) = 0.5
   ```
+
+## Estimating accuracy without a reference
+
+`estimate_transcript_accuracy(primary, secondary, segments=None, exclude_fillers=True)` estimates the
+word error rate of a primary transcript (for example CrisperWhisper) when no reference exists, from
+two measurements per time span:
+
+- the **inter-system disagreement**: the word edit distance between the primary and the secondary
+  transcript (for example Qwen3-ASR), divided by the longer of the two, after both are lowercased, stripped of punctuation and bracketed markers and, by default,
+  of hesitation fillers (`uh`, `um`, ...), which one system writes verbatim and the other omits;
+- the primary's **word confidences** (`ScriptLine.chunks[*].score`): mean, minimum and the fraction
+  below the profile's low-confidence threshold.
+
+A calibration profile (`data/accuracy_calibration.yaml`) maps the two to `estimated_wer` with an
+interval. The packaged profile was fitted for CrisperWhisper 2.0 turbo against Qwen3-ASR-1.7B on
+public AMI meeting audio; its derivation and fit quality are in
+`specs/20261017-104000-asr-apple-silicon/`. Spans (`segments`, e.g. speaker turns) receive words by
+their midpoint and need word timestamps on both transcripts.
+
+```python
+from senselab.audio.tasks.speech_to_text_evaluation import estimate_transcript_accuracy
+
+report = estimate_transcript_accuracy(crisper_line, qwen_line, segments=[(0.0, 12.5), (12.5, 30.0)])
+report.overall.estimated_wer, report.overall.estimated_wer_low, report.overall.estimated_wer_high
+[s.inter_system_disagreement for s in report.segments]
+```
