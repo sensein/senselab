@@ -1089,7 +1089,7 @@ the two name sets are disjoint), <code>counts.&lt;name&gt;</code>, <code>per_cla
                     <div class="attr variable">
             <span class="name">HEADLINES_BY_KIND</span><span class="annotation">: dict[str, frozenset[str]]</span>        =
 <input id="HEADLINES_BY_KIND-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="HEADLINES_BY_KIND-view-value"></label><span class="default_value">{&#39;classification&#39;: frozenset({&#39;balanced_accuracy&#39;}), &#39;detection&#39;: frozenset({&#39;map_at&#39;, &#39;avg_map&#39;}), &#39;statistic&#39;: frozenset({&#39;f_stat&#39;}), &#39;count&#39;: frozenset({&#39;count&#39;})}</span>
+            <label class="view-value-button pdoc-button" for="HEADLINES_BY_KIND-view-value"></label><span class="default_value">{&#39;classification&#39;: frozenset({&#39;balanced_accuracy&#39;}), &#39;detection&#39;: frozenset({&#39;avg_map&#39;, &#39;map_at&#39;}), &#39;statistic&#39;: frozenset({&#39;f_stat&#39;}), &#39;count&#39;: frozenset({&#39;count&#39;})}</span>
 
         
     </div>
@@ -1102,7 +1102,7 @@ the two name sets are disjoint), <code>counts.&lt;name&gt;</code>, <code>per_cla
                     <div class="attr variable">
             <span class="name">SECONDARY_BY_KIND</span><span class="annotation">: dict[str, frozenset[str]]</span>        =
 <input id="SECONDARY_BY_KIND-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="SECONDARY_BY_KIND-view-value"></label><span class="default_value">{&#39;classification&#39;: frozenset({&#39;auroc&#39;, &#39;top1&#39;, &#39;accuracy&#39;, &#39;macro_f1&#39;, &#39;pr_auc&#39;, &#39;f1&#39;, &#39;mcc&#39;}), &#39;detection&#39;: frozenset(), &#39;statistic&#39;: frozenset(), &#39;count&#39;: frozenset()}</span>
+            <label class="view-value-button pdoc-button" for="SECONDARY_BY_KIND-view-value"></label><span class="default_value">{&#39;classification&#39;: frozenset({&#39;macro_f1&#39;, &#39;accuracy&#39;, &#39;pr_auc&#39;, &#39;mcc&#39;, &#39;top1&#39;, &#39;f1&#39;, &#39;auroc&#39;}), &#39;detection&#39;: frozenset(), &#39;statistic&#39;: frozenset(), &#39;count&#39;: frozenset()}</span>
 
         
     </div>
@@ -1114,7 +1114,7 @@ the two name sets are disjoint), <code>counts.&lt;name&gt;</code>, <code>per_cla
                 <section id="CLASSIFICATION_KINDS">
                     <div class="attr variable">
             <span class="name">CLASSIFICATION_KINDS</span>        =
-<span class="default_value">frozenset({&#39;classification&#39;, &#39;detection&#39;})</span>
+<span class="default_value">frozenset({&#39;detection&#39;, &#39;classification&#39;})</span>
 
         
     </div>
@@ -1127,7 +1127,7 @@ the two name sets are disjoint), <code>counts.&lt;name&gt;</code>, <code>per_cla
                     <div class="attr variable">
             <span class="name">RATE_METRICS</span>        =
 <input id="RATE_METRICS-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="RATE_METRICS-view-value"></label><span class="default_value">frozenset({&#39;balanced_accuracy&#39;, &#39;top1&#39;, &#39;pr_auc&#39;, &#39;auroc&#39;, &#39;map_at&#39;, &#39;avg_map&#39;, &#39;accuracy&#39;, &#39;macro_f1&#39;, &#39;f1&#39;})</span>
+            <label class="view-value-button pdoc-button" for="RATE_METRICS-view-value"></label><span class="default_value">frozenset({&#39;accuracy&#39;, &#39;pr_auc&#39;, &#39;top1&#39;, &#39;macro_f1&#39;, &#39;avg_map&#39;, &#39;map_at&#39;, &#39;balanced_accuracy&#39;, &#39;f1&#39;, &#39;auroc&#39;})</span>
 
         
     </div>
@@ -1139,7 +1139,7 @@ the two name sets are disjoint), <code>counts.&lt;name&gt;</code>, <code>per_cla
                 <section id="PRESENCE_ONLY_FLOORS">
                     <div class="attr variable">
             <span class="name">PRESENCE_ONLY_FLOORS</span>        =
-<span class="default_value">frozenset({&#39;map_at&#39;, &#39;avg_map&#39;, &#39;macro_f1&#39;})</span>
+<span class="default_value">frozenset({&#39;macro_f1&#39;, &#39;map_at&#39;, &#39;avg_map&#39;})</span>
 
         
     </div>
@@ -1284,7 +1284,7 @@ the two name sets are disjoint), <code>counts.&lt;name&gt;</code>, <code>per_cla
                     <div class="attr variable">
             <span class="name">DRIVER_KEYS</span>        =
 <input id="DRIVER_KEYS-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="DRIVER_KEYS-view-value"></label><span class="default_value">frozenset({&#39;verdict&#39;, &#39;target&#39;, &#39;sd&#39;, &#39;tolerance&#39;, &#39;delta&#39;, &#39;pass&#39;, &#39;floor_used&#39;, &#39;lift_used&#39;, &#39;chain1_pass&#39;})</span>
+            <label class="view-value-button pdoc-button" for="DRIVER_KEYS-view-value"></label><span class="default_value">frozenset({&#39;tolerance&#39;, &#39;lift_used&#39;, &#39;delta&#39;, &#39;floor_used&#39;, &#39;pass&#39;, &#39;sd&#39;, &#39;verdict&#39;, &#39;target&#39;, &#39;chain1_pass&#39;})</span>
 
         
     </div>
@@ -1296,7 +1296,7 @@ the two name sets are disjoint), <code>counts.&lt;name&gt;</code>, <code>per_cla
                 <section id="DRIVER_BOOLS">
                     <div class="attr variable">
             <span class="name">DRIVER_BOOLS</span>        =
-<span class="default_value">frozenset({&#39;chain1_pass&#39;, &#39;pass&#39;})</span>
+<span class="default_value">frozenset({&#39;pass&#39;, &#39;chain1_pass&#39;})</span>
 
         
     </div>
@@ -1335,7 +1335,7 @@ the two name sets are disjoint), <code>counts.&lt;name&gt;</code>, <code>per_cla
                     <div class="attr variable">
             <span class="name">TOP_KEYS</span>        =
 <input id="TOP_KEYS-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="TOP_KEYS-view-value"></label><span class="default_value">frozenset({&#39;n&#39;, &#39;per_class&#39;, &#39;headline&#39;, &#39;confusion&#39;, &#39;threshold_tuning&#39;, &#39;n_folds&#39;, &#39;secondary&#39;, &#39;counts&#39;, &#39;split_report&#39;})</span>
+            <label class="view-value-button pdoc-button" for="TOP_KEYS-view-value"></label><span class="default_value">frozenset({&#39;secondary&#39;, &#39;threshold_tuning&#39;, &#39;split_report&#39;, &#39;per_class&#39;, &#39;n&#39;, &#39;headline&#39;, &#39;confusion&#39;, &#39;counts&#39;, &#39;n_folds&#39;})</span>
 
         
     </div>
@@ -1347,7 +1347,7 @@ the two name sets are disjoint), <code>counts.&lt;name&gt;</code>, <code>per_cla
                 <section id="SPLIT_KEYS">
                     <div class="attr variable">
             <span class="name">SPLIT_KEYS</span>        =
-<span class="default_value">frozenset({&#39;unit&#39;, &#39;invariant_ok&#39;, &#39;protocol&#39;, &#39;folds&#39;, &#39;stratify&#39;})</span>
+<span class="default_value">frozenset({&#39;protocol&#39;, &#39;stratify&#39;, &#39;folds&#39;, &#39;invariant_ok&#39;, &#39;unit&#39;})</span>
 
         
     </div>
@@ -1360,7 +1360,7 @@ the two name sets are disjoint), <code>counts.&lt;name&gt;</code>, <code>per_cla
                     <div class="attr variable">
             <span class="name">ENTRY_KEYS</span>        =
 <input id="ENTRY_KEYS-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="ENTRY_KEYS-view-value"></label><span class="default_value">frozenset({&#39;n&#39;, &#39;ci_low&#39;, &#39;ci_high&#39;, &#39;name&#39;, &#39;label&#39;, &#39;floor&#39;, &#39;unit&#39;, &#39;dendf&#39;, &#39;n_folds&#39;, &#39;lift&#39;, &#39;numdf&#39;, &#39;value&#39;})</span>
+            <label class="view-value-button pdoc-button" for="ENTRY_KEYS-view-value"></label><span class="default_value">frozenset({&#39;lift&#39;, &#39;name&#39;, &#39;dendf&#39;, &#39;n&#39;, &#39;ci_low&#39;, &#39;floor&#39;, &#39;ci_high&#39;, &#39;label&#39;, &#39;value&#39;, &#39;numdf&#39;, &#39;n_folds&#39;, &#39;unit&#39;})</span>
 
         
     </div>
@@ -1385,7 +1385,7 @@ the two name sets are disjoint), <code>counts.&lt;name&gt;</code>, <code>per_cla
                     <div class="attr variable">
             <span class="name">CODES</span>        =
 <input id="CODES-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="CODES-view-value"></label><span class="default_value">frozenset({&#39;E_METRICS_DRIVER_KEY&#39;, &#39;E_METRICS_KIND_KEY&#39;, &#39;E_METRICS_MISSING_HEADLINE&#39;, &#39;E_METRICS_MISSING_COUNT&#39;, &#39;E_METRICS_PREVALENCE_SUM&#39;, &#39;E_METRICS_NO_FLOOR&#39;, &#39;E_SPLIT_BAD_PROTOCOL&#39;, &#39;E_SPLIT_BAD_INVARIANT&#39;, &#39;E_METRICS_UNDECLARED_LABEL&#39;, &#39;E_METRICS_BAD_FLOOR&#39;, &#39;E_METRICS_NO_PREVALENCE&#39;, &#39;E_METRICS_BAD_TUNING_SPLIT&#39;, &#39;E_METRICS_RANGE&#39;, &#39;E_METRICS_NO_CLASS_RATES&#39;, &#39;E_METRICS_UNDECLARED_HEADLINE&#39;, &#39;E_METRICS_PREVALENCE_SUBSAMPLE&#39;, &#39;E_SPLIT_FOLD_PREVALENCE&#39;, &#39;E_METRICS_NEGATIVE&#39;, &#39;E_METRICS_PREVALENCE_RANGE&#39;, &#39;E_METRICS_NOT_INT&#39;, &#39;E_SPLIT_NO_PROTOCOL&#39;, &#39;E_METRICS_UNDECLARED_COUNT&#39;, &#39;E_METRICS_MISSING_SECONDARY&#39;, &#39;E_SPLIT_UNEXPECTED&#39;, &#39;E_METRICS_NOT_BOOL&#39;, &#39;E_METRICS_UNKNOWN_KEY&#39;, &#39;E_METRICS_NO_TUNING_SPLIT&#39;, &#39;E_SPLIT_MISSING&#39;, &#39;E_METRICS_BAD_SHAPE&#39;, &#39;E_METRICS_NOT_OBJECT&#39;, &#39;E_METRICS_UNDECLARED_SECONDARY&#39;, &#39;E_METRICS_NOT_NUMBER&#39;, &#39;E_METRICS_NO_LIFT&#39;, &#39;E_METRICS_LIFT_MISMATCH&#39;, &#39;E_METRICS_BAD_TOKEN&#39;})</span>
+            <label class="view-value-button pdoc-button" for="CODES-view-value"></label><span class="default_value">frozenset({&#39;E_METRICS_PREVALENCE_RANGE&#39;, &#39;E_METRICS_RANGE&#39;, &#39;E_METRICS_LIFT_MISMATCH&#39;, &#39;E_METRICS_UNDECLARED_COUNT&#39;, &#39;E_METRICS_NOT_BOOL&#39;, &#39;E_METRICS_MISSING_COUNT&#39;, &#39;E_METRICS_NO_TUNING_SPLIT&#39;, &#39;E_SPLIT_UNEXPECTED&#39;, &#39;E_METRICS_PREVALENCE_SUBSAMPLE&#39;, &#39;E_METRICS_NOT_NUMBER&#39;, &#39;E_METRICS_NOT_INT&#39;, &#39;E_METRICS_MISSING_SECONDARY&#39;, &#39;E_METRICS_UNDECLARED_SECONDARY&#39;, &#39;E_METRICS_DRIVER_KEY&#39;, &#39;E_SPLIT_FOLD_PREVALENCE&#39;, &#39;E_METRICS_KIND_KEY&#39;, &#39;E_METRICS_UNDECLARED_HEADLINE&#39;, &#39;E_SPLIT_BAD_INVARIANT&#39;, &#39;E_METRICS_NEGATIVE&#39;, &#39;E_METRICS_NO_CLASS_RATES&#39;, &#39;E_METRICS_UNDECLARED_LABEL&#39;, &#39;E_METRICS_NO_FLOOR&#39;, &#39;E_METRICS_NOT_OBJECT&#39;, &#39;E_METRICS_BAD_TUNING_SPLIT&#39;, &#39;E_SPLIT_NO_PROTOCOL&#39;, &#39;E_METRICS_NO_PREVALENCE&#39;, &#39;E_METRICS_MISSING_HEADLINE&#39;, &#39;E_METRICS_NO_LIFT&#39;, &#39;E_SPLIT_BAD_PROTOCOL&#39;, &#39;E_METRICS_PREVALENCE_SUM&#39;, &#39;E_METRICS_BAD_FLOOR&#39;, &#39;E_METRICS_BAD_TOKEN&#39;, &#39;E_METRICS_BAD_SHAPE&#39;, &#39;E_METRICS_UNKNOWN_KEY&#39;, &#39;E_SPLIT_MISSING&#39;})</span>
 
         
     </div>
@@ -1397,7 +1397,7 @@ the two name sets are disjoint), <code>counts.&lt;name&gt;</code>, <code>per_cla
                 <section id="WARNINGS">
                     <div class="attr variable">
             <span class="name">WARNINGS</span>        =
-<span class="default_value">frozenset({&#39;W_CLASS_ABSENT&#39;, &#39;W_TUNED_ON_TEST&#39;})</span>
+<span class="default_value">frozenset({&#39;W_TUNED_ON_TEST&#39;, &#39;W_CLASS_ABSENT&#39;})</span>
 
         
     </div>
@@ -1410,7 +1410,7 @@ the two name sets are disjoint), <code>counts.&lt;name&gt;</code>, <code>per_cla
                     <div class="attr variable">
             <span class="name">ADDRESS_CODES</span>        =
 <input id="ADDRESS_CODES-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="ADDRESS_CODES-view-value"></label><span class="default_value">frozenset({&#39;E_METRICS_UNDECLARED_COUNT&#39;, &#39;E_METRICS_AMBIGUOUS&#39;, &#39;E_METRICS_BAD_ADDRESS&#39;, &#39;E_METRICS_ABSENT&#39;, &#39;E_METRICS_SUPPRESSED&#39;, &#39;E_METRICS_UNDECLARED_LABEL&#39;, &#39;E_METRICS_UNDECLARED_HEADLINE&#39;})</span>
+            <label class="view-value-button pdoc-button" for="ADDRESS_CODES-view-value"></label><span class="default_value">frozenset({&#39;E_METRICS_AMBIGUOUS&#39;, &#39;E_METRICS_BAD_ADDRESS&#39;, &#39;E_METRICS_UNDECLARED_HEADLINE&#39;, &#39;E_METRICS_UNDECLARED_LABEL&#39;, &#39;E_METRICS_UNDECLARED_COUNT&#39;, &#39;E_METRICS_SUPPRESSED&#39;, &#39;E_METRICS_ABSENT&#39;})</span>
 
         
     </div>
@@ -1770,7 +1770,7 @@ the threshold-tuning split and a split report are required.</li>
                 <section id="SCALED_QUANTITIES">
                     <div class="attr variable">
             <span class="name">SCALED_QUANTITIES</span>        =
-<span class="default_value">frozenset({&#39;rate&#39;, &#39;mcc&#39;})</span>
+<span class="default_value">frozenset({&#39;mcc&#39;, &#39;rate&#39;})</span>
 
         
     </div>

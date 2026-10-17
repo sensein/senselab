@@ -2808,7 +2808,7 @@ reduced step a draft manifest holds for <code>prefetch --sources-only</code>.</p
                 <section id="DRIVER_FILE_NAMES">
                     <div class="attr variable">
             <span class="name">DRIVER_FILE_NAMES</span>        =
-<span class="default_value">frozenset({&#39;metrics.json&#39;, &#39;summary.json&#39;, &#39;extracted.json&#39;, &#39;run.json&#39;})</span>
+<span class="default_value">frozenset({&#39;metrics.json&#39;, &#39;extracted.json&#39;, &#39;summary.json&#39;, &#39;run.json&#39;})</span>
 
         
     </div>
@@ -2848,7 +2848,7 @@ reduced step a draft manifest holds for <code>prefetch --sources-only</code>.</p
                 <section id="FIXED_PLACEHOLDERS">
                     <div class="attr variable">
             <span class="name">FIXED_PLACEHOLDERS</span>        =
-<span class="default_value">frozenset({&#39;venv&#39;, &#39;checkout&#39;, &#39;out&#39;, &#39;cache&#39;, &#39;tmp&#39;})</span>
+<span class="default_value">frozenset({&#39;cache&#39;, &#39;tmp&#39;, &#39;checkout&#39;, &#39;venv&#39;, &#39;out&#39;})</span>
 
         
     </div>
@@ -3131,7 +3131,7 @@ reduced step a draft manifest holds for <code>prefetch --sources-only</code>.</p
 
                             <div id="LockRef.lock" class="classattr">
                                 <div class="attr variable">
-            <span class="name">lock</span><span class="annotation">: Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f8be0272e80&gt;)]</span>        =
+            <span class="name">lock</span><span class="annotation">: Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f37f32584a0&gt;)]</span>        =
 <span class="default_value">PydanticUndefined</span>
 
         
@@ -3179,7 +3179,7 @@ reduced step a draft manifest holds for <code>prefetch --sources-only</code>.</p
 
                             <div id="FileRef.file" class="classattr">
                                 <div class="attr variable">
-            <span class="name">file</span><span class="annotation">: Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f8be0272e80&gt;)]</span>        =
+            <span class="name">file</span><span class="annotation">: Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f37f32584a0&gt;)]</span>        =
 <span class="default_value">PydanticUndefined</span>
 
         
@@ -3302,7 +3302,7 @@ reduced step a draft manifest holds for <code>prefetch --sources-only</code>.</p
                             </div>
                             <div id="BodySpec.requirements_in" class="classattr">
                                 <div class="attr variable">
-            <span class="name">requirements_in</span><span class="annotation">: Optional[Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f8be0272e80&gt;)]]</span>        =
+            <span class="name">requirements_in</span><span class="annotation">: Optional[Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f37f32584a0&gt;)]]</span>        =
 <span class="default_value">None</span>
 
         
@@ -3350,7 +3350,7 @@ reduced step a draft manifest holds for <code>prefetch --sources-only</code>.</p
                             </div>
                             <div id="BodySpec.config_file" class="classattr">
                                 <div class="attr variable">
-            <span class="name">config_file</span><span class="annotation">: Optional[Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f8be0272e80&gt;)]]</span>        =
+            <span class="name">config_file</span><span class="annotation">: Optional[Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f37f32584a0&gt;)]]</span>        =
 <span class="default_value">None</span>
 
         
@@ -3374,7 +3374,7 @@ reduced step a draft manifest holds for <code>prefetch --sources-only</code>.</p
                             </div>
                             <div id="BodySpec.overrides" class="classattr">
                                 <div class="attr variable">
-            <span class="name">overrides</span><span class="annotation">: Optional[Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f8be0272e80&gt;)]]</span>        =
+            <span class="name">overrides</span><span class="annotation">: Optional[Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f37f32584a0&gt;)]]</span>        =
 <span class="default_value">None</span>
 
         
@@ -5071,7 +5071,7 @@ for any secondary metric on another kind). A detection step declares at least on
 
                             <div id="HFFile.path" class="classattr">
                                 <div class="attr variable">
-            <span class="name">path</span><span class="annotation">: Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f8be0272e80&gt;)]</span>        =
+            <span class="name">path</span><span class="annotation">: Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f37f32584a0&gt;)]</span>        =
 <span class="default_value">PydanticUndefined</span>
 
         
@@ -5243,7 +5243,7 @@ names the registered model-cache input holding the snapshot; it must be one of t
 
                             <div id="UrlWeight.file" class="classattr">
                                 <div class="attr variable">
-            <span class="name">file</span><span class="annotation">: Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f8be0272e80&gt;)]</span>        =
+            <span class="name">file</span><span class="annotation">: Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f37f32584a0&gt;)]</span>        =
 <span class="default_value">PydanticUndefined</span>
 
         
@@ -5267,7 +5267,7 @@ names the registered model-cache input holding the snapshot; it must be one of t
                             </div>
                             <div id="UrlWeight.place" class="classattr">
                                 <div class="attr variable">
-            <span class="name">place</span><span class="annotation">: Annotated[str, AfterValidator(func=&lt;function _url_place at 0x7f8be0252ca0&gt;)]</span>        =
+            <span class="name">place</span><span class="annotation">: Annotated[str, AfterValidator(func=&lt;function _url_place at 0x7f37f25742c0&gt;)]</span>        =
 <span class="default_value">PydanticUndefined</span>
 
         
@@ -5492,7 +5492,7 @@ only (<code>E_SPEC_EXTRACT</code>).</p>
                     <div class="attr variable">
             <span class="name">ENGINE_SERVER_FIELDS</span>        =
 <input id="ENGINE_SERVER_FIELDS-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="ENGINE_SERVER_FIELDS-view-value"></label><span class="default_value">frozenset({&#39;max_model_len&#39;, &#39;generation_config&#39;, &#39;servers_per_card&#39;, &#39;enable_prefix_caching&#39;, &#39;startup_timeout_s&#39;, &#39;kv_cache_dtype&#39;, &#39;max_num_seqs&#39;, &#39;server_args&#39;, &#39;limit_mm_per_prompt&#39;})</span>
+            <label class="view-value-button pdoc-button" for="ENGINE_SERVER_FIELDS-view-value"></label><span class="default_value">frozenset({&#39;kv_cache_dtype&#39;, &#39;generation_config&#39;, &#39;startup_timeout_s&#39;, &#39;limit_mm_per_prompt&#39;, &#39;max_model_len&#39;, &#39;servers_per_card&#39;, &#39;server_args&#39;, &#39;enable_prefix_caching&#39;, &#39;max_num_seqs&#39;})</span>
 
         
     </div>
@@ -5672,7 +5672,7 @@ value's type is part of the key (<code>1</code> and <code>1.0</code> key apart).
                             </div>
                             <div id="DrawSpec.sampling" class="classattr">
                                 <div class="attr variable">
-            <span class="name">sampling</span><span class="annotation">: dict[typing.Annotated[str, StringConstraints(strip_whitespace=None, to_upper=None, to_lower=None, strict=None, min_length=None, max_length=None, pattern=&#39;^[a-z][a-z0-9_]{0,63}$&#39;, ascii_only=None)], typing.Union[typing.Annotated[bool, Strict(strict=True)], typing.Annotated[int, Strict(strict=True)], typing.Annotated[float, Strict(strict=True), FieldInfo(annotation=NoneType, required=True, metadata=[_PydanticGeneralMetadata(allow_inf_nan=False)])], typing.Annotated[str, StringConstraints(strip_whitespace=None, to_upper=None, to_lower=None, strict=None, min_length=None, max_length=None, pattern=&#39;^[A-Za-z][A-Za-z0-9_+-]{0,63}$&#39;, ascii_only=None), AfterValidator(func=&lt;function _sampling_label at 0x7f8be0253060&gt;)]]]</span>        =
+            <span class="name">sampling</span><span class="annotation">: dict[typing.Annotated[str, StringConstraints(strip_whitespace=None, to_upper=None, to_lower=None, strict=None, min_length=None, max_length=None, pattern=&#39;^[a-z][a-z0-9_]{0,63}$&#39;, ascii_only=None)], typing.Union[typing.Annotated[bool, Strict(strict=True)], typing.Annotated[int, Strict(strict=True)], typing.Annotated[float, Strict(strict=True), FieldInfo(annotation=NoneType, required=True, metadata=[_PydanticGeneralMetadata(allow_inf_nan=False)])], typing.Annotated[str, StringConstraints(strip_whitespace=None, to_upper=None, to_lower=None, strict=None, min_length=None, max_length=None, pattern=&#39;^[A-Za-z][A-Za-z0-9_+-]{0,63}$&#39;, ascii_only=None), AfterValidator(func=&lt;function _sampling_label at 0x7f37f2574680&gt;)]]]</span>        =
 <span class="default_value">{}</span>
 
         
@@ -6477,7 +6477,7 @@ the host floor check (<code>E_DRIVER_OLD</code>) then enforces. <code><a href="#
                             </div>
                             <div id="StepSpec.resume_dir" class="classattr">
                                 <div class="attr variable">
-            <span class="name">resume_dir</span><span class="annotation">: Optional[Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f8be0272e80&gt;)]]</span>        =
+            <span class="name">resume_dir</span><span class="annotation">: Optional[Annotated[str, AfterValidator(func=&lt;function _relative_path at 0x7f37f32584a0&gt;)]]</span>        =
 <span class="default_value">None</span>
 
         
@@ -6549,7 +6549,7 @@ the host floor check (<code>E_DRIVER_OLD</code>) then enforces. <code><a href="#
 
                             <div id="SourcesRef.lock" class="classattr">
                                 <div class="attr variable">
-            <span class="name">lock</span><span class="annotation">: Annotated[str, AfterValidator(func=&lt;function _sources_lock_path at 0x7f8be02537e0&gt;)]</span>        =
+            <span class="name">lock</span><span class="annotation">: Annotated[str, AfterValidator(func=&lt;function _sources_lock_path at 0x7f37f2574e00&gt;)]</span>        =
 <span class="default_value">PydanticUndefined</span>
 
         
