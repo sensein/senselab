@@ -59,7 +59,9 @@ All models supported by senselab, organized by task.
 | SUPERB SER (IEMOCAP) | huggingface | `superb/wav2vec2-base-superb-er` | — | 95M | Conversational speech emotion (4 classes) |
 | SpeechBrain SER (IEMOCAP) | speechbrain | `speechbrain/emotion-recognition-wav2vec2-IEMOCAP` | — | 95M | Conversational speech emotion (4 classes, very confident) |
 | XLSR SER (RAVDESS) | huggingface | `ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition` | — | 315M | Acted speech emotion (8 classes) |
-| Continuous SER (MSP-Podcast) | huggingface | `audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim` | — | 315M | Dimensional emotion (valence/arousal/dominance) |
+| Continuous SER (MSP-Podcast) | huggingface | `audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim` | — | 315M | Dimensional emotion (valence/arousal/dominance); licence CC BY-NC-SA 4.0 |
+| emotion2vec+ large | funasr | `emotion2vec/emotion2vec_plus_large` | — | 300M | Categorical emotion, 9 classes (FunASR subprocess venv); FunASR Model License v1.1 |
+| emotion2vec+ base | funasr | `emotion2vec/emotion2vec_plus_base` | — | 90M | Categorical emotion, 9 classes, smaller and faster (FunASR subprocess venv); FunASR Model License v1.1 |
 
 ## Audio Scene Classification
 
