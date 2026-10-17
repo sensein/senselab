@@ -1,0 +1,69 @@
+# Conversation-analysis thresholds. Every value is a literature or convention default, not a fit:
+# none has been measured against labelled senselab data yet. Each carries its derivation; the full
+# definitions and references are in specs/20261017-120000-conversation-analysis/spec.md.
+version: 1
+
+thresholds:
+  ipu_gap_s:
+    value: 0.2
+    derivation: >-
+      Silence shorter than this between two words of one speaker does not end an inter-pausal unit.
+      200 ms is the conventional talkspurt/pause boundary for conversational speech (Brady 1968;
+      Heldner & Edlund 2010 use the same order); it sits above stop-closure silences (< ~150 ms).
+  no_gap_no_overlap_s:
+    value: 0.05
+    derivation: >-
+      |FTO| below this is a no-gap-no-overlap transition. 50 ms is roughly two frames of the 20-40 ms
+      timestamp resolution of word aligners, so smaller differences are not resolvable from word times.
+  backchannel_max_duration_s:
+    value: 1.0
+    derivation: >-
+      Backchannels are brief; 1 s bounds the typical one-to-three-word continuer ("mm-hm", "yeah
+      right") with margin (Ward & Tsukahara 2000 describe them as short, non-floor-taking responses).
+  backchannel_max_words:
+    value: 3
+    derivation: Task brief; covers "oh I see" and "yeah yeah yeah" and excludes clause-length responses.
+  backchannel_floor_window_s:
+    value: 1.0
+    derivation: >-
+      A short IPU only counts as a backchannel if another speaker is still speaking at its end or
+      resumes within this window, i.e. it did not take the floor. 1 s is roughly the 90th percentile
+      of between-speaker gaps in conversational corpora (Heldner & Edlund 2010; Stivers et al. 2009).
+  terminal_overlap_window_s:
+    value: 0.5
+    derivation: >-
+      An overlap starting within this many seconds of the end of the current speaker's IPU is
+      terminal / non-competitive (Jefferson 1984; Schegloff 2000): roughly the last one or two
+      syllables at 4-6 syllables/s.
+  interruption_yield_window_s:
+    value: 2.0
+    derivation: >-
+      A competitive overlap is a successful interruption when the interrupted speaker stops within
+      this window and the interrupter outlasts them. Task brief value.
+  silent_pause_min_s:
+    value: 0.2
+    derivation: >-
+      Minimum silence that counts as a silent pause before/after a filler; the same boundary as
+      ipu_gap_s so that "pre-pause" means "ends an IPU".
+  prolongation_z:
+    value: 2.0
+    derivation: >-
+      A word whose duration per character is more than this many standard deviations above the
+      speaker's own mean is a prolongation candidate. Task brief value.
+  prolongation_min_words:
+    value: 10
+    derivation: >-
+      Fewer timed words than this give a speaker distribution too small for a z-score to mean
+      anything (with n words the largest attainable z is sqrt(n-1)); no prolongations are reported.
+  repetition_max_ngram:
+    value: 3
+    derivation: Immediate repeats of 1-3 tokens (Shriberg 1994 repetitions are overwhelmingly 1-2 words).
+  substantive_min_content_words:
+    value: 2
+    derivation: >-
+      A question, directive or statement segment with at least this many content words (tokens outside
+      the stopword and filler lexicons) makes its turn substantive, so a leading "Sure." or "Yeah."
+      cannot be the turn's primary act. Minimal responses ("yes I do", "that's it") have
+      zero content words under the packaged stopwords and "oh I see" one; one content word can be an echo of the
+      partner ("Sure. Nursing."); two is the smallest count that carries a predicate and an argument
+      ("I work as a nurse" -> work, nurse). Convention, not fitted.
