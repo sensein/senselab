@@ -368,6 +368,7 @@ def _sdist(site: Site) -> dict[str, Any]:
     }
 
 
+@needs_userns
 def test_prefetch_passes_the_profile_and_deny_patterns_and_records_wheels(
     site: Site, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -401,6 +402,7 @@ def test_prefetch_passes_the_profile_and_deny_patterns_and_records_wheels(
         assert (step.env.wheels.lock, step.env.wheels.lock_sha256) == ("wheels.lock", "e" * 64)
 
 
+@needs_userns
 def test_a_changed_wheels_sha_is_written_in_place_keeping_comments(site: Site, monkeypatch: pytest.MonkeyPatch) -> None:
     """A recorded sha that changed is replaced in the file text, so comments and layout survive."""
     monkeypatch.setattr(
@@ -420,6 +422,7 @@ def test_a_changed_wheels_sha_is_written_in_place_keeping_comments(site: Site, m
     assert text.startswith("# keep this comment\n") and "f" * 64 in text and "e" * 64 not in text
 
 
+@needs_userns
 def test_prefetch_accepts_hf_weights_present_in_the_cache_and_refuses_missing(
     site: Site, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -769,6 +772,7 @@ def _no_install(monkeypatch: pytest.MonkeyPatch, site: Site) -> list[str]:
     return calls
 
 
+@needs_userns
 def test_batch_builds_wait_without_timeout_and_pass_the_base_dir(site: Site, monkeypatch: pytest.MonkeyPatch) -> None:
     """A CUDA sdist is built by a waited ``build-one`` job given prefetch's ``--base-dir``; then the env installs."""
     calls = _no_install(monkeypatch, site)
@@ -795,6 +799,7 @@ def test_a_failed_build_job_fails_the_prefetch(site: Site, monkeypatch: pytest.M
     assert calls == []
 
 
+@needs_userns
 def test_an_interrupted_build_wait_cancels_the_job(site: Site, monkeypatch: pytest.MonkeyPatch) -> None:
     """Ctrl-C while waiting cancels the build job by name, so no orphan rewrites the manifest later."""
     calls = _no_install(monkeypatch, site)
