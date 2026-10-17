@@ -427,6 +427,8 @@ def link_tiles_to_speakers(
     speaker_activity_per_speaker: Mapping[str, np.ndarray],
     fps: float,
     window_s: Optional[float] = None,
+    n_shifts: int = 200,
+    min_shift_s: float = 10.0,
 ) -> SpeakerLink:
     """Assign tiles to diarized speakers by correlating mouth motion with speech activity.
 
@@ -439,12 +441,21 @@ def link_tiles_to_speakers(
         speaker_activity_per_speaker: ``speaker -> 0/1 series`` on the same grid.
         fps: Sampling rate.
         window_s: Smoothing window; ``linking.window_s`` from the defaults when ``None``.
+        n_shifts: Circular shifts drawn for the null distribution of the best total correlation.
+        min_shift_s: Smallest shift, so the null excludes near-aligned series.
 
     Returns:
         The assignment with its correlations and margins.
     """
     window = float(window_s if window_s is not None else load_defaults()["linking"]["window_s"])
-    return _link_tiles_to_speakers(mouth_series_per_tile, speaker_activity_per_speaker, fps, window_s=window)
+    return _link_tiles_to_speakers(
+        mouth_series_per_tile,
+        speaker_activity_per_speaker,
+        fps,
+        window_s=window,
+        n_shifts=n_shifts,
+        min_shift_s=min_shift_s,
+    )
 
 
 class FacialAnalysis(BaseModel):
