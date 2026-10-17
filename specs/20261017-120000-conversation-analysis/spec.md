@@ -195,9 +195,30 @@ discourse tokens (`lead_skip`: so, well, okay, oh, um ...) skipped for head-word
 9. otherwise statement (0.3).
 
 `confidence` is the rule's strength, ordered by how often such a cue misfires in our judgement; it is
-not a calibrated probability. A turn's `dialogue_act` is the highest-priority act among its segments
-(questions > directive > disagreement > agreement > apology > thanking > greeting/closing > backchannel >
-statement), so "Thanks for coming. What brings you here?" is a wh_question.
+not a calibrated probability.
+
+### A turn's primary act
+
+`primary_act(segments, config)` fixes a turn's `dialogue_act` in three steps:
+
+1. The turn is **substantive** when any segment labelled a question (wh / yes-no / declarative),
+   directive or statement holds at least `substantive_min_content_words` (2) content words — tokens in
+   neither the `stopwords` nor the filler lexicons.
+2. In a substantive turn, `backchannel` and `agreement` are not candidates.
+3. The remaining candidates rank questions > directive > disagreement > agreement > apology >
+   thanking > greeting/closing > backchannel > statement; acts outside the rule taxonomy (custom
+   labellers) rank after, first seen wins.
+
+So "Thanks for coming. What brings you here?" is a wh_question, and "Sure. I work as a nurse." is a
+statement. Before step 2 existed, backchannel and agreement outranked statement unconditionally and a
+downstream pipeline on two-person interviews saw answers opening with "Sure." / "Yeah." counted as
+backchannel or agreement turns.
+A bare "Sure. Yes I do." (0 content words) still reads as a minimal
+response. Thanking, apology and greeting/closing still outrank a statement: they are not minimal
+responses, and "Thanks. I'm fine." is plausibly a thanking turn; that is a choice, not a measurement,
+and is the next thing to revisit if a labelled set shows otherwise. The threshold 2 is a convention:
+"yes I do" and "that's it" have 0 content words, "oh I see" 1, and an echo of the partner
+("Sure. Nursing.") 1; the smallest predicate+argument clause ("I work as a nurse" → work, nurse) has 2.
 
 **Pluggable**: `label_dialogue_acts(segments, labeller=None)` accepts any callable mapping the segment
 sequence (in time order, so context is available) to one `DialogueActLabel(act, confidence, source)`

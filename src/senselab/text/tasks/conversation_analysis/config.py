@@ -175,6 +175,8 @@ class ConversationAnalysisConfig(BaseModel):
         prolongation_z: Per-character duration z-score above which a word is a prolongation.
         prolongation_min_words: Fewest timed non-filler words a speaker needs for prolongation z-scores.
         repetition_max_ngram: Longest token n-gram checked for immediate repetition.
+        substantive_min_content_words: Content words a question, directive or statement segment needs
+            to make its turn substantive, so that backchannel/agreement cannot be the turn's primary act.
         lexicons: Word lists for the rule layers.
     """
 
@@ -191,4 +193,5 @@ class ConversationAnalysisConfig(BaseModel):
     prolongation_z: float = _threshold("prolongation_z")
     prolongation_min_words: int = _threshold("prolongation_min_words")
     repetition_max_ngram: int = _threshold("repetition_max_ngram")
+    substantive_min_content_words: int = _threshold("substantive_min_content_words")
     lexicons: Lexicons = Field(default_factory=load_default_lexicons)

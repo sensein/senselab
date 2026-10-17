@@ -34,11 +34,14 @@ verbatim everywhere: no step drops or rewrites a word.
    competitive (interruption, successful or unsuccessful).
 6. **Dialogue acts** — turns split at sentence-final punctuation and labelled by
    `label_dialogue_acts(segments, labeller=None)`; pass any `DialogueActLabeller` to replace the rules.
+   A turn's act is `primary_act(segments)`: backchannel/agreement never head a turn that also holds a
+   question, directive or statement with `substantive_min_content_words` content words.
 7. **Disfluencies** — filled pauses (with position, surrounding pauses and what follows), repetitions,
    cut-offs and prolongations.
 8. **Markers** — discourse markers, hedges, politeness strategies, pronouns and lexical alignment.
-9. **Entrainment** — `compute_entrainment(turn_features)` on any per-turn numeric series, or
-   `analyze_conversation(..., turn_features=df)` with a `turn_id` column.
+9. **Entrainment** — `compute_entrainment(turn_features)` on any per-turn numeric series,
+   `turn_entrainment(turns, features)` on an analysis' floor-holding turns with a `turn_id`-keyed
+   feature table, or `analyze_conversation(..., turn_features=df)`.
 
 Thresholds live in `data/defaults.yaml` (each with its derivation) and lexicons in
 `data/lexicons.yaml`; override either through `ConversationAnalysisConfig`. Definitions and

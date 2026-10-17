@@ -1,6 +1,6 @@
 """.. include:: ./doc.md"""  # noqa: D415
 
-from senselab.text.tasks.conversation_analysis.api import analyze_conversation
+from senselab.text.tasks.conversation_analysis.api import analyze_conversation, turn_entrainment
 from senselab.text.tasks.conversation_analysis.config import ConversationAnalysisConfig, Lexicons, load_default_lexicons
 from senselab.text.tasks.conversation_analysis.data_structures import (
     IPU,
@@ -20,7 +20,9 @@ from senselab.text.tasks.conversation_analysis.data_structures import (
 from senselab.text.tasks.conversation_analysis.dialogue_acts import (
     DialogueActLabeller,
     RuleBasedLabeller,
+    content_words,
     label_dialogue_acts,
+    primary_act,
     rule_act,
     segment_dialogue_acts,
 )
@@ -57,6 +59,7 @@ __all__ = [
     "build_ipus",
     "build_turns",
     "compute_entrainment",
+    "content_words",
     "detect_disfluencies",
     "floor_transfers",
     "label_dialogue_acts",
@@ -65,7 +68,9 @@ __all__ = [
     "normalize_words",
     "overlaps",
     "politeness_counts",
+    "primary_act",
     "rule_act",
     "segment_dialogue_acts",
+    "turn_entrainment",
     "turn_markers",
 ]

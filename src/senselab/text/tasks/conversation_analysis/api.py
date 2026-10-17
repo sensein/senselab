@@ -1,4 +1,4 @@
-"""Public entry point: :func:`analyze_conversation`."""
+"""Public entry points: :func:`analyze_conversation` and :func:`turn_entrainment`."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from senselab.text.tasks.conversation_analysis.config import ConversationAnalysi
 from senselab.text.tasks.conversation_analysis.data_structures import (
     QUESTION_ACTS,
     ConversationAnalysis,
+    DialogueActSegment,
     EntrainmentResult,
     Turn,
 )
@@ -78,13 +79,13 @@ def analyze_conversation(
     episodes = overlaps(ipus, config)
 
     segments = label_dialogue_acts(segment_dialogue_acts(turns, ipus, norm), labeller or RuleBasedLabeller(config))
-    acts_by_turn: dict[int, List[str]] = {}
+    segments_by_turn: dict[int, List[DialogueActSegment]] = {}
     last_act: dict[int, str] = {}
     for seg in sorted(segments, key=lambda g: (g.turn_id or 0, g.segment_index)):
         if seg.turn_id is not None and seg.act is not None:
-            acts_by_turn.setdefault(seg.turn_id, []).append(seg.act)
+            segments_by_turn.setdefault(seg.turn_id, []).append(seg)
             last_act[seg.turn_id] = seg.act
-    turns = [t.model_copy(update={"dialogue_act": primary_act(acts_by_turn.get(t.id, []))}) for t in turns]
+    turns = [t.model_copy(update={"dialogue_act": primary_act(segments_by_turn.get(t.id, []), config)}) for t in turns]
     transfers = [
         f.model_copy(update={"after_question": last_act.get(f.from_turn_id) in QUESTION_ACTS}) for f in transfers
     ]
@@ -97,7 +98,7 @@ def analyze_conversation(
 
     entrainment: Optional[List[EntrainmentResult]] = None
     if turn_features is not None:
-        entrainment = _turn_entrainment(turns, turn_features, entrainment_surrogates, seed)
+        entrainment = turn_entrainment(turns, turn_features, n_surrogates=entrainment_surrogates, seed=seed)
 
     return ConversationAnalysis(
         speakers=speakers,
@@ -117,15 +118,39 @@ def analyze_conversation(
     )
 
 
-def _turn_entrainment(
-    turns: Sequence[Turn], turn_features: pd.DataFrame, n_surrogates: int, seed: int
+def turn_entrainment(
+    turns: Sequence[Turn],
+    features: pd.DataFrame,
+    *,
+    n_surrogates: int = 1000,
+    seed: int = 0,
 ) -> List[EntrainmentResult]:
-    if "turn_id" not in turn_features.columns:
-        raise ValueError("turn_features needs a 'turn_id' column")
+    """Entrainment of per-turn features over the floor-holding turns of a conversation.
+
+    Embedded turns are dropped; each remaining turn's speaker and start come from ``turns`` and its
+    numeric features from the ``features`` row with the same ``turn_id``. The series then go through
+    :func:`compute_entrainment`.
+
+    Args:
+        turns: Turns, e.g. :attr:`ConversationAnalysis.turns`.
+        features: Per-turn numeric features with a ``turn_id`` column matching :attr:`Turn.id`; any
+            ``speaker``/``start`` columns are ignored in favour of the turns'. Turns without a row get
+            missing values.
+        n_surrogates: Surrogate shuffles for the baseline.
+        seed: Seed for the surrogates.
+
+    Returns:
+        One result per numeric feature column.
+
+    Raises:
+        ValueError: ``features`` has no ``turn_id`` column.
+    """
+    if "turn_id" not in features.columns:
+        raise ValueError("features needs a 'turn_id' column")
     floor = pd.DataFrame(
         [{"turn_id": t.id, "speaker": t.speaker, "start": t.start} for t in turns if not t.embedded],
         columns=["turn_id", "speaker", "start"],
     )
-    features = [c for c in turn_features.select_dtypes("number").columns if c not in ("turn_id", "speaker", "start")]
-    merged = floor.merge(turn_features[["turn_id", *features]], on="turn_id", how="left")
-    return compute_entrainment(merged, features, n_surrogates=n_surrogates, seed=seed)
+    columns = [c for c in features.select_dtypes("number").columns if c not in ("turn_id", "speaker", "start")]
+    merged = floor.merge(features[["turn_id", *columns]], on="turn_id", how="left")
+    return compute_entrainment(merged, columns, n_surrogates=n_surrogates, seed=seed)

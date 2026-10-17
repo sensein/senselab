@@ -5,11 +5,14 @@ from typing import Any, Dict, List, Sequence
 import pytest
 
 from senselab.text.tasks.conversation_analysis import (
+    ConversationAnalysisConfig,
     DialogueActLabel,
     DialogueActSegment,
     analyze_conversation,
+    content_words,
     load_default_lexicons,
     politeness_counts,
+    primary_act,
     rule_act,
 )
 
@@ -85,6 +88,59 @@ def test_turns_split_into_segments_and_get_primary_act() -> None:
     assert result.summary()["B"]["act_wh_question"] == 0
     frame = result.to_dataframes()["dialogue_acts"]
     assert list(frame["act"]) == ["thanking", "wh_question", "statement"]
+
+
+def segments(*labelled: tuple) -> List[DialogueActSegment]:
+    """Labelled segments of one turn from ``(text, act)`` pairs."""
+    return [
+        DialogueActSegment(id=i, speaker="B", start=float(i), end=i + 1.0, text=text, word_ids=[], turn_id=0, act=act)
+        for i, (text, act) in enumerate(labelled)
+    ]
+
+
+def test_content_words_skip_stopwords_and_fillers() -> None:
+    """Stopwords and fillers are not content words."""
+    lex = load_default_lexicons()
+    assert content_words("Yes I do.", lex) == 0
+    assert content_words("Um, I work as a nurse.", lex) == 2
+
+
+@pytest.mark.parametrize(
+    "labelled,expected",
+    [
+        ((("Sure.", "backchannel"), ("I work as a nurse.", "statement")), "statement"),
+        ((("Yeah.", "agreement"), ("I work as a nurse.", "statement")), "statement"),
+        ((("Mm-hm.", "backchannel"), ("Where do you work?", "wh_question")), "wh_question"),
+        ((("Right.", "agreement"), ("Tell me about your job.", "directive")), "directive"),
+        ((("Sure.", "backchannel"), ("Yes I do.", "statement")), "backchannel"),
+        ((("Exactly.", "agreement"), ("I see.", "statement")), "agreement"),
+        ((("Thanks.", "thanking"), ("I work as a nurse.", "statement")), "thanking"),
+        ((("No.", "disagreement"), ("I work as a nurse.", "statement")), "disagreement"),
+        ((("Sure.", "backchannel"),), "backchannel"),
+        ((("Hmm.", "backchannel"), ("Okay.", "agreement")), "agreement"),
+        ((), None),
+    ],
+)
+def test_primary_act_precedence(labelled: tuple, expected: str) -> None:
+    """Backchannel/agreement never head a turn that also holds a substantive question/directive/statement."""
+    assert primary_act(segments(*labelled)) == expected
+
+
+def test_primary_act_content_threshold_is_configurable() -> None:
+    """A one-content-word statement is substantive only when the threshold is lowered to 1."""
+    turn = segments(("Sure.", "backchannel"), ("Nursing.", "statement"))
+    assert primary_act(turn) == "backchannel"
+    assert primary_act(turn, ConversationAnalysisConfig(substantive_min_content_words=1)) == "statement"
+
+
+def test_backchannel_led_answer_is_a_statement_turn() -> None:
+    """End to end: "Sure. I work as a nurse at the hospital." answering a question is a statement turn."""
+    words = utterance("A", 0.0, 2.0, "What do you do for work?") + utterance(
+        "B", 2.5, 5.0, "Sure. I work as a nurse at the hospital."
+    )
+    result = analyze_conversation(words)
+    assert [s.act for s in result.dialogue_acts if s.turn_id == 1][0] in ("backchannel", "agreement")
+    assert [t.dialogue_act for t in result.turns] == ["wh_question", "statement"]
 
 
 def test_custom_labeller_is_used() -> None:

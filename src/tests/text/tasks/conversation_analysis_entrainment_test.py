@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from senselab.text.tasks.conversation_analysis import analyze_conversation, compute_entrainment
+from senselab.text.tasks.conversation_analysis import analyze_conversation, compute_entrainment, turn_entrainment
 
 
 def alternating(a_values: list, b_values: list) -> pd.DataFrame:
@@ -90,3 +90,21 @@ def test_entrainment_through_analyze_conversation() -> None:
     assert "entrainment" in with_features.to_dataframes()
     with pytest.raises(ValueError, match="turn_id"):
         analyze_conversation(words, turn_features=features.drop(columns="turn_id"))
+
+
+def test_public_turn_entrainment_matches_analyze_conversation() -> None:
+    """``turn_entrainment`` on an analysis' turns equals the entrainment ``analyze_conversation`` reports."""
+    words = []
+    for i in range(6):
+        speaker = "A" if i % 2 == 0 else "B"
+        for k, tok in enumerate(["some", "words", "here", "now"]):
+            words.append({"speaker": speaker, "start": 2.0 * i + 0.3 * k, "end": 2.0 * i + 0.3 * (k + 1), "text": tok})
+    result = analyze_conversation(words)
+    features = pd.DataFrame({"turn_id": [t.id for t in result.turns], "f0": [100, 100, 120, 120, 140, 140]})
+    direct = turn_entrainment(result.turns, features, n_surrogates=50, seed=3)
+    via_api = analyze_conversation(words, turn_features=features, entrainment_surrogates=50, seed=3).entrainment
+    assert via_api is not None
+    assert [r.model_dump() for r in direct] == [r.model_dump() for r in via_api]
+    assert by_target(direct, "B").synchrony_r == pytest.approx(1.0)
+    with pytest.raises(ValueError, match="turn_id"):
+        turn_entrainment(result.turns, features.drop(columns="turn_id"))
