@@ -21,6 +21,11 @@ class TileBox(BaseModel):
         width: Width in source pixels.
         height: Height in source pixels.
         masks: Tile-relative rectangles blanked before analysis (the name label).
+        derivation: How the tile was found: ``"gutter"`` (bounded by dark canvas or an image seam),
+            ``"aspect_split"`` (an equal split of a merged region, chosen by tile aspect ratio and
+            face positions) or ``"whole_frame"`` (no layout was estimated).
+        confidence: In ``[0, 1]``. For ``gutter`` tiles the fraction of sampled frames that show the
+            tile's boundary; for ``aspect_split`` tiles the face-occupancy support of the split.
     """
 
     tile_id: str
@@ -29,6 +34,8 @@ class TileBox(BaseModel):
     width: int
     height: int
     masks: List[Rect] = Field(default_factory=list)
+    derivation: Literal["gutter", "aspect_split", "whole_frame"] = "gutter"
+    confidence: float = 1.0
 
     @property
     def box(self) -> Rect:

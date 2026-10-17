@@ -29,6 +29,7 @@ from senselab.video.tasks.facial_analysis.tiles import (
     equalize_tiles,
     estimate_frame_layout,
     layout_from_estimates,
+    layout_from_frames,
 )
 
 av = pytest.importorskip("av")
@@ -113,6 +114,91 @@ class TestLayoutTimeline:
         assert len(changes) == 1 and changes[0].end_s == 30.0 and changes[0].n_samples == 2
 
 
+def _zoom_frame(rects: List[Rect], means: Tuple[int, ...], bars: Tuple[int, int], seed: int) -> np.ndarray:
+    """A 1920x1080 gallery frame: black bars outside rows ``bars``, canvas, noisy tiles, codec-like blur."""
+    rng = np.random.default_rng(seed)
+    frame = np.full((1080, 1920), CANVAS, np.uint8)
+    frame[: bars[0]] = 0
+    frame[bars[1] :] = 0
+    for (x, y, w, h), mean in zip(rects, means):
+        frame[y : y + h, x : x + w] = np.clip(rng.normal(mean, 30, (h, w)), 0, 255).astype(np.uint8)
+    blurred = frame.astype(np.float32)
+    for axis in (0, 1):
+        blurred = 0.25 * np.roll(blurred, 1, axis) + 0.5 * blurred + 0.25 * np.roll(blurred, -1, axis)
+    return blurred.round().astype(np.uint8)
+
+
+def _no_faces(frames: object, rect: object) -> List[List[Rect]]:
+    return [[] for _ in frames]  # type: ignore[attr-defined]
+
+
+def _layout(rects: List[Rect], means: Tuple[int, ...], bars: Tuple[int, int], faces: object = _no_faces) -> list:
+    """Tiles found by the analysis-width XY-cut plus the full-resolution split, as (x, y, w, h, derivation)."""
+    full = [_zoom_frame(rects, means, bars, seed) for seed in range(12)]
+    analysis = [(float(i), f.reshape(540, 2, 960, 2).mean(axis=(1, 3)).astype(np.uint8)) for i, f in enumerate(full)]
+    layout = layout_from_frames(analysis, full, 1920, 1080, load_defaults()["tiles"], face_detector=faces)  # type: ignore[arg-type]
+    return [(t.x, t.y, t.width, t.height, t.derivation, t.confidence) for t in layout.tiles]
+
+
+def _matches(found: list, truth: List[Rect], derivation: str, tol: int = 12) -> bool:
+    """Each found tile lies inside its true tile, inset by at most ``tol`` px per side."""
+    return len(found) == len(truth) and all(
+        f[4] == derivation
+        and f[5] > 0.5
+        and t[0] <= f[0] <= t[0] + tol
+        and t[1] <= f[1] <= t[1] + tol
+        and t[0] + t[2] - tol <= f[0] + f[2] <= t[0] + t[2]
+        and t[1] + t[3] - tol <= f[1] + f[3] <= t[1] + t[3]
+        for f, t in zip(found, truth)
+    )
+
+
+class TestMergedTiles:
+    """Gutters too narrow for the analysis width, recovered at full resolution or by aspect and faces."""
+
+    @pytest.mark.parametrize("gutter", [0, 1, 2, 4])
+    @pytest.mark.parametrize("means", [(90, 150), (120, 120)])
+    def test_letterboxed_side_by_side_pair(self, gutter: int, means: Tuple[int, int]) -> None:
+        """Two 953x526 tiles between letterbox bars, as in the 1080p Zoom pilot."""
+        truth = [(7, 277, 953, 526), (960 + gutter, 277, 953, 526)]
+        found = _layout(truth, means, (277, 803))
+        if gutter == 0 and means[0] == means[1]:
+            assert len(found) == 1
+        else:
+            assert _matches(found, truth, "gutter"), found
+
+    def test_identical_backgrounds_without_gutter_split_on_faces(self) -> None:
+        """No seam at all: one face in each half of a 2 x 16:9 region splits it in two."""
+        truth = [(7, 277, 953, 526), (960, 277, 953, 526)]
+
+        def faces(frames: list, rect: Rect) -> List[List[Rect]]:
+            return [[(380, 420, 150, 150), (1360, 430, 140, 140)] for _ in frames]
+
+        assert _matches(_layout(truth, (120, 120), (277, 803), faces), truth, "aspect_split")
+
+    @pytest.mark.parametrize("gutter", [0, 1, 2])
+    def test_two_by_two_grid(self, gutter: int) -> None:
+        """Four 958x538 tiles filling the frame."""
+        w, h = 958, 538
+        truth = [(0, 0, w, h), (w + gutter, 0, w, h), (0, h + gutter, w, h), (w + gutter, h + gutter, w, h)]
+        assert _matches(_layout(truth, (80, 140, 110, 170), (0, 1080)), truth, "gutter")
+
+    @pytest.mark.parametrize("gutter", [0, 1, 2])
+    def test_one_by_three_row(self, gutter: int) -> None:
+        """Three 638x360 tiles in a letterboxed row."""
+        truth = [(i * (638 + gutter), 360, 638, 360) for i in range(3)]
+        assert _matches(_layout(truth, (80, 140, 110), (360, 720)), truth, "gutter")
+
+    def test_letterboxed_speaker_view_is_not_split(self) -> None:
+        """One 16:9 speaker with a centred face stays one tile."""
+
+        def faces(frames: list, rect: Rect) -> List[List[Rect]]:
+            return [[(880, 400, 160, 160)] for _ in frames]
+
+        found = _layout([(0, 140, 1440, 810)], (120,), (140, 950), faces)
+        assert len(found) == 1 and found[0][4] == "gutter"
+
+
 def _write_video(path: Path, frames: List[np.ndarray], fps: int) -> None:
     """Encode grayscale or RGB frames with PyAV."""
     with av.open(str(path), mode="w") as container:
@@ -157,6 +243,16 @@ class TestGalleryVideo:
         changes = layout.layout_changes()
         assert changes and all(2.0 <= c.start_s <= 3.0 for c in changes)
         assert 0.6 <= layout.reference_fraction < 1.0
+
+    def test_pilot_format_pair_is_split_in_an_encoded_file(self, tmp_path: Path) -> None:
+        """1920x1080 letterboxed pair with a 1 px gutter, through the codec and the file path."""
+        truth = [(7, 277, 953, 526), (961, 277, 953, 526)]
+        path = tmp_path / "pilot.mp4"
+        _write_video(path, [_zoom_frame(truth, (90, 150), (277, 803), seed) for seed in range(16)], 16)
+        layout = detect_gallery_tiles(path, sample_frames=8)
+        found = [(t.x, t.y, t.width, t.height, t.derivation, t.confidence) for t in layout.tiles]
+        assert _matches(found, truth, "gutter", tol=14), found
+        assert layout.reference_fraction == 1.0
 
     def test_probe_and_resampled_decode(self, gallery_video: Path) -> None:
         """A 15 fps stream sampled at 5 fps yields every third frame, evenly spaced."""

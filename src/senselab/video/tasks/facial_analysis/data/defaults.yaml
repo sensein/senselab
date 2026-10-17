@@ -25,6 +25,21 @@ tiles:
   label_mask_height_fraction: 0.08
   border_inset_fraction: 0.012
   match_iou: 0.90
+  # Splitting tiles merged across a gutter too narrow for analysis_width; derivations in
+  # specs/20261017-104500-video-facial-analysis/README.md ("Merged tiles").
+  split:
+    sample_frames: 12          # frames decoded at seam_width for seams and faces
+    seam_width: 1920           # seam search resolution (source width when smaller)
+    aspects: [1.7778, 1.3333]  # tile aspect ratios tried: 16:9 and 4:3
+    aspect_tolerance: 0.05     # largest relative cell-aspect error of a candidate grid
+    max_grid: 4                # largest columns or rows tried
+    seam_search_fraction: 0.04 # seam search half-window, fraction of the region side
+    seam_min_z: 8.0            # median-over-frames seam score that counts as a boundary
+    seam_dominance: 3.0        # and at least this multiple of the region's 99th-percentile score
+    seam_max_gutter_px: 8      # widest dark gutter trimmed beside a seam
+    face_detect_width: 960     # Haar cascade input width
+    face_min_fraction: 0.5     # each cell holds a face in at least this fraction of frames
+    face_max_straddle: 0.2     # largest fraction of faces crossing a cell boundary
 
 geometry:
   derivation: |
