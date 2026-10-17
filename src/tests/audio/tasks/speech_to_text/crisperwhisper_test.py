@@ -18,7 +18,7 @@ import torch
 import senselab.audio.tasks.speech_to_text.crisperwhisper as cw
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
-from senselab.utils.data_structures import HFModel
+from senselab.utils.data_structures import DeviceType, HFModel
 from senselab.utils.subprocess_venv import provisioned_venv_dirs
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -274,3 +274,63 @@ def test_crisperwhisper_transcribes_when_venv_present() -> None:
     chunks = line.chunks or []
     assert len(chunks) >= 1
     assert chunks[0].start is not None and chunks[0].end is not None
+
+
+def test_each_audio_is_its_own_request_with_a_duration_scaled_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One worker request per file, so a long list cannot exceed one request's timeout."""
+    _stub_out_staging(monkeypatch)
+    calls: list[dict] = []
+
+    def _serve(*a: object, **k: object) -> dict:
+        calls.append(k)
+        return {"results": [{"text": "a", "words": []}]}
+
+    monkeypatch.setattr(cw, "serve_in_venv", _serve)
+    short = Audio(waveform=torch.zeros(1, 16000, dtype=torch.float32), sampling_rate=16000)
+    long = Audio(waveform=torch.zeros(1, 16000 * 1000, dtype=torch.float32), sampling_rate=16000)
+    out = cw.CrisperWhisperASR.transcribe_with_crisperwhisper([short, long], model=None, device=DeviceType.CPU)
+
+    assert len(out) == 2 and len(calls) == 2
+    assert all(len(c["request"]["audio_paths"]) == 1 for c in calls)
+    assert calls[0]["request_timeout_s"] == cw._REQUEST_TIMEOUT_S
+    assert calls[1]["request_timeout_s"] == pytest.approx(cw.REQUEST_SECONDS_PER_AUDIO_SECOND * 1000)
+    assert calls[0]["init"]["word_confidence"] is True
+
+
+@pytest.mark.parametrize(("device", "compute_type"), [("cpu", "float32"), ("mps", "float16"), ("cuda", "float16")])
+def test_compute_type_per_device(device: str, compute_type: str) -> None:
+    """MPS runs half precision like CUDA; CPU stays float32."""
+    assert cw.COMPUTE_TYPES[device] == compute_type
+
+
+def _say_fillers(tmp_path: Path) -> Path:
+    """Synthesize a sentence with fillers with macOS ``say``, as 16 kHz mono WAV."""
+    import shutil
+    import subprocess
+
+    if shutil.which("say") is None or shutil.which("afconvert") is None:
+        pytest.skip("macOS say/afconvert not available")
+    aiff, wav = tmp_path / "fillers.aiff", tmp_path / "fillers.wav"
+    text = "So, um, I think that, uh, we should, uh, go to the store. Um, yeah, I mean, I I don't know."
+    subprocess.run(["say", "-o", str(aiff), text], check=True)
+    subprocess.run(["afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", str(aiff), str(wav)], check=True)
+    return wav
+
+
+@pytest.mark.skipif(not CRISPER_VENVS, reason="crisperwhisper venv not provisioned for this host's device key")
+def test_fillers_survive_with_timestamps_and_confidences(tmp_path: Path) -> None:
+    """CrisperWhisper's bracketed fillers reach the ScriptLine text and words, timed and scored."""
+    audio = Audio(filepath=str(_say_fillers(tmp_path)))
+    [line] = cw.CrisperWhisperASR.transcribe_with_crisperwhisper(
+        [audio], model=HFModel(path_or_uri="nyralabs/CrisperWhisper2.0_turbo")
+    )
+    words = line.chunks or []
+    fillers = [w for w in words if (w.text or "").strip(" ,.").upper() in ("[UM]", "[UH]", "UM", "UH")]
+    assert len(fillers) >= 3, [w.text for w in words]
+    assert "[UM]" in (line.text or "") or "um" in (line.text or "").lower()
+    for w in fillers:
+        assert w.start is not None and w.end is not None and w.end >= w.start
+    if cw._CRISPER_BACKEND == "transformers":
+        assert all(w.score is not None and 0.0 <= w.score <= 1.0 for w in words)
+        assert line.score is not None
+    assert [w.text for w in words].count("I") >= 3, "the repetition 'I I' is kept"
