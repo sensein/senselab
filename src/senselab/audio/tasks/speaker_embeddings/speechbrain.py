@@ -96,7 +96,7 @@ class SpeechBrainEmbeddings:
                 CPU, CUDA or MPS; the fastest available when omitted.
 
         Returns:
-            List[torch.Tensor]: A list of tensors containing the speaker embeddings for each audio file.
+            List[torch.Tensor]: CPU tensors, one speaker embedding per audio, whatever the compute device.
 
         Todo:
             - Optimizing the computation by working in batches
@@ -145,6 +145,6 @@ class SpeechBrainEmbeddings:
         embeddings_batch = classifier.encode_batch(waveforms, wav_lens)
 
         # Split the batch embeddings into a list of individual embeddings
-        embeddings = [embedding.squeeze() for embedding in embeddings_batch]
+        embeddings = [embedding.squeeze().detach().cpu() for embedding in embeddings_batch]
 
         return embeddings

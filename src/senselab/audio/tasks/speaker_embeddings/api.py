@@ -64,7 +64,7 @@ def extract_speaker_embeddings_from_audios(
             If ``None``, a default is chosen by the backend.
 
     Returns:
-        list[torch.Tensor]: One 1-D tensor per input audio (e.g., shape ``[192]`` for ECAPA).
+        list[torch.Tensor]: One 1-D CPU tensor per input audio (e.g., shape ``[192]`` for ECAPA), on every device.
 
     Raises:
         NotImplementedError:
