@@ -47,7 +47,13 @@ frames cross the process boundary and memory stays bounded for any length.
 their full extent (XY-cut), which handles one tile, side-by-side pairs, grids, and uneven
 arrangements such as two over one. The most frequent layout is the reference; its extents are
 re-estimated on the per-pixel maximum over the frames that share it and equalised across tiles, then
-inset past the active-speaker border, with a mask over the bottom-left name label. Every sampled
+inset past the active-speaker border, with a mask over the bottom-left name label. Gutters narrower
+than about 3 px at the analysis width merge neighbouring tiles, so each tile whose aspect ratio is
+that of an equal grid of 16:9 or 4:3 cells (`tiles.split`) is checked on frames decoded at up to
+1920 px: a grid is accepted when every internal boundary is a fixed image seam or dark line
+(`derivation="gutter"`), or, failing that, when faces (OpenCV Haar cascade) occupy every cell and
+rarely straddle a boundary (`derivation="aspect_split"`). Each `TileBox` carries its `derivation`
+and a `confidence`. Every sampled
 frame is classified as `reference`, `subset` (a tile went dark, e.g. camera off) or `different`
 (screen share, speaker view); `layout.layout_changes()` lists the `different` runs.
 

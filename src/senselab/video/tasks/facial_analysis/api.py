@@ -79,8 +79,11 @@ def detect_gallery_tiles(
     are dark over almost their whole extent (the canvas gutters), which handles 1, 2 or N tiles in
     any grid. The most frequent per-frame layout is the reference; its tile extents are refined on
     the per-pixel maximum over the frames that share it, inset past the active-speaker border, and
-    given a mask over the bottom-left name label. Every sampled frame is classified against the
-    reference, so screen share, speaker view and camera-off tiles show up in the timeline.
+    given a mask over the bottom-left name label. A tile whose aspect ratio is that of an equal grid
+    of 16:9 or 4:3 cells is split at a seam found at full resolution (``derivation="gutter"``), or,
+    without a seam, when faces occupy every cell (``derivation="aspect_split"``). Every sampled frame
+    is classified against the reference, so screen share, speaker view and camera-off tiles show up
+    in the timeline.
 
     Args:
         video: The recording.

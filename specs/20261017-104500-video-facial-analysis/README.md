@@ -119,6 +119,47 @@ Decoding is never the bottleneck, including the 4K 30 fps file.
 - **D-11 Defaults 8 fps geometry and 2 fps affect** from the throughput table, with the 0.5-4 Hz
   gesture band clipped to 0.45 x fps so 8 fps stays valid.
 
+## Merged tiles
+
+Pilot (privacy-preserving, numbers only): a 1920x1080, 16 fps Zoom gallery recording with two
+participants side by side, letterboxed (`near_black_fraction` median 0.432 per frame). The VLM saw
+2 tiles in 7 of 8 frames and OpenCV counted 2 faces per frame (median), but `detect_gallery_tiles`
+returned one tile, x=7 y=277 w=1906 h=526, `reference` over all 48 samples: the two ~953x526 tiles
+with the gutter between them lost at the 960 px analysis width. 28 of the 30 corpus recordings
+share this format.
+
+`tiles.split` (in `data/defaults.yaml`) adds a second pass over each reference tile:
+
+- **Candidate grids.** Equal `columns x rows` grids (up to `max_grid` = 4) whose cells are within
+  `aspect_tolerance` = 0.05 of 16:9 or 4:3. The pilot region (1906/526 = 3.62) is 2x1 with cells
+  1.81, 1.9 % off 16:9; a single letterboxed 16:9 speaker only admits 2x2, 3x3, 4x4. Zoom crops
+  participant video to fill its tile, so 16:9 and 4:3 are the shapes that occur.
+- **Seams.** 12 frames (`sample_frames`) are decoded at up to 1920 px (`seam_width`), the
+  resolution at which a 1 px gutter in 1080p still exists. Each boundary is scored by the larger of
+  two robust z-scores over the region's boundaries: the mean absolute row-wise difference across it,
+  and the column-mean step over 1 and 3 columns. The median over frames suppresses moving content.
+  `seam_min_z` = 8 is a floor; the binding threshold is `seam_dominance` = 3 times the 99th
+  percentile outside the search window. Measured on an mpeg4-encoded 1920x1080 synthetic pair
+  (noise tiles, 1 px gutter): macroblock edges at multiples of 16 px scored 13-16 (99th percentile
+  13.6), the true boundary 193. Without the dominance term a 4x2 grid on block edges was accepted.
+  The search half-window is 4 % of the region side (`seam_search_fraction`); dark columns up to
+  8 px beside the seam (`seam_max_gutter_px`) belong to neither tile. A grid needs a seam at every
+  internal boundary in every band of cells; the largest such grid wins.
+- **Faces.** With no seam grid (identical backgrounds, no gutter), the Haar cascade runs on the 12
+  frames (at most 960 px wide); a grid is accepted when every cell holds a face in at least half the
+  frames (`face_min_fraction`) and at most 20 % of faces straddle a boundary (`face_max_straddle`).
+  Both are unfitted priors. Two people sharing one 16:9 camera do not split: that region only admits
+  2x2 and up, and its bottom cells hold no face.
+- **Confidence.** `gutter` tiles: fraction of seam frames whose own score passes at the boundary
+  (unsplit tiles: fraction of sampled frames whose estimate contains the tile). `aspect_split`
+  tiles: minimum cell occupancy times one minus the straddle fraction.
+
+Synthetic checks (all in `facial_analysis_test.py::TestMergedTiles` and the encoded-file test):
+letterboxed 953x526 pairs with gutters 0, 1, 2, 4 px, distinct and identical mean colours, 3x3
+binomial blur; 2x2 and 1x3 with 0-2 px gutters; the encoded pilot format. The only unsplit pair is
+0 px with identical backgrounds and no faces, which carries no information; given one face per
+half it splits as `aspect_split`.
+
 ## Licences
 
 | Component | Licence |
@@ -134,7 +175,7 @@ implemented in this change; it would take face boxes from the geometry pass.
 
 ## Tests
 
-- `src/tests/video/tasks/facial_analysis_test.py` (29 tests, synthetic): 1, 2, 2x2 and two-over-one
+- `src/tests/video/tasks/facial_analysis_test.py` (synthetic): 1, 2, 2x2 and two-over-one
   layouts, slivers, equalisation, timeline kinds, an encoded two-tile video with a screen-share
   window, resampled and chunked decoding, label masking, nods/shakes/noise/drift/gaps/8 fps,
   blinks over a high baseline, gaze proxy, worker pose and iris helpers, AV linking (assignment,
@@ -144,6 +185,10 @@ implemented in this change; it would take face boxes from the geometry pass.
   or the clip cannot be downloaded.
 
 ## Known limitations
+
+- Merged-tile splitting is checked on synthetic noise tiles only; the pilot recording has not been
+  re-run. A static vertical edge in a single speaker's background at exactly the 2x2 centre lines
+  could read as a seam.
 
 - Gaze proxy uncalibrated; nod, shake and blink thresholds are unfitted priors.
 - One face per tile; a camera-off tile reads as no face, and its layout run as `subset`.
