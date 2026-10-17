@@ -1,0 +1,66 @@
+# Conversation-analysis lexicons (English). Tokens are compared after normalisation: lower case,
+# curly apostrophes folded, edge punctuation stripped, and for fillers surrounding brackets dropped
+# ([UH] -> uh). A multi-word entry is matched as a contiguous run of tokens.
+# derivation: sources per list are in specs/20261017-120000-conversation-analysis/spec.md.
+version: 1
+
+# A short IPU made only of these entries is lexically backchannel-like.
+backchannel: [mm-hm, mm-hmm, mhm, mhmm, mmhm, uh-huh, uh huh, um-hum, uh-hum, yeah, yep, yup, yes, yea, right, okay, ok, alright, all right, sure, hm, hmm, mm, mmm, wow, oh, ah, i see, exactly, 'true', cool, nice, great, good, really, absolutely, definitely, totally, of course, got it, gotcha, indeed]
+
+# Filled pauses. uh_family / um_family feed the uh:um ratio (Clark & Fox Tree 2002); other_family
+# counts as a filled pause but in neither side of the ratio.
+fillers:
+  uh_family: [uh, uhh, uhhh, er, err]
+  um_family: [um, umm, ummm, uhm, uhmm, erm]
+  other_family: [ah, ahh, eh, hm, hmm, mm, mmm]
+
+# Immediate repeats made only of these tokens are not counted as repetition disfluencies.
+repetition_exempt: [yeah, yes, no, okay, ok, right, very, bye, ha, haha, mm, hm, really, so, much]
+
+discourse_markers: [so, well, you know, i mean, like, actually, anyway, anyways, basically, right, okay, ok, now, then, because, but, and, also]
+
+hedges: [maybe, perhaps, i think, sort of, kind of, i guess, probably, possibly, i suppose, somewhat, i believe, i feel like, kinda, sorta, apparently, presumably]
+
+# Dialogue-act rule lexicons.
+wh_words: [what, who, whom, whose, when, where, why, how, which, what's, who's, where's, how's, when's, why's, whatcha]
+auxiliaries: [do, does, did, is, are, was, were, can, could, will, would, should, shall, have, has, had, may, might, must, am, isn't, aren't, wasn't, weren't, don't, doesn't, didn't, won't, wouldn't, couldn't, can't, shouldn't, haven't, hasn't, hadn't]
+# Leading tokens skipped before the head-word rules (wh-, aux-, imperative-start) are applied.
+lead_skip: [so, well, and, but, okay, ok, oh, now, alright, then, also, um, uh, er, erm, ah, hm, hmm, like, right, yeah]
+directive_phrases: [could you, can you, would you, will you, would you mind, i'd like you to, i would like you to, i want you to, let's, let us, go ahead, make sure, feel free to, you should, you need to, you have to]
+imperative_verbs: [tell, describe, explain, show, look, go, give, take, try, imagine, think, say, talk, wait, listen, keep, start, stop, read, repeat, consider, remember, walk, pick, put, come, check, open, close, click, share, mute, unmute, turn, move, write, sit, hold, continue, speak, focus, note]
+thanking: [thank, thanks, thank you, thankyou, appreciate it, i appreciate, much appreciated, cheers]
+apology: [sorry, apologize, apologise, apologies, excuse me, my bad, pardon, forgive me]
+greeting_start: [hi, hello, hey, good morning, good afternoon, good evening, welcome, greetings]
+closing: [bye, goodbye, bye-bye, see you, take care, nice to meet you, nice talking, talk soon, have a good, have a great, good night]
+agreement_phrases: [i agree, that's right, that's true, that is right, that is true, exactly, absolutely, definitely, of course, sounds good, good point, fair enough, agreed, correct, totally]
+agreement_tokens: [yes, yeah, yep, yup, sure, right, 'true', exactly, absolutely, definitely, correct, okay, ok, alright, of course, agreed, totally]
+disagreement_phrases: [no, nope, nah, not really, i disagree, i don't think so, i don't agree, that's not, that is not, not at all, not exactly, actually no, i'm not sure about that]
+
+# Politeness strategies after Danescu-Niculescu-Mizil et al. (2013), lexical/regex subset.
+politeness:
+  gratitude: [thank, thanks, thank you, appreciate, appreciated, grateful]
+  apologizing: [sorry, apologize, apologise, apologies, excuse me, my bad, forgive me, oops, woops]
+  please: [please]
+  indirect_btw: [by the way, btw]
+  direct_question_start: [what, why, who, how]
+  direct_start: [so, then, and, but, or]
+  counterfactual_modal: [could you, would you]
+  indicative_modal: [can you, will you]
+  first_person_start: [i, my, mine, myself]
+  first_person: [i, me, my, mine, myself]
+  first_person_plural: [we, us, our, ours, ourselves]
+  second_person: [you, your, yours, yourself, yourselves]
+  second_person_start: [you, your, yours, yourself]
+  factuality: [in fact, actually, really, the point is, the reality is, the truth is, honestly]
+  deference_start: [great, good, nice, interesting, cool, excellent, awesome, wonderful]
+  greeting: [hi, hello, hey]
+  positive_lexicon: [good, great, nice, happy, glad, love, excellent, wonderful, awesome, amazing, fantastic, enjoy, enjoyed, fun, helpful, interesting, perfect, pleasure]
+  negative_lexicon: [bad, sad, angry, upset, hate, worry, worried, problem, difficult, hard, terrible, awful, annoying, frustrating, frustrated, wrong, unfortunately, sick, pain]
+
+pronouns:
+  i: [i, me, my, mine, myself, i'm, i've, i'd, i'll, im]
+  we: [we, us, our, ours, ourselves, we're, we've, we'd, we'll, let's]
+  you: [you, your, yours, yourself, yourselves, you're, you've, you'd, you'll, ya]
+
+# Function words excluded from lexical alignment.
+stopwords: [a, an, the, and, or, but, so, if, then, of, to, in, on, at, by, for, with, about, from, as, into, like, through, over, after, before, up, down, out, off, i, me, my, mine, we, us, our, you, your, he, him, his, she, her, it, its, they, them, their, this, that, these, those, there, here, is, am, are, was, were, be, been, being, do, does, did, have, has, had, will, would, can, could, should, shall, may, might, must, not, no, yes, yeah, okay, ok, just, very, really, also, too, what, who, when, where, why, how, which, i'm, it's, that's, don't, didn't, there's, we're, you're, they're, i've, i'd, i'll, can't, won't, oh, well, right, now, um, uh, mm, hm, s, t, gonna, wanna, kind, sort]

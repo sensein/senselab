@@ -180,6 +180,9 @@ data/
 # ...and the subprocess-venv locks ensure_venv installs from.
 !src/senselab/utils/data/
 !src/senselab/utils/data/**
+# ...and the text tasks' packaged lexicons and thresholds (pii_detection, conversation_analysis).
+!src/senselab/text/tasks/*/data/
+!src/senselab/text/tasks/*/data/**
 # ...and the same for checked-in *test* data. `level_verdicts_baseline.json` is a measured artifact —
 # the level-probe verdicts the guards in `level_probe_test.py` assert properties of — so a clone
 # without it cannot run those six tests at all. They passed only on the machine that generated the
