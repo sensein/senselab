@@ -80,6 +80,9 @@ REVIEWED_INPROCESS = {
     "audio/tasks/speech_to_text/huggingface.py",
     "audio/tasks/ssl_embeddings/self_supervised_features.py",
     "audio/tasks/text_to_speech/huggingface.py",
+    # pyannote/speech-separation-ami-1.0: resolve_model pins the literal SHA, then Pipeline.from_pretrained
+    # loads with revision=<sha>, the same shape as speaker_diarization/pyannote.py.
+    "audio/tasks/turn_taking_projection/separation.py",
     "text/tasks/embeddings_extraction/huggingface.py",
     "text/tasks/embeddings_extraction/sentence_transformers.py",
     # scene-quality / adaptive workflow (branch-only, #536)
@@ -140,6 +143,10 @@ RAW_LOAD_EXCEPTIONS = {
     # would download 1.3 GB no run reads. Same pinning guarantee as above: a full commit hash takes
     # huggingface_hub's commit-hash shortcut, so a cached file resolves with no network.
     "audio/tasks/speech_enhancement/driftse.py",
+    # MaAI's VAP and backchannel checkpoints: hf_hub_download(..., revision=<literal 40-hex SHA>) for the
+    # one ~24 MB state dict each run reads. resolve_model is not used because maai-kyoto/vap_bc_en also
+    # holds a 400 MB Mimi-encoder checkpoint the CPC path never reads. The worker is handed the local file.
+    "audio/tasks/turn_taking_projection/maai.py",
 }
 
 
