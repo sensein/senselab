@@ -1,6 +1,6 @@
 """Each participant's recording condition from pass 1's rows, by COHORT's own ``condition_summary``.
 
-    python conditions.py "out/cond.*.jsonl" conditions.json
+python conditions.py "out/cond.*.jsonl" conditions.json
 """
 
 import glob

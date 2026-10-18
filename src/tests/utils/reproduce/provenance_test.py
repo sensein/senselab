@@ -229,9 +229,7 @@ def test_the_activity_holds_the_run_and_withholds_the_command(recorded: dict[str
     assert parameters["torch_lock_sha256"] == TORCH_LOCK
     assert parameters["body_lock_sha256"] == BODY_LOCK
     assert parameters["overlay_sha256"] is None
-    assert parameters["installed_sha256"] == installed_sha256(
-        recorded["tmp"] / "cache" / "venvs" / "repro-demo-SUBJ13"
-    )
+    assert parameters["installed_sha256"] == installed_sha256(recorded["tmp"] / "cache" / "venvs" / "repro-demo-SUBJ13")
     assert parameters["exit_code"] == 0
     assert parameters["codes"] == ["W_CLASS_ABSENT"]
     assert parameters["env_keys"] == ["HOME", "PATH", "TZ"]
