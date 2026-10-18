@@ -394,6 +394,20 @@ def test_count_headline_is_an_integer_and_suppressed() -> None:
     assert clean == {"headline": [{"name": "count", "value": 7}]}
 
 
+def test_a_suppressed_count_headline_passes_the_driver_pass() -> None:
+    """The driver re-validates the adapter pass's suppressed copy: a ``count`` value of ``"<5"`` passes again.
+
+    Both passes suppress (`validate_metrics`), so the second sees the token, not the number; another threshold's
+    token is still refused.
+    """
+    schema = MetricsSchema.model_validate({"kind": "count", "headline": ["count"]})
+    clean, codes = validate_metrics({"headline": [{"name": "count", "value": 1}]}, schema, min_cell=5)
+    assert codes == [] and clean is not None
+    final, codes = validate_metrics(clean, schema, min_cell=5, writer="driver")
+    assert codes == [] and final == {"headline": [{"name": "count", "value": "<5"}]}
+    assert _codes({"headline": [{"name": "count", "value": "<10"}]}, schema) == ["E_METRICS_NOT_NUMBER"]
+
+
 def test_split_report_both_protocols_pass() -> None:
     """Both protocols are valid, whatever the invariant outcome."""
     obj = _obj()
