@@ -197,3 +197,12 @@ not otherwise touch `dependencies.py`. `huggingface_hub`'s own internal per-file
 make concurrent downloads of the *same blob* safe) is a distinct, lower-level mechanism with no
 heartbeat or staleness logic of its own — a plain `flock` with a fixed timeout — and is unaffected
 by, and out of scope for, this fix.
+
+## `took_over`: the takeover verdict, for callers (2026-10-14)
+
+`__enter__` already decides whether it is taking over from a holder that never released: a legible identity in
+`.holder`, read before the acquire, and an acquire under `_UNCONTENDED_ACQUIRE_THRESHOLD`. It now records that verdict
+as `took_over`. The reproduce driver needs it to tell a killed run of a step (whose partial store it may keep) from a
+waiter after a clean release. Timing the call from outside would also count the file touches, the identity write and
+the stale-takeover warning around the acquire, which on a loaded network filesystem can push a real takeover past the
+threshold; this verdict times the acquire alone, as the lock's own decision does.
