@@ -37,6 +37,19 @@ def test_find_uv_searches_path_then_the_home_install_locations(tmp_path: Path, m
         find_uv()
 
 
+def test_find_uv_without_the_home_locations_searches_path_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With ``home=False`` only PATH is searched: a uv in ``~/.local/bin`` is not found."""
+    on_path = _executable(tmp_path / "bin" / "uv")
+    home = tmp_path / "home"
+    _executable(home / ".local" / "bin" / "uv")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("PATH", str(on_path.parent))
+    assert find_uv(home=False) == str(on_path)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    with pytest.raises(FileNotFoundError):
+        find_uv(home=False)
+
+
 def test_normalize_name_matches_pep503() -> None:
     """Runs of ``-``, ``_`` and ``.`` collapse to one ``-`` and the name is lowercased."""
     cases = {
