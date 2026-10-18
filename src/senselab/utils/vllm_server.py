@@ -71,6 +71,9 @@ CONTENT_LOGGING_PREFIXES = ("--enable-log-req", "--enable-log-out")
 """Prefixes of the server flags, and of their abbreviations, that would write request or output content to the
 log; any argument starting with one is refused."""
 
+CONTENT_LOGGING_FLAGS = ("--enable-log-requests", "--enable-log-outputs")
+"""The content-logging flags in full; an abbreviation of one is refused too."""
+
 REFUSED_FLAGS = ("--config",)
 """Server flags (bare or ``flag=value``) refused because they could turn content logging on from a file."""
 
@@ -149,6 +152,29 @@ class VllmStartError(RuntimeError):
             raise ValueError(f"unknown start error kind {kind!r}; known: {START_ERROR_KINDS}")
         super().__init__(f"{kind}: {message}")
         self.kind = kind
+
+
+def option_name(arg: str) -> str:
+    """The option name of a server argument as the server's parser reads it: before any ``=``, ``_`` as ``-``."""
+    name = arg.split("=", 1)[0]
+    return name.replace("_", "-") if name.startswith("--") else name
+
+
+def refused_arg(arg: str) -> bool:
+    """Whether a server argument could log request or output content.
+
+    That is a content-logging flag (:data:`CONTENT_LOGGING_PREFIXES`, or an abbreviation of one of
+    :data:`CONTENT_LOGGING_FLAGS`) or :data:`REFUSED_FLAGS` (or an abbreviation), bare or ``flag=value``, in either
+    spelling of its dashes and underscores.
+    """
+    name = option_name(arg)
+    if name.startswith(CONTENT_LOGGING_PREFIXES):
+        return True
+    return (
+        len(name) > 2
+        and name.startswith("--")
+        and any(f.startswith(name) for f in (*CONTENT_LOGGING_FLAGS, *REFUSED_FLAGS))
+    )
 
 
 def _free_port() -> int:
@@ -231,9 +257,7 @@ class VllmServer:
                 file.
         """
         for arg in map(str, server_args):
-            if arg.startswith(CONTENT_LOGGING_PREFIXES) or any(
-                arg == f or arg.startswith(f + "=") for f in REFUSED_FLAGS
-            ):
+            if refused_arg(arg):
                 raise ValueError(f"{arg} could log request or output content; it is not allowed")
         self.executable = str(executable)
         self.model_dir = Path(model_dir)

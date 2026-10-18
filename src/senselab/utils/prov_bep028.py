@@ -87,6 +87,9 @@ RELATION_TERMS: dict[str, str] = {
 }
 """Each store relation and the JSON-LD term it is emitted under."""
 
+TRIAGE_DESCRIPTION = "in-process senselab triage step, not a shell command: {label}"
+"""The default activity ``Description``; ``{label}`` is replaced by the activity's label."""
+
 _JSONLD_KEYWORDS = frozenset({"@context", "@id", "@type", "@graph", "@version", "@container", "@vocab"})
 
 
@@ -166,14 +169,16 @@ def _term(key: str) -> str:
     return "".join(part.capitalize() for part in key.split("_"))
 
 
-def _activity_record(activity: Activity, relations: dict[str, list[str]], *, dataset: str) -> dict[str, Any]:
+def _activity_record(
+    activity: Activity, relations: dict[str, list[str]], *, dataset: str, description: str
+) -> dict[str, Any]:
     """One ``Activities`` object."""
     label = activity.node if activity.step is None else f"{activity.node} / {activity.step}"
     record: dict[str, Any] = {
         "Id": bids_uri(activity.id, dataset=dataset),
         "Label": label,
         "Command": None,
-        "Description": f"in-process senselab triage step, not a shell command: {label}",
+        "Description": description.replace("{label}", label),
         "Type": ["sl:workflow-node"],
         "Node": activity.node,
     }
@@ -226,13 +231,17 @@ def _environment_record(environment: Environment, *, dataset: str) -> dict[str, 
     return record
 
 
-def to_bep028_graph(store: ProvStore, *, dataset: str = "", label: str = "triage") -> dict[str, Any]:
+def to_bep028_graph(
+    store: ProvStore, *, dataset: str = "", label: str = "triage", description: str = TRIAGE_DESCRIPTION
+) -> dict[str, Any]:
     """Serialize a store as one aggregated BEP028 provenance graph.
 
     Args:
         store: The store to read. It is not modified.
         dataset: The BIDS dataset name for every identifier, or ``""`` for the current dataset.
         label: The ``prov-<label>`` entity the graph belongs to.
+        description: Every activity's ``Description``, which says why ``Command`` is null;
+            ``{label}`` is replaced by the activity's label.
 
     Returns:
         A JSON-LD document: an ``@context`` and a ``Records`` object holding ``Files``,
@@ -256,7 +265,8 @@ def to_bep028_graph(store: ProvStore, *, dataset: str = "", label: str = "triage
     if others:
         records["prov:Entity"] = others
     activities = [
-        _activity_record(activity, outgoing.get(activity.id, {}), dataset=dataset) for activity in store.activities()
+        _activity_record(activity, outgoing.get(activity.id, {}), dataset=dataset, description=description)
+        for activity in store.activities()
     ]
     if activities:
         records["Activities"] = activities
@@ -274,18 +284,21 @@ def to_bep028_graph(store: ProvStore, *, dataset: str = "", label: str = "triage
     }
 
 
-def convert_store_file(store_path: str | Path, *, dataset: str = "", label: str = "triage") -> dict[str, Any]:
+def convert_store_file(
+    store_path: str | Path, *, dataset: str = "", label: str = "triage", description: str = TRIAGE_DESCRIPTION
+) -> dict[str, Any]:
     """Read a written ``store.jsonl`` and serialize it as a BEP028 graph.
 
     Args:
         store_path: The ``store.jsonl`` to read.
         dataset: The BIDS dataset name for every identifier, or ``""`` for the current dataset.
         label: The ``prov-<label>`` entity the graph belongs to.
+        description: Every activity's ``Description``, as for :func:`to_bep028_graph`.
 
     Returns:
         The JSON-LD document.
     """
-    return to_bep028_graph(ProvStore.read_jsonl(store_path), dataset=dataset, label=label)
+    return to_bep028_graph(ProvStore.read_jsonl(store_path), dataset=dataset, label=label, description=description)
 
 
 def write_bep028_files(graph: dict[str, Any], prov_dir: str | Path, *, label: str = "triage") -> list[Path]:

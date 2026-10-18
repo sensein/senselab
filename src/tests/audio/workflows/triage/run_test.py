@@ -1008,8 +1008,7 @@ class TestTheEntityPath:
             ("recording", ()),
             ("nothing_bids_here", ()),
             (
-                "sub-SUBJ01_ses-SES01"
-                "_task-diadochokinesis-ka",
+                "sub-SUBJ01_ses-SES01_task-diadochokinesis-ka",
                 ("sub-SUBJ01", "ses-SES01"),
             ),
             ("ses-02_task-vowel", ("ses-02",)),
@@ -1032,9 +1031,7 @@ class TestTheEntityPath:
         out_dir = tmp_path / "out"
         stem = "sub-SUBJ01_ses-SES01_task-ka"
         layout = prepare_run_layout(out_dir, stem)
-        assert layout.entity_dir == out_dir / "sub-SUBJ01" / (
-            "ses-SES01"
-        )
+        assert layout.entity_dir == out_dir / "sub-SUBJ01" / ("ses-SES01")
         assert layout.root.parent == layout.entity_dir
         assert layout.root.name.startswith(f"{stem}_")
         assert layout.run_dir.is_dir()

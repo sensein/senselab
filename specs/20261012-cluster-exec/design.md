@@ -59,7 +59,9 @@ What `vllm_server` takes from these numbers:
     (requirements-sha256 `5b1a68e3…d8a4`, Python 3.12, exclude-newer `2026-10-10T00:00:00Z`).
 - **Logging.** vLLM logs no request content unless `--enable-log-requests` is passed. `VllmServer` refuses any
   argument starting with `--enable-log-req` or `--enable-log-out` (argparse accepts abbreviations), and
-  `--config` (a config file could turn them on). The clients log nothing.
+  `--config` (a config file could turn them on). The clients log nothing. `refused_arg` reads an option name as
+  vLLM's parser does (`_` as `-`, unique abbreviations accepted), so `--enable_log_requests`, `--enable-log-r` and
+  `--conf` are refused too; `--enable-log-stats` stays allowed.
 
 ### The slice pool (`specs/20261011-slice-pool/`)
 
@@ -109,7 +111,9 @@ The primitives shared by both hashed-lock formats. The header formats themselves
 
 - `find_uv(*, install=False)` searches `PATH`, then `~/.local/bin`, then `~/.cargo/bin`. It installs uv with pip
   only when `install=True`, and otherwise raises `FileNotFoundError`. It replaces `subprocess_venv._find_uv` and
-  `venv_lock._uv`, and `venv_lock` still raises `VenvLockError` when uv is missing.
+  `venv_lock._uv`, and `venv_lock` still raises `VenvLockError` when uv is missing. `home=False` searches `PATH` only:
+  the reproduce driver's uv must come from its pinned `PATH` (or `REPRO_UV`), never from a home install that a batch
+  job's environment did not name.
 - `normalize_name(name)` gives the PEP 503 form of a name.
 - `requirements_sha256(lines, *, header_fields)` digests the sorted requirements with the header fields. It is
   order-insensitive and header-sensitive, and the committed digests are unchanged.
@@ -177,6 +181,8 @@ The primitives shared by both hashed-lock formats. The header formats themselves
   - `release` sends the item back to the queue with attempt+1 and counts toward `max_interrupts`, not toward the
     failure budget.
   - `reap` re-publishes leases whose heartbeat is older than `lease_s`, and abandoned `tmp/` entries.
+  - `state(item_id)` names where one item is (`done`, `dead`, `leased`, `queued`, `staged` or None), so a caller
+    that publishes a fixed set of ids can skip ids already published and read each one's outcome.
 - **Worker:** `python -m senselab.utils.work_pool work POOL --classes a,b [--linger N] [--poll S]
   [--host-check CMD]`.
   - It runs each item's command with `POOL_ITEM_ID` and `POOL_ATTEMPT` set, under a heartbeat thread.
