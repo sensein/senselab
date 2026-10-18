@@ -14,8 +14,8 @@ jobs:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     concurrency:
-      group: docs-branch
-      cancel-in-progress: false
+      group: docs-preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     environment:
       name: docs-preview
       url: https://sensein.group/senselab/pr-${{ github.event.pull_request.number }}/
@@ -39,44 +39,20 @@ jobs:
         uv run python scripts/generate-compat-matrix.py
         touch docs/.nojekyll
     - name: Deploy preview
-      uses: JamesIves/github-pages-deploy-action@v4
-      with:
-        folder: docs
-        branch: docs
-        target-folder: pr-${{ github.event.pull_request.number }}
-        clean: false
-        single-commit: true
+      run: bash .github/scripts/docs-deploy.sh preview docs "${{ github.event.pull_request.number }}"
 
   cleanup:
     if: github.event.action == 'closed'
     runs-on: ubuntu-latest
     concurrency:
-      group: docs-branch
-      cancel-in-progress: false
+      group: docs-preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     steps:
     - uses: actions/checkout@v5
-      with:
-        ref: docs
-        fetch-depth: 1
     - name: Remove previews of every PR that is no longer open
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
         open_prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json number --jq '.[].number')
-        removed=0
-        for dir in pr-*/; do
-          [ -d "$dir" ] || continue
-          num=${dir#pr-}
-          num=${num%/}
-          if ! grep -qx "$num" <<<"$open_prs"; then
-            git rm -rq "$dir"
-            removed=$((removed + 1))
-          fi
-        done
-        echo "removed $removed preview(s)"
-        [ "$removed" -eq 0 ] && exit 0
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        git checkout -q --orphan docs-squashed
-        git commit -qm "Docs site with previews of open PRs only"
-        git push --force origin docs-squashed:docs
+        # shellcheck disable=SC2086
+        bash .github/scripts/docs-deploy.sh cleanup $open_prs

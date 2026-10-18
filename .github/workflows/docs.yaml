@@ -60,7 +60,7 @@ jobs:
   publish-docs:
     needs: build-docs
     concurrency:
-      group: docs-branch
+      group: docs-release-${{ github.ref }}
       cancel-in-progress: false
     if: ${{ needs.build-docs.outputs.deploy == 'true' }}
     runs-on: ${{ matrix.os }}
@@ -79,9 +79,5 @@ jobs:
       with:
         name: documentation
         path: docs
-    - uses: JamesIves/github-pages-deploy-action@v4
-      with:
-        folder: docs
-        branch: docs
-        clean-exclude: pr-*
-        single-commit: true
+    - name: Deploy release site, keeping PR previews
+      run: bash .github/scripts/docs-deploy.sh release docs
