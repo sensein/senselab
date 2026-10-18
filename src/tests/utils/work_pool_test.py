@@ -420,6 +420,23 @@ def test_status_counts_per_state_and_class(tmp_path: Path) -> None:
     assert _read(pool.root / "status.json") == status
 
 
+def test_state_names_where_one_item_is(tmp_path: Path) -> None:
+    """state() gives queued, leased, done, dead or staged for one id, and None for an id the pool never saw."""
+    pool = _pool(tmp_path)
+    pool.publish([_item(0), _item(1), _item(2, max_attempts=1), _item(3)])
+    assert pool.state("item-0000") == "queued" and pool.state("item-9999") is None
+    done, leased, dead = pool.claim(["main"], "w"), pool.claim(["main"], "w"), pool.claim(["main"], "w")
+    assert done is not None and leased is not None and dead is not None
+    assert pool.complete(done, {"exit_code": 0}) and pool.fail(dead, 1) == "dead"
+    assert [pool.state(f"item-{i:04d}") for i in range(4)] == ["done", "leased", "dead", "queued"]
+    staged = pool.root / "tmp" / "claim-x"
+    staged.mkdir()
+    os.rename(pool.root / "queue" / "item-0003.json", staged / "item.json")
+    assert pool.state("item-0003") == "staged"
+    with pytest.raises(ValueError, match="item id"):
+        pool.state("../x")
+
+
 def test_a_put_back_does_not_strip_a_live_owner(tmp_path: Path) -> None:
     """A lease renamed aside and back (a reaper's put-back) stays the owner's.
 

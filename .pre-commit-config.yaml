@@ -70,6 +70,8 @@ repos:
   - id: check-toml
   - id: detect-private-key
   - id: name-tests-test
+    # Shared fixture modules imported by several test files; they hold no tests.
+    exclude: _fixture\.py$
 
 - repo: https://github.com/codespell-project/codespell
   rev: v2.4.1
@@ -105,3 +107,7 @@ repos:
     entry: YAML files must have .yaml extension.
     language: fail
     files: \.yml$
+  - id: participant-ids
+    name: No research-participant identifiers in tracked files.
+    entry: python scripts/check_participant_ids.py
+    language: python

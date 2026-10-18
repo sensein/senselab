@@ -1,0 +1,5 @@
+Annotated_Doc==0.0.5
+numpy==2.4.6
+python-speech-features @ file:///tmp/wheelhouse/python_speech_features-0.6-py3-none-any.whl
+torch @ https://download-r2.pytorch.org/whl/cu128/torch-2.8.0%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl
+torchaudio==2.8.0+cu128
