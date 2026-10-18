@@ -45,110 +45,70 @@ RECORDINGS: list[dict[str, Any]] = [
         subject="sub-SUBJ03",
         task="Respiration-and-cough-Cough-1",
         is_speech=False,
-        relpath=(
-            "sub-SUBJ03/ses-SES02/audio/"
-            "sub-SUBJ03_ses-SES02_"
-            "task-Respiration-and-cough-Cough-1.wav"
-        ),
+        relpath=("sub-SUBJ03/ses-SES02/audio/sub-SUBJ03_ses-SES02_task-Respiration-and-cough-Cough-1.wav"),
     ),
     dict(
         key="s1_cough2",
         subject="sub-SUBJ03",
         task="Respiration-and-cough-Cough-2",
         is_speech=False,
-        relpath=(
-            "sub-SUBJ03/ses-SES02/audio/"
-            "sub-SUBJ03_ses-SES02_"
-            "task-Respiration-and-cough-Cough-2.wav"
-        ),
+        relpath=("sub-SUBJ03/ses-SES02/audio/sub-SUBJ03_ses-SES02_task-Respiration-and-cough-Cough-2.wav"),
     ),
     dict(
         key="s1_fivebreaths1",
         subject="sub-SUBJ03",
         task="Respiration-and-cough-FiveBreaths-1",
         is_speech=False,
-        relpath=(
-            "sub-SUBJ03/ses-SES02/audio/"
-            "sub-SUBJ03_ses-SES02_"
-            "task-Respiration-and-cough-FiveBreaths-1.wav"
-        ),
+        relpath=("sub-SUBJ03/ses-SES02/audio/sub-SUBJ03_ses-SES02_task-Respiration-and-cough-FiveBreaths-1.wav"),
     ),
     dict(
         key="s2_cough1",
         subject="sub-SUBJ04",
         task="Respiration-and-cough-Cough-1",
         is_speech=False,
-        relpath=(
-            "sub-SUBJ04/ses-SES04/audio/"
-            "sub-SUBJ04_ses-SES04_"
-            "task-Respiration-and-cough-Cough-1.wav"
-        ),
+        relpath=("sub-SUBJ04/ses-SES04/audio/sub-SUBJ04_ses-SES04_task-Respiration-and-cough-Cough-1.wav"),
     ),
     dict(
         key="s2_breath1",
         subject="sub-SUBJ04",
         task="Respiration-and-cough-Breath-1",
         is_speech=False,
-        relpath=(
-            "sub-SUBJ04/ses-SES04/audio/"
-            "sub-SUBJ04_ses-SES04_"
-            "task-Respiration-and-cough-Breath-1.wav"
-        ),
+        relpath=("sub-SUBJ04/ses-SES04/audio/sub-SUBJ04_ses-SES04_task-Respiration-and-cough-Breath-1.wav"),
     ),
     dict(
         key="s2_threequickbreaths1",
         subject="sub-SUBJ04",
         task="Respiration-and-cough-ThreeQuickBreaths-1",
         is_speech=False,
-        relpath=(
-            "sub-SUBJ04/ses-SES04/audio/"
-            "sub-SUBJ04_ses-SES04_"
-            "task-Respiration-and-cough-ThreeQuickBreaths-1.wav"
-        ),
+        relpath=("sub-SUBJ04/ses-SES04/audio/sub-SUBJ04_ses-SES04_task-Respiration-and-cough-ThreeQuickBreaths-1.wav"),
     ),
     dict(
         key="s3_hardcough",
         subject="sub-SUBJ05",
         task="Respiration-and-cough-(v2)-HardCough",
         is_speech=False,
-        relpath=(
-            "sub-SUBJ05/ses-SES03/audio/"
-            "sub-SUBJ05_ses-SES03_"
-            "task-Respiration-and-cough-(v2)-HardCough.wav"
-        ),
+        relpath=("sub-SUBJ05/ses-SES03/audio/sub-SUBJ05_ses-SES03_task-Respiration-and-cough-(v2)-HardCough.wav"),
     ),
     dict(
         key="s3_breath",
         subject="sub-SUBJ05",
         task="Respiration-and-cough-(v2)-Breath",
         is_speech=False,
-        relpath=(
-            "sub-SUBJ05/ses-SES03/audio/"
-            "sub-SUBJ05_ses-SES03_"
-            "task-Respiration-and-cough-(v2)-Breath.wav"
-        ),
+        relpath=("sub-SUBJ05/ses-SES03/audio/sub-SUBJ05_ses-SES03_task-Respiration-and-cough-(v2)-Breath.wav"),
     ),
     dict(
         key="s1_storyrecall",
         subject="sub-SUBJ03",
         task="Story-recall",
         is_speech=True,
-        relpath=(
-            "sub-SUBJ03/ses-SES02/audio/"
-            "sub-SUBJ03_ses-SES02_"
-            "task-Story-recall.wav"
-        ),
+        relpath=("sub-SUBJ03/ses-SES02/audio/sub-SUBJ03_ses-SES02_task-Story-recall.wav"),
     ),
     dict(
         key="s3_storyrecall",
         subject="sub-SUBJ05",
         task="Story-recall-(v2)",
         is_speech=True,
-        relpath=(
-            "sub-SUBJ05/ses-SES03/audio/"
-            "sub-SUBJ05_ses-SES03_"
-            "task-Story-recall-(v2).wav"
-        ),
+        relpath=("sub-SUBJ05/ses-SES03/audio/sub-SUBJ05_ses-SES03_task-Story-recall-(v2).wav"),
     ),
 ]
 
