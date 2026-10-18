@@ -211,8 +211,9 @@ class TestPageTitleFitsThePage:
         style = FigureStyle()
         figure = plt.figure(figsize=style.figure_inches)
         drawable = style.figure_inches[0] - 2.0 * style.cover_margin_in
+        uuid_length_label = "wxyzwxyz-wxyz-wxyz-wxyz-wxyzwxyzwxyz"
         heading = (
-            "sub-SUBJ01_ses-SES01"
+            f"sub-{uuid_length_label}_ses-{uuid_length_label}"
             "_task-diadochokinesis-buttercup_20260919-200235 — page 1, 0-20s of 6.27s"
         )
         assert self._drawn_in(figure, heading, PAGE_TITLE_FONTSIZE) > drawable

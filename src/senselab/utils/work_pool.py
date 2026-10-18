@@ -438,17 +438,33 @@ class WorkPool:
         return held
 
     def _known(self, item_id: str) -> bool:
-        if any(
-            _exists(p)
-            for p in (
-                self._d("queue") / f"{item_id}.json",
-                self._d("leases") / item_id,
-                self._d("done") / f"{item_id}.json",
-                self._d("dead") / f"{item_id}.json",
-            )
+        return self.state(item_id) is not None
+
+    def state(self, item_id: str) -> Optional[str]:
+        """Where one item is now: ``done``, ``dead``, ``leased``, ``queued``, ``staged`` (in ``tmp/``) or None.
+
+        A done or dead record wins over any other copy (a ``conflicts/`` record is never counted).
+
+        Args:
+            item_id: The item's id.
+
+        Returns:
+            The state, or None when the pool holds no such item.
+
+        Raises:
+            ValueError: The id does not match :data:`ID_PATTERN`.
+        """
+        if not ID_PATTERN.fullmatch(item_id):
+            raise ValueError(f"item id {item_id!r} does not match {ID_PATTERN.pattern}")
+        for state, path in (
+            ("done", self._d("done") / f"{item_id}.json"),
+            ("dead", self._d("dead") / f"{item_id}.json"),
+            ("leased", self._d("leases") / item_id),
+            ("queued", self._d("queue") / f"{item_id}.json"),
         ):
-            return True
-        return any(data.get("id") == item_id for _, data in self._tmp_items())
+            if _exists(path):
+                return state
+        return "staged" if any(data.get("id") == item_id for _, data in self._tmp_items()) else None
 
     def publish(self, items: Iterable[Item]) -> list[Item]:
         """Put items in the queue, each with one exclusive ``link(2)`` from ``tmp/``.

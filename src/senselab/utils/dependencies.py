@@ -374,7 +374,7 @@ def _snapshot_is_present(repo_id: str, sha: str) -> bool:
 
     Returns:
         ``True`` when the snapshot directory exists and is non-empty. Empty counts as absent:
-        ``_point_ref_at`` and an interrupted download can both leave the directory behind
+        ``point_ref_at`` and an interrupted download can both leave the directory behind
         with nothing in it, and returning ``True`` there reintroduces the same failure one
         level deeper.
     """
@@ -702,11 +702,11 @@ def resolve_model(repo_id: str, revision: str = "main", *, token: Optional[str] 
             "separate trees."
         )
 
-    _point_ref_at(repo_root, revision, sha)
+    point_ref_at(repo_root, revision, sha)
     return sha, snapshot_path
 
 
-def _point_ref_at(repo_root: Path, ref: str, sha: str) -> None:
+def point_ref_at(repo_root: Path, ref: str, sha: str) -> None:
     """Make ``refs/<ref>`` name ``sha``, so a loader that cannot take a revision still gets it.
 
     ``snapshot_download(revision=<sha>)`` writes ``snapshots/<sha>/`` and **no** ``refs/`` entry at
@@ -743,6 +743,10 @@ def _point_ref_at(repo_root: Path, ref: str, sha: str) -> None:
             ref_file.write_text(sha)
     except OSError as exc:
         logger.debug("Could not point refs/%s at %s under %s: %s", ref, sha, repo_root, exc)
+
+
+_point_ref_at = point_ref_at
+"""The former private name of `point_ref_at`, kept for callers that import it."""
 
 
 def load_hf_resilient(
