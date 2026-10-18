@@ -57,16 +57,34 @@ def mediapipe_model_path() -> Path:
         RuntimeError: When the downloaded bytes do not match the pinned SHA-256.
     """
     target = cache_root() / "models" / "mediapipe" / f"face_landmarker_float16_v1_{MEDIAPIPE_MODEL_SHA256[:12]}.task"
-    if target.exists() and _sha256(target) == MEDIAPIPE_MODEL_SHA256:
+    return download_pinned(MEDIAPIPE_MODEL_URL, MEDIAPIPE_MODEL_SHA256, target)
+
+
+def download_pinned(url: str, sha256: str, target: Path) -> Path:
+    """Download ``url`` to ``target`` once, verifying its SHA-256.
+
+    Args:
+        url: The source URL.
+        sha256: The pinned digest.
+        target: The cache file.
+
+    Returns:
+        ``target``.
+
+    Raises:
+        RuntimeError: When the downloaded bytes do not match the pinned SHA-256.
+    """
+    if target.exists() and _sha256(target) == sha256:
         return target
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name(target.name + ".partial")
-    with urllib.request.urlopen(MEDIAPIPE_MODEL_URL, timeout=120) as response, open(partial, "wb") as handle:  # noqa: S310
+    request = urllib.request.Request(url, headers={"User-Agent": "senselab (https://github.com/sensein/senselab)"})
+    with urllib.request.urlopen(request, timeout=120) as response, open(partial, "wb") as handle:  # noqa: S310
         handle.write(response.read())
     digest = _sha256(partial)
-    if digest != MEDIAPIPE_MODEL_SHA256:
+    if digest != sha256:
         partial.unlink(missing_ok=True)
-        raise RuntimeError(f"face_landmarker.task SHA-256 {digest} != pinned {MEDIAPIPE_MODEL_SHA256}")
+        raise RuntimeError(f"{target.name} SHA-256 {digest} != pinned {sha256} ({url})")
     partial.replace(target)
     return target
 
@@ -99,7 +117,20 @@ def _sha256(path: Path) -> str:
 
 
 def _tile_payload(layout: GalleryLayout) -> List[Dict[str, Any]]:
-    return [{"tile_id": t.tile_id, "box": list(t.box), "masks": [list(m) for m in t.masks]} for t in layout.tiles]
+    """Worker tiles; a person track carries ``segments`` of ``[start_s, end_s, region_id, box, masks]``."""
+    regions = {r.tile_id: r for r in layout.regions}
+    out: List[Dict[str, Any]] = []
+    for tile in layout.tiles:
+        entry: Dict[str, Any] = {"tile_id": tile.tile_id, "box": list(tile.box), "masks": [list(m) for m in tile.masks]}
+        track = next((p for p in layout.persons if p.person_id == tile.tile_id), None)
+        if track is not None:
+            entry["segments"] = [
+                [s.start_s, s.end_s, s.region_id, list(regions[s.region_id].box)]
+                + [[list(m) for m in regions[s.region_id].masks]]
+                for s in track.segments
+            ]
+        out.append(entry)
+    return out
 
 
 def _run_worker(

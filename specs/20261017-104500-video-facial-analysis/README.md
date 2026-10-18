@@ -18,7 +18,7 @@ extract_face_geometry(video, layout=None, fps=None, config=None, timeout_s=None)
 extract_facial_affect(video, layout=None, fps=None, device=None, config=None, timeout_s=None) -> FrameTable
 detect_nonverbal_events(geometry, config=None) -> Dict[tile_id, NonverbalEvents]
 summarize_tiles(geometry=None, affect=None, events=None, config=None) -> List[TileSummary]
-link_tiles_to_speakers(mouth_series_per_tile, speaker_activity_per_speaker, fps, window_s=None) -> SpeakerLink
+link_tiles_to_speakers(mouth_series_per_tile, speaker_activity_per_speaker, fps, window_s=None, n_shifts=200, min_shift_s=10.0, visibility_per_tile=None) -> SpeakerLink
 segments_to_activity(segments, times) -> np.ndarray
 analyze_gallery_video(video, run_affect=True, single_tile=False, config=None, device=None) -> FacialAnalysis
 load_defaults(overrides=None) -> dict
@@ -160,6 +160,86 @@ binomial blur; 2x2 and 1x3 with 0-2 px gutters; the encoded pilot format. The on
 0 px with identical backgrounds and no faces, which carries no information; given one face per
 half it splits as `aspect_split`.
 
+## Face-position split
+
+Corpus (numbers only): of 30 recordings, gutter plus aspect split found two tiles in 28. In one
+1920x1080 miss the reference was a single 1712x526 band (`gutter`; timeline 43 reference, 5
+different). The VLM saw a two-tile gallery with two people in 9 of 10 frames and OpenCV counted 2
+faces (median). The band's aspect 3.25 is 9 % off 2 x 16:9 (3.56), so no candidate grid passed the
+5 % tolerance: each tile is about 856x526 (1.63:1), not 16:9.
+
+`tiles.split.face_split` cuts any tile, after the seam and aspect-grid passes fail, on face
+positions alone (`derivation="face_split"`):
+
+- **Clusters.** Face centres (Haar, the same 12 seam frames) are sorted along x, then y, and broken
+  wherever consecutive centres are more than `min_gap_face_widths` = 1 median face size apart.
+  Clusters with a face in at least `min_fraction` = 0.5 of the frames are kept (as for
+  `face_min_fraction`); two or more are needed.
+- **Cut.** Between neighbouring clusters, the strongest seam (`find_seam`, same floor and
+  dominance rule) in the face-free gap if one passes, else the midpoint of the clusters' median
+  centres.
+- **Guards.** At most `max_straddle` = 0.2 of faces cross a cut. Every cell's width/height must lie
+  in `cell_aspect_range` = [1.25, 2.0]: 4:3 less 6 % to 16:9 plus 12 %, which admits the observed
+  1.63 cells. This is what keeps two people sharing one 16:9 camera together: the halves would be
+  0.89:1.
+- **Confidence.** Smallest kept-cluster support times one minus the straddle fraction.
+
+Synthetic checks (`facial_analysis_speaker_view_test.py::TestFacePositionSplit`): the 1712x526 band
+with identical backgrounds and no gutter splits within 20 px of the true boundary; with distinct
+backgrounds and off-centre faces the cut lands on the seam (within 12 px), not the face midpoint; a
+stacked pair splits along y. Kept whole: one face drifting across the band, two faces in one 16:9
+tile, a second face present in 4 of 12 frames, faces straddling the cut in 6 of 12 frames.
+
+## Active-speaker view
+
+Corpus (numbers only): another 1920x1080 recording had a single 1650x920 reference tile (timeline 30
+reference, 18 different). The VLM read layout `single` in 19 of 24 frames and `gallery` in 5;
+people visible median 1 (max 2); OpenCV faces median 1. This is Zoom's active-speaker view,
+switching between the two participants, occasionally in gallery.
+
+Approach (`speaker_view.py`, `identity.py`, `speaker_view` in `data/defaults.yaml`):
+
+- **Trigger.** The gallery layout has one tile covering at least 0.5 of the frame (0.73 observed; a
+  two-tile gallery tile is at most 0.5).
+- **Identity samples.** Sequential decode at 2 fps, 960 px wide. Per sample: the XY-cut layout
+  estimate, and every face from OpenCV YuNet (`face_detection_yunet_2023mar.onnx`) with an SFace
+  embedding (`face_recognition_sface_2021dec.onnx`), aligned with `alignCrop`.
+- **Persons.** Average-linkage agglomeration on cosine distance, cut at 1 - 0.363 (SFace's
+  same-person cosine threshold in opencv_zoo's `sface.py`). Clusters under 5 % of face samples are
+  dropped. At most 2000 embeddings (evenly spaced) are clustered; the rest join the nearest centroid
+  at or above 0.363, which bounds the O(n^2) linkage memory at 2 fps x 98 min = 11760 samples.
+- **Modes.** A sample whose layout matches the speaker tile is `speaker_view` and shows its largest
+  face's person in region `S`; two or more tiles or faces make it `gallery`; anything else is
+  `other`. Speaker view is accepted when at least half the samples are `speaker_view` and two
+  persons each appear in at least 5 % of its face samples.
+- **Gallery intervals.** Gallery tiles are the modal layout of the gallery samples, passed through
+  the face-position split (no seam frames, so midpoints). Each run of gallery samples maps each
+  person to the tile holding most of their faces; the map applies to the whole run.
+- **Tracks.** A person's segment is a run of consecutive samples showing them in one region, from
+  its first to its last sample (opened to 0 or the duration at the ends). Frames between samples
+  that disagree belong to no one. Workers receive per-person `segments` with each region's box and
+  label mask; MediaPipe keeps one landmarker per (person, region); py-feat batches are now padded to
+  the largest crop instead of cut to the smallest, since `S` and `G*` differ in size.
+- **Linking.** `FrameTable.on_grid` puts person tracks on one grid (NaN where not shown);
+  `link_tiles_to_speakers(..., visibility_per_tile=)` masks mouth activity to visible frames and
+  reports `visibility_activity_corr`, since in active-speaker view being shown follows speaking.
+
+Measured on the composited integration recording (1280x720, 8 fps, 20 s; two public-domain official
+portraits, A 0-5 s, B 5-10 s, A 10-14 s, two-tile gallery 14-17 s, B 17-20 s): 40 identity
+samples, 34 `speaker_view` and 6 `gallery`, 46 faces, none unclustered. Same-person cosine at
+least 0.928, different-person at most 0.225. Tracks P0 = A: (0, 4.5, S), (10, 13.5, S),
+(14, 16.5, G1); P1 = B: (5, 9.5, S), (14, 16.5, G0), (17, 20, S). The identity pass cost 29 ms per
+sample including decode (M1 Pro, load average 5.3), so about 6 min for a 98 min recording at 2 fps;
+`detect_gallery_tiles` took 2.2 s for the clip.
+
+Pipeline consumers (the lead-conversation `face_geometry` / `face_affect` / `face` stages) must:
+read `layout.mode`; for `speaker_view`, key outputs by person id (`P0`, `P1`) rather than tile id,
+expect rows only where the person is shown (do not treat missing rows as face absent), carry
+`region_id`, put series on one grid with `FrameTable.on_grid` before linking, pass
+`layout.visible(...)` as `visibility_per_tile`, and report `visibility_activity_corr` beside the
+mouth correlations. Per-minute rates in `summarize_tiles` are per face-present time, so they stay
+comparable; `face_present_fraction` is per shown time.
+
 ## Licences
 
 | Component | Licence |
@@ -168,6 +248,9 @@ half it splits as `aspect_split`.
 | py-feat 2.1.5 (code) | MIT |
 | `py-feat/face_multitask_v2` weights | research-only (non-commercial), see the repo LICENSE |
 | `py-feat/retinaface_r34` weights | see the repo LICENSE-NOTICE |
+| OpenCV YuNet `face_detection_yunet_2023mar.onnx` (`opencv/face_detection_yunet@3cc26e7f`, SHA-256 `8f2383e4...`) | MIT |
+| OpenCV SFace `face_recognition_sface_2021dec.onnx` (`opencv/face_recognition_sface@3d708243`, SHA-256 `0ba9fbfa...`) | Apache-2.0 |
+| Integration portraits (official US government portraits on Wikimedia Commons) | public domain (not committed) |
 | Benchmark clips | NIOSH clip public domain; Barbara Firth clip CC BY 3.0 (not committed) |
 
 EmotiEffLib (`enet_b0_8_va_mtl`, Apache-2.0) was scoped as a fallback affect backend and is not
@@ -180,9 +263,15 @@ implemented in this change; it would take face boxes from the geometry pass.
   window, resampled and chunked decoding, label masking, nods/shakes/noise/drift/gaps/8 fps,
   blinks over a high baseline, gaze proxy, worker pose and iris helpers, AV linking (assignment,
   unassigned extra speaker, unrelated motion not significant), config merge and summaries.
-- `src/tests/video/tasks/facial_analysis_integration_test.py` (2 tests): a 12 s two-tile gallery
-  composed from the CC BY 3.0 clip, through both workers. Skipped when the venv is not provisioned
-  or the clip cannot be downloaded.
+- `src/tests/video/tasks/facial_analysis_speaker_view_test.py` (synthetic, injected detections and
+  embeddings): face-position splits and must-not-split cases, identity clustering, speaker-view
+  tracks (switching, gallery interval, merged gallery band, one person, screen share, unseen faces),
+  worker payload and placement, padded batches, person-track geometry rows through a stub worker,
+  `on_grid`, and visibility-aware linking.
+- `src/tests/video/tasks/facial_analysis_integration_test.py` (3 tests): a 12 s two-tile gallery
+  composed from the CC BY 3.0 clip, through both workers; and (`slow`) a 20 s speaker-view sequence
+  composited from two public-domain portraits through YuNet + SFace and, when provisioned, MediaPipe.
+  Skipped when the venv is not provisioned or a download fails.
 
 ## Known limitations
 
@@ -192,4 +281,7 @@ implemented in this change; it would take face boxes from the geometry pass.
 
 - Gaze proxy uncalibrated; nod, shake and blink thresholds are unfitted priors.
 - One face per tile; a camera-off tile reads as no face, and its layout run as `subset`.
+- Speaker view is recognised only when dominant; gallery recordings with speaker-view intervals keep
+  spatial tiles. Neither the face-position split nor speaker view has been re-run on the two corpus
+  recordings that motivated them.
 - The throughput table is load-contaminated (see above).

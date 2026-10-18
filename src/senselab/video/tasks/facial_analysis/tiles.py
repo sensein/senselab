@@ -12,7 +12,7 @@ from senselab.video.tasks.facial_analysis.frame_stream import probe_video, sampl
 from senselab.video.tasks.facial_analysis.results import GalleryLayout, LayoutSegment, Rect, TileBox
 
 Derived = Tuple[Rect, str, Optional[float]]
-"""A tile rectangle with its derivation (``gutter`` or ``aspect_split``) and confidence."""
+"""A tile rectangle with its derivation (``gutter``, ``aspect_split`` or ``face_split``) and confidence."""
 
 FaceDetector = Callable[[Sequence[np.ndarray], Rect], List[List[Rect]]]
 """``(gray frames, region) -> face boxes per frame`` in the frames' pixels."""
@@ -147,6 +147,47 @@ def _classify(rects: Sequence[Rect], reference: Sequence[Rect], match_iou: float
     return "different"
 
 
+def tile_box(
+    tile_id: str,
+    rect: Rect,
+    derivation: str,
+    confidence: float,
+    label_mask_width_fraction: float = 0.30,
+    label_mask_height_fraction: float = 0.08,
+    border_inset_fraction: float = 0.012,
+) -> TileBox:
+    """A tile from its outer rectangle: inset past the border, with the bottom-left name label masked.
+
+    Args:
+        tile_id: The tile id.
+        rect: Outer rectangle in source pixels.
+        derivation: How the rectangle was found.
+        confidence: Its confidence.
+        label_mask_width_fraction: Name-label mask width, as a fraction of tile width.
+        label_mask_height_fraction: Name-label mask height, as a fraction of tile height.
+        border_inset_fraction: Inset applied on every side, as a fraction of the tile's short side.
+
+    Returns:
+        The tile.
+    """
+    x, y, w, h = rect
+    inset = int(math.ceil(border_inset_fraction * min(w, h)))
+    x, y, w, h = x + inset, y + inset, w - 2 * inset, h - 2 * inset
+    mh = int(round(label_mask_height_fraction * h))
+    mw = int(round(label_mask_width_fraction * w))
+    masks = [(0, h - mh, mw, mh)] if mh > 0 and mw > 0 else []
+    return TileBox(
+        tile_id=tile_id,
+        x=x,
+        y=y,
+        width=w,
+        height=h,
+        masks=masks,
+        derivation=derivation,  # type: ignore[arg-type]
+        confidence=confidence,
+    )
+
+
 def layout_from_estimates(
     estimates: Sequence[Tuple[float, List[Rect]]],
     frame_width: int,
@@ -184,26 +225,19 @@ def layout_from_estimates(
         derivations = [("gutter", None)] * len(reference)
 
     tiles = []
-    for index, ((x, y, w, h), (derivation, confidence)) in enumerate(zip(reference, derivations)):
+    for index, (box, (derivation, confidence)) in enumerate(zip(reference, derivations)):
         if confidence is None:
-            box = (x, y, w, h)
             seen = sum(any(_iou(r, box) >= match_iou for r in rects) for _, rects in estimates)
             confidence = seen / len(estimates) if estimates else 0.0
-        inset = int(math.ceil(border_inset_fraction * min(w, h)))
-        x, y, w, h = x + inset, y + inset, w - 2 * inset, h - 2 * inset
-        mh = int(round(label_mask_height_fraction * h))
-        mw = int(round(label_mask_width_fraction * w))
-        masks = [(0, h - mh, mw, mh)] if mh > 0 and mw > 0 else []
         tiles.append(
-            TileBox(
-                tile_id=f"T{index}",
-                x=x,
-                y=y,
-                width=w,
-                height=h,
-                masks=masks,
-                derivation=derivation,  # type: ignore[arg-type]
-                confidence=float(confidence),
+            tile_box(
+                f"T{index}",
+                box,
+                derivation,
+                float(confidence),
+                label_mask_width_fraction=label_mask_width_fraction,
+                label_mask_height_fraction=label_mask_height_fraction,
+                border_inset_fraction=border_inset_fraction,
             )
         )
 
@@ -473,7 +507,14 @@ def seam_scores(gray: np.ndarray, lags: Sequence[int] = (1, 3)) -> np.ndarray:
 
 
 def find_seam(
-    frames: Sequence[np.ndarray], x0: int, x1: int, y0: int, y1: int, expected: float, config: Dict[str, Any]
+    frames: Sequence[np.ndarray],
+    x0: int,
+    x1: int,
+    y0: int,
+    y1: int,
+    expected: float,
+    config: Dict[str, Any],
+    window: Optional[Tuple[int, int]] = None,
 ) -> Optional[Tuple[int, int, float]]:
     """Locate a vertical tile boundary near ``expected`` inside ``[x0, x1) x [y0, y1)``.
 
@@ -489,6 +530,8 @@ def find_seam(
         y1: Region bottom (exclusive).
         expected: Expected boundary column, absolute.
         config: The ``tiles`` section of the defaults.
+        window: Absolute ``[first, last]`` boundary columns searched instead of the
+            ``split.seam_search_fraction`` half-window around ``expected``.
 
     Returns:
         ``(left_end, right_start, confidence)`` in absolute columns, with ``confidence`` the fraction
@@ -500,9 +543,12 @@ def find_seam(
     regions = [f[y0:y1, x0:x1] for f in frames]
     scores = np.stack([seam_scores(r) for r in regions])
     width = x1 - x0
-    reach = max(2, int(round(split["seam_search_fraction"] * width)))
-    centre = int(round(expected)) - x0
-    lo, hi = max(1, centre - reach), min(width - 1, centre + reach)
+    if window is None:
+        reach = max(2, int(round(split["seam_search_fraction"] * width)))
+        centre = int(round(expected)) - x0
+        lo, hi = max(1, centre - reach), min(width - 1, centre + reach)
+    else:
+        lo, hi = max(1, int(window[0]) - x0), min(width - 1, int(window[1]) - x0)
     if hi <= lo:
         return None
     outside = np.ones(scores.shape[1], bool)
@@ -677,14 +723,114 @@ def split_merged_tiles(
             chosen = _seam_grid(frames, rect, columns, rows, config)
             if chosen is not None:
                 break
-        if chosen is None and candidates:
+        if chosen is None and frames:
             faces = (face_detector or (lambda f, r: detect_faces(f, r, config)))(frames, rect)
             for columns, rows in candidates:
                 chosen = _face_grid(faces, rect, columns, rows, config)
                 if chosen is not None:
                     break
+            if chosen is None:
+                chosen = face_position_split(faces, rect, config, frames=frames)
         out.append(chosen if chosen is not None else [(rect, "gutter", None)])
     return out
+
+
+def _face_clusters(
+    faces: Sequence[Sequence[Rect]], rect: Rect, axis: int, min_gap_face_widths: float
+) -> List[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """Face centres inside ``rect`` grouped along one axis wherever consecutive centres are far apart.
+
+    Args:
+        faces: Face boxes per frame.
+        rect: The region.
+        axis: 0 to group by x, 1 by y.
+        min_gap_face_widths: Smallest gap between groups, in median face sizes along the axis.
+
+    Returns:
+        Per group ``(centres, half_extents, frame_indices)`` along the axis, in increasing position.
+    """
+    x, y, w, h = rect
+    centres, halves, owners = [], [], []
+    for index, boxes in enumerate(faces):
+        for fx, fy, fw, fh in boxes:
+            cx, cy = fx + fw / 2, fy + fh / 2
+            if x <= cx < x + w and y <= cy < y + h:
+                centres.append(cx if axis == 0 else cy)
+                halves.append((fw if axis == 0 else fh) / 2)
+                owners.append(index)
+    if not centres:
+        return []
+    order = np.argsort(centres)
+    c, half, own = np.asarray(centres)[order], np.asarray(halves)[order], np.asarray(owners)[order]
+    gap = min_gap_face_widths * 2 * float(np.median(half))
+    breaks = np.flatnonzero(np.diff(c) > gap) + 1
+    return [(c[a:b], half[a:b], own[a:b]) for a, b in zip(np.r_[0, breaks], np.r_[breaks, len(c)])]
+
+
+def face_position_split(
+    faces: Sequence[Sequence[Rect]],
+    rect: Rect,
+    config: Dict[str, Any],
+    frames: Sequence[np.ndarray] = (),
+) -> Optional[List[Derived]]:
+    """Cut a region between face clusters that stay apart along one axis, whatever its aspect ratio.
+
+    Face centres are grouped along x (then y) wherever consecutive centres are more than
+    ``split.face_split.min_gap_face_widths`` face sizes apart. Groups holding a face in at least
+    ``split.face_split.min_fraction`` of the frames are kept; with two or more, the region is cut
+    between neighbouring groups, at the strongest seam (:func:`find_seam`) in the face-free gap when
+    one passes, else midway between the groups' median centres. The cut is accepted when every cell's
+    aspect ratio lies in ``split.face_split.cell_aspect_range`` and at most
+    ``split.face_split.max_straddle`` of the faces cross a cut.
+
+    Args:
+        faces: Face boxes per frame, in the frames' pixels.
+        rect: The region.
+        config: The ``tiles`` section of the defaults.
+        frames: Gray frames in the same pixels, for seams; midpoints only when empty.
+
+    Returns:
+        The cells with derivation ``face_split``, or ``None``.
+    """
+    settings = config["split"]["face_split"]
+    if not faces:
+        return None
+    x, y, w, h = rect
+    low_aspect, high_aspect = settings["cell_aspect_range"]
+    for axis in (0, 1):
+        groups = _face_clusters(faces, rect, axis, float(settings["min_gap_face_widths"]))
+        support = [len(set(own.tolist())) / len(faces) for _, _, own in groups]
+        kept = [g for g, s in zip(groups, support) if s >= settings["min_fraction"]]
+        if len(kept) < 2:
+            continue
+        origin, span = (x, w) if axis == 0 else (y, h)
+        cuts: List[Tuple[int, int]] = []
+        for (c0, h0, _), (c1, h1, _) in zip(kept[:-1], kept[1:]):
+            gap_lo, gap_hi = int(np.ceil(np.max(c0 + h0))), int(np.floor(np.min(c1 - h1)))
+            seam = None
+            if frames and gap_hi - gap_lo >= 2:
+                grid = frames if axis == 0 else [f.T for f in frames]
+                a0, a1 = (y, y + h) if axis == 0 else (x, x + w)
+                seam = find_seam(grid, origin, origin + span, a0, a1, 0.0, config, window=(gap_lo, gap_hi))
+            if seam is not None:
+                cuts.append((seam[0], seam[1]))
+            else:
+                middle = int(round((np.median(c0) + np.median(c1)) / 2))
+                cuts.append((middle, middle))
+        bounds = [origin] + [v for cut in cuts for v in cut] + [origin + span]
+        spans = [(bounds[2 * k], bounds[2 * k + 1]) for k in range(len(kept))]
+        cells = [(a, y, b - a, h) if axis == 0 else (x, a, w, b - a) for a, b in spans]
+        if any(not low_aspect <= cw / max(ch, 1) <= high_aspect for _, _, cw, ch in cells):
+            continue
+        all_c = np.concatenate([g[0] for g in groups])
+        all_h = np.concatenate([g[1] for g in groups])
+        lines = [(a + b) / 2 for a, b in cuts]
+        straddle = float(np.mean([any(c - e < line < c + e for line in lines) for c, e in zip(all_c, all_h)]))
+        if straddle > settings["max_straddle"]:
+            continue
+        confidence = min(s for g, s in zip(groups, support) if s >= settings["min_fraction"]) * (1.0 - straddle)
+        return [(cell, "face_split", confidence) for cell in cells]
+    return None
 
 
 def single_tile_layout(width: int, height: int, tile_id: Optional[str] = None) -> GalleryLayout:

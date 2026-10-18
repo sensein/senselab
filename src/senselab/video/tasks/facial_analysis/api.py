@@ -30,6 +30,7 @@ from senselab.video.tasks.facial_analysis.signals import (
 from senselab.video.tasks.facial_analysis.signals import (
     link_tiles_to_speakers as _link_tiles_to_speakers,
 )
+from senselab.video.tasks.facial_analysis.speaker_view import detect_speaker_view_in_file
 from senselab.video.tasks.facial_analysis.tiles import detect_gallery_tiles_in_file, single_tile_layout
 
 VideoSource = Union[str, os.PathLike, Any]
@@ -81,9 +82,15 @@ def detect_gallery_tiles(
     the per-pixel maximum over the frames that share it, inset past the active-speaker border, and
     given a mask over the bottom-left name label. A tile whose aspect ratio is that of an equal grid
     of 16:9 or 4:3 cells is split at a seam found at full resolution (``derivation="gutter"``), or,
-    without a seam, when faces occupy every cell (``derivation="aspect_split"``). Every sampled frame
-    is classified against the reference, so screen share, speaker view and camera-off tiles show up
-    in the timeline.
+    without a seam, when faces occupy every cell (``derivation="aspect_split"``); any tile holding
+    face clusters that stay apart along one axis is cut between them (``derivation="face_split"``).
+    Every sampled frame is classified against the reference, so screen share, speaker view and
+    camera-off tiles show up in the timeline.
+
+    When the reference is one large tile and ``speaker_view.enabled``, the recording is sampled for
+    face identity (YuNet + SFace); if the tile shows different people in turn, the result is a
+    ``mode="speaker_view"`` layout whose tiles are person tracks ``P0``, ``P1``, ... (see
+    :class:`GalleryLayout`), with gallery intervals mapped to the same persons by identity.
 
     Args:
         video: The recording.
@@ -93,16 +100,34 @@ def detect_gallery_tiles(
     Returns:
         Tiles ``T0..Tn`` in reading order, with the layout timeline.
     """
-    tiles_config = load_defaults(config)["tiles"]
-    count = int(sample_frames if sample_frames is not None else tiles_config["sample_frames"])
-    return detect_gallery_tiles_in_file(_video_path(video), count, tiles_config)
+    merged = load_defaults(config)
+    count = int(sample_frames if sample_frames is not None else merged["tiles"]["sample_frames"])
+    return _detect_layout(_video_path(video), count, merged)
+
+
+def _detect_layout(path: str, count: int, config: Dict[str, Any]) -> GalleryLayout:
+    layout = detect_gallery_tiles_in_file(path, count, config["tiles"])
+    if config["speaker_view"]["enabled"]:
+        layout = detect_speaker_view_in_file(path, layout, config["tiles"], config["speaker_view"])
+    return layout
 
 
 def _layout_for(path: str, layout: Optional[GalleryLayout], config: Dict[str, Any]) -> GalleryLayout:
     if layout is not None:
         return layout
-    tiles_config = config["tiles"]
-    return detect_gallery_tiles_in_file(path, int(tiles_config["sample_frames"]), tiles_config)
+    return _detect_layout(path, int(config["tiles"]["sample_frames"]), config)
+
+
+def _region_column(layout: GalleryLayout, tile_id: str, times: np.ndarray) -> Optional[np.ndarray]:
+    """Region each row of a person track was analysed in; ``None`` for a gallery tile."""
+    track = next((p for p in layout.persons if p.person_id == tile_id), None)
+    if track is None:
+        return None
+    out = np.full(len(times), "", dtype=object)
+    for segment in track.segments:
+        inside = (times >= segment.start_s - 1e-6) & (times <= segment.end_s + 1e-6) & (out == "")
+        out[inside] = segment.region_id
+    return out
 
 
 def _timing(status: Dict[str, Any]) -> Dict[str, float]:
@@ -132,6 +157,9 @@ def extract_face_geometry(
     in tile-normalised coordinates, iris offsets, mouth aspect ratio, all 52 blendshapes as
     ``bs_<name>``, tile ``motion_energy`` (mean absolute frame difference, 0-1), and the
     toward-camera gaze proxy (``gaze_yaw_deg``, ``gaze_pitch_deg``, ``toward_camera``).
+
+    For a ``speaker_view`` layout each table is a person track: rows exist only for frames inside the
+    person's segments, analysed in the region shown then, named in a ``region_id`` column.
 
     Args:
         video: The recording.
@@ -197,6 +225,9 @@ def extract_face_geometry(
         frame["gaze_yaw_deg"] = gaze_yaw.astype(np.float32)
         frame["gaze_pitch_deg"] = gaze_pitch.astype(np.float32)
         frame["toward_camera"] = score.astype(np.float32)
+        region = _region_column(layout, key, frame["time_s"].to_numpy())
+        if region is not None:
+            frame["region_id"] = region
         tables[key] = frame
     return FrameTable(
         kind="geometry",
@@ -255,7 +286,8 @@ def extract_facial_affect(
     ``face_multitask_v2`` model; the largest face per tile is kept. Columns per frame: ``face_score``
     (0 without a face), ``n_faces``, the face box in tile pixels at the decode scale, head pose and
     gaze in degrees, seven emotion probabilities (lower-case names), ``valence`` and ``arousal`` in
-    ``[-1, 1]``, and twenty AU probabilities (``AU01``..``AU43``).
+    ``[-1, 1]``, and twenty AU probabilities (``AU01``..``AU43``). Person tracks of a
+    ``speaker_view`` layout are handled as in :func:`extract_face_geometry`.
 
     The model weights are released for research use only; see the module documentation.
 
@@ -294,6 +326,9 @@ def extract_facial_affect(
         )
         frame.insert(0, "time_s", arrays[f"{key}/time_s"])
         frame["n_faces"] = frame["n_faces"].astype(np.int16)
+        region = _region_column(layout, key, frame["time_s"].to_numpy())
+        if region is not None:
+            frame["region_id"] = region
         tables[key] = frame
     return FrameTable(
         kind="affect",
@@ -432,12 +467,14 @@ def link_tiles_to_speakers(
     window_s: Optional[float] = None,
     n_shifts: int = 200,
     min_shift_s: float = 10.0,
+    visibility_per_tile: Optional[Mapping[str, np.ndarray]] = None,
 ) -> SpeakerLink:
     """Assign tiles to diarized speakers by correlating mouth motion with speech activity.
 
     See :func:`senselab.video.tasks.facial_analysis.signals.link_tiles_to_speakers`; build the
     activity series with :func:`~senselab.video.tasks.facial_analysis.signals.segments_to_activity`
-    on the geometry table's ``time_s``.
+    on the geometry table's ``time_s``. For person tracks, put the mouth series on one grid with
+    :meth:`FrameTable.on_grid` and pass ``layout.visible(person_id, grid)`` as visibility.
 
     Args:
         mouth_series_per_tile: ``tile_id -> jawOpen series`` on one time grid.
@@ -446,6 +483,8 @@ def link_tiles_to_speakers(
         window_s: Smoothing window; ``linking.window_s`` from the defaults when ``None``.
         n_shifts: Circular shifts drawn for the null distribution of the best total correlation.
         min_shift_s: Smallest shift, so the null excludes near-aligned series.
+        visibility_per_tile: ``tile_id -> bool series`` on the same grid; mouth activity is used only
+            where True, and ``visibility_activity_corr`` is filled.
 
     Returns:
         The assignment with its correlations and margins.
@@ -458,6 +497,7 @@ def link_tiles_to_speakers(
         window_s=window,
         n_shifts=n_shifts,
         min_shift_s=min_shift_s,
+        visibility_per_tile=visibility_per_tile,
     )
 
 

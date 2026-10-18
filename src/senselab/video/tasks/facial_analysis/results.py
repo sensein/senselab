@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
+import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,9 +24,13 @@ class TileBox(BaseModel):
         masks: Tile-relative rectangles blanked before analysis (the name label).
         derivation: How the tile was found: ``"gutter"`` (bounded by dark canvas or an image seam),
             ``"aspect_split"`` (an equal split of a merged region, chosen by tile aspect ratio and
-            face positions) or ``"whole_frame"`` (no layout was estimated).
+            face positions), ``"face_split"`` (a merged region cut between consistently separated
+            face clusters, whatever its aspect ratio), ``"person_track"`` (a speaker-view person
+            whose face is analysed wherever :attr:`GalleryLayout.persons` places it) or
+            ``"whole_frame"`` (no layout was estimated).
         confidence: In ``[0, 1]``. For ``gutter`` tiles the fraction of sampled frames that show the
-            tile's boundary; for ``aspect_split`` tiles the face-occupancy support of the split.
+            tile's boundary; for ``aspect_split`` and ``face_split`` tiles the face-occupancy support
+            of the split; for ``person_track`` tiles the fraction of identity samples showing the person.
     """
 
     tile_id: str
@@ -34,7 +39,7 @@ class TileBox(BaseModel):
     width: int
     height: int
     masks: List[Rect] = Field(default_factory=list)
-    derivation: Literal["gutter", "aspect_split", "whole_frame"] = "gutter"
+    derivation: Literal["gutter", "aspect_split", "face_split", "person_track", "whole_frame"] = "gutter"
     confidence: float = 1.0
 
     @property
@@ -54,6 +59,10 @@ class LayoutSegment(BaseModel):
         kind: ``"reference"`` when the run matches the reference layout; ``"subset"`` when every tile
             it found is a reference tile but some reference tiles are missing (a dark or camera-off
             tile); ``"different"`` otherwise (screen share, speaker view, a resized window).
+        mode: ``"gallery"`` (participants in spatial tiles), ``"speaker_view"`` (one large tile
+            showing one person at a time) or ``"other"`` (neither, e.g. screen share). Always
+            ``"gallery"`` in a gallery-mode layout.
+        persons: In a speaker-view layout, ``person_id -> region_id`` for the persons the run shows.
     """
 
     start_s: float
@@ -61,6 +70,36 @@ class LayoutSegment(BaseModel):
     n_samples: int
     boxes: List[Rect]
     kind: Literal["reference", "subset", "different"]
+    mode: Literal["gallery", "speaker_view", "other"] = "gallery"
+    persons: Dict[str, str] = Field(default_factory=dict)
+
+
+class PersonSegment(BaseModel):
+    """An interval during which a person is shown in one region.
+
+    Attributes:
+        start_s: First identity sample of the interval (``0`` when it opens the recording).
+        end_s: Last identity sample of the interval (the recording end when it closes it).
+        region_id: The region (:attr:`GalleryLayout.regions`) the person's face is in.
+    """
+
+    start_s: float
+    end_s: float
+    region_id: str
+
+
+class PersonTrack(BaseModel):
+    """Where one identity-clustered person is visible over a speaker-view recording.
+
+    Attributes:
+        person_id: ``P0``, ``P1``, ... in order of first appearance.
+        segments: Visible intervals, in time order; frames outside them belong to no row of this person.
+        n_samples: Identity samples in which the person's face was found.
+    """
+
+    person_id: str
+    segments: List[PersonSegment]
+    n_samples: int
 
 
 class GalleryLayout(BaseModel):
@@ -73,6 +112,12 @@ class GalleryLayout(BaseModel):
         timeline: Per-run layout estimates over the sampled frames.
         reference_fraction: Fraction of sampled frames whose layout matches the reference.
         n_samples: Frames sampled.
+        mode: ``"gallery"`` (tiles are fixed regions) or ``"speaker_view"`` (tiles are person tracks
+            ``P0``, ``P1``, ... whose region changes over time, see ``persons``).
+        regions: Physical regions of a speaker-view layout: ``S`` (the speaker tile) and ``G0``, ``G1``,
+            ... (the tiles of gallery intervals). Empty in gallery mode.
+        persons: Per person track, where and when the person is visible. Empty in gallery mode.
+        identity: Face-identity provenance of a speaker-view layout (models, hashes, threshold).
     """
 
     frame_width: int
@@ -81,10 +126,33 @@ class GalleryLayout(BaseModel):
     timeline: List[LayoutSegment]
     reference_fraction: float
     n_samples: int
+    mode: Literal["gallery", "speaker_view"] = "gallery"
+    regions: List[TileBox] = Field(default_factory=list)
+    persons: List[PersonTrack] = Field(default_factory=list)
+    identity: Dict[str, Any] = Field(default_factory=dict)
 
     def layout_changes(self) -> List[LayoutSegment]:
         """Runs whose layout differs from the reference (screen share, speaker view, resized window)."""
         return [segment for segment in self.timeline if segment.kind == "different"]
+
+    def visible(self, tile_id: str, times: Sequence[float]) -> np.ndarray:
+        """Whether a tile's face is shown at each time.
+
+        Args:
+            tile_id: A tile (gallery mode) or person track (speaker-view mode).
+            times: Sample times in seconds.
+
+        Returns:
+            Boolean array; all True for a gallery tile, the person's segments for a person track.
+        """
+        t = np.asarray(times, dtype=np.float64)
+        track = next((p for p in self.persons if p.person_id == tile_id), None)
+        if track is None:
+            return np.ones(t.shape, bool)
+        out = np.zeros(t.shape, bool)
+        for segment in track.segments:
+            out |= (t >= segment.start_s) & (t <= segment.end_s)
+        return out
 
 
 class HeadGestureEvent(BaseModel):
@@ -145,6 +213,38 @@ class FrameTable(BaseModel):
     tiles: Dict[str, pd.DataFrame]
     provenance: Dict[str, Any] = Field(default_factory=dict)
     timing: Dict[str, float] = Field(default_factory=dict)
+
+    def on_grid(
+        self, column: str, times: Sequence[float], tolerance_s: Optional[float] = None
+    ) -> Dict[str, np.ndarray]:
+        """One column of every tile resampled onto a shared time grid.
+
+        Person tracks have rows only where the person is shown, so their tables do not share a grid;
+        this puts them on one for :func:`~senselab.video.tasks.facial_analysis.link_tiles_to_speakers`.
+
+        Args:
+            column: The column to read.
+            times: The grid, in seconds.
+            tolerance_s: Largest distance to the nearest row; half the frame step when ``None``.
+
+        Returns:
+            ``tile_id -> values``, NaN where no row lies within the tolerance.
+        """
+        grid = np.asarray(times, dtype=np.float64)
+        tolerance = 0.5 / self.fps if tolerance_s is None else float(tolerance_s)
+        out: Dict[str, np.ndarray] = {}
+        for tile_id, frame in self.tiles.items():
+            values = np.full(grid.shape, np.nan)
+            if len(frame) and column in frame:
+                row_times = frame["time_s"].to_numpy(np.float64)
+                index = np.clip(np.searchsorted(row_times, grid), 1, max(len(row_times) - 1, 1))
+                left = np.clip(index - 1, 0, len(row_times) - 1)
+                right = np.clip(index, 0, len(row_times) - 1)
+                nearest = np.where(np.abs(row_times[left] - grid) <= np.abs(row_times[right] - grid), left, right)
+                ok = np.abs(row_times[nearest] - grid) <= tolerance
+                values[ok] = frame[column].to_numpy(np.float64)[nearest[ok]]
+            out[tile_id] = values
+        return out
 
     def to_long(self) -> pd.DataFrame:
         """All tiles stacked into one Parquet-ready frame with a ``tile_id`` column."""
@@ -234,6 +334,9 @@ class SpeakerLink(BaseModel):
             assignment's confidence, since a margin alone is inflated when speaker tracks are
             complements of each other.
         n_frames: Frames where both series were finite.
+        visibility_activity_corr: ``tile_id -> speaker -> Pearson r`` of the tile's visibility (0/1)
+            with speaker activity, when visibility was given. In active-speaker view the person shown
+            is usually the one talking, so this is a link cue of its own.
     """
 
     correlations: Dict[str, Dict[str, float]]
@@ -242,3 +345,4 @@ class SpeakerLink(BaseModel):
     total_margin: float
     p_value: float
     n_frames: int
+    visibility_activity_corr: Dict[str, Dict[str, float]] = Field(default_factory=dict)

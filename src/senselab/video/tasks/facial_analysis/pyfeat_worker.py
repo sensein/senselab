@@ -17,10 +17,20 @@ from typing import Any, Dict, List
 import numpy as np
 
 try:
-    from senselab.video.tasks.facial_analysis.frame_stream import crop_tile, iter_frames
+    from senselab.video.tasks.facial_analysis.frame_stream import crop_tile, iter_frames, tile_placement, widest_box
 except ImportError:  # inside the backend venv, where senselab is not installed
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from frame_stream import crop_tile, iter_frames  # type: ignore[no-redef]
+    from frame_stream import crop_tile, iter_frames, tile_placement, widest_box  # type: ignore[no-redef]
+
+
+def pad_stack(crops: List[np.ndarray]) -> np.ndarray:
+    """Stack crops of different sizes, zero-padded at the bottom and right to the largest."""
+    h = max(c.shape[0] for c in crops)
+    w = max(c.shape[1] for c in crops)
+    out = np.zeros((len(crops), h, w) + crops[0].shape[2:], crops[0].dtype)
+    for i, crop in enumerate(crops):
+        out[i, : crop.shape[0], : crop.shape[1]] = crop
+    return out
 
 
 def build_detector(spec: Dict[str, Any]) -> Any:  # noqa: ANN401
@@ -57,7 +67,7 @@ def run(spec: Dict[str, Any]) -> Dict[str, Any]:
     import feat
 
     tiles: List[Dict[str, Any]] = spec["tiles"]
-    scale = min(1.0, float(spec["tile_width"]) / max(t["box"][2] for t in tiles))
+    scale = min(1.0, float(spec["tile_width"]) / widest_box(tiles))
     detector = build_detector(spec)
     au_names = list(detector.multitask.au_names)
     emotion_names = list(detector.multitask.emotion_names)
@@ -74,9 +84,7 @@ def run(spec: Dict[str, Any]) -> Dict[str, Any]:
         nonlocal value_columns
         if not pending:
             return
-        h = min(p.shape[0] for p in pending)
-        w = min(p.shape[1] for p in pending)
-        batch = torch.from_numpy(np.stack([p[:h, :w] for p in pending])).permute(0, 3, 1, 2).contiguous()
+        batch = torch.from_numpy(pad_stack(pending)).permute(0, 3, 1, 2).contiguous()
         size = batch.shape[0]
         zeros = torch.zeros(size)
         batch_data = {
@@ -116,7 +124,11 @@ def run(spec: Dict[str, Any]) -> Dict[str, Any]:
     last_t = 0.0
     for t, image in iter_frames(spec["video"], fps=float(spec["fps"]), scale=scale):
         for tile in tiles:
-            pending.append(crop_tile(image, tile["box"], scale=scale, masks=tile.get("masks", [])))
+            placement = tile_placement(tile, t)
+            if placement is None:
+                continue
+            _, box, masks = placement
+            pending.append(crop_tile(image, box, scale=scale, masks=masks))
             owners.append((tile["tile_id"], t))
         n_frames += 1
         last_t = t

@@ -52,10 +52,32 @@ than about 3 px at the analysis width merge neighbouring tiles, so each tile who
 that of an equal grid of 16:9 or 4:3 cells (`tiles.split`) is checked on frames decoded at up to
 1920 px: a grid is accepted when every internal boundary is a fixed image seam or dark line
 (`derivation="gutter"`), or, failing that, when faces (OpenCV Haar cascade) occupy every cell and
-rarely straddle a boundary (`derivation="aspect_split"`). Each `TileBox` carries its `derivation`
-and a `confidence`. Every sampled
+rarely straddle a boundary (`derivation="aspect_split"`). Any tile, whatever its aspect ratio, is
+also cut between face clusters that stay apart along one axis in most sampled frames, provided the
+resulting cells have a tile-like aspect ratio (`tiles.split.face_split`, `derivation="face_split"`).
+Each `TileBox` carries its `derivation` and a `confidence`. Every sampled
 frame is classified as `reference`, `subset` (a tile went dark, e.g. camera off) or `different`
 (screen share, speaker view); `layout.layout_changes()` lists the `different` runs.
+
+**Active-speaker view.** When the reference layout is one large tile (`speaker_view`), the
+recording is sampled at 2 fps for face identity: OpenCV YuNet finds faces and SFace embeds them, and
+the embeddings are clustered into persons. If the tile shows different people in turn, the layout
+becomes `mode="speaker_view"`: its `tiles` are person tracks `P0`, `P1`, ... (order of first
+appearance), `regions` holds the speaker tile `S` and the tiles `G0`, `G1`, ... of any gallery
+intervals, `persons[k].segments` say when and where each person is shown, and each timeline run has
+a `mode` (`speaker_view`, `gallery`, `other`) and the `persons` it shows. Gallery intervals are
+mapped to the same persons by identity, so `P0` is one person across the recording. Geometry and
+affect then analyse the face that is shown: a person's table has rows only inside their segments,
+with a `region_id` column. To link persons to speakers, put the series on one grid and pass
+visibility; in active-speaker view, being shown is itself a cue (`visibility_activity_corr`):
+
+```python
+grid = np.arange(0, duration, 1 / geometry.fps)
+mouths = geometry.on_grid("bs_jawOpen", grid)
+shown = {p: layout.visible(p, grid) for p in mouths}
+link = link_tiles_to_speakers(mouths, activity, fps=geometry.fps, visibility_per_tile=shown)
+link.visibility_activity_corr
+```
 
 **Geometry columns.** `face_present`, `n_faces`, `head_pitch_deg` (positive up), `head_yaw_deg`
 (positive toward the subject's right, i.e. image left), `head_roll_deg`, head translation, face box
@@ -90,6 +112,9 @@ worker's CPU threads on a shared host. Throughput is measured by `scripts/bench_
 - py-feat code: MIT. **The `py-feat/face_multitask_v2` weights are released for research use
   only**; see that repository's LICENSE. RetinaFace weights come from `py-feat/retinaface_r34`.
   Both are fetched at pinned commit SHAs, recorded in `FrameTable.provenance`.
+- OpenCV YuNet `face_detection_yunet_2023mar.onnx` (MIT) and SFace
+  `face_recognition_sface_2021dec.onnx` (Apache-2.0), from opencv_zoo's Hugging Face mirrors at
+  pinned commits, verified against pinned SHA-256s and recorded in `GalleryLayout.identity`.
 
 ## Limitations
 
@@ -100,3 +125,6 @@ worker's CPU threads on a shared host. Throughput is measured by `scripts/bench_
 - A tile showing two people is analysed for one face (MediaPipe `num_faces=1`; py-feat keeps the
   largest).
 - Gutters narrower than about 3 px at the 960 px analysis width can merge tiles.
+- In active-speaker view, frames between two identity samples that show different people (up to
+  0.5 s per switch at 2 fps) are attributed to nobody. Speaker view is recognised only when it is
+  the dominant layout; a gallery recording with speaker-view intervals keeps its spatial tiles.

@@ -299,6 +299,7 @@ def link_tiles_to_speakers(
     n_shifts: int = 200,
     min_shift_s: float = 10.0,
     seed: int = 0,
+    visibility_per_tile: Optional[Mapping[str, np.ndarray]] = None,
 ) -> SpeakerLink:
     """Assign tiles to diarized speakers by correlating mouth motion with speech activity.
 
@@ -316,10 +317,13 @@ def link_tiles_to_speakers(
         n_shifts: Circular shifts drawn for the null distribution of the best total correlation.
         min_shift_s: Smallest shift, so the null excludes near-aligned series.
         seed: Seed of the shift draw.
+        visibility_per_tile: ``tile_id -> bool series``: where the tile's face is shown (a person
+            track of a speaker-view layout). Mouth activity is NaN elsewhere, and the Pearson
+            correlation of each visibility series with each smoothed speaker track is reported.
 
     Returns:
         Correlations, the assignment, per-tile margins, the total margin over the runner-up
-        assignment, and the shift-null p-value.
+        assignment, the shift-null p-value and, with visibility, the visibility-activity correlations.
     """
     from scipy.optimize import linear_sum_assignment
 
@@ -333,6 +337,16 @@ def link_tiles_to_speakers(
     speech = {
         s: _rolling(np.asarray(speaker_activity_per_speaker[s], float)[:length], window, "mean") for s in speakers
     }
+    visibility_corr: Dict[str, Dict[str, float]] = {}
+    for t, shown in (visibility_per_tile or {}).items():
+        if t not in mouth:
+            continue
+        seen = np.asarray(shown, bool)[:length]
+        mouth[t] = np.where(seen, mouth[t], np.nan)
+        visibility_corr[t] = {}
+        for s in speakers:
+            r, _ = _pearson(seen.astype(float), speech[s])
+            visibility_corr[t][s] = float(r) if np.isfinite(r) else 0.0
 
     def correlate(shift: int) -> Tuple[np.ndarray, int]:
         matrix = np.zeros((len(tiles), len(speakers)))
@@ -372,6 +386,7 @@ def link_tiles_to_speakers(
         total_margin=float(best_total - runner_up) if runner_up is not None else best_total,
         p_value=float(p_value),
         n_frames=n_used,
+        visibility_activity_corr=visibility_corr,
     )
 
 

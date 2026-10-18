@@ -40,6 +40,44 @@ tiles:
     face_detect_width: 960     # Haar cascade input width
     face_min_fraction: 0.5     # each cell holds a face in at least this fraction of frames
     face_max_straddle: 0.2     # largest fraction of faces crossing a cell boundary
+    # Cut between face clusters regardless of the region's aspect ratio; derivation in the spec
+    # ("Face-position split").
+    face_split:
+      min_fraction: 0.5             # each kept cluster holds a face in at least this fraction of frames
+      max_straddle: 0.2             # largest fraction of faces crossing a cut
+      min_gap_face_widths: 1.0      # clusters are apart by more than this many median face sizes
+      cell_aspect_range: [1.25, 2.0] # every resulting cell's width/height lies in this range
+
+speaker_view:
+  derivation: |
+    Zoom's active-speaker view shows one participant at a time in one large tile and switches
+    between them. It is considered when the reference layout is one tile covering at least
+    min_tile_area_fraction of the frame (the observed case, 1650x920 in 1920x1080, is 0.73; a
+    two-tile gallery tile is at most 0.5). Identity samples are decoded sequentially at identity_fps
+    and identity_width; YuNet finds faces (score_threshold, nms_threshold and top_k are the
+    opencv_zoo demo values) and SFace embeds each one. Embeddings are clustered by average-linkage
+    agglomeration on cosine distance, cut at 1 - cosine_threshold, where 0.363 is SFace's published
+    same-person cosine threshold (opencv_zoo sface.py; LFW). Clusters holding fewer than
+    min_person_fraction of the face samples are dropped as spurious detections; at most
+    max_cluster_samples embeddings (evenly spaced) are clustered and the rest are assigned to the
+    nearest centroid at or above the same threshold, which bounds memory on long recordings. The view
+    is speaker view when at least min_speaker_view_fraction of the samples show the reference tile
+    and at least two persons each appear in min_person_fraction of its face samples. A person's
+    rows are kept only between identity samples that agree, so up to 1/identity_fps around each
+    switch is unattributed. identity_fps 2 keeps that loss at most 0.5 s per switch at about
+    30 ms per sample (decode, YuNet and SFace at 960x540, M1 Pro at load 5), about 6 min for a
+    98 min recording. All but the cosine threshold are unfitted priors.
+  enabled: true
+  min_tile_area_fraction: 0.5
+  min_speaker_view_fraction: 0.5
+  identity_fps: 2.0
+  identity_width: 960
+  score_threshold: 0.6
+  nms_threshold: 0.3
+  top_k: 50
+  cosine_threshold: 0.363
+  min_person_fraction: 0.05
+  max_cluster_samples: 2000
 
 geometry:
   derivation: |

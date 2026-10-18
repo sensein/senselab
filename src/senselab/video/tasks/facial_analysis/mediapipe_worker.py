@@ -17,10 +17,24 @@ from typing import Any, Dict, List
 import numpy as np
 
 try:
-    from senselab.video.tasks.facial_analysis.frame_stream import crop_tile, iter_frames, probe_video, scaled_size
+    from senselab.video.tasks.facial_analysis.frame_stream import (
+        crop_tile,
+        iter_frames,
+        probe_video,
+        scaled_size,
+        tile_placement,
+        widest_box,
+    )
 except ImportError:  # inside the backend venv, where senselab is not installed
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from frame_stream import crop_tile, iter_frames, probe_video, scaled_size  # type: ignore[no-redef]
+    from frame_stream import (  # type: ignore[no-redef]
+        crop_tile,
+        iter_frames,
+        probe_video,
+        scaled_size,
+        tile_placement,
+        widest_box,
+    )
 
 # Iris centres and eye-corner landmarks of the 478-point mesh, ordered image-left to image-right.
 _EYES = (
@@ -79,8 +93,9 @@ def run(spec: Dict[str, Any]) -> Dict[str, Any]:
 
     tiles: List[Dict[str, Any]] = spec["tiles"]
     info = probe_video(spec["video"])
-    scale = min(1.0, float(spec["tile_width"]) / max(t["box"][2] for t in tiles))
-    motion_scale = float(spec["motion_width"]) / max(t["box"][2] for t in tiles)
+    widest = widest_box(tiles)
+    scale = min(1.0, float(spec["tile_width"]) / widest)
+    motion_scale = float(spec["motion_width"]) / widest
 
     def make() -> Any:  # noqa: ANN401
         options = vision.FaceLandmarkerOptions(
@@ -95,10 +110,10 @@ def run(spec: Dict[str, Any]) -> Dict[str, Any]:
         )
         return vision.FaceLandmarker.create_from_options(options)
 
-    landmarkers = [make() for _ in tiles]
+    landmarkers: Dict[tuple, Any] = {}
     columns: Dict[str, Dict[str, List[Any]]] = {t["tile_id"]: {} for t in tiles}
     blendshape_names: List[str] = []
-    previous: Dict[str, np.ndarray] = {}
+    previous: Dict[tuple, np.ndarray] = {}
     began = time.monotonic()
     last_ms = -1
     n = 0
@@ -106,19 +121,26 @@ def run(spec: Dict[str, Any]) -> Dict[str, Any]:
     for t, frame in iter_frames(spec["video"], fps=float(spec["fps"]), scale=scale):
         ms = max(int(round(t * 1000)), last_ms + 1)
         last_ms = ms
-        for tile, landmarker in zip(tiles, landmarkers):
-            crop = crop_tile(frame, tile["box"], scale=scale, masks=tile.get("masks", []))
-            result = landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=crop), ms)
+        for tile in tiles:
+            placement = tile_placement(tile, t)
+            if placement is None:
+                continue
+            region, crop_box, masks = placement
+            key = (tile["tile_id"], region)
+            if key not in landmarkers:
+                landmarkers[key] = make()
+            crop = crop_tile(frame, crop_box, scale=scale, masks=masks)
+            result = landmarkers[key].detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=crop), ms)
             col = columns[tile["tile_id"]]
             step = max(1, int(round(scale / motion_scale))) if motion_scale < scale else 1
             small = crop[::step, ::step].mean(axis=2, dtype=np.float32)
-            prev = previous.get(tile["tile_id"])
+            prev = previous.get(key)
             motion = (
                 float(np.mean(np.abs(small - prev)) / 255.0)
                 if prev is not None and prev.shape == small.shape
                 else np.nan
             )
-            previous[tile["tile_id"]] = small
+            previous[key] = small
             present = bool(result.face_landmarks)
             col.setdefault("time_s", []).append(t)
             col.setdefault("face_present", []).append(present)
@@ -160,7 +182,7 @@ def run(spec: Dict[str, Any]) -> Dict[str, Any]:
             print(
                 json.dumps({"progress": {"t": round(t, 2), "frames": n, "wall_s": round(elapsed, 1)}}), file=sys.stderr
             )
-    for landmarker in landmarkers:
+    for landmarker in landmarkers.values():
         landmarker.close()
 
     width = len(blendshape_names) or 52

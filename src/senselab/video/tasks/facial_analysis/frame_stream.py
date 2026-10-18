@@ -199,3 +199,32 @@ def crop_tile(frame: np.ndarray, box: Box, scale: float = 1.0, masks: Sequence[B
             sx, sy = int(round(mx * scale)), int(round(my * scale))
             tile[sy : sy + int(round(mh * scale)), sx : sx + int(round(mw * scale))] = fill.astype(tile.dtype)
     return tile
+
+
+def tile_placement(tile: Dict[str, Any], t: float) -> Optional[Tuple[str, Box, List[Box]]]:
+    """Where a worker tile is analysed at time ``t``.
+
+    Args:
+        tile: A worker tile: ``tile_id``, ``box``, ``masks`` and, for a person track, ``segments`` of
+            ``[start_s, end_s, region_id, box, masks]`` in time order.
+        t: Frame time in seconds.
+
+    Returns:
+        ``(region_key, box, masks)``; ``None`` when a person track is not shown at ``t``.
+    """
+    segments = tile.get("segments")
+    if segments is None:
+        return tile["tile_id"], tuple(tile["box"]), list(tile.get("masks", []))  # type: ignore[return-value]
+    for start, end, region_id, box, masks in segments:
+        if start - 1e-6 <= t <= end + 1e-6:
+            return str(region_id), tuple(box), list(masks)  # type: ignore[return-value]
+        if start > t:
+            break
+    return None
+
+
+def widest_box(tiles: Sequence[Dict[str, Any]]) -> int:
+    """The widest box among worker tiles and their segments, in source pixels."""
+    widths = [int(t["box"][2]) for t in tiles]
+    widths += [int(s[3][2]) for t in tiles for s in t.get("segments") or []]
+    return max(widths)
