@@ -1,8 +1,10 @@
 """The store's file checksums: what they record, and what they say when they cannot."""
 
 import hashlib
+import json
 import os
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
@@ -10,6 +12,7 @@ from senselab.utils.prov_store import (
     CHECKSUM_KEY,
     CHECKSUM_UNRESOLVED_KEY,
     MTIME_KEY,
+    PROV_TYPE,
     SIZE_KEY,
     ProvStore,
     file_attributes,
@@ -83,6 +86,26 @@ def test_entity_refuses_a_dishonest_checksum(attributes: dict[str, object], matc
         store.entity(prov_type="stream", extent=None, attributes=attributes)
 
 
+@pytest.mark.parametrize(
+    "attributes", [{CHECKSUM_KEY: "0" * 64}, {CHECKSUM_UNRESOLVED_KEY: "input set is empty"}], ids=["digest", "reason"]
+)
+def test_an_artifact_checksum_needs_no_path(tmp_path: Path, attributes: dict[str, object]) -> None:
+    """An artifact is named by its content alone, and reads back unchanged."""
+    store = ProvStore(run_id="r")
+    eid = store.entity(prov_type="artifact", extent=None, attributes={"role": "input", **attributes})
+    path = tmp_path / "store.jsonl"
+    store.write_jsonl(path)
+    assert ProvStore.read_jsonl(path).get_entity(eid).attributes == {"role": "input", **attributes}
+
+
+@pytest.mark.parametrize("prov_type", sorted(set(get_args(PROV_TYPE)) - {"artifact"}))
+def test_every_other_type_still_needs_a_path_for_its_checksum(prov_type: PROV_TYPE) -> None:
+    """Only an artifact is exempt; any other entity's checksum must still say which file it describes."""
+    store = ProvStore(run_id="r")
+    with pytest.raises(ValueError, match="naming the file"):
+        store.entity(prov_type=prov_type, extent=None, attributes={CHECKSUM_KEY: "0" * 64})
+
+
 def test_read_back_holds_a_written_store_to_the_same_checksum_invariants(tmp_path: Path) -> None:
     """A hand-edited store.jsonl carrying a malformed digest is refused, naming the entity."""
     store = ProvStore(run_id="r")
@@ -91,6 +114,20 @@ def test_read_back_holds_a_written_store_to_the_same_checksum_invariants(tmp_pat
     store.write_jsonl(path)
     path.write_text(path.read_text().replace("0" * 64, "0" * 63))
     with pytest.raises(ValueError, match="64 lowercase hex"):
+        ProvStore.read_jsonl(path)
+
+
+def test_read_back_refuses_a_non_artifact_whose_path_was_removed(tmp_path: Path) -> None:
+    """A hand-edited store.jsonl cannot turn a located file into a pathless checksum; only an artifact may be one."""
+    store = ProvStore(run_id="r")
+    store.entity(prov_type="stream", extent=None, attributes={"path": "a.flac", CHECKSUM_KEY: "0" * 64})
+    path = tmp_path / "store.jsonl"
+    store.write_jsonl(path)
+    [line] = path.read_text().splitlines()
+    record = json.loads(line)
+    del record["attributes"]["path"]
+    path.write_text(json.dumps(record) + "\n")
+    with pytest.raises(ValueError, match="naming the file"):
         ProvStore.read_jsonl(path)
 
 

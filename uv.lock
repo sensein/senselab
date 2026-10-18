@@ -6179,6 +6179,7 @@ dependencies = [
     { name = "transformers" },
     { name = "umap-learn" },
     { name = "vocos" },
+    { name = "xxhash" },
 ]
 
 [package.optional-dependencies]
@@ -6311,6 +6312,7 @@ requires-dist = [
     { name = "uroman", marker = "extra == 'all'", specifier = ">=1.3" },
     { name = "uroman", marker = "extra == 'nlp'", specifier = ">=1.3" },
     { name = "vocos", specifier = ">=0.1" },
+    { name = "xxhash", specifier = ">=3.5" },
 ]
 provides-extras = ["all", "nlp", "senselab-ai", "text", "video"]
 
