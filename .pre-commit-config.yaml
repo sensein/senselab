@@ -107,3 +107,7 @@ repos:
     entry: YAML files must have .yaml extension.
     language: fail
     files: \.yml$
+  - id: participant-ids
+    name: No research-participant identifiers in tracked files.
+    entry: python scripts/check_participant_ids.py
+    language: python
