@@ -346,7 +346,10 @@ class _Check:
             if "value" not in entry:
                 self.codes.add("E_METRICS_BAD_SHAPE")
             for key in ENTRY_NUMBERS:
-                self.number(entry, key)
+                # A count value is checked by `integer`, which also accepts the suppression token: the driver's
+                # pass re-validates the adapter pass's suppressed copy.
+                if not (key == "value" and name == "count"):
+                    self.number(entry, key)
             if name == "count":
                 self.integer(entry, "value", suppress=True)
             self.integer(entry, "n", suppress=True)
