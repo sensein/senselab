@@ -74,6 +74,7 @@ WORKERS_READING_THROUGH_PORTABLE_AUDIO_IO = {
     "audio/tasks/source_separation/unasdiff.py",
     "audio/tasks/speech_enhancement/driftse.py",
     "audio/tasks/ssl_embeddings/s3prl.py",
+    "audio/tasks/turn_taking_projection/maai.py",
     "audio/tasks/voice_cloning/coqui.py",
     "audio/tasks/voice_cloning/sparc.py",
     "utils/clearvoice.py",

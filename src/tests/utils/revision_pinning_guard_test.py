@@ -114,6 +114,10 @@ LOADER_CANNOT_PIN_SUBPROCESS_FILES = {
     # snapshots/<sha> directory with disable_update=True, so it is pinned by the path and makes no
     # Hub call; the payload carries no repo id or revision-shaped key.
     "audio/tasks/classification/speech_emotion_recognition/emotion2vec.py",
+    # MaAI's Maai(local_model=...) takes a file path and no revision. The parent fetches each checkpoint
+    # with hf_hub_download(..., revision=<literal SHA in MaaiCheckpoint>) and the CPC encoder by URL with
+    # a SHA-256 check, and hands the worker both paths; the worker makes no Hub call.
+    "audio/tasks/turn_taking_projection/maai.py",
 }
 
 
