@@ -672,8 +672,9 @@ def stage_portable_audio_io(directory: "str | Path") -> str:
 def _clean_subprocess_env() -> dict:
     """Return a copy of os.environ fit for a subprocess venv.
 
-    Strips MPLBACKEND (matplotlib_inline's backend is not available in subprocesses) and points TLS
-    verification at a CA bundle that exists.
+    Strips MPLBACKEND (matplotlib_inline's backend is not available in subprocesses), applies
+    :func:`senselab.utils.network_guard.apply_network_guard` (a no-op unless
+    ``SENSELAB_BLOCK_NETWORK`` is set) and points TLS verification at a CA bundle that exists.
 
     **Why the CA bundle needs saying explicitly.** These venvs run on the uv-managed interpreter, which
     is python-build-standalone: statically linked, and with no usable system CA path compiled in. So
@@ -693,7 +694,10 @@ def _clean_subprocess_env() -> dict:
     corporate CA has already answered this question, and overriding it would break exactly the setup
     that took the trouble to configure it.
     """
+    from senselab.utils.network_guard import apply_network_guard
+
     env = {k: v for k, v in os.environ.items() if k not in ("MPLBACKEND",)}
+    apply_network_guard(env)
     if not env.get("SSL_CERT_FILE") or not env.get("REQUESTS_CA_BUNDLE"):
         try:
             import certifi

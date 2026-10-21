@@ -249,3 +249,6 @@ node_modules
 package-lock.json
 test-results/
 playwright-report/
+# the data/ re-includes above must not re-include bytecode caches
+**/__pycache__/
+*.py[co]

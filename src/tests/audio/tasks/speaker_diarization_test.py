@@ -583,3 +583,22 @@ def test_diarize_audios_with_child_adult_rejects_short_clips(
     # Fixture is ~4.9s, well under the 10s floor.
     with pytest.raises(ValueError, match="10s"):
         diarize_audios_with_child_adult(audios=[resampled_mono_audio_sample], model=model, device=DeviceType.CUDA)
+
+
+@pytest.mark.parametrize("exclusive", [True, False])
+def test_diarize_audios_forwards_exclusive_to_pyannote(monkeypatch: pytest.MonkeyPatch, exclusive: bool) -> None:
+    """``diarize_audios(exclusive=...)`` reaches the pyannote backend unchanged; the default stays True."""
+    seen: list = []
+
+    def fake(audios: list, **kwargs: object) -> list:
+        seen.append(kwargs["exclusive"])
+        return [[] for _ in audios]
+
+    monkeypatch.setattr(diarization_api, "diarize_audios_with_pyannote", fake)
+    model: PyannoteAudioModel = PyannoteAudioModel.model_construct(
+        path_or_uri="pyannote/speaker-diarization-community-1", revision="main", commit_sha="0" * 40
+    )
+    audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000)
+    diarize_audios([audio], model=model, exclusive=exclusive)
+    diarize_audios([audio], model=model)
+    assert seen == [exclusive, True]

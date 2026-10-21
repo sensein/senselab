@@ -45,7 +45,7 @@ class PyannoteDiarization:
         - Pyannote models typically expect **mono, 16 kHz** audio.
         - If you know the number of speakers, set `num_speakers`; otherwise use
           `min_speakers`/`max_speakers` bounds to help estimation.
-        - Supported devices: ``DeviceType.CPU`` and ``DeviceType.CUDA``.
+        - Supported devices: ``DeviceType.CPU``, ``DeviceType.CUDA`` and ``DeviceType.MPS``.
     """
 
     _pipelines: Dict[str, "Pipeline"] = {}
@@ -72,7 +72,7 @@ class PyannoteDiarization:
             )
 
         device, _ = _select_device_and_dtype(
-            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU]
         )
         key = f"{model.path_or_uri}-{model.revision}-{device}"
         if key not in cls._pipelines:
@@ -118,7 +118,7 @@ def diarize_audios_with_pyannote(
         model (PyannoteAudioModel | None):
             Pyannote model. Defaults to ``pyannote/speaker-diarization-community-1@main``.
         device (DeviceType | None):
-            Inference device (``CPU`` or ``CUDA``).
+            Inference device (``CPU``, ``CUDA`` or ``MPS``); the fastest available when omitted.
         num_speakers (int | None):
             If known, fix the number of speakers.
         min_speakers (int | None):

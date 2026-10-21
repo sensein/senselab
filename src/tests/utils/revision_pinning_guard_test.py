@@ -106,6 +106,11 @@ LOADER_CANNOT_PIN_SUBPROCESS_FILES = {
     # file with hf_hub_download(..., revision=<sha>) and hands the worker the snapshots/<sha>/ path,
     # so it is pinned by the path. The worker makes no Hub call; see ppg_revision_test.py.
     "audio/tasks/features_extraction/ppg.py",
+    # FunASR's AutoModel takes a model directory (or a hub id it downloads without a revision). The
+    # parent stages the emotion2vec+ commit with resolve_model and hands the worker the returned
+    # snapshots/<sha> directory with disable_update=True, so it is pinned by the path and makes no
+    # Hub call; the payload carries no repo id or revision-shaped key.
+    "audio/tasks/classification/speech_emotion_recognition/emotion2vec.py",
 }
 
 
