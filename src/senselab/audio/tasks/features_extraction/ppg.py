@@ -96,6 +96,24 @@ _PPGS_REQUIREMENTS = [
 ]
 _PPGS_PYTHON = "3.11"
 
+PPGS_FRAME_RATE: float = 100.0
+"""Posteriorgram frames per second: ppgs' 160-sample hop at 16 kHz. Frame ``i`` is centred at ``(i + 0.5) / 100`` s."""
+
+DEFAULT_WINDOW_S = 60.0
+"""Audio, in seconds, the worker turns into posteriors per model call (see the sparse-ppg-boundaries spec)."""
+
+CHUNK_BATCH = 16
+"""ppgs inference chunks (5 s each) the worker stacks into one forward pass."""
+
+PPGS_REPO_ID = "CameronChurchwell/ppgs"
+"""The Hugging Face repository ppgs downloads its pretrained checkpoints from."""
+
+PPGS_CHECKPOINT_FILE = "mel-800k.pt"
+"""The ``mel`` model's checkpoint inside :data:`PPGS_REPO_ID`."""
+
+PPGS_REVISION = "main"
+"""The ref resolved, through the run manifest, to the commit every checkpoint load is pinned to."""
+
 # Worker script — runs inside the isolated venv (no senselab imports)
 _WORKER_SCRIPT = r"""
 import json
@@ -108,33 +126,83 @@ import torch
 
 args = json.loads(sys.stdin.read())
 sys.path.insert(0, args["io_dir"])
-from portable_audio_io import read_audio
-audio_paths = args["audio_paths"]
-device = args["device"]
-output_dir = args["output_dir"]
+from portable_audio_io import audio_info, read_audio
 
 import ppgs
 
-gpu = 0 if device == "cuda" else None
+device = torch.device({"cuda": "cuda:0", "mps": "mps"}.get(args["device"], "cpu"))
+hop = int(ppgs.HOPSIZE)
+stride = int(ppgs.CHUNK_LENGTH) - 2 * int(ppgs.CHUNK_OVERLAP)
+window_frames = args["window_frames"]
+if window_frames is not None:
+    window_frames = -(-int(window_frames) // stride) * stride
+context_frames = stride
+model = ppgs.load.model(checkpoint=args["checkpoint"], representation="mel").to(device).eval()
+
+
+chunk_batch = int(args["chunk_batch"])
+
+
+def run(x):
+    return model(x, torch.full((x.shape[0],), x.shape[-1], dtype=torch.long, device=device))
+
+
+def logits(features):
+    # ppgs.model.Transformer.forward's own chunking, with its full-length chunks batched.
+    overlap, length = int(ppgs.CHUNK_OVERLAP), int(ppgs.CHUNK_LENGTH)
+    if features.shape[-1] <= length:
+        return run(features)
+    padded = torch.nn.functional.pad(features, (overlap, 0), mode="replicate")
+    splits = [padded[..., i * stride : i * stride + length] for i in range(-(-features.shape[-1] // stride))]
+    kept = [None] * len(splits)
+    full = [i for i, split in enumerate(splits) if split.shape[-1] == length]
+    for first in range(0, len(full), chunk_batch):
+        group = full[first : first + chunk_batch]
+        out = run(torch.cat([splits[i] for i in group], dim=0))
+        for j, i in enumerate(group):
+            kept[i] = out[j : j + 1, :, overlap : length - overlap]
+    for i, split in enumerate(splits):
+        if kept[i] is None:
+            kept[i] = run(split)[..., overlap : length - overlap]
+    return torch.cat(kept, dim=-1)
+
+
+def posteriors(samples):
+    audio = torch.from_numpy(np.ascontiguousarray(samples, dtype=np.float32))[None, None]
+    features = ppgs.preprocess.from_audio(audio, representation="mel", sample_rate=ppgs.SAMPLE_RATE)
+    with torch.inference_mode():
+        probabilities = torch.softmax(logits(features.float().to(device)), dim=1)
+    return probabilities[0].float().cpu().numpy()
+
+
+def file_posteriors(path):
+    total = int(audio_info(path).frames)
+    n_frames = total // hop
+    if window_frames is None or n_frames <= window_frames + 2 * context_frames:
+        data, _ = read_audio(path)
+        return posteriors(data)
+    out = np.empty((len(ppgs.PHONEMES), n_frames), dtype=np.float32)
+    for start in range(0, n_frames, window_frames):
+        stop = min(n_frames, start + window_frames)
+        left = max(0, start - context_frames)
+        right = min(n_frames, stop + context_frames)
+        data, _ = read_audio(path, start=left * hop, stop=total if right == n_frames else right * hop)
+        block = posteriors(data)
+        out[:, start:stop] = block[:, start - left : stop - left]
+    return out
+
 
 outputs = []
-for i, audio_path in enumerate(audio_paths):
-    data, sr = read_audio(audio_path, channels_first=False)
-    waveform = torch.from_numpy(data).unsqueeze(0) if data.ndim == 1 else torch.from_numpy(data.T)
+for i, audio_path in enumerate(args["audio_paths"]):
     try:
-        posteriorgram = ppgs.from_audio(
-            torch.unsqueeze(waveform, dim=0),
-            ppgs.SAMPLE_RATE,
-            gpu=gpu,
-        ).cpu()
-    except RuntimeError as e:
-        print(f"RuntimeError extracting PPGs for audio {i}: {e}", file=sys.stderr)
+        posteriorgram = file_posteriors(audio_path)
+    except (RuntimeError, ValueError) as e:
+        print(f"{type(e).__name__} extracting PPGs for audio {i}: {e}", file=sys.stderr)
         print(traceback.format_exc(), file=sys.stderr)
         outputs.append({"path": None, "error": f"{type(e).__name__}: {e}"})
         continue
-
-    out_path = str(Path(output_dir) / f"ppg_{i}.npy")
-    np.save(out_path, posteriorgram.float().numpy())
+    out_path = str(Path(args["output_dir"]) / f"ppg_{i}.npy")
+    np.save(out_path, posteriorgram[None])
     outputs.append({"path": out_path, "error": None})
 
 print(json.dumps({"outputs": outputs}))
@@ -184,6 +252,41 @@ def require_posteriorgram(result: "torch.Tensor | PpgsPosteriorgramUnavailable")
     return result
 
 
+def ppgs_checkpoint(revision: str = PPGS_REVISION) -> Tuple[str, Path]:
+    """Resolve the ppgs ``mel`` checkpoint to a commit and stage that commit's file locally.
+
+    The commit comes from :func:`~senselab.utils.model_revision.resolve_revision` (recorded in the
+    run manifest); :data:`PPGS_CHECKPOINT_FILE` is downloaded at that SHA. The worker is handed the
+    local file and makes no Hub call.
+
+    Args:
+        revision: A ref or a 40-hex commit of :data:`PPGS_REPO_ID`.
+
+    Returns:
+        ``(commit_sha, checkpoint_path)``; the path lies under the cache's ``snapshots/<commit_sha>/``.
+    """
+    from huggingface_hub import hf_hub_download
+
+    from senselab.utils.model_revision import resolve_revision
+
+    sha = resolve_revision(PPGS_REPO_ID, revision)
+    return sha, Path(hf_hub_download(PPGS_REPO_ID, PPGS_CHECKPOINT_FILE, revision=sha))
+
+
+def ppgs_model_revision(revision: str = PPGS_REVISION) -> str:
+    """The commit :func:`extract_ppgs_from_audios` loads for ``revision``, for provenance.
+
+    Args:
+        revision: A ref or a 40-hex commit of :data:`PPGS_REPO_ID`.
+
+    Returns:
+        The 40-hex commit SHA (memoized for the run; no I/O after the first resolution).
+    """
+    from senselab.utils.model_revision import resolve_revision
+
+    return resolve_revision(PPGS_REPO_ID, revision)
+
+
 WORKER_STARTUP_S = 300.0
 """Seconds allowed for the worker before it has any audio to read: interpreter, torch, checkpoint."""
 
@@ -204,19 +307,31 @@ def _worker_timeout_s(audio_seconds: float) -> float:
 
 
 def extract_ppgs_from_audios(
-    audios: List[Audio], device: Optional[DeviceType] = None, timeout_min_s: Optional[float] = None
+    audios: List[Audio],
+    device: Optional[DeviceType] = None,
+    timeout_min_s: Optional[float] = None,
+    window_s: Optional[float] = DEFAULT_WINDOW_S,
+    revision: str = PPGS_REVISION,
 ) -> List["torch.Tensor | PpgsPosteriorgramUnavailable"]:
     """Extracts phonetic posteriorgrams (PPGs) from every audio.
 
-    The ppgs model runs in an isolated subprocess venv with its own
-    Python and dependencies. Audio is transferred via WAV files.
+    The ppgs ``mel`` model runs in an isolated subprocess venv with its own Python and dependencies,
+    in float32. Audio is transferred via WAV files; the worker reads each one window by window, so
+    its memory is bounded by ``window_s`` rather than by the recording's length. Windows are aligned
+    to ppgs' own 4 s inference chunks and carry one chunk of context on each side, so the windowed
+    posteriorgram equals the one-call posteriorgram.
 
     Args:
         audios: The audios to extract PPGs from. Every one must be mono and at
             :data:`PPGS_SAMPLE_RATE`.
-        device: Device to use (CUDA or CPU).
+        device: Device to use (CUDA, MPS or CPU).
         timeout_min_s: The least the worker is allowed, in seconds, whatever the audio's length; None
             allows only the length-scaled budget.
+        window_s: Seconds of audio per model call, rounded up to a multiple of ppgs' 4 s chunk stride.
+            None runs every recording in one call.
+        revision: Ref or commit of :data:`PPGS_REPO_ID`; resolved to a SHA by :func:`ppgs_checkpoint`
+            and the checkpoint loaded from that commit. :func:`ppgs_model_revision` returns the same
+            SHA for provenance.
 
     Returns:
         One entry per input audio, in input order: a PPG tensor in ``(1, phonemes, frames)`` layout
@@ -225,9 +340,14 @@ def extract_ppgs_from_audios(
         raised on. :func:`require_posteriorgram` unwraps one entry.
 
     Raises:
-        ValueError: If any audio is multi-channel, or is not at :data:`PPGS_SAMPLE_RATE`.
+        ValueError: If any audio is multi-channel, or is not at :data:`PPGS_SAMPLE_RATE`, or
+            ``window_s`` is not positive.
     """
-    device, _ = _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
+    if window_s is not None and window_s <= 0:
+        raise ValueError(f"window_s must be positive or None, got {window_s}")
+    device, _ = _select_device_and_dtype(
+        user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU]
+    )
 
     if any(audio.waveform.shape[0] != 1 for audio in audios):
         raise ValueError("Only mono audio is supported by ppgs model.")
@@ -237,6 +357,7 @@ def extract_ppgs_from_audios(
             f"ppgs reads every waveform at {PPGS_SAMPLE_RATE} Hz and is given {off_rate}; resample before calling."
         )
 
+    _, checkpoint = ppgs_checkpoint(revision)
     python = venv_python(ensure_ppgs_venv())
     budget = _worker_timeout_s(sum(audio.waveform.shape[-1] / audio.sampling_rate for audio in audios))
     if timeout_min_s is not None:
@@ -257,6 +378,9 @@ def extract_ppgs_from_audios(
             {
                 "audio_paths": audio_paths,
                 "device": device.value,
+                "window_frames": None if window_s is None else max(1, round(window_s * PPGS_FRAME_RATE)),
+                "chunk_batch": CHUNK_BATCH,
+                "checkpoint": str(checkpoint),
                 "output_dir": str(tmp),
                 "io_dir": stage_portable_audio_io(tmp),
             }

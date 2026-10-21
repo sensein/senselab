@@ -32,6 +32,9 @@ from senselab.utils.prov_store import ProvStore
 
 SR = 16000
 
+FAKE_PPGS_SHA = "0123456789abcdef0123456789abcdef01234567"
+"""The commit the stubbed ppgs resolution reports."""
+
 
 class _FakeModel:
     """A model spec stub carrying exactly what the node reads: path_or_uri and commit_sha."""
@@ -160,6 +163,7 @@ def _stub_models(
         ]
 
     monkeypatch.setattr(preprocess_module, "extract_ppgs_from_audios", ppgs or fake_ppgs)
+    monkeypatch.setattr(preprocess_module, "ppgs_model_revision", lambda revision="main": FAKE_PPGS_SHA)
     monkeypatch.setattr(
         preprocess_module,
         "diarization_model",

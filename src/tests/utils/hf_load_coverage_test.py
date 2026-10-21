@@ -141,6 +141,11 @@ RAW_LOAD_EXCEPTIONS = {
     # would download 1.3 GB no run reads. Same pinning guarantee as above: a full commit hash takes
     # huggingface_hub's commit-hash shortcut, so a cached file resolves with no network.
     "audio/tasks/speech_enhancement/driftse.py",
+    # ppgs resolves CameronChurchwell/ppgs to a commit via resolve_revision and then calls
+    # hf_hub_download(..., revision=<sha>) for the one checkpoint the mel model reads (mel-800k.pt);
+    # the repository also holds the unused w2v2fb checkpoint, so resolve_model would stage both.
+    # The worker gets the local file and calls ppgs.load.model(checkpoint=<path>).
+    "audio/tasks/features_extraction/ppg.py",
 }
 
 
