@@ -173,6 +173,17 @@ def test_shutdown_ends_every_worker(tmp_path: Path) -> None:
     assert again["pid"] not in (a["pid"], b["pid"])
 
 
+def test_close_by_label_ends_only_that_label(tmp_path: Path) -> None:
+    """Closing one label stops its worker and leaves the others; the next call for it starts fresh."""
+    a = _call(tmp_path, {"x": 1}, tag="a")
+    b = _call(tmp_path, {"x": 1}, tag="b")
+    assert venv_worker.close_venv_workers("test worker a") == 1
+    assert [s["identity"][1] for s in venv_worker_stats()] == ["model-b"]
+    assert _call(tmp_path, {"x": 1}, tag="b")["pid"] == b["pid"]
+    assert _call(tmp_path, {"x": 1}, tag="a")["pid"] != a["pid"]
+    assert venv_worker.close_venv_workers("no such label") == 0
+
+
 class _CountingLock:
     """A worker lock that counts the threads that have asked for it."""
 

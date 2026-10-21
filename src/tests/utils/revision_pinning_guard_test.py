@@ -51,6 +51,10 @@ REVISION_RESOLVED_SUBPROCESS_FILES = {
     "audio/tasks/classification/speech_emotion_recognition/api.py",
     "audio/tasks/speaker_diarization/child_adult.py",
     "audio/tasks/speaker_diarization/moss.py",
+    # qwen.py: the ASR model's SHA is model.commit_sha or resolve_revision(...); the aligner's is
+    # resolve_revision(aligner_name, aligner_ref) in both transcribe_with_qwen and align_with_qwen,
+    # so forced_aligner_revision / aligner_revision in the payloads are SHAs
+    # (test_qwen_aligner_revision_is_always_resolved below).
     "audio/tasks/speech_to_text/qwen.py",
     "audio/tasks/text_to_speech/qwen_tts.py",
     "text/tasks/pii_detection/subprocess_backend.py",
@@ -192,6 +196,27 @@ def test_revision_resolved_subprocess_files_still_resolve_before_sending() -> No
         "ref may have crept back into the worker payload (a comment saying otherwise does not "
         "count):\n" + "\n".join(f"  {f}" for f in unresolved)
     )
+
+
+def test_qwen_aligner_revision_is_always_resolved() -> None:
+    """Every assignment to ``aligner_revision`` in qwen.py is a ``resolve_revision(...)`` call.
+
+    The worker payload keys ``forced_aligner_revision`` / ``aligner_revision`` are fed from that
+    local, so a ref assigned to it anywhere would reach ``from_pretrained(revision=...)`` unresolved.
+    """
+    from tests.utils.hf_load_coverage_test import _SRC
+
+    tree = ast.parse((_SRC / "audio/tasks/speech_to_text/qwen.py").read_text())
+    assigned = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "aligner_revision" for t in node.targets)
+    ]
+    assert len(assigned) >= 2
+    for value in assigned:
+        call = value.body if isinstance(value, ast.IfExp) else value
+        assert isinstance(call, ast.Call) and getattr(call.func, "id", None) == "resolve_revision", ast.dump(value)
 
 
 def _revision_payload_files() -> set[str]:
@@ -496,7 +521,11 @@ def _stages_via_a_ref(node: ast.expr) -> bool:
     * ``model.revision or "main"`` -- the idiom ``qwen_tts.py`` uses for an optional field. Handled
       as a general ``or``: every branch must itself be a ref, so ``model.commit_sha or ...`` fails;
     * a literal ref string that is not 40-hex, for a companion model with no ``HFModel`` of its own
-      (``qwen.py``'s forced aligner is a bare id).
+      (``qwen.py``'s forced aligner is a bare id);
+    * a local named ``aligner_ref`` -- ``qwen.py``'s caller-selectable aligner ref
+      (``aligner_revision or "main"``), which is never resolved to a SHA itself: the resolved SHA
+      lives in the separate ``aligner_revision`` local, so this name can only hold a ref
+      (reviewed for both ``transcribe_with_qwen`` and ``align_with_qwen``).
 
     Everything else fails -- notably a local variable, which is how the pre-fix sites read
     (``revision = model.commit_sha or resolve_revision(...)``) and which no static check can prove
@@ -508,6 +537,8 @@ def _stages_via_a_ref(node: ast.expr) -> bool:
         return isinstance(node.value, ast.Name)
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return not SHA_RE.match(node.value)
+    if isinstance(node, ast.Name):
+        return node.id == "aligner_ref"
     return False
 
 
@@ -550,7 +581,7 @@ def test_ref_staged_backends_stage_via_the_ref_not_a_resolved_sha() -> None:
             elif not _stages_via_a_ref(arg):
                 wrong.append(
                     f"{relpath}:{lineno}: hf_subprocess_env revision arg is {ast.unparse(arg)!r}, "
-                    'must be a ref (model.revision, model.revision or "main", or a literal ref)'
+                    'must be a ref (model.revision, model.revision or "main", a literal ref, or aligner_ref)'
                 )
 
     assert not wrong, (

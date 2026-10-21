@@ -1,15 +1,14 @@
 """CrisperWhisper 2.0 (verbatim, word-timed) via an isolated subprocess venv.
 
-CrisperWhisper 2.0 (nyralabs) is a Whisper-derived model tuned for **verbatim**
-transcription and **word-level timestamps** (~30-40 ms boundary error). It ships
-as the ``crisperwhisper`` pip package (2.x) with a CTranslate2 backend
-(``crisperwhisper[ct2]``) rather than plain ``transformers`` weights, so it runs
-in its own venv (same pattern as the Qwen / Canary / Brouhaha backends) — the
-CT2 fork (``ctranslate2-crisperwhisper``) must not leak into the senselab core.
+CrisperWhisper 2.0 (nyralabs) is a Whisper-derived model for **verbatim** transcription with
+**word-level timestamps**: fillers come out as bracketed words (``[UM]``, ``[UH]``) and repetitions
+are kept. It runs in its own venv with the library's CTranslate2 backend on Linux x86_64 and its
+transformers backend elsewhere (CPU, CUDA, or MPS in float16 on Apple silicon).
 
-The worker returns per-word timestamps and native per-word confidence (when the
-library exposes it) so the asr axis can consume a native uncertainty
-signal via ``ScriptLine.score`` (line-level) and each word chunk's ``score``.
+Each word chunk's ``score`` is its confidence: on the transformers backend, the mean teacher-forced
+probability of the word's tokens given the audio and the window's prompt; ``None`` on the CT2
+backend. The line ``score`` is the mean over words. Measurements and decisions:
+``specs/20261017-104000-asr-apple-silicon/``.
 """
 
 from __future__ import annotations
@@ -164,9 +163,110 @@ def load(init):
             shutil.rmtree(str(staging), ignore_errors=True)
         model_id = str(entry)
 
+    if init["device"] == "mps":
+        _disable_deferred_stop_check()
+
     # CrisperWhisperModel takes no revision anywhere in its call chain; `model_id` is the local
     # snapshot directory the parent resolved and staged for the run-agreed commit.
-    return CrisperWhisperModel(model_id, backend=backend, device=init["device"], compute_type=compute_type)
+    model = CrisperWhisperModel(model_id, backend=backend, device=init["device"], compute_type=compute_type)
+    global _CAPTURE
+    _CAPTURE = _install_word_confidence(model) if init.get("word_confidence") else None
+    return model
+
+
+def _disable_deferred_stop_check():
+    from transformers.generation import utils as generation_utils
+
+    deferred = getattr(generation_utils, "DeferredStopCheck", None)
+    if deferred is not None:
+        deferred.is_supported = staticmethod(lambda *args, **kwargs: False)
+
+
+_CAPTURE = None
+
+
+class _WordConfidence:
+    def __init__(self, engine):
+        import crisperwhisper.longform.continuation as continuation
+        import crisperwhisper.word_timing as word_timing
+
+        self.engine = engine
+        self.slots = []
+        self.encoded = None
+        self.prompt = None
+        engine.model.get_encoder().register_forward_hook(self._on_encoder)
+
+        extract_features = engine.extract_features_with_mel
+        generate = engine.generate_with_repair_and_attention
+        extract_words = word_timing.extract_word_timings
+        drop_index = continuation._overlap_drop_index
+
+        def extract_features_with_mel(*args, **kwargs):
+            self.slots.append({"words": [], "keep": None})
+            return extract_features(*args, **kwargs)
+
+        def generate_with_repair_and_attention(features, prompt_tokens, *args, **kwargs):
+            self.prompt = list(prompt_tokens)
+            return generate(features, prompt_tokens, *args, **kwargs)
+
+        def extract_word_timings(eng, gen_ids, attention, mel, **kwargs):
+            keep_unplaceable = kwargs.pop("keep_unplaceable", False)
+            words = extract_words(eng, gen_ids, attention, mel, keep_unplaceable=True, **kwargs)
+            if self.slots:
+                probs = self._word_probs(gen_ids, len(words))
+                self.slots[-1]["words"] = [(w.start is not None, p) for w, p in zip(words, probs)]
+            return words if keep_unplaceable else [w for w in words if w.start is not None]
+
+        def _overlap_drop_index(*args, **kwargs):
+            keep = drop_index(*args, **kwargs)
+            if self.slots:
+                self.slots[-1]["keep"] = keep
+            return keep
+
+        engine.extract_features_with_mel = extract_features_with_mel
+        engine.generate_with_repair_and_attention = generate_with_repair_and_attention
+        word_timing.extract_word_timings = extract_word_timings
+        continuation._overlap_drop_index = _overlap_drop_index
+
+    def _on_encoder(self, module, args, output):
+        self.encoded = output[0]
+
+    def _word_probs(self, gen_ids, n_words):
+        import torch
+        from crisperwhisper.word_timing import group_tokens_into_words
+
+        if self.encoded is None or self.prompt is None or not gen_ids:
+            return [None] * n_words
+        eng = self.engine
+        gen_ids = [int(t) for t in gen_ids]
+        groups, _ = group_tokens_into_words(gen_ids, [eng.tokenizer.decode([t]) for t in gen_ids])
+        if len(groups) != n_words:
+            return [None] * n_words
+        n_prompt = len(self.prompt)
+        dec = torch.tensor([self.prompt + gen_ids], device=eng.device, dtype=torch.long)
+        with torch.no_grad():
+            logits = eng.model(encoder_outputs=(self.encoded,), decoder_input_ids=dec, use_cache=False).logits[0]
+        logp = torch.log_softmax(logits[n_prompt - 1 : n_prompt - 1 + len(gen_ids)].float(), dim=-1)
+        target = torch.tensor(gen_ids, device=logp.device).unsqueeze(1)
+        token_p = logp.gather(1, target).squeeze(1).exp().cpu().tolist()
+        return [sum(token_p[i] for i in g) / len(g) for g in groups]
+
+    def reset(self):
+        self.slots = []
+
+    def final(self):
+        out = []
+        for slot in self.slots:
+            words = slot["words"] if slot["keep"] is None else slot["words"][: slot["keep"]]
+            out.extend(p for placed, p in words if placed)
+        return out
+
+
+def _install_word_confidence(model):
+    engine = getattr(model, "_engine", None)
+    if engine is None or type(engine).__name__ != "TransformersEngine":
+        return None
+    return _WordConfidence(engine)
 
 
 def _first_attr(obj, names):
@@ -215,16 +315,26 @@ def handle(model, args):
     results = []
     for path in args["audio_paths"]:
         used = strategy
+        if _CAPTURE is not None:
+            _CAPTURE.reset()
         try:
             r = _decode(path)
         except Exception as overrun:
             if prompt_budget is None or position_limit not in str(overrun):
                 raise
             used = args["capped_strategy"]
+            if _CAPTURE is not None:
+                _CAPTURE.reset()
             r = _decode_capped(path)
+        raw_words = getattr(r, "words", None) or []
+        captured = _CAPTURE.final() if _CAPTURE is not None else []
+        if len(captured) != len(raw_words):
+            captured = [None] * len(raw_words)
         words = []
-        for w in (getattr(r, "words", None) or []):
+        for w, captured_p in zip(raw_words, captured):
             conf = _first_attr(w, ("probability", "confidence", "score", "prob"))
+            if conf is None:
+                conf = captured_p
             words.append({
                 "text": _first_attr(w, ("word", "text")) or "",
                 "start": float(w.start),
@@ -248,13 +358,19 @@ def handle(model, args):
 _LOAD_TIMEOUT_S = 1800
 _REQUEST_TIMEOUT_S = 1800
 
+REQUEST_SECONDS_PER_AUDIO_SECOND = 3.0
+"""Per-file request timeout, in seconds per second of audio, when that exceeds ``_REQUEST_TIMEOUT_S``."""
+
+COMPUTE_TYPES = {"cuda": "float16", "mps": "float16", "cpu": "float32"}
+"""Weight precision per device (MPS measurements: specs/20261017-104000-asr-apple-silicon/)."""
+
 
 class CrisperWhisperASR:
-    """CrisperWhisper 2.0 transcription via its isolated CT2 subprocess venv.
+    """CrisperWhisper 2.0 transcription via its isolated subprocess venv.
 
     Routed automatically by ``speech_to_text.api`` when the model id matches the
     ``nyralabs/CrisperWhisper2.0`` prefix. Returns one ``ScriptLine`` per audio
-    with verbatim ``text``, per-word ``chunks`` (with ``score`` = native word
+    with verbatim ``text``, per-word ``chunks`` (with ``score`` = word
     confidence when available), and a line-level ``score``.
     """
 
@@ -268,16 +384,20 @@ class CrisperWhisperASR:
     ) -> List[ScriptLine]:
         """Transcribe audios with CrisperWhisper 2.0 via the dedicated subprocess venv.
 
+        Each audio is one request to the long-lived worker, which keeps the model loaded across
+        the list; a request's timeout grows with the audio's duration.
+
         Args:
             audios: Audio clips (mono, 16 kHz expected).
             model: HF model id (default ``nyralabs/CrisperWhisper2.0_turbo``).
-            device: CPU or CUDA (CT2 auto-uses the GPU when available).
+            device: CUDA, MPS or CPU (default: the fastest available). MPS runs the
+                transformers backend in float16.
             language: Force a language (default ``en``); CrisperWhisper is en/de.
 
         Returns:
             One ``ScriptLine`` per input with verbatim ``text``, word-level
-            ``chunks`` carrying timestamps + ``score`` (native word confidence
-            when exposed), a line-level ``score``, and the ``decode_strategy``
+            ``chunks`` carrying timestamps + ``score`` (word confidence, see the
+            module docstring), a line-level ``score``, and the ``decode_strategy``
             used: :data:`LONGFORM_STRATEGY`, or :data:`CONTEXT_CAPPED` for an input
             whose first decode overran the decoder's positions and was decoded
             again with each window's context prompt cut, leading words first,
@@ -291,11 +411,10 @@ class CrisperWhisperASR:
             model = HFModel(path_or_uri="nyralabs/CrisperWhisper2.0_turbo")
         model_id = str(model.path_or_uri)
         device_type, _ = _select_device_and_dtype(
-            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU]
         )
-        # float16 only on CUDA; CPU (e.g. macOS transformers backend) needs float32.
-        device_str = "cuda" if device_type == DeviceType.CUDA else "cpu"
-        compute_type = "float16" if device_str == "cuda" else "float32"
+        device_str = device_type.value
+        compute_type = COMPUTE_TYPES[device_str]
 
         venv_dir = ensure_venv(_CRISPER_VENV, _CRISPER_REQUIREMENTS, python_version=_CRISPER_PYTHON)
         python = venv_python(venv_dir)
@@ -309,12 +428,6 @@ class CrisperWhisperASR:
 
         with tempfile.TemporaryDirectory(prefix="senselab-crisperwhisper-") as tmpdir:
             tmp = Path(tmpdir)
-            audio_paths: List[str] = []
-            for i, audio in enumerate(audios):
-                path = str(tmp / f"audio_{i}.wav")
-                audio.save_to_file(path)
-                audio_paths.append(path)
-
             cache_root = _ct2_cache_root()
             ct2_entry = cache_root / _ct2_cache_key(str(snapshot_path), compute_type)
             if _CRISPER_BACKEND == "ct2":
@@ -322,40 +435,48 @@ class CrisperWhisperASR:
             # Stage the model once (cross-process heartbeat lock) and run the worker offline so
             # its weight fetch makes no Hub version check.
             env = hf_subprocess_env(model_id, revision, base_env=_clean_subprocess_env())
-            try:
-                output = serve_in_venv(
-                    (Path(venv_dir).name, str(snapshot_path), revision, device_str, compute_type),
-                    python=python,
-                    script=_CRISPER_WORKER_SCRIPT,
-                    init={
-                        "model_id": str(snapshot_path),
-                        "backend": _CRISPER_BACKEND,
-                        "device": device_str,
-                        "compute_type": compute_type,
-                        "ct2_entry": str(ct2_entry),
-                        "ct2_staging_root": str(cache_root),
-                    },
-                    request={
-                        "audio_paths": audio_paths,
-                        "language": language or "en",
-                        "longform_strategy": LONGFORM_STRATEGY,
-                        "max_new_tokens": MAX_NEW_TOKENS,
-                        "prompt_token_budget": DECODER_POSITIONS - MAX_NEW_TOKENS - 1,
-                        "capped_strategy": CONTEXT_CAPPED,
-                        "position_limit": _CT2_POSITION_LIMIT,
-                    },
-                    env=env,
-                    label="CrisperWhisper 2.0",
-                    load_timeout_s=_LOAD_TIMEOUT_S,
-                    request_timeout_s=_REQUEST_TIMEOUT_S,
-                )
-            except RuntimeError as err:
-                if _CT2_POSITION_LIMIT in str(err):
-                    raise CrisperWhisperDecoderPositionsExceeded(str(err)) from err
-                raise
+            entries: List[dict] = []
+            for i, audio in enumerate(audios):
+                path = tmp / f"audio_{i}.wav"
+                audio.save_to_file(str(path))
+                duration_s = audio.waveform.shape[-1] / float(audio.sampling_rate)
+                try:
+                    output = serve_in_venv(
+                        (Path(venv_dir).name, str(snapshot_path), revision, device_str, compute_type),
+                        python=python,
+                        script=_CRISPER_WORKER_SCRIPT,
+                        init={
+                            "model_id": str(snapshot_path),
+                            "backend": _CRISPER_BACKEND,
+                            "device": device_str,
+                            "compute_type": compute_type,
+                            "ct2_entry": str(ct2_entry),
+                            "ct2_staging_root": str(cache_root),
+                            "word_confidence": True,
+                        },
+                        request={
+                            "audio_paths": [str(path)],
+                            "language": language or "en",
+                            "longform_strategy": LONGFORM_STRATEGY,
+                            "max_new_tokens": MAX_NEW_TOKENS,
+                            "prompt_token_budget": DECODER_POSITIONS - MAX_NEW_TOKENS - 1,
+                            "capped_strategy": CONTEXT_CAPPED,
+                            "position_limit": _CT2_POSITION_LIMIT,
+                        },
+                        env=env,
+                        label="CrisperWhisper 2.0",
+                        load_timeout_s=_LOAD_TIMEOUT_S,
+                        request_timeout_s=max(_REQUEST_TIMEOUT_S, REQUEST_SECONDS_PER_AUDIO_SECOND * duration_s),
+                    )
+                except RuntimeError as err:
+                    if _CT2_POSITION_LIMIT in str(err):
+                        raise CrisperWhisperDecoderPositionsExceeded(str(err)) from err
+                    raise
+                path.unlink(missing_ok=True)
+                entries.extend(output.get("results", []))
 
             results: List[ScriptLine] = []
-            for entry in output.get("results", []):
+            for entry in entries:
                 words = entry.get("words") or []
                 chunks: Optional[List[ScriptLine]] = None
                 line_start: Optional[float] = None
