@@ -118,6 +118,11 @@ REVIEWED_SUBPROCESS = {
 # Files that intentionally do a RAW load and are exempt from the helper check.
 # Keep this set tiny and justify every entry.
 RAW_LOAD_EXCEPTIONS = {
+    # Facial affect: the py-feat weights are fetched with hf_hub_download(..., revision=<sha>) where
+    # the SHAs are pinned constants in the module, one file per repo. resolve_model would download
+    # every checkpoint generation in py-feat/face_multitask_v2 (five files, about 800 MB) for the one
+    # file Detectorv2 reads. The worker receives local paths and touches no Hub.
+    "video/tasks/facial_analysis/backends.py",
     # Defines the helpers; snapshot_download here IS the download-once primitive.
     "utils/dependencies.py",
     # Diagnostic CLI probe (`_probe`) that intentionally exercises a raw
