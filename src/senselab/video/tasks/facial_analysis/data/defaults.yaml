@@ -1,0 +1,162 @@
+# Facial-analysis defaults. Every value here is either measured (throughput) or a stated prior that has
+# not been fitted to labelled data; `derivation` says which. The measurements are in
+# specs/20261017-104500-video-facial-analysis/README.md.
+version: 1
+name: senselab-video-facial-analysis/default
+
+tiles:
+  derivation: |
+    Zoom gallery view draws equal tiles on a near-black canvas (about RGB 26,26,26 = 0.10). A row or
+    column of the canvas is dark over nearly its full extent; a row of video content almost never is.
+    dark_level 0.16 sits above the canvas and below any lit scene; gutter_fraction 0.97 tolerates
+    compression noise. min_tile_fraction 0.12 rejects slivers (the self-view thumbnail strip in
+    speaker view is about 0.15 of the height and is kept as a tile, which is what flags that view as a
+    layout change). Name-label mask and border inset are measured off Zoom's 1080p gallery: the label
+    is about 0.21 x 0.06 of a 960x540 tile, masked here with margin at 0.30 x 0.08; the active-speaker
+    border is 3-4 px at 540 px, so 0.012 of the short side. analysis_width 960: a 4 px gutter between
+    two 1280x720 tiles merged at 640 px (2 px after scaling and codec blur) and separated at 960.
+    All unfitted priors.
+  analysis_width: 960
+  sample_frames: 48
+  dark_level: 0.16
+  gutter_fraction: 0.97
+  min_tile_fraction: 0.12
+  label_mask_width_fraction: 0.30
+  label_mask_height_fraction: 0.08
+  border_inset_fraction: 0.012
+  match_iou: 0.90
+  # Splitting tiles merged across a gutter too narrow for analysis_width; derivations in
+  # specs/20261017-104500-video-facial-analysis/README.md ("Merged tiles").
+  split:
+    sample_frames: 12          # frames decoded at seam_width for seams and faces
+    seam_width: 1920           # seam search resolution (source width when smaller)
+    aspects: [1.7778, 1.3333]  # tile aspect ratios tried: 16:9 and 4:3
+    aspect_tolerance: 0.05     # largest relative cell-aspect error of a candidate grid
+    max_grid: 4                # largest columns or rows tried
+    seam_search_fraction: 0.04 # seam search half-window, fraction of the region side
+    seam_min_z: 8.0            # median-over-frames seam score that counts as a boundary
+    seam_dominance: 3.0        # and at least this multiple of the region's 99th-percentile score
+    seam_max_gutter_px: 8      # widest dark gutter trimmed beside a seam
+    face_detect_width: 960     # Haar cascade input width
+    face_min_fraction: 0.5     # each cell holds a face in at least this fraction of frames
+    face_max_straddle: 0.2     # largest fraction of faces crossing a cell boundary
+    # Cut between face clusters regardless of the region's aspect ratio; derivation in the spec
+    # ("Face-position split").
+    face_split:
+      min_fraction: 0.5             # each kept cluster holds a face in at least this fraction of frames
+      max_straddle: 0.2             # largest fraction of faces crossing a cut
+      min_gap_face_widths: 1.0      # clusters are apart by more than this many median face sizes
+      cell_aspect_range: [1.25, 2.0] # every resulting cell's width/height lies in this range
+
+speaker_view:
+  derivation: |
+    Zoom's active-speaker view shows one participant at a time in one large tile and switches
+    between them. It is considered when the reference layout is one tile covering at least
+    min_tile_area_fraction of the frame (the observed case, 1650x920 in 1920x1080, is 0.73; a
+    two-tile gallery tile is at most 0.5). Identity samples are decoded sequentially at identity_fps
+    and identity_width; YuNet finds faces (score_threshold, nms_threshold and top_k are the
+    opencv_zoo demo values) and SFace embeds each one. Embeddings are clustered by average-linkage
+    agglomeration on cosine distance, cut at 1 - cosine_threshold, where 0.363 is SFace's published
+    same-person cosine threshold (opencv_zoo sface.py; LFW). Clusters holding fewer than
+    min_person_fraction of the face samples are dropped as spurious detections; at most
+    max_cluster_samples embeddings (evenly spaced) are clustered and the rest are assigned to the
+    nearest centroid at or above the same threshold, which bounds memory on long recordings. The view
+    is speaker view when at least min_speaker_view_fraction of the samples show the reference tile
+    and at least two persons each appear in min_person_fraction of its face samples. A person's
+    rows are kept only between identity samples that agree, so up to 1/identity_fps around each
+    switch is unattributed. identity_fps 2 keeps that loss at most 0.5 s per switch at about
+    30 ms per sample (decode, YuNet and SFace at 960x540, M1 Pro at load 5), about 6 min for a
+    98 min recording. All but the cosine threshold are unfitted priors.
+  enabled: true
+  min_tile_area_fraction: 0.5
+  min_speaker_view_fraction: 0.5
+  identity_fps: 2.0
+  identity_width: 960
+  score_threshold: 0.6
+  nms_threshold: 0.3
+  top_k: 50
+  cosine_threshold: 0.363
+  min_person_fraction: 0.05
+  max_cluster_samples: 2000
+
+geometry:
+  derivation: |
+    MediaPipe Face Landmarker throughput is measured at about 70 tile-frames/s on an M1 Pro CPU and is
+    insensitive to tile resolution (its detector and mesh run on fixed 128/192/256 px inputs), so
+    fps decides the cost: 16 fps x 2 tiles runs at about 4.6x real time, 8 fps at about 8.7x. 8 fps
+    keeps the 0.5-4 Hz nod/shake band below Nyquist and samples most blinks once; 16 fps is the
+    choice when blink counts matter. tile_width 640 is above the landmarker's internal inputs.
+    Confidence thresholds are MediaPipe's defaults. threads (null = library default) sets the
+    OpenMP/BLAS thread variables of the worker; it caps a worker sharing a busy host.
+  fps: 8.0
+  tile_width: 640
+  num_faces: 1
+  min_face_detection_confidence: 0.5
+  min_face_presence_confidence: 0.5
+  min_tracking_confidence: 0.5
+  motion_width: 160
+  threads:
+
+affect:
+  derivation: |
+    py-feat Detectorv2 on MPS spends about 28 ms per face in the multitask model plus about 6 ms per
+    tile in RetinaFace at 320-480 px, so 2 tiles cost about 70 ms per sampled instant: 4 fps runs at
+    about 3.8x real time and 2 fps at about 7.5x. Affect (emotion, valence/arousal, AUs) changes on
+    second scales, so 2 fps is the default that lets a 27 h corpus finish in a few hours; 4 fps is
+    the documented alternative. batch_size 16 (8 sampled instants of 2 tiles) bounds MPS memory on a
+    shared host; 32 was no faster. threads (null = library default) caps torch's CPU threads and the
+    OpenMP/BLAS variables of the worker. tile_width 480 keeps a typical gallery face above the 256 px chip.
+  fps: 2.0
+  tile_width: 480
+  batch_size: 16
+  face_detection_threshold: 0.5
+  threads:
+
+gestures:
+  derivation: |
+    Head nods and shakes are 0.5-4 Hz oscillations of pitch and yaw (Hadar et al. 1983; Kousidis et
+    al. 2013 report 2-3 Hz backchannel nods). An event is three or more alternating extrema of the
+    band-passed angle, consecutive extrema within max_half_period_s and each swing at least
+    min_swing_deg, with the swing axis dominating the other by dominance_ratio. Swing and dominance
+    values are unfitted priors; fit them to annotated nods before reading rates as calibrated.
+  band_hz: [0.5, 4.0]
+  min_swing_deg: 3.0
+  min_extrema: 3
+  max_half_period_s: 0.8
+  dominance_ratio: 1.5
+  max_gap_s: 0.3
+
+blinks:
+  derivation: |
+    eyeBlinkLeft/Right blendshapes rise toward 1 on closure, from a resting level that differs by
+    face: about 0.15 on an unobstructed face and about 0.37 behind glasses in the development clip,
+    where a fixed 0.35 floor merged every blink into one long closure. A blink is therefore a rise
+    above a 2 s rolling-median baseline: extended while more than low_rise above it, kept when its
+    peak is high_rise above it and it lasts at most max_duration_s (longer is an eye closure).
+    Rise thresholds are unfitted priors; at 8 fps a blink spans one or two samples, so rates there
+    are lower bounds.
+  high_rise: 0.3
+  low_rise: 0.15
+  baseline_window_s: 2.0
+  max_duration_s: 0.5
+
+gaze:
+  derivation: |
+    Toward-camera proxy. Eye-in-head angles come from the iris centre's offset inside the eye
+    opening (MediaPipe iris landmarks), in eye widths, scaled by eye_gain_deg per eye width (the
+    iris centre travels about +-0.25 of the eye width over about +-15 degrees). The vertical offset
+    of a level gaze is not zero: the iris centre sits above the corner line, at about -0.10 to -0.17
+    eye widths in the development clip; eye_vertical_neutral removes -0.10. Gaze = head + eye; the
+    score is a Gaussian of the gaze angle with sigma_deg. Uncalibrated: a camera above the screen
+    makes looking at the other person read as looking slightly down.
+  eye_gain_deg: 60.0
+  eye_vertical_neutral: -0.10
+  sigma_deg: 10.0
+  toward_threshold: 0.5
+
+linking:
+  derivation: |
+    Speech moves the jaw at syllable rate, so the rolling standard deviation of jawOpen over
+    window_s tracks talking better than openness itself; speaker activity is smoothed by the same
+    window. 0.5 s spans two to three syllables.
+  window_s: 0.5

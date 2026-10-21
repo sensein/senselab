@@ -57,6 +57,7 @@ _WORKER_TOKENS = (
     "ASRModel",
     "CrisperWhisper",
     "SentenceTransformer",
+    "mlx_vlm",
 )
 
 _INPROCESS_HELPERS = {"resolve_model", "load_hf_resilient", "ensure_hf_model"}
@@ -80,11 +81,16 @@ REVIEWED_INPROCESS = {
     "audio/tasks/speech_to_text/huggingface.py",
     "audio/tasks/ssl_embeddings/self_supervised_features.py",
     "audio/tasks/text_to_speech/huggingface.py",
+    # pyannote/speech-separation-ami-1.0: resolve_model pins the literal SHA, then Pipeline.from_pretrained
+    # loads with revision=<sha>, the same shape as speaker_diarization/pyannote.py.
+    "audio/tasks/turn_taking_projection/separation.py",
     "text/tasks/embeddings_extraction/huggingface.py",
     "text/tasks/embeddings_extraction/sentence_transformers.py",
+    "text/tasks/sentiment_analysis/huggingface.py",
     # scene-quality / adaptive workflow (branch-only, #536)
     "audio/workflows/audio_analysis/adaptive/audio_io.py",
     "audio/workflows/audio_analysis/adaptive/backends.py",
+    "video/tasks/scene_description/backends.py",
 }
 
 # Subprocess-venv backends whose worker loads a model; the parent stages it via
@@ -109,11 +115,17 @@ REVIEWED_SUBPROCESS = {
     # scene-quality / ASR (branch-only, #536)
     "audio/tasks/scene_quality/brouhaha.py",
     "audio/tasks/speech_to_text/crisperwhisper.py",
+    "video/tasks/scene_description/backends.py",
 }
 
 # Files that intentionally do a RAW load and are exempt from the helper check.
 # Keep this set tiny and justify every entry.
 RAW_LOAD_EXCEPTIONS = {
+    # Facial affect: the py-feat weights are fetched with hf_hub_download(..., revision=<sha>) where
+    # the SHAs are pinned constants in the module, one file per repo. resolve_model would download
+    # every checkpoint generation in py-feat/face_multitask_v2 (five files, about 800 MB) for the one
+    # file Detectorv2 reads. The worker receives local paths and touches no Hub.
+    "video/tasks/facial_analysis/backends.py",
     # Defines the helpers; snapshot_download here IS the download-once primitive.
     "utils/dependencies.py",
     # Diagnostic CLI probe (`_probe`) that intentionally exercises a raw
@@ -140,6 +152,15 @@ RAW_LOAD_EXCEPTIONS = {
     # would download 1.3 GB no run reads. Same pinning guarantee as above: a full commit hash takes
     # huggingface_hub's commit-hash shortcut, so a cached file resolves with no network.
     "audio/tasks/speech_enhancement/driftse.py",
+    # ppgs resolves CameronChurchwell/ppgs to a commit via resolve_revision and then calls
+    # hf_hub_download(..., revision=<sha>) for the one checkpoint the mel model reads (mel-800k.pt);
+    # the repository also holds the unused w2v2fb checkpoint, so resolve_model would stage both.
+    # The worker gets the local file and calls ppgs.load.model(checkpoint=<path>).
+    "audio/tasks/features_extraction/ppg.py",
+    # MaAI's VAP and backchannel checkpoints: hf_hub_download(..., revision=<literal 40-hex SHA>) for the
+    # one ~24 MB state dict each run reads. resolve_model is not used because maai-kyoto/vap_bc_en also
+    # holds a 400 MB Mimi-encoder checkpoint the CPC path never reads. The worker is handed the local file.
+    "audio/tasks/turn_taking_projection/maai.py",
 }
 
 

@@ -42,7 +42,13 @@ def test_every_venv_the_code_builds_has_a_current_lock(backends: dict[str, venv_
     """A changed requirement list without a regenerated lock fails here, not on a cluster node."""
     assert backends, "no ensure_venv calls were found"
     for name, backend in backends.items():
-        load_lock(name, backend.requirements, backend.python, backend.max_cuda_version)
+        load_lock(
+            name,
+            backend.requirements,
+            backend.python,
+            backend.max_cuda_version,
+            excluded_packages=backend.excluded_packages,
+        )
 
 
 _DIGESTS_ON_HOST = """
@@ -58,7 +64,7 @@ for name in modules:
     fresh.__dict__.update(__file__=real.__file__, __package__=real.__package__, __spec__=real.__spec__)
     sys.modules[name] = fresh
     exec(compile(open(real.__file__).read(), real.__file__, "exec"), fresh.__dict__)
-print(json.dumps({n: requirements_sha256(b.requirements, b.python, b.max_cuda_version)
+print(json.dumps({n: requirements_sha256(b.requirements, b.python, b.max_cuda_version, b.excluded_packages)
                   for n, b in discover_backends().items()}))
 """
 
@@ -72,7 +78,10 @@ def test_every_lock_digest_is_the_same_on_every_host(
         [sys.executable, "-c", _DIGESTS_ON_HOST, *host], capture_output=True, text=True, check=True, timeout=600
     )
     there = json.loads(result.stdout.strip().splitlines()[-1])
-    here = {n: requirements_sha256(b.requirements, b.python, b.max_cuda_version) for n, b in backends.items()}
+    here = {
+        n: requirements_sha256(b.requirements, b.python, b.max_cuda_version, b.excluded_packages)
+        for n, b in backends.items()
+    }
     assert {n for n in here if there.get(n) != here[n]} == set()
 
 
@@ -150,6 +159,29 @@ def test_requirements_digest_ignores_order_and_tracks_every_input() -> None:
     assert base != requirements_sha256(["a==1", "b>=3"], "3.11")
     assert base != requirements_sha256(["a==1", "b>=2"], "3.12")
     assert base != requirements_sha256(["a==1", "b>=2"], "3.11", (12, 4))
+    assert base == requirements_sha256(["a==1", "b>=2"], "3.11", None, ())
+    assert base != requirements_sha256(["a==1", "b>=2"], "3.11", None, ("pyaudio",))
+    assert requirements_sha256(["a==1"], "3.11", None, ("PyAudio", "b")) == requirements_sha256(
+        ["a==1"], "3.11", None, ("b", "pyaudio")
+    )
+
+
+def test_excluded_packages_are_left_out_of_the_body_and_named_in_the_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An excluded distribution is passed to uv as --no-emit-package and recorded in the header."""
+    calls: list[tuple[str, ...]] = []
+
+    def fake_compile(in_file: Path, python: str, constraints: Path, exclude_newer: object, **kwargs: object) -> str:
+        calls.append(tuple(kwargs.get("no_emit", ())))  # type: ignore[arg-type]
+        return "foo==1.0  # via -r requirements.in\npyaudio==0.2.14  # via foo\n"
+
+    monkeypatch.setattr(venv_lock, "_compile", fake_compile)
+    monkeypatch.setattr(venv_lock, "find_uv", lambda: "uv")
+
+    text = compile_lock("t", ["foo"], "3.12", excluded_packages=("PyAudio",))
+
+    assert calls[-1] == ("pyaudio",)
+    assert "# exclude: pyaudio" in text
+    assert requirements_sha256(["foo"], "3.12", None, ("pyaudio",)) in text
 
 
 _ANNOTATED = """\

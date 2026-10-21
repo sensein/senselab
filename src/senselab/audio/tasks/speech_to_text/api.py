@@ -5,6 +5,7 @@ Users can specify the audio clips to transcribe, the ASR model, the language,
 the preferred device, and the model-specific parameters, and senselab handles the rest.
 """
 
+import logging
 from typing import Any, List, Optional
 
 from senselab.audio.data_structures import Audio
@@ -79,8 +80,9 @@ def transcribe_audios(
         model (SenselabModel):
             The ASR model to use. Supported: ``HFModel`` (Transformers or NeMo).
         language (Language, optional):
-            Spoken language hint for decoding (passed to the HF pipeline when
-            supported; not used for NeMo models).
+            Spoken language to force in decoding. Forwarded to the HF pipeline, Qwen3-ASR
+            and CrisperWhisper; the NeMo, Canary-Qwen and Granite backends cannot force a
+            language, so passing one to them logs a warning and it is ignored.
         device (DeviceType, optional):
             Preferred device for inference. Supports ``DeviceType.CPU`` and
             ``DeviceType.CUDA``. If None, the backend will choose ``CUDA`` if
@@ -129,6 +131,15 @@ def transcribe_audios(
     if not audios:
         return []
 
+    if (
+        language is not None
+        and isinstance(model, HFModel)
+        and str(model.path_or_uri).startswith(_NEMO_PREFIXES + _CANARY_PREFIXES + _GRANITE_PREFIXES)
+    ):
+        logging.getLogger(__name__).warning(
+            "%s cannot force a language; ignoring language=%s", model.path_or_uri, language
+        )
+
     try:
         if isinstance(model, HFModel) and str(model.path_or_uri).startswith(_NEMO_PREFIXES):
             return NeMoASR.transcribe_with_nemo(audios=audios, model=model, device=device)
@@ -140,11 +151,18 @@ def transcribe_audios(
                 qwen_kwargs["return_timestamps"] = bool(kwargs.pop("return_timestamps"))
             if "forced_aligner" in kwargs:
                 qwen_kwargs["forced_aligner"] = kwargs.pop("forced_aligner")
+            if "aligner_revision" in kwargs:
+                qwen_kwargs["aligner_revision"] = kwargs.pop("aligner_revision")
+            if language is not None:
+                qwen_kwargs["language"] = language.name
             return QwenASR.transcribe_with_qwen(audios=audios, model=model, device=device, **qwen_kwargs)
         elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_CRISPER_PREFIXES):
             crisper_kwargs: dict[str, Any] = {}
-            if "language" in kwargs:
-                crisper_kwargs["language"] = kwargs.pop("language")
+            if language is not None:
+                try:
+                    crisper_kwargs["language"] = language.alpha_2
+                except AttributeError:
+                    crisper_kwargs["language"] = language.alpha_3
             return CrisperWhisperASR.transcribe_with_crisperwhisper(
                 audios=audios, model=model, device=device, **crisper_kwargs
             )

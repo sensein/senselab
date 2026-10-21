@@ -9,7 +9,7 @@ import threading
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, Optional, Tuple, TypeVar
+from typing import Any, Callable, Iterable, Iterator, Optional, Tuple, TypeVar
 
 from senselab.utils.file_lock import SharedFileLock
 
@@ -266,6 +266,38 @@ def speechbrain_loading_cwd(savedir: Path) -> Iterator[Path]:
             yield savedir
         finally:
             os.chdir(prev)
+
+
+def speechbrain_load_device(device: str) -> str:
+    """The ``run_opts["device"]`` to construct a SpeechBrain ``Pretrained`` with for ``device``.
+
+    SpeechBrain's ``Pretrained.__init__`` sets ``device_type`` only for ``cpu`` and ``cuda*``, so
+    constructing on ``mps`` raises ``AttributeError``. MPS models are therefore constructed on CPU
+    and moved with :func:`speechbrain_move_to`.
+
+    Args:
+        device: The device string the model should end up on.
+
+    Returns:
+        ``"cpu"`` for ``mps``; ``device`` otherwise.
+    """
+    return "cpu" if device == "mps" else device
+
+
+def speechbrain_move_to(pretrained: Any, device: str) -> Any:  # noqa: ANN401
+    """Move a SpeechBrain ``Pretrained`` built by :func:`speechbrain_load_device` to ``device``.
+
+    Args:
+        pretrained: The constructed model.
+        device: Target device string.
+
+    Returns:
+        ``pretrained``, with its modules and ``device`` attribute on ``device``.
+    """
+    if getattr(pretrained, "device", None) != device:
+        pretrained.mods.to(device)
+        pretrained.device = device
+    return pretrained
 
 
 def _safe_key(repo_id: str, revision: str) -> str:
@@ -791,7 +823,10 @@ def hf_subprocess_env(
     manifest and could pin to a different commit than the rest of the run if upstream
     moved between the two resolutions.
     """
+    from senselab.utils.network_guard import apply_network_guard
+
     env = dict(os.environ if base_env is None else base_env)
+    apply_network_guard(env)
     # Set unconditionally, before either return path below: a worker that falls back to
     # online loading (the early `return env` on a staging failure) must still inherit the
     # parent's run identity, not just the happy path that reaches the offline flags.

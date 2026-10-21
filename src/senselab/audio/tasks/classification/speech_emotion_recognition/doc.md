@@ -14,11 +14,29 @@ SER is typically split between two subcategories: discrete emotion classificatio
 A variety of models are supported by ```senselab``` for SER tasks. They can be explored on the [Hugging Face Hub](https://huggingface.co/models?pipeline_tag=audio-classification&library=transformers&sort=downloadss) and using search terms like "SER" or "emotion". Each model varies in performance, size, license, language support, and more. Performance may also vary depending on who is the speaker in the processed audio clips (there may be differences in terms of age, dialects, disfluencies). It is recommended to review the model card for each model before use. Also, always refer to the most recent literature for an informed decision.
 
 ### Dispatch & supported checkpoint families
-`classify_emotions_from_speech` routes each model through one of three paths, in priority order:
+`classify_emotions_from_speech` first sends `emotion2vec/emotion2vec_plus_{seed,base,large}` to the
+FunASR backend (below), then routes every other model through one of three paths, in priority order.
+Routing reads the model's cached `config.json` at its resolved commit; the model card's tags are
+consulted only when the labels do not identify an emotion model, and are read from the cached
+`README.md` before the Hub, so routing works with `HF_HUB_OFFLINE=1` once the model is cached.
 
 1. **Custom in-process emotion-head class** — for checkpoints that pair a recognized speech encoder (`wav2vec2`, `hubert`, or `wavlm`) with a 2-layer `dense → activation → dropout → final` head. The dispatcher detects this either from the model's `architectures` string (`Wav2Vec2ForSpeechClassification`-style) or by peeking at the checkpoint's safetensors / shard-index manifest for `classifier.dense.*` plus `classifier.{out_proj,output}.*` keys. Single-bin checkpoints that can't be peeked cheaply must be registered in `_KNOWN_HEAD_LAYOUTS`. This path is what loads `audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim` and `ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition` correctly — the standard transformers pipeline silently random-initializes their heads. The path applies softmax to logits when `config.problem_type` is set to a classification value (or the head's labels look discrete), and leaves them raw when `problem_type="regression"` or labels look continuous (arousal/valence/dominance). `wav2vec2-bert` is intentionally **not** supported on this path: it consumes log-mel `input_features` via `SeamlessM4TFeatureExtractor` and the loader hardcodes raw `input_values` via `Wav2Vec2FeatureExtractor`. Adding it requires a per-family preprocessing adapter.
 2. **Subprocess venv** — for continuous SER checkpoints with broken `config.json` (e.g. `vocab_size: null`) that `huggingface_hub>=1.0`'s strict validators reject. Run in an isolated venv pinned to `huggingface_hub<1.0`.
 3. **Standard transformers `pipeline()`** — for everything else. As of [#511](https://github.com/sensein/senselab/pull/511) this path also runs a head-load check: if `loading_info.missing_keys` or `mismatched_keys` contain head-shaped entries (`classifier.*`, `head.*`, `score.*`, `out_proj.*`, `projector.*`), a `RuntimeError` is raised by default — silent corruption of downstream consumers (e.g. windowed segmentation aggregating ~uniform softmax) is not tolerated. Set `SENSELAB_STRICT_HEAD_LOAD=0` to demote to a `logger.warning` if you intentionally want to load a partial-head checkpoint (e.g. for fine-tuning warm-start).
+
+**emotion2vec+ (FunASR subprocess venv).** `emotion2vec/emotion2vec_plus_seed`, `_plus_base` (~90M)
+and `_plus_large` (~300M) classify a whole utterance into nine classes: angry, disgusted, fearful,
+happy, neutral, other, sad, surprised, unknown. They load only through FunASR, which runs in its own
+venv (`emotion2vec`); the parent stages the commit and the worker loads that local snapshot with
+`disable_update=True`, so it makes no network call. `emotion2vec/emotion2vec_base` has no
+classification head and is refused. Licence: FunASR Model Open Source License v1.1 (use, modify and
+share with attribution; model names retained).
+
+**Devices.** The custom-head path, the SpeechBrain path, the continuous-SER venv and emotion2vec+
+accept `DeviceType.MPS`.
+
+**Licences to check before use.** `audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim` is
+CC BY-NC-SA 4.0 (non-commercial, share-alike).
 
 When the dispatcher's heuristics fail (e.g. a checkpoint with a 2-layer head whose final-layer attribute name is neither `out_proj` nor `output`, or a HuBERT/WavLM emotion model not in the registry), the standard pipeline path will still emit the head-load warning so silent failures are visible. To probe a model end-to-end without running inference, use the diagnostic CLI:
 

@@ -66,6 +66,7 @@ UNROUTED_AUDIO_READ: dict[str, str] = {}
 # Subprocess-venv backends, each in exactly one set (relative to ``src/senselab``).
 WORKERS_READING_THROUGH_PORTABLE_AUDIO_IO = {
     "audio/tasks/classification/speech_emotion_recognition/api.py",
+    "audio/tasks/classification/speech_emotion_recognition/emotion2vec.py",
     "audio/tasks/classification/yamnet.py",
     "audio/tasks/features_extraction/ppg.py",
     "audio/tasks/features_extraction/sparc.py",
@@ -73,6 +74,7 @@ WORKERS_READING_THROUGH_PORTABLE_AUDIO_IO = {
     "audio/tasks/source_separation/unasdiff.py",
     "audio/tasks/speech_enhancement/driftse.py",
     "audio/tasks/ssl_embeddings/s3prl.py",
+    "audio/tasks/turn_taking_projection/maai.py",
     "audio/tasks/voice_cloning/coqui.py",
     "audio/tasks/voice_cloning/sparc.py",
     "utils/clearvoice.py",
@@ -96,6 +98,8 @@ WORKERS_PASSING_A_PARENT_WRITTEN_WAV_TO_A_LIBRARY = {
     "utils/vllm_server.py",
 }
 WORKERS_WITH_NO_AUDIO_INPUT = {
+    "video/tasks/scene_description/backends.py",
+    "video/tasks/facial_analysis/backends.py",
     "audio/tasks/text_to_speech/qwen_tts.py",
     "text/tasks/pii_detection/redaction_review.py",
     "text/tasks/pii_detection/redaction_review_vllm.py",

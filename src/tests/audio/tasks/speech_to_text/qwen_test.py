@@ -124,3 +124,125 @@ def test_align_with_qwen_maps_worker_output_to_scriptlines(monkeypatch: pytest.M
     assert utt.text == "This is Peter"
     assert utt.start == 0.0 and utt.end == 0.9
     assert utt.chunks is not None and [c.text for c in utt.chunks] == ["This", "is", "Peter"]
+
+
+def _stub_qwen_staging(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr(qwen_mod, "hf_subprocess_env", lambda *a, **k: {"HF_HUB_OFFLINE": "1"})
+    monkeypatch.setattr(qwen_mod, "ensure_venv", lambda *a, **k: "/fake/venv")
+    monkeypatch.setattr(qwen_mod, "venv_python", lambda *a, **k: "/fake/venv/bin/python")
+
+
+def _capture_serve(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    calls: list[dict] = []
+
+    def _serve(identity: tuple, **k: object) -> dict:
+        calls.append({"identity": identity, **k})
+        return {"results": [{"text": "hello", "chunks": [{"text": "hello", "start": 0.0, "end": 0.5}]}]}
+
+    monkeypatch.setattr(qwen_mod, "serve_in_venv", _serve)
+    return calls
+
+
+def test_mps_loads_half_precision_in_short_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On MPS the worker gets float16, 30 s chunks, batch 1 and the allocator limits."""
+    from senselab.utils.data_structures import DeviceType
+
+    _stub_qwen_staging(monkeypatch)
+    calls = _capture_serve(monkeypatch)
+    audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000)
+    model: HFModel = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B", revision="main")
+    QwenASR.transcribe_with_qwen([audio], model=model, device=DeviceType.MPS)
+
+    [call] = calls
+    init = call["init"]
+    assert init["device"] == "mps" and init["dtype"] == "float16"
+    assert init["max_chunk_sec"] == 30.0 and init["max_inference_batch_size"] == 1
+    assert call["env"]["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] == qwen_mod.MPS_ENV["PYTORCH_MPS_HIGH_WATERMARK_RATIO"]
+    assert call["env"]["HF_HUB_OFFLINE"] == "1"
+    assert "float16" in call["identity"]
+
+
+def test_cpu_and_cuda_payloads_are_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Off MPS no dtype/chunk/batch keys reach the worker, so the wrapper keeps its own defaults."""
+    from senselab.utils.data_structures import DeviceType
+
+    _stub_qwen_staging(monkeypatch)
+    calls = _capture_serve(monkeypatch)
+    audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000)
+    model: HFModel = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B", revision="main")
+    for device in (DeviceType.CPU, DeviceType.CUDA):
+        QwenASR.transcribe_with_qwen([audio], model=model, device=device)
+    for call in calls:
+        assert not {"dtype", "max_chunk_sec", "max_inference_batch_size"} & set(call["init"])
+        assert "PYTORCH_MPS_HIGH_WATERMARK_RATIO" not in call["env"]
+        assert "default" in call["identity"]
+
+
+def test_chunk_override_and_one_request_per_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``max_chunk_sec`` overrides the device default; each file is its own request, timeout scaled."""
+    from senselab.utils.data_structures import DeviceType
+
+    _stub_qwen_staging(monkeypatch)
+    calls = _capture_serve(monkeypatch)
+    short = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000)
+    long = Audio(waveform=torch.zeros(1, 16000 * 1000), sampling_rate=16000)
+    model: HFModel = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B", revision="main")
+    out = QwenASR.transcribe_with_qwen([short, long], model=model, device=DeviceType.CPU, max_chunk_sec=45)
+
+    assert len(out) == 2 and len(calls) == 2
+    assert all(c["init"]["max_chunk_sec"] == 45.0 for c in calls)
+    assert all(len(c["request"]["audio_paths"]) == 1 for c in calls)
+    assert calls[1]["request_timeout_s"] == pytest.approx(qwen_mod.REQUEST_SECONDS_PER_AUDIO_SECOND * 1000)
+    assert out[1].chunks is not None and out[1].chunks[0].timestamp_model == qwen_mod._DEFAULT_FORCED_ALIGNER
+
+
+def test_segment_bounds_cover_the_input_and_cut_at_silence() -> None:
+    """Pieces tile the input exactly; a cut lands in the silent gap nearest each target."""
+    import numpy as np
+
+    sr = 100
+    x = np.ones(1000, dtype=np.float32)
+    x[395:405] = 0.0  # a silent 0.1 s gap near the 4 s target
+    bounds = qwen_mod._segment_bounds(x, sr, 4.0)
+    assert bounds[0][0] == 0 and bounds[-1][1] == len(x)
+    assert all(b0[1] == b1[0] for b0, b1 in zip(bounds, bounds[1:]))
+    assert 395 <= bounds[0][1] <= 405
+    assert qwen_mod._segment_bounds(x[:300], sr, 4.0) == [(0, 300)]
+
+
+def test_long_mps_audio_is_decoded_in_pieces_by_fresh_workers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Over MPS_SEGMENT_SEC the audio goes as pieces, word times are shifted back, workers recycled."""
+    from senselab.utils.data_structures import DeviceType
+
+    _stub_qwen_staging(monkeypatch)
+    calls = _capture_serve(monkeypatch)
+    closed: list[str] = []
+    monkeypatch.setattr(qwen_mod, "close_venv_workers", closed.append)
+    monkeypatch.setattr(qwen_mod, "MPS_SEGMENT_SEC", 2.0)
+    audio = Audio(waveform=torch.ones(1, 16000 * 5), sampling_rate=16000)
+    model: HFModel = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B", revision="main")
+    [line] = QwenASR.transcribe_with_qwen([audio], model=model, device=DeviceType.MPS)
+
+    assert len(calls) == 3 and closed == ["Qwen3-ASR"] * 3
+    assert line.text == "hello hello hello"
+    starts = [c.start for c in line.chunks or []]
+    expected = [a / 16000 for a, _ in qwen_mod._segment_bounds(audio.waveform[0], 16000, 2.0)]
+    assert starts == pytest.approx(expected)
+    assert starts[2] is not None and line.end == pytest.approx(starts[2] + 0.5)
+
+
+def test_short_or_off_mps_audio_is_one_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Below the segment length, or on CPU, one request and no worker recycling."""
+    from senselab.utils.data_structures import DeviceType
+
+    _stub_qwen_staging(monkeypatch)
+    calls = _capture_serve(monkeypatch)
+    closed: list[str] = []
+    monkeypatch.setattr(qwen_mod, "close_venv_workers", closed.append)
+    monkeypatch.setattr(qwen_mod, "MPS_SEGMENT_SEC", 2.0)
+    audio = Audio(waveform=torch.ones(1, 16000 * 5), sampling_rate=16000)
+    model: HFModel = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B", revision="main")
+    QwenASR.transcribe_with_qwen([audio], model=model, device=DeviceType.CPU)
+    assert len(calls) == 1 and closed == []

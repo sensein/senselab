@@ -71,7 +71,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 24
+CACHE_SCHEMA_VERSION = 25
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -268,6 +268,9 @@ commit, so none may be reused — the first run after this change recomputes eve
 Bumped 23 → 24 when the senselab version left the key. Its hatch-vcs value changes with every commit,
 so the old key missed on every run at a new commit; the new key omits it and is a different payload,
 so no pre-24 entry is readable under it.
+
+Bumped 24 → 25 when CrisperWhisper and Qwen3-ASR began running on MPS under ``device: auto`` and
+CrisperWhisper's word chunks began carrying a confidence ``score``.
 """
 
 

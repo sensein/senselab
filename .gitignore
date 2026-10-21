@@ -166,39 +166,19 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 .idea/
 
-# data folder
+# data folder: run outputs and downloads stay out of git wherever they land...
 data/
-# ...but the audio_analysis workflow ships checked-in package data (AudioSet
-# category map, YAMNet class names) that must be tracked and wheel-included.
-!src/senselab/audio/workflows/audio_analysis/data/
-!src/senselab/audio/workflows/audio_analysis/data/**
-# ...and the same for source_separation's FSD class map -- a bare `data/` pattern here
-# would silently gitignore it exactly the way it once hid level_verdicts_baseline.json
-# below, and load_fsd_class_map_document() would fail on any clone that isn't this host.
-!src/senselab/audio/tasks/source_separation/data/
-!src/senselab/audio/tasks/source_separation/data/**
-# ...and the subprocess-venv locks ensure_venv installs from.
-!src/senselab/utils/data/
-!src/senselab/utils/data/**
-# ...and the same for checked-in *test* data. `level_verdicts_baseline.json` is a measured artifact —
-# the level-probe verdicts the guards in `level_probe_test.py` assert properties of — so a clone
-# without it cannot run those six tests at all. They passed only on the machine that generated the
-# file, and failed on every fresh clone (Engaging, CI) with the bare `data/` pattern above hiding why.
+# ...except package data and test data. Every `data/` directory under `src/senselab/` holds
+# checked-in configuration, fitted profiles or derivations that the code loads at runtime and the
+# wheel must include; a per-module exception was added after each one was silently hidden. One
+# rule covers them all, including modules that do not exist yet.
+!src/senselab/**/data/
+!src/senselab/**/data/**
 !src/tests/**/data/
 !src/tests/**/data/**
-# ...and the same for utils/tasks' fitted profiles (embedding_gap_significance.json): the bare
-# `data/` pattern above silently gitignored it on first add, so `uv build` produced a wheel missing
-# the file `_load_gap_significance_margin` reads, and a clone with no bundled profile would fall
-# back to the undocumented in-code default instead of failing loudly.
-!src/senselab/utils/tasks/data/
-!src/senselab/utils/tasks/data/**
-# ...but the triage workflow ships checked-in package data (the versioned config); a bare
-# `data/` pattern would hide it from both git and hatchling's VCS-aware file selection.
-!src/senselab/audio/workflows/triage/data/
-!src/senselab/audio/workflows/triage/data/**
-# ...and the PII task's own packaged data (the Safe Harbor identifiers the redaction reviewer applies).
-!src/senselab/text/tasks/pii_detection/data/
-!src/senselab/text/tasks/pii_detection/data/**
+# The re-includes above must not re-include bytecode caches.
+**/__pycache__/
+*.py[co]
 # pdoc documentation
 docs/
 
@@ -269,3 +249,6 @@ node_modules
 package-lock.json
 test-results/
 playwright-report/
+# the data/ re-includes above must not re-include bytecode caches
+**/__pycache__/
+*.py[co]

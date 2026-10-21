@@ -39,7 +39,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator, Optional, Sequence
 
 from senselab.utils import venv_lock
 from senselab.utils.cuda_probe import (
@@ -308,12 +308,15 @@ def _resolve_lock(
     python_version: Optional[str],
     max_cuda_version: Optional[tuple[int, int]],
     compile_lock: bool,
+    excluded_packages: Sequence[str] = (),
 ) -> VenvLock:
     """The lock a venv is installed from: the committed one, or one compiled now for a probe."""
     if not compile_lock:
-        return load_lock(name, requirements, python_version, max_cuda_version)
+        return load_lock(name, requirements, python_version, max_cuda_version, excluded_packages=excluded_packages)
     python = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
-    text = venv_lock.compile_lock(name, requirements, python, max_cuda_version, check_torch_index=False)
+    text = venv_lock.compile_lock(
+        name, requirements, python, max_cuda_version, check_torch_index=False, excluded_packages=excluded_packages
+    )
     path = _cache_dir() / ".locks" / f"{name}.txt"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
@@ -327,6 +330,7 @@ def ensure_venv(
     max_cuda_version: Optional[tuple[int, int]] = None,
     *,
     compile_lock: bool = False,
+    excluded_packages: Sequence[str] = (),
 ) -> Path:
     """Create or reuse an isolated virtual environment from its pinned lock.
 
@@ -344,6 +348,8 @@ def ensure_venv(
             ``pick_torch_index``. ``None`` applies no cap.
         compile_lock: Compile a lock now instead of reading the committed one. For compatibility
             probes over version ranges only; such a venv is not reproducible.
+        excluded_packages: Distributions the requirements resolve to but the lock body leaves out,
+            so they are never installed; the lock must have been compiled with the same list.
 
     Returns:
         Path to the venv directory.
@@ -351,7 +357,7 @@ def ensure_venv(
     Raises:
         VenvLockError: When the committed lock is missing or was compiled from other inputs.
     """
-    lock = _resolve_lock(name, requirements, python_version, max_cuda_version, compile_lock)
+    lock = _resolve_lock(name, requirements, python_version, max_cuda_version, compile_lock, excluded_packages)
     last_error: Optional[_VenvLockLost] = None
     for attempt in range(1, _MAX_LOCK_LOST_RETRIES + 1):
         try:
@@ -672,8 +678,9 @@ def stage_portable_audio_io(directory: "str | Path") -> str:
 def _clean_subprocess_env() -> dict:
     """Return a copy of os.environ fit for a subprocess venv.
 
-    Strips MPLBACKEND (matplotlib_inline's backend is not available in subprocesses) and points TLS
-    verification at a CA bundle that exists.
+    Strips MPLBACKEND (matplotlib_inline's backend is not available in subprocesses), applies
+    :func:`senselab.utils.network_guard.apply_network_guard` (a no-op unless
+    ``SENSELAB_BLOCK_NETWORK`` is set) and points TLS verification at a CA bundle that exists.
 
     **Why the CA bundle needs saying explicitly.** These venvs run on the uv-managed interpreter, which
     is python-build-standalone: statically linked, and with no usable system CA path compiled in. So
@@ -693,7 +700,10 @@ def _clean_subprocess_env() -> dict:
     corporate CA has already answered this question, and overriding it would break exactly the setup
     that took the trouble to configure it.
     """
+    from senselab.utils.network_guard import apply_network_guard
+
     env = {k: v for k, v in os.environ.items() if k not in ("MPLBACKEND",)}
+    apply_network_guard(env)
     if not env.get("SSL_CERT_FILE") or not env.get("REQUESTS_CA_BUNDLE"):
         try:
             import certifi
