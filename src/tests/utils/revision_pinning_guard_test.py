@@ -66,6 +66,9 @@ REVISION_RESOLVED_SUBPROCESS_FILES = {
     # redaction_review_vllm.py: the same resolved SHA; vllm serve and the tokenizer load the staged
     # snapshots/<sha> directory, and the worker reports that directory's name back as the revision.
     "text/tasks/pii_detection/redaction_review_vllm.py",
+    # scene_description/backends.py: MLXVLMBackend resolves the ref with resolve_revision, stages that
+    # commit with resolve_model, and the mlx-vlm worker loads the returned snapshots/<sha> directory.
+    "video/tasks/scene_description/backends.py",
 }
 
 # Subprocess workers that CANNOT pass a revision to their loader, because the upstream loader has
