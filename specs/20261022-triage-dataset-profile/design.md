@@ -78,9 +78,13 @@ A profile supplies files, not code, except for the optional `hints.py` and the h
 ## How a profile is loaded
 
 1. **Stacked layers:** packaged defaults, then the profile's override, then a run override.
-   `load_triage_config` accepts more than one layer. The profile can remove a packaged data-map entry
-   explicitly, for example with a `null` value, so the packaged defaults never have to carry dataset
-   entries.
+   `load_triage_config` accepts more than one layer.
+   - **Packaged maps keyed by task carry no dataset entries.** A data map such as
+     `verdict.gates.by_family` (`rainbow-passage`, `caterpillar-passage`, `word-color-stroop` today) merges
+     add-only, so an override can add or change a key but never delete one (`config.py:165-166`).
+   - The B2AI entries move into the B2AI profile, and the packaged maps keyed by task are left empty.
+   - Deleting a packaged entry is then needed only for senselab's own general entries, such as classifier
+     label thresholds. That is an open question below, not a requirement.
 2. **One data-path resolver.** Every one of the 39 package-relative loads asks the resolver. The resolver
    looks in the profile first and falls back to the package.
 3. **One hash over everything that decides.** Today `config_hash` covers the merged YAML only
@@ -112,7 +116,7 @@ Each step is its own PR, and each must leave B2AI output unchanged (see "Accepta
 
 1. **Identity.** Add the identity function, have `b2ai_hints.build_hint` write `task_token`, and route
    the six parsers through it.
-2. **Loader.** Add stacked layers, explicit removal, the data-path resolver and the extended hash. Every
+2. **Loader.** Add stacked layers, the data-path resolver and the extended hash. Every
    packaged file is still found through the fallback.
 3. **Tasks and families as data.** Load the task rows and family sets through accessors. Extract the B2AI
    rows, sets and lexicons into a B2AI profile, kept at first as a senselab test fixture. Switch the DDK
@@ -158,7 +162,9 @@ Each step is its own PR, and each must leave B2AI output unchanged (see "Accepta
    unfitted placeholders that fail through `UnmeasuredConfigKey` until a profile supplies them, or ship
    the B2AI values labelled as such. The first is stricter; the second keeps `triage_audio.py` usable
    out of the box.
-2. **Removal syntax** for packaged data-map entries: `null`, or a separate `remove:` list.
+2. **Deleting packaged entries.** Should an override be able to delete one of senselab's own general
+   data-map entries, such as a classifier label threshold? If so, how: a `null` value, or a separate
+   `remove:` list. The B2AI profile does not need this.
 3. **Profile versioning:** whether a profile's version is free-form or must match a profile schema
    version that senselab checks.
 4. **Where `hints.py` lives:** in the profile folder, or as an entry point the dataset package exposes.
