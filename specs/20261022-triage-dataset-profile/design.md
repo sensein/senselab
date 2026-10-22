@@ -1,7 +1,8 @@
 # Dataset profiles for triage — 2026-10-22
 
 **Status:** proposal, for review by the triage owner. No code. Citations are to `origin/alpha` at
-`98c8048b6`, relative to `src/senselab/audio/workflows/triage/` unless a path says otherwise.
+`98c8048b6`, relative to `src/senselab/audio/workflows/triage/` unless a path says otherwise. The staged
+work is in `plan.md` beside this file.
 
 ## What this is
 
@@ -112,22 +113,24 @@ code; a matcher registry is listed under "Not in scope".
 
 ## Changes, in order
 
-Each step is its own PR, and each must leave B2AI output unchanged (see "Acceptance").
+Each step is its own PR, and each must leave B2AI output unchanged (see "Acceptance"). `plan.md` has the
+detail.
 
-1. **Identity.** Add the identity function, have `b2ai_hints.build_hint` write `task_token`, and route
-   the six parsers through it.
-2. **Loader.** Add stacked layers, the data-path resolver and the extended hash. Every
-   packaged file is still found through the fallback.
+1. **Identity.** ADMIT records participant, session and task from the hint, with today's file-name
+   parsing as the fallback. `b2ai_hints.build_hint` writes `task_token`, `participant_id` and `session_id`.
+   The graph's readers use the record. The corpus-level parsers follow in a later step.
+2. **Loader.** Add stacked layers, the data-path resolver and the extended hash. Every packaged file is
+   still found through the fallback.
 3. **Tasks and families as data.** Load the task rows and family sets through accessors. Extract the B2AI
    rows, sets and lexicons into a B2AI profile, kept at first as a senselab test fixture. Switch the DDK
    dispatch to `Pattern`.
-4. **Fitted values and policy.** Move the family-keyed YAMLs and owner-policy keys into the B2AI profile.
-5. **Outside triage.** Make the PII and second-opinion inputs caller-supplied (next section).
+4. **Fitted values, policy and neutral defaults.** Move the family-keyed YAMLs and owner-policy keys into
+   the B2AI profile. The packaged values become explicit, as open question 1 decides.
+5. **Outside triage.** Make the PII and second-opinion inputs caller-supplied (see "Outside triage").
 6. **Hand-over.** The B2AI profile, `b2ai_hints.py`, `task_registry.py` and the vendored
    `data/b2ai_task_registry/` move to b2aiprep, which already owns the registry's source
    (`data/b2ai_task_registry/PROVENANCE.yaml`). b2aiprep gets a paired change.
-7. **Neutral defaults.** The packaged values become explicit, as the open question below decides.
-8. **Tests.** The 59 triage test files that use B2AI family names load the B2AI fixture profile;
+7. **Tests.** The 59 triage test files that use B2AI family names load the B2AI fixture profile.
    `nodes/branches_test.py:471-480` (48 rows) moves with it.
 
 ## Acceptance
@@ -137,8 +140,9 @@ Each step is its own PR, and each must leave B2AI output unchanged (see "Accepta
   `replay_diff`. Each step's PR includes the diff.
 - **The engine runs without the profile.** A synthetic recording with no hint and no profile runs to a
   verdict through detect mode (`nodes/branches.py:1253`).
-- **A second profile.** B2AI pediatric is the natural first test of a second protocol. Its tasks
-  (identifying pictures, repeating words, the sounds tasks) are named nowhere in triage today.
+- **A second profile comes after this plan.** B2AI pediatric is the planned next extension and the first
+  real test of a second protocol. Its tasks (identifying pictures, repeating words, the sounds tasks) are
+  named nowhere in triage today.
 
 ## Outside triage
 
@@ -156,12 +160,36 @@ Each step is its own PR, and each must leave B2AI output unchanged (see "Accepta
   clipping, disruptions, gammatone, spectral continuity, classification, speech enhancement, feature
   extraction, plotting). They import nothing from triage and take every tuned value as an argument.
 
+## Decided (2026-10-22)
+
+- **Who does the work.** The first attempt is by the b2aiprep side (Jordan Wilke, with Claude Code). The
+  triage owner reviews each PR and changes it as needed.
+- **Where the B2AI profile lives:** in the b2aiprep package, not a separate data package.
+- **Fitted values belong to the caller.** Whoever runs triage on a dataset maintains that dataset's
+  values in its profile.
+  - For B2AI this is the release's triage runner, and changes go through a reviewed b2aiprep PR.
+  - A way to fit a new dataset's values programmatically is not part of this plan. It needs train/test
+    split support that senselab does not have yet, and is a follow-up issue after the refactor.
+- **Pediatric** is the planned next extension, after this plan.
+- **Dependency.** b2aiprep points at a senselab alpha on PyPI (`>=1.4.0a7`). 1.4.0a7 is `origin/alpha` as
+  of 2026-10-21, triage included.
+
 ## Open questions
 
-1. **Neutral defaults.** Every fitted value comes from B2AI adult data. senselab can either ship explicit
-   unfitted placeholders that fail through `UnmeasuredConfigKey` until a profile supplies them, or ship
-   the B2AI values labelled as such. The first is stricter; the second keeps `triage_audio.py` usable
-   out of the box.
+1. **Neutral defaults.** Every value fitted today comes from B2AI adult data. The values are of three
+   kinds, and each suits a different default:
+   - **Defined by signal or physics** (clipping at full scale, band limits at the resample rate): keep
+     them as plain defaults.
+   - **What a task normally produces** (DDK syllable rate, maximum phonation time, breath and cough
+     durations): literature exists but depends on the population. Use cited values at the `Pattern`
+     level, or none.
+   - **About the models and pipeline** (classifier score cut-offs, the speaker-embedding cosine floor,
+     ASR agreement): only a corpus can give these. Either fail through `UnmeasuredConfigKey` until a
+     profile supplies them, or ship the B2AI value with a warning that names its source.
+
+   Proposal: keep the defined values, cite literature where it exists, and decide fail-or-warn for the
+   model and pipeline values. `specs/20260817-triage-workflow-dag/config-derivations.md` is the starting
+   point for sorting each value.
 2. **Deleting packaged entries.** Should an override be able to delete one of senselab's own general
    data-map entries, such as a classifier label threshold? If so, how: a `null` value, or a separate
    `remove:` list. The B2AI profile does not need this.
