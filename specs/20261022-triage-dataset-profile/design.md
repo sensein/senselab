@@ -113,8 +113,9 @@ code; a matcher registry is listed under "Not in scope".
 
 ## Changes, in order
 
-Each step is its own PR. Each compares B2AI output before and after the change, and any difference is
-explained in the PR (see "Acceptance"). `plan.md` has the detail.
+Each step is its own PR against the integration branch `design/triage-dataset-profile`. The branch merges
+into `alpha` once, at the end. Each step compares B2AI output before and after the change, and any
+difference is explained in the PR (see "Acceptance"). `plan.md` has the detail.
 
 1. **Identity.** ADMIT records participant, session and task from the hint, with today's file-name
    parsing as the fallback. `b2ai_hints.build_hint` writes `task_token`, `participant_id` and `session_id`.

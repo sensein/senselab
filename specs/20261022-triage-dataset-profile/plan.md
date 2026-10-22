@@ -1,7 +1,13 @@
 # Implementation plan: triage dataset profiles — 2026-10-22
 
-This is the staged work for `design.md` in this folder. Each step is its own PR against `alpha`. A step
-starts only after the triage owner has reviewed the one before it.
+This is the staged work for `design.md` in this folder. The work happens on an integration branch,
+`design/triage-dataset-profile`:
+- Each step is its own PR against that branch, reviewed by the triage owner. A step starts only after the
+  one before it has been reviewed.
+- The branch's own PR (#607) merges into `alpha` once, when every step is in. A published alpha therefore
+  holds either none of the refactor or all of it.
+- `alpha` is merged into the branch regularly, with a merge rather than a rebase, so the step PRs keep
+  their history while triage keeps changing on `alpha`.
 
 Every step compares B2AI output before and after. A refactor is expected to change nothing. Where a change
 is intended or reasonable, such as step 2's hash, the PR names it and the reviewer accepts it case by case.
