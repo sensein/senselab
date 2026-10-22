@@ -56,7 +56,8 @@ from senselab.audio.workflows.triage.cohort_fold import (
 )
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.decision import PASS, REVIEW
-from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
+from senselab.audio.workflows.triage.identity import declared_session_key
+from senselab.audio.workflows.triage.live_evidence import declared_task, declared_task_of, recording_stem
 from senselab.audio.workflows.triage.nodes.background import session_key
 from senselab.audio.workflows.triage.nodes.branches import derivative_arrays, merge
 from senselab.audio.workflows.triage.nodes.common import (
@@ -500,7 +501,7 @@ def facts_of(
         The facts.
     """
     stem = recording_stem(store) or (stem or "")
-    family = declared_task(stem)[1]
+    family = declared_task_of(store, stem)[1]
     extents = [span.extent for span in standing_task_extents(live_entities(store, "span")) if span.extent]
     hull = (min(float(e[0]) for e in extents), max(float(e[1]) for e in extents)) if extents else None
     segments: tuple[tuple[float, float, str], ...] = ()
@@ -524,7 +525,7 @@ def facts_of(
     removed_speech = _subtract(by_name.get(removed["from"], []), by_name.get(removed["kept"], []))
     return RecordingFacts(
         stem=stem,
-        session=session_key(stem),
+        session=declared_session_key(store, stem),
         family=family,
         lexical_task=lexical_task(family),
         duration_s=_recording_duration(store),
