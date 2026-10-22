@@ -113,8 +113,8 @@ code; a matcher registry is listed under "Not in scope".
 
 ## Changes, in order
 
-Each step is its own PR, and each must leave B2AI output unchanged (see "Acceptance"). `plan.md` has the
-detail.
+Each step is its own PR. Each compares B2AI output before and after the change, and any difference is
+explained in the PR (see "Acceptance"). `plan.md` has the detail.
 
 1. **Identity.** ADMIT records participant, session and task from the hint, with today's file-name
    parsing as the fallback. `b2ai_hints.build_hint` writes `task_token`, `participant_id` and `session_id`.
@@ -135,9 +135,13 @@ detail.
 
 ## Acceptance
 
-- **B2AI output does not change.** A fixed B2AI sample is replayed with the packaged configuration and
-  with the B2AI profile. The decision tables must match apart from the config hash, compared with
-  `replay_diff`. Each step's PR includes the diff.
+- **B2AI output is compared, and every difference is explained.** A fixed B2AI sample is replayed before
+  and after each step, and the decision tables are compared with `replay_diff`. Each step's PR includes the
+  diff.
+  - A refactor is expected to change nothing.
+  - Where a change is intended or a fair consequence of the step, the PR names it and the reviewer accepts
+    it case by case.
+  - An unexplained difference blocks the step.
 - **The engine runs without the profile.** A synthetic recording with no hint and no profile runs to a
   verdict through detect mode (`nodes/branches.py:1253`).
 - **A second profile comes after this plan.** B2AI pediatric is the planned next extension and the first

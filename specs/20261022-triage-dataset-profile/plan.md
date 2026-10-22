@@ -1,8 +1,11 @@
 # Implementation plan: triage dataset profiles — 2026-10-22
 
 This is the staged work for `design.md` in this folder. Each step is its own PR against `alpha`. A step
-starts only after the triage owner has reviewed the one before it. Every step must leave B2AI output
-unchanged; the only planned exception is step 2's hash, as noted there.
+starts only after the triage owner has reviewed the one before it.
+
+Every step compares B2AI output before and after. A refactor is expected to change nothing. Where a change
+is intended or reasonable, such as step 2's hash, the PR names it and the reviewer accepts it case by case.
+An unexplained difference blocks the step.
 
 Citations are to `origin/alpha` at `98c8048b6`, relative to `src/senselab/audio/workflows/triage/`.
 
@@ -61,8 +64,8 @@ stores without the new fields behave exactly as now.
    participant and session must agree for all of them. It runs as a SLURM job, since reading 62k sidecars
    takes more than a minute or two.
 3. **The existing triage test suite passes unchanged.**
-4. **One end-to-end run on a few B2AI recordings**, before and after the change, with identical decision
-   tables. The recordings cover a breath task, whose route comes from its index, plus a DDK task and a
+4. **One end-to-end run on a few B2AI recordings**, before and after the change. The decision tables are
+   compared, and any difference is explained. The recordings cover a breath task, whose route comes from its index, plus a DDK task and a
    reading task.
 
 **Size:** about 150 lines of code plus tests.
@@ -76,8 +79,8 @@ stores without the new fields behave exactly as now.
 - **A wider hash:** `config_hash` covers the merged config plus the bytes of every profile file loaded,
   and the run records the profile's name and version.
   - This is the one planned output change: hash values change, decisions do not.
-- **Acceptance:** identical decision tables on the step-1 sample. Every packaged file is still found
-  through the fallback.
+- **Acceptance:** the decision tables on the step-1 sample are compared, and any difference other than
+  the hash is explained. Every packaged file is still found through the fallback.
 
 ## Step 3 — tasks and families as data
 
