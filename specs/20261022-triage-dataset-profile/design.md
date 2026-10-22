@@ -64,7 +64,7 @@ whose parameters happen to be B2AI's.
 
 ## What a profile holds
 
-| File | Contents | Replaces |
+| File | Contents | Takes over from |
 |---|---|---|
 | `profile.yaml` | name, version, provenance (source dataset, runs it was fitted on), the list of files below, and a config override | the single override argument |
 | `tasks.yaml` | the task rows: family → branch, `Pattern` and `Expectation` fields, loaded through `Expectation.from_mapping` | the three `*_EXPECTATIONS` tables |
@@ -86,8 +86,8 @@ A profile supplies files, not code, except for the optional `hints.py` and the h
    - The B2AI entries move into the B2AI profile, and the packaged maps keyed by task are left empty.
    - Deleting a packaged entry is then needed only for senselab's own general entries, such as classifier
      label thresholds. That is an open question below, not a requirement.
-2. **One data-path resolver.** Every one of the 39 package-relative loads asks the resolver. The resolver
-   looks in the profile first and falls back to the package.
+2. **One data-path resolver.** Every package-relative read of a data file asks the resolver. It reads the
+   file the profile supplies, and falls back to the package for any file the profile does not supply.
 3. **One hash over everything that decides.** Today `config_hash` covers the merged YAML only
    (`config.py:201`). The packaged data files are pinned only by the senselab commit, but files supplied
    from outside are not. The hash must cover the merged config plus the bytes of every profile file that

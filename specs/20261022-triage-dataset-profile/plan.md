@@ -1,6 +1,12 @@
 # Implementation plan: triage dataset profiles — 2026-10-22
 
-This is the staged work for `design.md` in this folder. The work happens on an integration branch,
+This is the staged work for `design.md` in this folder.
+
+**End state:** senselab's triage ships no dataset-specific data, only the engine's own files and neutral
+defaults. Every dataset, B2AI included, supplies its task rows, families, word lists, fitted values and
+policy through its own profile. Until the last steps land, senselab still ships the B2AI files, so a
+profile's files are read instead of them; by the end there is nothing left to take over from.
+ The work happens on an integration branch,
 `design/triage-dataset-profile`:
 - Each step is its own PR against that branch, reviewed by the triage owner. A step starts only after the
   one before it has been reviewed.
@@ -79,12 +85,16 @@ stores without the new fields behave exactly as now.
 ## Step 2 — profile loader and hash
 
 - **Layers:** `load_triage_config` accepts packaged defaults, then a profile, then a run override.
-- **Profile manifest:** `profile.yaml` gives the name, version, provenance and the list of files.
-- **One resolver for data files,** which replaces the 39 package-relative loads and falls back to the
-  package.
-- **A wider hash:** `config_hash` covers the merged config plus the bytes of every profile file loaded,
-  and the run records the profile's name and version.
-  - This is the one planned output change: hash values change, decisions do not.
+- **Profile manifest:** `profile.yaml` gives the name, version, provenance and the data files the profile
+  supplies. The engine's own files (the packaged config, the output schemas, the decision vocabularies)
+  cannot be supplied.
+- **One resolver for data files:** each data read goes through it. It reads the file the profile supplies,
+  and otherwise the packaged one.
+- **One profile per process:** loaders cache what they read, so activating a second, different profile
+  raises.
+- **A wider hash, only with a profile:** `config_hash` also covers the profile's name, version and every
+  byte it supplies, and `run.json` records the profile. Without a profile, the hash is unchanged.
+- **`scripts/triage_audio.py --profile`.** The `extend_*` drivers get the same option next.
 - **Acceptance:** the decision tables on the step-1 sample are compared, and any difference other than
   the hash is explained. Every packaged file is still found through the fallback.
 
@@ -123,5 +133,7 @@ stores without the new fields behave exactly as now.
 ## After this plan
 
 - **A pediatric profile:** the first second protocol.
+- **senselab's data folder holds no dataset data:** checked by a test that fails if a packaged data file
+  names a dataset's tasks.
 - **Fitting a new dataset's values programmatically:** a follow-up issue. It needs train/test split
   support in senselab.
