@@ -7,7 +7,14 @@ from typing import Callable, cast
 import numpy as np
 import pytest
 
+from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.identity import (
+    DECLARED_FROM,
+    DECLARED_SESSION,
+    DECLARED_TASK_ID,
+    recorded_identity,
+)
 from senselab.audio.workflows.triage.nodes import admit as admit_module
 from senselab.audio.workflows.triage.nodes.admit import AdmitResult, admit
 from senselab.audio.workflows.triage.nodes.common import resolve_stream
@@ -153,6 +160,28 @@ class TestStoreWrites:
         entity_id, audio = resolve_stream(store, tmp_path, "recording")
         assert entity_id == stream.id
         assert audio.waveform.shape[-1] == 16000
+
+    def test_pass_records_the_stem_identity_when_no_hint_declares_one(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """Without a hint the recorded identity is the stem's own reading."""
+        path = wav_writer("sub-01_ses-02_task-loudness-1.wav", _sine())
+        admit(store, path, config, run_dir=tmp_path)
+        [stream] = store.entities("stream")
+        assert stream.attributes[DECLARED_TASK_ID] == "loudness-1"
+        assert stream.attributes[DECLARED_SESSION] == "ses-02"
+        assert set(stream.attributes[DECLARED_FROM].values()) == {"stem"}
+
+    def test_pass_records_what_the_hint_declares(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """A hint's participant, session and task are recorded, so store-only readers see them."""
+        path = wav_writer("recording-0042.wav", _sine())
+        hint = AudioHints(metadata={"participant_id": "P7", "session_id": "s1", "task_token": "cough-2"})
+        admit(store, path, config, hint, run_dir=tmp_path)
+        identity = recorded_identity(store)
+        assert identity is not None
+        assert (identity.participant, identity.session, identity.task_family) == ("P7", "s1", "cough")
 
     def test_fail_writes_only_a_verdict(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
