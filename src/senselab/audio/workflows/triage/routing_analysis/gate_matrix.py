@@ -29,6 +29,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import yaml
 
+from senselab.audio.workflows.triage.dataset_profile import data_path
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures, value_stats
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     AT_LEAST,
@@ -85,9 +86,9 @@ def _bundled_profile_path() -> Path:
     Raises:
         FileNotFoundError: If the package ships no profile.
     """
-    bundled = sorted(PROFILE_DIR.glob("*.yaml"))
+    bundled = sorted(data_path("disagreement_profile").glob("*.yaml"))
     if not bundled:
-        raise FileNotFoundError(f"no disagreement profile in {PROFILE_DIR}")
+        raise FileNotFoundError(f"no disagreement profile in {data_path('disagreement_profile')}")
     return bundled[-1]
 
 

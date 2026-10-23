@@ -1,0 +1,141 @@
+# The decision table's reason vocabulary: every ground key the fold can write maps to one short reason.
+# `reason` is the first of a recording's reasons in `precedence`; `reasons` is all of them, in that order.
+# Owner, 2026-10-07: verdict pass/review/discard, release as_is/redacted/withheld, one reason per recording.
+# Owner, 2026-10-10: consolidated to these codes; the release ground is its own column (release_reason).
+# Derivation: specs/20261007-task-events-in-background/design.md ("Decision table", "Reasons consolidated",
+# "The residual's other voice is attributed", "The reviewer reads the phrases").
+version: 14
+precedence:            # discard reasons first, then incomplete, then the recording, then the content
+- unreadable
+- task_too_short
+- no_task_captured
+- task_not_found
+- not_measured
+- fault_in_task
+- interference_in_task
+- other_speaker
+- off_task_speech
+- weak_events
+- extent_incomplete
+- task_not_conforming
+- atypical_recording
+- identifying_content
+meaning:
+  unreadable: ADMIT could not read the recording, or it declares no task this graph holds
+  task_too_short: the recording is shorter than its task's minimum duration
+  no_task_captured: nothing the task asks for stands above the background
+  task_not_found: the declared task is absent -- other activity, or a different task than declared
+  not_measured: the pipeline owes the recording a measurement (run_status incomplete)
+  fault_in_task: a capture fault (shutoff, dropout, clip) falls inside the task
+  interference_in_task: a non-speech sound source (a BACKGROUND impulse, where its kind decides) overlaps the task; another voice is never one
+  other_speaker: someone other than the participant speaks -- a background voice, an examiner, an assistant; the residual's other voice only where COHORT or a reader attributes it
+  off_task_speech: the participant speaks outside the task's own content
+  weak_events: the task's events stand too weakly over the background to decide, or the streams disagree on them
+  extent_incomplete: the task extent leaves part of the task out, or takes in more than the task (data/task_extent.yaml completeness)
+  task_not_conforming: the task was performed, but not as instructed
+  atypical_recording: the recording falls outside its family's corpus distribution (COHORT)
+  identifying_content: content that may identify the participant needs a reader; every release but as_is
+keys:                  # exact verdict ground key -> reason
+  unmeasurable: unreadable
+  too_short_for_task: task_too_short
+  acoustically_empty: no_task_captured
+  no_breath_captured: no_task_captured
+  no_cough_captured: no_task_captured
+  no_phonation_captured: no_task_captured
+  no_syllable_train_captured: no_task_captured
+  syllable_train_not_target: task_not_found
+  declared_task_absent: task_not_found
+  task_mismatch: task_not_found
+  task_replaced_by_talk: task_not_found   # data/discard_replaced_task.yaml; discards only when enabled
+  preprocess_errored: not_measured
+  routing_errored: not_measured
+  config_bad_hint_map: not_measured
+  declaration_unread: not_measured
+  no_branch_measured: not_measured
+  route_unreadable: not_measured
+  critical_absence: not_measured
+  taxonomy_no_classifier: not_measured
+  redact_rescan_incomplete: not_measured
+  uncomputed_reading: not_measured
+  owning_branch_input_absent: not_measured
+  pii_scan_missing: not_measured   # owner, 2026-10-10: lexical words of a lexical family with no PII scan are a missing measurement
+  node_outcome_unreadable: not_measured
+  streams_disagree: weak_events
+  breath_review_low_confidence: weak_events
+  cough_review_low_confidence: weak_events
+  voice_review_low_confidence: weak_events
+  ddk_review_weak_events: weak_events
+  discard_contested: weak_events
+  ddk_review_identity: task_not_conforming
+  extent_incomplete: extent_incomplete
+  speech_no_lexical_item: task_not_conforming
+  other_voice_in_task: other_speaker
+  reviewer_second_speaker: other_speaker
+  reviewer_other_speaker: other_speaker
+  gate:dominant_speaker_share_min: other_speaker
+  other_speaker_in_session: other_speaker
+  session_speaker_inconsistent: other_speaker
+  other_speaker_in_task: other_speaker
+  instructions_spoken_by_other: other_speaker
+  instructions_spoken: off_task_speech
+  speech_in_task: off_task_speech
+  reviewer_off_task_speech: off_task_speech
+  reviewer_phrases_instead_of_items: off_task_speech
+  reviewer_quotes_unplaced: off_task_speech   # owner, 2026-10-10: phrase quotes unplaced after max_iterations
+  recording_duration_outlier: atypical_recording
+  release_in_nonlexical_task: identifying_content
+  release_reviewed: identifying_content
+  person_name_review: identifying_content
+  reviewer_residue: identifying_content
+  reviewer_named_no_words: identifying_content
+  unplaced_finding_open: identifying_content
+  unplaced_finding_unread: identifying_content
+  second_opinion:other_voice: other_speaker
+  second_opinion:other_voice_participant: off_task_speech   # r37 C2: COHORT reads the participant
+  second_opinion:instructions_spoken: off_task_speech
+  second_opinion:instructions_spoken_by_other: other_speaker
+  second_opinion:policy_identifier_present: identifying_content
+  second_opinion:masked_text_free_of_identifiers: identifying_content
+  second_opinion:off_task_speech: off_task_speech
+  second_opinion:phrases_instead_of_items: off_task_speech
+annotations:           # ground keys and prefixes the fold writes only as annotations; they map to no reason
+- speech_outside_task
+- fault_outside_task
+- interference_outside_task
+- phrases_occasional
+- residual_speech_unattributed
+- residual_speech_outside_task
+- aligner_failed
+- session_condition_shift       # COHORT: a session inconsistency its recording condition explains
+- recurring_non_target_voice    # COHORT: a non-matching voice outside the task recurring across recordings
+- non_task_self_talk            # COHORT: a non-matching voice outside the task that is the participant's own
+- speaker_nonmatch_shared       # COHORT: a non-match shared across the participant and uncorroborated
+- speaker_gate_recording_condition   # r37 C1: an uncorroborated speaker-gate fire on a hot or clipped participant
+- off_task_aside                     # r37 G1: an off-task aside in a narrative family
+- speech_before_task                 # r37 G3: lexical speech before a lexical task's extent
+- atypical_attempt
+reviewed_releases:     # owner, 2026-10-10: masks not yet validated; every release but as_is is reviewed (release_reviewed)
+- redacted
+- withheld
+release_audible_share_min: 0.1   # UNFITTED: a release whose masks leave less of the task extent audible than this withholds (release_empty)
+second_opinion_not_free_withholds: true   # owner, 2026-10-10; r37 G2: a confident second-opinion "not free" holds the release only where the reviewer or a standing identifier mask corroborates it
+release_keys:          # release ground key -> reason, for a release the graph could not assess (run_status incomplete)
+  no_transcript: not_measured
+  speech_unread: not_measured
+  redaction_owed: not_measured
+  scan_unrecorded: not_measured
+prefixes:              # `<prefix>:<name>` ground key -> reason, where no exact key above names it
+  gate: task_not_conforming
+  conformance: task_not_conforming
+  nothing_read: task_not_conforming
+  route_mismatch: task_not_found
+  hint_mismatch: task_not_found
+  deviation: task_not_conforming
+  conformance_unanswered: task_not_conforming
+  unmeasured_operating_point: not_measured
+  branch_silent: not_measured
+  store_assertion_contradicted: task_not_conforming
+  node: task_not_conforming
+  fault_in_task: fault_in_task
+  interference_in_task: interference_in_task
+  second_opinion: identifying_content

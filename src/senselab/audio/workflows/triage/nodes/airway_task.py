@@ -1,13 +1,12 @@
 """AIRWAY's task measures: the breath train and the cough onsets, written to the store.
 
-A declared airway family named in ``data/airway_event_requirements.yaml`` is measured here, inside
+A declared airway family named in the dataset profile's ``airway_event_requirements.yaml`` is measured here, inside
 the AIRWAY branch, and VERDICT reads only what this module writes. The design is in
 ``specs/20261006-airway-move/design.md``.
 """
 
 from __future__ import annotations
 
-import functools
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -21,13 +20,12 @@ from senselab.audio.workflows.triage.breath_pattern import (
     breath_pattern_of,
 )
 from senselab.audio.workflows.triage.cough_pattern import CoughPattern, cough_pattern_of, in_cough_review_band
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.nodes.branches import Expectation
 from senselab.audio.workflows.triage.nodes.common import clamp_to_recording, mint_live, write_measurement
 from senselab.audio.workflows.triage.task_events import REVIEW
 from senselab.audio.workflows.triage.vocabulary import SUPERSEDES, TASK_EXTENT_SPAN_ROLE
 from senselab.utils.prov_store import ProvStore
-
-AIRWAY_EVENT_REQUIREMENTS_PATH = Path(__file__).parents[1] / "data" / "airway_event_requirements.yaml"
 
 BREATH_READING = "airway_breath_reading"
 """The measurement holding AIRWAY's breathing-pattern reading, or the inputs it lacked."""
@@ -36,10 +34,10 @@ COUGH_READING = "airway_cough_reading"
 """The measurement holding AIRWAY's cough-onset reading, or the inputs it lacked."""
 
 
-@functools.cache
+@profile_cache
 def _airway_event_requirements() -> dict[str, str]:
-    """``data/airway_event_requirements.yaml``: per declared airway family, the event kind it is decided on."""
-    document = yaml.safe_load(AIRWAY_EVENT_REQUIREMENTS_PATH.read_text()) or {}
+    """Per declared airway family, the event kind it is decided on (profile: ``airway_event_requirements.yaml``)."""
+    document = yaml.safe_load(data_path("airway_event_requirements.yaml").read_text()) or {}
     return {
         str(family): str(kind) for kind, families in document.items() if kind != "version" for family in families or ()
     }
@@ -52,7 +50,7 @@ def required_event(declared_family: str | None) -> str | None:
         declared_family: The task family the recording declares.
 
     Returns:
-        ``breath`` or ``cough`` for a family ``data/airway_event_requirements.yaml`` lists under it;
+        ``breath`` or ``cough`` for a family the dataset profile's ``airway_event_requirements.yaml`` lists under it;
         None otherwise.
     """
     return _airway_event_requirements().get(declared_family or "")

@@ -102,6 +102,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Triage config YAML, deep-merged over the packaged default. Name only the keys you change.",
     )
     parser.add_argument(
+        "--profile",
+        type=Path,
+        default=None,
+        help="Dataset profile directory (holding profile.yaml): its config override is merged before --config, "
+        "and the data files it supplies are read instead of the packaged ones.",
+    )
+    parser.add_argument(
         "--hint",
         type=Path,
         default=None,
@@ -214,9 +221,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: audio file not found: {args.audio}", file=sys.stderr)
         return 2
     try:
-        config = load_triage_config(args.config)
+        config = load_triage_config(args.config, profile=args.profile)
     except (OSError, ValueError, KeyError) as error:
-        print(f"ERROR: invalid triage config {args.config}: {error}", file=sys.stderr)
+        print(f"ERROR: invalid triage config {args.config} or profile {args.profile}: {error}", file=sys.stderr)
         return 2
     hint = None
     if args.hint is not None:
@@ -233,7 +240,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: invalid enrollment {args.enrollment}: {error}", file=sys.stderr)
             return 2
 
-    print(f"Config: {config.name} v{config.version} ({config.config_hash})")
+    profile = f", profile {config.profile.name} {config.profile.version}" if config.profile is not None else ""
+    print(f"Config: {config.name} v{config.version}{profile} ({config.config_hash})")
     print(f"Input:  {args.audio}")
     result = run_triage(args.audio, args.out, config, hint=hint, enrollment=enrollment)
 

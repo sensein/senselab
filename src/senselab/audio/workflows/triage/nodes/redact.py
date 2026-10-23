@@ -40,7 +40,6 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass, replace
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Collection, Mapping, Sequence
 
@@ -50,6 +49,7 @@ from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
 from senselab.audio.workflows.triage.cohort import COHORT, CONDITION_KINDS, OTHER, load_cohort_profile
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.nodes.branches import (
     branch_params,
     declared_carrier,
@@ -1269,14 +1269,14 @@ AGREEMENTS = (AGREED_MASKED, AGREED_PLACED, NEW, BY_KIND, COUNTRY_MASKED)
 """Every agreement a reviewer ``redact`` entry can carry."""
 
 
-@lru_cache(maxsize=1)
+@profile_cache
 def _families() -> dict[str, str]:
     """Every category the families file names, mapped to its family.
 
     Returns:
         ``{category: family}``, upper-cased; each family maps to itself.
     """
-    raw = yaml.safe_load(FAMILIES_PATH.read_text()) or {}
+    raw = yaml.safe_load(data_path("pii_category_families.yaml").read_text()) or {}
     table: dict[str, str] = {}
     for family, members in (raw.get("families") or {}).items():
         for member in [family, *(members or ())]:
@@ -1297,14 +1297,14 @@ def same_extents(one: Sequence[RedactionExtent], other: Sequence[RedactionExtent
     return [(float(e.start), float(e.end)) for e in one] == [(float(e.start), float(e.end)) for e in other]
 
 
-@lru_cache(maxsize=1)
+@profile_cache
 def name_families() -> frozenset[str]:
     """The families whose findings name something by a proper noun.
 
     Returns:
         ``name_families`` from ``data/pii_category_families.yaml``, upper-cased.
     """
-    raw = yaml.safe_load(FAMILIES_PATH.read_text()) or {}
+    raw = yaml.safe_load(data_path("pii_category_families.yaml").read_text()) or {}
     return frozenset(str(family).upper() for family in raw.get("name_families") or ())
 
 
@@ -1322,7 +1322,6 @@ def category_family(category: str) -> str:
     return _families().get(key, key)
 
 
-TIME_RELEASE_PATH = Path(__file__).parents[1] / "data" / "time_release.yaml"
 """The words of a DATE_TIME-family finding released by kind: times of day and durations."""
 
 DATE_TIME_FAMILY = "DATE_TIME"
@@ -1331,14 +1330,14 @@ _ORDINAL_DIGITS = re.compile(r"^\d+(st|nd|rd|th)$")
 _YEAR_DIGITS = re.compile(r"^\d{4}s?$")
 
 
-@lru_cache(maxsize=1)
+@profile_cache
 def _time_release() -> dict[str, frozenset[str]]:
-    """The lists of ``data/time_release.yaml``, each as a set.
+    """The lists of the dataset profile's ``time_release.yaml``, each as a set.
 
     Returns:
         ``{list name: words}``.
     """
-    raw = yaml.safe_load(TIME_RELEASE_PATH.read_text()) or {}
+    raw = yaml.safe_load(data_path("time_release.yaml").read_text()) or {}
     return {str(key): frozenset(str(word).lower() for word in value or ()) for key, value in raw.items()}
 
 

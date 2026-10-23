@@ -12,7 +12,6 @@ Every parameter is in ``data/voice_phonation.yaml``. The design is
 
 from __future__ import annotations
 
-import functools
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -22,6 +21,7 @@ import numpy as np
 import yaml
 
 from senselab.audio.workflows.triage.background_model import bridge, floor_db, runs_of, shutoff_runs
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.task_events import (
     TaskEvidence,
     evidence_of,
@@ -41,14 +41,14 @@ Word = tuple[float, float, str]
 Run = tuple[int, int]
 
 
-@functools.cache
+@profile_cache
 def voice_phonation_parameters() -> dict[str, Any]:
     """The parameters of ``data/voice_phonation.yaml``.
 
     Returns:
         The parsed mapping.
     """
-    return dict(yaml.safe_load(VOICE_PHONATION_PATH.read_text()) or {})
+    return dict(yaml.safe_load(data_path("voice_phonation.yaml").read_text()) or {})
 
 
 @dataclass(frozen=True)

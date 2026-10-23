@@ -30,6 +30,8 @@ from typing import Any, Optional
 import numpy as np
 import pyarrow as pa
 
+from senselab.audio.workflows.triage.dataset_profile import data_path
+
 SCHEMA_VERSION = 2
 """Bumped whenever a column is added, removed or retyped, or the pooling rule changes."""
 
@@ -90,7 +92,7 @@ def load_min_extent_s(path: Optional[Path] = None) -> float:
     """
     import yaml  # type: ignore[import-untyped]
 
-    target = Path(path) if path is not None else _PROFILE_PATH
+    target = Path(path) if path is not None else data_path("speaker_vector_profile/2026-09-22.yaml")
     if not target.exists():
         raise ValueError(
             f"speaker-vector profile {target} is missing from this install. Refusing to "

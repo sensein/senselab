@@ -3,7 +3,7 @@
 A health condition the reviewer lists is a **cohort** condition where its text matches one of the
 profile's patterns, and an **other** condition where it does not; under redaction policy v7 the kind
 is recorded on the ledger and moves neither axis. The profile is named by ``verdict.cohort_conditions`` and lives in
-``data/cohort_conditions/<name>.yaml``; its derivation is in
+the dataset profile's ``cohort_conditions/<name>.yaml``; its derivation is in
 ``specs/20260927-pii-span-ledger/design.md``, section 10.
 """
 
@@ -11,12 +11,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 
 import yaml
 
-PROFILE_DIR = Path(__file__).parent / "data" / "cohort_conditions"
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 
 COHORT = "cohort"
 """A condition the study recruits for."""
@@ -75,12 +74,12 @@ class CohortProfile:
         return COHORT if self.diagnosis(text) is not None else OTHER
 
 
-@lru_cache(maxsize=8)
+@profile_cache
 def load_cohort_profile(name: str) -> CohortProfile:
     """The packaged profile of this name.
 
     Args:
-        name: The file stem under :data:`PROFILE_DIR`.
+        name: The file stem under the dataset profile's ``cohort_conditions/``.
 
     Returns:
         The profile.
@@ -89,9 +88,9 @@ def load_cohort_profile(name: str) -> CohortProfile:
         FileNotFoundError: If no such profile is packaged.
         ValueError: If the file does not carry a ``conditions`` mapping of pattern lists.
     """
-    path = PROFILE_DIR / f"{name}.yaml"
+    path = data_path("cohort_conditions") / f"{name}.yaml"
     if not path.is_file():
-        raise FileNotFoundError(f"no cohort profile named {name!r} under {PROFILE_DIR}")
+        raise FileNotFoundError(f"no cohort profile named {name!r} under {data_path('cohort_conditions')}")
     data = yaml.safe_load(path.read_text()) or {}
     conditions = data.get("conditions")
     if not isinstance(conditions, dict) or not all(isinstance(v, list) for v in conditions.values()):

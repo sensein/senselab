@@ -67,7 +67,7 @@ modulation:
 # extent"). Noise and silence no longer veto; the classifier scores are recorded for context only.
 veto:
   speech_words_min: 5          # speech words inside the task extent at or above: speech
-  active_fraction_min: 0.36    # active span over the task extent (the file where the extent is under min_duration_s) below: too little
+  active_fraction_min:         # dataset profile (B2AI: 0.36, fitted on 56 listened recordings): active span over the task extent (the file where the extent is under min_duration_s) below: too little
   noise_labels: [Vehicle, Car, Engine, Mechanical fan, White noise]   # recorded as context
 # The breath train (measure_breath_train): bursts of coherent broadband rise over denoised subband
 # envelopes, grouped into the run that is the task; its hull is the breath-task extent and its bursts
@@ -89,7 +89,7 @@ train:
   template_corr_min: 0.6
   distance_quick_s: 0.25       # between bursts, for the quick-breath families
   distance_s: 0.4              # for every other family
-  quick_families: [respiration-and-cough-threequickbreaths, respiration-and-cough-v2-threebreaths]
+  quick_families: []           # dataset profile: the quick-breath families (B2AI: respiration-and-cough-threequickbreaths, -v2-threebreaths)
   burst_s: [0.12, 4.0]
   flatness_min: 0.03
   voiced_max: 0.95             # share of a burst's frames
