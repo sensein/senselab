@@ -10,11 +10,11 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import cache
-from importlib import resources
 from typing import Any
 
 import yaml
+
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 
 logger = logging.getLogger(__name__)
 
@@ -36,14 +36,14 @@ CATEGORY_COMPARISONS = ("in", "not in")
 """How a category is compared with the list of categories it is read against."""
 
 
-@cache
+@profile_cache
 def reason_vocabulary() -> dict[str, Any]:
     """The reason vocabulary.
 
     Returns:
         ``data/decision_reasons.yaml``, parsed.
     """
-    text = resources.files("senselab.audio.workflows.triage.data").joinpath("decision_reasons.yaml").read_text()
+    text = data_path("decision_reasons.yaml").read_text()
     return dict(yaml.safe_load(text))
 
 

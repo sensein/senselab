@@ -28,3 +28,8 @@ def _scalar_evidence_rows(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
     monkeypatch.setattr(vocabulary, "_decision_evidence", checked)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _triage_reads_the_b2ai_profile(b2ai_triage_profile: Any) -> None:  # noqa: ANN401 -- the fixture's profile
+    """Every triage test reads its dataset data from the Bridge2AI-Voice adult profile (src/tests/conftest.py)."""

@@ -12,7 +12,6 @@ that carry speech. Every parameter is in ``data/session_background.yaml``; the d
 
 from __future__ import annotations
 
-import functools
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -20,6 +19,7 @@ import numpy as np
 import yaml
 
 from senselab.audio.workflows.triage.background_model import BandFrames, background_model_parameters, band_frames
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.routing_analysis.families import (
     AIRWAY_ELICITING,
     LEXICAL_SPEECH,
@@ -52,14 +52,14 @@ Signal = tuple[np.ndarray, int]
 Span = tuple[float, float]
 
 
-@functools.cache
+@profile_cache
 def session_background_parameters() -> dict[str, Any]:
     """The parameters of ``data/session_background.yaml``.
 
     Returns:
         The parsed mapping.
     """
-    return dict(yaml.safe_load(SESSION_BACKGROUND_PATH.read_text()) or {})
+    return dict(yaml.safe_load(data_path("session_background.yaml").read_text()) or {})
 
 
 def kind_of(family: str | None) -> str | None:

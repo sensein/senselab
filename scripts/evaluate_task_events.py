@@ -2,8 +2,8 @@
 r"""Score triage decisions against the owner's listening labels.
 
     uv run python scripts/evaluate_task_events.py LABELS.csv DECISIONS \
-        [--split src/senselab/audio/workflows/triage/data/evaluation/task_events_split.yaml] \
-        [--label-map src/senselab/audio/workflows/triage/data/evaluation/owner_label_map.yaml] \
+        [--split <profile>/evaluation/task_events_split.yaml] \
+        [--label-map <profile>/evaluation/owner_label_map.yaml] \
         [--out DIR]
 
 ``LABELS.csv`` is the owner label table (``listen_set``, ``stem``, ``family``, ``owner_label``,
@@ -35,7 +35,10 @@ import numpy as np
 import pandas as pd
 import yaml
 
-DATA = Path(__file__).resolve().parents[1] / "src/senselab/audio/workflows/triage/data/evaluation"
+DATA = (
+    Path(__file__).resolve().parents[1] / "src/tests/audio/workflows/triage/profiles/bridge2ai_voice_adult/evaluation"
+)
+"""The Bridge2AI-Voice adult listening labels and split, which live in the B2AI dataset profile."""
 SPLIT_SEED = 20261007
 HELDOUT_FRACTION = 0.3
 REVIEW_BAND_KEYS = ("breath_review_low_confidence", "cough_review_low_confidence", "voice_review_low_confidence")

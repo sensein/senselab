@@ -6,6 +6,8 @@ import pytest
 
 from senselab.text.tasks.pii_detection import redaction_policy as policy
 
+pytestmark = pytest.mark.usefixtures("b2ai_triage_profile")  # these tests run triage nodes on B2AI fixtures
+
 
 def _hits(sentence: str, finder) -> list[str]:  # noqa: ANN001 -- one of the module's position finders
     words = sentence.split()

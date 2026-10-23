@@ -17,16 +17,16 @@ enrollment:
 # Per session, the pool of the participant's other sessions is the fallback where the session has no
 # enrollment of its own, and the comparison for session_speaker_consistency.
 participant:
-  consistency_cosine_min: 0.63  # session vs other-sessions enrollment cosine under this is session_speaker_inconsistent; Tukey lower fence (Q1 - 1.5 IQR) over r18d, UNFITTED against labels
+  consistency_cosine_min:       # dataset profile (B2AI: 0.63, a Tukey lower fence over r18d): session vs other-sessions enrollment cosine under this is session_speaker_inconsistent; Tukey lower fence (Q1 - 1.5 IQR) over r18d, UNFITTED against labels
 
 # Recording condition per participant and session (level, SNR, clipping), read by cohort_fold.hot_or_clipped and
 # cohort_fold.condition_shift. Derivations: specs/20261007-task-events-in-background/cross-dataset.md, "D1".
 condition:
   snr_percentiles: {floor: 10, level: 95}  # energy-envelope percentiles read as floor and active level (recording_vectors/evaluation.yaml frame)
-  hot_rms_dbfs_min: -9.343                 # a participant or session median RMS at or over this is hot; Tukey upper fence over 1,527 participant medians, r36
-  clipped_fraction_min: 0.475              # a participant or session with this share of recordings holding clip spans is clipped; Tukey upper fence, r36
-  shift_level_db_min: 17.783               # a session median level this far from the other sessions' is a condition shift; Tukey upper fence over 351 sessions, r36
-  shift_snr_db_min: 15.117                 # likewise for the median envelope SNR; Tukey upper fence over 351 sessions, r36
+  hot_rms_dbfs_min:                        # dataset profile (B2AI: -9.343, a Tukey fence over r36): a participant or session median RMS at or over this is hot; Tukey upper fence over 1,527 participant medians, r36
+  clipped_fraction_min:                    # dataset profile (B2AI: 0.475, a Tukey fence over r36): a participant or session with this share of recordings holding clip spans is clipped; Tukey upper fence, r36
+  shift_level_db_min:                      # dataset profile (B2AI: 17.783, a Tukey fence over r36): a session median level this far from the other sessions' is a condition shift; Tukey upper fence over 351 sessions, r36
+  shift_snr_db_min:                        # dataset profile (B2AI: 15.117, a Tukey fence over r36): likewise for the median envelope SNR; Tukey upper fence over 351 sessions, r36
 
 # The participant's non-matching speech outside the task, clustered across their recordings (cohort_stage.non_target_voices).
 non_target_voice:
@@ -36,7 +36,7 @@ non_target_voice:
 # A speaker non-match shared across a participant's recordings (cohort_fold.shared_nonmatch).
 shared_nonmatch:
   recordings_min: 3     # non-matching recordings, the fewest that can be shared beyond a pair
-  fraction_min: 0.169   # share of the participant's compared recordings; Tukey upper fence over the 214 participants with any non-match, r36
+  fraction_min:         # dataset profile (B2AI: 0.169, a Tukey fence over r36): share of the participant's compared recordings; Tukey upper fence over the 214 participants with any non-match, r36
 
 # Speaker comparison: per recording, one embedding pooled over its target speech and one over its speech
 # outside the task, each compared with the enrollment. Derivation: design.md, "Pooled speaker comparison".
@@ -51,9 +51,7 @@ comparison:
     default: none                       # owner, 2026-10-11: airway, voice and DDK have no target comparison
     kinds:
       lexical_speech: speech            # DECLARED_KIND key -> rule
-    families:
-      loudness: task_text               # owner, 2026-10-11: compared on its "hey" only (task_speech.yaml voice_task_text)
-      loudness-v2: task_text            # owner, 2026-10-11
+    families: {}                        # dataset profile: family -> rule (B2AI: loudness and loudness-v2 -> task_text)
 
 # Speech the enhancer removed: speech-classified on `from` and not on `kept`. A removed region holding a
 # word of speech outside the task joins the non-task pool. Labels and score as data/background_speech.yaml
@@ -68,7 +66,7 @@ speech:
 # task syllables is task text.
 non_task:
   task_syllables:               # a families.py set -> the syllables its task text is spelled from; a word made only of them is task text
-    SYLLABLE_REPETITION: [pa, pah, ta, tah, ka, kah, puh, tuh, kuh, buh, ba, da, ga, butter, cup]
+    SYLLABLE_REPETITION: [pa, pah, ta, tah, ka, kah, puh, tuh, kuh, buh, ba, da, ga]   # the standard DDK syllables; B2AI adds butter, cup
 
 # Distribution checks: each names its level, its bounds and the ground it raises.
 quantiles: [0.05, 0.25, 0.5, 0.75, 0.95]

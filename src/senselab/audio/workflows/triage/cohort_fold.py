@@ -10,12 +10,12 @@ section "Cohort stage".
 from __future__ import annotations
 
 from collections.abc import Mapping
-from functools import cache
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.decision import ANNOTATION, PASS, REVIEW, EvidenceItem, item
 
 PARAMETERS_PATH = Path(__file__).parent / "data" / "cohort_stage.yaml"
@@ -135,9 +135,9 @@ def pool_block(reading: Mapping[str, Any] | None, pool: str) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
-@cache
+@profile_cache
 def _parameters() -> dict[str, Any]:
-    return dict(yaml.safe_load(PARAMETERS_PATH.read_text(encoding="utf-8")))
+    return dict(yaml.safe_load(data_path("cohort_stage.yaml").read_text(encoding="utf-8")))
 
 
 def non_target_voice_block(reading: Mapping[str, Any] | None) -> dict[str, Any]:

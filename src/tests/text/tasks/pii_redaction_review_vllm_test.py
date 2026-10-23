@@ -17,6 +17,8 @@ from senselab.audio.workflows.triage.nodes import review as review_node
 from senselab.text.tasks.pii_detection import redaction_review as rr
 from senselab.text.tasks.pii_detection import redaction_review_vllm as rv
 
+pytestmark = pytest.mark.usefixtures("b2ai_triage_profile")  # these tests run triage nodes on B2AI fixtures
+
 SHA = "c" * 40
 
 _ANSWER = [

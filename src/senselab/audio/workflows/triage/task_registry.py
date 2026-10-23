@@ -17,6 +17,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+
 REGISTRY_DIR = Path(__file__).parent / "data" / "b2ai_task_registry"
 
 SIDECAR = "sidecar"
@@ -47,20 +49,22 @@ def description_key(name: str) -> str:
     return str(name or "").strip().lower().replace("(", "").replace(")", "")
 
 
-@lru_cache(maxsize=1)
+@profile_cache
 def _descriptions() -> dict[str, dict[str, Any]]:
-    raw = json.loads((REGISTRY_DIR / "audio_task_descriptions.json").read_text())
+    raw = json.loads((data_path("b2ai_task_registry") / "audio_task_descriptions.json").read_text())
     return {description_key(name): dict(entry) for name, entry in raw.items()}
 
 
-@lru_cache(maxsize=1)
+@profile_cache
 def _registry() -> dict[str, Any]:
-    return dict(json.loads((REGISTRY_DIR / "registry.json").read_text()))
+    return dict(json.loads((data_path("b2ai_task_registry") / "registry.json").read_text()))
 
 
-@lru_cache(maxsize=1)
+@profile_cache
 def _curated() -> dict[str, dict[str, Any]]:
-    return dict(json.loads((REGISTRY_DIR / "task_instructions_curated.json").read_text()).get("tasks") or {})
+    return dict(
+        json.loads((data_path("b2ai_task_registry") / "task_instructions_curated.json").read_text()).get("tasks") or {}
+    )
 
 
 def _version_of(name: str) -> str:

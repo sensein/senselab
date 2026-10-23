@@ -43,6 +43,7 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     load_ruleset,
 )
 from senselab.utils.prov_store import ProvStore
+from tests.conftest import B2AI_TRIAGE_PROFILE
 
 STEM = "sub-01_ses-01_task-free-speech"
 """The stem the synthetic recordings carry; its ``task-`` id is the recording's own declaration."""
@@ -55,7 +56,7 @@ def config() -> TriageConfig:
     Returns:
         The configuration as ``data/config/default.yaml`` declares it.
     """
-    return load_triage_config()
+    return load_triage_config(profile=B2AI_TRIAGE_PROFILE)
 
 
 @pytest.fixture(scope="module")

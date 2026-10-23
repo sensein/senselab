@@ -29,6 +29,7 @@ import pyarrow as pa
 import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD, standing_task_extents
 from senselab.utils import fastio
 
@@ -1061,14 +1062,14 @@ clipping and dropout are sample damage, which it cannot, so they are never count
 ENHANCEMENT_RESOLVABLE = ("noise_floor", "low_snr")
 
 
-@lru_cache(maxsize=1)
+@profile_cache
 def evaluation_bounds() -> dict[str, Any]:
     """The packaged bounds for the triage-evaluation columns.
 
     Returns:
         The parsed ``data/recording_vectors/evaluation.yaml``.
     """
-    path = Path(__file__).parent / "data" / "recording_vectors" / "evaluation.yaml"
+    path = data_path("recording_vectors/evaluation.yaml")
     return dict(yaml.safe_load(path.read_text(encoding="utf-8")))
 
 

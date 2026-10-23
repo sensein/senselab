@@ -7,9 +7,9 @@ import yaml
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.dataset_profile import data_path
 from senselab.audio.workflows.triage.residue import FREE, residue_rule, task_residue
 from senselab.audio.workflows.triage.task_lexicon import (
-    CATEGORY_DIR,
     SECTIONS,
     TaskLexicon,
     category_members,
@@ -84,7 +84,7 @@ def test_an_empty_lexicon_changes_nothing() -> None:
 
 def test_every_packaged_category_lexicon_names_its_own_category() -> None:
     """A file under ``categories/`` loads under the category its stem is the slug of."""
-    for path in sorted(CATEGORY_DIR.glob("*.yaml")):
+    for path in sorted(data_path("task_lexicon/categories").glob("*.yaml")):
         category = str(yaml.safe_load(path.read_text())["category"])
         assert category_slug(category) == path.stem
         assert category_phrases(category), path

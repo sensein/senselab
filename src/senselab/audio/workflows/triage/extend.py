@@ -47,6 +47,7 @@ from senselab.audio.workflows.triage.consensus import (
     word_attributes,
     word_from_attributes,
 )
+from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes.branches import declared_task_family
 from senselab.audio.workflows.triage.nodes.common import (
@@ -912,6 +913,7 @@ def refold_verdict(
     Returns:
         What the re-fold did, including the marker it wrote last.
     """
+    require_dataset_values(config.values)
     software = software_agent(store)
     held = live_decisions(store, nodes=(VERDICT_NODE,))
     outcomes: dict[str, NodeOutcome] = {}
@@ -1101,6 +1103,7 @@ def replay_decisions(
     Returns:
         What the replay did, including the marker it wrote last.
     """
+    require_dataset_values(config.values)
     software = software_agent(store)
     held = held_reading(store)
     retired = retire_decisions(store, live_decisions(store), software=software)

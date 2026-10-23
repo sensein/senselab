@@ -1,0 +1,54 @@
+# The task layer's shared reading (task_events.py): each branch's candidate events read against the
+# recording-level background, the rhythm prior, the dominant cluster, the extent and the decision.
+# Derivations are in specs/20261007-task-events-in-background/design.md ("Unit B: the task layer").
+version: 2
+entangle_abut_s: 0.05            # an impulse this close to an event abuts it
+impulse_margin_db: 6.0           # masked of impulse frames, an event must still stand this over the floor (as background_model activity.margin_db). TO REFIT with decision.snr_low_db
+local:
+  window_s: 2.0                  # the background either side of an event (fitted, unit B grid)
+  percentile: 20.0               # of the broadband level of that window's non-event frames (fitted, unit B grid)
+decision:
+  snr_low_db: 10.0               # C5 s_lo, over the stationary floor: an event under this is no event (fitted, unit B grid). TO REFIT against the session background before session_background.yaml decides
+  snr_high_db: 16.0              # C5 s_hi, over the local background: an event at or over this is clear (fitted, unit B grid). TO REFIT: fitted when every found event decided; since v2 only the task cluster's events decide; and against the session background before session_background.yaml decides
+extent:                          # which cluster of events is the task (task_cluster); design "Decide on the extent's own events" (2026-10-10)
+  speech_words_min: 2            # lexical words in a run (gaps under breath_pattern.yaml train.speech_gap_s) that is speech no task cluster touches; one word on one event may be the task misread
+  speech_gap_s: 1.0              # the longest gap inside one run of words (as breath_pattern.yaml train.speech_gap_s)
+  speech_score_min: 0.5          # a plain-stream YAMNet window whose speech-label score reaches this is speech (as background_speech.yaml speech_min)
+  count_weight: 1.0              # UNFITTED (owner direction): agreement with the instructed count, or size against the largest cluster where none is instructed
+  position_weight: 0.5           # UNFITTED (owner direction): earliness, 1 - start / duration; the task is performed when asked, not at the end of a long file
+  events_per_instructed:         # task events one instructed unit gives
+    breath: 2                    # an inhale and an exhale phase
+    cough: 1
+inhale:
+  margin_db: 6.0                 # the level the preparatory inhale stands over the floor (as cough_pattern.yaml inhale). TO REFIT with decision.snr_low_db
+  back_max_s: 2.0                # the furthest the extent runs back before the first event
+rhythm:
+  band_hz: [0.1, 1.2]            # the breathing band (C3)
+  prominence_min_db: 6.0         # C3 r: a modulation peak this prominent is a rhythm; it groups and recovers phases, never decides
+breath:
+  gap_min_s: 3.0                 # the dominant cluster's least inner gap without a rhythm
+  gap_cycles: 1.5                # with a rhythm, gaps up to this many cycles stay inside the cluster
+  recover_voiced_max: 0.5        # a region recovered by the rhythm prior may be voiced over at most this share
+cough:
+  gap_s: 5.0                     # the dominant cluster's longest inner gap between coughs
+voice:
+  gap_s: 10.0                    # the dominant cluster's longest inner gap between holds (reported only)
+ddk:                             # the diadochokinesis task layer (ddk_task.py); design "DDK task layer"
+  voicing_strength_min: 0.45     # a pitch-track frame is voiced at or over this strength, as breath_pattern.yaml
+  smooth_s: 0.03                 # the nucleus series is smoothed over this
+  unvoiced_db: 6.0               # UNFITTED: an unvoiced frame's level is lowered this much, so voicing troughs split nuclei
+  nucleus_prominence_db: 6.0     # UNFITTED: a nucleus stands this far over the troughs either side
+  nucleus_spacing_s: 0.08        # nuclei at least this far apart (12.5 syllables a second)
+  syllable_min_s: 0.05           # a syllable is at least this long
+  syllable_max_s: 0.8            # and at most this long; a longer stretch with no trough is another activity
+  cycle_band_hz: [0.5, 3.5]      # the band the cycle rhythm prior is read in (a sequence family only)
+  rhythm_prominence_min_db: 6.0  # as rhythm.prominence_min_db
+  rhythm_agreement: 1.5          # the rhythm's period is used where within this factor of the syllables' own cycle period
+  gap_s: 2.0                     # UNFITTED: the dominant cluster's longest inner gap; the extent is its first event to its last
+  identity_pad_s: 0.03           # an event's posteriorgram frames are read this far either side
+  skip_log: -1.0                 # UNFITTED: the log cost of each template position the alignment deletes
+  events_min:                    # UNFITTED (N_min): clear events a present decision needs
+    syllable: 3
+    cycle: 2
+  identity_min: 0.30             # UNFITTED: the median identity a present decision needs; under it the identity is ambiguous
+  identity_absent_max: 0.15      # UNFITTED: a median identity under this is another activity, and the task is absent

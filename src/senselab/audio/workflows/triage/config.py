@@ -8,6 +8,11 @@ An override may not introduce a key, with one exception: a **data** mapping, who
 the caller supplies — a HeAR label, a hint tag, a vocal task, a kind, a task's trailing index — may
 gain entries. Those mappings are named in :data:`DATA_MAP_PATHS`; every other mapping is schema,
 whose keys are names the code reads, and a key it does not already have is refused.
+
+A dataset profile (:mod:`~senselab.audio.workflows.triage.dataset_profile`) sits between the two: its own
+override is merged over the packaged file before a run's override, and the data files it supplies are read
+instead of the packaged ones. A configuration loaded with a profile carries it, and its hash covers the profile's
+name, version and every byte the profile lists; one loaded without a profile hashes exactly as before.
 """
 
 from __future__ import annotations
@@ -20,6 +25,13 @@ from pathlib import Path
 from typing import Any
 
 import yaml  # type: ignore[import-untyped]
+
+from senselab.audio.workflows.triage.dataset_profile import (
+    DatasetProfile,
+    activate_profile,
+    active_profile,
+    load_profile,
+)
 
 _DEFAULT = Path(__file__).parent / "data" / "config" / "default.yaml"
 _OPEN_QUESTIONS = "specs/20260817-triage-workflow-dag/benchmarks/open.md"
@@ -82,14 +94,17 @@ class TriageConfig:
     Attributes:
         name: The configuration's name.
         version: Schema version of the file.
-        config_hash: Hash of the merged mapping, so a run's configuration can be named.
+        config_hash: Hash of the merged mapping, and of the profile when there is one, so a run's
+            configuration can be named.
         values: The merged mapping.
+        profile: The dataset profile it was loaded with, or None.
     """
 
     name: str
     version: int
     config_hash: str
     values: dict[str, Any]
+    profile: DatasetProfile | None = None
 
     def get(self, path: str, default: Any = None) -> Any:  # noqa: ANN401
         """Read a value, returning ``default`` when it is absent or null.
@@ -182,23 +197,42 @@ def _validate(values: dict[str, Any]) -> None:
         raise ValueError(f"windows.ast.hop_s must be at least {MIN_AST_HOP_S:g} s; received {hop_s:g} s")
 
 
-def load_triage_config(override: str | Path | None = None) -> TriageConfig:
-    """Load the packaged configuration, deep-merging one override over it.
+def load_triage_config(
+    override: str | Path | None = None, *, profile: str | Path | DatasetProfile | None = None
+) -> TriageConfig:
+    """Load the packaged configuration, then a dataset profile's override, then a run's override.
 
     Args:
         override: Path to a partial YAML. Its keys must already exist in the packaged file,
             except inside a mapping named in :data:`DATA_MAP_PATHS`, which may gain entries.
+        profile: A dataset profile, or its directory. When None and a profile is already active
+            (:func:`~senselab.audio.workflows.triage.dataset_profile.active_profile`), that profile is used, so the
+            configuration always names the profile its data files are read from. The profile's own override, if
+            it has one, is merged under ``override`` by the same rules, and the profile is activated only once
+            the merged configuration has validated.
 
     Returns:
-        The resolved configuration, carrying the hash of the merged mapping.
+        The resolved configuration, carrying the hash of the merged mapping and of the profile.
 
     Raises:
-        ValueError: If the override introduces a key the packaged file does not have, outside a
-            data mapping.
+        ValueError: If an override introduces a key the packaged file does not have, outside a
+            data mapping, or the profile is malformed.
+        RuntimeError: If a different profile is already active in this process.
     """
+    loaded = load_profile(profile) if isinstance(profile, (str, Path)) else profile
+    if loaded is None:
+        loaded = active_profile()
     values = yaml.safe_load(_DEFAULT.read_text())
+    if loaded is not None and loaded.config is not None:
+        values = _merge(values, yaml.safe_load(loaded.config.read_text()) or {})
     if override is not None:
         values = _merge(values, yaml.safe_load(Path(override).read_text()) or {})
     _validate(values)
-    digest = hashlib.sha256(json.dumps(values, sort_keys=True, default=str).encode()).hexdigest()[:16]
-    return TriageConfig(name=values["name"], version=int(values["version"]), config_hash=digest, values=values)
+    hashed = json.dumps(values, sort_keys=True, default=str)
+    if loaded is not None:
+        activate_profile(loaded)
+        hashed += f"\0profile\0{loaded.name}\0{loaded.version}\0{loaded.digest}"
+    digest = hashlib.sha256(hashed.encode()).hexdigest()[:16]
+    return TriageConfig(
+        name=values["name"], version=int(values["version"]), config_hash=digest, values=values, profile=loaded
+    )

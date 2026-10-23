@@ -13,7 +13,5 @@
 # single-cough families sit at 0.5 s, just above the longest cough fragment the owner listened to
 # (0.45 s). The per-family counts and examples are in specs/20261005-truncated-capture-discard/design.md.
 version: 1
-default_s: 1.0
-families:
-  voluntary-cough: 0.5
-  respiration-and-cough-v2-hardcough: 0.5
+default_s: 0.5     # long enough for one cough; B2AI's profile uses 1.0
+families: {}       # dataset profile: per-family floors (B2AI: voluntary-cough and -v2-hardcough 0.5)

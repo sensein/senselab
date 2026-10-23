@@ -26,8 +26,8 @@ import pyarrow.parquet as pq
 
 from senselab.audio.workflows.triage.routing_analysis.detectors import (
     CONSOLIDATION_FLOOR,
-    DETECTORS,
     Detector,
+    detector_catalogue,
     detector_value,
     sweep_points,
 )
@@ -806,8 +806,10 @@ class RoutingRule:
     threshold: float
 
 
-DETECTOR_BY_NAME: dict[str, Detector] = {detector.name: detector for detector in DETECTORS}
-"""Every detector in the catalogue, by name."""
+def detector_by_name() -> dict[str, Detector]:
+    """Every detector in the catalogue, by name."""
+    return {detector.name: detector for detector in detector_catalogue()}
+
 
 BASELINE_RULES: tuple[RoutingRule, ...] = (
     RoutingRule("speech", "speech.words_lexical", 2.0),
@@ -836,7 +838,7 @@ def _rule_fires(record: RecordingFeatures, rule: RoutingRule) -> bool:
         True when the detector's value is on the firing side of the threshold. Absent evidence is
         not a firing.
     """
-    detector = DETECTOR_BY_NAME[rule.detector]
+    detector = detector_by_name()[rule.detector]
     value = detector_value(record, detector)
     if value is None:
         return False
@@ -902,7 +904,7 @@ def bucket_augmentation(
     uncovered = [not any(_rule_fires(record, rule) for rule in base) for record in records]
     n_uncovered = sum(uncovered)
     entries: list[dict[str, Any]] = []
-    for detector in DETECTORS:
+    for detector in detector_catalogue():
         if detector.name in base_names:
             continue
         values = [detector_value(record, detector) for record in records]
@@ -975,7 +977,7 @@ def write_report(records: Sequence[RecordingFeatures], out_dir: Path) -> dict[st
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     sweeps: list[dict[str, Any]] = []
-    for detector in DETECTORS:
+    for detector in detector_catalogue():
         for reference in REFERENCE_STANDARDS:
             if reference.kind != detector.kind:
                 continue
@@ -984,7 +986,7 @@ def write_report(records: Sequence[RecordingFeatures], out_dir: Path) -> dict[st
     families_seen = sorted({record.family for record in records})
     by_family = [
         score_detector(records, detector, reference, family=family)
-        for detector in DETECTORS
+        for detector in detector_catalogue()
         if detector.name in PRIMARY_DETECTORS
         for reference in REFERENCE_STANDARDS
         if reference.kind == detector.kind

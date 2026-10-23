@@ -31,14 +31,12 @@ trim:                            # A2: the extent ends at the task's own acousti
     edge_duration_ratio: 2.5     # UNFITTED: an edge event longer than this x the train's median event is not the train
     kept_share_min: 0.5          # a speech split stands only where its kept piece holds this share of the train's events
     margin_intervals: 1.0        # a trimmed edge keeps this many of the train's own median onset intervals beyond its last event. Round 3: 7 ok, 1 same, 2 current better
-    exclude_families:            # families whose task word spans the recording: never trimmed
-    - diadochokinesis-buttercup
-    - diadochokinesis-v2-buttercup
+    exclude_families: []         # families whose task word spans the recording: never trimmed (dataset profile; B2AI: both buttercups)
   airway:
     pad_s: 0.1                   # breath and cough: nothing beyond the events but this (cough_pattern.yaml extent)
 count_in:                        # A3: a voice task's declared count-in is inside its extent
   enabled: true                  # owner labels, round 2: 10 of 10 better
-  gap_max_s: 3.0                 # the count-in ends at most this before the phonation onset: r36 p99 2.9 s (n=1232); an overlap is taken in. Round 3: 9 of 9 ok
+  gap_max_s:                     # dataset profile (B2AI: 3.0): the count-in ends at most this before the phonation onset: r36 p99 2.9 s (n=1232); an overlap is taken in. Round 3: 9 of 9 ok
 continuity:                      # A3: an interrupted vowel is spanned by phonation continuity
   enabled: true                  # owner labels, round 3 (end bounded by tail_s, runs_max): 9 ok, 1 better
   semitones: 3.0                 # UNFITTED: a further run's median F0 within this of the core's continues the vowel
@@ -58,5 +56,5 @@ completeness:                    # A5: extent_complete
   voice_hold_min_s: 0.8          # a voiced run outside a voice extent this long, F0 within continuity.semitones, is the task (voice_phonation.yaml segment_min_s)
   onset_tolerance_s: 0.3         # a voice extent starting this much before its phonation onset (no count-in) is too wide
 atypical:                        # E2: an attempted task whose events fall outside its family's corpus range
-  cough_event_s_max: 1.877        # the median cough event longer than this: r36 corpus p97.5 (n=2643)
-  ddk_rate_hz: [2.235, 7.692]    # the syllable rate outside this range: r36 corpus p2.5-p97.5 (n=7815)
+  cough_event_s_max:              # dataset profile (B2AI: 1.877): the median cough event longer than this: r36 corpus p97.5 (n=2643)
+  ddk_rate_hz:                    # dataset profile (B2AI: [2.235, 7.692]): the syllable rate outside this range: r36 corpus p2.5-p97.5 (n=7815)

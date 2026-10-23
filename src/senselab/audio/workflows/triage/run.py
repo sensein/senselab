@@ -17,6 +17,7 @@ from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.cohort_fold import COHORT_NODE
 from senselab.audio.workflows.triage.cohort_stage import write_cohort_unavailable
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.identity import declared_session_key
 from senselab.audio.workflows.triage.live_evidence import recording_stem
@@ -454,7 +455,22 @@ def _write_log(path: Path, source: Path, config: TriageConfig, result: TriageRun
     """
     payload: dict[str, Any] = {
         "source": str(source),
-        "config": {"name": config.name, "version": config.version, "config_hash": config.config_hash},
+        "config": {
+            "name": config.name,
+            "version": config.version,
+            "config_hash": config.config_hash,
+            **(
+                {
+                    "profile": {
+                        "name": config.profile.name,
+                        "version": config.profile.version,
+                        "digest": config.profile.digest,
+                    }
+                }
+                if config.profile is not None
+                else {}
+            ),
+        },
         "run_dir": str(result.run_dir),
         "artifacts_dir": str(result.artifacts_dir),
         "store": str(result.store_path),
@@ -493,6 +509,7 @@ def run_triage(
         The file verdict, the per-node outcomes and errors, the run's paths, REDACT's released pair
         and REPORT's two products.
     """
+    require_dataset_values(config.values)
     source = Path(source)
     layout = prepare_run_layout(Path(out_dir), source.stem)
     store = ProvStore(run_id=layout.root.name)

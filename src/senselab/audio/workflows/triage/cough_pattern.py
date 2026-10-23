@@ -24,6 +24,7 @@ from scipy.signal import find_peaks
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.background_speech import background_speech_parameters
 from senselab.audio.workflows.triage.breath_pattern import SPECTROGRAM, _in_script, _moving_median, _sidecar
+from senselab.audio.workflows.triage.dataset_profile import data_path
 from senselab.audio.workflows.triage.nodes.common import lexical_words, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
 from senselab.audio.workflows.triage.task_events import (
@@ -126,7 +127,7 @@ class CoughReviewParameters:
 
 
 def _section(name: str) -> dict[str, Any]:
-    return dict((yaml.safe_load(COUGH_PATTERN_PATH.read_text()) or {})[name])
+    return dict((yaml.safe_load(data_path("cough_pattern.yaml").read_text()) or {})[name])
 
 
 @functools.cache

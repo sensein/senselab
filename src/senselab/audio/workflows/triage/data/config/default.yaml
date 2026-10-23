@@ -155,8 +155,8 @@ stimulus:
     variant_similarity_min: 0.66       # least 1 - edits/longer length at which a word is a reading of a stimulus word
     insertion_window: 3                # stimulus words either side an inserted word may repeat, restart or split
     train_repetitions_min: 3           # recurrences that make a token a syllable train in a syllable task
-    cue_families: [productive-vocabulary]    # free-response families whose stimulus is a cue word the participant defines; a reading of it is task content
-  task_lexicons: [cinderella-story, animal-fluency, random-item-generation, random-item-generation-v2]    # families whose packaged lexicon, and item category's, is task content
+    cue_families: []    # dataset profile (B2AI: [productive-vocabulary]).  free-response families whose stimulus is a cue word the participant defines; a reading of it is task content
+  task_lexicons: []    # dataset profile (B2AI: cinderella-story, animal-fluency, random-item-generation[-v2]).  families whose packaged lexicon, and item category's, is task content
 
 # The declared task ALWAYS adds a route to its own branch. That route needs no key here: the task is
 # read off the recording's own BIDS stem and resolved through `taxonomy.ruleset.reference_family_set`
@@ -180,11 +180,7 @@ airway:
   labels_of_interest: [Cough, Breathe]  # the HeAR labels this branch acts on
   # a task's trailing index -> the route its instruction prescribes. Data, not schema: a campaign
   # with another protocol supplies its own map.
-  route_by_task_index:
-    1: nose
-    2: mouth
-    3: nose
-    4: mouth
+  route_by_task_index: {}   # dataset profile: a task id's trailing index -> nose or mouth (B2AI: 1 nose, 2 mouth, 3 nose, 4 mouth)
 
 # Praat's harmonicity and pitch settings for the whole-stream F0/formant tracks.
 phonation:
@@ -253,7 +249,7 @@ voice:
 # SPEECH's enrollment, separation, diarization and non-target settings.
 speech:
   second_diarizer:                     # which model corroborates pyannote's speaker count
-  target_match_cosine: 0.231           # similarity at or above which a speaker or run is the enrolled target
+  target_match_cosine: 0.25            # similarity at or above which a speaker or run is the enrolled target. SpeechBrain's own verification default for spkrec-ecapa-voxceleb; B2AI's profile fits 0.231
   secondary_exclusive_min_s: 1.0       # exclusive second-voice time in a task extent under which it holds no turn; specs/20261012-r37-words-speaker/design.md
   speech_test_stoi_floor:              # STOI floor for a speech span to pass quality
   speech_test_si_sdr_floor:            # SI-SDR floor, same
@@ -330,7 +326,7 @@ verdict:
   llm_redaction_withholds: false       # UNFITTED. a reading of residue withholds a recording REDACT passed
   llm_reset_redactions: true           # owner, 2026-09-27: a reading's release entries unmask exactly the words they name
   condition_categories: [CONDITION]    # owner, 2026-10-03 (policy v7): a listed health condition is never masked and never withholds
-  cohort_conditions: bridge2ai_voice_adult_2026-09-04  # data/cohort_conditions profile: which listed conditions the study recruits for
+  cohort_conditions:   # dataset profile: names a cohort_conditions/<name>.yaml the profile supplies (B2AI: bridge2ai_voice_adult_2026-09-04).  data/cohort_conditions profile: which listed conditions the study recruits for
   person_name_review_flags: true       # owner, 2026-10-03 (policy v7): a masked person's name flags for a human's review of name tags
   trim_protected_categories: [PERSON, NAME, LOCATION, LOC]  # owner, 2026-09-27: a marked word written as a proper noun is never trimmed
   llm_second_speaker_flags: true       # owner, 2026-09-27: a reading that heard more than one speaker flags the recording for review
@@ -340,13 +336,13 @@ verdict:
   second_opinion_disagreement_flags: true  # owner, 2026-10-01: a confident second-opinion disagreement with the reviewer flags for review
   second_opinion_confident_yes: 0.8    # UNFITTED: kept from the Nimble pilot (owner, 2026-10-02); see config-derivations.md, verdict
   second_opinion_confident_no: 0.2     # UNFITTED: kept from the Nimble pilot (owner, 2026-10-02); see config-derivations.md, verdict
-  hint_mismatch_exempt_families: [respiration-and-cough-breath, respiration-and-cough-v2-breath]  # owner, 2026-09-29: quiet breathing the classifier does not hear is no flag
+  hint_mismatch_exempt_families: []  # dataset profile (B2AI: the two breath families).  owner, 2026-09-29: quiet breathing the classifier does not hear is no flag
   # declared task family -> flag gates its own instruction makes inapplicable. Empty: owner, 2026-09-30,
   # any voice other than the participant's is flagged, whether or not the instructions expect it.
   flag_gate_exemptions: {}
   # families whose session instructions permit someone to say the sentence first ("you can have someone
   # else say the sentence first and you just repeat it after them"); the speaker gate's ground says so.
-  model_speaker_families: [harvard-sentences-list, cape-v-sentences, cape-v-sentences-v2]
+  model_speaker_families: []   # dataset profile (B2AI: harvard-sentences-list, cape-v-sentences[-v2])
   # The branches for which finding the subject IS evaluating the task, so an out-of-family result
   # is a covariate on the detector rather than a reading of the recording. DDK only: a rapid
   # alternating train does not occur incidentally, where breath, phonation and lexical content all do.
@@ -434,15 +430,7 @@ verdict:
     # per-family difference has been derived yet. What it buys now is that the differences the
     # design names -- `maximum-phonation-time` declaring `expect_inhale` where its v2 does not,
     # inside one group -- are expressible without a code change.
-    by_family:
-      # UNFITTED: fractions of a passage's or the Stroop list's content tokens left unread. Proposed
-      # from the r8 distribution; see specs/20260929-task-check-alignment/design.md § B.
-      rainbow-passage:
-        content_omission_fraction_max: 0.1
-      caterpillar-passage:
-        content_omission_fraction_max: 0.1
-      word-color-stroop:
-        content_omission_fraction_max: 0.2
+    by_family: {}   # dataset profile: per-family gate bounds (B2AI: rainbow, caterpillar and Stroop content-omission fractions, r8)
 
 # The label consolidation. TAXONOMY runs no models: it consolidates PREPROCESS's stored scores.
 taxonomy:
@@ -503,19 +491,19 @@ taxonomy:
       voice.glide:
         feature: [peak_set, plain, yamnet, singing]   # YAMNet singing-subtree union peak, plain stream
         op: at_least
-        threshold: 0.05                 # union score that routes VOICE
+        threshold:                      # dataset profile: union score that routes VOICE, a sweep over the corpus (B2AI: 0.05)
       voice.chant:
         feature: [peak_label, plain, yamnet, Chant]   # YAMNet Chant peak, plain stream
         op: at_least
-        threshold: 0.02                 # chant score that routes VOICE
+        threshold:                      # dataset profile: chant score that routes VOICE (B2AI: 0.02)
       airway.breath:
         feature: [residual, energy_fraction]   # residual energy as a fraction of the plain stream
         op: at_least
-        threshold: 0.10                 # residual fraction that routes AIRWAY
+        threshold:                      # dataset profile: residual fraction that routes AIRWAY (B2AI: 0.10)
       airway.cough:
         feature: [span_label_set_stat, yamnet.cough_labels.peak_over_floor_db_max]  # loudest cough-labelled span
         op: at_least
-        threshold: 50.0                 # dB over floor that routes AIRWAY; carried over unswept on this population
+        threshold:                      # dataset profile: dB over floor that routes AIRWAY; gain-dependent (B2AI: 50.0, unswept)
       airway.bracketed_event:
         feature: [bracketed_set, airway]   # typed bracketed consensus tokens in taxonomy.airway_bracket_tokens
         op: at_least
@@ -523,7 +511,7 @@ taxonomy:
       airway.ppg_silent_fraction:
         feature: [ppg, silent_fraction]   # posteriorgram frames whose argmax phoneme is <silent>
         op: at_least
-        threshold: 0.757                # silent frame fraction that routes AIRWAY, beside airway.breath
+        threshold:                      # dataset profile: silent frame fraction that routes AIRWAY (B2AI: 0.757)
 
 # SQUIM and disruption tolerances. Every key in this section is currently read by nothing in
 # `src/senselab`: the gate they describe is unimplemented.
