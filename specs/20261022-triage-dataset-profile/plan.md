@@ -207,7 +207,8 @@ follows it. What changed is recorded. Replay refuses only where a change is almo
       new hint. Where it differs, it writes a new `recording` record and retires the old one with the existing
       `supersede` (`extend.py:507`), so every stage reads the new one. The marker records the old and new digest of
       each changed field.
-   6. **No `--hints`, and the store holds a hint:** reuse the recorded hint.
+   6. **No `--hints`, and the store holds a hint:** reuse the recorded hint. A hint that carried a `target_speaker`
+      cannot be reused, since only the speaker vector's digest is stored: such a replay refuses without `--hints`.
    7. **No `--hints`, and the store holds no hint** (stores written before this step): refuse, unless `--hints` or an
       explicit `--no-hint` is given. The B2AI corpus runs used a hint, so silence would drop the expected speech.
    8. **Expected speech changed, or prompts appear where there were none:** redo the stimulus alignment from the
@@ -228,11 +229,14 @@ follows it. What changed is recorded. Replay refuses only where a change is almo
    - every driver that loads the config takes `--profile`, through one shared argument helper;
    - each runs checks 1–3;
    - drivers that read the hint (`extend_llm_review`, `extend_second_opinion`) use the recorded hint by default.
-7. **Each kept output records the hint it was made from.** The outputs that survive a replay or a refold (ADMIT's
-   identity, the stimulus alignment, word arbitration, and the branch reports a refold keeps) store the whole-hint
-   digest on their own activity, as word arbitration (`word_arbitration.py:284`) and REVIEW's `reading_key`
-   (`nodes/review.py:763`) already do. There is no central list of which stage reads which field: the whole hint
-   reaches every stage, so such a list would drift from the code.
+7. **The stimulus alignment records the hint it was made from.** It is the one output a replay keeps that read
+   the hint directly (`expected_speech`, `nodes/preprocess.py:882`), so its activity records the digest of the
+   `expected_speech` it aligned against. The other candidates need nothing:
+   - word arbitration is rerun by every replay and records the family it used (`word_arbitration.py:284`);
+   - the branch reports a refold keeps cannot mix hints, because a refold refuses a changed hint (change 4).
+
+   There is no central list of which stage reads which field: the whole hint reaches every stage, so such a list
+   would drift from the code.
 8. **One chain from the record to every corpus grouping.** It replaces the file-name parsers:
    - `session_key(stem)` in `extend_cohort` (`:279`, `:308`), `extend_session_floor` (`:82`) and
      `measure_session_background` (`:286`);
@@ -289,7 +293,7 @@ follows it. What changed is recorded. Replay refuses only where a change is almo
 
 | PR | Changes | Estimate (not measured) |
 |---|---|---|
-| **3a** | 1 (one task reader), 2 (hint saved in the store, with digests), 7 (kept outputs record their hint digest) | about 150 lines |
+| **3a** | 1 (one task reader), 2 (hint saved in the store, with digests), 7 (the stimulus alignment records its `expected_speech` digest) | about 150 lines |
 | **3b** | 3–6 (replay, refold and extend checks; marker key; alignment redo; `--profile` on the drivers), 10 (replay design doc) | about 250 lines |
 | **3c** | 8 (corpus chain, output folders), 9 (identity check, `session_scope`) | about 200 lines |
 
