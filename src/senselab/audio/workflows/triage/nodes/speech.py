@@ -1758,7 +1758,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
 
     # The expectation: one mode or the other, chosen from the declared family. It runs before this
     # branch proposes anything, and before the no-lexical exit below.
-    mode, declared_family = mode_of(NODE, store, hint)
+    mode, declared_family = mode_of(NODE, store)
     expect = store.activity(
         node=NODE, step="expect", parameters={"mode": mode, "task_family": declared_family, "stream": source}
     )
