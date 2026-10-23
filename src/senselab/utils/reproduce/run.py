@@ -1386,6 +1386,7 @@ class _Execution:
         self.resumed = False
         self.released: bool | None = False if step.restricted else None
         self.closure: list[str] | None = None
+        self.probe = False
 
     # --- before the reset ----------------------------------------------------------------------
 
@@ -1615,7 +1616,8 @@ class _Execution:
                 weights.place_url_weights(self.tmp, step, config.profile)
             except weights.WeightsError as error:
                 raise RunError(error.code) from None
-        self._stage()
+        if not self.probe:
+            self._stage()
         try:
             self.env, _, self.recorded_sha = sandbox.build_env(
                 step, config.profile, self._inner_paths(), parent=config.parent_env, shard=self.keyed.shard
@@ -2507,6 +2509,111 @@ def resolve_steps(manifests: Sequence[Manifest], config: RunConfig, names: Colle
             upstream = {n: outcomes[n] for n in step.needs}
             outcomes[step.name] = resolve_step(step, analysis[step.name], config, upstream)
     return outcomes
+
+
+HOST_PROBE_EXIT: dict[str, int] = {"exec-error": 20, "exit-nonzero": 21, "timeout": 22, "sandbox-unavailable": 23}
+"""The exit code of ``run … --step <s> --shard <i> --host-probe`` per failure reason of `host_probe` (0: it passed)."""
+HOST_PROBE_SANDBOX_CHECK = "/usr/bin/true"
+"""Run in the step's sandbox before the probe."""
+HOST_PROBE_DIR = ".host-probe"
+"""Under the step's results root: each probe's private result dir, removed after the probe."""
+HOST_REFUSALS = frozenset({"E_SANDBOX_UNAVAILABLE", "E_NO_USERNS", "E_GPU_MISSING", "E_DRIVER_OLD"})
+"""Refusals (`_ready`) that depend on the host, so a probe reports them as ``sandbox-unavailable``."""
+
+
+def host_probe(manifests: Sequence[Manifest], config: RunConfig, step_name: str, shard: int) -> str | None:
+    """Run a sharded step's ``host_probe`` on this host, in the step's sandbox with its binds, claiming nothing.
+
+    A work-pool worker runs this before its first claim (`slurm.run_pool`). The step is keyed as its shard would be
+    (its needs by `resolve_steps`), refused as a run would refuse it (`_Execution.refusals`) and prepared without its
+    stage files, in a private result dir under ``<results root>/.host-probe/`` that is removed afterwards; its own
+    result dir, claim and run links are never touched. The sandbox is started once with `HOST_PROBE_SANDBOX_CHECK`,
+    then with the probe. A failure that does not depend on the host (keying, an upstream not done, an env or
+    preparation code) passes, so the shard itself fails with its code.
+
+    Args:
+        manifests: The manifests of the submission.
+        config: The run configuration.
+        step_name: A sharded step with a ``host_probe``.
+        shard: The shard index to key it as.
+
+    Returns:
+        None when the probe exits 0 or a failure does not depend on the host; otherwise the reason, a key of
+        `HOST_PROBE_EXIT`: ``sandbox-unavailable`` (a `HOST_REFUSALS` code, or the sandbox does not start),
+        ``exec-error`` (the probe exits 126 or 127), ``timeout`` (``host_probe_timeout_s`` passed; the sandbox is
+        killed), ``exit-nonzero`` (any other exit).
+
+    Raises:
+        ValueError: If the step is not a sharded step of the manifests with a ``host_probe``.
+    """
+    config = _with_sources(config, manifests)
+    specs = {s.name: s for m in manifests for s in m.steps}
+    analysis = {s.name: m.name for m in manifests for s in m.steps}
+    step = specs.get(step_name)
+    if step is None or step.shards is None or step.host_probe is None:
+        raise ValueError("host_probe needs a sharded step with a host_probe")
+    try:
+        resolved = resolve_steps(manifests, config, step.needs) if step.needs else {}
+        upstream = {name: resolved[name] for name in step.needs}
+        if not all(o.ok for o in upstream.values()):
+            return None
+        keyed = _key(step, analysis[step_name], config, upstream, shard)
+    except (RunError, digest.DigestError, cache.CacheError, OSError, ValueError, TypeError, KeyError):
+        return None
+    top = results_root_of(step, config.profile) / HOST_PROBE_DIR
+    try:
+        top.mkdir(mode=0o770, parents=True, exist_ok=True)
+        result = top / f"{keyed.key}-{uuid.uuid4().hex[:12]}"
+        _mkdir(result)
+    except OSError:
+        return None
+    try:
+        paths = {**keyed.paths, "out": result / WORK, "tmp": result / TMP}
+        paths |= {f"up:{name}": result / UP / name for name in keyed.gathers}
+        probe = _Execution(step, analysis[step_name], config, upstream, {}, keyed._replace(result=result, paths=paths))
+        probe.probe = True
+        try:
+            probe.refusals(log=False)
+        except RunError as error:
+            return "sandbox-unavailable" if error.code in HOST_REFUSALS else None
+        try:
+            _mkdir(result / LOGS)
+            probe._prepare()
+            check = probe._sandbox([HOST_PROBE_SANDBOX_CHECK], [probe.work], tmp=probe.tmp)
+            argv = probe._sandbox([probe._render(a) for a in step.host_probe], [probe.work], tmp=probe.tmp)
+        except (RunError, digest.DigestError, cache.CacheError, OSError, ValueError, TypeError):
+            return None
+        if _probe_exit(check, probe.env, result, step.host_probe_timeout_s) != 0:
+            return "sandbox-unavailable"
+        rc = _probe_exit(argv, probe.env, result, step.host_probe_timeout_s)
+    finally:
+        shutil.rmtree(result, ignore_errors=True)
+    if rc == 0:
+        return None
+    if rc == "timeout":
+        return "timeout"
+    return "exec-error" if rc in (126, 127) else "exit-nonzero"
+
+
+def _probe_exit(argv: list[str], run_env: Mapping[str, str], cwd: Path, timeout: float) -> int | str:
+    """Run one sandbox with no output kept; its exit code, ``timeout`` (the sandbox killed) or 127."""
+    try:
+        proc = subprocess.Popen(  # noqa: S603
+            argv,
+            env=dict(run_env),
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return 127
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        return "timeout"
 
 
 def step_row(outcome: StepOutcome, spec: StepSpec) -> dict[str, Any]:

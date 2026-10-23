@@ -171,6 +171,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_cmd.add_argument("--shard", type=int, help="run only this shard of the one sharded --step (a work-pool item)")
     run_cmd.add_argument(
+        "--host-probe",
+        action="store_true",
+        help="with --step and --shard: run the step's host_probe on this host, in its sandbox; exit 0 when it passes",
+    )
+    run_cmd.add_argument(
         "--pool",
         metavar="STEP",
         help="a sharded step's pool job: publish its shards, run the work-pool controller until they end, settle",
@@ -1058,6 +1063,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     profile = _profile(args)
     data, shas = _read_bytes(paths)
     if args.pin and not args.finalize and list(args.pin) != shas:
+        if args.host_probe:
+            print("host-probe manifest-changed")
+            return EXIT_OK
         return _manifest_changed(args, paths, profile, data)
     manifests = [parse_manifest(d, p.suffix, headline_rule=profile.policy.headline_rule) for d, p in zip(data, paths)]
     config = _run_config(args, paths, profile)
@@ -1070,6 +1078,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return EXIT_FAILED if any(p.status == "blocked" for p in plans) else EXIT_OK
     if args.pool is not None:
         return _run_pool(args, paths, manifests, config)
+    if args.host_probe:
+        return _host_probe(args, manifests, config)
     if args.finalize:
         if args.submission is not None:
             cancelled = slurm.cancel_submission(args.submission, run.pending_jobs(manifests, config, args.submission))
@@ -1102,14 +1112,30 @@ def _run_pool(args: argparse.Namespace, paths: Sequence[Path], manifests: list[M
         pins=args.pin,
     )
     commands = [slurm.shard_command(base, spec.name, i, sys.executable) for i in range(spec.shards.count)]
+    probe = None if spec.host_probe is None else slurm.host_probe_command(base, spec.name, sys.executable)
 
     def recheck() -> tuple[str, ...]:
         changed = bool(args.pin) and _read_bytes(paths)[1] != list(args.pin)
         return ("E_MANIFEST_CHANGED",) if changed else ()
 
-    outcome = slurm.run_pool(manifests, config, spec.name, args.submission, commands, recheck=recheck)
+    outcome = slurm.run_pool(manifests, config, spec.name, args.submission, commands, recheck=recheck, host_probe=probe)
     print(status_line(outcome.step, outcome.key, outcome.status, outcome.exit, outcome.codes))
     return EXIT_OK if outcome.ok else EXIT_FAILED
+
+
+def _host_probe(args: argparse.Namespace, manifests: list[Manifest], config: run.RunConfig) -> int:
+    """``run … --step <s> --shard <i> --host-probe``: `run.host_probe`; prints ``host-probe <s> ok|<reason>``.
+
+    Exits 0 when the probe passes, else with the reason's `run.HOST_PROBE_EXIT` code. A manifest changed since
+    submission also exits 0, so the shard itself fails with ``E_MANIFEST_CHANGED``.
+    """
+    step = args.step[0] if args.step and len(args.step) == 1 else None
+    spec = next((s for m in manifests for s in m.steps if s.name == step), None)
+    if spec is None or spec.shards is None or spec.host_probe is None or args.shard is None:
+        raise UsageError("--host-probe needs one sharded --step with a host_probe, and --shard")
+    reason = run.host_probe(manifests, config, spec.name, args.shard)
+    print(f"host-probe {spec.name} {reason or 'ok'}")
+    return EXIT_OK if reason is None else run.HOST_PROBE_EXIT[reason]
 
 
 def _cmd_submit(args: argparse.Namespace) -> int:
@@ -1229,8 +1255,9 @@ def _verify_inputs(args: argparse.Namespace, profile: Profile) -> int:
     """Run ``verify-inputs``; each id prints one line, and an ``OSError`` for one id prints ``E_DRIVER``.
 
     Verifying a restricted input (flagged, or in a restricted dir) first purges its public closure
-    (`restricted.purge_closure`) and its public verify records, and adds ``purged=<n>`` to its line; an
-    unflagged one is then ``E_INPUT_REGISTRY``.
+    (`restricted.purge_closure`) and its public verify records, and adds ``purged=<n> skipped_inflight=<n>`` to
+    its line (results a run may still own are left alone and counted); an unflagged one is then
+    ``E_INPUT_REGISTRY``.
     """
     base = Path(args.base_dir).absolute()
     stems = sorted(p.stem for p in (base / inputs.REGISTRY_DIR).glob("*.yaml"))
@@ -1247,11 +1274,11 @@ def _verify_inputs(args: argparse.Namespace, profile: Profile) -> int:
         with contextlib.suppress(inputs.InputError):
             registry[stem] = inputs.read_registry_entry(base, stem)[0]
     for input_id in ids:
-        purged: int | None = None
+        purge: restricted.Purge | None = None
         try:
             entry = inputs.read_registry_entry(base, input_id)[0]
             if restricted.input_is_restricted(entry, profile):
-                purged = restricted.purge_closure(profile, input_id)
+                purge = restricted.purge_closure(profile, input_id)
                 inputs.remove_public_records(input_id, profile)
             inputs.check_flag(entry, profile)
             directory = inputs.verify_dir(entry, profile)
@@ -1269,7 +1296,7 @@ def _verify_inputs(args: argparse.Namespace, profile: Profile) -> int:
         record = verification.record
         failed |= record.status != "ok"
         counts = " ".join(f"{name}={record.counts[name]}" for name in inputs.COUNT_NAMES)
-        suffix = "" if purged is None else f" purged={purged}"
+        suffix = "" if purge is None else f" purged={purge.purged} skipped_inflight={purge.skipped_inflight}"
         print(f"{_id_text(input_id)}\t{record.status}\t{counts}{suffix}")
     return EXIT_FAILED if failed else EXIT_OK
 
