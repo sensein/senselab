@@ -903,13 +903,16 @@ class WorkPool:
         return count
 
     # -- host checks ---------------------------------------------------------------------------------------------
-    def note_host_check_failure(self, worker: str, partition: Optional[str], rc: Union[int, str]) -> None:
+    def note_host_check_failure(
+        self, worker: str, partition: Optional[str], rc: Union[int, str], reason: Optional[str] = None
+    ) -> None:
         """Record that a worker on ``partition`` failed its host check.
 
         Args:
             worker: The worker's name.
             partition: The worker's partition (``SLURM_JOB_PARTITION``); None outside Slurm.
             rc: The check's exit code, or ``timeout``.
+            reason: The name the check's caller gave that exit code, when it gave one.
         """
         directory = self._d("hostcheck")
         directory.mkdir(exist_ok=True)
@@ -917,7 +920,7 @@ class WorkPool:
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", part) or "_"
         _write_json(
             directory / f"{safe}.{worker}.{int(_now() * 1000)}.json",
-            {"partition": part, "worker": worker, "host": self.host, "rc": rc},
+            {"partition": part, "worker": worker, "host": self.host, "rc": rc, "reason": reason},
         )
 
     def host_check_failures(self, window_s: float) -> dict[str, int]:
@@ -1038,11 +1041,13 @@ class _Worker:
         poll_s: float,
         host_check: Optional[Sequence[str]] = None,
         host_check_timeout_s: float = HOST_CHECK_TIMEOUT_S,
+        host_check_reasons: Optional[Mapping[int, str]] = None,
     ) -> None:
         self.pool, self.classes, self.worker = pool, list(classes), worker
         self.linger, self.poll_s = linger, poll_s
         self.host_check = list(host_check) if host_check else None
         self.host_check_timeout_s = host_check_timeout_s
+        self.host_check_reasons = dict(host_check_reasons or {})
         self.run: Optional[_Run] = None
         self.terminating = threading.Event()
 
@@ -1143,7 +1148,10 @@ class _Worker:
         if self.host_check is not None:
             rc = self._check_host()
             if rc != 0:
-                self.pool.note_host_check_failure(self.worker, env.get("SLURM_JOB_PARTITION"), rc)
+                reason = (
+                    "timeout" if rc == "timeout" else self.host_check_reasons.get(rc) if isinstance(rc, int) else None
+                )
+                self.pool.note_host_check_failure(self.worker, env.get("SLURM_JOB_PARTITION"), rc, reason)
                 _log(f"host check failed (rc {rc}) on {self.pool.host}; exiting without claiming")
                 self._record(exited=_now(), items=0, terminated=False, host_check=rc)
                 return HOST_CHECK_EXIT
@@ -1173,6 +1181,7 @@ def work(
     poll_s: float = 10.0,
     host_check: Optional[Sequence[str]] = None,
     host_check_timeout_s: float = HOST_CHECK_TIMEOUT_S,
+    host_check_reasons: Optional[Mapping[int, str]] = None,
 ) -> int:
     """Run one worker in this process until the queue stays empty (installs SIGTERM and SIGINT handlers).
 
@@ -1186,13 +1195,18 @@ def work(
             ``host_check_timeout_s``, the worker records it under ``hostcheck/`` for its partition and exits with
             :data:`HOST_CHECK_EXIT` without claiming anything.
         host_check_timeout_s: Seconds the host check may run.
+        host_check_reasons: A name for each exit code of the host check, recorded with a failure as ``reason``
+            (``timeout`` is always named ``timeout``).
 
     Returns:
         0, :data:`SIGNAL_EXIT` after SIGTERM or SIGINT, or :data:`HOST_CHECK_EXIT`.
     """
     name = worker or f"{_host()}-{os.environ.get('SLURM_JOB_ID', 'local')}-{os.getpid()}"
     name = re.sub(r"[^A-Za-z0-9._-]", "_", name)
-    return _Worker(WorkPool(pool), classes, name, linger, poll_s, host_check, host_check_timeout_s).loop()
+    worker_ = _Worker(
+        WorkPool(pool), classes, name, linger, poll_s, host_check, host_check_timeout_s, host_check_reasons
+    )
+    return worker_.loop()
 
 
 # -- controller --------------------------------------------------------------------------------------------------
@@ -1624,12 +1638,21 @@ def submit_controller(
     return runner(argv).strip().split(";")[0]
 
 
+def _reason(text: str) -> tuple[int, str]:
+    """``CODE=NAME`` as ``(code, name)``: a host check's exit code and the name recorded for it."""
+    code, sep, name = text.partition("=")
+    if not sep or not code.strip().lstrip("-").isdigit() or not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+        raise argparse.ArgumentTypeError(f"expected CODE=NAME, got {text!r}")
+    return int(code), name
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Command line: ``work`` runs one worker, ``control`` runs a controller.
 
-    ``work POOL --classes a,b [--linger N] [--poll S] [--worker NAME] [--host-check CMD] [--host-check-timeout S]``;
-    ``control POOL --classes FILE [--once] [--poll S] [--pending-s S] [--release-cap N] [--log-dir D]
-    [--host-check CMD] [--host-check-timeout S] [--worker-linger N] [--worker-poll S]``.
+    ``work POOL --classes a,b [--linger N] [--poll S] [--worker NAME] [--host-check CMD] [--host-check-timeout S]
+    [--host-check-reason CODE=NAME …]``; ``control POOL --classes FILE [--once] [--poll S] [--pending-s S]
+    [--release-cap N] [--log-dir D] [--host-check CMD] [--host-check-timeout S] [--host-check-reason CODE=NAME …]
+    [--worker-linger N] [--worker-poll S]``.
 
     Args:
         argv: Arguments (default ``sys.argv[1:]``).
@@ -1647,6 +1670,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     run.add_argument("--worker")
     run.add_argument("--host-check", help="a command (split like a shell) that must succeed on this node")
     run.add_argument("--host-check-timeout", type=float, default=HOST_CHECK_TIMEOUT_S)
+    run.add_argument("--host-check-reason", action="append", default=[], type=_reason, help="CODE=NAME (repeatable)")
     ctl = sub.add_parser("control", help="run a controller that submits and cancels Slurm workers")
     ctl.add_argument("pool")
     ctl.add_argument("--classes", required=True, help="the resource classes' YAML file")
@@ -1657,6 +1681,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ctl.add_argument("--log-dir")
     ctl.add_argument("--host-check", help="passed on to each worker")
     ctl.add_argument("--host-check-timeout", type=float, help="passed on to each worker")
+    ctl.add_argument("--host-check-reason", action="append", default=[], type=_reason, help="passed on to each worker")
     ctl.add_argument("--worker-linger", type=int, help="passed on to each worker as --linger")
     ctl.add_argument("--worker-poll", type=float, help="passed on to each worker as --poll")
     args = parser.parse_args(argv)
@@ -1667,6 +1692,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             command += ["--host-check", args.host_check]
         if args.host_check_timeout is not None:
             command += ["--host-check-timeout", str(args.host_check_timeout)]
+        command += [f"--host-check-reason={code}={name}" for code, name in args.host_check_reason]
         if args.worker_linger is not None:
             command += ["--linger", str(args.worker_linger)]
         if args.worker_poll is not None:
@@ -1691,6 +1717,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         poll_s=args.poll,
         host_check=check,
         host_check_timeout_s=args.host_check_timeout,
+        host_check_reasons=dict(args.host_check_reason),
     )
 
 

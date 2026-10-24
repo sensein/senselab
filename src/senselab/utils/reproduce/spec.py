@@ -195,7 +195,7 @@ def _covered(rel: str, patterns: Iterable[str], trees: Iterable[str]) -> bool:
 
 
 def undeclared_root_paths(step: "StepSpec", trees: Mapping[str, Iterable[str]] | None) -> list[str]:
-    """The ``{root:<name>}`` paths of a step's argv, cwd, pythonpath and stage dests that nothing declared covers.
+    """The ``{root:<name>}`` paths of a step's argv, cwd, pythonpath, host probe and stage dests not covered.
 
     A path is covered by a pattern of an ``inputs`` entry with that root (`_covered`), or by the tree
     (``relpath``) of one of the step's ``lock_inputs`` on that root, given in ``trees`` by root name. With
@@ -204,7 +204,7 @@ def undeclared_root_paths(step: "StepSpec", trees: Mapping[str, Iterable[str]] |
     Returns:
         The uncovered paths as written (``{root:<name>}<path>``), sorted and without duplicates.
     """
-    templates = [*step.argv, step.cwd, *step.pythonpath, *(s.dest for s in step.stage)]
+    templates = [*step.argv, step.cwd, *step.pythonpath, *(step.host_probe or []), *(s.dest for s in step.stage)]
     patterns: dict[str, list[str]] = {}
     for entry in step.inputs:
         patterns.setdefault(entry.root, []).extend(entry.patterns)
@@ -915,6 +915,9 @@ class StepSpec(_Model):
     inference engine (`EngineSpec`): its model must be one of the step's ``hf_weights``, and a ``vllm`` engine needs
     ``resources.gpu_arch`` and a ``resources.min_driver`` of at least `CUDA13_MIN_DRIVER` (``E_SPEC_ENGINE``), which
     the host floor check (``E_DRIVER_OLD``) then enforces. ``draw`` declares its seeds and sampling (`DrawSpec`).
+    ``host_probe`` (an argv with the step's placeholders) is run by each work-pool worker of a sharded step, in the
+    step's sandbox, before its first claim (`run.host_probe`); a worker whose probe fails claims nothing. Neither
+    it nor ``host_probe_timeout_s`` is keyed; only a public sharded step may declare one (``E_SPEC_HOST_PROBE``).
     """
 
     name: Name
@@ -946,6 +949,8 @@ class StepSpec(_Model):
     resume_dir: RelPath | None = None
     engine: EngineSpec | None = None
     draw: DrawSpec | None = None
+    host_probe: list[str] | None = Field(default=None, min_length=1)
+    host_probe_timeout_s: Annotated[float, Field(gt=0)] = 120.0
 
     _unique_lock_inputs = field_validator("lock_inputs")(_no_duplicates)
 
@@ -960,6 +965,10 @@ class StepSpec(_Model):
         if not parts or parts[0] in RESUME_RESERVED or DRIVER_FILE_NAMES & set(parts):
             raise ValueError(f"E_SPEC_RESUME: step {self.name!r} resume_dir names a dir the driver makes")
         self._engine_consistent()
+        if self.host_probe is not None and (self.shards is None or self.restricted):
+            raise ValueError(
+                f"E_SPEC_HOST_PROBE: step {self.name!r} declares host_probe but is not a public sharded step"
+            )
         if len({e.name for e in self.extract}) != len(self.extract):
             raise ValueError(f"E_SPEC_EXTRACT: step {self.name!r} has duplicate extract names")
         if len(needs) != len(self.needs):
@@ -972,12 +981,13 @@ class StepSpec(_Model):
         targets = [w.target() for w in self.url_weights]
         if any(a == b or a.is_relative_to(b) for i, a in enumerate(targets) for b in targets[i + 1 :] + targets[:i]):
             raise ValueError(f"step {self.name!r} has url_weights placed at one path, or one inside another")
-        literal = [t for t in (*self.argv, *self.pythonpath) if t.startswith("/") and not placeholders(t)]
+        probe = self.host_probe or []
+        literal = [t for t in (*self.argv, *self.pythonpath, *probe) if t.startswith("/") and not placeholders(t)]
         if literal:
             raise ValueError(
                 f"E_SPEC_ABSOLUTE_PATH: step {self.name!r} names absolute paths with no placeholder: {literal}"
             )
-        templates = [*self.argv, self.cwd, *self.pythonpath, *(s.dest for s in self.stage)]
+        templates = [*self.argv, self.cwd, *self.pythonpath, *probe, *(s.dest for s in self.stage)]
         if self.env.r_lib is not None:
             templates.append(self.env.r_lib)
         referenced = [s for t in templates for s in _upstream(t)]
