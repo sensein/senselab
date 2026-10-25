@@ -18,7 +18,9 @@ from typing import Any
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.data_structures.audio_hints import ExpectedSpeech
+from senselab.audio.workflows.triage.identity import PARTICIPANT_KEY, SESSION_KEY, TASK_TOKEN_KEY, identity_from_stem
 from senselab.audio.workflows.triage.nodes.branches import ITEM_CATEGORY_FROM_KEY, ITEM_CATEGORY_KEY
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK
 from senselab.audio.workflows.triage.task_registry import prompt_ref, questionnaire_field, task_text
 
 SIDECAR_SUFFIXES = ("_recording-metadata.json", "_acoustictask-metadata.json")
@@ -112,6 +114,16 @@ def build_hint(wav: Path) -> tuple[AudioHints | None, dict[str, Any]]:
     text = task_text(name, fields)
     prompts = [ExpectedSpeech(text=text.stimulus, prompt_id=name)] if text.stimulus else []
     metadata: dict[str, Any] = {"task_name": name}
+    # Declared from the stem, so a hinted run reads the same task id as the stem parsers did before hints
+    # declared one. Taking it from the sidecars instead is a later, separate change.
+    stem_identity = identity_from_stem(wav.stem)
+    for key, value in (
+        (PARTICIPANT_KEY, stem_identity.participant),
+        (SESSION_KEY, stem_identity.session),
+        (TASK_TOKEN_KEY, None if stem_identity.task_id == UNKNOWN_TASK else stem_identity.task_id),
+    ):
+        if value:
+            metadata[key] = value
     for key in ("language", "stimulus_source"):
         if fields.get(key) not in (None, ""):
             metadata[key] = fields[key]

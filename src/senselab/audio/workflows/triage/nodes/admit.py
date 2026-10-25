@@ -3,6 +3,10 @@
 The only rejections are decode failure, all samples zero, a constant signal, and a file whose bytes
 change while ADMIT reads them. No thresholds, no ``flag`` outcome, no models, no derived audio. See
 ``specs/20260817-triage-workflow-dag/admit.md``.
+
+On ``pass`` ADMIT also records the recording's identity on the ``recording`` stream it writes: the
+participant, session and task the hint declares, or the file stem's reading where it declares none
+(:mod:`~senselab.audio.workflows.triage.identity`).
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import torch
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.identity import identity_of
 from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import ProvStore, file_attributes, file_digest
@@ -50,7 +55,7 @@ def admit(
         store: The provenance store.
         source: The recording, as supplied.
         config: The triage configuration. Unread.
-        hint: What the recording was declared to contain. Unread.
+        hint: What the recording was declared to contain. Read only for the identity it declares.
         run_dir: The run directory. Unused.
 
     Returns:
@@ -98,6 +103,7 @@ def admit(
             "sampling_rate": int(audio.sampling_rate),
             "channels": int(waveform.shape[0]),
             **file_attributes(source, digest=after, reason=None if after else after_reason or before_reason),
+            **identity_of(source.stem, hint).as_attributes(),
         },
     )
     store.was_generated_by(stream_id, activity_id)

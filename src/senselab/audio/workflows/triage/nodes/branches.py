@@ -22,7 +22,7 @@ import numpy as np
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
 from senselab.audio.workflows.triage.consensus import vocabulary_key
-from senselab.audio.workflows.triage.nodes.admit import NODE as ADMIT_NODE
+from senselab.audio.workflows.triage.identity import task_id_candidates
 from senselab.audio.workflows.triage.nodes.common import (
     clamp_to_recording,
     find_measurement,
@@ -47,7 +47,6 @@ from senselab.audio.workflows.triage.routing_analysis.families import (
     SYLLABLE_REPETITION,
     VOICE_ELICITING,
     task_family,
-    task_id_of,
 )
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -1157,9 +1156,10 @@ The packaged config names the same three sets by key under
 def declared_task_family(store: ProvStore, hint: AudioHints | None = None) -> str | None:
     """The declared task family, from whichever carrier the graph has.
 
-    Three carriers are read, in order: the hint's ``task_token`` metadata, the ``path`` ADMIT writes
-    onto the ``recording`` stream entity, and, where ADMIT refused the recording and wrote no stream,
-    the ``audio_file`` its activity was run with.
+    The carriers are read in order (:func:`~senselab.audio.workflows.triage.identity.task_id_candidates`):
+    the hint's ``task_token`` metadata, the task id ADMIT recorded from a hint, the ``path`` ADMIT writes
+    onto the ``recording`` stream entity, and, where ADMIT refused the recording and wrote no stream, the
+    ``audio_file`` its activity was run with.
 
     Args:
         store: The provenance store.
@@ -1170,39 +1170,11 @@ def declared_task_family(store: ProvStore, hint: AudioHints | None = None) -> st
         activity, a path that is not a BIDS stem, or a stem whose task id is ``"unknown"``. None
         takes the out-of-family mode.
     """
-    for task_id in _declared_task_ids(store, hint):
+    for task_id in task_id_candidates(store, hint):
         family = task_family(task_id)
         if family and family != UNKNOWN_TASK:
             return family
     return None
-
-
-def _declared_task_ids(store: ProvStore, hint: AudioHints | None) -> list[str]:
-    """Every task id the store and the hint carry, best carrier first.
-
-    Args:
-        store: The provenance store.
-        hint: The recording's hints, or None.
-
-    Returns:
-        The candidate task ids, lowercased, in the order they should be tried.
-    """
-    found: list[str] = []
-    token = (hint.metadata or {}).get("task_token") if hint is not None else None
-    if isinstance(token, str) and token.strip():
-        found.append(token.strip().lower())
-    recording = [
-        entity
-        for entity in live_entities(store, "stream")
-        if entity.attributes.get("name") == RECORDING_STREAM and entity.attributes.get("path")
-    ]
-    if recording:
-        found.append(task_id_of(Path(str(recording[-1].attributes["path"])).stem))
-    else:
-        admitted = [a for a in store.activities(ADMIT_NODE) if a.parameters.get("audio_file")]
-        if admitted:
-            found.append(task_id_of(Path(str(admitted[-1].parameters["audio_file"])).stem))
-    return found
 
 
 class AlignMode(Protocol):
