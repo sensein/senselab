@@ -71,14 +71,17 @@ from senselab.audio.workflows.triage.cohort_stage import (
     write_enrollment_entity,
     write_quantile_artefact,
 )
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.extend import (
     ERROR,
     OK,
     RUN_SUBDIR,
     SKIPPED,
     SLICES_SUBDIR,
+    add_config_arguments,
+    driver_config,
     export_prov,
+    read_checked_store,
     read_manifest,
     read_store,
     run_root_of,
@@ -129,7 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--enrollments-out", type=Path, default=None, help="Write each session's and participant's vector here, 0600"
     )
     apply.add_argument("--force", action="store_true", help="Re-read participants already carrying this cohort key")
-    apply.add_argument("--config", type=Path, default=None, help="Partial YAML deep-merged over the packaged config")
+    add_config_arguments(apply)
     apply.add_argument("--commit", default=None)
     apply.add_argument("--log-dir", type=Path, default=None, help=f"Where {SLICES_SUBDIR}/ goes")
     apply.add_argument("--device", default=None, help="cpu or cuda; default lets senselab pick")
@@ -336,6 +339,7 @@ def process_participant(
     readings_out: Path | None = None,
     enrollments_out: Path | None = None,
     force: bool = False,
+    config: TriageConfig | None = None,
 ) -> list[dict[str, Any]]:
     """COHORT over every session of one participant, written into the stores or into ``readings_out``.
 
@@ -349,6 +353,8 @@ def process_participant(
         readings_out: Where readings go instead of the stores, or None.
         enrollments_out: Where the session and participant vectors go, or None.
         force: Re-read a participant already carrying this cohort key.
+        config: The configuration each store is checked against (:func:`read_checked_store`), or None for the
+            recording alone.
 
     Returns:
         One outcome record per member: ids, counts and cosines only.
@@ -369,7 +375,7 @@ def process_participant(
         for row in rows:
             try:
                 run_root = run_root_of(Path(row["enhanced"]))
-                store = read_store(run_root)
+                store = read_checked_store(run_root, config)
             except (OSError, ValueError) as error:
                 failed.append(
                     {
@@ -501,7 +507,7 @@ def run_apply(args: argparse.Namespace) -> dict[str, Any]:
         The task's summary.
     """
     started = time.time()
-    config = load_triage_config(args.config) if args.config else load_triage_config()
+    config = driver_config(args)
     settings = enrollment_config(config)
     artefact, quantiles_ref = None, None
     if args.quantiles is not None:
@@ -542,6 +548,7 @@ def run_apply(args: argparse.Namespace) -> dict[str, Any]:
             readings_out=args.readings_out,
             enrollments_out=args.enrollments_out,
             force=args.force,
+            config=config,
         )
         log.extend(records)
         head = records[0].get("participant_summary") if records else None

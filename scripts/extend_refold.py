@@ -2,7 +2,7 @@
 r"""Decide every recording in a finished corpus again, reading nothing new.
 
     uv run python scripts/extend_refold.py MANIFEST --slice-index I --slice-count N \
-        --hints DIR [--log-dir DIR] [--config OVERRIDE.yaml] [--commit SHA]
+        [--hints DIR | --no-hint] [--profile DIR] [--log-dir DIR] [--config OVERRIDE.yaml] [--commit SHA]
 
 ``MANIFEST`` is the JSONL every ``extend_*`` driver takes: ``stem`` and ``enhanced``, and
 optionally ``source``, the recording the run was over, which is what the hint is built from and
@@ -46,14 +46,20 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.extend import (
     ERROR,
     OK,
+    REFUSED,
     RUN_SUBDIR,
     SLICES_SUBDIR,
+    ReplayInputs,
+    ReplayRefused,
     SliceLog,
+    add_config_arguments,
     attempt_derivation,
+    check_replay_inputs,
+    driver_config,
     export_prov,
     load_hint_builder,
     logged,
@@ -92,13 +98,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Where this task's {SLICES_SUBDIR}/ log goes (default: beside the manifest)",
     )
-    parser.add_argument("--config", type=Path, default=None, help="Partial YAML deep-merged over the packaged config")
     parser.add_argument(
         "--hints",
         type=Path,
-        required=True,
-        help="Directory holding hints.py; required, because VERDICT reads the declaration",
+        default=None,
+        help="Directory holding hints.py; without it the hint each run recorded is used",
     )
+    parser.add_argument("--no-hint", action="store_true", help="Re-fold with no hint where none is recorded")
+    add_config_arguments(parser, allow_profile_change=True)
     parser.add_argument("--commit", default=None, help="The code revision to record on the re-fold marker")
     return parser
 
@@ -107,35 +114,54 @@ def refold_one(
     run_root: Path,
     config: TriageConfig,
     *,
-    build_hint: Callable[[Path], Any],
+    build_hint: Callable[[Path], Any] | None,
     source: Path,
     commit: str | None,
+    no_hint: bool = False,
+    allow_profile_change: bool = False,
 ) -> dict[str, str]:
     """Decide one finished run again and write the store only if the decision moved.
 
     Args:
         run_root: The run root.
         config: The triage configuration.
-        build_hint: The hint populator.
+        build_hint: The hint populator, or None to use the hint the run recorded.
         source: The recording the run was over.
         commit: The code revision to record on the marker.
+        no_hint: Re-fold with no hint where none is given or recorded.
+        allow_profile_change: Accept a profile whose name differs from the run's.
 
     Returns:
         ``{status, REFOLD}`` -- ``ok`` with the two axes where the fold moved, ``unchanged`` where it
-        reached what already stood, ``error`` where the store would not open or the fold refused it.
+        reached what already stood, ``refused`` where the run's recorded inputs refuse a re-fold (a changed
+        hint among them: replay the run instead), ``error`` where the store would not open or the fold failed.
     """
     try:
         store = read_store(run_root)
     except (OSError, ValueError) as error:
         return {"status": ERROR, NODE: describe_exception(error)}
     try:
-        hint = build_hint(source)[0]
+        hint = build_hint(source)[0] if build_hint is not None else None
     except (OSError, ValueError, LookupError, KeyError, IndexError) as error:
         return {"status": ERROR, NODE: f"hint: {describe_exception(error)}"}
+    try:
+        inputs = check_replay_inputs(
+            store,
+            run_root,
+            config,
+            hint=hint,
+            hint_given=build_hint is not None,
+            no_hint=no_hint,
+            allow_profile_change=allow_profile_change,
+            allow_hint_change=False,
+            source=source,
+        )
+    except ReplayRefused as refusal:
+        return {"status": REFUSED, NODE: str(refusal)}
 
     before = store.fingerprint()
     outcome = attempt_derivation(
-        lambda: _fold(store, config, hint, run_root=run_root, commit=commit),
+        lambda: _fold(store, config, inputs, run_root=run_root, commit=commit),
     )
     if outcome.failed:
         return {"status": ERROR, NODE: outcome.detail}
@@ -146,13 +172,13 @@ def refold_one(
     return {"status": OK, NODE: outcome.detail}
 
 
-def _fold(store: Any, config: TriageConfig, hint: Any, *, run_root: Path, commit: str | None) -> str:  # noqa: ANN401
+def _fold(store: Any, config: TriageConfig, inputs: ReplayInputs, *, run_root: Path, commit: str | None) -> str:  # noqa: ANN401
     """Run the re-fold and render what it decided.
 
     Args:
         store: The run's store.
         config: The triage configuration.
-        hint: What the recording was declared to contain.
+        inputs: What :func:`check_replay_inputs` found, carrying the hint to fold with.
         run_root: The run root.
         commit: The code revision to record on the marker.
 
@@ -163,11 +189,12 @@ def _fold(store: Any, config: TriageConfig, hint: Any, *, run_root: Path, commit
     result = refold_verdict(
         store,
         config,
-        hint,
+        inputs.hint,
         run_dir=run_root / RUN_SUBDIR,
         artifacts_dir=run_root / RELEASE_SUBDIR,
         summary_dir=run_root / SUMMARY_SUBDIR,
         commit=commit,
+        inputs=inputs,
     )
     if "VERDICT" in result.errors:
         raise RuntimeError(result.errors["VERDICT"])
@@ -180,18 +207,22 @@ def process(
     rows: Sequence[dict[str, Any]],
     config: TriageConfig,
     *,
-    build_hint: Callable[[Path], Any],
+    build_hint: Callable[[Path], Any] | None,
     commit: str | None = None,
     log: SliceLog | None = None,
+    no_hint: bool = False,
+    allow_profile_change: bool = False,
 ) -> list[dict[str, Any]]:
     """Decide every run named by these rows again, one at a time.
 
     Args:
         rows: The manifest rows this task owns.
         config: The triage configuration.
-        build_hint: The hint populator.
+        build_hint: The hint populator, or None to use the hint each run recorded.
         commit: The code revision to record on each marker.
         log: Where each row's record is appended as it lands, or None.
+        no_hint: Re-fold with no hint where none is given or recorded.
+        allow_profile_change: Accept a profile whose name differs from a run's.
 
     Returns:
         One outcome record per input row, in order.
@@ -206,7 +237,16 @@ def process(
             source = Path(str(row["source"])) if row.get("source") else source_of(run_root)
         except (OSError, ValueError, KeyError) as error:
             return {**row, "status": ERROR, NODE: f"source: {describe_exception(error)}"}
-        return {**row, **refold_one(run_root, config, build_hint=build_hint, source=source, commit=commit)}
+        refolded = refold_one(
+            run_root,
+            config,
+            build_hint=build_hint,
+            source=source,
+            commit=commit,
+            no_hint=no_hint,
+            allow_profile_change=allow_profile_change,
+        )
+        return {**row, **refolded}
 
     return logged(rows, one, log)
 
@@ -218,8 +258,10 @@ def run_slice(
     slice_count: int,
     config: TriageConfig,
     log_dir: Path,
-    hints: Path,
+    hints: Path | None,
     commit: str | None = None,
+    no_hint: bool = False,
+    allow_profile_change: bool = False,
 ) -> dict[str, Any]:
     """Decide every run in one array task's stride of the manifest again.
 
@@ -229,8 +271,10 @@ def run_slice(
         slice_count: How many tasks the array has.
         config: The triage configuration.
         log_dir: Where this task's ``slices/`` log goes.
-        hints: The directory holding ``hints.py``.
+        hints: The directory holding ``hints.py``, or None to use the hint each run recorded.
         commit: The code revision to record on each marker.
+        no_hint: Re-fold with no hint where none is given or recorded.
+        allow_profile_change: Accept a profile whose name differs from a run's.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
@@ -244,7 +288,15 @@ def run_slice(
     log_path = slices_dir / f"{label}.jsonl"
     rows_log = SliceLog(log_path, slice_index=slice_index, slice_count=slice_count, total=len(mine))
     try:
-        log = process(mine, config, build_hint=load_hint_builder(hints), commit=commit, log=rows_log)
+        log = process(
+            mine,
+            config,
+            build_hint=load_hint_builder(hints) if hints is not None else None,
+            commit=commit,
+            log=rows_log,
+            no_hint=no_hint,
+            allow_profile_change=allow_profile_change,
+        )
     finally:
         rows_log.close()
 
@@ -279,8 +331,8 @@ def main(argv: list[str] | None = None) -> int:
         argv: The command line, or None for ``sys.argv``.
 
     Returns:
-        0 where every row reached a determinate outcome, 1 where any row is ``error`` (the other
-        stores are written either way), 2 where the arguments could not be resolved.
+        0 where every row reached a determinate outcome, 1 where any row is ``error`` or ``refused`` (the
+        other stores are written either way), 2 where the arguments could not be resolved.
     """
     args = build_parser().parse_args(argv)
 
@@ -292,10 +344,12 @@ def main(argv: list[str] | None = None) -> int:
             args.manifest,
             slice_index=args.slice_index,
             slice_count=args.slice_count,
-            config=load_triage_config(args.config) if args.config else load_triage_config(),
+            config=driver_config(args),
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
             hints=args.hints,
             commit=args.commit,
+            no_hint=args.no_hint,
+            allow_profile_change=args.allow_profile_change,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
@@ -306,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {status:<10} {number}")
     for what, number in sorted(summary["decided"].items(), key=lambda pair: -pair[1])[:10]:
         print(f"  decided {what:<32} {number}")
-    return 1 if summary["counts"].get(ERROR) else 0
+    return 1 if summary["counts"].get(ERROR) or summary["counts"].get(REFUSED) else 0
 
 
 if __name__ == "__main__":

@@ -913,11 +913,14 @@ def write_stimulus_alignment(
     alignment: StimulusAlignment,
     terminators: str,
     expected_speech_digest: str | None = None,
+    replaces: str | None = None,
 ) -> str:
     """Persist one stimulus alignment beside the run and register the measurement that names it.
 
     Three parallel-column tables in one ``.npz`` -- the expected tokens, the declared structure and
-    the lexical complement. The entity carries the counts, and the table's path, digest and size.
+    the lexical complement. The entity carries the counts, and the table's path, digest and size. Any
+    existing entry at the sidecar's path is removed first, so the write replaces the name rather than
+    writing through a link.
 
     Args:
         store: The provenance store.
@@ -929,6 +932,7 @@ def write_stimulus_alignment(
         expected_speech_digest: The digest of the ``expected_speech`` aligned against
             (:func:`~senselab.audio.workflows.triage.hint_record.expected_speech_digest`), recorded on the
             activity.
+        replaces: The alignment this one replaces, recorded on the entity, or None.
 
     Returns:
         The measurement entity's id.
@@ -948,6 +952,7 @@ def write_stimulus_alignment(
     )
     relative = f"derivatives/{STIMULUS_MEASUREMENT}.npz"
     (run_dir / "derivatives").mkdir(parents=True, exist_ok=True)
+    (run_dir / relative).unlink(missing_ok=True)
     expected, units, unexpected = alignment.expected, alignment.units, alignment.unexpected
     np.savez(
         run_dir / relative,
@@ -989,12 +994,15 @@ def write_stimulus_alignment(
             **path_attributes(relative, run_dir),
             **alignment.provenance,
             "layout": "three_tables_by_row",
+            **({"replaces": replaces} if replaces is not None else {}),
         },
         derived_from=(consensus_id,),
     )
 
 
-def stimulus_alignment(store: ProvStore, config: TriageConfig, *, run_dir: Path, hint: AudioHints | None) -> str:
+def stimulus_alignment(
+    store: ProvStore, config: TriageConfig, *, run_dir: Path, hint: AudioHints | None, replaces: str | None = None
+) -> str:
     """The consensus word stream aligned against the declared utterance, to one npz sidecar.
 
     Args:
@@ -1002,6 +1010,7 @@ def stimulus_alignment(store: ProvStore, config: TriageConfig, *, run_dir: Path,
         config: The triage configuration, read for ``stimulus.sentence_terminators``.
         run_dir: The run directory the sidecar is written under.
         hint: What the recording was declared to contain.
+        replaces: The alignment this one replaces, recorded on the entity, or None.
 
     Returns:
         The measurement entity's id.
@@ -1021,6 +1030,7 @@ def stimulus_alignment(store: ProvStore, config: TriageConfig, *, run_dir: Path,
         alignment=alignment,
         terminators=terminators,
         expected_speech_digest=prompts_digest(prompts),
+        replaces=replaces,
     )
 
 

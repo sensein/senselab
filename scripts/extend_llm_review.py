@@ -75,17 +75,24 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.extend import (
     ERROR,
     OK,
     PRESENT,
     PROV_SUBDIR,
+    REFUSED,
     RUN_SUBDIR,
     SLICES_SUBDIR,
     VERDICT_NODE,
+    ReplayInputs,
+    ReplayRefused,
     SliceLog,
+    add_config_arguments,
     attempt_derivation,
+    check_replay_inputs,
+    check_run_inputs,
+    driver_config,
     export_prov,
     load_hint_builder,
     logged,
@@ -150,7 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Where this task's {SLICES_SUBDIR}/ log goes (default: beside the manifest)",
     )
-    parser.add_argument("--config", type=Path, default=None, help="Partial YAML deep-merged over the packaged config")
+    add_config_arguments(parser)
     parser.add_argument("--out-root", type=Path, default=None, help="Mirror each run root here instead of writing it")
     parser.add_argument("--apply", action="store_true", help="Also write the redacted stream from the proposal")
     parser.add_argument("--force", action="store_true", help="Re-read where an annotation already stands")
@@ -339,6 +346,7 @@ def extend_one(
     build_hint: Callable[[Path], Any] | None,
     source: Path | None,
     commit: str | None = None,
+    finished: Path | None = None,
 ) -> dict[str, str]:
     """Read one finished run back, re-fold its verdict over the reading, and write the store once.
 
@@ -354,6 +362,7 @@ def extend_one(
         build_hint: The hint populator, or None to leave the recorded verdict as it stands.
         source: The recording the run was over, for the hint. None where no hint is built.
         commit: The code revision to record on the re-fold marker.
+        finished: The finished run root ``run_root`` mirrors, read for ``run.json``; None when they are one.
 
     Returns:
         ``{status, REVIEW}`` -- ``ok`` when a reading landed, ``present`` when one already stood,
@@ -374,6 +383,17 @@ def extend_one(
         hint = build_hint(source)[0] if build_hint is not None and source is not None else None
     except Exception as error:  # noqa: BLE001 — a hint that cannot be built is this row's error
         return {"status": ERROR, NODE: f"hint: {describe_exception(error)}"}
+    log_root = finished if finished is not None else run_root
+    inputs: ReplayInputs | None = None
+    try:
+        if hint is None:
+            check_run_inputs(store, log_root, config, source=source)
+        else:
+            inputs = check_replay_inputs(
+                store, log_root, config, hint=hint, hint_given=True, allow_hint_change=False, source=source
+            )
+    except ReplayRefused as refusal:
+        return {"status": REFUSED, NODE: str(refusal)}
     before = store.fingerprint()
     with record_venv_use() as used:
         outcome = attempt_derivation(
@@ -387,7 +407,7 @@ def extend_one(
     if store.fingerprint() == before:
         return {"status": PRESENT, NODE: outcome.detail}
     capture_environments(store, used)
-    refolded = _refold(store, config, run_root=run_root, build_hint=build_hint, source=source, commit=commit)
+    refolded = _refold(store, config, run_root=run_root, inputs=inputs, commit=commit)
     write_store(store, run_root)
     export_prov(store, run_root)
     return {"status": OK, NODE: outcome.detail, REFOLD: refolded}
@@ -398,8 +418,7 @@ def _refold(
     config: TriageConfig,
     *,
     run_root: Path,
-    build_hint: Callable[[Path], Any] | None,
-    source: Path | None,
+    inputs: ReplayInputs | None,
     commit: str | None,
 ) -> str:
     """Decide the file again over the reading REVIEW just wrote.
@@ -408,8 +427,8 @@ def _refold(
         store: The run's store, carrying the new annotation.
         config: The triage configuration.
         run_root: The run root, already the writable one.
-        build_hint: The hint populator, or None to leave the recorded verdict as it stands.
-        source: The recording the run was over, for the hint.
+        inputs: What :func:`check_replay_inputs` found before REVIEW ran, carrying the hint; None to leave
+            the recorded verdict as it stands.
         commit: The code revision to record on the marker.
 
     Returns:
@@ -417,21 +436,18 @@ def _refold(
         rather than conflated with a VERDICT that did: the decision landed either way, and only
         the rendering of it is missing.
     """
-    if build_hint is None or source is None:
+    if inputs is None:
         return SKIPPED
-    try:
-        hint = build_hint(source)[0]
-    except (OSError, ValueError, LookupError, KeyError, IndexError) as error:
-        return f"{ERROR}: hint: {describe_exception(error)}"
     try:
         outcome = refold_verdict(
             store,
             config,
-            hint,
+            inputs.hint,
             run_dir=run_root / RUN_SUBDIR,
             artifacts_dir=run_root / RELEASE_SUBDIR,
             summary_dir=run_root / SUMMARY_SUBDIR,
             commit=commit,
+            inputs=inputs,
         )
     except (OSError, ValueError, LookupError) as error:
         return f"{ERROR}: {describe_exception(error)}"
@@ -486,7 +502,14 @@ def process(
         return {
             **row,
             **extend_one(
-                run_root, config, apply=apply, force=force, build_hint=build_hint, source=source, commit=commit
+                run_root,
+                config,
+                apply=apply,
+                force=force,
+                build_hint=build_hint,
+                source=source,
+                commit=commit,
+                finished=finished,
             ),
         }
 
@@ -605,7 +628,7 @@ def main(argv: list[str] | None = None) -> int:
             args.manifest,
             slice_index=args.slice_index,
             slice_count=args.slice_count,
-            config=load_triage_config(args.config) if args.config else load_triage_config(),
+            config=driver_config(args),
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
             out_root=args.out_root,
             apply=args.apply,
@@ -624,7 +647,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  read {reading:<16} {number}")
     for refold, number in sorted(summary["refolds"].items()):
         print(f"  refold {refold:<14} {number}")
-    return 1 if summary["counts"].get(ERROR) else 0
+    return 1 if summary["counts"].get(ERROR) or summary["counts"].get(REFUSED) else 0
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.extend import (
     ABSENT,
     ERROR,
@@ -38,10 +38,12 @@ from senselab.audio.workflows.triage.extend import (
     RUN_SUBDIR,
     SLICES_SUBDIR,
     SliceLog,
+    add_config_arguments,
+    driver_config,
     export_prov,
     logged,
+    read_checked_store,
     read_manifest,
-    read_store,
     run_root_of,
     take_slice,
     write_store,
@@ -69,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Where this task's {SLICES_SUBDIR}/ log goes (default: beside the manifest)",
     )
-    parser.add_argument("--config", type=Path, default=None, help="Partial YAML deep-merged over the packaged config")
+    add_config_arguments(parser)
     return parser
 
 
@@ -85,7 +87,7 @@ def cut_one(run_root: Path, config: TriageConfig) -> dict[str, Any]:
         ``task_<source>``, and the extent's bounds and the recording's duration where one stands.
     """
     try:
-        store = read_store(run_root)
+        store = read_checked_store(run_root, config)
     except (OSError, ValueError) as error:
         return {"status": ERROR, NODE: describe_exception(error)}
     try:
@@ -206,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
             args.manifest,
             slice_index=args.slice_index,
             slice_count=args.slice_count,
-            config=load_triage_config(args.config) if args.config else load_triage_config(),
+            config=driver_config(args),
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
         )
     except (OSError, ValueError) as error:

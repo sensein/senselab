@@ -41,17 +41,19 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.extend import (
     ERROR,
     OK,
     RUN_SUBDIR,
     SKIPPED,
     SLICES_SUBDIR,
+    add_config_arguments,
     attempt_derivation,
+    driver_config,
     export_prov,
+    read_checked_store,
     read_manifest,
-    read_store,
     run_root_of,
     take_slice,
     write_store,
@@ -81,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Where this task's {SLICES_SUBDIR}/ log goes (default: beside the manifest)",
     )
-    parser.add_argument("--config", type=Path, default=None, help="Partial YAML deep-merged over the packaged config")
+    add_config_arguments(parser)
     return parser
 
 
@@ -116,7 +118,7 @@ def extend_one(run_root: Path, config: TriageConfig) -> tuple[str, str]:
         needed, or ``error`` and the reason.
     """
     try:
-        store = read_store(run_root)
+        store = read_checked_store(run_root, config)
     except (OSError, ValueError) as error:
         return ERROR, describe_exception(error)
     if find_measurement(store, CLIP_AMPLITUDE_MEASUREMENT) is not None:
@@ -229,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
             args.manifest,
             slice_index=args.slice_index,
             slice_count=args.slice_count,
-            config=load_triage_config(args.config) if args.config else load_triage_config(),
+            config=driver_config(args),
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
         )
     except (OSError, ValueError) as error:

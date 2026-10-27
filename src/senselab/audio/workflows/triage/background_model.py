@@ -698,6 +698,9 @@ def session_floor_db(members: Sequence[dict[str, Any]], p: dict[str, Any] | None
 def write_view_arrays(path: Path, reading: BackgroundReading) -> None:
     """Write the arrays a branch reads the background through: frames, floor, impulses and regions.
 
+    Any existing entry at ``path`` is removed first, so the write replaces the name rather than writing
+    through a link.
+
     Args:
         path: The ``.npz`` to write.
         reading: The reading, carrying its frames.
@@ -708,6 +711,7 @@ def write_view_arrays(path: Path, reading: BackgroundReading) -> None:
     if reading.frames is None:
         raise ValueError("a background reading without its frames has no view to write")
     floor = reading.floor
+    path.unlink(missing_ok=True)
     np.savez(
         path,
         times_s=reading.frames.times_s,

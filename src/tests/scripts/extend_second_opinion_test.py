@@ -132,6 +132,14 @@ def test_a_store_review_has_not_read_is_an_error_and_a_later_review_asks_again(t
     assert _run(tmp_path, run_root, reread)["counts"] == {"ok": 1}
 
 
+def test_without_hints_a_store_that_records_no_hint_is_refused(tmp_path: Path) -> None:
+    """The command line without --hints asks with the recorded hint, and refuses where there is none."""
+    run_root = _reviewed_run(tmp_path / "corpus")
+    opener = _Opener()
+    assert _run(tmp_path, run_root, opener, recorded_hint_default=True)["counts"] == {"refused": 1}
+    assert opener.opened == 0 and _opinions(run_root) == []
+
+
 def test_an_opinion_lands_and_a_second_pass_starts_no_server(tmp_path: Path) -> None:
     """Resumable by the store: a standing ok opinion is present and the model is not served."""
     run_root = _reviewed_run(tmp_path / "corpus")

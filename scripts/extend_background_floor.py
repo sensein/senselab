@@ -30,6 +30,7 @@ from senselab.audio.workflows.triage.extend import (
     SLICES_SUBDIR,
     attempt_derivation,
     export_prov,
+    read_checked_store,
     read_manifest,
     read_store,
     run_root_of,
@@ -69,7 +70,7 @@ def extend_one(run_root: Path) -> tuple[str, str]:
         ``(status, detail)``.
     """
     try:
-        store = read_store(run_root)
+        store = read_checked_store(run_root, None)
     except (OSError, ValueError) as error:
         return ERROR, describe_exception(error)
     if find_measurement(store, OWN_FLOOR) is not None:

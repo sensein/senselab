@@ -48,16 +48,20 @@ from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterator, Sequence
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.extend import (
     ERROR,
     OK,
     PRESENT,
+    REFUSED,
     SLICES_SUBDIR,
     SliceLog,
+    add_config_arguments,
+    driver_config,
     export_prov,
     load_hint_builder,
     logged,
+    read_checked_store,
     read_manifest,
     read_store,
     run_root_of,
@@ -66,6 +70,7 @@ from senselab.audio.workflows.triage.extend import (
     take_slice,
     write_store,
 )
+from senselab.audio.workflows.triage.hint_record import recorded_hint, recorded_hint_digest
 from senselab.audio.workflows.triage.nodes.common import describe_exception, find_measurement, software_agent
 from senselab.audio.workflows.triage.nodes.second_opinion import ABSENT, NODE, Ask, pin_of, second_opinion, settings
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, SECOND_OPINION_ANSWERS
@@ -95,7 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--slice-index", type=int, required=True, help="This task's index, 0-based")
     parser.add_argument("--slice-count", type=int, required=True, help="How many tasks the array has")
     parser.add_argument("--log-dir", type=Path, default=None, help=f"Where {SLICES_SUBDIR}/ goes (default: beside it)")
-    parser.add_argument("--config", type=Path, default=None, help="Partial YAML deep-merged over the packaged config")
+    add_config_arguments(parser)
     parser.add_argument("--ollama-binary", type=Path, default=None, help="The ollama executable")
     parser.add_argument("--ollama-models", type=Path, default=None, help="The Ollama model store (OLLAMA_MODELS)")
     parser.add_argument(
@@ -103,7 +108,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--force", action="store_true", help="Ask again where an opinion already stands")
     parser.add_argument(
-        "--hints", type=Path, required=True, help="Directory holding hints.py; the task context comes from it"
+        "--hints",
+        type=Path,
+        default=None,
+        help="Directory holding hints.py; the task context comes from it (default: the hint each run recorded)",
     )
     parser.add_argument(
         "--workers", type=int, default=None, help="Rows asked at once (default: second_opinion.workers)"
@@ -286,6 +294,7 @@ def extend_one(
     build_hint: Callable[[Path], Any] | None,
     source: Path | None,
     num_parallel: int = 1,
+    recorded_hint_default: bool = False,
 ) -> dict[str, str]:
     """Ask about one finished run and write the opinion into its store.
 
@@ -297,14 +306,17 @@ def extend_one(
         build_hint: The hint populator, or None to ask without the declaration's task context.
         source: The recording the run was over, for the hint.
         num_parallel: How many requests the server answers at once, recorded on the opinion.
+        recorded_hint_default: Ask with the hint the run recorded where ``build_hint`` is None, refusing a
+            store that records none (the command line without ``--hints``).
 
     Returns:
         ``{status, SECOND_OPINION}`` -- ``ok`` when an opinion landed, ``present`` when one already
-        stood or the store came out unchanged, ``error`` when the store would not open, REVIEW has not
+        stood or the store came out unchanged, ``refused`` when no ``--hints`` is given and the store records
+        no hint, ``error`` when the store would not open, REVIEW has not
         written its annotation, or the model was asked and did not answer. An unanswered ask is not written.
     """
     try:
-        store = read_store(run_root)
+        store = read_checked_store(run_root, config)
     except (OSError, ValueError) as error:
         return {"status": ERROR, NODE: describe_exception(error)}
     held = standing(store, config)
@@ -313,7 +325,9 @@ def extend_one(
     if find_measurement(store, REDACTION_LLM_ANNOTATION) is None:
         return {"status": ERROR, NODE: f"REVIEW has not run: no {REDACTION_LLM_ANNOTATION} in the store"}
     replaced = live_opinions(store)
-    hint: AudioHints | None = None
+    if build_hint is None and recorded_hint_default and recorded_hint_digest(store) is None:
+        return {"status": REFUSED, NODE: "this store records no hint; pass --hints to rebuild the task context"}
+    hint: AudioHints | None = recorded_hint(store) if build_hint is None and recorded_hint_default else None
     if build_hint is not None and source is not None:
         try:
             hint = build_hint(source)[0]
@@ -353,6 +367,7 @@ def process(
     build_hint: Callable[[Path], Any] | None = None,
     workers: int = 1,
     log: SliceLog | None = None,
+    recorded_hint_default: bool = False,
 ) -> list[dict[str, Any]]:
     """Ask about every run named by these rows, ``workers`` at a time.
 
@@ -364,6 +379,7 @@ def process(
         build_hint: The hint populator, or None to ask without the declaration's task context.
         workers: How many rows are asked at once, which is also the server's parallelism.
         log: Where each row's record is appended as it lands, or None.
+        recorded_hint_default: As :func:`extend_one`.
 
     Returns:
         One outcome record per input row, in order.
@@ -383,7 +399,14 @@ def process(
         return {
             **row,
             **extend_one(
-                run_root, config, ask, force=force, build_hint=build_hint, source=source, num_parallel=workers
+                run_root,
+                config,
+                ask,
+                force=force,
+                build_hint=build_hint,
+                source=source,
+                num_parallel=workers,
+                recorded_hint_default=recorded_hint_default,
             ),
         }
 
@@ -401,6 +424,7 @@ def run_slice(
     force: bool = False,
     hints: Path | None = None,
     workers: int = 1,
+    recorded_hint_default: bool = False,
 ) -> dict[str, Any]:
     """Ask about every run in one array task's stride of the manifest.
 
@@ -414,6 +438,7 @@ def run_slice(
         force: Whether to ask again where an opinion stands.
         hints: The directory holding ``hints.py``, or None to ask without the declaration's task context.
         workers: How many rows are asked at once; the asker must answer as many in parallel.
+        recorded_hint_default: As :func:`extend_one`.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
@@ -431,7 +456,16 @@ def run_slice(
     rows_log = SliceLog(log_path, slice_index=slice_index, slice_count=slice_count, total=len(mine), workers=workers)
     ask = LazyAsk(open_ask, max_consecutive_errors=int(settings(config)["max_consecutive_errors"]))
     try:
-        log = process(mine, config, ask, force=force, build_hint=build_hint, workers=workers, log=rows_log)
+        log = process(
+            mine,
+            config,
+            ask,
+            force=force,
+            build_hint=build_hint,
+            workers=workers,
+            log=rows_log,
+            recorded_hint_default=recorded_hint_default,
+        )
     finally:
         rows_log.close()
         server_started = ask.opened
@@ -489,7 +523,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     try:
-        config = load_triage_config(args.config) if args.config else load_triage_config()
+        config = driver_config(args)
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
@@ -527,6 +561,7 @@ def main(argv: list[str] | None = None) -> int:
             force=args.force,
             hints=args.hints,
             workers=workers,
+            recorded_hint_default=args.hints is None,
         )
     except SliceAbortedError as error:
         print(f"ABORTED: {error}", file=sys.stderr)
@@ -540,7 +575,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {status:<9} {number}")
     for reading, number in sorted(summary["readings"].items()):
         print(f"  read {reading:<16} {number}")
-    return 1 if summary["counts"].get(ERROR) else 0
+    return 1 if summary["counts"].get(ERROR) or summary["counts"].get(REFUSED) else 0
 
 
 if __name__ == "__main__":
