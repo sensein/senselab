@@ -33,6 +33,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_measurement,
 )
 from senselab.audio.workflows.triage.nodes.verdict import NODE as VERDICT_NODE
+from senselab.audio.workflows.triage.recording_vectors import stem_of
 from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
 from senselab.audio.workflows.triage.task_audio import MEASUREMENT as TASK_AUDIO_MEASUREMENT
 from senselab.audio.workflows.triage.task_audio import PLAIN, sample_bounds, task_extent
@@ -187,7 +188,7 @@ def declared_family(store: ProvStore, stem: str | None) -> str | None:
 
     Args:
         store: The run's store.
-        stem: The recording's BIDS stem, or None.
+        stem: The recording's BIDS stem, with or without the run's launch timestamp, or None.
 
     Returns:
         The family, or None where neither is known.
@@ -196,7 +197,7 @@ def declared_family(store: ProvStore, stem: str | None) -> str | None:
     family = None if folded is None else folded.attributes.get("declared_family")
     if family:
         return str(family)
-    return task_family(task_id_of(stem)) if stem else None
+    return task_family(task_id_of(stem_of(Path(stem)))) if stem else None
 
 
 def weights_path(asset: str) -> Path:

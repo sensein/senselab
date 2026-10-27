@@ -216,3 +216,11 @@ class TestTheStore:
         store = _seed(tmp_path, task=(5.0, 5.4))
         outcome = measure_task_squim(store, config, run_dir=tmp_path / "run", scorer=_Counting)
         assert outcome.status == ABSENT and "floor" in str(outcome.reason)
+
+
+def test_a_timestamped_manifest_stem_gives_its_family(tmp_path: Path) -> None:
+    """Where the fold names no family, the manifest stem's launch timestamp is dropped before the task is read."""
+    from senselab.audio.workflows.triage.task_squim import declared_family
+
+    store = ProvStore(run_id="stem-test")
+    assert declared_family(store, "sub-a_ses-b_task-voluntary-cough-2_20261010-144634") == "voluntary-cough"

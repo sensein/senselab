@@ -90,7 +90,7 @@ def test_the_report_is_aggregates_only_and_reads_the_trend(tmp_path: Path) -> No
     (logs / "task-squim-slice-0-of-1.jsonl").write_text(
         json.dumps(
             {
-                "stem": "sub-secret000_ses-x_task-caterpillar-passage",
+                "stem": "sub-secret000_ses-x_task-caterpillar-passage_20261010-144634",
                 "status": "ok",
                 "windows_n": 2,
                 "covered_s": 20.0,
@@ -106,6 +106,7 @@ def test_the_report_is_aggregates_only_and_reads_the_trend(tmp_path: Path) -> No
     text = out.read_text()
     assert "sub-secret" not in text and "ses-x" not in text and "sub-airway" not in text
     assert "| snr_db | PESQ | 40 | -1.000 | 40 | +1.000 |" in text
+    assert "| SPEECH | ok | 1 |" in text, "a timestamped manifest stem resolves to its branch"
 
 
 def test_an_airway_value_fails_the_sanity_check(tmp_path: Path) -> None:
