@@ -103,6 +103,7 @@ from senselab.audio.workflows.triage.consensus import (
     vocabulary_key,
     word_attributes,
 )
+from senselab.audio.workflows.triage.hint_record import expected_speech_digest as prompts_digest
 from senselab.audio.workflows.triage.label_membership import (
     LabelMembership,
     load_label_membership,
@@ -911,6 +912,7 @@ def write_stimulus_alignment(
     consensus_id: str,
     alignment: StimulusAlignment,
     terminators: str,
+    expected_speech_digest: str | None = None,
 ) -> str:
     """Persist one stimulus alignment beside the run and register the measurement that names it.
 
@@ -924,6 +926,9 @@ def write_stimulus_alignment(
         alignment: The alignment to persist.
         terminators: The unit-closing characters the alignment was split on, as the activity
             records them.
+        expected_speech_digest: The digest of the ``expected_speech`` aligned against
+            (:func:`~senselab.audio.workflows.triage.hint_record.expected_speech_digest`), recorded on the
+            activity.
 
     Returns:
         The measurement entity's id.
@@ -932,7 +937,12 @@ def write_stimulus_alignment(
     activity = _activity(
         store,
         STIMULUS_MEASUREMENT,
-        {"routine": STIMULUS_ROUTINE, "algorithm": STIMULUS_ALGORITHM, "sentence_terminators": terminators},
+        {
+            "routine": STIMULUS_ROUTINE,
+            "algorithm": STIMULUS_ALGORITHM,
+            "sentence_terminators": terminators,
+            "expected_speech_digest": expected_speech_digest,
+        },
         (consensus_id,),
         software,
     )
@@ -1005,7 +1015,12 @@ def stimulus_alignment(store: ProvStore, config: TriageConfig, *, run_dir: Path,
     terminators = str(config.require("stimulus.sentence_terminators"))
     alignment = align_stimulus(prompts, words, terminators=terminators)
     return write_stimulus_alignment(
-        store, run_dir=run_dir, consensus_id=consensus_id, alignment=alignment, terminators=terminators
+        store,
+        run_dir=run_dir,
+        consensus_id=consensus_id,
+        alignment=alignment,
+        terminators=terminators,
+        expected_speech_digest=prompts_digest(prompts),
     )
 
 
@@ -2692,7 +2707,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         Reads the spans and the phonation tracks back out of the store, and rewrites the consensus words it
         moves (:func:`~senselab.audio.workflows.triage.word_arbitration.arbitrate_words`).
         """
-        entity_id = arbitrate_words(store, run_dir=run_dir, family=declared_task_family(store, hint))
+        entity_id = arbitrate_words(store, run_dir=run_dir, family=declared_task_family(store))
         if entity_id is not None:
             derivatives[WORD_ARBITRATION] = entity_id
             view.append(entity_id)

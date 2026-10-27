@@ -1107,7 +1107,7 @@ def replay_decisions(
     software = software_agent(store)
     held = held_reading(store)
     retired = retire_decisions(store, live_decisions(store), software=software)
-    arbitrate_words(store, run_dir=run_dir, family=declared_task_family(store, hint))
+    arbitrate_words(store, run_dir=run_dir, family=declared_task_family(store))
     outcomes: dict[str, NodeOutcome] = {}
     with record_venv_use() as used_venvs:
         released = drive_decisions(

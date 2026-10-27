@@ -45,6 +45,7 @@ from senselab.audio.workflows.triage.nodes.voice import (
     voice,
 )
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import declare_hint_identity
 from tests.audio.workflows.triage.nodes.conftest import gated_conformance, gated_flags, readings_of
 
 HOP_S = 0.01
@@ -469,11 +470,11 @@ class TestTheModeIsSelectedByTheDeclaredFamily:
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
         assert result.report.conformance == UNDETERMINED
 
-    def test_the_hint_carrier_selects_the_mode_before_the_path_does(self, tmp_path: Path) -> None:
-        """``task_token`` is the clean route and is read first."""
+    def test_the_recorded_hint_carrier_selects_the_mode_before_the_path_does(self, tmp_path: Path) -> None:
+        """``task_token``, as ADMIT records it, is the clean route and is read first."""
         store, _ = seed(tmp_path, stem=COUGH_STEM)
-        hint = AudioHints(metadata={"task_token": "glides-low-to-high"})
-        assert mode_of("VOICE", store, hint) == ("align", "glides-low-to-high")
+        declare_hint_identity(store, AudioHints(metadata={"task_token": "glides-low-to-high"}))
+        assert mode_of("VOICE", store) == ("align", "glides-low-to-high")
 
 
 class TestThePendingDeclarationRowsTakeTheDetectArm:

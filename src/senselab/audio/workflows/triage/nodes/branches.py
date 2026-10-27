@@ -22,7 +22,7 @@ import numpy as np
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
 from senselab.audio.workflows.triage.consensus import vocabulary_key
-from senselab.audio.workflows.triage.identity import task_id_candidates
+from senselab.audio.workflows.triage.identity import declared_task_id
 from senselab.audio.workflows.triage.nodes.common import (
     clamp_to_recording,
     find_measurement,
@@ -1153,28 +1153,18 @@ The packaged config names the same three sets by key under
 # --------------------------------------------------------------------- the two modes
 
 
-def declared_task_family(store: ProvStore, hint: AudioHints | None = None) -> str | None:
-    """The declared task family, from whichever carrier the graph has.
-
-    The carriers are read in order (:func:`~senselab.audio.workflows.triage.identity.task_id_candidates`):
-    the hint's ``task_token`` metadata, the task id ADMIT recorded from a hint, the ``path`` ADMIT writes
-    onto the ``recording`` stream entity, and, where ADMIT refused the recording and wrote no stream, the
-    ``audio_file`` its activity was run with.
+def declared_task_family(store: ProvStore) -> str | None:
+    """The declared task family, from :func:`~senselab.audio.workflows.triage.identity.declared_task_id`.
 
     Args:
         store: The provenance store.
-        hint: What the recording was declared to contain, when the caller supplied one.
 
     Returns:
-        The family, or None when no carrier names one — neither a ``recording`` entity nor an ADMIT
-        activity, a path that is not a BIDS stem, or a stem whose task id is ``"unknown"``. None
-        takes the out-of-family mode.
+        The family, or None when nothing declares one: no ``recording`` entity and no ADMIT activity, a path
+        that is not a BIDS stem, or a task id of ``"unknown"``. None takes the out-of-family mode.
     """
-    for task_id in task_id_candidates(store, hint):
-        family = task_family(task_id)
-        if family and family != UNKNOWN_TASK:
-            return family
-    return None
+    family = task_family(declared_task_id(store))
+    return family if family and family != UNKNOWN_TASK else None
 
 
 class AlignMode(Protocol):
@@ -1241,7 +1231,7 @@ def dispatch(
         ValueError: If a mode proposed a span outside this branch's own family.
     """
     table = EXPECTATIONS[branch]
-    family = declared_task_family(store, hint)
+    family = declared_task_family(store)
     in_family = family is not None and family in table
     result = align(family, store, hint, params) if in_family and family is not None else detect(store, params)
     own = BRANCH_FAMILY[branch]
@@ -1340,13 +1330,12 @@ def item_category(task_family: str | None, hint: AudioHints | None) -> str | Non
     return item_category_of(task_family, hint)[0]
 
 
-def mode_of(branch: str, store: ProvStore, hint: AudioHints | None = None) -> tuple[str, str | None]:
+def mode_of(branch: str, store: ProvStore) -> tuple[str, str | None]:
     """Which mode :func:`dispatch` would select, and on what family. For a verdict's record.
 
     Args:
         branch: One of :data:`BRANCHES`.
         store: The provenance store.
-        hint: What the recording was declared to contain.
 
     Returns:
         ``("align", family)`` or ``("detect", family)``, the family being what was declared, which
@@ -1355,7 +1344,7 @@ def mode_of(branch: str, store: ProvStore, hint: AudioHints | None = None) -> tu
     Raises:
         KeyError: If ``branch`` is not one of :data:`BRANCHES`.
     """
-    family = declared_task_family(store, hint)
+    family = declared_task_family(store)
     return ("align" if family is not None and family in EXPECTATIONS[branch] else "detect", family)
 
 

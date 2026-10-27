@@ -803,7 +803,7 @@ def voice(
         """Bind the run directory the mode contract does not carry. Names match ``DetectMode``."""
         return detect_voice(store, params, run_dir=run_dir)
 
-    mode, declared = mode_of(NODE, store, hint)
+    mode, declared = mode_of(NODE, store)
     result = dispatch(NODE, store, params, hint, align=align, detect=detect)
     tracks_absent = find_measurement(store, PHONATION_TRACKS) is None or read_tracks(store, run_dir) is None
 

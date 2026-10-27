@@ -30,13 +30,22 @@ from senselab.audio.workflows.triage.nodes import speech as speech_module
 from senselab.audio.workflows.triage.nodes.common import live_entities
 from senselab.audio.workflows.triage.nodes.ddk import CV_AUTHORITY, INSTRUMENT_READING, TRANSCRIPT_CLAIM
 from senselab.audio.workflows.triage.nodes.redact import _pii_marked_words, redact
-from senselab.audio.workflows.triage.nodes.speech import _hypotheses, speech
+from senselab.audio.workflows.triage.nodes.speech import _hypotheses
+from senselab.audio.workflows.triage.nodes.speech import speech as _speech_node
 from senselab.audio.workflows.triage.task_extent import task_extent_parameters
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import record_admitted_hint
 from tests.audio.workflows.triage.nodes.conftest import level_of_raster, seed_background_view
+
+
+def speech(store: ProvStore, signal: str, config: Any, hint: AudioHints | None = None, **kwargs: Any) -> Any:  # noqa: ANN401
+    """SPEECH as a run reaches it: ADMIT has already recorded the hint's identity (``record_admitted_hint``)."""
+    record_admitted_hint(store, hint)
+    return _speech_node(store, signal, config, hint, **kwargs)
+
 
 SENTINEL = "alicia"  # the name the scan finds; nothing released may carry it
 WORDS = ["my", "name", "is", SENTINEL, "and", "i", "live", "here"]

@@ -12,6 +12,7 @@ from typing import Any, Sequence
 
 import pytest
 
+from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.extend import (
     REVIEW_CARRIED,
@@ -34,8 +35,10 @@ from senselab.audio.workflows.triage.nodes.review import (
     NODE,
     backfill_from_store,
     refine_plan,
-    review,
     review_cache_key,
+)
+from senselab.audio.workflows.triage.nodes.review import (
+    review as _review_node,
 )
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED, Outcome
 from senselab.text.tasks.pii_detection.redaction_review import (
@@ -46,7 +49,15 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     parse_completion,
 )
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import record_admitted_hint
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
+
+
+def review(store: ProvStore, config: Any, hint: AudioHints | None = None, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+    """REVIEW as a run reaches it: ADMIT has already recorded the hint's identity (``record_admitted_hint``)."""
+    record_admitted_hint(store, hint)
+    return _review_node(store, config, hint, *args, **kwargs)
+
 
 LLM_ON = "redaction:\n  llm_check:\n    enabled: true\n"
 

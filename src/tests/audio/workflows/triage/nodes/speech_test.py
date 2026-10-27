@@ -39,7 +39,7 @@ from senselab.audio.workflows.triage.nodes.gates import Pattern
 from senselab.audio.workflows.triage.nodes.preprocess import (
     diarization_measurement as preprocess_diarization_measurement,
 )
-from senselab.audio.workflows.triage.nodes.speech import speech
+from senselab.audio.workflows.triage.nodes.speech import speech as _speech_node
 from senselab.audio.workflows.triage.nodes.verdict import gate_conformance
 from senselab.audio.workflows.triage.recording_vectors import SCALAR_MEASUREMENTS
 from senselab.audio.workflows.triage.stimulus import NearMatch, near_match
@@ -47,12 +47,20 @@ from senselab.audio.workflows.triage.vocabulary import UNDETERMINED
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import Entity, ProvStore
+from tests.audio.workflows.triage.conftest import record_admitted_hint
 from tests.audio.workflows.triage.nodes.conftest import (
     gated_from_store,
     level_of_raster,
     seed_background_view,
     store_readings,
 )
+
+
+def speech(store: ProvStore, signal: str, config: Any, hint: AudioHints | None = None, **kwargs: Any) -> Any:  # noqa: ANN401
+    """SPEECH as a run reaches it: ADMIT has already recorded the hint's identity (``record_admitted_hint``)."""
+    record_admitted_hint(store, hint)
+    return _speech_node(store, signal, config, hint, **kwargs)
+
 
 SR = 16000
 ENROLLMENT_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
