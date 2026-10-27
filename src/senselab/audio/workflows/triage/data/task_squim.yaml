@@ -1,0 +1,29 @@
+# SQUIM over the task extent (task_squim.py): fixed non-overlapping windows across the recording's task
+# extent on the plain stream, read by the objective head; the medians feed q_task_squim_* and triage.tsv
+# squim_*. The design and verification are in specs/20261027-task-extent-squim/design.md.
+version: 1
+windows:
+  window_s: 10.0       # CONVENTIONAL, not fitted: the window the #614 reporter measured with
+  min_window_s: 3.0    # CONVENTIONAL, not fitted: a trailing partial window shorter than this is dropped; an extent shorter than this is one window
+  floor_s: 1.0         # CONVENTIONAL, not fitted: an extent shorter than this gets no value
+model:
+  model_id: torchaudio SQUIM_OBJECTIVE
+  asset: models/squim_objective_dns2020.pth
+  weights_sha256: 2c54586fea83fb5eb5394d710038ee89f55cab7011a5bf730bebed4c8777e828
+  sampling_rate: 16000
+no_value_branches: [AIRWAY]   # breath and cough families: SQUIM is a speech-quality estimate and does not describe them
+derivation: |
+  Not fitted. Issue sensein/senselab#614 found that the release squim_* columns were the median of
+  PREPROCESS's per-span SQUIM readings, about 40% of them on silence gaps (median span 0.27-0.32 s),
+  so clean read speech read PESQ ~1.2 and SI-SDR ~-7 dB and the values fell as SNR rose. The reporter
+  measured 10 s windows of the same audio at PESQ ~2.9, STOI ~0.98, SI-SDR ~16-17 dB, rising with SNR,
+  on two samples (50 and 60 recordings). window_s takes that 10 s so the corpus values are comparable
+  with the reporter's. specs/20260817-triage-workflow-dag/benchmarks/squim.md shows SQUIM scores silence
+  and non-speech near its floor (silence 1.00 s: STOI 0.397, SI-SDR -13.5 dB) and that a short speech
+  span (0.9-1.6 s) already reads as speech (STOI 0.95, SI-SDR +12 to +17 dB); floor_s = 1.0 s is the
+  shortest span length in that table, below which no reading in the benchmark is taken. min_window_s =
+  3.0 s keeps a trailing remainder from contributing a reading dominated by an utterance boundary while
+  still giving short tasks (a few seconds of read speech) a value. All three are conventions to be
+  revisited against the VERIFY report of the corpus run, not values chosen from data.
+  weights_sha256 is the SHA-256 of torchaudio's hosted squim_objective_dns2020.pth, the file PREPROCESS
+  loads through SQUIM_OBJECTIVE.get_model(); the replay refuses weights whose digest differs.
