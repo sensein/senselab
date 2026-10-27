@@ -1419,26 +1419,33 @@ columns:
     source: [recording_vectors.py:_quality_columns]
     null_means: As `q_enhanced_floor_dbfs`.
 
-  q_plain_squim_pesq:
+  q_task_squim_pesq:
     units: none
-    description: Median SQUIM PESQ estimate over the plain stream's spans.
-    computation: Median of the live `squim` assertions' `pesq`.
-    source: [recording_vectors.py:_quality_columns]
-    null_means: No span carries a SQUIM reading.
+    description: Median SQUIM PESQ estimate over fixed windows of the task extent, plain stream.
+    computation: The live `task_squim` measurement's `pesq`, the median over its windows (data/task_squim.yaml).
+    source: [recording_vectors.py:_quality_columns, task_squim.py:measure_task_squim]
+    null_means: No live `task_squim` measurement, or none of its windows was read (airway family, no task extent, extent under the floor).
 
-  q_plain_squim_stoi:
+  q_task_squim_stoi:
     units: ratio
-    description: Median SQUIM STOI estimate over the plain stream's spans.
-    computation: Median of the live `squim` assertions' `stoi`.
-    source: [recording_vectors.py:_quality_columns]
-    null_means: No span carries a SQUIM reading.
+    description: Median SQUIM STOI estimate over fixed windows of the task extent, plain stream.
+    computation: The live `task_squim` measurement's `stoi`, the median over its windows.
+    source: [recording_vectors.py:_quality_columns, task_squim.py:measure_task_squim]
+    null_means: As `q_task_squim_pesq`.
 
-  q_plain_squim_si_sdr:
+  q_task_squim_si_sdr:
     units: dB
-    description: Median SQUIM SI-SDR estimate over the plain stream's spans.
-    computation: Median of the live `squim` assertions' `si_sdr`.
-    source: [recording_vectors.py:_quality_columns]
-    null_means: No span carries a SQUIM reading.
+    description: Median SQUIM SI-SDR estimate over fixed windows of the task extent, plain stream.
+    computation: The live `task_squim` measurement's `si_sdr`, the median over its windows.
+    source: [recording_vectors.py:_quality_columns, task_squim.py:measure_task_squim]
+    null_means: As `q_task_squim_pesq`.
+
+  q_task_squim_windows_n:
+    units: count
+    description: How many task-extent windows SQUIM read.
+    computation: The live `task_squim` measurement's `windows_n`.
+    source: [recording_vectors.py:_quality_columns, task_squim.py:measure_task_squim]
+    null_means: No live `task_squim` measurement.
 
   q_raw_issues:
     units: none
