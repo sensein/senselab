@@ -21,6 +21,7 @@ See ``specs/20260912-extend-reprocessed-outputs/design.md`` and
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import os
@@ -30,7 +31,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterator, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.classification.huggingface import AudioTooShortForAST
@@ -38,7 +39,7 @@ from senselab.audio.tasks.classification.yamnet import SpanTooShortForYAMNet
 from senselab.audio.tasks.features_extraction.ppg import PpgsPosteriorgramUnavailable
 from senselab.audio.tasks.phonation.api import F0RangeUnavailable
 from senselab.audio.tasks.speech_to_text.crisperwhisper import CrisperWhisperDecoderPositionsExceeded
-from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.consensus import (
     Rebracketed,
     rebracket,
@@ -49,6 +50,24 @@ from senselab.audio.workflows.triage.consensus import (
 )
 from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
 from senselab.audio.workflows.triage.enrollment import Enrollment
+from senselab.audio.workflows.triage.hint_record import (
+    HINT,
+    NO_HINT,
+    TARGET_SPEAKER,
+    changed_fields,
+    hint_attributes,
+    hint_digest,
+    recorded_hint,
+    recorded_hint_digest,
+)
+from senselab.audio.workflows.triage.hint_record import expected_speech_digest as prompts_digest
+from senselab.audio.workflows.triage.identity import (
+    ADMIT_NODE,
+    admit_record,
+    identity_of,
+    recorded_identity,
+    recording_entity,
+)
 from senselab.audio.workflows.triage.nodes.branches import declared_task_family
 from senselab.audio.workflows.triage.nodes.common import (
     REMINT,
@@ -64,8 +83,11 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.nodes.preprocess import NODE as PREPROCESS_NODE
 from senselab.audio.workflows.triage.nodes.preprocess import (
+    STIMULUS_MEASUREMENT,
     SpeakerDiarizationUnavailable,
+    StimulusExpectationUnavailable,
     WithdrawnClip,
+    stimulus_alignment,
     write_withdrawn_clips,
 )
 from senselab.audio.workflows.triage.nodes.quality import (
@@ -101,7 +123,7 @@ from senselab.audio.workflows.triage.run import (
 from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, QUALITY, REDACTION_LLM_ANNOTATION
 from senselab.audio.workflows.triage.word_arbitration import arbitrate_words
 from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
-from senselab.utils.prov_store import Entity, ProvStore
+from senselab.utils.prov_store import CHECKSUM_KEY, MTIME_KEY, SIZE_KEY, Entity, ProvStore, file_digest
 from senselab.utils.subprocess_venv import record_venv_use
 
 RUN_SUBDIR = "run"
@@ -250,6 +272,37 @@ def attempt_derivation(call: Callable[[], str]) -> DerivationOutcome:
         return DerivationOutcome(f"{ABSENT}: {describe_exception(error)}", failed=False)
     except (OSError, ValueError, LookupError) as error:
         return DerivationOutcome(describe_exception(error), failed=True)
+
+
+def add_config_arguments(parser: argparse.ArgumentParser, *, allow_profile_change: bool = False) -> None:
+    """Add the configuration options every driver shares: ``--config`` and ``--profile``.
+
+    Args:
+        parser: The driver's parser.
+        allow_profile_change: Also add ``--allow-profile-change`` (the replay and re-fold drivers).
+    """
+    parser.add_argument("--config", type=Path, default=None, help="Partial YAML deep-merged over the packaged config")
+    parser.add_argument(
+        "--profile", type=Path, default=None, help="The dataset profile directory the runs were made with"
+    )
+    if allow_profile_change:
+        parser.add_argument(
+            "--allow-profile-change",
+            action="store_true",
+            help="Accept a profile whose name differs from the one a run was made with",
+        )
+
+
+def driver_config(args: argparse.Namespace) -> TriageConfig:
+    """The configuration a driver's :func:`add_config_arguments` options name.
+
+    Args:
+        args: The parsed options.
+
+    Returns:
+        The configuration, with the profile active where one was named.
+    """
+    return load_triage_config(args.config, profile=args.profile)
 
 
 def read_manifest(path: Path, *, required: Sequence[str] = ("stem",)) -> list[dict[str, Any]]:
@@ -697,21 +750,28 @@ def replay_run_id(run_root: Path, config_hash: str, commit: str | None = None) -
     return f"{run_root.name}+replay-{config_hash}{suffix}"
 
 
-def find_replay_marker(store: ProvStore, config_hash: str, commit: str | None = None) -> str | None:
-    """The marker a replay under this configuration and code already wrote into this store, if any.
+def find_replay_marker(
+    store: ProvStore, config_hash: str, commit: str | None = None, hint_digest: str | None = None
+) -> str | None:
+    """The marker a replay under this configuration, code and hint already wrote into this store, if any.
 
     Args:
         store: The run's store.
         config_hash: The replaying configuration's hash.
         commit: The replaying code revision. None matches a marker of any revision.
+        hint_digest: The replaying hint's digest
+            (:func:`~senselab.audio.workflows.triage.hint_record.hint_digest`). None matches a marker of any
+            hint; a marker that records no hint digest matches only None.
 
     Returns:
-        The marker activity's id, or None when this store has not been replayed under both.
+        The marker activity's id, or None when this store has not been replayed under all of them.
     """
     for activity in store.activities(REPLAY_NODE):
         if activity.step != REPLAY_MARKER_STEP or activity.parameters.get("config_hash") != config_hash:
             continue
-        if commit is None or activity.parameters.get("commit") == commit:
+        if commit is not None and activity.parameters.get("commit") != commit:
+            continue
+        if hint_digest is None or activity.parameters.get("hint_digest") == hint_digest:
             return activity.id
     return None
 
@@ -835,6 +895,355 @@ def source_of(run_root: Path) -> Path:
     return Path(str(source))
 
 
+REFUSED = "refused"
+"""A row whose recorded inputs say this replay or re-fold is almost certainly a mistake; nothing was written."""
+
+AUDIO_VERIFIED = "verified"
+AUDIO_UNVERIFIED = "unverified"
+AUDIO_UNRECORDED = "unrecorded"
+"""Whether the recording was re-hashed and matched, could not be read, or has no digest recorded."""
+
+HINT_GIVEN = "given"
+HINT_RECORDED = "recorded"
+HINT_NONE = "none"
+"""Where the hint a replay ran with came from."""
+
+IDENTITY_RECORDED_STEP = "identity_recorded"
+IDENTITY_SUPERSEDED_STEP = "identity_superseded"
+STIMULUS_SUPERSEDED_STEP = "stimulus_alignment_superseded"
+_IDENTITY_REASON = "the replay was given a hint that differs from the one this record holds"
+_STIMULUS_REASON = "the expected speech it was aligned against differs from the replay's hint"
+_NO_STIMULUS_REASON = "the replay's hint declares no expected speech to align against"
+
+
+class ReplayRefused(ValueError):
+    """A replay or re-fold its run's recorded inputs refuse; the message says why and what to pass."""
+
+
+@dataclass(frozen=True)
+class ReplayInputs:
+    """What a replay or re-fold checked against the run's record, and the hint it runs with.
+
+    Attributes:
+        hint: The hint the pass runs with.
+        hint_from: :data:`HINT_GIVEN`, :data:`HINT_RECORDED` or :data:`HINT_NONE`.
+        changed: The hint fields that differ from the recorded hint (``metadata.<key>`` for metadata);
+            ``[]`` when none, None when the store records no hint.
+        audio: :data:`AUDIO_VERIFIED`, :data:`AUDIO_UNVERIFIED` or :data:`AUDIO_UNRECORDED`.
+        profile: The recorded and current profile (name, version, digest) when they differ, else None.
+    """
+
+    hint: AudioHints | None
+    hint_from: str
+    changed: list[str] | None
+    audio: str
+    profile: dict[str, Any] | None = None
+
+    @property
+    def hint_moved(self) -> bool:
+        """Whether the hint differs from the record, or there was no record to compare with."""
+        return self.changed is None or bool(self.changed)
+
+    def marker_parameters(self) -> dict[str, Any]:
+        """The fields the marker records about the inputs."""
+        return {
+            "hint_digest": hint_digest(self.hint),
+            "hint_from": self.hint_from,
+            "hint_changed": self.changed,
+            "audio": self.audio,
+            "profile_change": self.profile,
+        }
+
+
+def _run_log(run_root: Path) -> dict[str, Any]:
+    log_path = run_root / RUN_SUBDIR / LOG_FILE
+    return json.loads(log_path.read_text()) if log_path.is_file() else {}
+
+
+def _profile_fields(profile: Any) -> dict[str, Any] | None:  # noqa: ANN401 -- a DatasetProfile or a run.json mapping
+    if profile is None:
+        return None
+    if isinstance(profile, Mapping):
+        return {key: profile.get(key) for key in ("name", "version", "digest")}
+    return {"name": profile.name, "version": profile.version, "digest": profile.digest}
+
+
+def _check_recording_and_profile(
+    attributes: Mapping[str, Any],
+    log: Mapping[str, Any],
+    config: TriageConfig | None,
+    *,
+    allow_profile_change: bool,
+    source: Path | None,
+) -> tuple[str, dict[str, Any] | None]:
+    """Checks 2 and 3 of :func:`check_replay_inputs`: the recording's digest and the profile's name.
+
+    Args:
+        attributes: What ADMIT recorded.
+        log: The run's ``run.json``.
+        config: The configuration now in use; None checks the recording alone.
+        allow_profile_change: Accept a profile whose name differs from the run's.
+        source: The recording to re-hash; None reads the one ``run.json`` names.
+
+    Returns:
+        The audio state and the profile change, or None where the profile did not change.
+
+    A recording whose size and modification time equal what ADMIT recorded is taken as the same bytes without
+    being re-hashed; any other is hashed.
+
+    Raises:
+        ReplayRefused: On a differing recording, or a profile name that differs without ``allow_profile_change``.
+    """
+    recorded_digest = attributes.get(CHECKSUM_KEY)
+    audio = AUDIO_UNRECORDED
+    if recorded_digest:
+        recording = source if source is not None else Path(str(log.get("source") or ""))
+        stat = recording.stat() if recording.is_file() else None
+        unchanged = (
+            stat is not None
+            and attributes.get(SIZE_KEY) == stat.st_size
+            and attributes.get(MTIME_KEY) == stat.st_mtime_ns
+        )
+        now = recorded_digest if unchanged else (file_digest(recording)[0] if stat is not None else None)
+        if now is None:
+            audio = AUDIO_UNVERIFIED
+        elif now != recorded_digest:
+            raise ReplayRefused(
+                f"{recording} is not the recording this run admitted: its digest differs from the record"
+            )
+        else:
+            audio = AUDIO_VERIFIED
+    if config is None:
+        return audio, None
+    recorded_profile = _profile_fields((log.get("config") or {}).get("profile"))
+    current_profile = _profile_fields(config.profile)
+    profile = None
+    if recorded_profile is not None:
+        name_differs = current_profile is None or current_profile["name"] != recorded_profile["name"]
+        if name_differs and not allow_profile_change:
+            raise ReplayRefused(
+                f"this run was made with profile {recorded_profile['name']!r} and this pass has "
+                f"{None if current_profile is None else current_profile['name']!r}; pass --profile, or "
+                "--allow-profile-change where the driver takes it"
+            )
+        if current_profile != recorded_profile:
+            profile = {"recorded": recorded_profile, "now": current_profile}
+    return audio, profile
+
+
+def check_run_inputs(
+    store: ProvStore,
+    run_root: Path,
+    config: TriageConfig | None,
+    *,
+    source: Path | None = None,
+    allow_profile_change: bool = False,
+) -> tuple[str, dict[str, Any] | None]:
+    """Checks 2 and 3 of :func:`check_replay_inputs` alone: the recording and the profile, not the hint.
+
+    Args:
+        store: The run's store.
+        run_root: The finished run root, read for ``run.json``.
+        config: The configuration now in use; None checks the recording alone.
+        source: The recording to re-hash; None reads the one ``run.json`` names.
+        allow_profile_change: Accept a profile whose name differs from the run's.
+
+    Returns:
+        The audio state and the profile change, or None where the profile did not change.
+
+    Raises:
+        ReplayRefused: As :func:`check_replay_inputs`, checks 2 and 3.
+    """
+    record = admit_record(store)
+    return _check_recording_and_profile(
+        record[0] if record is not None else {},
+        _run_log(run_root),
+        config,
+        allow_profile_change=allow_profile_change,
+        source=source,
+    )
+
+
+def read_checked_store(
+    run_root: Path, config: TriageConfig | None, *, run_id: str | None = None, allow_profile_change: bool = False
+) -> ProvStore:
+    """:func:`read_store`, refusing a run whose recording or profile differs from the record.
+
+    Args:
+        run_root: The run root.
+        config: The configuration now in use; None checks the recording alone.
+        run_id: As :func:`read_store`.
+        allow_profile_change: Accept a profile whose name differs from the run's.
+
+    Returns:
+        The store.
+
+    Raises:
+        FileNotFoundError: If the run holds no store.
+        ReplayRefused: As :func:`check_replay_inputs`, checks 2 and 3.
+    """
+    store = read_store(run_root, run_id=run_id)
+    check_run_inputs(store, run_root, config, allow_profile_change=allow_profile_change)
+    return store
+
+
+def check_replay_inputs(
+    store: ProvStore,
+    run_root: Path,
+    config: TriageConfig,
+    *,
+    hint: AudioHints | None,
+    hint_given: bool,
+    no_hint: bool = False,
+    allow_profile_change: bool = False,
+    allow_hint_change: bool = True,
+    source: Path | None = None,
+) -> ReplayInputs:
+    """Check a finished run's recorded inputs before a replay or re-fold, and settle the hint it runs with.
+
+    Refused: a recording whose bytes differ from the digest ADMIT recorded; a profile whose name differs
+    from the run's, or none where the run had one, unless ``allow_profile_change``; no hint given where the
+    store records none, unless ``no_hint``; a recorded hint that carried a ``target_speaker`` (only its
+    digest is stored), unless a hint is given; a changed hint, unless ``allow_hint_change``. Anything else is
+    accepted and recorded on :class:`ReplayInputs`.
+
+    Args:
+        store: The run's store.
+        run_root: The finished run root, read for ``run.json`` and the recording it names.
+        config: The replaying configuration.
+        hint: The hint the caller built, when ``hint_given``.
+        hint_given: Whether the caller built a hint (``--hints``).
+        no_hint: Whether the caller asked to run with no hint (``--no-hint``).
+        allow_profile_change: Accept a profile whose name differs from the run's.
+        allow_hint_change: Accept a hint that differs from the recorded one; False for a re-fold.
+        source: The recording to re-hash; None reads the one ``run.json`` names.
+
+    Returns:
+        What was checked, and the hint to run with.
+
+    Raises:
+        ReplayRefused: For each refusal above.
+    """
+    record = admit_record(store)
+    attributes = record[0] if record is not None else {}
+    audio, profile = _check_recording_and_profile(
+        attributes, _run_log(run_root), config, allow_profile_change=allow_profile_change, source=source
+    )
+
+    if hint_given:
+        held, hint_from = hint, HINT_GIVEN
+    elif no_hint:
+        held, hint_from = None, HINT_NONE
+    elif recorded_hint_digest(store) is None:
+        raise ReplayRefused("this store records no hint; pass --hints to rebuild it, or --no-hint to run without one")
+    elif recorded_hint_digest(store) == NO_HINT:
+        held, hint_from = None, HINT_RECORDED
+    elif isinstance(attributes.get(HINT), Mapping) and attributes[HINT].get(TARGET_SPEAKER) is not None:
+        raise ReplayRefused(
+            "the recorded hint carried a target speaker, which is stored only as a digest; pass --hints"
+        )
+    else:
+        held, hint_from = recorded_hint(store), HINT_RECORDED
+    changed = changed_fields(store, held)
+    if changed and not allow_hint_change:
+        raise ReplayRefused(f"the hint differs from the recorded one ({', '.join(changed)}); replay the run instead")
+    return ReplayInputs(hint=held, hint_from=hint_from, changed=changed, audio=audio, profile=profile)
+
+
+def record_replayed_hint(store: ProvStore, hint: AudioHints | None, *, software: str) -> str | None:
+    """Record the replay's hint and the identity it declares as the run's, retiring the record it replaces.
+
+    The identity is read off the stem of the file ADMIT was given (its ``audio_file``), as ADMIT read it.
+
+    Args:
+        store: The run's store.
+        hint: The hint the replay runs with.
+        software: The agent answerable for the record.
+
+    Returns:
+        The new ``recording`` stream's id, or None where ADMIT wrote no stream.
+    """
+    entity = recording_entity(store)
+    if entity is None:
+        return None
+    admitted = [a for a in store.activities(ADMIT_NODE) if a.parameters.get("audio_file")]
+    source = admitted[-1].parameters["audio_file"] if admitted else entity.attributes.get("path")
+    stem = Path(str(source or "")).stem
+    attributes = {
+        **entity.attributes,
+        **identity_of(stem, hint).as_attributes(),
+        **hint_attributes(hint),
+        "replaces": entity.id,
+    }
+    activity = store.activity(node=REPLAY_NODE, step=IDENTITY_RECORDED_STEP, parameters={"replaces": entity.id})
+    store.was_associated_with(activity, software)
+    replacement = store.entity(prov_type="stream", extent=entity.extent, attributes=attributes)
+    store.was_generated_by(replacement, activity)
+    store.was_attributed_to(replacement, software)
+    supersede(
+        store, entity.id, node=REPLAY_NODE, step=IDENTITY_SUPERSEDED_STEP, reason=_IDENTITY_REASON, software=software
+    )
+    return replacement
+
+
+def realign_stimulus(
+    store: ProvStore, config: TriageConfig, hint: AudioHints | None, *, run_dir: Path, software: str
+) -> str | None:
+    """Rebuild the stimulus alignment where the replay's expected speech is not the one it was aligned against.
+
+    The new alignment is written before the old one is retired; where it cannot be built, the old one stands.
+    Where the replay's hint declares no expected speech, the old alignment is retired with nothing in its
+    place. An alignment with no recorded ``expected_speech_digest`` (written before alignments recorded one)
+    is left as it is.
+
+    Args:
+        store: The run's store.
+        config: The replaying configuration.
+        hint: The hint the replay runs with.
+        run_dir: The run directory the sidecar is written under.
+        software: The agent answerable for the retirement.
+
+    Returns:
+        The new alignment measurement's id, or None where nothing was rebuilt.
+    """
+    prompts = list(hint.expected_speech) if hint is not None else []
+    current = find_measurement(store, STIMULUS_MEASUREMENT)
+    if current is not None:
+        generated = store.generated_by(current.id)
+        recorded = store.get_activity(generated).parameters.get("expected_speech_digest") if generated else None
+        if recorded is None or recorded == prompts_digest(prompts):
+            return None
+    elif not prompts:
+        return None
+    if not prompts:
+        assert current is not None
+        supersede(
+            store,
+            current.id,
+            node=PREPROCESS_NODE,
+            step=STIMULUS_SUPERSEDED_STEP,
+            reason=_NO_STIMULUS_REASON,
+            software=software,
+        )
+        return None
+    try:
+        rebuilt = stimulus_alignment(
+            store, config, run_dir=run_dir, hint=hint, replaces=None if current is None else current.id
+        )
+    except (StimulusExpectationUnavailable, LookupError):
+        return None
+    if current is not None:
+        supersede(
+            store,
+            current.id,
+            node=PREPROCESS_NODE,
+            step=STIMULUS_SUPERSEDED_STEP,
+            reason=_STIMULUS_REASON,
+            software=software,
+        )
+    return rebuilt
+
+
 @dataclass(frozen=True)
 class RefoldOutcome:
     """What one re-fold did to one finished run.
@@ -888,6 +1297,7 @@ def refold_verdict(
     artifacts_dir: Path,
     summary_dir: Path,
     commit: str | None = None,
+    inputs: ReplayInputs | None = None,
 ) -> RefoldOutcome:
     """Decide the file again over a store a driver has just added a measurement to, and re-render it.
 
@@ -909,6 +1319,8 @@ def refold_verdict(
         artifacts_dir: The release directory, settled to the new release by :func:`settle_release`.
         summary_dir: Where REPORT's products go.
         commit: The code revision the re-fold ran under, recorded on the marker.
+        inputs: What :func:`check_replay_inputs` found (with ``allow_hint_change=False``), recorded on the
+            marker.
 
     Returns:
         What the re-fold did, including the marker it wrote last.
@@ -933,7 +1345,11 @@ def refold_verdict(
     marker = store.activity(
         node=REFOLD_NODE,
         step=REFOLD_MARKER_STEP,
-        parameters={"config_hash": config.config_hash, "commit": commit},
+        parameters={
+            "config_hash": config.config_hash,
+            "commit": commit,
+            **(inputs.marker_parameters() if inputs is not None else {"hint_digest": hint_digest(hint)}),
+        },
     )
     store.was_associated_with(marker, software)
     return RefoldOutcome(
@@ -1075,6 +1491,7 @@ def replay_decisions(
     summary_dir: Path,
     enrollment: Enrollment | None = None,
     commit: str | None = None,
+    inputs: ReplayInputs | None = None,
 ) -> ReplayOutcome:
     """Re-decide a finished run from TAXONOMY, over the PREPROCESS output its store already holds.
 
@@ -1092,19 +1509,33 @@ def replay_decisions(
     Args:
         store: The finished run's store, read under :func:`replay_run_id`.
         config: The replaying configuration.
-        hint: What the recording was declared to contain, rebuilt by the caller.
+        hint: What the recording was declared to contain, rebuilt by the caller; ``inputs.hint`` when given.
         run_dir: The run directory sidecar paths resolve against. Must hold ``derivatives/`` and a
             writable ``streams/``.
         artifacts_dir: The release directory handed to REDACT.
         summary_dir: Where REPORT's products go.
         enrollment: The target speaker's enrollment, when the caller has one.
         commit: The code revision the replay ran under, recorded on the marker.
+        inputs: What :func:`check_replay_inputs` found, when the caller checked. A hint that differs from the
+            record, or a store that recorded none, is recorded as the run's first
+            (:func:`record_replayed_hint`), and the stimulus alignment is rebuilt where its expected speech
+            moved (:func:`realign_stimulus`); the marker records the inputs and any change of identity.
 
     Returns:
         What the replay did, including the marker it wrote last.
     """
     require_dataset_values(config.values)
     software = software_agent(store)
+    identity_change: dict[str, Any] | None = None
+    if inputs is not None:
+        hint = inputs.hint
+        before = recorded_identity(store)
+        if inputs.hint_moved:
+            record_replayed_hint(store, hint, software=software)
+        after = recorded_identity(store)
+        if before is not None and after is not None and before.as_attributes() != after.as_attributes():
+            identity_change = {"from": before.as_attributes(), "to": after.as_attributes()}
+        realign_stimulus(store, config, hint, run_dir=run_dir, software=software)
     held = held_reading(store)
     retired = retire_decisions(store, live_decisions(store), software=software)
     arbitrate_words(store, run_dir=run_dir, family=declared_task_family(store))
@@ -1128,7 +1559,13 @@ def replay_decisions(
     marker = store.activity(
         node=REPLAY_NODE,
         step=REPLAY_MARKER_STEP,
-        parameters={"config_hash": config.config_hash, "commit": commit, "retired": len(retired)},
+        parameters={
+            "config_hash": config.config_hash,
+            "commit": commit,
+            "retired": len(retired),
+            **(inputs.marker_parameters() if inputs is not None else {"hint_digest": hint_digest(hint)}),
+            "identity_change": identity_change,
+        },
     )
     store.was_associated_with(marker, software)
     return ReplayOutcome(

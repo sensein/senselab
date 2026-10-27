@@ -12,28 +12,56 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pytest
 import soundfile as sf
 
-from senselab.audio.data_structures import Audio
+from senselab.audio.data_structures import Audio, AudioHints, ExpectedSpeech
+from senselab.audio.data_structures.audio_hints import SpeakerEmbeddingProvenance, TargetSpeakerEmbedding
+from senselab.audio.workflows.triage import extend as extend_module
+from senselab.audio.workflows.triage.background_model import write_view_arrays
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.extend import (
+    AUDIO_UNVERIFIED,
+    AUDIO_VERIFIED,
     DECISION_SUPERSEDED,
+    HINT_GIVEN,
+    HINT_RECORDED,
     REPLAY_MARKER_STEP,
     REPLAY_NODE,
     REPLAYED_NODES,
+    ReplayInputs,
+    ReplayRefused,
+    check_replay_inputs,
     find_replay_marker,
     live_decisions,
     read_store,
+    realign_stimulus,
+    record_replayed_hint,
+    replay_decisions,
     replay_run_id,
     retire_decisions,
 )
+from senselab.audio.workflows.triage.hint_record import (
+    HINT,
+    HINT_DIGEST,
+    HINT_FIELD_DIGESTS,
+    NO_HINT,
+    changed_fields,
+    hint_digest,
+)
+from senselab.audio.workflows.triage.hint_record import expected_speech_digest as prompts_digest
+from senselab.audio.workflows.triage.identity import declared_task_id, recording_entity
 from senselab.audio.workflows.triage.nodes.admit import admit
-from senselab.audio.workflows.triage.nodes.common import software_agent, write_stream, write_verdict
+from senselab.audio.workflows.triage.nodes.common import find_measurement, software_agent, write_stream, write_verdict
+from senselab.audio.workflows.triage.nodes.preprocess import STIMULUS_MEASUREMENT, write_stimulus_alignment
+from senselab.audio.workflows.triage.stimulus import StimulusAlignment
 from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, Outcome
 from senselab.utils.prov_store import ProvStore
 
@@ -59,12 +87,13 @@ def _samples() -> np.ndarray:
     return (0.05 * np.sin(2 * np.pi * 220.0 * grid)).astype(np.float32)
 
 
-def _seed_run(root: Path, *, decided: bool = True) -> Path:
+def _seed_run(root: Path, *, decided: bool = True, hint: AudioHints | None = None) -> Path:
     """Write one finished run: a source WAV, ADMIT's stream, PREPROCESS's verdict, and a decision.
 
     Args:
         root: The run root, created if absent.
         decided: Whether to seed a VERDICT-generated entity for the replay to retire.
+        hint: The hint ADMIT is given, and so records.
 
     Returns:
         The source WAV's path.
@@ -79,7 +108,7 @@ def _seed_run(root: Path, *, decided: bool = True) -> Path:
 
     store = ProvStore(run_id=root.name)
     config = load_triage_config()
-    admitted = admit(store, source, config, run_dir=run_dir)
+    admitted = admit(store, source, config, hint, run_dir=run_dir)
     assert admitted.audio is not None
     agent = software_agent(store)
     preprocessing = store.activity(node="PREPROCESS", step="condition", parameters={})
@@ -267,7 +296,8 @@ def test_mirror_run_root_is_writable_and_reads_through_to_the_finished_run(tmp_p
     mirrored = cli.mirror_run_root(root, out_root, "sub-01_ses-01_task-x")
 
     assert mirrored.parent == out_root / "sub-01" / "ses-01"
-    assert (mirrored / "run" / "derivatives").is_symlink()
+    assert not (mirrored / "run" / "derivatives").is_symlink()
+    assert (mirrored / "run" / "derivatives" / "yamnet_scores.json").is_symlink()
     assert (mirrored / "run" / "derivatives" / "yamnet_scores.json").read_text() == "[]"
     assert not (mirrored / "run" / "streams").is_symlink()
     assert (mirrored / "run" / "streams" / "enhanced.flac").is_symlink()
@@ -300,6 +330,56 @@ def test_a_replayed_redact_write_leaves_the_finished_tree_byte_identical(tmp_pat
     after = {path.name: path.read_bytes() for path in sorted((root / "run" / "streams").iterdir()) if path.is_file()}
     assert after == before, "a replayed run must not write into the tree it reads"
     assert (mirrored / "run" / "streams" / "redacted.flac").read_bytes() != before["redacted.flac"]
+
+
+def test_the_derivatives_a_replay_rewrites_leave_the_finished_tree_byte_identical(tmp_path: Path) -> None:
+    """The defect: replayed BACKGROUND rewrote ``background_view.npz`` through a linked ``derivatives/``."""
+    root = tmp_path / "finished" / "sub-01_ses-01_task-x_20260920-030808"
+    _seed_run(root)
+    finished = root / "run" / "derivatives"
+    np.savez(finished / "background_view.npz", marker=np.array([1]))
+    np.savez(finished / "stimulus_alignment.npz", marker=np.array([2]))
+    before = {path.name: path.read_bytes() for path in sorted(finished.iterdir())}
+
+    mirrored = cli.mirror_run_root(root, tmp_path / "replayed", "sub-01_ses-01_task-x")
+    store = ProvStore(run_id="replayed")
+    frames = SimpleNamespace(times_s=np.arange(3.0), band_db=np.zeros((3, 2)), level_db=np.zeros(3))
+    floor = SimpleNamespace(
+        band_db=np.zeros(2), own_db=np.zeros(2), residual_db=None, source="quiet_frames", quiet_s=1.0
+    )
+    reading = SimpleNamespace(frames=frames, floor=floor, impulses=(), regions=())
+    write_view_arrays(mirrored / "run" / "derivatives" / "background_view.npz", reading)  # type: ignore[arg-type]
+    alignment = StimulusAlignment(expected=(), units=(), unexpected=(), provenance={})
+    write_stimulus_alignment(store, run_dir=mirrored / "run", consensus_id="c", alignment=alignment, terminators=".")
+
+    after = {path.name: path.read_bytes() for path in sorted(finished.iterdir())}
+    assert after == before, "a replayed run must not write into the tree it reads"
+    for name in ("background_view.npz", "stimulus_alignment.npz"):
+        assert not (mirrored / "run" / "derivatives" / name).is_symlink()
+
+
+def test_a_mirror_whose_derivatives_link_the_whole_directory_is_rebuilt(tmp_path: Path) -> None:
+    """An out root an earlier driver populated must not let a rewrite delete the finished run's file."""
+    root = tmp_path / "finished" / "sub-01_ses-01_task-x_20260920-030808"
+    _seed_run(root)
+    finished = root / "run" / "derivatives"
+    np.savez(finished / "background_view.npz", marker=np.array([1]))
+    before = (finished / "background_view.npz").read_bytes()
+    old = tmp_path / "replayed" / "sub-01" / "ses-01" / root.name / "run"
+    old.mkdir(parents=True)
+    (old / "derivatives").symlink_to(finished)
+
+    mirrored = cli.mirror_run_root(root, tmp_path / "replayed", "sub-01_ses-01_task-x")
+    reading = SimpleNamespace(
+        frames=SimpleNamespace(times_s=np.arange(3.0), band_db=np.zeros((3, 2)), level_db=np.zeros(3)),
+        floor=SimpleNamespace(band_db=np.zeros(2), own_db=np.zeros(2), residual_db=None, source="q", quiet_s=1.0),
+        impulses=(),
+        regions=(),
+    )
+    write_view_arrays(mirrored / "run" / "derivatives" / "background_view.npz", reading)  # type: ignore[arg-type]
+
+    assert not (mirrored / "run" / "derivatives").is_symlink()
+    assert (finished / "background_view.npz").read_bytes() == before
 
 
 def test_a_stream_write_replaces_the_entry_rather_than_following_it(tmp_path: Path) -> None:
@@ -357,7 +437,7 @@ def test_a_run_already_carrying_this_configurations_marker_is_skipped(tmp_path: 
     marker = store.activity(
         node=REPLAY_NODE,
         step=REPLAY_MARKER_STEP,
-        parameters={"config_hash": config.config_hash, "commit": None, "retired": 0},
+        parameters={"config_hash": config.config_hash, "commit": None, "retired": 0, "hint_digest": NO_HINT},
     )
     store.write_jsonl(root / "run" / "store.jsonl")
     before = (root / "run" / "store.jsonl").read_text()
@@ -367,6 +447,22 @@ def test_a_run_already_carrying_this_configurations_marker_is_skipped(tmp_path: 
     assert record["status"] == cli.PRESENT
     assert (root / "run" / "store.jsonl").read_text() == before, "a skipped run is not rewritten"
     assert marker
+
+
+def test_a_marker_under_another_hint_does_not_skip_the_replay(tmp_path: Path) -> None:
+    """A corrected sidecar is a new hint: the run replays rather than reading as already done."""
+    root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+    _seed_run(root)
+    config = load_triage_config()
+    store = read_store(root, run_id=replay_run_id(root, config.config_hash))
+    store.activity(
+        node=REPLAY_NODE,
+        step=REPLAY_MARKER_STEP,
+        parameters={"config_hash": config.config_hash, "commit": None, "retired": 0, "hint_digest": "another"},
+    )
+    assert find_replay_marker(store, config.config_hash, None, NO_HINT) is None
+    assert find_replay_marker(store, config.config_hash, None, "another") is not None
+    assert find_replay_marker(store, config.config_hash) is not None
 
 
 def test_the_manifest_and_slice_shape_match_the_other_extend_drivers(tmp_path: Path) -> None:
@@ -521,7 +617,7 @@ def test_force_replays_a_run_that_already_carries_the_marker(tmp_path: Path, mon
     store.activity(
         node=REPLAY_NODE,
         step=REPLAY_MARKER_STEP,
-        parameters={"config_hash": config.config_hash, "commit": None, "retired": 0},
+        parameters={"config_hash": config.config_hash, "commit": None, "retired": 0, "hint_digest": NO_HINT},
     )
     store.write_jsonl(root / "run" / "store.jsonl")
     monkeypatch.setattr(cli, "replay_decisions", _stub_replay({}))
@@ -531,3 +627,238 @@ def test_force_replays_a_run_that_already_carries_the_marker(tmp_path: Path, mon
 
     assert skipped["status"] == cli.PRESENT
     assert forced["status"] == cli.OK
+
+
+HINT_COUGH = AudioHints(metadata={"task_token": "voluntary-cough"})
+HINT_RAINBOW = AudioHints(metadata={"task_token": "rainbow-passage"})
+
+
+def _checked(root: Path, **kwargs: Any) -> ReplayInputs:  # noqa: ANN401
+    store = read_store(root)
+    return check_replay_inputs(store, root, load_triage_config(), **{"hint": None, "hint_given": False, **kwargs})
+
+
+class TestTheReplayChecksTheRunsRecord:
+    """What a replay or re-fold compares before it changes anything (plan step 3, check list)."""
+
+    def test_the_admitted_recording_is_verified(self, tmp_path: Path) -> None:
+        """Re-hashed, it matches what ADMIT recorded."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        _seed_run(root)
+        assert _checked(root).audio == AUDIO_VERIFIED
+
+    def test_a_different_recording_is_refused(self, tmp_path: Path) -> None:
+        """Bytes that differ from the record are a different recording."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        source = _seed_run(root)
+        sf.write(str(source), _samples() * 0.5, SR)
+        with pytest.raises(ReplayRefused, match="not the recording"):
+            _checked(root)
+
+    def test_a_recording_that_is_gone_is_unverified_not_refused(self, tmp_path: Path) -> None:
+        """Nothing to compare is not evidence of a mistake."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        _seed_run(root).unlink()
+        assert _checked(root).audio == AUDIO_UNVERIFIED
+
+    def test_another_profile_name_is_refused_unless_allowed(self, tmp_path: Path) -> None:
+        """A run made with one dataset's profile is not replayed under another's by accident."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        source = _seed_run(root)
+        recorded = {"name": "another-dataset", "version": "1", "digest": "d"}
+        (root / "run" / "run.json").write_text(json.dumps({"source": str(source), "config": {"profile": recorded}}))
+        with pytest.raises(ReplayRefused, match="another-dataset"):
+            _checked(root)
+        assert _checked(root, allow_profile_change=True).profile["recorded"] == recorded
+
+    def test_a_run_with_no_recorded_profile_is_accepted(self, tmp_path: Path) -> None:
+        """A run from before profiles: nothing to compare."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        _seed_run(root)
+        assert _checked(root).profile is None
+
+    def test_the_recorded_hint_is_reused_without_hints(self, tmp_path: Path) -> None:
+        """No --hints reads the hint the run recorded rather than replaying with none."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        _seed_run(root, hint=HINT_COUGH)
+        inputs = _checked(root)
+        assert (inputs.hint, inputs.hint_from, inputs.changed) == (HINT_COUGH, HINT_RECORDED, [])
+
+    def test_a_store_that_recorded_no_hint_is_refused_without_hints_or_no_hint(self, tmp_path: Path) -> None:
+        """A store from before ADMIT recorded hints cannot say whether one was used."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        _seed_run(root)
+        store = read_store(root)
+        [stream] = store.entities("stream")
+        for key in (HINT, HINT_DIGEST, HINT_FIELD_DIGESTS):
+            del stream.attributes[key]
+        with pytest.raises(ReplayRefused, match="records no hint"):
+            check_replay_inputs(store, root, load_triage_config(), hint=None, hint_given=False)
+        accepted = check_replay_inputs(store, root, load_triage_config(), hint=None, hint_given=False, no_hint=True)
+        assert (accepted.hint, accepted.changed) == (None, None)
+
+    def test_a_given_hint_that_differs_is_accepted_and_named(self, tmp_path: Path) -> None:
+        """The caller's correction wins; the fields it moved are recorded."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        _seed_run(root, hint=HINT_COUGH)
+        inputs = _checked(root, hint=HINT_RAINBOW, hint_given=True)
+        assert (inputs.hint_from, inputs.changed) == (HINT_GIVEN, ["metadata.task_token"])
+
+    def test_a_refold_refuses_a_changed_hint(self, tmp_path: Path) -> None:
+        """Re-folding over branch reports made under another hint would mix the two."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        _seed_run(root, hint=HINT_COUGH)
+        with pytest.raises(ReplayRefused, match="replay the run instead"):
+            _checked(root, hint=HINT_RAINBOW, hint_given=True, allow_hint_change=False)
+        assert _checked(root, hint=HINT_COUGH, hint_given=True, allow_hint_change=False).changed == []
+
+    def test_a_recorded_target_speaker_is_not_reused(self, tmp_path: Path) -> None:
+        """Only its digest is stored, so the hint cannot be rebuilt from the record."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        speaker = TargetSpeakerEmbedding(vector=[0.1, 0.2], provenance=SpeakerEmbeddingProvenance(model_id="m"))
+        _seed_run(root, hint=AudioHints(target_speaker=speaker))
+        with pytest.raises(ReplayRefused, match="target speaker"):
+            _checked(root)
+
+
+class TestAChangedHintBecomesTheRunsRecord:
+    """A replay with a changed hint records it, so every stage and the next pass read it."""
+
+    def test_the_identity_is_superseded_and_the_marker_names_the_change(self, tmp_path: Path) -> None:
+        """The recording stream is replaced; the marker says what moved and who was affected."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        _seed_run(root, hint=HINT_COUGH)
+        config = load_triage_config()
+        store = read_store(root, run_id=replay_run_id(root, config.config_hash))
+        inputs = check_replay_inputs(store, root, config, hint=HINT_RAINBOW, hint_given=True)
+        outcome = replay_decisions(
+            store,
+            config,
+            inputs.hint,
+            run_dir=root / "run",
+            artifacts_dir=root / "released",
+            summary_dir=root / "summary",
+            inputs=inputs,
+        )
+        assert declared_task_id(store) == "rainbow-passage"
+        assert changed_fields(store, HINT_RAINBOW) == []
+        marker = store.get_activity(outcome.marker).parameters
+        assert marker["hint_changed"] == ["metadata.task_token"]
+        assert marker["identity_change"]["to"]["declared_task_id"] == "rainbow-passage"
+        assert find_replay_marker(store, config.config_hash, None, hint_digest(HINT_RAINBOW)) == outcome.marker
+
+    def test_an_unchanged_hint_rewrites_no_record(self, tmp_path: Path) -> None:
+        """The same hint again leaves the recording stream as ADMIT wrote it."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        _seed_run(root, hint=HINT_COUGH)
+        store = read_store(root)
+        inputs = check_replay_inputs(store, root, load_triage_config(), hint=HINT_COUGH, hint_given=True)
+        assert not inputs.hint_moved
+
+
+class TestTheStimulusAlignmentFollowsTheExpectedSpeech:
+    """Replay rebuilds the alignment where the expected speech it was aligned against moved."""
+
+    def _store_with_alignment(self, digest: str | None) -> ProvStore:
+        store = ProvStore(run_id="s")
+        activity = store.activity(
+            node="PREPROCESS", step=STIMULUS_MEASUREMENT, parameters={"expected_speech_digest": digest}
+        )
+        entity = store.entity(prov_type="measurement", extent=None, attributes={"name": STIMULUS_MEASUREMENT})
+        store.was_generated_by(entity, activity)
+        return store
+
+    def test_matching_expected_speech_is_left_alone(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Nothing moved, nothing is rebuilt."""
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="Hello.")])
+        store = self._store_with_alignment(prompts_digest(hint.expected_speech))
+        monkeypatch.setattr(extend_module, "stimulus_alignment", lambda *a, **k: pytest.fail("rebuilt"))
+        assert realign_stimulus(store, load_triage_config(), hint, run_dir=tmp_path, software="s") is None
+
+    def test_moved_expected_speech_is_realigned(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The old alignment is retired and a new one is written."""
+        store = self._store_with_alignment("another")
+        monkeypatch.setattr(extend_module, "stimulus_alignment", lambda *a, **k: "new-alignment")
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="Hello.")])
+        assert realign_stimulus(store, load_triage_config(), hint, run_dir=tmp_path, software="s") == "new-alignment"
+        assert find_measurement(store, STIMULUS_MEASUREMENT) is None
+
+    def test_a_rebuild_that_fails_leaves_the_old_alignment_standing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The old one is retired only once a replacement exists."""
+        store = self._store_with_alignment("another")
+
+        def fail(*args: Any, **kwargs: Any) -> str:  # noqa: ANN401
+            raise LookupError("no live consensus_transcript")
+
+        monkeypatch.setattr(extend_module, "stimulus_alignment", fail)
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="Hello.")])
+        assert realign_stimulus(store, load_triage_config(), hint, run_dir=tmp_path, software="s") is None
+        assert find_measurement(store, STIMULUS_MEASUREMENT) is not None
+
+    def test_a_hint_with_no_expected_speech_retires_the_alignment(self, tmp_path: Path) -> None:
+        """Nothing to align against: the alignment goes, with nothing in its place."""
+        store = self._store_with_alignment("another")
+        assert realign_stimulus(store, load_triage_config(), AudioHints(), run_dir=tmp_path, software="s") is None
+        assert find_measurement(store, STIMULUS_MEASUREMENT) is None
+
+    def test_an_alignment_that_recorded_no_digest_is_left_alone(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Written before alignments recorded one: unknown, so not rebuilt."""
+        store = self._store_with_alignment(None)
+        monkeypatch.setattr(extend_module, "stimulus_alignment", lambda *a, **k: pytest.fail("rebuilt"))
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="Hello.")])
+        assert realign_stimulus(store, load_triage_config(), hint, run_dir=tmp_path, software="s") is None
+
+
+class TestTheRecordAReplayWrites:
+    """The record a changed hint writes is always live, and reads the file ADMIT read."""
+
+    def _store(self, audio_file: str, path: str) -> ProvStore:
+        store = ProvStore(run_id="r")
+        store.activity(node="ADMIT", step=None, parameters={"audio_file": audio_file})
+        store.entity(prov_type="stream", extent=(0.0, 1.0), attributes={"name": "recording", "path": path})
+        return store
+
+    def test_switching_back_to_an_earlier_hint_leaves_a_live_record(self) -> None:
+        """Content-addressed ids must not hand back a record that was already retired."""
+        store = self._store("/d/sub-01_ses-01_task-x.wav", "/d/sub-01_ses-01_task-x.wav")
+        for hint in (HINT_RAINBOW, HINT_COUGH, HINT_RAINBOW):
+            record_replayed_hint(store, hint, software="s")
+            assert recording_entity(store) is not None
+        assert declared_task_id(store) == "rainbow-passage"
+
+    def test_the_identity_is_read_off_the_file_admit_was_given(self) -> None:
+        """ADMIT records the resolved path; the stem it read was the one it was given."""
+        store = self._store("/bids/sub-01_ses-01_task-loudness-1.wav", "/exports/platform-0042.wav")
+        record_replayed_hint(store, None, software="s")
+        assert declared_task_id(store) == "loudness-1"
+
+
+class TestTheRecordingCheckReadsTheStatFirst:
+    """A recording whose size and modification time match the record is not re-hashed."""
+
+    def test_an_unchanged_recording_is_not_hashed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Reading every source end to end on every pass is the cost this avoids."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        _seed_run(root)
+        monkeypatch.setattr(extend_module, "file_digest", lambda *a, **k: pytest.fail("hashed"))
+        assert _checked(root).audio == AUDIO_VERIFIED
+
+    def test_a_touched_recording_is_hashed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A changed modification time sends the check to the bytes."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        source = _seed_run(root)
+        os.utime(source, ns=(1, 1))
+        hashed: list[Path] = []
+        real = extend_module.file_digest
+
+        def counting(path: Path) -> Any:  # noqa: ANN401
+            hashed.append(path)
+            return real(path)
+
+        monkeypatch.setattr(extend_module, "file_digest", counting)
+        assert _checked(root).audio == AUDIO_VERIFIED
+        assert hashed == [source]
