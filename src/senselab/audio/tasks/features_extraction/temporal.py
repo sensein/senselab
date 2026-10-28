@@ -74,9 +74,8 @@ def extract_temporal_features(
       grid). One row per opensmile frame.
     - **parselmouth**: aggregates over a sliding window since the
       senselab wrapper currently only exposes the summary form.
-    - **torchaudio_squim**: STOI/PESQ/SI-SDR are inherently global
-      quality scores — windowed externally so the resulting time series
-      is comparable to the rest.
+    - **torchaudio_squim**: one SQUIM pass per sliding window
+      (``window_s=None``), on the same grid as parselmouth.
 
     Returns a dict ``{backend: [rows...]}`` so each backend can be
     written to its own parquet sidecar (different columns + time grids
@@ -119,7 +118,12 @@ def extract_temporal_features(
             print(f"  [features.parselmouth win {idx}] warn: {exc!r}", file=sys.stderr)
         try:
             sq = extract_features_from_audios(
-                [clip], opensmile=False, parselmouth=False, torchaudio=False, torchaudio_squim=True, device=device
+                [clip],
+                opensmile=False,
+                parselmouth=False,
+                torchaudio=False,
+                torchaudio_squim={"window_s": None, "floor_s": 0.0},
+                device=device,
             )[0]
             row = _flatten_feature_dict(sq.get("torchaudio_squim", {}))
             row.update({"start": start, "end": end, "win_index": idx})
