@@ -118,15 +118,13 @@ class WindowConfig:
         return {"window_s": self.window_s, "min_window_s": self.min_window_s, "floor_s": self.floor_s}
 
 
-_EPS = 1e-9
-
-
 def task_windows(start_s: float, end_s: float, config: WindowConfig) -> list[tuple[float, float]]:
     """Non-overlapping fixed windows across ``[start_s, end_s]``.
 
-    Full windows of ``window_s`` from the start; the remainder is one more window where it is at least
-    ``min_window_s`` and is dropped otherwise. An extent shorter than ``min_window_s`` is one window over
-    the whole extent, and one shorter than ``floor_s`` gets none.
+    :func:`~senselab.audio.tasks.features_extraction.torchaudio_squim.plan_windows` with a trailing
+    remainder under ``min_window_s`` dropped: full windows of ``window_s`` from the start, the remainder
+    one more window where it is at least ``min_window_s``. An extent shorter than ``min_window_s`` is one
+    window over the whole extent, and one shorter than ``floor_s`` gets none.
 
     Args:
         start_s: The extent's start, in seconds.
@@ -136,17 +134,16 @@ def task_windows(start_s: float, end_s: float, config: WindowConfig) -> list[tup
     Returns:
         ``(start, end)`` per window, in order.
     """
-    duration = end_s - start_s
-    if duration < config.floor_s - _EPS:
-        return []
-    if duration < config.min_window_s - _EPS:
-        return [(start_s, end_s)]
-    full = int(math.floor(duration / config.window_s + _EPS))
-    windows = [(start_s + i * config.window_s, start_s + (i + 1) * config.window_s) for i in range(full)]
-    tail_start = start_s + full * config.window_s
-    if end_s - tail_start >= config.min_window_s - _EPS:
-        windows.append((tail_start, end_s))
-    return windows
+    from senselab.audio.tasks.features_extraction.torchaudio_squim import plan_windows
+
+    return plan_windows(
+        start_s,
+        end_s,
+        window_s=config.window_s,
+        min_window_s=config.min_window_s,
+        floor_s=config.floor_s,
+        short_tail="drop",
+    )
 
 
 def summarise(readings: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -241,7 +238,8 @@ def squim_scorer() -> Scorer:
     """The objective-SQUIM reader senselab ships, after the pinned weights are verified.
 
     Returns:
-        A scorer over ``torchaudio_squim.extract_objective_quality_features_from_audios``.
+        A scorer reading each window in one pass of
+        ``torchaudio_squim.extract_objective_quality_features_from_audios``.
     """
     from senselab.audio.tasks.features_extraction.torchaudio_squim import (
         extract_objective_quality_features_from_audios,
@@ -252,7 +250,10 @@ def squim_scorer() -> Scorer:
     verify_weights(str(model["asset"]), str(model["weights_sha256"]))
 
     def score(audios: Sequence[Audio]) -> list[dict[str, float]]:
-        return extract_objective_quality_features_from_audios(list(audios), device=DeviceType.CPU)
+        results = extract_objective_quality_features_from_audios(
+            list(audios), window_s=None, floor_s=0.0, device=DeviceType.CPU
+        )
+        return [{head: float(result[head]) for head in HEADS} for result in results]
 
     return score
 
