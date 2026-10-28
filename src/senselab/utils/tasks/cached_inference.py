@@ -271,6 +271,8 @@ so no pre-24 entry is readable under it.
 
 Bumped 24 → 25 when CrisperWhisper and Qwen3-ASR began running on MPS under ``device: auto`` and
 CrisperWhisper's word chunks began carrying a confidence ``score``.
+
+Bumped 25 → 26 when the temporal stage's SQUIM rows gained ``windows_n`` and ``span_s`` (PR #616).
 """
 
 
