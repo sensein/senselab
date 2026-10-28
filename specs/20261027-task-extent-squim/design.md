@@ -117,3 +117,99 @@ VOICE gets no value. That decision is `data/task_squim.yaml` v2.
 The pilot's top `snr_db` decile (45.6–75.6 dB, n = 16) read lower (PESQ 1.77, SI-SDR 5.1 dB) than the
 deciles below it. With VOICE rows in that decile the pilot cannot tell whether the drop is real in
 speech. The SPEECH-only decile table in the corpus report answers that.
+
+## Full run (squim38, 62,550 recordings, commit 451af99c)
+
+The numbers are from `squim38/verify.md`. "Old" is r37's per-span medians and "new" the task-extent
+windows. They are medians, with the IQR in brackets.
+
+### Old against new
+
+| rows | head | old n | old | new n | new |
+| --- | --- | --- | --- | --- | --- |
+| all with a value | PESQ | 49,056 | 1.21 (1.18–1.25) | 39,656 | 2.99 (2.06–3.60) |
+| all with a value | STOI | 49,056 | 0.669 (0.579–0.768) | 39,656 | 0.986 (0.958–0.995) |
+| all with a value | SI-SDR dB | 49,056 | −8.63 (−11.6 to −3.64) | 39,656 | 18.0 (9.36–23.6) |
+| SPEECH | PESQ | 40,763 | 1.21 (1.18–1.26) | 39,656 | 2.99 (2.06–3.60) |
+| SPEECH | STOI | 40,763 | 0.687 (0.599–0.784) | 39,656 | 0.986 (0.958–0.995) |
+| SPEECH | SI-SDR dB | 40,763 | −7.80 (−11.0 to −2.55) | 39,656 | 18.0 (9.36–23.6) |
+
+The old VOICE values (n = 8,293; PESQ 1.19, STOI 0.581, SI-SDR −11.7 dB) have no new counterpart.
+
+### Spearman with SNR
+
+| SNR column | rows | head | old | new |
+| --- | --- | --- | --- | --- |
+| `snr_db` | all with a value | PESQ / STOI / SI-SDR | −0.238 / −0.167 / −0.114 | +0.265 / +0.149 / +0.342 |
+| `snr_db` | SPEECH | PESQ / STOI / SI-SDR | −0.262 / −0.230 / −0.184 | +0.265 / +0.149 / +0.342 |
+| `speech_over_residual_db` | all with a value | PESQ / STOI / SI-SDR | +0.049 / +0.218 / +0.147 | +0.467 / +0.377 / +0.404 |
+
+### SPEECH by `snr_db` decile (new medians)
+
+| decile | dB | n | PESQ | STOI | SI-SDR dB |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 0.6–20.5 | 4,120 | 1.78 | 0.963 | 6.36 |
+| 2 | 20.5–25.3 | 4,119 | 2.47 | 0.980 | 12.4 |
+| 3 | 25.3–28.3 | 4,116 | 2.76 | 0.982 | 16.1 |
+| 4 | 28.3–30.8 | 4,115 | 2.94 | 0.985 | 18.3 |
+| 5 | 30.8–33.2 | 4,116 | 3.13 | 0.987 | 20.1 |
+| 6 | 33.2–35.6 | 4,133 | 3.17 | 0.989 | 20.8 |
+| 7 | 35.6–38.3 | 4,117 | 3.29 | 0.990 | 22.0 |
+| 8 | 38.3–41.3 | 4,125 | 3.38 | 0.992 | 22.7 |
+| 9 | 41.3–45.4 | 4,123 | 3.36 | 0.991 | 22.1 |
+| 10 | 45.4–115.6 | 4,123 | 3.08 | 0.981 | 19.2 |
+
+The old PESQ stays between 1.19 and 1.24 in every decile, and the old SI-SDR falls from −6.1 to −9.9 dB.
+
+### SPEECH by `speech_over_residual_db` decile (new medians)
+
+| decile | dB | n | PESQ | STOI | SI-SDR dB |
+| --- | --- | --- | --- | --- | --- |
+| 1 | −52.9–12.8 | 3,981 | 1.77 | 0.937 | 8.22 |
+| 2 | 12.8–21.6 | 3,985 | 2.19 | 0.966 | 11.6 |
+| 3 | 21.6–27.6 | 3,982 | 2.54 | 0.976 | 14.3 |
+| 4 | 27.6–32.8 | 3,984 | 2.84 | 0.983 | 16.2 |
+| 5 | 32.8–37.2 | 3,990 | 3.03 | 0.987 | 17.7 |
+| 6 | 37.2–41.2 | 3,984 | 3.22 | 0.990 | 19.4 |
+| 7 | 41.2–44.9 | 3,971 | 3.33 | 0.991 | 20.7 |
+| 8 | 44.9–48.6 | 3,996 | 3.41 | 0.992 | 21.3 |
+| 9 | 48.6–52.8 | 3,985 | 3.49 | 0.992 | 22.1 |
+| 10 | 52.8–73.0 | 3,986 | 3.61 | 0.993 | 22.9 |
+
+### Clean read speech
+
+This is SPEECH rows with verdict pass, a *passage* or *sentences* family, and `snr_db` at or above the
+corpus median of 31.2 dB. Old (n = 12,202): PESQ 1.19, STOI 0.648, SI-SDR −8.86 dB. New (n = 12,189):
+PESQ 3.30 (2.42–3.75), STOI 0.991 (0.974–0.997), SI-SDR 22.0 dB (13.7–25.3). #614 reported 2.9, 0.98
+and 17 dB on 10 s windows of a 110-recording sample.
+
+### By verdict (new medians, rows with a value)
+
+pass (n = 35,974): PESQ 3.02, SI-SDR 18.4 dB. review (n = 3,642): 2.64, 14.7 dB. discard (n = 40): 1.22,
+1.06 dB. Rows with a weak-event reason (n = 18) read PESQ 1.34 and SI-SDR −1.05 dB.
+
+### Coverage
+
+| branch | rows | old with a value | new with a value | driver outcomes |
+| --- | --- | --- | --- | --- |
+| AIRWAY | 13,017 | 0 | 0 | 13,017 airway family |
+| SPEECH | 41,226 | 40,763 | 39,656 | 39,656 measured; 1,468 no task extent; 102 under the 1 s floor |
+| VOICE | 8,307 | 8,293 | 0 | 8,307 voice family |
+
+- Windows per measured recording: 1 window for 28,900 recordings, 2–5 for 7,758, 6–10 for 2,607, and
+  more than 10 for 391.
+- The median padded extent is 4.37 s (IQR 3.23–17.5 s). The median fraction of it covered is 1.0.
+- 39,616 extents came from the `task_audio` cut and 40 from the spans (discards).
+- The driver took a median of 0.6 s per recording.
+- Sanity checks: no airway row, voice row, or row without a task extent carries a value.
+
+### The top-SNR-decile dip
+
+In SPEECH, the new medians rise through decile 8 or 9 and then fall in decile 10 (45.4–115.6 dB): PESQ
+3.36 → 3.08, SI-SDR 22.1 → 19.2 dB. The same dip appears in the non-airway decile table, so it does not
+come from VOICE rows, which now carry no value. It does not appear against `speech_over_residual_db`,
+where all three heads rise through the top decile. *Hypothesis, not tested:* `snr_db` is the plain
+stream's active level over its noise floor, so a very high value is often a near-digital-silence floor,
+for example a gated or noise-suppressed capture device. That processing lowers SQUIM's estimate even
+though the measured SNR is high. Testing it needs the floor level and the device or capture-path
+metadata for the top-decile rows.
