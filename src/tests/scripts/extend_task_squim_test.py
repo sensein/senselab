@@ -34,7 +34,7 @@ def _fake(audios: Sequence[Audio]) -> list[dict[str, float]]:
 
 
 def _run(tree: Path) -> Path:
-    run_root = tree / "sub-a" / "ses-b" / f"{STEM}_20261010-000000"
+    run_root = tree / "sub-a" / "ses-b" / f"{STEM}_20000101-000000"
     run_dir = run_root / "run"
     (run_dir / "streams").mkdir(parents=True)
     (run_dir / "derivatives").mkdir()

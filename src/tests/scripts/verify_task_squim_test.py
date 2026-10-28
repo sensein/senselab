@@ -102,7 +102,7 @@ def test_the_report_is_aggregates_only_and_reads_the_trend(tmp_path: Path) -> No
     (logs / "task-squim-slice-0-of-1.jsonl").write_text(
         json.dumps(
             {
-                "stem": "sub-secret000_ses-x_task-caterpillar-passage_20261010-144634",
+                "stem": "sub-secret000_ses-x_task-caterpillar-passage_20000101-000000",
                 "status": "ok",
                 "windows_n": 2,
                 "covered_s": 20.0,
