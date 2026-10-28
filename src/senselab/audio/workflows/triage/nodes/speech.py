@@ -1883,7 +1883,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         )
         squim: dict[str, Any]
         try:
-            [scores] = extract_objective_quality_features_from_audios([clip])
+            [scores] = extract_objective_quality_features_from_audios([clip], window_s=None, floor_s=0.0)
             squim = {"stoi": float(scores["stoi"]), "pesq": float(scores["pesq"]), "si_sdr": float(scores["si_sdr"])}
         except Exception as err:  # noqa: BLE001 — a span SQUIM refuses is unmeasured, not padded
             squim = {"unmeasured": type(err).__name__}
