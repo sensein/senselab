@@ -194,13 +194,25 @@ class TestTheStore:
         """Breath and cough families are not read."""
         store = _seed(tmp_path, family="voluntary-cough")
         outcome = measure_task_squim(store, config, run_dir=tmp_path / "run", scorer=_Counting)
-        assert outcome.status == ABSENT and "AIRWAY" in str(outcome.reason)
+        assert outcome.status == ABSENT and outcome.reason == "airway family"
         assert find_measurement(store, MEASUREMENT) is None
 
-    def test_a_voice_family_is_read(self, tmp_path: Path, config: TriageConfig) -> None:
-        """VOICE families get values."""
+    def test_a_voice_family_gets_no_value(self, tmp_path: Path, config: TriageConfig) -> None:
+        """Sustained vowels and glides are not read: SQUIM is speech-trained."""
         store = _seed(tmp_path, family="prolonged-vowel")
-        assert measure_task_squim(store, config, run_dir=tmp_path / "run", scorer=_Counting).status == OK
+        outcome = measure_task_squim(store, config, run_dir=tmp_path / "run", scorer=_Counting)
+        assert outcome.status == ABSENT and outcome.reason == "voice family"
+        assert find_measurement(store, MEASUREMENT) is None
+
+    def test_a_voice_family_measured_under_v1_is_retired(self, tmp_path: Path, config: TriageConfig) -> None:
+        """A task_squim a VOICE recording carries from before is invalidated, not left standing."""
+        store = _seed(tmp_path, family="prolonged-vowel")
+        v1 = {**task_squim_parameters(), "no_value_branches": ["AIRWAY"]}
+        measure_task_squim(store, config, run_dir=tmp_path / "run", scorer=_Counting, parameters=v1)
+        held = find_measurement(store, MEASUREMENT)
+        assert held is not None
+        outcome = measure_task_squim(store, config, run_dir=tmp_path / "run", scorer=_Counting)
+        assert outcome.status == ABSENT and outcome.changed and store.is_invalidated(held.id)
 
     def test_no_task_extent_gets_no_value(self, tmp_path: Path, config: TriageConfig) -> None:
         """A recording with no live task-extent span is not read."""

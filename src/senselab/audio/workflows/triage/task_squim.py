@@ -342,7 +342,8 @@ def measure_task_squim(
     """Read SQUIM over fixed windows of the task extent on the plain stream and record it.
 
     A store whose live ``task_squim`` measurement carries the same key is left unwritten. Otherwise the
-    old one is retired and a new one written. An airway family, a recording with no task extent or no
+    old one is retired and a new one written. A family of a branch ``no_value_branches`` names (airway,
+    voice), a recording with no task extent or no
     plain stream, and an extent under the floor get no value, and any earlier measurement is retired.
 
     Args:
@@ -373,7 +374,7 @@ def measure_task_squim(
     family = declared_family(store, stem)
     branch = branch_of_family(family)
     if branch in set(p.get("no_value_branches") or ()):
-        return absent(f"{branch} family {family}")
+        return absent(f"{str(branch).lower()} family")
     bounds = extent_bounds(store, config)
     if bounds is None:
         return absent("no task extent")

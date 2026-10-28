@@ -43,7 +43,7 @@ def _write(path: Path, rows: list[dict[str, str]]) -> Path:
     return path
 
 
-def _rows(new: bool, *, airway_value: bool = False) -> list[dict[str, str]]:
+def _rows(new: bool, *, airway_value: bool = False, voice_value: bool = False) -> list[dict[str, str]]:
     rows = []
     for i in range(40):
         snr = 5.0 + i
@@ -78,6 +78,18 @@ def _rows(new: bool, *, airway_value: bool = False) -> list[dict[str, str]]:
             "squim_si_sdr": "",
         }
     )
+    rows.append(
+        {
+            **rows[0],
+            "participant_id": "sub-voice",
+            "task": "prolonged-vowel",
+            "task_family": "prolonged-vowel",
+            "branch": "VOICE",
+            "squim_pesq": "1.3" if voice_value else "",
+            "squim_stoi": "",
+            "squim_si_sdr": "",
+        }
+    )
     return rows
 
 
@@ -107,10 +119,19 @@ def test_the_report_is_aggregates_only_and_reads_the_trend(tmp_path: Path) -> No
     assert "sub-secret" not in text and "ses-x" not in text and "sub-airway" not in text
     assert "| snr_db | PESQ | 40 | -1.000 | 40 | +1.000 |" in text
     assert "| SPEECH | ok | 1 |" in text, "a timestamped manifest stem resolves to its branch"
+    assert "### Median by snr_db decile (SPEECH rows only, deciles of SPEECH)" in text
+    assert "| voice row carries a new value | 0 | 0 |" in text
 
 
 def test_an_airway_value_fails_the_sanity_check(tmp_path: Path) -> None:
     """An airway row carrying a new value is a violation and a non-zero exit."""
     old = _write(tmp_path / "old.tsv", _rows(False))
     new = _write(tmp_path / "new.tsv", _rows(True, airway_value=True))
+    assert cli.main(["--old", str(old), "--new", str(new), "--out", str(tmp_path / "v.md")]) == 1
+
+
+def test_a_voice_value_fails_the_sanity_check(tmp_path: Path) -> None:
+    """A voice row carrying a new value is a violation and a non-zero exit."""
+    old = _write(tmp_path / "old.tsv", _rows(False))
+    new = _write(tmp_path / "new.tsv", _rows(True, voice_value=True))
     assert cli.main(["--old", str(old), "--new", str(new), "--out", str(tmp_path / "v.md")]) == 1

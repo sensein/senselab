@@ -62,7 +62,7 @@ VECTOR_COLUMNS = {
 }
 """``recording_vectors`` column to ``triage.tsv`` column: the plain-stream readings (SQUIM over the task extent)."""
 SQUIM_COLUMNS = ("squim_pesq", "squim_stoi", "squim_si_sdr")
-NO_SQUIM_BRANCHES = ("AIRWAY",)
+NO_SQUIM_BRANCHES = ("AIRWAY", "VOICE")
 """Branches whose families SQUIM, a speech-quality estimate, does not describe: their SQUIM columns are empty."""
 WITHHELD = "withheld"
 

@@ -1,7 +1,7 @@
 # SQUIM over the task extent (task_squim.py): fixed non-overlapping windows across the recording's task
 # extent on the plain stream, read by the objective head; the medians feed q_task_squim_* and triage.tsv
 # squim_*. The design and verification are in specs/20261027-task-extent-squim/design.md.
-version: 1
+version: 2
 windows:
   window_s: 10.0       # CONVENTIONAL, not fitted: the window the #614 reporter measured with
   min_window_s: 3.0    # CONVENTIONAL, not fitted: a trailing partial window shorter than this is dropped; an extent shorter than this is one window
@@ -11,7 +11,7 @@ model:
   asset: models/squim_objective_dns2020.pth
   weights_sha256: 2c54586fea83fb5eb5394d710038ee89f55cab7011a5bf730bebed4c8777e828
   sampling_rate: 16000
-no_value_branches: [AIRWAY]   # breath and cough families: SQUIM is a speech-quality estimate and does not describe them
+no_value_branches: [AIRWAY, VOICE]   # breath, cough and phonation families: SQUIM is a speech-quality estimate and does not describe them
 derivation: |
   Not fitted. Issue sensein/senselab#614 found that the release squim_* columns were the median of
   PREPROCESS's per-span SQUIM readings, about 40% of them on silence gaps (median span 0.27-0.32 s),
@@ -25,5 +25,10 @@ derivation: |
   3.0 s keeps a trailing remainder from contributing a reading dominated by an utterance boundary while
   still giving short tasks (a few seconds of read speech) a value. All three are conventions to be
   revisited against the VERIFY report of the corpus run, not values chosen from data.
+  no_value_branches (v2, owner decision 2026-10-27, after the squim38 pilot, ORCD job 27069320): VOICE
+  joins AIRWAY. On the pilot's VOICE rows the task-extent medians barely moved from the per-span ones
+  (PESQ 1.18 -> 1.26, SI-SDR -10.6 -> -9.7 dB) and showed no relation to SNR, while SPEECH rose to the
+  #614 range. SQUIM is trained on speech (DNS 2020); a sustained vowel or glide is outside its training
+  distribution, so the columns are kept to speech quality only.
   weights_sha256 is the SHA-256 of torchaudio's hosted squim_objective_dns2020.pth, the file PREPROCESS
   loads through SQUIM_OBJECTIVE.get_model(); the replay refuses weights whose digest differs.

@@ -36,6 +36,8 @@ from senselab.audio.workflows.triage.task_squim import branch_of_family
 HEADS = ("squim_pesq", "squim_stoi", "squim_si_sdr")
 LABEL = {"squim_pesq": "PESQ", "squim_stoi": "STOI", "squim_si_sdr": "SI-SDR (dB)"}
 KEY = ("participant_id", "session_id", "task")
+NO_VALUE_BRANCHES = ("AIRWAY", "VOICE")
+"""Branches whose rows must carry no new value (data/task_squim.yaml ``no_value_branches``)."""
 SNR_COLUMNS = ("snr_db", "speech_over_residual_db")
 REPORTER = {"squim_pesq": 2.9, "squim_stoi": 0.98, "squim_si_sdr": 17.0}
 """The #614 reporter's 10 s window medians on clean read speech (two samples, 50 and 60 recordings)."""
@@ -211,10 +213,11 @@ def absent_kind(reason: str) -> str:
         reason: The driver's ``reason``.
 
     Returns:
-        ``airway family``, ``no task extent``, ``no plain stream``, ``under floor`` or ``other``.
+        ``airway family``, ``voice family``, ``no task extent``, ``no plain stream``, ``under floor`` or ``other``.
     """
-    if "AIRWAY" in reason:
-        return "airway family"
+    for kind in ("airway family", "voice family"):
+        if reason.lower().startswith(kind.split()[0]):
+            return kind
     if "floor" in reason:
         return "under floor"
     return reason if reason in ("no task extent", "no plain stream") else "other"
@@ -288,7 +291,7 @@ def report(joined: Sequence[Mapping[str, Any]], logs: Sequence[Mapping[str, Any]
             n_new, rho_new = spearman([(r[column], r["new"][h]) for r in joined])
             rho_rows.append([column, LABEL[h], n_old, rho_old, n_new, rho_new])
     lines += table(["SNR column", "head", "old n", "old rho", "new n", "new rho"], rho_rows)
-    for branch in ("SPEECH", "VOICE"):
+    for branch in ("SPEECH",):
         members = [r for r in joined if r["branch"] == branch]
         rows: list[list[Any]] = []
         for h in HEADS:
@@ -301,13 +304,16 @@ def report(joined: Sequence[Mapping[str, Any]], logs: Sequence[Mapping[str, Any]
             )
         lines += [f"{branch} only, against snr_db:", ""]
         lines += table(["head", "old rho", "new rho"], rows)
+    decile_head = ["decile", "range", "n", *[f"{LABEL[h]} {w}" for h in HEADS for w in ("old", "new")]]
     for column in SNR_COLUMNS:
-        decile_rows = deciles([r for r in joined if r["branch"] != "AIRWAY"], column)
-        if decile_rows:
-            lines += [f"### Median by {column} decile (non-airway rows)", ""]
-            lines += table(
-                ["decile", "range", "n", *[f"{LABEL[h]} {w}" for h in HEADS for w in ("old", "new")]], decile_rows
-            )
+        for title, members in (
+            ("non-airway rows", [r for r in joined if r["branch"] != "AIRWAY"]),
+            ("SPEECH rows only, deciles of SPEECH", [r for r in joined if r["branch"] == "SPEECH"]),
+        ):
+            decile_rows = deciles(members, column)
+            if decile_rows:
+                lines += [f"### Median by {column} decile ({title})", ""]
+                lines += table(decile_head, decile_rows)
 
     lines += ["## Against verdict and reason", ""]
     lines += ["### By verdict", ""]
@@ -408,11 +414,13 @@ def report(joined: Sequence[Mapping[str, Any]], logs: Sequence[Mapping[str, Any]
 
     lines += ["## Sanity", ""]
     airway_valued = sum(1 for r in joined if r["branch"] == "AIRWAY" and r["new"]["squim_pesq"] is not None)
+    voice_valued = sum(1 for r in joined if r["branch"] == "VOICE" and r["new"]["squim_pesq"] is not None)
     no_extent_valued = sum(1 for r in joined if r["task_start_s"] is None and r["new"]["squim_pesq"] is not None)
     lines += table(
         ["check", "rows violating", "expected"],
         [
             ["airway row carries a new value", airway_valued, 0],
+            ["voice row carries a new value", voice_valued, 0],
             ["row with no task extent carries a new value", no_extent_valued, 0],
         ],
     )
@@ -426,7 +434,7 @@ def main(argv: list[str] | None = None) -> int:
         argv: The command line, or None for ``sys.argv``.
 
     Returns:
-        0 when the sanity checks hold, 1 when either is violated.
+        0 when the sanity checks hold, 1 when any is violated.
     """
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", maxsplit=1)[0] if __doc__ else None)
     parser.add_argument("--old", type=Path, required=True, help="triage.tsv with the per-span squim_*")
@@ -440,7 +448,8 @@ def main(argv: list[str] | None = None) -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     violated = any(
-        (r["branch"] == "AIRWAY" or r["task_start_s"] is None) and r["new"]["squim_pesq"] is not None for r in joined
+        (r["branch"] in NO_VALUE_BRANCHES or r["task_start_s"] is None) and r["new"]["squim_pesq"] is not None
+        for r in joined
     )
     print(f"wrote {args.out}; sanity {'VIOLATED' if violated else 'ok'}")
     return 1 if violated else 0

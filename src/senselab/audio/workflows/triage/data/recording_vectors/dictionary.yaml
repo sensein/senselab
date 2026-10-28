@@ -1424,7 +1424,7 @@ columns:
     description: Median SQUIM PESQ estimate over fixed windows of the task extent, plain stream.
     computation: The live `task_squim` measurement's `pesq`, the median over its windows (data/task_squim.yaml).
     source: [recording_vectors.py:_quality_columns, task_squim.py:measure_task_squim]
-    null_means: No live `task_squim` measurement, or none of its windows was read (airway family, no task extent, extent under the floor).
+    null_means: No live `task_squim` measurement, or none of its windows was read (airway or voice family, no task extent, extent under the floor).
 
   q_task_squim_stoi:
     units: ratio

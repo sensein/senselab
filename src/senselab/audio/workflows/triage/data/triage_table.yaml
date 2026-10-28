@@ -135,13 +135,13 @@ columns:
   units: dB
 - name: squim_pesq
   group: quality
-  description: the median SQUIM PESQ over fixed 10 s windows of the task extent, plain stream (data/task_squim.yaml); empty for airway families and where the task extent is missing or under 1 s
+  description: the median SQUIM PESQ over fixed 10 s windows of the task extent, plain stream (data/task_squim.yaml); empty for airway and voice families and where the task extent is missing or under 1 s
 - name: squim_stoi
   group: quality
-  description: the median SQUIM STOI over fixed 10 s windows of the task extent, plain stream (data/task_squim.yaml); empty for airway families and where the task extent is missing or under 1 s
+  description: the median SQUIM STOI over fixed 10 s windows of the task extent, plain stream (data/task_squim.yaml); empty for airway and voice families and where the task extent is missing or under 1 s
 - name: squim_si_sdr
   group: quality
-  description: the median SQUIM SI-SDR over fixed 10 s windows of the task extent, plain stream (data/task_squim.yaml), dB; empty for airway families and where the task extent is missing or under 1 s
+  description: the median SQUIM SI-SDR over fixed 10 s windows of the task extent, plain stream (data/task_squim.yaml), dB; empty for airway and voice families and where the task extent is missing or under 1 s
   units: dB
 - name: clipped_s
   group: quality

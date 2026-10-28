@@ -297,6 +297,8 @@ def test_the_sidecar_describes_every_column_in_order() -> None:
     assert set(sidecar["asr_single_hypothesis"]["Levels"]) == {"true", "false"}
     for name in ("squim_pesq", "squim_stoi", "squim_si_sdr"):
         assert "windows of the task extent, plain stream" in sidecar[name]["Description"]
+        assert "empty for airway and voice families" in sidecar[name]["Description"]
+    assert triage_table.NO_SQUIM_BRANCHES == ("AIRWAY", "VOICE")
     assert "none" in sidecar["branch"]["Levels"] and "none" in sidecar["enrollment_source"]["Levels"]
     assert all(
         isinstance(text, str) and text for entry in sidecar.values() for text in entry.get("Levels", {}).values()
@@ -444,3 +446,13 @@ def test_the_squim_columns_read_the_task_extent_vectors_not_the_per_span_ones() 
     readings = triage_table.vector_readings(vectors)["s1"]
     assert (readings["squim_pesq"], readings["squim_stoi"], readings["squim_si_sdr"]) == (2.9, 0.98, 17.0)
     assert triage_table.column_dictionary()["version"] == 4
+
+
+def test_a_voice_row_carries_no_squim_even_where_the_vectors_hold_one() -> None:
+    """VOICE, like AIRWAY, publishes empty squim_* columns."""
+    readings = {"squim_pesq": 1.3, "squim_stoi": 0.7, "squim_si_sdr": -9.0}
+    voice = triage_table.row({"declared_family": "prolonged-vowel", "stem": "s"}, readings, {}, 4)
+    speech = triage_table.row({"declared_family": "caterpillar-passage", "stem": "s"}, readings, {}, 4)
+    assert voice["branch"] == "VOICE"
+    assert (voice["squim_pesq"], voice["squim_stoi"], voice["squim_si_sdr"]) == (None, None, None)
+    assert speech["squim_pesq"] == 1.3

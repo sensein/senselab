@@ -41,12 +41,12 @@ release with the updated table.
    window over the whole extent; an extent under 1 s gets no value. The medians over the windows read are
    the values; `windows_n` and `covered_s` say how much was read. Per-window readings are kept in the
    measurement's `windows`.
-4. **Branches.** AIRWAY families (breath, cough) get no value, as before: SQUIM is a speech-quality
-   estimate. **VOICE families get values** (sustained vowels, glides, maximum phonation time). SQUIM was
-   trained on DNS speech and a sustained vowel is outside that distribution, so a VOICE value is a
-   reading of the phonation's cleanliness, not of intelligibility; VOICE is reported separately in the
-   verification so its distribution is not pooled with SPEECH. `triage_table.NO_SQUIM_BRANCHES` still
-   blanks AIRWAY in the table as a second guard.
+4. **Branches.** AIRWAY (breath, cough) and VOICE (sustained vowels, glides, maximum phonation time)
+   families get no value; the driver records them `absent` with reason `airway family` / `voice family`,
+   and retires any `task_squim` a recording carries from before. The columns therefore describe speech
+   quality only. `no_value_branches` in `data/task_squim.yaml` holds the rule (v1 excluded AIRWAY only;
+   v2 adds VOICE), and `triage_table.NO_SQUIM_BRANCHES` blanks the same two branches in the table as a
+   second guard. See "Pilot" for why VOICE was dropped.
 5. **Columns.** `recording_vectors` replaces `q_plain_squim_{pesq,stoi,si_sdr}` with
    `q_task_squim_{pesq,stoi,si_sdr}` and adds `q_task_squim_windows_n` (schema 28 → 29; `decode.js`
    and the viewer follow). `triage.tsv` keeps the published names `squim_*`, with new descriptions, and
@@ -95,8 +95,25 @@ pooled out):
   the corpus median) near PESQ 2.9, STOI 0.98, SI-SDR 17 dB;
 - coverage: rows with a value by branch, driver outcomes by branch, windows per recording, seconds
   covered over extent seconds, extent source;
-- sanity (exit 1 if violated): no value on an airway row; none where the task extent is missing.
+- SNR-decile medians for SPEECH rows alone, beside the non-airway deciles, so a decile pattern can be
+  attributed to speech rather than to the mix of branches;
+- sanity (exit 1 if violated): no value on an airway or voice row; none where the task extent is missing.
 
 The run order is: a stratified pilot of about 200 recordings written into a mirrored tree
 (`--out-root`), its vectors and table, and VERIFY against the r37 table; then the full manifest in
 place, the vectors and `triage.tsv` rebuilt, and VERIFY again.
+
+## Pilot (ORCD job 27069320, 2026-10-27)
+
+About 200 recordings, stratified across task families and r37 SNR deciles, were measured into a mirrored
+tree at commit 62f4b922 (windows v1, VOICE still read). Its `squim38/pilot/verify.md` showed SPEECH
+(n = 121) moving to the #614 range: PESQ 1.21 → 2.80, STOI 0.68 → 0.98, SI-SDR −8.4 → 17.8 dB. Its
+Spearman with `snr_db` went from negative to positive (PESQ −0.17 → +0.29, STOI −0.27 → +0.23). Clean
+read speech (n = 11) read PESQ 2.80, STOI 0.985, SI-SDR 23.5 dB. Both sanity checks held. VOICE barely moved: PESQ 1.18 → 1.26 and SI-SDR −10.6 →
+−9.7 dB (per-span → task-extent medians), with no relation to SNR. SQUIM is trained on speech (DNS
+2020) and a sustained phonation is outside that distribution, so the owner decided on 2026-10-27 that
+VOICE gets no value. That decision is `data/task_squim.yaml` v2.
+
+The pilot's top `snr_db` decile (45.6–75.6 dB, n = 16) read lower (PESQ 1.77, SI-SDR 5.1 dB) than the
+deciles below it. With VOICE rows in that decile the pilot cannot tell whether the drop is real in
+speech. The SPEECH-only decile table in the corpus report answers that.
