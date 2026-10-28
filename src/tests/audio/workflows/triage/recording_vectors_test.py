@@ -1288,7 +1288,49 @@ def test_noise_the_enhanced_stream_removes_is_resolved_and_clipping_never_is(tmp
     assert row["q_raw_issues"] == ["noise_floor", "low_snr", "clipping"]
     assert row["q_resolved_by_enhanced"] == ["noise_floor", "low_snr"]
     assert row["q_unresolved"] == ["clipping"]
-    assert row["q_plain_squim_pesq"] == 2.75
+
+
+def test_the_per_span_squim_readings_no_longer_feed_the_quality_columns(tmp_path: Path) -> None:
+    """A store holding only PREPROCESS's per-span SQUIM leaves the task-extent columns null."""
+    row = rv.extract(_evaluation_recording(tmp_path), tmp_path)
+    assert row is not None
+    assert "q_plain_squim_pesq" not in row
+    for key in ("q_task_squim_pesq", "q_task_squim_stoi", "q_task_squim_si_sdr", "q_task_squim_windows_n"):
+        assert row[key] is None
+
+
+def test_the_quality_columns_read_the_live_task_squim_measurement(tmp_path: Path) -> None:
+    """The task-extent medians and window count come from the live task_squim measurement only."""
+    extra = (
+        _entity(
+            "measurement-task-squim-old",
+            "measurement",
+            [0.0, 4.0],
+            name="task_squim",
+            signal="plain",
+            pesq=1.5,
+            stoi=0.6,
+            si_sdr=-3.0,
+            windows_n=1,
+        ),
+        _relation("wasInvalidatedBy", "measurement-task-squim-old", "activity-retire"),
+        _entity(
+            "measurement-task-squim",
+            "measurement",
+            [0.25, 3.75],
+            name="task_squim",
+            signal="plain",
+            pesq=2.9,
+            stoi=0.98,
+            si_sdr=17.0,
+            windows_n=1,
+            covered_s=3.5,
+        ),
+    )
+    row = rv.extract(_evaluation_recording(tmp_path, extra=extra), tmp_path)
+    assert row is not None
+    assert (row["q_task_squim_pesq"], row["q_task_squim_stoi"], row["q_task_squim_si_sdr"]) == (2.9, 0.98, 17.0)
+    assert row["q_task_squim_windows_n"] == 1
 
 
 def test_no_plain_stream_leaves_the_quality_checks_null(one_row: dict[str, Any]) -> None:
