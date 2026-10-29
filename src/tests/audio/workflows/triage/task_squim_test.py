@@ -236,3 +236,104 @@ def test_a_timestamped_manifest_stem_gives_its_family(tmp_path: Path) -> None:
 
     store = ProvStore(run_id="stem-test")
     assert declared_family(store, "sub-a_ses-b_task-voluntary-cough-2_20000101-000000") == "voluntary-cough"
+
+
+def _windows_before_the_shared_planner(start_s: float, end_s: float, config: WindowConfig) -> list[tuple[float, float]]:
+    """``task_windows`` as it stood before window planning moved into ``torchaudio_squim``."""
+    eps = 1e-9
+    duration = end_s - start_s
+    if duration < config.floor_s - eps:
+        return []
+    if duration < config.min_window_s - eps:
+        return [(start_s, end_s)]
+    full = int(math.floor(duration / config.window_s + eps))
+    windows = [(start_s + i * config.window_s, start_s + (i + 1) * config.window_s) for i in range(full)]
+    tail_start = start_s + full * config.window_s
+    if end_s - tail_start >= config.min_window_s - eps:
+        windows.append((tail_start, end_s))
+    return windows
+
+
+def _chirp(seconds: float) -> Audio:
+    t = torch.arange(int(round(RATE * seconds)), dtype=torch.float32) / RATE
+    waveform = 0.2 * torch.sin(2 * math.pi * (100 + 20 * t) * t) * (1 + t / 40)
+    return Audio(waveform=waveform.unsqueeze(0), sampling_rate=RATE)
+
+
+def _cut_scorer(audios: Sequence[Audio]) -> list[dict[str, float]]:
+    """A deterministic reading of each cut: its mean magnitude, its length and its end samples."""
+    return [
+        {
+            "pesq": round(float(a.waveform.abs().mean()), 6),
+            "stoi": a.waveform.shape[-1] / 1e6,
+            "si_sdr": round(float(a.waveform[0, 0] + a.waveform[0, -1]), 6),
+        }
+        for a in audios
+    ]
+
+
+class TestTheSharedPlannerChangesNothing:
+    """Triage's windows and medians are those it published before the planner moved."""
+
+    def test_the_windows_match_the_previous_planner_on_a_grid(self) -> None:
+        """Every extent from 0 to 45 s in 0.05 s steps, from three starts."""
+        for start in (0.0, 1.75, 3.3):
+            for k in range(901):
+                end = start + k * 0.05
+                assert task_windows(start, end, CONFIG) == _windows_before_the_shared_planner(start, end, CONFIG)
+
+    @pytest.mark.parametrize(
+        ("task", "windows", "medians"),
+        [
+            ((2.0, 25.0), [(1.75, 11.75), (11.75, 21.75), (21.75, 25.25)], (0.180644, 0.16, 0.545578, 3, 23.5)),
+            ((0.5, 29.7), [(0.25, 10.25), (10.25, 20.25), (20.25, 29.95)], (0.175869, 0.16, 0.447459, 3, 29.7)),
+            ((4.0, 6.2), [(3.75, 6.45)], (0.143554, 0.0432, 0.258684, 1, 2.7)),
+            ((1.3, 14.1), [(1.05, 11.05), (11.05, 14.35)], (0.157171, 0.1064, 0.158042, 2, 13.3)),
+            ((3.0, 15.2), [(2.75, 12.75)], (0.151995, 0.16, 0.469931, 1, 10.0)),
+        ],
+    )
+    def test_the_measurement_matches_values_recorded_before_the_refactor(
+        self,
+        tmp_path: Path,
+        config: TriageConfig,
+        monkeypatch: pytest.MonkeyPatch,
+        task: tuple[float, float],
+        windows: list[tuple[float, float]],
+        medians: tuple[float, float, float, int, float],
+    ) -> None:
+        """A chirp, a deterministic scorer of each cut, and the values the pre-refactor code wrote."""
+        monkeypatch.setitem(globals(), "_tone", _chirp)
+        store = _seed(tmp_path, task=task)
+        measure_task_squim(store, config, run_dir=tmp_path / "run", scorer=lambda: _cut_scorer)
+        held = find_measurement(store, MEASUREMENT)
+        assert held is not None
+        a = held.attributes
+        assert [(w["start_s"], w["end_s"]) for w in a["windows"]] == pytest.approx(windows)
+        pesq, stoi, si_sdr, windows_n, covered_s = medians
+        assert a["pesq"] == pytest.approx(pesq, abs=2e-6)
+        assert a["stoi"] == pytest.approx(stoi)
+        assert a["si_sdr"] == pytest.approx(si_sdr, abs=2e-6)
+        assert a["windows_n"] == windows_n and a["covered_s"] == pytest.approx(covered_s)
+
+
+def test_the_shipped_scorer_reads_each_window_in_one_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``squim_scorer`` asks the general function for a single pass at the default floor, so a window is read as cut."""
+    from senselab.audio.tasks.features_extraction import torchaudio_squim
+    from senselab.audio.workflows.triage import task_squim
+
+    calls: list[dict[str, Any]] = []
+
+    def fake(audios: list[Audio], **kwargs: Any) -> list[dict[str, Any]]:  # noqa: ANN401
+        calls.append(kwargs)
+        return [
+            {"stoi": 0.9, "pesq": 2.0, "si_sdr": 10.0, "windows": [], "windows_n": 1, "span_s": 1.0} for _ in audios
+        ]
+
+    monkeypatch.setattr(torchaudio_squim, "extract_objective_quality_features_from_audios", fake)
+    monkeypatch.setattr(task_squim, "verify_weights", lambda asset, sha256: sha256)
+    task_squim.squim_scorer.cache_clear()
+    try:
+        assert task_squim.squim_scorer()([_tone(12.0)]) == [{"pesq": 2.0, "stoi": 0.9, "si_sdr": 10.0}]
+    finally:
+        task_squim.squim_scorer.cache_clear()
+    assert calls and calls[0]["window_s"] is None and "floor_s" not in calls[0]

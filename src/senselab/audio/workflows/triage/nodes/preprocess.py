@@ -2342,7 +2342,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 sampling_rate=target_hz,
             )
             try:
-                [scores] = extract_objective_quality_features_from_audios([segment])
+                [scores] = extract_objective_quality_features_from_audios([segment], window_s=None)
                 attributes: dict[str, Any] = {
                     "verb": "measure",
                     "name": name,
