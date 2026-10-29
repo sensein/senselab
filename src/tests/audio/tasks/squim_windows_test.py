@@ -146,7 +146,7 @@ class TestExtraction:
     def test_the_single_pass_equals_the_model_on_the_whole_waveform(self, stub: _StubModel) -> None:
         """No span and no window is the previous whole-waveform call."""
         audio = _ramp(4.37)
-        [result] = extract_objective_quality_features_from_audios([audio], window_s=None, floor_s=0.0)
+        [result] = extract_objective_quality_features_from_audios([audio], window_s=None)
         stoi, pesq, si_sdr = _StubModel()(audio.waveform)
         assert (result["stoi"], result["pesq"], result["si_sdr"]) == (stoi.item(), pesq.item(), si_sdr.item())
 
@@ -162,17 +162,34 @@ class TestExtraction:
         [result] = extract_objective_quality_features_from_audios([_ramp(30.0)], start_s=5.0, end_s=7.0)
         assert result["windows_n"] == 1 and stub.lengths == [32_000]
 
-    def test_a_span_under_the_floor_is_nan(self, stub: _StubModel) -> None:
+    def test_a_short_span_gets_a_value_by_default(self, stub: _StubModel) -> None:
+        """The default floor is 0: a 0.3 s word is read as one window."""
+        [result] = extract_objective_quality_features_from_audios([_ramp(10.0)], start_s=2.0, end_s=2.3)
+        assert result["windows_n"] == 1 and stub.lengths == [4_800]
+        assert result["stoi"] == pytest.approx(0.3)
+
+    def test_a_short_recording_gets_a_value_by_default(self, stub: _StubModel) -> None:
+        """A whole 0.3 s recording is read."""
+        [result] = extract_objective_quality_features_from_audios([_ramp(0.3)])
+        assert result["windows_n"] == 1 and math.isfinite(result["pesq"])
+
+    def test_a_span_under_a_requested_floor_is_nan(self, stub: _StubModel) -> None:
         """Nothing is read and nothing is invented."""
-        [result] = extract_objective_quality_features_from_audios([_ramp(0.6)])
+        [result] = extract_objective_quality_features_from_audios([_ramp(0.6)], floor_s=1.0)
         assert result["windows_n"] == 0 and result["windows"] == [] and stub.lengths == []
         assert all(math.isnan(result[head]) for head in ("stoi", "pesq", "si_sdr"))
 
-    @pytest.mark.parametrize("bounds", [(-1.0, 5.0), (5.0, 5.0), (6.0, 5.0), (0.0, 31.0)])
-    def test_a_span_outside_the_audio_is_refused(self, stub: _StubModel, bounds: tuple[float, float]) -> None:
+    @pytest.mark.parametrize("bounds", [(-1.0, 5.0), (5.0, 5.0), (6.0, 5.0), (0.0, 31.0), (30.0, None)])
+    def test_a_span_outside_the_audio_is_refused(self, stub: _StubModel, bounds: tuple[float, float | None]) -> None:
         """``0 <= start_s < end_s <= duration`` or a ValueError naming the bounds."""
         with pytest.raises(ValueError, match="0 <= start_s < end_s <= duration"):
             extract_objective_quality_features_from_audios([_ramp(30.0)], start_s=bounds[0], end_s=bounds[1])
+
+    def test_an_empty_audio_is_refused(self, stub: _StubModel) -> None:
+        """An empty span raises whether it is given or is the whole of an empty audio."""
+        with pytest.raises(ValueError, match="0 <= start_s < end_s <= duration"):
+            extract_objective_quality_features_from_audios([Audio(waveform=torch.zeros(1, 0), sampling_rate=RATE)])
+        assert stub.lengths == []
 
     def test_non_mono_and_wrong_rate_are_refused(self, stub: _StubModel) -> None:
         """The model's input contract is unchanged."""

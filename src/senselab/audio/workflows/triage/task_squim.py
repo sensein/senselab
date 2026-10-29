@@ -250,9 +250,7 @@ def squim_scorer() -> Scorer:
     verify_weights(str(model["asset"]), str(model["weights_sha256"]))
 
     def score(audios: Sequence[Audio]) -> list[dict[str, float]]:
-        results = extract_objective_quality_features_from_audios(
-            list(audios), window_s=None, floor_s=0.0, device=DeviceType.CPU
-        )
+        results = extract_objective_quality_features_from_audios(list(audios), window_s=None, device=DeviceType.CPU)
         return [{head: float(result[head]) for head in HEADS} for result in results]
 
     return score

@@ -12,7 +12,7 @@ pass over the whole waveform. No compatibility path is kept (pre-1.x major relea
 
 ```python
 extract_objective_quality_features_from_audios(
-    audios, window_s=10.0, min_window_s=3.0, start_s=None, end_s=None, floor_s=1.0, device=None
+    audios, window_s=10.0, min_window_s=3.0, start_s=None, end_s=None, floor_s=0.0, device=None
 )
 ```
 
@@ -41,15 +41,26 @@ with the drop rule, and they must not change. Both policies share every other ru
 
 ## Floor
 
-The default `floor_s` is 1.0 s, the same as triage's `data/task_squim.yaml` `floor_s`. Its derivation
-is in that file. In the `specs/20260817-triage-workflow-dag/benchmarks/squim.md` table, 1.0 s is the
-shortest span length, and a 0.9 to 1.6 s speech span already reads as speech. A span under the floor
-returns NaN for all three heads with `windows_n == 0`.
+The default `floor_s` is 0 (owner decision, 2026-10-28): every span the model accepts gets a value,
+single words included. Values from short spans vary more. In the #614 reporter's comparison, medians
+over speech-only spans, mostly under 0.5 s, agreed with medians over 10 s windows only at Pearson
+r ≈ 0.55–0.76. Callers that want a cut-off set `floor_s`. A span under it returns NaN for all three
+heads with `windows_n == 0`.
 
-`floor_s` is a parameter because three callers deliberately read sub-second spans one pass at a time,
-and their values must not change: triage `PREPROCESS` and `SPEECH` per-span SQUIM, and the
-`audio_analysis` temporal features. Those callers pass `window_s=None, floor_s=0.0`. Triage's
-`task_squim` scorer passes the same values, because it plans and cuts its windows itself.
+Triage's `task_squim` keeps its own `floor_s = 1.0` from `data/task_squim.yaml`. It applies that floor in
+`plan_windows` and then reads each planned window with `window_s=None` at the default floor. Its windows
+and medians are unchanged; the identity tests in `task_squim_test.py` check this.
+
+An empty span (`start_s == end_s`, or an empty audio) raises `ValueError`, like any span outside
+`0 <= start_s < end_s <= duration`. NaN is kept for "read nothing by request" (under `floor_s`), and an
+empty span is a caller error. The model raises `RuntimeError` on inputs shorter than its 64-sample
+kernel (4 ms); that error propagates as before.
+
+The single-pass callers pass only `window_s=None`. These are triage `PREPROCESS` and `SPEECH` per-span
+SQUIM, analyze_audio's temporal features and the triage `task_squim` scorer. At the default floor that
+is the previous whole-waveform call for any non-empty input. A zero-sample clip in triage's per-span
+readings is now recorded as `unmeasured: ValueError` where the model's `RuntimeError` was recorded
+before.
 
 ## Callers
 

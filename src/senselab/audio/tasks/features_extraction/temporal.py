@@ -122,7 +122,7 @@ def extract_temporal_features(
                 opensmile=False,
                 parselmouth=False,
                 torchaudio=False,
-                torchaudio_squim={"window_s": None, "floor_s": 0.0},
+                torchaudio_squim={"window_s": None},
                 device=device,
             )[0]
             row = _flatten_feature_dict(sq.get("torchaudio_squim", {}))

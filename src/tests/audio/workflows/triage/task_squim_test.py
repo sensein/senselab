@@ -317,7 +317,7 @@ class TestTheSharedPlannerChangesNothing:
 
 
 def test_the_shipped_scorer_reads_each_window_in_one_pass(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``squim_scorer`` asks the general function for a single pass with no floor, so a window is read as cut."""
+    """``squim_scorer`` asks the general function for a single pass at the default floor, so a window is read as cut."""
     from senselab.audio.tasks.features_extraction import torchaudio_squim
     from senselab.audio.workflows.triage import task_squim
 
@@ -336,4 +336,4 @@ def test_the_shipped_scorer_reads_each_window_in_one_pass(monkeypatch: pytest.Mo
         assert task_squim.squim_scorer()([_tone(12.0)]) == [{"pesq": 2.0, "stoi": 0.9, "si_sdr": 10.0}]
     finally:
         task_squim.squim_scorer.cache_clear()
-    assert calls and calls[0]["window_s"] is None and calls[0]["floor_s"] == 0.0
+    assert calls and calls[0]["window_s"] is None and "floor_s" not in calls[0]

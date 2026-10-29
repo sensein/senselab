@@ -43,8 +43,8 @@ DEFAULT_WINDOW_S = 10.0
 DEFAULT_MIN_WINDOW_S = 3.0
 """The default shortest trailing window kept as a window of its own, in seconds."""
 
-DEFAULT_FLOOR_S = 1.0
-"""The default shortest span read at all, in seconds; triage's ``task_squim`` floor."""
+DEFAULT_FLOOR_S = 0.0
+"""The default shortest span read at all, in seconds: every non-empty span is read."""
 
 OBJECTIVE_HEADS = ("stoi", "pesq", "si_sdr")
 """The objective head's three readings."""
@@ -124,8 +124,7 @@ def _span_of(audio: Audio, start_s: Optional[float], end_s: Optional[float]) -> 
     duration = audio.waveform.shape[-1] / audio.sampling_rate
     start = 0.0 if start_s is None else float(start_s)
     end = duration if end_s is None else float(end_s)
-    explicit = start_s is not None or end_s is not None
-    if start < 0 or end > duration + _EPS or (explicit and start >= end) or start > end:
+    if start < 0 or end > duration + _EPS or start >= end:
         raise ValueError(f"span must satisfy 0 <= start_s < end_s <= duration ({duration} s), got [{start}, {end}]")
     return start, min(end, duration)
 
@@ -149,8 +148,11 @@ def extract_objective_quality_features_from_audios(
     The span ``[start_s, end_s]`` is cut into windows by :func:`plan_windows` (a trailing remainder
     shorter than ``min_window_s`` folds into the previous window), each window is cut by sample index
     and read by the SQUIM objective model, and the reported values are the medians over the windows.
-    With ``window_s=None`` the span is read in one pass. A span shorter than ``floor_s`` is not read:
-    its values are NaN and ``windows_n`` is 0.
+    With ``window_s=None`` the span is read in one pass.
+
+    Every non-empty span is read by default. Values from spans under about 0.5 s vary more than those
+    from 10 s windows (sensein/senselab#614); set ``floor_s`` for a cut-off, under which a span's values
+    are NaN and ``windows_n`` is 0. An empty span, including an empty audio, raises ``ValueError``.
 
     The SQUIM model only supports mono audio at 16000 Hz.
 
@@ -161,7 +163,7 @@ def extract_objective_quality_features_from_audios(
             into the previous window. A span shorter than this is one window.
         start_s: The span's start in seconds; 0 when None.
         end_s: The span's end in seconds; the audio's duration when None.
-        floor_s: The shortest span read, in seconds; shorter spans return NaN.
+        floor_s: The shortest span read, in seconds; shorter spans return NaN. 0 reads every span.
         device: The device to run the model on.
 
     Returns:
@@ -171,9 +173,9 @@ def extract_objective_quality_features_from_audios(
 
     Raises:
         ModuleNotFoundError: If torchaudio is not installed.
-        ValueError: If an audio is not mono 16 kHz, a span is outside ``0 <= start_s < end_s <= duration``,
-            or the window lengths are inconsistent.
-        RuntimeError: If the model fails on a window.
+        ValueError: If an audio is not mono 16 kHz, a span is outside ``0 <= start_s < end_s <= duration``
+            (an empty span included), or the window lengths are inconsistent.
+        RuntimeError: If the model fails on a window, as it does on one shorter than its 64-sample kernel.
     """
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(

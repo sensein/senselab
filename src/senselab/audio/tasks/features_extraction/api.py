@@ -84,7 +84,7 @@ def extract_features_from_audios(
         torchaudio_squim (dict | bool, optional):
             - ``False`` → skip objective quality metrics.
             - ``True``  → STOI, PESQ and SI-SDR as medians over 10 s windows of the whole audio:
-                ``{"window_s": 10.0, "min_window_s": 3.0, "start_s": None, "end_s": None, "floor_s": 1.0}``
+                ``{"window_s": 10.0, "min_window_s": 3.0, "start_s": None, "end_s": None, "floor_s": 0.0}``
             - ``dict`` → override any of the above keys (``window_s=None`` reads the span in one pass).
               See ``torchaudio_squim.extract_objective_quality_features_from_audios``.
         sparc (bool, optional):
