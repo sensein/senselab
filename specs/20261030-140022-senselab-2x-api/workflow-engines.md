@@ -1,6 +1,6 @@
 # Workflow engines for senselab 2.x: an evaluation
 
-Date 2026-10-30. Scope: design §4.4, 4.5, 4.7, 4.8, 4.10 and 4.11 of
+Date 2026-10-30. Scope: design §4.4, 4.5, 4.7, 4.9, 4.11 and 4.12 of
 `specs/20261030-140022-senselab-2x-api/design.md`, measured against requirements R1–R9.
 Legend: **N** native, **P** plugin or extension, **W** feasible with work, **–** no.
 Facts about pydra come from source at `nipype/pydra@c5081a6` (tag v1.0a12) and from a local
@@ -209,13 +209,13 @@ format, its pickling and its failure semantics.
 **What senselab must own regardless.** The candidates were planner, model cache and env manager;
 each is tested here.
 
-1. **Content-addressed result store** (§4.8). Own it. No engine lets the key be
-   `{task, version, backend, env lock sha, model commit, identity tunables, input ids}` *and* writes
+1. **Content-addressed result store** (§4.8). Own it. No engine lets the key be the canonical key
+   (`design.md` §4.8) *and* writes
    atomically by rename on NFS *and* stores Python-version-neutral data (`.npy`/JSON/parquet rather
    than pickles).
    - Prefect has the key model but needs a server.
    - pydra has the key model but stores pickles non-atomically.
-2. **Env manager and worker runtime** (§4.4, §4.11). Own it. This is senselab's differentiator.
+2. **Env manager and worker runtime** (§4.4, §4.12). Own it. This is senselab's differentiator.
 3. **Model cache and resident workers** (§4.4). Own them. Batching across records is a
    planner-to-worker contract (collect inputs for one resident identity), not a scheduler feature.
 4. **Planner.** Own the *placement* part: backend, env, device class, batch, partition and
@@ -229,35 +229,39 @@ each is tested here.
 **Which ready layer to start on.** If one is used at all, use **pydra for the graph layer only.**
 - Use its compose/lazy/state/split-combine and typed ports for `sl.Pipeline`, behind senselab's
   own `Executor` protocol and result store.
-- Do not use its workers, its environments or its pickle cache.
-- This is viable because the owner leads pydra. It is conditional on PRs 1–4 below landing first.
-  Without them, pydra's barrier semantics and per-item cost are disqualifying at 10^4+ records.
-- **Fallback:** if pydra 1.0 does not reach a non-alpha release with PRs 1–4 by the senselab 2.0
-  builder's start, write the ~1–2k-line graph layer in senselab. Reuse `reproduce/dag.py`'s
-  deterministic toposort and triage's `unrolled_contracts` for loops.
+- Do not use its pickle cache once the store interface lands. Route A (`execution.md` §4) uses a
+  pool worker plugin and pydra's environment identity.
+- This is viable because the owner leads pydra. It is conditional on the proposal's E1, D1 and F2
+  working on the branch, which senselab uses through `uv` git sources; a non-alpha release is not
+  required. Without them, pydra's barrier semantics and per-item cost are disqualifying at 10^4+
+  records.
+- **Fallback** (decided at the start of senselab Phase 3): write the graph layer in senselab,
+  2–4k lines. Reuse `reproduce/dag.py`'s deterministic toposort and
+  `audio_analysis/contracts.py:991` `unrolled_contracts` for loops.
 
 Do not adopt Ray, even for R4. A Ray actor cannot host a 3.10 or TF env, and `serve_in_venv` plus
 the planner's co-location already gives a resident model per identity. Revisit Ray only if
 multi-node tensor-parallel inference becomes a requirement (vLLM already covers single-node).
 
-## 5. pydra PRs that would close the gaps
+## 5. pydra changes that would close the gaps
 
-Ordered by value to senselab. Risk is to pydra's existing users (Nipype 2, fileformats tasks).
+This evaluation first listed nine changes. A maintainer review then revised and re-split them in
+[proposal 0001](https://github.com/nipype/pydra/blob/enh/execution-extensions/proposals/0001-execution-extensions.md),
+which is now the only numbering. The original items map to it as follows:
 
-| # | PR | scope | files | risk |
-|---|---|---|---|---|
-| 1 | **Per-element dataflow (no barrier) and keep-going.** Enable the disabled branch in `NodeExecution.get_runnable_tasks` so a downstream state runs when *its* predecessor indices succeed. An errored element marks only its own descendants unrunnable. Add a `Submitter(on_error="continue"\|"stop")` and a final error summary | engine | `engine/submitter.py` (853–920), `engine/state.py` (partial state from lazy fields, which the FIXME names), tests in `engine/tests/test_submitter.py` | **high**: the State refactor named in the FIXME; splitter/combiner index consistency |
-| 2 | **Cheap submission path.** Stop re-pickling the task in `Job.__getstate__` for in-process workers. Write `_job.pklz` lazily (only for remote workers or crash dumps). Memoise the checksum per job. Batch cache-existence checks with one `scandir` per cache root. Target <0.5 ms/item cold and <0.1 ms/item cached | engine | `engine/job.py` (184–200, 294–311), `engine/result.py` (`load_result`, `save`), `engine/submitter.py` | medium: crash-file and `pydracli crash --rerun` rely on `_job.pklz` |
-| 3 | **Atomic, lock-light cache with stale-lock recovery.** Run in `cache_root/tmp/<uuid>`, then `rename` into `<checksum>/` (first writer wins, as in senselab's design). Replace the run-long `SoftFileLock` with a lease holding owner and heartbeat; reap stale leases (port `work_pool`'s NFS-measured protocol). Closes #778 | engine | `engine/job.py` (`run`, `run_async`, `PydraFileLock`), `engine/result.py`, `workers/slurm.py` (requeue lock removal) | medium: workflow dirs that copy outputs (`copyfile_workflow`) assume the final path during the run |
-| 4 | **Pluggable result serializer and versioned cache layout.** A `ResultStore` protocol (default cloudpickle; an alternative writing JSON plus `.npy` per output field for registered types), and `tasks-v<N>/` layout independent of the pydra version (#825). Removes cross-user unpickling on shared caches | engine, utils | `engine/result.py`, `engine/job.py`, `utils/general.py` (`user_cache_root`), `compose/base/task.py` (`Outputs._from_job`) | medium: every result reader |
-| 5 | **Environment identity in the checksum and Python tasks in environments** (#826, #840). `Environment.checksum()` (a lock sha for a venv env) is folded into the job checksum. A `Venv(python=..., lock=...)` environment runs a `python.Task` by shipping an argument payload (not a pickle) to a stdlib runner inside the env. senselab's worker runtime is the reference implementation | environments, compose | `environments/base.py`, new `environments/venv.py`, `compose/python.py`, `engine/job.py` | medium: hashes change for every environment-using task (one-time recompute) |
-| 6 | **Resource requests and per-task Slurm settings** (#227, #830). A `ComputeResources(cpus, mem, gpus, gpu_class, time)` on the task or node, mapped by the worker to sbatch args through a site profile | compose, workers | `compose/base/task.py`, `engine/node.py`, `workers/slurm.py`, `workers/sge.py` | low |
-| 7 | **Slurm worker fixes plus arrays or a pilot.** Fix the `--error` crash (line 118), add a requeue budget and do not requeue user `CANCELLED`, use one `squeue --me` per poll cycle for all jobs, and use `sbatch --array` for split states. Better still, add a `pool` worker over a shared-FS lease queue (`work_pool` contributed upstream or as `pydra-workers-pool`) so the queue holds workers, not items | workers | `workers/slurm.py`, new `workers/pool.py` | low for the fixes; medium for the pool (new plugin package keeps core risk low) |
-| 8 | **Provenance through hooks** (#798, #566). Emit one PROV record per job (used: input checksums; generated: output ids; agent: environment and host; times) from `TaskHooks.post_run_task` as plain JSON lines to a configurable sink. Drop the network fetch of `context.jsonld` | engine | `engine/audit.py`, `engine/hooks.py`, `engine/job.py` | low |
-| 9 | **Plan printing.** `Submitter.plan(task)` lists the static graph, the splits and the expected cache hits without running, marking nodes inside run-time-constructed nested workflows as "deferred". Supports senselab's `plan.explain()` | engine | `engine/workflow.py` (`execution_graph`), `engine/graph.py` | low |
+| Original item | Proposal ids |
+|---|---|
+| per-element dataflow, keep-going | E1, E2 |
+| cheap submission | B1, B2 |
+| atomic, lock-light cache | D1, C |
+| pluggable, pickle-free results | D1, D2 |
+| environment identity, Python tasks in environments | G1, G2 |
+| resources, per-task Slurm settings | F1 (+ F2 routing) |
+| Slurm fixes, arrays, pool | A0, A1, A2, I |
+| provenance | J1 |
+| plan printing | J2 |
 
-PRs 1–4 are prerequisites for adopting pydra at senselab scale. PRs 5–8 can stay on the senselab
-side if pydra's maintainers decline them.
+The gate for senselab is E1, D1 and F2 working on the branch (`design.md` §4.9).
 
 ## Appendix: measurement scripts
 

@@ -207,16 +207,18 @@ CapnoBase (test only), WESAD, OxWalk, NSRR SHHS/MESA, Lund2013/Hollywood2 EM, UC
 
 ## 5. Cadence and hardware
 
+This is the same cadence as `testing.md` §5.
+
 | Tier | Contents | When | Hardware | Budget |
 |---|---|---|---|---|
 | Smoke | the "Smoke" column above, fixed item lists + checksums, cached data | every PR touching a task (path-filtered), nightly on `alpha` | CI CPU runner / laptop CPU, serial (no `-n auto`) | <15 min total; physio/text/eye <1 min each |
-| Core | full open minimal suite (a), CPU-feasible parts: physio, actigraphy, sleep, EEG, f0/VQ, text, SER on CREMA-D | weekly + every release candidate | laptop/workstation CPU | 1–3 h |
-| GPU | ASR (LibriSpeech, ESB subset), diarization, SV, enhancement/separation, FSD50K, COCO pose/captions, TS-FM probes | every release; weekly on `alpha` for ASR/diarization | one GPU (A100/H100 class) | 3–8 h |
+| Core | full open minimal suite (a), CPU-feasible parts: physio, actigraphy, sleep, EEG, f0/VQ, text, SER on CREMA-D | weekly on ORCD CPU, and every release candidate | CPU node | 1–3 h |
+| GPU | ASR (LibriSpeech, ESB subset), diarization, SV, enhancement/separation, FSD50K, COCO pose/captions, TS-FM probes | GPU smoke weekly on ORCD; full every release | one typed GPU (H100 preferred) | 3–8 h |
 | Extended | suite (b), full ESB, HEAR, NSRR, multilingual ASR | per minor release, and when a backend or model revision changes | cluster (ORCD array, typed H100), data under credentialed storage | overnight |
 
 Each run records dataset version/DOI/hash, item list, model id + resolved commit SHA,
 normaliser/scorer commit, metric parameters (collar, tolerance, P_target), hardware and wall time,
-in line with the cache-key provenance rules. Timing figures are valid only from idle, dedicated
+in line with the canonical key (`design.md` §4.8). Timing figures are valid only from idle, dedicated
 nodes. Publish aggregate metrics for all tiers. Publish per-item outputs only for CC BY / ODC-By /
 CC0 / ODbL sets.
 

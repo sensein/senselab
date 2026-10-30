@@ -6,25 +6,13 @@ it is amended here.
 
 ## How to change this register
 
-Principles are edited, not accumulated. The register stays short enough to hold in mind.
-
-- **Add**: append with the next unused id. Ids are never reused or renumbered. Give the statement,
-  its source (the owner's words, quoted, or the file it is inherited from) and how a reviewer checks
-  compliance.
-- **Amend**: edit the statement in place and add a change-log line saying what changed and why. If
-  the meaning changes, not just the wording, say so in the log.
-- **Retire**: set `Status: retired`, keep the entry, and give the reason and what supersedes it.
-  A retired principle is not cited by new work.
-- **Merge or split**: retire the old ids and point them at the new ones.
-- **Conflicts**: when two principles pull against each other in a concrete decision, record the
-  resolution under *Resolved tensions* rather than weakening either statement silently.
-- Only the owner adds or amends an `owner` principle. An agent may propose a change in a PR, but
-  must not apply it unasked.
-- Every change gets a line in the change log at the bottom.
-
-Fields: **Statement** is normative. **Source** is either `owner` (with a quote and date) or
-`inherited` (with a path). **Check** is how a reviewer, human or agent, decides whether a design
-complies.
+- **Add** with the next unused id (ids are never reused). **Amend** in place; **retire** by setting
+  `Status: retired` and naming what supersedes it.
+- Record conflicts under *Resolved tensions*, and log every change, marking changes of meaning.
+- Only the owner adds or amends an owner principle's statement. Agents propose changes in PRs, and
+  may fix *Check* fields for consistency, logging each fix.
+- Fields: **Statement** (normative), **Source** (an owner quote and date, or an inherited path),
+  **Check** (how a reviewer decides compliance).
 
 ---
 
@@ -98,8 +86,8 @@ complies.
   CPU-bound versus GPU-bound nodes are decided by the executor from a hardware description, not
   hard-coded in tasks.
 - **Source**: owner, 2026-10-30: "optimization for GPU versus CPU".
-- **Check**: a task declares its resource needs and the knobs it can tune; the values come from an
-  execution profile.
+- **Check**: a task declares its resource needs and the knobs it can tune. The values come from an
+  execution profile or from catalogue resource tables, which the scale ladder produces (Phase 3).
 
 ### P-8 Inference stacks are interchangeable
 - **Status**: active
@@ -207,8 +195,9 @@ complies.
   task uses (GPL/NC/apache, etc) which needs to be very clear and machine accessible"; "missing
   licenses can be a flag that defaults to raising exception and the process could be generalized
   to licensing sets".
-- **Check**: `sl.licenses(plan)` answers without running anything. CI fails on a catalogue model
-  or a backend's direct dependency without a license record; transitive packages are reported.
+- **Check**: `sl.licenses(plan)` answers without running anything. The CI gate equals the run-time
+  default: it is applied to every catalogue model and locked package (transitive included) shipped
+  at that phase (`design.md` §4.13).
 
 ### P-24 Modalities share types; environments share by dependency set
 - **Status**: active
@@ -219,7 +208,7 @@ complies.
 - **Source**: owner, 2026-10-30: "with audio/video/text processing enabled consider what
   unions/intersections are across such processing (and knowing subprocess envs exist)".
 - **Check**: a video → audio → text pipeline needs no conversion code between nodes. The env
-  grouping is computed and recorded as data, not hand-assigned per module.
+  grouping is computed, recorded as data, and adopted in Phase 4.
 
 ### P-25 Every execution environment is a locked, isolated venv
 - **Status**: active
@@ -230,8 +219,8 @@ complies.
   provenance, and its absence is an error, not a fallback.
 - **Source**: owner, 2026-10-30: "we should always be using isolated envs for reproducibility, not
   relying on system libraries. i.e. one requirement is to install senselab into a venv".
-- **Check**: every activity in provenance names an env with a lock sha. No code path imports a
-  package that the active env's lock does not list.
+- **Check**: every activity in provenance names an env with a numerics identity (`design.md` I-2).
+  The env tier audits each env's imports against its lock.
 
 ### P-26 Signals generalise; modality-specific tasks stay specific
 - **Status**: active
@@ -248,12 +237,16 @@ complies.
 
 ### P-30 Tests are tiered; benchmarks are separate
 - **Status**: active
-- **Statement**: Tests come in two tiers. **Logic tests** exercise behaviour with small synthetic
-  inputs and no models. **Limit and use-case tests** exercise parameter boundaries and realistic use
-  cases with real backends. Tests are short and named for the behaviour they check. Parametrisation
-  enumerates meaningful cases, never encoded history. **Benchmarks** are a separate evaluation on
-  public data, run as senselab pipelines with provenance, tracked over releases rather than gated as
-  pass/fail.
+- **Statement**: Tests come in tiers (`testing.md`):
+  - **logic**: behaviour, with small synthetic inputs and no models;
+  - **contract**: generated from declarations;
+  - **limits**: parameter boundaries with real backends;
+  - **use case**: realistic end-to-end pipelines;
+  - **env**: locked environments build and round-trip.
+
+  Tests are short and named for the behaviour they check. Parametrisation enumerates meaningful
+  cases, never encoded history. **Benchmarks** are a separate evaluation on public data, run as
+  senselab pipelines with provenance and tracked over releases rather than gated as pass/fail.
 - **Source**: owner, 2026-10-30: "many tests in current senselab are overly verbose or strangely
   parameterized ... some tests should just exercise logic, and some tests should exercise the limits
   of parameters and use cases. then there should be benchmarks as a separate evaluation with public
@@ -348,54 +341,35 @@ How 2.x is built. These bind the people and agents building it, not the API.
 
 ## Inherited principles
 
-These are existing senselab rules that the 2.x design must keep. They are recorded here so the API
-design does not lose them. Amending one also means amending its origin.
+Existing senselab rules that 2.x keeps. The full text is in `CLAUDE.md`; amending one also means
+amending its origin.
 
 ### P-16 Load by commit, never by ref
-- **Status**: active
-- **Statement**: Resolving a ref to a SHA binds nothing by itself. Every load passes the resolved
-  SHA.
-- **Source**: inherited, `CLAUDE.md` ("A model load must pass a commit SHA, never a ref").
-- **Check**: `src/tests/utils/revision_pinning_guard_test.py`, or its 2.x successor, covers every
-  loader.
+- **Status**: active. **Statement**: every load passes a resolved commit SHA. **Source**:
+  `CLAUDE.md`. **Check**: the revision-pinning guard, or its 2.x successor, covers every loader.
 
 ### P-17 Thresholds are data with a derivation
-- **Status**: active
-- **Statement**: Thresholds and fitted constants live in versioned data profiles with a written
-  derivation, never as code literals. Profiles are regenerated from measurements, not hand-edited.
-- **Source**: inherited, `CLAUDE.md` ("Thresholds belong in `data/`").
-- **Check**: no numeric decision constant appears in task or pipeline code without a profile key.
+- **Status**: active. **Statement**: decision constants live in versioned data profiles with a
+  derivation, and are regenerated rather than hand-edited. **Source**: `CLAUDE.md`. **Check**: a lint
+  flags numeric literals in `decide` tasks that have no profile key.
 
 ### P-18 Configuration, not flags
-- **Status**: active
-- **Statement**: Entry points take inputs and a configuration. Knobs are config keys with a
-  derivation, deep-merged over packaged defaults, and the merged config hash is stamped into every
-  output. Entry points do not grow per-knob flags.
-- **Source**: inherited, `CLAUDE.md` ("The CLI is two arguments").
-- **Check**: CLI entry points take an input, an output and an optional config only.
+- **Status**: active. **Statement**: entry points take inputs and configuration, and the merged
+  configuration hash is stamped into outputs. **Source**: `CLAUDE.md`. **Check**: entry points take
+  inputs plus profiles (config, dataset profile, execution), with no per-knob flags.
 
 ### P-19 Cache invalidation is cheap
-- **Status**: active
-- **Statement**: Cache keys are content- and commit-aware. When cached semantics change, bump the
-  schema version rather than reasoning about which entries survive.
-- **Source**: inherited, `CLAUDE.md` ("Cache invalidation is free", "Cache keys are commit-aware").
-- **Check**: the cache key includes the schema version, task version, model identity (P-4),
-  parameters and input identity.
+- **Status**: active. **Statement**: keys are content- and commit-aware; bump the schema rather than
+  reason about survivors. **Source**: `CLAUDE.md`. **Check**: the canonical key in `design.md` §4.8.
 
 ### P-20 Measurements and decisions are separate layers
-- **Status**: active
-- **Statement**: Nodes that measure emit measurements. Decisions over measurements are separate,
-  declared nodes.
-- **Source**: inherited, `src/senselab/audio/workflows/audio_analysis/doc.md` (L1 measures, L2
-  decides).
-- **Check**: a measurement node's output schema carries no verdict fields.
+- **Status**: active. **Statement**: measuring nodes emit measurements; decisions are separate,
+  declared nodes. **Source**: `audio_analysis/doc.md`. **Check**: the generated contract suite
+  asserts that `measure` outputs carry no verdict fields.
 
 ### P-21 Rationale lives in specs
-- **Status**: active
-- **Statement**: Code and docstrings say what a thing is and how to call it. The reasons behind a
-  choice live in `specs/`.
-- **Source**: inherited, `CLAUDE.md` ("Rationale does not go in code").
-- **Check**: review.
+- **Status**: active. **Statement**: code says what and how; the reasons go to `specs/`.
+  **Source**: `CLAUDE.md`. **Check**: the prose lint (`engineering.md`) and review.
 
 ---
 
@@ -428,3 +402,13 @@ design does not lose them. Amending one also means amending its origin.
   `engineering.md`.
 - 2026-10-30: amended P-32 (meaning change). fastio is the exemplar of algorithmic efficiency, not
   of brevity; the remaining standards come from current best practice.
+- 2026-10-30: consistency revision after the five reviews (`review-register.md`).
+  - Shortened the change rules.
+  - Condensed P-16..P-21 to one-line statements with links.
+  - Fixed Check fields: P-7 (catalogue tables from the scale ladder), P-17 (decide-literal lint),
+    P-18 (inputs plus profiles), P-19 (canonical key), P-20 (contract check), P-24 (adoption in
+    Phase 4), P-25 (numerics identity; env-tier import audit), P-21 (prose lint).
+  - Amended P-30 to name the tiers in `testing.md`. This is a wording alignment, not a change of
+    meaning.
+- 2026-10-30: fixed the P-23 Check field. The CI gate equals the run-time default, including
+  transitive packages; the previous Check contradicted the statement.

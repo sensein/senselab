@@ -91,7 +91,7 @@ The implementations:
 2. **A payload that is not a cloudpickle of the function.** Interpreters differ (3.10 vs 3.13),
    and cloudpickle by-value is not portable across Python versions. Use an importable reference
    `module:qualname` plus inputs encoded as JSON or `.npy`, run by a small stdlib runner inside the
-   venv. That runner is exactly senselab's worker runtime (design §4.11).
+   venv. That runner is exactly senselab's worker runtime (design §4.12).
 3. **Output decoding back into `Outputs`.** The values come back as files or JSON and are validated
    on the host.
 4. **Optional persistence.** A one-shot subprocess per job is simple. A resident process is
@@ -222,7 +222,7 @@ checksum (section 2). No pydra change is needed for that part.
      up to *k* items or *t* ms. It groups them by `(task type, resource identity)`, makes one
      batched call (the task declares `batch_function`), then completes each `Job` separately
      through `ResultStore.commit`. **This needs no submitter change**; it does need
-     per-element dataflow (PR 1 in `workflow-engines.md`), or batches only form within one
+     per-element dataflow (proposal 0001 E1/E2), or batches only form within one
      node's split.
 - *Upstream:* the `Resident` field marker, the provider protocol on `Worker`, the batching worker,
   and `chdir` removal so that several jobs share one process safely. *senselab:* the providers
@@ -260,7 +260,7 @@ checksum (section 2). No pydra change is needed for that part.
     pydra-compatible result.
   - pydra keeps doing expansion, caching and dependency order; senselab owns placement and pools.
   - Limits: one worker per submitter (section 1), the pickle cache (section 5), and the barrier
-    semantics (PR 1).
+    semantics (proposal E1/E2).
 - **B. A compile API upstream.** `Submitter` is split in two:
   - a `GraphRunner`, which tracks ready jobs, does lazy resolution and state expansion, and reads
     results from a `ResultStore`;

@@ -5,7 +5,7 @@ Status: draft, 2026-10-30. Evidence and citations:
   Nextflow prototype measurement;
 - [`pydra-extension-points.md`](pydra-extension-points.md);
 - pydra [proposal 0001](https://github.com/nipype/pydra/blob/enh/execution-extensions/proposals/0001-execution-extensions.md),
-  cited as §3.n.
+  cited by PR id (A0…J2).
 
 The pydra facts were measured or read at `nipype/pydra@c5081a6` (v1.0a12). Facts about other
 engines come from their documentation; cells carried over with a † in `workflow-engines.md` were
@@ -46,15 +46,15 @@ Legend:
 | G1 declarative graph | **●** static workflow, typed definitions | ○ futures; the graph unfolds as code runs | ◐ `.bind()` DAG API; usual use is imperative | ◐ `delayed` graphs are static; futures are not | ○ plain Python, no static DAG | ● rule DAG, dry-run | ◐ channels; stub runs | ● function DAG |
 | G2 nest/ports/fan-out/route/loop | **●** nesting, split/combine, lazy typed fields; loops via nested workflows | ◐ dynamic, untyped | ◐ dynamic, untyped | ◐ untyped | ◐ untyped | ◐ file-typed; no loops | ◐ channel-typed | ◐ no loops |
 | G3 caller-controlled keys | **●** `__bytes_repr__` hashing | ● `id_for_memo` | ○ | ○ | ● `cache_key_fn` | ◐ files and params | ◐ staged-file hash; changing one model recomputed 14 of 18 tasks (measured in senselab) | ◐ |
-| G4 NFS-safe, portable results | ◐ pickles and soft locks → §3.3, §3.4 | ◐ NFS safety undocumented | ○ | ○ | ◐ FS/Redis locks | ● files | ● work directories | ◐ |
-| G5 per-node venv, mixed Python | ◐ shell tasks have envs; Python tasks do not → §3.7 | ◐ `worker_init` per executor | ○ Python and Ray versions must match the cluster | ○ workers match client versions | ○ | ◐ conda/apptainer per rule, not uv | ◐ conda/containers per process | ○ |
-| G6 resident model + batching | ◐ → §3.8 | ◐ module-global state in a worker | **●** actors, `@serve.batch` | ◐ actors without fault tolerance | ○ | ○ process per job | ○ process per task | ○ |
-| G7 heterogeneous routing | ◐ one worker per Submitter → §3.5, §3.6 | ● per-app executors | ● per-task resources | ◐ worker resources | ◐ via runners | ● per-rule resources | ● per-process executors | ○ |
-| G8 Slurm pools + laptop | ◐ one sbatch per job; crashes on `--error` → §3.9 | **●** HTEX pilots on SlurmProvider | ◐ community Slurm guide; macOS single-node | ◐ dask-jobqueue, no release since 2024-08 | ○ | ● executor plugin | ● | ○ |
-| G9 per-item overhead | ◐ 4–5 ms cold, 2–3 ms cached (measured upper bound) → §3.2 targets <0.5 ms | ● | ● | ● 0.2–1 ms | ○ API state write per task | ○ DAG build slows at 10⁵+ jobs | ○ work directory per task | ● in-process |
-| G10 keep-going | ○ today: 7 of 8 healthy items blocked (measured) → §3.1 | ● | ● | ● | ● | ● `--keep-going` | ◐ `errorStrategy` | ◐ |
+| G4 NFS-safe, portable results | ◐ pickles and soft locks → D1, C, D2 | ◐ NFS safety undocumented | ○ | ○ | ◐ FS/Redis locks | ● files | ● work directories | ◐ |
+| G5 per-node venv, mixed Python | ◐ shell tasks have envs; Python tasks do not → G1, G2 | ◐ `worker_init` per executor | ○ Python and Ray versions must match the cluster | ○ workers match client versions | ○ | ◐ conda/apptainer per rule, not uv | ◐ conda/containers per process | ○ |
+| G6 resident model + batching | ◐ → H0, H | ◐ module-global state in a worker | **●** actors, `@serve.batch` | ◐ actors without fault tolerance | ○ | ○ process per job | ○ process per task | ○ |
+| G7 heterogeneous routing | ◐ one worker per Submitter → F1, F2 | ● per-app executors | ● per-task resources | ◐ worker resources | ◐ via runners | ● per-rule resources | ● per-process executors | ○ |
+| G8 Slurm pools + laptop | ◐ one sbatch per job; crashes on `--error` → A0–A2, I | **●** HTEX pilots on SlurmProvider | ◐ community Slurm guide; macOS single-node | ◐ dask-jobqueue, no release since 2024-08 | ○ | ● executor plugin | ● | ○ |
+| G9 per-item overhead | ◐ 4–5 ms cold, 2–3 ms cached (measured upper bound) → B2 targets <0.5 ms | ● | ● | ● 0.2–1 ms | ○ API state write per task | ○ DAG build slows at 10⁵+ jobs | ○ work directory per task | ● in-process |
+| G10 keep-going | ○ today: 7 of 8 healthy items blocked (measured) → E1, E2 | ● | ● | ● | ● | ● `--keep-going` | ◐ `errorStrategy` | ◐ |
 | G11 inline debugging | **●** debug worker | ● ThreadPool | ○ `local_mode` discouraged | ● synchronous scheduler | ◐ | ○ not inline Python | ○ JVM | ● |
-| G12 provenance hook | ◐ `post_run_task` hook exists; audit unfinished → §3.10 | ◐ monitoring DB | ○ | ○ | ◐ events | ◐ reports | ◐ trace and lineage | ◐ |
+| G12 provenance hook | ◐ `post_run_task` hook exists; audit unfinished → J1 | ◐ monitoring DB | ○ | ○ | ◐ events | ◐ reports | ◐ trace and lineage | ◐ |
 | G13 light, permissive | **●** 7 dependencies, Apache-2.0 | ◐ medium | ○ heavy | ◐ medium | ○ server and database | ◐ | ○ JVM | ● |
 | G14 governance | **●** the owner leads pydra; changes ship in 1.0 alphas | ○ external | ○ external | ○ external | ○ external | ○ external | ○ external | ○ external |
 
@@ -92,7 +92,7 @@ execution model.
   all.
 
 **The count is close, and the choice rests on which gaps can be fixed.** pydra and Parsl each
-meet six requirements today. pydra has one ○ (G10), which §3.1 closes. Parsl has two: G1, which
+meet six requirements today. pydra has one ○ (G10), which E1/E2 close. Parsl has two: G1, which
 is structural, and G14. The choice is pydra because its gaps are fixable by senselab and are work
 senselab must do anyway, while Parsl's G1 gap is structural.
 
@@ -101,10 +101,14 @@ senselab must do anyway, while Parsl's G1 gap is structural.
 - **Maturity.** pydra 1.0 is alpha (1.0a12), and `pip install pydra` still gives 0.25. One
   developer wrote about 70% of the last year's non-bot commits. senselab's dependence on pydra
   increases the maintenance load on the pydra project.
-- **Risk.** §3.1 (per-element dataflow) is high-risk: it needs the State refactor, and it gates
+- **Risk.** E1/E2 (per-element dataflow) is high-risk: it needs the State refactor, and it gates
   corpus-scale use.
-- **Mitigation.** senselab depends only on pydra's graph layer (Route A in `execution.md` §4),
-  behind its own `Executor` protocol and result store. If the gating changes stall, the fallback
-  is a 1–2k-line graph layer in senselab (`design.md` §4.8). No senselab user code would change.
+- **Mitigation.** senselab uses pydra through Route A (`execution.md` §4): a pydra Submitter for
+  the graph, a pool worker plugin for execution, and senselab's own store and identity
+  (`design.md` §4.8). pydra changes are used from the branch.
+  - Decision gate at the start of Phase 3: if E1, D1 and F2 are not working, senselab builds its
+    own graph layer behind the same `Executor` protocol (2–4k lines, 3–5 person-weeks;
+    `design.md` §4.9).
+  - No senselab user code would change.
 - **Where others stay better.** For multi-node tensor-parallel inference, Ray would be revisited.
-  Parsl's HTEX remains a reference design for the pool worker (§3.9).
+  Parsl's HTEX remains a reference design for the pool worker (I).

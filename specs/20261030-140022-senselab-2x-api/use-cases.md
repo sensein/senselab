@@ -1,6 +1,6 @@
 # senselab 2.x: use cases, models and the signal taxonomy
 
-Research note for `specs/20261030-140022-senselab-2x-api/design.md` (sections 4.1, 4.2, 4.10, 4.12).
+Research note for `specs/20261030-140022-senselab-2x-api/design.md` (now §4.1 data, §4.2 tasks, §4.11 modalities, §4.13 licenses, §4.15 signal tiers).
 Licences were checked on 2026-10-30 against the GitHub licence API or LICENSE text, Hugging Face card
 metadata and PyPI. Anything not confirmed from a primary source is marked **unverified**.
 
@@ -149,7 +149,7 @@ The traps are:
 - AGPL RAPIDS;
 - NC weights: HuBERT-ECG, Moirai.
 
-All of them fit the design's `License` record (4.12), which needs a `LicenseRef-Oxford-Academic-Use`
+All of them fit the design's `License` record (§4.13), which needs a `LicenseRef-Oxford-Academic-Use`
 entry and a "conflicting sources" note for pyPPG and PyGaze.
 
 ## 3. Data standards
@@ -256,7 +256,7 @@ Metadata every reader must normalise into the core type:
    - `Signal{data: (channels, samples), sampling_rate, channels: [ChannelInfo{name, type, units,
      component?, tracked_point?, reference?}], start: TimeAnchor, device: DeviceInfo, identity}`.
    - `Audio` becomes `Signal` with `type="audio"` and units = full-scale.
-   - Make 4.10's `Track[T]` the same `Signal` (regular) or `IrregularSignal`, so f0, HR, ENMO and
+   - Make the `Track[T]` of the original §4.10 the same `Signal` (regular) or `IrregularSignal`, so f0, HR, ENMO and
      facial-AU intensity series all flow into the generic tasks of 4(a).
    - Keep dtypes per channel: actigraphy and ADC data arrive as int16/int32 with gain. Allow
      float64 where precision matters (timestamps, EDA).
@@ -306,7 +306,7 @@ Metadata every reader must normalise into the core type:
   `sl.physio.ecg_rpeaks` are sugar over the family task, as 4.2 already does for typed functions.
 - **Type-driven dispatch.** A task's `inputs` declare `Signal[type in {...}, units]`, so the
   planner and `sl.describe` can tell an agent "these 14 tasks accept your ACCEL channel".
-- **Bridges (4.10) gain physio entries**, for example:
+- **Bridges (§4.11) gain physio entries**, for example:
   - ECG/PPG → respiration;
   - accelerometer + PPG → motion-corrected pulse;
   - video → respiration (rPPG);
@@ -318,7 +318,7 @@ Metadata every reader must normalise into the core type:
   SKDH, GGIR via R, ECG-FM, MOMENT), so a `commercial_use: required` policy remains satisfiable for
   most chains. Actigraphy sleep/steps is the main gap: asleep and stepcount are NC, so the permissive
   path is SKDH or GGIR.
-- **Environments.** R (GGIR) and Java (actipy) are new non-Python runtimes. The env layer (4.10)
+- **Environments.** R (GGIR) and Java (actipy) are new non-Python runtimes. The env layer (§4.11)
   must declare non-pip requirements, as it already does for TF.
 
 ## Unverified items to resolve before adding them to the catalogue
