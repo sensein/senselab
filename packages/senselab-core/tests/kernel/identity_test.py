@@ -6,6 +6,7 @@ import unicodedata
 
 import numpy
 import pytest
+import senselab_core.kernel.identity as identity
 from pydantic import ValidationError
 from senselab_core.kernel.identity import (
     DEFAULT_REUSE_POLICY,
@@ -78,7 +79,7 @@ def test_key_ignores_param_order_and_unicode_form() -> None:
         ("profile_slices", {"p": "s"}),
         ("batch_formation", "bucket-1s"),
         ("chunk_grid", "30s"),
-        ("schema", 2),
+        ("schema_version", 2),
     ],
 )
 def test_key_changes_with_each_identity_field(field: str, value: object) -> None:
@@ -90,7 +91,7 @@ def test_key_changes_with_each_identity_field(field: str, value: object) -> None
 def test_context_is_not_in_key() -> None:
     """The key holds the ADR-002 logical fields and nothing from the execution context."""
     assert set(LogicalKey.model_fields) == {
-        "schema",
+        "schema_version",
         "task",
         "task_version",
         "backend",
@@ -110,7 +111,7 @@ def test_digest_is_sha256_of_the_jcs_of_the_fields() -> None:
     """The digest is reproducible from the fields alone, by any implementation of JCS and sha256."""
     k = _key(model=COMMIT, params={"beam": 5, "lang": "en", "t": [0.5, None]}, inputs={"audio": SHA256})
     expected = {
-        "schema": 1,
+        "schema_version": 1,
         "task": "t",
         "task_version": "1",
         "backend": "b",
@@ -170,21 +171,22 @@ def test_key_accepts_numpy_scalars_as_their_python_values() -> None:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("schema", [0, 1.0, True, "1"])
-def test_key_schema_is_a_positive_integer(schema: object) -> None:
-    """The schema is a strict positive integer."""
+@pytest.mark.parametrize("schema_version", [0, 1.0, True, "1"])
+def test_key_schema_version_is_a_positive_integer(schema_version: object) -> None:
+    """The schema version is a strict positive integer."""
     with pytest.raises(ValidationError):
-        _key(schema=schema)
+        _key(schema_version=schema_version)
 
 
 # Execution context and reuse policy
 
 
 @pytest.mark.logic
-def test_fingerprint_excludes_host_only() -> None:
-    """The host does not reach the fingerprint; every other context field does."""
+def test_fingerprint_excludes_host_and_protocol() -> None:
+    """Host and protocol do not reach the fingerprint; every other context field does."""
     base = _ctx()
     assert _ctx(host="node2").fingerprint() == base.fingerprint()
+    assert _ctx(protocol="worker-beef/wire-2").fingerprint() == base.fingerprint()
     for field, value in [
         ("env_lock", "c" * 64),
         ("platform", "macosx-arm64"),
@@ -192,7 +194,6 @@ def test_fingerprint_excludes_host_only() -> None:
         ("numerics", {"device": "cuda", "arch": "sm90", "precision": "bf16"}),
         ("decoder", None),
         ("driver", {"cuda": "12.9"}),
-        ("protocol", "worker-beef/wire-2"),
     ]:
         assert _ctx(**{field: value}).fingerprint() != base.fingerprint(), field
 
@@ -218,27 +219,53 @@ def test_default_policy_is_equivalent() -> None:
 def test_equivalent_without_measurement_is_exact() -> None:
     """With no measured equivalence class, `equivalent` reuses only the same context; `tolerant` any."""
     c1, c2 = _ctx(platform="linux"), _ctx(platform="macos")
-    assert acceptable(c1, c1, ReusePolicy.EQUIVALENT) and not acceptable(c1, c2, ReusePolicy.EQUIVALENT)
-    assert acceptable(c1, c2, ReusePolicy.TOLERANT)
-    assert acceptable(c1, c1, ReusePolicy.EXACT) and not acceptable(c1, c2, ReusePolicy.EXACT)
+    assert acceptable(c1, c1, ReusePolicy.EQUIVALENT, backend="b") and not acceptable(
+        c1, c2, ReusePolicy.EQUIVALENT, backend="b"
+    )
+    assert acceptable(c1, c2, ReusePolicy.TOLERANT, backend="b")
+    assert acceptable(c1, c1, ReusePolicy.EXACT, backend="b") and not acceptable(c1, c2, ReusePolicy.EXACT, backend="b")
 
 
 @pytest.mark.logic
 def test_another_host_is_the_same_context() -> None:
     """A result from another host with an identical context is reused even under `exact`."""
-    assert acceptable(_ctx(host="laptop"), _ctx(host="node7"), ReusePolicy.EXACT)
+    assert acceptable(_ctx(host="laptop"), _ctx(host="node7"), ReusePolicy.EXACT, backend="b")
+
+
+@pytest.mark.logic
+def test_another_protocol_is_the_same_context() -> None:
+    """A result recorded under another worker protocol with an identical context is reused under `exact`."""
+    stored, current = _ctx(protocol="worker-c0ffee/wire-1"), _ctx(protocol="worker-beef/wire-2")
+    assert acceptable(stored, current, ReusePolicy.EXACT, backend="b")
+    assert stored.protocol != current.protocol
 
 
 @pytest.mark.logic
 def test_equivalent_reuses_within_a_measured_class(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two contexts in one measured class are equivalent; `exact` still refuses them."""
-    import senselab_core.kernel.identity as identity
-
+    """Two contexts in one of the backend's measured classes are equivalent; `exact` still refuses them."""
     c1, c2, c3 = _ctx(platform="linux"), _ctx(platform="macos"), _ctx(platform="windows")
-    monkeypatch.setattr(identity, "EQUIVALENCE", {"cpu-fp32": frozenset({c1.fingerprint(), c2.fingerprint()})})
-    assert acceptable(c1, c2, ReusePolicy.EQUIVALENT) and acceptable(c2, c1, ReusePolicy.EQUIVALENT)
-    assert not acceptable(c1, c3, ReusePolicy.EQUIVALENT)
-    assert not acceptable(c1, c2, ReusePolicy.EXACT)
+    classes = {"cpu-fp32": frozenset({c1.fingerprint(), c2.fingerprint()})}
+    monkeypatch.setattr(identity, "EQUIVALENCE", {"b": classes})
+    assert acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="b") and acceptable(
+        c2, c1, ReusePolicy.EQUIVALENT, backend="b"
+    )
+    assert not acceptable(c1, c3, ReusePolicy.EQUIVALENT, backend="b")
+    assert not acceptable(c1, c2, ReusePolicy.EXACT, backend="b")
+
+
+@pytest.mark.logic
+def test_equivalence_is_scoped_to_its_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A class measured for backend A does not make the same contexts equivalent for backend B."""
+    c1, c2 = _ctx(platform="linux"), _ctx(platform="macos")
+    monkeypatch.setattr(identity, "EQUIVALENCE", {"A": {"cpu-fp32": frozenset({c1.fingerprint(), c2.fingerprint()})}})
+    assert acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="A")
+    assert not acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="B")
+
+
+@pytest.mark.logic
+def test_phase_1_has_no_measured_equivalence() -> None:
+    """The packaged equivalence table is empty in Phase 1."""
+    assert dict(identity.EQUIVALENCE) == {}
 
 
 # Model references

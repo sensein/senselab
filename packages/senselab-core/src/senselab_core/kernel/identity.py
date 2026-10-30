@@ -2,7 +2,6 @@
 
 import json
 import re
-import warnings
 from collections.abc import Mapping
 from enum import Enum
 from typing import Annotated, Any, Literal
@@ -133,36 +132,36 @@ Params = Annotated[
 """A JSON object held in its RFC 8785 canonical value, deeply read-only (objects as mappings, arrays as tuples)."""
 
 
-with warnings.catch_warnings():
-    warnings.filterwarnings("ignore", message='Field name "schema"', category=UserWarning)
+class LogicalKey(Frozen):
+    """The exact, portable identity of a task call (ADR-002).
 
-    class LogicalKey(Frozen):
-        """The exact, portable identity of a task call (ADR-002).
+    `model` is the weight identity; `params` is canonicalised (NFC strings, JCS numbers) at
+    construction and refused if it is not JSON; `inputs` maps input names to content or upstream
+    output identities. No execution context, code or environment is part of the key.
+    """
 
-        `model` is the weight identity; `params` is canonicalised (NFC strings, JCS numbers) at
-        construction and refused if it is not JSON; `inputs` maps input names to content or upstream
-        output identities. No execution context, code or environment is part of the key.
-        """
+    schema_version: Annotated[int, Strict(), Field(ge=1)] = 1
+    task: NonEmptyStr
+    task_version: NonEmptyStr
+    backend: NonEmptyStr
+    backend_version: NonEmptyStr
+    model: NonEmptyStr | None
+    params: Params
+    inputs: StrMap
+    profile_slices: StrMap = FrozenMapping({})
+    batch_formation: NonEmptyStr | None = None
+    chunk_grid: NonEmptyStr | None = None
 
-        schema: Annotated[int, Strict(), Field(ge=1)] = 1  # type: ignore[assignment]
-        task: NonEmptyStr
-        task_version: NonEmptyStr
-        backend: NonEmptyStr
-        backend_version: NonEmptyStr
-        model: NonEmptyStr | None
-        params: Params
-        inputs: StrMap
-        profile_slices: StrMap = FrozenMapping({})
-        batch_formation: NonEmptyStr | None = None
-        chunk_grid: NonEmptyStr | None = None
-
-        def digest(self) -> str:
-            """Return the sha256 hex of the JCS of the key's fields."""
-            return sha256_bytes(jcs_dumps(self.model_dump()))
+    def digest(self) -> str:
+        """Return the sha256 hex of the JCS of the key's fields."""
+        return sha256_bytes(jcs_dumps(self.model_dump()))
 
 
 class ExecutionContext(Frozen):
-    """Where and how a result was computed; recorded with each result, never keyed (ADR-002)."""
+    """Where and how a result was computed; recorded with each result, never keyed (ADR-002).
+
+    `protocol` is recorded but checked only at the worker handshake, so it is not fingerprinted.
+    """
 
     env_lock: NonEmptyStr
     platform: NonEmptyStr
@@ -174,8 +173,8 @@ class ExecutionContext(Frozen):
     protocol: NonEmptyStr
 
     def fingerprint(self) -> str:
-        """Return the sha256 hex of the JCS of every field except `host`."""
-        return sha256_bytes(jcs_dumps(self.model_dump(exclude={"host"})))
+        """Return the sha256 hex of the JCS of every field except `host` and `protocol`."""
+        return sha256_bytes(jcs_dumps(self.model_dump(exclude={"host", "protocol"})))
 
 
 class ReusePolicy(str, Enum):
@@ -188,19 +187,19 @@ class ReusePolicy(str, Enum):
 
 DEFAULT_REUSE_POLICY = ReusePolicy.EQUIVALENT
 
-EQUIVALENCE: dict[str, frozenset[str]] = {}
-"""Measured equivalence classes: class name to the context fingerprints in it."""
+EQUIVALENCE: Mapping[str, Mapping[str, frozenset[str]]] = {}
+"""Measured equivalence classes per backend: backend name to class name to the context fingerprints in it."""
 
 
-def acceptable(stored: ExecutionContext, current: ExecutionContext, policy: ReusePolicy = DEFAULT_REUSE_POLICY) -> bool:
-    """Return whether a result computed in `stored` may be reused in `current` under `policy`.
+def acceptable(stored: ExecutionContext, current: ExecutionContext, policy: ReusePolicy, *, backend: str) -> bool:
+    """Return whether a result `backend` computed in `stored` may be reused in `current` under `policy`.
 
-    `exact` needs equal fingerprints; `equivalent` also accepts two fingerprints in one class of
-    `EQUIVALENCE`; `tolerant` accepts any context.
+    `exact` needs equal fingerprints; `equivalent` also accepts two fingerprints in one of the
+    backend's classes in `EQUIVALENCE`; `tolerant` accepts any context.
     """
     if policy is ReusePolicy.TOLERANT:
         return True
     a, b = stored.fingerprint(), current.fingerprint()
-    if a == b or policy is ReusePolicy.EXACT:
+    if policy is ReusePolicy.EXACT or a == b:
         return a == b
-    return any(a in members and b in members for members in EQUIVALENCE.values())
+    return any(a in members and b in members for members in EQUIVALENCE.get(backend, {}).values())
