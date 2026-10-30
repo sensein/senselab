@@ -301,13 +301,20 @@ How 2.x is built. These bind the people and agents building it, not the API.
 - **Source**: owner, 2026-10-30: "we want to make verbosity minimal for the human and any agent".
 - **Check**: prose lint budgets; review. See `engineering.md`.
 
-### P-32 Clear, compact, efficient code
+### P-32 Clean, robust, reusable, efficient code
 - **Status**: active
-- **Statement**: Code is clear to read and compact: thin public surfaces over shared engines, no
-  duplicated logic, small typed functions. `utils/fastio.py` is the exemplar.
+- **Statement**: Code follows current best practice for clean, robust, reusable and efficient code:
+  deep modules with thin surfaces, a functional core with an imperative shell, one implementation
+  per concept, explicit types and errors, and no duplicated logic.
+  - Performance problems are solved algorithmically, chosen for the cost model. That means
+    vectorisation, streaming, batching, and concurrency for latency-bound work, not naive loops.
+  - `utils/fastio.py` is the exemplar of that elegant, testable, robust algorithmic efficiency.
 - **Source**: owner, 2026-10-30: "code itself should be clear to read and compact/efficient (think
-  fastio code)".
-- **Check**: ruff complexity, mypy, duplicate-code check, size budgets.
+  fastio code)"; "the fastio example was more about an elegant, testable, robust algorithmic
+  efficiency instead of just writing for loops. the rest of the pieces should come from best
+  practices in the field today for clean, robust, reusable, and efficient code".
+- **Check**: ruff (including complexity), mypy strict on core, import-linter, a duplicate-code
+  check, the scale ladder (P-33), and review against `engineering.md`.
 
 ### P-33 Profiling detects inefficiency at every scale
 - **Status**: active
@@ -419,3 +426,5 @@ design does not lose them. Amending one also means amending its origin.
 - 2026-10-30: added P-30 (test tiers) and P-31..P-35 (engineering standards: verbosity, compact
   code, profiling at scale, brittleness, adversarial agents). Their per-commit rules are in
   `engineering.md`.
+- 2026-10-30: amended P-32 (meaning change). fastio is the exemplar of algorithmic efficiency, not
+  of brevity; the remaining standards come from current best practice.
