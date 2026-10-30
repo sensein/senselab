@@ -767,19 +767,19 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
 
 ### 6.4 Cut or deferred for 2.0 (R-53)
 
-Each cut keeps its interface or hook, and is added when a measurement or a use case asks for it.
+Each cut keeps its interface or hook, and is added when a measurement or a use case asks for it. Rows marked *proposed* weaken an owner principle and are not settled until the owner decides.
 
 | Cut or deferred | 2.0 instead | Added when |
 |---|---|---|
 | Env-merging solver (P-24 grouping) | one env per backend; the grouping report is still produced | the env count or resident memory is measured as a problem |
 | Packed store tier; GPU token arbiter | the plain store; static caps; OOM as a resource fault | the scale ladder shows inode or OOM pressure |
-| License taint algebra and set combinators | license records, a plan-time check, transitive CI, and one union default set | a user needs a restrictive policy |
+| *Proposed, owner to decide (conflicts with P-23):* license taint algebra and set combinators | license records, a plan-time check, transitive CI, and one union default set | a user needs a restrictive policy |
 | pixi (conda-forge) envs | uv venvs only | the first R or Java backend is ported |
-| vLLM-omni stack | vLLM only | the first omni model is in the catalogue |
+| *Proposed, owner to decide (conflicts with P-8, which names vLLM-omni):* vLLM-omni stack | vLLM only | the first omni model is in the catalogue |
 | `sl.eeg`, `sl.eyetrack`, `sl.motion` namespaces | `sl.signal` generic tasks only | the first task exists in that modality |
 | `sl.sklearn` adapter | `ResultSet.to_frame()` | users ask for it |
 | Route B (pydra runner/executor split) | Route A | pydra RFC 3.10 lands |
-| Prose-lint banned-word rules | a review norm | — |
+| *Proposed, owner to decide (conflicts with P-31's check):* prose-lint banned-word rules | a review norm | — |
 
 **Kept for 2.0:**
 - the kernel and runtime;
