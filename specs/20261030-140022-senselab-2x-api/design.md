@@ -524,7 +524,7 @@ Constraints from the current locks:
 
 | Constraint | Today | Requirement for core |
 |---|---|---|
-| Python | envs use 3.10 (2), 3.11 (10), 3.12 (16), 3.13 (1); the host is `>=3.11` | `requires-python >=3.10`; syntax and stdlib at the 3.10 level (ruff `target-version = "py310"` for core; `typing_extensions` for `Self` and similar) |
+| Python | envs use 3.10 (2), 3.11 (10), 3.12 (16), 3.13 (1); the host is `>=3.11` | only non-EOL CPython (P-22): `requires-python >=3.11` at 2.0, raised as versions reach EOL. Re-lock the two 3.10 envs (child-adult-diarization: torch 2.3.0; unasdiff: torch 2.6.0, numpy 1.23.5) on 3.11, since both pins publish 3.11 wheels. Ruff `target-version` for core = the floor |
 | numpy | six envs pin 1.x, oldest `1.23.5` (unasdiff) | `numpy >=1.23`; no numpy-2-only API; tested at both ends |
 | pydantic | absent or v2 in every lock; no v1 pin | `pydantic >=2,<3`. A future env that needs v1 is a lock-time error, not a silent downgrade |
 | other deps | — | only pure-python or wheel-everywhere dependencies with wide ranges |
@@ -545,7 +545,7 @@ Constraints from the current locks:
   - `serve_in_venv`.
 
   The planner, executors and catalogue are importable but unused there.
-- **CI:** core tests on 3.10–3.14 at minimum and maximum numpy, plus one test per env that imports
+- **CI:** core tests on every non-EOL Python (3.11–3.14 today) at minimum and maximum numpy, plus one test per env that imports
   core inside the built env and round-trips each data type over the wire.
 
 ### 4.12 Licenses are explicit and machine-readable (P-23)
@@ -648,11 +648,11 @@ cite principles.
   - the torch-free hardware probe;
   - no import side effects;
   - the shared timeline, annotation and embedding types (section 4.10);
-  - core at the Python 3.10 / numpy 1.23 floor (section 4.11);
+  - core at the Python 3.11 / numpy 1.23 floor, with the two 3.10 envs re-locked on 3.11 (section 4.11);
   - the `License` record, with licenses backfilled for all 50 catalogue entries and harvested from
     every env lock (section 4.12).
 - Exit:
-  - the core-only CI job is green on Python 3.10–3.14 (P-13, P-22);
+  - the core-only CI job is green on every non-EOL Python, 3.11–3.14 today (P-13, P-22);
   - the identity/cache/provenance tests pass with no torch installed (P-3, P-4, P-19);
   - the license-coverage test passes (P-23).
 

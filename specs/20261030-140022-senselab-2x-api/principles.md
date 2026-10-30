@@ -181,11 +181,13 @@ complies.
 ### P-22 Core runs on both sides of every environment boundary
 - **Status**: active
 - **Statement**: senselab core installs and imports in the host and inside every isolated
-  environment, across every Python version those environments use (3.10 and up today) and across
-  their numpy and pydantic ranges. Host and workers use the same core version, verified at
-  handshake.
+  environment, across every supported Python version and across the environments' numpy and
+  pydantic ranges. Supported Python versions are the CPython releases not past end-of-life; when a
+  version reaches EOL it is dropped from core and from every environment, and an environment pinned
+  to it is re-locked on a supported version. Host and workers use the same core version, verified
+  at handshake.
 - **Source**: owner, 2026-10-30: "can senselab core be used across subprocess venvs so that install
-  works across python versions".
+  works across python versions"; "we can drop python versions that will have gone into EOL".
 - **Check**: core CI runs on the full Python range at the minimum and maximum numpy. Every env build
   imports core and round-trips each data type over the wire.
 
@@ -277,3 +279,6 @@ None yet.
 - 2026-10-30: added P-22 (core in every environment), P-23 (licenses), P-24 (cross-modal sharing)
   from the owner's follow-up requests. Inherited principles keep ids P-16..P-21; new ids continue
   from P-22 because ids are never renumbered.
+- 2026-10-30: amended P-22 (meaning change). Its Python range now follows the CPython EOL schedule
+  instead of covering every version an env happens to use; this drops 3.10, which reaches EOL in
+  2026-10 (PEP 619).
