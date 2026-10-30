@@ -243,12 +243,14 @@ jobs:
         fetch-depth: 0   # hatch-vcs derives the version from tags
     - name: Install uv
       uses: astral-sh/setup-uv@v5
-    - name: Install the worker alone
+    - name: Build the worker wheel
+      run: uv build --wheel --out-dir dist packages/senselab-worker
+    - name: Install the wheel alone at the floor
       run: |
-        uv venv -p 3.10 .worker
-        uv pip install -p .worker ./packages/senselab-worker pytest pytest-timeout
+        uv venv -p 3.10 .floor
+        uv pip install --python .floor dist/senselab_worker-*.whl numpy==1.23.5 pytest pytest-timeout hypothesis
     - name: Run worker tests
-      run: .worker/bin/pytest packages/senselab-worker -m "logic or contract" -p no:cacheprovider
+      run: .floor/bin/pytest packages/senselab-worker/tests -m logic -p no:cacheprovider
 
   # ── EC2 GPU Runner Jobs ───────────────────────────────────────────────
   # Ephemeral GPU instances via machulav/ec2-github-runner.
