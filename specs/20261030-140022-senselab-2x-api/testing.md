@@ -178,4 +178,4 @@ files, not essays.
 - Gated or credentialed datasets run only where access is held, and their derived results are
   published only as their terms allow.
 
-The dataset choices per task and modality are in [`benchmarks.md`](benchmarks.md) (pending).
+The dataset choices per task and modality are in [`benchmarks.md`](benchmarks.md). It records each benchmark's license and access terms, which results may be published, reference scorers, smoke subsets, and cadence.
