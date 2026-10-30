@@ -168,7 +168,7 @@ pydra 1.0 alpha that senselab pins. They do not have to wait for a non-alpha rel
 
 Items 1–5 gate Route A. Items 6–11 can be developed in senselab first and upstreamed when stable.
 The design for these changes, written for pydra's users rather than senselab's, lives on the pydra
-branch (see `pydra-design.md` there).
+branch: [`proposals/0001-execution-extensions.md`](https://github.com/nipype/pydra/blob/enh/execution-extensions/proposals/0001-execution-extensions.md) on `nipype/pydra` branch `enh/execution-extensions`.
 
 ## 6. What stays senselab-only
 
