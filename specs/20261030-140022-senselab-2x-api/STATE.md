@@ -11,7 +11,8 @@ task or decision changes state. Newest entries go first in the log.
 | Durable worktree | `~/software/sensein/senselab-2x` (branch `senselab-2x-api`) |
 | 1.x freeze tag (Phase 0) | `1x-freeze-2026-10-30` → `19834fdd` (= `1.4.0-alpha.11`) |
 | pydra proposal | branch `enh/execution-extensions` → draft PR nipype/pydra#891; worktree `~/software/nipype/pydra-ext` |
-| Implementation branches | `2x/p1-<task>` off `alpha`, one PR per task to `alpha` (P-27) |
+| Implementation branch | `2x/phase-1` (worktree `~/software/sensein/senselab-2x-impl`), stacked on `senselab-2x-api`; one reviewed commit series per task; all spec edits during Phase 1 go here too (SDD ruling R2) |
+| SDD ledger | `.superpowers/sdd/phase-1/progress.md` in the impl worktree (git-ignored; task completion lines and rulings) |
 | Phase plans | `plans/phase-1.md` (this directory) |
 
 ## Document map (this directory)
@@ -42,7 +43,7 @@ task or decision changes state. Newest entries go first in the log.
 |---|---|
 | Design | done; owner approved 2026-10-30 ("go ahead") |
 | 0: freeze tag | done (`1x-freeze-2026-10-30`) |
-| 1: kernel, worker runtime, identity, store, data fetch | planned in `plans/phase-1.md` (16 tasks); execution not started |
+| 1: kernel, worker runtime, identity, store, data fetch | executing (subagent-driven); T0 done (no drift) |
 | 2–5 | not started |
 | pydra PRs (A0…K1) | proposed in #891; none implemented |
 
@@ -69,6 +70,9 @@ vLLM-omni kept, license taint kept and combinators deferred, prose review by mod
 4. Brief every delegated task as `engineering.md` requires.
 
 ## Log
+
+- **2026-10-30 (Phase 1 start):** P-39 scan found no drift (`origin/alpha` = `19834fdd` = every
+  ledger mark). Execution began on `2x/phase-1`.
 
 - **2026-10-30:**
   - Design completed through five reviews and an architect review.
