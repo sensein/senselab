@@ -856,3 +856,5 @@ Each cut keeps its interface or hook, and is added when a measurement or a use c
   - Licenses: taint propagation (I-9) stays in 2.0, and user-defined set combinators are deferred.
   - Prose: word lists are replaced by advisory review from a small pinned model plus agent
     sharpening (P-31).
+- **Docs and example data** (P-41): audiences, PR previews with a 2.x status page, and the
+  fixture-versus-pulled-data policy are in [`docs.md`](docs.md).

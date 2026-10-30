@@ -209,3 +209,9 @@ files, not essays.
   published only as their terms allow.
 
 The dataset choices per task and modality are in [`benchmarks.md`](benchmarks.md). It records each benchmark's license and access terms, which results may be published, reference scorers, smoke subsets, and cadence.
+
+## Test data
+
+Toy fixtures in the repository versus versioned data pulled from public sources follow
+[`docs.md`](docs.md) (data policy). The same manifest and fetch serve use-case tests, benchmarks
+and docs.

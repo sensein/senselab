@@ -238,6 +238,22 @@ it is amended here.
 ### P-30 Tests are tiered; benchmarks are separate
 - **Status**: active. Full text in [`engineering.md`](engineering.md#p-30).
 
+### P-41 Docs communicate senselab and its progress, with examples on public data
+- **Status**: active
+- **Statement**: The docs are written for scientists, clinicians and engineers, with rich examples
+  executed on public data, and every PR gets a preview that shows implementation progress. The
+  repository holds only toy fixtures (generated where possible; tiny and licensed otherwise).
+  Example and benchmark data are pulled from versioned, hash-verified manifests at build time and
+  never committed.
+- **Source**: owner, 2026-10-30: "have a PR preview for docs which should reflect clear structure
+  and communication of senselab for scientistists/clinicians/engineers with rich examples using
+  public data. this should also be a design consideration for toy testing examples stored in
+  senselab versus versioned data pulled from public resources for building the docs and not
+  committed to the repo".
+- **Check**: the PR preview builds with a status page. The fixture budget check passes. Every
+  example dataset has a manifest with hashes and a license record. No example data is tracked in
+  git.
+
 ### P-36 The flywheel is the roadmap goal; it informs, not forces
 - **Status**: active
 - **Statement**: senselab's long-term goal is a flywheel in which machines and humans iteratively
@@ -413,3 +429,5 @@ amending its origin.
 - 2026-10-30: added P-39 (reconcile concurrent 1.x work on `alpha`; `migration-ledger.md`).
 - 2026-10-30: added P-40 (agent and model selection per task, independent reviewers) with its
   roster in `engineering.md`.
+- 2026-10-30: added P-41 (docs for three audiences, PR previews showing progress, toy fixtures in
+  the repo versus pulled versioned data); see `docs.md`.
