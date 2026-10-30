@@ -62,6 +62,8 @@ The PR template carries this checklist. Pre-commit and CI check what they can.
 - [ ] New boundaries have bad-input, fault and property tests; there is no special-casing (P-34).
 - [ ] No identifiers; tests are scoped and serial (P-28, P-29).
 - [ ] Every new task, backend or profile is declared, so contract tests cover it (P-30).
+- [ ] The PR records the implementer and reviewer models, and they differ (P-40).
+- [ ] The ledger mark is current for any 1.x area touched (P-39).
 
 ## What "special-casing" means (rejected in review)
 
@@ -70,6 +72,49 @@ The PR template carries this checklist. Pre-commit and CI check what they can.
 - A retry, sleep or timeout added to hide a race instead of removing it.
 - A test that asserts the current output of a model, or a measured number, outside `benchmarks/`.
 - A try/except that turns an unknown failure into a default value.
+
+## Agents and model selection (P-40)
+
+Every 2.x task is done by an agent sized to it, and reviewed by a different one. The aim is speed
+without trading away P-31..P-39.
+
+| Task | Agent | Model, effort | Isolation |
+|---|---|---|---|
+| Lookups, inventories, fact checks, `migration-ledger.md` drift scans (P-39) | Explore | haiku, lower | read-only |
+| Mechanical changes: rewires, renames, module moves, applying a spelled-out pattern, doc consistency fixes | general-purpose | sonnet, lower | worktree |
+| Implementing a phase item outside the kernel: a backend port, a task, a dataset adapter, tests | general-purpose | sonnet | worktree |
+| Implementing kernel or concurrency code: identity, store and leases, graph format, worker protocol, planner | general-purpose | opus | worktree |
+| Design, ADRs, synthesis across threads | main thread or fork | opus | — |
+| Per-PR review (standards and checklist, P-31..P-37) | fresh general-purpose | sonnet; opus for kernel or concurrency PRs | read-only |
+| End-of-phase adversarial round (P-35) | general-purpose lead with up to 5 subagents | opus, higher; subagents sonnet | read-only |
+| Phase-gate architecture review | general-purpose lead with subagents | opus; verification subagents haiku, lower | read-only |
+| Verifying a reviewer's claims before acting on them | Explore | haiku or sonnet, lower | read-only |
+| Prose review in CI (P-31) | pinned small model | — | CI |
+| ORCD jobs (benchmarks, GPU limits, env builds) | an agent submits; the main thread holds the wait | sonnet, lower | pinned checkout per job |
+
+**Rules**
+- **Escalation.** Move up one tier (sonnet to opus) after a task fails its tests or review twice.
+  Use fable only after opus has failed on the same item, or for proofs about the lease and store
+  protocol (ADR-003).
+- **Reviewer independence.** A review never runs on the model and context that produced the work.
+  Pair a sonnet implementation with an opus review on the kernel, and an opus implementation with
+  a fresh sonnet or opus reviewer. A reviewer gets the code and the principles, not the
+  implementer's conclusions.
+- **Every brief carries:**
+  - the P-ids and ADRs the task touches;
+  - the per-commit checklist above;
+  - the test tier expected (`testing.md`);
+  - P-28 (no identifiers) and P-29 (serial, scoped tests; cluster limits);
+  - the reconciliation mark to check (P-39);
+  - the exact files to read.
+
+  A task without that brief is not delegated.
+- **Parallelism.** Independent items fan out with `effort: lower`. Several agents on ORCD share
+  the QOS cap (P-29). Agents never hold cluster waits; the main thread does.
+- **Claims are verified before acting on them.** A finding that drives a change is checked
+  against the code first.
+- **Record the tier used.** Each PR notes the implementer and reviewer models, so escalation rates
+  per task type can be measured and the table tuned.
 
 ## Process and engineering principles
 
@@ -192,3 +237,16 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
 - **Check**: the reconciliation task runs at each phase start, before each use-case migration and
   before any 1.x deletion. Deletion is blocked while an area's mark lags `alpha`. Phase 5 exits
   only when every mark equals `alpha`.
+
+<a id="p-40"></a>
+### P-40 Agents are sized to the task and reviewed independently
+- **Status**: active
+- **Statement**: Each task is delegated to an agent whose model and effort fit it (cheaper tiers by
+  default, escalating on failure), with a brief that carries the governing principles. Each result
+  is reviewed by a different model and context before it is accepted. The roster in
+  `engineering.md` is tuned from the recorded escalation rates.
+- **Source**: owner, 2026-10-30: "also do model selection for subagents and subagent reviewers for
+  each task to keep moving things at a good clip and also with principles of good code (as stored
+  in principles) in tow".
+- **Check**: each PR records its implementer and reviewer models, and they differ. Briefs cite
+  P-ids and the checklist.
