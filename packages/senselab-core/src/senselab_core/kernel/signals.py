@@ -94,10 +94,11 @@ class RegularGroup(Frozen):
         start = 0 if start_ns is None else require_ns(start_ns, "start_ns")
         if start < 0:
             raise ValueError(f"start_ns must be non-negative, got {start}")
-        if end_ns is not None and require_ns(end_ns, "end_ns") < start:
-            raise ValueError(f"end_ns {end_ns} is before start_ns {start}")
+        end = None if end_ns is None else require_ns(end_ns, "end_ns")
+        if end is not None and end < start:
+            raise ValueError(f"end_ns {end} is before start_ns {start}")
         first = min(_frame_at(start, self.sampling_rate), self._frames)
-        stop = self._frames if end_ns is None else min(_frame_at(int(end_ns), self.sampling_rate), self._frames)
+        stop = self._frames if end is None else min(_frame_at(end, self.sampling_rate), self._frames)
         if self.data is not None:
             return self.data[:, first:stop]
         return self._decode(first, stop - first)
