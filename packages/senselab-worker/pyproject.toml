@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "senselab-worker"
+dynamic = ["version"]
+description = "Subprocess worker runtime for senselab: stdlib and numpy only."
+license = { file = "../../LICENSE.md" }
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "numpy>=1.23"
+]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+root = "../.."
+version_scheme = "guess-next-dev"
+local_scheme = "no-local-version"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/senselab_worker"]

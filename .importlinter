@@ -1,0 +1,33 @@
+[importlinter]
+root_packages =
+    senselab_worker
+    senselab_core
+include_external_packages = True
+
+[importlinter:contract:worker-is-the-base]
+name = senselab_worker imports nothing above it
+type = forbidden
+source_modules = senselab_worker
+forbidden_modules =
+    senselab_core
+    senselab
+    pydantic
+
+[importlinter:contract:kernel-below-runtime]
+name = senselab_core.kernel imports neither the runtime nor senselab
+type = forbidden
+source_modules = senselab_core.kernel
+forbidden_modules =
+    senselab_core.runtime
+    senselab
+
+[importlinter:contract:core-is-framework-free]
+name = senselab_core imports neither senselab nor a model framework
+type = forbidden
+source_modules = senselab_core
+forbidden_modules =
+    senselab
+    torch
+    transformers
+    speechbrain
+    pyannote

@@ -29,6 +29,7 @@ classifiers = [
   "Operating System :: OS Independent"
 ]
 dependencies = [
+  "senselab-core",
   # PyTorch ecosystem
   "torch>=2.8; sys_platform != 'darwin' or platform_machine == 'arm64'",
   "torchvision>=0.23",
@@ -129,7 +130,9 @@ dev = [
   "ipykernel~=7.1",
   "ipywidgets~=8.1",
   "jupyterlab~=4.4",
-  "papermill~=2.6"
+  "papermill~=2.6",
+  "import-linter~=2.0",
+  "hypothesis~=6.0"
 ]
 docs = [
   "pdoc~=16.0"
@@ -138,6 +141,16 @@ profiling = [
   "scalene>=2.2",
   "nbconvert>=7"
 ]
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+senselab-core = { workspace = true }
+
+[tool.hatch.metadata.hooks.custom]
+path = "hatch_build_pins.py"
+pin = "senselab-core"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/senselab"]
@@ -167,6 +180,19 @@ pythonpath = [
 ]
 testpaths = [
   "src/tests"
+]
+addopts = "--strict-markers --import-mode=importlib"
+markers = [
+  "logic: pure logic, no I/O beyond tmp files",
+  "contract: a boundary contract between components",
+  "limits: behaviour at declared limits",
+  "usecase: an end-to-end use case",
+  "env: needs a built environment",
+  "gpu: needs a GPU",
+  "network: needs network outside the sandbox",
+  "slow: long-running",
+  "large_model: loads a large model",
+  "compat: probes version boundaries of the compatibility matrix"
 ]
 # A hung test must fail with a traceback, not consume the job.
 #
