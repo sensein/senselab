@@ -43,7 +43,7 @@ task or decision changes state. Newest entries go first in the log.
 |---|---|
 | Design | done; owner approved 2026-10-30 ("go ahead") |
 | 0: freeze tag | done (`freeze/1x-2026-10-30`) |
-| 1: kernel, worker runtime, identity, store, data fetch | executing (subagent-driven); T0 done (no drift) |
+| 1: kernel, worker runtime, identity, store, data fetch | executing (subagent-driven); T0–T3 done (workspace, wire protocol, canonical serialisation) |
 | 2–5 | not started |
 | pydra PRs (A0…K1) | proposed in #891; none implemented |
 
