@@ -180,16 +180,17 @@ complies.
 
 ### P-22 Core runs on both sides of every environment boundary
 - **Status**: active
-- **Statement**: senselab core installs and imports in the host and inside every isolated
-  environment, across every supported Python version and across the environments' numpy and
-  pydantic ranges. Supported Python versions are the CPython releases not past end-of-life; when a
-  version reaches EOL it is dropped from core and from every environment, and an environment pinned
-  to it is re-locked on a supported version. Host and workers use the same core version, verified
-  at handshake.
+- **Statement**: senselab core supports only CPython releases not past end-of-life and drops each
+  version at EOL. Isolated environments may use older Python versions when a model needs them.
+  Every environment, whatever its Python, runs the senselab worker runtime (wire codec, worker
+  loop, weight hashing, provenance records; stdlib + numpy only), so host and workers share one
+  protocol. Host and worker versions match, verified at handshake.
 - **Source**: owner, 2026-10-30: "can senselab core be used across subprocess venvs so that install
-  works across python versions"; "we can drop python versions that will have gone into EOL".
-- **Check**: core CI runs on the full Python range at the minimum and maximum numpy. Every env build
-  imports core and round-trips each data type over the wire.
+  works across python versions"; "we can drop python versions that will have gone into EOL";
+  "subprocess envs can use older versions".
+- **Check**: core CI covers every non-EOL Python. Worker-runtime CI covers every Python any env
+  lock uses. Every env build imports the worker runtime and round-trips each data type over the
+  wire.
 
 ### P-23 Licenses are explicit and machine-readable
 - **Status**: active
@@ -199,8 +200,8 @@ complies.
   execution. Licenses are recorded in provenance.
 - **Source**: owner, 2026-10-30: "one of the challenges of senselab is knowing what license a given
   task uses (GPL/NC/apache, etc) which needs to be very clear and machine accessible".
-- **Check**: `sl.licenses(plan)` answers without running anything; CI fails on a catalogue model or
-  locked package without a license record.
+- **Check**: `sl.licenses(plan)` answers without running anything. CI fails on a catalogue model
+  or a backend's direct dependency without a license record; transitive packages are reported.
 
 ### P-24 Modalities share types; environments share by dependency set
 - **Status**: active
@@ -270,7 +271,9 @@ design does not lose them. Amending one also means amending its origin.
 
 ## Resolved tensions
 
-None yet.
+- **P-22, core on non-EOL Python vs old models needing old Python** (2026-10-30). Both hold by
+  splitting the code that crosses the boundary into a worker runtime (stdlib + numpy) with no Python
+  floor beyond what a lock needs, while full core follows EOL. Typed validation happens on the host.
 
 ## Change log
 
@@ -282,3 +285,5 @@ None yet.
 - 2026-10-30: amended P-22 (meaning change). Its Python range now follows the CPython EOL schedule
   instead of covering every version an env happens to use; this drops 3.10, which reaches EOL in
   2026-10 (PEP 619).
+- 2026-10-30: amended P-22 again (meaning change). Envs may keep EOL Python; what crosses the
+  boundary is a stdlib+numpy worker runtime, not full core. See *Resolved tensions*.

@@ -250,6 +250,10 @@ class WhisperVllm: ...
     `VllmServer` implementation.
 - **Torch backends** declare both `host` (the notebook fast path, needs `senselab[torch]`) and
   `isolated`. The planner picks one; the call site never knows (P-6).
+  - *Design call:* the default execution profile picks `host` whenever the host's installed
+    packages satisfy the backend. Otherwise it picks `isolated`. A profile can force either.
+  - The choice is shown in `plan.explain()`, so a notebook user with `senselab[torch]` gets
+    predictable in-process behaviour.
 - **One worker protocol:** `serve_in_venv` (persistent, JSON control line, arrays passed by
   file/shared memory, typed errors). The one-shot scripts, the bespoke workers and `call_in_venv`
   are removed. Errors keep their type across the boundary, because a registered exception table
@@ -372,9 +376,20 @@ Device placement and data movement:
 - A worker on any host runs the same `senselab execute <fragment>` entry point.
 
 **One content-addressed result store**
-- It replaces the stage cache, the result cache and the separate key schemes. The key is
-  `{schema, task, task_version, backend, stack-if-output-affecting, model identity, params,
-  input identities, dataset-profile hash if read}`.
+- It replaces the stage cache, the result cache and the separate key schemes. *Design call:* the key
+  is `{schema, task, task_version, backend, stack, env identity, identity tunables, model identity,
+  params, input identities, dataset-profile hash if read}`.
+  - **env identity** is the env lock sha for an isolated backend, or the digest of the relevant
+    installed packages for a host backend. A host run and an isolated run with different torch
+    builds are therefore different results.
+  - **identity tunables** are the tunables a backend declares as output-affecting. The default is
+    `dtype`; vLLM adds concurrency. Batch size, device index and partition are recorded in
+    provenance but are not in the key.
+  - **device class** (`cpu`/`cuda`/`mps`) is in the key only when the backend declares it
+    output-affecting.
+  - This favours correctness over cache sharing. A laptop run and a cluster run share hits only
+    when env, stack and identity tunables match. Adopting a computed env grouping changes env
+    identity and so recomputes, which is correct (section 4.10).
 - The layout is `schema-<N>/<k[:2]>/<k>/`, written by atomic rename, first writer wins (the result
   cache design). Bumping the schema opens a new directory.
 - Failures are not cached.
@@ -513,40 +528,51 @@ What the host process holds is then the intersection of all of this: core plus t
 `senselab[torch]` it also holds whichever torch backends the execution profile allows in-process.
 Everything else is the union, held in the fewest environments that resolve.
 
-### 4.11 Core inside every environment (P-22)
+### 4.11 Core and the worker runtime across environments (P-22)
 
-senselab-core is installed into every isolated environment, so host and workers share one set of
-types, one wire format, one identity hash and one provenance writer. Today workers instead get
-copies of single modules, such as `stage_portable_audio_io` staging `portable_audio_io.py` onto
-`sys.path`, or reimplement them in script strings.
+Two installable pieces, with different Python policies:
 
-Constraints from the current locks:
+| Piece | Where it runs | Python | Dependencies |
+|---|---|---|---|
+| **senselab-core** | the host | non-EOL CPython only: `>=3.11` at 2.0, raised as versions reach EOL | numpy, pydantic v2, … (section 5) |
+| **senselab-worker** (worker runtime) | inside every isolated env | whatever the env's lock needs: today 3.10–3.13, including EOL versions kept for old models | stdlib + numpy `>=1.23` only; syntax at the oldest Python any lock uses |
 
-| Constraint | Today | Requirement for core |
-|---|---|---|
-| Python | envs use 3.10 (2), 3.11 (10), 3.12 (16), 3.13 (1); the host is `>=3.11` | only non-EOL CPython (P-22): `requires-python >=3.11` at 2.0, raised as versions reach EOL. Re-lock the two 3.10 envs (child-adult-diarization: torch 2.3.0; unasdiff: torch 2.6.0, numpy 1.23.5) on 3.11, since both pins publish 3.11 wheels. Ruff `target-version` for core = the floor |
-| numpy | six envs pin 1.x, oldest `1.23.5` (unasdiff) | `numpy >=1.23`; no numpy-2-only API; tested at both ends |
-| pydantic | absent or v2 in every lock; no v1 pin | `pydantic >=2,<3`. A future env that needs v1 is a lock-time error, not a silent downgrade |
-| other deps | — | only pure-python or wheel-everywhere dependencies with wide ranges |
+Today workers get copies of single modules, such as `stage_portable_audio_io` staging
+`portable_audio_io.py` onto `sys.path`, or reimplement them in script strings. The worker runtime
+replaces both.
 
-- **Same version on both sides.** The env installer adds the host's exact core version (the same
-  wheel) on top of the env lock. The worker handshake checks the core version and the
-  wire-protocol version, and refuses on a mismatch rather than mis-decoding.
-- **The core lock is separate from each env lock.** Each env lock's requirements-sha includes the
-  core version, so a core change rebuilds envs. This is cheap and correct, by the same logic as
-  cache invalidation.
-- **What a worker imports from core:**
-  - data types: `Audio`, `Video`, `Span`, `Annotation`, `Embedding`, result models;
-  - the wire codec;
-  - the `ResolvedModel` identity and weight hashing, so hashes are computed where the weights are
-    loaded;
-  - the provenance writer;
-  - the model-cache runtime;
-  - `serve_in_venv`.
+**What the worker runtime holds**
+- the wire codec (arrays as `.npy`/safetensors or shared memory, JSON control line);
+- the `serve_in_venv` loop and handshake;
+- plain-dict encoders for the core data types;
+- weight hashing, so hashes are computed where the weights are loaded;
+- the per-worker model cache;
+- the typed error table;
+- provenance records emitted as plain JSON.
 
-  The planner, executors and catalogue are importable but unused there.
-- **CI:** core tests on every non-EOL Python (3.11–3.14 today) at minimum and maximum numpy, plus one test per env that imports
-  core inside the built env and round-trips each data type over the wire.
+**What stays in core:** pydantic models, validation, the planner, executors, catalogue and the
+provenance store. Everything arriving from a worker is validated into core types on the host
+side, so a worker never needs pydantic.
+
+**Constraints from the current locks**
+- 2 envs are on Python 3.10, which reaches EOL in 2026-10 (child-adult-diarization: torch 2.3.0;
+  unasdiff: torch 2.6.0, numpy 1.23.5). They stay on 3.10: the worker runtime supports them and
+  core does not need to.
+- Six envs pin numpy 1.x, so the worker runtime uses no numpy-2-only API.
+
+**Rules**
+- **Same version on both sides.** The env installer adds the worker runtime at the host core's
+  exact version. The handshake checks that version and the wire-protocol version, and refuses on a
+  mismatch rather than mis-decoding. Each env lock's requirements-sha includes the worker-runtime
+  version, so a change rebuilds envs.
+- **Small and slow-moving.** The worker runtime has its own floor test: it must import on the
+  oldest Python and numpy in any lock. Raising that floor is allowed only when no lock needs the old
+  version.
+- **CI:**
+  - core tests on every non-EOL Python (3.11–3.14 today) at minimum and maximum numpy;
+  - worker-runtime tests on every Python any lock uses;
+  - one test per env that imports the worker runtime inside the built env and round-trips each data
+    type over the wire.
 
 ### 4.12 Licenses are explicit and machine-readable (P-23)
 
@@ -597,8 +623,10 @@ License(
   them, so a published derivative states what it was made with.
 
 **Enforcement**
-- A CI test fails when a catalogue model or a locked package has no license record, or when a
-  record has `unknown` without a dated reason.
+- A CI test fails when a catalogue model or a backend's direct dependency has no license record, or
+  has `unknown` without a dated reason.
+  - A harvested record counts.
+  - Transitive packages are harvested and reported, but do not fail CI (section 7).
 - senselab reports licenses and enforces the policy the user sets. It does not give legal
   interpretation.
 
@@ -648,7 +676,8 @@ cite principles.
   - the torch-free hardware probe;
   - no import side effects;
   - the shared timeline, annotation and embedding types (section 4.10);
-  - core at the Python 3.11 / numpy 1.23 floor, with the two 3.10 envs re-locked on 3.11 (section 4.11);
+  - core at the non-EOL Python floor (3.11), and the stdlib+numpy worker runtime at the oldest
+    Python any lock uses (3.10 today) (section 4.11);
   - the `License` record, with licenses backfilled for all 50 catalogue entries and harvested from
     every env lock (section 4.12).
 - Exit:
@@ -658,21 +687,40 @@ cite principles.
 
 **Phase 2: tasks and backends on a vertical slice.**
 - Build the Task and Backend declarations, Params validation, generated functions, `.map`, and
-  generated JSON Schemas. Port four tasks that between them exercise every Env and stack kind:
-  1. `speech_to_text`: transformers (host), vllm (server), mlx or ct2 (isolated);
-  2. `diarize`: pyannote (host or isolated);
-  3. `speaker_embeddings`: speechbrain (host);
-  4. one numpy DSP primitive (`phonation` or `envelope`).
+  generated JSON Schemas.
+- Port five tasks that between them exercise every Env and stack kind. *Design call:* only
+  backends that exist in 1.x, so every port has a 1.x reference.
+  1. `speech_to_text`: HF Whisper on transformers (host), and CrisperWhisper on CTranslate2 and on
+     transformers (isolated persistent worker). CrisperWhisper already has both stacks.
+  2. `diarize`: pyannote (host or isolated).
+  3. `speaker_embeddings`: speechbrain (host).
+  4. text PII review on vLLM (server) and transformers. The engine switch already exists.
+  5. one numpy DSP primitive (`phonation` or `envelope`).
 - Collapse the worker protocols into `serve_in_venv` for the backends touched, and build the
   runtime model cache.
-- Install core into the env of each touched backend, replacing module staging.
+- Install the worker runtime into the env of each touched backend, replacing module staging.
 - Build the computed env-grouping tool, run it over all 29 locks, and record the grouping it
   proposes without adopting it yet.
 - Exit:
-  - the same `speech_to_text` call runs on transformers and vLLM by changing only the execution
-    profile (P-8);
+  - the same CrisperWhisper call runs on CTranslate2 and transformers, and the same PII-review call
+    runs on vLLM and transformers, each by changing only the execution profile (P-8);
   - an agent given only `sl.describe` output runs each task (P-1);
-  - outputs match 1.x within each task's documented tolerance.
+  - outputs match 1.x within each task's parity tolerance (see below).
+
+*Parity tolerances (design call).*
+- Measured, not asserted. For each ported task, run 1.x and 2.x on a fixed reference set and
+  record the tolerance as a data profile with its derivation (P-17). The reference set is the
+  tutorial audio plus a small committed set.
+- Measured on CPU, plus one CUDA host.
+- A pipeline port additionally must not change any verdict on the reference set; a changed verdict
+  blocks the phase.
+
+**New integrations.**
+- 2.0 is otherwise porting only. The exception is the vLLM-omni stack, which the owner named
+  (P-8). It is added after Phase 3 as the first new integration, together with a vLLM ASR backend,
+  because both depend on the plan and server machinery.
+- Neither has a 1.x reference. Their acceptance is agreement with the transformers stack on the
+  same model, within a measured tolerance.
 
 **Phase 3: plans and executors.**
 - Build:
@@ -720,6 +768,36 @@ it already sits on `work_pool`, `vllm_server` and `ProvStore`.
 - The exact JSON Schema dialect and the mapping of numpy and data types into it.
 - The order of task ports within Phase 5.
 
+Calls already made in this document, marked *design call* where they appear, for the owner to
+check:
+- **Host-first default for torch backends** (section 4.4).
+- **Result-key composition** (section 4.8).
+- **Phase 2 slice** from existing backends only (section 6).
+- **Parity tolerances** measured as data (section 6).
+- **vLLM-omni and vLLM ASR** as the only new integrations, after Phase 3 (section 6).
+- **License bar** (section 4.12).
+  - A license harvested from PEP 639, `License` or classifiers counts as a record.
+  - `unknown` blocks CI only for catalogue models and backends' direct dependencies.
+  - Transitive packages are reported in `sl.licenses`, with any copyleft, NC or unknown flag
+    surfaced, but do not fail CI.
+
 ## 8. Open questions for the owner
 
-See the end of this section in the conversation; answers are folded in here once given.
+Answers are folded in here once given.
+
+1. **Build vs adopt for the graph runtime.** Pydra already provides typed tasks, nested workflows,
+   content-hash caching and Slurm/Dask workers. Should the 2.x Pipeline and Executor layer be
+   implemented on Pydra, with senselab adding the planner, cross-record batching, the model cache
+   and envs, or be senselab's own, generalising `reproduce`'s DAG and `work_pool`?
+2. **Where 2.x is built and how 1.x coexists.** Is it a long-lived `v2` branch, or a replacement in
+   place on `alpha`? Do 1.x releases keep shipping meanwhile? Is core a separate distribution
+   (`senselab-core` plus `senselab-worker`) or one `senselab` package with extras?
+3. **The second dataset for the P-12 test.** Which dataset proves triage is generic, does it have
+   labelled verdicts to fit its thresholds, and does "runs" mean completes or produces validated
+   verdicts?
+4. **Keep, port or drop for 1.x pieces not named above.** The proposal:
+   - port: `adaptive_loop` (as `p.loop`), the tutorials (rewritten);
+   - replace: `agentic_interface` (by the MCP server);
+   - keep outside the package, as tools over run directories: the review-page and VLM tooling;
+   - move out of the repo into site profiles: the ORCD campaign scripts and sbatch files;
+   - keep as dev scripts: benchmarks.
