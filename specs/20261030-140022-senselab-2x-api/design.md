@@ -695,7 +695,8 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
   use-case tests.
 - Delete 1.x: the `api.py` dispatch, wrapper classes, `SenselabDataset`, `call_in_venv`, bespoke
   workers, the second vLLM server, the stage cache, and the 15 `extend_*` drivers.
-- Exit: no 1.x name remains (P-14), and the README quick start runs in CI.
+- Exit: no 1.x name remains (P-14), the consolidation inventory is empty (P-37), and the README
+  quick start runs in CI.
 
 `reproduce` migrates any time after Phase 3.
 
