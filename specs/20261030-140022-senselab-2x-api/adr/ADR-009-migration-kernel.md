@@ -25,8 +25,8 @@
     (ADR-001), serialisation (ADR-006);
   - a **runtime**: planner, executors, store, provenance writer, observability.
 - **Allowed dependency direction:**
-  - kernel ← runtime ← backends;
-  - kernel ← `senselab_worker`;
+  - `senselab_worker` ← kernel ← runtime ← backends: the worker runtime is stdlib plus numpy and
+    depends on nothing in senselab; core imports its codec and weight hashing (design §4.12, §5);
   - nothing depends on 1.x.
 - **Enforced by import-linter** in CI.
 
