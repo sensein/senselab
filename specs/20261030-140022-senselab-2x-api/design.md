@@ -524,7 +524,8 @@ consumer of this store.
 - **Derived artifacts** inherit the join of their sources' licenses (I-9).
 - **Policy.** One schema: `license_policy: {allow: [license sets], on_missing: raise | warn}`.
   - License sets are named, versioned data: `permissive`, `weak-copyleft-ok`, `copyleft-ok`,
-    `non-commercial-ok`, `gated-ok`, plus user-defined sets combined by union or intersection.
+    `non-commercial-ok`, `gated-ok`. User-defined sets combined by union or intersection are
+    deferred (§6.4).
   - The packaged default is `allow` = the union of the packaged sets, with `on_missing: raise`.
     Research runs are therefore never blocked by license *type*, only by a missing record.
 - **Enforcement.**
@@ -773,12 +774,12 @@ Each cut keeps its interface or hook, and is added when a measurement or a use c
 |---|---|---|
 | Env-merging solver (P-24 grouping) | one env per backend; the grouping report is still produced | the env count or resident memory is measured as a problem |
 | Packed store tier; GPU token arbiter | the plain store; static caps; OOM as a resource fault | the scale ladder shows inode or OOM pressure |
-| *Proposed, owner to decide (conflicts with P-23):* license taint algebra and set combinators | license records, a plan-time check, transitive CI, and one union default set | a user needs a restrictive policy |
+| User-defined license-set combinators (union, intersection) | the packaged named sets; taint propagation (I-9) stays in 2.0 | a user needs a custom set |
 | pixi (conda-forge) envs | uv venvs only | the first R or Java backend is ported |
 | `sl.eeg`, `sl.eyetrack`, `sl.motion` namespaces | `sl.signal` generic tasks only | the first task exists in that modality |
 | `sl.sklearn` adapter | `ResultSet.to_frame()` | users ask for it |
 | Route B (pydra runner/executor split) | Route A | pydra RFC 3.10 lands |
-| *Proposed, owner to decide (conflicts with P-31's check):* prose-lint banned-word rules | a review norm | — |
+| Word-list prose lint | model- and agent-based prose review, advisory (`engineering.md`, P-31) | — (replaced, not deferred) |
 
 **Kept for 2.0:**
 - the kernel and runtime;
@@ -835,4 +836,6 @@ Each cut keeps its interface or hook, and is added when a measurement or a use c
     exists.
   - The default reuse policy is `equivalent` (P-38).
   - P-27..P-35 live in `engineering.md`.
-  - The license-set combinator cut and the prose-lint cut are still pending the owner.
+  - Licenses: taint propagation (I-9) stays in 2.0, and user-defined set combinators are deferred.
+  - Prose: word lists are replaced by advisory review from a small pinned model plus agent
+    sharpening (P-31).

@@ -400,3 +400,7 @@ amending its origin.
   `engineering.md` and logged here.
 - 2026-10-30: owner confirmed `equivalent` as the default reuse policy (P-38), and kept vLLM-omni
   in 2.0 (P-8).
+- 2026-10-30: owner decisions on two proposed cuts. P-23: taint propagation (I-9) stays in 2.0;
+  user-defined license-set combinators are deferred. P-31 check (text in `engineering.md`):
+  word-list linting is replaced by advisory review from a small pinned model plus agent
+  sharpening; only the exact-pattern id check blocks.
