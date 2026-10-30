@@ -10,8 +10,9 @@ ADR-009.
   only where something is hashed). It is written without `NaN` or `Infinity`; non-finite values
   travel in arrays. Numpy scalars are written as their `.item()`.
 - Host → worker on the worker's stdin. Worker → host on a private duplicate of the worker's fd 1.
-  At startup, before the hello and before any backend code is imported, the worker points fd 1 and
-  `sys.stdout` at stderr, so library prints cannot reach the protocol stream.
+  The host starts `python -m senselab_worker.launch <backend_module>`. Before the hello and before
+  any backend code is imported, the launcher points fd 1 and `sys.stdout` at stderr, so library
+  prints cannot reach the protocol stream. The backend module is imported during load.
 - stderr is never parsed. The host drains it continuously and keeps the last 100 lines, which it
   attaches to every fault it raises itself.
 - A line longer than 16 MiB, or one that is not a JSON object, is a protocol violation.
@@ -52,8 +53,9 @@ ADR-009.
 - `id` is a UUID string; the response carries the same `id`. Item ids are unique within a request.
 - `results` has exactly one entry per item, in item order, with matching ids. A failure in one
   item never fails its batch-mates.
-- **Backend contract.** The worker module calls
-  `serve(load: Callable[[dict], object], handle: Callable[[object, list[dict], dict], list[dict]])`.
+- **Backend contract.** The backend module defines
+  `load: Callable[[dict], object]` and `handle: Callable[[object, list[dict], dict], list[dict]]`;
+  the launcher serves them.
   - `load(init)` returns the state, once.
   - `handle(state, items, params)` gets the decoded items (`{"id", "inputs"}`) and returns one dict
     per item, in item order: `{"outputs": {...}}`, or `{"error": exc}` with an exception instance
@@ -86,8 +88,8 @@ ADR-009.
   the worker, that item is not passed to `handle`. The same failure in `params` fails every item
   of the request; in `init` it is `fatal`.
 - **Lifetime.** The host creates `array_dir` before spawning and removes it on close. After
-  decoding a response, the host deletes the files referenced by that request and response, except
-  those referenced by `init`. The worker never deletes.
+  each request, the host deletes every file in `array_dir` except those referenced by `init`,
+  including files written for items that failed to encode. The worker never deletes.
 
 ## Errors and faults
 

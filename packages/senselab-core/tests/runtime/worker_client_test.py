@@ -17,7 +17,8 @@ from senselab_worker.faults import FaultClass, ProtocolError, classify
 from senselab_worker.hashing import sha256_bytes
 
 FAKE = "senselab_worker.fake"
-SCRIPTED = "scripted_worker_fixture"
+SCRIPTED = Path(__file__).parent / "scripted_worker_fixture.py"
+posix_only = pytest.mark.skipif(os.name == "nt", reason="stands in for the interpreter with a shell script")
 
 
 def _no_children() -> bool:
@@ -56,15 +57,18 @@ def worker(array_dir: Path) -> Iterator[WorkerClient]:
     assert not client.alive
 
 
-@pytest.fixture
-def scripted_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make the scripted worker importable by the child."""
-    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).parent))
+def _interpreter(directory: Path, body: str) -> Path:
+    """Write an executable that stands in for the worker's interpreter and ignores its arguments."""
+    path = directory / "interpreter"
+    path.write_text(f"#!/bin/sh\n{body}\n")
+    path.chmod(0o755)
+    return path
 
 
 def _scripted(array_dir: Path, *replies: dict, **init: object) -> WorkerClient:
+    python = _interpreter(array_dir.parent, f'exec "{sys.executable}" "{SCRIPTED}"')
     return WorkerClient(
-        sys.executable, SCRIPTED, init={"replies": [json.dumps(r) for r in replies], **init}, array_dir=array_dir
+        python, "unused", init={"replies": [json.dumps(r) for r in replies], **init}, array_dir=array_dir
     )
 
 
@@ -142,13 +146,41 @@ def test_handshake_mismatch_refuses(array_dir: Path) -> None:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize(("module", "stderr"), [("this", None), ("senselab_worker.no_such_module", "No module")])
-def test_non_worker_is_a_mismatch(array_dir: Path, module: str, stderr: str | None) -> None:
+@posix_only
+@pytest.mark.parametrize(("body", "stderr"), [("echo junk", None), ("echo oops >&2; exit 3", "oops")])
+def test_non_worker_is_a_mismatch(array_dir: Path, body: str, stderr: str | None) -> None:
     """A first line that is not a hello, or no line at all, is a mismatch carrying the stderr tail."""
     with pytest.raises(ProtocolMismatch) as info:
-        WorkerClient(sys.executable, module, init={}, array_dir=array_dir)
+        WorkerClient(_interpreter(array_dir.parent, body), FAKE, init={}, array_dir=array_dir)
     if stderr:
         assert any(stderr in note for note in info.value.__notes__)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("module", "error_type"), [("no_such_backend", "ModuleNotFoundError"), ("json", "AttributeError")]
+)
+def test_unusable_backend_is_worker_fatal(array_dir: Path, module: str, error_type: str) -> None:
+    """A backend module that cannot be imported, or lacks `load`, fails the load."""
+    with pytest.raises(WorkerFatal) as info:
+        WorkerClient(sys.executable, module, init={}, array_dir=array_dir)
+    assert info.value.error["type"] == error_type
+
+
+@pytest.mark.logic
+def test_no_array_file_remains_when_every_item_fails_to_encode(worker: WorkerClient, array_dir: Path) -> None:
+    """An array written before its item failed to encode is removed though nothing was sent."""
+    out = worker.run([{"id": "a", "inputs": {"x": numpy.ones(3), "y": numpy.array([object()])}}], {})
+    assert out[0]["error"]["fault"] is FaultClass.CONTENT
+    assert list(array_dir.iterdir()) == []
+
+
+@pytest.mark.logic
+def test_no_array_file_remains_when_params_fail_to_encode(worker: WorkerClient, array_dir: Path) -> None:
+    """An array written before the params failed to encode is removed."""
+    with pytest.raises(ValueError):
+        worker.run([{"id": "a", "inputs": {}}], {"w": numpy.ones(3), "z": float("nan")})
+    assert list(array_dir.iterdir()) == []
 
 
 @pytest.mark.logic
@@ -218,7 +250,7 @@ def _ok(item: str) -> dict:
         {"ready": {}},
     ],
 )
-def test_malformed_responses_are_protocol_errors(scripted_env: None, array_dir: Path, reply: dict) -> None:
+def test_malformed_responses_are_protocol_errors(array_dir: Path, reply: dict) -> None:
     """A response with the wrong id, count, order or entry shape raises `ProtocolError`."""
     client = _scripted(array_dir, reply)
     with pytest.raises(ProtocolError):
@@ -228,7 +260,7 @@ def test_malformed_responses_are_protocol_errors(scripted_env: None, array_dir: 
 
 
 @pytest.mark.logic
-def test_fatal_during_a_request_is_worker_fatal(scripted_env: None, array_dir: Path) -> None:
+def test_fatal_during_a_request_is_worker_fatal(array_dir: Path) -> None:
     """A `fatal` line in place of a response raises `WorkerFatal`, whatever fault it names."""
     error = {"type": "MemoryError", "message": "m", "fault": "resource", "traceback": "", "gap": False}
     client = _scripted(array_dir, {"error": error, "fatal": True})
@@ -239,9 +271,7 @@ def test_fatal_during_a_request_is_worker_fatal(scripted_env: None, array_dir: P
 
 
 @pytest.mark.logic
-def test_output_arrays_decode_per_item_and_init_files_survive(
-    scripted_env: None, array_dir: Path, tmp_path: Path
-) -> None:
+def test_output_arrays_decode_per_item_and_init_files_survive(array_dir: Path, tmp_path: Path) -> None:
     """A damaged output array fails only its item; request and response files go, init files stay."""
     staging = tmp_path / "staging"
     staging.mkdir()
@@ -270,7 +300,7 @@ def test_output_arrays_decode_per_item_and_init_files_survive(
 
 
 @pytest.mark.logic
-def test_classification_gap_is_reported(scripted_env: None, array_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_classification_gap_is_reported(array_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
     """An error marked as a classification gap is logged by the host."""
     error = {"type": "OSError", "message": "m", "fault": "infrastructure", "traceback": "", "gap": True}
     client = _scripted(array_dir, {"id": "$ID", "results": [{"id": "a", "error": error}]})

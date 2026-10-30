@@ -1,10 +1,7 @@
-"""The worker serve loop, driven over in-memory streams and once as a real process."""
+"""The worker serve loop, driven over in-memory streams."""
 
 import io
 import json
-import subprocess
-import sys
-import textwrap
 from pathlib import Path
 from typing import Callable
 
@@ -12,7 +9,7 @@ import numpy
 import pytest
 from senselab_worker import WIRE_VERSION, runtime_identity
 from senselab_worker.codec import encode
-from senselab_worker.serve import serve_streams
+from senselab_worker.serve import serve
 
 Handle = Callable[[object, list[dict], dict], list[dict]]
 
@@ -34,7 +31,7 @@ def _session(
 ) -> tuple[int, list[dict]]:
     rx = io.BytesIO(b"".join(m if isinstance(m, bytes) else encode(m, array_dir=array_dir) for m in messages))
     tx = io.BytesIO()
-    code = serve_streams(load, handle, rx, tx)
+    code = serve(load, handle, rx, tx)
     return code, [json.loads(line) for line in tx.getvalue().splitlines()]
 
 
@@ -243,31 +240,3 @@ def test_empty_request_gets_empty_results(tmp_path: Path) -> None:
     """A request with no items is answered with no results."""
     _, out = _session(tmp_path, [_init(tmp_path), {"id": "r", "items": [], "params": {}}])
     assert out[2] == {"id": "r", "results": []}
-
-
-WORKER_THAT_PRINTS = textwrap.dedent(
-    """
-    import os
-    from senselab_worker.serve import serve
-
-    def load(init):
-        print("noise from load")
-        os.write(1, b"noise on fd 1\\n")
-        return None
-
-    serve(load, lambda state, items, params: [{"outputs": {}} for _ in items])
-    """
-)
-
-
-@pytest.mark.logic
-def test_backend_prints_never_reach_the_protocol_stream(tmp_path: Path) -> None:
-    """Writes to `sys.stdout` or fd 1 after startup go to stderr."""
-    stdin = encode(_init(tmp_path), array_dir=tmp_path) + encode(_request("a"), array_dir=tmp_path)
-    stdin += encode({"stop": True}, array_dir=tmp_path)
-    proc = subprocess.run(
-        [sys.executable, "-c", WORKER_THAT_PRINTS], input=stdin, capture_output=True, timeout=60, check=True
-    )
-    keys = [next(iter(json.loads(line))) for line in proc.stdout.splitlines()]
-    assert keys == ["hello", "ready", "id"]
-    assert b"noise from load" in proc.stderr and b"noise on fd 1" in proc.stderr

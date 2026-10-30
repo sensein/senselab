@@ -2,7 +2,6 @@
 
 import os
 import platform
-import sys
 import time
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
@@ -26,28 +25,13 @@ Handle = Callable[[object, list[dict[str, Any]], dict[str, Any]], list[dict[str,
 EXIT_FATAL = 1
 
 
-def serve(load: Load, handle: Handle) -> None:
-    """Serve the protocol on this process's stdin and stdout until stop or EOF.
+def serve(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO) -> int:
+    """Serve the protocol, reading from `rx` and writing to `tx`; return the process exit code.
 
     `load(init)` is called once and returns the state. `handle(state, items, params)` gets the
-    decoded items (`{"id", "inputs"}`) and returns one `{"outputs": dict[str, Any]}` or
-    `{"error": exception}` per item, in order. Before the hello, fd 1 and `sys.stdout` are pointed
-    at stderr, so only protocol lines reach the host; import model frameworks inside `load`.
-
-    Raises:
-        SystemExit: with a non-zero code after reporting a fatal error.
+    decoded items (`{"id", "inputs"}`) and returns one `{"outputs": dict}` or `{"error": exception}`
+    per item, in order. Returns 0 on stop or EOF and `EXIT_FATAL` after reporting a fatal error.
     """
-    sys.stdout.flush()
-    protocol = os.fdopen(os.dup(1), "wb")
-    os.dup2(2, 1)
-    sys.stdout = sys.stderr
-    code = serve_streams(load, handle, sys.stdin.buffer, protocol)
-    if code:
-        raise SystemExit(code)
-
-
-def serve_streams(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO) -> int:
-    """Serve the protocol reading from `rx` and writing to `tx`; return the process exit code."""
     hello = {
         "wire": WIRE_VERSION,
         "runtime": runtime_identity(),

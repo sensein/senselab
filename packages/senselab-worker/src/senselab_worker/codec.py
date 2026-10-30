@@ -170,8 +170,8 @@ def _read_array(ref: object, root: Path) -> numpy.ndarray:
         a: numpy.ndarray = numpy.load(io.BytesIO(data), allow_pickle=False)
         if a.dtype.str != ref["dtype"] or list(a.shape) != ref["shape"]:
             raise ValueError(f"array is {a.dtype.str} {list(a.shape)}, reference says {ref['dtype']} {ref['shape']}")
-    except (KeyError, TypeError, ValueError, OSError) as exc:
-        raise ArrayIntegrityError(f"bad array reference: {exc}") from exc
+    except Exception as exc:
+        raise ArrayIntegrityError(f"bad array reference: {type(exc).__name__}: {exc}") from exc
     return a
 
 
@@ -188,7 +188,7 @@ def array_paths(value: object) -> set[Path]:
 
 
 def check_request(msg: dict[str, Any]) -> None:
-    """Check the shape of a request: a str `id`, `items` with unique str ids and dict inputs, dict[str, Any] `params`.
+    """Check the shape of a request: a str `id`, `items` with unique str ids and dict inputs, dict `params`.
 
     Raises:
         ValueError: naming the first part that is malformed.

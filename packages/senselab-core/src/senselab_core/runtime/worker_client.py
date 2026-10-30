@@ -30,6 +30,7 @@ from senselab_worker.faults import (
     error_record,
 )
 
+LAUNCHER = "senselab_worker.launch"
 HELLO_TIMEOUT_S = 60.0
 STOP_GRACE_S = 10.0
 STDERR_TAIL_LINES = 100
@@ -56,9 +57,11 @@ class WorkerFatal(InfrastructureFault):
 
 
 class WorkerClient:
-    """A worker process running `python -m <module>`, spoken to over the wire protocol.
+    """A worker process running `python -m senselab_worker.launch <module>`, spoken to over the wire protocol.
 
-    `array_dir` is created if missing and removed on close. Host faults (`ProtocolMismatch`,
+    `module` defines `load` and `handle` (see `senselab_worker.launch`). `array_dir` is created if
+    missing and removed on close; after each request every file in it except those `init`
+    references is deleted. Host faults (`ProtocolMismatch`,
     `ProtocolError`, `WorkerLost`, `WorkerFatal`, `TimeoutError`) discard the worker and carry its
     last stderr lines as a note. `hello` holds the worker's hello.
     """
@@ -127,29 +130,32 @@ class WorkerClient:
             raise WorkerLost("worker was discarded or closed; start a new WorkerClient")
         request_id = str(uuid.uuid4())
         check_request({"id": request_id, "items": items, "params": params})
-        wire_params = to_wire(params, array_dir=self._array_dir)
-        results: list[dict[str, Any]] = [{} for _ in items]
-        sent: list[tuple[int, dict[str, Any]]] = []
-        for i, item in enumerate(items):
-            try:
-                sent.append((i, {"id": item["id"], "inputs": to_wire(item["inputs"], array_dir=self._array_dir)}))
-            except Exception as exc:
-                results[i] = {"id": item["id"], "error": _mapped(error_record(exc))}
-        if not sent:
-            return results
-        request = {"id": request_id, "items": [wire for _, wire in sent], "params": wire_params}
-        line = dump_line(request)
         try:
-            self._send(line)
-            response = self._receive(self._request_timeout)
-            replies = self._decode_response(response, request)
-        except BaseException as exc:
-            self._fail(exc)
-            raise
-        for (i, _), reply in zip(sent, replies):
-            results[i] = reply
-        self._remove_arrays(request, response)
-        return results
+            wire_params = to_wire(params, array_dir=self._array_dir)
+            results: list[dict[str, Any]] = [{} for _ in items]
+            sent: list[tuple[int, dict[str, Any]]] = []
+            for i, item in enumerate(items):
+                try:
+                    sent.append((i, {"id": item["id"], "inputs": to_wire(item["inputs"], array_dir=self._array_dir)}))
+                except Exception as exc:
+                    results[i] = {"id": item["id"], "error": _mapped(error_record(exc))}
+            if not sent:
+                return results
+            request = {"id": request_id, "items": [wire for _, wire in sent], "params": wire_params}
+            line = dump_line(request)
+            try:
+                self._send(line)
+                response = self._receive(self._request_timeout)
+                replies = self._decode_response(response, request)
+            except BaseException as exc:
+                self._fail(exc)
+                raise
+            for (i, _), reply in zip(sent, replies):
+                results[i] = reply
+            return results
+        finally:
+            if not self._closed:
+                self._remove_arrays()
 
     def close(self) -> None:
         """Stop the worker (SIGKILL after 10 s) and remove `array_dir`. Safe to call twice."""
@@ -167,7 +173,8 @@ class WorkerClient:
 
     def _start(self, python: str | os.PathLike[str], module: str) -> None:
         pipe = subprocess.PIPE
-        self._proc = subprocess.Popen([os.fspath(python), "-m", module], stdin=pipe, stdout=pipe, stderr=pipe)
+        argv = [os.fspath(python), "-m", LAUNCHER, module]
+        self._proc = subprocess.Popen(argv, stdin=pipe, stdout=pipe, stderr=pipe)
         assert self._proc.stdout is not None and self._proc.stderr is not None
         self._threads = [
             threading.Thread(target=self._pump_stdout, args=(self._proc.stdout,), daemon=True),
@@ -253,10 +260,10 @@ class WorkerClient:
         root = self._array_dir.resolve()
         return {p.resolve() for p in paths if p.resolve().parent == root}
 
-    def _remove_arrays(self, *messages: dict[str, Any]) -> None:
-        paths = set().union(*(array_paths(m) for m in messages))
-        for path in self._owned(paths) - self._init_paths:
-            path.unlink(missing_ok=True)
+    def _remove_arrays(self) -> None:
+        for path in self._array_dir.iterdir():
+            if path.resolve() not in self._init_paths:
+                path.unlink()
 
     def _fail(self, exc: BaseException) -> None:
         self._shutdown(graceful=isinstance(exc, ProtocolMismatch))

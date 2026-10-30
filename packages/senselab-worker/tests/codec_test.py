@@ -131,3 +131,17 @@ def test_array_paths_lists_every_reference(tmp_path: Path) -> None:
     a, b = numpy.zeros(2), numpy.ones(2)
     wire = to_wire({"p": [a, {"q": b}], "r": 1}, array_dir=tmp_path)
     assert array_paths(wire) == {Path(p) for p in tmp_path.iterdir()}
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "data",
+    [b"", b"\x93NUMPY\x01\x00", b"\x93NUMPY\x01\x00\x10\x00{'descr': '<f4'", b"not an npy file", b"\x93NUMPY\x09\x00"],
+)
+def test_malformed_file_with_matching_sha256_is_integrity_error(tmp_path: Path, data: bytes) -> None:
+    """A file whose sha256 matches its reference but which numpy cannot load raises `ArrayIntegrityError`."""
+    sha = sha256_bytes(data)
+    (tmp_path / f"{sha}.npy").write_bytes(data)
+    ref = {"__array__": {"path": str(tmp_path / f"{sha}.npy"), "sha256": sha, "dtype": "<f4", "shape": [1]}}
+    with pytest.raises(ArrayIntegrityError):
+        from_wire(ref, array_dir=tmp_path)

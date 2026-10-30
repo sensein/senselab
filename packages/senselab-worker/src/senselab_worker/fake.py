@@ -1,6 +1,6 @@
 """A backend whose outputs are hashes of their inputs, with a declared fault model.
 
-Run as `python -m senselab_worker.fake`. Faults come from `init["faults"]` and are replaced, per
+Run as `python -m senselab_worker.launch senselab_worker.fake`. Faults come from `init["faults"]` and are replaced, per
 request, by `params["faults"]`; both take the fields of `FakeFaults`.
 """
 
@@ -14,7 +14,6 @@ import numpy
 
 from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
 from senselab_worker.hashing import sha256_bytes
-from senselab_worker.serve import serve
 
 EXIT_CRASH = 70
 _NONCE_BYTES = 16
@@ -63,7 +62,7 @@ class _State:
     handled: int = field(default=0)
 
 
-def fake_load(init: dict[str, Any]) -> object:
+def load(init: dict[str, Any]) -> object:
     """Return the fake's state; `init` may hold only `array_dir` and `faults`.
 
     Raises:
@@ -76,14 +75,14 @@ def fake_load(init: dict[str, Any]) -> object:
     return _State(FakeFaults.from_json(init.get("faults", {})))
 
 
-def fake_handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
     """Return `{"outputs": {"value": sha256(jcs(inputs and params))}}` per item, perturbed by faults.
 
     `params["faults"]` is excluded from the hash. Arrays enter it by the sha256 of their canonical
     `.npy` bytes.
     """
     if not isinstance(state, _State):
-        raise TypeError("state must come from fake_load")
+        raise TypeError("state must come from load")
     faults = FakeFaults.from_json(params["faults"]) if "faults" in params else state.faults
     rest = _identity_view({k: v for k, v in params.items() if k != "faults"})
     batch = [_identity_view(item["inputs"]) for item in items] if faults.batch_coupled else None
@@ -124,7 +123,3 @@ def _identity_view(value: object) -> object:
     if isinstance(value, (list, tuple)):
         return [_identity_view(v) for v in value]
     return value
-
-
-if __name__ == "__main__":
-    serve(fake_load, fake_handle)
