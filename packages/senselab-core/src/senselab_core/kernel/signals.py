@@ -2,13 +2,23 @@
 
 import math
 import os
+from collections.abc import Mapping
 from fractions import Fraction
 from pathlib import Path
+from types import MappingProxyType
 from typing import Annotated
 
 import numpy
 import soundfile
-from pydantic import BeforeValidator, Field, PrivateAttr, model_validator
+from pydantic import (
+    AfterValidator,
+    BeforeValidator,
+    Field,
+    PlainSerializer,
+    PrivateAttr,
+    ValidationInfo,
+    model_validator,
+)
 from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
 from senselab_worker.hashing import content_identity, sha256_bytes
 
@@ -20,6 +30,7 @@ AUDIO_UNITS = "FS"
 """Digital full scale: the units of decoded audio samples."""
 
 _NS_PER_S = 10**9
+_HEADER = "senselab_core.sound_header"
 
 SignalArray = Annotated[numpy.ndarray, BeforeValidator(lambda v: as_numeric_array(v, 2))]
 """A read-only numeric array of shape `(channels, samples)`."""
@@ -62,14 +73,16 @@ class RegularGroup(Frozen):
     _frames: int = PrivateAttr()
 
     @model_validator(mode="after")
-    def _check_layout(self) -> "RegularGroup":
+    def _check_layout(self, validation: ValidationInfo) -> "RegularGroup":
+        if getattr(self, "_frames", None) is not None:
+            return self
         if (self.data is None) == (self.source is None):
             raise ValueError("a regular group needs exactly one of data and source")
         if self.data is not None:
             rows, self._frames = self.data.shape
         else:
             assert self.source is not None
-            info = soundfile.info(os.fspath(self.source))
+            info = (validation.context or {}).get(_HEADER) or soundfile.info(os.fspath(self.source))
             if info.samplerate != self.sampling_rate:
                 raise ValueError(f"declared rate {self.sampling_rate} Hz, file rate {info.samplerate} Hz")
             rows, self._frames = info.channels, info.frames
@@ -130,10 +143,19 @@ class IrregularGroup(Frozen):
         return self
 
 
-class Recording(Frozen):
-    """Named channel groups sharing one clock, anchored by `anchor`, with content `identity`."""
+Groups = Annotated[
+    Mapping[NonEmptyStr, RegularGroup | IrregularGroup],
+    Field(min_length=1),
+    AfterValidator(lambda groups: MappingProxyType(dict(groups))),
+    PlainSerializer(dict),
+]
+"""A non-empty read-only mapping of group name to group; serialised as a dict."""
 
-    groups: dict[NonEmptyStr, RegularGroup | IrregularGroup] = Field(min_length=1)
+
+class Recording(Frozen):
+    """Named channel groups sharing one clock, anchored by `anchor`, with content `identity`; `groups` is read-only."""
+
+    groups: Groups
     anchor: TimeAnchor
     identity: NonEmptyStr
 
@@ -168,14 +190,17 @@ class Audio(Recording):
         The recording's clock is named by its identity.
         """
         info = soundfile.info(os.fspath(path))
-        group = RegularGroup(channels=cls._channels(info.channels), sampling_rate=info.samplerate, source=Path(path))
+        group = RegularGroup.model_validate(
+            {"channels": cls._channels(info.channels), "sampling_rate": info.samplerate, "source": Path(path)},
+            context={_HEADER: info},
+        )
         return cls._of(group, content_identity(path)["root"])
 
     @classmethod
     def from_array(cls, a: numpy.ndarray, sampling_rate: float) -> "Audio":
         """Wrap a copy of samples shaped `(samples,)` or `(channels, samples)`.
 
-        The identity is `sha256_bytes(jcs_dumps({"array": sha256_bytes(canonical_npy_bytes(x)),
+        The identity is `sha256_bytes(jcs_dumps({"npy": sha256_bytes(canonical_npy_bytes(x)),
         "sampling_rate": float(sampling_rate)}))`, where `x` is the `(channels, samples)` array. The
         recording's clock is named by its identity.
 
@@ -188,5 +213,5 @@ class Audio(Recording):
         if x.ndim != 2:
             raise ValueError(f"audio samples must be 1-D or (channels, samples), got shape {x.shape}")
         group = RegularGroup(channels=cls._channels(x.shape[0]), sampling_rate=sampling_rate, data=x)
-        array_hash = sha256_bytes(canonical_npy_bytes(x))
-        return cls._of(group, sha256_bytes(jcs_dumps({"array": array_hash, "sampling_rate": group.sampling_rate})))
+        npy_hash = sha256_bytes(canonical_npy_bytes(x))
+        return cls._of(group, sha256_bytes(jcs_dumps({"npy": npy_hash, "sampling_rate": group.sampling_rate})))

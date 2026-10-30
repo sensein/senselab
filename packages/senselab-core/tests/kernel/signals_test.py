@@ -210,7 +210,7 @@ def test_audio_from_array_identity_construction() -> None:
     x = numpy.linspace(-1, 1, 50, dtype=numpy.float32)
     a = Audio.from_array(x, 16_000)
     expected = sha256_bytes(
-        jcs_dumps({"array": sha256_bytes(canonical_npy_bytes(x.reshape(1, -1))), "sampling_rate": 16_000})
+        jcs_dumps({"npy": sha256_bytes(canonical_npy_bytes(x.reshape(1, -1))), "sampling_rate": 16_000})
     )
     assert a.identity == expected
     assert Audio.from_array(x.reshape(1, -1), 16_000.0).identity == expected
@@ -249,3 +249,32 @@ def test_audio_from_path_refuses_a_file_that_is_not_audio(tmp_path: Path) -> Non
     p.write_bytes(b"not audio at all")
     with pytest.raises(soundfile.LibsndfileError):
         Audio.from_path(p)
+
+
+@pytest.mark.logic
+def test_recording_groups_are_read_only() -> None:
+    """The group mapping of a recording cannot be changed, and still serialises as a dict."""
+    r = Recording(
+        groups={"ecg": _group(1, 250.0, 10)}, anchor=TimeAnchor(clock_id="dev", absolute_start_ns=None), identity="x"
+    )
+    with pytest.raises(TypeError):
+        r.groups["acc"] = _group(1, 50.0, 10)  # type: ignore[index]
+    with pytest.raises(TypeError):
+        del r.groups["ecg"]  # type: ignore[attr-defined]
+    assert list(r.model_dump()["groups"]) == ["ecg"]
+
+
+@pytest.mark.logic
+def test_audio_from_path_reads_the_header_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opening a file reads its header once."""
+    p = write_wav(tmp_path)
+    calls: list[str] = []
+    original = soundfile.info
+
+    def spy(file: str, verbose: bool = False) -> object:
+        calls.append(file)
+        return original(file, verbose)
+
+    monkeypatch.setattr(soundfile, "info", spy)
+    Audio.from_path(p)
+    assert calls == [str(p)]
