@@ -644,6 +644,22 @@ from the built wheel in a separate env.
   serialisation) plus a runtime (planner, executors, store, provenance, observability), with the
   layering enforced by import-linter (ADR-009).
 
+**Reconciling concurrent 1.x work (P-39).** 1.x development continues on `alpha` after the
+Phase 0 freeze tag. Those changes are ported, not lost.
+- `migration-ledger.md` records, per area (task module, workflow, utility), the last `alpha`
+  commit whose 1.x changes have been reconciled into 2.x, and how each change was handled:
+  ported (with the 2.x commit), folded into a profile, or dropped with a reason.
+- A **reconciliation task** lists commits on `alpha` since an area's ledger mark that touch its
+  1.x paths (`git log <mark>..alpha -- <paths>`). For each one it ports the behaviour change,
+  adds a parity or benchmark case where it changed outputs, and advances the mark.
+- It runs:
+  - at the start of every phase;
+  - before a use case is migrated;
+  - before any 1.x module is deleted, which is not allowed while its ledger mark lags `alpha`;
+  - after any 1.x fix that a running campaign depends on.
+- Campaigns that need a 1.x fix move to a newer pinned 1.x commit. The freeze tag is only the
+  starting mark.
+
 **Consolidation inventory (P-37).** These are the known duplicates in 1.x. Each phase removes the
 ones it touches, and Phase 5's exit requires the list to be empty. Each consolidation keeps one
 engine with typed variants, never a flag per former caller.
@@ -749,7 +765,8 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
   use-case tests.
 - Delete 1.x: the `api.py` dispatch, wrapper classes, `SenselabDataset`, `call_in_venv`, bespoke
   workers, the second vLLM server, the stage cache, and the 15 `extend_*` drivers.
-- Exit: no 1.x name remains (P-14), the consolidation inventory is empty (P-37), and the README
+- Exit: no 1.x name remains (P-14), the consolidation inventory is empty (P-37), every ledger mark
+  equals `alpha` (P-39), and the README
   quick start runs in CI.
 
 `reproduce` migrates any time after Phase 3.

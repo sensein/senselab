@@ -312,6 +312,9 @@ How 2.x is built. These bind the people and agents building it, not the API.
 ### P-35 Agents break the system to raise standards, not to add brittleness
 - **Status**: active. Full text in [`engineering.md`](engineering.md#p-35).
 
+### P-39 Concurrent 1.x work is reconciled, never lost
+- **Status**: active. Full text in [`engineering.md`](engineering.md#p-39).
+
 ---
 
 ## Inherited principles
@@ -404,3 +407,4 @@ amending its origin.
   user-defined license-set combinators are deferred. P-31 check (text in `engineering.md`):
   word-list linting is replaced by advisory review from a small pinned model plus agent
   sharpening; only the exact-pattern id check blocks.
+- 2026-10-30: added P-39 (reconcile concurrent 1.x work on `alpha`; `migration-ledger.md`).

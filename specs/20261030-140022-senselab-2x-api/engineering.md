@@ -179,3 +179,16 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   standards not more brittleness".
 - **Check**: each phase ends with an adversarial round. Findings are recorded with their
   architectural resolution, and case-only fixes are rejected.
+
+<a id="p-39"></a>
+### P-39 Concurrent 1.x work is reconciled, never lost
+- **Status**: active
+- **Statement**: 1.x work continues on `alpha` during the migration. Every change made after an
+  area's last reconciliation is either ported into 2.x, folded into a profile, or dropped with a
+  recorded reason. Recurring reconciliation tasks keep `migration-ledger.md` current.
+- **Source**: owner, 2026-10-30: "there is some work still happening in senselab, so even if a
+  current alpha commit is frozen, we will have to look at changes made from that commit to alpha and
+  incorporate, so some tasks should do this at somepoint".
+- **Check**: the reconciliation task runs at each phase start, before each use-case migration and
+  before any 1.x deletion. Deletion is blocked while an area's mark lags `alpha`. Phase 5 exits
+  only when every mark equals `alpha`.
