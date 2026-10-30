@@ -6,8 +6,9 @@ ADR-009.
 
 ## Framing
 
-- One JSON object per line, UTF-8, terminated by `\n`. JSON is written without `NaN` or
-  `Infinity`; non-finite values travel in arrays.
+- One JSON object per line, UTF-8, terminated by `\n`. Wire JSON is not canonical (JCS is used
+  only where something is hashed). It is written without `NaN` or `Infinity`; non-finite values
+  travel in arrays. Numpy scalars are written as their `.item()`.
 - Host → worker on the worker's stdin. Worker → host on a private duplicate of the worker's fd 1.
   At startup, before the hello and before any backend code is imported, the worker points fd 1 and
   `sys.stdout` at stderr, so library prints cannot reach the protocol stream.
@@ -27,15 +28,16 @@ ADR-009.
 | H → W | init | `{"init": {"array_dir": "<abs path>", ...}}` |
 | W → H | ready | `{"ready": {"load_s": float}}` |
 | H → W | request | `{"id": "<uuid>", "items": [{"id": "<item>", "inputs": {...}}], "params": {...}}` |
-| W → H | response | `{"id": "<uuid>", "results": [{"id": "<item>", "outputs": {...}} \| {"id": "<item>", "error": {...}}]}` |
+| W → H | response | `{"id": "<uuid>", "results": [{"id": "<item>", "outputs": {...}} \| {"id": "<item>", "error": {...}}]}`; each entry has exactly one of `outputs` and `error` |
 | W → H | fatal | `{"error": {...}, "fatal": true}` |
 | H → W | stop | `{"stop": true}` |
 
 ## Handshake
 
 1. The worker writes the hello as soon as it starts.
-   - `runtime` is `runtime_identity()`: sha256 over the sorted `(relative path, bytes)` pairs of
-     the `senselab_worker/*.py` files.
+   - `runtime` is `runtime_identity()`: take the `*.py` files under the `senselab_worker` package
+     root, as POSIX paths relative to that root, sorted by path. Concatenate, per file, the
+     UTF-8 path, `\0`, the file bytes, `\0`; the hex sha256 of the concatenation is the identity.
    - `python`, `numpy` and `pid` are recorded in the execution context (ADR-002 §2); they do not
      gate the connection.
 2. The host accepts only if `wire` and `runtime` both equal its own. Otherwise, or if the first
@@ -50,10 +52,16 @@ ADR-009.
 - `id` is a UUID string; the response carries the same `id`. Item ids are unique within a request.
 - `results` has exactly one entry per item, in item order, with matching ids. A failure in one
   item never fails its batch-mates.
-- If `handle` raises for the whole batch, every item gets that error. If it returns the wrong
-  number of results or mismatched ids, every item gets an `infrastructure` error of type
-  `ProtocolError`.
-- A request the worker cannot decode is answered with `fatal`, and the worker exits.
+- **Backend contract.** The worker module calls
+  `serve(load: Callable[[dict], object], handle: Callable[[object, list[dict], dict], list[dict]])`.
+  - `load(init)` returns the state, once.
+  - `handle(state, items, params)` gets the decoded items (`{"id", "inputs"}`) and returns one dict
+    per item, in item order: `{"outputs": {...}}`, or `{"error": exc}` with an exception instance
+    for a per-item failure. `serve` adds the ids and classifies each `exc` by the fault table.
+  - If `handle` raises, every item gets that error, classified.
+  - If it returns the wrong count, or an entry without exactly one of `outputs` and `error`,
+    every item gets an `infrastructure` error of type `ProtocolError`.
+- A line the worker cannot parse as a request is answered with `fatal`, and the worker exits.
 - The host validates `id`, length, order and item ids. A mismatch is a protocol violation.
 
 ## Arrays
@@ -64,13 +72,19 @@ ADR-009.
 
 - An object whose only key is `__array__` is an array reference; it may appear anywhere inside
   `init`, `inputs`, `params` or `outputs`. Every numpy array travels this way; none is inlined.
-- The file is canonical `.npy` (ADR-006); `sha256` is over the file bytes and names the file.
-  `dtype` carries an explicit byte order; object dtypes are refused.
+- The file is canonical `.npy` (ADR-006): version 1.0, C order, little-endian. The writer
+  converts non-contiguous and big-endian arrays to that form, so `dtype` is always `<…` or `|…`.
+  `sha256` is over the file bytes and names the file.
+- Object and structured dtypes are refused with a `content` error (`TypeError`): on the worker,
+  for that item; on the host, before the request is sent.
 - The writer writes to a temporary name in `array_dir` and renames, so a reader never sees a
   partial file and equal arrays share one file.
 - The reader rejects a path outside `array_dir`, recomputes the sha256 and checks `dtype` and
-  `shape`. Any failure is an `infrastructure` fault. The reader loads the array into memory; it
-  does not memory-map.
+  `shape`. It loads the array into memory; it does not memory-map.
+- **Decode failure scope.** On either side, a missing, unreadable or mismatched array fails only
+  the item that references it, with an `infrastructure` error of type `ArrayIntegrityError`; on
+  the worker, that item is not passed to `handle`. The same failure in `params` fails every item
+  of the request; in `init` it is `fatal`.
 - **Lifetime.** The host creates `array_dir` before spawning and removes it on close. After
   decoding a response, the host deletes the files referenced by that request and response, except
   those referenced by `init`. The worker never deletes.
@@ -82,7 +96,9 @@ ADR-009.
 ```
 
 - `type` is the exception's class name; `traceback` is the last 8 frames.
-- The worker classifies by `isinstance`, first match wins:
+- **Precedence.** `ArrayIntegrityError` and `ProtocolError` are `infrastructure` by definition and
+  are decided before the table. Every other exception is classified by the table, by
+  `isinstance`, first match wins:
 
 | Exception | `fault` |
 |---|---|
@@ -91,9 +107,12 @@ ADR-009.
 | anything else | `infrastructure`, with `"gap": true` |
 
 - `gap: true` marks a classification gap; the host reports it.
-- Faults the host raises itself: `ProtocolMismatch`, `ProtocolError` and `WorkerLost` are
-  `infrastructure`; a host timeout is `resource` (`TimeoutError`). Each fails every item of the
-  request in flight, and the worker is discarded.
+- Faults the host raises itself: `ProtocolMismatch`, `ProtocolError`, `WorkerLost` and
+  `WorkerFatal` are `infrastructure`; a host timeout is `resource` (`TimeoutError`). Each fails
+  every item of the request in flight, and the worker is discarded.
+- **Fatal.** On a `fatal` line, during load or a request, the host raises
+  `WorkerFatal(RuntimeError)` carrying the worker's error object; its fault is `infrastructure`,
+  whatever the error object's `fault` says.
 
 ## Timeouts and shutdown
 

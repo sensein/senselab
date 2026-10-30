@@ -49,7 +49,7 @@ Reviews of 2026-10-30, all against `senselab-2x-api`, each with a different lens
 | R-34 | M | Nine factual errors in proposal 0001 (FIXME location, memoisation, sync `Worker.run`, dispatch sites, existing opt-outs, SGE `qsub_args`, audit fetch) | Proposal revised (`98965678` on `enh/execution-extensions`) | resolved |
 | R-35 | M | Proposal API sketches clash with pydra 1.0 idioms; defaults would change; PR order needs splitting; senselab specifics leak | Proposal revised: `workflow.add(resources=)`, `Submitter(workers=, router=)`, `provided=` `Arg` attribute, Audit/messengers, defaults kept, A0…J2 split, generic examples | resolved |
 | R-36 | A | Weight hashing implemented in both core and the worker runtime | Cross-implementation golden test in the env tier (`design.md` §4.12) | resolved in design |
-| R-37 | C | Undefined: wire-protocol version, handshake format, JSON Schema dialect | Wire and handshake specs are Phase 1 deliverables; the dialect is a builder decision | resolved in wire-protocol.md |
+| R-37 | C | Undefined: wire-protocol version, handshake format | Wire and handshake spec is a Phase 1 deliverable; the JSON Schema dialect moved to R-55 | resolved in wire-protocol.md |
 | R-38 | P | senselab does not own its graph format; keys pass through pydra hashing; `Executor` is undefined | senselab defines the graph format, plan hash and keys; pydra is a compiler target and one executor (P §1) | resolved in ADR-001 |
 | R-39 | P | Composite keys hash upstream keys, not outputs, so identical upstream output still invalidates downstream (I-5) | output-addressed early cutoff: downstream keys use upstream output identity (P §2) | resolved in ADR-002 |
 | R-40 | P | Env identity covers the whole lock plus platform; near-zero hits across hosts and after lock bumps | per-backend dependency closures and measured equivalence classes (P §3, extends R-4) | resolved in ADR-002 |
@@ -67,3 +67,4 @@ Reviews of 2026-10-30, all against `senselab-2x-api`, each with a different lens
 | R-52 | P | Fault classification must originate in the worker | typed faults raised at the source (P §16, refines R-5) | resolved in ADR-009 |
 | R-53 | P | Over-engineering for 2.0 | cut list (P §17) | resolved in design §6.4 |
 | R-54 | P | Factual corrections, e.g. the model registry is read by no Python code, and the work pool starts one subprocess per item | fix the wording in design §2 (P §18) | resolved in design §2 (verified) |
+| R-55 | R-37 | JSON Schema dialect for task schemas | a builder decision | open — builder decision, Phase 2 |
