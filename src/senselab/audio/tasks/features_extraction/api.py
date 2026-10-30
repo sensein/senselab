@@ -9,7 +9,7 @@ Backends:
     - **Praat/Parselmouth**: Prosody and voice-quality measures
         (pitch, jitter, shimmer, formants, etc.).
     - **torchaudio**: Spectral features (spectrogram, mel, MFCC, pitch).
-    - **torchaudio-squim**: Objective quality metrics (e.g., STOI, PESQ, SI-SDR).
+    - **torchaudio-squim**: Objective quality metrics (STOI, PESQ, SI-SDR), medians over 10 s windows.
 """
 
 import os
@@ -27,7 +27,12 @@ from .ppg import extract_ppgs_from_audios, require_posteriorgram
 from .praat_parselmouth import extract_praat_parselmouth_features_from_audios
 from .sparc import SparcFeatureExtractor
 from .torchaudio import extract_torchaudio_features_from_audios
-from .torchaudio_squim import extract_objective_quality_features_from_audios
+from .torchaudio_squim import (
+    DEFAULT_FLOOR_S,
+    DEFAULT_MIN_WINDOW_S,
+    DEFAULT_WINDOW_S,
+    extract_objective_quality_features_from_audios,
+)
 
 
 @requires_compatibility("audio.tasks.features_extraction.extract_features_from_audios")
@@ -36,7 +41,7 @@ def extract_features_from_audios(
     opensmile: Union[Dict[str, str], bool] = True,
     parselmouth: Union[Dict[str, str], bool] = True,
     torchaudio: Union[Dict[str, str], bool] = True,
-    torchaudio_squim: bool = True,
+    torchaudio_squim: Union[Dict[str, Any], bool] = True,
     sparc: Optional[bool] = None,
     ppgs: Optional[bool] = None,
     device: Optional[DeviceType] = None,
@@ -76,9 +81,12 @@ def extract_features_from_audios(
                 ``{"freq_low": 80, "freq_high": 500, "n_fft": 1024, "n_mels": 128,
                   "n_mfcc": 40, "win_length": None, "hop_length": None}``
             - ``dict`` → override any of the above keys (e.g., ``n_fft``, ``hop_length``).
-        torchaudio_squim (bool, optional):
+        torchaudio_squim (dict | bool, optional):
             - ``False`` → skip objective quality metrics.
-            - ``True``  → compute metrics such as STOI, PESQ, SI-SDR (backend-dependent defaults).
+            - ``True``  → STOI, PESQ and SI-SDR as medians over 10 s windows of the whole audio:
+                ``{"window_s": 10.0, "min_window_s": 3.0, "start_s": None, "end_s": None, "floor_s": 0.0}``
+            - ``dict`` → override any of the above keys (``window_s=None`` reads the span in one pass).
+              See ``torchaudio_squim.extract_objective_quality_features_from_audios``.
         sparc (bool, optional):
             - ``False`` → skip Speech Articulatory Coding features.
             - ``True`` → use the SPARC encoding model to generate features (currently generate and return all)
@@ -120,7 +128,8 @@ def extract_features_from_audios(
         - ``"torchaudio"`` → nested ``dict[str, Tensor]`` (e.g., ``spectrogram``,
           ``mel_spectrogram``, ``mfcc``, ``pitch``). Tensors have shapes defined
           by your STFT/mel/MFCC settings.
-        - ``"torchaudio_squim"`` → ``dict[str, float]`` with objective quality scores.
+        - ``"torchaudio_squim"`` → ``dict`` with ``stoi``, ``pesq`` and ``si_sdr`` (medians over
+          windows), ``windows`` (per-window readings), ``windows_n`` and ``span_s``.
         - ``"sparc"`` → ``dict[str, Tensor]``
         - ``"ppgs"`` → Tensor
 
@@ -403,9 +412,12 @@ def extract_features_from_audios(
             'apq11_shimmer': 0.19065409516266155,
             'dda_shimmer': 0.2108954794913202},),
         'torchaudio_squim': {
-            'stoi': 0.9247563481330872,
-            'pesq': 1.3702949285507202,
-            'si_sdr': 11.71167278289795
+            'stoi': ...,
+            'pesq': ...,
+            'si_sdr': ...,
+            'windows': [{'start_s': 0.0, 'end_s': ..., 'stoi': ..., 'pesq': ..., 'si_sdr': ...}],
+            'windows_n': 1,
+            'span_s': ...
             },
         'ppgs': tensor([[[3.0436e-08, 2.7577e-08, 2.3042e-08,  ..., 2.7873e-05,
             3.1141e-04, 3.2798e-03],
@@ -533,6 +545,13 @@ def extract_features_from_audios(
         "win_length": None,
         "hop_length": None,
     }
+    default_squim: Dict[str, Any] = {
+        "window_s": DEFAULT_WINDOW_S,
+        "min_window_s": DEFAULT_MIN_WINDOW_S,
+        "start_s": None,
+        "end_s": None,
+        "floor_s": DEFAULT_FLOOR_S,
+    }
 
     # Resolve configs
     use_opensmile = bool(opensmile)
@@ -564,7 +583,8 @@ def extract_features_from_audios(
             my_ta = {**default_torchaudio, **(torchaudio if isinstance(torchaudio, dict) else {})}
             out["torchaudio"] = extract_torchaudio_features_from_audios([a], **my_ta)[0]
         if use_squim:
-            out["torchaudio_squim"] = extract_objective_quality_features_from_audios([a])[0]
+            my_squim = {**default_squim, **(torchaudio_squim if isinstance(torchaudio_squim, dict) else {})}
+            out["torchaudio_squim"] = extract_objective_quality_features_from_audios([a], **my_squim, device=device)[0]
         if use_sparc:
             out["sparc"] = SparcFeatureExtractor.extract_sparc_features([a], device=device, resample=True)[0]
         if use_ppgs:

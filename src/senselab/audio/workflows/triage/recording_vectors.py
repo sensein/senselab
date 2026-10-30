@@ -33,7 +33,7 @@ from senselab.audio.workflows.triage.dataset_profile import data_path, profile_c
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD, standing_task_extents
 from senselab.utils import fastio
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -1054,7 +1054,7 @@ CLIP_CLAIM = "clip"
 WITHDRAW_VERB = "withdraw"
 CONTEST_VERB = "contest"
 RAW_DISRUPTIONS_MEASUREMENT = "disruptions_file"
-SQUIM_MEASUREMENT = "squim"
+TASK_SQUIM_MEASUREMENT = "task_squim"
 QUALITY_CHECKS = ("noise_floor", "low_snr", "clipping", "dropout")
 """The raw quality checks, in report order. The first two are noise, which enhancement can resolve;
 clipping and dropout are sample damage, which it cannot, so they are never counted as resolved."""
@@ -1262,22 +1262,17 @@ def _quality_columns(run_dir: Path, view: StoreView, clip: Mapping[str, Any]) ->
         clip: The row's clip columns, for the raw disruption reading.
 
     Returns:
-        The plain and enhanced noise floor and SNR estimate, the plain spans' median SQUIM, the
-        raw checks that fail, those the enhanced stream passes, and those it does not.
+        The plain and enhanced noise floor and SNR estimate, the median SQUIM over the task extent's
+        windows (the live ``task_squim`` measurement) and how many windows it read, the raw checks
+        that fail, those the enhanced stream passes, and those it does not.
     """
     plain_floor, plain_snr = _stream_noise(_stream_frames_dbfs(run_dir, view, "plain"))
     enhanced_floor, enhanced_snr = _stream_noise(_stream_frames_dbfs(run_dir, view, "enhanced"))
     bounds = evaluation_bounds()["quality"]
     floor_max, snr_min = float(bounds["floor_max_dbfs"]), float(bounds["snr_min_db"])
-    squim = [
-        e.attributes
-        for e in view.live("assertion")
-        if e.attributes.get("name") == SQUIM_MEASUREMENT and "stoi" in e.attributes
-    ]
-
-    def median(key: str) -> float | None:
-        values = [v for v in (_number(a.get(key)) for a in squim) if v is not None]
-        return float(np.median(values)) if values else None
+    task_squim = view.last("measurement", name=TASK_SQUIM_MEASUREMENT)
+    squim = {} if task_squim is None else task_squim.attributes
+    windows_n = squim.get("windows_n")
 
     raw: list[str] = []
     resolved: list[str] = []
@@ -1299,9 +1294,10 @@ def _quality_columns(run_dir: Path, view: StoreView, clip: Mapping[str, Any]) ->
         "q_plain_snr_db": plain_snr,
         "q_enhanced_floor_dbfs": enhanced_floor,
         "q_enhanced_snr_db": enhanced_snr,
-        "q_plain_squim_pesq": median("pesq"),
-        "q_plain_squim_stoi": median("stoi"),
-        "q_plain_squim_si_sdr": median("si_sdr"),
+        "q_task_squim_pesq": _number(squim.get("pesq")),
+        "q_task_squim_stoi": _number(squim.get("stoi")),
+        "q_task_squim_si_sdr": _number(squim.get("si_sdr")),
+        "q_task_squim_windows_n": None if windows_n is None else int(windows_n),
         "q_raw_issues": raw if assessed else None,
         "q_resolved_by_enhanced": resolved if assessed else None,
         "q_unresolved": [check for check in raw if check not in resolved] if assessed else None,
@@ -1739,9 +1735,10 @@ def _fields() -> list[pa.Field]:
         pa.field("q_plain_snr_db", pa.float64()),
         pa.field("q_enhanced_floor_dbfs", pa.float64()),
         pa.field("q_enhanced_snr_db", pa.float64()),
-        pa.field("q_plain_squim_pesq", pa.float64()),
-        pa.field("q_plain_squim_stoi", pa.float64()),
-        pa.field("q_plain_squim_si_sdr", pa.float64()),
+        pa.field("q_task_squim_pesq", pa.float64()),
+        pa.field("q_task_squim_stoi", pa.float64()),
+        pa.field("q_task_squim_si_sdr", pa.float64()),
+        pa.field("q_task_squim_windows_n", pa.int32()),
         pa.field("q_raw_issues", pa.list_(pa.string())),
         pa.field("q_resolved_by_enhanced", pa.list_(pa.string())),
         pa.field("q_unresolved", pa.list_(pa.string())),

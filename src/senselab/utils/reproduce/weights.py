@@ -19,8 +19,11 @@ their presence check and prefetch check (the same accept rule, against the step'
 
 Stamps: given a stamps dir (``<cache>/weights-stamps``), `verify_hf` and `verify_url` write a stamp for each file
 they verify (by hash or by the accept rule): the blob's real path, the declared sha256, and the blob's ``lstat``
-size, ``mtime_ns``, device and inode. `check_stamps` is the inputs gate's re-check: a declared file with no stamp
-is ``E_WEIGHTS_UNVERIFIED``, one whose blob no longer has the stamped size, mtime or inode is ``E_WEIGHTS_CHANGED``.
+size, ``mtime_ns`` and inode, and the identity of the filesystem that holds it (`filesystem_identity`: the mount's
+type and source, not ``st_dev``, which a network mount numbers differently on each host). `check_stamps` is
+the inputs gate's re-check, on whichever host the step lands: a declared file with no stamp is
+``E_WEIGHTS_UNVERIFIED``, one whose blob no longer has the stamped size, mtime, inode or filesystem is
+``E_WEIGHTS_CHANGED``.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import uuid
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -155,7 +159,52 @@ class _Registered:
         return st.st_size == row.size and st.st_mtime_ns in (row.mtime_ns, overlay.get(rel))
 
 
-_STAMP_FIELDS = ("st_size", "st_mtime_ns", "st_dev", "st_ino")
+_STAMP_FIELDS = ("st_size", "st_mtime_ns", "st_ino")
+"""The ``lstat`` fields a stamp records; the device is recorded as `filesystem_identity` instead."""
+_SAME_HOST_FIELDS = (*_STAMP_FIELDS, "st_dev")
+"""What `write_stamp` compares between two ``lstat`` calls of one process, where ``st_dev`` is meaningful."""
+_MOUNTINFO = Path("/proc/self/mountinfo")
+
+
+def _unescape(field: str) -> str:
+    r"""A mountinfo path field with its octal escapes (``\040`` for a space, ``\134`` for a backslash) decoded."""
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
+
+
+def _mount_identity(path: str, mountinfo: str) -> str | None:
+    """The ``<fstype> <source>`` of the mount that holds ``path`` (a real path), from mountinfo text.
+
+    The mount is the one whose mount point is the longest prefix of ``path`` on path components; of mounts at
+    the same point, the last listed (it hides the earlier ones). A later mount over a parent directory that hides
+    a deeper mount is not detected (that needs the mount tree). The mount's root is left out: the inode already
+    names the file within its filesystem, and a host that mounts a subtree at the same path holds the same file.
+    None when no line parses or none holds ``path``.
+    """
+    best: tuple[int, str] | None = None
+    for line in mountinfo.splitlines():
+        head, sep, tail = line.partition(" - ")
+        fields, rest = head.split(), tail.split()
+        if not sep or len(fields) < 5 or len(rest) < 2:
+            continue
+        point = _unescape(fields[4])
+        inside = path == point or path.startswith(point.rstrip("/") + "/")
+        if inside and (best is None or len(point) >= best[0]):
+            best = (len(point), f"{rest[0]} {_unescape(rest[1])}")
+    return None if best is None else best[1]
+
+
+def filesystem_identity(path: str, st: os.stat_result) -> str:
+    """The identity of the filesystem holding ``path``, the same on every host that mounts it.
+
+    ``st_dev`` is not: an NFS mount gets a different device number on each client. The identity is the mount's
+    type and source from ``/proc/self/mountinfo``, or ``dev:<st_dev>`` where mountinfo is unavailable (not
+    Linux) or does not cover ``path``.
+    """
+    try:
+        found = _mount_identity(path, _MOUNTINFO.read_text())
+    except OSError:
+        found = None
+    return found if found is not None else f"dev:{st.st_dev}"
 
 
 def _stamp_path(stamps: Path, blob: str, sha256: str) -> Path:
@@ -163,25 +212,29 @@ def _stamp_path(stamps: Path, blob: str, sha256: str) -> Path:
     return stamps / f"{name}.json"
 
 
-def _stamp_of(st: os.stat_result) -> dict[str, int]:
-    return {field: int(getattr(st, field)) for field in _STAMP_FIELDS}
+def _stamp_of(blob: str, st: os.stat_result) -> dict[str, int | str]:
+    return {**{field: int(getattr(st, field)) for field in _STAMP_FIELDS}, "fs": filesystem_identity(blob, st)}
+
+
+def _same_host(st: os.stat_result) -> tuple[int, ...]:
+    return tuple(int(getattr(st, field)) for field in _SAME_HOST_FIELDS)
 
 
 def write_stamp(stamps: Path, file: Path, sha256: str, st: os.stat_result | None = None) -> None:
-    """Record that ``file`` (its real path) was verified against ``sha256``: its ``lstat`` size, mtime, device, inode.
+    """Record that ``file`` (its real path) was verified against ``sha256``: its ``lstat`` size, mtime, inode, fs.
 
     ``st`` is the ``lstat`` taken before the file was hashed; with it, nothing is written when the file changed
     meanwhile. Written atomically.
     """
     blob = os.path.realpath(file)
     now = os.lstat(blob)
-    if st is not None and _stamp_of(st) != _stamp_of(now):
+    if st is not None and _same_host(st) != _same_host(now):
         remove_stamp(stamps, file, sha256)
         return
     stamps.mkdir(parents=True, exist_ok=True)
     path = _stamp_path(stamps, blob, sha256)
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    tmp.write_text(json.dumps({"blob": blob, "sha256": sha256, **_stamp_of(now)}, sort_keys=True))
+    tmp.write_text(json.dumps({"blob": blob, "sha256": sha256, **_stamp_of(blob, now)}, sort_keys=True))
     os.replace(tmp, path)
 
 
@@ -207,8 +260,9 @@ def check_stamps(step: StepSpec, profile: Profile, stamps: Path) -> list[str]:
 
     Returns:
         Sorted codes: ``E_WEIGHTS_UNVERIFIED`` for a file with no readable stamp for its declared sha256 (prefetch
-        did not verify it), ``E_WEIGHTS_CHANGED`` for one whose blob's size, ``mtime_ns``, device or inode differ
-        from the stamp; empty when every file matches.
+        did not verify it), ``E_WEIGHTS_CHANGED`` for one whose blob's size, ``mtime_ns``, inode or filesystem
+        (`filesystem_identity`) differ from the stamp; a stamp written before the filesystem was recorded is
+        ``E_WEIGHTS_UNVERIFIED`` (prefetch again); empty when every file matches.
     """
     codes = set()
     for file, sha256 in declared_files(step, profile):
@@ -217,13 +271,14 @@ def check_stamps(step: StepSpec, profile: Profile, stamps: Path) -> list[str]:
         blob = os.path.realpath(file)
         try:
             stamp = json.loads(_stamp_path(stamps, blob, sha256).read_text())
-            recorded = {field: int(stamp[field]) for field in _STAMP_FIELDS}
+            recorded: dict[str, int | str] = {field: int(stamp[field]) for field in _STAMP_FIELDS}
+            recorded["fs"] = str(stamp["fs"])
             matches = stamp["blob"] == blob and stamp["sha256"] == sha256
         except (OSError, ValueError, KeyError, TypeError):
             codes.add(WEIGHTS_UNVERIFIED)
             continue
         try:
-            current = _stamp_of(os.lstat(blob))
+            current = _stamp_of(blob, os.lstat(blob))
         except OSError:
             continue
         if not matches:

@@ -529,7 +529,7 @@ produces them — no re-fold, no replay.
 | --- | --- | --- |
 | task extent | `task_extent_n`, `task_extent_start_s`, `task_extent_end_s`, `lead_s`, `tail_s`, `trim_s`, `trim_fraction`, `trimmable` (bool) | no live span carries role `task_extent` |
 | clipping | `clip_spans_n`, `clip_s`, `clip_level_max`, `clip_unclipped_peak`, `clip_unclipped_louder_n`, `clip_withdrawn_n`, `clip_contested_n`, `clip_consistent` (bool), `clip_state` ∈ {`none`, `withdrawn_only`, `kept_consistent`, `kept_inconsistent`}, `raw_clipped_runs`, `raw_clipped_s`, `raw_dropout_s` | per column; `clip_state` is never null |
-| raw vs enhanced | `q_plain_floor_dbfs`, `q_plain_snr_db`, `q_enhanced_floor_dbfs`, `q_enhanced_snr_db`, `q_plain_squim_pesq`, `q_plain_squim_stoi`, `q_plain_squim_si_sdr`, `q_raw_issues`, `q_resolved_by_enhanced`, `q_unresolved` (list<string> ⊂ {`noise_floor`, `low_snr`, `clipping`, `dropout`}) | the plain stream is absent or does not decode |
+| raw vs enhanced | `q_plain_floor_dbfs`, `q_plain_snr_db`, `q_enhanced_floor_dbfs`, `q_enhanced_snr_db`, `q_task_squim_pesq`, `q_task_squim_stoi`, `q_task_squim_si_sdr`, `q_task_squim_windows_n`, `q_raw_issues`, `q_resolved_by_enhanced`, `q_unresolved` (list<string> ⊂ {`noise_floor`, `low_snr`, `clipping`, `dropout`}) | the plain stream is absent or does not decode |
 | other speakers in the task extent | `ms_diarization_speakers_max`, `ms_diarization_secondary_s`, `ms_reviewer_other_n`, `ms_reviewer_expected_n`, `ms_reviewer_unexpected_n`, `ms_signals` (list<string> ⊂ {`diarization`, `separation`, `reviewer`}), `ms_agreement` | neither an `extent_speaker_count` nor a reviewer reading exists |
 
 **Schema 16 adds the task-extent cut** to the task-extent group: `task_audio_start_s`,

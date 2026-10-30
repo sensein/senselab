@@ -453,7 +453,7 @@ def profile_findings(profile: Profile) -> list[Finding]:
 def _root_names(step: StepSpec) -> list[str]:
     roots = [i.root for i in step.inputs] + [s.root for s in step.stage]
     names = [r for r in roots if not r.startswith("up:") and r not in RESERVED_ROOT_NAMES]
-    templates = [*step.argv, step.cwd, *step.pythonpath, *(s.dest for s in step.stage)]
+    templates = [*step.argv, step.cwd, *step.pythonpath, *(step.host_probe or []), *(s.dest for s in step.stage)]
     names += [p.split(":", 1)[1] for t in templates for p in placeholders(t) if p.startswith("root:")]
     return list(dict.fromkeys(names))
 
@@ -771,6 +771,21 @@ def shard_command(base: Sequence[str], step: str, shard: int, driver_python: str
     return [driver_python, "-P", "-m", DRIVER_MODULE, *base, "--step", step, "--shard", str(shard)]
 
 
+HOST_PROBE_MARGIN_S = 600.0
+"""Seconds a worker's host check may run beyond its two sandbox runs (keying and preparing the step)."""
+
+
+def host_probe_command(base: Sequence[str], step: str, driver_python: str) -> list[str]:
+    """A worker's host check for a ``host_probe`` step: shard 0's argv with ``--host-probe`` (`run.host_probe`)."""
+    return [*shard_command(base, step, 0, driver_python), "--host-probe"]
+
+
+def host_check_args(command: Sequence[str], timeout_s: float) -> list[str]:
+    """The ``work`` arguments that make a worker run ``command`` before its first claim and name its exit codes."""
+    reasons = [f"--host-check-reason={code}={reason}" for reason, code in run.HOST_PROBE_EXIT.items()]
+    return ["--host-check", shlex.join(command), "--host-check-timeout", str(float(timeout_s)), *reasons]
+
+
 # --- the probe and submission --------------------------------------------------------------------------
 
 
@@ -1027,7 +1042,7 @@ WORKER_ENV = ("/usr/bin/env", "-u", "TMPDIR")
 it, so a worker (and each shard it runs) keeps its node's default instead."""
 
 
-def pool_drain(profile: Profile, date: datetime.date, driver_python: str) -> Drain:
+def pool_drain(profile: Profile, date: datetime.date, driver_python: str, worker_args: Sequence[str] = ()) -> Drain:
     """The pool job's drain: a `work_pool.Controller` run until the pool drains, waiting out another controller.
 
     Its workers run ``env -u TMPDIR <driver python> -P -m senselab.utils.work_pool work <pool>`` (`WORKER_ENV`;
@@ -1037,6 +1052,7 @@ def pool_drain(profile: Profile, date: datetime.date, driver_python: str) -> Dra
         profile: The site profile; it must have ``work_pool`` settings (``poll_s``).
         date: The run date (the dated log dir).
         driver_python: The interpreter with senselab installed.
+        worker_args: More ``work`` arguments (`host_check_args`).
 
     Returns:
         The drain.
@@ -1046,6 +1062,7 @@ def pool_drain(profile: Profile, date: datetime.date, driver_python: str) -> Dra
 
     def drain(pool: work_pool.WorkPool, classes: list[work_pool.ResourceClass]) -> None:
         worker = [*WORKER_ENV, driver_python, "-P", "-m", "senselab.utils.work_pool", "work", str(pool.root)]
+        worker += list(worker_args)
         controller = work_pool.Controller(
             pool, classes, worker_command=worker, poll_s=settings.poll_s, log_dir=log_dir(profile, date)
         )
@@ -1065,6 +1082,7 @@ def run_pool(
     drain: Drain | None = None,
     recheck: Callable[[], Sequence[str]] | None = None,
     driver_python: str = sys.executable,
+    host_probe: Sequence[str] | None = None,
 ) -> run.StepOutcome:
     """A sharded step's pool job: publish one item per shard, drain the pool, settle the step's row.
 
@@ -1085,6 +1103,8 @@ def run_pool(
         drain: Runs the pool until it drains (default: `pool_drain`).
         recheck: Called once the pool drains; codes it returns fail the step with them.
         driver_python: The interpreter the default drain's workers run.
+        host_probe: The default drain's workers run this before their first claim (`host_probe_command`); a
+            worker whose check fails claims nothing and is recorded under the pool's ``hostcheck/``.
 
     Returns:
         The step's outcome.
@@ -1107,7 +1127,12 @@ def run_pool(
             if pool.state(item_id) is None
         ]
         pool.publish(fresh)
-        (drain or pool_drain(profile, config.date, driver_python))(
+        args = (
+            []
+            if host_probe is None
+            else host_check_args(host_probe, 2 * spec.host_probe_timeout_s + HOST_PROBE_MARGIN_S)
+        )
+        (drain or pool_drain(profile, config.date, driver_python, args))(
             pool, [resource_class(profile, spec.shards.resource_class)]
         )
         states = [pool.state(item_id) for item_id in ids]
