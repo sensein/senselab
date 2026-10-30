@@ -392,14 +392,64 @@ Device placement and data movement:
 
 ### 4.8 Execution, cache and provenance (P-3, P-5, P-19)
 
+**Executors and the graph runtime** (from [`workflow-engines.md`](workflow-engines.md))
+
+*Assessment.* 13 engines were evaluated critically against nine requirements (R1–R9 in
+`workflow-engines.md`). No engine is adopted as the execution layer. The three hardest
+requirements are:
+- R3: mixed Python versions per node without containers;
+- R4: a resident GPU model batched across records;
+- R5: Slurm pilots on NFS with preemption.
+
+No candidate is native on more than one of them. senselab already has measured answers to all
+three: `venv_worker`, `vllm_server`, and `work_pool` (0 double-claims in the NFS race tests).
+
+**What senselab owns**
+- the result store;
+- the env manager and worker runtime;
+- the model cache with batching across records;
+- the *placement* half of the planner (backend, env, device class, batch, partition, `explain()`).
+
 **Executors**
-- Executors implement one protocol, `submit(plan_fragment) -> handles`:
-  - `InProcess`: the notebook and test default;
-  - `Local`: process pool with GPU slots;
-  - `Pool`: today's `work_pool`, with items extended from argv to serialised plan fragments, so a
-    task call can be shipped without a CLI;
-  - `Slurm`: the `work_pool` `Controller` plus held `afterok` chaining from `reproduce`.
+- `InProcess`: the notebook and test default.
+- `Pool`: `work_pool`, with items extended from argv to serialised plan fragments, so a task call
+  can be shipped without a CLI. A local controller makes it the local multi-process executor too,
+  so there is no separate `Local` executor.
+- `Slurm`: the `work_pool` `Controller` plus `reproduce`'s held `afterok` chaining.
 - A worker on any host runs the same `senselab execute <fragment>` entry point.
+
+**The graph half**
+- This covers nesting, typed ports, `over=` fan-out, `route`, bounded `loop` and the ready set.
+  It is generic, and is what pydra 1.0 implements.
+- *Decision:* use pydra for the graph layer only, behind senselab's `Executor` protocol and result
+  store. Do not use pydra's workers, environments or pickle cache.
+- This is conditional on pydra PRs 1–4 in `workflow-engines.md` §5 landing in a non-alpha pydra
+  release. The owner leads pydra and welcomes the PRs.
+  1. per-item dataflow, with keep-going on failure;
+  2. a cheap submission path;
+  3. atomic rename into the cache, with leases and stale-lock recovery;
+  4. a pluggable, pickle-free result format.
+- **Fallback:** if those PRs have not landed when Phase 4 starts, write the graph layer in
+  senselab, estimated at 1–2k lines. Reuse `reproduce/dag.py`'s toposort and `unrolled_contracts`
+  for loops. Do not write a third graph runner beyond that: triage's runner and `reproduce/dag.py`
+  fold into it.
+- Pydra PRs 5–9 (env identity and venv tasks, resources, Slurm fixes, provenance hooks, plan
+  printing) are worth upstreaming, but senselab does not depend on them.
+
+**Verified pydra findings** (rechecked 2026-10-30)
+- PyPI's stable release is still 0.25; 1.0 is at `1.0a12`.
+- In an 8-item fan-out with one failure, none of the 7 healthy items runs its downstream node.
+  This was re-run and confirmed.
+- The Slurm worker crashes when `--error` is passed: `workers/slurm.py:118` calls `.replace` on
+  `None`.
+- Issues #778 (stray locks), #826 (environment not in the checksum) and #840 (Python tasks in
+  environments) are open.
+- The per-item overhead (about 4–5 ms cold, 2–3 ms cached; about 34 KB of pickles per item) was
+  measured on a loaded laptop and is an upper bound.
+
+**What carries over from the Nextflow prototype:** changing one model's revision recomputed 14 of
+18 tasks, because keys covered whole files. Keys must cover what each node reads, which the
+result-store key below does.
 
 **One content-addressed result store**
 - It replaces the stage cache, the result cache and the separate key schemes. *Design call:* the key
@@ -893,7 +943,8 @@ cite principles.
 **Phase 3: plans and executors.**
 - Build:
   - the Plan with `explain` and hashing;
-  - `InProcess`, `Local` and `Pool`/`Slurm` executors;
+  - `InProcess` and `Pool`/`Slurm` executors;
+  - open pydra PRs 1–4 upstream, in parallel with Phases 1–3;
   - `work_pool` items as plan fragments;
   - `senselab execute`;
   - cross-record batching;
@@ -953,6 +1004,7 @@ check:
 - **Parity tolerances** measured as data (section 6).
 - **vLLM-omni and vLLM ASR** as the only new integrations, after Phase 3 (section 6).
 - **sklearn-style configured objects as the primary form, with immutable `fit`** (section 4.13).
+- **No separate `Local` executor; pydra for the graph layer only, with a fallback** (section 4.8).
 - **License enforcement** (section 4.12).
   - A license harvested from PEP 639, `License` or classifiers counts as a record.
   - At run time a missing or unknown license raises by default (`on_missing: raise`) for every
@@ -966,8 +1018,10 @@ check:
    - Pydra would need to be stable, debuggable and optimised for execution. PRs to Pydra to get
      there are welcome.
    - A ready layer (joblib or another engine) is an acceptable starting point if it is available.
-   - Engine capabilities are to be assessed critically. That assessment is in
-     `workflow-engines.md` (pending), and section 4.8 is updated from it.
+   - Engine capabilities are to be assessed critically.
+   - **Resolved** in section 4.8 from `workflow-engines.md`: no engine is adopted as the execution
+     layer. pydra is used for the graph layer only, if PRs 1–4 land; otherwise senselab writes its
+     own. joblib was assessed and is not a fit beyond in-process memoisation.
 2. **In place on `alpha`.** Core is its own distribution; one repo builds several (section 5).
    1.x modules are deleted as their 2.x replacements land (P-14, P-27).
 3. **No second labelled dataset exists.** Genericity is shown by design with a constructed
