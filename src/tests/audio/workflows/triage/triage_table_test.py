@@ -348,7 +348,7 @@ def test_lists_are_joined_and_acquisition_readings_fill_their_columns(tmp_path: 
     assert breath["task_audio_plain"].endswith("run/streams/task_plain.flac")
     assert breath["task_audio_enhanced"].endswith("run/streams/task_enhanced.flac")
     assert breath["task_audio_redacted"] == ""
-    assert (breath["pipeline_commit"], breath["config_hash"], breath["schema_version"]) == ("abc123", "c0ffee", "4")
+    assert (breath["pipeline_commit"], breath["config_hash"], breath["schema_version"]) == ("abc123", "c0ffee", "5")
     speech = dict(zip(HEADER, parsed[2]))
     assert speech["branch"] == "SPEECH" and speech["task_audio_enhanced"] == ""
     assert speech["task_events_found"] == "" and speech["interference_in_task"] == ""
@@ -445,7 +445,7 @@ def test_the_squim_columns_read_the_task_extent_vectors_not_the_per_span_ones() 
     )
     readings = triage_table.vector_readings(vectors)["s1"]
     assert (readings["squim_pesq"], readings["squim_stoi"], readings["squim_si_sdr"]) == (2.9, 0.98, 17.0)
-    assert triage_table.column_dictionary()["version"] == 4
+    assert triage_table.column_dictionary()["version"] == 5
 
 
 def test_a_voice_row_carries_no_squim_even_where_the_vectors_hold_one() -> None:

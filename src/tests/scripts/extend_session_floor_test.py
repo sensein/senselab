@@ -12,6 +12,7 @@ import numpy as np
 import soundfile as sf
 
 from senselab.audio.workflows.triage.extend import read_store, write_store
+from senselab.audio.workflows.triage.identity import identity_columns, identity_from_stem
 from senselab.audio.workflows.triage.nodes.background import (
     FLOOR_FROM_SESSION,
     OWN_FLOOR,
@@ -55,9 +56,15 @@ def _run(root: Path, stem: str, samples: np.ndarray) -> dict[str, str]:
     sf.write(streams / "plain.wav", samples, RATE, subtype="FLOAT")
     sf.write(streams / "enhanced.flac", samples, RATE)
     store = ProvStore(run_id=stem)
+    identity = identity_from_stem(stem)
+    store.entity(
+        prov_type="stream",
+        extent=None,
+        attributes={"name": "recording", "path": f"/b/{stem}.wav", **identity.as_attributes()},
+    )
     store.entity(prov_type="stream", extent=None, attributes={"name": "plain", "path": "streams/plain.wav"})
     write_store(store, run_root)
-    return {"stem": stem, "enhanced": str(streams / "enhanced.flac")}
+    return {"stem": stem, "enhanced": str(streams / "enhanced.flac"), **identity_columns(identity)}
 
 
 def test_members_of_one_session_share_one_floor(tmp_path: Path) -> None:
@@ -65,13 +72,13 @@ def test_members_of_one_session_share_one_floor(tmp_path: Path) -> None:
     rows = [_run(tmp_path, f"sub-a_ses-1_task-t{i}", _breaths(i)) for i in range(3)]
     rows.append(_run(tmp_path, "sub-b_ses-9_task-t0", _breaths(7)))
     assert [r["status"] for r in floor_cli.process(rows)] == ["ok"] * 4
-    assert [s for s, _ in session_cli.sessions_of(rows)] == ["sub-a_ses-1", "sub-b_ses-9"]
-    out = session_cli.process_session("sub-a_ses-1", rows[:3])
+    assert [s for s, _ in session_cli.sessions_of(rows)] == ["sub-a/ses-1", "sub-b/ses-9"]
+    out = session_cli.process_session("sub-a/ses-1", rows[:3])
     assert {r[SESSION_FLOOR] for r in out} == {FLOOR_FROM_SESSION}
     store = read_store(Path(rows[0]["enhanced"]).parents[2])
     assert find_measurement(store, OWN_FLOOR) is not None
     found = find_measurement(store, SESSION_FLOOR)
-    assert found is not None and found.attributes["used_n"] == 3 and found.attributes["session"] == "sub-a_ses-1"
+    assert found is not None and found.attributes["used_n"] == 3 and found.attributes["session"] == "sub-a/ses-1"
 
 
 def test_an_own_floor_already_written_is_not_written_again(tmp_path: Path) -> None:
@@ -93,7 +100,12 @@ def _speech_run(root: Path, stem: str, seed: int) -> dict[str, str]:
     for name, samples in (("plain", speech + room), ("enhanced", speech), ("residual", room)):
         sf.write(streams / f"{name}.wav", samples, RATE, subtype="FLOAT")
         store.entity(prov_type="stream", extent=None, attributes={"name": name, "path": f"streams/{name}.wav"})
-    store.entity(prov_type="stream", extent=None, attributes={"name": "recording", "path": f"/data/{stem}.wav"})
+    identity = identity_from_stem(stem)
+    store.entity(
+        prov_type="stream",
+        extent=None,
+        attributes={"name": "recording", "path": f"/data/{stem}.wav", **identity.as_attributes()},
+    )
     windows = [{"start": float(a), "end": float(a) + 1.0, "label_scores": [{"Speech": 0.9}]} for a in (0, 2, 4)]
     (run_root / "run" / "enhanced_yamnet.json").write_text(json.dumps(windows))
     store.entity(
@@ -102,7 +114,7 @@ def _speech_run(root: Path, stem: str, seed: int) -> dict[str, str]:
         attributes={"name": "enhanced_yamnet_scores", "path": "enhanced_yamnet.json"},
     )
     write_store(store, run_root)
-    return {"stem": stem, "enhanced": str(streams / "enhanced.wav")}
+    return {"stem": stem, "enhanced": str(streams / "enhanced.wav"), **identity_columns(identity)}
 
 
 def test_the_session_pass_writes_each_speech_residual_and_the_session_background(tmp_path: Path) -> None:
@@ -113,7 +125,7 @@ def test_the_session_pass_writes_each_speech_residual_and_the_session_background
         _speech_run(tmp_path, "sub-a_ses-1_task-breath-sounds", 3),
     ]
     floor_cli.process(rows)
-    out = session_cli.process_session("sub-a_ses-1", rows)
+    out = session_cli.process_session("sub-a/ses-1", rows)
     assert {r["session_background"] for r in out} == {"speech_residual"}
     assert {r["session_background_members_n"] for r in out} == {2}
     store = read_store(Path(rows[2]["enhanced"]).parents[2])
@@ -125,3 +137,14 @@ def test_the_session_pass_writes_each_speech_residual_and_the_session_background
         "sub-a_ses-1_task-free-speech-1",
         "sub-a_ses-1_task-rainbow-passage",
     ]
+
+
+def test_a_stale_manifest_row_refuses_its_whole_session(tmp_path: Path) -> None:
+    """One member whose row names another identity than its run records: no member's store is written."""
+    rows = [_run(tmp_path, f"sub-a_ses-1_task-t{i}", _breaths(i)) for i in range(3)]
+    rows[2] = {**rows[2], "participant": "sub-z"}
+    stores = [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows]
+    out = session_cli.process_session("sub-a/ses-1", rows)
+    assert {r["status"] for r in out} == {"error"}
+    assert all("stale" in r[SESSION_FLOOR] for r in out)
+    assert [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows] == stores

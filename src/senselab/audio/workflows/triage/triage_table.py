@@ -26,7 +26,7 @@ import yaml
 from senselab.audio.workflows.triage.decision import reason_vocabulary
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
 from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, StoreView, read_store
-from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
+from senselab.audio.workflows.triage.routing_analysis.families import task_family
 from senselab.audio.workflows.triage.vocabulary import release_ground_meanings
 from senselab.utils import fastio
 
@@ -526,7 +526,7 @@ def row(
         The row, keyed by :func:`columns`.
     """
     verdict = decision.get("verdict")
-    family = decision.get("declared_family") or task_family(task_id_of(str(decision.get("stem") or "")))
+    family = decision.get("declared_family") or task_family(str(decision.get("task") or ""))
     branch = branch_of(family)
     reasons = list(decision.get("reasons") or ())
     annotations = list(decision.get("annotations") or ())

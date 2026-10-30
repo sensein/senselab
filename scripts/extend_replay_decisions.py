@@ -52,6 +52,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.extend import (
     ERROR,
@@ -83,6 +84,7 @@ from senselab.audio.workflows.triage.extend import (
     write_store,
 )
 from senselab.audio.workflows.triage.hint_record import hint_digest
+from senselab.audio.workflows.triage.identity import RecordingIdentity, identity_of, recorded_identity
 from senselab.audio.workflows.triage.nodes.common import STREAM_SUFFIX, describe_exception
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
 from senselab.audio.workflows.triage.nodes.speech import SEPARATED_PREFIX
@@ -140,7 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def mirror_run_root(run_root: Path, out_root: Path, stem: str) -> Path:
+def mirror_run_root(run_root: Path, out_root: Path, identity: RecordingIdentity) -> Path:
     """A writable run root under ``out_root`` whose sidecars read through to the finished one.
 
     ``derivatives/`` is a real directory holding a symlink per entry of the finished one; the sidecar
@@ -152,12 +154,12 @@ def mirror_run_root(run_root: Path, out_root: Path, stem: str) -> Path:
     Args:
         run_root: The finished run root.
         out_root: The tree replayed roots are created under.
-        stem: The recording's file stem, placing the root under its BIDS entity path.
+        identity: The identity the replay leaves the run with, placing the root under its entity path.
 
     Returns:
         The replayed run root, created.
     """
-    dest = out_root / entity_subdir(stem) / run_root.name
+    dest = out_root / entity_subdir(identity) / run_root.name
     run_dir = dest / RUN_SUBDIR
     (run_dir / STREAMS_SUBDIR).mkdir(parents=True, exist_ok=True)
     (dest / RELEASE_SUBDIR).mkdir(parents=True, exist_ok=True)
@@ -177,6 +179,28 @@ def mirror_run_root(run_root: Path, out_root: Path, stem: str) -> Path:
         if not link.is_symlink() and not link.exists():
             link.symlink_to(stream)
     return dest
+
+
+def replay_identity(
+    recorded: RecordingIdentity | None, stem: str, hint: AudioHints | None, *, hint_given: bool
+) -> RecordingIdentity:
+    """The identity a replay leaves its run with, which places an ``--out-root`` mirror.
+
+    A replay without ``--hints`` into an out-root that a hint-moved replay already wrote places a second mirror under
+    the finished run's identity; keep hinted and unhinted replays in separate out-roots.
+
+    Args:
+        recorded: The identity the finished run records (:func:`recorded_identity`), or None.
+        stem: The recording's file stem.
+        hint: The hint the replay was given, if any.
+        hint_given: Whether a hint was given (``--hints``).
+
+    Returns:
+        The given hint's identity; else the one the run records; else the stem's (a run that records none).
+    """
+    if hint_given:
+        return identity_of(stem, hint)
+    return recorded if recorded is not None else identity_of(stem, None)
 
 
 def replay_one(
@@ -215,16 +239,21 @@ def replay_one(
         and hint had already replayed the run, ``refused`` when the run's recorded inputs refuse it
         (:func:`~senselab.audio.workflows.triage.extend.check_replay_inputs`), ``error`` when it could not.
     """
-    target = mirror_run_root(run_root, out_root, stem) if out_root is not None else run_root
-    read_from = target if (target / RUN_SUBDIR / "store.jsonl").is_file() else run_root
-    try:
-        store = read_store(read_from, run_id=replay_run_id(run_root, config.config_hash, commit))
-    except (OSError, ValueError) as error:
-        return {"status": ERROR, DERIVATION: describe_exception(error)}
     try:
         hint = build_hint(source_of(run_root))[0] if build_hint is not None else None
     except (OSError, ValueError, LookupError, KeyError, IndexError) as error:
         return {"status": ERROR, DERIVATION: f"hint: {describe_exception(error)}"}
+    run_id = replay_run_id(run_root, config.config_hash, commit)
+    try:
+        store = read_store(run_root, run_id=run_id)
+        target = run_root
+        if out_root is not None:
+            placed = replay_identity(recorded_identity(store), stem, hint, hint_given=build_hint is not None)
+            target = mirror_run_root(run_root, out_root, placed)
+            if (target / RUN_SUBDIR / "store.jsonl").is_file():
+                store = read_store(target, run_id=run_id)
+    except (OSError, ValueError) as error:
+        return {"status": ERROR, DERIVATION: describe_exception(error)}
     try:
         inputs = check_replay_inputs(
             store,

@@ -19,19 +19,27 @@ source_root: src/senselab/audio/workflows/triage
 columns:
   participant:
     units: none
-    description: The BIDS participant id.
+    description: The recording's participant, as declared, e.g. `sub-01`.
     computation: >-
-      The first `sub-…` token of the stem (the run directory name with its `_YYYYmmdd-HHMMSS` launch
-      suffix removed).
-    source: [recording_vectors.py:identity, recording_vectors.py:stem_of]
-    null_means: The stem carries no `sub-` token.
+      The run's recorded identity (ADMIT): the `declared_participant` attribute of the latest live
+      `recording` stream entity, or, where ADMIT refused the recording and wrote no stream, of its last
+      activity's parameters. ADMIT resolved it once from the hint's `participant_id`, else the stem's own
+      `sub-` entity (`participant_from` says which).
+    source: [recording_vectors.py:view_identity, identity.py:identity_columns, identity.py:identity_of]
+    null_means: >-
+      The run records no identity (a store written before ADMIT recorded one; a replay records it), or
+      neither the hint nor the stem names a participant.
 
   task:
     units: none
-    description: The BIDS task id, including any trailing index, e.g. `harvard-sentences-list-12-3`.
-    computation: Everything after `task-` in the stem.
-    source: [recording_vectors.py:identity]
-    null_means: The stem carries no `task-` token.
+    description: >-
+      The recording's task id, lower-cased, including any trailing index, e.g. `harvard-sentences-list-12-3`.
+    computation: >-
+      The run's recorded identity (ADMIT): the `declared_task_id` attribute, read as `participant` is. ADMIT
+      resolved it once from the hint's `task_token`, else the stem's `task-` entity, lower-cased
+      (`task_from` says which); `unknown` where neither names one.
+    source: [recording_vectors.py:view_identity, identity.py:identity_columns, identity.py:identity_of]
+    null_means: The run records no identity (a store written before ADMIT recorded one; a replay records it).
 
   verdict:
     units: none
@@ -84,10 +92,41 @@ columns:
 
   session:
     units: none
-    description: The BIDS session id.
-    computation: The first `ses-…` token of the stem.
-    source: [recording_vectors.py:identity]
-    null_means: The stem carries no `ses-` token.
+    description: The recording's session, as declared, e.g. `ses-02`.
+    computation: >-
+      The run's recorded identity (ADMIT): the `declared_session` attribute, read as `participant` is. ADMIT
+      resolved it once from the hint's `session_id`, else the stem's own `ses-` entity (`session_from` says
+      which).
+    source: [recording_vectors.py:view_identity, identity.py:identity_columns, identity.py:identity_of]
+    null_means: >-
+      The run records no identity (a store written before ADMIT recorded one), or neither the hint nor the
+      stem names a session.
+
+  participant_from:
+    units: none
+    values: [hint, stem]
+    description: Where ADMIT read `participant` from.
+    computation: >-
+      The `participant` entry of the recorded identity's `declared_from` mapping: `hint` where the hint
+      declared it, `stem` where it was read off the file stem.
+    source: [recording_vectors.py:view_identity, identity.py:identity_columns, identity.py:identity_of]
+    null_means: The run records no identity (a store written before ADMIT recorded one).
+
+  session_from:
+    units: none
+    values: [hint, stem]
+    description: Where ADMIT read `session` from.
+    computation: The `session` entry of the recorded identity's `declared_from` mapping, as `participant_from`.
+    source: [recording_vectors.py:view_identity, identity.py:identity_columns, identity.py:identity_of]
+    null_means: The run records no identity (a store written before ADMIT recorded one).
+
+  task_from:
+    units: none
+    values: [hint, stem]
+    description: Where ADMIT read `task` from.
+    computation: The `task_id` entry of the recorded identity's `declared_from` mapping, as `participant_from`.
+    source: [recording_vectors.py:view_identity, identity.py:identity_columns, identity.py:identity_of]
+    null_means: The run records no identity (a store written before ADMIT recorded one).
 
   stem:
     units: none
@@ -101,9 +140,10 @@ columns:
     description: The recording's run directory.
     computation: >-
       The run directory relative to the scan root, or its absolute path when it is not under the
-      root. Where a stem has more than one timestamped run directory, the lexically latest is the
-      one read.
-    source: [recording_vectors.py:extract, recording_vectors.py:scan]
+      root. Run directories are found at any depth (a directory holding `run/store.jsonl`). Where a stem
+      has more than one timestamped run directory in one folder, the lexically latest is the one read; the
+      same stem in two folders is two recordings, both read.
+    source: [recording_vectors.py:extract, recording_vectors.py:latest_recordings, recording_vectors.py:scan]
     null_means: Never.
 
   declared_family:

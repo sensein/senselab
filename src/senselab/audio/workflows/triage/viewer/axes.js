@@ -137,13 +137,13 @@ var SchemaAxes = (function () {
   var IDENTITY = [
     column({
       name: 'participant', kind: 'categorical', group: 'identity', shortKey: 'sub-',
-      nullMeans: 'the stem carries no sub-',
+      nullMeans: 'the run records no identity, or no participant',
     }),
-    column({ name: 'task', kind: 'categorical', group: 'identity', nullMeans: 'the stem carries no task-' }),
+    column({ name: 'task', kind: 'categorical', group: 'identity', nullMeans: 'the run records no identity' }),
     column({ name: 'verdict', kind: 'categorical', group: 'decision', nullMeans: 'never null' }),
     column({
       name: 'session', kind: 'categorical', group: 'identity', shortKey: 'ses-',
-      nullMeans: 'the stem carries no ses-',
+      nullMeans: 'the run records no identity, or no session',
     }),
     column({ name: 'declared_family', kind: 'categorical', group: 'identity', nullMeans: 'nothing was declared' }),
     column({ name: 'release', kind: 'categorical', group: 'decision', nullMeans: 'the fold wrote none' }),

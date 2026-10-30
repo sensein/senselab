@@ -9,6 +9,7 @@ from typing import Any
 import pyarrow.parquet as pq
 
 from senselab.audio.workflows.triage import decision_tables
+from senselab.audio.workflows.triage.identity import RecordingIdentity, identity_of
 from senselab.audio.workflows.triage.vocabulary import (
     ROUTED,
     BranchDecision,
@@ -20,6 +21,8 @@ from senselab.audio.workflows.triage.vocabulary import (
 )
 
 STEM = "sub-SUBJ13_ses-01_task-respiration-and-cough-breath"
+RECORDED = identity_of(STEM)
+"""What ADMIT records for the stem when no hint declares an identity."""
 
 
 def _fold(**task: Any) -> dict[str, Any]:  # noqa: ANN401 -- TaskEvidence fields
@@ -41,8 +44,17 @@ def _fold(**task: Any) -> dict[str, Any]:  # noqa: ANN401 -- TaskEvidence fields
     return {"node": "VERDICT", **folded.record()}
 
 
-def _run_root(root: Path, decision: dict[str, Any]) -> Path:
-    """A finished run directory holding one fold, a task extent, a cut and its activities."""
+def _run_root(root: Path, decision: dict[str, Any], identity: RecordingIdentity | None = RECORDED) -> Path:
+    """A finished run directory holding one fold, a task extent, a cut and its activities.
+
+    Args:
+        root: The scan root.
+        decision: The fold's record.
+        identity: What ADMIT recorded on the ``recording`` stream, or None for a store from before it did.
+
+    Returns:
+        The run root.
+    """
     run_root = root / "sub-SUBJ13" / "ses-01" / f"{STEM}_20261007-120000"
     (run_root / "run").mkdir(parents=True)
     (run_root / "summary").mkdir()
@@ -53,7 +65,11 @@ def _run_root(root: Path, decision: dict[str, Any]) -> Path:
             "id": "rec",
             "prov_type": "stream",
             "extent": [0.0, 9.0],
-            "attributes": {"name": "recording", "path": "streams/recording.flac"},
+            "attributes": {
+                "name": "recording",
+                "path": "streams/recording.flac",
+                **(identity.as_attributes() if identity is not None else {}),
+            },
         },
         {
             "record": "entity",
@@ -132,6 +148,17 @@ def test_a_pass_row_carries_its_decisive_task_evidence_and_its_paths(tmp_path: P
     assert names["breath_rhythm_hz"]["effect"] == "annotation" and not names["breath_rhythm_hz"]["decisive"]
     assert names["breath_event_db_over_local"]["threshold"] == "16.0"
     assert names["breath_event_db_over_local"]["group"] == "breath"
+
+
+def test_the_identity_is_the_one_the_run_recorded_not_the_stem_s(tmp_path: Path) -> None:
+    """Participant, session and task are ADMIT's record; a store that records none leaves all three null."""
+    declared = RecordingIdentity("P1", "visit-1", "breath-2", {"participant": "hint", "task_id": "hint"})
+    fold = _fold(**_breath(24.0, 20.0))
+    row, _ = decision_tables.decision_rows(_run_root(tmp_path / "a", fold, declared), tmp_path)  # type: ignore[misc]
+    assert (row["participant"], row["session"], row["task"]) == ("P1", "visit-1", "breath-2")
+    row, _ = decision_tables.decision_rows(_run_root(tmp_path / "b", fold, None), tmp_path)  # type: ignore[misc]
+    assert (row["participant"], row["session"], row["task"]) == (None, None, None)
+    assert row["stem"] == STEM
 
 
 def test_a_discard_row_names_the_one_reading_that_discarded_it(tmp_path: Path) -> None:

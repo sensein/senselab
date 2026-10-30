@@ -11,6 +11,7 @@ import pytest
 import soundfile
 
 from senselab.audio.workflows.triage import recording_vectors as rv
+from senselab.audio.workflows.triage.identity import FROM_HINT, FROM_STEM, RecordingIdentity, identity_of
 from senselab.audio.workflows.triage.nodes import figure as figure_module
 from senselab.audio.workflows.triage.vocabulary import BRANCHES, Release, Triage
 
@@ -20,6 +21,9 @@ RETIRED_MEASUREMENTS = frozenset(
     {"ddk_ppg_period_dispersion", "ddk_repetition_count_from_ppg_decode", "ddk_syllable_rate_from_ppg_decode_hz"}
 )
 """Measurements the dated corpus scan enumerated that the graph no longer writes: the cyclic decode's."""
+
+SOURCE_COLUMNS = ("participant_from", "session_from", "task_from")
+"""Where each identity field was read from."""
 
 
 # ------------------------------------------------------------------------------ a synthetic store
@@ -146,6 +150,8 @@ def build_recording(
     with_derivatives: bool = True,
     with_stream_file: bool = True,
     measurements: tuple[tuple[str, Any], ...] = (("voiced_duration_s", 2.5),),
+    with_identity: bool = True,
+    identity: RecordingIdentity | None = None,
 ) -> Path:
     """A run directory carrying only what one test needs.
 
@@ -167,6 +173,8 @@ def build_recording(
         with_derivatives: Whether the envelope and continuity npz files exist.
         with_stream_file: Whether the conditioned flac exists.
         measurements: ``(name, value)`` pairs to write as measurement entities.
+        with_identity: Whether the ``recording`` stream records an identity, as ADMIT writes it.
+        identity: The identity it records, or None for the one the stem alone names.
 
     Returns:
         The run root, the directory holding ``run/``.
@@ -179,7 +187,10 @@ def build_recording(
     samples = int(duration_s * sampling_rate)
     lines: list[str] = []
 
-    lines.append(_entity("stream-rec", "stream", [0.0, duration_s], name="recording", sampling_rate=sampling_rate))
+    declared = (identity or identity_of(stem)).as_attributes() if with_identity else {}
+    lines.append(
+        _entity("stream-rec", "stream", [0.0, duration_s], name="recording", sampling_rate=sampling_rate, **declared)
+    )
     lines.append(
         _entity(
             "stream-pre",
@@ -477,14 +488,47 @@ def test_the_three_identity_columns_come_first_and_in_the_directed_order() -> No
     assert [field.name for field in rv.schema()][:3] == ["participant", "task", "verdict"]
 
 
-def test_identity_is_read_from_the_stem_and_the_verdict_from_the_fold(one_row: dict[str, Any]) -> None:
-    """Participant and task come from the stem; the verdict is the fold's triage."""
+def test_identity_is_the_runs_record_and_the_verdict_the_folds(one_row: dict[str, Any]) -> None:
+    """Participant, session and task are what ADMIT recorded, with their sources; the verdict is the fold's triage."""
     assert one_row["participant"] == "sub-a1"
     assert one_row["session"] == "ses-b2"
     assert one_row["task"] == "diadochokinesis-pa"
+    assert (one_row["participant_from"], one_row["session_from"], one_row["task_from"]) == (FROM_STEM,) * 3
     assert one_row["verdict"] == Triage.REVIEW.value
     assert one_row["release"] == Release.WITHHELD.value
     assert one_row["declared_family"] == "diadochokinesis-pa"
+
+
+def test_a_declared_identity_is_read_from_the_record_not_from_the_stem(tmp_path: Path) -> None:
+    """A hint that names another participant and an upper-case task wins over the stem, as ADMIT recorded it."""
+    declared = RecordingIdentity("P7", "visit-2", "free-speech-3", {"participant": FROM_HINT, "session": FROM_HINT})
+    row = rv.extract(build_recording(tmp_path, identity=declared), tmp_path)
+    assert row is not None
+    assert (row["participant"], row["session"], row["task"]) == ("P7", "visit-2", "free-speech-3")
+    assert (row["participant_from"], row["session_from"], row["task_from"]) == (FROM_HINT, FROM_HINT, None)
+
+
+def test_a_refused_recording_s_identity_is_read_from_admits_activity(tmp_path: Path) -> None:
+    """ADMIT that wrote no stream recorded the identity on its activity's parameters."""
+    run_root = build_recording(tmp_path, with_identity=False)
+    store = run_root / "run" / "store.jsonl"
+    lines = [line for line in store.read_text().splitlines() if '"stream-rec"' not in line]
+    parameters = {"audio_file": "/data/x.wav", **identity_of("sub-z9_ses-y8_task-x").as_attributes()}
+    lines.append(json.dumps({"record": "activity", "node": "ADMIT", "step": None, "parameters": parameters}))
+    store.write_text("\n".join(lines) + "\n")
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    assert (row["participant"], row["session"], row["task"]) == ("sub-z9", "ses-y8", "x")
+
+
+def test_a_run_that_records_no_identity_is_a_row_with_null_identity_and_is_counted(tmp_path: Path) -> None:
+    """A store written before ADMIT recorded identity is kept, its six identity columns null, and reported."""
+    run_root = build_recording(tmp_path, with_identity=False)
+    rows, report = rv.scan(tmp_path)
+    (row,) = rows
+    assert all(row[name] is None for name in ("participant", "session", "task", *SOURCE_COLUMNS))
+    assert row["verdict"] == Triage.REVIEW.value
+    assert report.unidentified == [str(run_root.relative_to(tmp_path))]
 
 
 def test_the_decision_record_the_html_asked_for_is_present(one_row: dict[str, Any]) -> None:
@@ -782,6 +826,29 @@ def test_a_rerun_supersedes_its_earlier_run(tmp_path: Path) -> None:
     assert len(rows) == 1
     assert rows[0]["run_dir"].endswith("20260921-101010")
     assert report.superseded == ["sub-a1_ses-b2_task-diadochokinesis-pa_20260920-030735"]
+
+
+def test_run_directories_are_found_at_any_depth_and_not_below_a_run(tmp_path: Path) -> None:
+    """A run at the root's top level, one nested four deep, and the BIDS-shaped three are all found."""
+    shallow = build_recording(tmp_path / "flat", stem="sub-a_ses-b_task-x")
+    flat = tmp_path / "flat" / shallow.name
+    shallow.rename(flat)
+    deep = build_recording(tmp_path / "site" / "batch", stem="sub-c_ses-d_task-y")
+    bids = build_recording(tmp_path, stem="sub-e_ses-f_task-z")
+    (bids / "run" / "nested" / "run").mkdir(parents=True)
+    (bids / "run" / "nested" / "run" / "store.jsonl").write_text("")
+    assert list(rv.recording_dirs(tmp_path)) == sorted([flat, deep, bids])
+
+
+def test_the_same_stem_in_two_folders_is_two_recordings(tmp_path: Path) -> None:
+    """Latest-per-stem holds within one folder; two folders holding one stem are both read."""
+    first = build_recording(tmp_path / "site-a", timestamp="20260920-030735")
+    second = build_recording(tmp_path / "site-b", timestamp="20260919-000000")
+    rows, report = rv.scan(tmp_path)
+    assert sorted(row["run_dir"] for row in rows) == sorted(
+        str(run_root.relative_to(tmp_path)) for run_root in (first, second)
+    )
+    assert report.superseded == []
 
 
 def test_an_unfinished_recording_is_counted_rather_than_written(tmp_path: Path) -> None:

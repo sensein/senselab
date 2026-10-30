@@ -588,6 +588,11 @@ the merge writes `triage_decisions.parquet`, `triage_decisions.tsv` and `triage_
 `triage_evidence` holds one row per (recording, item) with `group`, the item's fields and
 `decisive`. In the TSV, list and struct columns are compact JSON.
 
+Since `schema_version` 4, `participant`, `session` and `task` are the run's recorded identity, what
+ADMIT wrote on the `recording` stream (`recording_vectors.view_identity`), not a regex over the stem:
+`task` is the recorded `declared_task_id`, lower-cased with its trailing index, and all three are null
+for a run that records no identity (a store written before ADMIT recorded one).
+
 ## Unit C step 1: the session floor and the background before the branches (built)
 
 **The DAG.** `GRAPH_ORDER` is ADMIT, PREPROCESS, SESSION, BACKGROUND, TAXONOMY, routing, the

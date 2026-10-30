@@ -40,14 +40,14 @@ from senselab.audio.workflows.triage.background_model import (
     regions_of,
 )
 from senselab.audio.workflows.triage.config import load_triage_config
-from senselab.audio.workflows.triage.extend import RUN_SUBDIR, read_manifest, read_store, run_root_of, take_slice
-from senselab.audio.workflows.triage.nodes import ddk as ddk_node
 from senselab.audio.workflows.triage.ddk_task import DDK_READING
+from senselab.audio.workflows.triage.extend import RUN_SUBDIR, read_manifest, read_store, run_root_of, take_slice
+from senselab.audio.workflows.triage.identity import identity_disagreement, recorded_identity, row_groups, row_identity
+from senselab.audio.workflows.triage.nodes import ddk as ddk_node
 from senselab.audio.workflows.triage.nodes.airway_task import BREATH_READING, COUGH_READING, measure_airway_task
 from senselab.audio.workflows.triage.nodes.background import (
     SESSION_FLOOR,
     declared_family,
-    session_key,
     speech_residual_attributes,
 )
 from senselab.audio.workflows.triage.nodes.branches import AIRWAY_EXPECTATIONS, SPEECH_EXPECTATIONS
@@ -224,6 +224,13 @@ def measure_session(session: str, rows: Sequence[dict[str, Any]], config: Any) -
         try:
             run_root = run_root_of(Path(row["enhanced"]))
             store = read_store(run_root)
+            named, recorded = row_identity(row), recorded_identity(store)
+            if named is None or recorded is None:
+                raise ValueError(f"the run for {row['stem']} records no identity")
+            disagree = identity_disagreement(named, recorded)
+            if disagree:
+                stale = f"session skipped: the manifest is stale for {row['stem']} ({', '.join(disagree)})"
+                return [{"stem": member["stem"], "session": session, "error": stale} for member in rows]
             reading = speech_residual_attributes(store, run_root / RUN_SUBDIR)
             opened.append((row, run_root, store, {**reading, "stem": row["stem"]}, None))
         except Exception as error:  # noqa: BLE001 -- one unreadable member is a row, not a crash
@@ -283,7 +290,7 @@ def draw_sessions(manifest: Path, sessions: int, seed: int) -> list[tuple[str, l
     """
     groups: dict[str, list[dict[str, Any]]] = {}
     for row in read_manifest(manifest, required=("stem", "enhanced")):
-        groups.setdefault(session_key(str(row["stem"])) or str(row["stem"]), []).append(row)
+        groups.setdefault(row_groups(row)[1], []).append(row)
     keys = sorted(groups)
     chosen = sorted(random.Random(seed).sample(keys, min(sessions, len(keys))))
     return [(key, groups[key]) for key in chosen]

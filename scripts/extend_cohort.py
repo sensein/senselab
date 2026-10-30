@@ -63,7 +63,6 @@ from senselab.audio.workflows.triage.cohort_stage import (
     ecapa_embedder,
     enrollment_config,
     facts_of,
-    participant_key,
     plain_loader,
     read_participant,
     read_quantile_artefact,
@@ -78,6 +77,7 @@ from senselab.audio.workflows.triage.extend import (
     RUN_SUBDIR,
     SKIPPED,
     SLICES_SUBDIR,
+    StaleManifestRow,
     add_config_arguments,
     driver_config,
     export_prov,
@@ -88,7 +88,7 @@ from senselab.audio.workflows.triage.extend import (
     take_slice,
     write_store,
 )
-from senselab.audio.workflows.triage.nodes.background import session_key
+from senselab.audio.workflows.triage.identity import is_undeclared_session, row_groups, row_identity, undeclared_session
 from senselab.audio.workflows.triage.nodes.common import capture_environments, describe_exception, find_measurement
 from senselab.audio.workflows.triage.routing_analysis.families import task_family
 from senselab.utils.prov_store import ProvStore
@@ -224,7 +224,7 @@ def facts_from_table(path: Path) -> list[dict[str, Any]]:
                 continue
             duration = float(record["recording_duration_s"])
             extent = float(record["task_duration_s"]) if record.get("task_duration_s") else None
-            stem = f"{record.get('participant_id')}_{record.get('session_id')}_task-{record.get('task')}"
+            stem = Path(str(record.get("source_path") or "")).stem
             rows.append(
                 {
                     "stem": stem,
@@ -279,7 +279,7 @@ def run_quantiles(*, facts: Path | None, table: Path | None, out: Path, commit: 
         extent = row.get("extent_s")
         facts_row = RecordingFacts(
             stem=str(row["stem"]),
-            session=session_key(str(row["stem"])),
+            session=None,
             family=str(row["family"]),
             lexical_task=False,
             duration_s=duration,
@@ -297,19 +297,27 @@ def run_quantiles(*, facts: Path | None, table: Path | None, out: Path, commit: 
 
 
 def participants_of(rows: Sequence[dict[str, Any]]) -> list[tuple[str, list[tuple[str, list[dict[str, Any]]]]]]:
-    """The manifest's rows grouped by participant, then by BIDS session, both in sorted order.
+    """The manifest's rows grouped by the participant, then the session, their identity columns name.
 
     Args:
-        rows: Every manifest row.
+        rows: Every manifest row, carrying the corpus table's identity columns.
 
     Returns:
-        ``(participant, [(session, rows), ...])`` pairs; a stem naming no session is its own session,
-        keyed by the stem, under the participant its first underscore names.
+        ``(participant, [(session, rows), ...])`` pairs, both in sorted order. A participant's recordings that
+        declare no session are pooled under :func:`~.identity.undeclared_session`, which no session-level check
+        reads; a recording naming no participant, or whose run records no identity, is its own group, keyed by
+        its stem.
+
+    Raises:
+        ManifestWithoutIdentity: If a row carries no identity columns.
     """
     groups: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for row in rows:
-        session = session_key(str(row["stem"])) or str(row["stem"])
-        groups.setdefault(participant_key(session), {}).setdefault(session, []).append(row)
+        participant, session = row_groups(row)
+        identity = row_identity(row)
+        if identity is not None and identity.participant and not identity.session:
+            session = undeclared_session(identity.participant)
+        groups.setdefault(participant, {}).setdefault(session, []).append(row)
     return [(participant, sorted(sessions.items())) for participant, sessions in sorted(groups.items())]
 
 
@@ -370,13 +378,16 @@ def process_participant(
     failed: list[dict[str, Any]] = []
     stream = str(cohort_parameters()["comparison"]["diarization_stream"])
     opened: list[tuple[str, list[tuple[RecordingFacts, Path, ProvStore]]]] = []
+    stale: list[str] = []
     for session, rows in sessions:
         members: list[tuple[RecordingFacts, Path, ProvStore]] = []
         for row in rows:
             try:
                 run_root = run_root_of(Path(row["enhanced"]))
-                store = read_checked_store(run_root, config)
+                store = read_checked_store(run_root, config, row=row)
             except (OSError, ValueError) as error:
+                if isinstance(error, StaleManifestRow):
+                    stale.append(str(row["stem"]))
                 failed.append(
                     {
                         "stem": row["stem"],
@@ -391,6 +402,13 @@ def process_participant(
             members.append((facts, run_root, store))
         if members:
             opened.append((session, members))
+    if stale:
+        why = f"participant refused: the manifest is stale for {', '.join(sorted(stale))}; nothing was written"
+        return [
+            {"stem": row["stem"], "participant": participant, "session": session, "status": ERROR, "error": why}
+            for session, rows in sessions
+            for row in rows
+        ]
     every = [member for _, members in opened for member in members]
     key = cohort_key(
         group=participant,
@@ -419,7 +437,8 @@ def process_participant(
     )
     if enrollments is not None and enrollments_out is not None:
         for session, enrollment in enrollments.sessions.items():
-            _write_vector(enrollment.vector, enrollments_out / f"{session}.npy")
+            if not is_undeclared_session(session):
+                _write_vector(enrollment.vector, enrollments_out / f"{session}.npy")
         _write_vector(enrollments.pooled.vector, enrollments_out / f"{participant}.npy")
     out: list[dict[str, Any]] = []
     for session, members in opened:
@@ -428,7 +447,7 @@ def process_participant(
             if readings_out is None:
                 reading_id = write_cohort_reading(store, attributes)
                 if compared is not None and compared.vector is not None:
-                    write_enrollment_entity(store, compared, reading_id)
+                    write_enrollment_entity(store, compared, reading_id, subject=participant)
                 capture_environments(store, {})
                 write_store(store, run_root)
                 export_prov(store, run_root)
@@ -629,7 +648,7 @@ def run_consistency(logs: Path, *, iqr_multiple: float) -> dict[str, Any]:
         The fence summary and, at the packaged bound, how many sessions it flags.
     """
     base = logs / SLICES_SUBDIR if (logs / SLICES_SUBDIR).is_dir() else logs
-    paths = sorted(base.glob("cohort-slice-*.jsonl")) or sorted(base.glob("sub-*.jsonl"))
+    paths = sorted(base.glob("cohort-slice-*.jsonl")) or sorted(p for p in base.glob("*.jsonl") if p.parent == base)
     by_session: dict[str, float] = {}
     for path in paths:
         for line in path.read_text(encoding="utf-8").splitlines():

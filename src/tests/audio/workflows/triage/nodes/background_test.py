@@ -17,12 +17,13 @@ from senselab.audio.workflows.triage.nodes.background import (
     FLOOR_FROM_RECORDING,
     FLOOR_FROM_SESSION,
     SESSION_FLOOR,
+    declared_family,
     session_attributes,
-    session_key,
     write_background,
     write_own_floor,
     write_session_floor,
 )
+from senselab.audio.workflows.triage.nodes.branches import declared_task_family
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.audio.workflows.triage.task_events import generic_view, generic_view_of
 from senselab.utils.prov_store import ProvStore
@@ -50,10 +51,15 @@ def _breaths(seconds: float, room_db: float, seed: int) -> np.ndarray:
     return x
 
 
-def test_the_session_is_the_bids_participant_and_session() -> None:
-    """The key is read off the stem; a stem naming no session has none."""
-    assert session_key("sub-0a1b_ses-77AA_task-breath_20260920") == "sub-0a1b_ses-77AA"
-    assert session_key("recording") is None
+def test_background_reads_the_family_every_stage_reads() -> None:
+    """A store from before ADMIT recorded identity still names its family, the same one the branches read."""
+    store = ProvStore(run_id="old")
+    store.entity(
+        prov_type="stream",
+        extent=(0.0, 1.0),
+        attributes={"name": "recording", "path": "/data/sub-a_ses-b_task-respiration-and-cough-fivebreaths-2.wav"},
+    )
+    assert declared_family(store) == declared_task_family(store) == "respiration-and-cough-fivebreaths"
 
 
 def test_a_recording_that_captured_only_the_room_stands_far_under_its_session() -> None:

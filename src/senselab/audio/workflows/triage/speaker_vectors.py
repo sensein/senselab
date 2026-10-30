@@ -1,7 +1,11 @@
 """One speaker embedding per subject, pooled over the task extents that subject's recordings mint.
 
 A row is a speaker, not a recording: :mod:`senselab.audio.workflows.triage.recording_vectors` is
-the per-recording sibling and the two share their scan and shard conventions but nothing else.
+the per-recording sibling, and the corpus table it writes is this module's index. Each table row names a
+run directory (``run_dir``, relative to the corpus root) and the identity its run recorded
+(``participant``, ``session``, ``task``); a speaker is a ``participant``. No folder or file name is read
+for identity. A run the table has no row for -- one without a VERDICT fold when the table was built -- is
+not embedded.
 
 The unit of input is the ``task_extent`` span -- the single interval a branch mints in align mode
 to delimit the portion of a recording that serves its declared task, and only where that span's
@@ -21,18 +25,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from senselab.audio.workflows.triage.dataset_profile import data_path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 """Bumped whenever a column is added, removed or retyped, or the pooling rule changes."""
 
 STORE_NAME = "store.jsonl"
@@ -64,10 +68,8 @@ WINDOW_AGGREGATOR = "spherical_mean"
 AGGREGATOR = "recording_equal_spherical_mean"
 EMBEDDING_DIM = 192
 
-_TIMESTAMP = re.compile(r"_\d{8}-\d{6}(?:-\d+)?$")
-_PARTICIPANT = re.compile(r"(sub-[^_]+)")
-_SESSION = re.compile(r"(ses-[^_]+)")
-_TASK = re.compile(r"(task-[^_]+)")
+TABLE_COLUMNS = ("participant", "session", "task", "stem", "run_dir")
+"""The corpus-table columns this module reads (``recording_vectors.parquet``)."""
 
 _PROFILE_PATH = Path(__file__).parent / "data" / "speaker_vector_profile" / "2026-09-22.yaml"
 _PROFILE_VERSION = "1"
@@ -150,38 +152,13 @@ class Extent:
         return f"{self.stem}@{self.start_s:.3f}-{self.end_s:.3f}"
 
 
-def stem_of(run_root: Path) -> str:
-    """Return the BIDS stem of a run directory, with its timestamp removed.
-
-    Args:
-        run_root: A finished run directory.
-
-    Returns:
-        The directory name minus a trailing ``_YYYYmmdd-HHMMSS`` and any collision suffix.
-    """
-    return _TIMESTAMP.sub("", run_root.name)
-
-
-def identity(stem: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    """Split a stem into participant, session and task labels.
-
-    Args:
-        stem: A BIDS stem.
-
-    Returns:
-        ``(participant, session, task)``, each ``None`` when the stem does not carry it.
-    """
-    p = _PARTICIPANT.search(stem)
-    s = _SESSION.search(stem)
-    t = _TASK.search(stem)
-    return (p.group(1) if p else None, s.group(1) if s else None, t.group(1) if t else None)
-
-
-def read_task_extents(run_root: Path) -> list[Extent]:
+def read_task_extents(run_root: Path, recording: Mapping[str, Any]) -> list[Extent]:
     """Read every live task extent a finished run minted.
 
     Args:
         run_root: A run directory holding ``run/store.jsonl``.
+        recording: Its corpus-table row (:data:`TABLE_COLUMNS`): the speaker is its ``participant``, and its
+            ``session``, ``task``, ``stem`` and ``run_dir`` are carried onto every extent.
 
     Returns:
         The extents, deduplicated on their interval. Empty when the branch minted none, which is
@@ -192,10 +169,7 @@ def read_task_extents(run_root: Path) -> list[Extent]:
     """
     store = run_root / RUN_SUBDIR / STORE_NAME
     audio = run_root / RUN_SUBDIR / STREAMS_SUBDIR / f"{EMBED_STREAM}.flac"
-    stem = stem_of(run_root)
-    subject, session, task = identity(stem)
-    if subject is None:
-        return []
+    subject = str(recording["participant"])
 
     invalidated: set[str] = set()
     candidates: dict[tuple[float, float], list[tuple[str, dict[str, Any]]]] = {}
@@ -233,10 +207,10 @@ def read_task_extents(run_root: Path) -> list[Extent]:
         out.append(
             Extent(
                 subject=subject,
-                session=session,
-                task=task,
-                stem=stem,
-                run_dir=run_root.name,
+                session=recording.get("session"),
+                task=recording.get("task"),
+                stem=str(recording["stem"]),
+                run_dir=str(recording["run_dir"]),
                 audio_path=audio,
                 start_s=start_s,
                 end_s=end_s,
@@ -250,64 +224,51 @@ def read_task_extents(run_root: Path) -> list[Extent]:
 # ------------------------------------------------------------------------------------- the scan
 
 
-def _listdir(path: Path) -> list[Path]:
-    """List a directory, treating an unreadable one as empty.
+def table_recordings(table: Path, report: ScanReport) -> dict[str, list[dict[str, Any]]]:
+    """The recordings a corpus table names, grouped by speaker.
+
+    A recording is a stem in one folder; where the table names more than one run directory for it (tables
+    concatenated across builds), the lexically latest is kept, as
+    :func:`~senselab.audio.workflows.triage.recording_vectors.latest_recordings` keeps it.
 
     Args:
-        path: The directory.
+        table: The corpus table, ``recording_vectors.parquet``.
+        report: Counted into: rows with no participant and rows with no run directory, both skipped.
 
     Returns:
-        Its entries, or ``[]`` when it cannot be read -- a tree being written mid-scan is
-        tolerated rather than raised.
+        By participant, its rows (:data:`TABLE_COLUMNS`), in (folder, stem) order.
+
+    Raises:
+        ValueError: If the table lacks a column of :data:`TABLE_COLUMNS`.
     """
-    try:
-        return sorted(path.iterdir())
-    except OSError:
-        return []
-
-
-def subject_dirs(root: Path) -> Iterator[Path]:
-    """Yield the ``sub-*`` directories of a corpus tree.
-
-    Args:
-        root: The corpus root.
-
-    Yields:
-        Each subject directory.
-    """
-    for entry in _listdir(root):
-        if entry.is_dir() and entry.name.startswith("sub-"):
-            yield entry
-
-
-def run_dirs_of(subject_dir: Path) -> Iterator[Path]:
-    """Yield the run directories under one subject, newest run per stem only.
-
-    Args:
-        subject_dir: A ``sub-*`` directory.
-
-    Yields:
-        One run directory per stem: when a stem was run more than once, the latest timestamp.
-    """
-    latest: dict[str, Path] = {}
-    for session in _listdir(subject_dir):
-        if not session.is_dir():
+    names = set(pq.read_schema(table).names)
+    absent = [name for name in TABLE_COLUMNS if name not in names]
+    if absent:
+        raise ValueError(f"{table} carries no {', '.join(absent)} column; rebuild the corpus table")
+    latest: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in pq.read_table(table, columns=list(TABLE_COLUMNS)).to_pylist():
+        if not row["run_dir"]:
+            report.recordings_without_run_dir += 1
             continue
-        for run_root in _listdir(session):
-            if not run_root.is_dir() or not (run_root / RUN_SUBDIR / STORE_NAME).exists():
-                continue
-            stem = stem_of(run_root)
-            current = latest.get(stem)
-            if current is None or run_root.name > current.name:
-                latest[stem] = run_root
-    yield from (latest[stem] for stem in sorted(latest))
+        if not row["participant"]:
+            report.recordings_without_participant += 1
+            continue
+        run_dir = Path(row["run_dir"])
+        key = (str(run_dir.parent), str(row["stem"]))
+        previous = latest.get(key)
+        if previous is None or run_dir.name > Path(previous["run_dir"]).name:
+            latest[key] = row
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for _, row in sorted(latest.items()):
+        grouped.setdefault(str(row["participant"]), []).append(row)
+    return grouped
 
 
 def shard_of(subject: str, slices: int) -> int:
     """Assign a subject to a shard by content, so a growing tree never reshuffles.
 
     Args:
-        subject: The ``sub-*`` label.
+        subject: The participant, as the corpus table names it.
         slices: How many workers share the tree.
 
     Returns:
@@ -331,38 +292,44 @@ class ScanReport:
     recordings_seen: int = 0
     recordings_with_extent: int = 0
     recordings_unreadable: int = 0
+    recordings_without_participant: int = 0
+    recordings_without_run_dir: int = 0
     extents_admitted: int = 0
     extents_refused_short: int = 0
     extents_refused_family: dict[str, int] = field(default_factory=dict)
     extents_missing_audio: int = 0
 
 
-def gather(root: Path, slice_index: int = 0, slices: int = 1) -> tuple[dict[str, list[Extent]], ScanReport]:
+def gather(
+    root: Path, table: Path, slice_index: int = 0, slices: int = 1
+) -> tuple[dict[str, list[Extent]], ScanReport]:
     """Collect this shard's task extents, grouped by subject.
 
     Args:
-        root: The corpus root, a tree of ``sub-*/ses-*/<stem>_<stamp>/`` run directories.
+        root: The corpus root the table's ``run_dir`` paths are relative to.
+        table: The corpus table built over that root (``recording_vectors.parquet``,
+            :func:`table_recordings`); a run it has no row for is not read.
         slice_index: This worker's index.
         slices: How many workers share the tree.
 
     Returns:
         ``({subject: [Extent, ...]}, report)``. Extents outside :data:`EMBEDDED_FAMILIES`, those
-        below the profile floor, and those whose stream file is missing are excluded and counted.
+        below the profile floor, and those whose stream file is missing are excluded and counted, as
+        are table rows that name no participant or no run directory.
     """
     floor = load_min_extent_s()
     report = ScanReport()
     grouped: dict[str, list[Extent]] = {}
-    for subject_dir in subject_dirs(root):
-        subject = subject_dir.name
+    for subject, recordings in table_recordings(table, report).items():
         if shard_of(subject, slices) != slice_index:
             continue
         report.subjects_considered += 1
         admitted: list[Extent] = []
         saw_any = False
-        for run_root in run_dirs_of(subject_dir):
+        for recording in recordings:
             report.recordings_seen += 1
             try:
-                extents = read_task_extents(run_root)
+                extents = read_task_extents(root / str(recording["run_dir"]), recording)
             except OSError:
                 report.recordings_unreadable += 1
                 continue
@@ -398,7 +365,7 @@ def row_for(subject: str, extents: Sequence[Extent], embedding: Any, root: Path)
     """Build the parquet row for one speaker.
 
     Args:
-        subject: The ``sub-*`` label.
+        subject: The participant, as the corpus table names it.
         extents: The extents that were handed to the estimator, in the order they were handed.
         embedding: The ``TargetSpeakerEmbedding`` the estimator returned.
         root: The corpus root, so ``run_dir`` can be recorded relative to it.
@@ -620,7 +587,7 @@ def embed_subject(
     ``specs/20260922-speaker-vectors/design.md``.
 
     Args:
-        subject: The ``sub-*`` label.
+        subject: The participant, as the corpus table names it.
         extents: The subject's admitted extents.
         root: The corpus root, recorded on the row.
         device: Optional device override.
@@ -737,6 +704,7 @@ def embed_subject(
 
 def scan(
     root: Path,
+    table: Path,
     slice_index: int = 0,
     slices: int = 1,
     *,
@@ -748,6 +716,7 @@ def scan(
 
     Args:
         root: The corpus root.
+        table: The corpus table built over it (:func:`gather`).
         slice_index: This worker's index.
         slices: How many workers share the tree.
         device: Optional device override.
@@ -761,7 +730,7 @@ def scan(
         supply is a single extent shorter than :data:`WINDOW_S`, which yields one window where the
         distribution describer needs two.
     """
-    grouped, report = gather(root, slice_index, slices)
+    grouped, report = gather(root, table, slice_index, slices)
     wanted = set(subjects) if subjects is not None else None
     rows: list[dict[str, Any]] = []
     for subject in sorted(grouped):
@@ -784,21 +753,19 @@ __all__ = [
     "HOP_S",
     "MODEL_ID",
     "SCHEMA_VERSION",
+    "TABLE_COLUMNS",
     "WINDOW_AGGREGATOR",
     "WINDOW_S",
     "Extent",
     "ScanReport",
     "embed_subject",
     "gather",
-    "identity",
     "load_min_extent_s",
     "read_task_extents",
     "row_for",
-    "run_dirs_of",
     "scan",
     "schema",
     "shard_of",
-    "stem_of",
-    "subject_dirs",
+    "table_recordings",
     "to_table",
 ]

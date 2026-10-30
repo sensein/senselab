@@ -35,7 +35,7 @@ from senselab.audio.workflows.triage.background_model import (
     session_floor_db,
     write_view_arrays,
 )
-from senselab.audio.workflows.triage.identity import recorded_identity, session_key_of
+from senselab.audio.workflows.triage.nodes.branches import declared_task_family
 from senselab.audio.workflows.triage.nodes.common import (
     find_measurement,
     lexical_words,
@@ -73,18 +73,6 @@ FLOOR_FROM_RECORDING = "recording"
 
 VIEW_SIDECAR = "derivatives/background_view.npz"
 """The arrays a branch reads the background through, beside the ``background_model`` measurement."""
-
-
-def session_key(stem: str) -> str | None:
-    """The BIDS session a recording belongs to, ``sub-<label>_ses-<label>``, or None.
-
-    Args:
-        stem: The recording's file stem.
-
-    Returns:
-        The participant and session labels, or None where the stem names no session.
-    """
-    return session_key_of(stem)
 
 
 def _activity(store: ProvStore, node: str, step: str) -> tuple[str, str]:
@@ -162,16 +150,15 @@ def _recording_stream_stem(store: ProvStore) -> str:
 
 
 def declared_family(store: ProvStore) -> str | None:
-    """The declared family: the task ADMIT recorded, or the ``recording`` stream path's task id.
+    """The declared family, read as every stage reads it (:func:`~.branches.declared_task_family`).
 
     Args:
         store: The provenance store.
 
     Returns:
-        The family of the declared task id; None where no recording stream names a path.
+        The family, or None where nothing declares one.
     """
-    identity = recorded_identity(store) if _recording_stream_stem(store) else None
-    return identity.task_family if identity is not None else None
+    return declared_task_family(store)
 
 
 def _enhanced_speech(store: ProvStore, run_dir: Path) -> tuple[float | None, list[tuple[float, float]]]:
