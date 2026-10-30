@@ -294,6 +294,49 @@ How 2.x is built. These bind the people and agents building it, not the API.
 - **Check**: test jobs name a partition and resource class; concurrent agent jobs stay within the
   QOS cap.
 
+### P-31 Minimal verbosity for humans and agents
+- **Status**: active
+- **Statement**: Code, docstrings, comments, logs, errors and agent-facing text say each thing
+  once, in the fewest exact words. Reasons and history live in `specs/`.
+- **Source**: owner, 2026-10-30: "we want to make verbosity minimal for the human and any agent".
+- **Check**: prose lint budgets; review. See `engineering.md`.
+
+### P-32 Clear, compact, efficient code
+- **Status**: active
+- **Statement**: Code is clear to read and compact: thin public surfaces over shared engines, no
+  duplicated logic, small typed functions. `utils/fastio.py` is the exemplar.
+- **Source**: owner, 2026-10-30: "code itself should be clear to read and compact/efficient (think
+  fastio code)".
+- **Check**: ruff complexity, mypy, duplicate-code check, size budgets.
+
+### P-33 Profiling detects inefficiency at every scale
+- **Status**: active
+- **Statement**: Every module is measured at several scale points (one item, many items, a corpus,
+  a long signal). Per-item time, memory, files and bytes must stay flat with scale, and profiles
+  locate regressions.
+- **Source**: owner, 2026-10-30: "profiling should detect inefficiencies at different scales".
+- **Check**: the `benchmarks/scale/` ladder with per-item budgets as data; Scalene profiles on
+  regression.
+
+### P-34 Brittleness is always checked
+- **Status**: active
+- **Statement**: No change may rely on timing, ordering, one dataset, one host, one model's quirk, a
+  magic number or a string match. Boundaries are exercised with bad input and injected faults, and
+  failures are typed and isolated.
+- **Source**: owner, 2026-10-30: "brittleness has to be checked for always".
+- **Check**: property tests and fault injection in the logic tier; the PR checklist; review rejects
+  special-casing.
+
+### P-35 Agents break the system to raise standards, not to add brittleness
+- **Status**: active
+- **Statement**: Agents are used adversarially to break the system. Each break is resolved by an
+  architectural change (an invariant, a type, a contract test, a lint rule, or a principle), never
+  by a patch for the found case.
+- **Source**: owner, 2026-10-30: "agents should be used to break system to set architectural
+  standards not more brittleness".
+- **Check**: each phase ends with an adversarial round. Findings are recorded with their
+  architectural resolution, and case-only fixes are rejected.
+
 ---
 
 ## Inherited principles
@@ -373,3 +416,6 @@ design does not lose them. Amending one also means amending its origin.
 - 2026-10-30: added P-25 (locked isolated envs) and P-26 (signals generalise); added the
   *Process principles* section with P-27..P-29. Amended P-23 (meaning change): missing licenses
   raise at run time by default, and policies use named license sets.
+- 2026-10-30: added P-30 (test tiers) and P-31..P-35 (engineering standards: verbosity, compact
+  code, profiling at scale, brittleness, adversarial agents). Their per-commit rules are in
+  `engineering.md`.
