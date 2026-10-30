@@ -237,50 +237,90 @@ follows it. What changed is recorded. Replay refuses only where a change is almo
 
    There is no central list of which stage reads which field: the whole hint reaches every stage, so such a list
    would drift from the code.
-8. **One chain from the record to every corpus grouping.** It replaces the file-name parsers:
-   - `session_key(stem)` in `extend_cohort` (`:279`, `:308`), `extend_session_floor` (`:82`) and
-     `measure_session_background` (`:286`);
-   - `cohort_stage.participant_key` (the first `_`);
-   - `triage_review_page.participant_of` (`:270`);
-   - `recording_vectors.identity` (`:478`).
+8. **One chain from the record to every corpus grouping** (decided 2026-10-27 to 10-30; no backward compatibility
+   is kept, since B2AI is the only user and its stored runs can be replayed). Every place that grouped or filed runs
+   by file name now reads the recorded identity:
+   - the session and participant groups of `extend_cohort`, `extend_session_floor` and
+     `measure_session_background` (`session_key`, `cohort_stage.participant_key` removed);
+   - the enrollment `subject_id`, passed in by the participant being processed;
+   - the corpus table, `decision_tables` and the free-speech page (`recording_vectors.identity` removed);
+   - `triage_review_page`'s already-labelled check, looked up from the extract by stem; a labelled stem the extract
+     lacks is reported, not parsed;
+   - `speaker_vectors`, which reads the corpus table (`--table`) instead of walking `sub-*` folders and using the
+     folder name as the speaker;
+   - `run.entity_subdir(identity)`.
 
-   The chain:
+   **Strict reading.** `recorded_identity` reads ADMIT's record (its stream, or its activity where it refused the
+   recording) and returns None where there is none; it no longer reads the stem, nor does `declared_session_key`. The
+   one file-name reader left is ADMIT's default for a hint that declares no identity (`identity_from_stem`, which now
+   reads `sub-` and `ses-` each on its own). `declared_task_id` keeps its stem reading for stores from before step 1,
+   so they can still be replayed. Helpers that generate an identity for old stores are later work.
+
+   **The chain:**
    1. ADMIT's record is the source.
-   2. The corpus table: `recording_vectors`, which already opens every store, writes the recorded participant,
-      session and task as columns, with their source.
-   3. `select_replay_manifest` copies the three columns into each manifest row.
-   4. Corpus passes group by the row's columns. Where a pass opens the store, a row that disagrees with the record
-      is refused as a stale manifest.
-   5. A recording with no identity at all (no hint, no BIDS-like name) is its own group, as today.
+   2. The corpus table writes `participant`, `session`, `task` (the recorded `declared_task_id`) and
+      `participant_from`, `session_from`, `task_from`. A run with no recorded identity still gets a row, with the six
+      columns null, and is counted (schema 30; decision tables 4, `triage.tsv` 5, speaker vectors 3).
+   3. `select_replay_manifest` copies the six columns into each row and refuses a table without them.
+   4. Corpus passes group by the row's columns. A row without them is refused ("rebuild the manifest"). A row whose
+      run records no identity is its own group, keyed by its stem, and is refused when its store is opened. Where a
+      pass opens the store, a row that disagrees with the record refuses its whole participant or session group,
+      before anything is written.
+   5. A recording naming no participant and session is its own group, keyed by its stem.
 
-   **Output folders:**
-   - `entity_subdir` builds the run folder from the identity. B2AI paths do not change, because B2AI's identity
-     labels carry `sub-` and `ses-`.
-   - The folder walks in `recording_vectors` and `speaker_vectors` (`:269`) find runs by their `run.json`, not by
-     `sub-*` names.
-9. **An identity check**, a new function in `identity.py` plus `scripts/check_identity.py`, run at two points:
-   - before a corpus run, over the recording list and its hints. For the B2AI adult corpus this is a SLURM job:
-     about 22 minutes at the 0.021 s per hint measured in the replay design doc (`:150`).
-   - after a run, over the corpus table.
+   **Run discovery and folders:**
+   - The corpus walk finds runs at any depth; a directory holding `run/store.jsonl` is a run root (`run.json` is
+     written last, so an interrupted run has none). The latest run is kept per (folder, stem), so two recordings
+     sharing a stem in different folders are both kept.
+   - `entity_subdir(identity)` places a run under `<participant>/<session>`, labels as declared, a level dropped
+     where the identity does not name it. B2AI paths do not change. A label that is empty, `.`, `..` or holds a slash
+     is refused in `identity_of`.
+   - At run start the identity is `identity_of(stem, hint)`. A replay builds its hint before it mirrors, and places
+     an `--out-root` mirror by the identity it will record; `triage_replay_diff` finds it by the row's identity, then
+     by name.
+   **Sessions** (decided 2026-10-30; revised after the framing review the same day). A session is one recording
+   occasion: its recordings are expected to share its conditions (room, background, device). It is only a grouping
+   of recordings; what sessions share with one another (participant, location, time of day) is not encoded in it, and
+   a pass that ever needs those would read them as separate declared context attributes (not in this step).
+   - **Two uses.** The session floor and the session background need only shared conditions. The level-against-
+     session reading, per-session enrollment and the session speaker checks (`other_speaker_in_session`,
+     `session_speaker_inconsistent`, `session_condition_shift`) compare one speaker within a session. Every current
+     pass therefore keys a session by its participant and its identifier together. "One participant per session" is
+     an expectation, not an engine rule: a session holding several participants (a conversation, a caregiver and
+     child) is reported by the identity check, never refused. A future pass that needs shared conditions only, across
+     speakers, would group by the identifier alone.
+   - **The key** is built once, `RecordingIdentity.session_key`, as `<participant>/<session>`. No label may hold a
+     slash (`check_label`), so the key names one pair; labels may hold `_`. The same form names the enrollment file
+     (`<participant>/<session>.npy`).
+   - **No session declared.** For the session floor and the session background, a recording that declares no session
+     is its own session: it shares conditions with no other recording. For the cohort, a participant's recordings that
+     declare no session are pooled (`undeclared_session`) and compared leave-one-out within that pool; no
+     session-level check reads the pool (consistency and condition shift are not applicable), and it is no other
+     session's. A recording that names no participant is its own group everywhere.
+   - **Identifier namespace.** Whether session identifiers are unique within their participant (as BIDS `ses-1`) or
+     across the corpus is a fact about whoever minted them (B2AI source trees: corpus-wide; released trees: per
+     participant). It changes no triage output, since keys always carry the participant, so it is not in the run
+     config or the profile: `check_identity --session-scope` takes it, default `participant`.
+9. **An identity check**, `identity_check.check_identities` plus `scripts/check_identity.py`, run at two points:
+   - before a corpus run, over the recording list and the hints it will use (`--recordings`, `--hints`);
+   - after a run, over the corpus table (`--table`).
 
-   **Session scope.** B2AI session labels mean different things at different stages. In the source trees they are
-   unique IDs. In the released trees they are ordinals within a participant (`ses-1`, `ses-2`). A config key,
-   `identity.session_scope`, says which:
-   - `global`: a session label may appear under only one participant;
-   - `participant`: labels are unique only within a participant, and that part of check 1 is skipped.
-
-   The B2AI profile sets `participant`, which holds at every stage. A run over a source tree can set `global` in its
-   own override for the stronger check. Grouping is unaffected either way, because the session key already joins
-   participant and session.
+   **Session scope** (change 8, Sessions): `--session-scope global` says identifiers are corpus-wide, so one seen
+   under two participants is one session holding both; it is reported (check 1).
 
    | Check | On failure |
    |---|---|
-   | 1. A session label under two participants (scope `global` only) | refuse |
-   | 2. A (participant, session, task with index) appearing twice | refuse |
+   | 1. A session identifier under two participants (`--session-scope global` only) | report |
+   | 2. A (participant, session, task with index) appearing twice; a recording that does not name both is its own session, keyed by its stem | refuse |
    | 3. A task in no family triage knows (the `*_EXPECTATIONS` tables until step 4) | report |
-   | 4. A BIDS-like file name and the hint's identity disagree | report; the hint wins (change 1) |
+   | 4. A BIDS-like file name and the hint's identity disagree | report; the hint wins |
+   | 5. A run with no recorded identity (after a run) | report |
+   | 6. A stem appearing in more than one folder | report |
+   | 7. A hint that cannot be built, or a label that cannot name a folder | refuse |
 
-   Every failure is listed with the recording IDs. Nothing is settled silently.
+   Every finding is listed with its stems and run directories; the script exits 1 on any refusal. The report is
+   written mode 600, since it names participants and sessions. Check 4 cannot fire on B2AI, whose hints are built
+   from the stem, so it is not evidence for B2AI.
 10. **The replay design doc** is updated: hints may change, the node table includes REVIEW, and ADMIT now records
     identity and the hint.
 
@@ -352,6 +392,15 @@ follows it. What changed is recorded. Replay refuses only where a change is almo
 
 ## Step 4 — tasks and families as data
 
+**Framing amendment (2026-10-30 review).** The task id carries several meanings in one string: the trailing index is
+a repetition, a protocol variant (B2AI's airway route, `nodes/airway.py:598`) or a stimulus selector (a Harvard
+list), and the engine decodes it (`families.py:13`). In this step the hint declares them apart: the protocol item
+(kind and family), its variant attributes (such as the route), the stimulus (`expected_speech`) and a repetition
+index; B2AI's hint builder maps its tokens onto these. "One take per task per session" becomes an expectation a
+profile declares, not a uniqueness rule. The family-keyed lexicons and `voice_task_text` are a second carrier of the
+stimulus beside `expected_speech`; a family that holds different stimuli would read the wrong words, so the hint's
+stimulus is the one source.
+
 - The three `*_EXPECTATIONS` tables and the `families.py` sets load from `tasks.yaml` and `families.yaml`
   through accessors. The about 40 reads by name change to those accessors.
 - `CINDERELLA_CAST`, `STROOP_COLOURS`, `REPETITION_ALLOWED_CATEGORIES` and `data/task_lexicon/` move to
@@ -368,6 +417,10 @@ follows it. What changed is recorded. Replay refuses only where a change is almo
 
 ## Step 6 — inputs outside triage
 
+- **File-name parsing leaves the engine** (framing review, 2026-10-30). ADMIT's default reads `sub-`/`ses-`/`task-`
+  off the stem when the hint declares nothing (`identity_from_stem`), and identity check 4 compares a BIDS-like name
+  with the hint. Both move to the hint builder (the profile); the engine's default is "nothing declared". Values
+  read off a file name are recorded as such, not as "declared".
 - `pii_detection/data/redaction_policy.yaml`, `task_guidance.yaml` and the protocol wording in
   `redaction_review.py` become caller-supplied, and `decision_model/second_opinion.py` follows.
 - `prov_store.PROV_TYPE` accepts types registered by triage.
@@ -381,6 +434,23 @@ follows it. What changed is recorded. Replay refuses only where a change is almo
 ## Step 8 — tests on the fixture profile
 
 - The 59 triage test files that name B2AI tasks load the fixture profile.
+
+## Step 9 — speakers, recordings and corpus inputs (framing review, 2026-10-30)
+
+- **Target speaker.** Enrollment, `speaker_vectors` and the cohort treat the participant as the speaker. That holds
+  for adults recording themselves, not where a caregiver speaks for a child (the pediatric profile), nor for
+  clinician-prompted or conversational data. "Target speaker" names whose voice the task asks for; it defaults to the
+  participant and may be declared otherwise. `hint.target_speaker` exists, but the speech branch ignores it
+  (`nodes/speech.py:1753`). The participant stays the unit of consent, leakage and grouping.
+- **Recording id.** The stem is the run folder's name and the review pages' join key. It is unique only because BIDS
+  puts sub, ses and task in it; a flat `p01/s2/recording.wav` collides. The recording id becomes the source path
+  relative to the corpus root, or a declared id; the stem is a display label.
+- **Corpus-pass inputs on the replay marker.** The marker is the config hash, commit and hint digest. BACKGROUND and
+  VERDICT also read the session floor and the cohort readings, which `extend_session_floor` and `extend_cohort` write
+  without touching it, so rerunning those and then replaying returns PRESENT. The marker gains a digest of those
+  inputs. [UNVERIFIED — how `--force` is set in practice.]
+- **"Cohort" names two things:** the COHORT corpus stage (`cohort_stage.py`) and the recruited study cohort
+  (`cohort.py`, `verdict.cohort_conditions`). One is renamed.
 
 ## After this plan
 
