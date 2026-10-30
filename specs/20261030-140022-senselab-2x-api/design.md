@@ -166,11 +166,26 @@ class SpeechToText:
     outputs = {"transcript": Transcript}
 ```
 
-From that one declaration senselab generates:
+The primary form is a **configured, immutable task object**: hyperparameters at construction, data
+at call time (section 4.13):
+
+```python
+asr = sl.audio.SpeechToText(model="openai/whisper-large-v3-turbo", language="en")
+t   = asr(sl.Audio("a.wav"))           # one item
+ts  = asr.map(dataset)                 # many, through the planner
+asr.params                             # pydantic Params, = JSON Schema instance
+asr2 = asr.with_params(language="es")  # new object; objects never mutate
+```
+
+The object is what a pipeline node holds, what the cache key and provenance record, and what an
+agent's tool call serialises to.
+
+From that one declaration senselab also generates:
 
 - **a typed function for humans:**
   `sl.audio.speech_to_text(audio, model="openai/whisper-large-v3-turbo", language="en")`. It takes
-  **one item and returns one result**.
+  **one item and returns one result**, and is exactly `SpeechToText(**params)(audio)`; it is sugar,
+  not a second implementation.
 - **a batched form:** `sl.audio.speech_to_text.map(dataset_or_items, ...)`, which goes through the
   planner so batching, model reuse and caching happen in one place (P-5).
 - **a JSON Schema** of inputs, params, outputs and the models and backends that can serve it, for
@@ -630,6 +645,39 @@ License(
 - senselab reports licenses and enforces the policy the user sets. It does not give legal
   interpretation.
 
+### 4.13 Relation to the scikit-learn API (design call, owner asked)
+
+senselab borrows sklearn's conventions where they fit and declines its data and execution model.
+
+**Adopted**
+- **Hyperparameters at construction, data at call time.** The configured task object of
+  section 4.2. sklearn's `get_params` becomes the typed `Params` model, which is also the JSON
+  Schema (P-1).
+- **One uniform interface** for every task. This replaces the 37 inconsistent 1.x signatures.
+- **`fit` for tasks that learn state.**
+  - Covers threshold profiles from measured verdicts (P-17), cohort fences, speaker enrollment,
+    dimensionality reduction and classifiers on embeddings.
+  - These declare `kind="fit"`.
+  - `est.fit(dataset)` returns a **new** fitted object whose state is a content-hashed profile
+    artifact with provenance (fitted on which records, which config).
+  - Fitting never mutates `self`; `set_params`-style mutation is replaced by `.with_params()`.
+- **Interop through `sl.sklearn`.**
+  - `SenselabTransformer(task)` wraps any task with an array-valued output (embeddings, features)
+    as a sklearn transformer over a sequence of items, for featurisation inside sklearn pipelines.
+  - `sl.sklearn.to_frame(results)` returns arrays or frames with record entities as the index.
+  - It runs in-process and gives up the planner's batching across envs. It is the interop path,
+    not the main one.
+
+**Not adopted**
+
+| sklearn | Why not |
+|---|---|
+| fit/transform/predict as the core verbs | most tasks are pretrained inference that change the data type (audio → transcript); `__call__` and `.map` are the verbs |
+| `X` as an `(n_samples, n_features)` array | records are heterogeneous, variable length, multi-modal, with entities and a timeline |
+| linear `Pipeline` / `ColumnTransformer` | senselab needs DAGs with fan-out, routing, loops and cross-modal ports (section 4.5) |
+| mutable estimators | conflicts with content identity, caching and provenance (P-3, P-19) |
+| eager in-process execution | conflicts with the plan/executor split and isolated envs (P-2, P-6) |
+
 ## 5. Packaging (P-13)
 
 - **`senselab-core` dependencies:** numpy, pydantic, pyyaml, filelock, xxhash, soundfile,
@@ -775,6 +823,7 @@ check:
 - **Phase 2 slice** from existing backends only (section 6).
 - **Parity tolerances** measured as data (section 6).
 - **vLLM-omni and vLLM ASR** as the only new integrations, after Phase 3 (section 6).
+- **sklearn-style configured objects as the primary form, with immutable `fit`** (section 4.13).
 - **License bar** (section 4.12).
   - A license harvested from PEP 639, `License` or classifiers counts as a record.
   - `unknown` blocks CI only for catalogue models and backends' direct dependencies.
