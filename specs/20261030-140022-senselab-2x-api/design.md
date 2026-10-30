@@ -775,7 +775,6 @@ Each cut keeps its interface or hook, and is added when a measurement or a use c
 | Packed store tier; GPU token arbiter | the plain store; static caps; OOM as a resource fault | the scale ladder shows inode or OOM pressure |
 | *Proposed, owner to decide (conflicts with P-23):* license taint algebra and set combinators | license records, a plan-time check, transitive CI, and one union default set | a user needs a restrictive policy |
 | pixi (conda-forge) envs | uv venvs only | the first R or Java backend is ported |
-| *Proposed, owner to decide (conflicts with P-8, which names vLLM-omni):* vLLM-omni stack | vLLM only | the first omni model is in the catalogue |
 | `sl.eeg`, `sl.eyetrack`, `sl.motion` namespaces | `sl.signal` generic tasks only | the first task exists in that modality |
 | `sl.sklearn` adapter | `ResultSet.to_frame()` | users ask for it |
 | Route B (pydra runner/executor split) | Route A | pydra RFC 3.10 lands |
@@ -831,3 +830,9 @@ Each cut keeps its interface or hook, and is added when a measurement or a use c
   flywheel is meant to remove. It is a post-2.x roadmap goal that informs, not forces
   ([`roadmap.md`](roadmap.md), P-36). Phase 4 ports triage's measurements as tasks; its decision
   layer is rebuilt later as the first flywheel application.
+- **2026-10-30 follow-ups.**
+  - vLLM-omni stays in 2.0: the cut was reverted, because P-8 names it and `VllmServer` already
+    exists.
+  - The default reuse policy is `equivalent` (P-38).
+  - P-27..P-35 live in `engineering.md`.
+  - The license-set combinator cut and the prose-lint cut are still pending the owner.

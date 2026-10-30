@@ -236,23 +236,7 @@ it is amended here.
   of generic algorithms.
 
 ### P-30 Tests are tiered; benchmarks are separate
-- **Status**: active
-- **Statement**: Tests come in tiers (`testing.md`):
-  - **logic**: behaviour, with small synthetic inputs and no models;
-  - **contract**: generated from declarations;
-  - **limits**: parameter boundaries with real backends;
-  - **use case**: realistic end-to-end pipelines;
-  - **env**: locked environments build and round-trip.
-
-  Tests are short and named for the behaviour they check. Parametrisation enumerates meaningful
-  cases, never encoded history. **Benchmarks** are a separate evaluation on public data, run as
-  senselab pipelines with provenance and tracked over releases rather than gated as pass/fail.
-- **Source**: owner, 2026-10-30: "many tests in current senselab are overly verbose or strangely
-  parameterized ... some tests should just exercise logic, and some tests should exercise the limits
-  of parameters and use cases. then there should be benchmarks as a separate evaluation with public
-  benchmarks".
-- **Check**: every test belongs to exactly one tier (marker). No test docstring narrates a
-  measurement history (P-21). No parametrize id is a register number.
+- **Status**: active. Full text in [`engineering.md`](engineering.md#p-30).
 
 ### P-36 The flywheel is the roadmap goal; it informs, not forces
 - **Status**: active
@@ -305,81 +289,28 @@ it is amended here.
 How 2.x is built. These bind the people and agents building it, not the API.
 
 ### P-27 Commit and push early and often
-- **Status**: active
-- **Statement**: Each unit of work is committed when done and pushed promptly. Work in progress
-  stays visible on a branch with a PR to `alpha`. 2.x is built in place on `alpha`.
-- **Source**: owner, 2026-10-30: "commit+push early often"; "in place on alpha".
-- **Check**: no local-only work older than a session.
+- **Status**: active. Full text in [`engineering.md`](engineering.md#p-27).
 
 ### P-28 No identifiers leak
-- **Status**: active
-- **Statement**: No participant, subject or session identifier, no personal path and no site
-  credential enters the repository, a spec, a test fixture, a commit message or a PR. Examples use
-  synthetic identifiers.
-- **Source**: owner, 2026-10-30: "ensure no identifiers leak in".
-- **Check**: the pre-commit identifier hook passes, and reviewers check prose, which the hook may
-  not cover.
+- **Status**: active. Full text in [`engineering.md`](engineering.md#p-28).
 
 ### P-29 Fast test cycles locally and on the cluster, within shared limits
-- **Status**: active
-- **Statement**: Tests run locally for fast cycles and on ORCD for GPU and scale. Agents running in
-  parallel share both machines: scope test runs to what changed, run serially (never
-  `pytest -n auto`), respect the cluster's partitions and QOS caps, and do no compute on login
-  nodes.
-- **Source**: owner, 2026-10-30: "for testing do local tests and on orcd to have faster cycles, but
-  keep load across agents in mind, and orcd partitions in mind".
-- **Check**: test jobs name a partition and resource class; concurrent agent jobs stay within the
-  QOS cap.
+- **Status**: active. Full text in [`engineering.md`](engineering.md#p-29).
 
 ### P-31 Minimal verbosity for humans and agents
-- **Status**: active
-- **Statement**: Code, docstrings, comments, logs, errors and agent-facing text say each thing
-  once, in the fewest exact words. Reasons and history live in `specs/`.
-- **Source**: owner, 2026-10-30: "we want to make verbosity minimal for the human and any agent".
-- **Check**: prose lint budgets; review. See `engineering.md`.
+- **Status**: active. Full text in [`engineering.md`](engineering.md#p-31).
 
 ### P-32 Clean, robust, reusable, efficient code
-- **Status**: active
-- **Statement**: Code follows current best practice for clean, robust, reusable and efficient code:
-  deep modules with thin surfaces, a functional core with an imperative shell, one implementation
-  per concept, explicit types and errors, and no duplicated logic.
-  - Performance problems are solved algorithmically, chosen for the cost model. That means
-    vectorisation, streaming, batching, and concurrency for latency-bound work, not naive loops.
-  - `utils/fastio.py` is the exemplar of that elegant, testable, robust algorithmic efficiency.
-- **Source**: owner, 2026-10-30: "code itself should be clear to read and compact/efficient (think
-  fastio code)"; "the fastio example was more about an elegant, testable, robust algorithmic
-  efficiency instead of just writing for loops. the rest of the pieces should come from best
-  practices in the field today for clean, robust, reusable, and efficient code".
-- **Check**: ruff (including complexity), mypy strict on core, import-linter, a duplicate-code
-  check, the scale ladder (P-33), and review against `engineering.md`.
+- **Status**: active. Full text in [`engineering.md`](engineering.md#p-32).
 
 ### P-33 Profiling detects inefficiency at every scale
-- **Status**: active
-- **Statement**: Every module is measured at several scale points (one item, many items, a corpus,
-  a long signal). Per-item time, memory, files and bytes must stay flat with scale, and profiles
-  locate regressions.
-- **Source**: owner, 2026-10-30: "profiling should detect inefficiencies at different scales".
-- **Check**: the `benchmarks/scale/` ladder with per-item budgets as data; Scalene profiles on
-  regression.
+- **Status**: active. Full text in [`engineering.md`](engineering.md#p-33).
 
 ### P-34 Brittleness is always checked
-- **Status**: active
-- **Statement**: No change may rely on timing, ordering, one dataset, one host, one model's quirk, a
-  magic number or a string match. Boundaries are exercised with bad input and injected faults, and
-  failures are typed and isolated.
-- **Source**: owner, 2026-10-30: "brittleness has to be checked for always".
-- **Check**: property tests and fault injection in the logic tier; the PR checklist; review rejects
-  special-casing.
+- **Status**: active. Full text in [`engineering.md`](engineering.md#p-34).
 
 ### P-35 Agents break the system to raise standards, not to add brittleness
-- **Status**: active
-- **Statement**: Agents are used adversarially to break the system. Each break is resolved by an
-  architectural change (an invariant, a type, a contract test, a lint rule, or a principle), never
-  by a patch for the found case.
-- **Source**: owner, 2026-10-30: "agents should be used to break system to set architectural
-  standards not more brittleness".
-- **Check**: each phase ends with an adversarial round. Findings are recorded with their
-  architectural resolution, and case-only fixes are rejected.
+- **Status**: active. Full text in [`engineering.md`](engineering.md#p-35).
 
 ---
 
@@ -464,3 +395,8 @@ amending its origin.
 - 2026-10-30: added P-38 (exactness by portable hashes, reuse by measured equivalence) after the
   principal-architect review. The ADRs in `adr/` resolve R-3, R-8, R-9, R-12 and R-38..R-54.
   P-19's check now refers to ADR-002's logical key.
+- 2026-10-30: at the owner's request, moved the full text of P-27..P-35 to `engineering.md` to
+  reduce context per iteration. The ids, statuses and stubs remain here; amendments are made in
+  `engineering.md` and logged here.
+- 2026-10-30: owner confirmed `equivalent` as the default reuse policy (P-38), and kept vLLM-omni
+  in 2.0 (P-8).
