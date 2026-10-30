@@ -115,9 +115,9 @@ def test_jcs_converts_numpy_scalars() -> None:
 
 @pytest.mark.logic
 def test_jcs_integer_range_is_i_json() -> None:
-    """Integers up to 2**53 in magnitude serialise; larger ones are refused."""
-    assert jcs_dumps(2**53) == b"9007199254740992" and jcs_dumps(-(2**53)) == b"-9007199254740992"
-    for bad in (2**53 + 1, -(2**53) - 1, numpy.uint64(2**64 - 1)):
+    """Integers within +/-(2**53 - 1) serialise; larger ones are refused."""
+    assert jcs_dumps(2**53 - 1) == b"9007199254740991" and jcs_dumps(-(2**53) + 1) == b"-9007199254740991"
+    for bad in (2**53, -(2**53), 2**53 + 1, numpy.int64(2**53), numpy.uint64(2**64 - 1)):
         with pytest.raises(ValueError):
             jcs_dumps(bad)
 
@@ -138,9 +138,9 @@ def test_jcs_refuses_lone_surrogates() -> None:
 
 
 _NFC_TEXT = st.text().map(lambda s: unicodedata.normalize("NFC", s))
-_I_JSON_INTS = st.integers(min_value=-(2**53), max_value=2**53)
+_I_JSON_INTS = st.integers(min_value=-(2**53) + 1, max_value=2**53 - 1)
 _FINITE_FLOATS = st.floats(allow_nan=False, allow_infinity=False).filter(
-    lambda x: not (x.is_integer() and abs(x) > 2**53)
+    lambda x: not (x.is_integer() and abs(x) >= 2**53)
 )
 _JSON = st.recursive(
     st.none() | st.booleans() | _I_JSON_INTS | _FINITE_FLOATS | _NFC_TEXT,
@@ -203,5 +203,13 @@ def test_canonical_npy_edge_shapes(shape: tuple[int, ...]) -> None:
 @pytest.mark.parametrize("dtype", [object, [("a", "<f4"), ("b", "<i2")]])
 def test_canonical_npy_refuses_object_and_structured(dtype: object) -> None:
     """Object and structured dtypes are refused."""
+    with pytest.raises(ValueError):
+        canonical_npy_bytes(numpy.zeros(2, dtype=dtype))
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("dtype", [numpy.longdouble, numpy.clongdouble])
+def test_canonical_npy_refuses_platform_specific_dtypes(dtype: type) -> None:
+    """Extended-precision dtypes, whose layout varies by platform, are refused."""
     with pytest.raises(ValueError):
         canonical_npy_bytes(numpy.zeros(2, dtype=dtype))

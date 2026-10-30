@@ -75,7 +75,7 @@ ADR-009.
 - The file is canonical `.npy` (ADR-006): version 1.0, C order, little-endian. The writer
   converts non-contiguous and big-endian arrays to that form, so `dtype` is always `<…` or `|…`.
   `sha256` is over the file bytes and names the file.
-- Object and structured dtypes are refused with a `content` error (`TypeError`): on the worker,
+- Object and structured dtypes are refused with a `content` error (`ValueError`): on the worker,
   for that item; on the host, before the request is sent.
 - The writer writes to a temporary name in `array_dir` and renames, so a reader never sees a
   partial file and equal arrays share one file.

@@ -2,10 +2,11 @@
 
 import hashlib
 import os
+import unicodedata
 from pathlib import PurePath
 from typing import Iterator, Sequence, TypedDict
 
-from senselab_worker.canonical import jcs_dumps
+from senselab_worker.canonical import jcs_dumps, utf16_sort_key
 
 DEFAULT_CHUNK_SIZE = 64 * 2**20
 
@@ -60,12 +61,14 @@ def content_identity(path: str | os.PathLike[str], *, chunk_size: int = DEFAULT_
 def weights_identity(paths: Sequence[str | os.PathLike[str]], *, root: str | os.PathLike[str]) -> str:
     """Return the identity of a set of weight files under `root`, independent of listing order.
 
-    Each file contributes `[relpath, sha256]`: its POSIX path relative to `root` (symlinks are not
-    resolved, so a link is named by where it sits and hashed by what it points to) and the sha256
-    of its bytes. The identity is the sha256 of the JCS of the sorted pairs.
+    Each file contributes `[relpath, sha256]`: its path relative to `root` with POSIX separators,
+    NFC-normalised (symlinks are not resolved, so a link is named by where it sits and hashed by
+    what it points to), and the sha256 of its bytes. The identity is the sha256 of the JCS of the
+    pairs sorted by relpath in UTF-16 code-unit order, the order JCS uses for object keys.
 
     Raises:
-        ValueError: if a path lies outside `root` or the same path is listed twice.
+        ValueError: if a path lies outside `root` or the same path is listed twice after
+            normalisation.
     """
     root_abs = os.path.abspath(root)
     pairs: dict[str, str] = {}
@@ -73,8 +76,9 @@ def weights_identity(paths: Sequence[str | os.PathLike[str]], *, root: str | os.
         rel = os.path.relpath(os.path.abspath(path), root_abs)
         if rel == os.curdir or rel == os.pardir or rel.startswith(os.pardir + os.sep):
             raise ValueError(f"weight file is not under {root_abs}: {path}")
-        posix = PurePath(rel).as_posix()
+        posix = unicodedata.normalize("NFC", PurePath(rel).as_posix())
         if posix in pairs:
             raise ValueError(f"weight file listed twice: {posix}")
         pairs[posix] = _sha256_file(path)
-    return sha256_bytes(jcs_dumps(sorted([rel, sha] for rel, sha in pairs.items())))
+    ordered = sorted(pairs, key=utf16_sort_key)
+    return sha256_bytes(jcs_dumps([[rel, pairs[rel]] for rel in ordered]))

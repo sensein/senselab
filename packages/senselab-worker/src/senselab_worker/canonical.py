@@ -12,7 +12,8 @@ from typing import Callable
 
 import numpy
 
-_MAX_SAFE_INT = 2**53
+_MAX_SAFE_INT = 2**53 - 1
+_PLATFORM_DTYPE_CHARS = "gG"
 _NPY_MAGIC = b"\x93NUMPY\x01\x00"
 _NPY_ALIGN = 64
 
@@ -24,7 +25,7 @@ def jcs_dumps(obj: object) -> bytes:
     (converted with `.item()`). Strings and keys are NFC-normalised; keys sort by UTF-16 code units.
 
     Raises:
-        ValueError: on a NaN or infinite float, an integer of magnitude above 2**53, a string that
+        ValueError: on a NaN or infinite float, an integer outside +/-(2**53 - 1), a string that
             is not valid Unicode, or two keys of one object that are equal after NFC.
         TypeError: on any other type, including non-string keys and numpy arrays.
     """
@@ -71,7 +72,7 @@ def _write_object(obj: dict[object, object], out: Callable[[str], object]) -> No
             raise ValueError(f"duplicate JSON object key after NFC: {nfc!r}")
         members[nfc] = value
     out("{")
-    for i, key in enumerate(sorted(members, key=_utf16_sort_key)):
+    for i, key in enumerate(sorted(members, key=utf16_sort_key)):
         if i:
             out(",")
         out(_string_text(key))
@@ -80,13 +81,14 @@ def _write_object(obj: dict[object, object], out: Callable[[str], object]) -> No
     out("}")
 
 
-def _utf16_sort_key(key: str) -> bytes:
+def utf16_sort_key(key: str) -> bytes:
+    """Return the sort key that orders strings by UTF-16 code units, as JCS orders object keys."""
     return key.encode("utf-16-be", "surrogatepass")
 
 
 def _int_text(value: int) -> str:
     if abs(value) > _MAX_SAFE_INT:
-        raise ValueError(f"integer outside the I-JSON range of +/-2**53: {value}")
+        raise ValueError(f"integer outside the I-JSON range of +/-(2**53 - 1): {value}")
     return str(value)
 
 
@@ -129,10 +131,13 @@ def canonical_npy_bytes(a: numpy.ndarray) -> bytes:
     The header is numpy's version 1.0 dict, space-padded so the data starts on a 64-byte boundary.
 
     Raises:
-        ValueError: on an object or structured dtype.
+        ValueError: on an object or structured dtype, or on `longdouble`/`clongdouble`, whose
+            itemsize and byte layout differ between platforms.
     """
     if a.dtype.hasobject or a.dtype.fields is not None:
         raise ValueError(f"object and structured dtypes have no canonical form: {a.dtype}")
+    if a.dtype.char in _PLATFORM_DTYPE_CHARS:
+        raise ValueError(f"platform-specific dtype has no canonical form: {a.dtype.name}")
     dtype = a.dtype.newbyteorder("<")
     data = a.astype(dtype, order="C", copy=False)
     shape = tuple(int(n) for n in data.shape)

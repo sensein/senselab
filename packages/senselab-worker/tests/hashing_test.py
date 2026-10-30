@@ -115,3 +115,27 @@ def test_weights_identity_refuses_paths_outside_root_and_duplicates(tmp_path: Pa
         weights_identity([outside], root=root)
     with pytest.raises(ValueError):
         weights_identity([root / "config.json", root / "sub" / ".." / "config.json"], root=root)
+
+
+@pytest.mark.logic
+def test_weights_identity_normalises_names_to_nfc(tmp_path: Path) -> None:
+    """A file named in NFD hashes as its NFC name, so macOS and Linux checkouts agree."""
+    root = tmp_path / "model"
+    root.mkdir()
+    nfd = "café.bin"
+    (root / nfd).write_bytes(b"w")
+    expected = sha256_bytes(jcs_dumps([["café.bin", sha256_bytes(b"w")]]))
+    assert weights_identity([root / nfd], root=root) == expected
+    with pytest.raises(ValueError):
+        weights_identity([root / nfd, root / "café.bin"], root=root)
+
+
+@pytest.mark.logic
+def test_weights_identity_sorts_by_utf16_code_units(tmp_path: Path) -> None:
+    """Pairs sort by UTF-16 code units, so an astral name sorts below U+FB01."""
+    root = tmp_path / "model"
+    root.mkdir()
+    for name in ("ﬁ.bin", "\U0001f600.bin"):
+        (root / name).write_bytes(name.encode())
+    pairs = [[n, sha256_bytes(n.encode())] for n in ("\U0001f600.bin", "ﬁ.bin")]
+    assert weights_identity([root / "ﬁ.bin", root / "\U0001f600.bin"], root=root) == sha256_bytes(jcs_dumps(pairs))
