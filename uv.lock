@@ -6586,6 +6586,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "senselab-worker" },
+    { name = "soundfile" },
 ]
 
 [package.metadata]
@@ -6596,6 +6597,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pyyaml" },
     { name = "senselab-worker", editable = "packages/senselab-worker" },
+    { name = "soundfile", specifier = ">=0.12" },
 ]
 
 [[package]]
