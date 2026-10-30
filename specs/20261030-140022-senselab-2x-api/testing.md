@@ -61,10 +61,16 @@ Both tiers are deselected by default.
 For each declared task, backend, env and profile, one generic suite checks:
 - Params schema round-trip, unknown key rejected with a suggestion, defaults valid;
 - the output type matches the declaration, and the output survives JSON and array serialisation;
-- the cache key is deterministic. It changes when each component of the canonical key changes
-  (`design.md` §4.8), and not when a recorded-only field changes (batch size for batch-invariant
-  backends, device index, partition);
-- composite keys change when an inner node changes (I-5);
+- the logical key ([ADR-002](adr/ADR-002-identity-v2.md)) is deterministic and portable: the same
+  inputs give the same key on every platform in the CI matrix. The key changes when each logical
+  component changes. It does not change when an execution-context field or placement field
+  changes (env lock, numerics class, decoder, batch size, device, partition);
+- early cutoff (I-5): an upstream change that yields identical output leaves downstream keys
+  unchanged;
+- the reuse policy: `exact` rejects a context mismatch, `equivalent` with no measurement behaves
+  as `exact`, and `tolerant` accepts and labels the result;
+- graph documents round-trip and validate; a list wired to an item port without `map` is a type
+  error (ADR-001);
 - a `measure` task's output schema carries no verdict fields (P-20);
 - provenance is emitted with the required fields;
 - a license record exists, and a missing one raises under the default policy;
@@ -118,7 +124,15 @@ module over the registry, with ids equal to the task, backend or profile name.
     roots); the output must not change;
   - **batch invariance (I-3):** batch of 1 against mixed-length batches, within the measured
     tolerance; otherwise the backend must declare itself not batch-invariant;
-  - **service attestation (I-8):** restarting a service with a new config changes keys.
+  - **service attestation (I-8):** restarting a service with a new config changes keys;
+  - **cross-context equivalence (P-38):** the limits tier runs each backend in every context of the
+    CI and ORCD matrix (platform, device class, precision). Agreement within tolerance is written
+    to the backend's tolerance profile; this is the data `equivalent` reuse relies on;
+  - **verify sampling:** a run with `verify: k` recomputes k% of cross-context hits. Agreements are
+    recorded and disagreements are reported against the equivalence class.
+- **Version-bump check (CI, not a test):** a change to a task's or backend's source digest without a
+  `task_version` or `backend_version` bump fails the build (ADR-002).
+- **Format migrations:** every reader has a test that reads the previous major format (ADR-006).
 - Non-audio signals use generators (synthetic ECG and accelerometry, for example NeuroKit2's MIT
   simulators) for the same edge set.
 

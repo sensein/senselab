@@ -15,16 +15,16 @@ Reviews of 2026-10-30, all against `senselab-2x-api`, each with a different lens
 |---|---|---|---|---|
 | R-1 | A | Inputs a node reads that are not in its key (run-config thresholds, fitted profiles, hints, TimeMaps) are served stale; whole-profile hashing over-invalidates | Canonical key with declared profile slices and input identities; I-1 with a perturbation contract (`design.md` §4.8, `testing.md` §4) | resolved in design |
 | R-2 | A | Cross-record batching makes a record's result depend on its batch-mates | I-3: declared and certified batch invariance, otherwise canonical buckets in the key or batch size 1 | resolved in design |
-| R-3 | A | A coordinator restart re-plans and mixes commits; two coordinators run at once | Immutable hashed Plan, `resume(plan_hash)`, lease with a fencing token, routes and loop rounds stored as results (`execution.md` §3.1) | re-opened by P §6: mechanism missing |
+| R-3 | A | A coordinator restart re-plans and mixes commits; two coordinators run at once | Immutable hashed Plan, `resume(plan_hash)`, lease with a fencing token, routes and loop rounds stored as results (`execution.md` §3.1) | resolved in ADR-003 |
 | R-4 | A, C, F | Env identity is wrong both ways: cross-platform locks, an undefined host digest, and the worker version in the requirements-sha (per-release invalidation, per-commit rebuild storms) | I-2: numerics identity separate from protocol identity; worker runtime as an overlay keyed by source hash | resolved in design |
 | R-5 | A | Infrastructure faults are charged to items; one failure fails a whole batch | Fault taxonomy, per-item batch results, bisection (`execution.md` §3.3) | resolved in design |
 | R-6 | A | Composite caching goes stale; environment-caused `Absent` is cached | I-5 (Merkle composite key), I-6 (cause class on `Absent`) | resolved in design |
 | R-7 | A | Shards cut groups; chunk length changes outputs | I-7: shards closed under grouping, member-manifest hash, declared chunk grid | resolved in design |
-| R-8 | A | Resident-model affinity starves other queues; GPU packing OOMs | A resident model is a cache, not a reservation; bounded quantum; per-device admission arbiter (`execution.md` §3.4) | re-opened by P §6: mechanism missing |
-| R-9 | A | Service restarts keep a stale identity; scale-to-zero kills a live service | I-8 attestation; services as leased endpoints, alive while consumers are pending (`execution.md` §3.5) | re-opened by P §6: mechanism missing |
+| R-8 | A | Resident-model affinity starves other queues; GPU packing OOMs | A resident model is a cache, not a reservation; bounded quantum; per-device admission arbiter (`execution.md` §3.4) | resolved in ADR-003 |
+| R-9 | A | Service restarts keep a stale identity; scale-to-zero kills a live service | I-8 attestation; services as leased endpoints, alive while consumers are pending (`execution.md` §3.5) | resolved in ADR-003 |
 | R-10 | A, C | License taint does not propagate; CI gate and run-time gate differ; two policy schemas | I-9; one schema `{allow, on_missing}`; CI gate equals the run-time default (`design.md` §4.13) | resolved in design |
 | R-11 | A | Fake stack and generated contracts cannot see batching, fault or fairness failures | Fake stack with a declared fault model; limits-tier identity contracts (`testing.md` §3–4) | resolved in design |
-| R-12 | A | Store inode explosion; stat-heavy cache-hit estimation | Packed tier with key index; hits estimated from the index (`execution.md` §3.7) | re-opened by P §6: mechanism missing |
+| R-12 | A | Store inode explosion; stat-heavy cache-hit estimation | Packed tier with key index; hits estimated from the index (`execution.md` §3.7) | resolved in ADR-003 (packed tier deferred, design §6.4) |
 | R-13 | A | Storage without atomic rename, exclusive link or a server clock breaks leases | Storage capability probe as a `SystemRequirement` (`execution.md` §3.6) | resolved in design |
 | R-14 | A, U | Agents can relax policy, overspend, or reach arbitrary paths | Caps in the execution profile, acknowledged cost estimate, allowlisted roots, relaxations as role capabilities (`design.md` §4.10) | resolved in design |
 | R-15 | U | No run lifecycle; `sl.run` means two things; `.map` return undefined | `plan.run() -> Run`; one meaning of `sl.run`; lazy `ResultSet` (`design.md` §4.7) | resolved in design |
@@ -50,20 +50,20 @@ Reviews of 2026-10-30, all against `senselab-2x-api`, each with a different lens
 | R-35 | M | Proposal API sketches clash with pydra 1.0 idioms; defaults would change; PR order needs splitting; senselab specifics leak | Proposal revised: `workflow.add(resources=)`, `Submitter(workers=, router=)`, `provided=` `Arg` attribute, Audit/messengers, defaults kept, A0…J2 split, generic examples | resolved |
 | R-36 | A | Weight hashing implemented in both core and the worker runtime | Cross-implementation golden test in the env tier (`design.md` §4.12) | resolved in design |
 | R-37 | C | Undefined: wire-protocol version, handshake format, JSON Schema dialect | Wire and handshake specs are Phase 1 deliverables; the dialect is a builder decision | open (Phase 1) |
-| R-38 | P | senselab does not own its graph format; keys pass through pydra hashing; `Executor` is undefined | senselab defines the graph format, plan hash and keys; pydra is a compiler target and one executor (P §1) | open |
-| R-39 | P | Composite keys hash upstream keys, not outputs, so identical upstream output still invalidates downstream (I-5) | output-addressed early cutoff: downstream keys use upstream output identity (P §2) | open |
-| R-40 | P | Env identity covers the whole lock plus platform; near-zero hits across hosts and after lock bumps | per-backend dependency closures and measured equivalence classes (P §3, extends R-4) | open |
-| R-41 | P | Unkeyed inputs change outputs: decoder and resampler, system libraries, driver and cuDNN, backend source | key the decoder and resampler identity and the backend source hash; record and class the driver stack (P §4) | open |
-| R-42 | P | No canonical serialisation or evolution plan for stores, plans, profiles, provenance and fitted artifacts | canonical serialisation spec; format version on every artifact; migrations instead of wipes (P §5) | open |
-| R-43 | P | Signal model is one array and one rate; it cannot cover mixed-rate wearables, VFR video or long recordings | protocol-shaped data model with first-class time (P §7) | open |
-| R-44 | P | Identity of long and large inputs (hashing cost, chunked identity) | chunked content identity (P §8) | open |
-| R-45 | P | Plan conflates logical identity with physical placement | split the logical plan from placement (P §9) | open |
-| R-46 | P | Core is a runtime, not a kernel; dependency direction is unenforced below it | a small kernel plus enforced layering (P §10) | open |
-| R-47 | P | Observability is unspecified | logs, metrics and per-attempt diagnostics as a design section (P §11) | open |
-| R-48 | P | A model reference can make senselab download and run arbitrary hub code, including via MCP; provenance file labels can carry participant ids | a model-code trust boundary; store privacy; path redaction in exports (P §12) | open |
-| R-49 | P | Migration has no strangler boundary or coexistence budget | migrate one use case at a time, with a time-boxed coexistence budget (P §13) | open |
-| R-50 | P | Route and loop predicates are not tasks | predicates are declared decide tasks (P §14) | open |
-| R-51 | P | Implicit fan-out from list-typed ports is a typing trap (from R-19) | explicit fan-out (P §15) | open |
-| R-52 | P | Fault classification must originate in the worker | typed faults raised at the source (P §16, refines R-5) | open |
-| R-53 | P | Over-engineering for 2.0 | cut list (P §17) | open |
-| R-54 | P | Factual corrections, e.g. the model registry is read by no Python code, and the work pool starts one subprocess per item | fix the wording in design §2 (P §18) | open |
+| R-38 | P | senselab does not own its graph format; keys pass through pydra hashing; `Executor` is undefined | senselab defines the graph format, plan hash and keys; pydra is a compiler target and one executor (P §1) | resolved in ADR-001 |
+| R-39 | P | Composite keys hash upstream keys, not outputs, so identical upstream output still invalidates downstream (I-5) | output-addressed early cutoff: downstream keys use upstream output identity (P §2) | resolved in ADR-002 |
+| R-40 | P | Env identity covers the whole lock plus platform; near-zero hits across hosts and after lock bumps | per-backend dependency closures and measured equivalence classes (P §3, extends R-4) | resolved in ADR-002 |
+| R-41 | P | Unkeyed inputs change outputs: decoder and resampler, system libraries, driver and cuDNN, backend source | key the decoder and resampler identity and the backend source hash; record and class the driver stack (P §4) | resolved in ADR-002 |
+| R-42 | P | No canonical serialisation or evolution plan for stores, plans, profiles, provenance and fitted artifacts | canonical serialisation spec; format version on every artifact; migrations instead of wipes (P §5) | resolved in ADR-006 |
+| R-43 | P | Signal model is one array and one rate; it cannot cover mixed-rate wearables, VFR video or long recordings | protocol-shaped data model with first-class time (P §7) | resolved in ADR-005 |
+| R-44 | P | Identity of long and large inputs (hashing cost, chunked identity) | chunked content identity (P §8) | resolved in ADR-002 |
+| R-45 | P | Plan conflates logical identity with physical placement | split the logical plan from placement (P §9) | resolved in ADR-004 |
+| R-46 | P | Core is a runtime, not a kernel; dependency direction is unenforced below it | a small kernel plus enforced layering (P §10) | resolved in ADR-009 |
+| R-47 | P | Observability is unspecified | logs, metrics and per-attempt diagnostics as a design section (P §11) | resolved in ADR-008 |
+| R-48 | P | A model reference can make senselab download and run arbitrary hub code, including via MCP; provenance file labels can carry participant ids | a model-code trust boundary; store privacy; path redaction in exports (P §12) | resolved in ADR-007 |
+| R-49 | P | Migration has no strangler boundary or coexistence budget | migrate one use case at a time, with a time-boxed coexistence budget (P §13) | resolved in ADR-009 |
+| R-50 | P | Route and loop predicates are not tasks | predicates are declared decide tasks (P §14) | resolved in ADR-001 |
+| R-51 | P | Implicit fan-out from list-typed ports is a typing trap (from R-19) | explicit fan-out (P §15) | resolved in ADR-001 |
+| R-52 | P | Fault classification must originate in the worker | typed faults raised at the source (P §16, refines R-5) | resolved in ADR-009 |
+| R-53 | P | Over-engineering for 2.0 | cut list (P §17) | resolved in design §6.4 |
+| R-54 | P | Factual corrections, e.g. the model registry is read by no Python code, and the work pool starts one subprocess per item | fix the wording in design §2 (P §18) | resolved in design §2 (verified) |

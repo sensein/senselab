@@ -218,7 +218,7 @@ This is the same cadence as `testing.md` §5.
 
 Each run records dataset version/DOI/hash, item list, model id + resolved commit SHA,
 normaliser/scorer commit, metric parameters (collar, tolerance, P_target), hardware and wall time,
-in line with the canonical key (`design.md` §4.8). Timing figures are valid only from idle, dedicated
+in line with the logical key and execution context ([ADR-002](adr/ADR-002-identity-v2.md)). Timing figures are valid only from idle, dedicated
 nodes. Publish aggregate metrics for all tiers. Publish per-item outputs only for CC BY / ODC-By /
 CC0 / ODbL sets.
 

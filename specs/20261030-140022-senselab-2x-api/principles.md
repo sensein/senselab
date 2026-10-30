@@ -219,7 +219,7 @@ it is amended here.
   provenance, and its absence is an error, not a fallback.
 - **Source**: owner, 2026-10-30: "we should always be using isolated envs for reproducibility, not
   relying on system libraries. i.e. one requirement is to install senselab into a venv".
-- **Check**: every activity in provenance names an env with a numerics identity (`design.md` I-2).
+- **Check**: every activity in provenance names its env in the recorded execution context (ADR-002).
   The env tier audits each env's imports against its lock.
 
 ### P-26 Signals generalise; modality-specific tasks stay specific
@@ -279,6 +279,24 @@ it is amended here.
 - **Check**: the duplicate-code check; the task registry refuses duplicate operations; an
   adversarial duplicate-finding pass per phase; the consolidation inventory in design §6.1 is
   emptied by Phase 5.
+
+### P-38 Hashes establish exactness; reuse across contexts is measured
+- **Status**: active
+- **Statement**:
+  - Hashes establish exactness only, and only over facts that hash the same on every machine:
+    declared versions, model weight bytes, canonical params, raw input bytes, upstream outputs.
+  - Function code, Python objects and environments are never hashed into identity. They differ
+    across platforms, and a hash cannot measure distance (pydra #777, #776).
+  - Whether a result produced in another context may be reused is a user-chosen reuse policy
+    (`exact`, `equivalent`, `tolerant`). Equivalence comes from measured tolerances and verify
+    sampling.
+- **Source**: owner, 2026-10-30: "i don't see how senselab can do all the hashing ... many
+  functions may be environment dependent (same function may hash differently between macos and
+  linux). since hashing can't be used to judge distance, only exactness, should caches be
+  invalidated when moving between machines? perhaps so, but a user may say i don't care as long as
+  the outputs are the same/close for given inputs".
+- **Check**: ADR-002 key contract tests; a source change without a version bump fails CI; under
+  `equivalent`, unmeasured contexts behave as `exact`.
 
 ---
 
@@ -386,7 +404,7 @@ amending its origin.
 
 ### P-19 Cache invalidation is cheap
 - **Status**: active. **Statement**: keys are content- and commit-aware; bump the schema rather than
-  reason about survivors. **Source**: `CLAUDE.md`. **Check**: the canonical key in `design.md` §4.8.
+  reason about survivors. **Source**: `CLAUDE.md`. **Check**: the logical key in ADR-002 (`design.md` §4.8).
 
 ### P-20 Measurements and decisions are separate layers
 - **Status**: active. **Statement**: measuring nodes emit measurements; decisions are separate,
@@ -443,3 +461,6 @@ amending its origin.
   flywheel.
 - 2026-10-30: added P-37 (one implementation per behaviour, consolidated without brittleness), with
   its standard in `engineering.md` and the inventory in design §6.1.
+- 2026-10-30: added P-38 (exactness by portable hashes, reuse by measured equivalence) after the
+  principal-architect review. The ADRs in `adr/` resolve R-3, R-8, R-9, R-12 and R-38..R-54.
+  P-19's check now refers to ADR-002's logical key.

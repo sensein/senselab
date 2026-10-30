@@ -209,7 +209,7 @@ format, its pickling and its failure semantics.
 **What senselab must own regardless.** The candidates were planner, model cache and env manager;
 each is tested here.
 
-1. **Content-addressed result store** (§4.8). Own it. No engine lets the key be the canonical key
+1. **Content-addressed result store** (§4.8). Own it. No engine lets the key be senselab's logical key (ADR-002)
    (`design.md` §4.8) *and* writes
    atomically by rename on NFS *and* stores Python-version-neutral data (`.npy`/JSON/parquet rather
    than pickles).

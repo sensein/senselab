@@ -1,7 +1,7 @@
 # senselab 2.x execution design: pools, GPUs, substrates, and the pydra boundary
 
 Status: draft, revised after review. This document refines `design.md` §4.4, §4.7, §4.8 and §4.9.
-Identity rules (the canonical key, I-1..I-9) are in `design.md` §4.8 and are not repeated here.
+Identity rules (the logical key, execution context and reuse policy, I-1..I-9) are in [ADR-002](adr/ADR-002-identity-v2.md) and `design.md` §4.8, and are not repeated here.
 The case for pydra is in [`engine-choice.md`](engine-choice.md). pydra changes are cited by their
 ids in
 [proposal 0001](https://github.com/nipype/pydra/blob/enh/execution-extensions/proposals/0001-execution-extensions.md).
@@ -34,20 +34,22 @@ Boundary rule: a feature goes to pydra when it means something for a task that i
 ## 3. A mixed run
 
 ```
- Plan (immutable, hashed) ──► coordinator ──► queue/cpu   queue/gpu:a100#<model id>   queue/svc:<service id>
-                                 ▲  lease + fencing token        │                          │
+ LogicalPlan + Placement ──► coordinator ──► queue/cpu   queue/gpu:a100#<model id>   queue/svc:<service id>
+                                 ▲  epoch file (efficiency fence) │                          │
                                  └──── results (store) ◄── pool workers on local / Slurm substrates
 ```
 
 ### 3.1 Coordinator
 - **What it holds:** the plan and the graph. It releases a job to its queue when the job's inputs
   exist in the store, and marks descendants complete, typed-absent or failed.
-- **The Plan is immutable and hashed** and includes every resolution (model SHAs, catalogue
-  defaults, hardware probe, env identities, chunk grid). A restart is `resume(plan_hash)`. A
-  restart never re-resolves `@main`, re-probes hardware or re-plans.
-- **A single coordinator** holds a lease with a **fencing token**. The store and queues reject
-  releases that carry a stale token, so a preempted coordinator that is still alive cannot act
-  next to its replacement.
+- **The `LogicalPlan`** carries every resolution, and its hash is the run identity
+  ([ADR-004](adr/ADR-004-logical-plan.md)).
+  - A restart is `resume(logical_plan_hash)` with a fresh `Placement`.
+  - A restart never re-resolves `@main`. It may re-probe hardware and re-place nodes.
+- **Correctness comes from idempotence, not fencing** ([ADR-003](adr/ADR-003-storage-leases.md)).
+  - Jobs are content-addressed, and results are first-writer-wins by rename.
+  - A second coordinator therefore causes duplicate work, never a wrong result.
+  - An epoch file makes a stale coordinator stop releasing; it is an efficiency fence only.
 - **Route choices and loop rounds are stored as results,** so a restart replays them rather than
   recomputing them.
 - **It runs as a small CPU job,** never on a login node.
@@ -62,6 +64,11 @@ Boundary rule: a feature goes to pydra when it means something for a task that i
   batch-mates.
 
 ### 3.3 Fault taxonomy
+
+Faults are classified at the source by the worker runtime's error table
+([ADR-009](adr/ADR-009-migration-kernel.md)). An unclassified exception counts as `infrastructure`
+and is reported as a classification gap.
+
 | Class | Examples | Effect |
 |---|---|---|
 | content | decoder error on this input, invalid params | charges the item's retry budget; after the budget, the item goes to `dead/` and its descendants become typed failures |
@@ -72,24 +79,27 @@ When one env or one worker is broken, the fault is reported against the env or w
 spread across a million items.
 
 ### 3.4 Scheduling and memory
-- **A resident model is a cache, not a reservation.** A worker yields after a bounded quantum
-  when other queues are waiting. Every non-empty queue is served within a bound, so starvation is
-  impossible.
+- **Claim order.** Queues keep time-ordered index segments, and workers claim the oldest item
+  first, in O(1) amortised (ADR-003).
+- **A resident model is a cache, not a reservation.** A worker yields after N items or T seconds
+  when another queue it can serve has older work.
+  - Workers being alive is what guarantees progress.
+  - Latency is not bounded when the cluster grants no workers.
 - **The plan checks** that the caps cover the models that must be resident at the same time.
-- **Device memory goes through an admission arbiter** on each device. The arbiter uses
-  peak-memory-against-input-length tables from the catalogue. Packing several models on one card,
-  including vLLM servers' utilisation, is admitted by the arbiter and not assumed from a static
-  table.
+- **Device memory in 2.0** uses static caps per resource class. An OOM is a resource fault, so the
+  job is re-placed with a smaller batch and the item is not charged.
+  - A host-local `flock` token budget per device is the designed next step, adopted when the scale
+    ladder shows the need (design §6.4).
 - **A GPU-only task with no GPU class** in the execution profile fails planning and names the
   node. It never falls back to CPU silently.
 
 ### 3.5 Services
 - **What a service is:** a resident resource in a pool worker of class `svc`. Its process runs in
   an `Env.server` env.
-- **Registration:** services are endpoints registered in the store with leases, and addressed by
-  identity.
-- **Lifecycle:** a service stays alive while the plan has pending consumers for it; queue depth
-  does not decide that.
+- **Registration:** a service is a registry entry `{identity, endpoint, heartbeat}` under a lease
+  (ADR-003).
+- **Lifecycle:** each consumer holds a lease on the service. The service exits when no consumer
+  lease has been live for T. Queue depth does not decide this.
 - **Identity:** every response carries the service's attested identity (I-8).
 
 ### 3.6 Substrates
@@ -106,10 +116,12 @@ spread across a million items.
   laptop plans and submits only.
 
 ### 3.7 Result store at scale
-- **Small results go to a packed tier:** columnar files per shard plus a key index. This avoids
-  10⁸ inodes at `over="segment"` scale.
-- **Expected cache hits** in a plan are estimated from the index, not by stat-ing every key.
-- The store has its own per-item budgets for files and stats (P-33).
+- **Store budgets.** The store has its own per-item budgets for files and stats (P-33). The scale
+  ladder measures them.
+- **Packed tier (deferred, design §6.4).** Small results go to per-shard append-only segments,
+  written only by the shard's lease holder, plus an index committed by rename (ADR-003). Expected
+  hits are then estimated from the index.
+- **Reuse across contexts** follows the run's reuse policy ([ADR-002](adr/ADR-002-identity-v2.md)).
 
 ## 4. pydra for the graph
 
@@ -119,6 +131,8 @@ What the extension-point report established:
 - expanding a graph into jobs needs a Submitter.
 
 **Route A, built first:**
+- senselab's graph format ([ADR-001](adr/ADR-001-graph-format.md)) compiles to a pydra workflow.
+  Each node carries its senselab logical key, so pydra never hashes senselab code.
 - The coordinator is a pydra Submitter.
 - A pool worker plugin (I) publishes ready jobs to the queues and completes them from the store.
   Routing (F2) and resources (F1) map nodes to queues.

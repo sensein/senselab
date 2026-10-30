@@ -129,6 +129,13 @@ directly.
 
 ### 4.1 Data and signals (P-13, P-24, P-26)
 
+The time and recording model is decided in [ADR-005](adr/ADR-005-signal-time.md):
+- tasks accept protocols (`RegularSeries`, `IrregularSeries`, `FrameSequence`, `Text`);
+- a `Recording` holds channel groups, each with its own rate or its own timestamps;
+- time is integer nanoseconds on a `clock_id`.
+
+The summary below follows that model.
+
 - **`Signal`** is the base type:
   - `data` with shape `(channels, samples)`, a numpy array with a dtype per channel;
   - `sampling_rate`;
@@ -144,12 +151,12 @@ directly.
 - **`Video`, `Image` and `Text`** follow the same lazy, content-identified pattern.
 - **Loading** is lazy, by path, byte range, stream or time range. Derived data is chunked. Tensors
   exist only inside backends.
-- **Identity** is computed after the canonical decode, so changing the container does not change
-  identity. Units enter identity. Data objects are immutable, and a transform records its parent
-  (`wasDerivedFrom`).
-- **One timeline.** Every timed result is a `Span{start, end, source}` on its source clock. A
-  synchronisation task produces a `TimeMap` (offset plus drift, with uncertainty) that projects
-  between clocks.
+- **Identity** of source data is the hash of its raw content bytes, chunked for long recordings
+  ([ADR-002](adr/ADR-002-identity-v2.md)). The decoder is recorded as execution context. Data
+  objects are immutable, and a transform records its parent (`wasDerivedFrom`).
+- **One timeline.** Every timed result is a `Span{start_ns, end_ns, clock_id}`. A `TimeMap`
+  (offset plus drift, with uncertainty) relates clocks. It comes from metadata or a synchronisation
+  task, and is a declared input.
 - **Results.**
   - An `Annotation{span, label|value, score, producer, guideline}` is the per-item view.
     `producer` is a human, an agent or a model; `guideline` is the annotation guideline version
@@ -248,24 +255,27 @@ class CrisperWhisperCt2: ...
 ```python
 p = sl.Pipeline("conversation")
 seg = p.add(sl.audio.Diarize(), audio=p.input("audio"))
-asr = p.add(sl.audio.SpeechToText(language="en"), audio=seg.out.segments)   # fan-out from list port
+asr = p.add(sl.audio.SpeechToText(language="en"), audio=p.map(seg.out.segments))  # explicit fan-out
 spk = p.add(speaker_identity, audio=p.input("audio"), turns=seg.out.turns)  # nested Pipeline
 p.output(transcript=asr.out.transcript, speakers=spk.out.speakers)
 ```
 
 - **Nesting.** A `Pipeline` satisfies the Task protocol, so it can be used as a node.
-- **Fan-out** is inferred: wiring a list-typed output into an item-typed input runs the node per
-  element. `over=` is used only to name a dataset grouping key (`session`, `participant`,
-  `corpus`) that comes from the dataset's entities (section 4.6).
-- **Routing.** `p.route(selector, branches={...})` chooses among declared sub-graphs at run time.
-  **Loops:** `p.loop(body, until=..., max_rounds=n)` runs a body for bounded rounds, and unrolled
-  rounds get distinct ids.
+- **Fan-out is explicit.** `p.map(port)` runs the node per element and `p.gather(...)` collects the
+  results. Wiring a list into an item port without `map` is a type error
+  ([ADR-001](adr/ADR-001-graph-format.md)). `over=` names only a dataset grouping key (`session`,
+  `participant`, `corpus`) taken from the dataset's entities (section 4.6).
+- **Routing and loops.** `p.route(predicate, branches={...})` and
+  `p.loop(body, until=predicate, max_rounds=n)` take a **declared decide task** as the predicate.
+  Its output is a recorded result, so a resumed run takes the same branch. Unrolled rounds get
+  distinct ids.
 - **Absence.** `Absent(cause)` is typed: content-caused or environment-caused (I-6). Downstream
   nodes declare whether they accept it. A failure is not an absence.
 - **Ports** carry schemas: `StageContract`/`StageIO` become the port model, and edges are checked
   when the graph is built.
-- **Serialisation.** A pipeline serialises losslessly to JSON/YAML against a published graph
-  schema, and `sl.validate()` checks it without planning.
+- **Serialisation.** senselab owns the graph format: a pipeline serialises losslessly to JSON
+  against a published graph schema, and `sl.validate()` checks it without planning. The format
+  compiles to pydra workflows (ADR-001).
 
 ### 4.6 Dataset and profiles (P-11, P-12, P-18)
 
@@ -307,12 +317,16 @@ sl.run(p, ds, ...)         # = sl.plan(...).run(); task or pipeline
 sl.use(execution="laptop") # session default
 ```
 
-- **A Plan is immutable and hashed.** It includes every resolution (model SHAs, catalogue
-  defaults, hardware probe, env identities, chunk grid), so resuming means `resume(plan_hash)`
-  and never re-planning (`execution.md`).
+- **A plan has two parts** ([ADR-004](adr/ADR-004-logical-plan.md)).
+  - The **`LogicalPlan`** is the graph plus every resolution (model weight identities, catalogue
+    defaults, profile slices, input manifest, reuse policy). Its hash is the run identity.
+  - The **`Placement`** covers backend instance, env, device, batch and partition. It is recorded
+    but never part of an identity.
+  - Resuming is `resume(logical_plan_hash)` with a fresh placement.
 - **Before running, a plan announces** the env builds it needs, its cost (wall time, GPU-hours,
   downloads) and its license set.
-- **Laptop and cluster plans** for the same inputs differ only in execution fields (P-10).
+- **Laptop and cluster plans** for the same inputs share a `LogicalPlan` hash and differ only in
+  placement (P-10).
 - **The hardware probe needs no torch.** It extends `cuda_probe` and `reproduce/host.py`.
 - **Placement and batching:**
   - GPU and CPU nodes are placed separately.
@@ -322,19 +336,29 @@ sl.use(execution="laptop") # session default
 
 ### 4.8 Identity (P-3, P-4, P-19)
 
-**The canonical result key.** Every other document references this one:
+**Identity v2** ([ADR-002](adr/ADR-002-identity-v2.md), P-38). Hashes establish exactness, and only
+over facts that hash the same on every machine.
 
 ```
-{schema, task, task_version, backend, stack,
- env numerics identity, numerics class (unless a measured tolerance covers both classes),
- identity tunables (dtype, … ; batch formation when the backend is not batch-invariant),
- model identity, params,
- identity of every declared input (data, profile slices, fitted-profile artifacts, hints, TimeMaps),
- chunk grid (when chunked)}
+logical key = {schema, task, task_version, backend, backend_version,
+               model weight identity, params (JCS),
+               input identities (raw content bytes; upstream OUTPUT identity for derived data),
+               declared profile slices,
+               batch formation and chunk grid, when the backend declares them output-affecting}
 ```
 
-The senselab version, batch size (for batch-invariant backends), device index and partition are
-recorded but not keyed.
+- **Execution context, recorded per result and not keyed:** env lock, platform and wheel set;
+  numerics class; decoder and resampler; driver stack; host; protocol identity.
+- **Reuse policy, in the run config.** It decides whether a result produced in another context may
+  be reused:
+  - `exact`: same context;
+  - `equivalent`: the default; contexts in a measured equivalence class for that backend, falling
+    back to `exact` where nothing is measured;
+  - `tolerant`: any context, with the result labelled.
+- **Verify sampling** optionally recomputes a fraction of cross-context hits and feeds the
+  equivalence data.
+- **Not hashed:** function code, Python objects and environments.
+- **Versions are declared.** A CI check fails a source change made without a version bump.
 
 **Invariants.** These came from the adversarial review under P-35, and the owner may promote any of
 them to a principle.
@@ -342,20 +366,21 @@ them to a principle.
 | Id | Invariant | Check |
 |---|---|---|
 | I-1 | **No ambient reads.** Everything a node reads reaches it through a declared, identified input. | perturbation contract: perturb every undeclared source (env vars, other profile keys, cache roots); output unchanged |
-| I-2 | **Numerics identity is separate from protocol identity.** Numerics identity = lock sha + platform tag + installed wheel-set hash (the senselab venv uses the same formula). Protocol identity = worker-runtime source hash + wire version, checked only at handshake. The worker runtime is an overlay, not part of the requirements sha. | env tier: a release that changes only the worker runtime leaves numerics identities and cache keys unchanged |
+| I-2 | **Context and protocol identity are not in the key.** The execution context is recorded per result. The protocol identity (worker-runtime source hash plus wire version) is checked only at handshake. The worker runtime is an overlay on each env. | env tier: a release that changes only the worker runtime leaves keys unchanged |
 | I-3 | **Batch invariance is declared and certified.** Otherwise batches form from canonical length buckets (bucket in the key) or batch size 1. Nondeterministic backends are labelled. | limits contract: batch of 1 against mixed batches, within a measured tolerance |
-| I-4 | **The numerics class** (GPU architecture, precision mode) is keyed unless a measured tolerance covers both classes. | tolerance profiles exist for every class pair treated as equal |
-| I-5 | **A composite key** is the Merkle hash of its inner node keys. | contract: changing an inner node changes the composite key |
+| I-4 | **Cross-context reuse follows the reuse policy.** Equivalence classes come only from measured tolerance profiles and verify sampling. | logic: `equivalent` with no measurement behaves as `exact`; limits: verify sampling records agreement |
+| I-5 | **Early cutoff.** Derived inputs are identified by upstream output identity. A composite's identity is its `LogicalPlan` hash. | contract: an upstream change that yields identical output leaves downstream keys unchanged |
 | I-6 | **`Absent` carries a cause class.** Only content-caused absence is cached. | contract: environment-caused absence is never read back from the cache |
 | I-7 | **Shards are closed under the coarsest grouping level.** A group node's key includes a hash of its member manifest and it checks completeness. Chunkable tasks declare a chunk grid and receptive field as identity, and shards align to the grid. | logic: a split group fails planning; misaligned shards are refused |
 | I-8 | **Services attest their identity** (engine version, model SHA, config) on every response, and the key uses the attested value. | limits: restarting a service with a new config changes keys |
 | I-9 | **License taint propagates** along `wasDerivedFrom`. The policy is checked on everything consumed, including cache hits and fitted profiles. | contract: a non-commercial-derived artifact fails a permissive-only plan |
 
 **One result store** replaces the stage cache, the result cache and the separate key schemes:
-- layout `schema-<N>/<k[:2]>/<k>/`, plus a packed tier for small results (`execution.md`);
+- layout `schema-<N>/<k[:2]>/<k>/`; the packed tier for small results is deferred (§6.4);
 - atomic rename, first writer wins;
 - failures are not cached;
-- a new schema directory per bump.
+- every entry carries a format version, and format changes migrate rather than wipe
+  ([ADR-006](adr/ADR-006-formats.md)). A new key space is created only by an identity change.
 
 **One provenance store** (`ProvStore`, append-only, content-derived ids) is written around every
 node with the attested identities. BEP028 export is how runs are published. `reproduce` becomes a
@@ -368,19 +393,25 @@ consumer of this store.
 - **Executors:** `InProcess` (notebooks, tests) and `Pool` (`work_pool` with plan-fragment items).
 - **Substrates in 2.0:** local processes and Slurm. They start pool workers; they do not run the
   graph.
-- **Coordination:** a restartable coordinator with a fenced lease releases ready jobs to queues
-  per resource class and resident identity.
-- **Robustness:** typed faults decide what is charged to an item, scheduling is fair, a memory
-  admission arbiter runs on each device, and services are registered endpoints.
+- **Coordination:** safety comes from idempotence, so a duplicate coordinator causes only duplicate
+  work ([ADR-003](adr/ADR-003-storage-leases.md)). Queues are claimed oldest-first from index
+  segments, and resident workers yield after a quantum.
+- **Robustness:**
+  - faults are typed at the source (content, resource, infrastructure), and only content faults
+    charge an item ([ADR-009](adr/ADR-009-migration-kernel.md));
+  - services are leased registry entries;
+  - in 2.0 GPU memory uses static caps, with OOM treated as a resource fault (§6.4).
 
 **pydra's role,** stated once here and used consistently elsewhere:
-- **Route A.** A pydra Submitter runs the graph layer (nesting, ports, fan-out, routing, loops),
-  with a pool worker plugin sending jobs to senselab's queues. pydra's `Environment.checksum` (G1)
-  is used, and pydra's pickle cache is not used once D1 and D2 land.
+- **Route A.** senselab's graph format compiles to a pydra workflow, and a pydra Submitter runs it,
+  with a pool worker plugin sending jobs to senselab's queues. senselab supplies each node's
+  logical key, so pydra never hashes senselab code ([ADR-001](adr/ADR-001-graph-format.md)).
+  pydra's pickle cache is not used once D1 and D2 land.
 - **Version pinning.** pydra changes are used from the branch through `[tool.uv.sources]`, with
   the commit pinned in `uv.lock`, and released in 1.0 alphas.
-- **Decision gate at the start of Phase 3.** If E1, D1 and F2 are not working on the branch,
-  senselab builds its own graph layer behind the same `Executor` protocol: 2–4k lines, 3–5
+- **Decision gate at the start of Phase 3.** It decides only the default executor, not the format.
+  If E1, D1 and F2 are not working on the branch, senselab builds its own graph runner behind the
+  same `Executor` protocol: 2–4k lines, 3–5
   person-weeks, reusing `reproduce/dag.py` and `audio_analysis/contracts.py:991`
   `unrolled_contracts`.
 - **Citations.** pydra changes are cited by proposal id (A0…J2), from
@@ -419,6 +450,21 @@ consumer of this store.
   - Data roots are allowlisted.
   - Relaxing a policy (for example `on_missing: warn`) is a capability of a role, not a parameter.
 
+### 4.10a Observability and trust
+
+- **Observability** ([ADR-008](adr/ADR-008-observability.md)):
+  - every attempt emits structured JSON-lines events to the run directory;
+  - metrics (counts, durations, queue depth, hits per reuse policy, faults per class) are derived
+    from the events;
+  - `senselab status` and `senselab explain` read the events;
+  - OpenTelemetry export is optional.
+- **Trust and privacy** ([ADR-007](adr/ADR-007-trust-privacy.md)):
+  - model sources are allowlisted in the execution profile, and remote code runs only in isolated
+    envs with the network guard on after download;
+  - MCP roles cannot add sources;
+  - exports redact paths to entity-free labels;
+  - stores are per project.
+
 ### 4.11 Across modalities (P-24)
 
 - **Shared types and paths.** All modalities share the timeline, annotation, embedding, record,
@@ -441,7 +487,7 @@ consumer of this store.
 - **Environments are grouped by dependency set,** not by modality.
   - A lock-time tool merges backends into the fewest envs whose combined requirements resolve, and
     records the grouping as data.
-  - Merging changes numerics identity, which is correct.
+  - Merging changes the recorded execution context. Reuse then follows the reuse policy (ADR-002).
   - A persistent worker in a merged env serves several modalities.
   - A single vLLM or vLLM-omni service can answer ALM, VLM and text-LLM nodes, where the run config
     chooses it.
@@ -589,6 +635,13 @@ from the built wheel in a separate env.
 - **Ported backends.** When a backend is ported, triage's call to it is rewired in the same PR,
   so no second protocol survives.
 - **1.x import side effects** stay until Phase 5.
+- **Migrate by use case** ([ADR-009](adr/ADR-009-migration-kernel.md)).
+  - Each use case moves end to end, with a dated coexistence budget.
+  - A 1.x module is deleted when its last use case moves.
+  - The phases below order the work, and the budgets bound the half-migrated time.
+- **Kernel and runtime.** `senselab_core` is a small kernel (types, identity, graph format,
+  serialisation) plus a runtime (planner, executors, store, provenance, observability), with the
+  layering enforced by import-linter (ADR-009).
 
 **Consolidation inventory (P-37).** These are the known duplicates in 1.x. Each phase removes the
 ones it touches, and Phase 5's exit requires the list to be empty. Each consolidation keeps one
@@ -601,7 +654,7 @@ engine with typed variants, never a flag per former caller.
 | In-process model cache | a class-level dict per backend | the runtime model cache |
 | Device and dtype selection | per backend, with `DTYPE_MAP` mostly unused | the planner's placement plus backend tunables |
 | Config load, merge and hash | audio_analysis and triage loaders | one profile loader |
-| Result caches and keys | stage cache, result cache, `reproduce` step keys | one store, one canonical key (§4.8) |
+| Result caches and keys | stage cache, result cache, `reproduce` step keys | one store, one logical key (ADR-002) |
 | BIDS entity parsing | 6 regex copies | the BIDS adapter |
 | Graph runners | triage runner, `reproduce/dag.py`, audio_analysis `run_pass` | one graph layer (§4.9) |
 | Backend dispatch | `isinstance` plus prefix tables, duplicated in `model_for_task` | the registry |
@@ -620,7 +673,7 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
     wheel;
   - `Signal` (with `Audio` as a Signal), the timeline, annotation and embedding types;
   - `Model`/`ResolvedModel`, rewiring `model_revision` and the sha constants;
-  - the result store with the canonical key fields fixed (section 4.8), and the ProvStore writer;
+  - the result store with the ADR-002 logical-key fields fixed, and the ProvStore writer;
   - the torch-free hardware probe;
   - the `License` record type, with no backfill yet;
   - the `fake` stack with its declared fault model, and the generated contract-test module.
@@ -653,7 +706,7 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
 - Build:
   - the immutable `Plan`, `explain`, run lifecycle and `resume`;
   - `InProcess` and `Pool` on local and Slurm substrates;
-  - plan-fragment items, the coordinator with a fenced lease, and the fault taxonomy;
+  - plan-fragment items, the coordinator (idempotent, with an epoch file; ADR-003), and faults typed at the source (ADR-009);
   - cross-record batching under I-3;
   - a minimal BIDS adapter;
   - the `benchmarks/scale` ladder and the catalogue resource tables (P-7, P-33).
@@ -712,6 +765,32 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
 | pydra PRs | 4–8, in parallel | E1/E2 (the State refactor) |
 | fallback graph layer | 3–5, only if triggered | — |
 
+### 6.4 Cut or deferred for 2.0 (R-53)
+
+Each cut keeps its interface or hook, and is added when a measurement or a use case asks for it.
+
+| Cut or deferred | 2.0 instead | Added when |
+|---|---|---|
+| Env-merging solver (P-24 grouping) | one env per backend; the grouping report is still produced | the env count or resident memory is measured as a problem |
+| Packed store tier; GPU token arbiter | the plain store; static caps; OOM as a resource fault | the scale ladder shows inode or OOM pressure |
+| License taint algebra and set combinators | license records, a plan-time check, transitive CI, and one union default set | a user needs a restrictive policy |
+| pixi (conda-forge) envs | uv venvs only | the first R or Java backend is ported |
+| vLLM-omni stack | vLLM only | the first omni model is in the catalogue |
+| `sl.eeg`, `sl.eyetrack`, `sl.motion` namespaces | `sl.signal` generic tasks only | the first task exists in that modality |
+| `sl.sklearn` adapter | `ResultSet.to_frame()` | users ask for it |
+| Route B (pydra runner/executor split) | Route A | pydra RFC 3.10 lands |
+| Prose-lint banned-word rules | a review norm | — |
+
+**Kept for 2.0:**
+- the kernel and runtime;
+- the graph format;
+- the store and provenance;
+- one worker protocol;
+- `InProcess` and `Pool` on local and Slurm;
+- the audio use cases;
+- one cross-modal bridge;
+- the MCP surface, which is generated from the schemas.
+
 ## 7. Builder decisions and design calls
 
 **Left to the builder:**
@@ -723,7 +802,7 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
 - the order of task ports in Phase 5.
 
 **Design calls for the owner to check:**
-- the canonical key and invariants I-1..I-9 (section 4.8);
+- identity v2 (ADR-002) and invariants I-1..I-9 (section 4.8);
 - in-process execution only inside a locked senselab venv that covers the backend (section 4.4);
 - the run lifecycle and the single call shape (sections 4.2 and 4.7);
 - `fit` producing Profile artifacts (section 4.14);
