@@ -1,4 +1,4 @@
-"""Hatchling metadata hook: pin one sibling distribution to this distribution's version."""
+"""Hatchling metadata hook: the distribution's dependencies plus one exact pin on a sibling."""
 
 from typing import Any
 
@@ -6,11 +6,10 @@ from hatchling.metadata.plugin.interface import MetadataHookInterface
 
 
 class PinHook(MetadataHookInterface):
-    """Append ``<pin>==<version>`` to ``dependencies``; ``pin`` is read from the hook's config."""
+    """Set ``dependencies`` to the hook's ``dependencies`` plus ``<pin>==<version>``."""
 
     PLUGIN_NAME = "custom"
 
     def update(self, metadata: dict[str, Any]) -> None:
-        """Add the exact pin to the project metadata."""
-        pin = self.config["pin"]
-        metadata["dependencies"] = [*metadata.get("dependencies", []), f"{pin}=={metadata['version']}"]
+        """Write the dependency list, pin included, into the project metadata."""
+        metadata["dependencies"] = [*self.config["dependencies"], f"{self.config['pin']}=={metadata['version']}"]

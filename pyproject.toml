@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "senselab"
-dynamic = ["version"]
+dynamic = ["version", "dependencies"]
 description = "senselab is a Python package that simplifies building pipelines for speech and voice analysis."
 authors = [
   { name = "Fabio Catania", email = "fabiocat@mit.edu" },
@@ -27,49 +27,6 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
-]
-dependencies = [
-  "senselab-core",
-  # PyTorch ecosystem
-  "torch>=2.8; sys_platform != 'darwin' or platform_machine == 'arm64'",
-  "torchvision>=0.23",
-  "torchcodec>=0.7",
-  "torchaudio>=2.8",
-  # ML frameworks (these pull packaging, joblib, etc.)
-  "huggingface-hub>=1.3",  # transformers>=5.0 needs hf-hub>=1.3
-  "transformers>=5.3",  # >=5.3 required for VibeVoiceAsrForConditionalGeneration (VibeVoice-ASR-HF diarization backend)
-  "datasets>=3.6",
-  "accelerate",
-  "peft>=0.13",  # required by Granite Speech 3.3's LoRA adapter
-  "speechbrain>=1.0",
-  # Audio processing backends (pyannote pulls matplotlib, torch-audiomentations)
-  "pyannote-audio>=4.0",
-  "audiomentations>=0.42",
-  "opensmile>=2.6",
-  "vocos>=0.1",
-  "praat-parselmouth>=0.4.3",  # 0.4.0-0.4.2 fail on Python 3.12+
-  # Signal analysis. librosa was previously transitive only; it is now used
-  # directly (pcen, A_weighting) so it must be declared. pyloudnorm implements
-  # ITU-R BS.1770 gated loudness (numpy/scipy only, no transitive weight).
-  "librosa>=0.11",
-  "pyloudnorm>=0.1.1",
-  # soundfile was previously transitive through librosa; the triage recording-vector scan decodes
-  # conditioned streams directly with it, so it must be declared.
-  "soundfile>=0.12",
-  # PyYAML was previously transitive only; the triage workflow's config loader imports `yaml`
-  # directly, so it must be declared.
-  "pyyaml>=6.0",
-  # Data / utilities. pyarrow was previously transitive through `datasets`; the triage routing
-  # analysis writes and reads its generated tables as parquet, so it must be declared.
-  "pyarrow>=17",
-  "pydantic>=2.11",
-  "pycountry>=24.6",
-  "iso639>=0.1",
-  "scikit-learn>=1.7",
-  "umap-learn>=0.5.4",  # 0.5.0-0.5.3 fail on Python 3.12+
-  "python-dotenv>=1.0",
-  "nest-asyncio>=1.6",
-  "xxhash>=3.5"
 ]
 
 [project.optional-dependencies]
@@ -151,6 +108,48 @@ senselab-core = { workspace = true }
 [tool.hatch.metadata.hooks.custom]
 path = "hatch_build_pins.py"
 pin = "senselab-core"
+dependencies = [
+  # PyTorch ecosystem
+  "torch>=2.8; sys_platform != 'darwin' or platform_machine == 'arm64'",
+  "torchvision>=0.23",
+  "torchcodec>=0.7",
+  "torchaudio>=2.8",
+  # ML frameworks (these pull packaging, joblib, etc.)
+  "huggingface-hub>=1.3",  # transformers>=5.0 needs hf-hub>=1.3
+  "transformers>=5.3",  # >=5.3 required for VibeVoiceAsrForConditionalGeneration (VibeVoice-ASR-HF diarization backend)
+  "datasets>=3.6",
+  "accelerate",
+  "peft>=0.13",  # required by Granite Speech 3.3's LoRA adapter
+  "speechbrain>=1.0",
+  # Audio processing backends (pyannote pulls matplotlib, torch-audiomentations)
+  "pyannote-audio>=4.0",
+  "audiomentations>=0.42",
+  "opensmile>=2.6",
+  "vocos>=0.1",
+  "praat-parselmouth>=0.4.3",  # 0.4.0-0.4.2 fail on Python 3.12+
+  # Signal analysis. librosa was previously transitive only; it is now used
+  # directly (pcen, A_weighting) so it must be declared. pyloudnorm implements
+  # ITU-R BS.1770 gated loudness (numpy/scipy only, no transitive weight).
+  "librosa>=0.11",
+  "pyloudnorm>=0.1.1",
+  # soundfile was previously transitive through librosa; the triage recording-vector scan decodes
+  # conditioned streams directly with it, so it must be declared.
+  "soundfile>=0.12",
+  # PyYAML was previously transitive only; the triage workflow's config loader imports `yaml`
+  # directly, so it must be declared.
+  "pyyaml>=6.0",
+  # Data / utilities. pyarrow was previously transitive through `datasets`; the triage routing
+  # analysis writes and reads its generated tables as parquet, so it must be declared.
+  "pyarrow>=17",
+  "pydantic>=2.11",
+  "pycountry>=24.6",
+  "iso639>=0.1",
+  "scikit-learn>=1.7",
+  "umap-learn>=0.5.4",  # 0.5.0-0.5.3 fail on Python 3.12+
+  "python-dotenv>=1.0",
+  "nest-asyncio>=1.6",
+  "xxhash>=3.5"
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/senselab"]
@@ -165,7 +164,7 @@ packages = ["src/senselab"]
 # and added deliberately, which is the opposite of what an exclude list does. `src` carries both
 # `senselab` and its tests, so a downstream rebuild can still run the suite.
 [tool.hatch.build.targets.sdist]
-only-include = ["src", "pyproject.toml", "README.md", "LICENSE.md", "SECURITY.md", "uv.lock"]
+only-include = ["src", "pyproject.toml", "hatch_build_pins.py", "README.md", "LICENSE.md", "SECURITY.md", "uv.lock"]
 
 [tool.hatch.version]
 source = "vcs"
@@ -173,6 +172,7 @@ source = "vcs"
 [tool.hatch.version.raw-options]
 version_scheme = "guess-next-dev"
 local_scheme = "no-local-version"
+git_describe_command = "git describe --dirty --tags --long --match '[0-9]*.[0-9]*.[0-9]*'"
 
 [tool.pytest.ini_options]
 pythonpath = [
@@ -181,7 +181,7 @@ pythonpath = [
 testpaths = [
   "src/tests"
 ]
-addopts = "--strict-markers --import-mode=importlib"
+addopts = "--strict-markers"
 markers = [
   "logic: pure logic, no I/O beyond tmp files",
   "contract: a boundary contract between components",
@@ -191,8 +191,7 @@ markers = [
   "gpu: needs a GPU",
   "network: needs network outside the sandbox",
   "slow: long-running",
-  "large_model: loads a large model",
-  "compat: probes version boundaries of the compatibility matrix"
+  "large_model: loads a large model"
 ]
 # A hung test must fail with a traceback, not consume the job.
 #

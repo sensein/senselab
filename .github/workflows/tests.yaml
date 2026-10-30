@@ -218,11 +218,37 @@ jobs:
     - name: Install the core distributions alone
       run: |
         uv venv -p ${{ matrix.python-version }} .core
-        uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core pytest hypothesis import-linter
+        uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core pytest pytest-timeout hypothesis import-linter
     - name: Run core tests
-      run: .core/bin/pytest packages -m "logic or contract" --import-mode=importlib -p no:cacheprovider
+      run: .core/bin/pytest packages -m "logic or contract" -p no:cacheprovider
     - name: Check import contracts
       run: .core/bin/lint-imports
+    - name: Build each sdist into a wheel on its own
+      run: |
+        for src in packages/senselab-worker packages/senselab-core .; do
+          out=$(mktemp -d)
+          uv build --sdist --out-dir "$out/dist" "$src"
+          mkdir "$out/unpacked"
+          tar -xzf "$out"/dist/*.tar.gz -C "$out/unpacked"
+          uv build --wheel --out-dir "$out/wheel" "$out"/unpacked/*
+        done
+
+  worker-floor:
+    if: github.event.pull_request.draft == false
+    name: worker-floor (3.10)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0   # hatch-vcs derives the version from tags
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+    - name: Install the worker alone
+      run: |
+        uv venv -p 3.10 .worker
+        uv pip install -p .worker ./packages/senselab-worker pytest pytest-timeout
+    - name: Run worker tests
+      run: .worker/bin/pytest packages/senselab-worker -m "logic or contract" -p no:cacheprovider
 
   # ── EC2 GPU Runner Jobs ───────────────────────────────────────────────
   # Ephemeral GPU instances via machulav/ec2-github-runner.

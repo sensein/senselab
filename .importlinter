@@ -12,6 +12,10 @@ forbidden_modules =
     senselab_core
     senselab
     pydantic
+    torch
+    transformers
+    speechbrain
+    pyannote
 
 [importlinter:contract:kernel-below-runtime]
 name = senselab_core.kernel imports neither the runtime nor senselab
