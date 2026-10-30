@@ -709,30 +709,88 @@ senselab borrows sklearn's conventions where they fit and declines its data and 
 
 ### 4.14 Signals beyond audio (P-26)
 
-This section is a skeleton; the catalogue is filled from `use-cases.md`.
+The use cases, models, licenses and standards behind this section are in
+[`use-cases.md`](use-cases.md): 12 use cases, models per modality with licenses checked
+2026-10-30, BIDS physio/motion/eyetrack/EEG, EDF/WFDB/XDF, and a three-tier taxonomy.
 
-- **`Signal`** is the base data type:
-  - `data` `(channels, samples)`;
-  - `sampling_rate`, or explicit `timestamps` for irregular sampling;
-  - `channel_names` and `units`;
-  - a `clock` (device, start time, drift model) for aligning to the shared timeline (section 4.10);
-  - metadata.
-- Specialisations are `Audio`, `ECG`, `Accelerometry`, `PPG`, `EDA`, `Respiration`, and so on.
-  They add validation (expected units, channel layout) and are the types that modality-specific
-  tasks accept.
-- **Events and intervals** live on the shared timeline: R-peaks, steps, cough onsets, sleep
-  epochs. They use the same `Span`/`Annotation` types as speech segments.
-- **Task tiers:**
-  1. **Generic over `Signal`,** written once: resample, filter, window, spectral and envelope
-     features, activity and event detection, segmentation, QC (flatline, clipping, SNR), alignment
-     across devices, generic embeddings, statistics.
-  2. **Generic with modality profiles,** where the algorithm family is shared and the parameters
-     differ per modality and live in profiles (P-17). Examples: peak detection (R-peaks vs syllable
-     nuclei vs step counting) and band-limited envelopes.
-  3. **Modality-specific,** declared on the specialised type: ASR, HRV, sleep/wake scoring, face
-     action units.
-- **Datasets** read signals through the same adapter interface. BIDS physio and motion are the
-  first non-audio layouts.
+**Data model**
+- **`Signal`** is the base type:
+  - `data` `(channels, samples)`, with a dtype per channel (int ADC data with gain; float64 where
+    precision matters);
+  - `sampling_rate`;
+  - `channels: [ChannelInfo{name, type, units, placement, reference}]`;
+  - `start: TimeAnchor`;
+  - `device: DeviceInfo`;
+  - `identity`.
+
+  `Audio` is a `Signal` with `type="audio"`. The `Track[T]` of section 4.10 (f0, heart rate, ENMO,
+  facial-AU intensity) is a `Signal` too, so tracks feed the generic tasks.
+- **`IrregularSignal`** carries per-sample timestamps: phone sensing, LSL streams with no nominal
+  rate, RR series, eye trackers with drops.
+  - Regularising it is an explicit task, never a side effect of reading.
+  - Gaps are an `Intervals` value and are never zero-filled.
+- **Units are first-class.** Readers apply ADC gain and physical ranges. Tasks declare the units
+  they accept, and units enter identity.
+- **Clock model.**
+  - Each source has a `TimeAnchor{absolute_start, clock_id}`.
+  - A synchronisation task produces a `TimeMap` (offset plus drift, or piecewise, with
+    uncertainty) from each clock to a reference.
+  - Spans stay on their source clock and are projected through a recorded `TimeMap` when sources
+    are compared. This extends the single timeline of section 4.10 to multi-device recordings
+    (BIDS `StartTime`, XDF clock offsets, audio/video drift, wearable UTC/DST).
+- **Columnar `Events` and `Intervals`** (onset, duration, label, value, score arrays) for detector
+  outputs at scale. They serialise as Parquet or as BIDS `events.tsv`/`physioevents`.
+  `Annotation` remains the per-item view.
+- **Time-range loading and time sharding.**
+  - A `Signal` loads lazily by time range; derived data is chunked (Zarr or HDF5).
+  - A task may declare itself *chunkable* (streaming filter, windowed features), so the planner
+    shards along time as well as across records. A week of 100 Hz actigraphy is about 60M samples
+    per channel.
+- **Record views** are named by modality and device (`audio`, `video`, `ecg`, `ppg`, `acc@wrist`,
+  `eyetrack`). The BIDS `recording-`/`tracksys-` entities map to view names.
+
+**Task tiers** (the tables are in `use-cases.md` §4)
+1. **Generic over `Signal`,** in `sl.signal`. Covers resample, filter, unit conversion, windowing,
+   spectral and envelope features, activity and change-point detection, span algebra, signal QC,
+   synchronisation, foundation-model embeddings, and imputation. The 1.x audio DSP that is really
+   generic moves here: preprocessing, spans, envelope, band_profile, clipping, spectral continuity.
+2. **Families with modality profiles:** one task per family, for example
+   `sl.signal.detect_peaks(x, profile="ecg_rpeak")`.
+   - Families: peak detection, inter-event intervals, periodicity, signal-quality index,
+     decomposition, window classification, state sequencing, circadian measures, coupling.
+   - Profiles live in `data/` with derivations (P-17), and the default is chosen by channel `type`.
+   - Modality wrappers such as `sl.physio.ecg_rpeaks` are sugar over the family task.
+3. **Modality-specific,** in `sl.audio`, `sl.video`, `sl.text`, `sl.physio` (ECG, PPG, EDA,
+   respiration), `sl.motion` (actigraphy/IMU), `sl.eeg` (thin, delegating to MNE/YASA) and
+   `sl.eyetrack`.
+
+Inputs are declared as `Signal[type ∈ {...}, units]`, so `sl.describe` can answer "which tasks
+accept my accelerometer channel".
+
+**Bridges** gain physiological entries:
+- ECG/PPG → respiration;
+- accelerometer + PPG → motion-corrected pulse;
+- video → respiration (rPPG);
+- audio + actigraphy → speaking-while-moving.
+
+**Measure vs decide holds** (P-20). QC tasks emit SQI tracks and gap intervals. Non-wear and
+unusable-epoch verdicts are decision tasks with fitted profiles.
+
+**Licenses** (P-23)
+- Oxford's wearables tools (actipy, asleep, stepcount, ssl-wearables) are under an Academic Use
+  Licence, so non-commercial. pyActigraphy, hrv-analysis and pyPPG are GPL.
+- Permissive paths exist for most chains: NeuroKit2 (MIT), SKDH (MIT), GGIR (Apache-2.0), YASA
+  (BSD-3-Clause), MOMENT (MIT). The permissive path for actigraphy sleep and steps is SKDH or
+  GGIR.
+- The license sets need `LicenseRef` entries for Oxford Academic Use, audEERING, OpenFace and
+  OpenPose academic, and HAI-DEF.
+- Items still unverified are listed in `use-cases.md` and stay out of the catalogue until they are
+  checked.
+
+**Non-Python runtimes** (P-25). GGIR (R) and actipy (Java) need environments that pip cannot
+lock. *Design call:* `Env.isolated` gains a conda-forge kind, locked with pixi, for R, Java and
+native-library stacks. It has the same lock-sha identity, probe and provenance as venvs. A Python
+worker runtime inside that env drives the R or Java process, so the wire protocol is unchanged.
 
 ## 5. Packaging (P-13)
 
