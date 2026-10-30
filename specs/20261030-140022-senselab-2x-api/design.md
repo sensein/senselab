@@ -17,7 +17,7 @@ vLLM server manager, a shared-filesystem work pool that drives Slurm, a pinned s
 pipeline that needed it first, so it cannot be reached through one API, cannot be described to an
 agent, and has drifted toward one dataset.
 
-2.x keeps the machinery and gives it one shape. A user or agent declares *what* to compute. A
+2.x keeps the proven parts (pinning, provenance, locked envs, the lease protocol) and gives them one shape. The model-residency, batching and fault layers of execution are mostly new code: today's work pool starts one subprocess per item. A user or agent declares *what* to compute. A
 planner turns it, for a site and its hardware, into an inspectable plan. An executor runs the plan,
 and the framework records provenance and caches results the same way for every task.
 
@@ -30,7 +30,7 @@ and the framework records provenance and caches results the same way for every t
   - return shapes vary by task and sometimes by argument.
 - Nothing is exported at the top level, every call takes a list, and the README quick start fails
   (`transcribe_audios` requires `model`).
-- `model_registry.yaml` is barely read at run time.
+- `model_registry.yaml` is read by no Python code at run time; only docstrings and comments mention it.
 - The agent interface writes notebook code and looks up symbols on DeepWiki. There is no task
   schema.
 
