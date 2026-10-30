@@ -9,7 +9,7 @@
 > stay counts and categories only.
 
 Produced by `senselab.audio.workflows.triage.recording_vectors` and
-`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `15`; any
+`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `30`; any
 change to a column, a byte layout or a categorical column's controlled vocabulary bumps it and
 changes this file with it. The same number is in
 the parquet's own key-value metadata, under `senselab.recording_vectors.schema_version`, so a
@@ -45,6 +45,7 @@ What each bump added:
 | **16** | the task-extent cut (§8a) |
 | **17** | `released_by_kind_n`, `released_by_kind_categories` (§8a) |
 | **18** | the second-opinion columns renamed `nimble_*` → `second_opinion_*` when Clef replaced Nimble, plus `second_opinion_model_id`. See `specs/20261003-clef-second-opinion/design.md` |
+| **30** | `participant`, `session` and `task` are the run's **recorded identity** (what ADMIT wrote on the `recording` stream, or on its activity where it refused the recording) instead of a regex over the stem; `task` is the recorded `declared_task_id`, lower-cased with its trailing index. `participant_from`, `session_from`, `task_from` (`hint` \| `stem`) say where ADMIT read each. A run that records no identity still has a row, all six null, and is listed in the scan report's `unidentified`. Run directories are found at any depth, and the same stem in two folders is two rows (§10). See `specs/20261022-triage-dataset-profile/plan.md` step 3c |
 
 The data dictionary in the file's metadata was added without a bump: it adds no column, changes no
 layout and no vocabulary, and a reader that ignores the key reads the file exactly as before.
@@ -100,10 +101,11 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 
 | column | type | units / vocabulary | null means |
 | --- | --- | --- | --- |
-| `participant` | string | `sub-<uuid>`, from the stem | the stem carries no `sub-` |
-| `task` | string | everything after `task-` in the stem, e.g. `diadochokinesis-pa` | the stem carries no `task-` |
+| `participant` | string | the run's recorded participant (ADMIT's `declared_participant`), e.g. `sub-<uuid>` | the run records no identity, or none names a participant |
+| `task` | string | the run's recorded task id (ADMIT's `declared_task_id`), lower-cased, e.g. `diadochokinesis-pa` | the run records no identity |
 | `verdict` | string | `pass` \| `flag` \| `discard` — VERDICT's `triage` | never; a row exists only when the fold does |
-| `session` | string | `ses-<uuid>` | the stem carries no `ses-` |
+| `session` | string | the run's recorded session (ADMIT's `declared_session`), e.g. `ses-<uuid>` | the run records no identity, or none names a session |
+| `participant_from`, `session_from`, `task_from` | string | `hint` \| `stem`: where ADMIT read that field (`declared_from`) | the run records no identity |
 | `stem` | string | the BIDS stem, the run directory's name minus its `_YYYYmmdd-HHMMSS` suffix | never |
 | `run_dir` | string | the run directory, relative to the scan root | never |
 | `declared_family` | string | the declared task family, e.g. `story-recall-v2` | nothing was declared |
@@ -529,7 +531,7 @@ produces them — no re-fold, no replay.
 | --- | --- | --- |
 | task extent | `task_extent_n`, `task_extent_start_s`, `task_extent_end_s`, `lead_s`, `tail_s`, `trim_s`, `trim_fraction`, `trimmable` (bool) | no live span carries role `task_extent` |
 | clipping | `clip_spans_n`, `clip_s`, `clip_level_max`, `clip_unclipped_peak`, `clip_unclipped_louder_n`, `clip_withdrawn_n`, `clip_contested_n`, `clip_consistent` (bool), `clip_state` ∈ {`none`, `withdrawn_only`, `kept_consistent`, `kept_inconsistent`}, `raw_clipped_runs`, `raw_clipped_s`, `raw_dropout_s` | per column; `clip_state` is never null |
-| raw vs enhanced | `q_plain_floor_dbfs`, `q_plain_snr_db`, `q_enhanced_floor_dbfs`, `q_enhanced_snr_db`, `q_plain_squim_pesq`, `q_plain_squim_stoi`, `q_plain_squim_si_sdr`, `q_raw_issues`, `q_resolved_by_enhanced`, `q_unresolved` (list<string> ⊂ {`noise_floor`, `low_snr`, `clipping`, `dropout`}) | the plain stream is absent or does not decode |
+| raw vs enhanced | `q_plain_floor_dbfs`, `q_plain_snr_db`, `q_enhanced_floor_dbfs`, `q_enhanced_snr_db`, `q_task_squim_pesq`, `q_task_squim_stoi`, `q_task_squim_si_sdr`, `q_task_squim_windows_n`, `q_raw_issues`, `q_resolved_by_enhanced`, `q_unresolved` (list<string> ⊂ {`noise_floor`, `low_snr`, `clipping`, `dropout`}) | the plain stream is absent or does not decode |
 | other speakers in the task extent | `ms_diarization_speakers_max`, `ms_diarization_secondary_s`, `ms_reviewer_other_n`, `ms_reviewer_expected_n`, `ms_reviewer_unexpected_n`, `ms_signals` (list<string> ⊂ {`diarization`, `separation`, `reviewer`}), `ms_agreement` | neither an `extent_speaker_count` nor a reviewer reading exists |
 
 **Schema 16 adds the task-extent cut** to the task-extent group: `task_audio_start_s`,
@@ -595,10 +597,14 @@ uv run python scripts/triage_recording_vectors.py RUN_ROOT --out DIR --slice N -
 uv run python scripts/triage_recording_vectors.py --merge DIR --out DIR
 ```
 
-Sharding is **content-addressed** — `sha1(stem) % slices` — so a tree that grows while the array is
-running never moves a recording from one shard to another, and a shard that is re-run covers the
-same set. A stem with more than one timestamped run directory keeps the latest and reports the
-rest as `superseded`. A store with no VERDICT fold is `incomplete` and yields no row.
+A run directory is any directory holding `run/store.jsonl`, found at any depth under `RUN_ROOT` and
+not descended into. Sharding is **content-addressed** — `sha1(stem) % slices` — so a tree that grows
+while the array is running never moves a recording from one shard to another, and a shard that is
+re-run covers the same set. A recording is a stem in one folder: one with more than one timestamped
+run directory there keeps the latest and reports the rest as `superseded`, and the same stem in two
+folders is two recordings, both written. A store with no VERDICT fold is `incomplete` and yields no
+row. A store whose run records no identity yields a row with null identity columns and its `run_dir`
+is listed in the report's `unidentified` (counted in the merge summary).
 
 The first build over the 2026-09-19 corpus wrote **62,488 rows in 91.3 MB — 1,462 bytes per
 recording**, transcripts included. What each block costs, what the nulls mean over the whole

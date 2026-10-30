@@ -47,6 +47,7 @@ from senselab.audio.workflows.triage.extend import (
     run_root_of,
     take_slice,
 )
+from senselab.audio.workflows.triage.identity import identity_of, row_identity
 from senselab.audio.workflows.triage.replay_diff import (
     NO_STORE,
     aggregate,
@@ -94,7 +95,9 @@ def replayed_root(row: dict[str, Any], out_root: Path | None) -> Path:
     """Where the replay wrote one recording's run, from the manifest row the replay itself took.
 
     Args:
-        row: The manifest row, carrying ``stem`` and ``enhanced``.
+        row: The manifest row, carrying ``stem``, ``enhanced`` and the identity columns. The root is where the
+            replay places it without a hint (:func:`extend_replay_decisions.replay_identity`): the row's identity,
+            else the stem's. A replay whose hint moved the identity placed it elsewhere, and reads as not reached.
         out_root: The tree the replay mirrored into, or None when it replayed in place.
 
     Returns:
@@ -102,11 +105,13 @@ def replayed_root(row: dict[str, Any], out_root: Path | None) -> Path:
 
     Raises:
         ValueError: If ``enhanced`` is not a stream path inside a run root.
+        ManifestWithoutIdentity: If the row carries no identity columns.
     """
     finished = run_root_of(Path(str(row["enhanced"])))
     if out_root is None:
         return finished
-    return out_root / entity_subdir(str(row["stem"])) / finished.name
+    identity = row_identity(row) or identity_of(str(row.get("stem") or ""))
+    return out_root / entity_subdir(identity) / finished.name
 
 
 def process(rows: Sequence[dict[str, Any]], out_root: Path | None) -> list[dict[str, Any]]:

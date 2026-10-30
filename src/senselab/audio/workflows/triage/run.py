@@ -19,7 +19,7 @@ from senselab.audio.workflows.triage.cohort_stage import write_cohort_unavailabl
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
 from senselab.audio.workflows.triage.enrollment import Enrollment
-from senselab.audio.workflows.triage.identity import declared_session_key
+from senselab.audio.workflows.triage.identity import RecordingIdentity, check_label, declared_session_key, identity_of
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.airway import airway
 from senselab.audio.workflows.triage.nodes.background import (
@@ -80,7 +80,6 @@ SUMMARY_SUBDIR = "summary"
 SIDECAR_SUBDIRS = ("streams", "derivatives")
 
 _RUN_STAMP = "%Y%m%d-%H%M%S"
-_ENTITY_ORDER = ("sub-", "ses-")
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
 
@@ -148,7 +147,7 @@ class RunLayout:
 
     Attributes:
         entity_dir: The directory the run root sits in — ``out_dir`` joined with
-            :func:`entity_subdir` of the stem.
+            :func:`entity_subdir` of the recording's identity.
         root: The per-run root the three trees below are siblings in.
         run_dir: Where the store and every sidecar go.
         artifacts_dir: Where REDACT may release a pair. Fresh and empty on every run.
@@ -164,42 +163,42 @@ class RunLayout:
     summary_dir: Path
 
 
-def entity_subdir(stem: str) -> Path:
-    """The relative directory a stem's outputs belong in, mirroring the input BIDS tree.
-
-    The stem is split on ``_`` into entity chunks, so a label may itself contain hyphens
-    (``sub-SUBJ01``). A chunk with an empty label is not an entity.
+def entity_subdir(identity: RecordingIdentity) -> Path:
+    """The relative directory a recording's outputs belong in: its participant, then its session.
 
     Args:
-        stem: A recording's file stem, such as ``sub-01_ses-02_task-vowel``.
+        identity: The recording's identity, as ADMIT records it (:func:`~.identity.identity_of`).
 
     Returns:
-        ``sub-<label>/ses-<label>`` in BIDS order, with either component dropped when the stem does
-        not carry it, and ``Path(".")`` when it carries neither.
+        ``<participant>/<session>``, the labels as declared, with either level dropped when the identity does not
+        name it, and ``Path(".")`` when it names neither.
+
+    Raises:
+        IdentityLabelError: If a label cannot name a folder (:func:`~.identity.check_label`).
     """
-    chunks = stem.split("_")
-    parts: list[str] = []
-    for prefix in _ENTITY_ORDER:
-        entity = next((chunk for chunk in chunks if chunk.startswith(prefix) and chunk != prefix), None)
-        if entity is not None:
-            parts.append(entity)
+    parts = [
+        label
+        for label, what in ((identity.participant, "participant"), (identity.session, "session"))
+        if check_label(label, what) is not None
+    ]
     return Path(*parts) if parts else Path(".")
 
 
-def prepare_run_layout(out_dir: Path, stem: str) -> RunLayout:
-    """Create a fresh run root under the stem's entity path, with store tree and release tree apart.
+def prepare_run_layout(out_dir: Path, stem: str, identity: RecordingIdentity) -> RunLayout:
+    """Create a fresh run root under the recording's entity path, with store tree and release tree apart.
 
     Two runs landing in the same second are separated by a numeric suffix. See
     ``specs/20260817-triage-workflow-dag/dag.md``.
 
     Args:
-        out_dir: The tree run roots are created in, under each stem's :func:`entity_subdir`.
-        stem: The recording's file stem, used both to place and to name the run root.
+        out_dir: The tree run roots are created in, under each recording's :func:`entity_subdir`.
+        stem: The recording's file stem, which names the run root.
+        identity: The recording's identity, which places it.
 
     Returns:
         The run's directories, all of them created.
     """
-    entity_dir = out_dir / entity_subdir(stem)
+    entity_dir = out_dir / entity_subdir(identity)
     stamp = datetime.now(timezone.utc).strftime(_RUN_STAMP)
     attempt = 0
     while True:
@@ -509,7 +508,7 @@ def run_triage(
     """
     require_dataset_values(config.values)
     source = Path(source)
-    layout = prepare_run_layout(Path(out_dir), source.stem)
+    layout = prepare_run_layout(Path(out_dir), source.stem, identity_of(source.stem, hint))
     store = ProvStore(run_id=layout.root.name)
     outcomes: dict[str, NodeOutcome] = {}
 

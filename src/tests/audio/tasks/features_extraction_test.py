@@ -191,6 +191,9 @@ def test_extract_objective_quality_features_from_audios(resampled_mono_audio_sam
     assert isinstance(result[0]["stoi"], float)
     assert isinstance(result[0]["pesq"], float)
     assert isinstance(result[0]["si_sdr"], float)
+    assert result[0]["windows_n"] == len(result[0]["windows"]) >= 1
+    [single] = extract_objective_quality_features_from_audios([resampled_mono_audio_sample], window_s=None)
+    assert single["windows_n"] == 1 and isinstance(single["pesq"], float)
 
 
 def test_extract_objective_quality_features_from_audios_invalid_audio(mono_audio_sample: Audio) -> None:

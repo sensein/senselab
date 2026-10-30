@@ -92,6 +92,7 @@ def merge(shard_dir: Path, out: Path) -> int:
         "considered": sum(r["considered"] for r in reports),
         "incomplete": sum(len(r["incomplete"]) for r in reports),
         "unreadable": sum(len(r["unreadable"]) for r in reports),
+        "unidentified": sum(len(r["unidentified"]) for r in reports),
         "superseded": sum(len(r["superseded"]) for r in reports),
         "anomalies": {
             name: sum(r["anomalies"].get(name, 0) for r in reports)

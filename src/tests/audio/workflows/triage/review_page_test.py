@@ -14,6 +14,7 @@ import pytest
 import soundfile as sf
 
 from senselab.audio.workflows.triage import review_page
+from senselab.audio.workflows.triage.identity import identity_of
 from senselab.audio.workflows.triage.recording_vectors import read_store
 from senselab.audio.workflows.triage.review_page import page as page_module
 from senselab.audio.workflows.triage.review_page.records import overlays
@@ -78,7 +79,12 @@ def _run_root(root: Path) -> Path:
         return {"record": "entity", "id": eid, "prov_type": prov, "extent": extent, "attributes": attributes}
 
     lines = [
-        entity("rec", "stream", {"name": "recording", "path": "streams/recording.flac"}, [0.0, 4.0]),
+        entity(
+            "rec",
+            "stream",
+            {"name": "recording", "path": "streams/recording.flac", **identity_of(STEM).as_attributes()},
+            [0.0, 4.0],
+        ),
         entity("plain", "stream", {"name": "plain", "path": "streams/plain.flac"}, [0.0, 4.0]),
         entity("tp", "stream", {"name": "task_plain", "path": "streams/task_plain.flac"}, [0.0, 3.5]),
         entity("te", "stream", {"name": "task_enhanced", "path": "streams/task_enhanced.flac"}, [0.0, 3.5]),
@@ -142,6 +148,7 @@ def test_a_record_carries_decision_evidence_streams_and_a_spectrogram(tmp_path: 
     record = review_page.review_record(run_root, tmp_path, speech=lambda _: None)
     assert record is not None
     assert (record["verdict"], record["release"], record["branch"]) == ("pass", "as_is", "AIRWAY")
+    assert (record["participant"], record["session"]) == ("sub-SUBJ13", "ses-01")
     assert record["extent"] == [0.5, 3.5] and record["duration_s"] == 4.0
     decisive = {item["name"] for item in record["evidence"] if item["decisive"]}
     assert "breath_event_db_over_local" in decisive

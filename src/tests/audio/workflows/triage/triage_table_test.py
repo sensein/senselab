@@ -256,9 +256,9 @@ def _vectors(decisions: pa.Table) -> pa.Table:
             "stem": stems,
             "q_plain_snr_db": [31.5, 28.25, None],
             "q_plain_floor_dbfs": [-70.0, -66.5, None],
-            "q_plain_squim_pesq": [2.5, 3.25, None],
-            "q_plain_squim_stoi": [0.9, 0.95, None],
-            "q_plain_squim_si_sdr": [12.0, 18.5, None],
+            "q_task_squim_pesq": [2.5, 3.25, None],
+            "q_task_squim_stoi": [0.9, 0.95, None],
+            "q_task_squim_si_sdr": [12.0, 18.5, None],
         }
     )
 
@@ -295,6 +295,10 @@ def test_the_sidecar_describes_every_column_in_order() -> None:
     assert set(sidecar["verdict"]["Levels"]) == {"pass", "review", "discard"}
     assert set(sidecar["release"]["Levels"]) == {"as_is", "redacted", "withheld"}
     assert set(sidecar["asr_single_hypothesis"]["Levels"]) == {"true", "false"}
+    for name in ("squim_pesq", "squim_stoi", "squim_si_sdr"):
+        assert "windows of the task extent, plain stream" in sidecar[name]["Description"]
+        assert "empty for airway and voice families" in sidecar[name]["Description"]
+    assert triage_table.NO_SQUIM_BRANCHES == ("AIRWAY", "VOICE")
     assert "none" in sidecar["branch"]["Levels"] and "none" in sidecar["enrollment_source"]["Levels"]
     assert all(
         isinstance(text, str) and text for entry in sidecar.values() for text in entry.get("Levels", {}).values()
@@ -344,7 +348,7 @@ def test_lists_are_joined_and_acquisition_readings_fill_their_columns(tmp_path: 
     assert breath["task_audio_plain"].endswith("run/streams/task_plain.flac")
     assert breath["task_audio_enhanced"].endswith("run/streams/task_enhanced.flac")
     assert breath["task_audio_redacted"] == ""
-    assert (breath["pipeline_commit"], breath["config_hash"], breath["schema_version"]) == ("abc123", "c0ffee", "3")
+    assert (breath["pipeline_commit"], breath["config_hash"], breath["schema_version"]) == ("abc123", "c0ffee", "5")
     speech = dict(zip(HEADER, parsed[2]))
     assert speech["branch"] == "SPEECH" and speech["task_audio_enhanced"] == ""
     assert speech["task_events_found"] == "" and speech["interference_in_task"] == ""
@@ -426,3 +430,29 @@ def test_an_older_consensus_reads_single_hypothesis_off_its_source_count() -> No
     assert triage_table.store_readings(view({"n_sources": 1, "outcomes": {}}), None)["asr_single_hypothesis"] is True
     assert triage_table.store_readings(view({"n_sources": 2, "outcomes": {}}), None)["asr_single_hypothesis"] is False
     assert triage_table.store_readings(view({"outcomes": {}}), None)["asr_single_hypothesis"] is None
+
+
+def test_the_squim_columns_read_the_task_extent_vectors_not_the_per_span_ones() -> None:
+    """triage.tsv's squim_* take the q_task_squim_* vectors; a q_plain_squim_* column is ignored."""
+    vectors = pa.table(
+        {
+            "stem": ["s1"],
+            "q_plain_squim_pesq": [1.2],
+            "q_task_squim_pesq": [2.9],
+            "q_task_squim_stoi": [0.98],
+            "q_task_squim_si_sdr": [17.0],
+        }
+    )
+    readings = triage_table.vector_readings(vectors)["s1"]
+    assert (readings["squim_pesq"], readings["squim_stoi"], readings["squim_si_sdr"]) == (2.9, 0.98, 17.0)
+    assert triage_table.column_dictionary()["version"] == 5
+
+
+def test_a_voice_row_carries_no_squim_even_where_the_vectors_hold_one() -> None:
+    """VOICE, like AIRWAY, publishes empty squim_* columns."""
+    readings = {"squim_pesq": 1.3, "squim_stoi": 0.7, "squim_si_sdr": -9.0}
+    voice = triage_table.row({"declared_family": "prolonged-vowel", "stem": "s"}, readings, {}, 4)
+    speech = triage_table.row({"declared_family": "caterpillar-passage", "stem": "s"}, readings, {}, 4)
+    assert voice["branch"] == "VOICE"
+    assert (voice["squim_pesq"], voice["squim_stoi"], voice["squim_si_sdr"]) == (None, None, None)
+    assert speech["squim_pesq"] == 1.3

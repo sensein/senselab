@@ -56,7 +56,7 @@ from senselab.audio.workflows.triage.cohort_fold import (
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.decision import PASS, REVIEW
-from senselab.audio.workflows.triage.identity import declared_session_key
+from senselab.audio.workflows.triage.identity import declared_session_key, is_undeclared_session
 from senselab.audio.workflows.triage.live_evidence import declared_task_of, recording_stem
 from senselab.audio.workflows.triage.nodes.branches import derivative_arrays, merge
 from senselab.audio.workflows.triage.nodes.common import (
@@ -103,6 +103,7 @@ CONSISTENCY_CHECK = CONSISTENCY_CHECK_NAME
 NO_COHORT = "no cohort was read: the run saw this recording alone"
 NO_ENROLLMENT_SPANS = "no lexical speech span long enough to enroll"
 FEWER_THAN_TWO_ENROLLED_SESSIONS = "the participant has fewer than two sessions with an enrollment of their own"
+NO_SESSION_DECLARED = "the recordings declare no session, so no session-level check applies"
 SESSION_NOT_ENROLLED = "the session has no enrollment of its own"
 OTHER_SESSIONS_NOT_ENROLLED = "the participant's other sessions hold no enrollment"
 CONSISTENCY_UNSET = "participant.consistency_cosine_min is unset"
@@ -524,7 +525,7 @@ def facts_of(
     removed_speech = _subtract(by_name.get(removed["from"], []), by_name.get(removed["kept"], []))
     return RecordingFacts(
         stem=stem,
-        session=declared_session_key(store, stem),
+        session=declared_session_key(store),
         family=family,
         lexical_task=lexical_task(family),
         duration_s=_recording_duration(store),
@@ -849,18 +850,6 @@ def plain_loader(store: ProvStore, run_dir: Path) -> AudioLoader:
 # ------------------------------------------------------------------------------ the enrollment
 
 
-def participant_key(session: str) -> str:
-    """The participant a session key (or a stem standing for one) belongs to.
-
-    Args:
-        session: ``sub-<label>_ses-<label>``, or a stem naming no session.
-
-    Returns:
-        ``sub-<label>``: everything before the first underscore.
-    """
-    return session.split("_", 1)[0]
-
-
 @dataclass
 class Enrollment:
     """One participant's speaker vector, pooled over one session or over several.
@@ -1163,8 +1152,12 @@ class ParticipantEnrollments:
 
     @property
     def enrolled_sessions(self) -> list[str]:
-        """The sessions whose own enrollment holds a vector, in order."""
-        return [key for key, enrollment in self.sessions.items() if enrollment.vector is not None]
+        """The declared sessions whose own enrollment holds a vector, in order."""
+        return [
+            key
+            for key, enrollment in self.sessions.items()
+            if enrollment.vector is not None and not is_undeclared_session(key)
+        ]
 
     def source_for(self, session: str) -> tuple[str, Enrollment]:
         """The enrollment a session's recordings are compared against, and where it came from.
@@ -1265,15 +1258,16 @@ def enroll_participant(
         return dataclasses.replace(left, excluded_recording=stem)
 
     own = {session: pool(session, SCOPE_SESSION, candidates) for session, candidates in by_session.items()}
+    declared = [session for session in by_session if not is_undeclared_session(session)]
     others = {
         session: pool(
             participant,
             SCOPE_PARTICIPANT,
-            [c for other, candidates in by_session.items() if other != session for c in candidates],
+            [c for other in declared if other != session for c in by_session[other]],
             session,
         )
-        for session in by_session
-        if len(by_session) > 1
+        for session in declared
+        if len(declared) > 1
     }
     pooled = pool(participant, SCOPE_PARTICIPANT, [c for candidates in by_session.values() for c in candidates])
     return ParticipantEnrollments(participant, own, others, pooled, without)
@@ -1293,6 +1287,8 @@ def consistency_check(enrollments: ParticipantEnrollments, session: str, *, boun
     """
     enrolled = enrollments.enrolled_sessions
     count = {"enrolled_sessions_n": len(enrolled)}
+    if is_undeclared_session(session):
+        return {"status": NOT_APPLICABLE, "reason": NO_SESSION_DECLARED, **count}
     if len(enrolled) < 2:
         return {"status": NOT_APPLICABLE, "reason": FEWER_THAN_TWO_ENROLLED_SESSIONS, **count}
     own, other = enrollments.sessions[session], enrollments.other_sessions.get(session)
@@ -1516,13 +1512,23 @@ def condition_blocks(sessions: Sequence[tuple[str, Sequence[RecordingFacts]]]) -
 
     Returns:
         By session key: ``session``, ``participant`` and ``other_sessions`` (None for a participant with one
-        session), each a :func:`condition_summary`.
+        session), each a :func:`condition_summary`. A participant's recordings that declare no session
+        (:func:`~.identity.undeclared_session`) are no session: their ``session`` and ``other_sessions`` are None,
+        and they are no other session's.
     """
     every = [facts for _, members in sessions for facts in members]
     participant = condition_summary(every)
     out: dict[str, dict[str, Any]] = {}
     for session, members in sessions:
-        others = [facts for other, group in sessions if other != session for facts in group]
+        if is_undeclared_session(session):
+            out[session] = {"session": None, "participant": participant, "other_sessions": None}
+            continue
+        others = [
+            facts
+            for other, group in sessions
+            if other != session and not is_undeclared_session(other)
+            for facts in group
+        ]
         out[session] = {
             "session": condition_summary(members),
             "participant": participant,
@@ -1935,13 +1941,14 @@ def write_cohort_reading(store: ProvStore, attributes: Mapping[str, Any]) -> str
     return new_id
 
 
-def write_enrollment_entity(store: ProvStore, enrollment: Enrollment, reading_id: str) -> str:
+def write_enrollment_entity(store: ProvStore, enrollment: Enrollment, reading_id: str, *, subject: str) -> str:
     """Record the enrollment a reading compared against, without its vector.
 
     Args:
         store: The recording's store.
         enrollment: The session's own enrollment, or the participant's from the other sessions.
         reading_id: The ``cohort_reading`` derived from it.
+        subject: The participant group the enrollment belongs to.
 
     Returns:
         The enrollment entity's id.
@@ -1958,7 +1965,7 @@ def write_enrollment_entity(store: ProvStore, enrollment: Enrollment, reading_id
         prov_type="enrollment",
         extent=None,
         attributes={
-            "subject_id": participant_key(enrollment.key),
+            "subject_id": subject,
             "scope": enrollment.scope,
             "sessions": record["sessions"],
             "excluded_session": enrollment.excluded_session,

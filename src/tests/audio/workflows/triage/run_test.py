@@ -25,6 +25,13 @@ from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage import run as run_module
 from senselab.audio.workflows.triage import vocabulary as vocabulary_module
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.identity import (
+    PARTICIPANT_KEY,
+    SESSION_KEY,
+    IdentityLabelError,
+    RecordingIdentity,
+    identity_of,
+)
 from senselab.audio.workflows.triage.nodes import routing as routing_module
 from senselab.audio.workflows.triage.nodes.admit import AdmitResult
 from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY
@@ -998,7 +1005,7 @@ class TestFreshArtifactsDir:
 
 
 class TestTheEntityPath:
-    """Run roots nest under the stem's BIDS entities, mirroring the input tree."""
+    """Run roots nest under the recording's participant and session, as ADMIT records them."""
 
     @pytest.mark.parametrize(
         ("stem", "expected"),
@@ -1017,12 +1024,22 @@ class TestTheEntityPath:
         ],
     )
     def test_it_reads_the_subject_and_session_entities(self, stem: str, expected: tuple[str, ...]) -> None:
-        """Chunks are split on ``_``, so a label may itself contain hyphens; an empty label is none."""
-        assert entity_subdir(stem) == (Path(*expected) if expected else Path("."))
+        """With no hint, the stem's entities place the run: a label may contain hyphens, an empty one is none."""
+        assert entity_subdir(identity_of(stem)) == (Path(*expected) if expected else Path("."))
+
+    def test_a_declared_identity_places_the_run_whatever_the_stem(self) -> None:
+        """A hint's participant and session are the folders, as declared."""
+        hint = AudioHints(metadata={PARTICIPANT_KEY: "P7", SESSION_KEY: "visit-2"})
+        assert entity_subdir(identity_of("recording-0042", hint)) == Path("P7", "visit-2")
+
+    def test_a_label_that_cannot_name_a_folder_is_refused(self) -> None:
+        """A slash would place the run outside its participant's folder."""
+        with pytest.raises(IdentityLabelError):
+            entity_subdir(RecordingIdentity(participant="../x", session=None, task_id="t"))
 
     def test_a_stem_carrying_neither_entity_stays_flat(self, tmp_path: Path) -> None:
         """A non-BIDS filename lands directly under the out dir."""
-        layout = prepare_run_layout(tmp_path / "out", "recording")
+        layout = prepare_run_layout(tmp_path / "out", "recording", identity_of("recording"))
         assert layout.entity_dir == tmp_path / "out"
         assert layout.root.parent == tmp_path / "out"
 
@@ -1030,7 +1047,7 @@ class TestTheEntityPath:
         """``entity_dir`` is the run root's parent, and every directory exists."""
         out_dir = tmp_path / "out"
         stem = "sub-SUBJ01_ses-SES01_task-ka"
-        layout = prepare_run_layout(out_dir, stem)
+        layout = prepare_run_layout(out_dir, stem, identity_of(stem))
         assert layout.entity_dir == out_dir / "sub-SUBJ01" / ("ses-SES01")
         assert layout.root.parent == layout.entity_dir
         assert layout.root.name.startswith(f"{stem}_")
@@ -1040,8 +1057,9 @@ class TestTheEntityPath:
     def test_two_runs_in_one_second_stay_apart_under_the_same_entity_dir(self, tmp_path: Path) -> None:
         """The collision suffix applies to the leaf; the shared parents are reused, not refused."""
         out_dir = tmp_path / "out"
-        first = prepare_run_layout(out_dir, "sub-01_ses-02_task-vowel")
-        second = prepare_run_layout(out_dir, "sub-01_ses-02_task-vowel")
+        stem = "sub-01_ses-02_task-vowel"
+        first = prepare_run_layout(out_dir, stem, identity_of(stem))
+        second = prepare_run_layout(out_dir, stem, identity_of(stem))
         assert first.entity_dir == second.entity_dir
         assert first.root != second.root
 

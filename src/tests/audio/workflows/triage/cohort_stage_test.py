@@ -40,6 +40,7 @@ from senselab.audio.workflows.triage.cohort_stage import (
     build_quantile_artefact,
     cohort_attributes,
     compare_speaker,
+    condition_blocks,
     enroll_participant,
     enroll_session,
     exclusive_pieces,
@@ -50,6 +51,7 @@ from senselab.audio.workflows.triage.cohort_stage import (
     write_cohort_unavailable,
 )
 from senselab.audio.workflows.triage.decision import ANNOTATION, REVIEW
+from senselab.audio.workflows.triage.identity import undeclared_session
 from senselab.audio.workflows.triage.nodes.common import find_measurement, find_measurements
 from senselab.utils.prov_store import ProvStore
 
@@ -562,3 +564,15 @@ def test_a_recording_is_compared_with_its_session_enrollment_left_out() -> None:
     assert talker["enrollment"]["excluded_recording"] == "sub-a_ses-1_task-rainbow-passage-1"
     assert talker["enrollment"]["recordings"] == ["sub-a_ses-1_task-rainbow-passage-0"]
     assert not talker[POOL_TARGET]["match"] and talker["nonmatch"] == [POOL_TARGET]
+
+
+def test_recordings_declaring_no_session_are_no_session_to_the_condition_checks() -> None:
+    """A participant's session-less pool has no session summary and is no other session's."""
+    sessions = [
+        ("sub-a/ses-1", [_facts("a", "rainbow-passage", session="sub-a/ses-1")]),
+        (undeclared_session("sub-a"), [_facts("b", "rainbow-passage", session=None)]),
+    ]
+    blocks = condition_blocks(sessions)
+    assert blocks[undeclared_session("sub-a")]["session"] is None
+    assert blocks[undeclared_session("sub-a")]["other_sessions"] is None
+    assert blocks["sub-a/ses-1"]["other_sessions"] is None

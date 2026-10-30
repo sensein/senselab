@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -267,19 +269,41 @@ def test_the_transcript_fixture_is_what_this_script_writes() -> None:
         assert fs.paragraph(entries, case["marks"], script._agreement_word) == case["html"], case["name"]
 
 
-def test_a_listen_set_naming_a_labelled_participant_is_refused(tmp_path: Path) -> None:
-    """r37 round 3 let two labelled participants through; the build now fails unless one is allowed on purpose."""
+def test_a_listen_set_naming_a_labelled_participant_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """r37 round 3 let two labelled participants through; the build now fails unless one is allowed on purpose.
+
+    The participants are the extract's, its runs' recorded identity: no stem is parsed, so a stem that names
+    no ``sub-`` entity is checked as well as one that does.
+    """
     labels = tmp_path / "owner_labels"
     labels.mkdir()
-    entry = {"stem": "sub-SUBJ22_ses-A_task-x", "owner_label": "ok"}
+    entry = {"stem": "rec-22a", "owner_label": "ok"}
     (labels / "round.json").write_text(json.dumps({"schema": "s", "entries": [entry]}))
-    (labels / "older.tsv").write_text("stem\tnote\nsub-SUBJ23_ses-B_task-y\t\n")
-    assert script.labelled_participants(labels) == {"sub-SUBJ22", "sub-SUBJ23"}
-    stems = ["sub-SUBJ22_ses-C_task-z", "sub-fresh_ses-D_task-z", "sub-SUBJ23_ses-E_task-z"]
-    assert script.already_labelled(stems, labels) == [stems[0], stems[2]]
-    assert script.already_labelled(stems, labels, ["sub-SUBJ22"]) == [stems[2]]
+    (labels / "older.tsv").write_text("stem\tnote\nrec-23a\t\nrec-gone\t\n")
+    assert script.labelled_stems(labels) == {"rec-22a", "rec-23a", "rec-gone"}
+    participants = {"rec-22a": "P22", "rec-23a": "P23", "rec-22b": "P22", "rec-fresh": "P99", "rec-23b": "P23"}
+    stems = ["rec-22b", "rec-fresh", "rec-23b"]
+    labelled = script.labelled_stems(labels)
+    assert script.already_labelled(stems, labelled, participants) == ([stems[0], stems[2]], ["rec-gone"])
+    assert script.already_labelled(stems, labelled, participants, ["P22"]) == ([stems[2]], ["rec-gone"])
+    assert script.already_labelled(stems, labelled, participants, ["rec-23a"]) == ([stems[0]], ["rec-gone"])
+    extract = tmp_path / "review.jsonl"
+    header = {"schema": script.EXTRACT_SCHEMA, "version": script.EXTRACT_VERSION}
+    records = [{"stem": stem, "participant": participant} for stem, participant in participants.items()]
+    extract.write_text("\n".join(json.dumps(line) for line in (header, *records)) + "\n")
     listing = tmp_path / "listen.tsv"
     listing.write_text("stem\n" + "\n".join(stems) + "\n")
-    argv = ["render", str(tmp_path / "none.jsonl"), "--out", str(tmp_path / "page"), "--stems", str(listing)]
+    argv = ["render", str(extract), "--out", str(tmp_path / "page"), "--stems", str(listing)]
     assert script.main([*argv, "--exclude-labelled", str(labels)]) == 2
+    err = capsys.readouterr().err
+    assert "refusing" in err and "not in the extract" in err and "rec-gone" in err
     assert not (tmp_path / "page").exists()
+    assert script.main([*argv, "--exclude-labelled", str(labels), "--ignore-unknown-labelled"]) == 2
+    err = capsys.readouterr().err
+    assert "['P22', 'P23']" in err
+    assert not (tmp_path / "page").exists()
+    allowed = ["--allow-labelled", "rec-22a,P23", "--ignore-unknown-labelled"]
+    assert script.main([*argv, "--exclude-labelled", str(labels), *allowed]) == 0
+    assert (tmp_path / "page").exists()

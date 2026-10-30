@@ -12,6 +12,8 @@ from typing import Any
 
 import pytest
 
+from senselab.audio.workflows.triage.identity import identity_of
+
 _SCRIPT = Path(__file__).resolve().parents[5] / "scripts" / "free_speech_review_page.py"
 _SPEC = importlib.util.spec_from_file_location("free_speech_review_page", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -56,13 +58,14 @@ def _word(index: int, text: str, *, bracketed: bool = False) -> dict[str, Any]:
     )
 
 
-def _store(tmp_path: Path, stem: str, records: list[dict[str, Any]]) -> Path:
+def _store(tmp_path: Path, stem: str, records: list[dict[str, Any]], *, identity: bool = True) -> Path:
     """Write a run directory holding one store.
 
     Args:
         tmp_path: The temporary root.
         stem: The BIDS stem, without a timestamp.
         records: The store's records.
+        identity: Whether a ``recording`` stream records the identity the stem names, as ADMIT writes it.
 
     Returns:
         The run directory.
@@ -70,6 +73,9 @@ def _store(tmp_path: Path, stem: str, records: list[dict[str, Any]]) -> Path:
     participant, session = stem.split("_")[0], stem.split("_")[1]
     run_root = tmp_path / participant / session / f"{stem}_20260101-000000"
     (run_root / "run").mkdir(parents=True)
+    if identity:
+        attributes = {"name": "recording", **identity_of(stem).as_attributes()}
+        records = [_entity("stream-recording", "stream", attributes, [0.0, 1.0]), *records]
     (run_root / "run" / "store.jsonl").write_text("\n".join(json.dumps(record) for record in records) + "\n")
     return run_root
 
@@ -292,12 +298,31 @@ def test_recording_record_reads_the_live_generation(tmp_path: Path) -> None:
     assert row is not None
     assert row["rel"] == "withheld"
     assert row["p"] == "sub-aaa"
+    assert row["ses"] == "ses-bbb"
     assert row["fam"] == "free-speech"
     assert row["stem"] == _FAMILY_STEM
     assert row["nw"] == 3
     assert row["nl"] == 2
     assert row["w"][1] == ["[UH]", 1, -1]
     assert row["f"] == []
+
+
+def test_recording_record_reads_the_recorded_identity_and_none_without_one(tmp_path: Path) -> None:
+    """The participant and session are what the run recorded; a store that records none is its own group."""
+    records = [_word(0, "hello"), _verdict("as_is")]
+    row = page.recording_record(_store(tmp_path / "old", _FAMILY_STEM, records, identity=False), None)
+    assert row is not None
+    assert (row["p"], row["ses"], row["stem"]) == (_FAMILY_STEM, "", _FAMILY_STEM)
+
+
+def test_the_jump_list_shortens_any_participant_label(tmp_path: Path) -> None:
+    """A ``sub-`` prefix is dropped where present; a label without one is kept, both to twelve characters."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-abcdefghijklmnop"))
+    corpus.add(_row("P0123456789abcdef"))
+    document = page.render(corpus, "Review")
+    assert '<span class="jp">abcdefghijkl</span>' in document
+    assert '<span class="jp">P0123456789a</span>' in document
 
 
 def test_recording_record_skips_a_family_outside_the_pattern(tmp_path: Path) -> None:

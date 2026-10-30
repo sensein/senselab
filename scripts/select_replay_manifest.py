@@ -7,8 +7,11 @@ r"""Write the replay manifest: every recording of the AIRWAY families, and every
 ``RECORDING_VECTORS.parquet`` is the corpus table ``recording_vectors.py`` writes; its ``run_dir``
 is relative to ``--out-root``, the directory the corpus runs live under. Each selected row becomes
 one JSONL object carrying ``stem``, ``enhanced`` (``<out-root>/<run_dir>/run/streams/enhanced.flac``,
-the path the extend drivers derive a run root from), ``declared_family``, ``verdict`` and
-``selected_by`` (``family``, ``incomplete`` or both).
+the path the extend drivers derive a run root from), ``declared_family``, ``verdict``, ``selected_by``
+(``family``, ``incomplete`` or both), and the run's recorded identity as the table carries it
+(``participant``, ``session``, ``task`` and their ``*_from`` sources; all null for a run that records none).
+A corpus pass groups the manifest's rows by those columns, so a table built before it carried them is
+refused: rebuild the corpus table.
 
 ``--branch`` names the branch whose in-family rows are selected (``AIRWAY`` by default); a row is
 also selected where its ``run_status`` is ``incomplete``, unless ``--no-incomplete``. The selection is in
@@ -22,12 +25,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
+import pyarrow.parquet as pq
 
+from senselab.audio.workflows.triage.identity import ROW_PARTICIPANT, ROW_SESSION, ROW_SOURCES, ROW_TASK
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
 from senselab.audio.workflows.triage.vocabulary import RunStatus
+
+IDENTITY_COLUMNS = (ROW_PARTICIPANT, ROW_SESSION, ROW_TASK, *ROW_SOURCES.values())
+"""The corpus table's identity columns, copied onto every manifest row."""
 
 
 def select(table: pd.DataFrame, *, branch: str, include_incomplete: bool) -> pd.DataFrame:
@@ -52,11 +61,16 @@ def select(table: pd.DataFrame, *, branch: str, include_incomplete: bool) -> pd.
     return chosen
 
 
+def _null(value: object) -> object:
+    """A table value as JSON writes it: a pandas missing value becomes None."""
+    return None if value is None or (isinstance(value, float) and pd.isna(value)) else value
+
+
 def main() -> int:
     """Write the manifest and print what it holds.
 
     Returns:
-        0.
+        0; 2 when the table carries no identity columns.
     """
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", maxsplit=1)[0] if __doc__ else None)
     parser.add_argument("table", type=Path, help="recording_vectors.parquet")
@@ -68,18 +82,27 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    table = pd.read_parquet(args.table, columns=["stem", "run_dir", "declared_family", "verdict", "run_status"])
+    absent = [name for name in IDENTITY_COLUMNS if name not in pq.read_schema(args.table).names]
+    if absent:
+        print(
+            f"refusing: {args.table} carries no {', '.join(absent)} column; rebuild the corpus table",
+            file=sys.stderr,
+        )
+        return 2
+    columns = ["stem", "run_dir", "declared_family", "verdict", "run_status", *IDENTITY_COLUMNS]
+    table = pd.read_parquet(args.table, columns=columns)
     chosen = select(table, branch=args.branch, include_incomplete=not args.no_incomplete)
     with args.out.open("w") as handle:
-        for row in chosen.itertuples(index=False):
+        for row in chosen.to_dict(orient="records"):
             handle.write(
                 json.dumps(
                     {
-                        "stem": row.stem,
-                        "enhanced": str(args.out_root / str(row.run_dir) / "run" / "streams" / "enhanced.flac"),
-                        "declared_family": row.declared_family,
-                        "verdict": row.verdict,
-                        "selected_by": row.selected_by,
+                        "stem": row["stem"],
+                        "enhanced": str(args.out_root / str(row["run_dir"]) / "run" / "streams" / "enhanced.flac"),
+                        "declared_family": _null(row["declared_family"]),
+                        "verdict": row["verdict"],
+                        "selected_by": row["selected_by"],
+                        **{name: _null(row[name]) for name in IDENTITY_COLUMNS},
                     }
                 )
                 + "\n"

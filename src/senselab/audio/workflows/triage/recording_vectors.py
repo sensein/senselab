@@ -1,8 +1,9 @@
 """One compact row per recording, for the corpus and recording views.
 
-Reads finished triage stores and emits a single parquet with one row per recording: three identity
-columns, every measurement the graph writes, the decision record, and the drawable content of the
-summary figure as fixed-layout binary blobs.
+Reads finished triage stores and emits a single parquet with one row per recording: the identity
+ADMIT recorded for its run (participant, session and task, and where each was read from), every
+measurement the graph writes, the decision record, and the drawable content of the summary figure as
+fixed-layout binary blobs.
 
 The byte layout of every binary column and the nullability of every scalar are specified in
 ``specs/20260922-compact-recording-vectors/schema.md``, which is the interface a browser decodes
@@ -30,10 +31,19 @@ import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.identity import (
+    ADMIT_NODE,
+    RECORDING_STREAM,
+    ROW_TASK,
+    RecordingIdentity,
+    admit_choice,
+    identity_columns,
+    identity_from_attributes,
+)
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD, standing_task_extents
 from senselab.utils import fastio
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 30
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -62,10 +72,7 @@ UNKNOWN_CODE = 255
 
 REDACTION_NAME = "redaction"
 _ROLE_INDEX = re.compile(r"_\d+$")
-_TIMESTAMP = re.compile(r"_\d{8}-\d{6}$")
-_PARTICIPANT = re.compile(r"(sub-[^_]+)")
-_SESSION = re.compile(r"(ses-[^_]+)")
-_TASK = re.compile(r"task-(.+)$")
+_TIMESTAMP = re.compile(r"_\d{8}-\d{6}(?:-\d+)?$")
 
 SCALAR_MEASUREMENTS = (
     "breath_coverage_fraction",
@@ -470,28 +477,31 @@ def stem_of(run_root: Path) -> str:
         run_root: The directory holding ``run/`` and ``released/``.
 
     Returns:
-        The BIDS stem, with the launch timestamp removed.
+        The stem, with the launch timestamp and any same-second collision suffix removed.
     """
     return _TIMESTAMP.sub("", run_root.name)
 
 
-def identity(stem: str) -> tuple[str | None, str | None, str | None]:
-    """Participant, session and task, from a stem.
+def view_identity(view: StoreView) -> RecordingIdentity | None:
+    """The identity ADMIT recorded for a run, read from its store view.
+
+    The same record :func:`~senselab.audio.workflows.triage.identity.recorded_identity` reads from a
+    ``ProvStore``, so a corpus table and a pass that opens the store cannot disagree.
 
     Args:
-        stem: ``sub-…_ses-…_task-…``.
+        view: The store, read.
 
     Returns:
-        The three, each None when the stem does not carry it.
+        The identity on the latest live ``recording`` stream; where ADMIT refused the recording and wrote no
+        stream, the one on its last activity's parameters; None where ADMIT recorded none (a store written
+        before it recorded identity).
     """
-    participant = _PARTICIPANT.search(stem)
-    session = _SESSION.search(stem)
-    task = _TASK.search(stem)
-    return (
-        participant.group(1) if participant else None,
-        session.group(1) if session else None,
-        task.group(1) if task else None,
+    recording = view.last("stream", name=RECORDING_STREAM)
+    record = admit_choice(
+        recording.attributes if recording is not None else None,
+        [activity["parameters"] for activity in view.activities if activity.get("node") == ADMIT_NODE],
     )
+    return identity_from_attributes(record[0]) if record is not None else None
 
 
 def role_kind(role: Any) -> str | None:  # noqa: ANN401 -- a store attribute is any type
@@ -1054,7 +1064,7 @@ CLIP_CLAIM = "clip"
 WITHDRAW_VERB = "withdraw"
 CONTEST_VERB = "contest"
 RAW_DISRUPTIONS_MEASUREMENT = "disruptions_file"
-SQUIM_MEASUREMENT = "squim"
+TASK_SQUIM_MEASUREMENT = "task_squim"
 QUALITY_CHECKS = ("noise_floor", "low_snr", "clipping", "dropout")
 """The raw quality checks, in report order. The first two are noise, which enhancement can resolve;
 clipping and dropout are sample damage, which it cannot, so they are never counted as resolved."""
@@ -1262,22 +1272,17 @@ def _quality_columns(run_dir: Path, view: StoreView, clip: Mapping[str, Any]) ->
         clip: The row's clip columns, for the raw disruption reading.
 
     Returns:
-        The plain and enhanced noise floor and SNR estimate, the plain spans' median SQUIM, the
-        raw checks that fail, those the enhanced stream passes, and those it does not.
+        The plain and enhanced noise floor and SNR estimate, the median SQUIM over the task extent's
+        windows (the live ``task_squim`` measurement) and how many windows it read, the raw checks
+        that fail, those the enhanced stream passes, and those it does not.
     """
     plain_floor, plain_snr = _stream_noise(_stream_frames_dbfs(run_dir, view, "plain"))
     enhanced_floor, enhanced_snr = _stream_noise(_stream_frames_dbfs(run_dir, view, "enhanced"))
     bounds = evaluation_bounds()["quality"]
     floor_max, snr_min = float(bounds["floor_max_dbfs"]), float(bounds["snr_min_db"])
-    squim = [
-        e.attributes
-        for e in view.live("assertion")
-        if e.attributes.get("name") == SQUIM_MEASUREMENT and "stoi" in e.attributes
-    ]
-
-    def median(key: str) -> float | None:
-        values = [v for v in (_number(a.get(key)) for a in squim) if v is not None]
-        return float(np.median(values)) if values else None
+    task_squim = view.last("measurement", name=TASK_SQUIM_MEASUREMENT)
+    squim = {} if task_squim is None else task_squim.attributes
+    windows_n = squim.get("windows_n")
 
     raw: list[str] = []
     resolved: list[str] = []
@@ -1299,9 +1304,10 @@ def _quality_columns(run_dir: Path, view: StoreView, clip: Mapping[str, Any]) ->
         "q_plain_snr_db": plain_snr,
         "q_enhanced_floor_dbfs": enhanced_floor,
         "q_enhanced_snr_db": enhanced_snr,
-        "q_plain_squim_pesq": median("pesq"),
-        "q_plain_squim_stoi": median("stoi"),
-        "q_plain_squim_si_sdr": median("si_sdr"),
+        "q_task_squim_pesq": _number(squim.get("pesq")),
+        "q_task_squim_stoi": _number(squim.get("stoi")),
+        "q_task_squim_si_sdr": _number(squim.get("si_sdr")),
+        "q_task_squim_windows_n": None if windows_n is None else int(windows_n),
         "q_raw_issues": raw if assessed else None,
         "q_resolved_by_enhanced": resolved if assessed else None,
         "q_unresolved": [check for check in raw if check not in resolved] if assessed else None,
@@ -1365,7 +1371,8 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
         anomalies: Counted into, per measurement name the schema has no column for.
 
     Returns:
-        The row, or None when the store is unreadable or the fold has not been written yet.
+        The row, or None when the store is unreadable or the fold has not been written yet. A run that
+        records no identity still yields a row, its identity columns null.
     """
     run_dir = run_root / RUN_SUBDIR
     try:
@@ -1377,17 +1384,16 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
         return None
     decision = fold.attributes
     stem = stem_of(run_root)
-    participant, session, task = identity(stem)
+    recorded = identity_columns(view_identity(view))
 
-    recording = view.last("stream", name="recording")
+    recording = view.last("stream", name=RECORDING_STREAM)
     conditioned = view.last("stream", name="preemphasised") or view.last("stream", name="plain")
     duration_s = recording.extent[1] if recording and recording.extent else None
     conditioned_s = conditioned.extent[1] if conditioned and conditioned.extent else None
     scale_s = conditioned_s or duration_s or 0.0
 
     row: dict[str, Any] = {
-        "participant": participant,
-        "task": task,
+        **recorded,
         "verdict": decision.get("triage"),
         "run_status": decision.get("run_status"),
         "missing": [str(key) for key in decision["missing"]] if isinstance(decision.get("missing"), list) else None,
@@ -1395,7 +1401,6 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
         "reason_keys": (
             [str(key) for key in decision["reason_keys"]] if isinstance(decision.get("reason_keys"), list) else None
         ),
-        "session": session,
         "stem": stem,
         "run_dir": str(run_root.relative_to(root)) if run_root.is_relative_to(root) else str(run_root),
         "declared_family": decision.get("declared_family"),
@@ -1600,6 +1605,9 @@ def _fields() -> list[pa.Field]:
         pa.field("reason", pa.string()),
         pa.field("reason_keys", pa.list_(pa.string())),
         pa.field("session", pa.string()),
+        pa.field("participant_from", pa.string()),
+        pa.field("session_from", pa.string()),
+        pa.field("task_from", pa.string()),
         pa.field("stem", pa.string()),
         pa.field("run_dir", pa.string()),
         pa.field("declared_family", pa.string()),
@@ -1739,9 +1747,10 @@ def _fields() -> list[pa.Field]:
         pa.field("q_plain_snr_db", pa.float64()),
         pa.field("q_enhanced_floor_dbfs", pa.float64()),
         pa.field("q_enhanced_snr_db", pa.float64()),
-        pa.field("q_plain_squim_pesq", pa.float64()),
-        pa.field("q_plain_squim_stoi", pa.float64()),
-        pa.field("q_plain_squim_si_sdr", pa.float64()),
+        pa.field("q_task_squim_pesq", pa.float64()),
+        pa.field("q_task_squim_stoi", pa.float64()),
+        pa.field("q_task_squim_si_sdr", pa.float64()),
+        pa.field("q_task_squim_windows_n", pa.int32()),
         pa.field("q_raw_issues", pa.list_(pa.string())),
         pa.field("q_resolved_by_enhanced", pa.list_(pa.string())),
         pa.field("q_unresolved", pa.list_(pa.string())),
@@ -1995,34 +2004,53 @@ def shard_of(stem: str, slices: int) -> int:
     return int(hashlib.sha1(stem.encode(), usedforsecurity=False).hexdigest()[:8], 16) % slices
 
 
-def recording_dirs(root: Path, *, threads: int = fastio.DEFAULT_THREADS) -> Iterator[Path]:
-    """Every run directory under a tree, tolerating one that is still being written.
+def is_run_root(path: Path) -> bool:
+    """Whether a directory is a run root: it holds ``run/store.jsonl``.
 
     Args:
-        root: The tree of ``sub-*/ses-*/<stem>_<timestamp>/`` directories.
-        threads: How many participants are listed at once.
+        path: The directory.
+
+    Returns:
+        True when it holds a store.
+    """
+    return (path / RUN_SUBDIR / STORE_NAME).exists()
+
+
+def recording_dirs(root: Path, *, threads: int = fastio.DEFAULT_THREADS) -> Iterator[Path]:
+    """Every run directory under a tree, at any depth, tolerating one that is still being written.
+
+    A run root is not descended into, so a tree may nest its runs as deep as its layout does
+    (``sub-*/ses-*/<stem>_<timestamp>/`` in a BIDS-shaped corpus) without this naming any level.
+
+    Args:
+        root: The tree of run directories.
+        threads: How many top-level directories are listed at once.
 
     Yields:
-        Each directory holding a ``run/store.jsonl``, in sorted participant, session, recording order.
+        Each directory holding a ``run/store.jsonl``, in sorted path order.
     """
+    if is_run_root(root):
+        yield root
+        return
     for recordings in fastio.ordered_map(_recordings_of, _listdir(root), threads=threads):
         yield from recordings
 
 
-def _recordings_of(participant: Path) -> list[Path]:
-    """The run directories under one participant, sorted.
+def _recordings_of(directory: Path) -> list[Path]:
+    """The run directories at or under one directory, sorted.
 
     Args:
-        participant: A ``sub-*`` directory.
+        directory: A directory of the tree (a ``sub-*`` directory in a BIDS-shaped corpus).
 
     Returns:
-        Each ``ses-*/<stem>_<timestamp>/`` directory holding a ``run/store.jsonl``.
+        The directory itself when it is a run root (:func:`is_run_root`); otherwise every run root beneath
+        it, at any depth, in sorted path order. A ``run/`` directory is a run's own, whose store is not
+        written yet, and is not descended into.
     """
+    if is_run_root(directory):
+        return [directory]
     return [
-        recording
-        for session in _listdir(participant)
-        for recording in _listdir(session)
-        if (recording / RUN_SUBDIR / STORE_NAME).exists()
+        recording for child in _listdir(directory) if child.name != RUN_SUBDIR for recording in _recordings_of(child)
     ]
 
 
@@ -2050,6 +2078,8 @@ class ScanReport:
         written: Rows written.
         incomplete: Directories whose store carries no VERDICT fold yet.
         unreadable: Directories whose store could not be read.
+        unidentified: The ``run_dir`` of every row whose run records no identity (a store written before
+            ADMIT recorded one); the row is written, its identity columns null.
         superseded: Re-runs of a stem this shard skipped in favour of a later one.
         anomalies: Measurement names the store carried that the schema does not.
     """
@@ -2058,6 +2088,7 @@ class ScanReport:
     written: int = 0
     incomplete: list[str] = field(default_factory=list)
     unreadable: list[str] = field(default_factory=list)
+    unidentified: list[str] = field(default_factory=list)
     superseded: list[str] = field(default_factory=list)
     anomalies: dict[str, int] = field(default_factory=dict)
 
@@ -2065,32 +2096,51 @@ class ScanReport:
 def latest_recordings(
     root: Path, slice_index: int, slices: int, report: ScanReport, *, walk_threads: int = fastio.DEFAULT_THREADS
 ) -> list[Path]:
-    """The run directory this shard reads for each stem it owns: the lexically latest.
+    """The run directory this shard reads for each recording it owns: the lexically latest.
+
+    A recording is a stem in one folder: its run directories share a parent and differ only in their
+    launch timestamp. Two recordings with the same stem in different folders are both read.
 
     Args:
         root: The tree of finished run directories.
         slice_index: This shard's index.
         slices: How many shards share the tree.
         report: Counted into: considered and superseded run directories.
-        walk_threads: How many participants are listed at once while finding run directories.
+        walk_threads: How many top-level directories are listed at once while finding run directories.
 
     Returns:
-        One run directory per stem, in stem order.
+        One run directory per recording, in (folder, stem) order.
     """
-    latest: dict[str, Path] = {}
+    latest: dict[tuple[str, str], Path] = {}
     for recording in recording_dirs(root, threads=walk_threads):
         stem = stem_of(recording)
         if shard_of(stem, slices) != slice_index:
             continue
         report.considered += 1
-        previous = latest.get(stem)
+        key = (recording_folder(recording, root), stem)
+        previous = latest.get(key)
         if previous is None or recording.name > previous.name:
             if previous is not None:
                 report.superseded.append(previous.name)
-            latest[stem] = recording
+            latest[key] = recording
         else:
             report.superseded.append(recording.name)
     return [recording for _, recording in sorted(latest.items())]
+
+
+def recording_folder(run_root: Path, root: Path) -> str:
+    """The folder a run directory sits in, relative to the scan root: half of the key a recording is read by.
+
+    Args:
+        run_root: The run directory.
+        root: The scan root.
+
+    Returns:
+        The run directory's parent relative to ``root`` (``.`` at the root), or its absolute parent when it
+        lies outside ``root``.
+    """
+    parent = run_root.parent
+    return str(parent.relative_to(root)) if parent.is_relative_to(root) else str(parent)
 
 
 def scan(
@@ -2108,7 +2158,7 @@ def scan(
         root: The tree of finished run directories.
         slice_index: This shard's index.
         slices: How many shards share the tree.
-        walk_threads: How many participants are listed at once while finding run directories.
+        walk_threads: How many top-level directories are listed at once while finding run directories.
         recordings: The run directories to read, as :func:`latest_recordings` chose them; walked when None.
         report: The report those were counted into, continued; a new one when None.
 
@@ -2128,6 +2178,9 @@ def scan(
         if row is None:
             report.incomplete.append(recording.name)
             continue
+        if row[ROW_TASK] is None:
+            # identity_columns names a task for every recorded identity, so a null task is a run with none.
+            report.unidentified.append(str(row["run_dir"]))
         rows.append(row)
         report.written += 1
     return rows, report

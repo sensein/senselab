@@ -2,7 +2,10 @@
 
 Both read a run root's store the way :mod:`~senselab.audio.workflows.triage.recording_vectors` does,
 from the fold's own record, so neither can disagree with the decision. ``triage_decisions`` carries
-the decision and the decisive evidence items; ``triage_evidence`` every item the fold weighed.
+the decision and the decisive evidence items; ``triage_evidence`` every item the fold weighed. Its
+``participant``, ``session`` and ``task`` are the run's recorded identity
+(:func:`~senselab.audio.workflows.triage.recording_vectors.view_identity`), the task being the recorded
+``declared_task_id``, lower-cased; all three are null for a run that records none.
 ``specs/20261007-task-events-in-background/design.md`` ("Decision table") holds the vocabulary.
 """
 
@@ -25,13 +28,13 @@ from senselab.audio.workflows.triage.recording_vectors import (
     STORE_NAME,
     StoreView,
     _extent_columns,
-    identity,
     read_store,
     stem_of,
+    view_identity,
 )
 from senselab.audio.workflows.triage.vocabulary import release_ground_key
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 DECISIONS_NAME = "triage_decisions"
 EVIDENCE_NAME = "triage_evidence"
 FIGURE_PATH = Path("summary") / "summary.pdf"
@@ -173,7 +176,7 @@ def decision_rows(run_root: Path, root: Path) -> tuple[dict[str, Any], list[dict
         return None
     decision = fold.attributes
     stem = stem_of(run_root)
-    participant, session, task = identity(stem)
+    identity = view_identity(view)
     recording = view.last("stream", name="recording")
     duration_s = recording.extent[1] if recording and recording.extent else None
     extent = _extent_columns(view, duration_s)
@@ -181,9 +184,9 @@ def decision_rows(run_root: Path, root: Path) -> tuple[dict[str, Any], list[dict
     items = [dict(entry) for entry in decision.get("evidence") or () if isinstance(entry, Mapping)]
     figure = run_root / FIGURE_PATH
     row = {
-        "participant": participant,
-        "session": session,
-        "task": task,
+        "participant": identity.participant if identity else None,
+        "session": identity.session if identity else None,
+        "task": identity.task_id if identity else None,
         "declared_family": decision.get("declared_family"),
         "stem": stem,
         "run_dir": str(run_root.relative_to(root)) if run_root.is_relative_to(root) else str(run_root),

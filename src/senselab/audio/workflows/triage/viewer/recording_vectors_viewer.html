@@ -923,7 +923,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = SelectionK
 'use strict';
 
 var SchemaDecode = (function () {
-  var SCHEMA_VERSION = 28;
+  var SCHEMA_VERSION = 30;
   var DICTIONARY_KEY = 'senselab.recording_vectors.dictionary';
   var TIME_SCALE = 65535;
   var TRACE_POINTS = 256;
@@ -1439,13 +1439,13 @@ var SchemaAxes = (function () {
   var IDENTITY = [
     column({
       name: 'participant', kind: 'categorical', group: 'identity', shortKey: 'sub-',
-      nullMeans: 'the stem carries no sub-',
+      nullMeans: 'the run records no identity, or no participant',
     }),
-    column({ name: 'task', kind: 'categorical', group: 'identity', nullMeans: 'the stem carries no task-' }),
+    column({ name: 'task', kind: 'categorical', group: 'identity', nullMeans: 'the run records no identity' }),
     column({ name: 'verdict', kind: 'categorical', group: 'decision', nullMeans: 'never null' }),
     column({
       name: 'session', kind: 'categorical', group: 'identity', shortKey: 'ses-',
-      nullMeans: 'the stem carries no ses-',
+      nullMeans: 'the run records no identity, or no session',
     }),
     column({ name: 'declared_family', kind: 'categorical', group: 'identity', nullMeans: 'nothing was declared' }),
     column({ name: 'release', kind: 'categorical', group: 'decision', nullMeans: 'the fold wrote none' }),
@@ -1769,9 +1769,10 @@ var SchemaAxes = (function () {
     column({ name: 'q_plain_snr_db', kind: 'numeric', group: 'evaluate: quality', unit: 'dB', nullMeans: 'no plain stream stored' }),
     column({ name: 'q_enhanced_floor_dbfs', kind: 'numeric', group: 'evaluate: quality', unit: 'dBFS', nullMeans: 'no enhanced stream stored' }),
     column({ name: 'q_enhanced_snr_db', kind: 'numeric', group: 'evaluate: quality', unit: 'dB', nullMeans: 'no enhanced stream stored' }),
-    column({ name: 'q_plain_squim_pesq', kind: 'numeric', group: 'evaluate: quality', nullMeans: 'no SQUIM measurement' }),
-    column({ name: 'q_plain_squim_stoi', kind: 'numeric', group: 'evaluate: quality', nullMeans: 'no SQUIM measurement' }),
-    column({ name: 'q_plain_squim_si_sdr', kind: 'numeric', group: 'evaluate: quality', unit: 'dB', nullMeans: 'no SQUIM measurement' }),
+    column({ name: 'q_task_squim_pesq', kind: 'numeric', group: 'evaluate: quality', nullMeans: 'no task-extent SQUIM measurement' }),
+    column({ name: 'q_task_squim_stoi', kind: 'numeric', group: 'evaluate: quality', nullMeans: 'no task-extent SQUIM measurement' }),
+    column({ name: 'q_task_squim_si_sdr', kind: 'numeric', group: 'evaluate: quality', unit: 'dB', nullMeans: 'no task-extent SQUIM measurement' }),
+    column({ name: 'q_task_squim_windows_n', kind: 'numeric', group: 'evaluate: quality', nullMeans: 'no task-extent SQUIM measurement' }),
     column({ name: 'q_raw_issues', kind: 'set', group: 'evaluate: quality', nullMeans: 'empty means no raw issue' }),
     column({ name: 'q_resolved_by_enhanced', kind: 'set', group: 'evaluate: quality', nullMeans: 'empty means nothing resolved' }),
     column({ name: 'q_unresolved', kind: 'set', group: 'evaluate: quality', nullMeans: 'empty means nothing still flagged' }),
