@@ -590,6 +590,24 @@ from the built wheel in a separate env.
   so no second protocol survives.
 - **1.x import side effects** stay until Phase 5.
 
+**Consolidation inventory (P-37).** These are the known duplicates in 1.x. Each phase removes the
+ones it touches, and Phase 5's exit requires the list to be empty. Each consolidation keeps one
+engine with typed variants, never a flag per former caller.
+
+| Behaviour | Copies today | One implementation in 2.x |
+|---|---|---|
+| Worker protocol | `call_in_venv`, about 20 one-shot scripts, `serve_in_venv`, 4 bespoke workers | `serve_in_venv` in the worker runtime |
+| vLLM server | `vllm_server.py`, the PII reviewer's copy | `VllmServer` |
+| In-process model cache | a class-level dict per backend | the runtime model cache |
+| Device and dtype selection | per backend, with `DTYPE_MAP` mostly unused | the planner's placement plus backend tunables |
+| Config load, merge and hash | audio_analysis and triage loaders | one profile loader |
+| Result caches and keys | stage cache, result cache, `reproduce` step keys | one store, one canonical key (§4.8) |
+| BIDS entity parsing | 6 regex copies | the BIDS adapter |
+| Graph runners | triage runner, `reproduce/dag.py`, audio_analysis `run_pass` | one graph layer (§4.9) |
+| Backend dispatch | `isinstance` plus prefix tables, duplicated in `model_for_task` | the registry |
+| Parameter passing | `**kwargs`, `parameters`, named args, `config`, keyword-only args with no defaults | `Params` plus `backend_params` |
+| Corpus drivers | 15 `extend_*.py` scripts | pipelines over a dataset |
+
 ### 6.2 Phases
 
 Every phase ends with an adversarial round scoped to its new surfaces (P-35). Findings go into

@@ -267,6 +267,19 @@ it is amended here.
 - **Check**: design reviews confirm that hooks H-1..H-7 in `roadmap.md` stay possible. No 2.x phase
   takes on flywheel features.
 
+### P-37 One implementation per behaviour, consolidated without brittleness
+- **Status**: active
+- **Statement**: There are never multiple functions that do the same thing, nor chunks of code
+  copied with variants. Variants are expressed as typed parameters, strategies or backends over one
+  engine. Consolidation must not add brittleness: no caller-specific branches, no single-caller
+  flags, and every variant keeps its own contract test.
+- **Source**: owner, 2026-10-30: "eliminate function redundancy and consolidation without making it
+  brittle. there should not be multiple functions that do the "same" thing, or chunks of code copied
+  with variants".
+- **Check**: the duplicate-code check; the task registry refuses duplicate operations; an
+  adversarial duplicate-finding pass per phase; the consolidation inventory in design §6.1 is
+  emptied by Phase 5.
+
 ---
 
 ## Process principles
@@ -428,3 +441,5 @@ amending its origin.
 - 2026-10-30: added P-36 (flywheel as a roadmap goal) and `roadmap.md`. Phase 4 no longer ports
   triage as a pipeline: its measurements become tasks, and its decision layer waits for the
   flywheel.
+- 2026-10-30: added P-37 (one implementation per behaviour, consolidated without brittleness), with
+  its standard in `engineering.md` and the inventory in design §6.1.
