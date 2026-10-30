@@ -178,6 +178,39 @@ complies.
   principles as context moves. principles should allow modifying (add/delete/update)".
 - **Check**: every design decision for 2.x names the principles it serves or trades off.
 
+### P-22 Core runs on both sides of every environment boundary
+- **Status**: active
+- **Statement**: senselab core installs and imports in the host and inside every isolated
+  environment, across every Python version those environments use (3.10 and up today) and across
+  their numpy and pydantic ranges. Host and workers use the same core version, verified at
+  handshake.
+- **Source**: owner, 2026-10-30: "can senselab core be used across subprocess venvs so that install
+  works across python versions".
+- **Check**: core CI runs on the full Python range at the minimum and maximum numpy. Every env build
+  imports core and round-trips each data type over the wire.
+
+### P-23 Licenses are explicit and machine-readable
+- **Status**: active
+- **Statement**: Every model, code package, dataset and therefore every task call and every plan has
+  a machine-readable license record (SPDX where possible), with derived flags (commercial use,
+  copyleft, gated, unknown). A run can carry a license policy that the planner enforces before
+  execution. Licenses are recorded in provenance.
+- **Source**: owner, 2026-10-30: "one of the challenges of senselab is knowing what license a given
+  task uses (GPL/NC/apache, etc) which needs to be very clear and machine accessible".
+- **Check**: `sl.licenses(plan)` answers without running anything; CI fails on a catalogue model or
+  locked package without a license record.
+
+### P-24 Modalities share types; environments share by dependency set
+- **Status**: active
+- **Statement**: Audio, video and text share one timeline, annotation, embedding, record and
+  identity model, so cross-modal pipelines chain without glue. Environments are not owned by a
+  modality or a task: backends declare requirements, and backends whose combined requirements
+  resolve may share an environment and a worker.
+- **Source**: owner, 2026-10-30: "with audio/video/text processing enabled consider what
+  unions/intersections are across such processing (and knowing subprocess envs exist)".
+- **Check**: a video → audio → text pipeline needs no conversion code between nodes. The env
+  grouping is computed and recorded as data, not hand-assigned per module.
+
 ---
 
 ## Inherited principles
@@ -241,3 +274,6 @@ None yet.
 
 - 2026-10-30: register created. P-1..P-15 from the owner's requests in the API-refactor session;
   P-16..P-21 carried over from `CLAUDE.md` and the audio_analysis design.
+- 2026-10-30: added P-22 (core in every environment), P-23 (licenses), P-24 (cross-modal sharing)
+  from the owner's follow-up requests. Inherited principles keep ids P-16..P-21; new ids continue
+  from P-22 because ids are never renumbered.
