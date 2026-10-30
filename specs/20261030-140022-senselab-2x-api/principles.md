@@ -254,6 +254,19 @@ it is amended here.
 - **Check**: every test belongs to exactly one tier (marker). No test docstring narrates a
   measurement history (P-21). No parametrize id is a register number.
 
+### P-36 The flywheel is the roadmap goal; it informs, not forces
+- **Status**: active
+- **Statement**: senselab's long-term goal is a flywheel in which machines and humans iteratively
+  improve the system. Datasets, pipelines, annotations, reviews, fitting and model fine-tuning
+  happen as needed, and are evaluated and promoted by identity. 2.x builds none of it, but its
+  decisions must keep the hooks in `roadmap.md` possible. Triage's decision layer is rebuilt as a
+  flywheel application after 2.x rather than ported.
+- **Source**: owner, 2026-10-30: "triage should adopt a flywheel approach of a system that allows
+  machines and humans to iteratively improve the system ... make this a future roadmap goal that
+  should inform not force current decisions".
+- **Check**: design reviews confirm that hooks H-1..H-7 in `roadmap.md` stay possible. No 2.x phase
+  takes on flywheel features.
+
 ---
 
 ## Process principles
@@ -412,3 +425,6 @@ amending its origin.
     meaning.
 - 2026-10-30: fixed the P-23 Check field. The CI gate equals the run-time default, including
   transitive packages; the previous Check contradicted the statement.
+- 2026-10-30: added P-36 (flywheel as a roadmap goal) and `roadmap.md`. Phase 4 no longer ports
+  triage as a pipeline: its measurements become tasks, and its decision layer waits for the
+  flywheel.

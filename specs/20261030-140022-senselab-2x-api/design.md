@@ -150,7 +150,12 @@ directly.
 - **One timeline.** Every timed result is a `Span{start, end, source}` on its source clock. A
   synchronisation task produces a `TimeMap` (offset plus drift, with uncertainty) that projects
   between clocks.
-- **Results.** An `Annotation{span, label|value, score, producer}` is the per-item view;
+- **Results.**
+  - An `Annotation{span, label|value, score, producer, guideline}` is the per-item view.
+    `producer` is a human, an agent or a model; `guideline` is the annotation guideline version
+    for human or agent labels (roadmap hook H-1).
+  - Result models may carry an optional standard `uncertainty` field (H-5).
+  - The rest of this paragraph is unchanged:
   `Events`/`Intervals` are the columnar form at scale (Parquet or BIDS `events.tsv`). A
   `Transcript` is a tree of annotations (1.x `ScriptLine.chunks`). An `Embedding{vector, space}`
   has `space` equal to the resolved model identity.
@@ -650,13 +655,17 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
   - the merged config loader;
   - the generic `sl.signal` tier;
   - adoption of the env grouping (P-24).
-- Port audio_analysis, then triage (all B2AI coupling into `b2ai-voice`), then
-  explore_conversation and health_measurements. Add one cross-modal pipeline.
-- The triage gate is **adjudicated verdicts**: every changed verdict on the reference set is
-  explained with its cause, and an unexplained change blocks the phase.
+- Port audio_analysis, explore_conversation and health_measurements. Add one cross-modal
+  pipeline.
+- **Triage is not ported as a pipeline** (design call, from the owner's flywheel direction;
+  [`roadmap.md`](roadmap.md)).
+  - Its reusable measurements become generic tasks: task events, phonation, extents, quality,
+    PII. All B2AI coupling moves into a `b2ai-voice` dataset profile and task protocol.
+  - Its decision layer and orchestration stay on the frozen 1.x tag (Phase 0) for running
+    campaigns. After 2.x they are replaced by the flywheel (P-36).
 - Exit:
-  - triage runs on B2AI and on a constructed synthetic dataset by changing only the dataset
-    profile (P-12):
+  - a **protocol screening pipeline** composed from the ported measurement tasks runs on B2AI and
+    on a constructed synthetic dataset by changing only the dataset profile (P-12):
     - the synthetic dataset has a different entity scheme and task protocol;
     - its thresholds are declared `unfitted`, so they route to review;
     - every node runs or is typed-absent;
@@ -680,7 +689,7 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
 | 1 | 3–4 | the worker floor and the handshake |
 | 2 | 6–8 | CUDA parity, vLLM |
 | 3 | 6–10 | plan-fragment pool, resume on NFS |
-| 4 | 12–20 | the triage port and verdict adjudication |
+| 4 | 8–12 | dataset adapters and porting triage's measurements as generic tasks (the full triage port is replaced by the flywheel, P-36) |
 | 5 | 10–16 | about 30 tasks, MCP, tutorials |
 | pydra PRs | 4–8, in parallel | E1/E2 (the State refactor) |
 | fallback graph layer | 3–5, only if triggered | — |
@@ -701,7 +710,7 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
 - the run lifecycle and the single call shape (sections 4.2 and 4.7);
 - `fit` producing Profile artifacts (section 4.14);
 - the Phase 2 slice drawn from existing backends;
-- measured parity tolerances and the adjudicated triage gate;
+- measured parity tolerances; triage measurements ported as tasks, with its decision layer left for the flywheel;
 - vLLM-omni and vLLM ASR as the only new integrations;
 - the pydra gate at the start of Phase 3, with its fallback (section 4.9);
 - the license CI gate equal to the run-time default (section 4.13);
@@ -721,3 +730,7 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
 - **Also:** locked isolated envs (P-25), signals (P-26), license sets with raise by default
   (P-23), process principles (P-27..P-29), testing tiers (P-30) and engineering standards
   (P-31..P-35).
+- **Flywheel.** Triage's iteration on fixed recordings from one dataset is the brittleness the
+  flywheel is meant to remove. It is a post-2.x roadmap goal that informs, not forces
+  ([`roadmap.md`](roadmap.md), P-36). Phase 4 ports triage's measurements as tasks; its decision
+  layer is rebuilt later as the first flywheel application.
