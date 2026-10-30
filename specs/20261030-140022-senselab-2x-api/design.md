@@ -680,6 +680,8 @@ senselab borrows sklearn's conventions where they fit and declines its data and 
 
 ## 5. Packaging (P-13)
 
+- **`senselab-worker`:** stdlib + numpy only, installed into every isolated env (section 4.11).
+  Core depends on it, so the host and the workers run the same codec.
 - **`senselab-core` dependencies:** numpy, pydantic, pyyaml, filelock, xxhash, soundfile,
   huggingface-hub (resolution only), packaging. pyarrow becomes an optional `tables` extra.
 - **What core holds:**
