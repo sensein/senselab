@@ -1,5 +1,6 @@
 """Recordings, channel groups and audio."""
 
+import pickle
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -278,3 +279,31 @@ def test_audio_from_path_reads_the_header_once(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(soundfile, "info", spy)
     Audio.from_path(p)
     assert calls == [str(p)]
+
+
+@pytest.mark.logic
+def test_audio_pickles_and_deep_copies(tmp_path: Path) -> None:
+    """Pickling and deep copying keep identity, groups and samples; copies stay read-only mappings."""
+    for audio in (
+        Audio.from_array(numpy.arange(6.0, dtype=numpy.float32), 8_000),
+        Audio.from_path(write_wav(tmp_path)),
+    ):
+        for copy in (pickle.loads(pickle.dumps(audio)), audio.model_copy(deep=True)):
+            assert copy.identity == audio.identity and list(copy.groups) == list(audio.groups)
+            g, h = copy.groups["audio"], audio.groups["audio"]
+            assert isinstance(g, RegularGroup) and isinstance(h, RegularGroup)
+            assert g.frames == h.frames and numpy.array_equal(g.read(), h.read())
+            with pytest.raises(TypeError):
+                copy.groups["b"] = g  # type: ignore[index]
+
+
+@pytest.mark.logic
+def test_recording_round_trips_through_model_validate() -> None:
+    """A recording's dump validates back to a recording with the same groups."""
+    r = Recording(
+        groups={"ecg": _group(1, 250.0, 10)}, anchor=TimeAnchor(clock_id="dev", absolute_start_ns=None), identity="x"
+    )
+    back = Recording.model_validate(r.model_dump())
+    assert list(back.groups) == ["ecg"] and back.identity == "x"
+    with pytest.raises(TypeError):
+        del back.groups["ecg"]  # type: ignore[attr-defined]

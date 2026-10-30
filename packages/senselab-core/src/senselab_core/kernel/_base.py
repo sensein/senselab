@@ -1,10 +1,38 @@
 """Shared base model and field types of the kernel."""
 
 import math
-from typing import Annotated
+from collections.abc import Iterator, Mapping
+from typing import Annotated, TypeVar
 
 import numpy
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, Strict, StringConstraints
+
+K = TypeVar("K")
+V = TypeVar("V")
+
+
+class FrozenMapping(Mapping[K, V]):
+    """A read-only mapping that pickles and deep-copies; item assignment and deletion raise `TypeError`."""
+
+    __slots__ = ("_items",)
+
+    def __init__(self, items: Mapping[K, V]) -> None:
+        self._items = dict(items)
+
+    def __getitem__(self, key: K) -> V:
+        return self._items[key]
+
+    def __iter__(self) -> Iterator[K]:
+        return iter(self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __repr__(self) -> str:
+        return f"FrozenMapping({self._items!r})"
+
+    def __reduce__(self) -> tuple[type["FrozenMapping[K, V]"], tuple[dict[K, V]]]:
+        return type(self), (self._items,)
 
 
 class Frozen(BaseModel):

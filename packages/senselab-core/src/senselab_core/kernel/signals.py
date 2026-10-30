@@ -5,7 +5,6 @@ import os
 from collections.abc import Mapping
 from fractions import Fraction
 from pathlib import Path
-from types import MappingProxyType
 from typing import Annotated
 
 import numpy
@@ -22,7 +21,7 @@ from pydantic import (
 from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
 from senselab_worker.hashing import content_identity, sha256_bytes
 
-from senselab_core.kernel._base import Frozen, NonEmptyStr, NsArray, as_numeric_array, require_ns
+from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, NsArray, as_numeric_array, require_ns
 from senselab_core.kernel.time import TimeAnchor
 
 AUDIO_GROUP = "audio"
@@ -146,7 +145,7 @@ class IrregularGroup(Frozen):
 Groups = Annotated[
     Mapping[NonEmptyStr, RegularGroup | IrregularGroup],
     Field(min_length=1),
-    AfterValidator(lambda groups: MappingProxyType(dict(groups))),
+    AfterValidator(FrozenMapping),
     PlainSerializer(dict),
 ]
 """A non-empty read-only mapping of group name to group; serialised as a dict."""
