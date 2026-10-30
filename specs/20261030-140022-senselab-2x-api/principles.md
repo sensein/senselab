@@ -196,10 +196,17 @@ complies.
 - **Status**: active
 - **Statement**: Every model, code package, dataset and therefore every task call and every plan has
   a machine-readable license record (SPDX where possible), with derived flags (commercial use,
-  copyleft, gated, unknown). A run can carry a license policy that the planner enforces before
-  execution. Licenses are recorded in provenance.
+  copyleft, gated, unknown).
+  - Policies are expressed against named license sets (for example `permissive`, `copyleft-ok`,
+    `non-commercial-ok`) that users can define and combine.
+  - The planner enforces the policy before execution.
+  - A missing or unknown license raises by default. A policy flag can relax that to a warning,
+    and the relaxation is recorded.
+  - Licenses are recorded in provenance.
 - **Source**: owner, 2026-10-30: "one of the challenges of senselab is knowing what license a given
-  task uses (GPL/NC/apache, etc) which needs to be very clear and machine accessible".
+  task uses (GPL/NC/apache, etc) which needs to be very clear and machine accessible"; "missing
+  licenses can be a flag that defaults to raising exception and the process could be generalized
+  to licensing sets".
 - **Check**: `sl.licenses(plan)` answers without running anything. CI fails on a catalogue model
   or a backend's direct dependency without a license record; transitive packages are reported.
 
@@ -213,6 +220,64 @@ complies.
   unions/intersections are across such processing (and knowing subprocess envs exist)".
 - **Check**: a video → audio → text pipeline needs no conversion code between nodes. The env
   grouping is computed and recorded as data, not hand-assigned per module.
+
+### P-25 Every execution environment is a locked, isolated venv
+- **Status**: active
+- **Statement**: senselab never runs on unlocked or system state. senselab itself is installed into
+  a venv built from a lock, and every backend runs in a locked venv: either the senselab venv,
+  when its lock covers the backend, or its own isolated env. Native libraries come from wheels.
+  A system dependency that cannot be avoided is declared, probed at start, version-recorded in
+  provenance, and its absence is an error, not a fallback.
+- **Source**: owner, 2026-10-30: "we should always be using isolated envs for reproducibility, not
+  relying on system libraries. i.e. one requirement is to install senselab into a venv".
+- **Check**: every activity in provenance names an env with a lock sha. No code path imports a
+  package that the active env's lock does not list.
+
+### P-26 Signals generalise; modality-specific tasks stay specific
+- **Status**: active
+- **Statement**: Audio is one kind of signal. The data model and the task catalogue cover any
+  sampled or event-based signal (actigraphy, ECG, PPG, EDA, respiration and others). An algorithm
+  that applies to any time series is written once over the general signal type and parameterised
+  per modality through profiles. Tasks that are inherently modality-specific are declared on the
+  specific type.
+- **Source**: owner, 2026-10-30: "future extensions to actigraphy, ecg, and other such signals. in
+  many cases certain algorithms can be applied across different timeseries, and some are going to
+  be specific to the modality".
+- **Check**: adding a new signal modality needs a data type, an adapter and profiles, not copies
+  of generic algorithms.
+
+---
+
+## Process principles
+
+How 2.x is built. These bind the people and agents building it, not the API.
+
+### P-27 Commit and push early and often
+- **Status**: active
+- **Statement**: Each unit of work is committed when done and pushed promptly. Work in progress
+  stays visible on a branch with a PR to `alpha`. 2.x is built in place on `alpha`.
+- **Source**: owner, 2026-10-30: "commit+push early often"; "in place on alpha".
+- **Check**: no local-only work older than a session.
+
+### P-28 No identifiers leak
+- **Status**: active
+- **Statement**: No participant, subject or session identifier, no personal path and no site
+  credential enters the repository, a spec, a test fixture, a commit message or a PR. Examples use
+  synthetic identifiers.
+- **Source**: owner, 2026-10-30: "ensure no identifiers leak in".
+- **Check**: the pre-commit identifier hook passes, and reviewers check prose, which the hook may
+  not cover.
+
+### P-29 Fast test cycles locally and on the cluster, within shared limits
+- **Status**: active
+- **Statement**: Tests run locally for fast cycles and on ORCD for GPU and scale. Agents running in
+  parallel share both machines: scope test runs to what changed, run serially (never
+  `pytest -n auto`), respect the cluster's partitions and QOS caps, and do no compute on login
+  nodes.
+- **Source**: owner, 2026-10-30: "for testing do local tests and on orcd to have faster cycles, but
+  keep load across agents in mind, and orcd partitions in mind".
+- **Check**: test jobs name a partition and resource class; concurrent agent jobs stay within the
+  QOS cap.
 
 ---
 
@@ -274,6 +339,9 @@ design does not lose them. Amending one also means amending its origin.
 - **P-22, core on non-EOL Python vs old models needing old Python** (2026-10-30). Both hold by
   splitting the code that crosses the boundary into a worker runtime (stdlib + numpy) with no Python
   floor beyond what a lock needs, while full core follows EOL. Typed validation happens on the host.
+- **P-25 isolated envs vs P-5 efficiency** (2026-10-30). In-process execution is kept as an
+  optimisation only inside a locked senselab venv whose lock covers the backend, so it costs no
+  reproducibility. Otherwise the backend runs in its own env behind a persistent worker.
 
 ## Change log
 
@@ -287,3 +355,6 @@ design does not lose them. Amending one also means amending its origin.
   2026-10 (PEP 619).
 - 2026-10-30: amended P-22 again (meaning change). Envs may keep EOL Python; what crosses the
   boundary is a stdlib+numpy worker runtime, not full core. See *Resolved tensions*.
+- 2026-10-30: added P-25 (locked isolated envs) and P-26 (signals generalise); added the
+  *Process principles* section with P-27..P-29. Amended P-23 (meaning change): missing licenses
+  raise at run time by default, and policies use named license sets.

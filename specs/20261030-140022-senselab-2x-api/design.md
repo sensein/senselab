@@ -265,10 +265,21 @@ class WhisperVllm: ...
     `VllmServer` implementation.
 - **Torch backends** declare both `host` (the notebook fast path, needs `senselab[torch]`) and
   `isolated`. The planner picks one; the call site never knows (P-6).
-  - *Design call:* the default execution profile picks `host` whenever the host's installed
-    packages satisfy the backend. Otherwise it picks `isolated`. A profile can force either.
-  - The choice is shown in `plan.explain()`, so a notebook user with `senselab[torch]` gets
-    predictable in-process behaviour.
+  - **`host` means the senselab venv, which is itself locked (P-25).** senselab is always
+    installed into a venv built from its lock, for example by `senselab env create` or
+    `uv sync --locked`. A notebook kernel is that venv.
+  - The planner runs a backend in-process only when the senselab venv's lock covers that
+    backend's requirements, verified by digest. Otherwise it runs in its own isolated env.
+  - A system Python, an unlocked environment, or a package the lock does not list is never used.
+    `env identity` in the cache key (section 4.8) is the senselab venv's lock sha for host runs.
+  - The choice is shown in `plan.explain()`.
+- **Native libraries come from wheels.** soundfile bundles libsndfile, PyAV bundles FFmpeg, and
+  soxr is a wheel.
+  - A dependency that still needs a system library declares it as a `SystemRequirement`. Today
+    that is torchcodec's FFmpeg shared libraries.
+  - A `SystemRequirement` is probed when the env starts, and its version is recorded in
+    provenance. A missing one is an error naming what to install.
+  - Each such requirement is tracked as debt, to be replaced by a wheel-bundled alternative.
 - **One worker protocol:** `serve_in_venv` (persistent, JSON control line, arrays passed by
   file/shared memory, typed errors). The one-shot scripts, the bespoke workers and `call_in_venv`
   are removed. Errors keep their type across the boundary, because a registered exception table
@@ -637,6 +648,24 @@ License(
 - **Provenance** records the license of every model and software agent. The BEP028 export carries
   them, so a published derivative states what it was made with.
 
+**License sets and run-time policy**
+- A **license set** is a named, versioned list of SPDX expressions and flag conditions, shipped as
+  data. Users can define their own and combine them by union or intersection. Packaged sets:
+  - `permissive`: Apache-2.0, MIT, BSD-*, …;
+  - `weak-copyleft-ok`: adds LGPL, MPL;
+  - `copyleft-ok`: adds GPL, AGPL;
+  - `non-commercial-ok`: adds CC-BY-NC-*;
+  - `gated-ok`.
+- A `license_policy` names the allowed set or sets and has `on_missing: raise | warn`, **default
+  `raise`**.
+- The planner checks every node against the policy before anything runs.
+  - A missing or unknown license with `raise` stops planning with an error naming the node, the
+    model or package, and how to supply a record.
+  - With `warn`, the run proceeds, and the relaxation and the affected nodes are recorded in
+    provenance.
+- The default run config uses the broadest packaged set together with `on_missing: raise`. A
+  research run is therefore never blocked by license *type*, only by an unknown license.
+
 **Enforcement**
 - A CI test fails when a catalogue model or a backend's direct dependency has no license record, or
   has `unknown` without a dated reason.
@@ -678,6 +707,33 @@ senselab borrows sklearn's conventions where they fit and declines its data and 
 | mutable estimators | conflicts with content identity, caching and provenance (P-3, P-19) |
 | eager in-process execution | conflicts with the plan/executor split and isolated envs (P-2, P-6) |
 
+### 4.14 Signals beyond audio (P-26)
+
+This section is a skeleton; the catalogue is filled from `use-cases.md`.
+
+- **`Signal`** is the base data type:
+  - `data` `(channels, samples)`;
+  - `sampling_rate`, or explicit `timestamps` for irregular sampling;
+  - `channel_names` and `units`;
+  - a `clock` (device, start time, drift model) for aligning to the shared timeline (section 4.10);
+  - metadata.
+- Specialisations are `Audio`, `ECG`, `Accelerometry`, `PPG`, `EDA`, `Respiration`, and so on.
+  They add validation (expected units, channel layout) and are the types that modality-specific
+  tasks accept.
+- **Events and intervals** live on the shared timeline: R-peaks, steps, cough onsets, sleep
+  epochs. They use the same `Span`/`Annotation` types as speech segments.
+- **Task tiers:**
+  1. **Generic over `Signal`,** written once: resample, filter, window, spectral and envelope
+     features, activity and event detection, segmentation, QC (flatline, clipping, SNR), alignment
+     across devices, generic embeddings, statistics.
+  2. **Generic with modality profiles,** where the algorithm family is shared and the parameters
+     differ per modality and live in profiles (P-17). Examples: peak detection (R-peaks vs syllable
+     nuclei vs step counting) and band-limited envelopes.
+  3. **Modality-specific,** declared on the specialised type: ASR, HRV, sleep/wake scoring, face
+     action units.
+- **Datasets** read signals through the same adapter interface. BIDS physio and motion are the
+  first non-audio layouts.
+
 ## 5. Packaging (P-13)
 
 - **`senselab-worker`:** stdlib + numpy only, installed into every isolated env (section 4.11).
@@ -696,17 +752,21 @@ senselab borrows sklearn's conventions where they fit and declines its data and 
 - **Backend code** lives in the same repository, but each backend module imports its heavy
   dependencies only inside its implementation. Declarations import nothing heavy, which is checked
   by a test that imports every declaration with only core installed.
-- **Extras:**
-  - `senselab[torch]` installs torch, transformers, speechbrain and pyannote for in-process
-    (`Env.host`) execution;
-  - other in-process groups (`video`, `nlp`) as today;
-  - isolated environments need no extra; their locks ship as package data.
+- **Distributions from one repo.** A uv workspace with one `pyproject.toml` per member:
+  `packages/senselab-worker`, `packages/senselab-core`, and the root `senselab` (backends, task
+  catalogue, pipelines). Each is built and versioned on its own (hatch-vcs with per-package tag
+  prefixes), and all three are released together at the same version. P-22 requires the worker
+  runtime to match core's version exactly.
+- **Install.** senselab is always installed into a venv from its lock (P-25), for example
+  `uv sync --locked`, or `senselab env create` for users who do not use uv directly. Optional
+  in-process groups (`torch`, `video`, `nlp`) are lock-covered extras of that venv. Isolated envs
+  need no extra; their locks ship as package data.
 - **CI** gains a core-only job (install core, import every public module, run the
   declaration/schema/planner/provenance tests) next to the existing full jobs.
 
 How far 2.x can realistically get from torch:
 - **core: torch-free;**
-- **host process: torch-free if every torch backend runs isolated.** That is a valid execution
+- **senselab venv: torch-free if every torch backend runs isolated.** That is a valid execution
   profile, at the cost of about 0.5 GB resident per worker and file or shared-memory transfer;
 - **senselab overall: not torch-free.** Almost every model is a torch model.
 
@@ -794,7 +854,15 @@ cite principles.
   `health_measurements` as small pipelines.
 - Add one cross-modal pipeline (video → demux → diarize → ASR → text sentiment) as the P-24 test.
 - Exit:
-  - triage runs on B2AI and on one second dataset by changing only the dataset profile (P-12);
+  - triage runs on B2AI and on a **constructed** second dataset by changing only the dataset
+    profile (P-12). No second labelled dataset exists, so genericity is shown by design:
+    - the constructed dataset is a small synthetic in-memory dataset whose profile uses a
+      different entity scheme, task ids and task protocol (for example an invented "reading +
+      sustained vowel + counting" protocol);
+    - its thresholds are declared `unfitted`, so they route to review rather than decide (P-17);
+    - the profile schema validates;
+    - triage completes with every node running or typed-absent;
+    - a static check finds no dataset names, task ids or sidecar field names in pipeline code;
   - grepping pipeline code for dataset names and fields finds nothing;
   - both pipelines nest inside a parent pipeline unchanged (P-9).
 
@@ -820,35 +888,41 @@ it already sits on `work_pool`, `vllm_server` and `ProvStore`.
 
 Calls already made in this document, marked *design call* where they appear, for the owner to
 check:
-- **Host-first default for torch backends** (section 4.4).
+- **In-process only inside the locked senselab venv when its lock covers the backend** (section 4.4,
+  P-25).
 - **Result-key composition** (section 4.8).
 - **Phase 2 slice** from existing backends only (section 6).
 - **Parity tolerances** measured as data (section 6).
 - **vLLM-omni and vLLM ASR** as the only new integrations, after Phase 3 (section 6).
 - **sklearn-style configured objects as the primary form, with immutable `fit`** (section 4.13).
-- **License bar** (section 4.12).
+- **License enforcement** (section 4.12).
   - A license harvested from PEP 639, `License` or classifiers counts as a record.
-  - `unknown` blocks CI only for catalogue models and backends' direct dependencies.
-  - Transitive packages are reported in `sl.licenses`, with any copyleft, NC or unknown flag
-    surfaced, but do not fail CI.
+  - At run time a missing or unknown license raises by default (`on_missing: raise`) for every
+    model and package a plan touches, transitive packages included.
+  - CI checks catalogue models and backends' direct dependencies, so the common path never raises
+    for a user.
 
-## 8. Open questions for the owner
+## 8. Owner answers (2026-10-30)
 
-Answers are folded in here once given.
-
-1. **Build vs adopt for the graph runtime.** Pydra already provides typed tasks, nested workflows,
-   content-hash caching and Slurm/Dask workers. Should the 2.x Pipeline and Executor layer be
-   implemented on Pydra, with senselab adding the planner, cross-record batching, the model cache
-   and envs, or be senselab's own, generalising `reproduce`'s DAG and `work_pool`?
-2. **Where 2.x is built and how 1.x coexists.** Is it a long-lived `v2` branch, or a replacement in
-   place on `alpha`? Do 1.x releases keep shipping meanwhile? Is core a separate distribution
-   (`senselab-core` plus `senselab-worker`) or one `senselab` package with extras?
-3. **The second dataset for the P-12 test.** Which dataset proves triage is generic, does it have
-   labelled verdicts to fit its thresholds, and does "runs" mean completes or produces validated
-   verdicts?
-4. **Keep, port or drop for 1.x pieces not named above.** The proposal:
+1. **Graph runtime.**
+   - Pydra would need to be stable, debuggable and optimised for execution. PRs to Pydra to get
+     there are welcome.
+   - A ready layer (joblib or another engine) is an acceptable starting point if it is available.
+   - Engine capabilities are to be assessed critically. That assessment is in
+     `workflow-engines.md` (pending), and section 4.8 is updated from it.
+2. **In place on `alpha`.** Core is its own distribution; one repo builds several (section 5).
+   1.x modules are deleted as their 2.x replacements land (P-14, P-27).
+3. **No second labelled dataset exists.** Genericity is shown by design with a constructed
+   dataset and profile (Phase 4 exit).
+4. **Keep, port or drop: accepted as proposed.**
    - port: `adaptive_loop` (as `p.loop`), the tutorials (rewritten);
    - replace: `agentic_interface` (by the MCP server);
    - keep outside the package, as tools over run directories: the review-page and VLM tooling;
    - move out of the repo into site profiles: the ORCD campaign scripts and sbatch files;
    - keep as dev scripts: benchmarks.
+
+Also from the owner on the same date:
+- isolated, locked envs always (P-25);
+- the signal generalisation (P-26, section 4.14, pending `use-cases.md`);
+- license sets with raise-by-default (P-23);
+- process principles P-27..P-29.
