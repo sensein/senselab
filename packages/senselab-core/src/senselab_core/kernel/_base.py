@@ -5,7 +5,16 @@ from collections.abc import Iterator, Mapping
 from typing import Annotated, TypeVar
 
 import numpy
-from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, Strict, StringConstraints
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    Strict,
+    StringConstraints,
+)
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -103,3 +112,6 @@ NsArray = Annotated[numpy.ndarray, BeforeValidator(as_ns_array)]
 
 LabelArray = Annotated[numpy.ndarray, BeforeValidator(as_label_array)]
 """1-D read-only labels."""
+
+StrMap = Annotated[Mapping[str, str], AfterValidator(FrozenMapping), PlainSerializer(dict)]
+"""A read-only str-to-str mapping; serialised as a dict."""
