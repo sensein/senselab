@@ -155,10 +155,9 @@ directly.
     `producer` is a human, an agent or a model; `guideline` is the annotation guideline version
     for human or agent labels (roadmap hook H-1).
   - Result models may carry an optional standard `uncertainty` field (H-5).
-  - The rest of this paragraph is unchanged:
-  `Events`/`Intervals` are the columnar form at scale (Parquet or BIDS `events.tsv`). A
-  `Transcript` is a tree of annotations (1.x `ScriptLine.chunks`). An `Embedding{vector, space}`
-  has `space` equal to the resolved model identity.
+  - `Events`/`Intervals` are the columnar form at scale (Parquet or BIDS `events.tsv`).
+  - A `Transcript` is a tree of annotations (1.x `ScriptLine.chunks`).
+  - An `Embedding{vector, space}` has `space` equal to the resolved model identity.
 - **Serialisation.** Results are pydantic models with a stable JSON form. Arrays go to `.npy` or
   safetensors.
 - **Records.** A `Record` holds named views (`audio`, `video`, `ecg`, `acc@wrist`, `transcript`)
