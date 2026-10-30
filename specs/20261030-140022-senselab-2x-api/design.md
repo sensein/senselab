@@ -423,8 +423,15 @@ three: `venv_worker`, `vllm_server`, and `work_pool` (0 double-claims in the NFS
   It is generic, and is what pydra 1.0 implements.
 - *Decision:* use pydra for the graph layer only, behind senselab's `Executor` protocol and result
   store. Do not use pydra's workers, environments or pickle cache.
-- This is conditional on pydra PRs 1–4 in `workflow-engines.md` §5 landing in a non-alpha pydra
-  release. The owner leads pydra and welcomes the PRs.
+- This is conditional on the pydra changes that gate Route A in [`execution.md`](execution.md) §4–5
+  (per-item dataflow, cheap submission, atomic cache with leases, pickle-free `ResultStore`, worker
+  routing).
+  - They land in a pydra 1.0 alpha that senselab pins; a non-alpha release is not required.
+  - During development senselab depends on the pydra branch through `[tool.uv.sources]`, with the
+    commit pinned in `uv.lock`.
+  - The owner leads pydra and welcomes the PRs.
+- How pools, GPU-only tasks, services and substrates (Slurm, local, other engines) mix, and the
+  pydra/senselab boundary, are in [`execution.md`](execution.md).
   1. per-item dataflow, with keep-going on failure;
   2. a cheap submission path;
   3. atomic rename into the cache, with leases and stale-lock recovery;

@@ -246,6 +246,21 @@ complies.
 - **Check**: adding a new signal modality needs a data type, an adapter and profiles, not copies
   of generic algorithms.
 
+### P-30 Tests are tiered; benchmarks are separate
+- **Status**: active
+- **Statement**: Tests come in two tiers. **Logic tests** exercise behaviour with small synthetic
+  inputs and no models. **Limit and use-case tests** exercise parameter boundaries and realistic use
+  cases with real backends. Tests are short and named for the behaviour they check. Parametrisation
+  enumerates meaningful cases, never encoded history. **Benchmarks** are a separate evaluation on
+  public data, run as senselab pipelines with provenance, tracked over releases rather than gated as
+  pass/fail.
+- **Source**: owner, 2026-10-30: "many tests in current senselab are overly verbose or strangely
+  parameterized ... some tests should just exercise logic, and some tests should exercise the limits
+  of parameters and use cases. then there should be benchmarks as a separate evaluation with public
+  benchmarks".
+- **Check**: every test belongs to exactly one tier (marker). No test docstring narrates a
+  measurement history (P-21). No parametrize id is a register number.
+
 ---
 
 ## Process principles
