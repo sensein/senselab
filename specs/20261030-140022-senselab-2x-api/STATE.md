@@ -42,7 +42,7 @@ task or decision changes state. Newest entries go first in the log.
 |---|---|
 | Design | done; owner approved 2026-10-30 ("go ahead") |
 | 0: freeze tag | done (`1x-freeze-2026-10-30`) |
-| 1: kernel, worker runtime, identity, store, data fetch | planning → in progress |
+| 1: kernel, worker runtime, identity, store, data fetch | planned in `plans/phase-1.md` (16 tasks); execution not started |
 | 2–5 | not started |
 | pydra PRs (A0…K1) | proposed in #891; none implemented |
 
