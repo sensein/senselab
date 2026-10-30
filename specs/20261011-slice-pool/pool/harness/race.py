@@ -1,9 +1,8 @@
 """Exclusive-create race on a shared directory, run concurrently from many nodes.
 
-python race.py run DIR NAMES     # each process: try to win every name, by mkdir and by staged-dir rename
-python race.py check DIR NAMES   # every name must have exactly one winner per primitive
+    python race.py run DIR NAMES     # each process: try to win every name, by mkdir and by staged-dir rename
+    python race.py check DIR NAMES   # every name must have exactly one winner per primitive
 """
-
 import json, os, socket, sys, uuid
 from pathlib import Path
 
@@ -31,8 +30,7 @@ if mode == "run":
             if (root / "rename" / str(i) / "owner").read_text() == token:
                 won["rename"].append(i)
             else:
-                (staged / "owner").unlink()
-                staged.rmdir()
+                (staged / "owner").unlink(); staged.rmdir()
         except FileNotFoundError:
             pass
     (root / "wins" / f"{me}.json").write_text(json.dumps(won))
@@ -46,11 +44,6 @@ else:
     hosts = sorted({f.name.split(".")[0] for f in files})
     out = {"processes": len(files), "hosts": hosts}
     for k, c in counts.items():
-        out[k] = {
-            "names": names,
-            "exactly_one": sum(x == 1 for x in c),
-            "zero": sum(x == 0 for x in c),
-            "more": sum(x > 1 for x in c),
-        }
+        out[k] = {"names": names, "exactly_one": sum(x == 1 for x in c), "zero": sum(x == 0 for x in c), "more": sum(x > 1 for x in c)}
     print(json.dumps(out, indent=1))
     sys.exit(0 if all(out[k]["exactly_one"] == names for k in counts) else 1)

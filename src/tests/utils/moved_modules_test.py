@@ -16,6 +16,23 @@ MOVED = {
     "senselab/utils/model_revision",
 }
 
+# Moved module basenames, for the `from senselab.utils import <name>` form.
+MOVED_NAMES = {"file_lock", "model_revision"}
+
+# Names that now live in senselab_core and must not be imported from `senselab.utils.dependencies`.
+MOVED_HELPERS = {"retry_on_transient_error", "_is_transient", "_http_status", "get_cached_commit_hash"}
+
+_IMPORT_FROM = re.compile(r"from\s+{module}\s+import\s+(\(?[^)\n]*(?:\n[^)\n]*)*?\)|[^\n]*)", re.M)
+
+
+def _imported_names(text: str, module: str) -> set[str]:
+    """Names brought in by every ``from <module> import ...`` statement in ``text``."""
+    names: set[str] = set()
+    for m in re.finditer(_IMPORT_FROM.pattern.format(module=re.escape(module)), text):
+        names.update(n.strip().split(" as ")[0].strip("() \n") for n in m.group(1).replace("\n", ",").split(","))
+    return {n for n in names if n}
+
+
 # Extended by later tasks: patterns (not paths) that must not appear in any scanned file.
 FORBIDDEN_PATTERNS: tuple[re.Pattern[str], ...] = ()
 
@@ -37,4 +54,12 @@ def test_no_moved_module_paths_remain() -> None:
         text = path.read_text(errors="replace")
         hits += [f"{path.relative_to(REPO)}: {m}" for m in sorted(MOVED) if m in text]
         hits += [f"{path.relative_to(REPO)}: {p.pattern}" for p in FORBIDDEN_PATTERNS if p.search(text)]
+        hits += [
+            f"{path.relative_to(REPO)}: from senselab.utils import {n}"
+            for n in sorted(MOVED_NAMES & _imported_names(text, "senselab.utils"))
+        ]
+        hits += [
+            f"{path.relative_to(REPO)}: {n} imported from senselab.utils.dependencies"
+            for n in sorted(MOVED_HELPERS & _imported_names(text, "senselab.utils.dependencies"))
+        ]
     assert hits == []

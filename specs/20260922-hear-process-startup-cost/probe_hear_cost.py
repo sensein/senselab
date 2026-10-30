@@ -161,7 +161,9 @@ def main() -> None:
         sha, snapshot = stage_hear_snapshot()
         t2 = time.perf_counter()
         print(
-            json.dumps({"trial": "parent_staging", "rep": rep, "ensure_venv_s": t1 - t0, "stage_snapshot_s": t2 - t1}),
+            json.dumps(
+                {"trial": "parent_staging", "rep": rep, "ensure_venv_s": t1 - t0, "stage_snapshot_s": t2 - t1}
+            ),
             flush=True,
         )
     python = venv_python(venv_dir)
@@ -198,7 +200,9 @@ def main() -> None:
             for d in (2.0, 21.0, 120.0):
                 wall, timing = run_instrumented(python, encoder_dir, [job(d, 0)], env)
                 print(
-                    json.dumps({"trial": "encoder", "rep": rep, "seconds": d, "wall_s": wall, "timing": timing}),
+                    json.dumps(
+                        {"trial": "encoder", "rep": rep, "seconds": d, "wall_s": wall, "timing": timing}
+                    ),
                     flush=True,
                 )
 

@@ -60,10 +60,7 @@ def main() -> int:
     cls = load_classes(args.classes)[0]
     pool = WorkPool.create(args.pool, lease_s=60, heartbeat_s=5)
     pool.publish(
-        [
-            Item(id=f"smoke-{i:03d}", resource_class=cls.name, command=("sleep", str(args.seconds)))
-            for i in range(args.items)
-        ]
+        [Item(id=f"smoke-{i:03d}", resource_class=cls.name, command=("sleep", str(args.seconds))) for i in range(args.items)]
     )
     name = Controller(pool, [cls]).job_name(cls.name)
     control = [sys.executable, "-m", "senselab.utils.work_pool", "control", str(pool.root), "--classes", args.classes]

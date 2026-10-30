@@ -3,10 +3,10 @@
 import json
 import multiprocessing as mp
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from conftest import hub_error
 from huggingface_hub.errors import RepositoryNotFoundError
 from senselab_core.runtime.revision import (
     RevisionResolutionError,
@@ -285,7 +285,9 @@ def test_a_newline_suffixed_hub_sha_is_refused(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.logic
-def test_resolution_retries_a_transient_hub_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolution_retries_a_transient_hub_error(
+    monkeypatch: pytest.MonkeyPatch, hub_error: Callable[..., Exception]
+) -> None:
     """The mandatory model_info round-trip is retried on a transient error, not fatal.
 
     Finding #3 of the #550 review: this was the one Hub call without ``retry_on_transient_error``,
@@ -315,7 +317,9 @@ def test_resolution_retries_a_transient_hub_error(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.logic
-def test_a_missing_repo_fails_without_being_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_missing_repo_fails_without_being_retried(
+    monkeypatch: pytest.MonkeyPatch, hub_error: Callable[..., Exception]
+) -> None:
     """A genuine 404 surfaces as RevisionResolutionError on the first attempt.
 
     The version of this test that shipped with the retry raised ``ValueError("not found")`` as a
@@ -355,7 +359,7 @@ def _fake_cache(monkeypatch: pytest.MonkeyPatch, root: Path, repo_id: str, revis
 
 
 @pytest.mark.logic
-def testget_cached_commit_hash_resolves_real_sha_from_refs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_cached_commit_hash_resolves_real_sha_from_refs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """get_cached_commit_hash returns the commit SHA from refs/<ref>, not the mutable branch name."""
     sha = "a" * 40
     _fake_cache(monkeypatch, tmp_path, "org/model", "main", sha)

@@ -1,15 +1,16 @@
 """Transient-error classification and retry."""
 
+from collections.abc import Callable
+
 import httpx
 import pytest
-from conftest import hub_error
 from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
 from senselab_core.runtime import retry
 from senselab_core.runtime.retry import _is_transient, retry_on_transient_error
 
 
 @pytest.mark.logic
-def test_a_definitive_404_is_not_retried() -> None:
+def test_a_definitive_404_is_not_retried(hub_error: Callable[..., Exception]) -> None:
     """A missing repo is a verdict, not a blip: retrying it only delays the real error.
 
     ``RepositoryNotFoundError`` subclasses ``httpx.HTTPError`` -> ``OSError``, so it matches
@@ -25,19 +26,19 @@ def test_a_definitive_404_is_not_retried() -> None:
 
 
 @pytest.mark.logic
-def test_a_gated_403_is_not_retried() -> None:
+def test_a_gated_403_is_not_retried(hub_error: Callable[..., Exception]) -> None:
     """403 means the token lacks access; waiting does not grant it."""
     assert _is_transient(hub_error(403, GatedRepoError)) is False
 
 
 @pytest.mark.logic
-def test_a_429_is_retried() -> None:
+def test_a_429_is_retried(hub_error: Callable[..., Exception]) -> None:
     """The one 4xx that is transient: the server asking for backoff is what backoff is for."""
     assert _is_transient(hub_error(429)) is True
 
 
 @pytest.mark.logic
-def test_a_500_is_retried() -> None:
+def test_a_500_is_retried(hub_error: Callable[..., Exception]) -> None:
     """Server-side failures are the canonical retryable case."""
     assert _is_transient(hub_error(500)) is True
     assert _is_transient(hub_error(503)) is True
@@ -64,7 +65,9 @@ def test_a_non_network_error_is_never_retried() -> None:
 
 
 @pytest.mark.logic
-def test_retry_stops_on_a_404_and_backs_off_on_a_429(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_retry_stops_on_a_404_and_backs_off_on_a_429(
+    monkeypatch: pytest.MonkeyPatch, hub_error: Callable[..., Exception]
+) -> None:
     """The classification is only worth anything if ``retry_on_transient_error`` acts on it."""
     monkeypatch.setattr(retry.time, "sleep", lambda *_a, **_k: None)
 

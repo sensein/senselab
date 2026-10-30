@@ -4,13 +4,14 @@ import time
 from typing import Dict, List, Optional, Union
 
 import torch
+from senselab_core.runtime.retry import retry_on_transient_error
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_diarization.capabilities import DiarizationCapabilities
 from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.data_structures.model import get_huggingface_token
-from senselab.utils.dependencies import resolve_model, retry_on_transient_error
+from senselab.utils.dependencies import resolve_model
 
 try:
     from pyannote.audio import Pipeline

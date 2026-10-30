@@ -22,27 +22,31 @@ SCRIPTED = Path(__file__).parent / "scripted_worker_fixture.py"
 posix_only = pytest.mark.skipif(os.name == "nt", reason="stands in for the interpreter with a shell script")
 
 
-def _children() -> set[int]:
-    """Pids of this process's live children, as `pgrep -P` reports them."""
-    out = subprocess.run(["pgrep", "-P", str(os.getpid())], capture_output=True, text=True, check=False).stdout
-    return {int(pid) for pid in out.split()}
-
-
-@pytest.fixture(scope="module")
-def _baseline_children() -> set[int]:
-    """Children already alive when this module starts, such as a multiprocessing resource tracker."""
-    return _children()
-
-
 @pytest.fixture(autouse=True)
-def no_leaked_processes(_baseline_children: set[int]) -> Iterator[None]:
-    """Fail a test that leaves a child process behind."""
-    if os.name == "nt":
-        yield
-        return
-    assert _children() - _baseline_children == set()
-    yield
-    assert _children() - _baseline_children == set()
+def no_leaked_processes(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[subprocess.Popen[bytes]]]:
+    """Fail a test that leaves a worker process running or unreaped.
+
+    Records every ``Popen`` the client creates and asserts each has been waited on
+    (``returncode`` is set only by ``poll``/``wait``), so a zombie counts as a leak and
+    children spawned by other tests, such as multiprocessing helpers, are ignored.
+    """
+    spawned: list[subprocess.Popen[bytes]] = []
+    real = subprocess.Popen
+
+    class _Recording(real):  # type: ignore[valid-type, misc]
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(*args, **kwargs)  # type: ignore[call-overload]
+            spawned.append(self)
+
+    monkeypatch.setattr(subprocess, "Popen", _Recording)
+    yield spawned
+    monkeypatch.undo()
+    leaked = [p.pid for p in spawned if p.returncode is None]
+    for p in spawned:
+        if p.returncode is None:
+            p.kill()
+            p.wait()
+    assert leaked == []
 
 
 @pytest.fixture
@@ -313,3 +317,12 @@ def test_classification_gap_is_reported(array_dir: Path, caplog: pytest.LogCaptu
         out = client.run([{"id": "a", "inputs": {}}], {})
     assert out[0]["error"]["gap"] is True and "OSError" in caplog.text
     client.close()
+
+
+def test_leak_fixture_records_a_child_until_it_is_waited_on(no_leaked_processes: list[subprocess.Popen[bytes]]) -> None:
+    """An exited child nobody waited on still has no returncode, which is what the fixture rejects."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    assert proc in no_leaked_processes
+    assert proc.returncode is None
+    proc.wait()
+    assert proc.returncode == 0

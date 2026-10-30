@@ -33,6 +33,7 @@ CONFORMANCE_WHY = "reported that what the instruction asked for did not happen"
 """The substring identifying the flag a failed task conformance raises."""
 
 
+
 def store_readings(store: Path) -> dict[str, Any]:
     """The live value of each reading this scan wants, latest write winning.
 

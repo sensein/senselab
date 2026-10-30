@@ -159,9 +159,7 @@ def main() -> None:
             for n in (1, 2, 4, 8, 16):
                 wall, timing = run_worker(python, [paths[21.0]] * n, env)
                 print(
-                    json.dumps(
-                        {"trial": "batch", "rep": rep, "n": n, "seconds": 21.0, "wall_s": wall, "timing": timing}
-                    ),
+                    json.dumps({"trial": "batch", "rep": rep, "n": n, "seconds": 21.0, "wall_s": wall, "timing": timing}),
                     flush=True,
                 )
 

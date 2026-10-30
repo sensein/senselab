@@ -377,9 +377,7 @@ def measure(run: Path) -> dict[str, Any] | None:  # noqa: C901 — one pass, sev
         for key, read, state in zip(keys_all, reads, realisation):
             if state == "substituted" and key and read:
                 out["substitution_distance"][(min(len(key), 20), levenshtein(key, read))] += 1
-        on_stimulus = {
-            i for i, state in zip(word_index, realisation) if state in ("realised", "substituted") and i >= 0
-        }
+        on_stimulus = {i for i, state in zip(word_index, realisation) if state in ("realised", "substituted") and i >= 0}
         off_stimulus = {int(i) for i in data["unexpected_word_index"].tolist()}
         for finding in findings:
             if finding["extent"] is None:

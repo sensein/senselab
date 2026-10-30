@@ -326,10 +326,11 @@ def _mossformer2_separator(device: Optional[DeviceType]) -> Any:  # noqa: ANN401
 
 def _pyannote_separator(device: Optional[DeviceType]) -> Any:  # noqa: ANN401
     from pyannote.audio import Pipeline
+    from senselab_core.runtime.retry import retry_on_transient_error
 
     from senselab.utils.data_structures import _select_device_and_dtype
     from senselab.utils.data_structures.model import get_huggingface_token
-    from senselab.utils.dependencies import resolve_model, retry_on_transient_error
+    from senselab.utils.dependencies import resolve_model
 
     token = get_huggingface_token()
     sha, _ = resolve_model(PYANNOTE_SEPARATION_MODEL, PYANNOTE_SEPARATION_REVISION, token=token)

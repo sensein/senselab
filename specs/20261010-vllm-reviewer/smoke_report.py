@@ -48,8 +48,7 @@ def reading(row: dict[str, Any]) -> dict[str, Any]:
     rounds = [
         {key: entity.attributes.get(key) for key in ROUND_KEYS}
         for entity in store.entities("measurement")
-        if entity.attributes.get("name") == LLM_REVIEW_MEASUREMENT
-        and not store.is_invalidated(entity.id)
+        if entity.attributes.get("name") == LLM_REVIEW_MEASUREMENT and not store.is_invalidated(entity.id)
         and entity.attributes.get("prompt_version") == held.get("prompt_version")
     ]
     opinion = find_measurement(store, SECOND_OPINION_ANSWERS)
@@ -68,9 +67,7 @@ def reading(row: dict[str, Any]) -> dict[str, Any]:
         "rounds_digest": _digest(rounds),
         "opinion": dict((opinion.attributes.get("choices") or {})) if opinion is not None else None,
         "opinion_status": opinion.attributes.get("status") if opinion is not None else None,
-        "fold": {
-            key: fold.get(key) for key in ("outcome", "triage", "release", "reason", "release_reason") if key in fold
-        },
+        "fold": {key: fold.get(key) for key in ("outcome", "triage", "release", "reason", "release_reason") if key in fold},
     }
 
 

@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Union
 
 import torch
 import torch.nn.functional as F
+from senselab_core.runtime.retry import retry_on_transient_error
 from transformers import AutoFeatureExtractor, AutoModel
 
 from senselab.audio.data_structures import Audio
@@ -15,12 +16,7 @@ from senselab.utils.data_structures import (
     _select_device_and_dtype,
     device_run_opt,
 )
-from senselab.utils.dependencies import (
-    resolve_model,
-    retry_on_transient_error,
-    speechbrain_loading_cwd,
-    speechbrain_savedir,
-)
+from senselab.utils.dependencies import resolve_model, speechbrain_loading_cwd, speechbrain_savedir
 
 try:
     from speechbrain.inference.speaker import EncoderClassifier

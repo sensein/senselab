@@ -267,14 +267,8 @@ class Pool:
         old = read_json(aside / "owner.json") or {}
         write_json(
             self.d("interrupted") / f"{i}.{uuid.uuid4().hex[:12]}",
-            {
-                "slice": i,
-                "reason": reason,
-                "previous_owner": old,
-                "taken_by": me,
-                "time": stamp(),
-                "heartbeat_age_s": round(now() - (fresh_mtime(aside / "heartbeat") or 0), 1),
-            },
+            {"slice": i, "reason": reason, "previous_owner": old, "taken_by": me, "time": stamp(),
+             "heartbeat_age_s": round(now() - (fresh_mtime(aside / "heartbeat") or 0), 1)},
         )
         shutil.rmtree(aside, ignore_errors=True)
         log(f"slice {i}: {reason} claim of {old.get('job')}@{old.get('host')} taken over")
@@ -438,13 +432,8 @@ class Worker:
         n = self.pool.n
         cmd = [a.replace("{i}", str(i)).replace("{n}", str(n)) for a in self.pool.cfg["command"]]
         logfile = self.pool.d("logs") / f"slice-{i}.{attempt}.{token[:8]}.log"
-        env = {
-            **os.environ,
-            "POOL_DIR": str(self.pool.root),
-            "POOL_SLICE_INDEX": str(i),
-            "POOL_SLICE_COUNT": str(n),
-            "POOL_ATTEMPT": str(attempt),
-        }
+        env = {**os.environ, "POOL_DIR": str(self.pool.root), "POOL_SLICE_INDEX": str(i),
+               "POOL_SLICE_COUNT": str(n), "POOL_ATTEMPT": str(attempt)}
         if self.terminating:
             self.pool.release(i, token)
             return
@@ -452,9 +441,8 @@ class Worker:
         log(f"slice {i}/{n} attempt {attempt}: {shlex.join(cmd)} > {logfile.name}")
         stop = threading.Event()
         self.lost.clear()
-        beat = threading.Thread(
-            target=self._beat, args=(claim / "heartbeat", token, stop, claim / "owner.json"), daemon=True
-        )
+        beat = threading.Thread(target=self._beat, args=(claim / "heartbeat", token, stop, claim / "owner.json"),
+                                daemon=True)
         with open(logfile, "ab") as out:
             self.child = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, env=env, start_new_session=True)
             beat.start()
@@ -467,18 +455,8 @@ class Worker:
         beat.join(timeout=5)
         self.child = None
         end = now()
-        record = {
-            "slice": i,
-            "rc": rc,
-            "attempt": attempt,
-            "start": stamp(start),
-            "end": end,
-            "end_iso": stamp(end),
-            "seconds": round(end - start, 1),
-            "log": str(logfile),
-            **self.me,
-            "token": token,
-        }
+        record = {"slice": i, "rc": rc, "attempt": attempt, "start": stamp(start), "end": end, "end_iso": stamp(end),
+                  "seconds": round(end - start, 1), "log": str(logfile), **self.me, "token": token}
         success = rc in [int(c) for c in self.pool.cfg["success_codes"]]
         if success and not self.terminating:
             if self.lost.is_set():
@@ -490,10 +468,8 @@ class Worker:
             return
         if self.terminating or self.lost.is_set():
             reason = "sigterm" if self.terminating else "lost"
-            write_json(
-                self.pool.d("interrupted") / f"{i}.{uuid.uuid4().hex[:12]}",
-                {**record, "reason": reason, "time": stamp()},
-            )
+            write_json(self.pool.d("interrupted") / f"{i}.{uuid.uuid4().hex[:12]}",
+                       {**record, "reason": reason, "time": stamp()})
             self.pool.release(i, token)
             log(f"slice {i}: {reason} (rc {rc}); released")
             return
@@ -558,11 +534,8 @@ def sbatch(args: list[str]) -> str:
 def submit(pool: Pool, workers: int, after: str | None, name: str | None, extra: list[str]) -> str:
     """Submit one worker array over the pool and record it."""
     workers = max(1, min(workers, pool.n))
-    args = [
-        f"--array=0-{workers - 1}%{workers}",
-        f"--job-name={name or pool.cfg.get('name') or 'pool'}",
-        f"--output={pool.d('logs')}/worker-%A_%a.out",
-    ]
+    args = [f"--array=0-{workers - 1}%{workers}", f"--job-name={name or pool.cfg.get('name') or 'pool'}",
+            f"--output={pool.d('logs')}/worker-%A_%a.out"]
     if after:
         args.append(f"--dependency=afterany:{after}")
     job = sbatch([*args, *extra, str(WORKER_SBATCH), str(pool.root)])
@@ -573,9 +546,7 @@ def submit(pool: Pool, workers: int, after: str | None, name: str | None, extra:
 
 def submissions(pool: Pool) -> list[dict[str, Any]]:
     """Every recorded worker array, oldest first."""
-    recs = [
-        read_json(pool.root / n) for n in listdir(pool.root) if n.startswith("submissions.") and n.endswith(".json")
-    ]
+    recs = [read_json(pool.root / n) for n in listdir(pool.root) if n.startswith("submissions.") and n.endswith(".json")]
     return sorted((r for r in recs if r), key=lambda r: int(str(r["job"]).split("_")[0]))
 
 
@@ -646,20 +617,10 @@ def cmd_init(a: argparse.Namespace) -> int:
     command = a.command
     if not command:
         raise SystemExit("init: give the per-slice command after --")
-    cfg = {
-        "name": a.name or root.name,
-        "slices": a.slices,
-        "retries": a.retries,
-        "stale_minutes": a.stale_minutes,
-        "heartbeat": a.heartbeat,
-        "success_codes": [int(c) for c in a.success_codes.split(",")],
-        "max_interrupts": a.max_interrupts,
-        "same_host_grace": a.same_host_grace,
-        "linger": a.linger,
-        "poll": a.poll,
-        "host_check": a.host_check,
-        "command": command,
-    }
+    cfg = {"name": a.name or root.name, "slices": a.slices, "retries": a.retries, "stale_minutes": a.stale_minutes,
+           "heartbeat": a.heartbeat, "success_codes": [int(c) for c in a.success_codes.split(",")],
+           "max_interrupts": a.max_interrupts, "same_host_grace": a.same_host_grace, "linger": a.linger,
+           "poll": a.poll, "host_check": a.host_check, "command": command}
     if a.heartbeat * 3 > a.stale_minutes * 60:
         raise SystemExit("init: --stale-minutes must be at least three heartbeats")
     root.mkdir(parents=True, exist_ok=True)

@@ -96,8 +96,7 @@ def pyfeat_weight_paths() -> Dict[str, str]:
         ``multitask_weights`` and ``retinaface_weights`` local paths.
     """
     from huggingface_hub import hf_hub_download
-
-    from senselab.utils.dependencies import retry_on_transient_error
+    from senselab_core.runtime.retry import retry_on_transient_error
 
     def fetch(repo_id: str, filename: str, sha: str) -> str:
         return retry_on_transient_error(lambda: hf_hub_download(repo_id=repo_id, filename=filename, revision=sha))

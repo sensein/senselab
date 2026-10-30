@@ -284,7 +284,7 @@ def _resolve_uncached(repo_id: str, ref: str, token: Optional[str] = None) -> st
         # _is_transient classifies as non-transient, so a 429 escaping this line would defeat that
         # outer retry as well.
         #
-        # What is retried is _is_transient's judgement (dependencies.py): 429, 5xx and statusless
+        # What is retried is _is_transient's judgement (retry.py): 429, 5xx and statusless
         # connection/timeout failures. A definitive 4xx -- 401, 403, 404 -- is not retried and
         # surfaces below as RevisionResolutionError on the first attempt. That last part only
         # became true when _is_transient learned to read exc.response.status_code, which is the
