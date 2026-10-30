@@ -1,6 +1,6 @@
 # senselab 2.x execution design: pools, GPUs, engines, and the pydra boundary
 
-Status: draft. Refines `design.md` §4.4, §4.7 and §4.8. Inputs:
+Status: draft. Refines `design.md` §4.4, §4.7 and §4.8. The case for extending pydra, as a requirements table against eight engines, is [`engine-choice.md`](engine-choice.md). Inputs:
 - [`workflow-engines.md`](workflow-engines.md): which engines meet which requirements;
 - [`pydra-extension-points.md`](pydra-extension-points.md): where pydra can be extended, at
   pydra `c5081a6`, v1.0a12.
