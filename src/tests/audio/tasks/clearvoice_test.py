@@ -36,7 +36,7 @@ def offline_hub(monkeypatch: pytest.MonkeyPatch) -> None:
     Hub availability to check something that has nothing to do with the Hub.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kwargs: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: STAGED_SHA)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: STAGED_SHA)
 
 
 @pytest.fixture
@@ -440,7 +440,7 @@ def test_a_different_commit_of_the_checkpoint_misses(
     worker["n_sources"] = 2
     calls = _counting(monkeypatch)
     separate_audios([mono_audio_sample], model=_model("MossFormer2_SS_16K"))
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "e" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "e" * 40)
     separate_audios([mono_audio_sample], model=_model("MossFormer2_SS_16K"))
     assert calls == [1, 1]
 

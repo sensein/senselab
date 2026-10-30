@@ -83,7 +83,7 @@ def test_no_revision_supplied_falls_back_to_resolving_main_per_model(monkeypatch
     handed straight to `SpeechBrainModel`, which is what made the ref-load bug possible in the
     first place: a ref that never touches a resolver cannot become a SHA anywhere on the path.
     """
-    from senselab.utils import model_revision as model_revision_module
+    from senselab_core.runtime import revision as model_revision_module
 
     calls: list[tuple[str, str]] = []
 

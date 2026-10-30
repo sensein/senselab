@@ -308,8 +308,9 @@ def test_the_real_extraction_boundary_is_crossed_correctly(monkeypatch: pytest.M
     construction (`check_hf_repo_exists`, `resolve_revision`) are stubbed, so no HTTP request and
     no model download happen anywhere in this test.
     """
+    from senselab_core.runtime import revision as model_revision_module
+
     from senselab.audio.tasks.speaker_embeddings import windowing as windowing_module
-    from senselab.utils import model_revision as model_revision_module
     from senselab.utils.data_structures import model as model_module
 
     monkeypatch.setattr(model_module, "check_hf_repo_exists", lambda **kwargs: True)  # noqa: ANN003

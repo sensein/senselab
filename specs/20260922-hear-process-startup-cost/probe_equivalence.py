@@ -123,9 +123,7 @@ def main() -> None:
     for row in rows[:3]:
         prepared, starts = prepared_and_plan(row["wav"])
         t0 = time.perf_counter()
-        old = baseline.run_hear(
-            [prepared], [starts], subdir=hear.ENCODER_SUBDIR, batch_size=8, device=DeviceType.CPU
-        )
+        old = baseline.run_hear([prepared], [starts], subdir=hear.ENCODER_SUBDIR, batch_size=8, device=DeviceType.CPU)
         t1 = time.perf_counter()
         new = hear.run_hear([prepared], [starts], subdir=hear.ENCODER_SUBDIR, batch_size=8, device=DeviceType.CPU)
         t2 = time.perf_counter()

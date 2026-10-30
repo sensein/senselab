@@ -19,7 +19,7 @@ def _stub_hf_model_validation(monkeypatch: pytest.MonkeyPatch) -> None:
     composition, not HF Hub connectivity.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
 
 
 def test_detect_pii_in_audios_transcribes_then_detects(

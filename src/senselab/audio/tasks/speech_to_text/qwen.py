@@ -339,8 +339,8 @@ class QwenASR:
         # rather than whatever this host's mutable "main" ref currently points at. Staging is a
         # separate decision and goes via the ref -- see the hf_subprocess_env call below.
         # Deferred import (not at module top) keeps this monkeypatch-friendly at
-        # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
-        from senselab.utils.model_revision import resolve_revision
+        # senselab_core.runtime.revision.resolve_revision, matching the rest of the codebase.
+        from senselab_core.runtime.revision import resolve_revision
 
         revision = model.commit_sha or resolve_revision(model_name, model.revision)
         aligner_ref = aligner_revision or "main"
@@ -527,9 +527,9 @@ class QwenASR:
         # Qwen3ForcedAligner.from_pretrained(..., revision=...) pins the exact run-agreed
         # commit. Staging is a separate decision and goes via the ref -- see the
         # hf_subprocess_env call below. Deferred import (not at module top) keeps this
-        # monkeypatch-friendly at senselab.utils.model_revision.resolve_revision, matching the
+        # monkeypatch-friendly at senselab_core.runtime.revision.resolve_revision, matching the
         # rest of the codebase.
-        from senselab.utils.model_revision import resolve_revision
+        from senselab_core.runtime.revision import resolve_revision
 
         aligner_ref = aligner_revision or "main"
         aligner_revision = resolve_revision(aligner_name, aligner_ref)

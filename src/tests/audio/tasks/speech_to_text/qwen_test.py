@@ -94,7 +94,7 @@ def test_align_with_qwen_maps_worker_output_to_scriptlines(monkeypatch: pytest.M
     # align_with_qwen resolves the aligner ref to a commit SHA and stages it via
     # hf_subprocess_env before ever reaching subprocess.run; fake both so this test
     # doesn't depend on network reachability or this host's local HF cache state.
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
     monkeypatch.setattr(qwen_mod, "hf_subprocess_env", lambda *a, **k: {})
     monkeypatch.setattr(qwen_mod, "ensure_venv", lambda *a, **k: "/fake/venv")
     monkeypatch.setattr(qwen_mod, "venv_python", lambda *a, **k: "/fake/venv/bin/python")
@@ -128,7 +128,7 @@ def test_align_with_qwen_maps_worker_output_to_scriptlines(monkeypatch: pytest.M
 
 def _stub_qwen_staging(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
     monkeypatch.setattr(qwen_mod, "hf_subprocess_env", lambda *a, **k: {"HF_HUB_OFFLINE": "1"})
     monkeypatch.setattr(qwen_mod, "ensure_venv", lambda *a, **k: "/fake/venv")
     monkeypatch.setattr(qwen_mod, "venv_python", lambda *a, **k: "/fake/venv/bin/python")

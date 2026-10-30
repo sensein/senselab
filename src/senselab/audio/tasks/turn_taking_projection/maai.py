@@ -31,10 +31,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from senselab_core.runtime.locks import SharedFileLock
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType
-from senselab.utils.file_lock import SharedFileLock
 from senselab.utils.subprocess_venv import (
     _cache_dir,
     _clean_subprocess_env,

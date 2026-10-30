@@ -404,7 +404,7 @@ def test_a_takeover_during_build_refuses_to_certify_the_venv(
     the "importable-looking venv missing a shared object" corruption reported in
     specs/20260817-triage-workflow-dag/benchmarks/orcd-scheduling-2026-09-08.md.
     """
-    from senselab.utils.file_lock import SharedFileLock
+    from senselab_core.runtime.locks import SharedFileLock
 
     name = "t-lost-lock"
     venv_dir = fake_cache_dir / name

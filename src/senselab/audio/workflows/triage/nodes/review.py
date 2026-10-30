@@ -898,7 +898,7 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
 def _resolved(settings: Mapping[str, Any]) -> str | None:
     """The commit the reviewer's ref resolves to, or None where it cannot be resolved here."""
     try:
-        from senselab.utils.model_revision import resolve_revision
+        from senselab_core.runtime.revision import resolve_revision
 
         return str(resolve_revision(str(settings["model_id"]), str(settings["ref"])))
     except Exception:  # noqa: BLE001 — no commit, no key; the loop records why

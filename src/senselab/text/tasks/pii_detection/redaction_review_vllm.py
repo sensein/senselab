@@ -380,8 +380,9 @@ def start_vllm_worker(worker: Any, timeout_s: int) -> None:  # noqa: ANN401 — 
         RuntimeError: Through the worker's own error type, if the commit could not be staged, the worker
             did not report ready, or the server it reports is not the engine expected.
     """
+    from senselab_core.runtime.revision import resolve_revision
+
     from senselab.text.tasks.pii_detection import redaction_review as review
-    from senselab.utils.model_revision import resolve_revision
 
     worker.revision = resolve_revision(worker.model_id, str(worker.revision))
     venv_dir = ensure_venv(VLLM_VENV, VLLM_REQUIREMENTS, python_version=VLLM_PYTHON, max_cuda_version=VLLM_MAX_CUDA)

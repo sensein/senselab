@@ -33,7 +33,8 @@ def identity_model_paths() -> Dict[str, Path]:
     Returns:
         ``detector`` and ``recognizer`` local ``.onnx`` paths.
     """
-    from senselab.utils.model_revision import cache_root
+    from senselab_core.runtime.revision import cache_root
+
     from senselab.video.tasks.facial_analysis.backends import download_pinned
 
     folder = cache_root() / "models" / "opencv"

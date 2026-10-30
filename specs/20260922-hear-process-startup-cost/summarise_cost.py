@@ -28,14 +28,18 @@ def main() -> None:
 
     print("=== parent-side staging, per invocation of the one-shot path")
     for row in by["parent_staging"]:
-        print(f"  rep {row['rep']}: ensure_venv {row['ensure_venv_s']:.3f} s  stage_snapshot {row['stage_snapshot_s']:.3f} s")
+        print(
+            f"  rep {row['rep']}: ensure_venv {row['ensure_venv_s']:.3f} s  stage_snapshot {row['stage_snapshot_s']:.3f} s"
+        )
 
     for trial in ("single", "encoder"):
         entries = by.get(trial) or []
         if not entries:
             continue
         print(f"\n=== {trial}: one audio per invocation")
-        print(f"{'audio s':>9} {'windows':>8} {'wall':>7} {'import':>8} {'load':>7} {'sig':>6} {'read':>7} {'infer':>8} {'w1':>7}")
+        print(
+            f"{'audio s':>9} {'windows':>8} {'wall':>7} {'import':>8} {'load':>7} {'sig':>6} {'read':>7} {'infer':>8} {'w1':>7}"
+        )
         per_duration = defaultdict(list)
         for row in entries:
             per_duration[row["seconds"]].append(row)

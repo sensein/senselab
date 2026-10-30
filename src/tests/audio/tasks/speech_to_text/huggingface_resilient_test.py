@@ -11,7 +11,7 @@ def test_asr_pipeline_loads_via_load_hf_resilient(monkeypatch: pytest.MonkeyPatc
 
     # Avoid Hub validation when constructing the HFModel.
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
 
     captured: dict = {}
 

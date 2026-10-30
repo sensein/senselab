@@ -40,9 +40,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from senselab_core.runtime.locks import SharedFileLock
+
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype, device_run_opt
 from senselab.utils.data_structures.logging import logger
-from senselab.utils.file_lock import SharedFileLock
 from senselab.utils.subprocess_venv import (
     _cache_dir_path,
     _clean_subprocess_env,
@@ -257,8 +258,7 @@ def stage_clearvoice_checkpoints(spec: ClearVoiceModelSpec, revision: str = "mai
         weight files it names, and the 40-hex commit those bytes came from.
     """
     from huggingface_hub import hf_hub_download
-
-    from senselab.utils.model_revision import resolve_revision
+    from senselab_core.runtime.revision import resolve_revision
 
     sha = resolve_revision(spec.model_id, revision)
     manifest = Path(hf_hub_download(spec.model_id, "last_best_checkpoint", revision=sha))

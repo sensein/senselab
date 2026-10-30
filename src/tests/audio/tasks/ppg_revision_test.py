@@ -25,7 +25,7 @@ def test_checkpoint_is_downloaded_at_the_resolved_commit(monkeypatch: pytest.Mon
         calls["download"] = (repo_id, filename, revision)
         return str(tmp_path / "snapshots" / revision / filename)
 
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", fake_resolve)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", fake_resolve)
     monkeypatch.setattr("huggingface_hub.hf_hub_download", fake_download)
 
     sha, path = ppg.ppgs_checkpoint()

@@ -129,7 +129,7 @@ def test_staging_downloads_only_the_files_the_commit_manifest_names(
         return str(snapshot / filename)
 
     monkeypatch.setattr("huggingface_hub.hf_hub_download", fake_download)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: sha)
 
     checkpoint_dir, resolved = cv.stage_clearvoice_checkpoints(cv.CLEARVOICE_MODELS["MossFormer2_SR_48K"])
 
@@ -158,7 +158,7 @@ def test_staging_resolves_the_ref_to_a_commit_before_downloading(
         seen["repo"], seen["ref"] = repo_id, ref
         return sha
 
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", fake_resolve)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", fake_resolve)
     monkeypatch.setattr(
         "huggingface_hub.hf_hub_download",
         lambda repo_id, filename, revision="main": str(snapshot / filename),

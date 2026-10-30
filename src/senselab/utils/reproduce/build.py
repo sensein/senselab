@@ -43,7 +43,8 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
-from senselab.utils.file_lock import SharedFileLock, lock_fd_matches_path
+from senselab_core.runtime.locks import SharedFileLock, lock_fd_matches_path
+
 from senselab.utils.reproduce import sandbox
 from senselab.utils.reproduce.lockgen import uv_executable
 from senselab.utils.reproduce.locks import ReproduceLockError, file_sha256, lock_entries, normalize_name, verify_files

@@ -205,9 +205,11 @@ def check(root: Path, items: int, overlap_leg: bool = False) -> int:
     double += len(set(completes) ^ done)  # a completion without a done record, or the reverse
     lost = len(expected - done)
     st = WorkPool(root).status()["counts"]
-    print(f"leg {root.name} workers={len(logs)} hosts={len(hosts)} claims={sum(claims.values())} killed={killed} "
-          f"interrupted={st['interrupted']} dead={st['dead']} queued={st['queued']} leased={st['leased']} "
-          f"conflicts={st['conflicts']} leaselost={leaselost}")
+    print(
+        f"leg {root.name} workers={len(logs)} hosts={len(hosts)} claims={sum(claims.values())} killed={killed} "
+        f"interrupted={st['interrupted']} dead={st['dead']} queued={st['queued']} leased={st['leased']} "
+        f"conflicts={st['conflicts']} leaselost={leaselost}"
+    )
     tail = f" overlap={len(overlaps)}" if overlap_leg else ""
     print(f"race items={items} done={len(done & expected)} double={double} lost={lost}{tail}")
     return 0 if double == 0 and lost == 0 and not overlaps and done == expected else 1

@@ -165,7 +165,7 @@ def write_cell(
 ) -> None:
     """Write one cell's outcomes to ``path``, atomically, alongside the corpus it was measured against.
 
-    Write-then-rename (see ``senselab.utils.model_revision``'s identical convention): a
+    Write-then-rename (see ``senselab_core.runtime.revision``'s identical convention): a
     task preempted mid-write must never leave a partial cell file for the next attempt's
     :func:`read_cell` to mistake for a completed, trustworthy checkpoint.
 

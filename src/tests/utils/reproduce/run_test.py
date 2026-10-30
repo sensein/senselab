@@ -523,7 +523,7 @@ def test_gpu_guard_and_driver_floor(world: World, monkeypatch: pytest.MonkeyPatc
 @pytest.mark.parametrize(
     "line",
     [
-        "import senselab.utils.file_lock",
+        "import senselab_core.runtime.locks",
         "from senselab.utils import fastio",
         "import importlib; importlib.import_module('senselab.utils.fastio')",
         "import senselab",

@@ -8,8 +8,7 @@ from multiprocessing.synchronize import Event as MpEvent
 from pathlib import Path
 
 import pytest
-
-from senselab.utils.file_lock import LOCK_DIR_MODE, LOCK_FILE_MODE, SharedFileLock, lock_holder
+from senselab_core.runtime.locks import LOCK_DIR_MODE, LOCK_FILE_MODE, SharedFileLock, lock_holder
 
 
 def _lock_file(resource: Path) -> Path:
@@ -37,6 +36,7 @@ def _holder_file(resource: Path) -> Path:
     return Path(str(resource) + ".holder")
 
 
+@pytest.mark.logic
 def test_lock_and_heartbeat_files_are_group_writable(tmp_path: Path) -> None:
     """A second user must be able to refresh the heartbeat and break a stale lock.
 
@@ -55,6 +55,7 @@ def test_lock_and_heartbeat_files_are_group_writable(tmp_path: Path) -> None:
         assert stat.S_IMODE(holder.stat().st_mode) & 0o060 == 0o060
 
 
+@pytest.mark.logic
 def test_lock_directory_is_setgid_and_group_writable(tmp_path: Path) -> None:
     """Group ownership must propagate to files the next user creates."""
     resource = tmp_path / "nested" / "thing"
@@ -64,6 +65,7 @@ def test_lock_directory_is_setgid_and_group_writable(tmp_path: Path) -> None:
         assert mode & 0o070 == 0o070, "directory should be group rwx"
 
 
+@pytest.mark.logic
 def test_a_caller_directory_is_not_chmodded_when_unmanaged(tmp_path: Path) -> None:
     """A lock over a caller-supplied path must not touch that directory's permissions.
 
@@ -90,6 +92,7 @@ def test_a_caller_directory_is_not_chmodded_when_unmanaged(tmp_path: Path) -> No
     assert not (after & stat.S_ISGID), "setgid must not be set on a caller-owned directory"
 
 
+@pytest.mark.logic
 def test_holder_identity_is_recorded_while_held(tmp_path: Path) -> None:
     """A takeover must be able to name who it displaced.
 
@@ -106,6 +109,7 @@ def test_holder_identity_is_recorded_while_held(tmp_path: Path) -> None:
         assert isinstance(holder["taken_at"], (int, float))
 
 
+@pytest.mark.logic
 def test_holder_is_cleared_on_release(tmp_path: Path) -> None:
     """After release, lock_holder must read as unheld."""
     resource = tmp_path / "thing"
@@ -114,6 +118,7 @@ def test_holder_is_cleared_on_release(tmp_path: Path) -> None:
     assert lock_holder(_holder_file(resource)) is None
 
 
+@pytest.mark.logic
 def test_a_stale_heartbeat_is_taken_over(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """A holder that died must not block waiters until timeout.
 
@@ -140,6 +145,7 @@ def test_a_stale_heartbeat_is_taken_over(tmp_path: Path, caplog: pytest.LogCaptu
     assert "alice" in message and "node1234" in message and "4211" in message
 
 
+@pytest.mark.logic
 def test_a_fresh_heartbeat_is_not_taken_over(tmp_path: Path) -> None:
     """A live holder must be waited for, not displaced.
 
@@ -159,6 +165,7 @@ def test_a_fresh_heartbeat_is_not_taken_over(tmp_path: Path) -> None:
     assert heartbeat.exists() is False
 
 
+@pytest.mark.logic
 def test_a_live_holder_with_a_stale_heartbeat_is_not_displaced(tmp_path: Path) -> None:
     """A ``filelock.Timeout`` means a live process holds the lock -- never break it.
 
@@ -190,6 +197,7 @@ def test_a_live_holder_with_a_stale_heartbeat_is_not_displaced(tmp_path: Path) -
         assert getpass.getuser() in message
 
 
+@pytest.mark.logic
 def test_chmod_failure_does_not_break_the_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """On a shared tree the file may belong to someone else.
 
@@ -205,6 +213,7 @@ def test_chmod_failure_does_not_break_the_lock(tmp_path: Path, monkeypatch: pyte
         pass  # must not raise
 
 
+@pytest.mark.logic
 def test_dotted_resource_names_get_distinct_lock_files(tmp_path: Path) -> None:
     """Two resources differing only after a dot must never share a lock file.
 
@@ -229,6 +238,7 @@ def test_dotted_resource_names_get_distinct_lock_files(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.logic
 def test_lock_holder_returns_none_for_a_missing_or_junk_file(tmp_path: Path) -> None:
     """A partially written or corrupt lock file must read as unheld, not crash."""
     assert lock_holder(tmp_path / "nope.lock") is None
@@ -252,7 +262,7 @@ def _hold(path: str, seconds: float, acquired: MpEvent) -> None:
         acquired: Set once the lock is actually held, so the parent can wait
             on a real event instead of guessing how long spawn + import takes.
     """
-    from senselab.utils.file_lock import SharedFileLock
+    from senselab_core.runtime.locks import SharedFileLock
 
     with SharedFileLock(Path(path)):
         acquired.set()
@@ -261,6 +271,7 @@ def _hold(path: str, seconds: float, acquired: MpEvent) -> None:
         time.sleep(seconds)
 
 
+@pytest.mark.logic
 def test_a_second_process_waits_rather_than_proceeding(tmp_path: Path) -> None:
     """Two live processes must serialise, not interleave.
 
@@ -290,6 +301,7 @@ def test_a_second_process_waits_rather_than_proceeding(tmp_path: Path) -> None:
     assert waited > 0.5, f"second acquirer did not wait (waited {waited:.2f}s)"
 
 
+@pytest.mark.logic
 def test_a_normal_handoff_after_waiting_is_not_logged_as_a_stale_takeover(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -325,6 +337,7 @@ def test_a_normal_handoff_after_waiting_is_not_logged_as_a_stale_takeover(
     assert not any("Stale lock" in r.message for r in caplog.records), caplog.text
 
 
+@pytest.mark.logic
 def test_took_over_names_an_uncontended_acquire_over_a_leftover_identity(tmp_path: Path) -> None:
     """``took_over`` is true only after an uncontended acquire over a holder identity left on disk."""
     import multiprocessing as mp
@@ -354,6 +367,7 @@ def test_took_over_names_an_uncontended_acquire_over_a_leftover_identity(tmp_pat
         proc.join(timeout=10)
 
 
+@pytest.mark.logic
 def test_a_holder_without_a_heartbeat_yet_is_not_taken_over(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """A holder that has just acquired and not yet written a heartbeat must not be judged stale.
 
@@ -378,6 +392,7 @@ def test_a_holder_without_a_heartbeat_yet_is_not_taken_over(tmp_path: Path, capl
     assert not any("Stale lock" in r.message for r in caplog.records), caplog.text
 
 
+@pytest.mark.logic
 def test_a_holder_mid_long_install_without_a_readable_heartbeat_is_not_taken_over(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -408,6 +423,7 @@ def test_a_holder_mid_long_install_without_a_readable_heartbeat_is_not_taken_ove
     assert not any("Stale lock" in r.message for r in caplog.records), caplog.text
 
 
+@pytest.mark.logic
 def test_a_holder_with_no_heartbeat_and_an_old_taken_at_is_eventually_taken_over(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -438,6 +454,7 @@ def test_a_holder_with_no_heartbeat_and_an_old_taken_at_is_eventually_taken_over
     assert "Stale lock" in message and "alice" in message and "node1234" in message and "4211" in message
 
 
+@pytest.mark.logic
 def test_heartbeat_is_refreshed_while_held(tmp_path: Path) -> None:
     """The heartbeat file's mtime must keep advancing for the duration the lock is held.
 
@@ -455,6 +472,7 @@ def test_heartbeat_is_refreshed_while_held(tmp_path: Path) -> None:
     assert second > first, "heartbeat mtime did not advance while the lock was held"
 
 
+@pytest.mark.logic
 def test_timeout_tolerates_a_holder_without_taken_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A holder file senselab did not write must still raise TimeoutError, not KeyError.
 
@@ -479,7 +497,7 @@ def test_timeout_tolerates_a_holder_without_taken_at(tmp_path: Path, monkeypatch
         assert acquired.wait(timeout=30), "child never acquired the lock within 30s"
         # A hand-edited holder payload: legible JSON, correct shape, no `taken_at`.
         monkeypatch.setattr(
-            "senselab.utils.file_lock.lock_holder",
+            "senselab_core.runtime.locks.lock_holder",
             lambda *_a, **_k: {"user": "alice", "host": "node1", "pid": 4211},
         )
         with pytest.raises(TimeoutError):
@@ -493,6 +511,7 @@ NFS_ENV = "SENSELAB_WORK_POOL_NFS_DIR"
 
 
 @pytest.mark.parametrize("where", ["local", "nfs"])
+@pytest.mark.logic
 def test_a_waiter_that_locked_the_released_file_does_not_share_the_lock(
     where: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -21,23 +22,27 @@ SCRIPTED = Path(__file__).parent / "scripted_worker_fixture.py"
 posix_only = pytest.mark.skipif(os.name == "nt", reason="stands in for the interpreter with a shell script")
 
 
-def _no_children() -> bool:
-    try:
-        os.waitpid(-1, os.WNOHANG)
-    except ChildProcessError:
-        return True
-    return False
+def _children() -> set[int]:
+    """Pids of this process's live children, as `pgrep -P` reports them."""
+    out = subprocess.run(["pgrep", "-P", str(os.getpid())], capture_output=True, text=True, check=False).stdout
+    return {int(pid) for pid in out.split()}
+
+
+@pytest.fixture(scope="module")
+def _baseline_children() -> set[int]:
+    """Children already alive when this module starts, such as a multiprocessing resource tracker."""
+    return _children()
 
 
 @pytest.fixture(autouse=True)
-def no_leaked_processes() -> Iterator[None]:
+def no_leaked_processes(_baseline_children: set[int]) -> Iterator[None]:
     """Fail a test that leaves a child process behind."""
-    if not hasattr(os, "WNOHANG"):
+    if os.name == "nt":
         yield
         return
-    assert _no_children()
+    assert _children() - _baseline_children == set()
     yield
-    assert _no_children()
+    assert _children() - _baseline_children == set()
 
 
 @pytest.fixture

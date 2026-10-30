@@ -41,6 +41,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Optional, Sequence
 
+from senselab_core.runtime.locks import SharedFileLock
+
 from senselab.utils import venv_lock
 from senselab.utils.cuda_probe import (
     HostCuda,
@@ -49,7 +51,6 @@ from senselab.utils.cuda_probe import (
     detect_host_cuda,
     pick_torch_index,
 )
-from senselab.utils.file_lock import SharedFileLock
 from senselab.utils.uv_tools import find_uv
 from senselab.utils.venv_lock import VenvLock, load_lock
 

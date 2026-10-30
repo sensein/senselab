@@ -132,7 +132,7 @@ def _resolve_embedding_model(model: Optional[SenselabModel]) -> tuple[str, Optio
     if sha:
         return model_id, str(sha), None
     try:
-        from senselab.utils.model_revision import resolve_revision
+        from senselab_core.runtime.revision import resolve_revision
 
         return model_id, resolve_revision(model_id, "main"), None
     except Exception as exc:  # noqa: BLE001 — an unresolved commit must be recorded, not raised

@@ -44,7 +44,7 @@ def _stub_commit_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     to have those repos cached -- verified by running under ``HF_HUB_OFFLINE=1``
     with an empty ``HF_HUB_CACHE``, where the unstubbed form fails outright.
     """
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda repo_id, ref="main", **kw: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda repo_id, ref="main", **kw: "f" * 40)
 
 
 SR = 16000

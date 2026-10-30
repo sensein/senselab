@@ -17,9 +17,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+from senselab_core.runtime.revision import cache_root
 
 from senselab.utils.data_structures.logging import logger
-from senselab.utils.model_revision import cache_root
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, venv_python
 from senselab.video.tasks.facial_analysis.results import GalleryLayout
 

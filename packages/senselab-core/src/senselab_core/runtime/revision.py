@@ -23,7 +23,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from senselab.utils.file_lock import SharedFileLock
+from senselab_core.runtime.locks import SharedFileLock
+from senselab_core.runtime.retry import retry_on_transient_error
 
 logger = logging.getLogger("senselab")
 
@@ -204,6 +205,54 @@ def record_resolution(repo_id: str, ref: str, sha: str, run: Optional[str] = Non
         lock.__exit__(None, None, None)
 
 
+def get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:
+    """Resolve the immutable commit SHA of a locally cached model — no network.
+
+    Resolution order (all filesystem-only):
+      1. ``revision`` is already a full 40-hex commit SHA -> return it unchanged;
+      2. the authoritative ``refs/<revision>`` pointer file -> its SHA (works
+         regardless of which files the repo ships, e.g. SpeechBrain/pyannote/NeMo
+         repos with no ``config.json``);
+      3. a cached file's ``snapshots/<sha>/`` parent directory.
+
+    Raises:
+        RevisionResolutionError: If none of the above resolves ``revision`` to a
+            SHA. Callers needing an immutable identity cannot be handed the
+            mutable ``revision`` back as if it were one; the caller can retry
+            against the Hub instead (see ``revision._resolve_uncached``).
+    """
+    if _SHA_RE.fullmatch(revision):
+        return revision
+
+    from huggingface_hub import constants, try_to_load_from_cache
+
+    ref_file = Path(constants.HF_HUB_CACHE) / f"models--{repo_id.replace('/', '--')}" / "refs" / revision
+    try:
+        if ref_file.is_file():
+            sha = ref_file.read_text().strip()
+            if _SHA_RE.fullmatch(sha):
+                return sha
+    except Exception:
+        pass
+
+    for filename in ("config.json", "hyperparams.yaml", "preprocessor_config.json", "model.safetensors"):
+        try:
+            result = try_to_load_from_cache(repo_id=repo_id, filename=filename, revision=revision)
+            if isinstance(result, str):
+                # Path looks like: .../snapshots/<commit_hash>/<filename>
+                return Path(result).parent.name
+        except Exception:
+            continue
+
+    # Returning `revision` here would hand a mutable ref to callers that will
+    # record it as a commit -- provenance that is confidently wrong, which is
+    # worse than none. Refuse instead; the caller can go to the Hub.
+    raise RevisionResolutionError(
+        f"{repo_id}@{revision} is not resolvable from the local cache "
+        f"(no refs/{revision} pointer and no snapshot directory)."
+    )
+
+
 def _resolve_uncached(repo_id: str, ref: str, token: Optional[str] = None) -> str:
     """Resolve a ref to a SHA without consulting the manifest or the memo.
 
@@ -211,10 +260,8 @@ def _resolve_uncached(repo_id: str, ref: str, token: Optional[str] = None) -> st
     resolution would reintroduce the 429 rate-limiting that ``load_hf_resilient``
     exists to avoid.
     """
-    from senselab.utils.dependencies import _get_cached_commit_hash
-
     try:
-        local = _get_cached_commit_hash(repo_id, ref)
+        local = get_cached_commit_hash(repo_id, ref)
     except Exception as exc:  # noqa: BLE001 — any local-read failure just means "ask the Hub"
         # Never surfaces a wrong answer, but a *persistent* local problem (bad
         # HF_HUB_CACHE, permissions) would otherwise force every resolution onto
@@ -227,8 +274,6 @@ def _resolve_uncached(repo_id: str, ref: str, token: Optional[str] = None) -> st
 
     try:
         from huggingface_hub import HfApi
-
-        from senselab.utils.dependencies import retry_on_transient_error
 
         # The mandatory Hub round-trip on the cold-cache path, and the *first* network call a
         # cold run makes: resolve_model calls resolve_revision before ensure_hf_model. Wrap it in

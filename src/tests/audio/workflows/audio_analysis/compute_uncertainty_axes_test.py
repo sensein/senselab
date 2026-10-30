@@ -43,7 +43,7 @@ def _no_brouhaha(monkeypatch: pytest.MonkeyPatch) -> None:
     import senselab.audio.tasks.scene_quality as sq
 
     monkeypatch.setattr(sq, "extract_brouhaha_frames", lambda audios, *a, **k: [None] * len(audios))
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda repo_id, ref="main", **kw: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda repo_id, ref="main", **kw: "f" * 40)
 
 
 # ── Test fixture builders ─────────────────────────────────────────────

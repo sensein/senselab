@@ -631,6 +631,7 @@ def embed_subject(
         ValueError: If ``extents`` is empty, or no window survived extraction for any of them.
     """
     import torch  # noqa: PLC0415
+    from senselab_core.runtime.revision import resolve_revision  # noqa: PLC0415
 
     from senselab.audio.data_structures import Audio  # noqa: PLC0415
     from senselab.audio.data_structures.audio_hints import (  # noqa: PLC0415
@@ -640,7 +641,6 @@ def embed_subject(
     from senselab.audio.tasks.speaker_embeddings.windowing import (  # noqa: PLC0415
         extract_per_window_embeddings,
     )
-    from senselab.utils.model_revision import resolve_revision  # noqa: PLC0415
     from senselab.utils.portable_audio_io import audio_info, read_audio  # noqa: PLC0415
     from senselab.utils.tasks.embedding_distribution import (  # noqa: PLC0415
         describe_embedding_distribution,

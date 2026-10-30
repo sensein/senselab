@@ -301,8 +301,8 @@ def diarize_audios_with_child_adult(
         # commit_sha is already populated by HFModel's constructor-time resolution; the
         # resolve_revision fallback only matters if that somehow did not happen. Deferred
         # import (not at module top) keeps this monkeypatch-friendly at
-        # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
-        from senselab.utils.model_revision import resolve_revision
+        # senselab_core.runtime.revision.resolve_revision, matching the rest of the codebase.
+        from senselab_core.runtime.revision import resolve_revision
 
         hf_repo = str(model.path_or_uri)
         hf_revision = model.commit_sha or resolve_revision(hf_repo, model.revision)

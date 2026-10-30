@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from senselab_core.runtime.locks import SharedFileLock
 
-from senselab.utils.file_lock import SharedFileLock
 from senselab.utils.reproduce import cache, digest, run
 from senselab.utils.reproduce.cache import CacheError
 from senselab.utils.reproduce.spec import Manifest

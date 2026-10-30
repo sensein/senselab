@@ -1897,7 +1897,7 @@ def review_transcript(
     """
     began = time.monotonic()
     try:
-        from senselab.utils.model_revision import resolve_revision
+        from senselab_core.runtime.revision import resolve_revision
 
         revision = resolve_revision(model_id, ref)
     except Exception as exc:  # noqa: BLE001 — an unresolvable ref is a recorded absence, not a crash

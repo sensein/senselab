@@ -158,7 +158,7 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Harness
     monkeypatch.setattr(redaction_review, "venv_python", lambda *a, **k: sys.executable)
     monkeypatch.setattr(redaction_review, "_staged_snapshot", lambda *a, **k: None)
     monkeypatch.setattr(redaction_review, "hf_subprocess_env", lambda *a, **k: {"PATH": "/usr/bin:/bin"})
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: SHA)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: SHA)
     try:
         yield Harness(log, script)
     finally:
@@ -186,7 +186,7 @@ class TestTheWeightsAreLoadedOncePerProcess:
     def test_a_different_commit_is_a_different_worker(self, harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
         """Weights already resident are the wrong weights when the resolved commit changes."""
         review_transcript("one", model_id="stub/model")
-        monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "c" * 40)
+        monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "c" * 40)
         review_transcript("two", model_id="stub/model")
         assert [load["revision"] for load in harness.loads] == [SHA, "c" * 40]
 

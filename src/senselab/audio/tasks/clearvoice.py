@@ -73,7 +73,8 @@ def run_clearvoice_over_audios(
     if not audios:
         return []
 
-    from senselab.utils.model_revision import resolve_revision
+    from senselab_core.runtime.revision import resolve_revision
+
     from senselab.utils.tasks.cached_inference import audio_signature, result_cache_key, result_lookup, result_store
 
     prepared = prepare_audios_for_clearvoice(audios, spec)

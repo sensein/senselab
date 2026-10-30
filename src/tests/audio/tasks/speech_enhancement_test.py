@@ -38,7 +38,7 @@ def _offline_hfmodel_construction(monkeypatch: pytest.MonkeyPatch) -> None:
     construction in tests.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
 
 
 def test_default_model_is_unchanged(mono_audio_sample: Audio) -> None:
@@ -161,7 +161,7 @@ def test_empty_input_returns_empty_without_spawning(monkeypatch: pytest.MonkeyPa
     is mocked here per this project's rule against unmocked HFModel construction in tests.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
     assert driftse.enhance_audios_with_driftse([], model=HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)) == []
 
 
@@ -178,7 +178,7 @@ def test_checkpoint_download_is_one_pinned_file_not_the_whole_snapshot(
     resolution is observable without spawning a venv.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
 
     calls = []
 
@@ -269,7 +269,7 @@ def test_every_variant_names_a_checkpoint_and_a_config() -> None:
 def test_an_unknown_variant_fails_before_any_download(monkeypatch: pytest.MonkeyPatch) -> None:
     """A typo'd variant must fail loudly, not fall back to the default checkpoint."""
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
     model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)
     with pytest.raises(ValueError, match="unknown DriftSE variant"):
         driftse.enhance_audios_with_driftse([], model=model, variant="distilhubert_typo")
@@ -287,7 +287,7 @@ def test_checkpoint_override_skips_the_hub_entirely(
     real subprocess venv or touching the network.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
     monkeypatch.setenv(driftse._DRIFTSE_CHECKPOINT_ENV, str(tmp_path))
 
     def fail_resolve_model(*args: object, **kwargs: object) -> None:

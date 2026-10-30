@@ -49,7 +49,7 @@ def _fake_resolve_revision(monkeypatch: pytest.MonkeyPatch) -> None:
     default detector set (both presidio and gliner), so opting in per-test would just
     repeat this line everywhere it matters.
     """
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
 
 
 @pytest.fixture
@@ -552,7 +552,7 @@ def test_a_different_gliner_commit_misses(fake_venv: Path, monkeypatch: pytest.M
     recorder.input_hook = _echo
     monkeypatch.setattr(subprocess, "run", recorder)
     detect_pii_via_subprocess({"0": "Alice lives in Boston."})
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "a" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "a" * 40)
     detect_pii_via_subprocess({"0": "Alice lives in Boston."})
     assert len(recorder.calls) == 2
 

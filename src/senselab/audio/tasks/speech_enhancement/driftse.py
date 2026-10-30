@@ -411,8 +411,7 @@ def enhance_audios_with_driftse(
         config_rel = ""
     else:
         from huggingface_hub import hf_hub_download
-
-        from senselab.utils.model_revision import resolve_revision
+        from senselab_core.runtime.revision import resolve_revision
 
         # One file, not the snapshot: the mirror is 2.4 GB, of which one 1.14 GB checkpoint is
         # read. resolve_model would download all of it. Resolving the ref to a commit SHA first

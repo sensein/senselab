@@ -35,8 +35,8 @@ from typing import Any
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
+from senselab_core.runtime.locks import SharedFileLock
 
-from senselab.utils.file_lock import SharedFileLock
 from senselab.utils.reproduce import engine
 from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.env import env_key

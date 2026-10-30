@@ -38,7 +38,7 @@ def _stub_qwen(monkeypatch: pytest.MonkeyPatch) -> tuple[list[dict], list[tuple[
         return {}
 
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _resolve)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", _resolve)
     monkeypatch.setattr(qwen_mod, "hf_subprocess_env", _env)
     monkeypatch.setattr(qwen_mod, "ensure_venv", lambda *a, **k: "/fake/venv")
     monkeypatch.setattr(qwen_mod, "venv_python", lambda *a, **k: "/fake/venv/bin/python")
@@ -108,7 +108,7 @@ def test_aligner_revision_kwarg_is_forwarded_by_transcribe_audios(monkeypatch: p
 
     monkeypatch.setattr(api_mod.QwenASR, "transcribe_with_qwen", _fake)
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: MAIN_SHA)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: MAIN_SHA)
     model: HFModel = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B", revision="main")
     api_mod.transcribe_audios([_audio()], model, aligner_revision="v1")
     assert seen["aligner_revision"] == "v1"
@@ -117,7 +117,7 @@ def test_aligner_revision_kwarg_is_forwarded_by_transcribe_audios(monkeypatch: p
 def test_language_reaches_the_crisperwhisper_worker_request(monkeypatch: pytest.MonkeyPatch) -> None:
     """``transcribe_audios(language=...)`` sends the ISO 639-1 code in every CrisperWhisper request."""
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: MAIN_SHA)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: MAIN_SHA)
     monkeypatch.setattr(cw, "ensure_venv", lambda *a, **k: "/fake/venv")
     monkeypatch.setattr(cw, "venv_python", lambda *a, **k: "/fake/venv/bin/python")
     monkeypatch.setattr(cw, "resolve_model", lambda *a, **k: (MAIN_SHA, "/fake/snapshot"))

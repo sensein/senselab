@@ -26,7 +26,9 @@ def main() -> None:
     batch = [r for r in rows if r["trial"] == "batch"]
 
     print("=== single: one audio per invocation")
-    print(f"{'dur_s':>7} {'n':>3} {'wall':>7} {'import':>7} {'hubload':>8} {'classmap':>9} {'infer':>7} {'post':>6} {'read':>6}")
+    print(
+        f"{'dur_s':>7} {'n':>3} {'wall':>7} {'import':>7} {'hubload':>8} {'classmap':>9} {'infer':>7} {'post':>6} {'read':>6}"
+    )
     by_d: dict = {}
     for r in single:
         by_d.setdefault(r["seconds"], []).append(r)

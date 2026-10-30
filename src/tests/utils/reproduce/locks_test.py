@@ -853,7 +853,7 @@ def test_a_reader_rechecks_the_path_by_opening_it_not_by_stat(tmp_path: Path, mo
         first.__exit__(None, None, None)
         released.set()
         assert reader_in.wait(10)
-        from senselab.utils.file_lock import SharedFileLock
+        from senselab_core.runtime.locks import SharedFileLock
 
         with pytest.raises(TimeoutError):
             with SharedFileLock(resource, timeout=1, manage_dir_mode=False):

@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from senselab_core.runtime.revision import RevisionResolutionError
 
 from senselab.audio.workflows.audio_analysis.stage_context import (
     STAGE_VERSIONS,
@@ -23,7 +24,6 @@ from senselab.audio.workflows.audio_analysis.stage_context import (
     StageContext,
     stage_code_version,
 )
-from senselab.utils.model_revision import RevisionResolutionError
 from senselab.utils.tasks.cached_inference import audio_signature, cache_store
 
 
@@ -37,7 +37,7 @@ def _stub_commit_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     Hub call whose outcome depends on whether this machine already has that repo cached locally —
     the same non-hermetic risk `HFModel` construction has, and the same fix.
     """
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda repo_id, ref="main", **kw: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda repo_id, ref="main", **kw: "f" * 40)
 
 
 def _ctx(**kwargs: object) -> StageContext:
@@ -120,9 +120,9 @@ def test_cache_key_tracks_the_audio_signature() -> None:
 def test_cache_key_tracks_the_resolved_commit(monkeypatch: pytest.MonkeyPatch) -> None:
     """Two commits of the same Hub model must not collide (the bug this task fixes)."""
     ctx = _ctx()
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "a" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "a" * 40)
     at_a = ctx.cache_key_for("asr", "openai/whisper-tiny", {})
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "b" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "b" * 40)
     at_b = ctx.cache_key_for("asr", "openai/whisper-tiny", {})
     assert at_a != at_b
 
@@ -137,7 +137,7 @@ def test_commit_sha_for_a_non_hub_id_skips_resolution(monkeypatch: pytest.Monkey
     def _boom(*a: object, **k: object) -> str:
         raise AssertionError("a non-Hub model id must never be resolved")
 
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _boom)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", _boom)
     assert _ctx()._commit_sha_for("yamnet") is None  # noqa: SLF001
     assert _ctx()._commit_sha_for(None) is None  # noqa: SLF001
 
@@ -152,7 +152,7 @@ def test_commit_sha_for_a_hub_id_resolves(monkeypatch: pytest.MonkeyPatch) -> No
         seen.append(repo_id)
         return sha
 
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _record)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", _record)
     assert _ctx()._commit_sha_for("openai/whisper-tiny") == sha  # noqa: SLF001
     assert seen == ["openai/whisper-tiny"]
 
@@ -184,7 +184,7 @@ def test_commit_sha_for_a_hub_shaped_id_the_hub_lacks_degrades_to_none(monkeypat
     from huggingface_hub.errors import RepositoryNotFoundError
 
     monkeypatch.setattr(
-        "senselab.utils.model_revision.resolve_revision",
+        "senselab_core.runtime.revision.resolve_revision",
         _raising(RepositoryNotFoundError.__new__(RepositoryNotFoundError)),
     )
     assert _ctx()._commit_sha_for("google/yamnet") is None  # noqa: SLF001
@@ -222,7 +222,7 @@ def test_commit_sha_for_a_local_path_degrades_to_none(monkeypatch: pytest.Monkey
     from huggingface_hub.errors import HFValidationError
 
     monkeypatch.setattr(
-        "senselab.utils.model_revision.resolve_revision",
+        "senselab_core.runtime.revision.resolve_revision",
         _raising(HFValidationError("Repo id must be in the form 'repo_name' or 'namespace/repo_name'")),
     )
     assert _ctx()._commit_sha_for("/scratch/models/foo") is None  # noqa: SLF001
@@ -237,7 +237,7 @@ def test_commit_sha_for_propagates_a_transient_failure(monkeypatch: pytest.Monke
     in the same bucket. The load would very likely have succeeded, which is what makes swallowing
     this a silent-staleness bug rather than a crash avoided.
     """
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _raising(ConnectionError("reset")))
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", _raising(ConnectionError("reset")))
     with pytest.raises(RevisionResolutionError):
         _ctx()._commit_sha_for("openai/whisper-tiny")  # noqa: SLF001
 
@@ -252,7 +252,7 @@ def test_commit_sha_for_propagates_a_gated_repo(monkeypatch: pytest.MonkeyPatch)
     from huggingface_hub.errors import GatedRepoError
 
     monkeypatch.setattr(
-        "senselab.utils.model_revision.resolve_revision", _raising(GatedRepoError.__new__(GatedRepoError))
+        "senselab_core.runtime.revision.resolve_revision", _raising(GatedRepoError.__new__(GatedRepoError))
     )
     with pytest.raises(RevisionResolutionError):
         _ctx()._commit_sha_for("some/gated-model")  # noqa: SLF001
@@ -294,7 +294,7 @@ def test_provenance_records_the_stage_code_version() -> None:
 def test_provenance_records_the_commit_that_produced_the_result(monkeypatch: pytest.MonkeyPatch) -> None:
     """Both "revision" and "commit_sha" travel: what was asked for, and what actually ran."""
     sha = "d" * 40
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: sha)
     ctx = _ctx()
     prov = ctx.provenance_for("asr", "openai/whisper-large-v3-turbo", {"device": "cpu"})
     assert prov["commit_sha"] == sha
@@ -396,7 +396,7 @@ def test_stage_context_import_stays_light() -> None:
     """
     code = (
         "import sys; "
-        "import senselab.utils.model_revision as r; "
+        "import senselab_core.runtime.revision as r; "
         "r.resolve_revision = lambda repo_id, ref='main', **kw: 'f' * 40; "
         "import senselab.audio.workflows.audio_analysis.stage_context as m; "
         "ctx = m.StageContext(perturbation='raw', audio_signature='a' * 64, senselab_ver='1.2.3'); "
