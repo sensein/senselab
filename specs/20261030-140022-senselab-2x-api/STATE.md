@@ -9,7 +9,7 @@ task or decision changes state. Newest entries go first in the log.
 |---|---|
 | Design branch (specs only) | `senselab-2x-api` → draft PR sensein/senselab#617 to `alpha` |
 | Durable worktree | `~/software/sensein/senselab-2x` (branch `senselab-2x-api`) |
-| 1.x freeze tag (Phase 0) | `1x-freeze-2026-10-30` → `19834fdd` (= `1.4.0-alpha.11`) |
+| 1.x freeze tag (Phase 0) | `freeze/1x-2026-10-30` → `19834fdd` (= `1.4.0-alpha.11`) |
 | pydra proposal | branch `enh/execution-extensions` → draft PR nipype/pydra#891; worktree `~/software/nipype/pydra-ext` |
 | Implementation branch | `2x/phase-1` (worktree `~/software/sensein/senselab-2x-impl`), stacked on `senselab-2x-api`; one reviewed commit series per task; all spec edits during Phase 1 go here too (SDD ruling R2) |
 | SDD ledger | `.superpowers/sdd/phase-1/progress.md` in the impl worktree (git-ignored; task completion lines and rulings) |
@@ -42,7 +42,7 @@ task or decision changes state. Newest entries go first in the log.
 | Phase | State |
 |---|---|
 | Design | done; owner approved 2026-10-30 ("go ahead") |
-| 0: freeze tag | done (`1x-freeze-2026-10-30`) |
+| 0: freeze tag | done (`freeze/1x-2026-10-30`) |
 | 1: kernel, worker runtime, identity, store, data fetch | executing (subagent-driven); T0 done (no drift) |
 | 2–5 | not started |
 | pydra PRs (A0…K1) | proposed in #891; none implemented |
