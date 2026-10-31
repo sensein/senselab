@@ -55,7 +55,17 @@ at the handshake.
   `l = [l, l]` sixty times is 2^60 nodes as a tree, and is refused after about 22 levels and
   61 containers entered. On the worker an output refused this way, like one whose framed line is
   over budget, is that item's `ResponseTooLarge`; on the host an item whose inputs are refused
-  this way is that item's `ValueTooLarge` and is not sent.
+  this way is that item's `ValueTooLarge` and is not sent. Every container is entered through
+  `canonical.entered`; `_Encoder` holds the open path, the finished containers and the bytes
+  charged. `dump_line`'s depth check is linear in the same way: it records each container's height
+  the first time it walks it and, on meeting it again, checks only the current depth plus that
+  height, so a shared subtree is walked once however many paths reach it.
+- **Aggregate budget on the host.** When the encodable items of a request do not fit one line
+  together, the host measures the line's frame (the request with `params` and one empty item) and
+  each item's wire size (`codec.wire_size`). An item whose own request line would exceed the budget
+  is that item's `ValueTooLarge` (`resource`) and is left off; if `params` alone cannot fit, or the
+  remaining items fit only one at a time, `run` raises `ValueTooLarge`, a `ValueError`, and sends
+  nothing. No oversize path raises a plain `ValueError`.
 - **One validator.** `validate_message(msg, kind)` is the schema of every message kind (`hello`,
   `init`, `ready`, `request`, `result`, `done`, `fatal`, `stop`). The writer calls it, through
   `dump_line(msg, kind)`, before every send, and the reader after every parse. Field types are

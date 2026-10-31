@@ -101,13 +101,25 @@ def dump_line(msg: dict[str, Any], kind: Kind) -> bytes:
     validate_message(msg, kind)
     _check_depth(msg)
     try:
-        text = json.dumps(msg, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-        line = text.encode("utf-8") + b"\n"
+        line = _json_bytes(msg) + b"\n"
     except (ValueError, TypeError, RecursionError) as exc:
         raise ProtocolError(f"{kind} message has no wire form: {type(exc).__name__}: {exc}") from exc
     if len(line) > MAX_LINE_BYTES:
         raise LineTooLarge(len(line))
     return line
+
+
+def wire_size(value: object) -> int:
+    """Return the bytes `value`, already in wire form, takes inside a wire line.
+
+    Raises:
+        ValueError, TypeError: if `value` is not JSON data.
+    """
+    return len(_json_bytes(value))
+
+
+def _json_bytes(value: object) -> bytes:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
 def _refuse_constant(name: str) -> object:
@@ -132,21 +144,27 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _check_depth(msg: object) -> None:
     try:
-        _walk(msg, set())
+        _height(msg, set(), {})
     except ValueError as exc:
         raise ProtocolError(f"wire message: {exc}") from exc
 
 
-def _walk(value: object, active: set[int]) -> None:
+def _height(value: object, active: set[int], heights: dict[int, int]) -> int:
+    """Return the containers on the tallest path down from `value`, each distinct container walked once."""
     if isinstance(value, dict):
         children: Any = value.values()
     elif isinstance(value, (list, tuple)):
         children = value
     else:
-        return
+        return 0
+    known = heights.get(id(value))
+    if known is not None:
+        require_depth(len(active) + known)
+        return known
     with entered(value, active):
-        for child in children:
-            _walk(child, active)
+        height = 1 + max((_height(child, active, heights) for child in children), default=0)
+    heights[id(value)] = height
+    return height
 
 
 def parse_line(line: bytes) -> dict[str, Any]:
@@ -183,9 +201,7 @@ def to_wire(value: object, *, array_dir: Path, at: Slot) -> Any:  # noqa: ANN401
     (`ENVELOPE`): its containers' depths are counted from the line's root, as the reader counts
     them. Containers are exactly `dict` with `str` keys, `list` and `tuple` (which becomes a
     list); scalars are what `canonical_scalar` accepts, so a numpy scalar becomes its `.item()`;
-    arrays are exactly `numpy.ndarray`, and a reference is `ARRAY_REF_HEIGHT` containers tall. Every container is
-    entered through `canonical.entered`. A container or array met again is encoded once and
-    charged again, so the work done is bounded by the line budget, never by the number of paths.
+    arrays are exactly `numpy.ndarray`, and a reference is `ARRAY_REF_HEIGHT` containers tall.
 
     Raises:
         WireValueError: on any other type or a subclass, a non-finite float, a string or key that
@@ -204,7 +220,7 @@ def to_wire(value: object, *, array_dir: Path, at: Slot) -> Any:  # noqa: ANN401
 
 
 class _Encoder:
-    """One `to_wire` call: the path of open containers, the finished ones, and the bytes charged so far."""
+    """The state of one `to_wire` call."""
 
     def __init__(self, array_dir: Path, base: int) -> None:
         self.array_dir = array_dir

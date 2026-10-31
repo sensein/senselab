@@ -32,12 +32,14 @@ from senselab_worker.codec import (
     parse_line,
     to_wire,
     validate_message,
+    wire_size,
 )
 from senselab_worker.faults import (
     ArrayIntegrityError,
     FaultClass,
     InfrastructureFault,
     ProtocolError,
+    ValueTooLarge,
     error_record,
     wire_text,
 )
@@ -383,8 +385,9 @@ class WorkerClient:
 
         Raises:
             ConcurrentUse: if another `run` on this client is in flight; that call is unaffected.
-            ValueError: if `items` or `params` are malformed, `params` has no wire form, or the request
-                with every encodable item does not fit one wire line.
+            ValueError: if `items` or `params` are malformed or `params` has no wire form.
+            ValueTooLarge: if `params` cannot fit one wire line, or the items that each fit alone do
+                not fit one line together; an item that cannot fit alone fails alone instead.
             ProtocolError, WorkerLost, WorkerFatal: infrastructure faults; the worker is discarded.
             TimeoutError: if the request exceeds `request_timeout`; the worker is killed.
         """
@@ -448,13 +451,10 @@ class WorkerClient:
                 )
             except Exception as exc:
                 results[i] = {"id": item["id"], "error": _mapped(error_record(exc))}
+        sent, line = _request_line(request_id, sent, wire_params, results)
         if not sent:
             return results
-        request = {"id": request_id, "items": [wire for _, wire in sent], "params": wire_params}
-        try:
-            line = dump_line(request, "request")
-        except LineTooLarge as exc:
-            raise ValueError(f"request of {len(sent)} items does not fit one line; send fewer items: {exc}") from exc
+        request = {"id": request_id, "items": [wire for _, wire in sent]}
         deadline = Deadline(self._request_timeout)
         try:
             self._send(line, deadline)
@@ -693,6 +693,54 @@ class WorkerClient:
             pump.close()
         proc.stdout.close()
         proc.stderr.close()
+
+
+def _request_line(
+    request_id: str,
+    sent: list[tuple[int, dict[str, Any]]],
+    params: object,
+    results: list[dict[str, Any]],
+) -> tuple[list[tuple[int, dict[str, Any]]], bytes]:
+    """Return the items left to send and their request line; no items and an empty line if none is left.
+
+    An item whose request alone, with `params`, cannot fit one line gets its `ValueTooLarge` in
+    `results` and is left off.
+
+    Raises:
+        ValueTooLarge: if `params` with an empty item cannot fit one line, or the items that each
+            fit alone do not fit together.
+    """
+
+    def dump(items: list[dict[str, Any]]) -> bytes:
+        return dump_line({"id": request_id, "items": items, "params": params}, "request")
+
+    if not sent:
+        return sent, b""
+    try:
+        return sent, dump([wire for _, wire in sent])
+    except LineTooLarge as exc:
+        whole = exc
+    empty = {"id": "", "inputs": {}}
+    try:
+        frame = len(dump([empty])) - wire_size(empty)
+    except LineTooLarge as exc:
+        raise ValueTooLarge(f"params do not fit one wire line with any item: {exc}") from exc
+    kept: list[tuple[int, dict[str, Any]]] = []
+    for i, wire in sent:
+        size = frame + wire_size(wire)
+        if size > MAX_LINE_BYTES:
+            fault = ValueTooLarge(f"item {wire['id']!r} needs a {size}-byte request line; limit {MAX_LINE_BYTES}")
+            results[i] = {"id": wire["id"], "error": _mapped(error_record(fault))}
+        else:
+            kept.append((i, wire))
+    if not kept:
+        return kept, b""
+    try:
+        if len(kept) == len(sent):
+            raise whole
+        return kept, dump([wire for _, wire in kept])
+    except LineTooLarge as exc:
+        raise ValueTooLarge(f"request of {len(kept)} items does not fit one line; send fewer items: {exc}") from exc
 
 
 def _mapped(error: dict[str, Any]) -> dict[str, Any]:

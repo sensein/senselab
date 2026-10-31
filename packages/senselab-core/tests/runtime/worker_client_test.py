@@ -17,7 +17,7 @@ import numpy
 import pytest
 import senselab_worker
 from backends.subdir_backend_fixture import ARRAY_LIKE
-from hypothesis import given, settings
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from lifecycle_probes_fixture import alive, gate, group_alive, listing, recorded_pids, state
 from senselab_core.runtime import worker_client
@@ -29,11 +29,11 @@ from senselab_core.runtime.worker_client import (
     WorkerFatal,
     WorkerLost,
 )
-from senselab_worker import runtime_identity
+from senselab_worker import codec, runtime_identity
 from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
 from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_DEPTH, to_wire
 from senselab_worker.fake import EXIT_CRASH
-from senselab_worker.faults import FaultClass, ProtocolError, classify
+from senselab_worker.faults import FaultClass, ProtocolError, ValueTooLarge, classify
 from senselab_worker.hashing import sha256_bytes
 
 FAKE = "senselab_worker.fake"
@@ -893,9 +893,49 @@ def test_a10_exponentially_shared_input_fails_only_its_item(worker: WorkerClient
 
 
 @pytest.mark.logic
-def test_request_that_cannot_fit_one_line_is_a_value_error(worker: WorkerClient) -> None:
+def test_items_that_fit_alone_but_not_together_raise_value_too_large(worker: WorkerClient) -> None:
     """Items that each fit but together exceed the line budget refuse the request; the worker stays usable."""
     items = [{"id": str(i), "inputs": {"s": "x" * 10**6}} for i in range(20)]
-    with pytest.raises(ValueError, match="does not fit one line"):
+    with pytest.raises(ValueTooLarge, match="does not fit one line"):
         worker.run(items, {})
     assert worker.alive and worker.run(items[:2], {})[0]["outputs"]
+
+
+def _fits(items: list[dict], params: dict) -> bool:
+    request = {"id": "0" * 36, "items": items, "params": params}
+    try:
+        codec.dump_line(request, "request")
+    except codec.LineTooLarge:
+        return False
+    return True
+
+
+@pytest.mark.contract
+@settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(sizes=st.lists(st.integers(0, 1500), min_size=1, max_size=6), params_size=st.integers(0, 1500))
+def test_oversize_is_value_too_large_per_item_where_attributable(
+    worker: WorkerClient, monkeypatch: pytest.MonkeyPatch, sizes: list[int], params_size: int
+) -> None:
+    """An oversized request never raises a plain `ValueError`: what one item causes is that item's error.
+
+    Against the codec's own line check: an item whose request alone cannot fit fails alone as
+    `ValueTooLarge` (resource); params that cannot fit, or items that fit only alone, raise `ValueTooLarge`.
+    """
+    budget = 2048
+    monkeypatch.setattr(codec, "MAX_LINE_BYTES", budget)
+    monkeypatch.setattr(worker_client, "MAX_LINE_BYTES", budget)
+    params = {"p": "y" * params_size}
+    items = [{"id": str(i), "inputs": {"s": "x" * n}} for i, n in enumerate(sizes)]
+    alone = [_fits([item], params) for item in items]
+    kept = [item for item, ok in zip(items, alone) if ok]
+    if not _fits([{"id": "", "inputs": {}}], params) or (kept and not _fits(kept, params)):
+        with pytest.raises(ValueTooLarge):
+            worker.run(items, params)
+        return
+    out = worker.run(items, params)
+    for result, ok in zip(out, alone):
+        if ok:
+            assert "outputs" in result
+        else:
+            assert (result["error"]["type"], result["error"]["fault"]) == ("ValueTooLarge", FaultClass.RESOURCE)
+    assert worker.alive

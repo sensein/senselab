@@ -12,6 +12,7 @@ from hypothesis import strategies as st
 from senselab_worker import runtime_identity
 from senselab_worker.canonical import canonical_npy_bytes
 from senselab_worker.codec import (
+    MAX_DEPTH,
     MAX_LINE_BYTES,
     Deadline,
     LineTooLarge,
@@ -619,3 +620,52 @@ def test_shared_array_is_written_once(tmp_path: Path) -> None:
     a = numpy.arange(3.0)
     wire = to_wire({"a": [a] * 1000}, array_dir=tmp_path, at="outputs")
     assert len({json.dumps(ref) for ref in wire["a"]}) == 1 and len(list(tmp_path.iterdir())) == 1
+
+
+TREE_NODES = 5000
+"""Bound on a generated message's size as a tree, so that its JSON text stays small."""
+
+
+@st.composite
+def _shared_dags(draw: st.DrawFn) -> tuple[dict[str, object], int, int]:
+    """A result message whose containers reuse earlier ones, its height as built, and its distinct containers."""
+    nodes: list[object] = [0]
+    heights = [0]
+    paths = [1]
+    for _ in range(draw(st.integers(1, 80))):
+        picks = draw(st.lists(st.integers(0, len(nodes) - 1), max_size=3)) + [len(nodes) - 1]
+        if sum(paths[i] for i in picks) > TREE_NODES:
+            picks = picks[-1:]
+        children = [nodes[i] for i in picks]
+        nodes.append(children if draw(st.booleans()) else {str(k): c for k, c in enumerate(children)})
+        heights.append(1 + max(heights[i] for i in picks))
+        paths.append(1 + sum(paths[i] for i in picks))
+    return {"id": "r", "item": "i", "outputs": {"x": nodes[-1]}}, heights[-1] + 2, len(nodes) + 1
+
+
+@pytest.mark.contract
+@settings(max_examples=200, deadline=None)
+@given(case=_shared_dags())
+def test_depth_check_of_a_shared_dag_matches_the_tree_and_enters_each_container_once(
+    case: tuple[dict[str, object], int, int],
+) -> None:
+    """`dump_line` refuses exactly the messages whose tree is deeper than `MAX_DEPTH`, entering each container once."""
+    import senselab_worker.codec as codec
+
+    msg, height, distinct = case
+    entries = 0
+    real = codec.entered
+
+    def counting(*args: object) -> object:
+        nonlocal entries
+        entries += 1
+        return real(*args)  # type: ignore[arg-type]
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(codec, "entered", counting)
+        if height > MAX_DEPTH:
+            with pytest.raises(ProtocolError, match="deeper"):
+                dump_line(msg, "result")
+        else:
+            dump_line(msg, "result")
+    assert entries <= distinct
