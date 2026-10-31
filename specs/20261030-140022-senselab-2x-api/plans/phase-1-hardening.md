@@ -754,7 +754,7 @@ H6 and H7 can run at any time. H8 is last.
   and `importlib.util.find_spec(old)` is `None`.
 - Fixture budget:
   - the allowlist line format is `<path>\t<sha256>\t<bytes>`;
-  - every entry must exist in `git ls-tree -r freeze/1x-2026-10-30` with the same path, and its
+  - every entry must exist in `git ls-tree -r freeze-1x-2026-10-30` with the same path, and its
     current size must be ≤ the frozen size, with matching sha256;
   - the scan covers every `git ls-files` path, not only test trees;
   - a code file (`.py`, `.pyi`, `.ipynb`) over `code_file_max_bytes` from the policy file fails;
