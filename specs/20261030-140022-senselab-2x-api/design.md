@@ -445,12 +445,15 @@ them to a principle.
 node with the attested identities. BEP028 export is how runs are published. `reproduce` becomes a
 consumer of this store.
 Its ids are `identity_digest("provenance-id@4", [run_id, ...])[:16]` over each part of an entity, activity,
-agent or environment in the record's canonical form: `normalised`, then JCS written and read back, held
-read-only. `normalised` is the shared `canonical.Tokeniser` (the one `value@2` uses), with arrays written by
-value as the base64 of their canonical `.npy` bytes. A record holds that canonical form and nothing else:
-what the caller passed is not referenced, `get_entity` returns a read-only record, and its id is checked
-against its content whenever it is built, so a record cannot come to disagree with its id (H9c, R-102).
-The file format and the read-write contract are in ADR-006 (`provenance@2.0`, R-104). The attributes and parameters have a
+agent or environment, its values as the tokens `normalised` writes. `normalised` is the shared
+`canonical.Tokeniser` (the one `value@2` uses), with arrays written by value as the base64 of their canonical
+`.npy` bytes. A record keeps those tokens, which its file line holds, and hands callers the values they stand
+for, decoded and read-only (`FrozenDict`, `FrozenList`, read-only arrays): what the caller passed is not
+referenced, and its id is checked against its content whenever it is built, so a record cannot come to
+disagree with its id (H9c, R-102). A caller never reads a token (H9c round 2): the 1.x consumers compare
+read-backs with lists and dicts and with the floats and large integers they wrote, so the decoded form, not
+the token form, is what keeps them unchanged; and a read-back recorded again mints the same id. The file
+format, the read paths and the read-write contract are in ADR-006 (`provenance@2.0`, R-104). The attributes and parameters have a
 declared provenance value type: JSON values plus tagged families, each a one-key token: non-finite floats
 (`$f`), integers beyond ±(2^53−1) (`$int`), `Path` (`$path`, posix text), `Enum`
 (`$enum`, qualified name and value), `ndarray` (`$nd`, base64 of canonical `.npy`), `Decimal` (`$dec`),

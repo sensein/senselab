@@ -209,31 +209,38 @@ Architect review §5 (R-42) found:
   entries carry `output` identities. Every provenance id changes, for 13.0-only inputs too, since the tag is
   hashed with the payload: 1.x triage records written before H9d do not share ids with records written after.
 
-- **A provenance file is `provenance@2.0`** (H9c, R-104). Its first line is
-  `{"format":"provenance@2.0","record":"format"}` and every line is canonical JSON (JCS). An entity, activity,
-  agent or environment line holds every field of its record, `run_id` included, in the record's canonical form:
-  the attributes, parameters and dependencies `normalised` wrote, then put through JCS and read back (text in
-  canonical form, an integral float in the I-JSON range as an integer, objects and arrays read-only). The id
-  is `<prefix>-` and 16 hex of `identity_digest("provenance-id@4", [run_id, <the digested fields>])`, so it is
-  recomputed from the line, and the reader refuses a line whose id is not its content's. The writer and the
-  reader build each record through the record type itself, so the writer emits nothing the reader refuses,
-  `read_jsonl(write_jsonl(s))` holds records equal to `s`'s, and writing it again gives the same bytes. Two
+- **A provenance file is `provenance@2.0`** (H9c, R-104; reading rule H9c round 2). Its first line is
+  `{"format": "provenance@2.0", "record": "format"}`; every line is JSON with sorted keys and each number as
+  Python writes it (`json.dumps(sort_keys=True)`, the separators the 1.x writer used), so a float stays a float.
+  An entity, activity, agent or environment line holds every field of its record, `run_id` included, its value
+  fields (attributes, parameters, dependencies) as the tokens `normalised` wrote. The id is `<prefix>-` and 16
+  hex of `identity_digest("provenance-id@4", [run_id, <the digested fields, value fields as tokens>])`: JCS,
+  so `1` and `1.0`, and text equal after NFC, give one id. The reader refuses a value field that is not a form
+  the writer writes (decoding it and recording it again must give the same JSON) and a line whose id is not
+  its content's. The writer and the reader build each record through the record type itself, so the writer
+  emits nothing the reader refuses, `read_jsonl(write_jsonl(s))` holds records equal to `s`'s, and writing it
+  again gives the same bytes. Records are equal when their lines identify the same content (JCS). Two
   different records under one id are refused, by `read_jsonl` and by `merge`; two timings of one activity
   (its id excludes `started` and `ended`) are one activity, and the store and `merge` hold the later by
   `(started, ended)`, so the union is order-independent. A `provenance@2.0` line without a `run_id` is refused.
-  The store records again every form it returns (H9c round 1, H-R38): the tokeniser writes a `FrozenDict`,
-  the object form a record holds, as it is, so a read-back recorded whole or nested in a new mapping keeps its
-  values, its tokens and its escaped keys, and recording `get_entity(x).attributes` mints `x` again.
-  `revised(target, **changes)` is the one copy-with-changes: of a held mapping, a canonical `FrozenDict` with the
-  changes normalised; of a record, a copy keeping its id with `run_id` null, which a store refuses to hold.
-  `recorded(value)` is the form a record holds for a value, for comparing read-backs; `plain_values(value)`
-  turns the `$f`, `$int` and `$path` tokens of a store file parsed as JSON back into numbers and text.
-  A file without a format line is `provenance@1`, the previous major, still read: its values are normalised
-  as the writer normalises them and its records keep the ids it gave them, unverified (`run_id` null). A store
-  holding an unverified record is written as `provenance@1.1`, the same canonical lines under a format line that
-  says some ids are not recomputable; it is never written as `provenance@2.0`, which would need every such
-  record re-minted under a run id and every reference to its old id rewritten. Extents are finite on read as
-  on write.
+- **A caller reads every value decoded, never a token** (H9c round 2). Every read path (`get_entity`,
+  `entities`, the other accessors, `read_jsonl`, `recorded`, `revised`, `plain_values`) hands back the value a
+  token stands for: objects as `FrozenDict` and arrays as `FrozenList` (read-only `dict` and `list`, equal to a
+  `dict` and a `list` of the same items, as JSON writes them), `$f` as the float, `$int` as the integer, `$path`
+  as a `Path`, `$nd` as a read-only `numpy.ndarray`, `$set` as a `frozenset` (its arrays as tuples), `$bytes`
+  as `bytes`, `$dec` as a `Decimal`, `$enum` as an `EnumMember` (its type's qualified name and its value; the
+  type is not imported), and a `$$`-escaped key as the key it escapes. Decoding is the inverse of `normalised`
+  on what the writer writes, so recording a read-back, whole, nested in a new mapping or through `revised`,
+  records the same tokens and mints the same id. `revised(target, **changes)` is the one copy-with-changes: of a
+  held mapping, the decoded mapping with the changes; of a record, a copy keeping its id with `run_id` null,
+  which a store refuses to hold. `recorded(value)` is what a caller reads back for a value; `plain_values`
+  decodes a value of a store file parsed as JSON.
+- **The previous major and unverified records.** A file without a format line is `provenance@1`, still read:
+  its values are recorded as the store's methods record them and its records keep the ids it gave them,
+  unverified (`run_id` null). A store holding an unverified record is written as `provenance@1.1`, the same lines
+  under a format line that says some ids are not recomputable; it is never written as `provenance@2.0`, which
+  would need every such record re-minted under a run id and every reference to its old id rewritten. Extents
+  are finite on read as on write.
 - **Every artifact carries `format: <name>@<major>.<minor>`.** That covers results, logical plans,
   placements, profiles, provenance records, fitted artifacts, store indexes and graph documents.
   - A minor change is additive, and readers ignore unknown fields.
