@@ -10,6 +10,7 @@ Reasoning and the measurements: ``specs/20260819-091500-wav-subtype-sweep/design
 from __future__ import annotations
 
 import ast
+import time
 from pathlib import Path
 
 import numpy as np
@@ -343,6 +344,60 @@ def test_audio_and_the_shim_make_the_same_decision(
     assert (shim_report.peak, shim_report.gain) == (audio_report.peak, audio_report.gain), label
     assert shim_report.out_of_range_fraction == audio_report.out_of_range_fraction, label
     assert shim_path.read_bytes() == audio_path.read_bytes(), f"{label}: the files differ"
+
+
+_CLOCKED_CONTAINERS = frozenset({"MAT5", "SVX", "MPC2K", "OGG"})
+"""Containers whose header carries a creation time or a random stream serial that libsndfile always writes."""
+
+
+def _next_second() -> None:
+    """Return once the wall clock's whole second has changed, so a seconds timestamp cannot repeat."""
+    start = int(time.time())
+    deadline = time.monotonic() + 2.0
+    while int(time.time()) == start and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert int(time.time()) != start
+
+
+def test_a_write_straddling_a_second_boundary_is_byte_identical(tmp_path: Path) -> None:
+    """The same samples written in two different seconds give the same bytes: no PEAK-chunk timestamp."""
+    signal = _over_unity_signal(0.9)
+    first = write_audio(tmp_path / "first.wav", signal, _SR)
+    _next_second()
+    write_audio(tmp_path / "second.wav", signal, _SR)
+    assert first.subtype == "FLOAT"
+    assert (tmp_path / "first.wav").read_bytes() == (tmp_path / "second.wav").read_bytes()
+
+
+def test_every_libsndfile_container_writes_bytes_that_do_not_depend_on_the_clock(tmp_path: Path) -> None:
+    """Every format and subtype libsndfile writes, written in two different seconds, gives the same bytes.
+
+    ``_CLOCKED_CONTAINERS`` are excluded: their clock or serial field is written whatever the caller asks.
+    """
+    signal = 0.5 * _over_unity_signal(1.0)[:1600]
+    combos = [
+        (fmt, subtype)
+        for fmt in sorted(sf.available_formats())
+        if fmt not in _CLOCKED_CONTAINERS
+        for subtype in sorted(sf.available_subtypes(fmt))
+    ]
+    written: dict[tuple[str, str], Path] = {}
+    for fmt, subtype in combos:
+        path = tmp_path / f"a_{fmt}_{subtype}"
+        try:
+            write_audio(path, signal, _SR, format=fmt, subtype=subtype, out_of_range="warn")
+        except (ValueError, RuntimeError):
+            continue
+        written[(fmt, subtype)] = path
+    assert ("WAV", "FLOAT") in written and ("AIFF", "DOUBLE") in written and ("RF64", "FLOAT") in written
+    _next_second()
+    differ = []
+    for (fmt, subtype), path in written.items():
+        again = tmp_path / f"b_{fmt}_{subtype}"
+        write_audio(again, signal, _SR, format=fmt, subtype=subtype, out_of_range="warn")
+        if again.read_bytes() != path.read_bytes():
+            differ.append(f"{fmt}/{subtype}")
+    assert differ == []
 
 
 def test_read_audio_returns_senselab_axis_order(tmp_path: Path) -> None:
