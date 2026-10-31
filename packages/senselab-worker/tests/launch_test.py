@@ -109,11 +109,7 @@ def _bounded() -> None:
     "closed", [c for n in range(4) for c in itertools.combinations((0, 1, 2), n)], ids=lambda c: f"closed{list(c)}"
 )
 def test_files_opened_at_interpreter_start_never_become_the_channel(tmp_path: Path, closed: tuple[int, ...]) -> None:
-    """With any of fds 0-2 closed, files a `sitecustomize` holds open on them are neither read nor written.
-
-    The regression: on Linux a module imported during start took the free fd 0, and the launcher read it as the
-    channel, answering a fatal `'utf-8' codec can't decode byte 0xde`.
-    """
+    """With any of fds 0-2 closed, files a `sitecustomize` holds open on them are neither read nor written."""
     site = tmp_path / "site"
     site.mkdir()
     (site / "sitecustomize.py").write_text(SITECUSTOMIZE)

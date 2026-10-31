@@ -30,9 +30,15 @@ at the handshake.
   worker started with fd 0 closed read a file held there as the channel (`'utf-8' codec can't
   decode byte 0xde`). H9d had added `importlib.resources`, and with it `tempfile` and `random`, to
   the import graph; the likely holder is `random`'s seed falling back to a cached `/dev/urandom`
-  descriptor where `getrandom` is refused (unconfirmed, no Linux host was at hand). A
-  `sitecustomize` holding files on the closed descriptors reproduces the class on every platform. As its first act the launcher opens `/dev/null` on each fd closed at start, replacing
-  whatever was opened there since, and only then claims the channel. The package's `__init__`
+  descriptor, which CPython keeps only where `getrandom` is refused (ENOSYS on kernels before
+  3.17, EPERM under a restrictive seccomp profile, EAGAIN at early boot). That is unconfirmed: no
+  Linux host was at hand, and `strace -f -e trace=openat,getrandom` beside a `readlink
+  /proc/self/fd/0` probe would settle it. A `sitecustomize` holding files on the closed
+  descriptors reproduces the class on every platform. As its first act the launcher opens
+  `/dev/null` on each fd closed at start, replacing whatever was opened there since, and only then
+  claims the channel. A start-time holder whose descriptor was replaced and that later closes it
+  frees fd 0 again, so a backend's child could then inherit some later file as its stdin; the
+  channel is unaffected. The package's `__init__`
   imports nothing, so the claim precedes every senselab and numpy import. A worker started with
   fd 0 closed reads end of file and exits 0 after its hello; one started with fd 1 closed writes
   its replies to `/dev/null`.
@@ -115,8 +121,11 @@ at the handshake.
    discarded. The first JSON object must be a valid hello (`validate_message`, so `"wire": true`
    or `1.0` is refused). The host accepts only if `wire` is the int `2` and `runtime` equals its
    own. Otherwise, or if the first JSON object is not a valid hello, or none
-   arrives within 60 s, it sends `{"stop": true}` and raises `ProtocolMismatch` (an
-   `infrastructure` fault) naming both values. Nothing else is decoded.
+   arrives within 60 s while the worker is alive, it sends `{"stop": true}` and raises
+   `ProtocolMismatch` (an `infrastructure` fault) naming both values. A worker that exits or
+   closes its output before its hello is `WorkerLost` with its exit code, like a loss at any later
+   point: `ProtocolMismatch` is only for a worker that answered wrongly or stayed silent. Nothing
+   else is decoded.
 3. The host sends `init`. `array_dir` is reserved; every other key is the backend's.
 4. The worker calls `load(init)` and answers `ready` with the load time in seconds, or `fatal`
    and exits non-zero.
@@ -272,9 +281,18 @@ at the handshake.
   `run` is in flight, removing the client's files. Each step is recorded only after it completes,
   so an interrupted step runs again on the next `close()` or at the end of the `run`; every part
   of it is idempotent. On the main thread SIGINT and SIGTERM are held while shutdown runs and
-  raised, in arrival order, after their handlers are restored; any exception that still
-  interrupts it (another signal's handler, or one arriving before the handlers are swapped)
-  SIGKILLs the group, if its leader is still the client's unreaped child, before it propagates.
+  raised, in arrival order, after their handlers are restored. Held signals are not raised again
+  when a wakeup fd is set (`signal.set_wakeup_fd`, as asyncio's signal handlers use), since its
+  reader already saw them at arrival. The first SIGINT logs "stopping the worker; press Ctrl-C
+  again to kill it now"; a second raises `KeyboardInterrupt` at once. That, or any other exception
+  that interrupts the steps (another signal's handler, or one arriving before the handlers are
+  swapped), SIGKILLs the group if its leader is still the client's unreaped child and then runs
+  the steps again, with signals held, so the leader is reaped and the files removed before the
+  exception propagates: a double Ctrl-C ends the shutdown in well under a second. If that
+  finishing pass is interrupted too, it is logged, and the client's finaliser finishes the steps
+  when it is collected; `__del__` runs every step not yet completed, not only for a client never
+  closed. A constructor whose shutdown is cut short runs it again before raising, since its caller
+  holds nothing to close.
   The H8c probe (XW-1) set the "terminated" flag before the kill and caught only `Exception`, so a
   second SIGINT during the SIGTERM wait left a SIGTERM-trapping group running with its client
   closed.
@@ -283,20 +301,38 @@ at the handshake.
   and the outer call finishes. `close()` called on the thread running `run`, again only possible
   from a signal handler, marks the client closed, wakes the run and returns; the run stops the
   worker on its own frame, never inside the handler, whose interrupted frame may hold a lock the
-  shutdown needs. Each lock the shutdown takes is acquired within the bound.
+  shutdown needs; a `run` that has already read its replies returns them. The shutdown lock is
+  acquired within the bound. The channel lock and the pipe readers' locks are taken without one,
+  but each is held only around a non-blocking write or close. `close()` before the worker has
+  started stops its start: the spawn is made under the shutdown lock and refused once the client
+  is closed, and the constructor then raises `WorkerLost`.
+- **Owner process.** A client records the pid that created it. In a process forked from that one
+  (multiprocessing's `fork`, DataLoader workers), the copy is foreign: `close()` and collection
+  close only the child's copies of its descriptors, and `run` raises `WorkerLost`. The child
+  never writes the stop line into the shared stdin, signals the group or removes the array
+  directory, all of which belong to the owner.
 - **Closed under a run.** Every write to the worker's stdin is made under one channel lock, and only
   while the client is open; closing the stdin takes the same lock and then wakes a write waiting
   for the pipe. So a write never reaches a closed or recycled descriptor, and a `run` whose client
   is closed under it, at any point, raises `WorkerLost`, never a content fault (XW-3: `ValueError`
   from the closed stdin's `fileno()`).
-- **Interruption schedule.** `worker_shutdown_schedule_test` injects SIGINT, SIGTERM (whose handler
-  closes the client and exits), a SIGUSR1 handler's `close()`, `close()` on the same thread and
-  `close()` on another thread at the first main-thread call of every run boundary (`to_wire`,
-  `_send`, `_receive`) and every shutdown boundary, on a timed-out `run` of a SIGTERM-ignoring
-  worker and on an idle `close()`. Each case runs in a driver process under `faulthandler`, so a
-  deadlock fails the case. Each must surface a typed outcome within the bound, with the group dead
-  unless the client is still open, and after a final `close()` leave no group member, no
-  grandchild, the leader reaped and the array directory gone.
+- **Interruption schedule.** `worker_shutdown_schedule_test` first counts, on four paths, the
+  main-thread calls of every boundary: construction, construction over a worker that exits during
+  load, a timed-out `run` of a SIGTERM-ignoring worker, and an idle `close()`. The boundaries are
+  `to_wire`, the start, handshake, send and receive, `_fail`, `_shutdown` and each of its steps,
+  the stop line, the channel close, the leader probe, each group signal, each member wait,
+  `_kill_group_now`, file removal, the pipe readers and `Popen.wait`. At every counted call it then
+  injects, one case each, SIGINT, a double SIGINT, SIGTERM (whose handler closes the client and
+  exits), a SIGUSR1 handler that closes the client, raises `SystemExit` or raises `RuntimeError`,
+  `close()` on the same thread and `close()` on another. First calls run in the contract tier
+  and later calls (the SIGKILL `_signal_group`, the second member wait) in the limits tier. Each
+  case runs in a driver process under `faulthandler`, so a deadlock fails the case. With the graces
+  shrunk, each must surface a typed outcome within the request timeout, the exit-code wait and
+  two shutdown bounds computed from the shrunk graces. The group must be dead unless the client is
+  still open. A constructor that raised must already have left nothing behind. After a final
+  `close()`, no group member or grandchild may remain, the leader must be reaped and the array
+  directory gone. Deleting the SIGKILL-and-finish fallback, or recording the stop before it
+  completes, fails the contract tier.
 - **Live member.** A member is live while it can still run user code: it is neither a zombie nor
   exiting. On macOS a member that has taken its fatal signal is first reparented to `launchd` with
   `P_WEXIT` set, still answers `kill(pid, 0)` and is shown with the `E` flag by `ps`, while
@@ -316,8 +352,8 @@ at the handshake.
   stderr tail. A failed write to an idle worker that has died is the same. The exit code is the
   one the client reaps after stopping the group, on every path, and `str()` of a `WorkerLost`
   names it; it is never read from the exit notification, which on macOS has no status for a
-  leader that exited before the kqueue event was registered (XW-4). EOF before the hello is a
-  `ProtocolMismatch`. Every host fault carries a note with the reaped exit code and the stderr
+  leader that exited before the kqueue event was registered (XW-4). EOF before the hello is
+  `WorkerLost` too. Every host fault carries a note with the reaped exit code and the stderr
   tail. A partial last line is discarded, never parsed. A forked descendant holding the
   channel open does not delay it.
 - **Stop.** On `{"stop": true}` (exactly `true`), or EOF on stdin, the worker exits 0 without
