@@ -53,11 +53,59 @@ The protocol uses only primitives that `work_pool` has measured on NFS v4.2: ato
 - bounded latency when the cluster grants no workers;
 - fairness across users of a shared store.
 
+### Storage paths, kinds and entry binding (H9b, R-100, R-101)
+The result store, the fetch cache and the run manifests live under shared, group-writable roots, so
+anyone in the group can plant a symlink or a file there. The H8c re-attack showed what followed: fetch
+replaced a file outside the cache through a planted `files/sub -> /victim` (XS-1); a directory at
+`blobs/<sha256>` or a file at a store directory wedged its key behind a retryable-looking
+`StoreUnavailable` (XS-2, XS-3); a run id `../../escaped` wrote outside `runs/`, and under umask 0 the
+run manifest was world-writable (XS-7). The rules below make those states unconstructible.
+
+- **One path primitive.** `storage.StorageDir` reaches every directory below a storage root one
+  component at a time, opening each with `O_DIRECTORY | O_NOFOLLOW` relative to its parent's
+  descriptor (macOS and Linux). Every create, rename, link, symlink and removal in the store, the fetch
+  cache and the run manifests is made relative to such a descriptor: files are created with
+  `O_EXCL | O_NOFOLLOW`, links never follow their source, and removals go through `remove_owned` on the
+  held descriptor. No symlink below a root is ever followed. The root itself is opened as given, so an
+  operator may point `~/.cache/senselab` at scratch with a symlink.
+- **A wrong kind at an owned path is corrupt, never retryable.** A symlink or a non-directory where a
+  store or cache directory belongs, or anything but a regular file at `blobs/<sha256>`, is moved aside
+  by rename (into `quarantine/` for the store, into `tmp/` for the cache, where age collection removes it;
+  beside itself if that is refused) and the path is made again. An object that cannot be moved raises
+  `WrongKindError`, a `ValueError`, naming the path, its owner and the command that removes it. Under a
+  dataset's `files/`, whose paths come from the manifest, a wrong kind is a `ManifestConflictError`, as a
+  foreign file there already is. `StoreUnavailable` is left for faults where nothing was judged.
+- **Ids that become path components are one component.** Run ids (including `SENSELAB_RUN_ID`),
+  dataset names and versions and each part of a manifest path pass `storage.path_component`: non-empty,
+  not `.` or `..`, no `/`, `\` or NUL.
+- **Modes come from `StorePolicy`, never the umask.** Every directory and file is created private
+  (`0o700`, `0o600`) and then set to its policy mode (`shared_dir_mode`, `committed_modes`). The run
+  manifest is a committed file; dead writers' temporaries beside it are removed under its lock.
+- **An entry is bound to its address and to the context it was written in.** `result.json` records the
+  key digest and the context fingerprint (`result@2.0`, `store@4`, ADR-006). A reader requires the stored
+  key to digest to the recorded digest, the recorded fingerprint to equal the fingerprint of
+  `context.json`, and both to equal the path; a mismatch is misfiled and quarantined. Swapping members
+  between two contexts' entries therefore serves neither (XS-4). `put` verifies an existing entry's
+  arrays before returning its identity, so a reported success is served by the next `get` (XS-5).
+- **Members are read by path, after their directories were reached by the primitive.** An intermediate
+  swapped for a symlink between the walk and the read can only redirect the read to another entry,
+  which must still verify against this address and context; anyone able to plant it could equally write
+  such an entry in place. Reads are therefore not routed through descriptors.
+- **Lock takeover is read from the holder file once the lock is held.** A holder writes `.holder` only
+  while holding the `flock` and a clean release removes it before unlocking, so `took_over` is whether
+  `.holder` still names someone after the acquire; it no longer depends on how long the acquire waited
+  (XS-6).
+
 ## Consequences
 - `work_pool` gains index segments and quantum yielding. Items become plan fragments.
 - The packed tier and the token arbiter wait for measurements.
 
 ## Alternatives rejected
+- **Refusing a wrong kind with an error and leaving it** (H9b). In a shared root another user's stray
+  object would wedge a key for everyone until its owner acted; moving it aside heals the key and keeps
+  the object for its owner, and an error remains only for what cannot be moved.
+- **Resolving paths with `realpath` and checking the prefix.** It races with a rename between the check
+  and the use; descriptor-relative operations do not.
 - **A database or lock service for coordination.** It adds an operated dependency to every site.
 - **Strict fencing on NFS.** It cannot be made atomic with check-then-act; idempotence makes it
   unnecessary for correctness.

@@ -209,6 +209,12 @@ Architect review §5 (R-42) found:
   entries carry `output` identities. Every provenance id changes, for 13.0-only inputs too, since the tag is
   hashed with the payload: 1.x triage records written before H9d do not share ids with records written after.
 
+  H9b (R-101) moved the store to `store@4` and its `result.json` to `result@2.0`, which adds
+  `context_fingerprint`, the fingerprint of the context the entry was written in. A reader requires it to
+  equal the fingerprint of `context.json` and the entry's path, beside the key digest (ADR-003). A
+  `result@1.0` entry names no context, so it cannot show it belongs to the `context.json` beside it, and
+  none is read: this is a new key space, not a migration.
+
 - **A provenance file is `provenance@2.0`** (H9c, R-104; reading rule H9c round 2). Its first line is
   `{"format": "provenance@2.0", "record": "format"}`; every line is JSON with sorted keys and each number as
   Python writes it (`json.dumps(sort_keys=True)`, the separators the 1.x writer used), so a float stays a float.
