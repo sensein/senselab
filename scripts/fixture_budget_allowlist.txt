@@ -1,0 +1,12 @@
+src/tests/data_for_testing/audio_48khz_mono_16bits.wav
+src/tests/data_for_testing/audio_48khz_stereo_16bits.wav
+src/tests/data_for_testing/childes_clinical_eng_poler_match_166.cha
+src/tests/data_for_testing/english_conversation_higgs_audio_v2.wav
+src/tests/data_for_testing/had_that_curiosity.wav
+src/tests/data_for_testing/output_dataset/data-00000-of-00001.arrow
+src/tests/data_for_testing/output_dataset/dataset_info.json
+src/tests/data_for_testing/output_dataset/state.json
+src/tests/data_for_testing/pose_data/no_people.jpeg
+src/tests/data_for_testing/pose_data/single_person.jpg
+src/tests/data_for_testing/pose_data/three_people.jpg
+src/tests/data_for_testing/video_48khz_stereo_16bits.mp4

@@ -111,3 +111,9 @@ repos:
     name: No research-participant identifiers in tracked files.
     entry: python scripts/check_participant_ids.py
     language: python
+  - id: fixture-budget
+    name: Committed test fixtures stay within the data-policy budget.
+    entry: uv run python scripts/check_fixture_budget.py
+    language: system
+    pass_filenames: false
+    files: ^(src/tests/data_for_testing/|packages/.*/tests/.*data/|scripts/fixture_budget_allowlist\.txt$)
