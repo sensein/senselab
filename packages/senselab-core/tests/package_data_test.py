@@ -34,12 +34,14 @@ def _tracked(project: Path, name: str) -> list[str]:
 @pytest.mark.contract
 @pytest.mark.parametrize("name", sorted(DISTRIBUTIONS))
 def test_every_tracked_package_file_is_in_the_wheel(built: Path, name: str) -> None:
-    """The wheel holds every file tracked in the import package, ``data/`` files included."""
+    """The wheel holds every file tracked in the import package, and no untracked ``data/`` file."""
     (wheel,) = built.glob(f"{name}-*.whl")
     members = set(zipfile.ZipFile(wheel).namelist())
     tracked = _tracked(DISTRIBUTIONS[name], name)
     assert any("/data/" in f for f in tracked), f"{name}: no data files to check"
     assert [f for f in tracked if f not in members] == []
+    shipped_data = [m for m in members if m.startswith(f"{name}/") and "/data/" in m]
+    assert [m for m in shipped_data if m not in set(tracked)] == [], "an untracked data file ships"
 
 
 @pytest.mark.contract
