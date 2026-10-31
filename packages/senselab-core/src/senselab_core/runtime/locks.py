@@ -134,27 +134,6 @@ def _ensure_dir(path: Path, *, manage_mode: bool = True) -> None:
         pass
 
 
-def ensure_dirs(path: Path, *, mode: int = LOCK_DIR_MODE) -> None:
-    """Create ``path`` and any missing parents, each directory this call creates (and ``path``) set to ``mode``.
-
-    Unlike ``mkdir(parents=True)`` followed by one chmod, no intermediate directory is left with the
-    caller's umask. Directories that already exist above ``path`` are not touched. The setgid bit is
-    dropped where the OS refuses it (``set_mode``); any other failed chmod is ignored, as in
-    :func:`_ensure_dir`.
-    """
-    missing: list[Path] = []
-    current = Path(path)
-    while not current.exists():
-        missing.append(current)
-        current = current.parent
-    for directory in (*reversed(missing), Path(path)):
-        directory.mkdir(exist_ok=True)
-        try:
-            set_mode(directory, mode)
-        except OSError:
-            pass
-
-
 def _touch_shared(path: Path) -> None:
     """Create ``path`` if it does not exist, then force it group-writable.
 
@@ -241,12 +220,6 @@ class SharedFileLock:
     calling this class; that workaround is gone now that the primitive itself
     cannot collide).
     """
-
-    # Above this, a successful acquire is treated as "we waited for a live holder to
-    # release", never as a stale takeover -- see `__enter__`. Comfortably above
-    # filelock's own 0.05s poll interval, comfortably below any real contention in this
-    # codebase (seconds to minutes).
-    _UNCONTENDED_ACQUIRE_THRESHOLD = 0.5
 
     def __init__(
         self,
@@ -400,43 +373,30 @@ class SharedFileLock:
     def __enter__(self) -> "SharedFileLock":
         """Acquire the lock, taking over a dead holder's leftovers if found.
 
-        See ``specs/20260907-shared-lock-heartbeat-inf/`` for why the ``else`` branch
-        gates on *how long the acquire took* rather than re-reading holder content
-        afterward: ``filelock`` truncates the ``.lock`` file on every attempt (including a
-        contender's failed polls), so content read post-acquire cannot distinguish a
-        clean release from a crash leftover, but elapsed wait time can. Holder identity
-        itself lives in the separate ``.holder`` file precisely so this reasoning about
-        the ``.lock`` file's content doesn't have to extend to identity too.
-
-        Sets ``took_over``: True when the acquire was uncontended over a holder identity left on disk, i.e. a
-        previous holder that never released (a clean release clears ``.holder``), such as a killed process.
+        Sets ``took_over``: True when, once the ``flock`` is held, ``.holder`` still names a
+        previous holder. A holder writes ``.holder`` only while it holds the ``flock`` and a clean
+        release removes it before unlocking, so an identity there is one that never released, such
+        as a killed process; how long the acquire waited does not matter.
 
         Returns:
             This instance, for use as a context manager.
 
         Raises:
             TimeoutError: The lock is held by a live process, or staleness cannot be
-                determined for a holder identity left behind by an uncontended acquire.
+                determined for a holder identity left behind by a holder that never released.
         """
         self.took_over = False
         _ensure_dir(self._lock_path.parent, manage_mode=self._manage_dir_mode)
         _touch_shared(self._lock_path)
         _touch_shared(self._holder_path)
-        # Read whatever identity is on disk before any acquire attempt. `.holder` is never
-        # touched by `filelock`'s own polling (unlike `.lock`, which it truncates on every
-        # `_acquire()` call, including a failed poll -- see `lock_holder`'s docstring), so
-        # this snapshot stays valid for the whole attempt, not just up to the first poll.
+        # Read before the acquire only to name the holder if the wait times out.
         previous_holder: Optional[dict] = lock_holder(self._holder_path)
-        acquire_started = time.monotonic()
         try:
             self._lock.acquire(timeout=self._timeout)
         except Timeout:
             age = self._heartbeat_age()
             age_display = f"{age:.1f}s old" if age is not None else "unreadable"
             if previous_holder is not None:
-                # `.get`, not `[...]`: guards against a lock file senselab did not write --
-                # a hand-edited one, or a foreign `<resource>.lock` met on the FileRef path
-                # in subprocess_venv.call_in_venv.
                 taken_at = previous_holder.get("taken_at")
                 held_for = f"{time.time() - taken_at:.1f}s" if isinstance(taken_at, (int, float)) else "an unknown time"
                 detail = (
@@ -452,29 +412,21 @@ class SharedFileLock:
                 "is a live holder even though its heartbeat may look stale -- it is not broken automatically. "
                 "If that process is confirmed dead, remove the .lock and .holder files by hand."
             ) from None
-        else:
-            # A measurable wait means the flock was actually held until moments ago: a
-            # live holder finished and released normally during it (`__exit__` clears the
-            # heartbeat and holder identity before releasing the flock, so `previous_holder`
-            # is now a snapshot of a resource that no longer needs taking over from anyone).
-            # Only a genuinely uncontended (near-instant) acquire can mean `previous_holder`,
-            # if present, is an untouched leftover from a holder that never released at all.
-            contended = (time.monotonic() - acquire_started) > self._UNCONTENDED_ACQUIRE_THRESHOLD
-            self.took_over = previous_holder is not None and not contended
-            if previous_holder is not None and not contended:
-                age, basis, bound = self._staleness(previous_holder)
-                if age is None:
-                    # Release the OS-level lock we just took: raising here must leave this
-                    # process holding nothing, matching the Timeout branch's contract.
-                    self._lock.release()
-                    raise TimeoutError(
-                        f"Cannot determine whether the lock at {self._lock_path} is stale: "
-                        f"held by user={previous_holder.get('user')} host={previous_holder.get('host')} "
-                        f"pid={previous_holder.get('pid')}, no heartbeat and no recorded acquire time. "
-                        "Not taking over."
-                    )
-                if age > bound:
-                    self._warn_stale_takeover(previous_holder, age, basis, bound)
+        leftover = lock_holder(self._holder_path)
+        self.took_over = leftover is not None
+        if leftover is not None:
+            age, basis, bound = self._staleness(leftover)
+            if age is None:
+                # Release the OS-level lock just taken, so raising leaves this process holding nothing.
+                self._lock.release()
+                raise TimeoutError(
+                    f"Cannot determine whether the lock at {self._lock_path} is stale: "
+                    f"held by user={leftover.get('user')} host={leftover.get('host')} "
+                    f"pid={leftover.get('pid')}, no heartbeat and no recorded acquire time. "
+                    "Not taking over."
+                )
+            if age > bound:
+                self._warn_stale_takeover(leftover, age, basis, bound)
 
         self._write_holder()
         self._stop_event.clear()

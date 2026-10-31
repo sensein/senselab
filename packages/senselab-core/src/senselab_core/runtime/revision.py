@@ -27,6 +27,14 @@ from senselab_worker.canonical import jcs_dumps
 
 from senselab_core.runtime.locks import SharedFileLock
 from senselab_core.runtime.retry import retry_on_transient_error
+from senselab_core.runtime.storage import (
+    TEMPORARY_NAME,
+    StorageDir,
+    StorePolicy,
+    committed_modes,
+    path_component,
+    shared_dir_mode,
+)
 
 logger = logging.getLogger("senselab")
 
@@ -92,12 +100,16 @@ def run_id() -> str:
     """
     global _RUN_ID
     if _RUN_ID is None:
-        _RUN_ID = (
+        chosen = (
             os.environ.get("SENSELAB_RUN_ID")
             or os.environ.get("SLURM_ARRAY_JOB_ID")
             or os.environ.get("SLURM_JOB_ID")
             or str(uuid.uuid4())
         )
+        try:
+            _RUN_ID = path_component(chosen)
+        except ValueError:
+            raise ValueError(f"run id {chosen!r} (from SENSELAB_RUN_ID or Slurm) must be one path component") from None
         os.environ["SENSELAB_RUN_ID"] = _RUN_ID
     return _RUN_ID
 
@@ -120,8 +132,12 @@ def cache_root() -> Path:
 
 
 def manifest_path(run: Optional[str] = None) -> Path:
-    """Return the path to a run's resolution manifest."""
-    return _cache_root() / "runs" / (run or run_id()) / MANIFEST_NAME
+    """Return the path to a run's resolution manifest.
+
+    Raises:
+        ValueError: `run` is not one path component.
+    """
+    return _cache_root() / "runs" / path_component(run or run_id()) / MANIFEST_NAME
 
 
 def read_manifest(run: Optional[str] = None) -> dict[str, str]:
@@ -158,6 +174,15 @@ def record_resolution(repo_id: str, ref: str, sha: str, run: Optional[str] = Non
     model concurrently must not lose one another's entries, and the loser of the
     race adopts the winner's SHA rather than overwriting it. The returned value is
     therefore the *authoritative* SHA for the run, which may not be ``sha``.
+
+    ``runs/<run>/`` is reached through `StorageDir` and made with the `StorePolicy`'s
+    `shared_dir_mode`; the manifest is replaced atomically with its committed file mode, whatever
+    the umask. Temporaries a dead writer left beside it are removed under the lock.
+
+    Raises:
+        RevisionResolutionError: ``sha`` is not a 40-hex commit SHA.
+        ValueError: ``run`` (or this run's id) is not one path component.
+        WrongKindError: an object of the wrong kind at ``runs/`` or the run's directory cannot be moved aside.
     """
     # Reject a non-SHA at the door rather than only filtering it on read: an entry is immutable
     # for the run's life, so one bad write poisons every later participant that adopts it.
@@ -168,9 +193,16 @@ def record_resolution(repo_id: str, ref: str, sha: str, run: Optional[str] = Non
         )
 
     path = manifest_path(run)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    key = manifest_key(repo_id, ref)
-    lock = SharedFileLock(path)
+    policy = StorePolicy.load_default()
+    dir_mode = shared_dir_mode(policy)
+    with StorageDir.open_root(_cache_root(), create=True, mode=dir_mode) as root:
+        with root.walk("runs", path.parent.name, create=True, mode=dir_mode, aside=lambda: None) as run_dir:
+            return _record_in(run_dir, path, manifest_key(repo_id, ref), sha, run, committed_modes(policy)[0])
+
+
+def _record_in(run_dir: StorageDir, path: Path, key: str, sha: str, run: Optional[str], file_mode: int) -> str:
+    """Append-if-absent `key -> sha` to the manifest at `path` in `run_dir`, under the manifest's lock."""
+    lock = SharedFileLock(path, manage_dir_mode=False)
     while True:
         try:
             lock.__enter__()
@@ -178,36 +210,30 @@ def record_resolution(repo_id: str, ref: str, sha: str, run: Optional[str] = Non
         except TimeoutError:
             # A timeout proves a live holder: a crashed process's flock is
             # kernel-released, so it cannot hold continuously through the window.
-            # Waiting is correct; breaking the lock would displace a live writer.
-            logger.info("Waiting to record a resolution for %s@%s in the run manifest", repo_id, ref)
+            logger.info("Waiting to record a resolution for %s in the run manifest", key)
             continue
     try:
+        _remove_leftover_temporaries(run_dir)
         current = read_manifest(run)
         winner = current.get(key)
-        # Adopt an existing entry only if it is a real commit. Append-if-absent otherwise treats
-        # *any* present value as authoritative, so a corrupt entry would be handed back to every
-        # later caller -- and because entries are immutable for the run's life, nothing would ever
-        # dislodge it. Overwriting a non-SHA is the one case where replacing an entry is correct.
+        # Adopt an existing entry only if it is a real commit; a non-SHA entry is the one replaced.
         if winner is not None and _SHA_RE.fullmatch(winner):
             return winner
         current[key] = sha
-        # Write-then-rename, not write_text directly: a writer killed mid-write
-        # (OOM, preemption, node failure -- all routine on a cluster) leaves a
-        # truncated file. read_manifest degrades that to {}, and the *next*
-        # writer would then persist only its own key, silently discarding every
-        # other (repo_id, ref) -> sha this run had already recorded -- forcing
-        # later processes to re-resolve those pairs against the Hub, which can
-        # disagree with the original answer if upstream moved meanwhile. That is
-        # the split-run failure this whole module exists to prevent, arriving
-        # via corruption instead of concurrency. os.replace is atomic on POSIX
-        # as long as the temp file is on the same filesystem, which the sibling
-        # path here guarantees.
-        tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
-        tmp.write_text(json.dumps(current, indent=2, sort_keys=True))
-        os.replace(tmp, path)
+        run_dir.write_atomically(
+            MANIFEST_NAME, json.dumps(current, indent=2, sort_keys=True).encode("utf-8"), mode=file_mode
+        )
         return sha
     finally:
         lock.__exit__(None, None, None)
+
+
+def _remove_leftover_temporaries(run_dir: StorageDir) -> None:
+    """Remove the manifest's temporary files in `run_dir`; under the manifest's lock any there is a dead writer's."""
+    prefix = f".{MANIFEST_NAME}."
+    for name in run_dir.listdir():
+        if name.startswith(prefix) and TEMPORARY_NAME.fullmatch(name):
+            run_dir.remove_owned(name, pattern=TEMPORARY_NAME)
 
 
 def get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:
