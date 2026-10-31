@@ -1105,3 +1105,33 @@ def test_i4_a_blob_swapped_after_its_link_is_never_trusted_by_size(tmp_path: Pat
     report = _bounded("probe_i4_swap_after_link", str(tmp_path))
     assert report["stamped"] == [] and report["served"] is True, report
     assert report["staging_modes"] == [0o700], report
+
+
+def probe_clock_hard_link(scratch: str, op: str) -> dict[str, Any]:
+    """Hard-link a victim at the root's `.clock`, then collect on the store clock, or fetch; report the victim."""
+    base = Path(scratch)
+    root, victim = base / "root", base / "victim"
+    victim.mkdir()
+    (victim / "f").write_bytes(VICTIM_BYTES)
+    os.chmod(victim / "f", 0o600)
+    os.utime(victim / "f", (OLD, OLD))
+    _setup("collect" if op == "collect" else "fetch", root)
+    root.mkdir(parents=True, exist_ok=True)
+    if os.path.lexists(root / ".clock"):
+        os.unlink(root / ".clock")
+    os.link(victim / "f", root / ".clock")
+    before = _snapshot(victim)
+    if op == "collect":
+        from senselab_core.runtime.store import ResultStore
+
+        error, _ = _outcome(lambda: ResultStore(root).collect())
+    else:
+        error, _ = _outcome(lambda: _run(op, root))
+    return {"error": error, "victim_unchanged": _snapshot(victim) == before}
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("op", ["collect", "fetch"])
+def test_i1_a_hard_link_at_a_store_or_cache_clock_leaves_its_target_alone(tmp_path: Path, op: str) -> None:
+    """A hard link at the store's or the cache's `.clock`: the file it shares is not chmodded or re-stamped."""
+    assert _bounded("probe_clock_hard_link", str(tmp_path), op) == {"error": "", "victim_unchanged": True}
