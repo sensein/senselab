@@ -753,8 +753,11 @@ whole of `dist/` before the upload step runs. One listing of `dist/` feeds every
     a dropped or broken submodule.
 - **Rebuild.** Each sdist, unpacked alone, builds a wheel whose members are byte-identical to the wheel in
   `dist/`. Every pyproject pins its build backends exactly (`hatchling==`, `hatch-vcs==`, one version across the
-  three), so the direct build and the rebuild run one backend; their transitive build requirements
-  (setuptools-scm and others) are not pinned.
+  three), and with them the transitive build requirements that compute or normalise the version text
+  (`setuptools-scm`, `vcs-versioning`, which holds setuptools-scm's version logic from 10.x, and `packaging`),
+  so the direct build and the rebuild run one backend and write one version. The other transitive build
+  requirements (`pathspec`, `pluggy`, `trove-classifiers`, `tomlkit`, `setuptools`) are not pinned: what they
+  decide, which files ship, is checked member by member.
 - **Environment.** Every subprocess (git, uv, the venv interpreters) runs with an allowlisted environment
   (`ENV_KEPT`): where tools and temporaries are, the locale, uv's own directories and how to reach the
   network. `PYTHONPATH`, `PYTHONHOME`, `GIT_INDEX_FILE`, `GIT_DIR`, `VIRTUAL_ENV`, `PIP_*` and every other

@@ -1696,9 +1696,12 @@ def test_xg5_a_real_build_of_a_tagged_checkout_passes_every_static_check(
     gate.static_checks(gate.dist_files(root / "dist"), root, FLOOR, tag=RELEASE_FLOOR, prerelease=True)
 
 
-@pytest.mark.logic
-def test_every_build_backend_requirement_is_pinned_exactly() -> None:
-    """Each ``[build-system] requires`` names one exact version, the same in all three pyprojects."""
+VERSION_TEXT_BUILD_REQUIREMENTS = frozenset({"hatchling", "hatch-vcs", "setuptools-scm", "vcs-versioning", "packaging"})
+"""The build backends and the transitive build requirements that decide an artifact's version text."""
+
+
+def _build_pins() -> dict[str, str]:
+    """``{name: version}`` of the ``[build-system] requires`` pins, refusing any that is not exact or not shared."""
     from packaging.requirements import Requirement
 
     seen: dict[str, set[str]] = {}
@@ -1708,7 +1711,34 @@ def test_every_build_backend_requirement_is_pinned_exactly() -> None:
             (spec,) = requirement.specifier
             assert spec.operator == "==" and "*" not in spec.version and requirement.marker is None, line
             seen.setdefault(requirement.name, set()).add(spec.version)
-    assert set(seen) == {"hatchling", "hatch-vcs"} and all(len(v) == 1 for v in seen.values())
+    assert all(len(v) == 1 for v in seen.values()), seen
+    return {name: next(iter(versions)) for name, versions in seen.items()}
+
+
+@pytest.mark.logic
+def test_every_build_requirement_that_decides_version_text_is_pinned_exactly() -> None:
+    """Each ``[build-system] requires`` names one exact version, the same in all three pyprojects.
+
+    The pins are the backends and their transitive requirements that compute or normalise the version.
+    """
+    assert set(_build_pins()) == VERSION_TEXT_BUILD_REQUIREMENTS
+
+
+@pytest.mark.env
+@pytest.mark.network
+def test_the_build_requirement_pins_resolve_together_to_themselves() -> None:
+    """Resolving the pinned build requirements gives each pinned package at its pin, so no pin is overridden."""
+    pins = _build_pins()
+    proc = subprocess.run(
+        ["uv", "pip", "compile", "--no-header", "--no-annotate", "--python-version", "3.12", "-"],
+        input="\n".join(f"{name}=={version}" for name, version in pins.items()),
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+    )
+    resolved = dict(line.split("==", 1) for line in proc.stdout.split() if "==" in line)
+    assert {name: resolved.get(name) for name in pins} == pins
 
 
 @pytest.mark.logic
