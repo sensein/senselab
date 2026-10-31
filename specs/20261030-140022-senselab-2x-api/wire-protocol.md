@@ -22,9 +22,18 @@ at the handshake.
   at `/dev/null` and fd 1 and `sys.stdout` at stderr. A backend's prints cannot reach the protocol
   stream, and a child it starts with the default stdin (`subprocess.run(["ffmpeg", ...])`) reads
   `/dev/null`, not requests. A child made by `fork` without `exec` still holds the private
-  descriptors. If fd 0 is closed when the worker starts, the launcher first opens it on
-  `/dev/null`, so the channel reads end of file and the worker exits 0 after its hello. The
-  backend module is imported during load.
+  descriptors. The backend module is imported during load.
+- **Closed standard descriptors.** Whether fd 0, 1 or 2 was closed when the worker started is read
+  from the interpreter's own record (`sys.__stdin__`, `__stdout__`, `__stderr__` is `None`), never
+  from the descriptor table later: any file opened at start or during an import lands on the lowest
+  free descriptor, so a closed fd 0 can be taken before the launcher runs. On Linux at 97cddd8b a
+  module imported during start held a file on fd 0 and the launcher read it as the channel
+  (`'utf-8' codec can't decode byte 0xde`); a `sitecustomize` holding files reproduces it on every
+  platform. As its first act the launcher opens `/dev/null` on each fd closed at start, replacing
+  whatever was opened there since, and only then claims the channel. The package's `__init__`
+  imports nothing, so the claim precedes every senselab and numpy import. A worker started with
+  fd 0 closed reads end of file and exits 0 after its hello; one started with fd 1 closed writes
+  its replies to `/dev/null`.
 - stderr is never parsed. The host drains it continuously and keeps the last 100 lines, which it
   attaches to every fault it raises itself.
 - A line longer than 16 MiB (`MAX_LINE_BYTES`, newline included), or one that is not a JSON

@@ -1,7 +1,9 @@
 """The worker entry point, run as a real process."""
 
+import itertools
 import json
 import os
+import resource
 import subprocess
 import sys
 from pathlib import Path
@@ -87,3 +89,50 @@ def test_closed_fd0_at_start_reads_dev_null() -> None:
     proc = subprocess.run(["/bin/sh", "-c", script, sys.executable], capture_output=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
     assert _keys(proc.stdout) == ["hello"]
+
+
+PLANTED = b"\xde\xff planted\n"
+SITECUSTOMIZE = """
+import os
+held = [open(os.environ["PLANT"], "r+b") for _ in range(3)]
+with open(os.environ["PLANT"] + ".fds", "w") as f:
+    f.write(" ".join(str(h.fileno()) for h in held))
+"""
+
+
+def _bounded() -> None:
+    resource.setrlimit(resource.RLIMIT_FSIZE, (2**20, 2**20))
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize(
+    "closed", [c for n in range(4) for c in itertools.combinations((0, 1, 2), n)], ids=lambda c: f"closed{list(c)}"
+)
+def test_files_opened_at_interpreter_start_never_become_the_channel(tmp_path: Path, closed: tuple[int, ...]) -> None:
+    """With any of fds 0-2 closed, files a `sitecustomize` holds open on them are neither read nor written.
+
+    The regression: on Linux a module imported during start took the free fd 0, and the launcher read it as the
+    channel, answering a fatal `'utf-8' codec can't decode byte 0xde`.
+    """
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "sitecustomize.py").write_text(SITECUSTOMIZE)
+    plant = tmp_path / "planted.bin"
+    plant.write_bytes(PLANTED)
+    redirects = " ".join(f"{fd}>&-" if fd else "<&-" for fd in closed)
+    script = f'exec "$0" -m senselab_worker.launch senselab_worker.fake {redirects}'
+    env = {**os.environ, "PYTHONPATH": str(site), "PLANT": str(plant)}
+    proc = subprocess.run(
+        ["/bin/sh", "-c", script, sys.executable],
+        input=b"",
+        capture_output=True,
+        timeout=60,
+        env=env,
+        preexec_fn=_bounded,
+    )
+    held = {int(fd) for fd in (tmp_path / "planted.bin.fds").read_text().split()}
+    assert set(closed) <= held, "the plant did not land on the closed descriptors"
+    assert proc.returncode == 0, proc.stderr
+    assert plant.read_bytes() == PLANTED
+    if 1 not in closed:
+        assert _keys(proc.stdout) == ["hello"]
