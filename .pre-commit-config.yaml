@@ -40,6 +40,24 @@ repos:
     # so the stubs the dev group provides are not visible to it. Without this the hook fails
     # with `Library stubs not installed for "yaml"` while a local `uv run mypy .` passes.
     - types-PyYAML
+  - id: mypy
+    name: mypy (linux)
+    alias: mypy-linux
+    args: [--ignore-missing-imports, --extra-checks, --platform, linux]
+    files: ^packages/senselab-core/src/senselab_core/runtime/worker_client\.py$
+    additional_dependencies:
+    - pydantic>=1.10.4
+    - types-requests
+    - types-PyYAML
+  - id: mypy
+    name: mypy (darwin)
+    alias: mypy-darwin
+    args: [--ignore-missing-imports, --extra-checks, --platform, darwin]
+    files: ^packages/senselab-core/src/senselab_core/runtime/worker_client\.py$
+    additional_dependencies:
+    - pydantic>=1.10.4
+    - types-requests
+    - types-PyYAML
 - repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
   rev: v2.15.0
   hooks:

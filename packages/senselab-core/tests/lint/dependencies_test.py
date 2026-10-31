@@ -1,5 +1,6 @@
 """Every distribution under ``packages/`` is a root package and imports only what it declares."""
 
+import ast
 import configparser
 import re
 import sys
@@ -159,3 +160,67 @@ def test_an_undeclared_third_party_import_is_found(tmp_path: Path, monkeypatch: 
     assert undeclared_by_module(external_imports(graph, {"plantedpkg"}), {"numpy"}, {}) == {
         "plantedpkg.mod": {"requests"}
     }
+
+
+TEST_GROUP = ("senselab-core", "test")
+LOCAL_PREFIXES = ("_pytest",)
+
+
+def group_dependencies(pyproject: dict[str, object]) -> set[str]:
+    """Normalised distribution names in the core ``test`` dependency group."""
+    groups = pyproject["dependency-groups"]
+    assert isinstance(groups, dict)
+    return {_normalise(re.split(r"[\s<>=!~;\[]", spec, maxsplit=1)[0]) for spec in groups[TEST_GROUP[1]]}
+
+
+def imports_under(tests_root: Path) -> dict[str, set[str]]:
+    """``{file: top-level modules it imports}`` for every Python file under ``tests_root``, by syntax alone."""
+    out: dict[str, set[str]] = {}
+    for path in sorted(tests_root.rglob("*.py")):
+        names: set[str] = set()
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Import):
+                names |= {a.name.partition(".")[0] for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names.add(node.module.partition(".")[0])
+        out[str(path.relative_to(tests_root))] = names
+    return out
+
+
+def local_modules(tests_root: Path) -> set[str]:
+    """Import names that resolve inside ``tests_root`` itself: every module and package directory."""
+    return {p.stem for p in tests_root.rglob("*.py")} | {p.name for p in tests_root.rglob("*") if p.is_dir()}
+
+
+@pytest.mark.contract
+def test_every_third_party_import_in_the_tests_is_in_the_test_group() -> None:
+    """Each distribution's tests import only the stdlib, the workspace, local modules and what its group declares."""
+    workspace = {_normalise(tomllib.loads(p.read_text())["project"]["name"]) for p in PACKAGES.glob("*/pyproject.toml")}
+    core = tomllib.loads((PACKAGES / TEST_GROUP[0] / "pyproject.toml").read_text())
+    worker = tomllib.loads((PACKAGES / "senselab-worker" / "pyproject.toml").read_text())
+    group = group_dependencies(core)
+    assert "pytest" in group
+    allowed = set(import_names(PACKAGES)) | set(LOCAL_PREFIXES)
+    for dist in (declared_dependencies(core) | declared_dependencies(worker) | group) - workspace:
+        allowed |= import_names_of(dist)
+    found: dict[str, set[str]] = {}
+    for tests_root in sorted(PACKAGES.glob("*/tests")):
+        imports = imports_under(tests_root)
+        found.update(
+            {
+                f"{tests_root.parent.name}/{f}": i
+                for f, i in undeclared_by_module(imports, allowed | local_modules(tests_root), {}).items()
+            }
+        )
+    assert found == {}
+
+
+@pytest.mark.logic
+def test_an_import_missing_from_the_test_group_is_found(tmp_path: Path) -> None:
+    """A tests tree importing a distribution nobody declares is reported; stdlib and local modules are not."""
+    (tmp_path / "helper.py").write_text("")
+    (tmp_path / "a_test.py").write_text("import os\nimport helper\nimport httpx\nfrom grimp import build_graph\n")
+    imports = imports_under(tmp_path)
+    assert imports["a_test.py"] == {"os", "helper", "httpx", "grimp"}
+    bad = undeclared_by_module(imports, {"grimp"} | local_modules(tmp_path), {})
+    assert bad == {"a_test.py": {"httpx"}}

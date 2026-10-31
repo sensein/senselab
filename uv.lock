@@ -6589,6 +6589,18 @@ dependencies = [
     { name = "soundfile" },
 ]
 
+[package.dev-dependencies]
+test = [
+    { name = "grimp" },
+    { name = "httpx" },
+    { name = "hypothesis" },
+    { name = "import-linter" },
+    { name = "packaging" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "ruff" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "filelock" },
@@ -6598,6 +6610,18 @@ requires-dist = [
     { name = "pyyaml" },
     { name = "senselab-worker", editable = "packages/senselab-worker" },
     { name = "soundfile", specifier = ">=0.12" },
+]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "grimp" },
+    { name = "httpx" },
+    { name = "hypothesis" },
+    { name = "import-linter" },
+    { name = "packaging" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "ruff", specifier = "==0.15.11" },
 ]
 
 [[package]]

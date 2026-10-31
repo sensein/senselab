@@ -90,7 +90,37 @@ def workflow_ruff_pins(text: str) -> set[str]:
 
 @pytest.mark.logic
 def test_ci_installs_the_locked_ruff() -> None:
-    """The ruff the core-only job installs, so the banned-name tests run there, is the version uv.lock pins."""
+    """The ruff the core-only job installs (inline or by the core test group) is the version uv.lock pins."""
     lock = tomllib.loads((REPO / "uv.lock").read_text())
     pins = workflow_ruff_pins((REPO / ".github" / "workflows" / "tests.yaml").read_text())
+    pins |= workflow_ruff_pins((REPO / "packages" / "senselab-core" / "pyproject.toml").read_text())
     assert pins == {locked_version(lock, "ruff")}
+
+
+PLATFORM_CHECKED = "packages/senselab-core/src/senselab_core/runtime/worker_client.py"
+PLATFORMS = ("linux", "darwin")
+
+
+def platform_checked(precommit: dict, path: str) -> set[str]:
+    """The `--platform` values of the mypy hooks whose `files` pattern selects `path`."""
+    found = set()
+    for repo in precommit.get("repos", []):
+        for hook in repo.get("hooks", []):
+            args = [str(a) for a in hook.get("args", [])]
+            if hook.get("id") == "mypy" and "--platform" in args and re.search(hook.get("files", "$^"), path):
+                found.add(args[args.index("--platform") + 1])
+    return found
+
+
+@pytest.mark.logic
+def test_the_platform_specific_module_is_type_checked_on_both_platforms() -> None:
+    """A module that calls kqueue or waitid is checked by mypy under `--platform linux` and `--platform darwin`."""
+    assert platform_checked(_repo_files()[2], PLATFORM_CHECKED) == set(PLATFORMS)
+
+
+@pytest.mark.logic
+def test_a_missing_platform_hook_is_found() -> None:
+    """A configuration that checks one platform only is reported as covering one."""
+    config = {"repos": [{"hooks": [{"id": "mypy", "args": ["--platform", "linux"], "files": r"^a/b\.py$"}]}]}
+    assert platform_checked(config, "a/b.py") == {"linux"}
+    assert platform_checked(config, "a/c.py") == set()

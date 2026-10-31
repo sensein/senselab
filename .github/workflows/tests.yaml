@@ -222,7 +222,7 @@ jobs:
     - name: Install the core distributions alone
       run: |
         uv venv -p ${{ matrix.python-version }} .core
-        uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core pytest pytest-timeout hypothesis import-linter ruff==0.15.11
+        uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core --group packages/senselab-core/pyproject.toml:test
     - name: Run core tests
       run: .core/bin/pytest packages -m "logic or contract or limits or usecase" -p no:cacheprovider
     - name: Check import contracts
@@ -252,7 +252,7 @@ jobs:
     - name: Install the core distributions alone
       run: |
         uv venv -p 3.12 .core
-        uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core pytest pytest-timeout hypothesis pyyaml packaging
+        uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core --group packages/senselab-core/pyproject.toml:test
     - name: Run the core env tests
       run: .core/bin/pytest packages/senselab-core/tests -m "env and not network" -p no:cacheprovider
 

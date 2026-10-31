@@ -173,7 +173,7 @@ class _Pump:
 
 _NOTE_EXITSTATUS = 0x04000000 if sys.platform == "darwin" else 0
 _PS = "/bin/ps"
-_HAS_WAITID = hasattr(os, "waitid")
+_HAS_WAITID = sys.platform == "linux"
 _PROBE_RUN: Callable[..., "subprocess.CompletedProcess[str]"] = subprocess.run
 LEADER_PROBE_TIMEOUT_S = 2.0
 
@@ -181,28 +181,31 @@ LEADER_PROBE_TIMEOUT_S = 2.0
 def _wait_exit(pid: int) -> int | None:
     """Block until child `pid` exits, without reaping it; return its exit code when the platform reports one.
 
-    Uses `waitid(WNOWAIT)` where the platform has it (Linux) and a kqueue `NOTE_EXIT` otherwise (macOS).
+    Uses `waitid(WNOWAIT)` where the platform has it (Linux) and a kqueue `NOTE_EXIT` on macOS.
 
     Raises:
         ChildProcessError: if `pid` is not an unreaped child (waitid only).
+        NotImplementedError: on a platform that is neither Linux nor macOS.
     """
-    if hasattr(os, "waitid"):
+    if sys.platform == "linux":
         info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
         if info is None:
             return None
         return int(info.si_status) if info.si_code == os.CLD_EXITED else -int(info.si_status)
-    kq = select.kqueue()
-    try:
-        flags = select.KQ_EV_ADD | select.KQ_EV_ONESHOT
-        event = select.kevent(
-            pid, filter=select.KQ_FILTER_PROC, flags=flags, fflags=select.KQ_NOTE_EXIT | _NOTE_EXITSTATUS
-        )
-        for fired in kq.control([event], 1, None):
-            if fired.fflags & _NOTE_EXITSTATUS and not fired.flags & select.KQ_EV_ERROR:
-                return os.waitstatus_to_exitcode(fired.data)
-        return None
-    finally:
-        kq.close()
+    if sys.platform == "darwin":
+        kq = select.kqueue()
+        try:
+            flags = select.KQ_EV_ADD | select.KQ_EV_ONESHOT
+            event = select.kevent(
+                pid, filter=select.KQ_FILTER_PROC, flags=flags, fflags=select.KQ_NOTE_EXIT | _NOTE_EXITSTATUS
+            )
+            for fired in kq.control([event], 1, None):
+                if fired.fflags & _NOTE_EXITSTATUS and not fired.flags & select.KQ_EV_ERROR:
+                    return os.waitstatus_to_exitcode(fired.data)
+            return None
+        finally:
+            kq.close()
+    raise NotImplementedError(f"no exit notification for platform {sys.platform!r}")
 
 
 def _reap(pid: int, exited: threading.Event, status: list[int], stdout: _Pump) -> None:
@@ -227,9 +230,9 @@ def _leader_held(pid: int, exited: threading.Event, timeout: float) -> bool | No
     """
     if not exited.is_set():
         return True
-    if _HAS_WAITID:
+    if sys.platform == "linux" and _HAS_WAITID:
         try:
-            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)  # type: ignore[attr-defined,unused-ignore]
+            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
         except ChildProcessError:
             return False
         return True

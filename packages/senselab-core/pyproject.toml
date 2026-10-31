@@ -9,6 +9,18 @@ description = "Framework-free core of senselab: data model, kernel and runtime."
 license = "Apache-2.0"
 requires-python = ">=3.11"
 
+[dependency-groups]
+test = [
+  "pytest",
+  "pytest-timeout",
+  "hypothesis",
+  "httpx",
+  "packaging",
+  "grimp",
+  "import-linter",
+  "ruff==0.15.11"
+]
+
 [tool.hatch.version]
 source = "vcs"
 
