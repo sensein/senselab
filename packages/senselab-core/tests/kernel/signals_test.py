@@ -8,9 +8,16 @@ import numpy
 import pytest
 import soundfile
 from pydantic import ValidationError
-from senselab_core.kernel.signals import Audio, ChannelInfo, IrregularGroup, Recording, RegularGroup
+from senselab_core.kernel.signals import (
+    Audio,
+    ChannelInfo,
+    IrregularGroup,
+    Recording,
+    RegularGroup,
+    StaleSource,
+)
 from senselab_core.kernel.time import TimeAnchor
-from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
+from senselab_worker.canonical import canonical_npy_bytes, tagged_digest
 from senselab_worker.hashing import content_identity, sha256_bytes
 
 RATE = 8_000
@@ -29,7 +36,7 @@ def _group(channels: int, rate: float, samples: int, kind: str = "ecg") -> Regul
     return RegularGroup(
         channels=tuple(ChannelInfo(name=f"c{i}", type=kind, units="mV") for i in range(channels)),
         sampling_rate=rate,
-        data=numpy.zeros((channels, samples)),
+        data=numpy.zeros((channels, samples), dtype=numpy.float32),
     )
 
 
@@ -64,7 +71,6 @@ def test_multirate_recording() -> None:
             ),
         },
         anchor=TimeAnchor(clock_id="dev", absolute_start_ns=None),
-        identity="x",
     )
     ecg, acc = r.groups["ecg"], r.groups["acc"]
     assert isinstance(ecg, RegularGroup) and ecg.sampling_rate == 250.0
@@ -72,11 +78,11 @@ def test_multirate_recording() -> None:
 
 
 @pytest.mark.logic
-def test_recording_refuses_no_groups_or_no_identity() -> None:
-    """A recording has at least one group and an identity."""
+def test_recording_refuses_no_groups_or_an_empty_identity() -> None:
+    """A recording has at least one group, and a supplied identity is a content identity."""
     anchor = TimeAnchor(clock_id="dev", absolute_start_ns=None)
     with pytest.raises(ValidationError):
-        Recording(groups={}, anchor=anchor, identity="x")
+        Recording(groups={}, anchor=anchor)
     with pytest.raises(ValidationError):
         Recording(groups={"ecg": _group(1, 250.0, 10)}, anchor=anchor, identity="")
 
@@ -164,7 +170,7 @@ def test_audio_identity_is_raw_bytes(tmp_path: Path) -> None:
     """A file-backed audio's identity is the content identity root of its bytes."""
     p = write_wav(tmp_path)
     a = Audio.from_path(p)
-    assert a.identity == content_identity(p)["root"]
+    assert a.identity == "content:" + content_identity(p)["root"]
     group = a.groups["audio"]
     assert isinstance(group, RegularGroup) and group.sampling_rate == RATE and len(group.channels) == 2
     assert group.frames == RATE and a.anchor.clock_id == a.identity
@@ -210,8 +216,8 @@ def test_audio_from_array_identity_construction() -> None:
     """In-memory audio's identity hashes the canonical array with the sampling rate."""
     x = numpy.linspace(-1, 1, 50, dtype=numpy.float32)
     a = Audio.from_array(x, 16_000)
-    expected = sha256_bytes(
-        jcs_dumps({"npy": sha256_bytes(canonical_npy_bytes(x.reshape(1, -1))), "sampling_rate": 16_000})
+    expected = "content:" + tagged_digest(
+        "audio@2", {"npy": sha256_bytes(canonical_npy_bytes(x.reshape(1, -1))), "sampling_rate": 16_000}
     )
     assert a.identity == expected
     assert Audio.from_array(x.reshape(1, -1), 16_000.0).identity == expected
@@ -224,21 +230,21 @@ def test_audio_from_array_identity_construction() -> None:
 def test_audio_refuses_non_audio_layouts() -> None:
     """Audio is one regular group named `audio` whose channels are all audio with one unit."""
     anchor = TimeAnchor(clock_id="c", absolute_start_ns=None)
-    with pytest.raises(ValidationError):
-        Audio(groups={"ecg": _group(1, 8000.0, 10, kind="audio")}, anchor=anchor, identity="x")
-    with pytest.raises(ValidationError):
-        Audio(groups={"audio": _group(1, 8000.0, 10, kind="ecg")}, anchor=anchor, identity="x")
-    with pytest.raises(ValidationError):
-        Audio(
-            groups={"audio": _group(1, 8000.0, 10, kind="audio"), "b": _group(1, 8.0, 1)}, anchor=anchor, identity="x"
-        )
+    with pytest.raises(ValidationError, match="exactly one regular group"):
+        Audio(groups={"ecg": _group(1, 8000.0, 10, kind="audio")}, anchor=anchor)
+    with pytest.raises(ValidationError, match="type 'audio'"):
+        Audio(groups={"audio": _group(1, 8000.0, 10, kind="ecg")}, anchor=anchor)
+    with pytest.raises(ValidationError, match="exactly one regular group"):
+        Audio(groups={"audio": _group(1, 8000.0, 10, kind="audio"), "b": _group(1, 8.0, 1)}, anchor=anchor)
+    held = Audio(groups={"audio": _group(1, 8000.0, 10, kind="audio")}, anchor=anchor).groups["audio"]
+    assert isinstance(held, RegularGroup) and held.frames == 10
     mixed = RegularGroup(
         channels=(ChannelInfo(name="a", type="audio", units="FS"), ChannelInfo(name="b", type="audio", units="Pa")),
         sampling_rate=8000.0,
-        data=numpy.zeros((2, 4)),
+        data=numpy.zeros((2, 4), dtype=numpy.float32),
     )
     with pytest.raises(ValidationError, match="units"):
-        Audio(groups={"audio": mixed}, anchor=anchor, identity="x")
+        Audio(groups={"audio": mixed}, anchor=anchor)
     with pytest.raises(ValueError):
         Audio.from_array(numpy.zeros((1, 2, 3)), 8000)
 
@@ -255,9 +261,7 @@ def test_audio_from_path_refuses_a_file_that_is_not_audio(tmp_path: Path) -> Non
 @pytest.mark.logic
 def test_recording_groups_are_read_only() -> None:
     """The group mapping of a recording cannot be changed, and still serialises as a dict."""
-    r = Recording(
-        groups={"ecg": _group(1, 250.0, 10)}, anchor=TimeAnchor(clock_id="dev", absolute_start_ns=None), identity="x"
-    )
+    r = Recording(groups={"ecg": _group(1, 250.0, 10)}, anchor=TimeAnchor(clock_id="dev", absolute_start_ns=None))
     with pytest.raises(TypeError):
         r.groups["acc"] = _group(1, 50.0, 10)  # type: ignore[index]
     with pytest.raises(TypeError):
@@ -267,18 +271,18 @@ def test_recording_groups_are_read_only() -> None:
 
 @pytest.mark.logic
 def test_audio_from_path_reads_the_header_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Opening a file reads its header once."""
+    """Opening a file opens it as sound once, to read its header and stamp it."""
     p = write_wav(tmp_path)
-    calls: list[str] = []
-    original = soundfile.info
+    calls: list[object] = []
+    original = soundfile.SoundFile.__init__
 
-    def spy(file: str, verbose: bool = False) -> object:
+    def spy(self: soundfile.SoundFile, file: object, *args: object, **kwargs: object) -> None:
         calls.append(file)
-        return original(file, verbose)
+        original(self, file, *args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(soundfile, "info", spy)
+    monkeypatch.setattr(soundfile.SoundFile, "__init__", spy)
     Audio.from_path(p)
-    assert calls == [str(p)]
+    assert len(calls) == 1
 
 
 @pytest.mark.logic
@@ -300,10 +304,127 @@ def test_audio_pickles_and_deep_copies(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_recording_round_trips_through_model_validate() -> None:
     """A recording's dump validates back to a recording with the same groups."""
-    r = Recording(
-        groups={"ecg": _group(1, 250.0, 10)}, anchor=TimeAnchor(clock_id="dev", absolute_start_ns=None), identity="x"
-    )
+    r = Recording(groups={"ecg": _group(1, 250.0, 10)}, anchor=TimeAnchor(clock_id="dev", absolute_start_ns=None))
     back = Recording.model_validate(r.model_dump())
-    assert list(back.groups) == ["ecg"] and back.identity == "x"
+    assert list(back.groups) == ["ecg"] and back.identity == r.identity and back == r
     with pytest.raises(TypeError):
         del back.groups["ecg"]  # type: ignore[attr-defined]
+
+
+def _rewrite(path: Path, frames: int, value: float) -> None:
+    soundfile.write(path, numpy.full((frames, 2), value, dtype=numpy.float32), RATE, subtype="FLOAT")
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("frames", [RATE, RATE // 4])
+def test_overwritten_source_raises_stale_source(tmp_path: Path, frames: int) -> None:
+    """A source rewritten after open, at the same or another length, is refused at read."""
+    p = write_wav(tmp_path)
+    group = Audio.from_path(p).groups["audio"]
+    assert isinstance(group, RegularGroup)
+    _rewrite(p, frames, 0.5)
+    with pytest.raises(StaleSource):
+        group.read()
+    with pytest.raises(StaleSource):
+        group.read(0, 1_000_000)
+
+
+@pytest.mark.logic
+def test_a14_rewritten_source_never_reads_under_the_old_identity(tmp_path: Path) -> None:
+    """A-14: a WAV overwritten in place, or shrunk, cannot be read or copied under the old identity."""
+    p = write_wav(tmp_path, frames=4 * RATE)
+    a = Audio.from_path(p)
+    _rewrite(p, RATE, 0.5)
+    group = a.groups["audio"]
+    assert isinstance(group, RegularGroup) and group.frames == 4 * RATE
+    with pytest.raises(StaleSource):
+        group.read()
+    with pytest.raises((StaleSource, ValidationError)):
+        a.model_copy()
+    assert Audio.from_path(p).identity != a.identity
+
+
+@pytest.mark.logic
+def test_source_stamp_records_the_opened_file(tmp_path: Path) -> None:
+    """A source group carries the stamp of the file it opened, and a data group carries none."""
+    p = write_wav(tmp_path)
+    group = Audio.from_path(p).groups["audio"]
+    assert isinstance(group, RegularGroup) and group.source_stamp is not None
+    st = p.stat()
+    stamp = group.source_stamp
+    assert (stamp.size, stamp.mtime_ns, stamp.inode, stamp.device) == (st.st_size, st.st_mtime_ns, st.st_ino, st.st_dev)
+    assert stamp.frames == RATE
+    data_group = Audio.from_array(numpy.zeros(4, dtype=numpy.float32), RATE).groups["audio"]
+    assert isinstance(data_group, RegularGroup) and data_group.source_stamp is None
+
+
+_LSB = {"int16": 2.0**-15, "int32": 2.0**-31, "float32": 0.0, "float64": 0.0}
+_SUBTYPE = {"int16": "PCM_16", "int32": "PCM_32", "float32": "FLOAT", "float64": "DOUBLE"}
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("dtype", sorted(_LSB))
+def test_from_array_matches_from_path(tmp_path: Path, dtype: str) -> None:
+    """In-memory samples read as the same float32 full scale the decoder reads from a file of them."""
+    rng = numpy.random.default_rng(0)
+    if dtype.startswith("int"):
+        info = numpy.iinfo(dtype)
+        x = rng.integers(info.min, info.max, size=(2, 64), endpoint=True, dtype=dtype)
+        x[:, :2] = [[info.min, info.max], [0, -1]]
+    else:
+        x = rng.uniform(-1, 1, size=(2, 64)).astype(dtype)
+    path = tmp_path / "x.wav"
+    soundfile.write(path, x.T, RATE, subtype=_SUBTYPE[dtype])
+    held, decoded = Audio.from_array(x, RATE).groups["audio"], Audio.from_path(path).groups["audio"]
+    assert isinstance(held, RegularGroup) and isinstance(decoded, RegularGroup)
+    assert held.read().dtype == decoded.read().dtype == numpy.float32
+    numpy.testing.assert_allclose(held.read(), decoded.read(), rtol=0, atol=_LSB[dtype])
+
+
+@pytest.mark.logic
+def test_a16_int16_reads_full_scale() -> None:
+    """A-16: int16 samples are held as float32 full scale, as the decoder reads them."""
+    g = Audio.from_array(numpy.array([16384, -32768], dtype=numpy.int16), 16_000).groups["audio"]
+    assert isinstance(g, RegularGroup)
+    assert g.read().dtype == numpy.float32 and g.read().tolist() == [[0.5, -1.0]]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("rate", [True, "16000", float("inf"), float("nan"), 0, -5])
+def test_rate_refuses_bool_str_nonfinite(rate: object) -> None:
+    """A sampling rate is a positive finite number; bools and strings are not rates."""
+    with pytest.raises(ValidationError):
+        Audio.from_array(numpy.zeros(4, dtype=numpy.float32), rate)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        _group(1, rate, 4)  # type: ignore[arg-type]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "samples",
+    [
+        numpy.zeros(4, dtype=numpy.complex64),
+        numpy.zeros(4, dtype=bool),
+        numpy.array([0.0, None, 1.0], dtype=object),
+        numpy.zeros(0, dtype=numpy.float32),
+        numpy.zeros((2, 0), dtype=numpy.float32),
+        numpy.zeros(4, dtype=numpy.int64),
+        numpy.zeros(4, dtype="datetime64[ns]"),
+    ],
+    ids=["complex", "bool", "object", "empty", "empty-2d", "int64", "datetime"],
+)
+def test_from_array_refuses_complex_bool_empty(samples: numpy.ndarray) -> None:
+    """Complex, boolean, object, datetime, empty and unconvertible integer samples are refused."""
+    with pytest.raises(ValueError):
+        Audio.from_array(samples, RATE)
+
+
+@pytest.mark.logic
+def test_audio_holds_float32_only() -> None:
+    """An audio group's held samples are float32 full scale; other dtypes are converted by `from_array` only."""
+    anchor = TimeAnchor(clock_id="c", absolute_start_ns=None)
+    g = RegularGroup(
+        channels=(ChannelInfo(name="a", type="audio", units="FS"),), sampling_rate=8.0, data=numpy.zeros((1, 4))
+    )
+    with pytest.raises(ValidationError, match="float32"):
+        Audio(groups={"audio": g}, anchor=anchor)

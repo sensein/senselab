@@ -1,8 +1,9 @@
 """Integer-nanosecond time on named clocks."""
 
 from fractions import Fraction
+from typing import Annotated
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 
 from senselab_core.kernel._base import FiniteFloat, Frozen, Nanoseconds, NonEmptyStr, NonNegativeNs, require_ns
 from senselab_core.kernel.formats import FormatTag, Formatted
@@ -18,7 +19,8 @@ class TimeAnchor(Frozen):
 class TimeMap(Formatted):
     """Maps a time on clock `source` to clock `target`: `t + offset_ns + t * drift_ppm / 1e6`.
 
-    `uncertainty_ns` bounds the error of a mapped time.
+    `drift_ppm` lies in `(-1e6, 1e6)`, so the map never reverses time. `uncertainty_ns` bounds the
+    error of a mapped time.
     """
 
     format: FormatTag = "timemap@1.0"
@@ -26,7 +28,7 @@ class TimeMap(Formatted):
     source: NonEmptyStr
     target: NonEmptyStr
     offset_ns: Nanoseconds
-    drift_ppm: FiniteFloat = 0.0
+    drift_ppm: Annotated[FiniteFloat, Field(gt=-1e6, lt=1e6)] = 0.0
     uncertainty_ns: NonNegativeNs = 0
 
     def map(self, t_ns: int) -> int:

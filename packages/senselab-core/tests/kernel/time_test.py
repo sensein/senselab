@@ -1,7 +1,11 @@
 """Time anchors, clock maps and spans."""
 
+from fractions import Fraction
+
 import numpy
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from pydantic import ValidationError
 from senselab_core.kernel.time import Span, TimeAnchor, TimeMap
 
@@ -86,3 +90,44 @@ def test_timemap_maps_integer_nanoseconds_only() -> None:
     for bad in (1.5, True):
         with pytest.raises(TypeError):
             m.map(bad)  # type: ignore[arg-type]
+
+
+@pytest.mark.logic
+def test_nanoseconds_bounded_to_int64() -> None:
+    """Nanoseconds are int64: the extremes validate, one past either refuses."""
+    assert Span(start_ns=-(2**63), end_ns=2**63 - 1, clock_id="c").end_ns == 2**63 - 1
+    for bad in (2**63, 2**200):
+        with pytest.raises(ValidationError):
+            Span(start_ns=0, end_ns=bad, clock_id="c")
+    with pytest.raises(ValidationError):
+        Span(start_ns=-(2**63) - 1, end_ns=0, clock_id="c")
+    with pytest.raises(ValidationError):
+        TimeAnchor(clock_id="c", absolute_start_ns=2**64)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("drift", [-1e6, 1e6, -3e6, 2e6])
+def test_a37_drift_cannot_reverse_or_stop_time(drift: float) -> None:
+    """A-37: a drift of +/-1e6 ppm or beyond (which stops or reverses time) is refused."""
+    with pytest.raises(ValidationError):
+        TimeMap(source="a", target="b", offset_ns=0, drift_ppm=drift)
+
+
+@pytest.mark.logic
+@settings(max_examples=300, deadline=None)
+@given(
+    offset=st.integers(-(2**62), 2**62),
+    drift=st.floats(-1e6, 1e6, exclude_min=True, exclude_max=True),
+    t=st.integers(-(2**61), 2**61),
+    step=st.integers(1, 10**12),
+)
+def test_timemap_is_strictly_increasing(offset: int, drift: float, t: int, step: int) -> None:
+    """A map with drift inside its bounds never reverses time.
+
+    The exact map is strictly increasing; rounded to integer nanoseconds it is non-decreasing, and
+    strictly increasing for any two times whose exact images lie more than 1 ns apart.
+    """
+    m = TimeMap(source="a", target="b", offset_ns=offset, drift_ppm=drift)
+    assert m.map(t) <= m.map(t + step)
+    if step * (1 + Fraction(drift) / 1_000_000) > 1:
+        assert m.map(t) < m.map(t + step)

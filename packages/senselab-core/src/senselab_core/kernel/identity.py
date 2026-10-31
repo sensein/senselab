@@ -230,10 +230,6 @@ class LogicalKey(Frozen):
         self._digest = tagged_digest("logical-key@2", self.model_dump())
         return self
 
-    def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
-        """Return a copy with `update` applied, validated and digested like a new key."""
-        return type(self).model_validate({**self.model_dump(), **(update or {})})
-
     def digest(self) -> str:
         """Return `tagged_digest("logical-key@2", fields)`, computed at construction."""
         return self._digest
