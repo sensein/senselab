@@ -10,6 +10,7 @@ task. Every parameter is in ``data/background_model.yaml``; the design is
 from __future__ import annotations
 
 import functools
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -682,7 +683,8 @@ def session_floor_db(members: Sequence[dict[str, Any]], p: dict[str, Any] | None
     usable = [m for m in members if m.get("source") == "quiet_frames" and m.get("own_db")]
     edges = max((tuple(m["band_edges_hz"]) for m in usable), key=len, default=())
     used = [m for m in usable if tuple(m["band_edges_hz"]) == edges]
-    reducer = {"median": np.median, "mean": np.mean}[q["statistic"]]
+    reducers: dict[str, Callable[..., Any]] = {"median": np.median, "mean": np.mean}
+    reducer = reducers[q["statistic"]]
     enough = len(used) >= int(q["members_min"])
     levels = [float(m["active_level_db"]) for m in members if m.get("active_level_db") is not None]
     return {

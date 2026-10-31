@@ -125,6 +125,17 @@ def _host_cuda() -> str | None:
     return f"{found.version[0]}.{found.version[1]}"
 
 
+def _cpus_allowed() -> int | None:
+    """CPUs this process may run on: the Linux affinity mask, else ``os.cpu_count()`` where there is no such call."""
+    getter: Callable[[int], set[int]] | None = getattr(os, "sched_getaffinity", None)
+    if getter is None:
+        return os.cpu_count()
+    try:
+        return len(getter(0))
+    except OSError:
+        return None
+
+
 def host_record(
     venv: str | os.PathLike[str] | None, *, runner: Runner | None = None, hostname: bool = True
 ) -> dict[str, Any]:
@@ -144,10 +155,7 @@ def host_record(
     """
     run = runner or _run
     gpu_name, gpu_driver, gpu_count = _gpus(run)
-    try:
-        allowed: int | None = len(os.sched_getaffinity(0))
-    except (AttributeError, OSError):
-        allowed = None
+    allowed = _cpus_allowed()
     return {
         "hostname": socket.gethostname() if hostname else None,
         "cpu_model": _cpu_model(),

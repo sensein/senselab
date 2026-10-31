@@ -314,7 +314,7 @@ class TestTheSummaryFits:
         text = _taxonomy_panel(axis, lines, style)
         figure.canvas.draw()
         assert text is not None, "_taxonomy_panel must return its artist so its extent can be measured"
-        extent = text.get_window_extent(renderer=figure.canvas.get_renderer())
+        extent = text.get_window_extent(renderer=getattr(figure.canvas, "get_renderer")())
         axis_extent = axis.get_window_extent()
         plt.close(figure)
         assert extent.x1 <= axis_extent.x1 + 1.0, "the cover overruns the right edge of its axis"

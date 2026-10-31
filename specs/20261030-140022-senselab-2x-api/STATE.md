@@ -43,7 +43,7 @@ task or decision changes state. Newest entries go first in the log.
 |---|---|
 | Design | done; owner approved 2026-10-30 ("go ahead") |
 | 0: freeze tag | done (`freeze/1x-2026-10-30`) |
-| 1: kernel, worker runtime, identity, store, data fetch | executing (subagent-driven); T0–T12 done (workspace, wire protocol, canonical serialisation, worker runtime, kernel signal types, identity v2 + license, locks/revision/provenance moved into core, model resolution + weights manifest, result store, hardware probe, declaration registry + fake stack + generated contracts; T10–T12 done) |
+| 1: kernel, worker runtime, identity, store, data fetch | executing (subagent-driven); T0–T14 done; T15 (exit checks, adversarial round, final review) in progress. |
 | 2–5 | not started |
 | pydra PRs (A0…K1) | proposed in #891; none implemented |
 
@@ -80,3 +80,7 @@ vLLM-omni kept, license taint kept and combinators deferred, prose review by mod
   - Phase 0 tag pushed.
   - Worktrees moved to durable paths.
   - Phase 1 planning started.
+  - Phase 1 delivered (T0–T14): workspace and three distributions; worker runtime and wire protocol v1;
+    canonical serialisation and identity v2; kernel signal types; model resolution and weights manifest;
+    locks/revision/provenance/hardware moved into core; result store; declaration registry, fake stack and
+    generated contracts; data fetch; synthetic generators and fixture budget.

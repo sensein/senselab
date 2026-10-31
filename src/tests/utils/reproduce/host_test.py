@@ -138,3 +138,28 @@ def test_no_venv_probes_only_the_host() -> None:
     record = host_record(None, runner=runner)
     assert (record["python"], record["torch"], record["torch_cuda"]) == (None, None, None)
     assert [c[0] for c in calls] == ["nvidia-smi"]
+
+
+def test_cpus_allowed_uses_affinity_mask_where_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Where the platform has sched_getaffinity, cpus_allowed is the size of its mask."""
+    monkeypatch.setattr(host.os, "sched_getaffinity", lambda _pid: {0, 1, 2}, raising=False)
+    assert host_record(None, runner=lambda argv: (1, ""))["cpus_allowed"] == 3
+
+
+def test_cpus_allowed_falls_back_to_cpu_count_without_affinity_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On a platform without sched_getaffinity (macOS) cpus_allowed is os.cpu_count()."""
+    monkeypatch.delattr(host.os, "sched_getaffinity", raising=False)
+    monkeypatch.setattr(host.os, "cpu_count", lambda: 7)
+    record = host_record(None, runner=lambda argv: (1, ""))
+    assert record["cpus_allowed"] == 7
+    assert record["cpu_count"] == 7
+
+
+def test_cpus_allowed_is_none_when_affinity_call_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An OSError from the affinity call reads as unknown, not as a crash."""
+
+    def boom(_pid: int) -> set[int]:
+        raise OSError("denied")
+
+    monkeypatch.setattr(host.os, "sched_getaffinity", boom, raising=False)
+    assert host_record(None, runner=lambda argv: (1, ""))["cpus_allowed"] is None
