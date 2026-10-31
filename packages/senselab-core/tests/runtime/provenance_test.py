@@ -842,3 +842,22 @@ def test_the_store_records_again_every_form_it_returns(
     ProvStore.read_jsonl(again, run_id="run").write_jsonl(third)
     assert again.read_bytes() == third.read_bytes()
     assert all(record.minted_id() == record.id for record in ProvStore.read_jsonl(third).records())
+
+
+def test_a_hand_edited_store_keeps_order_ids_and_relations_and_marks_the_edit_unverified() -> None:
+    """`testing.provenance.hand_edited` changes one entity's attributes and nothing else a reader can see."""
+    from senselab_core.testing.provenance import hand_edited
+
+    store = _store()
+    first = store.entity(prov_type="span", extent=(0.0, 1.0), attributes={"signal": "enhanced", "n": [1]})
+    second = store.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
+    act = store.activity(node="N", step=None, parameters={})
+    store.was_generated_by(first, act)
+    edited = hand_edited(store, first, signal="plain")
+    assert [e.id for e in edited.entities()] == [first, second] and edited.relations() == store.relations()
+    held = edited.get_entity(first)
+    assert held.attributes == {"signal": "plain", "n": (1,)} and not held.verified and not edited.verified
+    assert (
+        edited.get_entity(second) == store.get_entity(second)
+        and store.get_entity(first).attributes["signal"] == "enhanced"
+    )

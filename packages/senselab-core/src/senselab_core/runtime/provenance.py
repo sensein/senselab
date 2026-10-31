@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, ClassVar, Literal, NoReturn, Sequence, TypeVar, cast, get_args
+from typing import Any, ClassVar, Literal, NoReturn, Sequence, TypeVar, cast, get_args, overload
 
 import numpy
 from senselab_worker import digest as worker_digest
@@ -687,7 +687,6 @@ _LEGACY_NORMALISED = {"entity": ("attributes",), "activity": ("parameters",), "e
 
 
 _R = TypeVar("_R", bound=_Record)
-_M = TypeVar("_M", bound="_Record | Mapping[str, Any]")
 _UNTIMED: dict[str, Any] = {"started": None, "ended": None}
 
 
@@ -703,7 +702,45 @@ def _mint(cls: type[_R], run_id: str, raw: Mapping[str, object], **plain: object
     return cast(_R, replace(cast(Any, draft), id=draft.minted_id(run_id), run_id=run_id))
 
 
-def revised(target: _M, /, **changes: object) -> _M:
+def recorded(value: object) -> Any:  # noqa: ANN401
+    """Return the form a record holds for `value`: normalised, through JCS, read-only.
+
+    Compare a read-back with what was recorded through this (`entity.attributes == recorded(attributes)`),
+    since a record holds objects as `FrozenDict`, arrays as tuples and integral floats as integers.
+
+    Raises:
+        UnrecordableValue: if `value` is outside the provenance value type.
+    """
+    return _canonical(normalised(value, "value"), "value")
+
+
+def plain_values(value: object) -> Any:  # noqa: ANN401
+    """Return a store file's JSON value with each number and path token as the value it stands for.
+
+    `{"$f": ...}` becomes the float, `{"$int": ...}` the integer and `{"$path": ...}` the posix text;
+    every other token, and every other value, is returned as it is (objects as `dict`, arrays as `list`).
+    For readers that parse a store file as JSON rather than through `ProvStore.read_jsonl`.
+    """
+    if isinstance(value, dict):
+        if len(value) == 1:
+            ((key, payload),) = value.items()
+            if key == "$f" and payload in _FLOAT_NAMES:
+                return float(payload)
+            if key == "$int" and isinstance(payload, str) and _INT_TOKEN_TEXT.fullmatch(payload):
+                return int(payload)
+            if key == "$path" and isinstance(payload, str):
+                return payload
+        return {k: plain_values(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [plain_values(v) for v in value]
+    return value
+
+
+@overload
+def revised(target: _R, /, **changes: object) -> _R: ...
+@overload
+def revised(target: Mapping[str, Any], /, **changes: object) -> FrozenDict: ...
+def revised(target: _Record | Mapping[str, Any], /, **changes: object) -> _Record | FrozenDict:
     """Return a copy of a record, or of a mapping a record holds, with `changes`; the original is untouched.
 
     For a mapping (attributes, parameters, an object inside them): a `FrozenDict` of its items with each
@@ -722,11 +759,11 @@ def revised(target: _M, /, **changes: object) -> _M:
         if unknown:
             raise ValueError(f"{type(target).__name__} has no fields {unknown}")
         normal = {k: normalised(v, k) if k in target._RAW else v for k, v in changes.items()}
-        return cast(_M, replace(cast(Any, target), run_id=None, **normal))
+        return cast(_Record, replace(cast(Any, target), run_id=None, **normal))
     if not isinstance(target, Mapping):
         raise TypeError(f"revised takes a record or a mapping a record holds, not {type(target).__name__}")
     merged = {**target, **{escaped_key(k): normalised(v, k) for k, v in changes.items()}}
-    return cast(_M, _canonical(merged, "revised"))
+    return cast(FrozenDict, _canonical(merged, "revised"))
 
 
 def _timing(record: _Record) -> tuple[str, str]:
