@@ -88,12 +88,21 @@ def canonical_text(text: str) -> str:
     """
     if text.isascii():
         return text
-    found = _SURROGATE.search(text)
-    if found is not None:
-        raise InvalidText(f"U+{ord(found.group()):04X} at index {found.start()} is a lone surrogate")
+    require_unicode(text)
     if _UNASSIGNED.search(text) is not None:
         return text
     return unicodedata.normalize("NFC", text)
+
+
+def require_unicode(text: str) -> None:
+    """Refuse `text` if it holds a lone surrogate.
+
+    Raises:
+        InvalidText: naming the first lone surrogate and its index.
+    """
+    found = None if text.isascii() else _SURROGATE.search(text)
+    if found is not None:
+        raise InvalidText(f"U+{ord(found.group()):04X} at index {found.start()} is a lone surrogate")
 
 
 def is_portable(text: str) -> bool:
@@ -440,19 +449,28 @@ def npy_bytes(a: numpy.ndarray) -> bytes:
         ValueError: on a dtype whose kind is not one of `b i u f U`, or on `longdouble`, whose
             itemsize and byte layout differ between platforms.
     """
+    header = npy_header(a)
+    data = a.astype(a.dtype.newbyteorder("<"), order="C", copy=False)
+    return header + data.tobytes(order="C")
+
+
+def npy_header(a: numpy.ndarray) -> bytes:
+    """Return the bytes `npy_bytes(a)` writes before the data: magic, version 1.0, header length and header.
+
+    Raises:
+        TypeError, ValueError: as `npy_bytes`.
+    """
     if type(a) is not numpy.ndarray:
         raise TypeError(f"not a plain numpy.ndarray: {type(a).__module__}.{type(a).__qualname__}")
     if a.dtype.kind not in _CANONICAL_KINDS or a.dtype.fields is not None:
         raise ValueError(f"dtype has no canonical form: {a.dtype}")
     if a.dtype.char in _PLATFORM_DTYPE_CHARS:
         raise ValueError(f"platform-specific dtype has no canonical form: {a.dtype.name}")
-    dtype = a.dtype.newbyteorder("<")
-    data = a.astype(dtype, order="C", copy=False)
-    shape = tuple(int(n) for n in data.shape)
-    header = f"{{'descr': {dtype.str!r}, 'fortran_order': False, 'shape': {shape!r}, }}"
+    shape = tuple(int(n) for n in a.shape)
+    header = f"{{'descr': {a.dtype.newbyteorder('<').str!r}, 'fortran_order': False, 'shape': {shape!r}, }}"
     padding = -(len(_NPY_MAGIC) + 2 + len(header) + 1) % _NPY_ALIGN
     header_bytes = (header + " " * padding + "\n").encode("latin1")
-    return _NPY_MAGIC + struct.pack("<H", len(header_bytes)) + header_bytes + data.tobytes(order="C")
+    return _NPY_MAGIC + struct.pack("<H", len(header_bytes)) + header_bytes
 
 
 def canonical_npy_bytes(a: numpy.ndarray) -> bytes:

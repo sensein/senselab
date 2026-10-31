@@ -19,7 +19,15 @@ from typing import Any, Callable, Literal
 import numpy
 
 from senselab_worker import _raw_digest
-from senselab_worker.canonical import MAX_DEPTH, canonical_scalar, entered, npy_bytes, require_depth
+from senselab_worker.canonical import (
+    MAX_DEPTH,
+    canonical_scalar,
+    entered,
+    npy_bytes,
+    npy_header,
+    require_depth,
+    require_unicode,
+)
 from senselab_worker.faults import ArrayIntegrityError, FaultClass, ProtocolError, ValueTooLarge, WireValueError
 from senselab_worker.ownership import ARRAY_TEMP_NAME, remove_owned
 
@@ -99,7 +107,7 @@ def dump_line(msg: dict[str, Any], kind: Kind) -> bytes:
         LineTooLarge: if the line, newline included, exceeds `MAX_LINE_BYTES`.
     """
     validate_message(msg, kind)
-    _check_depth(msg)
+    _check_message(msg)
     try:
         line = _json_bytes(msg) + b"\n"
     except (ValueError, TypeError, RecursionError) as exc:
@@ -142,7 +150,7 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return dict(pairs)
 
 
-def _check_depth(msg: object) -> None:
+def _check_message(msg: object) -> None:
     try:
         _height(msg, set(), {})
     except ValueError as exc:
@@ -150,8 +158,18 @@ def _check_depth(msg: object) -> None:
 
 
 def _height(value: object, active: set[int], heights: dict[int, int]) -> int:
-    """Return the containers on the tallest path down from `value`, each distinct container walked once."""
+    """Return the containers on the tallest path down from `value`, each distinct container walked once.
+
+    Raises:
+        ValueError: if a container is deeper than `MAX_DEPTH`, or a key or string holds a lone surrogate.
+    """
+    if isinstance(value, str):
+        require_unicode(value)
+        return 0
     if isinstance(value, dict):
+        for key in value:
+            if isinstance(key, str):
+                require_unicode(key)
         children: Any = value.values()
     elif isinstance(value, (list, tuple)):
         children = value
@@ -173,7 +191,8 @@ def parse_line(line: bytes) -> dict[str, Any]:
     Raises:
         ProtocolError: if the line exceeds `MAX_LINE_BYTES`, is not UTF-8 JSON, holds `NaN`,
             `Infinity` or a number that overflows to infinity (`1e999`), repeats a key within one
-            object, nests deeper than `MAX_DEPTH` containers, or is not an object.
+            object, nests deeper than `MAX_DEPTH` containers, holds a lone surrogate (`U+D800`-`U+DFFF`)
+            in a key or string, or is not an object.
     """
     if len(line) > MAX_LINE_BYTES:
         raise ProtocolError(f"wire line exceeds {MAX_LINE_BYTES} bytes")
@@ -190,7 +209,7 @@ def parse_line(line: bytes) -> dict[str, Any]:
         raise ProtocolError(f"wire line is not JSON: {exc}") from exc
     if type(msg) is not dict:
         raise ProtocolError(f"wire line is a JSON {type(msg).__name__}, not an object")
-    _check_depth(msg)
+    _check_message(msg)
     return msg
 
 
@@ -363,6 +382,9 @@ def _read_array(ref: object, root: Path, deadline: Deadline) -> numpy.ndarray:
         if _raw_digest.bytes_digest("npy@1", data) != sha:
             raise ValueError(f"array file bytes do not match sha256 {sha}")
         a: numpy.ndarray = numpy.load(io.BytesIO(data), allow_pickle=False)
+        header = npy_header(a)
+        if not (data.startswith(header) and len(data) == len(header) + a.nbytes):
+            raise ValueError("array file is not npy_bytes of its array: version 1.0, C order, little-endian")
         if a.dtype.str != ref["dtype"] or list(a.shape) != ref["shape"]:
             raise ValueError(f"array is {a.dtype.str} {list(a.shape)}, reference says {ref['dtype']} {ref['shape']}")
     except TimeoutError:
