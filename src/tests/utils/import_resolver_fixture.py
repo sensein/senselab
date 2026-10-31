@@ -21,22 +21,40 @@ def module_name(path: Path) -> tuple[str, bool]:
     return ".".join(parts), path.stem == "__init__"
 
 
+UNREADABLE = "<unreadable notebook>"
+"""What ``sources`` yields for a notebook whose JSON does not hold a list of cells; it never parses as Python."""
+
+
 def sources(path: Path) -> Iterator[str]:
-    """Python source texts in ``path``: the file, or each code cell of a notebook with IPython lines blanked."""
+    """Python source texts in ``path``: the file, or a notebook's code cells with IPython lines blanked.
+
+    A notebook's cells run in one namespace, so they are yielded joined as one text, and a name bound in one cell
+    resolves in the next. When the joined text does not parse, each cell is yielded alone.
+    """
     text = path.read_text(errors="replace")
     if path.suffix != ".ipynb":
         yield text
         return
     try:
-        cells = json.loads(text).get("cells", [])
-    except (ValueError, AttributeError):
+        cells = json.loads(text)["cells"]
+        assert isinstance(cells, list)
+    except (ValueError, KeyError, TypeError, AssertionError):
+        yield UNREADABLE
         return
+    codes = []
     for cell in cells:
-        if cell.get("cell_type") != "code":
+        if not isinstance(cell, dict) or cell.get("cell_type") != "code":
             continue
         source = cell.get("source", "")
         lines = (source if isinstance(source, str) else "".join(source)).splitlines()
-        yield "\n".join("" if ln.lstrip().startswith(("%", "!", "?")) else ln for ln in lines)
+        codes.append("\n".join("" if ln.lstrip().startswith(("%", "!", "?")) else ln for ln in lines))
+    joined = "\n".join(codes)
+    try:
+        ast.parse(joined)
+    except SyntaxError:
+        yield from codes
+        return
+    yield joined
 
 
 def fold(node: ast.AST) -> str | None:

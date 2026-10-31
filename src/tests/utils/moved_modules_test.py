@@ -390,3 +390,14 @@ def test_m5_a_second_site_of_an_allowed_dynamic_import_is_reported(tmp_path: Pat
     assert dynamic_site_hits("x.py", resolver.dynamic_sites(two), allowed) == [
         "x.py: <dynamic:module_name> at 2 sites, 1 allowed"
     ]
+
+
+@pytest.mark.logic
+def test_a_moved_module_reached_across_notebook_cells_is_found(tmp_path: Path) -> None:
+    """A notebook's cells share one namespace: a chain in one cell on a package imported in another is found."""
+    cells = [
+        {"cell_type": "code", "source": ["from senselab import utils\n"]},
+        {"cell_type": "code", "source": ["utils.file_lock.FileLock\n"]},
+    ]
+    path = _write(tmp_path, "nb.ipynb", json.dumps({"cells": cells}))
+    assert "senselab.utils.file_lock" in _hits(_imports(path))

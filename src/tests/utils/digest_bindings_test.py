@@ -5,6 +5,8 @@ The forbidden modules and the allowed edges are read from `.importlinter` (`dige
 
 import configparser
 import importlib.util
+import json
+import subprocess
 import types
 from pathlib import Path
 
@@ -54,8 +56,13 @@ def contract() -> tuple[frozenset[str], dict[str, frozenset[str]]]:
 
 
 def reached(path: Path, forbidden: frozenset[str]) -> set[str]:
-    """The forbidden names any import, attribute chain or folded dynamic import in ``path`` reaches."""
-    return {segment for name in resolver.imports(path) for segment in name.split(".") if segment in forbidden}
+    """The forbidden names any import, attribute chain or folded dynamic import in ``path`` reaches.
+
+    A source the resolver cannot parse reaches ``<unparseable>``, which no allowance names.
+    """
+    names = resolver.imports(path)
+    unparseable = {"<unparseable>"} if any(n.startswith("<unparseable") for n in names) else set()
+    return unparseable | {segment for name in names for segment in name.split(".") if segment in forbidden}
 
 
 def _module(rel: str, path: Path) -> str:
@@ -65,17 +72,28 @@ def _module(rel: str, path: Path) -> str:
 
 
 def production_files() -> list[str]:
-    """Every production `.py`: under `packages/`, `src/` and `scripts/` outside test trees, and at the root."""
+    """Every production source.
+
+    That is each `.py`/`.pyi` under `packages/`, `src/` and `scripts/` outside test trees, each at the root, and each
+    tracked notebook, read through its code cells.
+    """
     found = {
         p.relative_to(REPO).as_posix()
         for root in ("packages", "src", "scripts")
-        for p in (REPO / root).rglob("*.py")
-        if "tests" not in p.relative_to(REPO).parts
+        for p in (REPO / root).rglob("*")
+        if p.suffix in (".py", ".pyi")
+        and "tests" not in p.relative_to(REPO).parts
         and not p.name.endswith("_test.py")
         and p.name != "conftest.py"
         and ".venv" not in p.parts
     }
-    return sorted(found | {p.name for p in REPO.glob("*.py")})
+    return sorted(found | {p.name for p in REPO.glob("*.py")} | set(tracked_notebooks()))
+
+
+def tracked_notebooks() -> list[str]:
+    """Every notebook git tracks in this repository."""
+    listed = subprocess.run(["git", "ls-files", "-z", "*.ipynb"], cwd=REPO, capture_output=True, check=True).stdout
+    return [p for p in listed.decode().split("\0") if p]
 
 
 def violations(rel: str, path: Path, forbidden: frozenset[str], allowed: dict[str, frozenset[str]]) -> list[str]:
@@ -161,3 +179,55 @@ def test_m4_a_new_digest_import_in_an_out_of_graph_file_is_reported(tmp_path: Pa
     path = tmp_path / Path(rel).name
     path.write_text((REPO / rel).read_text() + "\nimport hmac\n")
     assert violations(rel, path, forbidden, allowed)
+
+
+@pytest.mark.logic
+def test_every_tracked_notebook_is_a_production_file() -> None:
+    """The code cells of each tracked notebook are scanned like a module that no allowance names."""
+    notebooks = tracked_notebooks()
+    assert notebooks and set(notebooks) <= set(production_files())
+
+
+def _notebook(path: Path, *cells: str) -> Path:
+    body = [{"cell_type": "code", "source": c.splitlines(keepends=True), "metadata": {}} for c in cells]
+    body.insert(1, {"cell_type": "markdown", "source": ["import hashlib\n"], "metadata": {}})
+    path.write_text(json.dumps({"cells": body, "nbformat": 4}))
+    return path
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("spelling", sorted(PLANTED))
+def test_notebook_cells_are_scanned_for_every_planted_spelling(tmp_path: Path, spelling: str) -> None:
+    """A planted spelling in a notebook's code cell, with an IPython magic beside it, is a violation."""
+    forbidden, allowed = contract()
+    path = _notebook(tmp_path / "t.ipynb", "%matplotlib inline\nimport json\n", PLANTED[spelling])
+    assert violations("tutorials/t.ipynb", path, forbidden, allowed), PLANTED[spelling]
+
+
+@pytest.mark.logic
+def test_a_binding_from_an_earlier_cell_is_followed(tmp_path: Path) -> None:
+    """Cells share one namespace: a chain in one cell on a module imported in another is resolved."""
+    forbidden, allowed = contract()
+    path = _notebook(tmp_path / "t.ipynb", "import urllib.request\n", "urllib.request.hashlib.sha256(b'')\n")
+    assert violations("tutorials/t.ipynb", path, forbidden, allowed) == ["tutorials/t.ipynb: hashlib"]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("text", ["not json", "[]", '{"cells": 3}', '{"nbformat": 4}'])
+def test_an_unreadable_notebook_is_a_violation(tmp_path: Path, text: str) -> None:
+    """A notebook whose cells cannot be read is reported, not passed as empty."""
+    forbidden, allowed = contract()
+    path = tmp_path / "t.ipynb"
+    path.write_text(text)
+    assert violations("tutorials/t.ipynb", path, forbidden, allowed) == ["tutorials/t.ipynb: <unparseable>"]
+
+
+@pytest.mark.logic
+def test_a_notebook_with_an_unparseable_cell_is_scanned_cell_by_cell(tmp_path: Path) -> None:
+    """One cell that is not Python marks the notebook unparseable, and the other cells are still resolved."""
+    forbidden, allowed = contract()
+    path = _notebook(tmp_path / "t.ipynb", "import hmac\n", "def broken(:\n")
+    assert violations("tutorials/t.ipynb", path, forbidden, allowed) == [
+        "tutorials/t.ipynb: <unparseable>",
+        "tutorials/t.ipynb: hmac",
+    ]
