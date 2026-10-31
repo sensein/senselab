@@ -1,9 +1,9 @@
 """Canonical byte forms of JSON values and numpy arrays, and the tagged digest over them (ADR-006).
 
-`jcs_dumps` writes RFC 8785 (JCS) JSON with strings in Unicode NFC (`nfc`); `canonical_npy_bytes`
-writes `.npy` version 1.0, C order, little-endian, one byte form per value; `tagged_digest` hashes a
-JSON value under a registered domain tag; `Tokeniser` writes a value outside JSON as JSON with a
-one-key token object per family. Every encoder accepts an exact-type whitelist, refuses everything
+`jcs_dumps` writes RFC 8785 (JCS) JSON with strings in their canonical form (`canonical_text`);
+`canonical_npy_bytes` writes `.npy` version 1.0, C order, little-endian, one byte form per value;
+`tagged_digest` hashes a JSON value under a registered domain tag; `Tokeniser` writes a value outside
+JSON as JSON with a one-key token object per family. Every encoder accepts an exact-type whitelist, refuses everything
 else, and walks containers through one `Walk`.
 """
 
@@ -54,9 +54,9 @@ Scalar = None | bool | int | float | str
 T = TypeVar("T")
 
 UNICODE_VERSION = "13.0.0"
-"""The Unicode version whose assigned code points canonical text may hold: the database of Python 3.10."""
+"""The Unicode version of the database of Python 3.10: text assigned in it is normalised, other text is not."""
 UNICODE_TABLE = "data/unicode-assigned.txt"
-"""The table of those code points, inside the package; `scripts/unicode_table.py` generates it."""
+"""The table of its assigned code points, inside the package; `scripts/unicode_table.py` generates it."""
 
 
 def _unassigned_pattern() -> "re.Pattern[str]":
@@ -85,24 +85,36 @@ def _unassigned_pattern() -> "re.Pattern[str]":
 _UNASSIGNED = _unassigned_pattern()
 
 
-class UnportableText(ValueError):
-    """Text holding a lone surrogate or a code point unassigned in `UNICODE_VERSION`."""
+_SURROGATE = re.compile("[\\ud800-\\udfff]")
 
 
-def nfc(text: str) -> str:
-    """Return `text` in Unicode NFC, the same on every supported Python.
+class InvalidText(ValueError):
+    """Text holding a lone surrogate, which is not Unicode and has no UTF-8 form."""
+
+
+def canonical_text(text: str) -> str:
+    """Return `text`'s canonical form, the same on every supported Python.
+
+    Text whose code points are all assigned in `UNICODE_VERSION` is put in NFC. Text holding any
+    other code point is returned unchanged: it is never normalised, and it is told apart from every
+    normalised text by that code point, which no NFC output over assigned code points holds.
 
     Raises:
-        UnportableText: if `text` holds a lone surrogate or a code point unassigned in `UNICODE_VERSION`.
+        InvalidText: if `text` holds a lone surrogate.
     """
     if text.isascii():
         return text
-    found = _UNASSIGNED.search(text)
+    found = _SURROGATE.search(text)
     if found is not None:
-        cp = ord(found.group())
-        what = "a lone surrogate" if 0xD800 <= cp <= 0xDFFF else f"unassigned in Unicode {UNICODE_VERSION}"
-        raise UnportableText(f"U+{cp:04X} at index {found.start()} is {what}")
+        raise InvalidText(f"U+{ord(found.group()):04X} at index {found.start()} is a lone surrogate")
+    if _UNASSIGNED.search(text) is not None:
+        return text
     return unicodedata.normalize("NFC", text)
+
+
+def is_portable(text: str) -> bool:
+    """Whether every code point of `text` is assigned in `UNICODE_VERSION`, so `canonical_text` normalises it."""
+    return text.isascii() or _UNASSIGNED.search(text) is None
 
 
 def canonical_scalar(v: object) -> Scalar:
@@ -245,11 +257,12 @@ def jcs_dumps(obj: object) -> bytes:
     """Serialise a JSON value as RFC 8785 canonical UTF-8 bytes.
 
     Containers are exactly `list`, `tuple` and `dict` with `str` keys; scalars are what
-    `canonical_scalar` accepts. Strings and keys are in NFC (`nfc`); keys sort by UTF-16 code units.
+    `canonical_scalar` accepts. Strings and keys are in their canonical form (`canonical_text`); keys
+    sort by UTF-16 code units.
 
     Raises:
-        ValueError: on a NaN or infinite float, an integer outside +/-(2**53 - 1), text `nfc`
-            refuses (`UnportableText`), two keys of one object that are equal after NFC, a container
+        ValueError: on a NaN or infinite float, an integer outside +/-(2**53 - 1), a lone surrogate
+            (`InvalidText`), two keys of one object with one canonical form, a container
             that contains itself, nesting deeper than `MAX_DEPTH`, or text longer than
             `MAX_CANONICAL_CHARS` (`WorkBudgetExceeded`).
         TypeError: on any other type, including container subclasses, non-`str` keys and arrays.
@@ -289,7 +302,7 @@ class _Writer:
         elif type(scalar) is float:
             self.out(_float_text(scalar))
         else:
-            self.out(_json_string(nfc(cast(str, scalar))))
+            self.out(_json_string(canonical_text(cast(str, scalar))))
 
     def _container(self, obj: object) -> tuple[int, int, int]:
         start, spent = len(self.parts), self.walk.spent
@@ -309,7 +322,7 @@ class _Writer:
         for key, value in obj.items():
             if type(key) is not str:
                 raise TypeError(f"JSON object key is not a str: {type(key).__qualname__}")
-            text = nfc(key)
+            text = canonical_text(key)
             if text in members:
                 raise ValueError(f"duplicate JSON object key after NFC: {text!r}")
             members[text] = value
@@ -474,12 +487,12 @@ def canonical_npy_bytes(a: numpy.ndarray) -> bytes:
     """Serialise an array as canonical `.npy`: `npy_bytes` of its values, each in its one canonical form.
 
     Every NaN becomes the positive quiet NaN with no payload (`QUIET_NAN_BITS`), `-0.0` becomes
-    `0.0`, every nonzero bool byte becomes 1, and every string is in NFC (`nfc`), at a `U` width no
-    narrower than the array's.
+    `0.0`, every nonzero bool byte becomes 1, and every string is in its canonical form
+    (`canonical_text`), at a `U` width no narrower than the array's.
 
     Raises:
         TypeError: if `a` is not exactly a `numpy.ndarray` (masked arrays and other subclasses).
-        ValueError: on a dtype `npy_bytes` refuses, or a string `nfc` refuses (`UnportableText`).
+        ValueError: on a dtype `npy_bytes` refuses, or a string holding a lone surrogate (`InvalidText`).
     """
     if type(a) is not numpy.ndarray:
         raise TypeError(f"not a plain numpy.ndarray: {type(a).__module__}.{type(a).__qualname__}")
@@ -516,7 +529,7 @@ def _canonical_strings(a: numpy.ndarray) -> numpy.ndarray:
     held = [str(x) for x in a.reshape(-1).tolist()]
     if all(x.isascii() for x in held):
         return a
-    texts = [nfc(x) for x in held]
+    texts = [canonical_text(x) for x in held]
     if texts == held:
         return a
     width = max(a.dtype.itemsize // 4, *(len(t) for t in texts))
@@ -594,7 +607,7 @@ class Tokeniser:
 
         Raises:
             NoCanonicalForm: (`error`) naming the path and type, for a value of no family, a non-`str`
-                key, a key `nfc` refuses, two keys equal after NFC, a container that contains itself,
+                key, a key holding a lone surrogate, two keys with one canonical form, a container that contains itself,
                 nesting deeper than `MAX_DEPTH`, or set elements over `MAX_CANONICAL_CHARS`.
         """
         return _Tokens(self, Walk()).value(value, path)
@@ -657,8 +670,8 @@ class _Tokens:
                 if type(key) is not str:
                     raise self.spec.error(f"{path}[{key!r}]", key, "is not a str object key")
                 try:
-                    text = nfc(key)
-                except UnportableText as err:
+                    text = canonical_text(key)
+                except InvalidText as err:
                     raise self.spec.error(f"{path}[{key!r}]", key, str(err)) from err
                 if text in seen:
                     raise self.spec.error(f"{path}.{key}", key, "is a key equal after NFC to another key of its object")

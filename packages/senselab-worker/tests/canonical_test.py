@@ -17,9 +17,9 @@ from senselab_worker.canonical import (
     DIGEST_TAGS,
     canonical_npy_bytes,
     canonical_scalar,
+    canonical_text,
     jcs_dumps,
     jcs_loads,
-    nfc,
     tagged_digest,
 )
 
@@ -149,15 +149,7 @@ def test_jcs_refuses_lone_surrogates() -> None:
         jcs_dumps("\ud800")
 
 
-def _portable(text: str) -> bool:
-    try:
-        nfc(text)
-    except ValueError:
-        return False
-    return True
-
-
-_NFC_TEXT = st.text().filter(_portable).map(nfc)
+_NFC_TEXT = st.text().map(canonical_text)
 _I_JSON_INTS = st.integers(min_value=-(2**53) + 1, max_value=2**53 - 1)
 _FINITE_FLOATS = st.floats(allow_nan=False, allow_infinity=False).filter(
     lambda x: not (x.is_integer() and abs(x) >= 2**53)

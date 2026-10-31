@@ -106,6 +106,25 @@ def test_every_value_family_has_its_own_encoding() -> None:
 
 
 @pytest.mark.contract
+@given(
+    st.text(alphabet="ae\u0301\u00e9\u0323 ", max_size=4),
+    st.sampled_from(["\U0001fae0", "\U0001fae8", "\U0001e08f", "\u0c5d", "\U000e0080"]),
+)
+def test_text_with_post_13_code_points_is_recorded_and_is_its_own_family(head: str, mark: str) -> None:
+    """Provenance records it (H-R29, H-R30); its value digest differs from its NFC and from every token family."""
+    from senselab_core.runtime.provenance import ProvStore
+
+    text = head + mark
+    ProvStore(run_id="t").entity(prov_type="span", extent=None, attributes={text: [text]})
+    digest = Holder(x=text).canonical_digest()
+    others = {Holder(x=v).canonical_digest() for v, _ in _family_samples().values()}
+    others.add(Holder(x=unicodedata.normalize("NFC", head)).canonical_digest())
+    if unicodedata.normalize("NFC", text) != text:
+        others.add(Holder(x=unicodedata.normalize("NFC", text)).canonical_digest())
+    assert digest not in others
+
+
+@pytest.mark.contract
 def test_provenance_tokens_are_the_shared_families() -> None:
     """Provenance writes each family with the shared tokeniser, arrays by value as `$nd`."""
     from senselab_core.runtime.provenance import normalised

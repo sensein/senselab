@@ -14,30 +14,106 @@ from hypothesis import strategies as st
 _UNASSIGNED_IN_13 = "a\U0001e08f\u0323"
 """U+1E08F is a combining mark (ccc 230) in Unicode 15 and unassigned in 13, so NFC reorders it on 3.12 only."""
 
+POST_13 = (
+    "\U0001e08f",  # 15.0 combining mark
+    "\U0001fae0",  # 14.0 melting face
+    "\U0001faf6",  # 14.0 heart hands
+    "\U0001fae8",  # 15.0 shaking face
+    "\U0001fa75",  # 15.0 light blue heart
+    "\u0c5d",  # 14.0 Telugu letter
+    "\U00011f00",  # 15.0 Kawi sign
+    "\U000e0080",  # unassigned in 15.0 too
+)
+"""Code points unassigned in Unicode 13.0, emoji and marks from 14.0 and 15.0 among them."""
 
-@pytest.mark.logic
-@pytest.mark.parametrize("where", ["value", "key", "nested"])
-def test_xc1_text_whose_nfc_differs_by_interpreter_is_refused(where: str) -> None:
-    """A string holding a code point unassigned in Unicode 13 has no canonical form, as a value or a key."""
+PINNED = {
+    _UNASSIGNED_IN_13: "91027814957edb1fb697c0c3f640e2f811ec745c71f3d114d4e0231619d3d40b",
+    "\U0001fae0 melting": "66c5c6daf2b9da68459649adb38a6b67642ff18c3fa3d15a88bbb30e6fbb2e76",
+    "e\u0301\U0001faf6": "4ce6da3badb79e2bd73d81bb0fb9ef61ba59dfe39d315baca9fad6635758defa",
+    "\U0001fae8\u0301\u0323": "9a94f041798ca0909bcb10dff8d4c76164ba0e89daf474dc40b490a62f4e836c",
+    "\u0c5d\u0c55": "35caf7985ee2423e87ef2a97e8cce07c10384f78e3df05d44bf94de4ea2c4193",
+}
+"""sha256 of `jcs_dumps({"k": [s], s: s})` per string, computed under Python 3.10 (Unicode 13.0)."""
+
+
+def _jcs_sha(text: str) -> str:
+    import hashlib
+
     from senselab_worker.canonical import jcs_dumps
 
-    value = {"value": _UNASSIGNED_IN_13, "key": {_UNASSIGNED_IN_13: 1}, "nested": [{"k": [_UNASSIGNED_IN_13]}]}[where]
-    with pytest.raises(ValueError, match="unassigned in Unicode 13.0.0"):
-        jcs_dumps(value)
+    return hashlib.sha256(jcs_dumps({"k": [text], text: text})).hexdigest()
+
+
+NFC_SENSITIVE = (_UNASSIGNED_IN_13, "e\u0301\U0001faf6", "\U0001fae8\u0301\u0323")
+"""Pinned strings an interpreter's NFC would change: the probes of XC-1."""
 
 
 @pytest.mark.logic
-def test_xc1_weights_paths_hold_only_portable_text(tmp_path: object) -> None:
-    """A weight file whose relative path holds an unassigned code point has no `weights@2` identity."""
+@pytest.mark.parametrize("text", NFC_SENSITIVE, ids=lambda t: ascii(t))
+def test_xc1_text_with_post_13_code_points_has_one_digest_on_every_interpreter(text: str) -> None:
+    """A string holding a code point unassigned in Unicode 13 digests as 3.10 digested it, as a value and a key."""
+    assert _jcs_sha(text) == PINNED[text]
+
+
+@pytest.mark.contract
+def test_every_pinned_post_13_digest_is_reproduced() -> None:
+    """Every string pinned under Python 3.10 digests the same under the running interpreter."""
+    assert {text: _jcs_sha(text) for text in PINNED} == PINNED
+
+
+def _is_portable(text: str) -> bool:
+    from senselab_worker.canonical import is_portable
+
+    return is_portable(text)
+
+
+def _portable_text() -> "st.SearchStrategy[str]":
+    return st.text(alphabet=st.characters(codec="utf-8"), max_size=8).filter(_is_portable)
+
+
+@pytest.mark.contract
+@given(
+    _portable_text(),
+    st.lists(st.sampled_from(POST_13), min_size=1, max_size=3),
+    st.integers(min_value=0, max_value=8),
+    _portable_text(),
+)
+def test_text_with_post_13_code_points_is_kept_raw_and_never_collides(
+    head: str, marks: list[str], at: int, other: str
+) -> None:
+    """Never refused, written without normalisation, and never equal to the form of text assigned in 13.0."""
+    import json
+
+    from senselab_worker.canonical import canonical_text, is_portable, jcs_dumps
+
+    text = head[:at] + "".join(marks) + head[at:]
+    assert not is_portable(text)
+    assert canonical_text(text) == text
+    assert jcs_dumps(text) == json.dumps(text, ensure_ascii=False).encode("utf-8")
+    assert jcs_dumps({text: [text]}) == (
+        "{" + json.dumps(text, ensure_ascii=False) + ":[" + json.dumps(text, ensure_ascii=False) + "]}"
+    ).encode("utf-8")
+    assert is_portable(canonical_text(other))
+    assert jcs_dumps(text) != jcs_dumps(other)
+    assert jcs_dumps(text) != jcs_dumps(canonical_text(head))
+
+
+@pytest.mark.logic
+def test_xc1_weights_paths_with_post_13_code_points_are_named_raw(tmp_path: object) -> None:
+    """A weight file whose relative path holds a code point unassigned in 13.0 has an identity over its raw name."""
+    import hashlib
+    import json
     from pathlib import Path
 
     from senselab_worker.hashing import weights_identity
 
     root = Path(str(tmp_path))
-    f = root / f"w{_UNASSIGNED_IN_13}.bin"
+    name = f"e\u0301{_UNASSIGNED_IN_13}.bin"
+    f = root / name
     f.write_bytes(b"x")
-    with pytest.raises(ValueError, match="unassigned"):
-        weights_identity([f], root=root)
+    pairs = json.dumps([[name, hashlib.sha256(b"x").hexdigest()]], ensure_ascii=False, separators=(",", ":"))
+    expected = hashlib.sha256(b"weights@2\x00" + pairs.encode("utf-8")).hexdigest()
+    assert weights_identity([f], root=root) == expected
 
 
 def _inf_minus_inf() -> numpy.ndarray:
@@ -166,12 +242,15 @@ def test_canonical_bools_are_zero_or_one_and_keep_truth(raw: bytes) -> None:
 
 
 @pytest.mark.logic
-def test_canonical_strings_are_nfc_and_portable() -> None:
-    """A `U` array's strings are in NFC, never narrower than the array, and an unassigned code point is refused."""
+def test_canonical_strings_are_in_canonical_form() -> None:
+    """A `U` array's strings are in NFC, never narrower than the array; one with a post-13.0 code point stays raw."""
+    import io
+
     from senselab_worker.canonical import canonical_npy_bytes
 
     composed = numpy.array(["\u00e9", "a"])
     decomposed = numpy.array(["e\u0301", "a"])
     assert canonical_npy_bytes(composed.astype("<U2")) == canonical_npy_bytes(decomposed)
-    with pytest.raises(ValueError, match="unassigned"):
-        canonical_npy_bytes(numpy.array([_UNASSIGNED_IN_13]))
+    raw = numpy.array(["e\u0301" + _UNASSIGNED_IN_13, "\u00e9"])
+    assert canonical_npy_bytes(raw) == canonical_npy_bytes(raw.copy()) and raw[0] == "e\u0301" + _UNASSIGNED_IN_13
+    assert numpy.load(io.BytesIO(canonical_npy_bytes(raw)))[0] == "e\u0301" + _UNASSIGNED_IN_13

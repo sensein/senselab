@@ -408,8 +408,8 @@ The digest is total over that type by construction. Pipelines record `-inf` dB f
 `mtime_ns` stamps, and branch evidence (`**finding.evidence`) is typed `Any`, so totality cannot rest on the
 suites that happen to run. A held key starting with `$` gains one more (`canonical.escaped_key`), so no
 recorded object reads as a token; escaping rather than refusal keeps the digest total.
-Anything else (another type, a non-`str` key, text holding a code point unassigned in Unicode 13.0, two keys
-equal after NFC, a cycle, nesting past `MAX_DEPTH` once tokens are counted, a form past `MAX_CANONICAL_CHARS`)
+Anything else (another type, a non-`str` key, a lone surrogate, two keys
+with one canonical text form, a cycle, nesting past `MAX_DEPTH` once tokens are counted, a form past `MAX_CANONICAL_CHARS`)
 raises `UnrecordableValue` at the `ProvStore` boundary, naming the attribute path and the type. Cycles, depth
 and work go through one `canonical.Walk`. JCS numeric equality (`1` = `1.0`) and the
 other ADR-006 equivalences are accepted (H-R29, H-R30).

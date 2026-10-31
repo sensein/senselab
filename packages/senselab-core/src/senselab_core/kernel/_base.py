@@ -111,7 +111,7 @@ def value_digest(type_name: str, fields: Mapping[str, object]) -> str:
     any other mapping is an object, and a key that starts with `$` gains one more `$`.
 
     Raises:
-        NoCanonicalForm: on a value of no family, text `nfc` refuses, nesting deeper than `MAX_DEPTH`, or a
+        NoCanonicalForm: on a value of no family, a lone surrogate, nesting deeper than `MAX_DEPTH`, or a
             container that contains itself.
         ValueError: if the tokens, inside the `{"type", "fields"}` envelope, nest deeper than `MAX_DEPTH` or
             exceed `MAX_CANONICAL_CHARS`.

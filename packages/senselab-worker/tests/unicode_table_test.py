@@ -14,7 +14,7 @@ from types import ModuleType
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from senselab_worker.canonical import UNICODE_TABLE, UNICODE_VERSION, UnportableText, nfc
+from senselab_worker.canonical import UNICODE_TABLE, UNICODE_VERSION, InvalidText, canonical_text, is_portable
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "unicode_table.py"
 TABLE = Path(__file__).resolve().parents[1] / "src" / "senselab_worker" / UNICODE_TABLE
@@ -72,12 +72,25 @@ def test_this_interpreter_normalises_every_allowed_code_point_as_the_floor_does(
 
 @pytest.mark.contract
 @given(st.integers(min_value=0x80, max_value=0x10FFFF))
-def test_nfc_refuses_exactly_the_code_points_outside_the_table(cp: int) -> None:
-    """`nfc` of one code point raises `UnportableText` exactly when the table does not allow it."""
+def test_canonical_text_normalises_exactly_the_code_points_in_the_table(cp: int) -> None:
+    """One code point is put in NFC if the table allows it, kept as it is otherwise; a surrogate raises."""
     _, ranges = _table()
-    try:
-        nfc(chr(cp))
-    except UnportableText:
-        assert not _allowed(cp, ranges)
-    else:
-        assert _allowed(cp, ranges)
+    ch = chr(cp)
+    if 0xD800 <= cp <= 0xDFFF:
+        with pytest.raises(InvalidText):
+            canonical_text(ch)
+        return
+    assert is_portable(ch) == _allowed(cp, ranges)
+    assert canonical_text(ch) == (unicodedata.normalize("NFC", ch) if _allowed(cp, ranges) else ch)
+
+
+@pytest.mark.contract
+def test_normalising_text_in_the_table_never_leaves_it() -> None:
+    """NFC and NFD of every allowed code point hold only allowed code points, so normalised text never reads as raw."""
+    _, ranges = _table()
+    for start, end in ranges:
+        for cp in range(start, end + 1):
+            ch = chr(cp)
+            assert is_portable(unicodedata.normalize("NFC", ch)) and is_portable(unicodedata.normalize("NFD", ch)), hex(
+                cp
+            )

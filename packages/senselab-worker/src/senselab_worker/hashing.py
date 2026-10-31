@@ -5,7 +5,7 @@ import os
 from pathlib import PurePath
 from typing import Iterator, Sequence, TypedDict
 
-from senselab_worker.canonical import DIGEST_TAGS, nfc, tagged_digest, utf16_sort_key
+from senselab_worker.canonical import DIGEST_TAGS, canonical_text, tagged_digest, utf16_sort_key
 
 __all__ = [
     "DEFAULT_CHUNK_SIZE",
@@ -74,13 +74,13 @@ def weights_identity(paths: Sequence[str | os.PathLike[str]], *, root: str | os.
     """Return the identity of a set of weight files under `root`, independent of listing order.
 
     Each file contributes `[relpath, sha256]`: its path relative to `root` with POSIX separators,
-    in NFC (`nfc`; symlinks are not resolved, so a link is named by where it sits and hashed by
+    in canonical form (`canonical_text`; symlinks are not resolved, so a link is named by where it sits and hashed by
     what it points to), and the sha256 of its bytes. The identity is `tagged_digest("weights@2", pairs)`
     over the pairs sorted by relpath in UTF-16 code-unit order, the order JCS uses for object keys.
 
     Raises:
         ValueError: if a path lies outside `root`, the same path is listed twice after
-            normalisation, or a path holds text `nfc` refuses (`UnportableText`).
+            normalisation, or a path holds a lone surrogate (`InvalidText`).
     """
     root_abs = os.path.abspath(root)
     pairs: dict[str, str] = {}
@@ -88,7 +88,7 @@ def weights_identity(paths: Sequence[str | os.PathLike[str]], *, root: str | os.
         rel = os.path.relpath(os.path.abspath(path), root_abs)
         if rel == os.curdir or rel == os.pardir or rel.startswith(os.pardir + os.sep):
             raise ValueError(f"weight file is not under {root_abs}: {path}")
-        posix = nfc(PurePath(rel).as_posix())
+        posix = canonical_text(PurePath(rel).as_posix())
         if posix in pairs:
             raise ValueError(f"weight file listed twice: {posix}")
         pairs[posix] = sha256_file(path)

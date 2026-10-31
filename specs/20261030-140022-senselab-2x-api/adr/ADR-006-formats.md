@@ -15,26 +15,37 @@ Architect review §5 (R-42) found:
   - JSON: RFC 8785 (JCS);
   - arrays: little-endian `.npy` version 1.0, C order, each value in its canonical form (below);
   - tables: Parquet with a fixed writer configuration;
-  - text: UTF-8 NFC, over portable text only (below).
+  - text: UTF-8, in its canonical form (below).
 
   Output identity (ADR-002) is the hash of this form.
-- **Canonical text is portable by construction (H-R33).** NFC is computed from the interpreter's Unicode
-  database, which differs between supported Pythons (3.10 has Unicode 13.0, 3.12 has 15.0). Unicode's
-  normalization stability policy fixes the NFC of every string whose code points are assigned in a given
-  version, but a code point assigned later can change NFC as a combining mark: `"a\U0001E08F\u0323"`
-  normalised one way on 3.10 and another on 3.12 (XC-1). Canonical text therefore holds only code points
-  assigned in Unicode 13.0, the database of the 3.10 floor; anything else, and a lone surrogate, raises
-  `UnportableText` (`canonical.nfc`, the one NFC every canonical encoder calls: JCS strings and keys,
-  provenance and value keys, `U` arrays, weight paths).
+- **Canonical text is portable by construction (H-R33, amended by H-R34).** NFC is computed from the
+  interpreter's Unicode database, which differs between supported Pythons (3.10 has Unicode 13.0, 3.12 has
+  15.0). Unicode's normalization stability policy fixes the NFC of every string whose code points are
+  assigned in a given version, but a code point assigned later can change NFC as a combining mark:
+  `"a\U0001E08F\u0323"` normalised one way on 3.10 and another on 3.12 (XC-1). `canonical.canonical_text`,
+  the one text form every canonical encoder uses (JCS strings and keys, provenance and value keys, `U`
+  arrays, weight paths), therefore has two branches:
+  - text whose code points are all assigned in Unicode 13.0, the database of the 3.10 floor, is put in NFC;
+  - text holding any other code point (an emoji from 14.0 or 15.0, a later script, an unassigned code
+    point) is kept exactly as given, with no normalisation, so every interpreter writes the same bytes.
+
+  It is never refused; only a lone surrogate, which is not Unicode, raises `InvalidText`. Refusing it (H-R33
+  as first written) broke provenance totality (H-R29, H-R30), since LLM review text carries modern emoji.
+  - The raw form is its own family, and its tag is the post-13.0 code point it holds. NFC and NFD of every
+    allowed code point hold only allowed code points (`test_normalising_text_in_the_table_never_leaves_it`),
+    so no normalised string equals a raw one, and two raw strings are equal only when identical. No
+    `{"$u": ...}` wrapper is used: a JSON string stays a JSON string, so stored outputs and records read back
+    as the text that was written, and `jcs_loads` keeps its fixed points.
+  - The cost is that two raw strings equal under a later NFC (`e\u0301` + emoji against `\u00e9` + emoji)
+    have two digests. Each digest is the same on every interpreter.
   - The allowed code points are `senselab_worker/data/unicode-assigned.txt`: the ranges whose general
     category in `unicodedata` 13.0.0 is neither `Cn` nor `Cs`. `packages/senselab-worker/scripts/unicode_table.py`
     regenerates it and refuses to run on any other Unicode version.
   - The file carries an NFC fingerprint: the sha256 over every allowed code point of its combining class,
     decomposition mapping, NFD and NFC, which together determine NFC on every string over those code points.
     `tests/unicode_table_test.py` regenerates the table under 3.10 and, under any later Python, recomputes the
-    fingerprint from that interpreter's database; both must equal the file. 3.10 and 3.12 agree.
-  - Refusing, rather than vendoring a frozen NFC implementation, keeps one NFC (the interpreter's) and costs
-    only text using characters added after 2020; such text has no portable identity to give.
+    fingerprint from that interpreter's database; both must equal the file. 3.10 and 3.12 agree, and the
+    digests of raw strings pinned under 3.10 are reproduced under 3.12.
 - **The canonical encoders accept an exact-type whitelist.** JSON scalars are exactly `None`,
   `bool`, `int`, `float` and `str`, or a numpy scalar defined by numpy whose dtype kind is one of
   `b i u f U` and whose `.item()` is one of those types. Containers are exactly `list`, `tuple` and
@@ -80,8 +91,9 @@ Architect review §5 (R-42) found:
     inf` gives `0x7FF8…` on arm64 (measured) and sets the sign bit on x86 (XC-4, inferred from the
     architecture), so without this one computation could hash two ways;
   - bools: every nonzero byte of a bool array is `True` and is written as 1;
-  - text: two strings, two keys, or two strings of a `U` array, equal after NFC (two such keys in one object
-    are refused, not merged; a `U` array keeps a width no narrower than its own);
+  - text: two strings, two keys, or two strings of a `U` array, equal after NFC when every code point is
+    assigned in Unicode 13.0 (two such keys in one object are refused, not merged; a `U` array keeps a width
+    no narrower than its own); text holding any other code point is equal only to itself;
   - containers: a list and a tuple; a set and a frozenset; two elements of one set with one JCS form are one
     element (XC-7);
   - arrays: equal in dtype name, shape and canonical values whatever their byte order and layout;
