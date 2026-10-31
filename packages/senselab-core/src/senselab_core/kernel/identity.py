@@ -15,10 +15,10 @@ from pydantic import (
     StringConstraints,
     model_validator,
 )
-from senselab_worker.canonical import Walk, jcs_dumps, jcs_loads
+from senselab_worker.canonical import jcs_dumps, jcs_loads
 from senselab_worker.digest import identity_digest
 
-from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap
+from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap, thawed
 from senselab_core.kernel.license import License
 
 _HF_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?")
@@ -178,22 +178,6 @@ class ModelIdentity(Frozen):
         return self
 
 
-def _thaw(v: object, walk: Walk | None = None) -> object:
-    """Return `v` with every mapping as a `dict` and every sequence as a `list`, through the shared guard.
-
-    Raises:
-        ValueError: if a container contains itself or nests deeper than `MAX_DEPTH`.
-    """
-    walk = Walk() if walk is None else walk
-    if isinstance(v, Mapping):
-        items = v
-        return walk.enter(v, lambda: {k: _thaw(x, walk) for k, x in items.items()})
-    if isinstance(v, (list, tuple)):
-        elements = v
-        return walk.enter(v, lambda: [_thaw(x, walk) for x in elements])
-    return v
-
-
 def _freeze(v: object) -> object:
     if isinstance(v, Mapping):
         return FrozenMapping({k: _freeze(x) for k, x in v.items()})
@@ -206,7 +190,7 @@ def _canonical_params(v: object) -> object:
     if not isinstance(v, Mapping):
         raise ValueError(f"params must be a JSON object, got {type(v).__name__}")
     try:
-        return jcs_loads(jcs_dumps(_thaw(v)))
+        return jcs_loads(jcs_dumps(thawed(v)))
     except TypeError as e:
         raise ValueError(f"params must be canonical JSON: {e}") from e
 
@@ -215,7 +199,7 @@ Params = Annotated[
     Mapping[str, Any],
     BeforeValidator(_canonical_params),
     AfterValidator(_freeze),
-    PlainSerializer(_thaw),
+    PlainSerializer(thawed),
 ]
 """A JSON object held in its RFC 8785 canonical value, deeply read-only (objects as mappings, arrays as tuples)."""
 
