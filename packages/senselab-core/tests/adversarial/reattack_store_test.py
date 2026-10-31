@@ -807,7 +807,7 @@ def test_every_storage_operation_on_a_planted_symlink_leaves_its_target_alone(tm
 
 NAME_OPERATIONS = ("put", "get", "collect", "fetch", "record", "lock")
 PLANTS = ("symlink", "hardlink", "directory", "corrupt")
-NAME_TYPED = {"", "WrongKindError", "ManifestConflictError", "LockTimeout"}
+NAME_TYPED = {"", "WrongKindError", "ManifestConflictError", "LockTimeout", "LockUnavailable"}
 OLD = 10**9
 NAME_BOUND_S = 30.0
 
@@ -978,15 +978,28 @@ def probe_record_with_plant(scratch: str, name: str, plant: str) -> dict[str, An
         target.mkdir()
     elif plant == "fifo":
         os.mkfifo(target)
+    elif plant in ("unopenable", "unmovable"):
+        target.write_bytes(b"someone else's")
+        os.chmod(target, 0o000)
     else:
         target.write_bytes(plant.encode())
     if plant != "hardlink":
         os.utime(target, (OLD, OLD), follow_symlinks=False)
     before = _snapshot(victim)
     os.environ["SENSELAB_CACHE"] = str(cache)
+    if plant == "unmovable":
+        os.chmod(target.parent, 0o555)
     started = time.monotonic()
     error, _ = _outcome(lambda: revision.record_resolution("org/m", "main", "a" * 40, run="r1"))
+    message = ""
+    if error:
+        try:
+            revision.record_resolution("org/m", "main", "a" * 40, run="r1")
+        except Exception as err:  # noqa: BLE001
+            message = str(err)
+    os.chmod(target.parent, 0o770)
     return {
+        "message": message,
         "error": error,
         "seconds": time.monotonic() - started,
         "recorded": revision.read_manifest("r1"),
@@ -1135,3 +1148,109 @@ def probe_clock_hard_link(scratch: str, op: str) -> dict[str, Any]:
 def test_i1_a_hard_link_at_a_store_or_cache_clock_leaves_its_target_alone(tmp_path: Path, op: str) -> None:
     """A hard link at the store's or the cache's `.clock`: the file it shares is not chmodded or re-stamped."""
     assert _bounded("probe_clock_hard_link", str(tmp_path), op) == {"error": "", "victim_unchanged": True}
+
+
+UNOPENABLE_NAMES = ("resolutions@2.json.lock", "resolutions@2.json.holder", "resolutions@2.json")
+
+
+@pytest.mark.logic
+@pytest.mark.skipif(os.geteuid() == 0, reason="root opens a 0o000 file")
+@pytest.mark.parametrize("name", UNOPENABLE_NAMES)
+def test_n1_an_unopenable_file_at_a_lock_or_manifest_name_never_wedges_record_resolution(
+    tmp_path: Path, name: str
+) -> None:
+    """A regular file this user cannot open, as another user's 0o600 file is, is moved aside or replaced."""
+    report = _bounded("probe_record_with_plant", str(tmp_path), name, "unopenable")
+    assert report["error"] == "" and report["recorded"] and report["seconds"] < NAME_BOUND_S, report
+
+
+@pytest.mark.logic
+@pytest.mark.skipif(os.geteuid() == 0, reason="root renames in a read-only directory")
+def test_n1_an_unopenable_lock_that_cannot_be_moved_is_a_typed_error_naming_its_remedy(tmp_path: Path) -> None:
+    """When the run directory refuses the move too, the error is `LockUnavailable` naming the lock and its owner."""
+    report = _bounded("probe_record_with_plant", str(tmp_path), "resolutions@2.json.lock", "unmovable")
+    assert report["error"] == "LockUnavailable", report
+    assert "resolutions@2.json.lock" in report["message"] and "owned by" in report["message"], report
+
+
+def probe_heartbeat_after_release(scratch: str) -> dict[str, Any]:
+    """Hold a lock with a 10 ms heartbeat, release it, then count heartbeat writes and open descriptors after."""
+    from senselab_core.runtime.locks import SharedFileLock
+    from senselab_core.runtime.storage import StorageDir
+
+    resource = Path(scratch) / "thing"
+    writes: list[str] = []
+    real = StorageDir.write_atomically
+
+    def counted(self: StorageDir, name: str, data: bytes, **kwargs: Any) -> Any:  # noqa: ANN401
+        writes.append(name)
+        return real(self, name, data, **kwargs)
+
+    StorageDir.write_atomically = counted  # type: ignore[method-assign]
+    before = len(os.listdir("/dev/fd"))
+    lock = SharedFileLock(resource, heartbeat_interval=0.01, timeout=5)
+    with lock:
+        time.sleep(0.1)
+    released = len(writes)
+    time.sleep(0.3)
+    return {
+        "beats_while_held": writes.count("thing.heartbeat"),
+        "writes_after_release": len(writes) - released,
+        "heartbeat_left": os.path.lexists(str(resource) + ".heartbeat"),
+        "fds_leaked": len(os.listdir("/dev/fd")) - before,
+        "threads": [t.name for t in threading.enumerate() if t is not threading.main_thread()],
+    }
+
+
+@pytest.mark.logic
+def test_n2_nothing_is_written_and_no_descriptor_is_left_after_release(tmp_path: Path) -> None:
+    """With a 10 ms heartbeat, release stops the thread: no heartbeat after it, no heartbeat file, no leaked fd."""
+    report = _bounded("probe_heartbeat_after_release", str(tmp_path))
+    assert report["beats_while_held"] >= 2, report
+    assert report["writes_after_release"] == 0 and report["heartbeat_left"] is False, report
+    assert report["fds_leaked"] == 0 and report["threads"] == [], report
+
+
+def probe_stalled_heartbeat_at_release(scratch: str) -> dict[str, Any]:
+    """Stall one heartbeat write past the release join, then report what started or stayed open after release."""
+    from senselab_core.runtime import locks as locks_module
+    from senselab_core.runtime.locks import SharedFileLock
+    from senselab_core.runtime.storage import StorageDir
+
+    locks_module.HEARTBEAT_JOIN_S = 0.05  # type: ignore[misc]
+    resource = Path(scratch) / "thing"
+    events: list[tuple[str, float]] = []
+    stall = threading.Event()
+    real_write, real_open = StorageDir.write_atomically, StorageDir.open_root.__func__  # type: ignore[attr-defined]
+
+    def write(self: StorageDir, name: str, data: bytes, **kwargs: Any) -> Any:  # noqa: ANN401
+        events.append(("write", time.monotonic()))
+        if name.endswith(".heartbeat") and stall.is_set():
+            stall.clear()
+            time.sleep(0.5)
+        return real_write(self, name, data, **kwargs)
+
+    def open_root(cls: type, root: Path, **kwargs: Any) -> Any:  # noqa: ANN401
+        events.append(("open", time.monotonic()))
+        return real_open(cls, root, **kwargs)
+
+    StorageDir.write_atomically = write  # type: ignore[method-assign]
+    StorageDir.open_root = classmethod(open_root)  # type: ignore[method-assign,assignment,arg-type]
+    before = len(os.listdir("/dev/fd"))
+    with SharedFileLock(resource, heartbeat_interval=0.01, timeout=5):
+        stall.set()
+        time.sleep(0.05)
+    released = time.monotonic()
+    time.sleep(1.0)
+    return {
+        "started_after_release": [kind for kind, at in events if at > released],
+        "fds_leaked": len(os.listdir("/dev/fd")) - before,
+        "threads": [t.name for t in threading.enumerate() if t is not threading.main_thread()],
+    }
+
+
+@pytest.mark.logic
+def test_n2_a_stalled_heartbeat_starts_nothing_and_leaves_nothing_open_after_release(tmp_path: Path) -> None:
+    """A heartbeat write stalled past the release join neither reopens the directory nor starts another write."""
+    report = _bounded("probe_stalled_heartbeat_at_release", str(tmp_path))
+    assert report == {"started_after_release": [], "fds_leaked": 0, "threads": []}, report

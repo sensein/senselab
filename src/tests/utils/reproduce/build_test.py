@@ -875,6 +875,64 @@ def _hold_locks(directory: Path) -> None:
     assert build.read_wheels_lock(lock, file_sha256(lock)) == {}
 
 
+_FILE_LOCK_PROBE = """
+import json, os, sys
+from pathlib import Path
+from senselab.utils.reproduce import build
+base, shared = Path(sys.argv[1]), sys.argv[2] == "shared"
+victim = base / "victim"
+before = [victim.read_bytes().decode(), victim.stat().st_mode, victim.stat().st_mtime_ns]
+locks = base / "locks"
+with build.file_lock(locks / "venv.lock", shared=shared), build.file_lock(locks / "other.lock", shared=shared):
+    pass
+after = [victim.read_bytes().decode(), victim.stat().st_mode, victim.stat().st_mtime_ns]
+kinds = {n: [(locks / n).is_file(), (locks / n).is_symlink()] for n in ("venv.lock", "other.lock")}
+print(json.dumps({"victim_unchanged": before == after, "outside": os.path.lexists(base / "created-outside"),
+                  "kinds": kinds}))
+"""
+
+
+def _bounded() -> None:
+    import resource
+
+    resource.setrlimit(resource.RLIMIT_FSIZE, (1 << 20, 1 << 20))
+
+
+@pytest.mark.parametrize("shared", [True, False])
+def test_file_lock_never_writes_through_a_planted_symlink(tmp_path: Path, shared: bool) -> None:
+    """A symlink at the ``.lock`` a `file_lock` takes, live or dangling, is moved aside; its target is untouched.
+
+    `file_lock` is `SharedFileLock` (H9b round 2, N-5): the lock file is opened relative to its directory without
+    following. The probe runs in a child under a file-size limit and a timeout, so it is bounded whatever
+    `file_lock` does with the symlink.
+    """
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"belongs to someone else")
+    victim.chmod(0o600)
+    os.utime(victim, (1e9, 1e9))
+    locks = tmp_path / "locks"
+    locks.mkdir()
+    (locks / "venv.lock").symlink_to(victim)
+    (locks / "other.lock").symlink_to(tmp_path / "created-outside")
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", _FILE_LOCK_PROBE, str(tmp_path), "shared" if shared else "exclusive"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            preexec_fn=_bounded,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("file_lock did not return within 60 s on a symlinked lock file")
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    report = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert report == {
+        "victim_unchanged": True,
+        "outside": False,
+        "kinds": {"venv.lock": [True, False], "other.lock": [True, False]},
+    }
+
+
 def test_locks_take_shared_and_exclusive(tmp_path: Path) -> None:
     """Shared and exclusive locks on a sidecar created by the lock itself."""
     _hold_locks(tmp_path)

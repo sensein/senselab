@@ -131,11 +131,10 @@ def _chain(node: ast.AST) -> list[str] | None:
     return None
 
 
-def _imports_of(tree: ast.AST, module: str, is_package: bool, label: str) -> set[str]:
-    package = module if is_package else module.rpartition(".")[0]
+def _bindings(tree: ast.AST, package: str) -> tuple[dict[str, str], set[str]]:
+    """``(name -> dotted target bound by an import, modules imported)`` for every import statement in ``tree``."""
     found: set[str] = set()
     bound: dict[str, str] = {}
-    importers = _importer_aliases(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -158,7 +157,42 @@ def _imports_of(tree: ast.AST, module: str, is_package: bool, label: str) -> set
                 full = f"{source}.{alias.name}" if source else alias.name
                 found.add(full)
                 bound[alias.asname or alias.name] = full
-        elif isinstance(node, ast.Call):
+    return bound, found
+
+
+def bindings(tree: ast.AST, path: Path) -> dict[str, str]:
+    """Each name an import in ``tree`` (the source of ``path``) binds, mapped to the dotted name it stands for.
+
+    Assignments of a bound name or attribute chain (``r = os.rename``) bind too, transitively.
+    """
+    module, is_package = module_name(path)
+    bound, _ = _bindings(tree, module if is_package else module.rpartition(".")[0])
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and (target := resolved(node.value, bound)) is not None:
+                for name in (t.id for t in node.targets if isinstance(t, ast.Name)):
+                    if bound.get(name) != target:
+                        bound[name] = target
+                        changed = True
+    return bound
+
+
+def resolved(node: ast.AST, bound: dict[str, str]) -> str | None:
+    """The dotted name ``node`` (a name, attribute chain or ``getattr`` with a folded name) stands for, else None."""
+    chain = _chain(node)
+    if not chain or chain[0] not in bound:
+        return None
+    return ".".join([*bound[chain[0]].split("."), *chain[1:]])
+
+
+def _imports_of(tree: ast.AST, module: str, is_package: bool, label: str) -> set[str]:
+    package = module if is_package else module.rpartition(".")[0]
+    bound, found = _bindings(tree, package)
+    importers = _importer_aliases(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
             target = _dynamic_target(node, importers)
             if target is None:
                 continue

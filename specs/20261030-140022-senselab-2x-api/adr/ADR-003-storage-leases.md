@@ -75,8 +75,8 @@ root (C-1, I-1). The rules below are stated as what is guaranteed after that rou
   check with `fstat` that they are regular, so a symlink is never read through and a fifo never blocks.
 - **Nothing under a root is modified in place.** A file that changes (a lock's holder, heartbeat and
   clock, a store or cache `.clock`, a run manifest, a dataset's completion marker) is written to a fresh
-  temporary created with `O_EXCL | O_NOFOLLOW` relative to the directory's descriptor and renamed over
-  its name. Replacing a symlink or a hard link replaces the name; the file it pointed at or shared is
+  temporary created `0o600` with `O_EXCL | O_NOFOLLOW` relative to the directory's descriptor, given its
+  mode with `fchmod` before any byte is written, and renamed over its name. Replacing a symlink or a hard link replaces the name; the file it pointed at or shared is
   never opened for writing, truncated, chmodded or re-stamped. Modes are set only with `fchmod` on a
   descriptor this process opened; nothing is chmodded by path. A directory or other non-file at such a
   name is moved aside before the rename.
@@ -84,25 +84,41 @@ root (C-1, I-1). The rules below are stated as what is guaranteed after that rou
   `flock`ed, so it is opened (created if missing, `O_EXCL` first) relative to the directory's descriptor
   with `O_NOFOLLOW | O_NONBLOCK`, never truncated, and accepted only if `fstat` shows a regular file with
   `st_nlink == 1`. A hard link (`st_nlink > 1`), symlink, directory or fifo there is corrupt and moved
-  aside beside it; its target is not touched. After each `flock` the descriptor must still be the file at
+  aside beside it; its target is not touched. A regular file there that this user cannot open read-write
+  (`EACCES`, `EPERM`, as another user's `0o600` file) is moved aside the same way; if the directory refuses
+  that rename too, the lock raises `LockUnavailable`, naming the file, its owner and the command that
+  removes it, never a bare `PermissionError`. 1.x `reproduce.build.file_lock` takes the same lock (shared
+  or exclusive) through `SharedFileLock`. After each `flock` the descriptor must still be the file at
   the name (device and inode through a fresh open), else the attempt is retried. `filelock` is no longer
   used; `SharedFileLock` is the one lock implementation.
 - **Holders and waits.** A holder file that is not a whole identity (`user`, `host`, `pid`, `taken_at`
-  of their types), or not a regular file, is corrupt: it is moved aside and the lock is taken once the
-  later of its mtime and the heartbeat's is older than `stale_after` on the storage clock. Every wait in
-  `SharedFileLock.__enter__` is bounded by `timeout` and ends in `LockTimeout`; `record_resolution`
-  waits once and does not retry.
+  of their types), not a regular file, or unreadable, is corrupt: once the later of its mtime and the
+  heartbeat's is older than `stale_after` on the storage clock, it is moved aside and the lock is taken.
+  With `timeout >= 0` every wait in `SharedFileLock.__enter__` ends in `LockTimeout` at `timeout`. With a
+  negative `timeout` (1.x `build.exclusive_lock` and `file_lock`) the wait for another process that holds
+  the `flock` has no bound (H-R41); the wait on a corrupt holder still ends at `stale_after`.
+  `record_resolution` waits once, for 600 s, and does not retry.
+- **The heartbeat stops at release.** The heartbeat thread writes through its own directory handle,
+  checks a stop flag before every write, and closes its handle as it ends; release sets the flag and
+  joins the thread for up to 5 s, then removes the sidecars and closes the lock's descriptors. A heartbeat
+  write already in progress when that join gives up (a stalled filesystem) can still land after release;
+  this is logged.
 - **Private staging for downloads.** Fetch stages each download and each marker in `tmp/<uuid>/`, made
   `0o700` by this process and checked with `fstat` to be its own. The download is written and hashed
   through one descriptor; it is hard-linked (first writer wins) or renamed into `blobs/<sha256>` from
   that directory by descriptor. The marker records only the stamp of an inode this call hashed (or found
   recorded): if `blobs/<sha256>` no longer names the hashed inode after the link, no stamp is recorded and
   the next `verify="size"` fetch hashes it again. A blob nobody hashed is never trusted by size.
-- **Every written name is listed.** Each module that writes under a root exports `WRITTEN_NAMES`, the
-  grammars of the file names it writes, and every `StorageDir` write takes the grammar its name must
-  match. A test greps the modules for any write without a listed grammar or by another API, and a
-  contract plants a symlink, a hard link, a directory and corrupt content at every name a clean run
-  writes.
+- **Every written name is listed.** Each runtime module that writes under a root exports
+  `WRITTEN_NAMES`, the grammars of the file names it writes, and every `StorageDir` write takes the
+  grammar its name must match. A lint over every module that writes under a storage root (store, fetch,
+  locks, storage, provenance, BEP-028, run manifests, 1.x `reproduce.build` and `reproduce.cache`)
+  reports any write without a listed grammar, and any write, rename, link, removal, mode or time change or
+  write-mode open by `os`, `io`, `shutil`, `tempfile`, builtin `open` or `pathlib.Path`, under any alias
+  the shared import resolver folds, outside `StorageDir`. The raw sites that remain (BEP-028's sidecars
+  and the 1.x reproduce trees, by path in caller-chosen trees, deferred to the 1.x cleanup) are counted in
+  the lint, so a new one fails it. A contract plants a symlink, a hard link, a directory and corrupt
+  content at every name a clean run writes.
 - **A wrong kind at an owned path is corrupt, never retryable.** A symlink or a non-directory where a
   store or cache directory belongs, or anything but a regular file at `blobs/<sha256>` or a completion
   marker, is moved aside by rename (into `quarantine/` for the store, into `tmp/` for the cache, where age
@@ -114,9 +130,12 @@ root (C-1, I-1). The rules below are stated as what is guaranteed after that rou
 - **Ids that become path components are one component.** Run ids (including `SENSELAB_RUN_ID`),
   dataset names and versions and each part of a manifest path pass `storage.path_component`: non-empty,
   not `.` or `..`, no `/`, `\\` or NUL.
-- **Modes come from `StorePolicy`, never the umask.** Every directory and file is created private
-  (`0o700`, `0o600`) and then set to its policy mode through its descriptor. A store root's missing
-  ancestors, which lie outside the root, are made as `os.makedirs` makes them.
+- **Modes come from `StorePolicy`, never the umask.** Every store, cache and run-manifest directory and
+  file is created private (`0o700`, `0o600`) and then set to its policy mode through its descriptor. A
+  root's missing ancestors, which lie outside the root, are made as `os.makedirs` makes them. A lock's own
+  directory, when the lock does not manage it (`manage_dir_mode=False`) and it is missing, is made under
+  the umask; a caller's file written by `write_atomically` without a mode keeps the mode the file had, or
+  gets the umask's default for a new file, set through the descriptor.
 - **An entry is bound to its address and to the context it was written in.** `result.json` records the
   key digest and the context fingerprint (`result@2.0`, `store@4`, ADR-006). A reader requires the stored
   key to digest to the recorded digest, the recorded fingerprint to equal the fingerprint of

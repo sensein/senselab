@@ -17,6 +17,7 @@ read on the storage's own clock. The lock is correct only where `flock` is coher
 disks, NFSv4).
 """
 
+import errno
 import fcntl
 import getpass
 import json
@@ -31,7 +32,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from senselab_core.runtime.storage import TEMPORARY_NAME, StorageDir, WrongKindError, path_component
+from senselab_core.runtime.storage import TEMPORARY_NAME, StorageDir, WrongKindError, owner_remedy, path_component
 
 logger = logging.getLogger("senselab")
 
@@ -54,6 +55,23 @@ _HOLDER_FIELDS: dict[str, Any] = {"user": str, "host": str, "pid": int, "taken_a
 
 class LockTimeout(TimeoutError):
     """A lock wait reached its bound: a holder kept the lock, or a corrupt holder was not yet stale."""
+
+
+class LockUnavailable(RuntimeError):
+    """The lock file is a regular file this user can neither open nor move aside; the message names the remedy.
+
+    Attributes:
+        path: The lock file.
+    """
+
+    def __init__(self, path: Path, message: str) -> None:
+        """Record `path`; `message` is the whole text."""
+        super().__init__(message)
+        self.path = path
+
+
+HEARTBEAT_JOIN_S = 5.0
+"""Seconds `__exit__` waits for the heartbeat thread to finish a write in progress."""
 
 
 def _holder_record(data: Optional[bytes]) -> Optional[dict[str, Any]]:
@@ -136,6 +154,8 @@ class SharedFileLock:
         file_mode: The mode of the lock file and sidecars this lock creates.
         directory: The directory holding `path`, already open; it is duplicated and `path`'s parent is not
             opened again.
+        shared: Take a shared `flock` (a reader) instead of an exclusive one. A shared holder writes no
+            holder, heartbeat or clock and judges no leftover; it waits only for an exclusive holder.
 
     Attributes:
         took_over: Whether, once the `flock` was held, a previous holder's identity (whole or corrupt) was
@@ -153,6 +173,7 @@ class SharedFileLock:
         manage_dir_mode: bool = True,
         file_mode: int = LOCK_FILE_MODE,
         directory: Optional[StorageDir] = None,
+        shared: bool = False,
     ) -> None:
         """Configure a lock over `path` without acquiring it."""
         self._path = Path(path)
@@ -171,7 +192,9 @@ class SharedFileLock:
         self._manage_dir_mode = manage_dir_mode
         self._file_mode = file_mode
         self._given = directory
+        self._shared = shared
         self._dir: Optional[StorageDir] = None
+        self._beat_dir: Optional[StorageDir] = None
         self._fd: Optional[int] = None
         self._stop_event = threading.Event()
         self._heartbeat_thread: Optional[threading.Thread] = None
@@ -209,9 +232,11 @@ class SharedFileLock:
         fd, failure = self._open_lock_fd(directory)
         if failure is not None:
             kind = directory.kind(self._lock_name)
-            if kind in (None, "file"):
+            if kind is None:
+                return None
+            if kind == "file" and failure.errno not in (errno.EACCES, errno.EPERM):
                 raise failure
-            self._move_aside(self._lock_name, f"a {kind}")
+            self._move_unopenable(kind, failure)
             return None
         if fd is None:
             return None
@@ -221,6 +246,17 @@ class SharedFileLock:
             self._move_aside(self._lock_name, "a hard link" if stat.S_ISREG(st.st_mode) else "not a regular file")
             return None
         return fd
+
+    def _move_unopenable(self, kind: str, failure: OSError) -> None:
+        """Move aside what is at the lock name and could not be opened; `LockUnavailable` if it cannot be moved."""
+        try:
+            self._move_aside(self._lock_name, f"a {kind} that cannot be opened ({failure.strerror})")
+        except WrongKindError as err:
+            raise LockUnavailable(
+                self._lock_path,
+                f"{self._lock_path} cannot be opened ({failure.strerror}) or moved aside; "
+                f"{owner_remedy(self._lock_path)}",
+            ) from err
 
     def _open_lock_fd(self, directory: StorageDir) -> tuple[Optional[int], Optional[OSError]]:
         """Open the lock file, creating it if missing: `(descriptor, error)`; both None if it vanished."""
@@ -236,7 +272,7 @@ class SharedFileLock:
         if fd is None:
             return None
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, (fcntl.LOCK_SH if self._shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
         except BlockingIOError:
             os.close(fd)
             return None
@@ -282,18 +318,19 @@ class SharedFileLock:
             self._holder_name, json.dumps(payload).encode("utf-8"), grammar=SIDECAR_NAME, mode=self._file_mode
         )
 
-    def _beat(self) -> None:
-        self._directory().write_atomically(self._heartbeat_name, b"", grammar=SIDECAR_NAME, mode=self._file_mode)
+    def _beat(self, directory: Optional[StorageDir] = None) -> None:
+        target = directory if directory is not None else self._directory()
+        target.write_atomically(self._heartbeat_name, b"", grammar=SIDECAR_NAME, mode=self._file_mode)
 
     def _read_holder(self) -> tuple[str, Optional[dict[str, Any]], float]:
-        """Return `("absent" | "whole" | "corrupt", record, mtime)` for the holder file."""
+        """Return `("absent" | "whole" | "corrupt", record, mtime)` for the holder; an unreadable one is corrupt."""
         directory = self._directory()
         info = directory.lstat(self._holder_name)
         if info is None:
             return "absent", None, 0.0
         try:
             data = directory.read_regular(self._holder_name, limit=HOLDER_LIMIT)
-        except (WrongKindError, ValueError):
+        except (WrongKindError, ValueError, PermissionError):
             data = b""
         record = _holder_record(data)
         return ("whole" if _whole(record) else "corrupt"), record, info.st_mtime
@@ -393,23 +430,38 @@ class SharedFileLock:
         deadline = time.monotonic() + self._timeout if self._timeout >= 0 else float("inf")
         try:
             self._fd = self._acquire(deadline)
+            if self._shared:
+                return self
             self._settle_leftover(deadline)
             self._write_holder()
             self._beat()
+            self._beat_dir = self._directory().dup()
         except BaseException:
             self._unlock()
             raise
-        self._stop_event.clear()
-        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self._stop_event = threading.Event()
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop, args=(self._stop_event, self._beat_dir), daemon=True
+        )
         self._heartbeat_thread.start()
         return self
 
-    def _heartbeat_loop(self) -> None:
-        while not self._stop_event.wait(self._heartbeat_interval):
-            try:
-                self._beat()
-            except (OSError, WrongKindError, ValueError) as err:
-                logger.warning("lock %s: cannot refresh the heartbeat: %s", self._lock_path, err)
+    def _heartbeat_loop(self, stop: threading.Event, directory: StorageDir) -> None:
+        """Rewrite the heartbeat through `directory` every interval, checking `stop` before each write.
+
+        `directory` is this thread's own handle and is closed when the thread ends, so the thread never
+        reopens the lock's directory and nothing else can be reached through a reused descriptor.
+        """
+        try:
+            while not stop.wait(self._heartbeat_interval):
+                if stop.is_set():
+                    return
+                try:
+                    self._beat(directory)
+                except (OSError, WrongKindError, ValueError) as err:
+                    logger.warning("lock %s: cannot refresh the heartbeat: %s", self._lock_path, err)
+        finally:
+            directory.close()
 
     def _unlock(self) -> None:
         """Release the `flock` and close the descriptors; the sidecars stay, so the next holder sees them."""
@@ -435,13 +487,22 @@ class SharedFileLock:
                 logger.warning("lock %s: cannot remove %s: %s", self._lock_path, name, err)
 
     def __exit__(self, *exc: object) -> None:
-        """Stop the heartbeat, remove the heartbeat, holder and clock sidecars, and release the lock."""
+        """Stop the heartbeat, remove the heartbeat, holder and clock sidecars, and release the lock.
+
+        The heartbeat thread is told to stop, so it starts no write after this, and is joined for up to
+        `HEARTBEAT_JOIN_S`; it closes its own directory handle as it ends. This closes the lock's descriptors.
+        A heartbeat write already in progress past that bound is logged and may finish after the release.
+        """
         self._stop_event.set()
-        if self._heartbeat_thread is not None:
-            self._heartbeat_thread.join(timeout=5)
-            self._heartbeat_thread = None
+        thread = self._heartbeat_thread
+        self._heartbeat_thread, self._beat_dir = None, None
+        if thread is not None:
+            thread.join(timeout=HEARTBEAT_JOIN_S)
+            if thread.is_alive():
+                logger.warning("lock %s: a heartbeat write outlived the %.0fs join", self._lock_path, HEARTBEAT_JOIN_S)
         try:
-            self._remove_sidecars()
+            if not self._shared:
+                self._remove_sidecars()
         finally:
             self._unlock()
 
@@ -453,7 +514,9 @@ __all__ = [
     "LOCK_NAME",
     "SIDECAR_NAME",
     "WRITTEN_NAMES",
+    "HEARTBEAT_JOIN_S",
     "LockTimeout",
+    "LockUnavailable",
     "SharedFileLock",
     "lock_fd_matches_path",
     "lock_holder",

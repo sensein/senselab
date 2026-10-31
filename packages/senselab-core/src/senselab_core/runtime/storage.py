@@ -146,6 +146,17 @@ def set_mode(fd: int, mode: int) -> None:
                 raise
 
 
+_UMASK_LOCK = threading.Lock()
+
+
+def umask_default_file_mode() -> int:
+    """Return the mode `open(..., 0o666)` would give a new file under the process's current umask."""
+    with _UMASK_LOCK:
+        mask = os.umask(0o077)
+        os.umask(mask)
+    return 0o666 & ~mask
+
+
 TEMPORARY_NAME = re.compile(r"^\..+\.[0-9]+\.[0-9]+\.[0-9a-f]{32}\.tmp$")
 """A file being written atomically: `.<name>.<pid>.<thread id>.<uuid4 hex>.tmp`."""
 ASIDE_NAME = UUID_HEX
@@ -611,10 +622,10 @@ class StorageDir:
     ) -> os.stat_result:
         """Replace `name` with a fresh file holding `data`, fsynced, renamed over the name; return the new file's stat.
 
-        The fresh file is a temporary (`TEMPORARY_NAME`) created with `O_EXCL | O_NOFOLLOW` and given
-        `mode` through its descriptor (the umask's default when None). A symlink or hard link at `name` is
-        replaced and its target never touched; a directory or other non-file there is set aside beside
-        itself first. The temporary is removed if the write fails.
+        The fresh file is a temporary (`TEMPORARY_NAME`) created `0o600` with `O_EXCL | O_NOFOLLOW` and then
+        given `mode` through its descriptor (`umask_default_file_mode()` when None), before any byte is
+        written. A symlink or hard link at `name` is replaced and its target never touched; a directory or
+        other non-file there is set aside beside itself first. The temporary is removed if the write fails.
 
         Raises:
             ValueError: `name` does not match `grammar`.
@@ -624,11 +635,10 @@ class StorageDir:
         _owned(name, grammar)
         temporary = f".{name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
         with _Naming(self.path / temporary):
-            descriptor = os.open(temporary, _NEW_FILE_FLAGS, 0o666, dir_fd=self.fd)
+            descriptor = os.open(temporary, _NEW_FILE_FLAGS, 0o600, dir_fd=self.fd)
         try:
             with os.fdopen(descriptor, "wb") as handle:
-                if mode is not None:
-                    set_mode(handle.fileno(), mode)
+                set_mode(handle.fileno(), mode if mode is not None else umask_default_file_mode())
                 handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())

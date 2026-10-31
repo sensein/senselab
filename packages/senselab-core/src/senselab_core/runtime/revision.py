@@ -143,7 +143,7 @@ def _parse_manifest(data: Optional[bytes], where: Path) -> dict[str, str]:
 def _read_in(run_dir: StorageDir) -> dict[str, str]:
     try:
         data = run_dir.read_regular(MANIFEST_NAME, limit=MANIFEST_LIMIT)
-    except (WrongKindError, ValueError) as err:
+    except (WrongKindError, ValueError, PermissionError) as err:
         logger.warning("Run manifest %s cannot be read (%s); treating as empty", run_dir.path / MANIFEST_NAME, err)
         return {}
     return _parse_manifest(data, run_dir.path / MANIFEST_NAME)
