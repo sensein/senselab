@@ -484,12 +484,9 @@ def test_a23_probe_policy_strings_are_coerced() -> None:
 
 @pytest.mark.logic
 def test_a24_probe_constructible_key_is_digestible() -> None:
-    """A key whose params hold `1e20` is refused at construction or has a digest."""
-    try:
-        key = _key(params={"x": 1e20})
-    except Exception:  # noqa: BLE001
-        return
-    assert len(key.digest()) == 64
+    """A key whose params hold `1e20` is constructed and has a 64-hex digest."""
+    key = _key(params={"x": 1e20})
+    assert re.fullmatch("[0-9a-f]{64}", key.digest())
 
 
 @pytest.mark.logic
@@ -740,12 +737,12 @@ def _client(tmp_path: Path, module: str, init: dict[str, Any], parent: Path | No
     code.mkdir(exist_ok=True)
     for name, source in BACKEND_SOURCES.items():
         (code / f"{name}.py").write_text(source)
-    existing = os.environ.get("PYTHONPATH")
-    os.environ["PYTHONPATH"] = str(code) if not existing else f"{code}{os.pathsep}{existing}"
     parent = parent if parent is not None else tmp_path / "work"
     parent.mkdir(exist_ok=True)
     key = "array_parent" if "array_parent" in inspect.signature(WorkerClient.__init__).parameters else "array_dir"
+    existing = os.environ.get("PYTHONPATH")
     try:
+        os.environ["PYTHONPATH"] = str(code) if not existing else f"{code}{os.pathsep}{existing}"
         return WorkerClient(sys.executable, module, init=init, **{key: parent}, **kwargs)  # type: ignore[arg-type]
     finally:
         if existing is None:
