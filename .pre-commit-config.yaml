@@ -69,12 +69,17 @@ repos:
     args:
     - --autofix
     - --indent=2
+    additional_dependencies:
+    - ruamel.yaml==0.19.1
   - id: pretty-format-toml
     exclude: ^uv.lock$
     args:
     - --autofix
     - --indent=2
     - --no-sort
+    additional_dependencies:
+    - toml-sort==0.25.0
+    - tomlrt==2.2.13
 
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v6.0.0

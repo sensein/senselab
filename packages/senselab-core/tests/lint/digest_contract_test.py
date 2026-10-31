@@ -1,5 +1,6 @@
 """No untagged digest API exists: the import contract, the banned names, and the digest module's surface (ADR-006)."""
 
+import ast
 import configparser
 import importlib
 import inspect
@@ -314,12 +315,15 @@ def _graph_files() -> set[str]:
         print(json.dumps(files))
         """
     )
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(REPO), str(REPO / "src")))}
+    source_roots = (REPO, REPO / "src", *sorted((REPO / "packages").glob("*/src")))
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(str(p) for p in source_roots)}
     result = subprocess.run(
         [sys.executable, "-c", code, *roots], cwd=REPO, env=env, capture_output=True, text=True, timeout=300
     )
     assert result.returncode == 0, result.stderr
-    return {Path(p).relative_to(REPO.resolve()).as_posix() for p in json.loads(result.stdout)}
+    files = {Path(p).relative_to(REPO.resolve()).as_posix() for p in json.loads(result.stdout)}
+    assert not {f for f in files if ".venv" in Path(f).parts or "site-packages" in Path(f).parts}
+    return files
 
 
 @pytest.mark.contract
@@ -388,11 +392,17 @@ RAW_PROBES: dict[str, object] = {"bytes_digest": b""}
 """Each function an owner module may define, with a valid input to call it on under an unregistered tag."""
 
 
-def untagged_surface(module: types.ModuleType, probes: dict[str, object]) -> list[str]:
-    """Return each function `module` defines outside `probes`, and each that does not lead with a checked tag."""
+def untagged_surface(module: types.ModuleType, probes: dict[str, object], source: str | None = None) -> list[str]:
+    """Return each function `source` defines outside `probes`, and each that does not lead with a checked tag.
+
+    The functions are the top-level `def`s of the source text, so a name the interpreter adds to a module (3.14's
+    `__annotate__`) is never one of them. `module` supplies the objects to call; `source` defaults to its file.
+    """
+    text = source if source is not None else Path(str(module.__file__)).read_text()
+    defined = {n.name for n in ast.parse(text).body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)}
     found = []
     for name, obj in vars(module).items():
-        if inspect.isfunction(obj) and obj.__module__ == module.__name__:
+        if name in defined and inspect.isfunction(obj):
             if name not in probes:
                 found.append(f"{name}: not a tagged digest")
                 continue
@@ -441,8 +451,9 @@ def test_the_digest_module_defines_only_tagged_digests() -> None:
 def test_xg2_a_planted_function_in_the_owner_is_reported(addition: str, expected: str) -> None:
     """A helper added to the owner module, or a digest that stops checking its tag, is reported."""
     planted = types.ModuleType(digest.__name__)
-    exec(compile(Path(digest.__file__).read_text() + "\n" + addition, digest.__file__, "exec"), vars(planted))  # noqa: S102
-    assert expected in untagged_surface(planted, DIGEST_PROBES)
+    source = Path(digest.__file__).read_text() + "\n" + addition
+    exec(compile(source, digest.__file__, "exec"), vars(planted))  # noqa: S102
+    assert expected in untagged_surface(planted, DIGEST_PROBES, source)
 
 
 @pytest.mark.logic
@@ -451,3 +462,14 @@ def test_the_tag_registries_are_disjoint_and_prefix_free() -> None:
     tags = sorted(digest.IDENTITY_TAGS | digest.BLOB_TAGS)
     assert not digest.IDENTITY_TAGS & digest.BLOB_TAGS
     assert all(not b.startswith(a) for a in tags for b in tags if a != b)
+
+
+@pytest.mark.contract
+def test_an_interpreter_generated_function_is_not_part_of_the_surface() -> None:
+    """A module-level function the source does not define, as 3.14 adds `__annotate__`, is not reported."""
+    planted = types.ModuleType("planted")
+    exec("def __annotate__(format):\n    return {}\n", vars(planted))  # noqa: S102
+    assert untagged_surface(planted, {}, "x = 1\n") == []
+    assert untagged_surface(planted, {}, "def __annotate__(format):\n    return {}\n") == [
+        "__annotate__: not a tagged digest"
+    ]

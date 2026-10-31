@@ -124,3 +124,56 @@ def test_a_missing_platform_hook_is_found() -> None:
     config = {"repos": [{"hooks": [{"id": "mypy", "args": ["--platform", "linux"], "files": r"^a/b\.py$"}]}]}
     assert platform_checked(config, "a/b.py") == {"linux"}
     assert platform_checked(config, "a/c.py") == set()
+
+
+FORMATTER_REPO = "https://github.com/macisamuele/language-formatters-pre-commit-hooks"
+FORMATTER_LIBRARIES = {"pretty-format-yaml": {"ruamel.yaml"}, "pretty-format-toml": {"toml-sort", "tomlrt"}}
+"""The libraries whose version decides each formatter hook's output, which the hook repository leaves unpinned."""
+
+
+def unpinned_formatter_libraries(precommit: dict) -> list[str]:
+    """Each formatter hook whose output-deciding library is not pinned `==` in its `additional_dependencies`."""
+    found = []
+    for repo in precommit.get("repos", []):
+        if repo.get("repo") != FORMATTER_REPO:
+            continue
+        hooks = {h.get("id"): h for h in repo.get("hooks", [])}
+        for hook_id, libraries in FORMATTER_LIBRARIES.items():
+            pinned = {
+                m.group(1).lower()
+                for dep in hooks.get(hook_id, {}).get("additional_dependencies", [])
+                if (m := re.fullmatch(r"([A-Za-z0-9_.-]+)==[0-9][0-9A-Za-z.]*", str(dep)))
+            }
+            found += [f"{hook_id} does not pin {lib}" for lib in sorted(libraries) if lib.lower() not in pinned]
+    return found
+
+
+@pytest.mark.logic
+def test_the_formatter_hooks_pin_the_libraries_that_decide_their_output() -> None:
+    """A release of toml-sort, tomlrt or ruamel.yaml cannot change what CI's formatter hooks rewrite."""
+    assert unpinned_formatter_libraries(_repo_files()[2]) == []
+
+
+@pytest.mark.logic
+def test_an_unpinned_formatter_library_is_found() -> None:
+    """A hook with no pin, a range, or a different library is reported for each library it leaves free."""
+    deps = {
+        "pretty-format-yaml": ["ruamel.yaml==0.19.1"],
+        "pretty-format-toml": ["toml-sort==0.25.0", "tomlrt==2.2.13"],
+    }
+
+    def config(**override: list[str]) -> dict:
+        merged = {**deps, **override}
+        hooks = [{"id": k, "additional_dependencies": v} for k, v in merged.items()]
+        return {"repos": [{"repo": FORMATTER_REPO, "hooks": hooks}]}
+
+    assert unpinned_formatter_libraries(config()) == []
+    assert unpinned_formatter_libraries(config(**{"pretty-format-toml": ["toml-sort==0.25.0"]})) == [
+        "pretty-format-toml does not pin tomlrt"
+    ]
+    assert unpinned_formatter_libraries(config(**{"pretty-format-toml": ["toml-sort>=0.22", "tomlrt==2.2.13"]})) == [
+        "pretty-format-toml does not pin toml-sort"
+    ]
+    assert unpinned_formatter_libraries(config(**{"pretty-format-yaml": []})) == [
+        "pretty-format-yaml does not pin ruamel.yaml"
+    ]
