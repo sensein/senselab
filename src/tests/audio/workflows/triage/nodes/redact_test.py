@@ -17,7 +17,6 @@ import numpy as np
 import pytest
 import soundfile as sf
 from senselab_core.runtime.provenance import Entity, ProvStore
-from senselab_core.runtime.provenance import recorded as recorded_form
 from senselab_core.testing.provenance import hand_edited
 
 from senselab.audio.data_structures import Audio
@@ -1044,12 +1043,12 @@ class TestItRedactsEverySpeaker:
             target_speaker="SPEAKER_00",
         )
         speech = _verdict_entity(store, "SPEECH").attributes
-        assert speech["flags"] == recorded_form(["pii (PERSON) in the target speaker's speech"]), "LOCATION unflagged"
+        assert speech["flags"] == ["pii (PERSON) in the target speaker's speech"], "LOCATION unflagged"
         _stub_pii(monkeypatch, findings=[])
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         detail = _verdict_entity(store, "REDACT").attributes
         assert detail["redactions_n"] == 2
-        assert detail["by_category"] == recorded_form({"PERSON": 1, "LOCATION": 1})
+        assert detail["by_category"] == {"PERSON": 1, "LOCATION": 1}
         x = np.asarray(Audio(filepath=str(result.artifacts["audio"])).waveform)[0]
         pad = 50 / 1000.0
         for start, end in ((1.0, 1.5), (3.0, 3.5)):
@@ -1075,7 +1074,7 @@ class TestPlanning:
         redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         detail = _verdict_entity(store, "REDACT").attributes
         assert detail["redactions_n"] == 1
-        assert detail["by_category"] == recorded_form({"PERSON+LOCATION": 1})
+        assert detail["by_category"] == {"PERSON+LOCATION": 1}
 
     def test_a_category_containing_plus_is_refused_by_the_node_not_discovered_later(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path
@@ -1105,7 +1104,7 @@ class TestPlanning:
         _stub_pii(monkeypatch, findings=[])
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         detail = _verdict_entity(store, "REDACT").attributes
-        assert detail["redactions_n"] == 1 and detail["by_category"] == recorded_form({"PERSON": 1})
+        assert detail["redactions_n"] == 1 and detail["by_category"] == {"PERSON": 1}
         spans = [e for e in store.entities("span") if e.attributes.get("name") == "redaction"]
         assert all(withdrawn.id not in store.derived_from(span.id) for span in spans)
         x = np.asarray(Audio(filepath=str(result.artifacts["audio"])).waveform)[0]
@@ -1183,7 +1182,7 @@ class TestTheStoresScanIsEvidenceOrItIsNot:
         assert result.verdict.outcome is Outcome.FAIL
         assert result.artifacts == {}
         detail = _verdict_entity(store, "REDACT").attributes
-        assert detail["scan_failed"] == recorded_form(["gliner"]), "detector names, never their messages"
+        assert detail["scan_failed"] == ["gliner"], "detector names, never their messages"
         assert "gliner" in result.verdict.why
 
     def test_a_store_scan_with_no_detectors_is_withheld(
@@ -1195,7 +1194,7 @@ class TestTheStoresScanIsEvidenceOrItIsNot:
         assert result.verdict.outcome is Outcome.FAIL
         assert result.artifacts == {}
         detail = _verdict_entity(store, "REDACT").attributes
-        assert detail["scan_failed"] == recorded_form([])
+        assert detail["scan_failed"] == []
 
     def test_a_required_detector_that_was_never_attempted_is_an_incomplete_scan(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path
@@ -1212,8 +1211,8 @@ class TestTheStoresScanIsEvidenceOrItIsNot:
         assert result.verdict.outcome is Outcome.FAIL
         assert result.artifacts == {}
         detail = _verdict_entity(store, "REDACT").attributes
-        assert detail["scan_missing"] == recorded_form(["gliner"])
-        assert detail["scan_failed"] == recorded_form([]), "never attempted is not the same as attempted and failed"
+        assert detail["scan_missing"] == ["gliner"]
+        assert detail["scan_failed"] == [], "never attempted is not the same as attempted and failed"
         assert "gliner" in result.verdict.why
 
     def test_narrowing_the_required_set_makes_the_same_scan_complete(
@@ -1237,7 +1236,7 @@ class TestTheStoresScanIsEvidenceOrItIsNot:
         _stub_pii(monkeypatch, findings=[], detectors_used=["presidio", "rules"])
         result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.PASS
-        assert _verdict_entity(store, "REDACT").attributes["scan_missing"] == recorded_form([])
+        assert _verdict_entity(store, "REDACT").attributes["scan_missing"] == []
         assert result.artifacts.keys() == {"audio", "transcript", "consensus"}
 
     def test_a_failure_message_from_the_store_scan_never_reaches_the_verdict(
@@ -1249,7 +1248,7 @@ class TestTheStoresScanIsEvidenceOrItIsNot:
         store = hand_edited(store, scan.id, failed={"gliner": "ValueError on 'jane doe'"})
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.FAIL
-        assert _verdict_entity(store, "REDACT").attributes["scan_failed"] == recorded_form(["gliner"])
+        assert _verdict_entity(store, "REDACT").attributes["scan_failed"] == ["gliner"]
         assert "jane doe" not in json.dumps(_verdict_entity(store, "REDACT").attributes)
         assert "jane doe" not in result.verdict.why
 
@@ -1495,7 +1494,7 @@ class TestTheTaskSOwnCastAccountsForACandidate:
             task_family="cinderella-story",
         )
         [assertion] = _exemptions(store)
-        assert assertion.attributes["expected_keys"] == recorded_form(["cinderella"])
+        assert assertion.attributes["expected_keys"] == ["cinderella"]
 
     def test_a_respelled_cast_name_is_not_redacted_either(
         self,
@@ -1599,7 +1598,7 @@ class TestANearSpellingOfAStimulusWordIsStillThatWord:
         _stub_pii(monkeypatch, findings=[("LOCATION", "rainbo")])
         redact(store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         [assertion] = _exemptions(store)
-        assert assertion.attributes["expected_keys"] == recorded_form(["rainbow"])
+        assert assertion.attributes["expected_keys"] == ["rainbow"]
 
     def test_a_short_word_one_edit_from_a_stimulus_word_is_still_redacted(
         self,
@@ -1689,7 +1688,7 @@ class TestTheStimulusAccountsForACandidate:
         redact(store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         [assertion] = _exemptions(store)
         assert assertion.attributes["category"] == "LOCATION"
-        assert assertion.attributes["expected_keys"] == recorded_form(["rainbow"])
+        assert assertion.attributes["expected_keys"] == ["rainbow"]
         assert assertion.attributes["expected_prompt"] == 0
         assert assertion.attributes["expected_unit_text"] == RAINBOW
         assert assertion.attributes["words_n"] == 1
@@ -1805,7 +1804,7 @@ class TestTheStimulusAccountsForACandidate:
             store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path)
         )
         assert result.artifacts["transcript"].read_text().split() == ["hi", "a", "rainbow"]
-        assert _exemptions(store)[0].attributes["expected_keys"] == recorded_form(["a", "rainbow"])
+        assert _exemptions(store)[0].attributes["expected_keys"] == ["a", "rainbow"]
 
     def test_the_comparison_uses_the_branches_own_normaliser(
         self,

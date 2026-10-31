@@ -15,7 +15,6 @@ from senselab_core.runtime.provenance import (
     SIZE_KEY,
     ProvStore,
 )
-from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.nodes.common import (
@@ -74,7 +73,7 @@ class TestWriteVerdict:
             why="testing",
             detail={"kinds": {"speech": "present"}},
         )
-        assert store.get_entity(entity_id).attributes["kinds"] == recorded_form({"speech": "present"})
+        assert store.get_entity(entity_id).attributes["kinds"] == {"speech": "present"}
 
 
 class TestMintLive:

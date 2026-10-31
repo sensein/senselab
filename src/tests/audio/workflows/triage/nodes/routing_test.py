@@ -7,7 +7,6 @@ from typing import Callable, Mapping, Sequence
 
 import pytest
 from senselab_core.runtime.provenance import ProvStore
-from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -118,7 +117,7 @@ class TestTheRulesetDecides:
         assert "VOICE" not in result.runs
         voice = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "VOICE")
         assert voice.attributes["route_state"] == "unavailable"
-        assert voice.attributes["unavailable_gates"] == recorded_form({"voice.glide": reason})
+        assert voice.attributes["unavailable_gates"] == {"voice.glide": reason}
 
     def test_a_fired_flag_is_recorded_on_the_branch_it_annotates(
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
@@ -127,7 +126,7 @@ class TestTheRulesetDecides:
         reads(_evaluation(["SPEECH"], flags={"SPEECH": ("speech.short",)}))
         routing(store, None, _map(tmp_path), run_dir=tmp_path)
         speech = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "SPEECH")
-        assert speech.attributes["flag_gates"] == recorded_form(["speech.short"])
+        assert speech.attributes["flag_gates"] == ["speech.short"]
 
     def test_the_reading_is_recorded_as_a_measurement(
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
@@ -298,9 +297,9 @@ class TestTheDeclaredTaskAlwaysAddsItsBranch:
         routing(store, None, _map(tmp_path), run_dir=tmp_path)
         recorded = find_measurement(store, RULESET_ROUTING)
         assert recorded is not None
-        assert recorded.attributes["declared"] == recorded_form(["SPEECH"])
+        assert recorded.attributes["declared"] == ["SPEECH"]
         assert recorded.attributes["family"] == "diadochokinesis-pa"
-        assert recorded.attributes["routed"] == recorded_form(["SPEECH"])
+        assert recorded.attributes["routed"] == ["SPEECH"]
 
     def test_no_declaration_and_no_hint_routes_by_content_alone(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
@@ -401,7 +400,7 @@ class TestHintsForceAndNothingElse:
         speech = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "SPEECH")
         assert speech.attributes["forced_by_declaration"] is False
         assert speech.attributes["declared"] is True
-        assert speech.attributes["hint_tags"] == recorded_form(["speech"])
+        assert speech.attributes["hint_tags"] == ["speech"]
         assert speech.attributes["why"] == "route_routed"
 
     def test_forcing_never_removes_a_branch(
@@ -419,7 +418,7 @@ class TestHintsForceAndNothingElse:
         reads(_evaluation([]))
         result = routing(store, None, _map(tmp_path), AudioHints(may_contain=["birdsong"]), run_dir=tmp_path)
         assert result.runs == ()
-        assert live_entities(store, "branch_decision")[0].attributes["unmapped_tags"] == recorded_form(["birdsong"])
+        assert live_entities(store, "branch_decision")[0].attributes["unmapped_tags"] == ["birdsong"]
 
     def test_a_map_value_that_is_not_a_branch_forces_nothing_and_names_the_typo(
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
@@ -437,8 +436,8 @@ class TestHintsForceAndNothingElse:
         assert result.forced == ()
         decisions = live_entities(store, "branch_decision")
         assert [d.attributes["hint_tags"] for d in decisions] == [[]] * len(BRANCHES)
-        assert decisions[0].attributes["unmapped_tags"] == recorded_form(["cough"])
-        assert decisions[0].attributes["bad_map_values"] == recorded_form({"cough": "AIRWY"})
+        assert decisions[0].attributes["unmapped_tags"] == ["cough"]
+        assert decisions[0].attributes["bad_map_values"] == {"cough": "AIRWY"}
 
     def test_a_good_map_records_no_bad_values(
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
@@ -446,7 +445,7 @@ class TestHintsForceAndNothingElse:
         """The control: the typo record must stay empty when the map is well formed."""
         reads(_evaluation([]))
         routing(store, None, _map(tmp_path), AudioHints(may_contain=["cough"]), run_dir=tmp_path)
-        assert all(d.attributes["bad_map_values"] == recorded_form({}) for d in live_entities(store, "branch_decision"))
+        assert all(d.attributes["bad_map_values"] == {} for d in live_entities(store, "branch_decision"))
 
     def test_a_null_map_forces_nothing(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, reads: Callable[[RouteEvaluation], None]

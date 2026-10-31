@@ -12,7 +12,6 @@ from typing import Any, Callable, Sequence
 import numpy as np
 import pytest
 from senselab_core.runtime.provenance import Entity, ProvStore
-from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
@@ -507,9 +506,7 @@ class TestTheInstructedCountIsAnAnnotation:
         )
         _run(store, ddk_config, tmp_path, PA)
         [counts] = _measurements(store, "counts")
-        assert counts.attributes["entries"][REQUIRED_COUNT] == recorded_form(
-            {"found": 8, "required": 10, "unit": "repetitions"}
-        )
+        assert counts.attributes["entries"][REQUIRED_COUNT] == {"found": 8, "required": 10, "unit": "repetitions"}
         assert _measurements(store, INSTRUCTED_COUNT_FRACTION) == []
         assert _reading(store)["annotations"]["count_fraction"] == pytest.approx(0.8)
 
@@ -993,7 +990,7 @@ class TestTheInstrumentIsTheAuthorityOverTheRecogniserText:
         value = reading.attributes["value"]
         assert len(value) == 8
         assert all(len(row) == 2 for row in value)
-        assert reading.attributes["classes"] == recorded_form(["labial", "open"])
+        assert reading.attributes["classes"] == ["labial", "open"]
 
     def test_the_reading_is_taken_over_the_task_extent(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]

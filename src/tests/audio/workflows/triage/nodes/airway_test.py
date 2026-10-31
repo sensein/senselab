@@ -17,7 +17,6 @@ import numpy as np
 import pytest
 import soundfile as sf
 from senselab_core.runtime.provenance import Entity, ProvStore
-from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -975,7 +974,7 @@ class TestTheCoverageFamiliesAreDecidedOnDetectedBreathEvents:
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         [absent] = find_measurements(store, "event_instrument")
-        assert absent.attributes["absent"] == recorded_form(["hear_scores"])
+        assert absent.attributes["absent"] == ["hear_scores"]
         assert find_measurements(store, "airway_events_found") == []
         assert result.report.conformance == UNDETERMINED
 
@@ -1319,7 +1318,7 @@ class TestBothClassifiersAreOneEvidenceSet:
         assert _events(store) == []
         assert result.report.conformance == UNDETERMINED
         [absence] = find_measurements(store, "event_instrument")
-        assert absence.attributes["absent"] == recorded_form(["span_hear", "span_yamnet"])
+        assert absence.attributes["absent"] == ["span_hear", "span_yamnet"]
 
 
 def _authored_by(store: ProvStore, entity: Entity, node: str) -> bool:
@@ -1658,7 +1657,7 @@ class TestEveryAlignedRecordingPlacesItsTaskExtent:
         assert task.extent == (1.0, 4.0)
         assert task.attributes["extent_from"] == ACTIVITY_ENVELOPE
         [absence] = find_measurements(store, "event_instrument")
-        assert absence.attributes["absent"] == recorded_form(["energy_envelope"])
+        assert absence.attributes["absent"] == ["energy_envelope"]
 
     def test_a_coverage_family_with_no_scoring_window_falls_back_too(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1709,7 +1708,7 @@ class TestAnAbsentInstrumentIsAnAbsence:
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert result.report.conformance == UNDETERMINED
         [absence] = find_measurements(store, "event_instrument")
-        assert absence.attributes["absent"] == recorded_form(["span_hear", "span_yamnet"])
+        assert absence.attributes["absent"] == ["span_hear", "span_yamnet"]
 
     def test_the_out_of_family_mode_counts_nothing_where_no_classifier_ran(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1723,7 +1722,7 @@ class TestAnAbsentInstrumentIsAnAbsence:
         assert result.report.conformance == UNDETERMINED
         assert "airway_events" not in _counts(store)
         [absence] = find_measurements(store, "event_instrument")
-        assert absence.attributes["absent"] == recorded_form(["span_hear", "span_yamnet"])
+        assert absence.attributes["absent"] == ["span_hear", "span_yamnet"]
 
     def test_both_absences_are_named_when_neither_instrument_arrived(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1732,7 +1731,7 @@ class TestAnAbsentInstrumentIsAnAbsence:
         _seed(store, tmp_path, task="respiration-and-cough-cough", no_contrast=True)
         airway(store, "plain", airway_config, run_dir=tmp_path)
         [absence] = find_measurements(store, "event_instrument")
-        assert absence.attributes["absent"] == recorded_form(["energy_envelope", "span_hear", "span_yamnet"])
+        assert absence.attributes["absent"] == ["energy_envelope", "span_hear", "span_yamnet"]
 
     def test_no_energy_envelope_leaves_the_task_undetermined(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1751,7 +1750,7 @@ class TestAnAbsentInstrumentIsAnAbsence:
         assert recorded["conformance"] == UNDETERMINED
         assert "energy_envelope" in " ".join(recorded["notes"])
         [absence] = find_measurements(store, "event_instrument")
-        assert absence.attributes["absent"] == recorded_form(["energy_envelope"])
+        assert absence.attributes["absent"] == ["energy_envelope"]
 
     def test_no_hear_scores_leaves_a_coverage_family_undetermined(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path

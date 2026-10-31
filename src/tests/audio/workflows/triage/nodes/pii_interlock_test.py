@@ -21,7 +21,6 @@ from typing import Any, Callable
 import numpy as np
 import pytest
 from senselab_core.runtime.provenance import ProvStore
-from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
@@ -268,7 +267,7 @@ class TestTheMarkingSpeechWritesIsTheMarkingRedactReads:
         """The control for the fixture: the branch scanned the transcript, not something else."""
         scan = [e for e in live_entities(spoken_store, "measurement") if e.attributes.get("name") == "pii_scan"][-1]
         assert scan.attributes["signal"] == "consensus_transcript"
-        assert scan.attributes["failed"] == recorded_form([]) and scan.attributes["missing"] == recorded_form([])
+        assert scan.attributes["failed"] == [] and scan.attributes["missing"] == []
 
 
 class TestRedactRunsOverSpeechsOwnStore:

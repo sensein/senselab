@@ -7,7 +7,6 @@ from typing import Callable
 
 import pytest
 from senselab_core.runtime.provenance import ProvStore
-from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.consensus import word_timing_parameters
@@ -114,7 +113,7 @@ class TestTheAdapter:
         assert [(w["start"], w["end"]) for w in hypothesis.attributes["words"]] == [(None, None)] * 3
         consensus = find_measurement(store, "consensus_transcript")
         assert consensus is not None
-        assert consensus.attributes["aligner_failed"] == recorded_form(["asr_qwen"])
+        assert consensus.attributes["aligner_failed"] == ["asr_qwen"]
         assert consensus.attributes["unconfirmed_n"] == 1
         words = consensus_words(store)
         assert all(word_hull(word)[0] >= 0.5 for word in words), "no hull is stretched to zero"

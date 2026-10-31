@@ -17,7 +17,6 @@ import numpy as np
 import pytest
 import soundfile
 from senselab_core.runtime.provenance import ProvStore
-from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -879,7 +878,7 @@ class TestTheAlignArmReadsThePhonationAttempt:
         reading = find_measurement(store, voice_module.PHONATION_READING)
         assert reading is not None
         assert reading.attributes["found"] is True
-        assert reading.attributes["absent"] == recorded_form([])
+        assert reading.attributes["absent"] == []
 
     def test_silence_proposes_no_extent(self, tmp_path: Path) -> None:
         """Nothing over the floor is no attempt, and no span."""
@@ -894,7 +893,7 @@ class TestTheAlignArmReadsThePhonationAttempt:
         store, _ = seed(tmp_path, duration_s=8.0)
         voice(store, "plain", config(), run_dir=tmp_path)
         reading = find_measurement(store, voice_module.PHONATION_READING)
-        assert reading is not None and reading.attributes["absent"] == recorded_form(["plain"])
+        assert reading is not None and reading.attributes["absent"] == ["plain"]
 
     def test_a_glide_reports_its_travel(self, tmp_path: Path) -> None:
         """A held vowel in a rising-glide task travels nowhere and reads as held."""

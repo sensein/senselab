@@ -15,7 +15,6 @@ from typing import Any
 import numpy as np
 import pytest
 from senselab_core.runtime.provenance import Entity, ProvStore
-from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import DATA_MAP_PATHS, TriageConfig, load_triage_config
@@ -451,12 +450,10 @@ class TestFindingsAreWrittenBesideSpansNotOntoThem:
         assert assertions[1].attributes["claim"] == "cough"
         counts = [each for each in store.entities("measurement") if each.attributes["name"] == "counts"]
         assert len(counts) == 1
-        assert counts[0].attributes["entries"] == recorded_form(
-            {
-                "events": {"found": 4, "declared": 5},
-                "declared_duration_s": {"found": 20.0, "declared": 20.0},
-            }
-        )
+        assert counts[0].attributes["entries"] == {
+            "events": {"found": 4, "declared": 5},
+            "declared_duration_s": {"found": 20.0, "declared": 20.0},
+        }
 
     def test_an_unknown_kind_is_refused_rather_than_dropped(self) -> None:
         """A finding nothing writes is a finding nobody sees."""

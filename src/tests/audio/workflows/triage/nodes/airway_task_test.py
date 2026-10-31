@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from senselab_core.runtime.provenance import Entity, ProvStore
-from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.workflows.triage.breath_pattern import BreathPattern
 from senselab.audio.workflows.triage.cough_pattern import CoughPattern
@@ -27,7 +26,7 @@ def test_the_measure_extent_stands_in_place_of_airways_and_settles_on_rerun() ->
     airway_task.settle_task_extent(store, store.activity(node="AIRWAY", step=None, parameters={}), software, extent)
     standing = standing_task_extents(live())
     assert [s.extent for s in standing] == [(1.0, 30.0)]
-    assert standing[0].attributes[SUPERSEDES] == recorded_form([airway])
+    assert standing[0].attributes[SUPERSEDES] == [airway]
     assert not store.is_invalidated(airway)
 
     again = store.activity(node="AIRWAY", step=None, parameters={"again": True})

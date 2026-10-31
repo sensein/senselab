@@ -8,7 +8,6 @@ from typing import Any, Callable, Mapping, Sequence
 
 import pytest
 from senselab_core.runtime.provenance import Entity, ProvStore
-from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage import vocabulary as vocabulary_module
@@ -209,15 +208,12 @@ def _write_redaction_evidence(store: ProvStore, activity: str, agent: str, *, sc
         pii_n: How many findings the scan left behind.
     """
     if scanned is not None:
-        scan = store.entity(
-            prov_type="measurement",
-            extent=None,
-            attributes=(
-                {"name": "pii_scan", "signal": "consensus_transcript", "scanned_by": ["rules"], "failed": []}
-                if scanned
-                else {"name": "pii_scan", "signal": "consensus", "scanned": False, "why": "all in the stimulus"}
-            ),
+        attributes: dict[str, Any] = (
+            {"name": "pii_scan", "signal": "consensus_transcript", "scanned_by": ["rules"], "failed": []}
+            if scanned
+            else {"name": "pii_scan", "signal": "consensus", "scanned": False, "why": "all in the stimulus"}
         )
+        scan = store.entity(prov_type="measurement", extent=None, attributes=attributes)
         store.was_generated_by(scan, activity)
         store.was_attributed_to(scan, agent)
     for index in range(pii_n):
@@ -545,7 +541,7 @@ class TestHintsAreReadThroughRoutingsMap:
         assert result.file_verdict.triage is Triage.REVIEW and result.file_verdict.run_status is RunStatus.INCOMPLETE
         assert "declaration_unread" in result.file_verdict.ground_keys
         assert any(reason.why == UNREAD_DECLARATION for reason in result.file_verdict.reasons)
-        assert _file_verdict_entity(store).attributes["hints"] == recorded_form({})
+        assert _file_verdict_entity(store).attributes["hints"] == {}
 
     def test_no_declaration_and_no_decision_claims_nothing_without_flagging(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
@@ -632,7 +628,7 @@ class TestHintsAreReadThroughRoutingsMap:
         assert "config_bad_hint_map" in result.file_verdict.ground_keys
         assert result.file_verdict.bad_map_values == {"cough": "AIRWY"}
         assert any("AIRWY" in reason.why for reason in result.file_verdict.reasons)
-        assert _file_verdict_entity(store).attributes["bad_map_values"] == recorded_form({"cough": "AIRWY"})
+        assert _file_verdict_entity(store).attributes["bad_map_values"] == {"cough": "AIRWY"}
 
     def test_a_declaration_no_longer_prevents_the_empty_discard(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
@@ -1088,14 +1084,14 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         assert result.file_verdict.release == Release.AS_IS
         ledger = find_measurement(store, PII_LEDGER)
         assert ledger is not None
-        assert ledger.attributes["proposals"] == recorded_form([])
+        assert ledger.attributes["proposals"] == []
         (condition,) = ledger.attributes["conditions"]
         assert (condition["texts"], condition["state"], condition["condition_kind"]) == (
             ["essential", "tremors"],
             "released_condition",
             "cohort",
         )
-        assert ledger.attributes["cohort_diagnoses"] == recorded_form(["essential_tremor"])
+        assert ledger.attributes["cohort_diagnoses"] == ["essential_tremor"]
 
     def test_a_condition_inside_a_detector_mask_is_released(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path

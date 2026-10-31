@@ -9,7 +9,6 @@ node that was wrong.
 from typing import Any, Callable
 
 from senselab_core.runtime.provenance import ProvStore
-from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.workflows.triage.nodes.common import find_measurement, find_measurements, live_entities
 
@@ -42,7 +41,7 @@ class TestSeeder:
         seed_preprocess_store(store, words=[], yamnet_labels=[], phonation=[])
         consensus = find_measurement(store, "consensus_transcript")
         assert consensus is not None
-        assert consensus.attributes["n_words"] == 0 and consensus.attributes["word_ids"] == recorded_form([])
+        assert consensus.attributes["n_words"] == 0 and consensus.attributes["word_ids"] == []
         pooled = find_measurement(store, "yamnet_windows")
         assert pooled is not None
         assert pooled.attributes["n_windows"] == 0
@@ -130,7 +129,7 @@ class TestSeeder:
         assert len(find_measurements(store, "yamnet_window")) == 3
         pooled = find_measurement(store, "yamnet_windows")
         assert pooled is not None
-        assert pooled.attributes["labels"] == recorded_form(["Cough", "Speech"])
+        assert pooled.attributes["labels"] == ["Cough", "Speech"]
         assert len(pooled.attributes["windows_by_label"]["Speech"]) == 2
         assert len(find_measurements(store, "hear_window")) == 2
         words: list[Any] = live_entities(store, "word")
@@ -138,12 +137,12 @@ class TestSeeder:
         assert words[1].extent == (2.0, 2.4)
         assert [w.attributes["bracketed"] for w in words] == [False, False, True, False]
         assert [w.attributes["outcome"] for w in words] == ["agreement", "agreement", "agreement", "insertion"]
-        assert words[3].attributes["sources"] == recorded_form(["asr_crisperwhisper"])
+        assert words[3].attributes["sources"] == ["asr_crisperwhisper"]
         assert words[3].attributes["agreement"] == 0.5
         consensus = find_measurement(store, "consensus_transcript")
         assert consensus is not None
         assert consensus.attributes["text"] == "hello world [COUGH] um"
-        assert consensus.attributes["outcomes"] == recorded_form({"agreement": 3, "variant": 0, "insertion": 1})
+        assert consensus.attributes["outcomes"] == {"agreement": 3, "variant": 0, "insertion": 1}
         for name in ("asr_crisperwhisper", "asr_qwen"):
             hypothesis = find_measurement(store, name)
             assert hypothesis is not None and hypothesis.attributes["role"] == "asr_hypothesis"

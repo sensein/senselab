@@ -12,7 +12,6 @@ import torch
 import yaml
 from scipy.signal import lfilter
 from senselab_core.runtime.provenance import Entity, ProvStore
-from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.data_structures import (
     Audio,
@@ -1047,7 +1046,7 @@ class TestTheSpeechFamilyIsAConfigKey:
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
         (corroborate,) = [a for a in store.activities("SPEECH") if a.step == "corroborate"]
-        assert corroborate.parameters["speech_labels"] == recorded_form(["Narration, monologue", "Speech"])
+        assert corroborate.parameters["speech_labels"] == ["Narration, monologue", "Speech"]
 
 
 class TestTheSecondDiarizerIsConditional:
@@ -1628,7 +1627,7 @@ class TestTheSpeakersInsideTheTaskExtent:
         _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
         speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
         attributes = self._readings(store)[speech_module.EXTENT_DOMINANT_SHARE].attributes
-        assert attributes["speaker_labels"] == recorded_form(["SPEAKER_00", "SPEAKER_01"])
+        assert attributes["speaker_labels"] == ["SPEAKER_00", "SPEAKER_01"]
         assert attributes["speaker_seconds"] == pytest.approx([1.6, 1.0])
         assert attributes["attributed_s"] == pytest.approx(2.6)
         assert attributes["secondary_s"] == pytest.approx(1.0)
@@ -1956,7 +1955,7 @@ class TestEnrollment:
         speech(store, "plain", enrollment_config, run_dir=tmp_path, enrollment=_enrollment())
         element = live_entities(store, "enrollment")[0]
         assert element.attributes["subject_id"] == "sub-01"
-        assert element.attributes["sources"] == recorded_form(["a.wav", "b.wav"])
+        assert element.attributes["sources"] == ["a.wav", "b.wav"]
         assert element.attributes["model_commit_sha"] == "a" * 40
 
     def test_the_probe_is_loaded_at_the_enrolled_commit(
@@ -2136,14 +2135,12 @@ class TestTheMultiSpeakerInstrument:
         separated = self._separated(store)
         assert separated
         for entity in separated:
-            assert entity.attributes["cache"] == recorded_form(
-                {
-                    "key": "k" * 64,
-                    "hit": True,
-                    "origin_run": "earlier-run",
-                    "origin_activity": "act-earlier",
-                }
-            )
+            assert entity.attributes["cache"] == {
+                "key": "k" * 64,
+                "hit": True,
+                "origin_run": "earlier-run",
+                "origin_activity": "act-earlier",
+            }
         [separate] = [a for a in store.activities() if a.step == "separate"]
         assert separate.parameters["cache_hit"] is True
         assert separate.parameters["cache_key"] == "k" * 64
@@ -2376,9 +2373,7 @@ class TestPiiOnTheConsensus:
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert scanned == ["my name is alice", "my name is alice", "my name is alice"]
         pii_act = next(a for a in store.activities("SPEECH") if a.step == "pii")
-        assert pii_act.parameters["text"] == recorded_form(
-            ["consensus_transcript", "asr:asr_crisperwhisper", "asr:asr_qwen"]
-        )
+        assert pii_act.parameters["text"] == ["consensus_transcript", "asr:asr_crisperwhisper", "asr:asr_qwen"]
 
     def test_the_same_finding_from_three_haystacks_is_one_finding(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2458,7 +2453,7 @@ class TestPiiOnTheConsensus:
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         [finding] = live_entities(store, "pii")
         assert finding.attributes["haystack"] == "asr_qwen"
-        assert finding.attributes["sources"] == recorded_form(["asr_crisperwhisper", "asr_qwen"])
+        assert finding.attributes["sources"] == ["asr_crisperwhisper", "asr_qwen"]
         variant = next(w for w in live_entities(store, "word") if w.attributes["text"] == "alyssa")
         marks = [e for e in live_entities(store, "assertion") if e.attributes.get("label") == "pii"]
         assert [store.derived_from(m.id) for m in marks] == [[variant.id]]
@@ -2521,7 +2516,7 @@ class TestPiiOnTheConsensus:
         assert finding.extent is not None
         assert finding.attributes["text"] == "alice"
         words = [word for word in live_entities(store, "word") if word.attributes.get("text") == "alice"]
-        assert finding.attributes["word_ids"] == recorded_form([words[0].id])
+        assert finding.attributes["word_ids"] == [words[0].id]
         assert "alice" not in str(_report_entity(store, "SPEECH").attributes)
 
     def test_a_finding_names_the_sources_behind_the_words_it_rests_on(
@@ -2533,14 +2528,14 @@ class TestPiiOnTheConsensus:
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         finding = live_entities(store, "pii")[0]
-        assert finding.attributes["sources"] == recorded_form(["asr_crisperwhisper", "asr_qwen"])
+        assert finding.attributes["sources"] == ["asr_crisperwhisper", "asr_qwen"]
         assert "recognizers" not in finding.attributes
 
         alone = ProvStore(run_id="alone")
         _seed_speech_store(alone, tmp_path, words=["my", "name", {"text": "alice", "sources": ["asr_qwen"]}])
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")], only_where_present=True)
         speech(alone, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert live_entities(alone, "pii")[0].attributes["sources"] == recorded_form(["asr_qwen"])
+        assert live_entities(alone, "pii")[0].attributes["sources"] == ["asr_qwen"]
 
     def test_a_finding_marks_the_word_elements(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2601,7 +2596,7 @@ class TestPiiOnTheConsensus:
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert result.report.conformance == UNDETERMINED
         scan = find_measurement(store, "pii_scan")
-        assert scan is not None and scan.attributes["missing"] == recorded_form(["gliner", "presidio"])
+        assert scan is not None and scan.attributes["missing"] == ["gliner", "presidio"]
 
     def test_a_non_target_finding_does_not_flag_but_is_still_a_finding(
         self, store: ProvStore, enrollment_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2854,7 +2849,7 @@ class TestWhatAPiiFailureMayCarry:
         result = speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
         assert result.report.conformance == UNDETERMINED
         scan = find_measurement(store, "pii_scan")
-        assert scan is not None and scan.attributes["missing"] == recorded_form([])
+        assert scan is not None and scan.attributes["missing"] == []
 
 
 class TestWhatTheBranchRecordsAboutItsOwnReads:
@@ -3261,7 +3256,7 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")], only_where_present=True)
         speech(store, "plain", syllable_config, self._declared("diadochokinesis-pa"), run_dir=tmp_path)
         detail = _report_entity(store, "SPEECH").attributes
-        assert detail["pii"]["categories"] == recorded_form(["PERSON"])
+        assert detail["pii"]["categories"] == ["PERSON"]
         assert detail["pii"]["n"] == 1
         assert detail["pii"]["scanned_by"], "the scan ran rather than being skipped"
         assert find_measurement(store, "pii_scan") is not None
@@ -3391,7 +3386,7 @@ class TestPiiRunsOnlyOnWordsTheTaskDidNotAskFor:
             if entity.attributes.get("name") == "pii_scan" and entity.attributes.get("scanned") is False
         ]
         assert "outside the task's own content" in record.attributes["why"]
-        assert record.attributes["residue_word_ids"] == recorded_form([])
+        assert record.attributes["residue_word_ids"] == []
 
     def test_one_word_outside_the_task_is_enough_to_scan(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

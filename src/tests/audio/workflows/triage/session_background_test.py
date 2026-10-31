@@ -10,7 +10,6 @@ import numpy as np
 import pytest
 import soundfile
 from senselab_core.runtime.provenance import ProvStore
-from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.workflows.triage.background_model import measure_background
 from senselab.audio.workflows.triage.nodes.background import (
@@ -193,7 +192,7 @@ def test_session_writes_the_reading_and_background_reads_the_reference(tmp_path:
     found = find_measurement(breath, SESSION_FLOOR)
     assert found is not None
     background = found.attributes["session_background"]
-    assert background["members"] == recorded_form(["sub-a_ses-1_task-rainbow-passage"])
+    assert background["members"] == ["sub-a_ses-1_task-rainbow-passage"]
     model = find_measurement(breath, "background_model")
     assert model is not None and model.attributes["floor_reference"]["used"] == "session_floor"
     assert model.attributes["floor_reference"]["decides"] is False

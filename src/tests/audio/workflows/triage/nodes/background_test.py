@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy as np
 import soundfile
 from senselab_core.runtime.provenance import ProvStore
-from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.workflows.triage.background_model import (
     BACKGROUND_MODEL,
@@ -137,7 +136,7 @@ def test_without_a_session_floor_the_background_is_not_read(tmp_path: Path) -> N
     store = _store_with_streams(tmp_path, _breaths(4.0, -60.0, 2), None)
     write_background(store, tmp_path, clips=())
     found = find_measurement(store, BACKGROUND_MODEL)
-    assert found is not None and found.attributes["missing"] == recorded_form([SESSION_FLOOR])
+    assert found is not None and found.attributes["missing"] == [SESSION_FLOOR]
     assert generic_view_of(store, tmp_path) is None
 
 
@@ -147,5 +146,5 @@ def test_a_store_without_a_plain_stream_records_what_it_lacked(tmp_path: Path) -
     write_own_floor(store, tmp_path)
     write_session_floor(store, (), session=None)
     own, session = find_measurement(store, "background_floor"), find_measurement(store, SESSION_FLOOR)
-    assert own is not None and own.attributes["missing"] == recorded_form(["plain"])
-    assert session is not None and session.attributes["missing"] == recorded_form(["background_floor"])
+    assert own is not None and own.attributes["missing"] == ["plain"]
+    assert session is not None and session.attributes["missing"] == ["background_floor"]

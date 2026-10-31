@@ -123,8 +123,7 @@ def read_store_light(path: Path, extra_markers: Sequence[str] = ()) -> StoreView
         for line in handle:
             if not line.strip():
                 continue
-            probe = line.replace('":"', '": "')
-            if MEASUREMENT_MARKER in probe and not any(marker in probe for marker in kept):
+            if MEASUREMENT_MARKER in line and not any(marker in line for marker in kept):
                 continue
             try:
                 record = json.loads(line)

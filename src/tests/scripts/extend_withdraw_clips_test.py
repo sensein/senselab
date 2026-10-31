@@ -11,8 +11,6 @@ spans carry.
 
 from __future__ import annotations
 
-from senselab_core.runtime.provenance import recorded as recorded_form
-
 import importlib.util
 import json
 import sys
@@ -456,8 +454,8 @@ class TestAContradictedClipIsTakenBack:
         after = find_measurement(store, CLIP_AMPLITUDE_MEASUREMENT)
         assert after is not None and after.id != before.id
         assert store.is_invalidated(before.id)
-        assert after.attributes[CLIP_LEVELS] == recorded_form({})
-        assert after.attributes[UNCLIPPED_LOUDER_N] == recorded_form({})
+        assert after.attributes[CLIP_LEVELS] == {}
+        assert after.attributes[UNCLIPPED_LOUDER_N] == {}
         assert after.attributes["clip_spans_n"] == 0
         for key in ("unclipped_peak", "unclipped_peak_time_s", "unclipped_samples_n", "edge_guard_samples"):
             assert after.attributes[key] == before.attributes[key]
