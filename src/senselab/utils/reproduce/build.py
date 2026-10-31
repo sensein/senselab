@@ -715,10 +715,10 @@ def file_lock(path: Path, *, shared: bool = False) -> Iterator[None]:
 
     The driver uses it only for shared (reader) locks; its exclusive locks are `exclusive_lock`. The file is
     opened read-write: on NFS ``flock`` becomes a POSIX lock, and a shared lock on a write-only descriptor fails
-    with ``EBADF``. A lock taken on a file that is no longer at ``path`` (an `exclusive_lock` unlinks the file as
-    it releases; on NFS the old file is silly-renamed and keeps a link) is dropped and taken again on the file now
-    there. The check opens the path and compares ``fstat`` results (`lock_fd_matches_path`), never ``stat``,
-    which NFS can answer from a cached dentry.
+    with ``EBADF``. A lock taken on a file that is no longer at ``path`` (one moved aside as corrupt; on NFS an
+    unlinked file is silly-renamed and keeps a link) is dropped and taken again on the file now there. The check
+    opens the path and compares ``fstat`` results (`lock_fd_matches_path`), never ``stat``, which NFS can answer
+    from a cached dentry.
     """
     while True:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -744,9 +744,9 @@ def exclusive_lock(resource: Path) -> contextlib.AbstractContextManager[object]:
     """An exclusive `SharedFileLock` over ``resource``: ``flock`` on ``<resource>.lock``, the file `file_lock` takes.
 
     It waits as long as a holder holds the lock (a reader's shared `file_lock` included), records its holder and
-    heartbeat beside the lock, and leaves the directory's mode alone. It unlinks the lock file as it releases, which
-    `file_lock` checks for; it checks the same itself after each acquire (`SharedFileLock`), so two writers never
-    hold the old and the new file at once.
+    heartbeat beside the lock, and leaves the directory's mode alone. The lock file stays in place on release; both
+    this lock and `file_lock` check after each acquire that the file locked is the one at the path, so two writers
+    never hold an old and a new file at once.
     """
     return SharedFileLock(resource, timeout=-1, manage_dir_mode=False)
 

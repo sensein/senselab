@@ -866,9 +866,7 @@ def _ephemeral(rel: Path) -> bool:
 
 def _names(op: str, scratch: Path, written: list[Path]) -> tuple[list[str], list[str]]:
     """Run `op` cleanly; return the names it wrote that no listed grammar matches, and the names to plant at."""
-    from lint_written_names import written_names
-
-    grammars = written_names()
+    grammars = importlib.import_module("written_names_test").written_names()
     root = scratch / "clean" / "root"
     _setup(op, root)
     written.clear()
@@ -904,7 +902,6 @@ def _plant(target: Path, plant: str, victim: Path) -> None:
 def probe_planted_names(scratch: str, op: str, plant: str) -> dict[str, Any]:
     """At each name `op` writes, plant `plant` and run `op`; report each outcome, the victim and what is outside."""
     sys.path.insert(0, str(HERE.parent / "lint"))
-    sys.modules["lint_written_names"] = importlib.import_module("written_names_test")
     written = _recording()
     base = Path(scratch)
     unlisted, targets = _names(op, base, written)

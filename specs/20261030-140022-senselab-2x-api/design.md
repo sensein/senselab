@@ -681,7 +681,7 @@ tasks with fitted profiles.
 - An exact same-version pin between the three, written by a metadata hook. Workspace sources do
   not appear in published wheels.
 
-**Core** depends on numpy, pydantic, pyyaml, filelock, xxhash, soundfile, huggingface-hub
+**Core** depends on numpy, pydantic, pyyaml, xxhash, soundfile, huggingface-hub
 (resolution only) and packaging; pyarrow is an extra. It holds:
 - data types;
 - declarations;

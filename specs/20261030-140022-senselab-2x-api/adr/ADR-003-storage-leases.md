@@ -61,40 +61,76 @@ replaced a file outside the cache through a planted `files/sub -> /victim` (XS-1
 `StoreUnavailable` (XS-2, XS-3); a run id `../../escaped` wrote outside `runs/`, and under umask 0 the
 run manifest was world-writable (XS-7). The rules below make those states unconstructible.
 
-- **One path primitive.** `storage.StorageDir` reaches every directory below a storage root one
-  component at a time, opening each with `O_DIRECTORY | O_NOFOLLOW` relative to its parent's
-  descriptor (macOS and Linux). Every create, rename, link, symlink and removal in the store, the fetch
-  cache and the run manifests is made relative to such a descriptor: files are created with
-  `O_EXCL | O_NOFOLLOW`, links never follow their source, and removals go through `remove_owned` on the
-  held descriptor. No symlink below a root is ever followed. The root itself is opened as given, so an
-  operator may point `~/.cache/senselab` at scratch with a symlink.
+Fix round 1 (the H9b review, ruling H-R40) found that the lock beside each run manifest still created,
+chmodded and truncated its sidecars by path, so a planted symlink or hard link reached a file outside the
+root (C-1, I-1). The rules below are stated as what is guaranteed after that round.
+
+- **One path primitive.** `storage.StorageDir` reaches every directory below a storage root (the result
+  store, the fetch cache, the HF cache's `runs/`, and the directory a `SharedFileLock` lives in) one
+  component at a time, opening each with `O_DIRECTORY | O_NOFOLLOW` relative to its parent's descriptor,
+  on macOS and Linux. The root itself (and, for a lock, its directory) is opened as given and may be a
+  symlink, an operator's choice. Below it, every create, rename, link, symlink, removal, mode change and
+  time change is made relative to a held descriptor. No symlink below a root is followed by a write, a
+  mode change or a removal; reads of files the runtime owns open them with `O_NOFOLLOW | O_NONBLOCK` and
+  check with `fstat` that they are regular, so a symlink is never read through and a fifo never blocks.
+- **Nothing under a root is modified in place.** A file that changes (a lock's holder, heartbeat and
+  clock, a store or cache `.clock`, a run manifest, a dataset's completion marker) is written to a fresh
+  temporary created with `O_EXCL | O_NOFOLLOW` relative to the directory's descriptor and renamed over
+  its name. Replacing a symlink or a hard link replaces the name; the file it pointed at or shared is
+  never opened for writing, truncated, chmodded or re-stamped. Modes are set only with `fchmod` on a
+  descriptor this process opened; nothing is chmodded by path. A directory or other non-file at such a
+  name is moved aside before the rename.
+- **The lock file is the one exception, and it must be what it seems.** `<name>.lock` must stay put to be
+  `flock`ed, so it is opened (created if missing, `O_EXCL` first) relative to the directory's descriptor
+  with `O_NOFOLLOW | O_NONBLOCK`, never truncated, and accepted only if `fstat` shows a regular file with
+  `st_nlink == 1`. A hard link (`st_nlink > 1`), symlink, directory or fifo there is corrupt and moved
+  aside beside it; its target is not touched. After each `flock` the descriptor must still be the file at
+  the name (device and inode through a fresh open), else the attempt is retried. `filelock` is no longer
+  used; `SharedFileLock` is the one lock implementation.
+- **Holders and waits.** A holder file that is not a whole identity (`user`, `host`, `pid`, `taken_at`
+  of their types), or not a regular file, is corrupt: it is moved aside and the lock is taken once the
+  later of its mtime and the heartbeat's is older than `stale_after` on the storage clock. Every wait in
+  `SharedFileLock.__enter__` is bounded by `timeout` and ends in `LockTimeout`; `record_resolution`
+  waits once and does not retry.
+- **Private staging for downloads.** Fetch stages each download and each marker in `tmp/<uuid>/`, made
+  `0o700` by this process and checked with `fstat` to be its own. The download is written and hashed
+  through one descriptor; it is hard-linked (first writer wins) or renamed into `blobs/<sha256>` from
+  that directory by descriptor. The marker records only the stamp of an inode this call hashed (or found
+  recorded): if `blobs/<sha256>` no longer names the hashed inode after the link, no stamp is recorded and
+  the next `verify="size"` fetch hashes it again. A blob nobody hashed is never trusted by size.
+- **Every written name is listed.** Each module that writes under a root exports `WRITTEN_NAMES`, the
+  grammars of the file names it writes, and every `StorageDir` write takes the grammar its name must
+  match. A test greps the modules for any write without a listed grammar or by another API, and a
+  contract plants a symlink, a hard link, a directory and corrupt content at every name a clean run
+  writes.
 - **A wrong kind at an owned path is corrupt, never retryable.** A symlink or a non-directory where a
-  store or cache directory belongs, or anything but a regular file at `blobs/<sha256>`, is moved aside
-  by rename (into `quarantine/` for the store, into `tmp/` for the cache, where age collection removes it;
-  beside itself if that is refused) and the path is made again. An object that cannot be moved raises
-  `WrongKindError`, a `ValueError`, naming the path, its owner and the command that removes it. Under a
-  dataset's `files/`, whose paths come from the manifest, a wrong kind is a `ManifestConflictError`, as a
-  foreign file there already is. `StoreUnavailable` is left for faults where nothing was judged.
+  store or cache directory belongs, or anything but a regular file at `blobs/<sha256>` or a completion
+  marker, is moved aside by rename (into `quarantine/` for the store, into `tmp/` for the cache, where age
+  collection removes it; beside itself if that is refused, which `collect` also ages out under the root,
+  `store@4/` and each prefix, and `record_resolution` under `runs/`). An object that cannot be moved
+  raises `WrongKindError`, a `ValueError`, naming the path, its owner and the command that removes it.
+  Under a dataset's `files/`, whose paths come from the manifest, a wrong kind is a
+  `ManifestConflictError`, as a foreign file there already is.
 - **Ids that become path components are one component.** Run ids (including `SENSELAB_RUN_ID`),
   dataset names and versions and each part of a manifest path pass `storage.path_component`: non-empty,
-  not `.` or `..`, no `/`, `\` or NUL.
+  not `.` or `..`, no `/`, `\\` or NUL.
 - **Modes come from `StorePolicy`, never the umask.** Every directory and file is created private
-  (`0o700`, `0o600`) and then set to its policy mode (`shared_dir_mode`, `committed_modes`). The run
-  manifest is a committed file; dead writers' temporaries beside it are removed under its lock.
+  (`0o700`, `0o600`) and then set to its policy mode through its descriptor. A store root's missing
+  ancestors, which lie outside the root, are made as `os.makedirs` makes them.
 - **An entry is bound to its address and to the context it was written in.** `result.json` records the
   key digest and the context fingerprint (`result@2.0`, `store@4`, ADR-006). A reader requires the stored
   key to digest to the recorded digest, the recorded fingerprint to equal the fingerprint of
-  `context.json`, and both to equal the path; a mismatch is misfiled and quarantined. Swapping members
-  between two contexts' entries therefore serves neither (XS-4). `put` verifies an existing entry's
-  arrays before returning its identity, so a reported success is served by the next `get` (XS-5).
-- **Members are read by path, after their directories were reached by the primitive.** An intermediate
-  swapped for a symlink between the walk and the read can only redirect the read to another entry,
-  which must still verify against this address and context; anyone able to plant it could equally write
-  such an entry in place. Reads are therefore not routed through descriptors.
+  `context.json`, and both to equal the path; a mismatch is misfiled and quarantined. `put` verifies an
+  existing entry's arrays before returning its identity.
+- **What is not guaranteed.** Store members are read through the entry directory's descriptor, but the
+  directories above the entry were reached by an earlier walk; a rename between the walk and the read can
+  redirect a read to another entry, which must still verify against the address and the context. A group
+  member who hard-links a live lock file makes the next acquirer move it aside and lock a new file while
+  the old holder keeps the old one; that needs write access to the lock's directory, which already allows
+  removing the lock file. Old `store@3/` trees and other unrecognised names are never collected.
 - **Lock takeover is read from the holder file once the lock is held.** A holder writes `.holder` only
-  while holding the `flock` and a clean release removes it before unlocking, so `took_over` is whether
-  `.holder` still names someone after the acquire; it no longer depends on how long the acquire waited
-  (XS-6).
+  while holding the `flock` and a clean release removes it before unlocking, so `took_over` is whether a
+  holder file (whole or corrupt) is still there after the acquire.
 
 ## Consequences
 - `work_pool` gains index segments and quantum yielding. Items become plan fragments.

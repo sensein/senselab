@@ -78,3 +78,27 @@ def test_staging_grammars_accept_their_own_names_only(grammar: object, own: str,
     """The fixed grammars match what the runtime writes and nothing a caller would name."""
     assert grammar.fullmatch(own)  # type: ignore[attr-defined]
     assert not any(grammar.fullmatch(name) for name in foreign)  # type: ignore[attr-defined]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("version", [(3, 10), (3, 12)])
+def test_a_removed_tree_never_follows_a_symlink_inside_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: tuple[int, int]
+) -> None:
+    """Removing a uuid-named tree, by 3.10's walk or `shutil.rmtree`, unlinks a symlink in it, never its target."""
+    from types import SimpleNamespace
+
+    from senselab_worker import ownership
+
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep").write_bytes(b"k")
+    root = tmp_path / "root"
+    tree = root / ("a" * 32)
+    (tree / "inner").mkdir(parents=True)
+    (tree / "inner" / "f").write_bytes(b"x")
+    os.symlink(victim, tree / "inner" / "out")
+    monkeypatch.setattr(ownership, "sys", SimpleNamespace(version_info=version))
+    with storage_module.StorageDir.open_root(root) as directory:
+        assert directory.remove_owned(tree.name, pattern=ownership.UUID_HEX)
+    assert list(root.iterdir()) == [] and (victim / "keep").read_bytes() == b"k"

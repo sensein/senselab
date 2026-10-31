@@ -10,10 +10,11 @@ sidecars beside it: `<name>.holder` (who holds it), `<name>.heartbeat` (refreshe
   (`StorageDir.write_atomically`), so a symlink or hard link there is replaced and its target never touched;
 - modes are set only through descriptors.
 
-A holder that is not a whole identity is corrupt: it is moved aside and the lock is taken once its age
-passes `stale_after`. Every wait is bounded by `timeout` and ends in `LockTimeout`. Ages are read on the
-storage's own clock. The lock is correct only where `flock` is coherent across clients (local disks,
-NFSv4).
+A holder that is not a whole identity (or not a regular file) is corrupt: once its age passes `stale_after` it
+is moved aside and the lock is taken. Every wait is bounded by `timeout` and ends in `LockTimeout`; a caller
+passing a negative timeout waits for a live `flock` holder without bound, never for a corrupt one. Ages are
+read on the storage's own clock. The lock is correct only where `flock` is coherent across clients (local
+disks, NFSv4).
 """
 
 import fcntl
@@ -126,7 +127,8 @@ class SharedFileLock:
 
     Args:
         path: The resource being guarded (not the lock file itself).
-        timeout: Seconds any wait in `__enter__` may take before `LockTimeout`.
+        timeout: Seconds any wait in `__enter__` may take before `LockTimeout`. A negative timeout waits for as
+            long as another process holds the `flock`; the wait on a corrupt holder still ends at `stale_after`.
         heartbeat_interval: Seconds between heartbeat refreshes while held.
         stale_after: Seconds of heartbeat silence after which a previous holder's leftovers count as stale.
         manage_dir_mode: Whether the lock's directory is made (or set, if this user owns it) `LOCK_DIR_MODE`;
@@ -361,17 +363,17 @@ class SharedFileLock:
             if age > bound:
                 self._warn_stale_takeover(record, age, basis, bound)
             return
-        self._move_aside(self._holder_name, "not a whole holder identity")
         while True:
             beat = self._directory().lstat(self._heartbeat_name)
             age = self._now() - max(mtime, beat.st_mtime if beat is not None else 0.0)
             if age > self._stale_after:
-                logger.warning("lock %s: taking over after a corrupt holder %.1fs old", self._lock_path, age)
+                self._move_aside(self._holder_name, f"not a whole holder identity, {age:.1f}s old")
                 return
             if time.monotonic() >= deadline:
                 raise LockTimeout(
-                    f"Timed out after {self._timeout:.1f}s at {self._lock_path}: a corrupt holder was moved aside "
-                    f"and its last sign of life is {age:.1f}s old, under the {self._stale_after:.1f}s stale bound"
+                    f"Timed out after {self._timeout:.1f}s at {self._lock_path}: the holder file is not a whole "
+                    f"identity and its last sign of life is {age:.1f}s old, under the {self._stale_after:.1f}s "
+                    "stale bound"
                 )
             time.sleep(min(POLL_S, max(0.0, deadline - time.monotonic())))
 
@@ -388,7 +390,7 @@ class SharedFileLock:
         """
         self.took_over = False
         self.set_aside = []
-        deadline = time.monotonic() + self._timeout
+        deadline = time.monotonic() + self._timeout if self._timeout >= 0 else float("inf")
         try:
             self._fd = self._acquire(deadline)
             self._settle_leftover(deadline)

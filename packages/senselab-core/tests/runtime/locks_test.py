@@ -30,9 +30,7 @@ def _heartbeat_file(resource: Path) -> Path:
 def _holder_file(resource: Path) -> Path:
     """Mirror SharedFileLock's own derivation: append, not `Path.with_suffix`.
 
-    Holder identity (user/host/pid/token) lives here, never in `.lock` itself -- see
-    specs/20260907-shared-lock-heartbeat-inf/stampede-timeout-and-identity-file.md for why
-    `filelock`'s own polling makes `.lock`'s content unfit to carry it.
+    Holder identity (user/host/pid/token) lives here, never in `.lock` itself.
     """
     return Path(str(resource) + ".holder")
 

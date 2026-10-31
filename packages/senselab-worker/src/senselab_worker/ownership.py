@@ -17,7 +17,7 @@ UUID_HEX = re.compile(r"^[0-9a-f]{32}$")
 """A staging file or directory named by a uuid4 hex."""
 
 
-def remove_owned(root: Path, path: Path, *, pattern: re.Pattern[str], root_fd: int | None = None) -> bool:
+def remove_owned(root: Path, path: Path, *, pattern: re.Pattern[str], root_fd: int | None = None) -> bool:  # noqa: C901
     """Remove `path` if it is a direct child of `root` whose name fully matches `pattern`; return whether it did.
 
     The child is examined with `lstat` relative to an open descriptor of `root`: `root_fd` when given
@@ -30,6 +30,20 @@ def remove_owned(root: Path, path: Path, *, pattern: re.Pattern[str], root_fd: i
     Raises:
         OSError: if the child exists but cannot be removed.
     """
+
+    def _remove_tree_at(parent_fd: int, child: str) -> None:
+        """Remove the directory `child` of `parent_fd` and everything in it, relative to descriptors only."""
+        fd = os.open(child, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        try:
+            for entry in os.listdir(fd):
+                if stat.S_ISDIR(os.lstat(entry, dir_fd=fd).st_mode):
+                    _remove_tree_at(fd, entry)
+                else:
+                    os.unlink(entry, dir_fd=fd)
+        finally:
+            os.close(fd)
+        os.rmdir(child, dir_fd=parent_fd)
+
     target = os.path.abspath(path)
     name = os.path.basename(target)
     if os.path.dirname(target) != os.path.abspath(root) or name in ("", ".", "..") or not pattern.fullmatch(name):
@@ -53,7 +67,7 @@ def remove_owned(root: Path, path: Path, *, pattern: re.Pattern[str], root_fd: i
             elif sys.version_info >= (3, 11):
                 shutil.rmtree(name, dir_fd=root_fd)
             else:
-                shutil.rmtree(target)
+                _remove_tree_at(root_fd, name)
         except FileNotFoundError:
             return False
         return True
