@@ -12,7 +12,17 @@ import pytest
 REPO = Path(__file__).resolve().parents[3]
 SCAN_ROOTS = ("src", "scripts", "packages")
 IMPORT_SCAN_ROOTS = (*SCAN_ROOTS, "tutorials")
-CODE_SUFFIXES = (".py", ".pyi", ".ipynb")
+
+
+def _fixture_budget_suffixes() -> tuple[str, ...]:
+    spec = importlib.util.spec_from_file_location("_budget_for_suffixes", REPO / "scripts" / "check_fixture_budget.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return tuple(module.CODE_SUFFIXES)
+
+
+CODE_SUFFIXES = _fixture_budget_suffixes()
 SELF = Path(__file__).resolve()
 
 MOVED = {
@@ -46,6 +56,7 @@ DYNAMIC_ALLOWED: dict[str, frozenset[str]] = {
     "packages/senselab-core/tests/lint/destructive_ops_test.py": frozenset({"<dynamic:module>"}),
     "packages/senselab-worker/src/senselab_worker/launch.py": frozenset({"<dynamic:argv[1]>"}),
     "src/tests/conftest.py": frozenset({"<dynamic:module>"}),
+    "src/tests/audio/tasks/audio_understanding_test.py": frozenset({"<dynamic:name>"}),
     "src/tests/audio/workflows/audio_analysis/run_config_test.py": frozenset(
         {"<dynamic:f'senselab.audio.workflows.audio_analysis.{module_name}'>"}
     ),
@@ -170,11 +181,25 @@ def _fold(node: ast.AST) -> str | None:
     return None
 
 
-def _dynamic_target(node: ast.Call) -> ast.expr | None:
+def _importer_aliases(tree: ast.AST) -> set[str]:
+    """Names bound to ``import_module`` or ``__import__`` by ``from importlib import ... as`` or by assignment."""
+    names = {"import_module", "__import__"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "importlib":
+            names |= {a.asname for a in node.names if a.name in ("import_module", "__import__") and a.asname}
+        elif isinstance(node, ast.Assign):
+            value = node.value
+            called = value.attr if isinstance(value, ast.Attribute) else value.id if isinstance(value, ast.Name) else ""
+            if called in names:
+                names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+    return names
+
+
+def _dynamic_target(node: ast.Call, importers: set[str] | None = None) -> ast.expr | None:
     """The module argument of ``importlib.import_module(x)``, ``import_module(x)`` or ``__import__(x)``, or ``None``."""
     func = node.func
     name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
-    if name not in ("import_module", "__import__"):
+    if name not in (importers or {"import_module", "__import__"}):
         return None
     if node.args:
         return node.args[0]
@@ -196,6 +221,7 @@ def _imports_of(tree: ast.AST, module: str, is_package: bool, label: str) -> set
     package = module if is_package else module.rpartition(".")[0]
     found: set[str] = set()
     bound: dict[str, str] = {}
+    importers = _importer_aliases(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -219,7 +245,7 @@ def _imports_of(tree: ast.AST, module: str, is_package: bool, label: str) -> set
                 found.add(full)
                 bound[alias.asname or alias.name] = full
         elif isinstance(node, ast.Call):
-            target = _dynamic_target(node)
+            target = _dynamic_target(node, importers)
             if target is None:
                 continue
             folded = _fold(target)
@@ -338,6 +364,21 @@ def test_importlib_concat_is_found(tmp_path: Path) -> None:
     names = _imports(_write(tmp_path, "senselab/audio/a.py", src))
     assert {"senselab.utils.file_lock", "senselab.utils.prov_store", "<dynamic:name>"} <= names
     assert "<dynamic:f'senselab.utils.{kind}_probe'>" in names
+
+
+@pytest.mark.logic
+def test_aliased_import_module_is_found(tmp_path: Path) -> None:
+    """``import_module`` bound to another name, by ``from ... as`` or by assignment, is still followed."""
+    src = (
+        "from importlib import import_module as im\n"
+        "import importlib\n"
+        "load = importlib.import_module\n"
+        "im('senselab.utils.' + 'file_lock')\n"
+        "load('senselab.utils.' + 'prov_store')\n"
+        "load(name)\n"
+    )
+    names = _imports(_write(tmp_path, "a.py", src))
+    assert {"senselab.utils.file_lock", "senselab.utils.prov_store", "<dynamic:name>"} <= names
 
 
 @pytest.mark.logic

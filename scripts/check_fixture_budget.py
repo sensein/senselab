@@ -100,12 +100,12 @@ def _git(root: Path, *args: str) -> bytes:
 
 
 def resolve_freeze_ref(root: Path = ROOT) -> str:
-    """The ref of the freeze branch: the local branch, else its remote-tracking ref.
+    """The ref of the freeze branch: its remote-tracking ref, and the local branch only when that is absent.
 
     Raises:
         LookupError: if neither exists, naming the fetch that creates it.
     """
-    for ref in (FREEZE_BRANCH, f"origin/{FREEZE_BRANCH}"):
+    for ref in (f"origin/{FREEZE_BRANCH}", FREEZE_BRANCH):
         probe = subprocess.run(["git", "rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], cwd=root, capture_output=True)
         if probe.returncode == 0:
             return ref

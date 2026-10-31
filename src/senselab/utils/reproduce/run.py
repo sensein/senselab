@@ -382,7 +382,8 @@ sys.exit(_code)
 """Runs an adapter as ``__main__`` with ``sys.argv = [adapter, work dir, metrics path]``, where the metrics
 path is the driver's pipe. It first imports every ``senselab.utils.reproduce`` module, then refuses any
 import, by an adapter, of a module that is neither in the standard library nor in that package, and exits 86
-if one was attempted or one was loaded anyway."""
+if one was attempted or one was loaded anyway. It guards against accidental first-party imports and is not a
+sandbox: the namespace sandbox the adapter runs in is the security boundary."""
 
 
 class RunError(Exception):

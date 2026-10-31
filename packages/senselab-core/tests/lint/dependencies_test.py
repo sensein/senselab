@@ -81,18 +81,28 @@ def test_an_unlisted_package_is_not_a_root_package(tmp_path: Path) -> None:
     assert import_names(tmp_path) == {"alpha", "beta"} != root_packages(text)
 
 
-OPTIONAL_IMPORTS = {"senselab-core": frozenset({"requests", "httpx"})}
-"""Modules a package imports only inside ``try: ... except ImportError`` (``runtime/retry.py``); not dependencies."""
+OPTIONAL_IMPORTS = {"senselab_core.runtime.retry": frozenset({"requests", "httpx"})}
+"""Modules a single module imports only inside ``try: ... except ImportError``; not dependencies."""
 
 
-def external_imports(graph: grimp.ImportGraph, own: set[str]) -> set[str]:
-    """The top-level modules imported directly by any module of the root packages ``own``."""
-    return {
-        imported.partition(".")[0]
-        for module in graph.modules
-        if module.partition(".")[0] in own
-        for imported in graph.find_modules_directly_imported_by(module)
-    } - own
+def external_imports(graph: grimp.ImportGraph, own: set[str]) -> dict[str, set[str]]:
+    """``{module: top-level modules it imports directly}`` for every module of the root packages ``own``."""
+    out: dict[str, set[str]] = {}
+    for module in graph.modules:
+        if module.partition(".")[0] in own:
+            imported = {i.partition(".")[0] for i in graph.find_modules_directly_imported_by(module)} - own
+            if imported:
+                out[module] = imported
+    return out
+
+
+def undeclared_by_module(
+    imports: dict[str, set[str]], allowed: set[str], optional: dict[str, frozenset[str]]
+) -> dict[str, set[str]]:
+    """The imports of each module that are neither allowed, stdlib, nor optional for that module."""
+    stdlib = set(sys.stdlib_module_names)
+    bad = {m: i - allowed - stdlib - optional.get(m, frozenset()) for m, i in imports.items()}
+    return {m: i for m, i in bad.items() if i}
 
 
 @pytest.mark.contract
@@ -104,23 +114,28 @@ def test_packages_import_only_declared_dependencies() -> None:
     for pyproject in sorted(PACKAGES.glob("*/pyproject.toml")):
         data = tomllib.loads(pyproject.read_text())
         own = {p.name for p in (pyproject.parent / "src").iterdir() if p.is_dir() and p.name != "__pycache__"}
-        allowed = set(roots) | OPTIONAL_IMPORTS.get(data["project"]["name"], frozenset())
+        allowed = set(roots)
         for dist in declared_dependencies(data) - workspace:
             allowed |= import_names_of(dist)
-        undeclared = external_imports(graph, own) - allowed - set(sys.stdlib_module_names)
-        assert undeclared == set(), f"{data['project']['name']} imports undeclared {sorted(undeclared)}"
+        assert undeclared_by_module(external_imports(graph, own), allowed, OPTIONAL_IMPORTS) == {}
 
 
 @pytest.mark.logic
 def test_optional_imports_are_still_imported() -> None:
-    """Every optional import allowance names a module its package still imports."""
+    """Every optional import allowance names a module that still imports those names."""
     roots = import_names(PACKAGES)
     graph = grimp.build_graph(*sorted(roots), include_external_packages=True)
-    for pyproject in sorted(PACKAGES.glob("*/pyproject.toml")):
-        data = tomllib.loads(pyproject.read_text())
-        own = {p.name for p in (pyproject.parent / "src").iterdir() if p.is_dir() and p.name != "__pycache__"}
-        optional = OPTIONAL_IMPORTS.get(data["project"]["name"], frozenset())
-        assert optional <= external_imports(graph, own)
+    imports = external_imports(graph, roots)
+    for module, names in OPTIONAL_IMPORTS.items():
+        assert names <= imports.get(module, set()), module
+
+
+@pytest.mark.logic
+def test_an_optional_import_is_allowed_only_in_its_own_module() -> None:
+    """The same import in another module of the package is reported."""
+    imports = {"pkg.retry": {"requests"}, "pkg.other": {"requests"}}
+    bad = undeclared_by_module(imports, set(), {"pkg.retry": frozenset({"requests"})})
+    assert bad == {"pkg.other": {"requests"}}
 
 
 @pytest.mark.logic
@@ -137,3 +152,6 @@ def test_an_undeclared_third_party_import_is_found(tmp_path: Path, monkeypatch: 
     }
     assert imported == {"os", "json", "requests", "numpy"}
     assert undeclared_imports(graph, {"plantedpkg"}, {"numpy"}) == {"requests"}
+    assert undeclared_by_module(external_imports(graph, {"plantedpkg"}), {"numpy"}, {}) == {
+        "plantedpkg.mod": {"requests"}
+    }

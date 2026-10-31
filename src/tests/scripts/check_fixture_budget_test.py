@@ -193,6 +193,21 @@ def test_main_catches_new_large_wav_anywhere_in_test_trees(tmp_path: Path, where
     assert budget.is_fixture(where) and not budget.is_fixture("src/tests/big_test.py")
 
 
+def test_a_local_freeze_branch_never_takes_precedence(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """With an `origin/` freeze ref present, entries are bound to it even when the local branch holds more."""
+    name = "src/tests/data_for_testing/added_locally.wav"
+    allow = _repo(tmp_path, {}, {}, _line(name, 500))
+    _git(tmp_path, "update-ref", f"refs/remotes/origin/{FREEZE}", FREEZE)
+    _git(tmp_path, "checkout", "-q", FREEZE)
+    _file(tmp_path, name, 500)
+    _git(tmp_path, "add", name)
+    _git(tmp_path, "commit", "-q", "-m", "advance the local branch")
+    _git(tmp_path, "checkout", "-q", "main")
+    allow.write_text(_line(name, 500))
+    assert budget.resolve_freeze_ref(tmp_path) == f"origin/{FREEZE}"
+    assert budget.main(tmp_path, allow) == 1 and f"{name}: not in origin/{FREEZE}" in capsys.readouterr().out
+
+
 def test_main_errors_without_the_freeze_branch(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """With no freeze ref the check fails naming the fetch, rather than passing unbound."""
     _git(tmp_path, "init", "-q", "-b", "main")

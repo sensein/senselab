@@ -1,9 +1,6 @@
 name: tests
 
 on:
-  # A direct push to a protected branch is guarded by the same jobs as a pull request. Jobs gated on
-  # `pull_request.draft == false` run on a push because the field is null there, which compares equal to false;
-  # the label-gated jobs do not run, since a push carries no labels.
   push:
     branches: [alpha, main, 2x/**]
   pull_request:
@@ -16,7 +13,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   macos-tests:
