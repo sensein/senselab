@@ -655,10 +655,11 @@ from the built wheel in a separate env.
   (`[project.scripts]` as `console_scripts`, `[project.gui-scripts]`, `[project.entry-points.*]`); a wheel
   that declares none carries none. A `.data/scripts/<name>` member ships only where the hatch wheel config
   declares it in `shared-scripts`, as a byte copy of its declared source; every other `.data` member is refused.
-- A tracked file that is modified but not committed is not caught: the contents check compares artifact bytes
-  with the working tree, and hatch-vcs writes a `.dev`/local version only for a dirty tree when the tag is not
-  on HEAD. Tagged CI is not exposed, because the publish job builds from a fresh checkout of the tag, where no
-  file can differ from the commit. A local build from a dirty tree at a tag can ship the modification.
+- A tracked file that is modified but not committed passes the contents check, which compares artifact bytes
+  with the working tree. The version check refuses it instead: the `--dirty` describe makes hatch-vcs write the
+  next `.dev0` version for a dirty tree even on the tag (measured: tag `2.0.0` plus one modified file builds
+  `2.0.1.dev0`). Tagged CI is not exposed either way, because the publish job builds from a fresh checkout of
+  the tag, where no file can differ from the commit.
 - The gate's subprocesses run with `--no-config` on every `uv` call and an environment without `PIP_*`,
   `VIRTUAL_ENV` and every `UV_*` variable except those naming uv's own directories and network behaviour
   (`UV_KEPT`). The first-party install runs with `--no-index`, so a caller's index, find-links or config file
