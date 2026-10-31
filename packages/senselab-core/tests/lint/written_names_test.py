@@ -6,15 +6,21 @@ writes, renames, links, makes directories, changes modes or times by any other A
 """
 
 import ast
-import importlib
 import re
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
+from senselab_core.runtime import fetch, locks, revision, storage, store
 
 RUNTIME = Path(__file__).resolve().parents[2] / "src" / "senselab_core" / "runtime"
-MODULES = ("storage", "store", "fetch", "locks", "revision")
+MODULES: dict[str, ModuleType] = {
+    "storage": storage,
+    "store": store,
+    "fetch": fetch,
+    "locks": locks,
+    "revision": revision,
+}
 WRITE_METHODS = frozenset({"open_new", "write_new", "write_atomically", "symlink", "link", "rename", "open_or_create"})
 RAW_OS = frozenset(
     {
@@ -49,8 +55,8 @@ ALLOWED_RAW = {("storage", "set_mode"): {"os.fchmod"}}
 def written_names() -> frozenset[re.Pattern[str]]:
     """Return the union of the modules' `WRITTEN_NAMES`."""
     found: set[re.Pattern[str]] = set()
-    for name in MODULES:
-        found |= importlib.import_module(f"senselab_core.runtime.{name}").WRITTEN_NAMES
+    for module in MODULES.values():
+        found |= module.WRITTEN_NAMES
     return frozenset(found)
 
 
@@ -109,13 +115,8 @@ def test_every_write_names_a_listed_grammar_and_goes_through_storage_dir() -> No
     grammars = written_names()
     found = [
         hit
-        for name in MODULES
-        for hit in violations(
-            (RUNTIME / f"{name}.py").read_text(),
-            name,
-            grammars,
-            importlib.import_module(f"senselab_core.runtime.{name}"),
-        )
+        for name, module in MODULES.items()
+        for hit in violations((RUNTIME / f"{name}.py").read_text(), name, grammars, module)
     ]
     assert found == []
 

@@ -3,11 +3,11 @@
 `FiniteSource` serves at most `expected + slack` bytes and then raises, whatever the reader asks for.
 `run_bounded` runs a probe function in a child interpreter under `RLIMIT_FSIZE`, `RLIMIT_AS` (where the
 platform accepts one below the current mapping; macOS does not) and a timeout, and returns what the probe
-returned. A probe is `<module>:<function>` in a directory given to the child; it takes string arguments
-and returns a JSON value. Run as a script, this module is that child.
+returned. A probe is `<module>:<function>`, the module loaded from `<where>/<module>.py` in the child; it
+takes string arguments and returns a JSON value. Run as a script, this module is that child.
 """
 
-import importlib
+import importlib.util
 import io
 import json
 import os
@@ -101,7 +101,12 @@ def _main(argv: list[str]) -> None:
     where, target, raw = argv
     sys.path[:0] = [where, str(HERE)]
     module, _, function = target.partition(":")
-    value = getattr(importlib.import_module(module), function)(*json.loads(raw))
+    spec = importlib.util.spec_from_file_location(module, Path(where) / f"{module}.py")
+    assert spec is not None and spec.loader is not None, f"no probe module {module} in {where}"
+    loaded = importlib.util.module_from_spec(spec)
+    sys.modules[module] = loaded
+    spec.loader.exec_module(loaded)
+    value = getattr(loaded, function)(*json.loads(raw))
     sys.stdout.write("\n" + json.dumps(value) + "\n")
     sys.stdout.flush()
 
