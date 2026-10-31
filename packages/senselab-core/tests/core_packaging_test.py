@@ -22,13 +22,6 @@ def test_core_imports_without_heavy_frameworks() -> None:
 
 
 @pytest.mark.logic
-def test_versions_are_pinned_equal() -> None:
-    """Core and worker share one version and core pins the worker exactly."""
-    assert metadata.version("senselab-core") == metadata.version("senselab-worker")
-    assert f"senselab-worker=={metadata.version('senselab-worker')}" in (metadata.requires("senselab-core") or [])
-
-
-@pytest.mark.logic
 def test_version_derives_from_a_release_tag() -> None:
     """A non-release tag must not set the version."""
     assert not metadata.version("senselab-core").startswith("31.")

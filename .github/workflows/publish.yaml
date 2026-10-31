@@ -27,12 +27,17 @@ jobs:
       run: uv build --all-packages
       shell: bash
     - name: Gate the release
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        REF_NAME: ${{ github.ref_name }}
+        PRERELEASE: ${{ github.event.release.prerelease }}
+        PYTHON_VERSION: ${{ matrix.python-version }}
       run: |
         args=()
-        if [ "${{ github.event_name }}" = "release" ]; then
-          args=(--tag "${{ github.ref_name }}" --prerelease "${{ github.event.release.prerelease }}")
+        if [ "$EVENT_NAME" = "release" ]; then
+          args=(--tag "$REF_NAME" --prerelease "$PRERELEASE")
         fi
-        uv run --no-project --python "${{ matrix.python-version }}" --with packaging python scripts/release_gate.py dist "${args[@]}"
+        uv run --no-project --python "$PYTHON_VERSION" --with packaging python scripts/release_gate.py dist "${args[@]}"
       shell: bash
     - name: Publish to PyPI
       if: github.event_name == 'release'

@@ -294,8 +294,9 @@ jobs:
     steps:
     - name: Parse GPU config labels
       id: gpu-config
+      env:
+        LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
       run: |
-        LABELS='${{ toJSON(github.event.pull_request.labels.*.name) }}'
         INSTANCE=$(echo "$LABELS" | jq -r '[.[] | select(startswith("gpu-instance:"))] | if length > 0 then .[0] | split(":")[1] else "" end')
         MULTI_GPU=$(echo "$LABELS" | jq -r '[.[] | select(. == "gpu-multi")] | if length > 0 then "true" else "" end')
         if [ -z "$INSTANCE" ] && [ -n "$MULTI_GPU" ]; then INSTANCE="g5.12xlarge"; fi
