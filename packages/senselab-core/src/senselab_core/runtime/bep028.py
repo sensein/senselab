@@ -24,6 +24,7 @@ from senselab_core.runtime.provenance import (
     Environment,
     ProvStore,
 )
+from senselab_core.runtime.storage import write_atomically
 
 BEP028_CONTEXT_SOURCE = "https://github.com/bids-standard/bids-specification/pull/2099 — src/provenance-context.json"
 """Where :data:`BEP028_CONTEXT` was copied from, verbatim."""
@@ -307,7 +308,8 @@ def write_bep028_files(graph: dict[str, Any], prov_dir: str | Path, *, label: st
 
     Args:
         graph: A document from :func:`to_bep028_graph`.
-        prov_dir: The ``prov/`` directory to write into. Created if absent.
+        prov_dir: The ``prov/`` directory to write into. Created if absent. Each file is replaced, never written
+            through: a symlink at its name is replaced by the new file.
         label: The ``prov-<label>`` entity the filenames carry.
 
     Returns:
@@ -327,7 +329,8 @@ def write_bep028_files(graph: dict[str, Any], prov_dir: str | Path, *, label: st
         if not body:
             continue
         path = target / f"prov-{label}_{suffix}.json"
-        path.write_text(json.dumps({"@context": graph["@context"], **body}, indent=2, sort_keys=False) + "\n")
+        text = json.dumps({"@context": graph["@context"], **body}, indent=2, sort_keys=False) + "\n"
+        write_atomically(path, text.encode("utf-8"))
         written.append(path)
     return written
 

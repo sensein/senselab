@@ -76,7 +76,7 @@ ALLOWED_GRAMMARS = {("storage", "write_atomically"): {"_CALLER_FILE"}}
 """Writers outside any storage root: `storage.write_atomically` writes the caller's own file."""
 ALLOWED_RAW: dict[tuple[str, str], dict[str, int]] = {
     ("storage", "set_mode"): {"os.fchmod": 1},
-    ("bep028", "write_bep028_files"): {".mkdir": 1, ".write_text": 1},
+    ("bep028", "write_bep028_files"): {".mkdir": 1},
     ("fetch", "_urlopen"): {".open": 1},
     ("reproduce.build", "_copy_verified"): {".mkdir": 1, "shutil.copyfile": 1},
     ("reproduce.build", "_place"): {
@@ -106,8 +106,7 @@ ALLOWED_RAW: dict[tuple[str, str], dict[str, int]] = {
 
 - `storage.set_mode` changes a mode through the descriptor it is given.
 - `fetch._urlopen`: `.open` is the HTTPS opener's request, not a file.
-- `bep028.write_bep028_files`: BEP-028 sidecars in the caller's output tree by path; M-6, deferred to the 1.x
-  cleanup by H-R41.
+- `bep028.write_bep028_files` creates the caller's `prov/` directory; its files go through `write_atomically`.
 - `reproduce.build.*` and `reproduce.cache.*`: 1.x writes by path in the reproduce trees (sdist and wheel caches,
   venv bases, results roots and run links); moving them onto `StorageDir` is the same 1.x cleanup. Their locks
   already go through `SharedFileLock` (`build.file_lock`, `cache.claim`).

@@ -266,3 +266,19 @@ def test_the_split_files_partition_the_graph(store: ProvStore, tmp_path: Path) -
     assert all(body["@context"] == graph["@context"] for body in bodies)
     keys = [key for body in bodies for key in body if key != "@context"]
     assert sorted(keys) == ["Activities", "Files", "Software", "prov:Entity"]
+
+
+def test_m6_a_symlink_at_a_sidecar_name_is_replaced_not_written_through(store: ProvStore, tmp_path: Path) -> None:
+    """A planted symlink at a BEP028 file name leaves its target unchanged and becomes the written file."""
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep")
+    prov = tmp_path / "prov"
+    prov.mkdir()
+    graph = to_bep028_graph(store)
+    names = [path.name for path in write_bep028_files(graph, tmp_path / "first", label="triage")]
+    for name in names:
+        (prov / name).symlink_to(victim)
+    written = write_bep028_files(graph, prov, label="triage")
+    assert victim.read_text() == "keep"
+    assert all(path.is_file() and not path.is_symlink() for path in written)
+    assert [path.name for path in written] == names

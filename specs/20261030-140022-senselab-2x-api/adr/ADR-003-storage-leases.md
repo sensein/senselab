@@ -146,7 +146,8 @@ root (C-1, I-1). The rules below are stated as what is guaranteed after that rou
   redirect a read to another entry, which must still verify against the address and the context. A group
   member who hard-links a live lock file makes the next acquirer move it aside and lock a new file while
   the old holder keeps the old one; that needs write access to the lock's directory, which already allows
-  removing the lock file. Old `store@3/` trees and other unrecognised names are never collected.
+  removing the lock file. Old `store@3/` trees and other unrecognised names are never collected: they are left for the
+  operator, who removes a `store@3/` tree once no process of the release that wrote it still runs.
 - **Lock takeover is read from the holder file once the lock is held.** A holder writes `.holder` only
   while holding the `flock` and a clean release removes it before unlocking, so `took_over` is whether a
   holder file (whole or corrupt) is still there after the acquire.
