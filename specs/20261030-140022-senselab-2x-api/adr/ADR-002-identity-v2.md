@@ -40,7 +40,7 @@ Principle P-38.
   unions and nested params). The registry refuses `set`, `frozenset`, `Decimal`, `datetime`,
   `Path`, `bytes`, `Any` and `object`. A generated contract builds every declared backend's key
   under two `PYTHONHASHSEED` values and requires one digest.
-- **The digest is taken at construction** (`tagged_digest("logical-key@2", fields)`, ADR-006), so a
+- **The digest is taken at construction** (`tagged_digest("logical-key@3", fields)`, ADR-006), so a
   key that validates can be digested.
 - **Versions are declared, not hashed.** `task_version` and `backend_version` are bumped by
   developers. A CI check fails when a task's or backend's source changes without a version bump,
