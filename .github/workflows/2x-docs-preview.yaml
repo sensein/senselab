@@ -1,0 +1,71 @@
+name: 2x Docs Preview
+
+permissions:
+  contents: write
+  pull-requests: write
+  deployments: write
+
+on:
+  # Previews of the 2.x line under 2x/pr-<N>/. 1.x PRs run docs-preview.yaml (root pr-<N>/).
+  pull_request:
+    branches: [2.x, senselab-2x-api, 2x/**]
+    types: [opened, synchronize, reopened, closed]
+
+jobs:
+  build-and-deploy:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: docs-preview-2x-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    environment:
+      name: docs-preview
+      url: https://sensein.group/senselab/2x/pr-${{ github.event.pull_request.number }}/
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0   # hatch-vcs derives the package versions from tags
+    - name: Look for the 2.x packages
+      id: packages
+      run: |
+        if [ -f packages/senselab-core/pyproject.toml ] && [ -f packages/senselab-worker/pyproject.toml ]; then
+          echo "present=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "present=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::no packages/ tree on this ref; no 2.x preview to build"
+        fi
+    - name: Install uv
+      if: steps.packages.outputs.present == 'true'
+      uses: astral-sh/setup-uv@v5
+    - name: Install the 2.x packages and pdoc
+      if: steps.packages.outputs.present == 'true'
+      run: |
+        uv venv -p 3.12 .docs
+        uv pip install -p .docs ./packages/senselab-worker ./packages/senselab-core "pdoc~=16.0"
+    - name: Build docs
+      if: steps.packages.outputs.present == 'true'
+      run: |
+        .docs/bin/pdoc senselab_core senselab_worker -o docs -t docs_style/pdoc-theme --docformat google \
+          --favicon https://readthedocs.org/favicon.ico
+        touch docs/.nojekyll
+    - name: Deploy preview
+      if: steps.packages.outputs.present == 'true'
+      env:
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: bash .github/scripts/docs-deploy.sh --namespace 2x preview docs "$PR_NUMBER"
+
+  cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: docs-preview-2x-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+    - uses: actions/checkout@v5
+    - name: Remove 2.x previews of every PR that is no longer open
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        open_prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json number --jq '.[].number')
+        # shellcheck disable=SC2086
+        bash .github/scripts/docs-deploy.sh --namespace 2x cleanup $open_prs

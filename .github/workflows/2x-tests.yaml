@@ -1,0 +1,171 @@
+name: 2x-tests
+
+on:
+  # The 2.x line only. 1.x branches (alpha, main) run tests.yaml.
+  push:
+    branches: [2.x, senselab-2x-api, 2x/**]
+  pull_request:
+    branches: [2.x, senselab-2x-api, 2x/**]
+    # `ready_for_review` matters because every job below is gated on `pull_request.draft == false`:
+    # without it a draft PR marked ready never re-triggers this workflow.
+    types: [opened, synchronize, reopened, labeled, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Branches of the 2.x line that predate the packages (2.x at the freeze, senselab-2x-api) carry
+  # no packages/ tree; the core jobs skip there instead of failing.
+  detect:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.packages.outputs.present }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 1
+    - name: Look for the 2.x packages
+      id: packages
+      run: |
+        if [ -f packages/senselab-core/pyproject.toml ] && [ -f packages/senselab-worker/pyproject.toml ]; then
+          echo "present=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "present=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::no packages/ tree on this ref; core-only, core-env and worker-floor skip"
+        fi
+
+  pre-commit:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 1
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Install dependencies with uv
+      run: uv sync --all-extras --group dev
+    - name: Fetch the 1.x freeze branch
+      run: git fetch --no-tags --depth=1 origin freeze-1x-2026-10-30:refs/remotes/origin/freeze-1x-2026-10-30
+    - name: Run pre-commit
+      run: uv run pre-commit run --all-files
+      shell: bash
+
+  # The 1.x tree (src/senselab) still lives on the 2.x line until it is retired.
+  cpu-tests:
+    if: github.event.pull_request.draft == false
+    name: cpu-tests (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ contains(github.event.pull_request.labels.*.name, 'full-matrix') && fromJSON('["3.11","3.12","3.13","3.14"]') || fromJSON('["3.12"]') }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 1
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install FFmpeg shared libraries
+      run: bash scripts/install-ffmpeg.sh
+    - name: Install dependencies with uv
+      run: uv sync --all-extras --group dev
+    - name: Run CPU tests
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
+        uv run pytest src/tests \
+          --junitxml=pytest.xml \
+          --cov-report=term-missing:skip-covered \
+          --cov-report=xml:coverage.xml \
+          --cov=src \
+          --log-level=DEBUG \
+          --verbose
+
+  core-only:
+    needs: detect
+    if: needs.detect.outputs.packages == 'true'
+    name: core-only (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.14']
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0   # hatch-vcs derives the version from tags
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+    - name: Install the core distributions alone
+      env:
+        PYTHON_VERSION: ${{ matrix.python-version }}
+      run: |
+        uv venv -p "$PYTHON_VERSION" .core
+        uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core --group packages/senselab-core/pyproject.toml:test
+    - name: Run core tests
+      run: .core/bin/pytest packages -m "logic or contract or limits or usecase" -p no:cacheprovider
+    - name: Check import contracts
+      env:
+        PYTHONPATH: src
+      run: .core/bin/lint-imports
+    - name: Build each sdist into a wheel on its own
+      run: |
+        for src in packages/senselab-worker packages/senselab-core .; do
+          out=$(mktemp -d)
+          uv build --sdist --out-dir "$out/dist" "$src"
+          mkdir "$out/unpacked"
+          tar -xzf "$out"/dist/*.tar.gz -C "$out/unpacked"
+          uv build --wheel --out-dir "$out/wheel" "$out"/unpacked/*
+        done
+
+  core-env:
+    needs: detect
+    if: needs.detect.outputs.packages == 'true'
+    name: core-env (release gate and packaging)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0   # hatch-vcs derives the version from tags
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+    - name: Install the core distributions alone
+      run: |
+        uv venv -p 3.12 .core
+        uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core --group packages/senselab-core/pyproject.toml:test
+    - name: Run the release gate and packaging tests, which build and create venvs
+      run: >-
+        .core/bin/pytest packages/senselab-core/tests/release_gate_test.py packages/senselab-core/tests/package_data_test.py
+        -m "env and not slow" -p no:cacheprovider
+
+  worker-floor:
+    needs: detect
+    if: needs.detect.outputs.packages == 'true'
+    name: worker-floor (3.10)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0   # hatch-vcs derives the version from tags
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+    - name: Build the worker wheel
+      run: uv build --wheel --out-dir dist packages/senselab-worker
+    - name: Install the wheel alone at the floor
+      run: |
+        uv venv -p 3.10 .floor
+        uv pip install --python .floor dist/senselab_worker-*.whl numpy==1.23.5 pytest pytest-timeout hypothesis
+    - name: Run worker tests
+      run: .floor/bin/pytest packages/senselab-worker/tests -m "logic or env or contract" -p no:cacheprovider
