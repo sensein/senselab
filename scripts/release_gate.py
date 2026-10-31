@@ -361,13 +361,20 @@ def check_installs(files: list[Path], pythons: Mapping[str, str]) -> None:
     """Install each distribution alone into its own fresh venv at ``pythons[name]``, check its siblings, import it.
 
     Only the distribution's own wheel is passed by path. Its siblings must be reached by the resolver through
-    ``--find-links`` on the directory of ``files``; third-party requirements come from the index. Each sibling
-    must then be installed with the version and file hashes of the wheel in ``dist/``, not merely the version.
+    ``--find-links`` on the directory of ``files``, in an install that neither reads nor writes any uv cache
+    (``--no-cache``), so a cached wheel of the same name and version cannot stand in for the one in ``dist/``.
+    The third-party requirements of the distribution and its siblings are installed first, by name, through the
+    host's cache, which no first-party wheel enters. Each sibling must then be installed with the version and
+    file hashes of the wheel in ``dist/``, not merely the version.
 
     Raises:
         GateError: If creating an environment, installing, a sibling's version or importing fails.
     """
     wheels = {_metadata(p)[0]: p.resolve() for p in files if p.suffix == ".whl"}
+    third_party = {
+        n: [str(r) for r in _metadata(p)[2] if canonicalize_name(r.name) not in DISTRIBUTIONS]
+        for n, p in wheels.items()
+    }
     built = {
         n: {"version": str(_metadata(p)[1]), "files": wheel_file_hashes(p)} for n, p in wheels.items()
     }
@@ -381,7 +388,11 @@ def check_installs(files: list[Path], pythons: Mapping[str, str]) -> None:
             venv = Path(tmp) / name
             _run("uv", "venv", "--python", pythons[name], str(venv))
             interpreter = str(venv / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python"))
-            _run("uv", "pip", "install", "--python", interpreter, "--find-links", str(links), str(wheels[name]))
+            requirements = [r for n in (name, *siblings) for r in third_party[n]]
+            if requirements:
+                _run("uv", "pip", "install", "--python", interpreter, *requirements)
+            install = ("uv", "pip", "install", "--no-cache", "--python", interpreter, "--find-links", str(links))
+            _run(*install, str(wheels[name]))
             _run(interpreter, "-c", _VERIFY + f"import {IMPORTS[name]}", json.dumps(siblings))
 
 

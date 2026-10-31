@@ -476,7 +476,9 @@ def test_m2_sibling_verification_binds_content_not_version(fabricate: Callable[.
     venv = tmp_path / "venv"
     subprocess.run(["uv", "venv", "-q", "--python", HERE_PYTHON["senselab"], str(venv)], check=True)
     python = str(venv / "bin/python")
-    subprocess.run(["uv", "pip", "install", "-q", "--python", python, str(next(other.glob("*.whl")))], check=True)
+    subprocess.run(
+        ["uv", "pip", "install", "-q", "--no-cache", "--python", python, str(next(other.glob("*.whl")))], check=True
+    )
     run = lambda files: subprocess.run(  # noqa: E731
         [python, "-c", gate._VERIFY, json.dumps({"senselab-worker": {"version": "2.0.0", "files": files}})],
         capture_output=True,
@@ -516,6 +518,47 @@ def test_n2_a_dotfile_wheel_cannot_stand_in_for_the_checked_one(fabricate: Calla
     dist = wheels[0].parent
     (dist / ".senselab-2.0.0-py3-none-any.whl").write_bytes(b"not a wheel")
     gate.check_installs(gate.dist_files(dist), HERE_PYTHON)
+
+
+def _first_party_cache_entries(cache: Path) -> list[str]:
+    """Return every path under the uv cache ``cache`` whose name is one of the three distributions."""
+    names = {*gate.DISTRIBUTIONS, *(n.replace("-", "_") for n in gate.DISTRIBUTIONS)}
+    return sorted(str(p.relative_to(cache)) for p in cache.rglob("*") if p.name.split("-2.")[0] in names)
+
+
+@pytest.mark.env
+def test_c4_a_cached_wheel_of_the_same_name_and_version_cannot_stand_in_for_dist(
+    fabricate: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Other bytes at the same name, version and dist path, already in the host's uv cache, are not installed."""
+    cache = tmp_path / "uv-cache"
+    monkeypatch.setenv("UV_CACHE_DIR", str(cache))
+    stale = {k: {"modules": {next(iter(v["modules"])): "STALE = True\n"}} for k, v in OK_MODULES.items()}
+    dist = _release(fabricate, "2.0.0", **stale)[0].parent
+    scratch = tmp_path / "scratch"
+    subprocess.run(["uv", "venv", "-q", "--python", HERE_PYTHON["senselab"], str(scratch)], check=True)
+    subprocess.run(
+        ["uv", "pip", "install", "-q", "--python", str(scratch / "bin/python"), "--find-links", str(dist), "senselab"],
+        check=True,
+    )
+    assert _first_party_cache_entries(cache), "the stale wheels did not reach the cache, so nothing is tested"
+    for path in dist.iterdir():
+        path.unlink()
+    wheels = _release(fabricate, "2.0.0", **OK_MODULES)
+    assert wheels[0].parent == dist
+    gate.check_installs(gate.dist_files(dist), HERE_PYTHON)
+
+
+@pytest.mark.env
+def test_c4_the_gate_leaves_no_first_party_wheel_in_the_host_cache(
+    fabricate: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a passing run the host's uv cache holds nothing of the three distributions for a later run to reuse."""
+    cache = tmp_path / "uv-cache"
+    monkeypatch.setenv("UV_CACHE_DIR", str(cache))
+    wheels = _release(fabricate, "2.0.0", **OK_MODULES)
+    gate.check_installs(gate.dist_files(wheels[0].parent), HERE_PYTHON)
+    assert _first_party_cache_entries(cache) == []
 
 
 @pytest.mark.logic
