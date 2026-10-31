@@ -462,11 +462,11 @@ def open_spy(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
 
 @pytest.mark.logic
 def test_copies_of_a_source_recording_do_not_read_the_file(tmp_path: Path, open_spy: list[str]) -> None:
-    """Opening hashes and stamps the file once; copies check it by stat and never read it."""
+    """Opening hashes and stamps the file through one open; copies check it by stat and never read it."""
     p = write_wav(tmp_path)
     open_spy.clear()
     a = Audio.from_path(p)
-    assert open_spy.count(f"open:{p}") == 2 and len(open_spy) == 3, open_spy
+    assert open_spy.count(f"open:{p}") == 1 and len(open_spy) == 2, open_spy
     open_spy.clear()
     r = Recording.model_validate(a.model_dump())
     copies = [copy.copy(a), copy.deepcopy(a), pickle.loads(pickle.dumps(a)), a.model_copy(), copy.deepcopy(r)]

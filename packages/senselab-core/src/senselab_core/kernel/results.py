@@ -5,16 +5,16 @@ from typing import Annotated
 import numpy
 from pydantic import BeforeValidator, Field, model_validator
 
-from senselab_core.kernel._base import FiniteFloat, LabelArray, NonEmptyStr, NsArray, as_numeric_array
+from senselab_core.kernel._base import FiniteFloat, LabelArray, NonEmptyStr, NsArray, as_numeric_array, require_finite
 from senselab_core.kernel.formats import FormatTag, Formatted
 from senselab_core.kernel.time import Span
 
 
 def _finite_vector(v: object) -> numpy.ndarray:
     a = as_numeric_array(v, 1)
-    if a.size == 0 or not numpy.all(numpy.isfinite(a)):
+    if a.size == 0:
         raise ValueError("an embedding is a non-empty vector of finite values")
-    return a
+    return require_finite(a, "an embedding")
 
 
 def _check_lengths(**columns: numpy.ndarray | None) -> None:

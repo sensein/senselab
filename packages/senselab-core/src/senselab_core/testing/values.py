@@ -19,10 +19,12 @@ Contracts per type:
 - `construct_refused`: `model_construct` raises `TypeError`.
 - `copy_refuses_unknown_fields`: `model_copy(update=)` naming a field the type lacks raises `ValueError`.
 - `built_from_mappings_only`: validating an object that carries the fields as attributes, with
-  `from_attributes=True`, raises `ValidationError`, so no input form skips a validator.
+  `from_attributes=True`, raises `ValidationError`; an unsealed instance (`BaseModel.model_construct`)
+  and an instance of a subclass are validated again from their fields as the type, so a forged
+  identity planted in either is refused; no input form skips a validator.
 - `read_only`: setting or deleting any field or private attribute, writing `__dict__`, calling
-  `__setstate__` on a built value, re-initialising a reachable `FrozenMapping`, and changing or
-  rebinding the class's `model_config` all raise, and leave the value's digest unchanged.
+  `__setstate__` on a built value, re-initialising a reachable `FrozenMapping`, and changing the
+  class's `model_config` all raise, and leave the value's digest unchanged.
 - `setstate_revalidates`: `__setstate__` on a blank instance builds the value from valid fields and
   raises `ValidationError` on each registered invalid update.
 - `identity_derived` (types with an `identity` field not in `ATTESTED_IDENTITIES`): a forged
@@ -42,11 +44,11 @@ import tempfile
 import types
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy
 import soundfile
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from senselab_worker.canonical import canonical_npy_bytes
 
 import senselab_core.kernel
@@ -302,12 +304,29 @@ def _copy_refuses_unknown_fields(factory: Factory) -> None:
 
 def _built_from_mappings_only(factory: Factory) -> None:
     for v in _samples(factory):
-        held = types.SimpleNamespace(**{name: getattr(v, name) for name in type(v).model_fields})
+        cls = type(v)
+        fields = {name: getattr(v, name) for name in cls.model_fields}
         try:
-            type(v).model_validate(held, from_attributes=True)
+            cls.model_validate(types.SimpleNamespace(**fields), from_attributes=True)
         except ValidationError:
-            continue
-        raise AssertionError(f"{type(v).__qualname__} was built from an object's attributes")
+            pass
+        else:
+            raise AssertionError(f"{cls.__qualname__} was built from an object's attributes")
+        unsealed = BaseModel.model_construct.__func__(cls, **fields)  # type: ignore[attr-defined]
+        subclass = cast("type[Frozen]", type(f"Sub{cls.__name__}", (cls,), {"__module__": __name__}))
+        for how, held in (("an unsealed instance", unsealed), ("a subclass instance", subclass.model_validate(fields))):
+            built = cls.model_validate(held)
+            assert type(built) is cls and built is not held and built == v, (
+                f"{cls.__qualname__}: {how} passed as itself"
+            )
+        if "identity" in cls.model_fields and cls not in ATTESTED_IDENTITIES:
+            for forged in FORGED_IDENTITIES:
+                planted = BaseModel.model_construct.__func__(cls, **{**fields, "identity": forged})  # type: ignore[attr-defined]
+                try:
+                    cls.model_validate(planted)
+                except ValidationError:
+                    continue
+                raise AssertionError(f"{cls.__qualname__} accepted an unsealed instance with a forged identity")
 
 
 def _reachable_mappings(v: object) -> Iterator[FrozenMapping[Any, Any]]:
@@ -335,7 +354,6 @@ def _writes(v: Frozen) -> Iterator[tuple[str, Callable[[], object]]]:
     yield "private item", functools.partial(operator.setitem, v.__pydantic_private__, "_canonical", "f" * 64)
     yield "__setstate__", functools.partial(v.__setstate__, {"__dict__": dict(v.__dict__)})
     yield "model_config item", functools.partial(operator.setitem, cls.model_config, "frozen", False)
-    yield "model_config rebind", functools.partial(setattr, cls, "model_config", {})
     for m in _reachable_mappings(v):
         yield "FrozenMapping.__init__", functools.partial(FrozenMapping.__init__, m, {})
 

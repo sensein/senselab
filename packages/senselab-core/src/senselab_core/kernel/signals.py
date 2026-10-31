@@ -24,7 +24,7 @@ from pydantic import (
     model_validator,
 )
 from senselab_worker.canonical import canonical_npy_bytes
-from senselab_worker.digest import identity_digest, npy_digest
+from senselab_worker.digest import identity_digest
 from senselab_worker.hashing import content_identity
 
 from senselab_core.kernel._base import (
@@ -34,6 +34,8 @@ from senselab_core.kernel._base import (
     NsArray,
     Rate,
     as_numeric_array,
+    held_npy_digest,
+    require_finite,
     require_ns,
     value_digest,
 )
@@ -107,15 +109,14 @@ def _remember(path: str | os.PathLike[str], stamp: "SourceStamp") -> None:
     _VERIFIED.put((os.fspath(path), stamp.canonical_digest()), True)
 
 
-def _finite_signal(v: object) -> numpy.ndarray:
-    a = as_numeric_array(v, 2)
-    if a.dtype.kind == "f" and not numpy.isfinite(a).all():
-        raise ValueError("signal samples must be finite; NaN and infinite samples are refused")
-    return a
+SignalArray = Annotated[
+    numpy.ndarray,
+    BeforeValidator(lambda v: require_finite(as_numeric_array(v, 2), "signal samples", nan_is_missing=True)),
+]
+"""A frozen integer or float array of shape `(channels, samples)`: no infinite sample; a NaN marks a missing one.
 
-
-SignalArray = Annotated[numpy.ndarray, BeforeValidator(_finite_signal)]
-"""A frozen integer or float array of shape `(channels, samples)` whose samples are all finite."""
+A NaN is held as the one quiet NaN without payload. A regular group refuses NaN; an irregular group holds it.
+"""
 
 
 class StaleSource(RuntimeError):
@@ -183,7 +184,8 @@ def _opened(path: str | os.PathLike[str]) -> Iterator[tuple[soundfile.SoundFile,
     """
     with open(path, "rb") as raw:
         st = os.fstat(raw.fileno())
-        content = content_identity(path)["root"]
+        content = content_identity(raw)["root"]
+        raw.seek(0)
         after = os.fstat(raw.fileno())
         if (after.st_size, after.st_mtime_ns) != (st.st_size, st.st_mtime_ns):
             raise StaleSource(f"{path} changed while it was read")
@@ -264,7 +266,7 @@ class RegularGroup(Frozen):
             taken = SourceStamp.of(data["source"])
             _remember(data["source"], taken)
             return {**data, "source_stamp": taken}
-        stamp = supplied if isinstance(supplied, SourceStamp) else SourceStamp.model_validate(supplied)
+        stamp = SourceStamp.model_validate(supplied)
         stamp.checked(data["source"])
         return {**data, "source_stamp": stamp}
 
@@ -275,6 +277,7 @@ class RegularGroup(Frozen):
         if self.data is not None:
             if self.source_stamp is not None:
                 raise ValueError("a source stamp belongs to a source group, not to held data")
+            require_finite(self.data, "a regular group's samples")
             rows = self.data.shape[0]
         else:
             assert self.source_stamp is not None
@@ -303,7 +306,7 @@ class RegularGroup(Frozen):
 
         Raises:
             TypeError: if a bound is not an integer.
-            ValueError: if `start_ns` is negative or `end_ns < start_ns`.
+            ValueError: if `start_ns` is negative or `end_ns < start_ns`, or a decoded sample is not finite.
             StaleSource: if the source file changed since it was opened.
         """
         start = 0 if start_ns is None else require_ns(start_ns, "start_ns")
@@ -327,11 +330,14 @@ class RegularGroup(Frozen):
                 return numpy.zeros((len(self.channels), 0), dtype=AUDIO_DTYPE)
             f.seek(first)
             samples = f.read(count, dtype="float32", always_2d=True)
-        return numpy.ascontiguousarray(samples.T)
+        return require_finite(samples.T, f"samples decoded from {self.source}")
 
 
 class IrregularGroup(Frozen):
-    """Channels sampled together at the strictly increasing times `timestamps_ns`, one per `data` column."""
+    """Channels sampled together at the strictly increasing times `timestamps_ns`, one per `data` column.
+
+    A NaN in `data` marks a sample missing from its channel at that time.
+    """
 
     channels: tuple[ChannelInfo, ...] = Field(min_length=1)
     timestamps_ns: NsArray
@@ -471,7 +477,7 @@ class Audio(Recording):
         group = _audio_group(groups)
         if group.data is None:
             return "content:" + _source_root(group)
-        npy = npy_digest("npy@1", group.data)
+        npy = held_npy_digest(group.data)
         return "content:" + identity_digest("audio@3", {"npy": npy, "sampling_rate": group.sampling_rate})
 
     @classmethod
@@ -529,11 +535,8 @@ class Audio(Recording):
         if x.dtype.name not in SIGNAL_DTYPES:
             raise ValueError(f"audio samples must be one of {sorted(SIGNAL_DTYPES)}, got {x.dtype}")
         scale = SIGNAL_DTYPES[x.dtype.name]
-        if scale is None and not numpy.isfinite(x).all():
-            raise ValueError("audio samples must be finite; NaN and infinite samples are refused")
-        with numpy.errstate(over="ignore"):
+        with numpy.errstate(over="ignore", invalid="ignore"):
             held = x.astype(AUDIO_DTYPE) if scale is None else x.astype(AUDIO_DTYPE) / AUDIO_DTYPE.type(scale)
-        if not numpy.isfinite(held).all():
-            raise ValueError("audio samples must lie within float32 full scale; a sample overflows float32")
+        held = require_finite(held, "audio samples, as float32")
         group = RegularGroup(channels=cls._channels(x.shape[0]), sampling_rate=sampling_rate, data=held)
         return cls._of(group)

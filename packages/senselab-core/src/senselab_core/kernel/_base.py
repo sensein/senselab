@@ -1,7 +1,9 @@
 """Shared base model and field types of the kernel."""
 
 import math
-from collections.abc import Callable, Iterator, Mapping
+import threading
+import weakref
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import Annotated, Any, NoReturn, Self, TypeVar
 
@@ -19,9 +21,8 @@ from pydantic import (
     ValidationError,
     ValidatorFunctionWrapHandler,
 )
-from pydantic._internal._model_construction import ModelMetaclass
-from senselab_worker.canonical import Tokeniser
-from senselab_worker.digest import identity_digest
+from senselab_worker.canonical import ARRAY_TOKEN, QUIET_NAN_BITS, Recurse, Tokeniser, Walk
+from senselab_worker.digest import identity_digest, npy_digest
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -71,8 +72,20 @@ class FrozenMapping(Mapping[K, V]):
         return type(self), (dict(self._items),)
 
 
+def is_frozen(a: numpy.ndarray) -> bool:
+    """Whether `a` is a plain C-order little-endian array whose `.base` chain ends in an immutable `bytes` object."""
+    if type(a) is not numpy.ndarray or not a.flags.c_contiguous or a.dtype.byteorder == ">":
+        return False
+    node: object = a
+    while isinstance(node, numpy.ndarray):
+        if node.flags.writeable:
+            return False
+        node = node.base
+    return type(node) is bytes
+
+
 def frozen_array(a: object) -> numpy.ndarray:
-    """Return a C-order little-endian copy of `a` whose buffer is an immutable `bytes` object.
+    """Return `a` if it `is_frozen`, otherwise a C-order little-endian copy whose buffer is an immutable `bytes` object.
 
     Neither the returned array nor any array on its `.base` chain can be made writeable.
 
@@ -82,12 +95,44 @@ def frozen_array(a: object) -> numpy.ndarray:
     """
     if isinstance(a, numpy.ndarray) and type(a) is not numpy.ndarray:
         raise ValueError(f"not a plain numpy.ndarray: {type(a).__module__}.{type(a).__qualname__}")
+    if isinstance(a, numpy.ndarray) and is_frozen(a):
+        return a
     x = numpy.asarray(a)
     if x.dtype.hasobject:
         raise ValueError(f"an array of Python objects has no bytes to own: {x.dtype}")
     dtype = x.dtype.newbyteorder("<")
     data = numpy.ascontiguousarray(x, dtype=dtype).tobytes(order="C")
     return numpy.frombuffer(data, dtype=dtype).reshape(x.shape)
+
+
+_NPY_DIGESTS: dict[int, str] = {}
+_NPY_LOCK = threading.Lock()
+
+
+def _forget(key: int) -> None:
+    with _NPY_LOCK:
+        _NPY_DIGESTS.pop(key, None)
+
+
+def held_npy_digest(a: numpy.ndarray) -> str:
+    """Return `npy_digest("npy@1", a)`, computed once per frozen array (`is_frozen`) and reused while it lives."""
+    if not is_frozen(a):
+        return npy_digest("npy@1", a)
+    key = id(a)
+    with _NPY_LOCK:
+        held = _NPY_DIGESTS.get(key)
+    if held is not None:
+        return held
+    digest = npy_digest("npy@1", a)
+    with _NPY_LOCK:
+        if key not in _NPY_DIGESTS:
+            _NPY_DIGESTS[key] = digest
+            weakref.finalize(a, _forget, key)
+    return digest
+
+
+def _array_token(a: numpy.ndarray, recurse: Recurse, path: str) -> object:
+    return {ARRAY_TOKEN: held_npy_digest(a)}
 
 
 def _value_family(v: object) -> tuple[str | None, object] | None:
@@ -108,7 +153,7 @@ def _fields(v: "Frozen") -> dict[str, object]:
     return {name: getattr(v, name) for name in type(v).model_fields}
 
 
-_TOKENISER = Tokeniser(extra=_value_family)
+_TOKENISER = Tokeniser(array=_array_token, extra=_value_family)
 
 
 def value_digest(type_name: str, fields: Mapping[str, object]) -> str:
@@ -139,20 +184,53 @@ def _rebuild(cls: type[F], fields: dict[str, Any]) -> F:
     return cls.model_validate(fields)
 
 
-class SealedDict(dict[str, Any]):
-    """The `__dict__` of a built `Frozen` value: every mutating method raises `TypeError`."""
+class FrozenDict(dict[str, Any]):
+    """A read-only `dict`: every mutating method raises `TypeError`; copies are the object itself.
+
+    It is the `__dict__` of a built `Frozen` value and the object form of a provenance record.
+    """
 
     __slots__ = ()
 
     def _refuse(self, *args: object, **kwargs: object) -> NoReturn:
-        raise TypeError("a Frozen value's fields are read-only")
+        raise TypeError("a FrozenDict is read-only")
 
-    __setitem__ = __delitem__ = __ior__ = _refuse
-    clear = pop = popitem = setdefault = update = _refuse
+    __setitem__ = __delitem__ = __ior__ = _refuse  # type: ignore[assignment]
+    clear = pop = popitem = setdefault = update = _refuse  # type: ignore[assignment]
+
+    def __reduce__(self) -> tuple[type["FrozenDict"], tuple[dict[str, Any]]]:
+        """Pickle as a new read-only mapping of the same items."""
+        return type(self), (dict(self),)
+
+    def __copy__(self) -> "FrozenDict":
+        """Return `self`, which cannot change."""
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "FrozenDict":
+        """Return `self`; a deep copy is only as deep as what it holds, which the holder keeps read-only."""
+        return self
+
+
+def thawed(value: object, walk: Walk | None = None) -> Any:  # noqa: ANN401
+    """Return `value` with every `Mapping` as a `dict` and every `list` or `tuple` as a `list`.
+
+    A container shared by several parents is thawed once per depth, through the shared guard.
+
+    Raises:
+        ValueError: if a container contains itself or nests deeper than `MAX_DEPTH`.
+    """
+    walk = Walk() if walk is None else walk
+    if isinstance(value, Mapping):
+        items = value
+        return walk.enter(value, lambda: {k: thawed(x, walk) for k, x in items.items()})
+    if isinstance(value, (list, tuple)):
+        elements: Sequence[object] = value
+        return walk.enter(value, lambda: [thawed(x, walk) for x in elements])
+    return value
 
 
 def _is_sealed(v: "Frozen") -> bool:
-    return type(object.__getattribute__(v, "__dict__")) is SealedDict
+    return type(object.__getattribute__(v, "__dict__")) is FrozenDict
 
 
 def _seal(v: "Frozen") -> None:
@@ -162,44 +240,40 @@ def _seal(v: "Frozen") -> None:
     private = MappingProxyType(dict(v._derived()))
     object.__setattr__(v, "__pydantic_private__", private)
     object.__setattr__(v, "__pydantic_fields_set__", frozenset(object.__getattribute__(v, "__pydantic_fields_set__")))
-    object.__setattr__(v, "__dict__", SealedDict(object.__getattribute__(v, "__dict__")))
+    object.__setattr__(v, "__dict__", FrozenDict(object.__getattribute__(v, "__dict__")))
 
 
-class _FrozenMeta(ModelMetaclass):
-    """The metaclass of `Frozen`: a class's `model_config` is a read-only mapping that cannot be rebound."""
+def _held_fields(cls: type["Frozen"], data: object) -> object:
+    """Return what `cls` validates: a sealed instance of exactly `cls` as itself, any other model as its fields.
 
-    def __new__(mcs, name: str, bases: tuple[type, ...], namespace: dict[str, Any], **kwargs: Any) -> type:  # noqa: ANN401
-        """Build the model class, then hold its config as a read-only mapping."""
-        cls = super().__new__(mcs, name, bases, namespace, **kwargs)
-        type.__setattr__(cls, "model_config", MappingProxyType(dict(cls.model_config)))  # type: ignore[attr-defined]
-        return cls
-
-    def __setattr__(cls, name: str, value: object) -> None:
-        """Refuse rebinding `model_config`; set any other class attribute."""
-        if name == "model_config":
-            raise AttributeError(f"{cls.__name__}.model_config is read-only")
-        super().__setattr__(name, value)
-
-    def __delattr__(cls, name: str) -> None:
-        """Refuse deleting `model_config`; delete any other class attribute."""
-        if name == "model_config":
-            raise AttributeError(f"{cls.__name__}.model_config is read-only")
-        super().__delattr__(name)
+    Raises:
+        ValueError: for anything that is neither a mapping nor a pydantic model.
+    """
+    if type(data) is cls and _is_sealed(data):  # type: ignore[arg-type]
+        return data
+    if isinstance(data, BaseModel):
+        held = object.__getattribute__(data, "__dict__")
+        return {name: held[name] for name in cls.model_fields if name in held}
+    if isinstance(data, Mapping):
+        return data
+    raise ValueError(f"{cls.__name__} is built from a mapping of its fields, not from a {type(data).__qualname__}")
 
 
-class Frozen(BaseModel, metaclass=_FrozenMeta):
+class Frozen(BaseModel):
     """Immutable pydantic model that may hold numpy arrays.
 
     Every array a value holds is a `frozen_array`. A value is built only by validating a mapping of
-    its fields (`__init__`, `model_validate`, `model_validate_json`, nested validation); validation
-    of any other object, `from_attributes` included, is refused, and an instance of the type passes
-    as itself. Values compare and hash by `canonical_digest`, computed when the value is built.
-    Every copy (pickle, `copy`, `deepcopy`, `model_copy`, `__setstate__` on a blank instance) is
-    rebuilt through `model_validate`, so it runs every validator. `model_construct` is refused.
+    its fields (`__init__`, `model_validate`, `model_validate_json`, nested validation). A sealed
+    instance of exactly the type passes as itself; any other model (an unsealed one, one made by
+    `BaseModel.model_construct`, a subclass) is validated again from its fields as the type; any other
+    object, `from_attributes` included, is refused. Values compare and hash by `canonical_digest`,
+    computed when the value is built. Every copy (pickle, `copy`, `deepcopy`, `model_copy`,
+    `__setstate__` on a blank instance) is rebuilt through `model_validate`, so it runs every
+    validator. `model_construct` is refused. Validation errors do not repeat their input.
 
     A built value is read-only: attribute assignment and deletion raise `ValidationError`, its
-    `__dict__` and private values are read-only mappings, `__setstate__` on it raises `TypeError`, and
-    the class's `model_config` can be neither changed nor rebound.
+    `__dict__` is a `FrozenDict`, its private values a read-only mapping, `__setstate__` on it raises
+    `TypeError`, and the class's `model_config` is a read-only mapping.
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True, extra="forbid", hide_input_in_errors=True)
@@ -210,16 +284,18 @@ class Frozen(BaseModel, metaclass=_FrozenMeta):
         inner = handler(source)
 
         def build(data: object, validate: ValidatorFunctionWrapHandler) -> object:
-            if not isinstance(data, (Mapping, cls)):
-                raise ValueError(
-                    f"{cls.__name__} is built from a mapping of its fields, not from a {type(data).__qualname__}"
-                )
-            value = validate(data)
+            value = validate(_held_fields(cls, data))
             if isinstance(value, Frozen):
                 _seal(value)
             return value
 
         return {"type": "function-wrap", "function": {"type": "no-info", "function": build}, "schema": inner}
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
+        """Hold the subclass's config as a read-only mapping."""
+        super().__pydantic_init_subclass__(**kwargs)
+        cls.model_config = MappingProxyType(dict(cls.model_config))  # type: ignore[assignment]
 
     def _derived(self) -> Mapping[str, object]:
         """Return the private values a built value holds; a subclass extends this mapping."""
@@ -278,7 +354,7 @@ class Frozen(BaseModel, metaclass=_FrozenMeta):
         return type(self).model_validate(self.model_dump())
 
     def __deepcopy__(self, memo: dict[int, Any] | None = None) -> Self:
-        """Return a copy rebuilt through `model_validate`; held arrays are copied by validation."""
+        """Return a copy rebuilt through `model_validate`; a held array that `is_frozen` is shared, not copied."""
         copied = type(self).model_validate(self.model_dump())
         if memo is not None:
             memo[id(self)] = copied
@@ -305,6 +381,9 @@ class Frozen(BaseModel, metaclass=_FrozenMeta):
         raise TypeError("Frozen values are built through validation")
 
 
+Frozen.model_config = MappingProxyType(dict(Frozen.model_config))  # type: ignore[assignment]
+
+
 def _numpy_int_to_int(v: object) -> object:
     return int(v) if isinstance(v, numpy.integer) else v
 
@@ -320,6 +399,30 @@ def _finite(v: float) -> float:
     if not math.isfinite(v):
         raise ValueError(f"must be finite, got {v}")
     return v
+
+
+def require_finite(a: numpy.ndarray, what: str, *, nan_is_missing: bool = False) -> numpy.ndarray:
+    """Return a frozen copy of `a` with no infinite value and, unless `nan_is_missing`, no NaN.
+
+    With `nan_is_missing`, a NaN marks a missing sample and is held as the one quiet NaN without payload
+    (`canonical.QUIET_NAN_BITS`), whatever its sign or payload.
+
+    Raises:
+        ValueError: naming `what`, on an infinite value, or on a NaN unless `nan_is_missing`.
+    """
+    held = frozen_array(a)
+    if held.dtype.kind != "f":
+        return held
+    if numpy.isinf(held).any():
+        raise ValueError(f"{what} must be finite; infinite values are refused")
+    nan = numpy.isnan(held)
+    if not nan.any():
+        return held
+    if not nan_is_missing:
+        raise ValueError(f"{what} must be finite; NaN values are refused")
+    out = numpy.array(held, copy=True)
+    out.view(f"<u{out.dtype.itemsize}")[nan] = QUIET_NAN_BITS[out.dtype.itemsize]
+    return frozen_array(out)
 
 
 def _plain_array(v: object) -> numpy.ndarray:

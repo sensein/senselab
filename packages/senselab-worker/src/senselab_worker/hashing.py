@@ -2,7 +2,7 @@
 
 import os
 from pathlib import PurePath
-from typing import Iterator, Sequence, TypedDict
+from typing import BinaryIO, Iterator, Sequence, TypedDict
 
 from senselab_worker import _raw_digest
 from senselab_worker.canonical import canonical_text, utf16_sort_key
@@ -22,16 +22,23 @@ class ContentId(TypedDict):
     root: str
 
 
-def _read_chunks(path: str | os.PathLike[str], chunk_size: int) -> Iterator[bytes]:
+def _read_chunks(source: "str | os.PathLike[str] | BinaryIO", chunk_size: int) -> Iterator[bytes]:
     if chunk_size < 1:
         raise ValueError(f"chunk_size must be at least 1 byte, got {chunk_size}")
-    with open(path, "rb") as f:
+    if not isinstance(source, (str, os.PathLike)):
+        while chunk := source.read(chunk_size):
+            yield chunk
+        return
+    with open(source, "rb") as f:
         while chunk := f.read(chunk_size):
             yield chunk
 
 
-def content_identity(path: str | os.PathLike[str], *, chunk_size: int = DEFAULT_CHUNK_SIZE) -> ContentId:
-    """Return the chunked identity of a file, read one chunk at a time.
+def content_identity(source: "str | os.PathLike[str] | BinaryIO", *, chunk_size: int = DEFAULT_CHUNK_SIZE) -> ContentId:
+    """Return the chunked identity of a file, read one chunk at a time: the file at a path, or an open binary file.
+
+    An open file is read from its current position to its end, so a caller that decodes the same open
+    file hashes the bytes it decodes.
 
     `chunks` holds the sha256 hex of each consecutive `chunk_size`-byte chunk (the last may be shorter;
     an empty file has none). `root` is `identity_digest("content-root@2", {"chunk_size": chunk_size,
@@ -40,7 +47,7 @@ def content_identity(path: str | os.PathLike[str], *, chunk_size: int = DEFAULT_
     Raises:
         ValueError: if `chunk_size` is below 1.
     """
-    chunks = [_raw_digest.bytes_digest("file@1", chunk) for chunk in _read_chunks(path, chunk_size)]
+    chunks = [_raw_digest.bytes_digest("file@1", chunk) for chunk in _read_chunks(source, chunk_size)]
     return {
         "algo": "sha256",
         "chunk_size": chunk_size,

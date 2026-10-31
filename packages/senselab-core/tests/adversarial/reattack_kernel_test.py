@@ -93,8 +93,6 @@ def test_xk4_config_private_state_and_dict_cannot_change_a_value() -> None:
     other = Span(start_ns=0, end_ns=20, clock_id="c")
     with pytest.raises(TypeError):
         Span.model_config["frozen"] = False  # type: ignore[index]
-    with pytest.raises(AttributeError):
-        Span.model_config = {}  # type: ignore[misc]
     with pytest.raises(ValidationError):
         span.end_ns = -100  # type: ignore[misc]
     with pytest.raises(ValidationError):
@@ -276,3 +274,78 @@ def test_xk12_small_loosenesses_are_refused() -> None:
         env_lock="l", platform="p", wheel_set="w", numerics={}, decoder=None, driver={}, host="h", protocol="1"
     )
     assert acceptable(context, context, "equivalent", backend="b")
+
+
+@pytest.mark.logic
+def test_xk1_a_nested_unsealed_or_subclass_instance_is_validated_again(tmp_path: Path) -> None:
+    """An instance built without validation, or of a subclass with other validators, cannot carry a forged identity."""
+    from pydantic import BaseModel
+
+    path = _wav(tmp_path / "a.wav")
+    real = Audio.from_path(path)
+    group = real.groups["audio"]
+    assert isinstance(group, RegularGroup) and group.source_stamp is not None
+    forged_stamp = BaseModel.model_construct.__func__(  # type: ignore[attr-defined]
+        type(group.source_stamp), **{**dict(group.source_stamp.__dict__), "content": "0" * 64}
+    )
+    planted = BaseModel.model_construct.__func__(  # type: ignore[attr-defined]
+        RegularGroup, **{**dict(group.__dict__), "source_stamp": forged_stamp}
+    )
+    with pytest.raises((ValidationError, StaleSource)):
+        Audio(groups={"audio": planted}, anchor=real.anchor)
+
+    class EvilAudio(Audio):
+        @classmethod
+        def identity_of(cls, groups: object) -> str:  # type: ignore[override]
+            return "content:" + "0" * 64
+
+    evil = EvilAudio(groups=dict(real.groups), anchor=real.anchor)  # type: ignore[call-arg]
+    assert evil.identity == "content:" + "0" * 64
+    with pytest.raises(ValidationError):
+        Audio.model_validate(evil)
+    unsealed = BaseModel.model_construct.__func__(Span, start_ns=5, end_ns=1, clock_id="c")  # type: ignore[attr-defined]
+    with pytest.raises(ValidationError):
+        Span.model_validate(unsealed)
+
+
+@pytest.mark.logic
+def test_audio_refuses_nan_of_either_sign_and_events_hold_one_nan() -> None:
+    """Audio refuses NaN whatever its sign or payload; an event value holding NaN has one digest across them."""
+    nan = numpy.array([0x7FC00000, 0], dtype="<u4").view("<f4")
+    negative_nan = numpy.array([0xFFC00001, 0], dtype="<u4").view("<f4")
+    for samples in (nan, negative_nan):
+        with pytest.raises(ValueError, match="NaN"):
+            Audio.from_array(samples, RATE)
+    ns = numpy.array([0, 1])
+    a, b = (Events(time_ns=ns, label=numpy.array(["a", "b"]), value=v, clock_id="c") for v in (nan, negative_nan))
+    assert a == b and a.canonical_digest() == b.canonical_digest()
+
+
+@pytest.mark.logic
+def test_a_float_wav_holding_nan_is_refused_on_decode(tmp_path: Path) -> None:
+    """A file-backed audio's samples are checked as decoded, as held samples are when built."""
+    path = tmp_path / "nan.wav"
+    samples = numpy.zeros(64, dtype=numpy.float32)
+    samples[10] = numpy.nan
+    soundfile.write(path, samples, RATE, subtype="FLOAT")
+    group = Audio.from_path(path).groups["audio"]
+    assert isinstance(group, RegularGroup)
+    with pytest.raises(ValueError, match="NaN"):
+        group.read()
+    assert group.read(0, 10 * 10**9 // RATE).shape == (1, 10)
+
+
+@pytest.mark.logic
+def test_an_irregular_group_holds_nan_as_the_one_missing_marker() -> None:
+    """NaN of any sign or payload in an irregular group is held as the quiet NaN without payload; inf is refused."""
+    from senselab_core.kernel.signals import ChannelInfo, IrregularGroup
+
+    channel = (ChannelInfo(name="x", type="pose", units="px"),)
+    nans = numpy.array([[1.0, 0.0, 0.0]], dtype=numpy.float64)
+    nans.view("<u8")[0, 1] = 0xFFF8000000000001
+    nans.view("<u8")[0, 2] = 0x7FF8000000000000
+    group = IrregularGroup(channels=channel, timestamps_ns=numpy.array([0, 5, 9]), data=nans)
+    bits = group.data.view("<u8")[0]
+    assert bits[1] == bits[2] == 0x7FF8000000000000
+    with pytest.raises(ValidationError):
+        IrregularGroup(channels=channel, timestamps_ns=numpy.array([0, 5]), data=numpy.array([[1.0, numpy.inf]]))
