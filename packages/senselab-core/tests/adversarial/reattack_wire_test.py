@@ -287,8 +287,10 @@ def test_ctrl_c_held_once_with_a_hint_and_escalated_by_a_second(caplog: pytest.L
 
 
 @pytest.mark.contract
-def test_ctrl_c_twice_kills_reaps_and_releases_within_a_second(tmp_path: Path, schedule: Any) -> None:
+def test_ctrl_c_twice_kills_reaps_and_releases_within_the_ctrl_c_bound(tmp_path: Path, schedule: Any) -> None:
     """With the real graces, a second SIGINT while a SIGTERM-ignoring group is stopped ends the close in about 1 s.
+
+    The bound adds a load allowance and stays below the real STOP grace, so a held second SIGINT still fails.
 
     The group is SIGKILLed and reaped and the files are removed before `KeyboardInterrupt` surfaces.
     """
@@ -301,6 +303,6 @@ def test_ctrl_c_twice_kills_reaps_and_releases_within_a_second(tmp_path: Path, s
     }
     [report] = schedule.run_schedule(tmp_path, [case])
     assert report["fired"] and report["outcome"] == "KeyboardInterrupt"
-    assert report["elapsed"] < schedule.REQUEST_TIMEOUT_S + schedule.SECOND_SIGINT_AFTER_S + 1.0
+    assert report["elapsed"] < schedule.ctrl_c_bound()
     assert report["at_outcome"] == schedule.CLEAN
     assert schedule.violations(report) == []

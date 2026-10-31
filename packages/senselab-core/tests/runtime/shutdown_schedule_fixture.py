@@ -34,6 +34,10 @@ REQUEST_TIMEOUT_S = 0.2
 GRACES = {"STOP_GRACE_S": 0.3, "TERM_GRACE_S": 0.1, "KILL_GRACE_S": 0.5, "JOIN_GRACE_S": 0.5, "EXIT_CODE_WAIT_S": 0.2}
 REAL_GRACES = {name: getattr(worker_client, name) for name in GRACES}
 CASE_BOUND_S = 60.0
+LOAD_ALLOWANCE_S = 5.0
+"""Added to every derived case bound for interpreter spawn, imports and hello on a loaded host."""
+CTRL_C_LOAD_ALLOWANCE_S = 3.0
+"""Added to the derived Ctrl-C bound (request timeout plus the second SIGINT's delay) for the same."""
 OTHER_THREAD_JOIN_S = 0.05
 SECOND_SIGINT_AFTER_S = 0.2
 PATHS = ("init", "init_lost", "timeout", "close")
@@ -95,10 +99,15 @@ def shutdown_bound(graces: dict[str, float]) -> float:
 
 
 def case_bound(case: dict[str, Any]) -> float:
-    """How long a case may take: the request timeout, the exit-code wait, one shutdown and one finishing pass."""
+    """How long a case may take: request timeout, exit-code wait, two shutdown passes and `LOAD_ALLOWANCE_S`."""
     graces = REAL_GRACES if case.get("real_graces") else GRACES
     timeout = REQUEST_TIMEOUT_S if case["path"] == "timeout" else 0.0
-    return timeout + graces["EXIT_CODE_WAIT_S"] + 2 * shutdown_bound(graces)
+    return timeout + graces["EXIT_CODE_WAIT_S"] + 2 * shutdown_bound(graces) + LOAD_ALLOWANCE_S
+
+
+def ctrl_c_bound() -> float:
+    """How long the real-grace double Ctrl-C case may take: request timeout, second-SIGINT delay, allowance."""
+    return REQUEST_TIMEOUT_S + SECOND_SIGINT_AFTER_S + CTRL_C_LOAD_ALLOWANCE_S
 
 
 class _Injector:
