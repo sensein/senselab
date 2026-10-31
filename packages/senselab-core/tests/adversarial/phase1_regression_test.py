@@ -211,8 +211,12 @@ def _budget_main(budget: ModuleType, root: Path, allow: Path) -> int:
     frozen = budget.measure(
         budget.frozen_objects(root, budget.FREEZE_BRANCH), budget.parse_allowlist(allow.read_text()), {}
     )
+    data: dict[str, Any] = {name: {"measured": frozen[name], "headroom": 2} for name in budget.CAPS}
+    if hasattr(budget, "freeze_problems"):
+        commit = subprocess.run(["git", "rev-parse", budget.FREEZE_BRANCH], cwd=root, capture_output=True, text=True)
+        data["freeze_commit"] = commit.stdout.strip()
     policy = root / "policy.yaml"
-    policy.write_text(yaml.safe_dump({name: {"measured": frozen[name], "headroom": 2} for name in budget.CAPS}))
+    policy.write_text(yaml.safe_dump(data))
     return int(budget.main(root, allow, policy))
 
 

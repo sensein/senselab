@@ -1,20 +1,20 @@
 """Fail when a tracked object breaks the data-policy budget, which is bound to the 1.x freeze.
 
-Every entry of the git index is an object of the budget, read from the index rather than the work tree, so a file
-missing from the checkout or checked out differently is measured as it will be committed:
+Every entry of the git index is an object of the budget, read from the index rather than the work tree:
 
 - a symlink (mode 120000), a submodule (mode 160000) or any other non-regular entry fails, without exception;
 - a code file (`CODE_SUFFIXES`) over the code-file cap fails, and every other file over the data-file cap fails
   unless it is allowlisted or is a generated file named in the policy;
 - code files, data files and the data files under the test trees are each capped in total across the whole tree;
   allowlisted files are not counted, generated files are;
-- each cap is the policy's headroom times a quantity this script measures on the freeze branch, and the policy
-  records that measurement, which must equal the measurement: the caps cannot move without the headroom moving;
-- a generated-file exemption names one exact path that exists in the freeze, and the file must parse as the kind
-  of lock the policy names;
-- the allowlist lines are `<path>\t<sha256>\t<bytes>`. Each path must exist in the freeze branch with the same
-  content hash, the recorded size may not exceed the frozen size, and the indexed file must still hash to the
-  recorded value, so an entry can neither be added after the freeze nor be replaced by other bytes.
+- the freeze is the commit the policy records (`freeze_commit`); a freeze branch that resolves elsewhere fails;
+- each cap is the policy's headroom times a quantity this script measures on the freeze commit, and the policy
+  records that measurement, which must equal the measurement;
+- a generated-file exemption names one exact path that exists in the freeze, and the file must parse, line by line
+  or table by table, as the kind of lock the policy names;
+- the allowlist lines are `<path>\t<sha256>\t<bytes>`. Each path must exist in the freeze with the same content
+  hash, the recorded size may not exceed the frozen size, and the indexed file must still hash to the recorded
+  value.
 
 Usage::
 
@@ -35,6 +35,8 @@ from pathlib import Path
 from typing import NamedTuple
 
 import yaml
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWLIST = Path(__file__).resolve().parent / "fixture_budget_allowlist.txt"
@@ -56,6 +58,7 @@ CAPS = (
 LOCK_KINDS = ("uv-lock", "venv-lock")
 _FIX = "generate it with senselab_core.testing.synth, or pull it through a data manifest"
 _SHA = re.compile(r"[0-9a-f]{64}")
+_COMMIT = re.compile(r"[0-9a-f]{40}")
 _GLOB = re.compile(r"[*?\[\]]")
 
 
@@ -90,6 +93,7 @@ class Cap(NamedTuple):
 class Policy(NamedTuple):
     """The byte policy read from `data/fixture_budget.yaml`."""
 
+    freeze_commit: str
     caps: dict[str, Cap]
     generated_files: dict[str, str]
 
@@ -111,13 +115,16 @@ def load_policy(path: Path = POLICY) -> Policy:
     """Read the policy file.
 
     Raises:
-        ValueError: if a cap is missing or malformed, a generated file is not an exact path mapped to a known lock
-            kind, or a key is unknown.
+        ValueError: if `freeze_commit` is not a commit id, a cap is missing or malformed, a generated file is not an
+            exact path mapped to a known lock kind, or a key is unknown.
     """
     data = yaml.safe_load(path.read_text())
-    unknown = set(data) - {*CAPS, "generated_files", "derivation"}
+    unknown = set(data) - {*CAPS, "freeze_commit", "generated_files", "derivation"}
     if unknown:
         raise ValueError(f"{path}: unknown keys {sorted(unknown)}")
+    commit = data.get("freeze_commit")
+    if not isinstance(commit, str) or not _COMMIT.fullmatch(commit):
+        raise ValueError(f"{path}: freeze_commit must be a 40-hex commit id, got {commit!r}")
     caps = {name: _cap(path, name, data.get(name)) for name in CAPS}
     generated = data.get("generated_files", {})
     if not isinstance(generated, dict):
@@ -127,7 +134,7 @@ def load_policy(path: Path = POLICY) -> Policy:
             raise ValueError(f"{path}: generated file {rel!r} is not one exact repository path")
         if kind not in LOCK_KINDS:
             raise ValueError(f"{path}: generated file {rel!r} has kind {kind!r}, not one of {LOCK_KINDS}")
-    return Policy(caps, dict(generated))
+    return Policy(commit, caps, dict(generated))
 
 
 def in_test_tree(rel: str) -> bool:
@@ -161,22 +168,26 @@ def _git(root: Path, *args: str, stdin: bytes | None = None) -> bytes:
     return subprocess.run(["git", *args], cwd=root, capture_output=True, check=True, input=stdin).stdout
 
 
-def resolve_freeze_ref(root: Path = ROOT) -> str:
-    """The ref of the freeze branch: its remote-tracking ref, and the local branch only when that is absent.
+def freeze_problems(root: Path, commit: str) -> list[str]:
+    """One message per freeze branch ref that resolves to another commit than the recorded `commit`.
 
     Raises:
-        LookupError: if neither exists, naming the fetch that creates it.
+        LookupError: if `commit` is not in the repository, naming the fetch that brings it.
     """
+    present = subprocess.run(["git", "cat-file", "-e", f"{commit}^{{commit}}"], cwd=root, capture_output=True)
+    if present.returncode != 0:
+        raise LookupError(
+            f"the freeze commit {commit} is not available; run: "
+            f"git fetch origin {FREEZE_BRANCH}:refs/remotes/origin/{FREEZE_BRANCH}"
+        )
+    out = []
     for ref in (f"origin/{FREEZE_BRANCH}", FREEZE_BRANCH):
         probe = subprocess.run(
-            ["git", "rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], cwd=root, capture_output=True
+            ["git", "rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], cwd=root, capture_output=True, text=True
         )
-        if probe.returncode == 0:
-            return ref
-    raise LookupError(
-        f"the freeze branch {FREEZE_BRANCH} is not available; run: "
-        f"git fetch origin {FREEZE_BRANCH}:refs/remotes/origin/{FREEZE_BRANCH}"
-    )
+        if probe.returncode == 0 and probe.stdout.strip() != commit:
+            out.append(f"freeze branch {ref} is at {probe.stdout.strip()}, the policy records the freeze {commit}")
+    return out
 
 
 def frozen_objects(root: Path, ref: str) -> list[TrackedObject]:
@@ -227,20 +238,107 @@ def measure(objects: Iterable[TrackedObject], allow: Mapping[str, object], gener
     }
 
 
-def is_lock(data: bytes, kind: str) -> bool:
-    """Whether `data` is a lock file of `kind`: a uv lock (TOML with a version and packages) or a venv lock."""
-    if kind == "venv-lock":
-        lines = data.decode(errors="replace").splitlines()
-        return (
-            len(lines) > 2
-            and lines[0].startswith("# senselab subprocess-venv lock: ")
-            and lines[1].startswith("# requirements-sha256: ")
-        )
-    try:
-        parsed = tomllib.loads(data.decode())
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+_NAME = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?(?:\[[A-Za-z0-9,._-]+\])?"
+_VENV_HEADER = re.compile(r"# [A-Za-z][A-Za-z0-9 -]*: \S.*")
+_VENV_HASH = re.compile(r"\s+--hash=sha256:[0-9a-f]{64}( \\)?")
+_VENV_VIA = re.compile(
+    rf"\s+#(?: via|  )(?: (?P<name>{_NAME})| -[rc] (?P<path>(?:\S+/)?(?:requirements\.in|constraints\.txt)))?"
+)
+_LINE_MAX = 320
+_VENV_EXCLUDED = "# The following packages were excluded from the output:"
+UV_LOCK_KEYS = frozenset(
+    {"version", "revision", "requires-python", "resolution-markers", "supported-markers", "manifest", "options"}
+    | {"conflicts", "package"}
+)
+UV_PACKAGE_KEYS = frozenset(
+    {"name", "version", "source", "dependencies", "optional-dependencies", "dev-dependencies", "metadata"}
+    | {"sdist", "wheels", "resolution-markers"}
+)
+UV_FILE_KEYS = frozenset({"url", "path", "hash", "size", "upload-time"})
+
+
+def _venv_lock(text: str) -> bool:
+    """Whether `text` is a subprocess-venv lock: its header, then requirements with hashes and `via` comments only.
+
+    Each requirement is a pinned (`==`) or direct (`@`) PEP 508 line; each `via` name is a requirement of the file.
+    """
+    lines = text.splitlines()
+    if len(lines) < 3 or not lines[0].startswith("# senselab subprocess-venv lock: "):
         return False
-    return isinstance(parsed.get("version"), int) and isinstance(parsed.get("package"), list)
+    if not re.fullmatch(r"# requirements-sha256: [0-9a-f]{64}", lines[1]):
+        return False
+    body = 0
+    while body < len(lines) and lines[body].startswith("#"):
+        if not _VENV_HEADER.fullmatch(lines[body]):
+            return False
+        body += 1
+    names, vias, previous = set(), set(), ""
+    for line in lines[body:]:
+        if len(line) > _LINE_MAX:
+            return False
+        if not line.strip():
+            continue
+        if line == _VENV_EXCLUDED or (previous in ("excluded", "excluded name") and line.startswith("# ")):
+            if line != _VENV_EXCLUDED:
+                if not re.fullmatch(_NAME, line[2:]):
+                    return False
+                names.add(canonicalize_name(line[2:]))
+            previous = "excluded" if line == _VENV_EXCLUDED else "excluded name"
+            continue
+        if _VENV_HASH.fullmatch(line):
+            if previous not in ("requirement", "hash"):
+                return False
+            previous = "hash"
+            continue
+        via = _VENV_VIA.fullmatch(line)
+        if via:
+            if via.group("name"):
+                vias.add(canonicalize_name(via.group("name").split("[")[0]))
+            previous = "via"
+            continue
+        try:
+            requirement = Requirement(line.removesuffix(" \\"))
+        except ValueError:
+            return False
+        if requirement.url is None and [s.operator for s in requirement.specifier] != ["=="]:
+            return False
+        names.add(canonicalize_name(requirement.name))
+        previous = "requirement"
+    return bool(names) and vias <= names
+
+
+def _uv_lock(text: str) -> bool:
+    """Whether `text` is a uv lock: only uv's tables and keys, each package named, versioned, its files hashed."""
+    try:
+        parsed = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return False
+    packages = parsed.get("package")
+    if set(parsed) - UV_LOCK_KEYS or not isinstance(parsed.get("version"), int) or not isinstance(packages, list):
+        return False
+    for package in packages:
+        if not isinstance(package, dict) or set(package) - UV_PACKAGE_KEYS:
+            return False
+        if not isinstance(package.get("name"), str) or not re.fullmatch(_NAME, package["name"]):
+            return False
+        if "version" in package and not (isinstance(package["version"], str) and len(package["version"]) <= 64):
+            return False
+        files = [*package.get("wheels", []), *([package["sdist"]] if "sdist" in package else [])]
+        for entry in files:
+            if not isinstance(entry, dict) or set(entry) - UV_FILE_KEYS:
+                return False
+            if "hash" in entry and not re.fullmatch(r"sha256:[0-9a-f]{64}", str(entry["hash"])):
+                return False
+    return True
+
+
+def is_lock(data: bytes, kind: str) -> bool:
+    """Whether `data` parses as a lock file of `kind`: a uv lock or a subprocess-venv lock."""
+    try:
+        text = data.decode()
+    except UnicodeDecodeError:
+        return False
+    return _venv_lock(text) if kind == "venv-lock" else _uv_lock(text)
 
 
 def check_policy(policy: Policy, root: Path, ref: str, allow: Mapping[str, object]) -> list[str]:
@@ -336,11 +434,12 @@ def main(root: Path = ROOT, allowlist: Path = ALLOWLIST, policy: Path = POLICY) 
     try:
         allow = parse_allowlist(allowlist.read_text())
         loaded = load_policy(policy)
-        ref = resolve_freeze_ref(root)
+        ref = loaded.freeze_commit
+        violations = freeze_problems(root, ref)
     except (ValueError, LookupError) as e:
         print(e)
         return 1
-    violations = check_allowlist(allow, root, ref) + check_policy(loaded, root, ref, allow)
+    violations += check_allowlist(allow, root, ref) + check_policy(loaded, root, ref, allow)
     violations += check(
         indexed_objects(root),
         allow={p: e.size for p, e in allow.items()},

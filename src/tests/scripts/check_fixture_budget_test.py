@@ -30,6 +30,7 @@ LIMITS = {
     "test_data_total_max_bytes": 2000,
 }
 Obj = budget.TrackedObject
+_VENV_HEAD = f"# senselab subprocess-venv lock: a\n# requirements-sha256: {'0' * 64}\n"
 
 
 def _file(root: Path, name: str, size: int, fill: bytes = b"\0") -> Path:
@@ -59,10 +60,11 @@ def _policy(root: Path, *, generated: dict[str, str] | None = None, measured: di
     allow_path = root / "allow.txt"
     allow = budget.parse_allowlist(allow_path.read_text()) if allow_path.exists() else {}
     generated = generated or {}
-    actual = budget.measure(budget.frozen_objects(root, FREEZE), allow, generated)
+    actual = budget.measure(budget.frozen_objects(root, f"{FREEZE}^{{commit}}"), allow, generated)
     caps = {n: {"measured": (measured or {}).get(n, actual[n]), "headroom": 2} for n in budget.CAPS}
+    commit = _git(root, "rev-parse", f"{FREEZE}^{{commit}}").strip()
     path = root / "policy.yaml"
-    path.write_text(yaml.safe_dump({**caps, "generated_files": generated, "derivation": "test"}))
+    path.write_text(yaml.safe_dump({**caps, "freeze_commit": commit, "generated_files": generated, "derivation": "t"}))
     return path
 
 
@@ -293,12 +295,23 @@ def test_xg10_an_exemption_must_be_a_frozen_lock(
         ("uv-lock", 'version = 1\n[[package]]\nname = "a"\n', True),
         ("uv-lock", "version = 1\n", False),
         ("uv-lock", "not toml [", False),
-        ("venv-lock", "# senselab subprocess-venv lock: a\n# requirements-sha256: b\nc==1\n", True),
+        ("venv-lock", f"{_VENV_HEAD}c==1 \\\n    --hash=sha256:{'a' * 64}\n    # via -r requirements.in\n", True),
         ("venv-lock", "a==1\nb==2\nc==3\n", False),
+        ("venv-lock", f"{_VENV_HEAD}c==1\n# QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=\n", False),
+        ("venv-lock", f"{_VENV_HEAD}c==1\n    #   payload-name\n", False),
+        ("venv-lock", f"{_VENV_HEAD}c>=1\n", False),
+        ("venv-lock", f"{_VENV_HEAD}    --hash=sha256:{'a' * 64}\nc==1\n", False),
+        ("venv-lock", f"{_VENV_HEAD}c==1\n{'x' * 400}\n", False),
+        ("venv-lock", f"{_VENV_HEAD}c==1\n# The following packages were excluded from the output:\n# torch\n", True),
+        ("uv-lock", 'version = 1\npayload = "x"\n[[package]]\nname = "a"\n', False),
+        ("uv-lock", 'version = 1\n[[package]]\nname = "a"\nblob = "x"\n', False),
+        ("uv-lock", 'version = 1\n[[package]]\nname = "a"\nwheels = [{ url = "u", hash = "sha256:x" }]\n', False),
+        ("uv-lock", 'version = 1\n[[package]]\nname = "a b"\n', False),
     ],
 )
-def test_lock_kinds_are_recognised_by_content(kind: str, content: str, ok: bool) -> None:
-    """A uv lock is TOML with a version and packages; a venv lock starts with its two header lines."""
+def test_xg10_lock_kinds_are_parsed_not_spelled(kind: str, content: str, ok: bool) -> None:
+    """A venv lock parses line by line (header, pinned requirements, hashes, `via` names it locks); a uv lock holds
+    only uv's tables and keys."""
     assert budget.is_lock(content.encode(), kind) is ok
 
 
@@ -360,21 +373,27 @@ def test_repository_tracks_no_symlink_or_submodule() -> None:
     assert modes <= budget.REGULAR_MODES
 
 
-def test_a_local_freeze_branch_never_takes_precedence(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """With an `origin/` freeze ref present, entries are bound to it even when the local branch holds more."""
-    name = "src/tests/data_for_testing/added_locally.wav"
-    allow = _repo(tmp_path, {}, {}, _line(name, 500))
-    _git(tmp_path, "update-ref", f"refs/remotes/origin/{FREEZE}", FREEZE)
+def test_xg10_the_freeze_is_a_commit_and_a_moved_branch_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Entries bind to the recorded freeze commit: a branch advanced to admit a file fails, local or origin."""
+    name = "src/tests/data_for_testing/added_later.wav"
+    allow = _repo(tmp_path, {"a.txt": 10}, {}, "")
+    policy = _policy(tmp_path)
+    assert budget.main(tmp_path, allow, policy) == 0
     _git(tmp_path, "checkout", "-q", FREEZE)
     _file(tmp_path, name, 500)
     _git(tmp_path, "add", name)
-    _git(tmp_path, "commit", "-q", "-m", "advance the local branch")
+    _git(tmp_path, "commit", "-q", "-m", "advance the freeze branch")
+    _git(tmp_path, "update-ref", f"refs/remotes/origin/{FREEZE}", FREEZE)
     _git(tmp_path, "checkout", "-q", "main")
+    _file(tmp_path, name, 500)
+    _git(tmp_path, "add", name)
     allow.write_text(_line(name, 500))
-    assert budget.resolve_freeze_ref(tmp_path) == f"origin/{FREEZE}"
-    policy = tmp_path / "policy.yaml"
-    policy.write_text(budget.POLICY.read_text())
-    assert budget.main(tmp_path, allow, policy) == 1 and f"{name}: not in origin/{FREEZE}" in capsys.readouterr().out
+    assert budget.main(tmp_path, allow, policy) == 1
+    out = capsys.readouterr().out
+    assert f"freeze branch origin/{FREEZE} is at" in out and f"freeze branch {FREEZE} is at" in out
+    assert f"{name}: not in" in out
 
 
 def test_main_errors_without_the_freeze_branch(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -394,10 +413,10 @@ def test_allowlist_has_no_dead_entries() -> None:
 
 
 def test_budget_passes_on_current_tree() -> None:
-    """The script exits 0 on the committed tree, which also binds the allowlist and the policy to the freeze branch."""
+    """The script exits 0 on the committed tree, which also binds the allowlist and the policy to the freeze."""
     try:
-        budget.resolve_freeze_ref(budget.ROOT)
+        budget.freeze_problems(budget.ROOT, budget.load_policy().freeze_commit)
     except LookupError:
-        pytest.skip("freeze branch not fetched here; the pre-commit job runs the script with it")
+        pytest.skip("freeze commit not fetched here; the pre-commit job runs the script with it")
     done = subprocess.run([sys.executable, str(_SCRIPT)], capture_output=True, text=True)
     assert done.returncode == 0, done.stdout

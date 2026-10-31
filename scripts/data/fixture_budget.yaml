@@ -1,9 +1,10 @@
+freeze_commit: 19834fdda6854dd6786395b7050f90cd6d41e4db
 code_file_max_bytes:
   measured: 189299
   headroom: 2.77
 code_total_max_bytes:
   measured: 16884936
-  headroom: 1.5
+  headroom: 1.25
 data_file_max_bytes:
   measured: 254841
   headroom: 1.03
@@ -20,8 +21,10 @@ generated_files:
   src/senselab/utils/data/venv_locks/pii-review-vllm.txt: venv-lock
   src/senselab/utils/data/venv_locks/vllm-server.txt: venv-lock
 derivation: |
+  freeze_commit: the commit freeze-1x-2026-10-30 resolved to on 2026-10-31. The freeze is that commit, not the
+  branch: a branch that moves fails the check.
   Every cap is `measured` times `headroom`, rounded down. `measured` is the quantity the cap bounds, measured by
-  scripts/check_fixture_budget.py on the freeze branch freeze-1x-2026-10-30 over every regular file of its tree
+  scripts/check_fixture_budget.py on the freeze commit over every regular file of its tree
   (allowlisted files left out of the data quantities, generated files left out of the largest data file only);
   the script recomputes it on every run and fails if the recorded number differs, so a cap moves only when its
   headroom does.
@@ -30,9 +33,9 @@ derivation: |
   about 512 KiB: hand-written code is never near it, while a committed base64 payload in a .py file (a 5 MB blob
   in a .py was the bypass that motivated the cap) is refused.
   code_total_max_bytes: the code files of the whole tree total 16884936 bytes at the freeze; on 2026-10-31 the
-  index held 18189856 (1.08 times). Headroom 1.5 gives 25327404 bytes, room for the 2.x packages to grow while
-  many code files each just under the per-file cap, each carrying a payload, are refused. Re-measure and lower
-  the headroom when the 1.x tree shrinks.
+  index held 18189856 (1.08 times). Headroom 1.25 gives 21106170 bytes, 2916314 above the index: about 2.9 MB
+  of 2.x growth, and also room for five code files at the per-file cap, each carrying a payload, before the total
+  refuses a sixth. Re-measure and lower the headroom when the 1.x tree shrinks.
   data_file_max_bytes: the largest data file that is neither allowlisted nor generated at the freeze is
   src/senselab/audio/workflows/triage/viewer/recording_vectors_viewer.html at 254841 bytes. Headroom 1.03 gives
   262486 bytes, the 256 KiB per-file limit of the data policy (P-41) with that file inside it.
