@@ -33,7 +33,14 @@ from typing import Any, TypeVar
 
 import numpy
 from pydantic import ValidationError
-from senselab_worker.canonical import canonical_npy_bytes, canonical_scalar, jcs_dumps, jcs_loads, tagged_digest
+from senselab_worker.canonical import (
+    canonical_npy_bytes,
+    canonical_scalar,
+    entered,
+    jcs_dumps,
+    jcs_loads,
+    tagged_digest,
+)
 from senselab_worker.hashing import sha256_bytes
 
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputIdentity, ReusePolicy, acceptable
@@ -80,7 +87,7 @@ class StoredResult:
     policy_used: ReusePolicy
 
 
-def _encode(value: object, arrays: dict[str, bytes]) -> object:
+def _encode(value: object, arrays: dict[str, bytes], active: set[int]) -> object:
     if type(value) is numpy.ndarray:
         data = canonical_npy_bytes(value)
         sha = sha256_bytes(data)
@@ -89,9 +96,11 @@ def _encode(value: object, arrays: dict[str, bytes]) -> object:
     if type(value) is dict:
         if ARRAY_TAG in value:
             raise ValueError(f"{ARRAY_TAG!r} is a reserved key in stored outputs")
-        return {k: _encode(v, arrays) for k, v in value.items()}
+        with entered(value, active):
+            return {k: _encode(v, arrays, active) for k, v in value.items()}
     if type(value) is list or type(value) is tuple:
-        return [_encode(v, arrays) for v in value]
+        with entered(value, active):
+            return [_encode(v, arrays, active) for v in value]
     return canonical_scalar(value)
 
 
@@ -101,7 +110,7 @@ def _tree_identity(tree: object) -> OutputIdentity:
 
 def _serialise(outputs: Mapping[str, object]) -> tuple[object, dict[str, bytes], OutputIdentity]:
     arrays: dict[str, bytes] = {}
-    tree = _encode(dict(outputs), arrays)
+    tree = _encode(dict(outputs), arrays, set())
     return tree, arrays, _tree_identity(tree)
 
 
@@ -110,8 +119,8 @@ def output_identity(outputs: Mapping[str, object]) -> OutputIdentity:
 
     Raises:
         TypeError: on a value that is neither a canonical JSON value nor a plain numpy array.
-        ValueError: on a reserved `$array` key, a value `jcs_dumps` refuses, or an array dtype
-            `canonical_npy_bytes` refuses.
+        ValueError: on a container that contains itself, a reserved `$array` key, a value `jcs_dumps`
+            refuses, or an array dtype `canonical_npy_bytes` refuses.
     """
     return _serialise(outputs)[2]
 
@@ -318,8 +327,8 @@ class ResultStore:
 
         Raises:
             TypeError: on an output that is neither a JSON value nor a numpy array.
-            ValueError: on a reserved `$array` key, a value `jcs_dumps` refuses, or an array dtype
-                `canonical_npy_bytes` refuses.
+            ValueError: on a container that contains itself, a reserved `$array` key, a value
+                `jcs_dumps` refuses, or an array dtype `canonical_npy_bytes` refuses.
             RuntimeError: if the target is still corrupt after `COMMIT_ATTEMPTS` commits.
         """
         tree, arrays, identity = _serialise(outputs)
@@ -358,6 +367,7 @@ class ResultStore:
         prov.was_generated_by(self._result_entity(identity, digest), activity)
 
     def _result_entity(self, identity: OutputIdentity, digest: str) -> str:
+        """Record a result: `checksum_sha256` is the hex of its tagged `output@2` digest, not a file hash."""
         return self.provenance.entity(
             prov_type="artifact",
             extent=None,

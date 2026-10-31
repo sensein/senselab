@@ -10,6 +10,8 @@ import json
 import math
 import struct
 import unicodedata
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Callable, cast
 
 import numpy
@@ -109,13 +111,29 @@ def tagged_digest(tag: str, value: object) -> str:
     return hashlib.sha256(tag.encode("ascii") + b"\x00" + jcs_dumps(value)).hexdigest()
 
 
+@contextmanager
+def entered(container: object, active: set[int]) -> Iterator[None]:
+    """Mark `container` as being encoded for the duration of the block, on the path held in `active`.
+
+    Every encoder that recurses into JSON containers enters each one through this, so a cycle
+    raises the same error wherever values are encoded; a child shared by two parents is not a cycle.
+
+    Raises:
+        ValueError: if `container` is already on the path, that is, it contains itself.
+    """
+    if id(container) in active:
+        raise ValueError(f"a {type(container).__name__} contains itself; JSON has no cycles")
+    active.add(id(container))
+    try:
+        yield
+    finally:
+        active.discard(id(container))
+
+
 def _write(obj: object, out: Callable[[str], object], active: set[int]) -> None:
     t = type(obj)
     if t is list or t is tuple or t is dict:
-        if id(obj) in active:
-            raise ValueError(f"a {t.__name__} contains itself; JSON has no cycles")
-        active.add(id(obj))
-        try:
+        with entered(obj, active):
             if t is dict:
                 _write_object(cast("dict[object, object]", obj), out, active)
             else:
@@ -125,8 +143,6 @@ def _write(obj: object, out: Callable[[str], object], active: set[int]) -> None:
                         out(",")
                     _write(item, out, active)
                 out("]")
-        finally:
-            active.discard(id(obj))
         return
     scalar = canonical_scalar(obj)
     if scalar is None:

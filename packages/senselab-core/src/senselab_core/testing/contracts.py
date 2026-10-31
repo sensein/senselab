@@ -47,8 +47,14 @@ KeyBuilder = Callable[..., LogicalKey]
 HASH_SEEDS: tuple[str, str] = ("1", "2")
 """The `PYTHONHASHSEED` values `key_independent_of_hash_seed` builds a key under."""
 
-VARIED_MODEL = ResolvedModel(ref=ModelRef.parse("contract/model@main"), identity="0" * 40)
-"""The pinned model `key_changes_with_model` puts into a call whose base has none."""
+HASH_SEED_TIMEOUT_S = 120
+"""How long one `key_independent_of_hash_seed` interpreter may take to import and build a key."""
+
+BASE_MODEL = ResolvedModel(ref=ModelRef.parse("contract/model@main"), identity="0" * 40)
+"""The pinned model every key case's base call carries."""
+
+VARIED_MODEL = ResolvedModel(ref=ModelRef.parse("contract/model@main"), identity="1" * 40)
+"""The pinned model `key_changes_with_model` puts in place of `BASE_MODEL`."""
 
 KEY_FORMAT_FIELDS: frozenset[str] = frozenset({"schema_version"})
 """Key fields fixed by the key format rather than by a call; their case varies the key directly."""
@@ -160,11 +166,11 @@ def _license_present(task: TaskSpec, backend: BackendSpec) -> None:
 
 
 def base_call(task: TaskSpec) -> dict[str, Any]:
-    """Return the key builder arguments every key case starts from: default params, no model."""
+    """Return the key builder arguments every key case starts from: default params and `BASE_MODEL`."""
     return {
         "params": task.params(),
         "inputs": {port: "content:" + sha256_bytes(port.encode()) for port in task.inputs},
-        "model": None,
+        "model": BASE_MODEL,
         "profile_slices": {},
     }
 
@@ -298,17 +304,27 @@ def _key_independent_of_hash_seed(build: KeyBuilder, task: TaskSpec, backend: Ba
     }
     digests = {}
     for seed in HASH_SEEDS:
-        proc = subprocess.run(
-            [sys.executable, "-c", _SEED_PROBE],
-            input=json.dumps(spec),
-            env={**os.environ, "PYTHONHASHSEED": seed},
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            proc = _run_seed_probe(spec, seed)
+        except subprocess.TimeoutExpired as err:
+            raise AssertionError(
+                f"building the key under PYTHONHASHSEED={seed} took over {HASH_SEED_TIMEOUT_S} s"
+            ) from err
         assert proc.returncode == 0, f"building the key under PYTHONHASHSEED={seed} failed:\n{proc.stderr}"
         digests[seed] = proc.stdout.strip()
     assert len(set(digests.values())) == 1, f"the key depends on the hash seed: {digests}"
+
+
+def _run_seed_probe(spec: dict[str, Any], seed: str) -> "subprocess.CompletedProcess[str]":
+    return subprocess.run(
+        [sys.executable, "-c", _SEED_PROBE],
+        input=json.dumps(spec),
+        env={**os.environ, "PYTHONHASHSEED": seed},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=HASH_SEED_TIMEOUT_S,
+    )
 
 
 def _content_fault_isolated(task: TaskSpec, backend: BackendSpec) -> None:

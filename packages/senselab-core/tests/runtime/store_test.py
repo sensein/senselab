@@ -476,3 +476,38 @@ def test_a23_get_coerces_policy(tmp_path: Path, policy: object) -> None:
 def test_store_dir_is_format_2() -> None:
     """Changed digests put entries in a new key space."""
     assert STORE_DIR == "store@2"
+
+
+def _cycles() -> list[object]:
+    d: dict[str, object] = {"a": 1}
+    d["self"] = d
+    lst: list[object] = [1]
+    lst.append(lst)
+    deep: list[object] = [{"x": []}]
+    deep[0]["x"].append(deep)  # type: ignore[index]
+    return [d, lst, deep]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("cyclic", _cycles(), ids=["self_dict", "self_list", "through_dict"])
+def test_store_cyclic_output_raises_value_error(tmp_path: Path, cyclic: object) -> None:
+    """A cyclic output raises the encoders' `ValueError`, not `RecursionError`, and nothing is written."""
+    with pytest.raises(ValueError, match="contains itself"):
+        output_identity({"y": cyclic})
+    with pytest.raises(ValueError, match="contains itself"):
+        ResultStore(tmp_path).put(_key(), {"y": cyclic}, _ctx())
+    assert _entries(tmp_path) == []
+    shared = [1, 2]
+    assert output_identity({"a": shared, "b": shared}) == output_identity({"a": [1, 2], "b": [1, 2]})
+
+
+@pytest.mark.logic
+def test_integral_float_output_reads_back_as_int(tmp_path: Path) -> None:
+    """Canonical JSON writes `3.0` as `3`, so it reads back as the int 3 with the same identity."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    ident = s.put(k, {"x": 3.0, "y": 2.5, "z": [1.0]}, c)
+    assert ident == output_identity({"x": 3, "y": 2.5, "z": [1]})
+    got = s.get(k, c, ReusePolicy.EXACT)
+    assert got is not None and got.output_identity == ident
+    assert got.outputs == {"x": 3, "y": 2.5, "z": [1]}
+    assert type(got.outputs["x"]) is int and type(got.outputs["y"]) is float

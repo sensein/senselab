@@ -197,6 +197,39 @@ def _seed_dependent(task: TaskSpec, backend: BackendSpec, *, inputs: dict[str, s
     return key_for(task, backend, inputs=salted, **call)
 
 
+def _seed_dependent_model(
+    task: TaskSpec,
+    backend: BackendSpec,
+    *,
+    model: ResolvedModel | None,
+    **call: Any,  # noqa: ANN401
+) -> LogicalKey:
+    assert model is not None, "the base call carries a model"
+    salted = model.model_copy(update={"identity": sha256_bytes(str(hash(model.ref.id)).encode())[:40]})
+    return key_for(task, backend, model=salted, **call)
+
+
+@pytest.mark.contract
+def test_hash_seed_case_catches_a_seed_dependent_model_identity() -> None:
+    """The base call carries a model, so a model identity that reads `hash()` fails the case."""
+    case = _case(_registry({}), "fake::key_independent_of_hash_seed", key_builder=_seed_dependent_model)
+    with pytest.raises(AssertionError, match="hash seed"):
+        case()
+
+
+@pytest.mark.logic
+def test_hash_seed_case_reports_a_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An interpreter that does not finish within the bound fails the case instead of stalling the suite."""
+    from senselab_core.testing import contracts
+
+    def hang(spec: Any, seed: str) -> Any:  # noqa: ANN401
+        raise subprocess.TimeoutExpired(cmd="probe", timeout=contracts.HASH_SEED_TIMEOUT_S)
+
+    monkeypatch.setattr(contracts, "_run_seed_probe", hang)
+    with pytest.raises(AssertionError, match="took over"):
+        _case(_registry({}), "fake::key_independent_of_hash_seed")()
+
+
 @pytest.mark.contract
 def test_hash_seed_case_passes_for_the_good_declaration() -> None:
     """The fixture declaration's key is the same under both hash seeds."""
