@@ -1,54 +1,58 @@
-"""Every tracked file of a distribution's import package reaches its wheel, and its ``data/`` files its sdist.
+"""A real build of this tree passes every static release check but the version check.
 
-The root ``.gitignore`` ignores ``data/``; hatch reads it relative to each package, where the re-includes
-written for the repository root never match. Each package's ``[tool.hatch.build] artifacts`` puts the
-data back, and this builds every distribution to check that it did.
+The version check is left out because this tree is not on a release tag, so hatch-vcs writes a dev version. Every
+other check is the release gate's own: the members of each artifact equal the tracked files its hatch config
+selects (data files included), and the metadata equals each pyproject.
 """
 
+import importlib.util
 import subprocess
-import tarfile
-import zipfile
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[3]
-DISTRIBUTIONS = {"senselab": REPO, "senselab_core": REPO / "packages" / "senselab-core"}
-DISTRIBUTIONS["senselab_worker"] = REPO / "packages" / "senselab-worker"
+if "release_gate" not in sys.modules:
+    _spec = importlib.util.spec_from_file_location("release_gate", REPO / "scripts" / "release_gate.py")
+    assert _spec and _spec.loader
+    sys.modules["release_gate"] = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(sys.modules["release_gate"])
+gate = sys.modules["release_gate"]
+PACKAGES = {"senselab": "senselab", "senselab-core": "senselab_core", "senselab-worker": "senselab_worker"}
 
 
 @pytest.fixture(scope="module")
-def built(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def built(tmp_path_factory: pytest.TempPathFactory) -> list[Path]:
     """Build every workspace distribution, wheel and sdist, once."""
     out = tmp_path_factory.mktemp("dist")
     subprocess.run(["uv", "build", "--all-packages", "--out-dir", str(out)], cwd=REPO, check=True, capture_output=True)
-    return out
+    return list(gate.dist_files(out))
 
 
-def _tracked(project: Path, name: str) -> list[str]:
-    """Paths relative to ``project/src`` of every file git tracks in the import package ``name``."""
-    listed = subprocess.run(["git", "ls-files", f"src/{name}"], cwd=project, check=True, capture_output=True, text=True)
-    return [line.removeprefix("src/") for line in listed.stdout.splitlines()]
+@pytest.mark.env
+@pytest.mark.network
+@pytest.mark.parametrize(
+    "check",
+    ["check_names", "check_files", "check_closure", "check_metadata", "check_members", "check_wheel_metadata"],
+)
+def test_the_build_of_this_tree_passes_the_static_release_checks(built: list[Path], check: str) -> None:
+    """Each static check of the release gate, the version check aside, passes on a build of this tree."""
+    if check in ("check_metadata", "check_members", "check_wheel_metadata"):
+        getattr(gate, check)(built, REPO)
+    else:
+        getattr(gate, check)(built)
 
 
-@pytest.mark.contract
-@pytest.mark.parametrize("name", sorted(DISTRIBUTIONS))
-def test_every_tracked_package_file_is_in_the_wheel(built: Path, name: str) -> None:
-    """The wheel holds every file tracked in the import package, and no untracked ``data/`` file."""
-    (wheel,) = built.glob(f"{name}-*.whl")
-    members = set(zipfile.ZipFile(wheel).namelist())
-    tracked = _tracked(DISTRIBUTIONS[name], name)
-    assert any("/data/" in f for f in tracked), f"{name}: no data files to check"
-    assert [f for f in tracked if f not in members] == []
-    shipped_data = [m for m in members if m.startswith(f"{name}/") and "/data/" in m]
-    assert [m for m in shipped_data if m not in set(tracked)] == [], "an untracked data file ships"
-
-
-@pytest.mark.contract
-@pytest.mark.parametrize("name", sorted(DISTRIBUTIONS))
-def test_every_tracked_data_file_is_in_the_sdist(built: Path, name: str) -> None:
-    """The sdist holds every file tracked under ``src/**/data/``, so a wheel built from it has them too."""
-    (sdist,) = built.glob(f"{name}-*.tar.gz")
-    members = {n.split("/", 1)[1] for n in tarfile.open(sdist).getnames() if "/" in n}
-    data = [f"src/{f}" for f in _tracked(DISTRIBUTIONS[name], name) if "/data/" in f]
-    assert [f for f in data if f not in members] == []
+@pytest.mark.env
+@pytest.mark.network
+def test_every_tracked_data_file_is_a_derived_member(built: list[Path]) -> None:
+    """The member derivation the checks use includes every tracked ``data/`` file of each import package."""
+    modes = gate.tracked_modes(REPO)
+    for path in built:
+        name = gate._metadata(path)[0]
+        root = gate.DIST_ROOTS[name]
+        prefix = "src/" if root == "." else f"{root}/src/"
+        data = {p for p in modes if p.startswith(f"{prefix}{PACKAGES[name]}/") and "/data/" in p}
+        sources = {s for s in gate.expected_members(path, REPO, modes).values() if s is not None}
+        assert data and data <= sources

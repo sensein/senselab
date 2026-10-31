@@ -3,13 +3,29 @@
 Usage::
 
     uv build --all-packages
-    uv run python scripts/release_gate.py dist [--tag TAG --prerelease true|false] [--floor VERSION] [--index-url URL]
+    uv run python scripts/release_gate.py dist [--repo DIR] [--tag TAG --prerelease true|false] [--floor VERSION]
+        [--index-url URL]
 
-Exit status 0 means every file in ``dist/`` is a wheel or sdist of one of the three distributions at one
-releasable version, the sibling pins are exact, every file inside every artifact is a git-tracked file of its package,
-each wheel's RECORD lists exactly its members with their hashes and its entry points are the declared ones, and each
-distribution installs on its own, with only its own siblings, into a fresh virtual environment at its floor
-Python and imports. The floor defaults to ``[tool.senselab.release] RELEASE_FLOOR`` in the root pyproject.
+Exit status 0 means every check below passed over one listing of ``dist/``, in this order, before anything is
+uploaded:
+
+- every file is a wheel or sdist named exactly ``<name>-<version>-py3-none-any.whl`` / ``<name>-<version>.tar.gz``,
+  one of each per distribution, its members normalised (no absolute, ``..``, empty or case-duplicate name; an
+  sdist's all under its one top directory) and its core metadata parsed strictly (no repeated single field);
+- the version is ``X.Y.Z`` or ``X.Y.Z(a|b|rc)N`` exactly (no epoch, local, post or dev segment), shared by every
+  file and filename, at or above the floor, equal to the tag and matching the prerelease flag;
+- each wheel's and sdist's metadata pins its sibling exactly and states the name, ``Requires-Python``,
+  requirements, extras and license files its pyproject declares, nothing more;
+- each artifact's members equal the set derived from the tracked files its hatch config selects plus the named
+  generated files, each a byte copy of its source: a missing member and an extra one are both refused;
+- each wheel's ``WHEEL`` states the filename's tag, its RECORD lists its members with their hashes and its entry
+  points are the declared ones;
+- each distribution installs alone, with all its extras and only its own siblings, into a fresh venv at its
+  floor Python, and every one of its modules imports there from the installed files;
+- each sdist builds a wheel whose members are byte-identical to the wheel in ``dist/``.
+
+Every subprocess runs in ``gate_environment``: only the variables it names, whatever the caller exports.
+The floor defaults to ``[tool.senselab.release] RELEASE_FLOOR`` in the root pyproject.
 """
 
 from __future__ import annotations
@@ -18,10 +34,13 @@ import argparse
 import base64
 import configparser
 import csv
+import email.parser
+import fnmatch
 import hashlib
 import io
 import json
 import os
+import posixpath
 import re
 import stat
 import subprocess
@@ -30,14 +49,17 @@ import tarfile
 import tempfile
 import tomllib
 import zipfile
-from collections.abc import Mapping
-from email.message import Message
-from email.parser import Parser
+from collections import Counter
+from collections.abc import Iterable, Mapping
 from pathlib import Path
+from typing import Any
 
+from packaging.markers import Marker
+from packaging.metadata import Metadata, parse_email
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
-from packaging.utils import canonicalize_name
+from packaging.tags import Tag
+from packaging.utils import canonicalize_name, parse_sdist_filename, parse_wheel_filename
 from packaging.version import InvalidVersion, Version
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,17 +68,23 @@ DEPENDS_ON = {"senselab": "senselab-core", "senselab-core": "senselab-worker", "
 DISTRIBUTIONS = tuple(DEPENDS_ON)
 DIST_ROOTS = {"senselab": ".", "senselab-core": "packages/senselab-core", "senselab-worker": "packages/senselab-worker"}
 """Each distribution's root, relative to the repository."""
-GENERATED = frozenset({"METADATA", "WHEEL", "RECORD", "entry_points.txt", "PKG-INFO"})
-"""File names a build writes into an artifact that no tracked file corresponds to."""
-SDIST_ALIASES = {"_shared_hatch_build_pins.py": "hatch_build_pins.py"}
-"""Sdist members force-included from the repository root under another name."""
+WHEEL_TAG = Tag("py3", "none", "any")
+"""The one tag every wheel is built for: pure Python 3."""
+VERSION_GRAMMAR = re.compile(r"\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?")
+"""The releasable version strings: a final release or a numbered alpha, beta or release candidate."""
+WHEEL_GENERATED = ("METADATA", "WHEEL", "RECORD")
+"""The ``dist-info`` files every wheel build writes; ``entry_points.txt`` and ``licenses/`` are derived per wheel."""
+DEFAULT_LICENSE_FILES = ("LICEN[CS]E*", "COPYING*", "NOTICE*", "AUTHORS*")
+"""The license-file globs hatchling applies at a project root when the pyproject names none."""
+SUPPORTED_BUILD_KEYS = {
+    "build": {"artifacts", "targets"},
+    "wheel": {"packages", "shared-scripts", "force-include"},
+    "sdist": {"only-include", "force-include"},
+}
+"""The hatch build settings the member derivation understands; any other refuses the release."""
+REGULAR_MODES = frozenset({"100644", "100755"})
 PYPI = "https://pypi.org/simple"
 """The index third-party requirements come from unless ``--index-url`` names another."""
-IMPORTS = {
-    "senselab-worker": "senselab_worker",
-    "senselab-core": "senselab_worker, senselab_core",
-    "senselab": "senselab_worker, senselab_core, senselab",
-}
 
 
 class GateError(Exception):
@@ -69,32 +97,112 @@ def release_floor() -> Version:
         return Version(tomllib.load(handle)["tool"]["senselab"]["release"]["RELEASE_FLOOR"])
 
 
-def _message(path: Path) -> Message:
-    """Return the core metadata of a wheel (METADATA) or an sdist (PKG-INFO)."""
+def version_problem(text: str) -> str | None:
+    """Return why ``text`` is not a releasable version string, or ``None`` when it is one."""
+    try:
+        version = Version(text)
+    except InvalidVersion:
+        return "is not a version"
+    if version.epoch:
+        return "has an epoch"
+    if version.local is not None:
+        return "has a local segment"
+    if version.is_devrelease:
+        return "is a dev build: HEAD is not on a release tag, or the tag is not X.Y.Z"
+    if version.is_postrelease:
+        return "is a post release"
+    if not VERSION_GRAMMAR.fullmatch(text) or str(version) != text:
+        return "is not written X.Y.Z or X.Y.Z(a|b|rc)N"
+    return None
+
+
+def _escaped(name: str) -> str:
+    """The distribution name as it appears in file and directory names: canonical, ``-`` written ``_``."""
+    return canonicalize_name(name).replace("-", "_")
+
+
+def filename_parts(path: Path) -> tuple[str, str, str]:
+    """Return ``(kind, canonical name, version text)`` of a wheel or sdist named exactly as the build names it.
+
+    Raises:
+        GateError: If the name is not ``<name>-<version>-py3-none-any.whl`` or ``<name>-<version>.tar.gz`` with the
+            name escaped and the version normalised, or carries a build tag or another tag.
+    """
+    try:
+        if path.name.endswith(".whl"):
+            name, version, build, tags = parse_wheel_filename(path.name)
+            kind = "wheel"
+            if build or tags != {WHEEL_TAG}:
+                raise GateError(f"{path.name}: a wheel must be tagged py3-none-any with no build number")
+            expected = f"{_escaped(name)}-{version}-py3-none-any.whl"
+        else:
+            name, version = parse_sdist_filename(path.name)
+            kind = "sdist"
+            expected = f"{_escaped(name)}-{version}.tar.gz"
+    except ValueError as exc:
+        raise GateError(f"{path.name}: not a wheel or sdist file name ({exc})") from exc
+    if path.name != expected:
+        raise GateError(f"{path.name}: must be named {expected}")
+    return kind, canonicalize_name(name), str(version)
+
+
+def stem(path: Path) -> str:
+    """``<escaped name>-<version>``: the wheel's dist-info prefix, the sdist's top directory."""
+    _, name, version = filename_parts(path)
+    return f"{_escaped(name)}-{version}"
+
+
+def _metadata_member(path: Path) -> str:
+    return f"{stem(path)}.dist-info/METADATA" if path.suffix == ".whl" else f"{stem(path)}/PKG-INFO"
+
+
+def _read_member(path: Path, member: str) -> bytes:
+    """Return the bytes of the regular file ``member`` in the wheel or sdist ``path``.
+
+    Raises:
+        GateError: If the artifact has no such regular file.
+    """
     if path.suffix == ".whl":
         with zipfile.ZipFile(path) as archive:
-            names = [n for n in archive.namelist() if re.fullmatch(r"[^/]+\.dist-info/METADATA", n)]
-            if len(names) != 1:
-                raise GateError(f"{path.name}: expected one dist-info/METADATA, found {len(names)}")
-            return Parser().parsestr(archive.read(names[0]).decode())
+            try:
+                return archive.read(member)
+            except KeyError as exc:
+                raise GateError(f"{path.name}: no {member}") from exc
     with tarfile.open(path) as tar:
-        names = [m.name for m in tar.getmembers() if re.fullmatch(r"[^/]+/PKG-INFO", m.name)]
-        if len(names) != 1:
-            raise GateError(f"{path.name}: expected one PKG-INFO, found {len(names)}")
-        member = tar.extractfile(names[0])
-        assert member is not None
-        return Parser().parsestr(member.read().decode())
+        try:
+            info = tar.getmember(member)
+        except KeyError as exc:
+            raise GateError(f"{path.name}: no {member}") from exc
+        handle = tar.extractfile(info) if info.isreg() else None
+        if handle is None:
+            raise GateError(f"{path.name}: {member} is not a regular file")
+        return handle.read()
+
+
+def core_metadata(path: Path) -> tuple[Metadata, str]:
+    """Return the strictly parsed core metadata of a wheel (METADATA) or sdist (PKG-INFO) and its raw version.
+
+    Raises:
+        GateError: If a single-use field repeats or does not parse, the metadata is invalid, or its name or
+            version differs from the file name's.
+    """
+    _, name, version = filename_parts(path)
+    raw, unparsed = parse_email(_read_member(path, _metadata_member(path)))
+    if unparsed:
+        raise GateError(f"{path.name}: core metadata fields repeated or unparseable: {', '.join(sorted(unparsed))}")
+    try:
+        metadata = Metadata.from_raw(raw, validate=True)
+    except (ExceptionGroup, ValueError) as exc:
+        raise GateError(f"{path.name}: invalid core metadata ({exc})") from exc
+    if canonicalize_name(metadata.name) != name or raw.get("version") != version:
+        raise GateError(f"{path.name}: metadata names {metadata.name} {raw.get('version')}, the file {name} {version}")
+    return metadata, version
 
 
 def _metadata(path: Path) -> tuple[str, Version, list[Requirement]]:
     """Return the canonical name, version and requirements recorded in a wheel or sdist."""
-    message = _message(path)
-    try:
-        version = Version(message["Version"])
-    except (InvalidVersion, TypeError) as exc:
-        raise GateError(f"{path.name}: unreadable version {message['Version']!r}") from exc
-    requirements = [Requirement(line) for line in message.get_all("Requires-Dist") or []]
-    return canonicalize_name(message["Name"]), version, requirements
+    metadata, _ = core_metadata(path)
+    return canonicalize_name(metadata.name), metadata.version, list(metadata.requires_dist or [])
 
 
 def dist_files(dist: Path) -> list[Path]:
@@ -112,56 +220,100 @@ def dist_files(dist: Path) -> list[Path]:
     return files
 
 
+def member_problems(path: Path) -> list[str]:
+    """Return each entry name of the wheel or sdist ``path`` that is not normalised.
+
+    A name is refused when it is absolute, holds a backslash, NUL, empty, ``.`` or ``..`` component, repeats
+    another name up to case, or (in an sdist) lies outside the one top directory ``<name>-<version>``.
+    """
+    if path.suffix == ".whl":
+        with zipfile.ZipFile(path) as archive:
+            names = [i.filename.rstrip("/") for i in archive.infolist()]
+        top = None
+    else:
+        with tarfile.open(path) as tar:
+            names = [m.name.rstrip("/") for m in tar.getmembers()]
+        top = stem(path)
+    problems = []
+    for name in names:
+        parts = name.split("/")
+        if name.startswith("/") or "\\" in name or "\0" in name or any(p in ("", ".", "..") for p in parts):
+            problems.append(f"{name!r} is not a normalised relative name")
+        elif top is not None and parts[0] != top:
+            problems.append(f"{name!r} is outside {top}/")
+    folded = Counter(n.casefold() for n in names)
+    problems += [f"{n!r} appears {c} times up to case" for n, c in sorted(folded.items()) if c > 1]
+    return problems
+
+
+def check_names(files: list[Path]) -> None:
+    """Require every file name, member name and core metadata of ``files`` to parse strictly.
+
+    Raises:
+        GateError: On the first file whose name, members or metadata are not as the build writes them.
+    """
+    for path in files:
+        filename_parts(path)
+        problems = member_problems(path)
+        if problems:
+            raise GateError(f"{path.name}: {'; '.join(problems[:5])}")
+        core_metadata(path)
+
+
 def check_files(files: list[Path]) -> None:
     """Require exactly one wheel and one sdist of each distribution.
 
     Raises:
         GateError: If a distribution lacks either file or has two of one kind.
     """
-    seen: dict[tuple[str, str], int] = {}
+    seen: Counter[tuple[str, str]] = Counter()
     for path in files:
-        key = (_metadata(path)[0], "wheel" if path.suffix == ".whl" else "sdist")
-        seen[key] = seen.get(key, 0) + 1
+        kind, name, _ = filename_parts(path)
+        seen[(_metadata(path)[0], kind)] += 1
+        if name != _metadata(path)[0]:
+            raise GateError(f"{path.name}: file name and metadata name differ")
     for name in DISTRIBUTIONS:
         for kind in ("wheel", "sdist"):
-            if seen.get((name, kind), 0) != 1:
-                raise GateError(f"dist/ must hold exactly one {kind} of {name}, found {seen.get((name, kind), 0)}")
+            if seen[(name, kind)] != 1:
+                raise GateError(f"dist/ must hold exactly one {kind} of {name}, found {seen[(name, kind)]}")
     extra = {name for name, _ in seen} - set(DISTRIBUTIONS)
     if extra:
         raise GateError(f"dist/ holds unknown distributions: {', '.join(sorted(extra))}")
 
 
-def check_versions(files: list[Path], floor: Version, *, tag: str | None = None, prerelease: bool | None = None) -> None:
-    """Require one shared final or pre-release version at or above ``floor``, bound to the tag when given.
+def check_versions(
+    files: list[Path], floor: Version, *, tag: str | None = None, prerelease: bool | None = None
+) -> None:
+    """Require one shared releasable version string at or above ``floor``, equal to the tag when given.
 
     Raises:
-        GateError: If the files disagree, or the version is dev, post, local or below ``floor``, or differs from
-            ``tag``, or ``prerelease`` differs from the version's own pre-release status.
+        GateError: If the files disagree, the version is not ``X.Y.Z(a|b|rc)N``-shaped (epoch, local, post and dev
+            segments included), is below ``floor``, differs from ``tag`` (itself held to the same grammar), or
+            ``prerelease`` differs from the version's own pre-release status.
     """
-    found = {path.name: _metadata(path)[1] for path in files}
+    found = {path.name: core_metadata(path)[1] for path in files}
     if not found:
         raise GateError("no file to check")
-    versions = set(found.values())
-    if len(versions) != 1:
+    texts = set(found.values())
+    if len(texts) != 1:
         raise GateError("files disagree on the version: " + ", ".join(f"{n} is {v}" for n, v in sorted(found.items())))
-    (version,) = versions
-    if version.local is not None:
-        raise GateError(f"version {version} has a local segment")
-    if version.is_devrelease:
-        raise GateError(f"version {version} is a dev build: HEAD is not on a release tag, or the tag is not X.Y.Z")
-    if version.is_postrelease:
-        raise GateError(f"version {version} is a post release")
+    (text,) = texts
+    problem = version_problem(text)
+    if problem:
+        raise GateError(f"version {text} {problem}")
+    version = Version(text)
     if version < floor:
         raise GateError(f"version {version} is below the release floor {floor}")
     if tag is not None:
-        try:
-            tagged = Version(tag)
-        except InvalidVersion as exc:
-            raise GateError(f"tag {tag!r} is not a version") from exc
-        if tagged != version:
-            raise GateError(f"version {version} was built for tag {tag!r}, which is {tagged}")
+        problem = version_problem(tag)
+        if problem:
+            raise GateError(f"tag {tag!r} {problem}")
+        if tag != text:
+            raise GateError(f"version {text} was built for another tag than {tag!r}")
     if prerelease is not None and prerelease != version.is_prerelease:
-        raise GateError(f"release marked prerelease={prerelease}, version {version} is_prerelease={version.is_prerelease}")
+        raise GateError(
+            f"release marked prerelease={prerelease}, version {version} is_prerelease={version.is_prerelease}"
+        )
 
 
 def _equals(text: str, version: Version) -> bool:
@@ -172,19 +324,19 @@ def _equals(text: str, version: Version) -> bool:
         return False
 
 
-def check_closure(wheels: list[Path]) -> None:
-    """Require each wheel to pin exactly the sibling ``DEPENDS_ON`` names, and no other sibling.
+def check_closure(files: list[Path]) -> None:
+    """Require each wheel and sdist to pin exactly the sibling ``DEPENDS_ON`` names, and no other sibling.
 
     Raises:
-        GateError: If a distribution is absent, a required pin is missing or is not ``==`` that wheel's version,
-            or a wheel requires a sibling the graph does not give it.
+        GateError: If a distribution is absent, a required pin is missing or is not ``==`` that distribution's
+            version, or a file requires a sibling the graph does not give it.
     """
-    built = {name: version for name, version, _ in map(_metadata, wheels)}
+    built = {name: version for name, version, _ in map(_metadata, files)}
     missing = sorted(set(DISTRIBUTIONS) - set(built))
     if missing:
         raise GateError(f"dist/ lacks {', '.join(missing)}: the release would publish an uninstallable senselab")
-    for wheel in wheels:
-        name, _, requirements = _metadata(wheel)
+    for path in files:
+        name, _, requirements = _metadata(path)
         pins = [r for r in requirements if canonicalize_name(r.name) in DISTRIBUTIONS]
         expected = DEPENDS_ON[name]
         wanted = [] if expected is None else [expected]
@@ -210,33 +362,265 @@ def _is_exact_pin(pin: Requirement, expected: str, version: Version) -> bool:
     )
 
 
-def _tracked(repo: Path) -> set[str]:
-    """Return every path git tracks in ``repo``.
+def gate_git(repo: Path, *args: str) -> bytes:
+    """Run ``git -C repo args`` in ``gate_environment`` with no system or global configuration; return stdout.
+
+    Raises:
+        GateError: If git fails, as it does when ``repo`` is not a git work tree.
+    """
+    env = {**gate_environment(os.environ), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+    done = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, env=env)
+    if done.returncode != 0:
+        raise GateError(f"{repo} is not a git work tree: the artifact contents cannot be checked")
+    return done.stdout
+
+
+def tracked_modes(repo: Path) -> dict[str, str]:
+    """Return ``{path: mode}`` for every path in the index of ``repo``, read with the gate's environment.
 
     Raises:
         GateError: If ``repo`` is not a git work tree.
     """
-    done = subprocess.run(["git", "ls-files", "-z"], cwd=repo, capture_output=True)
-    if done.returncode != 0:
-        raise GateError(f"{repo} is not a git work tree: the artifact contents cannot be checked")
-    return {p for p in done.stdout.decode().split("\0") if p}
+    out = {}
+    for line in gate_git(repo, "ls-files", "-s", "-z").decode().split("\0"):
+        if line:
+            meta, _, path = line.partition("\t")
+            out[path] = meta.split()[0]
+    return out
 
 
-def _pyproject(repo: Path, root: Path) -> dict:
+def _tracked(repo: Path) -> set[str]:
+    """Return every path git tracks in ``repo``."""
+    return set(tracked_modes(repo))
+
+
+def _pyproject(repo: Path, root: Path) -> dict[str, Any]:
     with (repo / root / "pyproject.toml").open("rb") as handle:
         return tomllib.load(handle)
 
 
-def _wheel_sources(repo: Path, root: Path) -> dict[str, str]:
-    """Map each top-level name a wheel of the distribution at ``root`` ships to its repo-relative source directory."""
-    packages = _pyproject(repo, root)["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]
-    return {Path(p).name: (root / p).as_posix() for p in packages}
+def _hatch_build(pyproject: dict[str, Any], name: str) -> dict[str, Any]:
+    """Return ``[tool.hatch.build]`` after refusing any setting the member derivation does not understand.
+
+    Raises:
+        GateError: Naming the unsupported setting, so a config change cannot ship members the gate did not derive.
+    """
+    build = pyproject.get("tool", {}).get("hatch", {}).get("build", {})
+    targets = build.get("targets", {})
+    unknown = [f"build.{k}" for k in sorted(set(build) - SUPPORTED_BUILD_KEYS["build"])]
+    unknown += [f"targets.{k}" for k in sorted(set(targets) - {"wheel", "sdist"})]
+    for target in ("wheel", "sdist"):
+        unknown += [f"{target}.{k}" for k in sorted(set(targets.get(target, {})) - SUPPORTED_BUILD_KEYS[target])]
+    if unknown:
+        raise GateError(f"{name}: the gate cannot derive the members of hatch settings {', '.join(unknown)}")
+    return build
 
 
-def _shared_scripts(repo: Path, root: Path) -> dict[str, str]:
-    """Map each ``.data/scripts/`` name the hatch wheel config declares to its repo-relative source file."""
-    wheel = _pyproject(repo, root)["tool"]["hatch"]["build"]["targets"]["wheel"]
-    return {dest: (root / src).as_posix() for src, dest in wheel.get("shared-scripts", {}).items()}
+def _join(root: Path, relative: str) -> str:
+    """The repo-relative POSIX path of ``relative`` taken from the distribution root ``root``."""
+    return posixpath.normpath((root / relative).as_posix())
+
+
+def _under(paths: Iterable[str], source: str) -> dict[str, str]:
+    """Map each of ``paths`` that is ``source`` or lies under it to its path relative to ``source`` (``""`` for itself)."""
+    if source in (".", ""):
+        return {p: p for p in paths}
+    return {p: "" if p == source else p[len(source) + 1 :] for p in paths if p == source or p.startswith(source + "/")}
+
+
+def declared_license_files(repo: Path, root: Path, regular: set[str]) -> set[str]:
+    """Return the license files, relative to ``root``, that hatchling records for the distribution at ``root``."""
+    project = _pyproject(repo, root)["project"]
+    at_root = {rel for rel in _under(regular, _join(root, ".")).values() if "/" not in rel}
+    globs = project.get("license-files", DEFAULT_LICENSE_FILES)
+    found = {rel for rel in at_root if any(fnmatch.fnmatchcase(rel, g) for g in globs)}
+    license_ = project.get("license")
+    if isinstance(license_, dict) and "file" in license_:
+        found.add(posixpath.normpath(license_["file"]))
+    return found
+
+
+def expected_members(path: Path, repo: Path, modes: Mapping[str, str]) -> dict[str, str | None]:
+    """Return every member the wheel or sdist ``path`` must hold, each mapped to its tracked source.
+
+    A member mapped to ``None`` is generated by the build and checked by its own rule (metadata, RECORD, entry
+    points). The tracked sources are the regular files the hatch config selects: a wheel's ``packages``,
+    ``shared-scripts`` and ``force-include``; an sdist's root (or its ``only-include`` entries), its
+    ``force-include`` and the ``.gitignore`` hatchling copies in.
+
+    Raises:
+        GateError: If the config uses a setting the derivation does not know, or a selected path is a symlink or
+            submodule.
+    """
+    kind, name, _ = filename_parts(path)
+    root = Path(DIST_ROOTS[name])
+    pyproject = _pyproject(repo, root)
+    targets = _hatch_build(pyproject, name).get("targets", {})
+    regular = {p for p, m in modes.items() if m in REGULAR_MODES}
+    irregular = {p for p, m in modes.items() if m not in REGULAR_MODES}
+    top = stem(path)
+    out: dict[str, str | None] = {}
+
+    def add(dest: str, source: str) -> None:
+        if _under(irregular, source):
+            raise GateError(f"{name}: {source} holds a tracked symlink or submodule, which cannot ship")
+        for repo_path, rel in _under(regular, source).items():
+            out[posixpath.join(dest, rel) if rel else dest] = repo_path
+
+    if kind == "wheel":
+        wheel = targets.get("wheel", {})
+        for package in wheel["packages"]:
+            add(posixpath.basename(package), _join(root, package))
+        for source, dest in wheel.get("shared-scripts", {}).items():
+            out[f"{top}.data/scripts/{dest}"] = _join(root, source)
+        for source, dest in wheel.get("force-include", {}).items():
+            add(dest, _join(root, source))
+        out.update({f"{top}.dist-info/{n}": None for n in WHEEL_GENERATED})
+        if declared_entry_points(repo, root):
+            out[f"{top}.dist-info/entry_points.txt"] = None
+        for license_file in declared_license_files(repo, root, regular):
+            out[f"{top}.dist-info/licenses/{license_file}"] = _join(root, license_file)
+        return out
+    sdist = targets.get("sdist", {})
+    for entry in sdist.get("only-include", ["."]):
+        add(posixpath.normpath(posixpath.join(top, entry)), _join(root, entry))
+    for source, dest in sdist.get("force-include", {}).items():
+        add(posixpath.join(top, dest), _join(root, source))
+    out[f"{top}/PKG-INFO"] = None
+    own = _join(root, ".gitignore")
+    out[f"{top}/.gitignore"] = own if own in regular else ".gitignore"
+    return out
+
+
+def check_members(files: list[Path], repo: Path) -> None:
+    """Require each artifact's members to be exactly its derived members, each a byte copy of its tracked source.
+
+    Raises:
+        GateError: Naming members that are missing, extra, not regular files or not copies of their source.
+    """
+    modes = tracked_modes(repo)
+    problems = []
+    for path in files:
+        expected = expected_members(path, repo, modes)
+        actual = {}
+        for member, content, problem in artifact_members(path):
+            if problem:
+                problems.append(f"{path.name}:{member} ({problem})")
+            actual[member] = content
+        problems += [f"{path.name}:{m} (missing)" for m in sorted(set(expected) - set(actual))]
+        problems += [
+            f"{path.name}:{m} (not a tracked file the config selects)" for m in sorted(set(actual) - set(expected))
+        ]
+        for member in sorted(set(expected) & set(actual)):
+            source = expected[member]
+            if source is not None and (repo / source).read_bytes() != actual[member]:
+                problems.append(f"{path.name}:{member} (differs from {source})")
+    if problems:
+        raise GateError(f"artifact members differ from the tracked sources: {', '.join(problems[:8])}")
+
+
+def _requirement_key(requirement: Requirement, extra: str | None = None) -> tuple[Any, ...]:
+    """A comparable form of ``requirement``: name, extras, specifiers, URL and marker, ``extra`` folded in."""
+    marker = requirement.marker
+    if extra is not None:
+        clause = f'extra == "{canonicalize_name(extra)}"'
+        marker = Marker(f"({marker}) and {clause}" if marker else clause)
+    return (
+        canonicalize_name(requirement.name),
+        tuple(sorted(requirement.extras)),
+        str(requirement.specifier),
+        requirement.url,
+        str(marker) if marker else None,
+    )
+
+
+def declared_requirements(repo: Path, name: str, version: str) -> set[tuple[Any, ...]]:
+    """Return the requirement keys the pyproject of ``name`` declares at ``version``, extras expanded as hatch does.
+
+    Base requirements come from ``[project] dependencies``, or from the pin hook's ``dependencies`` when they are
+    dynamic, plus the exact sibling pin. Each extra's requirements carry ``extra == "<name>"``; an extra naming the
+    distribution itself contributes the requirements of the extras it names.
+    """
+    pyproject = _pyproject(repo, Path(DIST_ROOTS[name]))
+    project = pyproject["project"]
+    if "dependencies" in project.get("dynamic", []):
+        base = list(pyproject["tool"]["hatch"]["metadata"]["hooks"]["custom"]["dependencies"])
+    else:
+        base = list(project.get("dependencies", []))
+    if DEPENDS_ON[name] is not None:
+        base.append(f"{DEPENDS_ON[name]}=={version}")
+    extras = {canonicalize_name(k): v for k, v in project.get("optional-dependencies", {}).items()}
+
+    def expand(extra: str, seen: frozenset[str]) -> list[Requirement]:
+        out = []
+        for line in extras[extra]:
+            requirement = Requirement(line)
+            if canonicalize_name(requirement.name) == name:
+                for nested in sorted(requirement.extras):
+                    if canonicalize_name(nested) not in seen:
+                        out += expand(canonicalize_name(nested), seen | {canonicalize_name(nested)})
+            else:
+                out.append(requirement)
+        return out
+
+    keys = {_requirement_key(Requirement(line)) for line in base}
+    for extra in extras:
+        keys |= {_requirement_key(r, extra) for r in expand(extra, frozenset({extra}))}
+    return keys
+
+
+def check_metadata(files: list[Path], repo: Path) -> None:
+    """Require each artifact's core metadata to state exactly what its pyproject declares.
+
+    Name, ``Requires-Python``, ``Requires-Dist`` (each line once), ``Provides-Extra`` and ``License-File`` must
+    equal the declaration; any other dependency, extra or Python range is refused.
+
+    Raises:
+        GateError: Naming the artifact and the first field that differs.
+    """
+    modes = tracked_modes(repo)
+    regular = {p for p, m in modes.items() if m in REGULAR_MODES}
+    for path in files:
+        metadata, version = core_metadata(path)
+        name = canonicalize_name(metadata.name)
+        root = Path(DIST_ROOTS[name])
+        project = _pyproject(repo, root)["project"]
+        shipped = Counter(_requirement_key(r) for r in metadata.requires_dist or [])
+        declared = declared_requirements(repo, name, version)
+        extras = {canonicalize_name(e) for e in project.get("optional-dependencies", {})}
+        problems = []
+        if metadata.name != project["name"]:
+            problems.append(f"Name {metadata.name!r} is not {project['name']!r}")
+        if metadata.requires_python != SpecifierSet(project["requires-python"]):
+            problems.append(f"Requires-Python {metadata.requires_python} is not {project['requires-python']}")
+        problems += [f"Requires-Dist {k} appears {c} times" for k, c in shipped.items() if c > 1]
+        problems += [f"Requires-Dist {k} is not declared" for k in sorted(set(shipped) - declared, key=str)]
+        problems += [f"declared {k} is not in Requires-Dist" for k in sorted(declared - set(shipped), key=str)]
+        if {canonicalize_name(e) for e in metadata.provides_extra or []} != extras:
+            problems.append(f"Provides-Extra {metadata.provides_extra} is not {sorted(extras)}")
+        if set(metadata.license_files or []) != declared_license_files(repo, root, regular):
+            problems.append(f"License-File {metadata.license_files} is not the declared license files")
+        if problems:
+            raise GateError(f"{path.name}: {'; '.join(problems[:5])}")
+
+
+def wheel_problems(path: Path) -> list[str]:
+    """Return how the wheel's ``WHEEL`` file differs from a pure-Python wheel tagged as its file name says."""
+    text = _read_member(path, f"{stem(path)}.dist-info/WHEEL").decode()
+    message = email.parser.Parser().parsestr(text)
+    keys = Counter(message.keys())
+    problems = [f"{k} appears {c} times" for k, c in keys.items() if c > 1 and k != "Tag"]
+    problems += [
+        f"unexpected header {k}" for k in keys if k not in ("Wheel-Version", "Generator", "Root-Is-Purelib", "Tag")
+    ]
+    if message["Wheel-Version"] != "1.0":
+        problems.append(f"Wheel-Version {message['Wheel-Version']} is not 1.0")
+    if message["Root-Is-Purelib"] != "true":
+        problems.append(f"Root-Is-Purelib {message['Root-Is-Purelib']} is not true")
+    tags = message.get_all("Tag") or []
+    if tags != [str(WHEEL_TAG)]:
+        problems.append(f"Tag {tags} is not the file name's [{WHEEL_TAG}]")
+    return problems
 
 
 def declared_entry_points(repo: Path, root: Path) -> dict[str, dict[str, str]]:
@@ -255,20 +639,20 @@ def _entry_points(text: str) -> dict[str, dict[str, str]]:
 
 
 def check_wheel_metadata(files: list[Path], repo: Path) -> None:
-    """Require each wheel's RECORD to list its members with their hashes, and its entry points to be the declared ones.
+    """Require each wheel's ``WHEEL`` to match its file name, RECORD to list its members, entry points as declared.
 
     Raises:
-        GateError: If a member is missing from RECORD or RECORD names an absent one, a row is repeated or its hash
-            or size differs from the member's bytes, or ``entry_points.txt`` differs from the declaration.
+        GateError: If ``WHEEL`` states another tag, purelib flag or version, or repeats a header; a member is
+            missing from RECORD or RECORD names an absent one, a row is repeated or its hash or size differs from
+            the member's bytes; or ``entry_points.txt`` differs from the declaration.
     """
     for path in files:
         if path.suffix != ".whl":
             continue
         name = _metadata(path)[0]
-        problems = record_problems(path)
-        stem = "-".join(path.name.split("-")[:2])
-        members = dict((m, c) for m, c, _ in artifact_members(path))
-        shipped = members.get(f"{stem}.dist-info/entry_points.txt")
+        problems = wheel_problems(path) + record_problems(path)
+        members = {m: c for m, c, _ in artifact_members(path)}
+        shipped = members.get(f"{stem(path)}.dist-info/entry_points.txt")
         found = _entry_points(shipped.decode()) if shipped is not None else {}
         declared = declared_entry_points(repo, Path(DIST_ROOTS[name]))
         if found != declared:
@@ -347,66 +731,6 @@ def artifact_members(path: Path) -> list[tuple[str, bytes | None, str | None]]:
     return out
 
 
-def _candidates(
-    path: Path, member: str, root: Path, license_files: set[str], sources: dict[str, str], scripts: dict[str, str]
-) -> list[str] | None:
-    """Return the repo paths ``member`` may be a copy of, ``[]`` when none is allowed, ``None`` when generated."""
-    posix = root.as_posix()
-    if path.suffix == ".whl":
-        stem = "-".join(path.name.split("-")[:2])
-        top, _, rest = member.partition("/")
-        if top == f"{stem}.dist-info":
-            if rest in GENERATED:
-                return None
-            if rest.startswith("licenses/") and rest.removeprefix("licenses/") in license_files:
-                return [(root / rest.removeprefix("licenses/")).as_posix()]
-            return []
-        if top == f"{stem}.data" and rest.startswith("scripts/") and rest.removeprefix("scripts/") in scripts:
-            return [scripts[rest.removeprefix("scripts/")]]
-        if top.endswith((".dist-info", ".data")) or top not in sources:
-            return []
-        return [f"{sources[top]}/{rest}"]
-    rest = member.partition("/")[2]
-    if rest == "PKG-INFO":
-        return None
-    if rest == ".gitignore":
-        return [(root / ".gitignore").as_posix(), ".gitignore"]
-    if rest in SDIST_ALIASES:
-        return [SDIST_ALIASES[rest]]
-    return [f"{posix}/{rest}" if posix != "." else rest]
-
-
-def check_contents(files: list[Path], repo: Path) -> None:
-    """Require every file in every artifact to be a byte-identical copy of a git-tracked file, or a generated one.
-
-    Aliased members (the shared hook, the ignore file, license files) are bound to their content, not only
-    their name. Entries that are not regular files, and extra dist-info or data directories, are refused.
-
-    Raises:
-        GateError: If an artifact holds such an entry, or ``repo`` is not a git work tree.
-    """
-    tracked = _tracked(repo)
-    stray = []
-    for path in files:
-        name = _metadata(path)[0]
-        root = Path(DIST_ROOTS[name])
-        sources = _wheel_sources(repo, root) if path.suffix == ".whl" else {}
-        scripts = _shared_scripts(repo, root) if path.suffix == ".whl" else {}
-        license_files = set(_message(path).get_all("License-File") or [])
-        for member, content, problem in artifact_members(path):
-            label = f"{path.name}:{member}"
-            if problem:
-                stray.append(f"{label} ({problem})")
-                continue
-            candidates = _candidates(path, member, root, license_files, sources, scripts)
-            if candidates is None:
-                continue
-            if not any(c in tracked and (repo / c).read_bytes() == content for c in candidates):
-                stray.append(f"{label} (no identical tracked file)")
-    if stray:
-        raise GateError(f"artifacts hold files that are not copies of tracked files: {', '.join(stray[:5])}")
-
-
 UV_KEPT = frozenset(
     {
         "UV_CACHE_DIR",
@@ -419,28 +743,47 @@ UV_KEPT = frozenset(
     }
 )
 """The ``UV_*`` variables the gate passes on: where uv keeps its files and how it talks to the network."""
+ENV_KEPT = UV_KEPT | {
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "SYSTEMROOT",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "all_proxy",
+}
+"""Every variable a gate subprocess sees: where tools and temporaries are, the locale, and how to reach the network."""
 
 
 def gate_environment(environ: Mapping[str, str]) -> dict[str, str]:
-    """Return ``environ`` without any ``UV_*`` variable outside ``UV_KEPT``, nor ``PIP_*`` or ``VIRTUAL_ENV``."""
-    return {
-        k: v
-        for k, v in environ.items()
-        if not (k.startswith("PIP_") or k == "VIRTUAL_ENV" or (k.startswith("UV_") and k not in UV_KEPT))
-    }
+    """Return the variables of ``environ`` named in ``ENV_KEPT``, and no other."""
+    return {k: v for k, v in environ.items() if k in ENV_KEPT}
 
 
-def _run(*args: str) -> None:
-    """Run a command in ``gate_environment``; a ``uv`` command also gets ``--no-config``.
+def _run(*args: str, cwd: str | None = None) -> str:
+    """Run a command in ``gate_environment``; a ``uv`` command also gets ``--no-config``; return its stdout.
 
     Raises:
         GateError: carrying the command's output on a non-zero status.
     """
     if args[0] == "uv":
         args = (*args[: 3 if args[1] == "pip" else 2], "--no-config", *args[3 if args[1] == "pip" else 2 :])
-    done = subprocess.run(args, capture_output=True, text=True, env=gate_environment(os.environ))
+    done = subprocess.run(args, capture_output=True, text=True, env=gate_environment(os.environ), cwd=cwd)
     if done.returncode != 0:
         raise GateError(f"{' '.join(args)} failed ({done.returncode}):\n{done.stdout}{done.stderr}")
+    return done.stdout
 
 
 def floor_pythons(repo: Path = ROOT) -> dict[str, str]:
@@ -456,8 +799,21 @@ def floor_pythons(repo: Path = ROOT) -> dict[str, str]:
     return floors
 
 
+_MARKER_ENVIRONMENT = (
+    "import json, os, platform, sys\n"
+    "i = sys.implementation.version\n"
+    "v = f'{i.major}.{i.minor}.{i.micro}' + ('' if i.releaselevel == 'final' else i.releaselevel[0] + str(i.serial))\n"
+    "print(json.dumps({'implementation_name': sys.implementation.name, 'implementation_version': v,\n"
+    "    'os_name': os.name, 'platform_machine': platform.machine(), 'platform_release': platform.release(),\n"
+    "    'platform_system': platform.system(), 'platform_version': platform.version(),\n"
+    "    'python_full_version': platform.python_version(),\n"
+    "    'platform_python_implementation': platform.python_implementation(),\n"
+    "    'python_version': '.'.join(platform.python_version_tuple()[:2]), 'sys_platform': sys.platform}))\n"
+)
+"""Prints the PEP 508 marker environment of the interpreter running it."""
+
 _VERIFY = (
-    "import csv, io, json, sys\n"
+    "import csv, importlib, importlib.util, io, json, os, sys\n"
     "from importlib import metadata\n"
     "bad = []\n"
     "for n, want in json.loads(sys.argv[1]).items():\n"
@@ -467,7 +823,35 @@ _VERIFY = (
     "    if dist.version != want['version'] or wrong:\n"
     "        bad.append(f'{n} {dist.version}: {wrong[:3]}')\n"
     "assert not bad, f'siblings not installed from dist: {bad}'\n"
+    "for m in json.loads(sys.argv[2]):\n"
+    "    if m.rpartition('.')[2] == '__main__':\n"
+    "        spec = importlib.util.find_spec(m)\n"
+    "        compile(open(spec.origin, 'rb').read(), spec.origin, 'exec')\n"
+    "    else:\n"
+    "        importlib.import_module(m)\n"
+    "prefix = os.path.realpath(sys.prefix) + os.sep\n"
+    "tops = set(json.loads(sys.argv[3]))\n"
+    "stray = sorted(f'{k} from {v.__file__}' for k, v in list(sys.modules.items())\n"
+    "    if k.partition('.')[0] in tops and not os.path.realpath(getattr(v, '__file__', None) or '').startswith(prefix))\n"
+    "assert not stray, f'first-party modules imported from outside the venv: {stray[:3]}'\n"
 )
+"""Checks the siblings' files, imports every listed module and requires every first-party module to be installed."""
+
+
+def wheel_modules(wheel: Path) -> list[str]:
+    """Return every module of the wheel's packages: each ``.py`` whose directories all hold an ``__init__.py``.
+
+    A ``.py`` file in a directory without ``__init__.py`` is package data, not a module, and is not listed.
+    """
+    names = {m for m, _, _ in artifact_members(wheel)}
+    modules = []
+    for member in sorted(names):
+        parts = member[: -len(".py")].split("/") if member.endswith(".py") else []
+        if not parts or parts[0].endswith((".dist-info", ".data")):
+            continue
+        if all("/".join(parts[:i]) + "/__init__.py" in names for i in range(1, len(parts))):
+            modules.append(".".join(parts[:-1] if parts[-1] == "__init__" else parts))
+    return modules
 
 
 def wheel_file_hashes(wheel: Path) -> dict[str, str]:
@@ -479,29 +863,46 @@ def wheel_file_hashes(wheel: Path) -> dict[str, str]:
     }
 
 
+def selected_requirements(
+    requirements: Iterable[Requirement], environment: dict[str, str], extras: Iterable[str]
+) -> list[str]:
+    """Return the requirements that apply to ``environment`` with ``extras`` requested, each without its marker.
+
+    A requirement applies when it has no marker, or its marker holds in ``environment`` with ``extra`` empty or
+    set to one of ``extras``. Markers are evaluated here because an installer evaluates ``extra`` as unset.
+    """
+    out = []
+    for requirement in requirements:
+        if requirement.marker is None or any(
+            requirement.marker.evaluate({**environment, "extra": e}) for e in ("", *extras)
+        ):
+            plain = Requirement(str(requirement))
+            plain.marker = None
+            out.append(str(plain))
+    return out
+
+
 def check_installs(files: list[Path], pythons: Mapping[str, str], *, index_url: str = PYPI) -> None:
-    """Install each distribution alone into its own fresh venv at ``pythons[name]``, check its siblings, import it.
+    """Install each distribution alone, with all its extras, into its own fresh venv at ``pythons[name]``; import it.
 
     Only the distribution's own wheel is passed by path. Its siblings must be reached by the resolver through
     ``--find-links`` on the directory of ``files``, with no index (``--no-index``), in an install that neither
     reads nor writes any uv cache (``--no-cache``), so neither a cached wheel nor an index serving the same name
     and version can stand in for the one in ``dist/``. Every ``uv`` call runs with ``--no-config`` in
     ``gate_environment``, so no configuration file or variable of the caller redirects resolution.
-    The third-party requirements of the distribution and its siblings are installed first, by name, from
-    ``index_url`` only, through the host's cache, which no first-party wheel enters. Each sibling must then be
-    installed with the version and file hashes of the wheel in ``dist/``, not merely the version.
+    The third-party requirements of the distribution (with every extra it provides) and of its siblings are
+    installed first, by name, from ``index_url`` only, through the host's cache, which no first-party wheel enters.
+    Each sibling must then be installed with the version and file hashes of the wheel in ``dist/``. Every module
+    of the distribution is imported by the venv's interpreter in isolated mode (``-I``) from a scratch directory,
+    and every first-party module loaded must come from the venv.
 
     Raises:
-        GateError: If creating an environment, installing, a sibling's version or importing fails.
+        GateError: If creating an environment, installing, a sibling's files or importing fails.
     """
     wheels = {_metadata(p)[0]: p.resolve() for p in files if p.suffix == ".whl"}
-    third_party = {
-        n: [str(r) for r in _metadata(p)[2] if canonicalize_name(r.name) not in DISTRIBUTIONS]
-        for n, p in wheels.items()
-    }
-    built = {
-        n: {"version": str(_metadata(p)[1]), "files": wheel_file_hashes(p)} for n, p in wheels.items()
-    }
+    meta = {n: core_metadata(p)[0] for n, p in wheels.items()}
+    built = {n: {"version": str(meta[n].version), "files": wheel_file_hashes(p)} for n, p in wheels.items()}
+    tops = sorted({m.partition(".")[0] for p in wheels.values() for m in wheel_modules(p)})
     links = next(iter(wheels.values())).parent
     with tempfile.TemporaryDirectory(prefix="release-gate-") as tmp:
         for name in DISTRIBUTIONS:
@@ -510,44 +911,92 @@ def check_installs(files: list[Path], pythons: Mapping[str, str], *, index_url: 
                 siblings[link] = built[link]
                 link = DEPENDS_ON[link]
             venv = Path(tmp) / name
-            _run("uv", "venv", "--python", pythons[name], str(venv))
+            _run("uv", "venv", "--python", pythons[name], str(venv), cwd=tmp)
             interpreter = str(venv / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python"))
-            requirements = [r for n in (name, *siblings) for r in third_party[n]]
+            environment = json.loads(_run(interpreter, "-I", "-c", _MARKER_ENVIRONMENT, cwd=tmp))
+            extras = sorted(meta[name].provides_extra or [])
+            requirements = []
+            for n, wanted in ((name, extras), *((s, []) for s in siblings)):
+                third_party = [r for r in meta[n].requires_dist or [] if canonicalize_name(r.name) not in DISTRIBUTIONS]
+                requirements += selected_requirements(third_party, environment, wanted)
             if requirements:
-                _run("uv", "pip", "install", "--python", interpreter, "--index-url", index_url, *requirements)
+                _run("uv", "pip", "install", "--python", interpreter, "--index-url", index_url, *requirements, cwd=tmp)
             install = ("uv", "pip", "install", "--no-cache", "--no-index", "--python", interpreter)
             install += ("--find-links", str(links))
-            _run(*install, str(wheels[name]))
-            _run(interpreter, "-c", _VERIFY + f"import {IMPORTS[name]}", json.dumps(siblings))
+            target = f"{name}[{','.join(extras)}] @ {wheels[name].as_uri()}" if extras else str(wheels[name])
+            _run(*install, target, cwd=tmp)
+            modules = json.dumps(wheel_modules(wheels[name]))
+            _run(interpreter, "-I", "-c", _VERIFY, json.dumps(siblings), modules, json.dumps(tops), cwd=tmp)
+
+
+def check_sdist_builds(files: list[Path], *, index_url: str = PYPI) -> None:
+    """Build a wheel from each sdist alone and require its members to be byte-identical to the wheel in ``dist/``.
+
+    Raises:
+        GateError: If an sdist does not build, or its wheel's name or any member differs from the direct wheel's.
+    """
+    wheels = {_metadata(p)[0]: p for p in files if p.suffix == ".whl"}
+    with tempfile.TemporaryDirectory(prefix="release-gate-sdist-") as tmp:
+        for sdist in (p for p in files if p.suffix != ".whl"):
+            name = _metadata(sdist)[0]
+            unpacked, out = Path(tmp) / name / "src", Path(tmp) / name / "out"
+            unpacked.mkdir(parents=True)
+            with tarfile.open(sdist) as tar:
+                tar.extractall(unpacked, filter="data")
+            _run("uv", "build", "--wheel", "--no-cache", "--index-url", index_url, "--out-dir", str(out),
+                 str(unpacked / stem(sdist)), cwd=tmp)  # fmt: skip
+            rebuilt = [p for p in out.iterdir() if p.suffix == ".whl"]
+            if [p.name for p in rebuilt] != [wheels[name].name]:
+                raise GateError(f"{sdist.name} builds {[p.name for p in rebuilt]}, not {wheels[name].name}")
+            direct = {m: c for m, c, _ in artifact_members(wheels[name])}
+            again = {m: c for m, c, _ in artifact_members(rebuilt[0])}
+            differ = sorted(m for m in set(direct) | set(again) if direct.get(m) != again.get(m))
+            if differ:
+                raise GateError(f"{sdist.name} builds a wheel that differs from {wheels[name].name} in {differ[:5]}")
+
+
+def static_checks(
+    files: list[Path], repo: Path, floor: Version, *, tag: str | None = None, prerelease: bool | None = None
+) -> None:
+    """Run every check that needs no environment: names, set, versions, pins, metadata, members, RECORD.
+
+    Raises:
+        GateError: On the first failing check.
+    """
+    check_names(files)
+    check_files(files)
+    check_versions(files, floor, tag=tag, prerelease=prerelease)
+    check_closure(files)
+    check_metadata(files, repo)
+    check_members(files, repo)
+    check_wheel_metadata(files, repo)
 
 
 def main(
     dist: Path,
     *,
+    repo: Path,
     floor: str | None = None,
     tag: str | None = None,
     prerelease: bool | None = None,
     pythons: Mapping[str, str] | None = None,
-    repo: Path | None = None,
     index_url: str = PYPI,
 ) -> int:
     """Run every check over one listing of ``dist``; print the reason and return 1 on the first failure, else 0.
 
-    ``repo`` is the git work tree the artifacts were built from; ``None`` skips the contents check.
+    ``repo`` is the git work tree the artifacts were built from.
     """
     try:
         files = dist_files(dist)
-        check_files(files)
-        check_versions(files, Version(floor) if floor else release_floor(), tag=tag, prerelease=prerelease)
-        check_closure([p for p in files if p.suffix == ".whl"])
-        if repo is not None:
-            check_contents(files, repo)
-            check_wheel_metadata(files, repo)
+        static_checks(files, repo, Version(floor) if floor else release_floor(), tag=tag, prerelease=prerelease)
         check_installs(files, pythons or floor_pythons(), index_url=index_url)
+        check_sdist_builds(files, index_url=index_url)
     except GateError as exc:
         print(f"release gate refused: {exc}", file=sys.stderr)
         return 1
-    print(f"release gate passed: {len(files)} files checked; each distribution installed alone and imported")
+    print(
+        f"release gate passed: {len(files)} files checked; each installed alone, imported, and rebuilt from its sdist"
+    )
     return 0
 
 

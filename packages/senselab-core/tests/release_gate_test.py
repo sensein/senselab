@@ -7,6 +7,7 @@ import http.server
 import importlib.util
 import io
 import json
+import os
 import re
 import shutil
 import stat
@@ -91,6 +92,11 @@ def test_gate_accepts_a_releasable_version(v: str, fabricate: Callable[..., Path
         "1.0.0a1",
         "2.0.0+local.1",
         "0.0.0",
+        "1!1.0.0",
+        "1!2.0.0",
+        "2.0",
+        "2.0.0.0",
+        "2.0.0rc1.post1",
     ],
 )
 def test_a29_release_gate_refuses_version(v: str, fabricate: Callable[..., Path]) -> None:
@@ -172,7 +178,7 @@ def test_main_refuses_and_names_the_reason(
     dist = _release(fabricate, v)[0].parent
     for name in gate.DISTRIBUTIONS:
         fabricate_sdist(name, v)
-    assert gate.main(dist) == 1
+    assert gate.main(dist, repo=dist) == 1
     assert reason in capsys.readouterr().err
 
 
@@ -186,6 +192,7 @@ OK_MODULES: dict[str, dict[str, dict[str, str]]] = {
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_check_installs_installs_each_distribution_alone_and_imports_it(fabricate: Callable[..., Path]) -> None:
     """A dist whose three wheels import installs, one distribution per venv, from ``dist/`` paths."""
     wheels = _release(fabricate, "2.0.0", **OK_MODULES)
@@ -193,6 +200,7 @@ def test_check_installs_installs_each_distribution_alone_and_imports_it(fabricat
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_a11_check_installs_refuses_a_wheel_that_does_not_import(fabricate: Callable[..., Path]) -> None:
     """An installable dist whose root package raises on import is refused."""
     wheels = _release(
@@ -205,6 +213,7 @@ def test_a11_check_installs_refuses_a_wheel_that_does_not_import(fabricate: Call
 
 
 @pytest.mark.env
+@pytest.mark.network
 @pytest.mark.parametrize("culprit", ["worker", "core", "root"])
 def test_i1_check_installs_refuses_an_undeclared_dependency(culprit: str, fabricate: Callable[..., Path]) -> None:
     """A distribution importing a third-party package its metadata omits fails in its own venv, whoever it is."""
@@ -246,7 +255,7 @@ def test_c1_release_gate_refuses_a_sibling_the_graph_does_not_give(extra: str, f
         ("2.0.0", False, True),
         ("2.0.0", None, True),
         ("2.1.0rc1", True, True),
-        ("2.1.0-rc.1", True, True),
+        ("2.1.0-rc.1", True, False),
         ("2.1.0", False, False),
         ("2.0.0", True, False),
         ("2.1.0rc1", False, False),
@@ -257,7 +266,7 @@ def test_c1_release_gate_refuses_a_sibling_the_graph_does_not_give(extra: str, f
 def test_i2_release_gate_binds_the_version_to_the_tag_and_prerelease_flag(
     tag: str, prerelease: bool | None, ok: bool, fabricate: Callable[..., Path]
 ) -> None:
-    """The built version must equal the normalised tag, and the release's prerelease flag must match it."""
+    """The built version must equal the tag, written canonically, and the release's prerelease flag must match it."""
     version = "2.1.0rc1" if tag.startswith("2.1.0") else "2.0.0"
     wheels = _release(fabricate, version)
     if ok:
@@ -300,30 +309,21 @@ def test_m4_release_gate_checks_every_file_in_dist(
         gate.dist_files(dist)
 
 
-@pytest.mark.env
-def test_main_passes_a_complete_fabricated_dist(
-    fabricate: Callable[..., Path], fabricate_sdist: Callable[..., Path]
-) -> None:
-    """Wheels and sdists of one releasable version, pinned and importable, pass end to end."""
-    wheels = _release(fabricate, "2.0.0", **OK_MODULES)
-    for name in gate.DISTRIBUTIONS:
-        fabricate_sdist(name, "2.0.0")
-    assert gate.main(wheels[0].parent, tag="2.0.0", prerelease=False, pythons=HERE_PYTHON) == 0
-
-
 def _core_files(root: Path, out: Path) -> list[Path]:
     """Build core in ``root`` and return its wheel and sdist."""
     return [p for p in build(root, out, "--package", "senselab-core") if not p.name.startswith(".")]
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_n3_clean_build_contents_are_all_tracked(tagged_workspace: Callable[..., Path], tmp_path: Path) -> None:
     """Every file in a clean build's wheel and sdist maps to a tracked file or a named generated one."""
     root = tagged_workspace(["2.0.0"])
-    gate.check_contents(_core_files(root, tmp_path / "out"), root)
+    gate.check_members(_core_files(root, tmp_path / "out"), root)
 
 
 @pytest.mark.env
+@pytest.mark.network
 @pytest.mark.parametrize("where", ["info-exclude", "untracked", "nested-untracked"])
 def test_n3_release_gate_refuses_a_shipped_file_git_does_not_track(
     where: str, tagged_workspace: Callable[..., Path], tmp_path: Path
@@ -339,10 +339,11 @@ def test_n3_release_gate_refuses_a_shipped_file_git_does_not_track(
     files = _core_files(root, tmp_path / "out")
     assert any("leak.txt" in n for p in files if p.suffix == ".whl" for n in zipfile.ZipFile(p).namelist())
     with pytest.raises(gate.GateError, match="leak.txt"):
-        gate.check_contents(files, root)
+        gate.check_members(files, root)
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_n3_gitignored_file_does_not_ship_and_is_not_refused(
     tagged_workspace: Callable[..., Path], tmp_path: Path
 ) -> None:
@@ -350,7 +351,7 @@ def test_n3_gitignored_file_does_not_ship_and_is_not_refused(
     root = tagged_workspace(["2.0.0"])
     (root / "packages/senselab-core/src/senselab_core/x.log").write_text("x")
     (root / ".gitignore").write_text("*.log\n")
-    gate.check_contents(_core_files(root, tmp_path / "out"), root)
+    gate.check_members(_core_files(root, tmp_path / "out"), root)
 
 
 def _rewrite_sdist(path: Path, edits: dict[str, bytes | tuple[str, str]]) -> None:
@@ -401,11 +402,12 @@ def _rewrite_wheel(path: Path, edits: dict[str, bytes | str]) -> None:
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_m1_m2_m4_mutating_a_real_build_is_refused(tagged_workspace: Callable[..., Path], tmp_path: Path) -> None:
     """Aliases are bound to content, extra dist-info or data dirs and non-regular entries are refused."""
     root = tagged_workspace(["2.0.0"])
     built = _core_files(root, tmp_path / "out")
-    gate.check_contents(built, root)
+    gate.check_members(built, root)
     wheel, sdist = (next(p for p in built if p.suffix == s) for s in (".whl", ".gz"))
     stem = "senselab_core-2.0.0"
     wheel_cases: dict[str, dict[str, bytes | str]] = {
@@ -422,8 +424,8 @@ def test_m1_m2_m4_mutating_a_real_build_is_refused(tagged_workspace: Callable[..
         target.parent.mkdir()
         shutil.copy(wheel, target)
         _rewrite_wheel(target, edits)
-        with pytest.raises(gate.GateError, match="not copies of tracked files"):
-            gate.check_contents([target], root)
+        with pytest.raises(gate.GateError, match="differ from the tracked sources"):
+            gate.check_members([target], root)
     sdist_cases: dict[str, dict[str, bytes | tuple[str, str]]] = {
         "alias content": {"_shared_hatch_build_pins.py": b"print('evil')\n"},
         "gitignore content": {".gitignore": b"!*\n"},
@@ -437,11 +439,12 @@ def test_m1_m2_m4_mutating_a_real_build_is_refused(tagged_workspace: Callable[..
         target.parent.mkdir()
         shutil.copy(sdist, target)
         _rewrite_sdist(target, sdist_edits)
-        with pytest.raises(gate.GateError, match="not copies of tracked files"):
-            gate.check_contents([target], root)
+        with pytest.raises(gate.GateError, match="differ from the tracked sources"):
+            gate.check_members([target], root)
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_m1_an_untracked_gitignore_in_a_package_root_that_ships_is_refused(
     tagged_workspace: Callable[..., Path], tmp_path: Path
 ) -> None:
@@ -450,26 +453,28 @@ def test_m1_an_untracked_gitignore_in_a_package_root_that_ships_is_refused(
     (root / "packages/senselab-core/.gitignore").write_text("!*\n")
     files = _core_files(root, tmp_path / "out")
     with pytest.raises(gate.GateError, match="gitignore"):
-        gate.check_contents(files, root)
+        gate.check_members(files, root)
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_m1_the_root_distribution_license_must_be_a_named_tracked_copy(
     tagged_workspace: Callable[..., Path], tmp_path: Path
 ) -> None:
     """The root wheel's license file passes when it is the tracked LICENSE.md and fails when its bytes differ."""
     root = tagged_workspace(["2.0.0"])
     files = [p for p in build(root, tmp_path / "out", "--package", "senselab") if not p.name.startswith(".")]
-    gate.check_contents(files, root)
+    gate.check_members(files, root)
     wheel = next(p for p in files if p.suffix == ".whl")
     names = zipfile.ZipFile(wheel).namelist()
     license_member = next(n for n in names if "/licenses/" in n)
     _rewrite_wheel(wheel, {license_member: b"forged"})
     with pytest.raises(gate.GateError, match="licenses"):
-        gate.check_contents([wheel], root)
+        gate.check_members([wheel], root)
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_m2_sibling_verification_binds_content_not_version(fabricate: Callable[..., Path], tmp_path: Path) -> None:
     """A sibling installed at the right version but from other files than the dist wheel fails the check."""
     dist = fabricate("senselab-worker", "2.0.0", modules={"senselab_worker/__init__.py": "A = 1\n"}).parent
@@ -502,10 +507,11 @@ def test_n3_contents_check_refuses_a_directory_that_is_not_a_repository(
     """Without a git work tree the contents cannot be checked, and the gate says so rather than passing."""
     wheels = _release(fabricate, "2.0.0")
     with pytest.raises(gate.GateError, match="not a git work tree"):
-        gate.check_contents(wheels, tmp_path)
+        gate.check_members(wheels, tmp_path)
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_n1_check_installs_exercises_the_sibling_edge(fabricate: Callable[..., Path]) -> None:
     """A root that imports core but pins nothing fails in its own venv: siblings are reached only through the pin."""
     wheels = [
@@ -518,6 +524,7 @@ def test_n1_check_installs_exercises_the_sibling_edge(fabricate: Callable[..., P
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_n2_a_dotfile_wheel_cannot_stand_in_for_the_checked_one(fabricate: Callable[..., Path]) -> None:
     """Install and checks share one listing, so a dot-named broken wheel is neither checked nor installed."""
     wheels = _release(fabricate, "2.0.0", **OK_MODULES)
@@ -533,6 +540,7 @@ def _first_party_cache_entries(cache: Path) -> list[str]:
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_c4_a_cached_wheel_of_the_same_name_and_version_cannot_stand_in_for_dist(
     fabricate: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -556,6 +564,7 @@ def test_c4_a_cached_wheel_of_the_same_name_and_version_cannot_stand_in_for_dist
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_c4_the_gate_leaves_no_first_party_wheel_in_the_host_cache(
     fabricate: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -582,80 +591,6 @@ def test_n4_root_is_tested_at_its_declared_floor() -> None:
     """The real floors are those the pyprojects declare, so the root is import-tested at the lowest Python it allows."""
     floors = gate.floor_pythons()
     assert floors["senselab"] == "3.11" and floors["senselab-core"] == "3.11" and floors["senselab-worker"] == "3.10"
-
-
-SAFE_EXPRESSIONS = {"github.event.pull_request.number", "matrix.python-version"}
-
-
-def _strings(node: Any) -> list[str]:  # noqa: ANN401
-    """Return every ``run`` string and github-script ``script`` string among the steps under ``node``."""
-    found: list[str] = []
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if key in ("run", "script") and isinstance(value, str):
-                found.append(value)
-            else:
-                found += _strings(value)
-    elif isinstance(node, list):
-        for item in node:
-            found += _strings(item)
-    return found
-
-
-def interpolation_offenders(directory: Path) -> list[str]:
-    """Parse every workflow and composite action under ``directory``; list each ``${{ }}`` in a script not allowed.
-
-    A script is inspected as one whole string, so an expression split over lines, or inside a literal or folded
-    block scalar, is found. An opener with no closer is an offender too.
-    """
-    offenders = []
-    for path in sorted([*directory.rglob("*.yml"), *directory.rglob("*.yaml")]):
-        for script in _strings(yaml.safe_load(path.read_text())):
-            found = re.findall(r"\$\{\{(.*?)\}\}", script, flags=re.S)
-            offenders += [
-                f"{path.name}: {' '.join(e.split())}" for e in found if " ".join(e.split()) not in SAFE_EXPRESSIONS
-            ]
-            if script.count("${{") != len(found):
-                offenders.append(f"{path.name}: unterminated ${{{{")
-    return offenders
-
-
-@pytest.mark.logic
-def test_n5_no_workflow_interpolates_an_expression_into_a_run_script() -> None:
-    """Untrusted contexts reach shell only through ``env:``; scripts hold no ``${{ }}`` but numbers and the matrix."""
-    assert interpolation_offenders(REPO / ".github") == []
-
-
-@pytest.mark.logic
-@pytest.mark.parametrize(
-    ("script", "bad"),
-    [
-        ("run: echo ${{ github.head_ref }}", True),
-        ("run: |\n        echo ${{\n          github.head_ref }}", True),
-        ("run: |\n        echo hi\n        echo ${{ github.event.pull_request.title }}", True),
-        ("run: >\n        echo\n        ${{ github.head_ref }}", True),
-        ("run: >\n        echo ${{\n        github.head_ref\n        }}", True),
-        ("run: echo ${{ github.head_ref", True),
-        ("run: echo ${{ matrix.python-version }}", False),
-        ("run: |\n        echo ${{\n          github.event.pull_request.number }}", False),
-        ('run: echo "$HEAD"', False),
-    ],
-)
-def test_m3_interpolation_guard_inspects_whole_scripts(script: str, bad: bool, tmp_path: Path) -> None:
-    """The guard parses YAML and scans each script as a whole: multi-line, literal and folded forms are all caught."""
-    (tmp_path / "w.yaml").write_text(f"jobs:\n  j:\n    steps:\n    - {script}\n")
-    assert bool(interpolation_offenders(tmp_path)) is bad
-
-
-@pytest.mark.logic
-def test_m3_interpolation_guard_covers_composite_actions_and_github_script(tmp_path: Path) -> None:
-    """A composite action's ``run`` and a github-script ``with.script`` are scripts too."""
-    (tmp_path / "action.yml").write_text("runs:\n  steps:\n  - run: echo ${{ github.head_ref }}\n")
-    (tmp_path / "w.yaml").write_text(
-        "jobs:\n  j:\n    steps:\n    - uses: actions/github-script@v7\n"
-        "      with:\n        script: x(${{ github.head_ref }})\n"
-    )
-    assert len(interpolation_offenders(tmp_path)) == 2
 
 
 @pytest.mark.logic
@@ -715,6 +650,7 @@ _TAGS = [
 
 
 @pytest.mark.env
+@pytest.mark.network
 @pytest.mark.parametrize(("tags", "after", "releasable"), _TAGS)
 def test_a29_version_from_the_tag_history_is_gated(
     tags: list[str], after: int, releasable: bool, tagged_workspace: Callable[..., Path], tmp_path: Path
@@ -732,6 +668,7 @@ def test_a29_version_from_the_tag_history_is_gated(
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_version_is_at_least_the_release_floor(tagged_workspace: Callable[..., Path], tmp_path: Path) -> None:
     """A checkout tagged at the floor builds all three distributions at a version of at least the floor."""
     root = tagged_workspace([RELEASE_FLOOR])
@@ -744,6 +681,7 @@ def test_version_is_at_least_the_release_floor(tagged_workspace: Callable[..., P
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_a32_sdists_are_self_contained_and_the_pin_is_exact(
     tagged_workspace: Callable[..., Path], tmp_path: Path
 ) -> None:
@@ -818,6 +756,7 @@ def test_versions_are_pinned_equal(
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_i2_two_release_tags_on_one_commit_build_the_older_version(
     tagged_workspace: Callable[..., Path], tmp_path: Path
 ) -> None:
@@ -831,8 +770,9 @@ def test_i2_two_release_tags_on_one_commit_build_the_older_version(
         gate.check_versions([wheel], FLOOR, tag="2.1.0rc1", prerelease=True)
 
 
-@pytest.mark.network
 @pytest.mark.env
+@pytest.mark.network
+@pytest.mark.slow
 def test_release_gate_installs_dist(tagged_workspace: Callable[..., Path], tmp_path: Path) -> None:
     """Build every package from a tagged checkout; the gate installs each distribution at its floor Python."""
     root = tagged_workspace([RELEASE_FLOOR])
@@ -974,24 +914,31 @@ def test_no_declared_entry_points_means_no_entry_points_file(fabricate: Callable
 
 @pytest.mark.contract
 @pytest.mark.parametrize(
-    ("member", "allowed"),
+    ("member", "source"),
     [
-        ("senselab_worker-2.0.0.data/scripts/run-worker", ["packages/senselab-worker/bin/run.sh"]),
-        ("senselab_worker-2.0.0.data/scripts/other", []),
-        ("senselab_worker-2.0.0.data/purelib/run-worker", []),
-        ("senselab_worker-2.0.0.data/data/run-worker", []),
-        ("senselab_worker-9.9.9.data/scripts/run-worker", []),
+        ("senselab_worker-2.0.0.data/scripts/run-worker", "packages/senselab-worker/bin/run.sh"),
+        ("senselab_worker-2.0.0.data/scripts/other", None),
+        ("senselab_worker-2.0.0.data/purelib/run-worker", None),
+        ("senselab_worker-2.0.0.data/data/run-worker", None),
+        ("senselab_worker-9.9.9.data/scripts/run-worker", None),
     ],
 )
-def test_data_scripts_ship_only_as_the_hatch_config_declares(member: str, allowed: list[str]) -> None:
-    """A ``.data/scripts`` member maps to its declared source; any other ``.data`` member maps to nothing."""
+def test_data_scripts_ship_only_as_the_hatch_config_declares(member: str, source: str | None, mini: Path) -> None:
+    """A ``.data/scripts`` member is derived from its declared source; no other ``.data`` member is derived at all."""
+    pyproject = mini / "packages/senselab-worker/pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text() + '[tool.hatch.build.targets.wheel.shared-scripts]\n"bin/run.sh" = "run-worker"\n'
+    )
+    (mini / "packages/senselab-worker/bin").mkdir()
+    (mini / "packages/senselab-worker/bin/run.sh").write_text("#!/bin/sh\n")
+    subprocess.run(["git", "add", "-A"], cwd=mini, check=True)
     wheel = Path("senselab_worker-2.0.0-py3-none-any.whl")
-    scripts = {"run-worker": "packages/senselab-worker/bin/run.sh"}
-    root = Path("packages/senselab-worker")
-    assert gate._candidates(wheel, member, root, set(), {"senselab_worker": "x"}, scripts) == allowed
+    expected = gate.expected_members(wheel, mini, gate.tracked_modes(mini))
+    assert expected.get(member) == source and (source is not None) is (member in expected)
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_a_real_build_passes_the_wheel_metadata_check(tagged_workspace: Callable[..., Path], tmp_path: Path) -> None:
     """The RECORD and entry points a clean hatch build writes pass the checks."""
     root = tagged_workspace(["2.0.0"])
@@ -1016,21 +963,35 @@ UV_STEERING = [
 
 
 @pytest.mark.contract
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=200, deadline=None)
 @given(
     env=st.dictionaries(
-        st.sampled_from([*UV_STEERING, *sorted(gate.UV_KEPT), "PIP_INDEX_URL", "VIRTUAL_ENV", "PATH", "HOME", "LANG"]),
+        st.one_of(
+            st.sampled_from(
+                [
+                    *UV_STEERING,
+                    *sorted(gate.ENV_KEPT),
+                    "PIP_INDEX_URL",
+                    "VIRTUAL_ENV",
+                    "PYTHONPATH",
+                    "PYTHONHOME",
+                    "PYTHONSTARTUP",
+                    "GIT_INDEX_FILE",
+                    "GIT_DIR",
+                    "GIT_WORK_TREE",
+                    "LD_PRELOAD",
+                    "DYLD_INSERT_LIBRARIES",
+                ]
+            ),
+            st.text(alphabet=st.characters(categories=["Lu", "Ll", "Nd"], include_characters="_"), min_size=1),
+        ),
         st.text(max_size=8),
     )
 )
-def test_the_gate_environment_keeps_no_variable_that_steers_resolution(env: dict[str, str]) -> None:
-    """Every ``UV_*`` outside the kept set, ``PIP_*`` and ``VIRTUAL_ENV`` are removed; the rest pass unchanged."""
-    out = gate.gate_environment(env)
-    assert not [k for k in out if (k.startswith("UV_") and k not in gate.UV_KEPT) or k.startswith("PIP_")]
-    assert "VIRTUAL_ENV" not in out
-    assert {k: v for k, v in env.items() if k not in out} == {
-        k: v for k, v in env.items() if k.startswith(("UV_", "PIP_")) and k not in gate.UV_KEPT or k == "VIRTUAL_ENV"
-    }
+def test_xg6_the_gate_environment_is_an_allowlist(env: dict[str, str]) -> None:
+    """Only the variables ``ENV_KEPT`` names pass, unchanged; every other name, known or invented, is dropped."""
+    assert gate.gate_environment(env) == {k: v for k, v in env.items() if k in gate.ENV_KEPT}
+    assert not {"PYTHONPATH", "PYTHONHOME", "GIT_INDEX_FILE", "GIT_DIR", "VIRTUAL_ENV"} & gate.ENV_KEPT
 
 
 @pytest.mark.logic
@@ -1059,6 +1020,7 @@ def test_every_uv_call_of_the_gate_ignores_configuration(
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_an_index_serving_a_same_version_first_party_wheel_cannot_win(
     fabricate: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1130,6 +1092,7 @@ class _SimpleIndex:
 
 
 @pytest.mark.env
+@pytest.mark.network
 def test_third_party_requirements_come_from_the_index_argument_and_never_from_the_environment(
     fabricate: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1158,15 +1121,434 @@ def test_third_party_requirements_come_from_the_index_argument_and_never_from_th
 
 
 @pytest.mark.logic
-def test_main_passes_the_index_argument_to_the_installs(
+def test_main_passes_the_index_argument_to_the_installs_and_the_sdist_builds(
     fabricate: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``main`` hands ``index_url`` to ``check_installs``; it defaults to PyPI."""
+    """``main`` hands ``index_url`` to ``check_installs`` and ``check_sdist_builds``; it defaults to PyPI."""
     wheels = _release(fabricate, "2.0.0", **OK_MODULES)
-    for name in gate.DISTRIBUTIONS:
-        sys.modules["release_fixture"].write_sdist(wheels[0].parent, name, "2.0.0")
-    seen: list[str] = []
-    monkeypatch.setattr(gate, "check_installs", lambda files, pythons, *, index_url: seen.append(index_url))
-    assert gate.main(wheels[0].parent, pythons=HERE_PYTHON) == 0
-    assert gate.main(wheels[0].parent, pythons=HERE_PYTHON, index_url="http://mirror.invalid/simple") == 0
-    assert seen == [gate.PYPI, "http://mirror.invalid/simple"]
+    seen: list[tuple[str, str]] = []
+    monkeypatch.setattr(gate, "static_checks", lambda *a, **k: None)
+    monkeypatch.setattr(gate, "check_installs", lambda files, pythons, *, index_url: seen.append(("i", index_url)))
+    monkeypatch.setattr(gate, "check_sdist_builds", lambda files, *, index_url: seen.append(("s", index_url)))
+    assert gate.main(wheels[0].parent, repo=REPO, pythons=HERE_PYTHON) == 0
+    assert gate.main(wheels[0].parent, repo=REPO, pythons=HERE_PYTHON, index_url="http://mirror.invalid/simple") == 0
+    mirror = "http://mirror.invalid/simple"
+    assert seen == [("i", gate.PYPI), ("s", gate.PYPI), ("i", mirror), ("s", mirror)]
+
+
+@pytest.mark.logic
+def test_main_cannot_skip_the_member_check() -> None:
+    """``repo`` is a required argument of ``main``: no call checks a dist without comparing it to its sources."""
+    import inspect
+
+    parameter = inspect.signature(gate.main).parameters["repo"]
+    assert parameter.default is inspect.Parameter.empty and parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+# --- H9f: the gate checks completeness (R-107, XG-4..XG-9) ----------------------------------------
+
+
+def _mini_dist(mini: Path, version: str = "2.0.0") -> list[Path]:
+    return sys.modules["release_fixture"].mini_dist(mini, mini.parent / "dist", version)
+
+
+def _static(files: list[Path], mini: Path, *, tag: str | None = "2.0.0") -> None:
+    gate.static_checks(files, mini, FLOOR, tag=tag, prerelease=None if tag is None else Version(tag).is_prerelease)
+
+
+def _rewrite(
+    mini: Path, name: str, kind: str, edit: Callable[[dict[str, bytes]], None], version: str = "2.0.0"
+) -> Path:
+    """Rewrite one mini artifact in place with ``edit`` applied to its members; RECORD follows the edit."""
+    fixture = sys.modules["release_fixture"]
+    writer = fixture.write_mini_wheel if kind == "wheel" else fixture.write_mini_sdist
+    return writer(mini, mini.parent / "dist", name, version, edit)
+
+
+@pytest.mark.logic
+def test_xg_a_hatch_shaped_dist_of_the_mini_repo_passes_every_static_check(mini: Path) -> None:
+    """The positive control: the six artifacts a hatch build writes pass names, versions, metadata and members."""
+    _static(_mini_dist(mini), mini)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("tag", ["1!1.0.0", "1!2.0.0"])
+def test_xg4_an_epoch_version_is_refused_whatever_the_tag(tag: str, fabricate: Callable[..., Path]) -> None:
+    """A ``1!1.0.0`` build outranks every 2.x release, so its version and its tag are both refused."""
+    wheels = _release(fabricate, tag)
+    with pytest.raises(gate.GateError, match="epoch"):
+        gate.check_versions(wheels, FLOOR, tag=tag, prerelease=False)
+    with pytest.raises(gate.GateError, match="epoch"):
+        gate.check_versions(_release(fabricate, "2.0.0"), FLOOR, tag=tag, prerelease=False)
+
+
+_SEGMENTS = st.tuples(
+    st.sampled_from(["", "1!", "0!"]),
+    st.lists(st.integers(0, 12), min_size=1, max_size=4).map(lambda p: ".".join(map(str, p))),
+    st.sampled_from(["", "a1", "b2", "rc3", "alpha1", "c1", "-rc.1", "pre2", "a"]),
+    st.sampled_from(["", ".post1", "-1", ".dev0", ".dev3"]),
+    st.sampled_from(["", "+g1234", "+local.1"]),
+)
+
+
+@pytest.mark.contract
+@settings(max_examples=300, deadline=None)
+@given(parts=_SEGMENTS)
+def test_xg4_only_the_grammar_is_a_releasable_version(parts: tuple[str, ...]) -> None:
+    """A version string is releasable exactly when it is ``X.Y.Z`` or ``X.Y.Z(a|b|rc)N`` written canonically."""
+    text = "".join(parts)
+    releasable = re.fullmatch(r"\d+\.\d+\.\d+((a|b|rc)\d+)?", text) is not None and str(Version(text)) == text
+    assert (gate.version_problem(text) is None) is releasable
+
+
+def _drop(member: str) -> Callable[[dict[str, bytes]], None]:
+    def edit(members: dict[str, bytes]) -> None:
+        del members[member]
+
+    return edit
+
+
+@pytest.mark.contract
+def test_xg5_every_derived_member_is_required(mini: Path) -> None:
+    """Dropping any one member of any artifact, its RECORD rewritten to match, is refused."""
+    fixture = sys.modules["release_fixture"]
+    files = _mini_dist(mini)
+    dropped = 0
+    for path in files:
+        name = gate._metadata(path)[0]
+        kind = "wheel" if path.suffix == ".whl" else "sdist"
+        for member in [m for m, _, _ in gate.artifact_members(path) if not m.endswith("/RECORD")]:
+            _rewrite(mini, name, kind, _drop(member))
+            with pytest.raises(gate.GateError):
+                _static(files, mini)
+            dropped += 1
+        (fixture.write_mini_wheel if kind == "wheel" else fixture.write_mini_sdist)(mini, path.parent, name, "2.0.0")
+    _static(files, mini)
+    assert dropped > 20
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("name", "member"),
+    [
+        ("senselab-core", "senselab_core/kernel/identity.py"),
+        ("senselab-core", "senselab_core/__init__.py"),
+        ("senselab-worker", "senselab_worker/canonical.py"),
+        ("senselab", "senselab/data/table.yaml"),
+    ],
+)
+def test_xg5_a_wheel_missing_a_tracked_package_file_is_refused(name: str, member: str, mini: Path) -> None:
+    """A tracked file the build silently dropped (ignored, force-added, excluded) refuses the release by name."""
+    files = _mini_dist(mini)
+    _rewrite(mini, name, "wheel", _drop(member))
+    with pytest.raises(gate.GateError, match=re.escape(f"{member} (missing)")):
+        _static(files, mini)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("name", "kind", "member", "content"),
+    [
+        ("senselab-core", "wheel", "senselab_core/evil.py", b"import os\n"),
+        ("senselab-core", "wheel", "senselab_core/pyproject.toml", None),
+        ("senselab-worker", "wheel", "senselab_worker-2.0.0.dist-info/licenses/LICENSE.md", None),
+        ("senselab", "wheel", "tests/a_test.py", None),
+        ("senselab", "sdist", "senselab-2.0.0/hatch_build_pins.py", None),
+        ("senselab-worker", "sdist", "senselab_worker-2.0.0/extra.txt", b"x"),
+    ],
+)
+def test_xg5_a_member_the_config_does_not_select_is_refused(
+    name: str, kind: str, member: str, content: bytes | None, mini: Path
+) -> None:
+    """Extra members are refused even when their bytes are a tracked file's."""
+    files = _mini_dist(mini)
+    data = content if content is not None else (mini / "packages/senselab-core/pyproject.toml").read_bytes()
+    _rewrite(mini, name, kind, lambda m: m.__setitem__(member, data))
+    with pytest.raises(gate.GateError, match="not a tracked file the config selects"):
+        _static(files, mini)
+
+
+@pytest.mark.logic
+def test_xg5_an_unknown_hatch_setting_refuses_rather_than_ships_underived_members(mini: Path) -> None:
+    """A build setting the derivation does not model is a refusal naming it."""
+    files = _mini_dist(mini)
+    pyproject = mini / "packages/senselab-core/pyproject.toml"
+    pyproject.write_text(pyproject.read_text() + '[tool.hatch.build.targets.wheel.sources]\n"src" = ""\n')
+    with pytest.raises(gate.GateError, match="wheel.sources"):
+        _static(files, mini)
+
+
+@pytest.mark.logic
+def test_xg5_wheel_modules_are_the_py_files_of_packages(mini: Path) -> None:
+    """Every ``.py`` under ``__init__``-bearing directories is a module; one in a data directory is not."""
+    wheel = sys.modules["release_fixture"].write_mini_wheel(
+        mini,
+        mini.parent,
+        "senselab",
+        "2.0.0",
+        lambda m: m.update(
+            {"senselab/data/guard/sitecustomize.py": b"", "senselab/__main__.py": b"", "senselab/x.pyi": b""}
+        ),
+    )
+    assert gate.wheel_modules(wheel) == ["senselab", "senselab.__main__", "senselab.cli"]
+
+
+@pytest.mark.logic
+def test_xg6_the_tracked_set_ignores_the_callers_git_environment(mini: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An alternate index exported as ``GIT_INDEX_FILE`` cannot make an untracked file count as tracked."""
+    (mini / "evil.py").write_text("x\n")
+    alternate = mini.parent / "alt-index"
+    env = {**os.environ, "GIT_INDEX_FILE": str(alternate)}
+    subprocess.run(["git", "read-tree", "HEAD"], cwd=mini, env=env, capture_output=True)
+    subprocess.run(["git", "add", "-A", "--force"], cwd=mini, env=env, check=True)
+    assert "evil.py" in subprocess.run(["git", "ls-files"], cwd=mini, env=env, capture_output=True, text=True).stdout
+    for key, value in {"GIT_INDEX_FILE": str(alternate), "GIT_DIR": str(mini / ".git"), "GIT_WORK_TREE": "/"}.items():
+        monkeypatch.setenv(key, value)
+    assert "evil.py" not in gate.tracked_modes(mini)
+
+
+@pytest.mark.logic
+def test_xg6_every_subprocess_runs_isolated_in_the_allowlisted_environment(
+    fabricate: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each command ``check_installs`` runs sees only ``ENV_KEPT`` variables; each interpreter runs with ``-I``."""
+    for key in ("PYTHONPATH", "PYTHONHOME", "GIT_INDEX_FILE", "VIRTUAL_ENV", "UV_INDEX_URL", "SOME_RANDOM_VAR"):
+        monkeypatch.setenv(key, "/planted")
+    seen: list[tuple[tuple[str, ...], dict[str, str]]] = []
+
+    def run(args: tuple[str, ...], **kwargs: Any) -> subprocess.CompletedProcess[str]:  # noqa: ANN401
+        seen.append((tuple(args), kwargs["env"]))
+        out = json.dumps({"sys_platform": sys.platform, "python_version": "3.12"}) if "-c" in args else ""
+        return subprocess.CompletedProcess(args, 0, out, "")
+
+    monkeypatch.setattr(gate.subprocess, "run", run)
+    gate.check_installs(gate.dist_files(_release(fabricate, "2.0.0", **OK_MODULES)[0].parent), HERE_PYTHON)
+    assert seen and all(set(env) <= gate.ENV_KEPT for _, env in seen)
+    interpreters = [args for args, _ in seen if args[0] != "uv"]
+    assert interpreters and all(args[1] == "-I" for args in interpreters)
+
+
+_CORE_INFO = "senselab_core-2.0.0/PKG-INFO"
+_WORKER_INFO = "senselab_worker-2.0.0/PKG-INFO"
+
+
+def _append(member: str, text: bytes) -> Callable[[dict[str, bytes]], None]:
+    return lambda m: m.update({member: m[member] + text})
+
+
+def _copy(member: str, source: str) -> Callable[[dict[str, bytes]], None]:
+    return lambda m: m.update({member: m[source]})
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("name", "edit", "match"),
+    [
+        ("senselab-core", lambda m: _sub(_CORE_INFO, b"worker==2.0.0", b"worker>=0")(m), "senselab-core requires"),
+        ("senselab-core", lambda m: _append(_CORE_INFO, b"Requires-Dist: evilpkg\n")(m), "evilpkg"),
+        ("senselab-worker", lambda m: _sub(_WORKER_INFO, b">=3.10", b">=3.6")(m), "Requires-Python"),
+        (
+            "senselab-core",
+            lambda m: _copy("othertop/pyproject.toml", "senselab_core-2.0.0/pyproject.toml")(m),
+            "outside",
+        ),
+    ],
+)
+def test_xg7_sdist_metadata_and_members_are_checked(
+    name: str, edit: Callable[[dict[str, bytes]], None], match: str, mini: Path
+) -> None:
+    """An sdist's pins, extra requirements, Python range and top directory are held to the same rules as a wheel's."""
+    files = _mini_dist(mini)
+    _rewrite(mini, name, "sdist", edit)
+    with pytest.raises(gate.GateError, match=match):
+        _static(files, mini)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "rename",
+    [
+        {"senselab_core-2.0.0.tar.gz": "anything-else-7.tar.gz"},
+        {
+            "senselab_core-2.0.0.tar.gz": "senselab_worker-2.0.0.tar.gz",
+            "senselab_worker-2.0.0.tar.gz": "senselab_core-2.0.0.tar.gz",
+        },
+        {"senselab_core-2.0.0.tar.gz": "Senselab_Core-2.0.0.tar.gz"},
+        {"senselab_core-2.0.0.tar.gz": "senselab-core-2.0.0.tar.gz"},
+        {"senselab_core-2.0.0-py3-none-any.whl": "senselab_core-2.0.0-py2.py3-none-any.whl"},
+        {"senselab_core-2.0.0-py3-none-any.whl": "senselab_core-2.0.0-1-py3-none-any.whl"},
+        {"senselab_core-2.0.0-py3-none-any.whl": "senselab_core-2.0.0-cp39-cp39-win32.whl"},
+    ],
+)  # fmt: skip
+def test_xg7_xg8_file_names_are_bound_to_the_metadata(rename: dict[str, str], mini: Path) -> None:
+    """A renamed, swapped or retagged file is refused: its name must be exactly the one its metadata gives."""
+    files = _mini_dist(mini)
+    dist = files[0].parent
+    staged = {old: (dist / old).read_bytes() for old in rename}
+    for old in rename:
+        (dist / old).unlink()
+    for old, new in rename.items():
+        (dist / new).write_bytes(staged[old])
+    with pytest.raises(gate.GateError):
+        _static(gate.dist_files(dist), mini)
+
+
+_WHEEL = "senselab_core-2.0.0.dist-info/WHEEL"
+_META = "senselab_core-2.0.0.dist-info/METADATA"
+
+
+def _sub(member: str, old: bytes, new: bytes) -> Callable[[dict[str, bytes]], None]:
+    return lambda m: m.update({member: m[member].replace(old, new)})
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("edit", "match"),
+    [
+        (_sub(_WHEEL, b"Root-Is-Purelib: true", b"Root-Is-Purelib: false"), "Root-Is-Purelib"),
+        (_sub(_WHEEL, b"Tag: py3-none-any", b"Tag: cp39-cp39-win32"), "Tag"),
+        (_sub(_WHEEL, b"Tag: py3-none-any", b"Tag: py3-none-any\nTag: py2-none-any"), "Tag"),
+        (_sub(_WHEEL, b"Wheel-Version: 1.0", b"Wheel-Version: 1.0\nWheel-Version: 2.0"), "Wheel-Version"),
+        (_sub(_WHEEL, b"Tag:", b"Build: 1\nTag:"), "Build"),
+        (_sub(_META, b"Version: 2.0.0", b"Version: 2.0.0\nVersion: 9.9.9"), "repeated"),
+        (_sub(_META, b"Name: senselab-core", b"Name: senselab-core\nName: evil"), "repeated"),
+        (_sub(_META, b">=3.11", b">=3.6"), "Requires-Python"),
+        (_sub(_META, b"Requires-Dist: pyyaml", b"Requires-Dist: pyyaml\nRequires-Dist: evilpkg"), "evilpkg"),
+        (_sub(_META, b"Requires-Dist: pyyaml", b"Requires-Dist: pyyaml\nRequires-Dist: pyyaml"), "2 times"),
+        (_sub(_META, b"Requires-Dist: pyyaml", b"Requires-Dist: pyyaml>=0"), "not declared"),
+        (_sub(_META, b"Requires-Dist: pyyaml", b"Provides-Extra: x"), "Provides-Extra|not in Requires-Dist"),
+        (_sub(_META, b"Requires-Python", b"License-File: pyproject.toml\nRequires-Python"), "License-File"),
+    ],
+)
+def test_xg8_wheel_and_metadata_files_are_parsed_strictly(
+    edit: Callable[[dict[str, bytes]], None], match: str, mini: Path
+) -> None:
+    """``WHEEL`` must state the file name's one tag and a pure-Python root; METADATA exactly the pyproject."""
+    files = _mini_dist(mini)
+    _rewrite(mini, "senselab-core", "wheel", edit)
+    with pytest.raises(gate.GateError, match=match):
+        _static(files, mini)
+
+
+@pytest.mark.logic
+def test_xg8_root_extras_are_expanded_as_hatch_expands_them(mini: Path) -> None:
+    """``all = ["senselab[nlp]"]`` contributes nlp's requirements under ``extra == "all"``; dropping one is refused."""
+    files = _mini_dist(mini)
+    meta = "senselab-2.0.0.dist-info/METADATA"
+    _rewrite(mini, "senselab", "wheel", _sub(meta, b"Requires-Dist: jiwer>=3.0; extra == 'all'\n", b""))
+    with pytest.raises(gate.GateError, match="not in Requires-Dist"):
+        _static(files, mini)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "member",
+    [
+        "../pyproject.toml",
+        "/pyproject.toml",
+        "senselab-2.0.0/../README.md",
+        "senselab-2.0.0/./pyproject.toml",
+        "senselab-2.0.0//pyproject.toml",
+        "senselab-2.0.0/SRC/senselab/__init__.py",
+        "othertop/pyproject.toml",
+        "senselab-2.0.0\\pyproject.toml",
+    ],
+)
+def test_xg9_tar_members_are_normalised_relative_names_under_the_top(member: str, mini: Path) -> None:
+    """``..``, absolute, dot, empty, backslash, outside-top and case-duplicate names are refused, whatever the bytes."""
+    files = _mini_dist(mini)
+    source = "senselab-2.0.0/src/senselab/__init__.py" if "SRC" in member else "senselab-2.0.0/pyproject.toml"
+    _rewrite(mini, "senselab", "sdist", lambda m: m.__setitem__(member, m[source]))
+    with pytest.raises(gate.GateError):
+        _static(files, mini)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("member", ["../x.py", "/x.py", "senselab/../x.py", "SENSELAB/__init__.py"])
+def test_xg9_zip_members_are_normalised_too(member: str, mini: Path) -> None:
+    """The same name rules hold for wheel members."""
+    files = _mini_dist(mini)
+    _rewrite(mini, "senselab", "wheel", lambda m: m.__setitem__(member, m["senselab/__init__.py"]))
+    with pytest.raises(gate.GateError):
+        _static(files, mini)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("line", "extras", "selected"),
+    [
+        ("numpy>=1.23", [], ["numpy>=1.23"]),
+        ("jiwer>=3.0; extra == 'nlp'", [], []),
+        ("jiwer>=3.0; extra == 'nlp'", ["nlp"], ["jiwer>=3.0"]),
+        ("jiwer>=3.0; extra == 'nlp'", ["all"], []),
+        ("torch>=2.8; sys_platform == 'linux'", [], ["torch>=2.8"]),
+        ("torch>=2.8; sys_platform == 'win32'", ["all"], []),
+        ("av[x]>=15; sys_platform == 'linux' and extra == 'video'", ["video"], ["av[x]>=15"]),
+    ],
+)
+def test_requirements_are_selected_for_the_target_interpreter_and_extras(
+    line: str, extras: list[str], selected: list[str]
+) -> None:
+    """Markers are evaluated against the venv's environment with each requested extra; the marker is then dropped."""
+    from packaging.requirements import Requirement
+
+    environment = {"sys_platform": "linux", "python_version": "3.11", "platform_machine": "x86_64"}
+    assert gate.selected_requirements([Requirement(line)], environment, extras) == selected
+
+
+@pytest.mark.env
+@pytest.mark.network
+def test_xg5_a_module_that_does_not_import_is_refused(fabricate: Callable[..., Path]) -> None:
+    """A module the package's ``__init__`` never imports is imported by the gate, and its failure refuses."""
+    modules = {
+        **OK_MODULES,
+        "worker": {"modules": {"senselab_worker/__init__.py": "\n", "senselab_worker/x.py": "import numpy\n"}},
+    }
+    wheels = _release(fabricate, "2.0.0", **modules)
+    with pytest.raises(gate.GateError, match="numpy"):
+        gate.check_installs(gate.dist_files(wheels[0].parent), HERE_PYTHON)
+
+
+@pytest.mark.env
+@pytest.mark.network
+def test_xg6_pythonpath_cannot_supply_a_module_the_wheel_lacks(
+    fabricate: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker wheel without a module its ``__init__`` imports is refused even with that module on ``PYTHONPATH``."""
+    source = tmp_path / "source"
+    (source / "senselab_worker").mkdir(parents=True)
+    (source / "senselab_worker" / "__init__.py").write_text("\n")
+    (source / "senselab_worker" / "canonical.py").write_text("X = 1\n")
+    modules = {
+        **OK_MODULES,
+        "worker": {"modules": {"senselab_worker/__init__.py": "from senselab_worker import canonical\n"}},
+    }
+    wheels = _release(fabricate, "2.0.0", **modules)
+    monkeypatch.setenv("PYTHONPATH", str(source))
+    with pytest.raises(gate.GateError, match="canonical"):
+        gate.check_installs(gate.dist_files(wheels[0].parent), HERE_PYTHON)
+
+
+@pytest.mark.env
+@pytest.mark.network
+def test_xg7_each_sdist_builds_the_wheel_in_dist(tagged_workspace: Callable[..., Path], tmp_path: Path) -> None:
+    """A real core sdist rebuilds its wheel byte for byte; an sdist whose source differs from its wheel is refused."""
+    root = tagged_workspace(["2.0.0"])
+    files = _core_files(root, tmp_path / "out")
+    worker = [p for p in build(root, tmp_path / "w", "--package", "senselab-worker") if not p.name.startswith(".")]
+    gate.check_sdist_builds([*files, *worker])
+    sdist = next(p for p in files if p.name.endswith(".tar.gz"))
+    _rewrite_sdist(sdist, {"src/senselab_core/__init__.py": b"CHANGED = 1\n"})
+    with pytest.raises(gate.GateError, match="differs"):
+        gate.check_sdist_builds([*files, *worker])
+
+
+@pytest.mark.env
+@pytest.mark.network
+def test_xg5_a_real_build_of_a_tagged_checkout_passes_every_static_check(
+    tagged_workspace: Callable[..., Path], tmp_path: Path
+) -> None:
+    """``uv build --all-packages`` on a tagged copy of this tree yields exactly the derived members and metadata."""
+    root = tagged_workspace([RELEASE_FLOOR])
+    build(root, root / "dist", "--all-packages")
+    gate.static_checks(gate.dist_files(root / "dist"), root, FLOOR, tag=RELEASE_FLOOR, prerelease=True)

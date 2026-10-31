@@ -253,8 +253,10 @@ jobs:
       run: |
         uv venv -p 3.12 .core
         uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core --group packages/senselab-core/pyproject.toml:test
-    - name: Run the core env tests
-      run: .core/bin/pytest packages/senselab-core/tests -m "env and not network" -p no:cacheprovider
+    - name: Run the release gate and packaging tests, which build and create venvs
+      run: >-
+        .core/bin/pytest packages/senselab-core/tests/release_gate_test.py packages/senselab-core/tests/package_data_test.py
+        -m "env and not slow" -p no:cacheprovider
 
   worker-floor:
     if: github.event.pull_request.draft == false
