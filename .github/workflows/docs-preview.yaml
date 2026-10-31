@@ -6,9 +6,10 @@ permissions:
   deployments: write
 
 on:
-  # 1.x previews at the site root (pr-<N>/). PRs into the 2.x line run 2x-docs-preview.yaml.
+  # 1.x previews at the site root (pr-<N>/), for every base except the 2.x line, which runs
+  # 2x-docs-preview.yaml.
   pull_request:
-    branches: [alpha, main]
+    branches-ignore: [2.x, senselab-2x-api, 2x/**]
     types: [opened, synchronize, reopened, closed]
 
 jobs:

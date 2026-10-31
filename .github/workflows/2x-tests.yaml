@@ -10,13 +10,16 @@ on:
     # without it a draft PR marked ready never re-triggers this workflow.
     types: [opened, synchronize, reopened, labeled, ready_for_review]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Branches of the 2.x line that predate the packages (2.x at the freeze, senselab-2x-api) carry
-  # no packages/ tree; the core jobs skip there instead of failing.
+  # Without a packages/ tree (2.x at the freeze, senselab-2x-api) the core jobs skip. With one, a
+  # missing package or src/ fails this job.
   detect:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
@@ -28,13 +31,7 @@ jobs:
         fetch-depth: 1
     - name: Look for the 2.x packages
       id: packages
-      run: |
-        if [ -f packages/senselab-core/pyproject.toml ] && [ -f packages/senselab-worker/pyproject.toml ]; then
-          echo "present=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "present=false" >> "$GITHUB_OUTPUT"
-          echo "::notice::no packages/ tree on this ref; core-only, core-env and worker-floor skip"
-        fi
+      run: bash .github/scripts/check-2x-packages.sh
 
   pre-commit:
     if: github.event.pull_request.draft == false
@@ -45,6 +42,8 @@ jobs:
         fetch-depth: 1
     - name: Install uv
       uses: astral-sh/setup-uv@v5
+      with:
+        version: 0.13.6
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
@@ -72,6 +71,8 @@ jobs:
         fetch-depth: 1
     - name: Install uv
       uses: astral-sh/setup-uv@v5
+      with:
+        version: 0.13.6
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v6
       with:
@@ -108,6 +109,8 @@ jobs:
         fetch-depth: 0   # hatch-vcs derives the version from tags
     - name: Install uv
       uses: astral-sh/setup-uv@v5
+      with:
+        version: 0.13.6
     - name: Install the core distributions alone
       env:
         PYTHON_VERSION: ${{ matrix.python-version }}
@@ -141,6 +144,8 @@ jobs:
         fetch-depth: 0   # hatch-vcs derives the version from tags
     - name: Install uv
       uses: astral-sh/setup-uv@v5
+      with:
+        version: 0.13.6
     - name: Install the core distributions alone
       run: |
         uv venv -p 3.12 .core
@@ -161,6 +166,8 @@ jobs:
         fetch-depth: 0   # hatch-vcs derives the version from tags
     - name: Install uv
       uses: astral-sh/setup-uv@v5
+      with:
+        version: 0.13.6
     - name: Build the worker wheel
       run: uv build --wheel --out-dir dist packages/senselab-worker
     - name: Install the wheel alone at the floor

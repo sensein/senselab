@@ -2,8 +2,6 @@ name: 2x Docs Preview
 
 permissions:
   contents: write
-  pull-requests: write
-  deployments: write
 
 on:
   # Previews of the 2.x line under 2x/pr-<N>/. 1.x PRs run docs-preview.yaml (root pr-<N>/).
@@ -20,23 +18,19 @@ jobs:
       cancel-in-progress: true
     environment:
       name: docs-preview
-      url: https://sensein.group/senselab/2x/pr-${{ github.event.pull_request.number }}/
+      url: ${{ steps.deploy.outputs.url }}
     steps:
     - uses: actions/checkout@v5
       with:
         fetch-depth: 0   # hatch-vcs derives the package versions from tags
     - name: Look for the 2.x packages
       id: packages
-      run: |
-        if [ -f packages/senselab-core/pyproject.toml ] && [ -f packages/senselab-worker/pyproject.toml ]; then
-          echo "present=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "present=false" >> "$GITHUB_OUTPUT"
-          echo "::notice::no packages/ tree on this ref; no 2.x preview to build"
-        fi
+      run: bash .github/scripts/check-2x-packages.sh
     - name: Install uv
       if: steps.packages.outputs.present == 'true'
       uses: astral-sh/setup-uv@v5
+      with:
+        version: 0.13.6
     - name: Install the 2.x packages and pdoc
       if: steps.packages.outputs.present == 'true'
       run: |
@@ -49,14 +43,20 @@ jobs:
           --favicon https://readthedocs.org/favicon.ico
         touch docs/.nojekyll
     - name: Deploy preview
+      id: deploy
       if: steps.packages.outputs.present == 'true'
       env:
         PR_NUMBER: ${{ github.event.pull_request.number }}
-      run: bash .github/scripts/docs-deploy.sh --namespace 2x preview docs "$PR_NUMBER"
+      run: |
+        bash .github/scripts/docs-deploy.sh --namespace 2x preview docs "$PR_NUMBER"
+        echo "url=https://sensein.group/senselab/2x/pr-$PR_NUMBER/" >> "$GITHUB_OUTPUT"
 
   cleanup:
     if: github.event.action == 'closed'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
     concurrency:
       group: docs-preview-2x-${{ github.event.pull_request.number }}
       cancel-in-progress: true

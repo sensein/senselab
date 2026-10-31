@@ -1,11 +1,9 @@
 name: tests
 
 on:
-  # 1.x only. The 2.x line (2.x, senselab-2x-api, 2x/**) runs 2x-tests.yaml instead.
-  push:
-    branches: [alpha, main]
   pull_request:
-    branches: [alpha, main]
+    # Every base except the 2.x line, which runs 2x-tests.yaml instead.
+    branches-ignore: [2.x, senselab-2x-api, 2x/**]
     # `ready_for_review` matters because every job below is gated on
     # `pull_request.draft == false`. Without it, a PR opened as a draft and later
     # marked ready never re-triggers this workflow, so its tests stay "skipping"
@@ -14,8 +12,8 @@ on:
     types: [opened, synchronize, reopened, labeled, ready_for_review]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   macos-tests:
