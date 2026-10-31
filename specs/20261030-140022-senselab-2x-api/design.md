@@ -397,18 +397,21 @@ them to a principle.
 node with the attested identities. BEP028 export is how runs are published. `reproduce` becomes a
 consumer of this store.
 Its ids are `tagged_digest("provenance-id@2", ...)[:16]` over each part of an entity, activity, agent or
-environment after `normalised`, the one step before the shared encoder. The attributes and parameters have a
+environment after `normalised`, the one step before the shared encoder. `normalised` is the shared
+`canonical.Tokeniser` (the one `value@2` uses), with arrays written by value. The attributes and parameters have a
 declared provenance value type: JSON values plus tagged families, each a one-key token: non-finite floats
-(`$f`), integers beyond ±(2^53−1) (`$int`, the token `value@1` uses), `Path` (`$path`, posix text), `Enum`
+(`$f`), integers beyond ±(2^53−1) (`$int`), `Path` (`$path`, posix text), `Enum`
 (`$enum`, qualified name and value), `ndarray` (`$nd`, dtype name, shape, flat values), `Decimal` (`$dec`),
-`bytes` (`$bytes`, hex), `set`/`frozenset` (`$set`, sorted by JCS bytes), and numpy scalars as their value.
+`bytes` (`$bytes`, hex), `set`/`frozenset` (`$set`, one element per JCS form, sorted by JCS bytes), and numpy
+scalars as their value.
 The digest is total over that type by construction. Pipelines record `-inf` dB for silence and nanosecond
 `mtime_ns` stamps, and branch evidence (`**finding.evidence`) is typed `Any`, so totality cannot rest on the
-suites that happen to run. A held key starting with `$` gains one more (`canonical.escaped_key`, shared with
-`value@1`), so no recorded object reads as a token; escaping rather than refusal keeps the digest total.
-Anything else (another type, a non-`str` key, two keys equal after NFC, a cycle, nesting past `MAX_DEPTH`
-once tokens are counted) raises `UnrecordableValue` at the `ProvStore` boundary, naming the attribute path
-and the type. Cycles and depth go through `canonical.entered`. JCS numeric equality (`1` = `1.0`) and the
+suites that happen to run. A held key starting with `$` gains one more (`canonical.escaped_key`), so no
+recorded object reads as a token; escaping rather than refusal keeps the digest total.
+Anything else (another type, a non-`str` key, text holding a code point unassigned in Unicode 13.0, two keys
+equal after NFC, a cycle, nesting past `MAX_DEPTH` once tokens are counted, a form past `MAX_CANONICAL_CHARS`)
+raises `UnrecordableValue` at the `ProvStore` boundary, naming the attribute path and the type. Cycles, depth
+and work go through one `canonical.Walk`. JCS numeric equality (`1` = `1.0`) and the
 other ADR-006 equivalences are accepted (H-R29, H-R30).
 
 ### 4.9 Execution (P-2, P-5, P-6, P-7)

@@ -53,10 +53,10 @@ An earlier count of 32 included four `dict.update` calls fed by `str()` (`cohort
 | `src/senselab/utils/reproduce/sandbox.py:413` | `_sha` | sha of a sandbox environment mapping | `tagged_digest` under the run-env tag |
 | `src/senselab/utils/reproduce/source.py:345` | `patch_set_sha256` | digest of a patch set | `tagged_digest` under a registered patch-set tag |
 | `src/senselab/utils/subprocess_venv.py:262` | `venv_environment` | `dependencies_digest` over a venv's full distribution listing | `tagged_digest` under a registered environment tag; `Environment.dependencies_digest` in `ProvStore` |
-| `src/senselab/utils/tasks/cached_inference.py:353` | `audio_signature` | audio identity: `str(sampling_rate)` into a hash update | `ContentIdentity` of the audio (`audio@2` over the canonical `.npy`) |
-| `src/senselab/utils/tasks/cached_inference.py:355` | `audio_signature` | audio identity: `str(shape)` into the same hash | as the row above: one `audio@2` identity |
+| `src/senselab/utils/tasks/cached_inference.py:353` | `audio_signature` | audio identity: `str(sampling_rate)` into a hash update | `ContentIdentity` of the audio (`audio@3` over the canonical `.npy`) |
+| `src/senselab/utils/tasks/cached_inference.py:355` | `audio_signature` | audio identity: `str(shape)` into the same hash | as the row above: one `audio@3` identity |
 | `src/senselab/utils/uv_tools.py:88` | `requirements_sha256` | digest of a requirements set with its header fields | `tagged_digest` under the environment tag |
-| `src/senselab/utils/venv_worker.py:116` | `_digest` | short digest of a worker call payload (`default=str`) | the worker wire's canonical form: `tagged_digest("value@1", …)` with non-JSON values refused |
+| `src/senselab/utils/venv_worker.py:116` | `_digest` | short digest of a worker call payload (`default=str`) | the worker wire's canonical form: `tagged_digest("value@2", …)` with non-JSON values refused |
 | `src/senselab/utils/vllm_server.py:476` | `_path_label` | path digest shown in an error message instead of the name, a label only | a label, not a key: `tagged_digest` under a registered label tag, or `sha256_bytes` of the path's UTF-8 |
 | `src/senselab/utils/vllm_server.py:527` | `content_part` | digest of the media directory shown in an error message, a label only | as the row above |
 | `src/senselab/utils/work_pool.py:286` | `Item.payload_digest` | idempotence key of a work-pool item | `tagged_digest` under a registered work-item tag |
