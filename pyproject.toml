@@ -68,6 +68,7 @@ Documentation = "https://sensein.group/senselab"
 
 [project.scripts]
 senselab-ai = "senselab.agentic_interface.launcher:senselab_ai"
+senselab = "senselab_core.cli:main"
 
 [dependency-groups]
 dev = [
