@@ -235,7 +235,8 @@ Architect review §5 (R-42) found:
 - **A caller reads every value decoded, never a token** (H9c round 2). Every read path (`get_entity`,
   `entities`, the other accessors, `read_jsonl`, `recorded`, `revised`, `plain_values`) hands back the value a
   token stands for: objects as `FrozenDict` and arrays as `FrozenList` (read-only `dict` and `list`, equal to a
-  `dict` and a `list` of the same items, as JSON writes them), `$f` as the float, `$int` as the integer, `$path`
+  `dict` and a `list` of the same items, as JSON writes them; distinct from the kernel's `FrozenMapping`, which
+  is not a `dict` and holds kernel values only — two types for two contracts, sharing one `thawed`, H-R45), `$f` as the float, `$int` as the integer, `$path`
   as a `Path`, `$nd` as a read-only `numpy.ndarray`, `$set` as a `frozenset` (its arrays as tuples), `$bytes`
   as `bytes`, `$dec` as a `Decimal`, `$enum` as an `EnumMember` (its type's qualified name and its value, and equal to
   another exactly when both are; the type is not imported), and a `$$`-escaped key as the key it escapes. Decoding is the inverse of `normalised`
