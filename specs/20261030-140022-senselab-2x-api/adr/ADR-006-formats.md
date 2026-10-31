@@ -92,7 +92,9 @@ Architect review §5 (R-42) found:
 - **Canonical equivalences.** This is the one list. Values that differ in Python but are one value here share
   every digest, and each canonical form writes them alike:
   - numbers: `1`, `1.0`, a numpy `1` and `1.0`, and `-0.0`, `0.0` and `0` compare by value, in JSON and in
-    arrays, where `-0.0` is written as `0.0`;
+    arrays, where `-0.0` is written as `0.0`. A provenance store, and `merge`, holding two records that differ
+    only so keeps the spelling of whichever arrived first: a file reads back as it was written, but a merged
+    store does not keep both spellings;
   - NaN: every NaN, whatever its sign or payload, is one value: in arrays it is written as the positive quiet
     NaN with no payload (`0x7E00`, `0x7FC00000`, `0x7FF8000000000000`), in tokens as `{"$f": "NaN"}`. `inf -
     inf` gives `0x7FF8…` on arm64 (measured) and sets the sign bit on x86 (XC-4, inferred from the
@@ -238,7 +240,12 @@ Architect review §5 (R-42) found:
   as `bytes`, `$dec` as a `Decimal`, `$enum` as an `EnumMember` (its type's qualified name and its value, and equal to
   another exactly when both are; the type is not imported), and a `$$`-escaped key as the key it escapes. Decoding is the inverse of `normalised`
   on what the writer writes, so recording a read-back, whole, nested in a new mapping or through `revised`,
-  records the same tokens and mints the same id. `revised(target, **changes)` is the one copy-with-changes: of a
+  records the same tokens and mints the same id. Read-backs compare with Python's `==`: an
+  `EnumMember`, a `Path`, a `frozenset` and the containers compare by value, but a NaN is unequal to itself and
+  a read-only array compares as numpy does, so `==` over a value holding an array is elementwise or raises
+  `ValueError`. A comparison that must hold for those compares the tokens, `jcs_dumps(normalised(a)) ==
+  jcs_dumps(normalised(b))`, as record equality does; `recorded(a) != recorded(b)` is exact only for values
+  without a NaN or an array. `revised(target, **changes)` is the one copy-with-changes: of a
   held mapping, the decoded mapping with the changes; of a record, a copy keeping its id with `run_id` null,
   which a store refuses to hold. `recorded(value)` is what a caller reads back for a value; `plain_values`
   decodes a value of a store file parsed as JSON.
