@@ -79,5 +79,12 @@ jobs:
       with:
         name: documentation
         path: docs
+    # The deploy script is the default branch's; the site is the release tag's build.
+    - name: Fetch the deploy script from the default branch
+      env:
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        git fetch --no-tags --depth=1 origin "refs/heads/$DEFAULT_BRANCH"
+        git show FETCH_HEAD:.github/scripts/docs-deploy.sh > "$RUNNER_TEMP/docs-deploy.sh"
     - name: Deploy release site, keeping PR previews
-      run: bash .github/scripts/docs-deploy.sh release docs
+      run: bash "$RUNNER_TEMP/docs-deploy.sh" release docs

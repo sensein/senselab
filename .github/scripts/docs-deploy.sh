@@ -2,9 +2,14 @@
 # Replace one part of the `docs` branch and push it as a single orphan commit.
 #
 # Usage (run inside a clone whose remote can push to `docs`):
-#   docs-deploy.sh preview <site-dir> <pr-number>   replace pr-<N>/ with <site-dir>
-#   docs-deploy.sh release <site-dir>               replace everything except pr-*/ with <site-dir>
-#   docs-deploy.sh cleanup <open-pr-number>...      remove every pr-<N>/ whose N is not listed
+#   docs-deploy.sh [--namespace <ns>] preview <site-dir> <pr-number>   replace <ns>/pr-<N>/ with <site-dir>
+#   docs-deploy.sh release <site-dir>               replace everything except pr-*/ and the namespace dirs
+#   docs-deploy.sh [--namespace <ns>] cleanup <open-pr-number>...   remove every <ns>/pr-<N>/ whose N is not listed
+#
+# Without --namespace, previews live at the root as pr-<N>/ (1.x). A namespace is a top-level directory
+# holding its own pr-<N>/ previews (`2x` for the 2.x line). A cleanup touches only its own namespace's
+# previews, and a release keeps every namespace directory as it is. Namespaces are listed in
+# `namespaces` below; a namespace not listed there is refused.
 #
 # Each attempt reads the current tip of `docs`, rebuilds the tree from it with only this
 # deploy's part replaced, commits that tree with no parent, and pushes with
@@ -23,6 +28,7 @@ remote=${DOCS_REMOTE:-origin}
 branch=${DOCS_BRANCH:-docs}
 attempts=${DOCS_DEPLOY_ATTEMPTS:-8}
 backoff=${DOCS_DEPLOY_BACKOFF:-2}
+namespaces=(2x)
 
 : "${GIT_AUTHOR_NAME:=github-actions[bot]}"
 : "${GIT_AUTHOR_EMAIL:=github-actions[bot]@users.noreply.github.com}"
@@ -35,8 +41,24 @@ die() {
   exit 1
 }
 
+usage="usage: $0 [--namespace <ns>] preview <site-dir> <pr-number> | release <site-dir> | [--namespace <ns>] cleanup <open-pr-number>..."
+
+ns=""
+if [ "${1:-}" = --namespace ]; then
+  [ $# -ge 2 ] || die "$usage"
+  ns=$2
+  shift 2
+  known=0
+  for candidate in "${namespaces[@]}"; do
+    if [ "$candidate" = "$ns" ]; then known=1; fi
+  done
+  [ "$known" = 1 ] || die "unknown namespace '$ns' (known: ${namespaces[*]})"
+fi
+# Path prefix of this namespace's previews: "" at the root, "<ns>/" inside a namespace.
+prefix=${ns:+$ns/}
+
 mode=${1:-}
-[ -n "$mode" ] || die "usage: $0 preview <site-dir> <pr-number> | release <site-dir> | cleanup <open-pr-number>..."
+[ -n "$mode" ] || die "$usage"
 shift
 
 site_tree=""
@@ -46,16 +68,17 @@ case "$mode" in
     site_dir=$1
     pr=$2
     [[ "$pr" =~ ^[0-9]+$ ]] || die "pr number must be numeric, got '$pr'"
-    message="Docs site: preview of PR #$pr"
+    message="Docs site: ${ns:+$ns }preview of PR #$pr"
     ;;
   release)
+    [ -z "$ns" ] || die "release takes no namespace"
     [ $# -eq 1 ] || die "release takes <site-dir>"
     site_dir=$1
     message="Docs site: release"
     ;;
   cleanup)
     open_prs=" $* "
-    message="Docs site with previews of open PRs only"
+    message="Docs site with ${ns:+$ns }previews of open PRs only"
     ;;
   *)
     die "unknown mode '$mode'"
@@ -83,9 +106,23 @@ fetch_tip() {
   fi
 }
 
-# Top-level entry names of the tree at $1 that match pr-<digits>.
+# Entry names directly under <tree-ish>:<dir> ($1, $2; $2 empty for the root) that match pr-<digits>.
 pr_dirs() {
-  git ls-tree --name-only "$1" | grep -E '^pr-[0-9]+$' || true
+  local tree=$1 dir=${2%/}
+  if [ -n "$dir" ]; then
+    git cat-file -e "$tree:$dir" 2>/dev/null || return 0
+    tree="$tree:$dir"
+  fi
+  git ls-tree --name-only "$tree" | grep -E '^pr-[0-9]+$' || true
+}
+
+# Top-level entries the release site never owns: root previews and namespace directories.
+preserved_dirs() {
+  pr_dirs "$1" ""
+  local name
+  for name in "${namespaces[@]}"; do
+    if git cat-file -e "$1:$name" 2>/dev/null; then echo "$name"; fi
+  done
 }
 
 # Builds the new root tree from tip $1 (may be empty) and prints its id.
@@ -96,23 +133,23 @@ build_tree() {
     preview)
       if [ -n "$tip" ]; then
         git read-tree "$tip"
-        git rm -r --cached --quiet --ignore-unmatch -- "pr-$pr" >/dev/null
+        git rm -r --cached --quiet --ignore-unmatch -- "${prefix}pr-$pr" >/dev/null
       else
         git read-tree --empty
       fi
-      git read-tree --prefix="pr-$pr/" "$site_tree"
+      git read-tree --prefix="${prefix}pr-$pr/" "$site_tree"
       ;;
     release)
       git read-tree "$site_tree"
       while read -r name; do
         [ -n "$name" ] || continue
         git rm -r --cached --quiet --ignore-unmatch -- "$name" >/dev/null
-      done < <(pr_dirs "$site_tree")
+      done < <(preserved_dirs "$site_tree")
       if [ -n "$tip" ]; then
         while read -r name; do
           [ -n "$name" ] || continue
           git read-tree --prefix="$name/" "$tip:$name"
-        done < <(pr_dirs "$tip")
+        done < <(preserved_dirs "$tip")
       fi
       ;;
     cleanup)
@@ -122,10 +159,10 @@ build_tree() {
         [ -n "$name" ] || continue
         num=${name#pr-}
         if [[ "$open_prs" != *" $num "* ]]; then
-          git rm -r --cached --quiet -- "$name" >/dev/null
-          echo "docs-deploy: removing $name" >&2
+          git rm -r --cached --quiet -- "$prefix$name" >/dev/null
+          echo "docs-deploy: removing $prefix$name" >&2
         fi
-      done < <(pr_dirs "$tip")
+      done < <(pr_dirs "$tip" "$ns")
       ;;
   esac
   git write-tree
