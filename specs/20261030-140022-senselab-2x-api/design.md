@@ -713,7 +713,8 @@ whole of `dist/` before the upload step runs. One listing of `dist/` feeds every
   directory `<name>-<version>/`.
 - **Versions.** The version string must be `X.Y.Z` or `X.Y.Z(a|b|rc)N`, written canonically, in every
   metadata file and file name. The tag (`github.ref_name`) is either that canonical string or the
-  repository's pre-release spelling `X.Y.Z-(alpha|beta|rc).N` (`2.0.0-alpha.3`), and `Version(tag)` must
+  repository's pre-release spelling `X.Y.Z-(alpha|beta|rc).N` (`2.0.0-alpha.3`), both in ASCII digits with no
+  leading zero in any number, and `Version(tag)` must
   equal the built version exactly. An epoch (`1!1.0.0` outranks every 2.x release on PyPI), a local, post or
   dev segment, a `v` prefix and any other spelling are refused, in tag and version alike. The version is at
   or above `RELEASE_FLOOR` (`2.0.0a0`, read once from the root pyproject) and matches
@@ -731,7 +732,7 @@ whole of `dist/` before the upload step runs. One listing of `dist/` feeds every
   `force-include`, the generated `METADATA`, `WHEEL` and `RECORD`, `entry_points.txt` when entry points are
   declared, and `licenses/` for the declared license files. For an sdist it is the tracked files under the
   root or its `only-include` entries, its `force-include`, `PKG-INFO`, and the `.gitignore` hatchling copies
-  in. A missing member and an extra one are both refused, and each sourced member must be a byte copy of its
+  in, the first one found walking up from the distribution root. A missing member and an extra one are both refused, and each sourced member must be a byte copy of its
   tracked file. A hatch setting the derivation does not model refuses the release by name, so a config change
   cannot ship underived members. A tracked symlink or submodule under a selected path is refused.
 - **RECORD and entry points.** Each wheel's RECORD lists exactly its members, each once, with the sha256 and
@@ -750,11 +751,18 @@ whole of `dist/` before the upload step runs. One listing of `dist/` feeds every
   - One shared venv would hide a dependency that only a sibling declares, and a top-level import would hide
     a dropped or broken submodule.
 - **Rebuild.** Each sdist, unpacked alone, builds a wheel whose members are byte-identical to the wheel in
-  `dist/`.
+  `dist/`. Every pyproject pins its build backends exactly (`hatchling==`, `hatch-vcs==`, one version across the
+  three), so the direct build and the rebuild run one backend; their transitive build requirements
+  (setuptools-scm and others) are not pinned.
 - **Environment.** Every subprocess (git, uv, the venv interpreters) runs with an allowlisted environment
   (`ENV_KEPT`): where tools and temporaries are, the locale, uv's own directories and how to reach the
   network. `PYTHONPATH`, `PYTHONHOME`, `GIT_INDEX_FILE`, `GIT_DIR`, `VIRTUAL_ENV`, `PIP_*` and every other
-  variable are dropped whatever the caller exports. Git also runs without system or global configuration.
+  variable are dropped whatever the caller exports. Git also runs without system or global configuration, with
+  `safe.directory` set to the repository alone, so a checkout owned by another uid is still read. The kept
+  variables are the caller's own machine and can still choose things: `PATH` picks the `uv` and `git` binaries
+  and the interpreter `uv venv --python` finds, `UV_PYTHON_INSTALL_DIR`/`UV_PYTHON_BIN_DIR` the managed
+  interpreters, `SSL_CERT_FILE`/`SSL_CERT_DIR` the trust roots of the third-party install, and `HOME` exposes
+  `~/.netrc` to uv.
   Every `uv` call has `--no-config`. The first-party install runs with `--no-index --no-cache`, so a
   caller's index, find-links, config file or cache cannot replace a `dist/` wheel. Third-party requirements
   come only from the index the gate's `--index-url` names (default PyPI).
@@ -781,15 +789,20 @@ whole of `dist/` before the upload step runs. One listing of `dist/` feeds every
 - **Allowlist.** Allowlisted files are spared and left out of the data totals. Each allowlist entry is bound
   to the freeze branch by content hash and size.
 - **Generated files.** The exemptions from the data per-file cap are exact paths, never globs. Each must
-  exist in the freeze and parse as the lock kind the policy names (a uv lock, or a subprocess-venv lock). It
-  still counts in the data total.
+  exist in the freeze and parse as the lock kind the policy names. A subprocess-venv lock parses line by line:
+  its header, pinned or direct PEP 508 requirements, their hashes, `via` comments naming requirements of the
+  file, and uv's excluded-packages trailer. A uv lock holds only uv's tables and keys, each package named and its
+  files sha256-hashed. It still counts in the data total.
+- **Freeze.** The freeze is the commit `freeze_commit` records in `scripts/data/fixture_budget.yaml`, not
+  the branch: a freeze branch resolving to another commit fails the check.
 - **Caps.** Each cap in `scripts/data/fixture_budget.yaml` is a recorded freeze measurement times a
   headroom. The script recomputes the measurement on the freeze branch and fails when the record differs,
   so a cap moves only when its headroom does, and the derivation beside it says why.
 
 **Workflow expressions (H7, H9f).** `packages/senselab-core/tests/lint/workflow_expressions_test.py` parses
-every `${{ }}` in every string value of every workflow and composite action. The one exception is `env:`
-values, the sanctioned channel for untrusted text.
+every `${{ }}` in every string value of every workflow and composite action. The one exception is the values
+of the `env` maps GitHub defines: workflow, job, step, job container, service and composite-action step. A
+matrix variable or a `with:` input named `env` is inspected like any other string.
 - **Clean values.** An expression passes only when its value cannot carry text an outsider chose:
   - a literal or a trusted context, exactly: `github.token`, `github.workflow`, `github.event_name`,
     `github.ref`, `github.repository`, `github.run_id`, `github.sha`, `github.event.pull_request.number`,
