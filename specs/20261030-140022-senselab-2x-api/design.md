@@ -732,7 +732,8 @@ whole of `dist/` before the upload step runs. One listing of `dist/` feeds every
   `force-include`, the generated `METADATA`, `WHEEL` and `RECORD`, `entry_points.txt` when entry points are
   declared, and `licenses/` for the declared license files. For an sdist it is the tracked files under the
   root or its `only-include` entries, its `force-include`, `PKG-INFO`, and the `.gitignore` hatchling copies
-  in, the first one found walking up from the distribution root. A missing member and an extra one are both refused, and each sourced member must be a byte copy of its
+  in, the first one found in the work tree walking up from the distribution root, which must itself be a
+  tracked file (an untracked one there is what hatchling ships, so it is refused). A missing member and an extra one are both refused, and each sourced member must be a byte copy of its
   tracked file. A hatch setting the derivation does not model refuses the release by name, so a config change
   cannot ship underived members. A tracked symlink or submodule under a selected path is refused.
 - **RECORD and entry points.** Each wheel's RECORD lists exactly its members, each once, with the sha256 and

@@ -451,10 +451,16 @@ def test_m1_m2_m4_mutating_a_real_build_is_refused(tagged_workspace: Callable[..
 def test_m1_an_untracked_gitignore_in_a_package_root_that_ships_is_refused(
     tagged_workspace: Callable[..., Path], tmp_path: Path
 ) -> None:
-    """The sdist ``.gitignore`` must equal a tracked one: an untracked file with other content ships and fails."""
+    """The sdist ``.gitignore`` must be a tracked one: an untracked file in the package root ships and fails.
+
+    The build must ship the planted bytes, or the refusal would test nothing.
+    """
     root = tagged_workspace(["2.0.0"])
     (root / "packages/senselab-core/.gitignore").write_text("!*\n")
     files = _core_files(root, tmp_path / "out")
+    sdist = next(p for p in files if p.name.endswith(".tar.gz"))
+    shipped = {member: content for member, content, _ in gate.artifact_members(sdist)}
+    assert shipped[f"{gate.stem(sdist)}/.gitignore"] == b"!*\n"
     with pytest.raises(gate.GateError, match="gitignore"):
         gate.check_members(files, root)
 
@@ -1709,12 +1715,21 @@ def test_every_build_backend_requirement_is_pinned_exactly() -> None:
 def test_the_sdist_gitignore_is_the_first_one_up_from_the_distribution_root(mini: Path) -> None:
     """A ``.gitignore`` between a package root and the repository root is the one hatchling copies, and is derived."""
     core = Path("packages/senselab-core")
-    assert gate.located_gitignore(mini, core) == ".gitignore"
+    assert gate.located_gitignore(mini, core, set(gate.tracked_modes(mini))) == ".gitignore"
     (mini / "packages/.gitignore").write_text("*.tmp\n")
     subprocess.run(["git", "add", "-A"], cwd=mini, check=True)
-    assert gate.located_gitignore(mini, core) == "packages/.gitignore"
+    assert gate.located_gitignore(mini, core, set(gate.tracked_modes(mini))) == "packages/.gitignore"
     expected = gate.expected_members(Path("senselab_core-2.0.0.tar.gz"), mini, gate.tracked_modes(mini))
     assert expected["senselab_core-2.0.0/.gitignore"] == "packages/.gitignore"
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("where", ["packages/senselab-core/.gitignore", "packages/.gitignore"])
+def test_m1_the_located_sdist_gitignore_must_be_tracked(mini: Path, where: str) -> None:
+    """The first ``.gitignore`` up from a package root is the one the sdist ships; an untracked one is refused."""
+    (mini / where).write_text("!*\n")
+    with pytest.raises(gate.GateError, match=r"\.gitignore hatchling copies into the sdist is not a tracked file"):
+        gate.expected_members(Path("senselab_core-2.0.0.tar.gz"), mini, gate.tracked_modes(mini))
 
 
 @pytest.mark.logic

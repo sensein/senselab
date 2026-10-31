@@ -462,16 +462,21 @@ def declared_license_files(repo: Path, root: Path, regular: set[str]) -> set[str
     return {rel for rel in _under(regular, _join(root, ".")).values() if any(matches(rel, g) for g in globs)}
 
 
-def located_gitignore(repo: Path, root: Path) -> str:
+def located_gitignore(repo: Path, root: Path, regular: set[str]) -> str:
     """Return the repo-relative ``.gitignore`` hatchling copies into an sdist: the first one up from ``root``.
 
+    The search is over the work tree, as hatchling's is; the file it finds must be in ``regular``, the tracked
+    regular files.
+
     Raises:
-        GateError: If there is none between ``root`` and the repository root.
+        GateError: If there is none between ``root`` and the repository root, or the one found is not tracked.
     """
     directory = _join(root, ".")
     while True:
         candidate = posixpath.normpath(posixpath.join(directory, ".gitignore"))
         if (repo / candidate).is_file():
+            if candidate not in regular:
+                raise GateError(f"{candidate}: the .gitignore hatchling copies into the sdist is not a tracked file")
             return candidate
         if directory in (".", ""):
             raise GateError(f"no .gitignore between {root} and the repository root")
@@ -525,7 +530,7 @@ def expected_members(path: Path, repo: Path, modes: Mapping[str, str]) -> dict[s
     for source, dest in sdist.get("force-include", {}).items():
         add(posixpath.join(top, dest), _join(root, source))
     out[f"{top}/PKG-INFO"] = None
-    out[f"{top}/.gitignore"] = located_gitignore(repo, root)
+    out[f"{top}/.gitignore"] = located_gitignore(repo, root, regular)
     return out
 
 
