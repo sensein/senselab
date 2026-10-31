@@ -6,7 +6,17 @@ from pathlib import Path
 import pytest
 from senselab_core.kernel.identity import ModelRef
 from senselab_core.runtime import models
-from senselab_core.runtime.models import WEIGHTS, WEIGHTS_FORMAT, WeightsMismatch, resolve, verify_weights
+from senselab_core.runtime.models import (
+    WEIGHTS,
+    WEIGHTS_FORMAT,
+    ModelResolutionError,
+    WeightsManifestError,
+    WeightsMismatch,
+    parse_weights,
+    resolve,
+    verify_model,
+    verify_weights,
+)
 from senselab_worker.hashing import weights_identity
 
 
@@ -63,11 +73,72 @@ def test_resolve_local_uses_weights_identity(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_resolve_unpinnable_sources_say_why(tmp_path: Path) -> None:
-    """A missing local path, an empty directory and a url are unresolved with a reason."""
-    for text in (f"local:{tmp_path / 'missing'}", f"local:{tmp_path}", "url:https://example.org/w.bin"):
-        r = resolve(ModelRef.parse(text))
-        assert not r.pinned and r.unresolved_reason
+def test_resolve_local_errors_are_typed(tmp_path: Path) -> None:
+    """A missing local path and an empty directory raise rather than resolving softly."""
+    with pytest.raises(ModelResolutionError):
+        resolve(ModelRef.parse(f"local:{tmp_path / 'missing'}"))
+    with pytest.raises(ModelResolutionError):
+        resolve(ModelRef.parse(f"local:{tmp_path}"))
+
+
+@pytest.mark.logic
+def test_url_ref_parses_the_declared_hash() -> None:
+    """`url:<url>#sha256=<hex>` carries the hash and round-trips through str."""
+    digest = "ab" * 32
+    ref = ModelRef.parse(f"url:https://example.org/w.bin#sha256={digest}")
+    assert (ref.source, ref.id, ref.ref) == ("url", "https://example.org/w.bin", digest)
+    assert str(ref) == f"url:https://example.org/w.bin#sha256={digest}"
+    with pytest.raises(ValueError):
+        ModelRef.parse("url:https://example.org/w.bin#sha256=zz")
+
+
+@pytest.mark.logic
+def test_resolve_url_identity_is_the_declared_hash() -> None:
+    """A url ref resolves to its declared hash with no download."""
+    digest = "cd" * 32
+    r = resolve(ModelRef.parse(f"url:https://example.org/w.bin#sha256={digest}"))
+    assert r.pinned and r.identity == digest
+
+
+@pytest.mark.logic
+def test_resolve_url_without_hash_is_an_error() -> None:
+    """A url ref with no declared hash is refused, never unresolved."""
+    with pytest.raises(ValueError, match="sha256"):
+        resolve(ModelRef.parse("url:https://example.org/w.bin"))
+
+
+@pytest.mark.logic
+def test_verify_model_checks_downloaded_bytes(tmp_path: Path) -> None:
+    """A single file is checked by its sha256, a directory by weights_identity."""
+    f = tmp_path / "w.bin"
+    f.write_bytes(b"weights")
+    model = resolve(ModelRef.parse(f"url:https://example.org/w.bin#sha256={hashlib.sha256(b'weights').hexdigest()}"))
+    verify_model(model, f)
+    f.write_bytes(b"other")
+    with pytest.raises(WeightsMismatch):
+        verify_model(model, f)
+    d = tmp_path / "set"
+    d.mkdir()
+    (d / "a").write_bytes(b"a")
+    ident = weights_identity([d / "a"], root=d)
+    verify_model(resolve(ModelRef.parse(f"url:https://example.org/s#sha256={ident}")), d)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "text",
+    [
+        "format: weights@1.0\n",
+        "format: weights@1.0\nweights: [a]\n",
+        "format: weights@1.0\nweights:\n  bad: 12\n",
+        "format: other\nweights: {}\n",
+        "- not a mapping\n",
+    ],
+)
+def test_malformed_manifest_raises_one_typed_error(text: str) -> None:
+    """Every malformed manifest shape raises WeightsManifestError."""
+    with pytest.raises(WeightsManifestError):
+        parse_weights(text)
 
 
 @pytest.mark.logic

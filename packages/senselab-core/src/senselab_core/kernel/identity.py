@@ -18,6 +18,7 @@ _HF_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?")
 _HF_REF = re.compile(r"[^\s@]+")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_URL_HASH = "#sha256="
 
 
 class ModelRef(Frozen):
@@ -26,8 +27,10 @@ class ModelRef(Frozen):
     Text forms, read by `parse` and written by `str`:
     - `<id>@<ref>`: source `hf`. `<id>` is `name` or `org/name` (letters, digits, `.`, `_`, `-`);
       `<ref>` is a branch, tag or commit, non-empty, without whitespace or `@`.
-    - `url:<url>`: source `url`. The rest of the string is the id verbatim and must be an absolute
-      URL with a scheme and a host; `ref` is empty.
+    - `url:<url>#sha256=<64 hex>`: source `url`. `<url>` is the id and must be an absolute URL with a
+      scheme and a host; `ref` holds the declared weight hash (pip-style), which `resolve` requires and
+      which is checked against the downloaded bytes at load. `ref` is empty only for a url with no
+      declared hash, which `resolve` refuses.
     - `local:<path>`: source `local`. The rest of the string is the id verbatim, any non-empty path;
       `ref` is empty.
     """
@@ -46,9 +49,11 @@ class ModelRef(Frozen):
                     f"hub reference {self.id!r} needs a revision without whitespace or '@', got {self.ref!r}"
                 )
             return self
-        if self.ref:
-            raise ValueError(f"{self.source} references carry no revision, got {self.ref!r}")
+        if self.source == "local" and self.ref:
+            raise ValueError(f"local references carry no revision, got {self.ref!r}")
         if self.source == "url":
+            if self.ref and not _SHA256.fullmatch(self.ref):
+                raise ValueError(f"a url reference's declared hash is 64 lowercase hex, got {self.ref!r}")
             parts = urlsplit(self.id)
             if not parts.scheme or not parts.netloc or re.search(r"\s", self.id):
                 raise ValueError(f"url reference must be an absolute URL with a host, got {self.id!r}")
@@ -57,10 +62,11 @@ class ModelRef(Frozen):
     @classmethod
     def parse(cls, text: str) -> "ModelRef":
         """Parse `org/name@rev`, `url:<url>` or `local:<path>`; raise `ValueError` on anything else."""
-        for source in ("url", "local"):
-            prefix = source + ":"
-            if text.startswith(prefix):
-                return cls(source=source, id=text[len(prefix) :], ref="")
+        if text.startswith("local:"):
+            return cls(source="local", id=text[len("local:") :], ref="")
+        if text.startswith("url:"):
+            url, sep, digest = text[len("url:") :].partition(_URL_HASH)
+            return cls(source="url", id=url, ref=digest if sep else "")
         model_id, sep, ref = text.partition("@")
         if not sep:
             raise ValueError(f"{text!r} needs an explicit revision: '{text}@<ref>', or a 'url:' or 'local:' prefix")
@@ -68,15 +74,20 @@ class ModelRef(Frozen):
 
     def __str__(self) -> str:
         """Return the text form that `parse` reads."""
-        return f"{self.id}@{self.ref}" if self.source == "hf" else f"{self.source}:{self.id}"
+        if self.source == "hf":
+            return f"{self.id}@{self.ref}"
+        return (
+            f"url:{self.id}{_URL_HASH}{self.ref}" if self.source == "url" and self.ref else f"{self.source}:{self.id}"
+        )
 
 
 class ResolvedModel(Frozen):
     """A reference bound to the identity of its weights.
 
     A pinned (`unresolved_reason is None`) hub model's identity is its 40-hex commit; a pinned url or
-    local model's is the sha256 of its weight set. An unpinnable source carries a non-empty
-    `unresolved_reason`, and its identity is unconstrained.
+    local model's is the sha256 of its weight set (for a url, the hash declared in the reference).
+    A source that cannot be pinned carries a non-empty `unresolved_reason`, and its identity is
+    unconstrained; none exists in Phase 1.
     """
 
     ref: ModelRef

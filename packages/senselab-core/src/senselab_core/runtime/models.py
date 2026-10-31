@@ -29,16 +29,36 @@ class WeightsMismatch(RuntimeError):
         self.path = path
 
 
-def _load_weights() -> Mapping[str, str]:
-    text = resources.files("senselab_core.runtime").joinpath("data", "weights.yaml").read_text(encoding="utf-8")
+class WeightsManifestError(ValueError):
+    """`weights.yaml` is malformed; the message names the offending entry."""
+
+
+class ModelResolutionError(RuntimeError):
+    """A model reference cannot be bound to an identity: a missing or empty local path."""
+
+
+def parse_weights(text: str) -> Mapping[str, str]:
+    """Parse the text of a `weights@1.0` manifest into a read-only name-to-sha256 mapping.
+
+    Raises:
+        WeightsManifestError: on a wrong format, a missing or non-mapping `weights`, or an entry
+            that is not a 64-hex sha256 string.
+    """
     doc = yaml.safe_load(text)
     if not isinstance(doc, dict) or doc.get("format") != WEIGHTS_FORMAT:
-        raise ValueError(f"weights.yaml must carry format {WEIGHTS_FORMAT!r}")
-    weights = doc["weights"]
-    bad = [k for k, v in weights.items() if not (isinstance(v, str) and _SHA256.fullmatch(v))]
-    if bad:
-        raise ValueError(f"weights.yaml entries must be 64-hex sha256 strings: {bad}")
-    return MappingProxyType({str(k): v for k, v in weights.items()})
+        raise WeightsManifestError(f"weights.yaml must carry format {WEIGHTS_FORMAT!r}")
+    weights = doc.get("weights")
+    if not isinstance(weights, dict):
+        raise WeightsManifestError("weights.yaml needs a 'weights' mapping of name to sha256")
+    for name, digest in weights.items():
+        if not (isinstance(name, str) and isinstance(digest, str) and _SHA256.fullmatch(digest)):
+            raise WeightsManifestError(f"weights.yaml entry {name!r} must map a name to a 64-hex sha256 string")
+    return MappingProxyType(dict(weights))
+
+
+def _load_weights() -> Mapping[str, str]:
+    text = resources.files("senselab_core.runtime").joinpath("data", "weights.yaml").read_text(encoding="utf-8")
+    return parse_weights(text)
 
 
 WEIGHTS: Mapping[str, str] = _load_weights()
@@ -61,13 +81,37 @@ def verify_weights(name: str, path: Path) -> None:
         raise WeightsMismatch(name, expected, actual, Path(path))
 
 
-def _local_identity(path: Path) -> str | None:
+def verify_model(model: ResolvedModel, path: Path) -> None:
+    """Check downloaded bytes of a url model against the hash its reference declared.
+
+    A single file is checked by its own sha256 (the pip-style `#sha256=` convention); a directory
+    by `weights_identity` of the files under it.
+
+    Raises:
+        ValueError: if `model` is not a url model.
+        WeightsMismatch: if the bytes do not hash to the declared value.
+    """
+    if model.ref.source != "url":
+        raise ValueError(f"verify_model checks url models, got {model.ref.source}")
+    path = Path(path)
+    actual = sha256_file(path) if path.is_file() else weights_identity(_files_under(path), root=path)
+    if actual != model.identity:
+        raise WeightsMismatch(str(model.ref), model.identity, actual, path)
+
+
+def _files_under(path: Path) -> list[Path]:
+    return sorted(Path(d) / f for d, _, names in os.walk(path) for f in names)
+
+
+def _local_identity(path: Path) -> str:
     if path.is_file():
         return weights_identity([path], root=path.parent)
     if path.is_dir():
-        files = sorted(Path(d) / f for d, _, names in os.walk(path) for f in names)
-        return weights_identity(files, root=path) if files else None
-    return None
+        files = _files_under(path)
+        if files:
+            return weights_identity(files, root=path)
+        raise ModelResolutionError(f"local model directory {path} holds no files")
+    raise ModelResolutionError(f"local model path {path} does not exist")
 
 
 def resolve(ref: ModelRef, *, token: str | None = None) -> ResolvedModel:
@@ -75,16 +119,17 @@ def resolve(ref: ModelRef, *, token: str | None = None) -> ResolvedModel:
 
     - hf: the 40-hex commit from `resolve_revision` (its errors propagate).
     - local: `weights_identity` of the file, or of every file under the directory, rooted at it.
-    - url: its bytes are not fetched here, so it is unresolved with a reason.
-    - a missing local path or an empty directory: unresolved with a reason.
+    - url: the hash declared in the reference (`url:<url>#sha256=<hex>`); nothing is downloaded.
+      `verify_model` checks the downloaded bytes against it at load.
+
+    Raises:
+        ValueError: for a url reference with no declared hash.
+        ModelResolutionError: for a missing local path or an empty directory.
     """
     if ref.source == "hf":
         return ResolvedModel(ref=ref, identity=resolve_revision(ref.id, ref.ref, token=token))
     if ref.source == "local":
-        identity = _local_identity(Path(ref.id))
-        if identity is not None:
-            return ResolvedModel(ref=ref, identity=identity)
-        return ResolvedModel(ref=ref, identity=str(ref), unresolved_reason=f"no weight files at {ref.id}")
-    return ResolvedModel(
-        ref=ref, identity=str(ref), unresolved_reason="url weights are not fetched, so their bytes are not hashed"
-    )
+        return ResolvedModel(ref=ref, identity=_local_identity(Path(ref.id)))
+    if not ref.ref:
+        raise ValueError(f"url model {ref.id!r} needs a declared hash: 'url:{ref.id}#sha256=<64 hex>'")
+    return ResolvedModel(ref=ref, identity=ref.ref)

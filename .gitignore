@@ -176,6 +176,8 @@ data/
 !src/senselab/**/data/**
 !src/tests/**/data/
 !src/tests/**/data/**
+!packages/*/src/**/data/
+!packages/*/src/**/data/**
 # The re-includes above must not re-include bytecode caches.
 **/__pycache__/
 *.py[co]
@@ -252,5 +254,3 @@ playwright-report/
 # the data/ re-includes above must not re-include bytecode caches
 **/__pycache__/
 *.py[co]
-!packages/*/src/**/data/
-!packages/*/src/**/data/**

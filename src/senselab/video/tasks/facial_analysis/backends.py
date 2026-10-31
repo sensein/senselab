@@ -53,7 +53,7 @@ def mediapipe_model_path() -> Path:
         The local ``.task`` file.
 
     Raises:
-        RuntimeError: When the downloaded bytes do not match the pinned SHA-256.
+        WeightsMismatch: When the downloaded bytes do not match the manifest entry (a ``RuntimeError``).
     """
     target = cache_root() / "models" / "mediapipe" / f"face_landmarker_float16_v1_{WEIGHTS['mediapipe'][:12]}.task"
     return download_pinned(MEDIAPIPE_MODEL_URL, "mediapipe", target)
