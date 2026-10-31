@@ -1,11 +1,11 @@
-"""No workflow string outside an ``env:`` value interpolates an expression that can carry untrusted text.
+"""No workflow string outside an ``env:`` map interpolates an expression that can carry untrusted text.
 
 Every ``${{ }}`` in every string value of every workflow and composite action is parsed and its result classified.
 An expression is clean when its value cannot carry text an outsider chose: a literal, a trusted context
 (``TRUSTED`` and ``TRUSTED_FAMILIES``), a boolean (comparison, ``!``, ``contains`` and the status functions), or
 ``fromJSON``/``toJSON``/``format``/``join``/``&&``/``||`` over clean operands. ``matrix.*`` is trusted in a job only
-when every expression in that job's matrix definition is clean. ``env.*`` is never trusted: ``env:`` values are the
-one place an untrusted value may go, and reading one back into a script would undo that.
+when every expression in that job's matrix definition is clean. ``env.*`` is never trusted. The exempt strings are
+the values of the ``env`` maps GitHub defines (``ENV_MAPS``), and nothing else named ``env``.
 """
 
 from __future__ import annotations
@@ -184,15 +184,37 @@ def clean(expression: str, *, matrix_clean: bool = False) -> bool:
     return _Parser(expression, matrix_clean).parse()
 
 
-def _strings(node: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], str]]:  # noqa: ANN401
-    """Yield ``(path, string)`` for every string value under ``node`` except those under an ``env`` key."""
+ENV_MAPS = (
+    ("env",),
+    ("jobs", "*", "env"),
+    ("jobs", "*", "steps", "*", "env"),
+    ("jobs", "*", "container", "env"),
+    ("jobs", "*", "services", "*", "env"),
+    ("runs", "steps", "*", "env"),
+)
+"""Where an ``env:`` map sits: workflow, job, step, job container and service, composite-action step."""
+
+
+def is_env_map(path: tuple[str, ...]) -> bool:
+    """Whether the key path ``path`` is one of ``ENV_MAPS``, ``*`` standing for any one key."""
+    return any(len(m) == len(path) and all(a in ("*", b) for a, b in zip(m, path, strict=True)) for m in ENV_MAPS)
+
+
+def _strings(
+    node: Any,  # noqa: ANN401
+    path: tuple[str, ...] = (),
+    *,
+    exempt: bool = True,
+) -> Iterator[tuple[tuple[str, ...], str]]:
+    """Yield ``(path, string)`` for every string value under ``node``, skipping ``env`` maps when ``exempt``."""
     if isinstance(node, dict):
         for key, value in node.items():
-            if key != "env":
-                yield from _strings(value, (*path, str(key)))
+            child = (*path, str(key))
+            if not (exempt and is_env_map(child)):
+                yield from _strings(value, child, exempt=exempt)
     elif isinstance(node, list):
         for i, item in enumerate(node):
-            yield from _strings(item, (*path, str(i)))
+            yield from _strings(item, (*path, str(i)), exempt=exempt)
     elif isinstance(node, str):
         yield path, node
 
@@ -215,7 +237,7 @@ def string_offenders(text: str, *, matrix_clean: bool) -> list[str]:
 def _matrix_clean(job: Any) -> bool:  # noqa: ANN401
     """Whether every expression in the job's ``strategy.matrix`` is clean; a literal matrix has none."""
     matrix = job.get("strategy", {}).get("matrix", {}) if isinstance(job, dict) else {}
-    return not any(string_offenders(s, matrix_clean=False) for _, s in _strings(matrix))
+    return not any(string_offenders(s, matrix_clean=False) for _, s in _strings(matrix, exempt=False))
 
 
 def document_offenders(document: Any) -> list[str]:  # noqa: ANN401
@@ -295,6 +317,11 @@ PLACES = {
     "dynamic index": "jobs:\n  j:\n    steps:\n    - run: echo ${{ secrets[github.head_ref] }}\n",
     "unknown function": "jobs:\n  j:\n    steps:\n    - run: echo ${{ evil(github.sha) }}\n",
     "unparseable": "jobs:\n  j:\n    steps:\n    - run: echo ${{ github.sha ; rm }}\n",
+    "with.env": f"jobs:\n  j:\n    steps:\n    - uses: a/b@v1\n      with:\n        env: {TITLE}\n",
+    "matrix key env": f"jobs:\n  j:\n    strategy:\n      matrix:\n        env: ['{TITLE}']\n"
+    "    steps:\n    - run: ls\n",
+    "env under with": f"jobs:\n  j:\n    steps:\n    - uses: a/b@v1\n      with:\n        env:\n          A: {TITLE}\n",
+    "env of a job named env": f"jobs:\n  env:\n    name: {TITLE}\n",
 }
 
 
@@ -358,3 +385,40 @@ def test_xg11_matrix_values_are_trusted_only_when_the_matrix_is_clean(matrix: st
 def test_clean_expressions_pass(expression: str) -> None:
     """Literals, trusted contexts, booleans and pass-through functions of clean operands are clean."""
     assert clean(expression)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "matrix",
+    [
+        "env: ['${{ github.event.pull_request.title }}']",
+        "include:\n        - env: ${{ github.head_ref }}",
+    ],
+)
+def test_xg11_a_matrix_variable_named_env_is_not_an_env_map(matrix: str, tmp_path: Path) -> None:
+    """``matrix.env`` is a matrix value: an untrusted definition makes both it and its use offenders."""
+    (tmp_path / "w.yaml").write_text(
+        f"jobs:\n  j:\n    strategy:\n      matrix:\n        {matrix}\n"
+        "    steps:\n    - run: echo ${{ matrix.env }}\n"
+    )
+    offenders = interpolation_offenders(tmp_path)
+    assert [o for o in offenders if "matrix.env" in o] and [o for o in offenders if "strategy.matrix" in o]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("env",),
+        ("jobs", "j", "env"),
+        ("jobs", "j", "steps", "0", "env"),
+        ("jobs", "j", "container", "env"),
+        ("jobs", "j", "services", "db", "env"),
+        ("runs", "steps", "2", "env"),
+    ],
+)
+def test_the_env_maps_are_exactly_githubs(path: tuple[str, ...]) -> None:
+    """Each position GitHub defines an ``env`` map at is exempt; the same key one level off is not."""
+    assert is_env_map(path)
+    assert not is_env_map((*path[:-1], "with", "env"))
+    assert not is_env_map((*path[:-1], "strategy", "matrix", "env"))
