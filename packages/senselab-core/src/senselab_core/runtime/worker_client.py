@@ -292,15 +292,18 @@ def _members_gone(pgid: int, exited: threading.Event, deadline: Deadline) -> boo
 
 
 ESCALATE_HINT = "stopping the worker; press Ctrl-C again to kill it now"
+_HINTED = threading.Event()
+"""Set once this process has logged `ESCALATE_HINT`; the hint is logged once per process."""
 
 
 @contextlib.contextmanager
 def _signals_deferred(*, escalate: bool) -> Iterator[None]:
     """On the main thread, hold `DEFERRED_SIGNALS` for the body, then restore their handlers and raise each held one.
 
-    With `escalate`, the first SIGINT is held and logs `ESCALATE_HINT`, and a second raises `KeyboardInterrupt`
-    at once. A signal whose handler was not installed from Python cannot be restored, so it is not held. Held
-    signals are not raised again when a wakeup fd is set, since its writer already saw them.
+    With `escalate`, the first SIGINT is held, a second raises `KeyboardInterrupt` at once, and the first SIGINT
+    held in this process logs `ESCALATE_HINT`. A signal whose handler was not installed from Python cannot be
+    restored, so it is not held. Held signals are not raised again when a wakeup fd is set, since its writer
+    already saw them.
     """
     if threading.current_thread() is not threading.main_thread():
         yield
@@ -313,7 +316,9 @@ def _signals_deferred(*, escalate: bool) -> Iterator[None]:
             if signal.SIGINT in held:
                 held[:] = [s for s in held if s != signal.SIGINT]
                 raise KeyboardInterrupt
-            logger.warning(ESCALATE_HINT)
+            if not _HINTED.is_set():
+                _HINTED.set()
+                logger.warning(ESCALATE_HINT)
         held.append(signum)
 
     try:

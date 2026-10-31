@@ -9,7 +9,9 @@ class the finding belongs to. Probes that could hang run in the shutdown schedul
 import gc
 import logging
 import os
+import resource
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -276,14 +278,44 @@ def test_i3_collecting_a_client_whose_shutdown_was_cut_short_finishes_it(
 
 
 @pytest.mark.logic
-def test_ctrl_c_held_once_with_a_hint_and_escalated_by_a_second(caplog: pytest.LogCaptureFixture) -> None:
+def test_ctrl_c_held_once_with_a_hint_and_escalated_by_a_second(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The first SIGINT during shutdown is held and logs the hint; the second raises `KeyboardInterrupt` at once."""
+    monkeypatch.setattr(worker_client, "_HINTED", threading.Event())
     with caplog.at_level(logging.WARNING), pytest.raises(KeyboardInterrupt):
         with _signals_deferred(escalate=True):
             signal.raise_signal(signal.SIGINT)
             assert caplog.messages.count(ESCALATE_HINT) == 1
             signal.raise_signal(signal.SIGINT)
             raise AssertionError("the second SIGINT did not interrupt")
+
+
+def _bounded() -> None:
+    resource.setrlimit(resource.RLIMIT_FSIZE, (2**20, 2**20))
+
+
+_THREE_SHUTDOWNS = """
+import logging, signal
+from senselab_core.runtime.worker_client import _signals_deferred
+logging.basicConfig(level=logging.WARNING)
+for _ in range(3):
+    try:
+        with _signals_deferred(escalate=True):
+            signal.raise_signal(signal.SIGINT)
+    except KeyboardInterrupt:
+        pass
+"""
+
+
+@pytest.mark.logic
+def test_l1_the_escalation_hint_is_logged_once_per_process() -> None:
+    """Three shutdowns in one process, each interrupted once, log the hint once."""
+    proc = subprocess.run(
+        [sys.executable, "-c", _THREE_SHUTDOWNS], capture_output=True, text=True, timeout=WAIT_S, preexec_fn=_bounded
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert proc.stderr.count(ESCALATE_HINT) == 1
 
 
 @pytest.mark.contract
