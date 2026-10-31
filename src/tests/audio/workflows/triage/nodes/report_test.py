@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -1157,9 +1158,13 @@ class TestTheSummaryLayers:
             entity for entity in store.entities("measurement") if entity.attributes.get("name") == "hear_window"
         ]
         assert hear_windows
-        hear_windows[0].attributes["labels"] = []
-        hear_windows[0].attributes["scores"] = {}
-        hear_windows[0].attributes["raw_scores"] = {"Cough": 0.12, "Breathe": 0.31, "Speech": 0.44}
+        edited = {
+            **hear_windows[0].attributes,
+            "labels": [],
+            "scores": {},
+            "raw_scores": {"Cough": 0.12, "Breathe": 0.31, "Speech": 0.44},
+        }
+        store._entities[hear_windows[0].id] = replace(hear_windows[0], attributes=edited, run_id=None)
 
         payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
 

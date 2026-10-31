@@ -15,6 +15,7 @@ not be able to tell them apart.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
@@ -431,7 +432,9 @@ class TestTheStreamItReads:
         samples[24000] = np.float32(0.9)
         _seed(store, tmp_path, wav_writer, samples, [clipped])
         elsewhere = [span for span in live_entities(store, "span")][0]
-        elsewhere.attributes["signal"] = "plain"
+        store._entities[elsewhere.id] = replace(
+            elsewhere, attributes={**elsewhere.attributes, "signal": "plain"}, run_id=None
+        )
         result = quality(store, "recording", config, run_dir=tmp_path)
         assert result.report.conformance == UNDETERMINED
         assert store.get_entity(result.report_entity_id).attributes["clip_spans_n"] == 0

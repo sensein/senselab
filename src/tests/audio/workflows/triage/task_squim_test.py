@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import pytest
 import torch
@@ -154,7 +154,7 @@ class TestTheStore:
         back = ProvStore.read_jsonl(path, run_id="task-squim-test")
         held = find_measurement(back, MEASUREMENT)
         assert held is not None
-        a: dict[str, Any] = held.attributes
+        a: Mapping[str, Any] = held.attributes
         assert (a["pesq"], a["stoi"], a["si_sdr"]) == (2.9, 0.98, 17.0)
         assert a["windows_n"] == 3 and a["covered_s"] == pytest.approx(23.5)
         assert a["signal"] == "plain" and a["extent_source"] == EXTENT_FROM_SPANS

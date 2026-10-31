@@ -1,5 +1,6 @@
 """The summary's cover: its margins, and the blocks the decision page owns instead of it."""
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -206,7 +207,9 @@ class TestTheCoverAndTheDecisionPageShareNoBlock:
 
         decisions = _route_decisions(cover_store)
         assert decisions, "the fixture wrote no route decision to attach an unavailable gate to"
-        decisions[0].attributes["unavailable_gates"] = {"voice.glide": "no f0 track in the store"}
+        gates = {"voice.glide": "no f0 track in the store"}
+        edited = replace(decisions[0], attributes={**decisions[0].attributes, "unavailable_gates": gates}, run_id=None)
+        cover_store._entities[edited.id] = edited
 
         _, cover = _rendered_pages(cover_store, pdf_config, tmp_path, monkeypatch)
         block = "\n".join(cover)

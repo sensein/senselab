@@ -126,10 +126,14 @@ def test_text_with_post_13_code_points_is_recorded_and_is_its_own_family(head: s
 
 @pytest.mark.contract
 def test_provenance_tokens_are_the_shared_families() -> None:
-    """Provenance writes each family with the shared tokeniser, arrays by value as `$nd`."""
-    from senselab_core.runtime.provenance import normalised
+    """Provenance writes each family with the shared tokeniser, arrays by value as `$nd`, base64 canonical `.npy`."""
+    import base64
 
-    assert normalised(numpy.array([1, 2], dtype="<i2")) == {"$nd": {"dtype": "int16", "shape": [2], "values": [1, 2]}}
+    from senselab_core.runtime.provenance import normalised
+    from senselab_worker.canonical import canonical_npy_bytes
+
+    a = numpy.array([1, 2], dtype=">i2")
+    assert normalised(a) == {"$nd": base64.b64encode(canonical_npy_bytes(a)).decode("ascii")}
     assert normalised({"$nd": 1}) == {"$$nd": 1}
     for token, (value, _) in _family_samples().items():
         if token in ("$array", "$type", "$value"):
@@ -140,7 +144,7 @@ def test_provenance_tokens_are_the_shared_families() -> None:
 @pytest.mark.logic
 @pytest.mark.parametrize("make", ["cycle", "dict-cycle", "deep"])
 def test_xc3_a_value_that_contains_itself_or_nests_deeply_raises_the_shared_error(make: str) -> None:
-    """A cycle or 5000-deep nesting gives the shared guard's `ValueError`, from the digest, `==` and `hash`."""
+    """A cycle or 5000-deep nesting gives the shared guard's `ValueError` when the value is built, which digests it."""
     value: object
     if make == "cycle":
         cyc: list[object] = []
@@ -152,10 +156,8 @@ def test_xc3_a_value_that_contains_itself_or_nests_deeply_raises_the_shared_erro
         value = d
     else:
         value = _nested(5000)
-    held = Holder(x=value)
-    for read in (held.canonical_digest, lambda: held == Holder(x=1), lambda: hash(held)):
-        with pytest.raises(ValueError, match="contains itself|deeper than"):
-            read()
+    with pytest.raises(ValueError, match="contains itself|deeper than"):
+        Holder(x=value)
 
 
 @pytest.mark.contract
@@ -176,22 +178,26 @@ def test_any_nesting_digests_or_raises_value_error(kinds: list[str]) -> None:
             except TypeError:
                 value = (value,)
     try:
-        Holder(x=value).canonical_digest()
+        Holder(x=value)
     except ValueError as err:
         assert "deeper than" in str(err) or "has no canonical form" in str(err)
 
 
 @pytest.mark.logic
 def test_xc4_audio_identity_is_one_per_value() -> None:
-    """Audio whose samples differ only by `-0.0` or a NaN's sign has one `content:` identity."""
+    """Audio whose samples differ only by `-0.0` has one `content:` identity; NaNs of any sign have one `.npy` digest.
+
+    Audio refuses NaN samples, so the NaN half is checked on the array digest audio identity is made of.
+    """
     from senselab_core.kernel.signals import Audio
+    from senselab_worker.digest import npy_digest
 
     zero = numpy.array([0.0, 1.0], dtype=numpy.float32)
     negative = numpy.array([-0.0, 1.0], dtype=numpy.float32)
     nan = numpy.array([0x7FC00000, 0], dtype="<u4").view("<f4")
     negative_nan = numpy.array([0xFFC00001, 0], dtype="<u4").view("<f4")
     assert Audio.from_array(zero, 16_000).identity == Audio.from_array(negative, 16_000).identity
-    assert Audio.from_array(nan, 16_000).identity == Audio.from_array(negative_nan, 16_000).identity
+    assert npy_digest("npy@1", nan) == npy_digest("npy@1", negative_nan)
 
 
 @pytest.mark.logic

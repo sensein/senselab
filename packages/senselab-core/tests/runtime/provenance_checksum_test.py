@@ -17,6 +17,7 @@ from senselab_core.runtime.provenance import (
     file_attributes,
     file_digest,
 )
+from senselab_worker.canonical import jcs_dumps
 
 pytestmark = pytest.mark.logic
 
@@ -124,10 +125,10 @@ def test_read_back_refuses_a_non_artifact_whose_path_was_removed(tmp_path: Path)
     store.entity(prov_type="stream", extent=None, attributes={"path": "a.flac", CHECKSUM_KEY: "0" * 64})
     path = tmp_path / "store.jsonl"
     store.write_jsonl(path)
-    [line] = path.read_text().splitlines()
+    header, line = path.read_text().splitlines()
     record = json.loads(line)
     del record["attributes"]["path"]
-    path.write_text(json.dumps(record) + "\n")
+    path.write_text(header + "\n" + jcs_dumps(record).decode("utf-8") + "\n")
     with pytest.raises(ValueError, match="naming the file"):
         ProvStore.read_jsonl(path)
 

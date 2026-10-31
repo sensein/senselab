@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from collections.abc import Mapping
+from typing import Any
 from pathlib import Path
 from types import ModuleType
 
@@ -164,7 +166,7 @@ def _quantiles(manifest: Path) -> Path:
     return out
 
 
-def _reading(row: dict) -> dict:
+def _reading(row: dict) -> Mapping[str, Any]:
     store = read_store(Path(row["enhanced"]).parents[2])
     found = find_measurement(store, COHORT_READING)
     assert found is not None

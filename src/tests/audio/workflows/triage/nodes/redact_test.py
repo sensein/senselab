@@ -1244,7 +1244,8 @@ class TestTheStoresScanIsEvidenceOrItIsNot:
         """A detector's failure message may quote the scanned input, so only its name is recorded."""
         _seed_redact_store(store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
         scan = next(e for e in store.entities("measurement") if e.attributes.get("name") == "pii_scan")
-        scan.attributes["failed"] = {"gliner": "ValueError on 'jane doe'"}
+        failed = {"gliner": "ValueError on 'jane doe'"}
+        store._entities[scan.id] = replace(scan, attributes={**scan.attributes, "failed": failed}, run_id=None)
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.FAIL
         assert _verdict_entity(store, "REDACT").attributes["scan_failed"] == ["gliner"]

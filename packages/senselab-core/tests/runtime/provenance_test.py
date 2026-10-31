@@ -20,6 +20,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from senselab_core.runtime import provenance
 from senselab_core.runtime.provenance import PROV_TYPE, Activity, Agent, Entity, ProvStore
+from senselab_worker.canonical import jcs_dumps
 
 pytestmark = pytest.mark.logic
 
@@ -35,7 +36,7 @@ def _rewrite_records(path: Path, kind: str, mutate: Callable[[dict[str, object]]
         rec = json.loads(line)
         if rec.get("record") == kind:
             mutate(rec)
-            line = json.dumps(rec, sort_keys=True)
+            line = jcs_dumps(rec).decode("utf-8")
         lines.append(line)
     path.write_text("\n".join(lines) + "\n")
 
@@ -550,7 +551,7 @@ class TestAtomicWrite:
         def _killed(descriptor: int) -> None:
             raise KeyboardInterrupt("SIGTERM during the write")
 
-        monkeypatch.setattr("senselab_core.runtime.provenance.os.fsync", _killed)
+        monkeypatch.setattr("senselab_core.runtime.storage.os.fsync", _killed)
         with pytest.raises(KeyboardInterrupt):
             s.write_jsonl(target)
         assert target.read_bytes() == before
@@ -659,7 +660,7 @@ def _oracle(value: object) -> object:
 
 
 def _id(value: object) -> str:
-    return provenance._digest([value], ("value",))
+    return ProvStore(run_id="r").entity(prov_type="measurement", extent=None, attributes={"value": value})
 
 
 @settings(max_examples=500, deadline=None)
@@ -715,7 +716,7 @@ class _Opaque:
         ({"evidence": {"window": _Opaque()}}, "attributes.evidence.window", "_Opaque"),
         ({"values": [1, {"x": complex(1, 2)}]}, "attributes.values[1].x", "builtins.complex"),
         ({"when": numpy.datetime64("2026-10-31")}, "attributes.when", "numpy.datetime64"),
-        ({"rows": numpy.array([(1, 2.0)], dtype="i4,f8")}, "attributes.rows[0]", "numpy.void"),
+        ({"rows": numpy.array([(1, 2.0)], dtype="i4,f8")}, "attributes.rows", "numpy.ndarray"),
         ({"ordered": collections.OrderedDict(a=1)}, "attributes.ordered", "collections.OrderedDict"),
         ({1: "x"}, "attributes[1]", "builtins.int"),
         ({"\u00e9": 1, "e\u0301": 2}, "attributes.e\u0301", "builtins.str"),
@@ -762,3 +763,52 @@ def test_a_real_file_entity_gets_an_id(tmp_path: Path) -> None:
     attributes = {"path": str(target), **provenance.file_attributes(target)}
     assert attributes[provenance.MTIME_KEY] == target.stat().st_mtime_ns > 2**53
     ProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=attributes)
+
+
+@settings(max_examples=300, deadline=None)
+@given(
+    attributes=st.dictionaries(_KEYS, _PAYLOADS, max_size=3), parameters=st.dictionaries(_KEYS, _PAYLOADS, max_size=3)
+)
+def test_write_and_read_are_inverse_and_ids_recompute_from_the_file(
+    tmp_path_factory: pytest.TempPathFactory, attributes: dict[str, object], parameters: dict[str, object]
+) -> None:
+    """Whatever the store records, the file reads back to equal records whose ids recompute, and writes back the same.
+
+    Every record the writer accepts the reader accepts: they build records through one validator.
+    """
+    store = ProvStore(run_id="run")
+    eid = store.entity(prov_type="measurement", extent=(0.0, 1.5), attributes=attributes)
+    aid = store.activity(node="N", step=None, parameters=parameters, started="t0")
+    store.agent(agent_type="software", version="1")
+    store.environment(kind="host", label="h", python_version="3.12", dependencies={"numpy": "2"})
+    store.was_generated_by(eid, aid)
+    path = tmp_path_factory.mktemp("prov") / "prov.jsonl"
+    store.write_jsonl(path)
+    back = ProvStore.read_jsonl(path)
+    assert back.records() == store.records() and back.relations() == store.relations()
+    assert all(record.minted_id() == record.id for record in back.records())
+    again = path.with_name("again.jsonl")
+    back.write_jsonl(again)
+    assert again.read_bytes() == path.read_bytes()
+
+
+def test_a_provenance_1_file_reads_with_its_ids_kept(tmp_path: Path) -> None:
+    """A file without a format line is the previous major: its values are normalised, its ids kept, no run_id."""
+    path = tmp_path / "old.jsonl"
+    lines = [
+        '{"record": "entity", "id": "span-0123456789abcdef", "prov_type": "span", "extent": [0, 1.5], '
+        '"attributes": {"level": -Infinity, "$k": 1}}',
+        '{"record": "activity", "id": "act-0123456789abcdef", "node": "N", "step": null, "started": null, '
+        '"ended": null, "parameters": {}}',
+        '{"record": "relation", "relation": "wasGeneratedBy", "source": "span-0123456789abcdef", '
+        '"target": "act-0123456789abcdef"}',
+    ]
+    path.write_text("\n".join(lines) + "\n")
+    back = ProvStore.read_jsonl(path)
+    entity = back.get_entity("span-0123456789abcdef")
+    assert entity.run_id is None and entity.extent == (0.0, 1.5)
+    assert entity.attributes == {"level": {"$f": "-Infinity"}, "$$k": 1}
+    assert back.generated_by(entity.id) == "act-0123456789abcdef"
+    written = tmp_path / "new.jsonl"
+    back.write_jsonl(written)
+    assert ProvStore.read_jsonl(written).records() == back.records()

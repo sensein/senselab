@@ -8,6 +8,7 @@ place BEP028 and the store disagree are in ``specs/20260908-triage-prov-bep028/d
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -126,7 +127,7 @@ def store_id(uri: str) -> str:
     return fragment.removeprefix(ENTITY_INFIX)
 
 
-def _checksum(attributes: dict[str, Any]) -> dict[str, Any]:
+def _checksum(attributes: Mapping[str, Any]) -> dict[str, Any]:
     """The ``Checksum`` array for a file, or the reason it has none."""
     digest = attributes.get(CHECKSUM_KEY)
     if digest is not None:
@@ -135,7 +136,7 @@ def _checksum(attributes: dict[str, Any]) -> dict[str, Any]:
     return {"ChecksumUnresolvedReason": reason} if reason is not None else {}
 
 
-def _extras(attributes: dict[str, Any]) -> dict[str, Any]:
+def _extras(attributes: Mapping[str, Any]) -> dict[str, Any]:
     """Store attributes with the ones that became BEP028 fields removed."""
     consumed = {PATH_KEY, CHECKSUM_KEY, CHECKSUM_UNRESOLVED_KEY, SIZE_KEY, MTIME_KEY}
     return {key: value for key, value in attributes.items() if key not in consumed and value is not None}
