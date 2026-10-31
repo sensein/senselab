@@ -8,9 +8,13 @@ Layout under `cache_root`:
 - `datasets/<name>@<version>/.complete`: the completion marker, read-only.
 
 Manifest paths live only under `files/`, so no manifest path can name the marker. Directories are
-`shared_dir_mode`; world bits are set only when the `StorePolicy` allows them. An `OSError` is
-raised as `StoreUnavailable` (`StorageFull` when out of space). Only `https` URLs are fetched,
-redirects included.
+`shared_dir_mode`, whatever the umask; world bits are set only when the `StorePolicy` allows them.
+Every directory below `cache_root` is reached through `StorageDir`, so no symlink below the root is
+followed: a symlink or a non-directory where `blobs/`, `tmp/`, `datasets/`, a dataset or its `files/`
+belongs, and anything but a regular file at `blobs/<sha256>`, is moved into `tmp/<uuid>` (and removed
+with the stale downloads); one under `files/` is a `ManifestConflictError`. An `OSError` is raised as
+`StoreUnavailable` (`StorageFull` when out of space), naming the path it was raised on. Only `https`
+URLs are fetched, redirects included.
 """
 
 import errno
@@ -36,13 +40,15 @@ from senselab_worker.ownership import UUID_HEX, remove_owned
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.license import License
-from senselab_core.runtime.locks import ensure_dirs
 from senselab_core.runtime.storage import (
     CLOCK_NAME,
+    StorageDir,
     StorePolicy,
     StoreUnavailable,
+    WrongKindError,
     committed_modes,
     fs_now,
+    path_component,
     shared_dir_mode,
     storage_fault,
 )
@@ -93,8 +99,11 @@ class DataFile(Frozen):
     @field_validator("path")
     @classmethod
     def _relative(cls, v: str) -> str:
-        parts = v.split("/")
-        if "\\" in v or "\x00" in v or any(p in ("", ".", "..") or LINK_STAGING_NAME.fullmatch(p) for p in parts):
+        try:
+            parts = [path_component(p) for p in v.split("/")]
+        except ValueError:
+            parts = []
+        if not parts or any(LINK_STAGING_NAME.fullmatch(p) for p in parts):
             raise ValueError(
                 f"file path must be relative, '/'-separated, with no empty, '.', '..' or staging-name part, got {v!r}"
             )
@@ -143,9 +152,10 @@ class DataManifest(Frozen):
     @field_validator("name", "version")
     @classmethod
     def _plain(cls, v: str) -> str:
-        if "/" in v or v in (".", "..") or "\\" in v or "\x00" in v:
-            raise ValueError(f"must not contain path separators, got {v!r}")
-        return v
+        try:
+            return path_component(v)
+        except ValueError:
+            raise ValueError(f"must be one path component, with no path separators, got {v!r}") from None
 
     @model_validator(mode="after")
     def _prefix_free(self) -> "DataManifest":
@@ -230,32 +240,32 @@ def _urlopen(url: str) -> BinaryIO:
     return _https_opener().open(url, timeout=60)  # type: ignore[no-any-return]
 
 
-def _remove_stale_downloads(root: Path, stale_s: int) -> None:
-    """Remove downloads in `root/tmp` older than `stale_s` on the cache's own clock; failures are logged."""
-    tmp_root = root / "tmp"
+def _remove_stale_downloads(root: Path, tmp: StorageDir, stale_s: int) -> None:
+    """Remove downloads in `tmp` older than `stale_s` on the cache's own clock; failures are logged."""
     try:
         cutoff = fs_now(root / CLOCK_NAME) - stale_s
-        children = list(tmp_root.iterdir())
+        children = tmp.listdir()
     except OSError as err:
-        logger.warning("cannot clear stale downloads in %s: %s", tmp_root, err)
+        logger.warning("cannot clear stale downloads in %s: %s", tmp.path, err)
         return
     for child in children:
         try:
-            if os.lstat(child).st_mtime < cutoff:
-                remove_owned(tmp_root, child, pattern=UUID_HEX)
-        except FileNotFoundError:
-            continue
+            info = tmp.lstat(child)
+            if info is not None and info.st_mtime < cutoff:
+                tmp.remove_owned(child, pattern=UUID_HEX)
         except OSError as err:
-            logger.warning("cannot remove stale download %s: %s", child, err)
+            logger.warning("cannot remove stale download %s: %s", tmp.path / child, err)
 
 
-def _download(url: str, opener: Callable[[str], BinaryIO], staged: Path, *, size: int, mode: int = 0o440) -> None:
-    """Stream `url` into `staged` (created with `mode`), reading at most `size + 1` bytes.
+def _download(
+    url: str, opener: Callable[[str], BinaryIO], directory: StorageDir, name: str, *, size: int, mode: int = 0o440
+) -> None:
+    """Stream `url` into the new file `directory/name` (created with `mode`), reading at most `size + 1` bytes.
 
     Raises:
         FetchError: the URL is not `https`, the opener or a read failed, or the source served more
             or fewer than `size` bytes.
-        OSError: `staged` could not be written.
+        OSError: the file could not be written.
     """
     _require_https(url)
     try:
@@ -263,39 +273,34 @@ def _download(url: str, opener: Callable[[str], BinaryIO], staged: Path, *, size
     except Exception as err:  # noqa: BLE001 - any opener failure is this source's failure
         raise _SourceError(f"{type(err).__name__}: {err}") from err
     received = 0
-    with source, open(staged, "xb") as out:
-        os.fchmod(out.fileno(), mode)
-        while True:
-            try:
-                chunk = source.read(min(_CHUNK, size + 1 - received))
-            except Exception as err:  # noqa: BLE001 - a dropped connection is this source's failure
-                raise _SourceError(f"{type(err).__name__}: {err}") from err
-            if not chunk:
-                break
-            received += len(chunk)
-            if received > size:
-                raise _SourceError(f"served more than the declared {size} bytes")
-            out.write(chunk)
-        if received < size:
-            raise _SourceError(f"ended after {received} of the declared {size} bytes")
-        out.flush()
-        os.fsync(out.fileno())
+    with source:
+        out = os.fdopen(directory.open_new(name, mode), "wb")
+        with out:
+            while True:
+                try:
+                    chunk = source.read(min(_CHUNK, size + 1 - received))
+                except Exception as err:  # noqa: BLE001 - a dropped connection is this source's failure
+                    raise _SourceError(f"{type(err).__name__}: {err}") from err
+                if not chunk:
+                    break
+                received += len(chunk)
+                if received > size:
+                    raise _SourceError(f"served more than the declared {size} bytes")
+                out.write(chunk)
+            if received < size:
+                raise _SourceError(f"ended after {received} of the declared {size} bytes")
+            out.flush()
+            os.fsync(out.fileno())
 
 
-def _fsync_dir(path: Path) -> None:
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+def _commit(
+    source: StorageDir, name: str, target: StorageDir, final: str, *, replace: bool, keeps: Callable[[Path], bool]
+) -> None:
+    """Move verified `source/name` into `target/final`, then sync `target`.
 
-
-def _commit(staged: Path, final: Path, *, replace: bool, keeps: Callable[[Path], bool]) -> None:
-    """Move verified `staged` into `final`, then sync the directory.
-
-    With `replace` False the first writer wins (`os.link`): a `final` that appeared meanwhile is
-    kept if `keeps(final)` verifies it, and otherwise atomically replaced by `staged`. With `replace`
-    True `final` is atomically replaced, so a reader sees the old or the new bytes, never a missing path.
+    With `replace` False the first writer wins (a hard link): a `final` that appeared meanwhile is
+    kept if `keeps(<its path>)` verifies it, and otherwise atomically replaced. With `replace` True
+    `final` is atomically replaced, so a reader sees the old or the new bytes, never a missing path.
 
     Raises:
         StoreUnavailable: the filesystem has no hard links.
@@ -303,30 +308,30 @@ def _commit(staged: Path, final: Path, *, replace: bool, keeps: Callable[[Path],
     """
     try:
         if not replace:
-            replace = not _link_first(staged, final) and not keeps(final)
+            replace = not _link_first(source, name, target, final) and not keeps(target.path / final)
         if replace:
-            os.replace(staged, final)
+            source.rename(name, target, final, replace=True)
     finally:
-        remove_owned(staged.parent, staged, pattern=UUID_HEX)
-    _fsync_dir(final.parent)
+        source.remove_owned(name, pattern=UUID_HEX)
+    target.fsync()
 
 
-def _link_first(staged: Path, final: Path) -> bool:
-    """Hard-link `staged` at `final`; return False if `final` already exists.
+def _link_first(source: StorageDir, name: str, target: StorageDir, final: str) -> bool:
+    """Hard-link `source/name` at `target/final`; return False if `final` already exists.
 
     Raises:
         StoreUnavailable: the filesystem has no hard links.
         OSError: the link failed otherwise.
     """
     try:
-        os.link(staged, final)
+        source.link(name, target, final)
     except FileExistsError:
         return False
     except OSError as err:
         if err.errno in _NO_HARDLINK_ERRNOS:
             raise storage_fault(
                 err,
-                final.parent,
+                target.path,
                 hint="this filesystem has no hard links; use a cache root on a filesystem that supports them",
             ) from err
         raise
@@ -403,35 +408,43 @@ def _blob_state(
 
 def _ensure_blob(
     file: DataFile,
-    root: Path,
+    blobs: StorageDir,
+    tmp: StorageDir,
     opener: Callable[[str], BinaryIO],
     recorded: Mapping[str, BlobStamp],
     verify: str,
     file_mode: int,
 ) -> Path:
-    blob = root / "blobs" / file.sha256
+    blob = blobs.path / file.sha256
     if _blob_state(blob, file.sha256, recorded, verify) == "verified":
         return blob
     tried: list[str] = []
     for url in (file.url, *file.mirrors):
-        staged = root / "tmp" / uuid.uuid4().hex
+        staged = uuid.uuid4().hex
         try:
-            _download(url, opener, staged, size=file.size, mode=file_mode)
-            actual = file_digest("file@1", staged)
+            _download(url, opener, tmp, staged, size=file.size, mode=file_mode)
+            actual = file_digest("file@1", tmp.path / staged)
             if actual != file.sha256:
                 tried.append(f"{url} (sha256 {actual[:12]}..., expected {file.sha256[:12]}...)")
                 continue
+            present = blobs.kind(file.sha256)
+            if present not in (None, "file"):
+                moved = blobs.set_aside(file.sha256, tmp)
+                logger.warning("moved the %s at blob %s aside to %s", present, blob, moved)
+                present = None
             _commit(
+                tmp,
                 staged,
-                blob,
-                replace=os.path.lexists(blob),
+                blobs,
+                file.sha256,
+                replace=present is not None,
                 keeps=lambda existing: _blob_state(existing, file.sha256, {}, "full") == "verified",
             )
             return blob
         except _SourceError as err:
             tried.append(f"{url} ({err})")
         finally:
-            remove_owned(staged.parent, staged, pattern=UUID_HEX)
+            tmp.remove_owned(staged, pattern=UUID_HEX)
     raise FetchError(
         f"could not fetch {file.path!r}: no source served {file.size} bytes with sha256 {file.sha256}; tried "
         + "; ".join(tried)
@@ -439,24 +452,37 @@ def _ensure_blob(
     )
 
 
-def _link(link: Path, blob: Path, dir_mode: int) -> None:
-    """Point `link` at `blob` through a staged symlink and an atomic rename.
+def _link(files: StorageDir, path: str, blob: Path, dir_mode: int) -> Path:
+    """Point `files/path` at `blob` through a staged symlink and an atomic rename; return the link's path.
+
+    The directories of `path` are made below `files` with `dir_mode`.
 
     Raises:
-        ManifestConflictError: a directory occupies the link's path.
+        ManifestConflictError: a directory occupies the link's path, or a symlink or non-directory
+            occupies a directory of it.
     """
-    target = os.path.relpath(blob, link.parent)
-    if link.is_symlink() and os.readlink(link) == target:
-        return
-    if link.is_dir() and not link.is_symlink():
-        raise ManifestConflictError(f"{link} is a directory where a file of the manifest belongs; remove it")
-    ensure_dirs(link.parent, mode=dir_mode)
-    staged = link.with_name(f".{link.name}.{uuid.uuid4().hex}")
-    os.symlink(target, staged)
+    *dirs, name = path.split("/")
     try:
-        os.replace(staged, link)
-    finally:
-        remove_owned(link.parent, staged, pattern=LINK_STAGING_NAME)
+        parent = files.walk(*dirs, create=True, mode=dir_mode)
+    except WrongKindError as err:
+        raise ManifestConflictError(
+            f"{err.path} is a {err.found} where a directory of the manifest's {path!r} belongs; remove it"
+        ) from err
+    with parent:
+        link = parent.path / name
+        target = os.path.relpath(blob, parent.path)
+        kind = parent.kind(name)
+        if kind == "symlink" and parent.readlink(name) == target:
+            return link
+        if kind == "directory":
+            raise ManifestConflictError(f"{link} is a directory where a file of the manifest belongs; remove it")
+        staged = f".{name}.{uuid.uuid4().hex}"
+        parent.symlink(target, staged)
+        try:
+            parent.rename(staged, parent, name, replace=True)
+        finally:
+            parent.remove_owned(staged, pattern=LINK_STAGING_NAME)
+    return link
 
 
 def _stamps(value: object) -> dict[str, BlobStamp] | None:
@@ -582,36 +608,58 @@ def fetch(
 
     Raises:
         FetchError: no URL served the expected bytes; the message names the file and every URL tried.
-        ManifestConflictError: another manifest's marker or files are under this `name@version`.
+        ManifestConflictError: another manifest's marker or files are under this `name@version`, or a
+            symlink or non-directory is where a directory of a manifest path belongs.
         StoreUnavailable: the cache could not be read or written; `StorageFull` when out of space.
+        WrongKindError: an object of the wrong kind in the cache could not be moved aside.
     """
     policy = policy if policy is not None else StorePolicy.load_default()
     file_mode, _ = committed_modes(policy)
     dir_mode = shared_dir_mode(policy)
     open_url = opener if opener is not None else _urlopen
     root = Path(cache_root)
-    dataset = root / "datasets" / f"{manifest.name}@{manifest.version}"
-    files_dir = dataset / FILES_DIR
     try:
-        for part in ("blobs", "tmp", "datasets"):
-            ensure_dirs(root / part, mode=dir_mode)
-        _remove_stale_downloads(root, policy.staging_stale_s)
-        recorded, marker_state = _read_marker(dataset, manifest)
-        ensure_dirs(files_dir, mode=dir_mode)
-        if marker_state != "valid" and (foreign := _foreign_files(files_dir, manifest)):
-            raise ManifestConflictError(
-                f"{dataset} holds files that are not in this manifest ({', '.join(foreign[:3])}); remove it to refetch"
-            )
-        result: dict[str, Path] = {}
-        stamps: dict[str, BlobStamp] = {}
-        for file in manifest.files:
-            blob = _ensure_blob(file, root, open_url, recorded, verify, file_mode)
-            link = files_dir / file.path
-            _link(link, blob, dir_mode)
-            result[file.path] = link
-            stamps[file.sha256] = _stamp(os.lstat(blob))
+        with StorageDir.open_root(root, create=True, mode=dir_mode) as top:
+            with top.walk("tmp", create=True, mode=dir_mode, aside=lambda: None) as tmp:
+                return _fetch_into(manifest, top, tmp, open_url, verify, policy)
+    except OSError as err:
+        raise storage_fault(err, root) from err
+
+
+def _fetch_into(
+    manifest: DataManifest,
+    top: StorageDir,
+    tmp: StorageDir,
+    open_url: Callable[[str], BinaryIO],
+    verify: str,
+    policy: StorePolicy,
+) -> dict[str, Path]:
+    file_mode, _ = committed_modes(policy)
+    dir_mode = shared_dir_mode(policy)
+
+    def aside() -> StorageDir:
+        return StorageDir(tmp.path, os.dup(tmp.fd))
+
+    _remove_stale_downloads(top.path, tmp, policy.staging_stale_s)
+    with (
+        top.walk("blobs", create=True, mode=dir_mode, aside=aside) as blobs,
+        top.walk("datasets", f"{manifest.name}@{manifest.version}", create=True, mode=dir_mode, aside=aside) as ds,
+    ):
+        recorded, marker_state = _read_marker(ds.path, manifest)
+        with ds.walk(FILES_DIR, create=True, mode=dir_mode, aside=aside) as files:
+            if marker_state != "valid" and (foreign := _foreign_files(files.path, manifest)):
+                raise ManifestConflictError(
+                    f"{ds.path} holds files that are not in this manifest ({', '.join(foreign[:3])}); "
+                    "remove it to refetch"
+                )
+            result: dict[str, Path] = {}
+            stamps: dict[str, BlobStamp] = {}
+            for file in manifest.files:
+                blob = _ensure_blob(file, blobs, tmp, open_url, recorded, verify, file_mode)
+                result[file.path] = _link(files, file.path, blob, dir_mode)
+                stamps[file.sha256] = _stamp(os.lstat(blob))
         if marker_state != "valid" or stamps != recorded:
-            staged = root / "tmp" / uuid.uuid4().hex
+            staged = uuid.uuid4().hex
             record = {
                 "format": MARKER_FORMAT,
                 "name": manifest.name,
@@ -627,20 +675,16 @@ def fetch(
                     for sha, st in stamps.items()
                 },
             }
-            with open(staged, "xb") as out:
-                os.fchmod(out.fileno(), file_mode)
-                out.write(jcs_dumps(record))
-                out.flush()
-                os.fsync(out.fileno())
+            tmp.write_new(staged, jcs_dumps(record), file_mode)
             _commit(
+                tmp,
                 staged,
-                dataset / COMPLETE_MARKER,
+                ds,
+                COMPLETE_MARKER,
                 replace=marker_state != "absent",
-                keeps=lambda _: _read_marker(dataset, manifest)[1] == "valid",
+                keeps=lambda _: _read_marker(ds.path, manifest)[1] == "valid",
             )
         return result
-    except OSError as err:
-        raise storage_fault(err, root) from err
 
 
 __all__ = [

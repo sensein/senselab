@@ -2,19 +2,25 @@
 
 Layout under `root`:
 
-- `store@3/<d[:2]>/<d>/<f>/`, where `d` is `LogicalKey.digest()` and `f` is
+- `store@4/<d[:2]>/<d>/<f>/`, where `d` is `LogicalKey.digest()` and `f` is
   `ExecutionContext.fingerprint()`, holding:
-  - `result.json`: JCS JSON with `format: "result@1.0"`, the key, its digest, the encoded outputs
-    and their output identity;
+  - `result.json`: JCS JSON with `format: "result@2.0"`, the key, its digest, the context fingerprint,
+    the encoded outputs and their output identity;
   - `context.json`: JCS JSON with `format: "execution-context@1.0"` and the context's fields;
   - `<sha256>.npy`: each array output in canonical `.npy`, named by the sha256 of its bytes.
 - `tmp/<uuid>/`: a writer's staging directory, committed by renaming it onto the entry.
-- `quarantine/<uuid>`: entries that failed verification, moved aside by rename.
+- `quarantine/<uuid>`: entries that failed verification, and objects of the wrong kind found at a path
+  the store owns, moved aside by rename.
 
-An entry is bound to its address: a reader recomputes the key digest from the stored key and the
-fingerprint from the stored context, and requires both to equal the path it read. A committed
-entry is read-only (`committed_modes`); directories that hold entries are `shared_dir_mode`. World
-bits are set only when the `StorePolicy` allows them. An existing `root` is left as it is.
+An entry is bound to its address and its context: a reader recomputes the key digest from the stored key
+and the fingerprint from the stored context, and requires both, and the digest and fingerprint recorded in
+`result.json`, to equal the path it read. A committed entry is read-only (`committed_modes`);
+directories that hold entries are `shared_dir_mode`, whatever the umask. World bits are set only when
+the `StorePolicy` allows them. An existing `root` is left as it is.
+
+Every directory below `root` is reached through `StorageDir`, so no symlink below the root is followed.
+A symlink or a non-directory where a directory of the store belongs is moved into the quarantine and the
+directory is made again; one that cannot be moved raises `WrongKindError`, naming it and its owner.
 
 Only a completed read that fails verification moves an entry. An `OSError` while reading or
 writing is raised as `StoreUnavailable` (`StorageFull` for `ENOSPC` and `EDQUOT`) and changes nothing.
@@ -28,7 +34,6 @@ The output identity is `"output:" + identity_digest("output@3", encoded form)`.
 import io
 import logging
 import os
-import pwd
 import re
 import stat
 import time
@@ -50,29 +55,30 @@ from senselab_worker.canonical import (
     jcs_loads,
 )
 from senselab_worker.digest import identity_digest
-from senselab_worker.ownership import UUID_HEX, remove_owned
+from senselab_worker.ownership import UUID_HEX
 
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputIdentity, ReusePolicy, acceptable
-from senselab_core.runtime.locks import ensure_dirs
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
 from senselab_core.runtime.storage import (
     CLOCK_NAME,
     STAGING_DIR_MODE,
+    StorageDir,
     StorePolicy,
     StoreUnavailable,
+    WrongKindError,
     committed_modes,
     fs_now,
-    set_mode,
+    owner_remedy,
     shared_dir_mode,
     storage_fault,
 )
 
 logger = logging.getLogger("senselab")
 
-STORE_DIR = "store@3"
+STORE_DIR = "store@4"
 STAGING_DIR = "tmp"
 QUARANTINE_DIR = "quarantine"
-RESULT_FORMAT = "result@1.0"
+RESULT_FORMAT = "result@2.0"
 CONTEXT_FORMAT = "execution-context@1.0"
 ARRAY_TAG = ARRAY_TOKEN
 COMMIT_ATTEMPTS = 3
@@ -176,42 +182,27 @@ def _member_path(entry: Path, name: str) -> Path:
     return path
 
 
-def _decode(value: object, entry: Path, load_arrays: bool) -> object:
+def _decode(value: object, entry: Path) -> object:
     if isinstance(value, dict):
         if set(value) == {ARRAY_TAG}:
             sha = value[ARRAY_TAG]
             if not isinstance(sha, str) or not _SHA256.fullmatch(sha):
                 raise CorruptEntryError(f"corrupt store entry {entry}: array reference {sha!r} is not a sha256")
-            path = _member_path(entry, f"{sha}.npy")
-            if not load_arrays:
-                return None
-            data = path.read_bytes()
+            data = _member_path(entry, f"{sha}.npy").read_bytes()
             if _raw_digest.bytes_digest("npy@1", data) != sha:
                 raise CorruptEntryError(f"corrupt store entry {entry}: {sha}.npy does not hash to its name")
             try:
                 return numpy.load(io.BytesIO(data), allow_pickle=False)
             except OSError as err:
                 raise CorruptEntryError(f"corrupt store entry {entry}: {sha}.npy is not an array: {err}") from err
-        return {k: _decode(v, entry, load_arrays) for k, v in value.items()}
+        return {k: _decode(v, entry) for k, v in value.items()}
     if isinstance(value, list):
-        return [_decode(v, entry, load_arrays) for v in value]
+        return [_decode(v, entry) for v in value]
     return value
 
 
-def _fsync_dir(path: Path) -> None:
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
-def _write_synced(path: Path, data: bytes, mode: int) -> None:
-    with open(path, "xb") as handle:
-        handle.write(data)
-        handle.flush()
-        set_mode(path, mode, fd=handle.fileno())
-        os.fsync(handle.fileno())
+def _write_synced(directory: StorageDir, name: str, data: bytes, mode: int) -> None:
+    directory.write_new(name, data, mode)
 
 
 def _read_object(entry: Path, name: str, fmt: str) -> dict[str, Any]:
@@ -241,12 +232,24 @@ def _stored_context(entry: Path) -> ExecutionContext:
     return ExecutionContext.model_validate(_read_object(entry, "context.json", CONTEXT_FORMAT))
 
 
-def _stored_key_digest(record: Mapping[str, Any]) -> str:
-    """Return the digest of the key stored in `record`; it must equal the digest stored beside it."""
+def _stored_address(entry: Path) -> tuple[str, str, dict[str, Any], ExecutionContext]:
+    """Return `(key digest, context fingerprint, result record, context)` as the entry's files state them.
+
+    The key in `result.json` must digest to its recorded `key_digest`, and the context in `context.json`
+    must fingerprint to the `context_fingerprint` recorded in `result.json`.
+    """
+    context = _stored_context(entry)
+    record = _read_object(entry, "result.json", RESULT_FORMAT)
     digest = LogicalKey.model_validate(record["key"]).digest()
     if record["key_digest"] != digest:
         raise MisfiledEntryError(f"stored key digest {record['key_digest']!r} is not the digest of the stored key")
-    return digest
+    fingerprint = context.fingerprint()
+    if record["context_fingerprint"] != fingerprint:
+        raise MisfiledEntryError(
+            f"misfiled store entry {entry}: result.json was written under context "
+            f"{str(record['context_fingerprint'])[:12]}..., context.json holds {fingerprint[:12]}..."
+        )
+    return digest, fingerprint, record, context
 
 
 def _bound(entry: Path, digest: str, fingerprint: str, stored_digest: str, stored_fingerprint: str) -> None:
@@ -274,52 +277,30 @@ def _read_context(entry: Path, fingerprint: str) -> ExecutionContext:
     return _guarded(entry, read)
 
 
-def _read_result(
-    entry: Path, *, digest: str, fingerprint: str, load_arrays: bool = True
-) -> tuple[str, dict[str, object], ExecutionContext]:
+def _read_result(entry: Path, *, digest: str, fingerprint: str) -> tuple[str, dict[str, object], ExecutionContext]:
     """Return the output identity, decoded outputs and context of the entry at `entry`.
 
-    The key stored in `result.json` must digest to its stored `key_digest` and to `digest`, and the
-    context in `context.json` must fingerprint to `fingerprint`. With `load_arrays` False each array
-    file is checked to be present and regular but is neither read nor hashed, and decodes as None.
+    The entry must be bound (`_stored_address`) to key digest `digest` and context fingerprint
+    `fingerprint`, its outputs must hash to their output identity, and every array file must hash to its name.
 
     Raises:
         CorruptEntryError: the entry is gone or fails verification; `MisfiledEntryError` when it
-            belongs to another address.
+            belongs to another address or context.
         StoreUnavailable: the entry could not be read.
     """
 
     def read() -> tuple[str, dict[str, object], ExecutionContext]:
-        context = _stored_context(entry)
-        record = _read_object(entry, "result.json", RESULT_FORMAT)
-        _bound(entry, digest, fingerprint, _stored_key_digest(record), context.fingerprint())
+        stored_digest, stored_fingerprint, record, context = _stored_address(entry)
+        _bound(entry, digest, fingerprint, stored_digest, stored_fingerprint)
         tree, identity = record["outputs"], record["output_identity"]
         if not isinstance(identity, str) or _tree_identity(tree) != identity:
             raise CorruptEntryError(f"corrupt store entry {entry}: outputs do not hash to their output identity")
-        outputs = _decode(tree, entry, load_arrays)
+        outputs = _decode(tree, entry)
         if not isinstance(outputs, dict):
             raise CorruptEntryError(f"corrupt store entry {entry}: outputs are not an object")
         return identity, outputs, context
 
     return _guarded(entry, read)
-
-
-def _committed_identity(entry: Path, *, digest: str, fingerprint: str) -> str | None:
-    """Return the output identity of the entry at `entry`, None if nothing is there.
-
-    Array files are checked to be present, not re-read.
-
-    Raises:
-        CorruptEntryError: something is at `entry` that is not a valid entry for this address.
-        StoreUnavailable: the entry could not be read.
-    """
-    try:
-        os.lstat(entry)
-    except FileNotFoundError:
-        return None
-    except OSError as err:
-        raise storage_fault(err, entry) from err
-    return _read_result(entry, digest=digest, fingerprint=fingerprint, load_arrays=False)[0]
 
 
 def _is_fingerprint(name: str) -> bool:
@@ -333,9 +314,8 @@ class _StoreEntryFormat:
 
     def address_of(self, path: Path) -> str:
         def read() -> str:
-            context = _stored_context(path)
-            digest = _stored_key_digest(_read_object(path, "result.json", RESULT_FORMAT))
-            return f"{digest}/{context.fingerprint()}"
+            digest, fingerprint, _, _ = _stored_address(path)
+            return f"{digest}/{fingerprint}"
 
         return _guarded(path, read)
 
@@ -349,15 +329,32 @@ class _StoreEntryFormat:
 STORE_ENTRY = _StoreEntryFormat()
 
 
+def _committed_identity(entry: Path, *, digest: str, fingerprint: str) -> str | None:
+    """Return the output identity of the entry at `entry`, None if nothing is there; every file is verified.
+
+    Raises:
+        CorruptEntryError: something is at `entry` that is not a valid entry for this address.
+        StoreUnavailable: the entry could not be read.
+    """
+    try:
+        os.lstat(entry)
+    except FileNotFoundError:
+        return None
+    except OSError as err:
+        raise storage_fault(err, entry) from err
+    return _read_result(entry, digest=digest, fingerprint=fingerprint)[0]
+
+
 def _commit(
     key: LogicalKey,
     context: ExecutionContext,
-    entry: Path,
-    staging_root: Path,
+    parent: StorageDir,
+    name: str,
+    staging_root: StorageDir,
     payload: tuple[object, dict[str, bytes], str],
     policy: StorePolicy,
 ) -> bool:
-    """Stage an entry, make its files read-only, and rename it onto `entry`; return False if another was there first.
+    """Stage an entry, make its files read-only, and rename it onto `parent/name`; return False if another was first.
 
     The entry directory is made read-only after the rename.
 
@@ -366,88 +363,67 @@ def _commit(
     """
     tree, arrays, identity = payload
     file_mode, dir_mode = committed_modes(policy)
-    staging = staging_root / uuid.uuid4().hex
+    staging_name = uuid.uuid4().hex
     try:
-        staging.mkdir()
-        set_mode(staging, STAGING_DIR_MODE)
-        for sha, data in arrays.items():
-            _write_synced(staging / f"{sha}.npy", data, file_mode)
-        _write_synced(
-            staging / "context.json",
-            jcs_dumps({"format": CONTEXT_FORMAT, **context.model_dump(mode="json")}),
-            file_mode,
-        )
-        result = {
-            "format": RESULT_FORMAT,
-            "key": jcs_loads(jcs_dumps(key.model_dump())),
-            "key_digest": key.digest(),
-            "output_identity": identity,
-            "outputs": tree,
-        }
-        _write_synced(staging / "result.json", jcs_dumps(result), file_mode)
-        _fsync_dir(staging)
+        with staging_root.child(staging_name, create=True, mode=STAGING_DIR_MODE) as staging:
+            for sha, data in arrays.items():
+                _write_synced(staging, f"{sha}.npy", data, file_mode)
+            _write_synced(
+                staging,
+                "context.json",
+                jcs_dumps({"format": CONTEXT_FORMAT, **context.model_dump(mode="json")}),
+                file_mode,
+            )
+            result = {
+                "format": RESULT_FORMAT,
+                "key": jcs_loads(jcs_dumps(key.model_dump())),
+                "key_digest": key.digest(),
+                "context_fingerprint": context.fingerprint(),
+                "output_identity": identity,
+                "outputs": tree,
+            }
+            _write_synced(staging, "result.json", jcs_dumps(result), file_mode)
+            staging.fsync()
         try:
-            os.rename(staging, entry)
+            staging_root.rename(staging_name, parent, name)
         except OSError:
-            if _occupied(entry):
+            if parent.kind(name) is not None:
                 return False
             raise
-        _seal(entry, dir_mode)
-        _fsync_dir(entry.parent)
+        _seal(parent, name, dir_mode)
+        parent.fsync()
         return True
     except OSError as err:
-        raise storage_fault(err, entry) from err
+        raise storage_fault(err, parent.path / name) from err
     finally:
-        _discard_staging(staging_root, staging)
+        _discard_staging(staging_root, staging_name)
 
 
-def _occupied(entry: Path) -> bool:
-    """Return whether something is at `entry`, so that a failed rename onto it means the address is taken."""
-    return os.path.lexists(entry)
-
-
-def _owner_remedy(path: Path) -> str:
-    """Return who owns `path` and what they must run to remove it."""
+def _seal(parent: StorageDir, name: str, dir_mode: int) -> None:
     try:
-        uid = os.lstat(path).st_uid
-    except OSError:
-        return f"{path} could not be examined; remove it as its owner"
-    try:
-        owner = pwd.getpwuid(uid).pw_name
-    except KeyError:
-        owner = f"uid {uid}"
-    return (
-        f"{path} is owned by {owner} (uid {uid}); as {owner}, run "
-        f"`chmod -R u+w '{path}' && rm -rf '{path}'` to remove it"
-    )
+        with parent.child(name) as entry:
+            entry.set_mode(dir_mode)
+    except (OSError, WrongKindError) as err:
+        logger.warning("cannot make store entry %s read-only: %s", parent.path / name, err)
 
 
-def _seal(entry: Path, dir_mode: int) -> None:
+def _discard_staging(staging_root: StorageDir, name: str) -> None:
     try:
-        set_mode(entry, dir_mode)
+        staging_root.remove_owned(name, pattern=UUID_HEX)
     except OSError as err:
-        logger.warning("cannot make store entry %s read-only: %s", entry, err)
+        logger.warning("cannot remove staging directory %s: %s", staging_root.path / name, err)
 
 
-def _discard_staging(staging_root: Path, staging: Path) -> None:
+def _listed(directory: StorageDir) -> list[str]:
+    """Return the names in `directory`; none if it cannot be listed, which is logged."""
     try:
-        remove_owned(staging_root, staging, pattern=UUID_HEX)
+        return directory.listdir()
     except OSError as err:
-        logger.warning("cannot remove staging directory %s: %s", staging, err)
-
-
-def _listed(directory: Path) -> list[str]:
-    """Return the names in `directory`; none if it is missing or cannot be listed, which is logged."""
-    try:
-        return os.listdir(directory)
-    except (FileNotFoundError, NotADirectoryError):
-        return []
-    except OSError as err:
-        logger.warning("cannot list %s to collect it: %s", directory, err)
+        logger.warning("cannot list %s to collect it: %s", directory.path, err)
         return []
 
 
-def _remove_older(directory: Path, cutoff: float) -> int:
+def _remove_older(directory: StorageDir, cutoff: float) -> int:
     """Remove the uuid-named children of `directory` whose mtime is before `cutoff`; return how many.
 
     A uuid-named directory is made writable by its owner first, so a sealed entry's files can be
@@ -455,22 +431,37 @@ def _remove_older(directory: Path, cutoff: float) -> int:
     """
     removed = 0
     for name in _listed(directory):
-        child = directory / name
         if not UUID_HEX.fullmatch(name):
             continue
         try:
-            info = os.lstat(child)
-            if info.st_mtime >= cutoff:
-                continue
-            if stat.S_ISDIR(info.st_mode):
-                set_mode(child, STAGING_DIR_MODE)
-            if remove_owned(directory, child, pattern=UUID_HEX):
-                removed += 1
-        except FileNotFoundError:
-            continue
-        except OSError as err:
-            logger.warning("cannot collect %s: %s", child, err)
+            removed += _remove_one_older(directory, name, cutoff)
+        except (OSError, WrongKindError) as err:
+            logger.warning("cannot collect %s: %s", directory.path / name, err)
     return removed
+
+
+def _remove_one_older(directory: StorageDir, name: str, cutoff: float) -> int:
+    info = directory.lstat(name)
+    if info is None or info.st_mtime >= cutoff:
+        return 0
+    if stat.S_ISDIR(info.st_mode):
+        with directory.child(name) as child:
+            child.set_mode(STAGING_DIR_MODE)
+    return 1 if directory.remove_owned(name, pattern=UUID_HEX) else 0
+
+
+def _opened(directory: StorageDir, *parts: str) -> StorageDir | None:
+    """Return `directory/parts` opened, None if a part is missing or is not a directory (which is logged)."""
+    try:
+        return directory.walk(*parts)
+    except FileNotFoundError:
+        return None
+    except WrongKindError as err:
+        logger.warning("not collecting %s: %s", err.path, err)
+        return None
+    except OSError as err:
+        logger.warning("cannot open %s to collect it: %s", directory.path.joinpath(*parts), err)
+        return None
 
 
 class ResultStore:
@@ -501,23 +492,44 @@ class ResultStore:
         d = key.digest()
         return self.root / STORE_DIR / d[:2] / d
 
-    def _ensure(self, *parts: str) -> Path:
-        """Create `root/<parts...>` as object directories and return it.
+    def _open_root(self, *, create: bool) -> StorageDir:
+        return StorageDir.open_root(self.root, create=create, mode=shared_dir_mode(self.policy))
+
+    def _quarantine_dir(self, root: StorageDir) -> StorageDir | None:
+        """Return `root/quarantine` opened, made if missing; None (logged) if it cannot be."""
+        try:
+            return root.walk(QUARANTINE_DIR, create=True, mode=shared_dir_mode(self.policy), aside=lambda: None)
+        except (OSError, WrongKindError) as err:
+            logger.warning("cannot open the quarantine of store %s: %s", self.root, err)
+            return None
+
+    def _ensure(self, root: StorageDir, *parts: str) -> StorageDir:
+        """Open `root/<parts...>`, making missing directories `shared_dir_mode` and quarantining wrong kinds.
 
         Raises:
-            StoreUnavailable: a directory could not be created.
+            StoreUnavailable: a directory could not be created or opened.
+            WrongKindError: an object of the wrong kind on the way cannot be moved aside.
         """
-        mode = shared_dir_mode(self.policy)
-        path = self.root
         try:
-            if not self.root.exists():
-                ensure_dirs(self.root, mode=mode)
-            for part in parts:
-                path = path / part
-                ensure_dirs(path, mode=mode)
+            return root.walk(
+                *parts, create=True, mode=shared_dir_mode(self.policy), aside=lambda: self._quarantine_dir(root)
+            )
         except OSError as err:
-            raise storage_fault(err, path) from err
-        return path
+            raise storage_fault(err, root.path.joinpath(*parts)) from err
+
+    def _parent(self, root: StorageDir, entry: Path) -> StorageDir | None:
+        """Return the directory holding `entry` opened below `root`, None if it is missing.
+
+        Raises:
+            WrongKindError: a directory on the way is of the wrong kind.
+            StoreUnavailable: it could not be opened.
+        """
+        try:
+            return root.walk(*entry.parent.relative_to(self.root).parts)
+        except FileNotFoundError:
+            return None
+        except OSError as err:
+            raise storage_fault(err, entry.parent) from err
 
     def _quarantine(self, entry: Path, *, digest: str, fingerprint: str) -> None:
         """Move `entry` aside, re-verify the moved copy, and put it back if it verifies.
@@ -533,32 +545,59 @@ class ResultStore:
 
         Raises:
             StoreUnavailable: `entry` cannot be moved at all; the message names its owner and the remedy.
+            WrongKindError: a directory above `entry` is of the wrong kind.
         """
         try:
-            is_dir = stat.S_ISDIR(os.lstat(entry).st_mode)
+            root = self._open_root(create=False)
         except FileNotFoundError:
             return
+        except OSError as err:
+            raise storage_fault(err, self.root) from err
+        with root:
+            parent = self._parent(root, entry)
+            if parent is None:
+                return
+            with parent:
+                self._quarantine_in(root, parent, entry.name, digest=digest, fingerprint=fingerprint)
+
+    def _quarantine_in(self, root: StorageDir, parent: StorageDir, name: str, *, digest: str, fingerprint: str) -> None:
+        entry = parent.path / name
+        try:
+            info = parent.lstat(name)
         except OSError as err:
             raise storage_fault(err, entry) from err
-        moved = self._aside(entry, is_dir)
-        try:
-            os.rename(entry, moved)
-        except FileNotFoundError:
+        if info is None:
             return
-        except OSError as err:
-            if is_dir and moved.parent != entry.parent:
-                _seal(entry, committed_modes(self.policy)[1])
-            raise storage_fault(err, entry, hint=_owner_remedy(entry)) from err
+        is_dir = stat.S_ISDIR(info.st_mode)
+        into = self._aside(root, parent, name, is_dir)
+        moved_name = uuid.uuid4().hex
+        target = into if into is not None else parent
         try:
-            os.utime(moved, follow_symlinks=False)
-        except OSError as err:
-            logger.warning("cannot stamp quarantined entry %s: %s", moved, err)
-        verdict, reason = self._verdict(moved, is_dir, digest=digest, fingerprint=fingerprint)
-        outcome = "quarantined" if moved.parent != entry.parent else "set aside in place"
-        if verdict != "corrupt":
-            outcome = self._restore(moved, entry)
-        elif moved.parent == entry.parent:
-            logger.warning("corrupt store entry set aside at %s; %s", moved, _owner_remedy(moved))
+            failure: OSError | None = None
+            try:
+                parent.rename(name, target, moved_name)
+            except FileNotFoundError:
+                return
+            except OSError as err:
+                failure = err
+            if failure is not None:
+                if is_dir and into is not None:
+                    _seal(parent, name, committed_modes(self.policy)[1])
+                raise storage_fault(failure, entry, hint=owner_remedy(entry)) from failure
+            moved = target.path / moved_name
+            try:
+                os.utime(moved_name, dir_fd=target.fd, follow_symlinks=False)
+            except OSError as err:
+                logger.warning("cannot stamp quarantined entry %s: %s", moved, err)
+            verdict, reason = self._verdict(moved, is_dir, digest=digest, fingerprint=fingerprint)
+            outcome = "quarantined" if into is not None else "set aside in place"
+            if verdict != "corrupt":
+                outcome = self._restore(target, moved_name, parent, name)
+            elif into is None:
+                logger.warning("corrupt store entry set aside at %s; %s", moved, owner_remedy(moved))
+        finally:
+            if into is not None:
+                into.close()
         logger.warning("store entry %s %s (%s): %s", entry, outcome, verdict, reason)
         self.provenance.activity(
             node="store.quarantine",
@@ -573,16 +612,19 @@ class ResultStore:
             },
         )
 
-    def _aside(self, entry: Path, is_dir: bool) -> Path:
-        """Return where to move `entry`: the quarantine if it can go there, else a uuid name beside it."""
+    def _aside(self, root: StorageDir, parent: StorageDir, name: str, is_dir: bool) -> StorageDir | None:
+        """Return the quarantine if `name` can be moved there, None to set it aside beside itself."""
+        quarantine = self._quarantine_dir(root)
+        if quarantine is None or not is_dir:
+            return quarantine
         try:
-            quarantine = self._ensure(QUARANTINE_DIR)
-            if is_dir:
-                set_mode(entry, STAGING_DIR_MODE)
-        except OSError as err:
-            logger.warning("cannot move %s into the quarantine, setting it aside in place: %s", entry, err)
-            return entry.parent / uuid.uuid4().hex
-        return quarantine / uuid.uuid4().hex
+            with parent.child(name) as entry:
+                entry.set_mode(STAGING_DIR_MODE)
+        except (OSError, WrongKindError) as err:
+            logger.warning("cannot move %s into the quarantine, setting it aside in place: %s", parent.path / name, err)
+            quarantine.close()
+            return None
+        return quarantine
 
     @staticmethod
     def _verdict(moved: Path, is_dir: bool, *, digest: str, fingerprint: str) -> tuple[str, str]:
@@ -597,22 +639,25 @@ class ResultStore:
             return "unreadable", str(err)
         return "verified", "the moved copy verifies"
 
-    def _restore(self, moved: Path, entry: Path) -> str:
-        """Rename `moved` back onto `entry` unless something now occupies it; return the outcome."""
+    def _restore(self, holder: StorageDir, moved_name: str, parent: StorageDir, name: str) -> str:
+        """Rename `holder/moved_name` back onto `parent/name` unless something now occupies it; return the outcome."""
+        failure: OSError | None = None
         try:
-            os.rename(moved, entry)
+            holder.rename(moved_name, parent, name)
         except OSError as err:
-            if _occupied(entry):
+            failure = err
+        if failure is not None:
+            if parent.kind(name) is not None:
                 return "superseded"
-            raise storage_fault(err, entry) from err
-        _seal(entry, committed_modes(self.policy)[1])
+            raise storage_fault(failure, parent.path / name) from failure
+        _seal(parent, name, committed_modes(self.policy)[1])
         return "restored"
 
     def _set_aside(self, entry: Path, *, digest: str, fingerprint: str) -> None:
         """Quarantine `entry`; if the store cannot be written, log it and leave the entry unserved."""
         try:
             self._quarantine(entry, digest=digest, fingerprint=fingerprint)
-        except StoreUnavailable as err:
+        except (StoreUnavailable, WrongKindError) as err:
             logger.warning("cannot quarantine store entry %s, skipping it: %s", entry, err)
 
     def _collect_due(self) -> None:
@@ -622,40 +667,60 @@ class ResultStore:
             self._last_collect = now
             self.collect()
 
-    def _reseal(self, entry: Path) -> None:
+    def _reseal(self, parent: StorageDir, name: str) -> None:
         """Make a verified entry's directory read-only again if a writer died between its rename and seal."""
         try:
-            writable = os.lstat(entry).st_mode & 0o222
+            info = parent.lstat(name)
         except OSError as err:
-            logger.warning("cannot examine store entry %s: %s", entry, err)
+            logger.warning("cannot examine store entry %s: %s", parent.path / name, err)
             return
-        if writable:
-            _seal(entry, committed_modes(self.policy)[1])
+        if info is not None and info.st_mode & 0o222:
+            _seal(parent, name, committed_modes(self.policy)[1])
 
     def collect(self, now: float | None = None) -> int:
         """Remove quarantined entries and staging directories older than the policy's ages; return how many.
 
         Entries set aside in place (`<uuid>` beside the fingerprints of their key) count as
         quarantined. Ages are measured from each directory's mtime to `now`, which defaults to the storage's own
-        clock (`fs_now` on `root`). Only uuid-named children are removed, through `remove_owned`.
-        A failure to read the clock, list or remove is logged and skips that item.
+        clock (`fs_now` on `root`). Only uuid-named children are removed, through `remove_owned`; no
+        directory below `root` is reached through a symlink. A failure to read the clock, list or remove
+        is logged and skips that item.
         """
-        if not self.root.exists():
+        try:
+            root = self._open_root(create=False)
+        except OSError as err:
+            if not isinstance(err, FileNotFoundError):
+                logger.warning("cannot open store %s; not collecting: %s", self.root, err)
             return 0
-        if now is None:
-            try:
-                now = fs_now(self.root / CLOCK_NAME)
-            except OSError as err:
-                logger.warning("cannot read the clock of store %s; not collecting: %s", self.root, err)
-                return 0
-        aside = now - self.policy.quarantine_retention_s
-        removed = _remove_older(self.root / QUARANTINE_DIR, aside)
-        removed += _remove_older(self.root / STAGING_DIR, now - self.policy.staging_stale_s)
-        store = self.root / STORE_DIR
-        for prefix in _listed(store):
-            for digest in _listed(store / prefix):
-                removed += _remove_older(store / prefix / digest, aside)
-        return removed
+        with root:
+            if now is None:
+                try:
+                    now = fs_now(self.root / CLOCK_NAME)
+                except OSError as err:
+                    logger.warning("cannot read the clock of store %s; not collecting: %s", self.root, err)
+                    return 0
+            aside = now - self.policy.quarantine_retention_s
+            removed = 0
+            for parts, cutoff in (((QUARANTINE_DIR,), aside), ((STAGING_DIR,), now - self.policy.staging_stale_s)):
+                directory = _opened(root, *parts)
+                if directory is not None:
+                    with directory:
+                        removed += _remove_older(directory, cutoff)
+            store = _opened(root, STORE_DIR)
+            if store is None:
+                return removed
+            with store:
+                for prefix in _listed(store):
+                    prefix_dir = _opened(store, prefix)
+                    if prefix_dir is None:
+                        continue
+                    with prefix_dir:
+                        for digest in _listed(prefix_dir):
+                            key_dir = _opened(prefix_dir, digest)
+                            if key_dir is not None:
+                                with key_dir:
+                                    removed += _remove_older(key_dir, aside)
+            return removed
 
     def put(self, key: LogicalKey, outputs: dict[str, object], context: ExecutionContext) -> OutputIdentity:
         """Store `outputs` under `key` and `context`, and return the committed output identity.
@@ -663,22 +728,41 @@ class ResultStore:
         Outputs are stored as JCS canonicalises them: `1.0` is stored as `1`, strings are
         NFC-normalised and tuples become lists, and the output identity is taken over that form.
         If a valid entry for `key` and `context` is already committed, nothing is written and that
-        entry's identity is returned, which may differ from the identity of `outputs`; its array
-        files are checked to be present, not re-read. Anything else at the entry's path is
-        quarantined and replaced. Either way one provenance activity is appended.
+        entry's identity is returned, which may differ from the identity of `outputs`; every file of
+        it, arrays included, is verified first. Anything else at the entry's path is quarantined and
+        replaced, as is anything of the wrong kind at a directory of the store on the way to it.
+        Either way one provenance activity is appended.
 
         Raises:
             TypeError: on an output that is neither a JSON value nor a numpy array.
             ValueError: on a container that contains itself, a reserved `$array` key, a value
                 `jcs_dumps` refuses, or an array dtype `canonical_npy_bytes` refuses.
             StoreUnavailable: the store could not be read or written (`StorageFull` when out of space).
+            WrongKindError: an object of the wrong kind in the store could not be moved aside.
             RuntimeError: if the target is still corrupt after `COMMIT_ATTEMPTS` commits.
         """
         payload = _serialise(outputs)
+        d = key.digest()
+        try:
+            root = self._open_root(create=True)
+        except OSError as err:
+            raise storage_fault(err, self.root) from err
+        with root:
+            with self._ensure(root, STAGING_DIR) as staging_root:
+                self._collect_due()
+                with self._ensure(root, STORE_DIR, d[:2], d) as parent:
+                    return self._put_in(key, context, parent, staging_root, payload)
+
+    def _put_in(
+        self,
+        key: LogicalKey,
+        context: ExecutionContext,
+        parent: StorageDir,
+        staging_root: StorageDir,
+        payload: tuple[object, dict[str, bytes], str],
+    ) -> OutputIdentity:
         d, f = key.digest(), context.fingerprint()
-        staging_root = self._ensure(STAGING_DIR)
-        self._collect_due()
-        entry = self._ensure(STORE_DIR, d[:2], d) / f
+        entry = parent.path / f
         for _ in range(COMMIT_ATTEMPTS):
             try:
                 existing = _committed_identity(entry, digest=d, fingerprint=f)
@@ -686,10 +770,10 @@ class ResultStore:
                 self._quarantine(entry, digest=d, fingerprint=f)
                 existing = None
             if existing is not None:
-                self._reseal(entry)
+                self._reseal(parent, f)
                 self._record_put(key, context, existing, outcome="existing")
                 return existing
-            if _commit(key, context, entry, staging_root, payload, self.policy):
+            if _commit(key, context, parent, f, staging_root, payload, self.policy):
                 self._record_put(key, context, payload[2], outcome="committed")
                 return payload[2]
         raise RuntimeError(f"{entry} was still corrupt after {COMMIT_ATTEMPTS} commits")
@@ -749,14 +833,37 @@ class ResultStore:
         Raises:
             ValueError: if `policy` is not a `ReusePolicy` value.
             StoreUnavailable: a candidate could not be read; nothing was quarantined.
+
+        An object of the wrong kind at a directory of the store on the way to `key` is quarantined and the
+        key reads as absent.
         """
         policy = ReusePolicy(policy)
         d = key.digest()
-        base = self._entry(key)
         try:
-            names = sorted(n for n in os.listdir(base) if _is_fingerprint(n))
-        except (FileNotFoundError, NotADirectoryError):
+            root = self._open_root(create=False)
+        except FileNotFoundError:
             return None
+        except OSError as err:
+            raise storage_fault(err, self.root) from err
+        with root:
+            try:
+                base = root.walk(STORE_DIR, d[:2], d, aside=lambda: self._quarantine_dir(root))
+            except FileNotFoundError:
+                return None
+            except WrongKindError as err:
+                logger.warning("cannot set aside %s, so key %s... is not served: %s", err.path, d[:12], err)
+                return None
+            except OSError as err:
+                raise storage_fault(err, self._entry(key)) from err
+            with base:
+                return self._get_in(key, context, policy, base)
+
+    def _get_in(
+        self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy, base_dir: StorageDir
+    ) -> StoredResult | None:
+        d, base = key.digest(), base_dir.path
+        try:
+            names = sorted(n for n in base_dir.listdir() if _is_fingerprint(n))
         except OSError as err:
             raise storage_fault(err, base) from err
         allowed = _POLICY_ORDER[: _POLICY_ORDER.index(policy) + 1]
@@ -780,7 +887,7 @@ class ResultStore:
             except CorruptEntryError:
                 self._set_aside(base / name, digest=d, fingerprint=name)
                 continue
-            self._reseal(base / name)
+            self._reseal(base_dir, name)
             hit = StoredResult(outputs=outputs, output_identity=identity, context=stored, policy_used=allowed[rank])
             if hit.policy_used is not ReusePolicy.EXACT:
                 self._record_reuse(key, stored, context, hit)

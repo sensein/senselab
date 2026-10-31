@@ -17,10 +17,11 @@ UUID_HEX = re.compile(r"^[0-9a-f]{32}$")
 """A staging file or directory named by a uuid4 hex."""
 
 
-def remove_owned(root: Path, path: Path, *, pattern: re.Pattern[str]) -> bool:
+def remove_owned(root: Path, path: Path, *, pattern: re.Pattern[str], root_fd: int | None = None) -> bool:
     """Remove `path` if it is a direct child of `root` whose name fully matches `pattern`; return whether it did.
 
-    The child is examined with `lstat` relative to an open descriptor of `root`. A directory is
+    The child is examined with `lstat` relative to an open descriptor of `root`: `root_fd` when given
+    (the caller's descriptor of `root`, left open), otherwise one opened here. A directory is
     removed, as a tree without following symlinks, only if its name also matches `UUID_HEX`;
     any other directory is refused. Anything else, a symlink included, is unlinked and its target is
     never touched. `.`, `..` and `root` itself are never children. A missing `root` or
@@ -33,10 +34,12 @@ def remove_owned(root: Path, path: Path, *, pattern: re.Pattern[str]) -> bool:
     name = os.path.basename(target)
     if os.path.dirname(target) != os.path.abspath(root) or name in ("", ".", "..") or not pattern.fullmatch(name):
         return False
-    try:
-        root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
-    except FileNotFoundError:
-        return False
+    borrowed = root_fd is not None
+    if root_fd is None:
+        try:
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        except FileNotFoundError:
+            return False
     try:
         try:
             mode = os.lstat(name, dir_fd=root_fd).st_mode
@@ -55,4 +58,5 @@ def remove_owned(root: Path, path: Path, *, pattern: re.Pattern[str]) -> bool:
             return False
         return True
     finally:
-        os.close(root_fd)
+        if not borrowed:
+            os.close(root_fd)

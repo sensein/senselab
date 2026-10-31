@@ -30,7 +30,7 @@ from senselab_core.runtime.fetch import (
     default_cache_root,
     fetch,
 )
-from senselab_core.runtime.storage import StorageFull, StorePolicy, StoreUnavailable
+from senselab_core.runtime.storage import StorageDir, StorageFull, StorePolicy, StoreUnavailable
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import identity_digest
 
@@ -386,12 +386,15 @@ def test_link_race_keeps_an_existing_blob_only_if_it_verifies(tmp_path: Path, ex
     before = os.lstat(final).st_ino
     staged = tmp_path / ("5" * 32)
     staged.write_bytes(PAYLOAD)
-    fetch_module._commit(
-        staged,
-        final,
-        replace=False,
-        keeps=lambda p: fetch_module._blob_state(p, SHA, {}, "full") == "verified",
-    )
+    with StorageDir.open_root(tmp_path) as source, StorageDir.open_root(blobs) as target:
+        fetch_module._commit(
+            source,
+            staged.name,
+            target,
+            final.name,
+            replace=False,
+            keeps=lambda p: fetch_module._blob_state(p, SHA, {}, "full") == "verified",
+        )
     assert not os.path.islink(final) and final.read_bytes() == PAYLOAD and not staged.exists()
     assert (os.lstat(final).st_ino == before) is (existing == "good")
 
@@ -575,7 +578,7 @@ def test_malformed_marker_is_treated_as_absent(tmp_path: Path, text: str) -> Non
 def test_no_hardlink_support_is_storage_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A filesystem without hard links gets a StorageError naming the fix."""
 
-    def refuse(src: object, dst: object) -> None:
+    def refuse(src: object, dst: object, **kwargs: object) -> None:
         raise OSError(errno.EXDEV, "Invalid cross-device link")
 
     monkeypatch.setattr(os, "link", refuse)
@@ -763,10 +766,6 @@ def test_symlinked_or_dangling_blob_is_absent(tmp_path: Path, kind: str) -> None
         blob.mkdir()
     assert fetch_module._blob_state(blob, SHA, {}, "full") == "absent"
     calls: list[str] = []
-    if kind == "directory":
-        with pytest.raises(StoreUnavailable):
-            fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}, calls))
-        return
     paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}, calls))
     assert calls == ["https://x/a.wav"]
     assert stat.S_ISREG(blob.lstat().st_mode) and stat.S_IMODE(blob.lstat().st_mode) == 0o440
@@ -823,8 +822,8 @@ def test_download_aborts_past_declared_size(tmp_path: Path, size: int) -> None:
     """The probe: an endless source streamed 3.86 GB in 3 s; it now stops after size + 1 bytes."""
     source = _Endless()
     staged = tmp_path / ("5" * 32)
-    with pytest.raises(FetchError, match="more than the declared"):
-        fetch_module._download("https://x/a", lambda url: source, staged, size=size)  # type: ignore[arg-type,return-value]
+    with pytest.raises(FetchError, match="more than the declared"), StorageDir.open_root(tmp_path) as directory:
+        fetch_module._download("https://x/a", lambda url: source, directory, staged.name, size=size)  # type: ignore[arg-type,return-value]
     assert source.served == size + 1
     assert staged.stat().st_size <= size
 
@@ -835,8 +834,8 @@ def test_download_short_of_declared_size_is_refused(tmp_path: Path) -> None:
     manifest = _manifest([_file("v.wav", "https://x/a", mirrors=["https://m/a"])])
     routes = {"https://x/a": PAYLOAD[:-1], "https://m/a": PAYLOAD}
     assert fetch(manifest, cache_root=tmp_path, opener=_opener(routes))["v.wav"].read_bytes() == PAYLOAD
-    with pytest.raises(FetchError, match="ended after"):
-        fetch_module._download("https://x/a", _opener(routes), tmp_path / ("6" * 32), size=len(PAYLOAD))
+    with pytest.raises(FetchError, match="ended after"), StorageDir.open_root(tmp_path) as directory:
+        fetch_module._download("https://x/a", _opener(routes), directory, "6" * 32, size=len(PAYLOAD))
 
 
 @pytest.mark.logic
@@ -890,8 +889,8 @@ def test_redirect_to_non_https_refused(target: str) -> None:
 def test_enospc_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int) -> None:
     """Out of space while writing a download is StorageFull, with no staged file left behind."""
 
-    def full(url: str, opener: object, staged: Path, *, size: int, mode: int) -> None:
-        staged.write_bytes(b"partial")
+    def full(url: str, opener: object, directory: StorageDir, name: str, *, size: int, mode: int) -> None:
+        (directory.path / name).write_bytes(b"partial")
         raise OSError(err, os.strerror(err))
 
     monkeypatch.setattr(fetch_module, "_download", full)

@@ -16,7 +16,7 @@ def _foreign_uuid(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _failing_replace(monkeypatch: pytest.MonkeyPatch) -> None:
-    def refuse(*args: object) -> None:
+    def refuse(*args: object, **kwargs: object) -> None:
         raise OSError("replace refused")
 
     monkeypatch.setattr(os, "replace", refuse)
@@ -44,8 +44,8 @@ def test_link_staging_cleanup_refuses_a_name_outside_its_grammar(
     link = tmp_path / "voice.wav"
     _foreign_uuid(monkeypatch)
     _failing_replace(monkeypatch)
-    with pytest.raises(OSError, match="replace refused"):
-        fetch_module._link(link, blob, 0o2770)
+    with pytest.raises(OSError, match="replace refused"), storage_module.StorageDir.open_root(tmp_path) as files:
+        fetch_module._link(files, link.name, blob, 0o2770)
     assert (tmp_path / ".voice.wav.notes").is_symlink()
 
 

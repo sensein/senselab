@@ -14,10 +14,12 @@
 
 import errno
 import os
+import pwd
 import re
 import stat
 import threading
 import uuid
+from collections.abc import Callable
 from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Protocol, Self, runtime_checkable
@@ -53,10 +55,12 @@ class StorageFull(StoreUnavailable):
 def storage_fault(err: OSError, path: Path, *, hint: str | None = None) -> StoreUnavailable:
     """Return the storage fault for `err`, raised while working on `path`; a `StoreUnavailable` is returned as is.
 
-    The message names the cause and the fix: `hint` when given, otherwise one chosen by errno.
+    The fault names the path `err` was raised on by a `StorageDir`, otherwise `path`. The message names the
+    cause and the fix: `hint` when given, otherwise one chosen by errno.
     """
     if isinstance(err, StoreUnavailable):
         return err
+    path = getattr(err, "storage_path", None) or path
     full = err.errno in _FULL_ERRNOS
     fix = hint or (
         "out of space or over quota; free space or move the store elsewhere"
@@ -160,33 +164,366 @@ TEMPORARY_NAME = re.compile(r"^\..+\.[0-9]+\.[0-9]+\.[0-9a-f]{32}\.tmp$")
 """A file being written atomically: `.<name>.<pid>.<thread id>.<uuid4 hex>.tmp`."""
 
 
-def write_atomically(target: Path, data: bytes, *, mode: int | None = None) -> None:
-    """Replace `target` with `data` through a fsynced temporary file in the same directory.
+class WrongKindError(ValueError):
+    """An object of the wrong kind is at a path the runtime owns: a symlink, or a file where a directory belongs.
 
-    The new file gets `mode`, or the mode `target` had, or the umask's default. The temporary is
-    removed if the write fails.
+    Attributes:
+        path: The offending path.
+        found: What is there: `"symlink"`, `"directory"`, `"file"` or `"other"`.
+    """
+
+    def __init__(self, path: Path, found: str, message: str) -> None:
+        """Record `path` and `found`; `message` is the whole text."""
+        super().__init__(message)
+        self.path = path
+        self.found = found
+
+
+def path_component(name: str) -> str:
+    """Return `name` if it is one path component: non-empty, not `.` or `..`, with no slash, backslash or NUL.
+
+    Raises:
+        ValueError: otherwise.
+    """
+    if not isinstance(name, str) or name in ("", ".", "..") or any(c in name for c in "/\\\x00"):
+        raise ValueError(f"{name!r} is not a single path component")
+    return name
+
+
+def owner_remedy(path: Path) -> str:
+    """Return who owns `path` and what they must run to remove it."""
+    try:
+        uid = os.lstat(path).st_uid
+    except OSError:
+        return f"{path} could not be examined; remove it as its owner"
+    try:
+        owner = pwd.getpwuid(uid).pw_name
+    except KeyError:
+        owner = f"uid {uid}"
+    return (
+        f"{path} is owned by {owner} (uid {uid}); as {owner}, run "
+        f"`chmod -R u+w '{path}' && rm -rf '{path}'` to remove it"
+    )
+
+
+def _kind(mode: int) -> str:
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    if stat.S_ISDIR(mode):
+        return "directory"
+    if stat.S_ISREG(mode):
+        return "file"
+    return "other"
+
+
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+_NEW_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+
+
+class _Naming:
+    """Re-raise an `OSError` naming `path`: as `storage_path`, and as `filename` when it carries an errno."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, kind: object, err: object, tb: object) -> None:
+        if isinstance(err, OSError) and not isinstance(err, StoreUnavailable):
+            if err.errno is not None:
+                err.filename = str(self.path)
+            err.storage_path = self.path  # type: ignore[attr-defined]
+
+
+class StorageDir:
+    """A directory under a storage root, held open and reached without following any symlink below the root.
+
+    Every name this class takes is one path component (`path_component`). Every operation is done relative
+    to the directory's descriptor, and a name is never followed when it is a symlink: `child` and `walk`
+    refuse a symlink or a non-directory with `WrongKindError`, and files are created with `O_NOFOLLOW`.
+    The root itself is opened as given, so a root that is a symlink is followed. A `StorageDir` is a
+    context manager that closes its descriptor; errors name the full path.
+
+    Attributes:
+        path: The directory's path, for messages and for readers that take a path.
+        fd: The open descriptor.
+    """
+
+    def __init__(self, path: Path, fd: int) -> None:
+        """Wrap an open directory descriptor `fd` for `path`; use `open_root`, `child` or `walk` instead."""
+        self.path = path
+        self.fd = fd
+
+    @classmethod
+    def open_root(cls, root: Path, *, create: bool = False, mode: int | None = None) -> "StorageDir":
+        """Open the storage root `root`, following it if it is a symlink.
+
+        With `create`, a missing root and its missing parents are created, each with `mode`.
+
+        Raises:
+            FileNotFoundError: the root is missing and `create` is False.
+            OSError: the root cannot be created or opened.
+        """
+        root = Path(root)
+        if create:
+            missing: list[Path] = []
+            current = root
+            while not os.path.lexists(current):
+                missing.append(current)
+                current = current.parent
+            for directory in reversed(missing):
+                with _Naming(directory):
+                    try:
+                        os.mkdir(directory, 0o700)
+                    except FileExistsError:
+                        continue
+                    if mode is not None:
+                        set_mode(directory, mode)
+        with _Naming(root):
+            fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        return cls(root, fd)
+
+    def close(self) -> None:
+        """Close the descriptor."""
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
+
+    def __enter__(self) -> "StorageDir":
+        """Return this directory."""
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Close the descriptor."""
+        self.close()
+
+    def lstat(self, name: str) -> os.stat_result | None:
+        """Return the `lstat` of `name`, None if it is missing."""
+        with _Naming(self.path / name):
+            try:
+                return os.lstat(path_component(name), dir_fd=self.fd)
+            except FileNotFoundError:
+                return None
+
+    def kind(self, name: str) -> str | None:
+        """Return what `name` is (`"symlink"`, `"directory"`, `"file"` or `"other"`), None if it is missing."""
+        st = self.lstat(name)
+        return None if st is None else _kind(st.st_mode)
+
+    def wrong_kind(self, name: str, expected: str) -> WrongKindError:
+        """Return the error for `name`, which is not `expected`."""
+        found = self.kind(name) or "nothing"
+        path = self.path / name
+        return WrongKindError(path, found, f"{path} is a {found} where a {expected} belongs; {owner_remedy(path)}")
+
+    def child(self, name: str, *, create: bool = False, mode: int | None = None) -> "StorageDir":
+        """Open the subdirectory `name`; with `create`, make it with `mode` (or 0o700) if it is missing.
+
+        Raises:
+            WrongKindError: `name` is a symlink or not a directory.
+            FileNotFoundError: `name` is missing and `create` is False.
+            OSError: it cannot be created or opened.
+        """
+        path_component(name)
+        path = self.path / name
+        for _ in range(3):
+            with _Naming(path):
+                try:
+                    return StorageDir(path, os.open(name, _DIR_FLAGS, dir_fd=self.fd))
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                except OSError:
+                    if self.kind(name) in (None, "directory"):
+                        raise
+                    raise self.wrong_kind(name, "directory") from None
+                try:
+                    os.mkdir(name, 0o700, dir_fd=self.fd)
+                except FileExistsError:
+                    continue
+                made = StorageDir(path, os.open(name, _DIR_FLAGS, dir_fd=self.fd))
+            try:
+                made.set_mode(mode if mode is not None else 0o700)
+            except BaseException:
+                made.close()
+                raise
+            return made
+        raise self.wrong_kind(name, "directory")
+
+    def walk(
+        self,
+        *parts: str,
+        create: bool = False,
+        mode: int | None = None,
+        aside: Callable[[], "StorageDir | None"] | None = None,
+    ) -> "StorageDir":
+        """Open `parts` below this directory, one component at a time, as `child` does.
+
+        With `aside`, a component of the wrong kind is moved out of the way (`set_aside` into the
+        directory `aside()` returns, which is then closed, or beside itself when it returns None) and
+        the component is opened or created again; without it, `WrongKindError` is raised. Intermediate descriptors are
+        closed; the returned directory is new even when `parts` is empty.
+
+        Raises:
+            WrongKindError: a component is of the wrong kind and `aside` is None, or it cannot be moved.
+            FileNotFoundError: a component is missing and `create` is False.
+            OSError: a component cannot be created or opened.
+        """
+        current = StorageDir(self.path, os.dup(self.fd))
+        try:
+            for part in parts:
+                try:
+                    nxt = current.child(part, create=create, mode=mode)
+                except WrongKindError:
+                    if aside is None:
+                        raise
+                    into = aside()
+                    try:
+                        current.set_aside(part, into)
+                    finally:
+                        if into is not None:
+                            into.close()
+                    nxt = current.child(part, create=create, mode=mode)
+                current.close()
+                current = nxt
+        except BaseException:
+            current.close()
+            raise
+        return current
+
+    def set_aside(self, name: str, into: "StorageDir | None") -> Path:
+        """Move `name` to `into/<uuid4 hex>`, or to `<uuid4 hex>` beside it when `into` is None or refuses it.
+
+        The moved object is stamped with the current time so retention ages count from the move. A
+        symlink is moved, never followed.
+
+        Raises:
+            WrongKindError: it cannot be moved at all; the message names its owner and the remedy.
+        """
+        found = self.kind(name) or "nothing"
+        aside = uuid.uuid4().hex
+        failure: OSError | None = None
+        for target in (into, self) if into is not None else (self,):
+            try:
+                os.rename(path_component(name), aside, src_dir_fd=self.fd, dst_dir_fd=target.fd)
+            except FileNotFoundError:
+                return target.path / aside
+            except OSError as err:
+                failure = err
+                continue
+            try:
+                os.utime(aside, dir_fd=target.fd, follow_symlinks=False)
+            except OSError:
+                pass
+            return target.path / aside
+        path = self.path / name
+        message = f"{path} is a {found} where it does not belong and cannot be moved: {failure}; {owner_remedy(path)}"
+        raise WrongKindError(path, found, message) from failure
+
+    def listdir(self) -> list[str]:
+        """Return the names in this directory."""
+        with _Naming(self.path):
+            return os.listdir(self.fd)
+
+    def readlink(self, name: str) -> str:
+        """Return the target of the symlink `name`."""
+        with _Naming(self.path / name):
+            return os.readlink(path_component(name), dir_fd=self.fd)
+
+    def open_new(self, name: str, mode: int) -> int:
+        """Create the file `name`, which must not exist, with `mode` whatever the umask; return its descriptor."""
+        with _Naming(self.path / name):
+            fd = os.open(path_component(name), _NEW_FILE_FLAGS, 0o600, dir_fd=self.fd)
+        try:
+            set_mode(self.path / name, mode, fd=fd)
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
+    def write_new(self, name: str, data: bytes, mode: int) -> None:
+        """Create the file `name` holding `data`, fsynced, with `mode`."""
+        with os.fdopen(self.open_new(name, mode), "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+    def symlink(self, target: str, name: str) -> None:
+        """Create the symlink `name` pointing at `target`."""
+        with _Naming(self.path / name):
+            os.symlink(target, path_component(name), dir_fd=self.fd)
+
+    def link(self, name: str, dst: "StorageDir", dst_name: str) -> None:
+        """Hard-link `name` (never followed) at `dst/dst_name`, which must not exist."""
+        with _Naming(dst.path / dst_name):
+            os.link(
+                path_component(name),
+                path_component(dst_name),
+                src_dir_fd=self.fd,
+                dst_dir_fd=dst.fd,
+                follow_symlinks=False,
+            )
+
+    def rename(self, name: str, dst: "StorageDir", dst_name: str, *, replace: bool = False) -> None:
+        """Rename `name` to `dst/dst_name`; with `replace` an existing file there is replaced atomically."""
+        with _Naming(self.path / name):
+            (os.replace if replace else os.rename)(
+                path_component(name), path_component(dst_name), src_dir_fd=self.fd, dst_dir_fd=dst.fd
+            )
+
+    def remove_owned(self, name: str, *, pattern: re.Pattern[str]) -> bool:
+        """Remove `name` through `ownership.remove_owned` relative to this descriptor; return whether it did."""
+        with _Naming(self.path / name):
+            return remove_owned(self.path, self.path / path_component(name), pattern=pattern, root_fd=self.fd)
+
+    def set_mode(self, mode: int) -> None:
+        """Set this directory's mode, as `set_mode` does."""
+        with _Naming(self.path):
+            set_mode(self.path, mode, fd=self.fd)
+
+    def fsync(self) -> None:
+        """Sync this directory."""
+        with _Naming(self.path):
+            os.fsync(self.fd)
+
+    def write_atomically(self, name: str, data: bytes, *, mode: int | None = None) -> None:
+        """Replace `name` with `data` through a fsynced temporary file in this directory.
+
+        The new file gets `mode`, or the mode the file had, or the umask's default. The temporary is
+        removed if the write fails.
+
+        Raises:
+            OSError: if the temporary cannot be written or renamed.
+        """
+        if mode is None:
+            st = self.lstat(name)
+            mode = stat.S_IMODE(st.st_mode) if st is not None and stat.S_ISREG(st.st_mode) else None
+        temporary = f".{path_component(name)}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
+        with _Naming(self.path / temporary):
+            descriptor = os.open(temporary, _NEW_FILE_FLAGS, 0o666, dir_fd=self.fd)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                if mode is not None:
+                    os.fchmod(handle.fileno(), mode)
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            self.rename(temporary, self, name, replace=True)
+        except BaseException:
+            self.remove_owned(temporary, pattern=TEMPORARY_NAME)
+            raise
+
+
+def write_atomically(target: Path, data: bytes, *, mode: int | None = None) -> None:
+    """Replace `target` with `data` as `StorageDir.write_atomically` does, in the directory holding `target`.
 
     Raises:
         OSError: if the temporary cannot be written or renamed.
     """
-    if mode is None:
-        try:
-            mode = stat.S_IMODE(target.stat().st_mode)
-        except FileNotFoundError:
-            mode = None
-    temporary = target.with_name(f".{target.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            if mode is not None:
-                os.fchmod(handle.fileno(), mode)
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, target)
-    except BaseException:
-        remove_owned(target.parent, temporary, pattern=TEMPORARY_NAME)
-        raise
+    target = Path(target)
+    with StorageDir.open_root(target.parent) as directory:
+        directory.write_atomically(target.name, data, mode=mode)
 
 
 @runtime_checkable
@@ -226,6 +563,10 @@ def __getattr__(name: str) -> object:
 
 __all__ = [
     "ADDRESSED_FORMATS",
+    "StorageDir",
+    "WrongKindError",
+    "owner_remedy",
+    "path_component",
     "CLOCK_NAME",
     "TEMPORARY_NAME",
     "STAGING_DIR_MODE",

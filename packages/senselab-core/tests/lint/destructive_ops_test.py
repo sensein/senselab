@@ -18,11 +18,13 @@ DESTRUCTIVE_MODULE_CALLS = {
     ("shutil", "rmtree"),
     ("shutil", "move"),
 }
-DESTRUCTIVE_METHODS = {"unlink", "rename", "rmdir", "_quarantine"}
+DESTRUCTIVE_METHODS = {"unlink", "rename", "rmdir", "_quarantine", "set_aside"}
 DESTRUCTIVE_FUNCTIONS = {"remove_owned"}
 BROAD = {"OSError", "Exception", "BaseException"}
 SCRATCH_CLEANUP = {
-    ("senselab_core.runtime.storage", "write_atomically", "remove_owned(pattern=TEMPORARY_NAME)"): "its temporary",
+    ("senselab_core.runtime.storage", "StorageDir.write_atomically", "remove_owned(pattern=TEMPORARY_NAME)"): (
+        "its temporary"
+    ),
     ("senselab_worker.codec", "_write_array", "remove_owned(pattern=ARRAY_TEMP_NAME)"): "its temporary array file",
     ("senselab_core.runtime.worker_client", "WorkerClient._remove_arrays", "remove_owned(pattern=ARRAY_NAME)"): (
         "an array file in the worker's private channel"
@@ -158,14 +160,19 @@ def _callee(module: _Module, call: ast.Call, scope: tuple[str, ...]) -> str | No
 
 
 def _reachable(module: _Module, body: list[ast.stmt], scope: tuple[str, ...], where: str, seen: set[str]) -> list[str]:
-    """Return the destructive calls in `body` (inside function `where`) or in same-module functions it calls."""
+    """Return the destructive calls in `body` (inside function `where`) or in same-module functions it calls.
+
+    A destructive call is judged where it is made; a same-module function it names is not followed.
+    """
     found: list[str] = []
     for stmt in body:
         for node in ast.walk(stmt):
             if not isinstance(node, ast.Call):
                 continue
-            if (name := _destructive(node)) is not None and (module.name, where, name) not in SCRATCH_CLEANUP:
-                found.append(f"{name} (line {node.lineno})")
+            if (name := _destructive(node)) is not None:
+                if (module.name, where, name) not in SCRATCH_CLEANUP:
+                    found.append(f"{name} (line {node.lineno})")
+                continue
             callee = _callee(module, node, scope)
             if callee is not None and callee not in seen:
                 seen.add(callee)
@@ -220,6 +227,9 @@ def test_no_destructive_call_under_oserror_handler() -> None:
         "self.path.rmdir()",
         "remove_owned(r, a, pattern=p)",
         "self._quarantine(a)",
+        "directory.remove_owned(a, pattern=p)",
+        "directory.rename(a, directory, b)",
+        "directory.set_aside(a, None)",
     ],
 )
 @pytest.mark.parametrize(
@@ -268,9 +278,12 @@ def test_scratch_cleanup_allowance_names_existing_functions() -> None:
 )
 def test_scratch_allowance_does_not_cover_other_calls_in_the_same_function(call: str) -> None:
     """Inside an allowed function, a deletion under another grammar, or any other destructive call, is reported."""
-    source = f"import os\ndef write_atomically(r, a, b):\n    try:\n        pass\n    except OSError:\n        {call}\n"
+    source = (
+        "import os\nclass StorageDir:\n    def write_atomically(self, r, a, b):\n        try:\n            pass\n"
+        f"        except OSError:\n            {call}\n"
+    )
     assert violations(source, "senselab_core.runtime.storage")
-    allowed = source.replace(call, "remove_owned(r, a, pattern=TEMPORARY_NAME)")
+    allowed = source.replace(call, "self.remove_owned(a, pattern=TEMPORARY_NAME)")
     assert violations(allowed, "senselab_core.runtime.storage") == []
 
 

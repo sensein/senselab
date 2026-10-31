@@ -22,6 +22,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ReusePolicy
+from senselab_core.runtime import storage as storage_module
 from senselab_core.runtime import store as store_module
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
 from senselab_core.runtime.storage import StorageFull, StorePolicy, StoreUnavailable
@@ -92,7 +93,8 @@ def test_put_get_exact(tmp_path: Path) -> None:
     entry = tmp_path / STORE_DIR / d[:2] / d / c.fingerprint()
     assert (entry / "result.json").is_file() and (entry / "context.json").is_file()
     result = json.loads((entry / "result.json").read_bytes())
-    assert result["format"] == "result@1.0"
+    assert result["format"] == "result@2.0"
+    assert result["context_fingerprint"] == c.fingerprint() and result["key_digest"] == d
     assert result["output_identity"] == ident
     sha = _sha(canonical_npy_bytes(outputs["y"]))  # type: ignore[arg-type]
     assert (entry / f"{sha}.npy").read_bytes() == canonical_npy_bytes(outputs["y"])  # type: ignore[arg-type]
@@ -307,7 +309,7 @@ CORRUPTIONS: dict[str, Callable[[Path], object]] = {
     ),
     "context_field_missing": lambda e: _rewrite_json(e / "context.json", lambda r: r.pop("platform")),
     "identity_missing": lambda e: _rewrite_json(e / "result.json", lambda r: r.pop("output_identity")),
-    "result_format": lambda e: _rewrite_json(e / "result.json", lambda r: r.update(format="result@2.0")),
+    "result_format": lambda e: _rewrite_json(e / "result.json", lambda r: r.update(format="result@1.0")),
     "context_format": lambda e: _rewrite_json(e / "context.json", lambda r: r.update(format="nope@1.0")),
     "outputs_tampered": lambda e: _rewrite_json(e / "result.json", lambda r: r["outputs"].update(n=2)),
     "key_digest_rewritten": lambda e: _rewrite_json(e / "result.json", lambda r: r.update(key_digest="0" * 64)),
@@ -507,9 +509,9 @@ def test_a23_get_coerces_policy(tmp_path: Path, policy: object) -> None:
 
 
 @pytest.mark.logic
-def test_store_dir_is_format_3() -> None:
-    """Changed digests put entries in a new key space."""
-    assert STORE_DIR == "store@3"
+def test_store_dir_is_format_4() -> None:
+    """Entries that record their context fingerprint are a new key space."""
+    assert STORE_DIR == "store@4"
 
 
 def _cycles() -> list[object]:
@@ -713,8 +715,8 @@ def test_a3_transient_error_in_put_never_quarantines(tmp_path: Path, monkeypatch
 
 
 @pytest.mark.logic
-def test_put_does_not_reread_arrays_of_an_existing_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A put over a valid committed entry reads its JSON members but none of its arrays."""
+def test_put_verifies_the_arrays_of_an_existing_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A put over a valid committed entry reads every member, its arrays included, before returning its identity."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     ident = s.put(k, {"y": numpy.ones(1000, "<f8"), "z": numpy.zeros(4, "<i4")}, c)
     read: list[str] = []
@@ -726,7 +728,7 @@ def test_put_does_not_reread_arrays_of_an_existing_entry(tmp_path: Path, monkeyp
 
     monkeypatch.setattr(Path, "read_bytes", spy)
     assert s.put(k, {"y": numpy.ones(1000, "<f8"), "z": numpy.zeros(4, "<i4")}, c) == ident
-    assert sorted(read) == ["context.json", "result.json"]
+    assert sorted(read)[-2:] == ["context.json", "result.json"] and len([n for n in read if n.endswith(".npy")]) == 2
 
 
 def _heal_during_quarantine(root: str, detected: MpEvent, go: MpEvent, out: "MpQueue[Any]") -> None:
@@ -887,11 +889,11 @@ def test_enospc_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     real = store_module._write_synced
     calls = {"n": 0}
 
-    def full(path: Path, data: bytes, mode: int) -> None:
+    def full(*args: object) -> None:
         calls["n"] += 1
         if calls["n"] == 2:
             raise OSError(err, os.strerror(err))
-        real(path, data, mode)
+        real(*args)  # type: ignore[arg-type]
 
     monkeypatch.setattr(store_module, "_write_synced", full)
     with pytest.raises(StorageFull) as caught:
@@ -902,13 +904,40 @@ def test_enospc_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 
 
 @pytest.mark.logic
-def test_unwritable_quarantine_never_raises_a_raw_permission_error(tmp_path: Path) -> None:
-    """When the quarantine cannot be created, the corrupt entry is set aside in place and the key stays usable."""
+def test_a_file_at_the_quarantine_is_set_aside_and_the_quarantine_rebuilt(tmp_path: Path) -> None:
+    """A file where the quarantine belongs is moved aside under the root; the corrupt entry is quarantined."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     s.put(k, {"y": 1}, c)
     entry = _entry_dir(tmp_path, k, c)
     CORRUPTIONS["result_garbled"](entry)
     (tmp_path / QUARANTINE_DIR).write_bytes(b"not a directory")
+    assert s.get(k, c, ReusePolicy.EXACT) is None
+    assert s.put(k, {"y": 2}, c) == output_identity({"y": 2})
+    got = s.get(k, c, ReusePolicy.EXACT)
+    assert got is not None and got.outputs == {"y": 2}
+    assert [p for p in entry.parent.iterdir() if p != entry] == []
+    assert len(list((tmp_path / QUARANTINE_DIR).iterdir())) == 1
+    (stray,) = [p for p in tmp_path.iterdir() if UUID_HEX.fullmatch(p.name)]
+    assert stray.read_bytes() == b"not a directory"
+
+
+@pytest.mark.logic
+def test_unwritable_quarantine_never_raises_a_raw_permission_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the quarantine cannot be opened, the corrupt entry is set aside in place and the key stays usable."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    s.put(k, {"y": 1}, c)
+    entry = _entry_dir(tmp_path, k, c)
+    CORRUPTIONS["result_garbled"](entry)
+    real = storage_module.StorageDir.child
+
+    def child(self: storage_module.StorageDir, name: str, **kwargs: object) -> storage_module.StorageDir:
+        if name == QUARANTINE_DIR:
+            raise PermissionError(errno.EACCES, "Permission denied", name)
+        return real(self, name, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(storage_module.StorageDir, "child", child)
     assert s.get(k, c, ReusePolicy.EXACT) is None
     assert s.put(k, {"y": 2}, c) == output_identity({"y": 2})
     got = s.get(k, c, ReusePolicy.EXACT)
@@ -919,14 +948,14 @@ def test_unwritable_quarantine_never_raises_a_raw_permission_error(tmp_path: Pat
 
 def _refuse_chmod_on(monkeypatch: pytest.MonkeyPatch, target: Path) -> None:
     """Refuse chmod on `target` with EPERM, as for an entry another user owns."""
-    real = store_module.set_mode
+    real = storage_module.set_mode
 
     def set_mode(path: Path | str, mode: int, *, fd: int | None = None) -> None:
-        if fd is None and Path(path) == target:
+        if Path(path) == target:
             raise PermissionError(errno.EPERM, "Operation not permitted", str(path))
         real(path, mode, fd=fd)
 
-    monkeypatch.setattr(store_module, "set_mode", set_mode)
+    monkeypatch.setattr(storage_module, "set_mode", set_mode)
 
 
 @pytest.mark.logic
@@ -1008,10 +1037,10 @@ def test_unmovable_corrupt_entry_names_owner_and_remedy(tmp_path: Path, monkeypa
     _refuse_chmod_on(monkeypatch, entry)
     real_rename = os.rename
 
-    def rename(src: object, dst: object) -> None:
-        if Path(str(src)) == entry:
+    def rename(src: object, dst: object, **dir_fds: int) -> None:
+        if str(src) == entry.name:
             raise PermissionError(errno.EACCES, "Permission denied", str(src))
-        real_rename(src, dst)  # type: ignore[arg-type]
+        real_rename(src, dst, **dir_fds)  # type: ignore[arg-type]
 
     monkeypatch.setattr(os, "rename", rename)
     with pytest.raises(StoreUnavailable) as caught:
@@ -1115,11 +1144,11 @@ def test_a36_enospc_mid_entry_is_storage_full(tmp_path: Path, monkeypatch: pytes
     real = store_module._write_synced
     calls = {"n": 0}
 
-    def boom(path: Path, data: bytes, mode: int) -> None:
+    def boom(*args: object) -> None:
         calls["n"] += 1
         if calls["n"] == 2:
             raise OSError(errno.ENOSPC, "No space left on device")
-        real(path, data, mode)
+        real(*args)  # type: ignore[arg-type]
 
     monkeypatch.setattr(store_module, "_write_synced", boom)
     with pytest.raises(StorageFull):
