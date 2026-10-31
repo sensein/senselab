@@ -1120,3 +1120,20 @@ def test_a36_enospc_mid_entry_is_storage_full(tmp_path: Path, monkeypatch: pytes
     with pytest.raises(StorageFull):
         s.put(k, {"a": "x"}, c)
     assert _entries(tmp_path) == [] and list((tmp_path / "tmp").iterdir()) == []
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("shape", [(), (1,), (2, 2)])
+def test_stored_bool_arrays_keep_their_shape_and_truth(tmp_path: Path, shape: tuple[int, ...]) -> None:
+    """A bool array holding byte 2 reads back from the store at its shape, as 0/1, and 0-d is not (1,)."""
+    count = int(numpy.prod(shape))
+    a = numpy.frombuffer(bytes([2, 0, 255, 1][:count]), dtype=numpy.bool_).reshape(shape)
+    s, c = ResultStore(tmp_path), _ctx()
+    s.put(_key(), {"y": a}, c)
+    got = s.get(_key(), c, ReusePolicy.EXACT)
+    assert got is not None
+    y = got.outputs["y"]
+    assert isinstance(y, numpy.ndarray) and y.shape == shape and numpy.array_equal(y, a)
+    assert y.view(numpy.uint8).max(initial=0) <= 1
+    if shape == ():
+        assert output_identity({"y": a}) != output_identity({"y": a.reshape(1)})

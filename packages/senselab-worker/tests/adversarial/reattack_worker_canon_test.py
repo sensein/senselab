@@ -8,7 +8,7 @@ import time
 
 import numpy
 import pytest
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 _UNASSIGNED_IN_13 = "a\U0001e08f\u0323"
@@ -254,3 +254,90 @@ def test_canonical_strings_are_in_canonical_form() -> None:
     raw = numpy.array(["e\u0301" + _UNASSIGNED_IN_13, "\u00e9"])
     assert canonical_npy_bytes(raw) == canonical_npy_bytes(raw.copy()) and raw[0] == "e\u0301" + _UNASSIGNED_IN_13
     assert numpy.load(io.BytesIO(canonical_npy_bytes(raw)))[0] == "e\u0301" + _UNASSIGNED_IN_13
+
+
+SHAPES = [(), (0,), (1,), (3,), (2, 3), (1, 2, 2)]
+NUMERIC = ["?", "i1", "i2", "i4", "i8", "u1", "u2", "u4", "u8", "f2", "f4", "f8"]
+
+
+def _reference_element(dtype: numpy.dtype, word: int) -> int:
+    """The canonical bits of one element by the ADR-006 list, from its raw little-endian word, without numpy."""
+    if dtype.kind == "b":
+        return 1 if word else 0
+    if dtype.kind == "f":
+        return _reference_bits(f"f{dtype.itemsize}", word)
+    return word
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("shape", SHAPES, ids=str)
+@pytest.mark.parametrize("code", NUMERIC)
+@pytest.mark.parametrize("order", ["<", ">"])
+@settings(max_examples=25)
+@given(st.data())
+def test_canonical_npy_is_the_reference_form_for_every_shape_and_dtype(
+    shape: tuple[int, ...], code: str, order: str, data: st.DataObject
+) -> None:
+    """Every accepted numeric dtype, either byte order, every shape: the reference bytes, the shape kept, 0-d apart."""
+    import io
+    import math
+
+    from senselab_worker.canonical import canonical_npy_bytes, npy_bytes
+
+    dtype = numpy.dtype(code).newbyteorder(order)
+    size = dtype.itemsize
+    count = math.prod(shape)
+    words = data.draw(
+        st.lists(
+            st.sampled_from([0, 1, 2, 255]) if code == "?" else st.integers(0, (1 << (8 * size)) - 1),
+            min_size=count,
+            max_size=count,
+        )
+    )
+    little = numpy.dtype(code).newbyteorder("<")
+    raw = b"".join(w.to_bytes(size, "little") for w in words)
+    a = numpy.frombuffer(raw, dtype=little).reshape(shape).astype(dtype)
+    expected = b"".join(_reference_element(little, w).to_bytes(size, "little") for w in words)
+    reference = numpy.frombuffer(expected, dtype=little).reshape(shape)
+    written = canonical_npy_bytes(a)
+    assert written == npy_bytes(reference)
+    back = numpy.load(io.BytesIO(written))
+    assert back.shape == shape and back.dtype == little
+    if count == 1:
+        other = a.reshape(()) if shape != () else a.reshape((1,))
+        assert canonical_npy_bytes(other) != written
+
+
+@pytest.mark.contract
+@given(st.sampled_from(SHAPES), st.data())
+def test_canonical_string_arrays_keep_their_shape(shape: tuple[int, ...], data: st.DataObject) -> None:
+    """A `U` array of any shape holds each string's canonical form, keeps its shape, and 0-d differs from (1,)."""
+    import io
+    import math
+
+    from senselab_worker.canonical import canonical_npy_bytes, canonical_text
+
+    count = math.prod(shape)
+    alphabet = st.sampled_from(["a", "e", "́", "é", "̣", "\U0001fae0", "\U0001e08f"])
+    texts = data.draw(st.lists(st.text(alphabet=alphabet, min_size=1, max_size=3), min_size=count, max_size=count))
+    a = numpy.array(texts, dtype="<U3").reshape(shape) if count else numpy.zeros(shape, dtype="<U3")
+    written = canonical_npy_bytes(a)
+    back = numpy.load(io.BytesIO(written))
+    assert back.shape == shape and back.dtype.itemsize >= a.dtype.itemsize
+    assert [str(x) for x in back.reshape(-1).tolist()] == [canonical_text(t) for t in texts]
+    if count == 1:
+        other = a.reshape(()) if shape != () else a.reshape((1,))
+        assert canonical_npy_bytes(other) != written
+
+
+@pytest.mark.logic
+def test_x_i1_a_zero_d_bool_with_byte_2_keeps_its_shape() -> None:
+    """The review's probe: a 0-d bool of byte 2 is written as 0-d `True`, not as `[True]`."""
+    import io
+
+    from senselab_worker.canonical import canonical_npy_bytes
+
+    b = numpy.frombuffer(b"\x02", dtype=numpy.bool_).reshape(())
+    assert canonical_npy_bytes(b) == canonical_npy_bytes(numpy.array(True))
+    assert canonical_npy_bytes(b) != canonical_npy_bytes(numpy.array([True]))
+    assert numpy.load(io.BytesIO(canonical_npy_bytes(b))).shape == ()

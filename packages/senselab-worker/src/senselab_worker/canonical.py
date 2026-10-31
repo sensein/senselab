@@ -519,7 +519,7 @@ def _canonical_floats(a: numpy.ndarray) -> numpy.ndarray:
 
 
 def _canonical_bools(a: numpy.ndarray) -> numpy.ndarray:
-    raw = numpy.ascontiguousarray(a).view(numpy.uint8)
+    raw = numpy.array(a, order="C", copy=True).view(numpy.uint8)
     if not (raw > 1).any():
         return a
     return numpy.asarray(raw != 0)
