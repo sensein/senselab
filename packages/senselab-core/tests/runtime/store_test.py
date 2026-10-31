@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy
 import pytest
-from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ReusePolicy
+from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ReusePolicy
 from senselab_core.runtime import store as store_module
 from senselab_core.runtime.locks import LOCK_DIR_MODE, LOCK_FILE_MODE
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
@@ -26,7 +26,7 @@ from senselab_core.runtime.store import (
     StoredResult,
     output_identity,
 )
-from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
+from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps, tagged_digest
 from senselab_worker.hashing import sha256_bytes
 
 
@@ -36,9 +36,9 @@ def _key(task: str = "asr", **inputs: str) -> LogicalKey:
         task_version="1",
         backend="hf",
         backend_version="1",
-        model="0" * 40,
+        model=ModelIdentity(source="hf", id="org/asr", identity="0" * 40),
         params={"beam": 1},
-        inputs=inputs or {"audio": "a" * 64},
+        inputs={port: "content:" + digest for port, digest in (inputs or {"audio": "a" * 64}).items()},
     )
 
 
@@ -235,10 +235,10 @@ def test_output_identity_enables_early_cutoff(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_output_identity_is_jcs_over_array_digests() -> None:
-    """The identity is sha256 over the JCS of outputs with each array replaced by its .npy digest."""
+def test_output_identity_is_tagged_over_array_digests() -> None:
+    """The identity is the `output@2` digest of the outputs with each array replaced by its .npy digest."""
     a = numpy.arange(4, dtype="<i8")
-    expected = sha256_bytes(jcs_dumps({"y": {"$array": sha256_bytes(canonical_npy_bytes(a))}, "z": 1}))
+    expected = "output:" + tagged_digest("output@2", {"y": {"$array": sha256_bytes(canonical_npy_bytes(a))}, "z": 1})
     assert output_identity({"z": 1, "y": a}) == expected
     assert output_identity({"y": numpy.asarray(a, dtype=">i8")}) == output_identity({"y": a})
 
@@ -314,7 +314,7 @@ def test_put_replaces_corrupt_entry(tmp_path: Path) -> None:
     ident = s.put(k, {"y": numpy.zeros(3, "<f4")}, c)
     assert ident == output_identity({"y": numpy.zeros(3, "<f4")})
     assert {a.parameters["outcome"] for a in s.provenance.activities()} == {"committed"}
-    assert ident in {e.attributes.get(CHECKSUM_KEY) for e in s.provenance.entities("artifact")}
+    assert ident in {e.attributes.get("output_identity") for e in s.provenance.entities("artifact")}
     got = s.get(k, c, ReusePolicy.EXACT)
     assert got is not None and got.output_identity == ident
     assert len(list((tmp_path / QUARANTINE_DIR).iterdir())) == 1
@@ -383,7 +383,7 @@ def test_relaxed_reuse_is_recorded_in_provenance(tmp_path: Path) -> None:
         "policy_used": "tolerant",
     }
     (used,) = [s.provenance.get_entity(e) for e in s.provenance.uses_of(act.id)]
-    assert used.attributes[CHECKSUM_KEY] == ident
+    assert used.attributes[CHECKSUM_KEY] == ident.removeprefix("output:")
 
 
 @pytest.mark.logic
@@ -397,7 +397,82 @@ def test_put_records_provenance(tmp_path: Path) -> None:
     assert act.parameters["context"]["fingerprint"] == c.fingerprint()
     assert act.parameters["context"]["host"] == "node1"
     used = [prov.get_entity(e) for e in prov.uses_of(act.id)]
-    assert [(e.attributes["input"], e.attributes["identity"]) for e in used] == [("audio", "a" * 64)]
+    assert [(e.attributes["input"], e.attributes["identity"]) for e in used] == [("audio", "content:" + "a" * 64)]
     (generated,) = [e for e in prov.entities("artifact") if prov.generated_by(e.id) == act.id]
-    assert generated.attributes[CHECKSUM_KEY] == ident
+    assert generated.attributes[CHECKSUM_KEY] == ident.removeprefix("output:")
     assert ResultStore(tmp_path).provenance.activities() == []
+
+
+@pytest.mark.logic
+def test_a31_output_identity_differs_from_key_digest_of_same_tree() -> None:
+    """The probe: a key's fields stored as outputs hashed to the key's own digest."""
+    k = _key()
+    tree = k.model_dump()
+    assert output_identity(tree).removeprefix("output:") != k.digest()
+    assert output_identity(tree) == "output:" + tagged_digest("output@2", tree)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "lossy",
+    [
+        numpy.datetime64("NaT"),
+        numpy.timedelta64(1, "ns"),
+        numpy.ma.array([1, 2, 3], mask=[0, 0, 1]),
+        numpy.zeros(1, dtype=[("a", "<i4")])[0],
+        ReusePolicy.EXACT,
+    ],
+    ids=["nat", "timedelta", "masked", "void", "str_enum"],
+)
+def test_a4_store_refuses_lossy_outputs(tmp_path: Path, lossy: object) -> None:
+    """The probe: NaT stored as null and a masked array as its fill values collided with other outputs."""
+    with pytest.raises(TypeError):
+        output_identity({"a": lossy})
+    with pytest.raises(TypeError):
+        ResultStore(tmp_path).put(_key(), {"a": [lossy]}, _ctx())
+    assert _entries(tmp_path) == []
+
+
+@pytest.mark.logic
+def test_store_scalars_go_through_the_one_canonical_encoder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every scalar the store encodes passes through `canonical_scalar`; there is no second encoder."""
+    seen: list[object] = []
+    real = store_module.canonical_scalar
+
+    def spy(v: object) -> object:
+        seen.append(v)
+        return real(v)
+
+    monkeypatch.setattr(store_module, "canonical_scalar", spy)
+    scalars = [None, True, 1, 0.5, "s", numpy.int32(2), numpy.float32(0.25)]
+    output_identity({"xs": scalars, "y": numpy.ones(2, "<f4")})
+    assert [type(v) for v in seen] == [type(v) for v in scalars]
+
+
+@pytest.mark.logic
+def test_a24_large_float_output_reads_back(tmp_path: Path) -> None:
+    """An integral float beyond 2**53 survives put and get with its identity intact."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    ident = s.put(k, {"x": 1e20, "key": k.model_dump()}, c)
+    got = s.get(k, c, ReusePolicy.EXACT)
+    assert got is not None and got.output_identity == ident and got.outputs["x"] == 1e20
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("policy", ["exact", "equivalent", "tolerant", "bogus", None])
+def test_a23_get_coerces_policy(tmp_path: Path, policy: object) -> None:
+    """`get` coerces its policy like `acceptable`: a member's value works, anything else raises."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    s.put(k, {"y": 1}, c)
+    if policy in {p.value for p in ReusePolicy}:
+        hit = s.get(k, c, policy)  # type: ignore[arg-type]
+        assert hit is not None and hit.policy_used is ReusePolicy.EXACT
+        return
+    with pytest.raises(ValueError):
+        s.get(k, c, policy)  # type: ignore[arg-type]
+
+
+@pytest.mark.logic
+def test_store_dir_is_format_2() -> None:
+    """Changed digests put entries in a new key space."""
+    assert STORE_DIR == "store@2"

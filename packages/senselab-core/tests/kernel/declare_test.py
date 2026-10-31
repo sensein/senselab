@@ -1,19 +1,32 @@
 """Declaration registry: task and backend specs, refusal of duplicates (P-37), the logical key builder."""
 
-from typing import Any
+from collections.abc import Callable, Mapping
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
+from enum import Enum
+from pathlib import Path
+from typing import Annotated, Any, Literal, Optional
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError, create_model
+from senselab_core.kernel._base import NonEmptyStr
 from senselab_core.kernel.declare import (
     BackendSpec,
     DuplicateDeclaration,
+    NonCanonicalParams,
     Registry,
     TaskParams,
     TaskSpec,
     UnknownTask,
+    check_canonical_params,
     key_for,
 )
+from senselab_core.kernel.identity import ModelIdentity, ModelRef, ResolvedModel, UnpinnedModel
 from senselab_core.kernel.license import License
+
+COMMIT = "41f01f3fe87f28c78e2fbf8b568835947dd65ed9"
+AUDIO = "content:" + "a" * 64
+SLICE = "profile:" + "b" * 64
 
 LICENSE = License(
     expression="Apache-2.0",
@@ -155,9 +168,7 @@ def test_output_affecting_names_only_key_components() -> None:
 @pytest.mark.logic
 def test_key_for_builds_the_logical_key() -> None:
     """The key carries the declared task and backend identities, the params' JSON and the input identities."""
-    key = key_for(
-        _task(), _backend(), params=_Params(window=5), inputs={"audio": "a" * 64}, profile_slices={"p": "b" * 64}
-    )
+    key = key_for(_task(), _backend(), params=_Params(window=5), inputs={"audio": AUDIO}, profile_slices={"p": SLICE})
     assert (key.task, key.task_version, key.backend, key.backend_version, key.model) == (
         "t.measure",
         "1",
@@ -166,8 +177,8 @@ def test_key_for_builds_the_logical_key() -> None:
         None,
     )
     assert dict(key.params) == {"window": 5}
-    assert dict(key.inputs) == {"audio": "a" * 64}
-    assert dict(key.profile_slices) == {"p": "b" * 64}
+    assert dict(key.inputs) == {"audio": AUDIO}
+    assert dict(key.profile_slices) == {"p": SLICE}
     assert (key.batch_formation, key.chunk_grid) == (None, None)
 
 
@@ -179,9 +190,9 @@ class _Other(BaseModel):
 @pytest.mark.parametrize(
     "kwargs,match",
     [
-        ({"params": _Other(), "inputs": {"audio": "x"}}, "_Params"),
+        ({"params": _Other(), "inputs": {"audio": AUDIO}}, "_Params"),
         ({"params": _Params(), "inputs": {}}, "audio"),
-        ({"params": _Params(), "inputs": {"audio": "x", "video": "y"}}, "video"),
+        ({"params": _Params(), "inputs": {"audio": AUDIO, "video": AUDIO}}, "video"),
     ],
     ids=["params_of_another_model", "missing_input", "undeclared_input"],
 )
@@ -195,4 +206,127 @@ def test_key_for_refuses_a_call_off_the_declaration(kwargs: dict[str, Any], matc
 def test_key_for_refuses_a_backend_of_another_task() -> None:
     """The backend must implement the task."""
     with pytest.raises(ValueError, match="t.other"):
-        key_for(_task(), _backend(task="t.other"), params=_Params(), inputs={"audio": "x"})
+        key_for(_task(), _backend(task="t.other"), params=_Params(), inputs={"audio": AUDIO})
+
+
+@pytest.mark.logic
+def test_key_for_puts_the_pinned_model_identity_into_the_key() -> None:
+    """`key_for` takes a resolved model and keys its identity; an unpinned one is refused."""
+    model = ResolvedModel(ref=ModelRef.parse("org/name@main"), identity=COMMIT)
+    key = key_for(_task(), _backend(), params=_Params(), inputs={"audio": AUDIO}, model=model)
+    assert key.model == ModelIdentity(source="hf", id="org/name", identity=COMMIT)
+    unpinned = ResolvedModel(ref=ModelRef.parse("local:/m"), identity="/m", unresolved_reason="not hashed")
+    with pytest.raises(UnpinnedModel):
+        key_for(_task(), _backend(), params=_Params(), inputs={"audio": AUDIO}, model=unpinned)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("bad", ["/home/x/a.wav", "a" * 64, SLICE])
+def test_a5_key_for_refuses_untyped_inputs(bad: str) -> None:
+    """An input that is a path, bare hex or another kind of identity is refused."""
+    with pytest.raises(ValidationError):
+        key_for(_task(), _backend(), params=_Params(), inputs={"audio": bad})
+
+
+class _Colour(str, Enum):
+    RED = "red"
+
+
+class _Mode(Enum):
+    A = "a"
+
+
+class _Level(Enum):
+    LOW = 1
+
+
+class _Inner(TaskParams):
+    n: int = 1
+
+
+class _Plain(BaseModel):
+    n: int = 1
+
+
+_CANONICAL: list[object] = [
+    int,
+    float,
+    str,
+    bool,
+    type(None),
+    Literal["a", 1, None, True],
+    _Colour,
+    _Mode,
+    list[int],
+    tuple[int, ...],
+    tuple[int, str],
+    dict[str, float],
+    Mapping[str, list[str]],
+    int | None,
+    Optional[str],  # noqa: UP045
+    Annotated[int, Field(ge=0)],
+    NonEmptyStr,
+    _Inner,
+]
+
+_NON_CANONICAL: list[object] = [
+    set[str],
+    frozenset[int],
+    Decimal,
+    datetime,
+    date,
+    time,
+    timedelta,
+    Path,
+    bytes,
+    complex,
+    Any,
+    object,
+    list,
+    dict,
+    dict[int, str],
+    Literal[b"x"],
+    _Level,
+    _Plain,
+]
+
+
+def _wrappers() -> list[tuple[str, Callable[[Any], Any]]]:
+    def nested(t: Any) -> Any:  # noqa: ANN401
+        return create_model("_Nested", __base__=TaskParams, v=(t, ...))
+
+    return [
+        ("bare", lambda t: t),
+        ("list", lambda t: list[t]),  # type: ignore[valid-type]
+        ("tuple", lambda t: tuple[t, ...]),  # type: ignore[valid-type]
+        ("pair", lambda t: tuple[int, t]),  # type: ignore[valid-type]
+        ("dict", lambda t: dict[str, t]),  # type: ignore[valid-type]
+        ("mapping", lambda t: Mapping[str, t]),  # type: ignore[valid-type]
+        ("optional", lambda t: t | None),
+        ("annotated", lambda t: Annotated[t, "meta"]),
+        ("nested", nested),
+    ]
+
+
+def _params_with(annotation: object) -> type[BaseModel]:
+    return create_model("_Generated", __base__=TaskParams, field=(annotation, ...))
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("wrap", [w for _, w in _wrappers()], ids=[n for n, _ in _wrappers()])
+@pytest.mark.parametrize("annotation", _CANONICAL, ids=repr)
+def test_canonical_param_types_are_admitted(annotation: object, wrap: Callable[[Any], Any]) -> None:
+    """Every canonical type, in every container position, passes the registry-time check."""
+    check_canonical_params(_params_with(wrap(annotation)))
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("wrap", [w for _, w in _wrappers()], ids=[n for n, _ in _wrappers()])
+@pytest.mark.parametrize("annotation", _NON_CANONICAL, ids=repr)
+def test_a6_registry_refuses_non_canonical_param_types(annotation: object, wrap: Callable[[Any], Any]) -> None:
+    """A type with no single canonical JSON form is refused wherever it sits, naming the field."""
+    registry = Registry()
+    with pytest.raises(NonCanonicalParams, match="_Generated.field"):
+        registry.add_task(_task(params=_params_with(wrap(annotation))))
+    assert registry.tasks() == []
+    assert issubclass(NonCanonicalParams, TypeError)

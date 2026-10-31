@@ -9,10 +9,12 @@ from typing import Any
 import pytest
 import senselab_core.runtime.fake_backend  # noqa: F401  registers fake.echo and its backend
 from pydantic import BaseModel, ConfigDict
+from senselab_core.kernel import declare
 from senselab_core.kernel.declare import REGISTRY, BackendSpec, Registry, TaskParams, TaskSpec, key_for
-from senselab_core.kernel.identity import ExecutionContext, LogicalKey
+from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ResolvedModel
 from senselab_core.runtime.fake_backend import FAKE
 from senselab_core.testing.contracts import NOT_YET_WIRED, NoContractRunner, contract_cases
+from senselab_worker.hashing import sha256_bytes
 
 
 @pytest.mark.contract
@@ -32,6 +34,7 @@ def test_fake_cases_are_listed_by_name() -> None:
         "fake.echo::measure_has_no_verdict",
         "fake::license_present",
         "fake::key_deterministic",
+        "fake::key_independent_of_hash_seed",
         "fake::content_fault_isolated",
     }
     expected |= {f"fake::key_changes_with_{f}" for f in LogicalKey.model_fields}
@@ -67,7 +70,7 @@ def _case(registry: Registry, name: str, **kwargs: Any) -> Callable[[], None]:  
 def test_a_good_declaration_passes_every_offline_case() -> None:
     """The fixture declaration is valid, so the failures below come from the one defect each introduces."""
     for name, case in contract_cases(_registry({})):
-        if name.endswith("content_fault_isolated"):
+        if name.endswith(("content_fault_isolated", "key_independent_of_hash_seed")):
             continue
         try:
             case()
@@ -128,10 +131,10 @@ def _drops_params(task: TaskSpec, backend: BackendSpec, *, params: BaseModel, **
 
 
 def _drops_inputs(task: TaskSpec, backend: BackendSpec, *, inputs: dict[str, str], **call: Any) -> LogicalKey:  # noqa: ANN401
-    return key_for(task, backend, inputs={port: "fixed" for port in task.inputs}, **call)
+    return key_for(task, backend, inputs={port: "content:" + "0" * 64 for port in task.inputs}, **call)
 
 
-def _drops_model(task: TaskSpec, backend: BackendSpec, *, model: str | None, **call: Any) -> LogicalKey:  # noqa: ANN401
+def _drops_model(task: TaskSpec, backend: BackendSpec, *, model: ResolvedModel | None, **call: Any) -> LogicalKey:  # noqa: ANN401
     return key_for(task, backend, **call)
 
 
@@ -183,3 +186,51 @@ def test_importing_the_contracts_module_registers_nothing() -> None:
         "assert REGISTRY.tasks() == [], REGISTRY.tasks()\n"
     )
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+class _Tagged(TaskParams):
+    tags: set[str] = {f"tag-{i}" for i in range(16)}
+
+
+def _seed_dependent(task: TaskSpec, backend: BackendSpec, *, inputs: dict[str, str], **call: Any) -> LogicalKey:  # noqa: ANN401
+    salted = {port: "content:" + sha256_bytes(str(hash(port)).encode()) for port in inputs}
+    return key_for(task, backend, inputs=salted, **call)
+
+
+@pytest.mark.contract
+def test_hash_seed_case_passes_for_the_good_declaration() -> None:
+    """The fixture declaration's key is the same under both hash seeds."""
+    _case(_registry({}), "fake::key_independent_of_hash_seed")()
+
+
+@pytest.mark.contract
+def test_hash_seed_case_catches_a_seed_dependent_builder() -> None:
+    """A key builder that reads `hash()` gives two digests under two seeds, and the case says so."""
+    case = _case(_registry({}), "fake::key_independent_of_hash_seed", key_builder=_seed_dependent)
+    with pytest.raises(AssertionError, match="hash seed"):
+        case()
+
+
+@pytest.mark.contract
+def test_a6_set_params_are_refused_and_caught_if_declared_anyway(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The probe: a `set[str]` param keyed differently under each hash seed.
+
+    The registry refuses the type; a registry that skipped that check would still fail the generated case.
+    """
+    with pytest.raises(declare.NonCanonicalParams, match="tags"):
+        _registry({"params": _Tagged})
+    monkeypatch.setattr(declare, "check_canonical_params", lambda model: None)
+    case = _case(_registry({"params": _Tagged}), "fake::key_independent_of_hash_seed")
+    with pytest.raises(AssertionError, match="hash seed"):
+        case()
+
+
+@pytest.mark.logic
+def test_hash_seed_case_needs_importable_declarations() -> None:
+    """A params model defined inside a function cannot be imported by name, and the case says so."""
+
+    class Local(TaskParams):
+        salt: str = ""
+
+    with pytest.raises(AssertionError, match="module level"):
+        _case(_registry({"params": Local}), "fake::key_independent_of_hash_seed")()

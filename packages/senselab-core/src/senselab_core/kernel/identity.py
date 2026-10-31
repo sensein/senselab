@@ -1,15 +1,22 @@
 """Identity v2: model references, logical keys, execution context and reuse policy (ADR-002, P-38)."""
 
-import json
 import re
 from collections.abc import Mapping
 from enum import Enum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self, assert_never
 from urllib.parse import urlsplit
 
-from pydantic import AfterValidator, BeforeValidator, Field, PlainSerializer, Strict, model_validator
-from senselab_worker.canonical import jcs_dumps
-from senselab_worker.hashing import sha256_bytes
+from pydantic import (
+    AfterValidator,
+    BeforeValidator,
+    Field,
+    PlainSerializer,
+    PrivateAttr,
+    Strict,
+    StringConstraints,
+    model_validator,
+)
+from senselab_worker.canonical import jcs_dumps, jcs_loads, tagged_digest
 
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap
 from senselab_core.kernel.license import License
@@ -19,6 +26,29 @@ _HF_REF = re.compile(r"[^\s@]+")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _URL_HASH = "#sha256="
+
+ContentIdentity = Annotated[str, StringConstraints(pattern=r"^content:[0-9a-f]{64}$")]
+"""The identity of source bytes: `content:` and a 64-hex digest."""
+
+OutputIdentity = Annotated[str, StringConstraints(pattern=r"^output:[0-9a-f]{64}$")]
+"""The identity of a stored result's outputs: `output:` and a 64-hex digest."""
+
+InputIdentity = ContentIdentity | OutputIdentity
+"""What a logical key's input names: source content or an upstream output."""
+
+ProfileSliceIdentity = Annotated[str, StringConstraints(pattern=r"^profile:[0-9a-f]{64}$")]
+"""The identity of a profile slice a call reads: `profile:` and a 64-hex digest."""
+
+
+class UnpinnedModel(ValueError):
+    """A model whose identity does not pin its weights was asked for a key identity."""
+
+
+def _pinned_identity_error(source: str, identity: str) -> str | None:
+    pattern, form = (_COMMIT, "a 40-hex commit") if source == "hf" else (_SHA256, "a sha256")
+    if pattern.fullmatch(identity):
+        return None
+    return f"a pinned {source} model's identity is {form}, got {identity!r}"
 
 
 class ModelRef(Frozen):
@@ -97,16 +127,42 @@ class ResolvedModel(Frozen):
 
     @model_validator(mode="after")
     def _check_identity(self) -> "ResolvedModel":
-        if self.unresolved_reason is None:
-            pattern, form = (_COMMIT, "a 40-hex commit") if self.ref.source == "hf" else (_SHA256, "a sha256")
-            if not pattern.fullmatch(self.identity):
-                raise ValueError(f"a pinned {self.ref.source} model's identity is {form}, got {self.identity!r}")
+        if self.unresolved_reason is None and (error := _pinned_identity_error(self.ref.source, self.identity)):
+            raise ValueError(error)
         return self
 
     @property
     def pinned(self) -> bool:
         """Whether the identity pins the weights."""
         return self.unresolved_reason is None
+
+    def key_identity(self) -> "ModelIdentity":
+        """Return the model's identity as a logical key holds it.
+
+        Raises:
+            UnpinnedModel: if the model is not pinned.
+        """
+        if not self.pinned:
+            raise UnpinnedModel(f"{self.ref} is not pinned ({self.unresolved_reason}); it cannot enter a key")
+        return ModelIdentity(source=self.ref.source, id=self.ref.id, identity=self.identity)
+
+
+class ModelIdentity(Frozen):
+    """A pinned model's identity in a logical key: its source, id and weight identity.
+
+    Built by `ResolvedModel.key_identity`; validation applies the same pinning rule, so `identity`
+    is a 40-hex commit for `hf` and a sha256 otherwise.
+    """
+
+    source: Literal["hf", "url", "local"]
+    id: NonEmptyStr
+    identity: NonEmptyStr
+
+    @model_validator(mode="after")
+    def _check_pinned(self) -> "ModelIdentity":
+        if error := _pinned_identity_error(self.source, self.identity):
+            raise ValueError(error)
+        return self
 
 
 def _thaw(v: object) -> object:
@@ -129,7 +185,7 @@ def _canonical_params(v: object) -> object:
     if not isinstance(v, Mapping):
         raise ValueError(f"params must be a JSON object, got {type(v).__name__}")
     try:
-        return json.loads(jcs_dumps(_thaw(v)))
+        return jcs_loads(jcs_dumps(_thaw(v)))
     except TypeError as e:
         raise ValueError(f"params must be canonical JSON: {e}") from e
 
@@ -146,9 +202,11 @@ Params = Annotated[
 class LogicalKey(Frozen):
     """The exact, portable identity of a task call (ADR-002).
 
-    `model` is the weight identity; `params` is canonicalised (NFC strings, JCS numbers) at
-    construction and refused if it is not JSON; `inputs` maps input names to content or upstream
-    output identities. No execution context, code or environment is part of the key.
+    `model` is a pinned model's identity; `params` is canonicalised (NFC strings, JCS numbers) at
+    construction and refused if it is not JSON; `inputs` maps input names to `content:` or
+    `output:` identities and `profile_slices` slice names to `profile:` identities. The digest is
+    computed at construction, so a key that validates can be digested. No execution context, code
+    or environment is part of the key.
     """
 
     schema_version: Annotated[int, Strict(), Field(ge=1)] = 1
@@ -156,16 +214,29 @@ class LogicalKey(Frozen):
     task_version: NonEmptyStr
     backend: NonEmptyStr
     backend_version: NonEmptyStr
-    model: NonEmptyStr | None
+    model: ModelIdentity | None
     params: Params
-    inputs: StrMap
-    profile_slices: StrMap = FrozenMapping({})
+    inputs: Annotated[Mapping[str, InputIdentity], AfterValidator(FrozenMapping), PlainSerializer(dict)]
+    profile_slices: Annotated[
+        Mapping[str, ProfileSliceIdentity], AfterValidator(FrozenMapping), PlainSerializer(dict)
+    ] = FrozenMapping({})
     batch_formation: NonEmptyStr | None = None
     chunk_grid: NonEmptyStr | None = None
 
+    _digest: str = PrivateAttr()
+
+    @model_validator(mode="after")
+    def _compute_digest(self) -> "LogicalKey":
+        self._digest = tagged_digest("logical-key@2", self.model_dump())
+        return self
+
+    def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
+        """Return a copy with `update` applied, validated and digested like a new key."""
+        return type(self).model_validate({**self.model_dump(), **(update or {})})
+
     def digest(self) -> str:
-        """Return the sha256 hex of the JCS of the key's fields."""
-        return sha256_bytes(jcs_dumps(self.model_dump()))
+        """Return `tagged_digest("logical-key@2", fields)`, computed at construction."""
+        return self._digest
 
 
 class ExecutionContext(Frozen):
@@ -184,8 +255,8 @@ class ExecutionContext(Frozen):
     protocol: NonEmptyStr
 
     def fingerprint(self) -> str:
-        """Return the sha256 hex of the JCS of every field except `host` and `protocol`."""
-        return sha256_bytes(jcs_dumps(self.model_dump(exclude={"host", "protocol"})))
+        """Return `tagged_digest("context@2", fields)` over every field except `host` and `protocol`."""
+        return tagged_digest("context@2", self.model_dump(exclude={"host", "protocol"}))
 
 
 class ReusePolicy(str, Enum):
@@ -202,15 +273,24 @@ EQUIVALENCE: Mapping[str, Mapping[str, frozenset[str]]] = {}
 """Measured equivalence classes per backend: backend name to class name to the context fingerprints in it."""
 
 
-def acceptable(stored: ExecutionContext, current: ExecutionContext, policy: ReusePolicy, *, backend: str) -> bool:
+def acceptable(stored: ExecutionContext, current: ExecutionContext, policy: ReusePolicy | str, *, backend: str) -> bool:
     """Return whether a result `backend` computed in `stored` may be reused in `current` under `policy`.
 
-    `exact` needs equal fingerprints; `equivalent` also accepts two fingerprints in one of the
-    backend's classes in `EQUIVALENCE`; `tolerant` accepts any context.
+    `policy` is coerced with `ReusePolicy(policy)`. `exact` needs equal fingerprints; `equivalent`
+    also accepts two fingerprints in one of the backend's classes in `EQUIVALENCE`; `tolerant`
+    accepts any context.
+
+    Raises:
+        ValueError: if `policy` is not a `ReusePolicy` value.
     """
-    if policy is ReusePolicy.TOLERANT:
-        return True
+    policy = ReusePolicy(policy)
     a, b = stored.fingerprint(), current.fingerprint()
-    if policy is ReusePolicy.EXACT or a == b:
-        return a == b
-    return any(a in members and b in members for members in EQUIVALENCE.get(backend, {}).values())
+    match policy:
+        case ReusePolicy.TOLERANT:
+            return True
+        case ReusePolicy.EXACT:
+            return a == b
+        case ReusePolicy.EQUIVALENT:
+            return a == b or any(a in members and b in members for members in EQUIVALENCE.get(backend, {}).values())
+        case _:
+            assert_never(policy)

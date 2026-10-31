@@ -1,15 +1,26 @@
 """Canonical JSON (RFC 8785) and canonical .npy bytes."""
 
+import hashlib
 import io
 import json
 import struct
 import unicodedata
+import warnings
+from enum import Enum
+from typing import Any
 
 import numpy
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
+from senselab_worker.canonical import (
+    DIGEST_TAGS,
+    canonical_npy_bytes,
+    canonical_scalar,
+    jcs_dumps,
+    jcs_loads,
+    tagged_digest,
+)
 
 
 @pytest.mark.logic
@@ -165,7 +176,7 @@ def test_canonical_npy_is_little_endian_c_order() -> None:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("dtype", ["<f4", ">f8", "|u1", "?", ">i2", "<c16", "<U3", "<M8[ns]"])
+@pytest.mark.parametrize("dtype", ["<f4", ">f8", "|u1", "?", ">i2", "<U3"])
 def test_canonical_npy_round_trips_and_ignores_layout(dtype: str) -> None:
     """Equal arrays give equal bytes whatever their byte order or memory layout."""
     base = numpy.arange(12).reshape(3, 4).astype(dtype)
@@ -213,3 +224,243 @@ def test_canonical_npy_refuses_platform_specific_dtypes(dtype: type) -> None:
     """Extended-precision dtypes, whose layout varies by platform, are refused."""
     with pytest.raises(ValueError):
         canonical_npy_bytes(numpy.zeros(2, dtype=dtype))
+
+
+# The exact-type whitelist
+
+
+def _numpy_scalar_types() -> list[type]:
+    """Every subclass of `numpy.generic`, abstract ones included, found by walking the hierarchy."""
+    found: list[type] = []
+    stack: list[type] = [numpy.generic]
+    while stack:
+        t = stack.pop()
+        if t not in found:
+            found.append(t)
+            stack.extend(t.__subclasses__())
+    return found
+
+
+_SAMPLE_SOURCES: list[object] = [
+    0,
+    1,
+    -3,
+    0.5,
+    -2.25,
+    1e20,
+    True,
+    "a",
+    "é",
+    b"ab",
+    1 + 2j,
+    numpy.datetime64("NaT"),
+    numpy.datetime64("2020-01-01"),
+    numpy.datetime64(1, "ns"),
+    numpy.timedelta64("NaT"),
+    numpy.timedelta64(1, "ns"),
+    numpy.timedelta64(1, "ps"),
+    numpy.zeros(1, dtype=[("a", "<i4")])[0],
+    numpy.void(b"ab"),
+    numpy.clongdouble(1 + 2j),
+    numpy.longdouble(0.5),
+]
+
+
+def _samples_of(t: type) -> list[object]:
+    """Instances of exactly `t`: each source converted by `t`, plus the sources already of type `t`."""
+    out: list[object] = [v for v in _SAMPLE_SOURCES if type(v) is t]
+    with warnings.catch_warnings(), numpy.errstate(all="ignore"):
+        warnings.simplefilter("ignore")
+        for source in _SAMPLE_SOURCES:
+            try:
+                v = t(source)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if type(v) is t:
+                out.append(v)
+    return out
+
+
+@pytest.mark.logic
+def test_every_numpy_generic_type_raises_or_encodes_exactly() -> None:
+    """Every numpy scalar type is refused, or encodes as exactly the Python value `.item()` returns."""
+    concrete = 0
+    for t in _numpy_scalar_types():
+        samples = _samples_of(t)
+        concrete += bool(samples)
+        for v in samples:
+            try:
+                b = jcs_dumps(v)
+            except (TypeError, ValueError):
+                continue
+            assert t.__module__ == "numpy" and numpy.dtype(t).kind in "biufU", t
+            item = v.item()  # type: ignore[attr-defined]
+            assert type(item) in (bool, int, float, str), t
+            decoded: Any = jcs_loads(b)
+            assert decoded == item and decoded == v, (t, v, b)
+            assert type(decoded) is type(item) or (type(item) is float and float(decoded) == item), (t, v)
+    assert concrete >= 20, f"only {concrete} numpy scalar types had samples; the walk is not covering numpy"
+
+
+class _IntEnum(int, Enum):
+    A = 1
+
+
+class _StrEnum(str, Enum):
+    A = "a"
+
+
+class _Int(int):
+    pass
+
+
+class _Str(str):
+    pass
+
+
+class _List(list):  # type: ignore[type-arg]
+    pass
+
+
+class _Dict(dict):  # type: ignore[type-arg]
+    pass
+
+
+class _Int64(numpy.int64):
+    pass
+
+
+_LOSSY = [
+    numpy.datetime64("NaT"),
+    numpy.datetime64("2020-01-01"),
+    numpy.timedelta64(1, "ns"),
+    numpy.timedelta64(1, "ps"),
+    numpy.ma.array([1, 2], mask=[0, 1]),
+    _IntEnum.A,
+    _StrEnum.A,
+    _Int(1),
+    _Str("a"),
+    _List([1]),
+    _Dict(a=1),
+    _Int64(1),
+    numpy.zeros(1, dtype=[("a", "<i4")])[0],
+    numpy.void(b"ab"),
+    numpy.complex128(1 + 2j),
+    numpy.longdouble(0.5),
+    numpy.bytes_(b"a"),
+    1 + 2j,
+    b"bytes",
+]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("v", _LOSSY, ids=lambda v: type(v).__qualname__)
+def test_a4_lossy_values_refused(v: object) -> None:
+    """A value whose JSON form would lose its type or unit is refused, at top level and nested."""
+    for wrapped in (v, {"a": v}, [v], ({"b": [v]},)):
+        with pytest.raises(TypeError):
+            jcs_dumps(wrapped)
+    with pytest.raises(TypeError):
+        canonical_scalar(v)
+
+
+@pytest.mark.logic
+def test_a4_nat_and_none_never_share_bytes() -> None:
+    """The probe: NaT encoded as null, and timedelta64 of any unit as its integer."""
+    assert jcs_dumps({"a": None}) == b'{"a":null}'
+    for v in (numpy.datetime64("NaT"), numpy.timedelta64(1, "ns"), numpy.timedelta64(1, "ps")):
+        with pytest.raises(TypeError):
+            jcs_dumps({"a": v})
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("key", [_StrEnum.A, _Str("a"), numpy.str_("a")], ids=lambda k: type(k).__qualname__)
+def test_jcs_object_keys_are_exactly_str(key: object) -> None:
+    """An object key must be exactly `str`; subclasses and numpy strings are refused."""
+    with pytest.raises(TypeError):
+        jcs_dumps({key: 1})
+
+
+@pytest.mark.logic
+def test_jcs_refuses_cycles() -> None:
+    """A container that contains itself raises `ValueError` instead of recursing; shared children are fine."""
+    a: list[object] = [1]
+    a.append(a)
+    d: dict[str, object] = {}
+    d["self"] = d
+    for cyclic in (a, d, [{"x": d}]):
+        with pytest.raises(ValueError, match="contains itself"):
+            jcs_dumps(cyclic)
+    shared = [1, 2]
+    assert jcs_dumps([shared, shared]) == b"[[1,2],[1,2]]"
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "array",
+    [
+        numpy.ma.array([1, 2, 3], mask=[0, 0, 1]),
+        numpy.arange(3).view(numpy.matrix),
+        numpy.zeros(2, dtype="<c16"),
+        numpy.zeros(2, dtype="<M8[ns]"),
+        numpy.zeros(2, dtype="<m8[ps]"),
+        numpy.zeros(2, dtype="|S2"),
+        numpy.zeros(2, dtype="|V4"),
+    ],
+    ids=["masked", "matrix", "complex", "datetime", "timedelta", "bytes", "void"],
+)
+def test_a4_canonical_npy_refuses_subclasses_and_lossy_kinds(array: numpy.ndarray) -> None:
+    """Only a plain `ndarray` of kind `b i u f U` has a canonical `.npy`; a masked array never encodes its fill."""
+    with pytest.raises((TypeError, ValueError)):
+        canonical_npy_bytes(array)
+
+
+_ANY_FLOAT = st.floats(allow_nan=False, allow_infinity=False)
+_ACCEPTED = st.recursive(
+    st.none() | st.booleans() | _I_JSON_INTS | _ANY_FLOAT | _NFC_TEXT,
+    lambda children: st.lists(children) | st.tuples(children, children) | st.dictionaries(_NFC_TEXT, children),
+    max_leaves=20,
+)
+
+
+@pytest.mark.logic
+@given(_ACCEPTED)
+def test_jcs_round_trips_every_accepted_value(v: object) -> None:
+    """Every value `jcs_dumps` accepts, integral floats beyond 2**53 included, survives `jcs_loads` byte for byte."""
+    assert jcs_dumps(jcs_loads(jcs_dumps(v))) == jcs_dumps(v)
+
+
+@pytest.mark.logic
+def test_a24_large_integral_float_parses_back_as_a_float() -> None:
+    """The probe: `1e20` serialises as an integer literal, which `jcs_loads` reads back as the float it was."""
+    assert jcs_dumps(1e20) == b"100000000000000000000"
+    back = jcs_loads(b"100000000000000000000")
+    assert type(back) is float and back == 1e20
+    assert type(jcs_loads(b"9007199254740991")) is int
+
+
+@pytest.mark.logic
+def test_digest_tags_distinct_and_prefix_free() -> None:
+    """No registered tag is a prefix of another, and each is ASCII with a `@<major>`."""
+    tags = sorted(DIGEST_TAGS)
+    assert all(not b.startswith(a) for a in tags for b in tags if a != b)
+    assert all(t.isascii() and "\x00" not in t and "@" in t for t in tags)
+
+
+@pytest.mark.logic
+def test_tagged_digest_separates_domains() -> None:
+    """One value under every tag gives as many digests, none of them the bare sha256 of its JCS."""
+    value = {"a": [1, "x"]}
+    digests = {tagged_digest(t, value) for t in DIGEST_TAGS}
+    assert len(digests) == len(DIGEST_TAGS)
+    assert hashlib.sha256(jcs_dumps(value)).hexdigest() not in digests
+    for tag in DIGEST_TAGS:
+        assert tagged_digest(tag, value) == hashlib.sha256(tag.encode() + b"\x00" + jcs_dumps(value)).hexdigest()
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("tag", ["", "output", "output@3", "logical-key@2\x00", "nope@1"])
+def test_tagged_digest_refuses_unregistered_tags(tag: str) -> None:
+    """Only a registered tag may name a digest domain."""
+    with pytest.raises(ValueError, match="unregistered"):
+        tagged_digest(tag, 1)

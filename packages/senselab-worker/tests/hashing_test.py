@@ -5,8 +5,7 @@ import os
 from pathlib import Path
 
 import pytest
-from senselab_worker.canonical import jcs_dumps
-from senselab_worker.hashing import content_identity, sha256_bytes, weights_identity
+from senselab_worker.hashing import DIGEST_TAGS, content_identity, sha256_bytes, tagged_digest, weights_identity
 
 
 @pytest.mark.logic
@@ -17,11 +16,11 @@ def test_sha256_bytes_is_hex_digest() -> None:
 
 @pytest.mark.logic
 def test_content_identity_chunks(tmp_path: Path) -> None:
-    """A 10-byte file in 4-byte chunks has three chunk hashes and a root over their concatenation."""
+    """A 10-byte file in 4-byte chunks has three chunk hashes and a tagged root over them and the chunk size."""
     p = tmp_path / "x.bin"
     p.write_bytes(b"a" * 10)
     cid = content_identity(p, chunk_size=4)
-    assert len(cid["chunks"]) == 3 and cid["root"] == sha256_bytes("".join(cid["chunks"]).encode())
+    assert cid["root"] == tagged_digest("content-root@2", {"chunk_size": 4, "chunks": cid["chunks"]})
     assert cid["chunks"] == [sha256_bytes(b"aaaa"), sha256_bytes(b"aaaa"), sha256_bytes(b"aa")]
     assert cid["algo"] == "sha256" and cid["chunk_size"] == 4
 
@@ -32,7 +31,8 @@ def test_content_identity_default_chunk_size_and_empty_file(tmp_path: Path) -> N
     p = tmp_path / "empty.bin"
     p.write_bytes(b"")
     cid = content_identity(p)
-    assert cid == {"algo": "sha256", "chunk_size": 64 * 2**20, "chunks": [], "root": sha256_bytes(b"")}
+    root = tagged_digest("content-root@2", {"chunk_size": 64 * 2**20, "chunks": []})
+    assert cid == {"algo": "sha256", "chunk_size": 64 * 2**20, "chunks": [], "root": root}
 
 
 @pytest.mark.logic
@@ -71,11 +71,11 @@ def test_weights_identity_ignores_listing_order(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_weights_identity_is_jcs_of_sorted_pairs(tmp_path: Path) -> None:
-    """The identity hashes the JCS of sorted [POSIX relpath, file sha256] pairs."""
+def test_weights_identity_is_tagged_digest_of_sorted_pairs(tmp_path: Path) -> None:
+    """The identity is the `weights@2` digest of sorted [POSIX relpath, file sha256] pairs."""
     root = _weights_dir(tmp_path)
-    expected = sha256_bytes(
-        jcs_dumps([["config.json", sha256_bytes(b"{}")], ["sub/w.bin", sha256_bytes(b"\x00\x01\x02")]])
+    expected = tagged_digest(
+        "weights@2", [["config.json", sha256_bytes(b"{}")], ["sub/w.bin", sha256_bytes(b"\x00\x01\x02")]]
     )
     assert weights_identity([root / "sub" / "w.bin", root / "config.json"], root=root) == expected
 
@@ -101,7 +101,7 @@ def test_weights_identity_hashes_symlink_targets_under_root_names(tmp_path: Path
     root = tmp_path / "snapshot"
     root.mkdir()
     os.symlink(blob, root / "model.bin")
-    expected = sha256_bytes(jcs_dumps([["model.bin", sha256_bytes(b"weights")]]))
+    expected = tagged_digest("weights@2", [["model.bin", sha256_bytes(b"weights")]])
     assert weights_identity([root / "model.bin"], root=root) == expected
 
 
@@ -124,7 +124,7 @@ def test_weights_identity_normalises_names_to_nfc(tmp_path: Path) -> None:
     root.mkdir()
     nfd = "café.bin"
     (root / nfd).write_bytes(b"w")
-    expected = sha256_bytes(jcs_dumps([["café.bin", sha256_bytes(b"w")]]))
+    expected = tagged_digest("weights@2", [["café.bin", sha256_bytes(b"w")]])
     assert weights_identity([root / nfd], root=root) == expected
     with pytest.raises(ValueError):
         weights_identity([root / nfd, root / "café.bin"], root=root)
@@ -138,4 +138,22 @@ def test_weights_identity_sorts_by_utf16_code_units(tmp_path: Path) -> None:
     for name in ("ﬁ.bin", "\U0001f600.bin"):
         (root / name).write_bytes(name.encode())
     pairs = [[n, sha256_bytes(n.encode())] for n in ("\U0001f600.bin", "ﬁ.bin")]
-    assert weights_identity([root / "ﬁ.bin", root / "\U0001f600.bin"], root=root) == sha256_bytes(jcs_dumps(pairs))
+    assert weights_identity([root / "ﬁ.bin", root / "\U0001f600.bin"], root=root) == tagged_digest("weights@2", pairs)
+
+
+@pytest.mark.logic
+def test_a31_content_root_covers_chunk_size(tmp_path: Path) -> None:
+    """The same bytes read in two chunk sizes have two roots, even where the chunk lists coincide."""
+    p = tmp_path / "x.bin"
+    p.write_bytes(b"abc")
+    roots = {content_identity(p, chunk_size=n)["root"] for n in (3, 4, 2**20)}
+    assert len(roots) == 3
+    empty = tmp_path / "empty.bin"
+    empty.write_bytes(b"")
+    assert content_identity(empty, chunk_size=1)["root"] != content_identity(empty, chunk_size=2)["root"]
+
+
+@pytest.mark.logic
+def test_hashing_uses_registered_tags() -> None:
+    """The tags `hashing` digests under are registered."""
+    assert {"content-root@2", "weights@2"} <= DIGEST_TAGS

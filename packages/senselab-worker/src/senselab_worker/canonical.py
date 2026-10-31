@@ -1,72 +1,153 @@
-"""Canonical byte forms of JSON values and numpy arrays (ADR-006).
+"""Canonical byte forms of JSON values and numpy arrays, and the tagged digest over them (ADR-006).
 
 `jcs_dumps` writes RFC 8785 (JCS) JSON with strings in Unicode NFC; `canonical_npy_bytes` writes
-`.npy` version 1.0, C order, little-endian.
+`.npy` version 1.0, C order, little-endian; `tagged_digest` hashes a JSON value under a registered
+domain tag. Both encoders accept an exact-type whitelist and refuse everything else.
 """
 
+import hashlib
 import json
 import math
 import struct
 import unicodedata
-from typing import Callable
+from typing import Callable, cast
 
 import numpy
 
 _MAX_SAFE_INT = 2**53 - 1
 _PLATFORM_DTYPE_CHARS = "gG"
+_CANONICAL_KINDS = "biufU"
+_PY_SCALARS = (type(None), bool, int, float, str)
 _NPY_MAGIC = b"\x93NUMPY\x01\x00"
 _NPY_ALIGN = 64
+
+DIGEST_TAGS: frozenset[str] = frozenset(
+    {
+        "logical-key@2",
+        "output@2",
+        "context@2",
+        "content-root@2",
+        "audio@2",
+        "weights@2",
+        "value@1",
+        "data-manifest@2",
+    }
+)
+"""The registered domain tags of `tagged_digest`; no tag is a prefix of another."""
+
+Scalar = None | bool | int | float | str
+
+
+def canonical_scalar(v: object) -> Scalar:
+    """Return `v` as the exact Python JSON scalar it encodes, dispatching on `type(v)` exactly.
+
+    `None`, `bool`, `int`, `float` and `str` pass unchanged. A numpy scalar passes as its `.item()`
+    only if its type is defined by numpy itself, its dtype kind is one of `b i u f U`, and its
+    `.item()` is one of those Python types (so `longdouble` is refused).
+
+    Raises:
+        TypeError: on any other value: subclasses (including `Enum` members with a scalar mix-in),
+            `datetime64`, `timedelta64`, `void`, complex, bytes and object scalars.
+    """
+    t = type(v)
+    if t in _PY_SCALARS:
+        return v  # type: ignore[return-value]
+    if isinstance(v, numpy.generic) and t.__module__ == "numpy" and v.dtype.kind in _CANONICAL_KINDS:
+        item = v.item()
+        if type(item) in _PY_SCALARS:
+            return item  # type: ignore[no-any-return]
+    raise TypeError(f"not a canonical JSON scalar: {t.__module__}.{t.__qualname__}")
 
 
 def jcs_dumps(obj: object) -> bytes:
     """Serialise a JSON value as RFC 8785 canonical UTF-8 bytes.
 
-    Accepts None, bool, int, float, str, lists, tuples, dicts with str keys and numpy scalars
-    (converted with `.item()`). Strings and keys are NFC-normalised; keys sort by UTF-16 code units.
+    Containers are exactly `list`, `tuple` and `dict` with `str` keys; scalars are what
+    `canonical_scalar` accepts. Strings and keys are NFC-normalised; keys sort by UTF-16 code units.
 
     Raises:
         ValueError: on a NaN or infinite float, an integer outside +/-(2**53 - 1), a string that
-            is not valid Unicode, or two keys of one object that are equal after NFC.
-        TypeError: on any other type, including non-string keys and numpy arrays.
+            is not valid Unicode, two keys of one object that are equal after NFC, or a container
+            that contains itself.
+        TypeError: on any other type, including container subclasses, non-`str` keys and arrays.
     """
     parts: list[str] = []
-    _write(obj, parts.append)
+    _write(obj, parts.append, set())
     return "".join(parts).encode("utf-8")
 
 
-def _write(obj: object, out: Callable[[str], object]) -> None:
-    if isinstance(obj, numpy.generic):
-        obj = obj.item()
-    if obj is None:
+def jcs_loads(data: bytes | str) -> object:
+    """Parse JCS bytes back to the value `jcs_dumps` wrote them from.
+
+    An integer literal outside +/-(2**53 - 1) can only come from a float, so it parses as that
+    float; `jcs_dumps(jcs_loads(b)) == b` for every `b` that `jcs_dumps` returns.
+
+    Raises:
+        ValueError: on text that is not JSON, or on `NaN` and `Infinity` literals.
+    """
+    return json.loads(data, parse_int=_parse_int, parse_constant=_refuse_constant)
+
+
+def _parse_int(text: str) -> int | float:
+    value = int(text)
+    return value if abs(value) <= _MAX_SAFE_INT else float(text)
+
+
+def _refuse_constant(text: str) -> object:
+    raise ValueError(f"non-finite number is not JSON: {text}")
+
+
+def tagged_digest(tag: str, value: object) -> str:
+    """Return the sha256 hex of `tag` in ASCII, a zero byte and the JCS of `value`.
+
+    Raises:
+        ValueError: if `tag` is not in `DIGEST_TAGS`, or `jcs_dumps` refuses `value`.
+        TypeError: if `jcs_dumps` refuses `value`.
+    """
+    if tag not in DIGEST_TAGS:
+        raise ValueError(f"unregistered digest tag {tag!r}; registered: {sorted(DIGEST_TAGS)}")
+    return hashlib.sha256(tag.encode("ascii") + b"\x00" + jcs_dumps(value)).hexdigest()
+
+
+def _write(obj: object, out: Callable[[str], object], active: set[int]) -> None:
+    t = type(obj)
+    if t is list or t is tuple or t is dict:
+        if id(obj) in active:
+            raise ValueError(f"a {t.__name__} contains itself; JSON has no cycles")
+        active.add(id(obj))
+        try:
+            if t is dict:
+                _write_object(cast("dict[object, object]", obj), out, active)
+            else:
+                out("[")
+                for i, item in enumerate(cast("list[object] | tuple[object, ...]", obj)):
+                    if i:
+                        out(",")
+                    _write(item, out, active)
+                out("]")
+        finally:
+            active.discard(id(obj))
+        return
+    scalar = canonical_scalar(obj)
+    if scalar is None:
         out("null")
-    elif obj is True:
+    elif scalar is True:
         out("true")
-    elif obj is False:
+    elif scalar is False:
         out("false")
-    elif isinstance(obj, int):
-        out(_int_text(obj))
-    elif isinstance(obj, float):
-        out(_float_text(obj))
-    elif isinstance(obj, str):
-        out(_string_text(obj))
-    elif isinstance(obj, (list, tuple)):
-        out("[")
-        for i, item in enumerate(obj):
-            if i:
-                out(",")
-            _write(item, out)
-        out("]")
-    elif isinstance(obj, dict):
-        _write_object(obj, out)
+    elif type(scalar) is int:
+        out(_int_text(scalar))
+    elif type(scalar) is float:
+        out(_float_text(scalar))
     else:
-        raise TypeError(f"not a JSON value: {type(obj).__name__}")
+        out(_string_text(scalar))  # type: ignore[arg-type]
 
 
-def _write_object(obj: dict[object, object], out: Callable[[str], object]) -> None:
+def _write_object(obj: dict[object, object], out: Callable[[str], object], active: set[int]) -> None:
     members: dict[str, object] = {}
     for key, value in obj.items():
-        if not isinstance(key, str):
-            raise TypeError(f"JSON object key is not a string: {type(key).__name__}")
+        if type(key) is not str:
+            raise TypeError(f"JSON object key is not a str: {type(key).__qualname__}")
         nfc = unicodedata.normalize("NFC", key)
         if nfc in members:
             raise ValueError(f"duplicate JSON object key after NFC: {nfc!r}")
@@ -77,7 +158,7 @@ def _write_object(obj: dict[object, object], out: Callable[[str], object]) -> No
             out(",")
         out(_string_text(key))
         out(":")
-        _write(members[key], out)
+        _write(members[key], out, active)
     out("}")
 
 
@@ -131,11 +212,14 @@ def canonical_npy_bytes(a: numpy.ndarray) -> bytes:
     The header is numpy's version 1.0 dict, space-padded so the data starts on a 64-byte boundary.
 
     Raises:
-        ValueError: on an object or structured dtype, or on `longdouble`/`clongdouble`, whose
+        TypeError: if `a` is not exactly a `numpy.ndarray` (masked arrays and other subclasses).
+        ValueError: on a dtype whose kind is not one of `b i u f U`, or on `longdouble`, whose
             itemsize and byte layout differ between platforms.
     """
-    if a.dtype.hasobject or a.dtype.fields is not None:
-        raise ValueError(f"object and structured dtypes have no canonical form: {a.dtype}")
+    if type(a) is not numpy.ndarray:
+        raise TypeError(f"not a plain numpy.ndarray: {type(a).__module__}.{type(a).__qualname__}")
+    if a.dtype.kind not in _CANONICAL_KINDS or a.dtype.fields is not None:
+        raise ValueError(f"dtype has no canonical form: {a.dtype}")
     if a.dtype.char in _PLATFORM_DTYPE_CHARS:
         raise ValueError(f"platform-specific dtype has no canonical form: {a.dtype.name}")
     dtype = a.dtype.newbyteorder("<")

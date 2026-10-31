@@ -23,12 +23,17 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from senselab_worker.canonical import jcs_dumps
+
 from senselab_core.runtime.locks import SharedFileLock
 from senselab_core.runtime.retry import retry_on_transient_error
 
 logger = logging.getLogger("senselab")
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+MANIFEST_NAME = "resolutions@2.json"
+"""The run manifest's file name; its `@<major>` is the format of its keys (`manifest_key`)."""
 
 # Process-local. _RUN_ID caches the run identity; _MEMO avoids re-reading the
 # manifest from disk for a pair already resolved in this process.
@@ -46,8 +51,8 @@ class RevisionResolutionError(RuntimeError):
 
 
 def manifest_key(repo_id: str, ref: str) -> str:
-    """Return the manifest key for a ``(repo_id, ref)`` pair."""
-    return f"{repo_id}@{ref}"
+    """Return the manifest key for a ``(repo_id, ref)`` pair: the JCS text of ``[repo_id, ref]``."""
+    return jcs_dumps([repo_id, ref]).decode()
 
 
 def run_id() -> str:
@@ -79,7 +84,7 @@ def run_id() -> str:
       they must resolve independently.
     - **Job-id reuse (known edge, unmitigated).** Slurm ids wrap at ``MaxJobId`` and reset when a
       controller is reinstalled, and nothing garbage-collects ``runs/``. A recycled id can
-      therefore land on a months-old ``runs/<jobid>/resolutions.json`` and adopt its SHAs as
+      therefore land on a months-old ``runs/<jobid>/`` manifest and adopt its SHAs as
       authoritative — confidently wrong provenance, which the module docstring names as the
       outcome worse than no provenance at all. Low probability, and deliberately not handled here:
       the cheap mitigations (folding ``SLURM_CLUSTER_NAME`` into the id, or ageing a manifest out
@@ -116,7 +121,7 @@ def cache_root() -> Path:
 
 def manifest_path(run: Optional[str] = None) -> Path:
     """Return the path to a run's resolution manifest."""
-    return _cache_root() / "runs" / (run or run_id()) / "resolutions.json"
+    return _cache_root() / "runs" / (run or run_id()) / MANIFEST_NAME
 
 
 def read_manifest(run: Optional[str] = None) -> dict[str, str]:

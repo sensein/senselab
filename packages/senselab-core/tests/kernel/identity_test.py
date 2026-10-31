@@ -1,5 +1,6 @@
 """Identity v2: model references, logical keys, execution context and reuse policy (ADR-002, P-38)."""
 
+import copy
 import math
 import pickle
 import unicodedata
@@ -7,36 +8,43 @@ import unicodedata
 import numpy
 import pytest
 import senselab_core.kernel.identity as identity
+from hypothesis import given
+from hypothesis import strategies as st
 from pydantic import ValidationError
 from senselab_core.kernel.identity import (
     DEFAULT_REUSE_POLICY,
     ExecutionContext,
     LogicalKey,
+    ModelIdentity,
     ModelRef,
     ResolvedModel,
     ReusePolicy,
+    UnpinnedModel,
     acceptable,
 )
 from senselab_core.kernel.license import License
-from senselab_worker.canonical import jcs_dumps
-from senselab_worker.hashing import sha256_bytes
+from senselab_worker.canonical import tagged_digest
 
 COMMIT = "41f01f3fe87f28c78e2fbf8b568835947dd65ed9"
 SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+CONTENT = "content:" + SHA256
+OUTPUT = "output:" + SHA256
+PROFILE = "profile:" + SHA256
+MODEL = ModelIdentity(source="hf", id="org/name", identity=COMMIT)
+
+BASE: dict[str, object] = {
+    "task": "t",
+    "task_version": "1",
+    "backend": "b",
+    "backend_version": "1",
+    "model": None,
+    "params": {"x": 1},
+    "inputs": {},
+}
 
 
 def _key(**overrides: object) -> LogicalKey:
-    fields: dict[str, object] = {
-        "task": "t",
-        "task_version": "1",
-        "backend": "b",
-        "backend_version": "1",
-        "model": None,
-        "params": {"x": 1},
-        "inputs": {},
-    }
-    fields.update(overrides)
-    return LogicalKey.model_validate(fields)
+    return LogicalKey.model_validate({**BASE, **overrides})
 
 
 def _ctx(**overrides: object) -> ExecutionContext:
@@ -73,10 +81,10 @@ def test_key_ignores_param_order_and_unicode_form() -> None:
         ("task_version", "2"),
         ("backend", "b2"),
         ("backend_version", "2"),
-        ("model", "m"),
+        ("model", MODEL),
         ("params", {"x": 2}),
-        ("inputs", {"a": "h"}),
-        ("profile_slices", {"p": "s"}),
+        ("inputs", {"a": CONTENT}),
+        ("profile_slices", {"p": PROFILE}),
         ("batch_formation", "bucket-1s"),
         ("chunk_grid", "30s"),
         ("schema_version", 2),
@@ -107,24 +115,24 @@ def test_context_is_not_in_key() -> None:
 
 
 @pytest.mark.contract
-def test_digest_is_sha256_of_the_jcs_of_the_fields() -> None:
+def test_digest_is_the_tagged_digest_of_the_fields() -> None:
     """The digest is reproducible from the fields alone, by any implementation of JCS and sha256."""
-    k = _key(model=COMMIT, params={"beam": 5, "lang": "en", "t": [0.5, None]}, inputs={"audio": SHA256})
+    k = _key(model=MODEL, params={"beam": 5, "lang": "en", "t": [0.5, None]}, inputs={"audio": CONTENT})
     expected = {
         "schema_version": 1,
         "task": "t",
         "task_version": "1",
         "backend": "b",
         "backend_version": "1",
-        "model": COMMIT,
+        "model": {"source": "hf", "id": "org/name", "identity": COMMIT},
         "params": {"beam": 5, "lang": "en", "t": [0.5, None]},
-        "inputs": {"audio": SHA256},
+        "inputs": {"audio": CONTENT},
         "profile_slices": {},
         "batch_formation": None,
         "chunk_grid": None,
     }
     assert k.model_dump() == expected
-    assert k.digest() == sha256_bytes(jcs_dumps(expected))
+    assert k.digest() == tagged_digest("logical-key@2", expected)
     assert len(k.digest()) == 64
 
 
@@ -151,17 +159,111 @@ def test_key_refuses_params_that_are_not_canonical_json(params: dict[str, object
 @pytest.mark.logic
 def test_key_is_deeply_immutable_and_pickles() -> None:
     """Fields, nested params and mappings cannot change; the key pickles with the same digest."""
-    k = _key(params={"opts": {"n": [1, 2]}}, inputs={"a": "h"})
+    k = _key(params={"opts": {"n": [1, 2]}}, inputs={"a": CONTENT})
     with pytest.raises(ValidationError):
         k.task = "u"  # type: ignore[misc]
     with pytest.raises(TypeError):
         k.params["opts"]["n"] = 3  # type: ignore[index]
     with pytest.raises(TypeError):
-        k.inputs["b"] = "g"  # type: ignore[index]
+        k.inputs["b"] = CONTENT  # type: ignore[index]
     assert isinstance(k.params["opts"]["n"], tuple)
     back = pickle.loads(pickle.dumps(k))
     assert back == k and back.digest() == k.digest()
     assert LogicalKey.model_validate_json(k.model_dump_json()).digest() == k.digest()
+    assert copy.deepcopy(k).digest() == k.digest() and copy.copy(k).digest() == k.digest()
+
+
+@pytest.mark.logic
+def test_model_copy_revalidates_and_redigests() -> None:
+    """A copy with an update is a new key: validated, and digested over its own fields."""
+    k = _key()
+    assert k.model_copy(update={"task": "u"}).digest() == _key(task="u").digest()
+    with pytest.raises(ValidationError):
+        k.model_copy(update={"model": "main"})
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"model": "main"},
+        {"model": COMMIT},
+        {"model": {"source": "hf", "id": "org/name", "identity": "main"}},
+        {"model": {"source": "local", "id": "/m", "identity": COMMIT}},
+        {"inputs": {"a": "/home/x/a.wav"}},
+        {"inputs": {"a": "f" * 64}},
+        {"inputs": {"a": "content:" + "F" * 64}},
+        {"inputs": {"a": "content:" + "f" * 63}},
+        {"inputs": {"a": PROFILE}},
+        {"profile_slices": {"p": "f" * 64}},
+        {"profile_slices": {"p": CONTENT}},
+    ],
+)
+def test_a5_key_refuses_untyped_identities(bad: dict[str, object]) -> None:
+    """The probe: a ref as the model and a path or bare hex as an input; every identity field is typed."""
+    with pytest.raises(ValidationError):
+        LogicalKey(**{**BASE, **bad})  # type: ignore[arg-type]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("identity_", [CONTENT, OUTPUT])
+def test_key_accepts_content_and_output_inputs(identity_: str) -> None:
+    """An input is named by source content or by an upstream output."""
+    assert _key(inputs={"a": identity_}).inputs["a"] == identity_
+
+
+@pytest.mark.logic
+def test_key_identity_requires_pinned_model() -> None:
+    """Only a pinned model has a key identity; an unpinned one raises `UnpinnedModel`, a `ValueError`."""
+    pinned = ResolvedModel(ref=ModelRef.parse("org/name@main"), identity=COMMIT)
+    assert pinned.key_identity() == MODEL
+    unpinned = ResolvedModel(
+        ref=ModelRef.parse("url:https://x.org/m"), identity="https://x.org/m", unresolved_reason="no ETag"
+    )
+    with pytest.raises(UnpinnedModel):
+        unpinned.key_identity()
+    assert issubclass(UnpinnedModel, ValueError)
+
+
+@pytest.mark.logic
+def test_model_identity_applies_the_pinning_rule() -> None:
+    """A model identity built directly is held to the rule `ResolvedModel` applies to a pinned model."""
+    assert ModelIdentity(source="local", id="/m", identity=SHA256).identity == SHA256
+    for source, ident in [("hf", "main"), ("hf", SHA256), ("url", COMMIT), ("local", "x")]:
+        with pytest.raises(ValidationError):
+            ModelIdentity(source=source, id="org/name", identity=ident)  # type: ignore[arg-type]
+
+
+_PARAM_VALUES = st.recursive(
+    st.none()
+    | st.booleans()
+    | st.integers()
+    | st.floats()
+    | st.sampled_from([1e20, -1e300, 2.0**53, 2**53, 1e-7])
+    | st.text(),
+    lambda children: st.lists(children, max_size=3) | st.dictionaries(st.text(max_size=3), children, max_size=3),
+    max_leaves=10,
+)
+
+
+@pytest.mark.logic
+@given(params=st.dictionaries(st.text(max_size=3), _PARAM_VALUES, max_size=4))
+def test_a24_constructible_key_is_digestible(params: dict[str, object]) -> None:
+    """Any params, large integral floats included: a key either fails validation or digests."""
+    try:
+        key = _key(params=params)
+    except ValidationError:
+        return
+    assert len(key.digest()) == 64
+    assert LogicalKey.model_validate_json(key.model_dump_json()).digest() == key.digest()
+
+
+@pytest.mark.logic
+def test_a24_large_float_param_is_kept_and_digested() -> None:
+    """The probe: `params={"x": 1e20}` validated but could not be digested."""
+    key = _key(params={"x": 1e20})
+    assert key.params["x"] == 1e20 and len(key.digest()) == 64
+    assert key.digest() == _key(params={"x": 10.0**20}).digest()
 
 
 @pytest.mark.logic
@@ -224,6 +326,35 @@ def test_equivalent_without_measurement_is_exact() -> None:
     )
     assert acceptable(c1, c2, ReusePolicy.TOLERANT, backend="b")
     assert acceptable(c1, c1, ReusePolicy.EXACT, backend="b") and not acceptable(c1, c2, ReusePolicy.EXACT, backend="b")
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("policy", ["exact", "bogus", "EXACT", "", 1, None, True])
+def test_a23_acceptable_coerces_policy(policy: object) -> None:
+    """A policy value is coerced with `ReusePolicy(policy)`: `"exact"` is exact, anything else raises."""
+    c1, c2 = _ctx(platform="linux"), _ctx(platform="macos")
+    if policy == "exact":
+        assert acceptable(c1, c1, "exact", backend="b") and not acceptable(c1, c2, "exact", backend="b")
+        return
+    with pytest.raises(ValueError):
+        acceptable(c1, c2, policy, backend="b")  # type: ignore[arg-type]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("policy", list(ReusePolicy))
+def test_every_policy_member_is_dispatched(policy: ReusePolicy) -> None:
+    """Each member and its value give the same answer for the same and for different contexts."""
+    c1, c2 = _ctx(platform="linux"), _ctx(platform="macos")
+    for a, b in [(c1, c1), (c1, c2)]:
+        assert acceptable(a, b, policy, backend="b") == acceptable(a, b, policy.value, backend="b")
+    assert acceptable(c1, c1, policy, backend="b")
+
+
+@pytest.mark.logic
+def test_fingerprint_is_the_context_tagged_digest() -> None:
+    """The fingerprint is `tagged_digest("context@2", fields without host and protocol)`."""
+    c = _ctx()
+    assert c.fingerprint() == tagged_digest("context@2", c.model_dump(exclude={"host", "protocol"}))
 
 
 @pytest.mark.logic

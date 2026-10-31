@@ -2,7 +2,7 @@
 
 Layout under `root`:
 
-- `store@1/<d[:2]>/<d>/<f>/`, where `d` is `LogicalKey.digest()` and `f` is
+- `store@2/<d[:2]>/<d>/<f>/`, where `d` is `LogicalKey.digest()` and `f` is
   `ExecutionContext.fingerprint()`, holding:
   - `result.json`: JCS JSON with `format: "result@1.0"`, the key, its digest, the encoded outputs
     and their output identity;
@@ -14,15 +14,14 @@ Layout under `root`:
 Directories the store creates are mode `LOCK_DIR_MODE` (0o2775) and files `LOCK_FILE_MODE` (0o664),
 whatever the umask; an existing `root` is left as it is.
 
-Outputs are a mapping of JSON values (None, bool, int, float, str, lists, tuples, str-keyed dicts,
-numpy scalars) and numpy arrays, nested to any depth. In the encoded form each array is replaced by
-`{"$array": <sha256 of its canonical .npy>}`, so `$array` is a reserved key. The output identity is
-the sha256 of the JCS of the encoded form.
+Outputs are a mapping of JSON values (what `canonical_scalar` accepts, in exact `list`, `tuple` and
+`str`-keyed `dict` containers) and plain numpy arrays, nested to any depth. In the encoded form each
+array is replaced by `{"$array": <sha256 of its canonical .npy>}`, so `$array` is a reserved key.
+The output identity is `"output:" + tagged_digest("output@2", encoded form)`.
 """
 
 import errno
 import io
-import json
 import os
 import shutil
 import time
@@ -34,14 +33,14 @@ from typing import Any, TypeVar
 
 import numpy
 from pydantic import ValidationError
-from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
+from senselab_worker.canonical import canonical_npy_bytes, canonical_scalar, jcs_dumps, jcs_loads, tagged_digest
 from senselab_worker.hashing import sha256_bytes
 
-from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ReusePolicy, acceptable
+from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputIdentity, ReusePolicy, acceptable
 from senselab_core.runtime.locks import LOCK_FILE_MODE, ensure_dirs
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
 
-STORE_DIR = "store@1"
+STORE_DIR = "store@2"
 STAGING_DIR = "tmp"
 QUARANTINE_DIR = "quarantine"
 RESULT_FORMAT = "result@1.0"
@@ -68,7 +67,7 @@ class StoredResult:
     Attributes:
         outputs: The decoded outputs, as JCS canonicalised them: arrays come back as little-endian
             numpy arrays, tuples as lists, integral floats as ints, strings NFC-normalised.
-        output_identity: The sha256 of the JCS of the encoded outputs.
+        output_identity: The `output:` identity of the encoded outputs.
         context: The execution context the result was computed in.
         policy_used: The narrowest policy, no wider than the one requested, under which `context`
             may serve the current context: `exact` for an equal fingerprint, `equivalent` for a
@@ -76,41 +75,41 @@ class StoredResult:
     """
 
     outputs: dict[str, object]
-    output_identity: str
+    output_identity: OutputIdentity
     context: ExecutionContext
     policy_used: ReusePolicy
 
 
 def _encode(value: object, arrays: dict[str, bytes]) -> object:
-    if isinstance(value, numpy.ndarray):
+    if type(value) is numpy.ndarray:
         data = canonical_npy_bytes(value)
         sha = sha256_bytes(data)
         arrays[sha] = data
         return {ARRAY_TAG: sha}
-    if isinstance(value, numpy.generic):
-        return _encode(value.item(), arrays)
-    if isinstance(value, Mapping):
+    if type(value) is dict:
         if ARRAY_TAG in value:
             raise ValueError(f"{ARRAY_TAG!r} is a reserved key in stored outputs")
         return {k: _encode(v, arrays) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
+    if type(value) is list or type(value) is tuple:
         return [_encode(v, arrays) for v in value]
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    raise TypeError(f"cannot store an output of type {type(value).__name__}")
+    return canonical_scalar(value)
 
 
-def _serialise(outputs: Mapping[str, object]) -> tuple[object, dict[str, bytes], str]:
+def _tree_identity(tree: object) -> OutputIdentity:
+    return "output:" + tagged_digest("output@2", tree)
+
+
+def _serialise(outputs: Mapping[str, object]) -> tuple[object, dict[str, bytes], OutputIdentity]:
     arrays: dict[str, bytes] = {}
     tree = _encode(dict(outputs), arrays)
-    return tree, arrays, sha256_bytes(jcs_dumps(tree))
+    return tree, arrays, _tree_identity(tree)
 
 
-def output_identity(outputs: Mapping[str, object]) -> str:
-    """Return the output identity of `outputs`: the sha256 of the JCS of their encoded form.
+def output_identity(outputs: Mapping[str, object]) -> OutputIdentity:
+    """Return the output identity of `outputs`: `"output:" + tagged_digest("output@2", encoded form)`.
 
     Raises:
-        TypeError: on a value that is neither a JSON value nor a numpy array.
+        TypeError: on a value that is neither a canonical JSON value nor a plain numpy array.
         ValueError: on a reserved `$array` key, a value `jcs_dumps` refuses, or an array dtype
             `canonical_npy_bytes` refuses.
     """
@@ -148,7 +147,7 @@ def _write_synced(path: Path, data: bytes) -> None:
 
 
 def _read_object(path: Path, fmt: str) -> dict[str, Any]:
-    record = json.loads(path.read_bytes())
+    record = jcs_loads(path.read_bytes())
     if not isinstance(record, dict):
         raise CorruptEntryError(f"corrupt store entry: {path} is not a JSON object")
     if record.pop("format", None) != fmt:
@@ -178,7 +177,7 @@ def _read_result(entry: Path) -> tuple[str, dict[str, object]]:
     def read() -> tuple[str, dict[str, object]]:
         record = _read_object(entry / "result.json", RESULT_FORMAT)
         tree, identity = record["outputs"], record["output_identity"]
-        if not isinstance(identity, str) or sha256_bytes(jcs_dumps(tree)) != identity:
+        if not isinstance(identity, str) or _tree_identity(tree) != identity:
             raise CorruptEntryError(f"corrupt store entry {entry}: outputs do not hash to their output identity")
         outputs = _decode(tree, entry)
         if not isinstance(outputs, dict):
@@ -226,7 +225,7 @@ def _commit(
         )
         result = {
             "format": RESULT_FORMAT,
-            "key": json.loads(jcs_dumps(key.model_dump())),
+            "key": jcs_loads(jcs_dumps(key.model_dump())),
             "key_digest": key.digest(),
             "output_identity": identity,
             "outputs": tree,
@@ -308,7 +307,7 @@ class ResultStore:
             self._quarantine(entry)
             return None
 
-    def put(self, key: LogicalKey, outputs: dict[str, object], context: ExecutionContext) -> str:
+    def put(self, key: LogicalKey, outputs: dict[str, object], context: ExecutionContext) -> OutputIdentity:
         """Store `outputs` under `key` and `context`, and return the committed output identity.
 
         Outputs are stored as JCS canonicalises them: `1.0` is stored as `1`, strings are
@@ -346,7 +345,7 @@ class ResultStore:
             step=key.backend,
             parameters={
                 "key": digest,
-                "logical_key": json.loads(jcs_dumps(key.model_dump())),
+                "logical_key": jcs_loads(jcs_dumps(key.model_dump())),
                 "context": {**context.model_dump(mode="json"), "fingerprint": context.fingerprint()},
                 "outcome": outcome,
             },
@@ -358,9 +357,11 @@ class ResultStore:
             )
         prov.was_generated_by(self._result_entity(identity, digest), activity)
 
-    def _result_entity(self, identity: str, digest: str) -> str:
+    def _result_entity(self, identity: OutputIdentity, digest: str) -> str:
         return self.provenance.entity(
-            prov_type="artifact", extent=None, attributes={CHECKSUM_KEY: identity, "key": digest}
+            prov_type="artifact",
+            extent=None,
+            attributes={CHECKSUM_KEY: identity.removeprefix("output:"), "output_identity": identity, "key": digest},
         )
 
     def _record_reuse(
@@ -379,13 +380,17 @@ class ResultStore:
         )
         self.provenance.used(activity, self._result_entity(hit.output_identity, digest))
 
-    def get(self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy) -> StoredResult | None:
+    def get(self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy | str) -> StoredResult | None:
         """Return a committed result for `key` whose context `policy` admits for `context`, or None.
 
         Candidates are tried narrowest admitting policy first, the current fingerprint first among
         `exact`, then by fingerprint. A corrupt candidate is quarantined and the next one tried. A
         hit admitted under a policy other than `exact` appends a reuse activity to provenance.
+
+        Raises:
+            ValueError: if `policy` is not a `ReusePolicy` value.
         """
+        policy = ReusePolicy(policy)
         base = self._entry(key)
         try:
             names = sorted(n for n in os.listdir(base) if _is_fingerprint(n))

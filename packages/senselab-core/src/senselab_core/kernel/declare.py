@@ -4,13 +4,16 @@ Declarations only: no graph, planner or execution (ADR-001).
 """
 
 import difflib
+import types
+import typing
 from collections.abc import Mapping
-from typing import Literal
+from enum import Enum
+from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr, StrMap
-from senselab_core.kernel.identity import LogicalKey
+from senselab_core.kernel.identity import InputIdentity, LogicalKey, ProfileSliceIdentity, ResolvedModel
 from senselab_core.kernel.license import License
 
 TaskKind = Literal["measure", "transform", "decide", "fit"]
@@ -50,6 +53,69 @@ class TaskParams(BaseModel):
                 hint = f"; did you mean {close[0]!r}?" if close else f"; known params: {known}"
                 raise ValueError(f"unknown param {key!r} for {cls.__name__}{hint}")
         return data
+
+
+class NonCanonicalParams(TypeError):
+    """A params model declares a field whose type has no canonical JSON form."""
+
+
+_SCALARS: tuple[type, ...] = (type(None), bool, int, float, str)
+_SEQUENCES: frozenset[object] = frozenset({list, tuple})
+_MAPPINGS: frozenset[object] = frozenset({dict, Mapping, typing.Mapping})
+_UNIONS: frozenset[object] = frozenset({Union, types.UnionType})
+
+
+def check_canonical_params(model: type[BaseModel]) -> None:
+    """Check that every field of `model` has a type whose values have one canonical JSON form.
+
+    Allowed, recursively: `None`, `bool`, `int`, `float`, `str`; `Literal` of those; an `Enum` whose
+    values are all `str`; `list[X]`, `tuple[X, ...]` and `tuple[X, Y, ...]`; `dict[str, X]` and
+    `Mapping[str, X]`; `Optional` and unions of allowed types; a nested `TaskParams`; and
+    `Annotated` constraints over any of these.
+
+    Raises:
+        NonCanonicalParams: naming the first field and type outside that set, such as `set`,
+            `frozenset`, `Decimal`, `datetime`, `Path`, `bytes`, `Any` or `object`.
+    """
+    _check_model(model, model.__name__, set())
+
+
+def _check_model(model: type[BaseModel], where: str, seen: set[type[BaseModel]]) -> None:
+    if model in seen:
+        return
+    seen.add(model)
+    for name, field in model.model_fields.items():
+        _check_type(field.annotation, f"{where}.{name}", seen)
+
+
+def _check_type(t: object, where: str, seen: set[type[BaseModel]]) -> None:
+    origin, args = typing.get_origin(t), typing.get_args(t)
+    if origin is Annotated:
+        _check_type(args[0], where, seen)
+    elif origin is Literal:
+        bad = [a for a in args if type(a) not in _SCALARS]
+        if bad:
+            raise NonCanonicalParams(f"{where}: Literal values must be JSON scalars, got {bad!r}")
+    elif origin in _UNIONS:
+        for arg in args:
+            _check_type(arg, where, seen)
+    elif origin in _SEQUENCES and args:
+        for arg in args:
+            if arg is not Ellipsis:
+                _check_type(arg, where, seen)
+    elif origin in _MAPPINGS and len(args) == 2:
+        if args[0] is not str:
+            raise NonCanonicalParams(f"{where}: mapping keys must be str, got {args[0]!r}")
+        _check_type(args[1], where, seen)
+    elif origin is None and t in _SCALARS:
+        return
+    elif origin is None and isinstance(t, type) and issubclass(t, Enum):
+        if not all(type(m.value) is str for m in t):
+            raise NonCanonicalParams(f"{where}: an Enum param must have str values, {t.__qualname__} does not")
+    elif origin is None and isinstance(t, type) and issubclass(t, TaskParams):
+        _check_model(t, where, seen)
+    else:
+        raise NonCanonicalParams(f"{where}: {t!r} has no canonical JSON form; declare a canonical type")
 
 
 class TaskSpec(Frozen):
@@ -110,8 +176,10 @@ class Registry:
         """Declare `spec`.
 
         Raises:
+            NonCanonicalParams: if its params model has a field with no canonical JSON form.
             DuplicateDeclaration: if its name or its signature is already declared.
         """
+        check_canonical_params(spec.params)
         if spec.name in self._tasks:
             raise DuplicateDeclaration(f"task {spec.name!r} is already declared", self._tasks[spec.name])
         for existing in self._tasks.values():
@@ -162,19 +230,22 @@ def key_for(
     backend: BackendSpec,
     *,
     params: BaseModel,
-    inputs: Mapping[str, str],
-    model: str | None = None,
-    profile_slices: Mapping[str, str] | None = None,
+    inputs: Mapping[str, InputIdentity],
+    model: ResolvedModel | None = None,
+    profile_slices: Mapping[str, ProfileSliceIdentity] | None = None,
 ) -> LogicalKey:
     """Return the logical key of calling `backend` for `task` (ADR-002).
 
     `params` is an instance of the task's params model; `inputs` maps each declared input port, and
-    no other, to its content or upstream output identity; `model` is the weight identity;
-    `profile_slices` maps each profile slice the call reads to its identity. Batch formation and
+    no other, to its `content:` or `output:` identity; `model` is the resolved model, which enters
+    the key as its `key_identity()`; `profile_slices` maps each profile slice the call reads to its
+    `profile:` identity. Batch formation and
     chunk grid are not set: `BackendSpec.output_affecting` does not reach the key yet.
 
     Raises:
         ValueError: if the backend implements another task, or params or inputs do not match the task.
+        UnpinnedModel: if `model` is not pinned.
+        pydantic.ValidationError: if an identity is not of its typed form.
     """
     if backend.task != task.name:
         raise ValueError(f"backend {backend.name!r} implements {backend.task!r}, not {task.name!r}")
@@ -187,7 +258,7 @@ def key_for(
         task_version=task.version,
         backend=backend.name,
         backend_version=backend.version,
-        model=model,
+        model=None if model is None else model.key_identity(),
         params=params.model_dump(mode="json"),
         inputs=inputs,
         profile_slices=profile_slices or {},

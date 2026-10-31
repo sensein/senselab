@@ -6,7 +6,18 @@ import unicodedata
 from pathlib import PurePath
 from typing import Iterator, Sequence, TypedDict
 
-from senselab_worker.canonical import jcs_dumps, utf16_sort_key
+from senselab_worker.canonical import DIGEST_TAGS, tagged_digest, utf16_sort_key
+
+__all__ = [
+    "DEFAULT_CHUNK_SIZE",
+    "DIGEST_TAGS",
+    "ContentId",
+    "content_identity",
+    "sha256_bytes",
+    "sha256_file",
+    "tagged_digest",
+    "weights_identity",
+]
 
 DEFAULT_CHUNK_SIZE = 64 * 2**20
 
@@ -45,7 +56,8 @@ def content_identity(path: str | os.PathLike[str], *, chunk_size: int = DEFAULT_
     """Return the chunked identity of a file, read one chunk at a time.
 
     `chunks` holds the sha256 of each consecutive `chunk_size`-byte chunk (the last may be shorter;
-    an empty file has none). `root` is the sha256 of the concatenated chunk hex digests.
+    an empty file has none). `root` is `tagged_digest("content-root@2", {"chunk_size": chunk_size,
+    "chunks": chunks})`, so the same bytes read in two chunk sizes have two roots.
 
     Raises:
         ValueError: if `chunk_size` is below 1.
@@ -55,7 +67,7 @@ def content_identity(path: str | os.PathLike[str], *, chunk_size: int = DEFAULT_
         "algo": "sha256",
         "chunk_size": chunk_size,
         "chunks": chunks,
-        "root": sha256_bytes("".join(chunks).encode()),
+        "root": tagged_digest("content-root@2", {"chunk_size": chunk_size, "chunks": chunks}),
     }
 
 
@@ -64,8 +76,8 @@ def weights_identity(paths: Sequence[str | os.PathLike[str]], *, root: str | os.
 
     Each file contributes `[relpath, sha256]`: its path relative to `root` with POSIX separators,
     NFC-normalised (symlinks are not resolved, so a link is named by where it sits and hashed by
-    what it points to), and the sha256 of its bytes. The identity is the sha256 of the JCS of the
-    pairs sorted by relpath in UTF-16 code-unit order, the order JCS uses for object keys.
+    what it points to), and the sha256 of its bytes. The identity is `tagged_digest("weights@2", pairs)`
+    over the pairs sorted by relpath in UTF-16 code-unit order, the order JCS uses for object keys.
 
     Raises:
         ValueError: if a path lies outside `root` or the same path is listed twice after
@@ -82,4 +94,4 @@ def weights_identity(paths: Sequence[str | os.PathLike[str]], *, root: str | os.
             raise ValueError(f"weight file listed twice: {posix}")
         pairs[posix] = sha256_file(path)
     ordered = sorted(pairs, key=utf16_sort_key)
-    return sha256_bytes(jcs_dumps([[rel, pairs[rel]] for rel in ordered]))
+    return tagged_digest("weights@2", [[rel, pairs[rel]] for rel in ordered])

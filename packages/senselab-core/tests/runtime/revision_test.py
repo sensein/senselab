@@ -8,7 +8,10 @@ from pathlib import Path
 
 import pytest
 from huggingface_hub.errors import RepositoryNotFoundError
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from senselab_core.runtime.revision import (
+    MANIFEST_NAME,
     RevisionResolutionError,
     get_cached_commit_hash,
     manifest_key,
@@ -106,6 +109,30 @@ def test_record_then_read_round_trips() -> None:
     """A recorded resolution is readable back from the manifest."""
     record_resolution("org/model", "main", SHA_A)
     assert read_manifest()[manifest_key("org/model", "main")] == SHA_A
+
+
+@pytest.mark.logic
+def test_a38_manifest_key_is_injective() -> None:
+    """The probe: `a@b` + `c` and `a` + `b@c` named one manifest entry."""
+    assert manifest_key("a@b", "c") != manifest_key("a", "b@c")
+    assert manifest_key("org/model", "main") == '["org/model","main"]'
+
+
+_PART = st.text(alphabet='ab@\\"[],', max_size=4)
+
+
+@pytest.mark.logic
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(st.tuples(_PART, _PART), st.tuples(_PART, _PART))
+def test_manifest_key_is_injective_over_pairs(x: tuple[str, str], y: tuple[str, str]) -> None:
+    """Two different (repo, ref) pairs never share a key, whatever separators and escapes they hold."""
+    assert (manifest_key(*x) == manifest_key(*y)) == (x == y)
+
+
+@pytest.mark.logic
+def test_manifest_file_carries_its_key_format() -> None:
+    """The manifest's name carries the format of its keys, so manifests keyed the old way are not read."""
+    assert manifest_path().name == MANIFEST_NAME == "resolutions@2.json"
 
 
 @pytest.mark.logic

@@ -9,12 +9,21 @@ written `<task>/<backend>`.
 Task cases: `params_round_trip`, `params_reject_unknown`, and for `measure` tasks
 `measure_has_no_verdict` (P-20). Backend cases: `license_present`, `key_deterministic`,
 `key_changes_with_<field>` for every `LogicalKey` field, `key_ignores_<field>` for every
-`ExecutionContext` field, and `content_fault_isolated` by the stack's runner in `FAULT_RUNNERS`.
-The key cases build keys with `key_builder` (default `key_for`).
+`ExecutionContext` field, `key_independent_of_hash_seed`, and `content_fault_isolated` by the
+stack's runner in `FAULT_RUNNERS`. The key cases build keys with `key_builder` (default `key_for`).
+
+`key_independent_of_hash_seed` builds the base call's key in two interpreters started with
+`PYTHONHASHSEED=1` and `PYTHONHASHSEED=2`. Each imports the params model and the key builder by
+`__module__` and `__qualname__`, so both must be defined at module level.
 """
 
 import functools
+import importlib
 import inspect
+import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from collections import Counter
@@ -28,12 +37,18 @@ from senselab_worker.faults import FaultClass
 from senselab_worker.hashing import sha256_bytes
 
 from senselab_core.kernel.declare import VERDICT_TYPES, BackendSpec, Registry, TaskSpec, key_for
-from senselab_core.kernel.identity import ExecutionContext, LogicalKey
+from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelRef, ResolvedModel
 from senselab_core.kernel.license import License, require_license
 
 Case = Callable[[], None]
 KeyBuilder = Callable[..., LogicalKey]
 """`key_for`'s call shape: `(task, backend, *, params, inputs, model=None, profile_slices=None)`."""
+
+HASH_SEEDS: tuple[str, str] = ("1", "2")
+"""The `PYTHONHASHSEED` values `key_independent_of_hash_seed` builds a key under."""
+
+VARIED_MODEL = ResolvedModel(ref=ModelRef.parse("contract/model@main"), identity="0" * 40)
+"""The pinned model `key_changes_with_model` puts into a call whose base has none."""
 
 KEY_FORMAT_FIELDS: frozenset[str] = frozenset({"schema_version"})
 """Key fields fixed by the key format rather than by a call; their case varies the key directly."""
@@ -109,6 +124,7 @@ def _backend_cases(
         (f"key_changes_with_{f}", functools.partial(_key_changes_with, build, f)) for f in LogicalKey.model_fields
     ]
     cases += [(f"key_ignores_{f}", functools.partial(_key_ignores, build, f)) for f in ExecutionContext.model_fields]
+    cases.append(("key_independent_of_hash_seed", functools.partial(_key_independent_of_hash_seed, build)))
     cases.append(("content_fault_isolated", FAULT_RUNNERS[backend.stack]))
     return cases
 
@@ -143,19 +159,20 @@ def _license_present(task: TaskSpec, backend: BackendSpec) -> None:
     assert isinstance(require_license(backend.license, f"backend {backend.name!r}"), License)
 
 
-def _base_call(task: TaskSpec) -> dict[str, Any]:
+def base_call(task: TaskSpec) -> dict[str, Any]:
+    """Return the key builder arguments every key case starts from: default params, no model."""
     return {
         "params": task.params(),
-        "inputs": {port: sha256_bytes(port.encode()) for port in task.inputs},
+        "inputs": {port: "content:" + sha256_bytes(port.encode()) for port in task.inputs},
         "model": None,
         "profile_slices": {},
     }
 
 
 def _key_deterministic(build: KeyBuilder, task: TaskSpec, backend: BackendSpec) -> None:
-    call = _base_call(task)
+    call = base_call(task)
     key = build(task, backend, **call)
-    assert build(task, backend, **_base_call(task)).digest() == key.digest(), "the same call gave two keys"
+    assert build(task, backend, **base_call(task)).digest() == key.digest(), "the same call gave two keys"
     again = build(
         task,
         backend,
@@ -211,11 +228,11 @@ def _varied_call(
         if not call["inputs"]:
             raise unittest.SkipTest(f"{task.name!r} declares no inputs; nothing to vary")
         port = sorted(call["inputs"])[0]
-        return task, backend, {**call, "inputs": {**call["inputs"], port: sha256_bytes(b"varied")}}
+        return task, backend, {**call, "inputs": {**call["inputs"], port: "content:" + sha256_bytes(b"varied")}}
     if field == "model":
-        return task, backend, {**call, "model": "perturbed"}
+        return task, backend, {**call, "model": VARIED_MODEL}
     if field == "profile_slices":
-        return task, backend, {**call, "profile_slices": {"profile": sha256_bytes(b"slice")}}
+        return task, backend, {**call, "profile_slices": {"profile": "profile:" + sha256_bytes(b"slice")}}
     raise AssertionError(
         f"LogicalKey.{field} has no contract variation: add it to _varied_call, KEY_FORMAT_FIELDS or NOT_YET_WIRED"
     )
@@ -224,7 +241,7 @@ def _varied_call(
 def _key_changes_with(build: KeyBuilder, field: str, task: TaskSpec, backend: BackendSpec) -> None:
     if field in NOT_YET_WIRED:
         raise unittest.SkipTest(f"LogicalKey.{field} not yet wired: {NOT_YET_WIRED[field]}")
-    call = _base_call(task)
+    call = base_call(task)
     key = build(task, backend, **call)
     if field in KEY_FORMAT_FIELDS:
         fields = key.model_dump()
@@ -242,6 +259,56 @@ def _key_ignores(build: KeyBuilder, field: str, task: TaskSpec, backend: Backend
     base = ExecutionContext.model_validate(BASE_CONTEXT)
     other = ExecutionContext.model_validate({**BASE_CONTEXT, field: _perturbed(field, base.model_dump()[field])})
     assert other != base, f"ExecutionContext.{field} did not vary"
+
+
+_SEED_PROBE = """
+import importlib, json, sys
+spec = json.loads(sys.stdin.read())
+sys.path[:] = spec["path"]
+from senselab_core.kernel.declare import BackendSpec, TaskSpec
+from senselab_core.testing.contracts import base_call, import_qualified
+task = TaskSpec(**spec["task"], params=import_qualified(*spec["params"]))
+backend = BackendSpec.model_validate(spec["backend"])
+print(import_qualified(*spec["builder"])(task, backend, **base_call(task)).digest())
+"""
+
+
+def import_qualified(module: str, qualname: str) -> Any:  # noqa: ANN401
+    """Return the object named `qualname` in `module`, importing the module."""
+    obj: Any = importlib.import_module(module)
+    for part in qualname.split("."):
+        obj = getattr(obj, part)
+    return obj
+
+
+def _qualified(obj: Any, what: str) -> list[str]:  # noqa: ANN401
+    module, qualname = getattr(obj, "__module__", None), getattr(obj, "__qualname__", None)
+    if not module or not qualname or "<" in qualname:
+        raise AssertionError(f"the {what} {obj!r} is not importable by name; define it at module level")
+    return [module, qualname]
+
+
+def _key_independent_of_hash_seed(build: KeyBuilder, task: TaskSpec, backend: BackendSpec) -> None:
+    spec = {
+        "path": sys.path,
+        "task": task.model_dump(mode="json", exclude={"params"}),
+        "params": _qualified(task.params, "params model"),
+        "backend": backend.model_dump(mode="json"),
+        "builder": _qualified(build, "key builder"),
+    }
+    digests = {}
+    for seed in HASH_SEEDS:
+        proc = subprocess.run(
+            [sys.executable, "-c", _SEED_PROBE],
+            input=json.dumps(spec),
+            env={**os.environ, "PYTHONHASHSEED": seed},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, f"building the key under PYTHONHASHSEED={seed} failed:\n{proc.stderr}"
+        digests[seed] = proc.stdout.strip()
+    assert len(set(digests.values())) == 1, f"the key depends on the hash seed: {digests}"
 
 
 def _content_fault_isolated(task: TaskSpec, backend: BackendSpec) -> None:
