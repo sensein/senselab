@@ -27,6 +27,7 @@ from typing import Any, Iterable, Iterator, Mapping, Sequence
 import numpy as np
 import pyarrow as pa
 import yaml  # type: ignore[import-untyped]
+from senselab_core.runtime.provenance import plain_values
 
 from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD, standing_task_extents
@@ -439,7 +440,7 @@ def read_store(path: Path) -> StoreView:
                         id=str(record.get("id")),
                         prov_type=str(record.get("prov_type")),
                         extent=(float(extent[0]), float(extent[1])) if extent else None,
-                        attributes=record.get("attributes") or {},
+                        attributes=plain_values(record.get("attributes") or {}),
                     )
                 )
             elif kind == "activity":
@@ -447,7 +448,7 @@ def read_store(path: Path) -> StoreView:
                     {
                         "node": record.get("node"),
                         "step": record.get("step"),
-                        "parameters": record.get("parameters") or {},
+                        "parameters": plain_values(record.get("parameters") or {}),
                     }
                 )
             elif kind == "relation":

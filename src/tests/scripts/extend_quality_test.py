@@ -10,6 +10,8 @@ spans with the amplitude measurement beside them — which is the shape the corp
 
 from __future__ import annotations
 
+from senselab_core.runtime.provenance import recorded as recorded_form
+
 import importlib.util
 import json
 import sys
@@ -258,7 +260,7 @@ class TestTheVerdictAFinishedRunGains:
 
         report = find_branch_report(_store_of(roots[0]), QUALITY)
         assert report is not None
-        assert report.attributes["preceded_by"] == ["ADMIT", "PREPROCESS"]
+        assert report.attributes["preceded_by"] == recorded_form(["ADMIT", "PREPROCESS"])
         assert QUALITY not in report.attributes["preceded_by"]
 
     def test_the_clip_span_is_kept_and_the_contest_is_derived_from_it(

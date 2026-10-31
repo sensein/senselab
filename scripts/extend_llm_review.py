@@ -74,7 +74,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from senselab_core.runtime.provenance import Entity, ProvStore
+from senselab_core.runtime.provenance import Entity, ProvStore, recorded
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -238,7 +238,7 @@ def standing(store: ProvStore, engine: Mapping[str, Any] | None = None) -> Entit
         return None
     if engine is not None:
         held = dict(annotation.attributes.get("engine") or engine_identity(ENGINE_TRANSFORMERS))
-        if annotation.attributes.get("prompt_version") != PROMPT_VERSION or held != dict(engine):
+        if annotation.attributes.get("prompt_version") != PROMPT_VERSION or recorded(held) != recorded(engine):
             return None
     return annotation
 

@@ -22,6 +22,8 @@ from typing import Callable
 import numpy as np
 import pytest
 from senselab_core.runtime.provenance import Entity, ProvStore
+from senselab_core.runtime.provenance import recorded as recorded_form
+from senselab_core.testing.provenance import hand_edited
 
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.admit import admit
@@ -410,7 +412,7 @@ class TestTheStreamItReads:
         result = quality(store, "recording", config, run_dir=tmp_path)
         assert result.report.conformance == UNDETERMINED
         report = store.get_entity(result.report_entity_id)
-        assert report.attributes["missing"] == ["recording"]
+        assert report.attributes["missing"] == recorded_form(["recording"])
         assert report.attributes["clip_spans_n"] == 0
         assert any(note.startswith(STREAM_NOT_STORED) for note in report.attributes["notes"])
 
@@ -420,8 +422,8 @@ class TestTheStreamItReads:
         """Where the stream is stored, ``missing`` is empty and no note is added."""
         _seed(store, tmp_path, wav_writer, _bed(), [])
         report = store.get_entity(quality(store, "recording", config, run_dir=tmp_path).report_entity_id)
-        assert report.attributes["missing"] == []
-        assert report.attributes["notes"] == []
+        assert report.attributes["missing"] == recorded_form([])
+        assert report.attributes["notes"] == recorded_form([])
 
     def test_a_clip_span_over_another_signal_is_not_read_against_this_one(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
@@ -432,9 +434,7 @@ class TestTheStreamItReads:
         samples[24000] = np.float32(0.9)
         _seed(store, tmp_path, wav_writer, samples, [clipped])
         elsewhere = [span for span in live_entities(store, "span")][0]
-        store._entities[elsewhere.id] = replace(
-            elsewhere, attributes={**elsewhere.attributes, "signal": "plain"}, run_id=None
-        )
+        store = hand_edited(store, elsewhere.id, signal="plain")
         result = quality(store, "recording", config, run_dir=tmp_path)
         assert result.report.conformance == UNDETERMINED
         assert store.get_entity(result.report_entity_id).attributes["clip_spans_n"] == 0

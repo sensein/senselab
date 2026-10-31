@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 import yaml
 from senselab_core.runtime.provenance import ProvStore
+from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.data_structures import AudioHints, ExpectedSpeech
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -332,7 +333,7 @@ class TestAFullySpecifiedFamilyAlignsAgainstTheDerivative:
         assert _of_kind(result, "deviation", "stimulus_mismatch") == []
         assert _of_kind(result, "deviation", "omission") == []
         [task_extent] = [proposal for proposal in result.components if proposal.role == "task_extent"]
-        assert task_extent.attributes == {"words_n": 8, "expected_n": 8}
+        assert task_extent.attributes == recorded_form({"words_n": 8, "expected_n": 8})
 
     def test_a_substitution_is_reported_with_both_surfaces(self, tmp_path: Path) -> None:
         """A substituted token: the deviation carries what was expected and what was read."""
@@ -342,7 +343,9 @@ class TestAFullySpecifiedFamilyAlignsAgainstTheDerivative:
         result = align_speech("harvard-sentences-list", store, hint, branch_params(_config(tmp_path)))
         [mismatch] = _of_kind(result, "deviation", "stimulus_mismatch")
         [task_extent] = [proposal for proposal in result.components if proposal.role == "task_extent"]
-        assert task_extent.attributes == {"words_n": 7, "expected_n": 8}, "a substitution realised no token"
+        assert task_extent.attributes == recorded_form({"words_n": 7, "expected_n": 8}), (
+            "a substitution realised no token"
+        )
         assert mismatch.evidence["expected"] == "canoe"
         assert mismatch.evidence["read"] == "canoes"
         assert (mismatch.start, mismatch.end) == (3.0, 3.5)

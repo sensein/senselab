@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 import torch
 from senselab_core.runtime.provenance import ProvStore
+from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.data_structures.audio_hints import ExpectedSpeech
@@ -118,7 +119,7 @@ class TestWindowClassificationsAreSets:
         preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
         pooled = find_measurement(store, "yamnet_windows")
         assert pooled is not None
-        assert pooled.attributes["labels"] == ["Cough", "Speech"]
+        assert pooled.attributes["labels"] == recorded_form(["Cough", "Speech"])
         per_window = find_measurements(store, "yamnet_window")
         assert len(per_window) == 1
         assert sorted(per_window[0].attributes["labels"]) == ["Cough", "Speech"]
@@ -136,7 +137,7 @@ class TestWindowClassificationsAreSets:
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, yamnet=[window(0.0, 0.96, {"Speech": 0.45, "Cough": 0.45})])
         preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
-        assert find_measurements(store, "yamnet_window")[0].attributes["labels"] == ["Speech"]
+        assert find_measurements(store, "yamnet_window")[0].attributes["labels"] == recorded_form(["Speech"])
 
     def test_an_empty_window_is_still_written(
         self,
@@ -155,7 +156,7 @@ class TestWindowClassificationsAreSets:
         preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
         per_window = find_measurements(store, "yamnet_window")
         assert len(per_window) == 2
-        assert per_window[1].attributes["labels"] == []
+        assert per_window[1].attributes["labels"] == recorded_form([])
         pooled = find_measurement(store, "yamnet_windows")
         assert pooled is not None
         assert pooled.attributes["n_windows"] == 2
@@ -177,11 +178,11 @@ class TestWindowClassificationsAreSets:
 
         [hear_window] = find_measurements(store, "hear_window")
         assert hear_window.attributes["raw_scores"] == raw_scores
-        assert hear_window.attributes["labels"] == []
-        assert hear_window.attributes["scores"] == {}
+        assert hear_window.attributes["labels"] == recorded_form([])
+        assert hear_window.attributes["scores"] == recorded_form({})
         pooled = find_measurement(store, "hear_windows")
         assert pooled is not None
-        assert pooled.attributes["labels"] == []
+        assert pooled.attributes["labels"] == recorded_form([])
 
     def test_pooling_is_union_and_the_windows_are_retained(
         self,
@@ -201,9 +202,9 @@ class TestWindowClassificationsAreSets:
         pooled = find_measurement(store, "yamnet_windows")
         per_window = find_measurements(store, "yamnet_window")
         assert pooled is not None
-        assert pooled.attributes["labels"] == ["Cough", "Speech"]
-        assert pooled.attributes["windows_by_label"]["Speech"] == [per_window[0].id]
-        assert pooled.attributes["windows_by_label"]["Cough"] == [per_window[1].id]
+        assert pooled.attributes["labels"] == recorded_form(["Cough", "Speech"])
+        assert pooled.attributes["windows_by_label"]["Speech"] == recorded_form([per_window[0].id])
+        assert pooled.attributes["windows_by_label"]["Cough"] == recorded_form([per_window[1].id])
 
     def test_the_scores_survive_a_null_threshold(
         self,
@@ -265,7 +266,7 @@ class TestWindowClassificationsAreSets:
         _stub_models(monkeypatch, ast=[window(0.0, 0.96, scores)])
         preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
         ast_window = find_measurements(store, "ast_window")[0]
-        assert ast_window.attributes["labels"] == ["L0", "L1", "L2", "L3"]
+        assert ast_window.attributes["labels"] == recorded_form(["L0", "L1", "L2", "L3"])
         assert len(ast_window.attributes["raw_scores"]) == 6, "the model's own output is kept whole"
 
     def test_hear_runs_on_its_fixed_window_at_the_configured_hop(
@@ -284,7 +285,7 @@ class TestWindowClassificationsAreSets:
         assert seen["hear"]["hop_length"] == pytest.approx(2.0)
         pooled = find_measurement(store, "hear_windows")
         assert pooled is not None
-        assert pooled.attributes["labels"] == ["Cough"]
+        assert pooled.attributes["labels"] == recorded_form(["Cough"])
 
 
 class TestSpansCarryTheirMergeRate:
@@ -629,8 +630,8 @@ class TestClipCandidateRejection:
         recording = [e for e in live_entities(store, "stream") if e.attributes.get("name") == "recording"][-1]
         assert store.derived_from(withdrawn[0].id) == [recording.id]
         derivatives = store.get_entity(result.verdict_entity_id).attributes["derivatives"]
-        assert derivatives[preprocess_module.WITHDRAWN_CLIPS] == [withdrawn[0].id]
-        assert derivatives["clip_spans"] == []
+        assert derivatives[preprocess_module.WITHDRAWN_CLIPS] == recorded_form([withdrawn[0].id])
+        assert derivatives["clip_spans"] == recorded_form([])
 
     def test_the_audit_that_found_the_contradiction_now_finds_nothing(
         self,
@@ -824,7 +825,7 @@ class TestSpanQuality:
         windows = find_measurements(store, "span_hear")
         assert windows
         assert windows[0].attributes["signal"] == "plain"
-        assert windows[0].attributes["labels"] == ["Cough"]
+        assert windows[0].attributes["labels"] == recorded_form(["Cough"])
         assert set(windows[0].attributes["raw_scores"]) == {"Cough", "Breathe"}
         assert windows[0].attributes["span_id"] in {
             e.id for e in live_entities(store, "span") if e.attributes.get("family") is None
@@ -851,7 +852,7 @@ class TestSpanQuality:
         measurement = next(w for w in find_measurements(store, "span_yamnet") if w.attributes["span_id"] == spans[0].id)
         assert measurement.attributes["signal"] == "plain"
         assert measurement.attributes["attribution"] == "native"
-        assert measurement.attributes["labels"] == ["Speech"]
+        assert measurement.attributes["labels"] == recorded_form(["Speech"])
         span_start = min(e.extent[0] for e in spans if e.extent is not None)
         assert measurement.extent is not None
         assert measurement.extent[0] == pytest.approx(span_start, abs=1e-3)
@@ -886,8 +887,8 @@ class TestSpanQuality:
         assert measurement.attributes["attribution"] == "covering_windows"
         assert measurement.attributes["covering_windows_n"] == 1
         assert measurement.attributes["covering_seconds"] == pytest.approx(span.extent[1] - span.extent[0])
-        assert measurement.attributes["raw_scores"] == {"Synthesizer": 0.9, "Speech": 0.2}
-        assert measurement.attributes["labels"] == ["Synthesizer"]
+        assert measurement.attributes["raw_scores"] == recorded_form({"Synthesizer": 0.9, "Speech": 0.2})
+        assert measurement.attributes["labels"] == recorded_form(["Synthesizer"])
 
     def test_a_short_span_with_no_covering_window_is_unmeasured(
         self,
@@ -1275,7 +1276,7 @@ class TestTheConsensusTranscript:
         assert [row["name"] for row in attributes["sources"]] == ["asr_crisperwhisper", "asr_qwen"]
         assert attributes["n_sources"] == 2
         assert attributes["text"] == "hello world"
-        assert attributes["outcomes"] == {"agreement": 2, "variant": 0, "insertion": 0}
+        assert attributes["outcomes"] == recorded_form({"agreement": 2, "variant": 0, "insertion": 0})
         assert attributes["time_fit"] == "weighted_isotonic_median_over_located_spans"
         assert len(attributes["word_ids"]) == attributes["n_words"] == 2
         for retired in ("words", "provenance", "systems", "timing_authority", "event_ids"):
@@ -1347,7 +1348,7 @@ class TestTheConsensusTranscript:
                 "index",
             }
             assert word.attributes["outcome"] == "agreement"
-            assert word.attributes["sources"] == ["asr_crisperwhisper", "asr_qwen"]
+            assert word.attributes["sources"] == recorded_form(["asr_crisperwhisper", "asr_qwen"])
             assert set(word.attributes["timings"]) == {"asr_crisperwhisper", "asr_qwen"}
 
     def test_the_consensus_reads_every_hypothesis_in_the_store(
@@ -1511,7 +1512,7 @@ class TestTheConsensusTranscript:
         consensus = find_measurement(store, "consensus_transcript")
         assert consensus is not None
         assert consensus.attributes["n_words"] == 0
-        assert consensus.attributes["word_ids"] == []
+        assert consensus.attributes["word_ids"] == recorded_form([])
         assert consensus.attributes["text"] == ""
         assert consensus.attributes["reference_source"] is None
         assert consensus.attributes["n_sources"] == 2
@@ -1585,7 +1586,7 @@ class TestWordsAreBracketAware:
         words = sorted(live_entities(store, "word"), key=lambda w: int(w.attributes["index"]))
         assert [w.attributes["text"] for w in words] == ["hello", "[KHH]", "world"]
         assert words[1].attributes["bracketed"] is True
-        assert words[1].attributes["readings"] == {"asr_crisperwhisper": "khh", "asr_qwen": "khh"}
+        assert words[1].attributes["readings"] == recorded_form({"asr_crisperwhisper": "khh", "asr_qwen": "khh"})
 
     def test_a_null_vocabulary_leaves_an_onomatopoeic_token_a_word(
         self,
@@ -2769,7 +2770,7 @@ class TestTheDiarizationBlock:
         assert measurement is not None
         attrs = measurement.attributes
         assert attrs["n_speakers"] == 1
-        assert attrs["speakers"] == ["SPEAKER_00"]
+        assert attrs["speakers"] == recorded_form(["SPEAKER_00"])
         assert attrs["n_segments"] == 1
         assert attrs["signal"] == "enhanced"
         assert attrs["exclusive"] is False

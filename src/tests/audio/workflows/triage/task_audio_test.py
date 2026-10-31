@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import torch
 from senselab_core.runtime.provenance import ProvStore
+from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions
@@ -218,7 +219,7 @@ class TestTheCut:
             assert len(sidecar["cuts"][name]["checksum_sha256"]) == 64
             assert len(sidecar["cuts"][name]["source_sha256"]) == 64
         measurement = next(e for e in store.entities("measurement") if e.attributes.get("name") == MEASUREMENT)
-        assert measurement.attributes["cuts"] == ["enhanced", "plain", "redacted"]
+        assert measurement.attributes["cuts"] == recorded_form(["enhanced", "plain", "redacted"])
 
     def test_each_cut_is_derived_from_its_source_and_the_extent(self, tmp_path: Path, config: TriageConfig) -> None:
         """Provenance names the stream cut and the measurement that says where."""
@@ -376,7 +377,7 @@ class TestARemaskedRelease:
             outcome.extent.start_s, outcome.extent.end_s, RECORDING_HZ, int(DURATION_S * RECORDING_HZ)
         )
         [inside] = masks_in_cut([wide], lo, hi, RECORDING_HZ)
-        assert entity.attributes["masks"] == [inside]
+        assert entity.attributes["masks"] == recorded_form([inside])
         a, b = inside["cut_samples"]
         assert int((got == 0).all(dim=0).sum()) == b - a
         assert torch.all(got[..., a:b] == 0)

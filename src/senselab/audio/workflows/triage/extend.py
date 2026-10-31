@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 
 from senselab_core.runtime.bep028 import to_bep028_graph, write_bep028_files
-from senselab_core.runtime.provenance import Entity, ProvStore
+from senselab_core.runtime.provenance import Entity, ProvStore, recorded, revised
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.classification.huggingface import AudioTooShortForAST
@@ -612,7 +612,11 @@ def rebracket_words(store: ProvStore, config: TriageConfig) -> str | None:
                 f"{sorted(word_attributes(result.word))}; re-flagging would rewrite fields this pass never read"
             )
         reread.append(result)
-    moved = {entity.id for entity, result in zip(stored, reread) if word_attributes(result.word) != entity.attributes}
+    moved = {
+        entity.id
+        for entity, result in zip(stored, reread)
+        if recorded(word_attributes(result.word)) != entity.attributes
+    }
     if not moved:
         return None
 
@@ -642,12 +646,12 @@ def rebracket_words(store: ProvStore, config: TriageConfig) -> str | None:
         software,
         name=CONSENSUS_TRANSCRIPT,
         signal=signal,
-        attributes={
-            **consensus.attributes,
-            "word_ids": word_ids,
-            "text": render_transcript(words, strong=("", "")),
-            "bracket_overrides_n": sum(result.bracket_overrides for result in reread),
-        },
+        attributes=revised(
+            consensus.attributes,
+            word_ids=word_ids,
+            text=render_transcript(words, strong=("", "")),
+            bracket_overrides_n=sum(result.bracket_overrides for result in reread),
+        ),
         derived_from=(consensus.id,),
         extent=consensus.extent,
     )
@@ -1039,7 +1043,7 @@ def carry_reading_forward(
         copied = store.entity(
             prov_type="measurement",
             extent=None,
-            attributes={**{k: v for k, v in round_.attributes.items() if k != REMINT}, "carried_from": round_.id},
+            attributes=revised({k: v for k, v in round_.attributes.items() if k != REMINT}, carried_from=round_.id),
         )
         store.was_generated_by(copied, activity)
         store.was_attributed_to(copied, software)
@@ -1047,7 +1051,7 @@ def carry_reading_forward(
     carried = store.entity(
         prov_type="measurement",
         extent=None,
-        attributes={**attributes, "result_cache": {"key": key, "hit": False, "carried_from": held.annotation.id}},
+        attributes=revised(attributes, result_cache={"key": key, "hit": False, "carried_from": held.annotation.id}),
     )
     store.was_generated_by(carried, activity)
     store.was_attributed_to(carried, software)

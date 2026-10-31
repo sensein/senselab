@@ -10,6 +10,8 @@ in miniature: FLAC streams on disk, per-span classifier measurements carrying ``
 
 from __future__ import annotations
 
+from senselab_core.runtime.provenance import recorded as recorded_form
+
 import importlib.util
 import json
 import sys
@@ -818,7 +820,7 @@ class TestRebracketingTheWords:
         variant = self._words(roots[0])[2]
         assert variant.attributes["outcome"] == "variant"
         assert [reading["text"] for reading in variant.attributes["variants"]] == ["[KHH]", "[HACK]"]
-        assert variant.attributes["readings"] == {"asr_a": "khh", "asr_b": "hack"}
+        assert variant.attributes["readings"] == recorded_form({"asr_a": "khh", "asr_b": "hack"})
         assert variant.attributes["agreement"] == 0.5
 
     def test_the_superseded_words_are_retired_and_the_retirement_names_why(
@@ -932,7 +934,7 @@ class TestTheSpansTheAsrProposed:
         assert not store.is_invalidated(before[0].id)
         record = find_measurement(store, REBRACKET)
         assert record is not None
-        assert record.attributes["asr_proposed_span_ids"] == [before[0].id]
+        assert record.attributes["asr_proposed_span_ids"] == recorded_form([before[0].id])
         assert record.attributes["asr_proposed_spans_recomputed"] is False
         assert (record.attributes["n_lexical_before"], record.attributes["n_lexical_after"]) == (4, 2)
         assert record.attributes["n_rebracketed"] == 2

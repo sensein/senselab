@@ -157,22 +157,30 @@ The summary below follows that model.
 - **One construction path for values** (H9c, R-102). A kernel value (`Frozen`) is built only by
   validating a mapping of its fields; any other input object, `from_attributes` included, is refused by
   a wrapper around the type's whole schema, outside every model validator, so no identity derivation or
-  stamp check is skipped by the input's form. An instance of the type passes as itself, which is safe
+  stamp check is skipped by the input's form. A sealed instance of exactly the type passes as itself; any
+  other model (unsealed, made by `BaseModel.model_construct`, or a subclass with validators of its own) is
+  validated again from its fields as the type (H9c round 1). Passing a sealed instance is safe
   because a built value cannot change: attribute writes and deletions raise a `frozen_instance` `ValidationError` whatever the config says,
   `__dict__` is a read-only dict, private values (the canonical digest, a key's digest) are computed when
   the value is built and held in a read-only mapping, `__setstate__` on a built value raises and on a blank
   one validates, `FrozenMapping.__init__` runs once, and a class's `model_config` is a read-only mapping
-  its metaclass will not rebind. What stays reachable is the interpreter's own bypasses
+  the public init-subclass hook installs (round 1 dropped a metaclass on pydantic's private API; rebinding the
+  attribute changes nothing a built value consults). What stays reachable is the interpreter's own bypasses
   (`object.__setattr__`, `dict.__setitem__` on the unbound type). Computing the digest at construction
   means a value that validates can be digested: a cycle or a form past the work budget is refused when
   built, not when first compared. Validation errors do not repeat their input (`hide_input_in_errors`),
-  since the repr of a shared DAG or a long array is itself unbounded. The cost measured on an hour of
-  16 kHz float32 audio held in memory: `Audio.from_array` 0.63 s (M-series laptop, 2026-10-31).
+  since the repr of a shared DAG or a long array is itself unbounded. A frozen array (its buffer an immutable
+  `bytes`) is reused by every copy rather than copied, and its `.npy` digest is computed once per array
+  object, so a value's digest and an audio identity share one hash. Measured on 10 minutes of 16 kHz float32
+  (38 MB, 2026-10-31, M-series laptop, `canonical_npy_bytes` calls counted): `Audio.from_array` 4 hashes,
+  0.105 s before; 1 hash, 0.041 s after. `model_copy` and `deepcopy` 3 hashes, 0.07 s before; none, under
+  0.01 s after. A pickle round trip 3 hashes before, 1 after (it carries bytes, so the copy is new).
   A type that is not `Formatted` refuses unknown fields, so `model_validate` and `model_copy(update=)`
   agree; `Formatted` ignores them, for minor-version readers.
 - **A source stamp binds the file's content** (H9c, R-103). `SourceStamp.content` is the file's
   content-identity root (`content-root@2`, the root a recording of the file is identified by), taken
-  over every byte when the stamp is taken. A stamp this process took is re-checked by `os.stat` when a
+  over every byte, through the same open file the header is read and samples are decoded from, when the
+  stamp is taken. A stamp this process took is re-checked by `os.stat` when a
   copy is validated; any other stamp (a fresh process, an unpickled copy, an evicted memo entry) is
   checked by stamping the file again. Every decoded `read` stamps the file again, content included, so a
   rewrite that keeps size, mtime, inode and device (`cp -p`, `rsync -t`, a tar restore) raises
@@ -186,9 +194,14 @@ The summary below follows that model.
   the identity, but a recording placed on a session clock carries that clock's name, so validation does
   not tie `anchor.clock_id` to `identity` (XK-12, ruled not a defect); the anchor is part of the value's
   canonical digest, not of its content identity.
-- **Signals are finite.** A signal group's samples are finite; `Audio.from_array` refuses NaN, infinite
-  and float32-overflowing samples. Label arrays of strings are held at the width of their longest string,
-  so two label columns holding the same strings are one value.
+- **Signals and NaN** (H-R38). No signal holds an infinite sample. A regular group, audio included,
+  refuses NaN when it is built and when a file-backed group's samples are decoded: a NaN in audio is a
+  producer defect (0/0 on silence) and fails at the boundary. An irregular group holds NaN as its
+  missing-sample marker (pose and physiological dropouts), held as the one quiet NaN without payload of
+  ADR-006 whatever the producer's sign or payload. `Events.value` admits NaN, one digest whatever its sign or
+  payload. Label arrays of
+  strings are held at the width of their longest string, so two label columns holding the same strings are
+  one value.
 - **One timeline.** Every timed result is a `Span{start_ns, end_ns, clock_id}`. A `TimeMap`
   (offset plus drift, with uncertainty) relates clocks. It comes from metadata or a synchronisation
   task, and is a declared input.

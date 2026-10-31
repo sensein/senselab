@@ -11,6 +11,7 @@ import pytest
 import yaml
 from senselab_core.runtime.bep028 import SHA256_ALGORITHM, check_graph, convert_store_file, store_id
 from senselab_core.runtime.provenance import CHECKSUM_KEY, PATH_KEY, ProvStore
+from senselab_core.runtime.provenance import recorded as recorded_form
 
 from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.env import INSTALLED, MARKER, VenvResult, installed_sha256
@@ -162,19 +163,23 @@ def test_inputs_and_outputs_are_path_free_artifacts(recorded: dict[str, Any]) ->
     artifacts = store.entities("artifact")
     assert len(store.entities()) == len(artifacts) == 2
     by_role = {entity.attributes["role"]: entity for entity in artifacts}
-    assert by_role["input"].attributes == {
-        "role": "input",
-        "declared": "inputs[0]",
-        "root": "projects",
-        CHECKSUM_KEY: recorded["inputs"][0].digest,
-        "file_count": 1,
-    }
-    assert by_role["output"].attributes == {
-        "role": "output",
-        "declared": "outputs[0]",
-        CHECKSUM_KEY: recorded["outputs"][0].digest,
-        "file_count": 1,
-    }
+    assert by_role["input"].attributes == recorded_form(
+        {
+            "role": "input",
+            "declared": "inputs[0]",
+            "root": "projects",
+            CHECKSUM_KEY: recorded["inputs"][0].digest,
+            "file_count": 1,
+        }
+    )
+    assert by_role["output"].attributes == recorded_form(
+        {
+            "role": "output",
+            "declared": "outputs[0]",
+            CHECKSUM_KEY: recorded["outputs"][0].digest,
+            "file_count": 1,
+        }
+    )
     assert all(PATH_KEY not in entity.attributes for entity in artifacts)
     [activity] = store.activities()
     assert store.uses_of(activity.id) == [by_role["input"].id]
@@ -207,7 +212,7 @@ def test_the_venv_and_the_host_are_environments(recorded: dict[str, Any]) -> Non
     [venv] = store.environments("venv")
     assert venv.label == "repro-demo-SUBJ13"
     assert venv.python_version == "3.12.11"
-    assert venv.dependencies == {"numpy": "2.1.0", "torch": "2.5.1"}
+    assert venv.dependencies == recorded_form({"numpy": "2.1.0", "torch": "2.5.1"})
     assert venv.dependencies_digest is None
     [host] = store.environments("host")
     assert host.label == "node042"

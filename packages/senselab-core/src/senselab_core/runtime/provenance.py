@@ -807,7 +807,7 @@ class ProvStore:
         self._environments: dict[str, Environment] = {}
         self._relations: list[tuple[RELATION, str, str]] = []
 
-    def entity(self, *, prov_type: PROV_TYPE, extent: tuple[float, float] | None, attributes: Mapping[str, Any]) -> str:
+    def entity(self, *, prov_type: PROV_TYPE, extent: tuple[float, float] | None, attributes: dict[str, Any]) -> str:
         """Add an entity holding the normalised, read-only form of `attributes`.
 
         Args:
@@ -833,7 +833,7 @@ class ProvStore:
         *,
         node: str,
         step: str | None,
-        parameters: Mapping[str, Any],
+        parameters: dict[str, Any],
         started: str | None = None,
         ended: str | None = None,
     ) -> str:
@@ -905,7 +905,7 @@ class ProvStore:
         label: str,
         python_version: str,
         operating_system: str | None = None,
-        dependencies: Mapping[str, str] | None = None,
+        dependencies: dict[str, str] | None = None,
         dependencies_digest: str | None = None,
         senselab_version: str | None = None,
     ) -> str:

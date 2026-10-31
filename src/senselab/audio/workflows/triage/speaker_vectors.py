@@ -29,6 +29,7 @@ from typing import Any, Optional
 
 import numpy as np
 import pyarrow as pa
+from senselab_core.runtime.provenance import plain_values
 
 SCHEMA_VERSION = 2
 """Bumped whenever a column is added, removed or retyped, or the pooling rule changes."""
@@ -210,7 +211,7 @@ def read_task_extents(run_root: Path) -> list[Extent]:
                 continue
             if record.get("record") != "entity" or record.get("prov_type") != SPAN_TYPE:
                 continue
-            attributes = record.get("attributes") or {}
+            attributes = plain_values(record.get("attributes") or {})
             if attributes.get("role") != TASK_EXTENT_ROLE:
                 continue
             span = record.get("extent")

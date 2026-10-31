@@ -218,10 +218,22 @@ Architect review §5 (R-42) found:
   recomputed from the line, and the reader refuses a line whose id is not its content's. The writer and the
   reader build each record through the record type itself, so the writer emits nothing the reader refuses,
   `read_jsonl(write_jsonl(s))` holds records equal to `s`'s, and writing it again gives the same bytes. Two
-  different records under one id are refused, by `read_jsonl` and by `merge`.
+  different records under one id are refused, by `read_jsonl` and by `merge`; two timings of one activity
+  (its id excludes `started` and `ended`) are one activity, and the store and `merge` hold the later by
+  `(started, ended)`, so the union is order-independent. A `provenance@2.0` line without a `run_id` is refused.
+  The store records again every form it returns (H9c round 1, H-R38): the tokeniser writes a `FrozenDict`,
+  the object form a record holds, as it is, so a read-back recorded whole or nested in a new mapping keeps its
+  values, its tokens and its escaped keys, and recording `get_entity(x).attributes` mints `x` again.
+  `revised(target, **changes)` is the one copy-with-changes: of a held mapping, a canonical `FrozenDict` with the
+  changes normalised; of a record, a copy keeping its id with `run_id` null, which a store refuses to hold.
+  `recorded(value)` is the form a record holds for a value, for comparing read-backs; `plain_values(value)`
+  turns the `$f`, `$int` and `$path` tokens of a store file parsed as JSON back into numbers and text.
   A file without a format line is `provenance@1`, the previous major, still read: its values are normalised
-  as the writer normalises them and its records keep the ids it gave them, with `run_id` null; such an id is
-  not recomputable and is said to be so by the null.
+  as the writer normalises them and its records keep the ids it gave them, unverified (`run_id` null). A store
+  holding an unverified record is written as `provenance@1.1`, the same canonical lines under a format line that
+  says some ids are not recomputable; it is never written as `provenance@2.0`, which would need every such
+  record re-minted under a run id and every reference to its old id rewritten. Extents are finite on read as
+  on write.
 - **Every artifact carries `format: <name>@<major>.<minor>`.** That covers results, logical plans,
   placements, profiles, provenance records, fitted artifacts, store indexes and graph documents.
   - A minor change is additive, and readers ignore unknown fields.

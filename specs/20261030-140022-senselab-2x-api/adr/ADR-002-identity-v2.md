@@ -26,6 +26,9 @@ Principle P-38.
   the upstream **output** identity: the hash of the canonical serialised output (ADR-006). An
   upstream change that reproduces identical output therefore leaves downstream keys unchanged
   (early cutoff).
+- **Cached outputs are clock-relative.** An input's identity is its content, not its `TimeAnchor`, so two
+  recordings of one content on two clocks share a key; a stored output carrying a `clock_id` is re-bound to
+  the consumer's anchor when it is served.
 - **Long and large inputs** use chunked content identity: a hash list over fixed-size byte chunks.
   A time-range read is identified by the chunks it touches plus the range.
 - **Identities are typed, not free strings.** The key refuses a ref, a path or bare hex where an

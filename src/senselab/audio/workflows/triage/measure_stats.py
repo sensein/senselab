@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
+from senselab_core.runtime.provenance import plain_values
+
 from senselab.utils import fastio
 
 STORE_NAME = "store.jsonl"
@@ -99,7 +101,7 @@ def readings(root: Path) -> Iterator[tuple[str, str, Any]]:
                 continue
             if record.get("record") != "entity":
                 continue
-            attributes = record.get("attributes") or {}
+            attributes = plain_values(record.get("attributes") or {})
             if record.get("prov_type") == "verdict" and attributes.get("node") == "VERDICT":
                 family = str(attributes.get("declared_family") or "(undeclared)")
             elif record.get("prov_type") == "measurement" and attributes.get("name"):

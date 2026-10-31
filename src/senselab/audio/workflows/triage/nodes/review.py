@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from senselab_core.runtime.provenance import ProvStore
+from senselab_core.runtime.provenance import ProvStore, recorded
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
@@ -855,7 +855,7 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
     if str(held.get("model_id")) != str(settings["model_id"]):
         return BACKFILL_SKIPPED, f"model {held.get('model_id')!r} is not the configured one"
     engine = dict(held.get("engine") or engine_identity(ENGINE_TRANSFORMERS))
-    if engine != review_engine(settings):
+    if recorded(engine) != recorded(review_engine(settings)):
         return BACKFILL_SKIPPED, f"engine {engine.get('name')!r} is not the configured one"
     original, redacted = transcript_texts(store)
     if bool(held.get("read_redacted")) != (redacted is not None):

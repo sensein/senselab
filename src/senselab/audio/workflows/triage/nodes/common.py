@@ -17,7 +17,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Mapping
 
-from senselab_core.runtime.provenance import PROV_TYPE, Entity, ProvStore, file_attributes
+from senselab_core.runtime.provenance import PROV_TYPE, Entity, ProvStore, file_attributes, revised
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.praat_parselmouth import CppsSettings
@@ -588,7 +588,7 @@ def bound_word(word: Entity, duration_s: float) -> Entity:
     """
     if word.extent is None or float(word.extent[1]) <= duration_s:
         return word
-    return replace(word, extent=bound_word_extent(word.extent, duration_s))
+    return revised(word, extent=bound_word_extent(word.extent, duration_s))
 
 
 def lexical_words(store: ProvStore) -> list[Entity]:

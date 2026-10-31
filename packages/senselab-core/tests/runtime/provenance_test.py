@@ -829,7 +829,7 @@ def test_the_store_records_again_every_form_it_returns(
     path = tmp_path_factory.mktemp("prov") / "prov.jsonl"
     store.write_jsonl(path)
     back = ProvStore.read_jsonl(path, run_id="run")
-    held = back.get_entity(eid).attributes
+    held = cast(dict[str, object], back.get_entity(eid).attributes)
     assert back.entity(prov_type="measurement", extent=(0.0, 1.0), attributes=held) == eid
     nested = back.entity(prov_type="measurement", extent=None, attributes={"inner": held, "list": [held]})
     assert back.get_entity(nested).attributes == {"inner": held, "list": (held,)}

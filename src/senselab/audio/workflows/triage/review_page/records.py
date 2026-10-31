@@ -85,7 +85,7 @@ def _find(tree: Any, key: str) -> list[Any]:  # noqa: ANN401 -- a store attribut
             if k == key:
                 found.append(v)
             found.extend(_find(v, key))
-    elif isinstance(tree, list):
+    elif isinstance(tree, (list, tuple)):
         for v in tree:
             found.extend(_find(v, key))
     return found
@@ -122,7 +122,7 @@ def overlays(view: StoreView) -> dict[str, list[list[Any]]]:
         faults = attributes.get("faults")
         if isinstance(faults, Mapping):
             for kind, values in faults.items():
-                spans = _spans(values) if isinstance(values, list) else _spans([values])
+                spans = _spans(values) if isinstance(values, (list, tuple)) else _spans([values])
                 issues.extend([s, e, str(kind)] for s, e in spans)
     heard = view.last("measurement", name=BACKGROUND_SPEECH)
     if heard is not None:
