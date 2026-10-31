@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import collections
 import copy
+import enum
 import json
 import math
 import unicodedata
 from collections.abc import Callable
+from decimal import Decimal
 from fractions import Fraction
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath
 from typing import cast, get_args
 
+import numpy
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -568,49 +572,106 @@ class TestAtomicWrite:
         assert target.stat().st_mode & 0o777 == 0o640
 
 
-_KEYS = st.text(alphabet="abf$i", max_size=4)
-_SCALARS = (
-    st.none()
-    | st.booleans()
-    | st.integers(-(2**70), 2**70)
-    | st.floats()
-    | st.sampled_from([float("inf"), float("-inf"), float("nan"), -0.0, 2.0**60, 1e300])
-    | st.text(alphabet="aé\u0301$fNI", max_size=5)
+class Colour(enum.Enum):
+    """An enum family member with a plain value."""
+
+    RED = "red"
+    ONE = 1
+
+
+class Level(enum.IntEnum):
+    """An enum family member that is also an int."""
+
+    ONE = 1
+
+
+_KEYS = st.text(alphabet="abfé\u0301$i", max_size=4).map(lambda k: unicodedata.normalize("NFC", k))
+_FLOATS = st.floats() | st.sampled_from([float("inf"), float("-inf"), float("nan"), -0.0, 2.0**60, 1e300])
+_JSON_SCALARS = (
+    st.none() | st.booleans() | st.integers(-(2**70), 2**70) | _FLOATS | st.text(alphabet="aé\u0301$fNI", max_size=5)
+)
+_NUMPY_SCALARS = st.one_of(
+    _FLOATS.map(numpy.float64),
+    st.floats(width=32).map(numpy.float32),
+    st.integers(-(2**63), 2**63 - 1).map(numpy.int64),
+    st.booleans().map(numpy.bool_),
+)
+_FAMILIES = st.one_of(
+    st.text(alphabet="ab/.", max_size=6).map(PurePosixPath),
+    st.sampled_from(list(Colour) + list(Level)),
+    st.decimals(allow_nan=True, allow_infinity=True, places=None).filter(lambda d: not d.is_snan()),
+    st.binary(max_size=4),
+    st.binary(max_size=4).map(bytearray),
+    st.lists(st.integers(-5, 5), max_size=4).map(lambda v: numpy.array(v, dtype="<i8")),
+    st.lists(_FLOATS, max_size=3).map(lambda v: numpy.array(v, dtype=">f8")),
+    st.frozensets(st.integers(-3, 3) | st.text(alphabet="ab", max_size=2), max_size=3),
+    st.sets(st.integers(-3, 3), max_size=3),
 )
 _PAYLOADS = st.recursive(
-    _SCALARS,
-    lambda inner: st.lists(inner, max_size=3) | st.dictionaries(_KEYS, inner, max_size=3),
+    _JSON_SCALARS | _NUMPY_SCALARS | _FAMILIES,
+    lambda inner: (
+        st.lists(inner, max_size=3) | st.lists(inner, max_size=3).map(tuple) | st.dictionaries(_KEYS, inner, max_size=3)
+    ),
     max_leaves=10,
 )
 
 
+def _number(value: float | int) -> object:
+    if isinstance(value, float) and not math.isfinite(value):
+        return ("nonfinite", "nan" if math.isnan(value) else repr(value))
+    if isinstance(value, int) and abs(value) > 2**53 - 1:
+        return ("bigint", value)
+    return ("n", Fraction(value))
+
+
 def _oracle(value: object) -> object:
-    """An independent identity: JCS numeric equality for finite numbers, NFC for text, tokens kept apart."""
+    """An independent identity, modulo ADR-006's equivalences only.
+
+    Finite numbers compare by value (1 = 1.0 = numpy 1, -0.0 = 0), every NaN is one, text compares after NFC,
+    a tuple is a list, bytes equal bytearray of the same content, a set equals a frozenset, an array compares
+    by dtype name, shape and values whatever its byte order. Every family stays apart from JSON and from the
+    others.
+    """
+    if isinstance(value, enum.Enum):
+        return ("enum", f"{type(value).__module__}.{type(value).__qualname__}", _oracle(value.value))
+    if isinstance(value, numpy.ndarray):
+        return ("nd", value.dtype.name, value.shape, tuple(_oracle(v) for v in value.reshape(-1).tolist()))
+    if isinstance(value, numpy.generic):
+        return _oracle(value.item())
     if value is None or isinstance(value, bool):
         return ("c", value)
-    if isinstance(value, int):
-        return ("n", Fraction(value)) if abs(value) <= 2**53 - 1 else ("bigint", value)
-    if isinstance(value, float):
-        return ("nonfinite", repr(value)) if not math.isfinite(value) else ("n", Fraction(value))
+    if isinstance(value, (int, float)):
+        return _number(value)
     if isinstance(value, str):
         return ("s", unicodedata.normalize("NFC", value))
+    if isinstance(value, PurePath):
+        return ("path", value.as_posix())
+    if isinstance(value, Decimal):
+        return ("dec", str(value))
+    if isinstance(value, (bytes, bytearray)):
+        return ("bytes", bytes(value))
+    if isinstance(value, (set, frozenset)):
+        return ("set", tuple(sorted(repr(_oracle(v)) for v in value)))
     if isinstance(value, (list, tuple)):
         return ("l", tuple(_oracle(v) for v in value))
     assert isinstance(value, dict)
     return ("d", frozenset((k, _oracle(v)) for k, v in value.items()))
 
 
-@settings(max_examples=400, deadline=None)
-@given(a=_PAYLOADS, b=_PAYLOADS)
-def test_provenance_digest_is_total_deterministic_and_collision_free(a: object, b: object) -> None:
-    """Over nested payloads with +/-inf, NaN, huge ints and `$` keys, the id always exists, repeats, and separates.
+def _id(value: object) -> str:
+    return provenance._digest([value], ("value",))
 
-    Two payloads share an id exactly when an independent oracle calls them equal: finite numbers by JCS value
-    (so `1` and `1.0` are one), text after NFC, non-finite floats and out-of-range integers by their own value.
+
+@settings(max_examples=500, deadline=None)
+@given(a=_PAYLOADS, b=_PAYLOADS)
+def test_provenance_digest_is_total_deterministic_and_injective_over_the_declared_type(a: object, b: object) -> None:
+    """Every value of the declared provenance type gets an id, the same id again, and its own id.
+
+    Two values share an id exactly when an independent oracle calls them equal modulo ADR-006's equivalences.
     """
     for value in (a, b):
-        assert provenance._digest(value) == provenance._digest(copy.deepcopy(value))
-    assert (provenance._digest(a) == provenance._digest(b)) is (_oracle(a) == _oracle(b))
+        assert _id(value) == _id(copy.deepcopy(value))
+    assert (_id(a) == _id(b)) is (_oracle(a) == _oracle(b))
 
 
 @pytest.mark.parametrize(
@@ -619,24 +680,68 @@ def test_provenance_digest_is_total_deterministic_and_collision_free(a: object, 
         (float("nan"), {"$f": "NaN"}),
         (float("-inf"), {"$f": "-Infinity"}),
         (float("-inf"), "-Infinity"),
-        (2**60, {"$i": str(2**60)}),
+        (2**60, {"$int": str(2**60)}),
         (2**60, str(2**60)),
         (2**60, float(2**60)),
         ({"$f": "NaN"}, {"$$f": "NaN"}),
         ([float("inf")], [float("-inf")]),
+        (PurePosixPath("a/b"), "a/b"),
+        (PurePosixPath("a/b"), {"$path": "a/b"}),
+        (Colour.RED, "red"),
+        (Level.ONE, 1),
+        (Colour.ONE, Level.ONE),
+        (Decimal("1.0"), Decimal("1.00")),
+        (Decimal("1"), 1),
+        (b"\x01", "01"),
+        (b"\x01", [1]),
+        (frozenset({1, 2}), [1, 2]),
+        (numpy.array([1, 2]), [1, 2]),
+        (numpy.array([1, 2], dtype="<i8"), numpy.array([1, 2], dtype="<i4")),
+        (numpy.array([[1, 2]]), numpy.array([1, 2])),
     ],
 )
-def test_tokens_never_collide_with_recorded_objects_or_strings(a: object, b: object) -> None:
-    """A token is never the id of an ordinary object or string; an escaped `$` key is never its unescaped twin."""
-    assert provenance._digest(a) != provenance._digest(b)
+def test_tokens_never_collide_with_recorded_values_or_each_other(a: object, b: object) -> None:
+    """A token is never the id of an ordinary object or string, of another family, or of another shape or dtype."""
+    assert _id(a) != _id(b)
 
 
-@settings(max_examples=50, deadline=None)
-@given(n=st.integers(-(2**53) + 1, 2**53 - 1), x=_PAYLOADS)
-def test_mixed_int_and_str_keys_are_refused(n: int, x: object) -> None:
-    """A non-`str` key is refused rather than collapsed onto its string twin."""
-    with pytest.raises(TypeError):
-        provenance._digest({n: x, str(n): x})
+class _Opaque:
+    """A type outside the declared provenance value type."""
+
+
+@pytest.mark.parametrize(
+    ("attributes", "path", "type_name"),
+    [
+        ({"evidence": {"window": _Opaque()}}, "attributes.evidence.window", "_Opaque"),
+        ({"values": [1, {"x": complex(1, 2)}]}, "attributes.values[1].x", "builtins.complex"),
+        ({"when": numpy.datetime64("2026-10-31")}, "attributes.when", "numpy.datetime64"),
+        ({"rows": numpy.array([(1, 2.0)], dtype="i4,f8")}, "attributes.rows[0]", "numpy.void"),
+        ({"ordered": collections.OrderedDict(a=1)}, "attributes.ordered", "collections.OrderedDict"),
+        ({1: "x"}, "attributes[1]", "builtins.int"),
+        ({"\u00e9": 1, "e\u0301": 2}, "attributes.e\u0301", "builtins.str"),
+    ],
+)
+def test_an_undeclared_value_raises_a_typed_error_at_the_boundary(attributes: dict, path: str, type_name: str) -> None:
+    """`ProvStore.entity` refuses a value outside the declared type with `UnrecordableValue` naming path and type."""
+    with pytest.raises(provenance.UnrecordableValue) as caught:
+        ProvStore(run_id="r").entity(prov_type="measurement", extent=None, attributes=attributes)
+    assert caught.value.path == path and caught.value.type_name.endswith(type_name)
+    assert path in str(caught.value) and type_name in str(caught.value)
+
+
+def test_cycles_and_depth_raise_the_typed_error_through_the_shared_guard() -> None:
+    """A container holding itself, recorded nesting past `MAX_DEPTH`, or tokens pushing past it, are typed errors."""
+    loop: dict[str, object] = {}
+    loop["self"] = loop
+    deep: object = 1.0
+    for _ in range(200):
+        deep = [deep]
+    edge: object = float("-inf")
+    for _ in range(62):
+        edge = [edge]
+    for attributes in ({"loop": loop}, {"deep": deep}, {"edge": edge}):
+        with pytest.raises(provenance.UnrecordableValue, match="contains itself|deeper"):
+            ProvStore(run_id="r").entity(prov_type="measurement", extent=None, attributes=attributes)
 
 
 def test_a_level_measurement_of_silence_gets_an_id() -> None:

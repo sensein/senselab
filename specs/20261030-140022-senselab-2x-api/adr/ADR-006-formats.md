@@ -39,6 +39,17 @@ Architect review §5 (R-42) found:
 
   Durable identities never name a Python class: a recording's `content:` identity hashes a
   declared type token (`recording`, or `audio@2` for in-memory audio), not a module path.
+- **Canonical equivalences.** Values that differ in Python but are one value under JCS or the forms above
+  share every digest:
+  - `1`, `1.0`, a numpy `1` and `1.0`, and `-0.0`, `0.0` and `0` (JSON numbers compare by value);
+  - every NaN, whatever its sign or payload, in the forms that admit NaN;
+  - two strings, or two keys, equal after NFC (two such keys in one object are refused, not merged);
+  - a list and a tuple; a set and a frozenset;
+  - `bytes` and `bytearray` of the same content, and arrays equal in dtype name, shape and values
+    whatever their byte order (`provenance-id@2`).
+
+  `value@1` adds its own (a path and its text, an enum and its value). `provenance-id@2` keeps those
+  apart as tagged tokens (`$path`, `$enum`, `$nd`, `$dec`, `$bytes`, `$set`, `$f`, `$int`).
 - **Every digest is `tagged_digest(tag, value)` with a registered tag:**
   `sha256(tag || 0x00 || JCS(value))`. The tags are `logical-key@2`, `output@2`, `context@2`,
   `content-root@2`, `audio@2`, `weights@2`, `value@1` and `data-manifest@2`. No tag is a prefix of

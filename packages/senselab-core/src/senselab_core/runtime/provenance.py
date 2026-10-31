@@ -14,12 +14,24 @@ import os
 import re
 import stat
 import threading
+import unicodedata
 import uuid
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from decimal import Decimal
+from enum import Enum
+from pathlib import Path, PurePath
 from typing import Any, Literal, Sequence, cast, get_args
 
-from senselab_worker.canonical import canonical_scalar, tagged_digest
+import numpy
+from senselab_worker.canonical import (
+    INT_TOKEN,
+    canonical_scalar,
+    entered,
+    escaped_key,
+    in_json_domain,
+    jcs_dumps,
+    tagged_digest,
+)
 
 from senselab_core.runtime.storage import write_atomically
 
@@ -177,49 +189,131 @@ class Environment:
     senselab_version: str | None = None
 
 
-_MAX_SAFE_INT = 2**53 - 1
-TOKEN_PREFIX = "$"
-"""Object keys starting with it are escaped by one more; a token is an object whose only key is `$f` or `$i`."""
+TOKENS = ("$f", INT_TOKEN, "$path", "$enum", "$nd", "$dec", "$bytes", "$set")
+"""The keys of the tagged tokens `normalised` writes, one per family of values outside the JSON domain."""
 
 
-def normalised(value: object) -> object:
-    """Return `value` with every scalar outside the JSON domain replaced by a token the shared encoder accepts.
+class UnrecordableValue(TypeError, ValueError):
+    """A provenance attribute or parameter holds a value outside the declared provenance value type.
 
-    A non-finite float becomes `{"$f": "NaN" | "Infinity" | "-Infinity"}`, an integer outside
-    +/-(2**53 - 1) becomes `{"$i": "<decimal>"}`, and an object key starting with `$` gains one more `$`,
-    so no recorded object reads as a token. Tuples become lists. Numpy scalars pass through
-    `canonical_scalar` first.
+    Attributes:
+        path: Where the value sits, from the attribute or parameter root, e.g. `attributes.evidence[2]`.
+        type_name: The offending value's type, `module.qualname`.
+    """
+
+    def __init__(self, path: str, value: object, reason: str) -> None:
+        """Name the path, the value's type and why it cannot be recorded."""
+        self.path = path
+        self.type_name = f"{type(value).__module__}.{type(value).__qualname__}"
+        super().__init__(f"{path}: {self.type_name} {reason}")
+
+
+def normalised(value: object, path: str = "value", active: set[int] | None = None) -> object:
+    """Return `value` as JSON the shared encoder accepts, every value outside the JSON domain as a tagged token.
+
+    The provenance value type is JSON (`None`, `bool`, `int`, `float`, `str`, `list`, `tuple`, `dict` with
+    `str` keys) plus these families, each written as a one-key object:
+
+    - a non-finite float: `{"$f": "NaN" | "Infinity" | "-Infinity"}`;
+    - an integer outside +/-`MAX_SAFE_INT`: `{"$int": "<decimal>"}`;
+    - a `PurePath`: `{"$path": <posix string>}`;
+    - an `Enum` member: `{"$enum": ["<module>.<qualname>", <its value, normalised>]}`;
+    - a `numpy.ndarray`: `{"$nd": {"dtype": <dtype name>, "shape": [...], "values": [<flat values, normalised>]}}`;
+    - a `Decimal`: `{"$dec": <str>}`; `bytes` or `bytearray`: `{"$bytes": <hex>}`;
+    - a `set` or `frozenset`: `{"$set": [<elements, normalised, sorted by their JCS bytes>]}`;
+    - a numpy scalar: its value, through `canonical_scalar`.
+
+    An object key starting with `$` gains one more `$`, so no recorded object reads as a token. Containers
+    are entered through `canonical.entered`, the shared cycle and depth guard.
 
     Raises:
-        TypeError: on a non-`str` object key or a value `canonical_scalar` refuses.
+        UnrecordableValue: naming `path` and the type, for any other type, a non-`str` key, two keys equal
+            after NFC, a container that contains itself, or nesting deeper than `MAX_DEPTH`.
     """
+    active = set() if active is None else active
+    t = type(value)
+    if t is dict or t is list or t is tuple or t is set or t is frozenset or t is numpy.ndarray:
+        try:
+            with entered(value, active):
+                return _container(value, path, active)
+        except UnrecordableValue:
+            raise
+        except ValueError as err:
+            raise UnrecordableValue(path, value, str(err)) from err
+    if isinstance(value, Enum):
+        qualname = f"{t.__module__}.{t.__qualname__}"
+        return {"$enum": [qualname, normalised(value.value, f"{path}.value", active)]}
+    if isinstance(value, PurePath):
+        return {"$path": value.as_posix()}
+    if t is bytes or t is bytearray:
+        return {"$bytes": cast("bytes | bytearray", value).hex()}
+    if t is Decimal:
+        return {"$dec": str(value)}
+    try:
+        scalar = canonical_scalar(value)
+    except TypeError as err:
+        raise UnrecordableValue(path, value, "is not a provenance value") from err
+    if in_json_domain(scalar):
+        return scalar
+    if type(scalar) is int:
+        return {INT_TOKEN: str(scalar)}
+    number = cast(float, scalar)
+    return {"$f": "NaN" if math.isnan(number) else ("Infinity" if number > 0 else "-Infinity")}
+
+
+def _container(value: Any, path: str, active: set[int]) -> object:  # noqa: ANN401
     t = type(value)
     if t is dict:
         out: dict[str, object] = {}
-        for key, item in value.items():  # type: ignore[attr-defined]
+        seen: set[str] = set()
+        for key, item in value.items():
             if type(key) is not str:
-                raise TypeError(f"provenance object key is not a str: {type(key).__qualname__}")
-            out[TOKEN_PREFIX + key if key.startswith(TOKEN_PREFIX) else key] = normalised(item)
+                raise UnrecordableValue(f"{path}[{key!r}]", key, "is not a str object key")
+            nfc = unicodedata.normalize("NFC", key)
+            if nfc in seen:
+                raise UnrecordableValue(f"{path}.{key}", key, "is a key equal after NFC to another key of its object")
+            seen.add(nfc)
+            out[escaped_key(key)] = normalised(item, f"{path}.{key}", active)
         return out
     if t is list or t is tuple:
-        return [normalised(item) for item in value]  # type: ignore[attr-defined]
-    scalar = canonical_scalar(value)
-    if type(scalar) is float and not math.isfinite(scalar):
-        return {"$f": "NaN" if math.isnan(scalar) else ("Infinity" if scalar > 0 else "-Infinity")}
-    if type(scalar) is int and abs(scalar) > _MAX_SAFE_INT:
-        return {"$i": str(scalar)}
-    return scalar
+        return [normalised(item, f"{path}[{i}]", active) for i, item in enumerate(value)]
+    if t is set or t is frozenset:
+        items = [normalised(item, f"{path}{{}}", active) for item in value]
+        return {"$set": sorted(items, key=jcs_dumps)}
+    flat = value.reshape(-1)
+    values = [normalised(flat[i], f"{path}[{i}]", active) for i in range(flat.size)]
+    return {"$nd": {"dtype": value.dtype.name, "shape": list(value.shape), "values": values}}
 
 
-def _digest(payload: object) -> str:
-    """Return the 16-hex id of a payload: `tagged_digest("provenance-id@2", normalised(payload))`.
+_ENTITY_ROOTS = ("run_id", "prov_type", "extent", "attributes")
+_ACTIVITY_ROOTS = ("run_id", "node", "step", "parameters")
+_AGENT_ROOTS = ("run_id", "agent_type", "model_id", "commit_sha", "unresolved_reason", "version")
+_ENVIRONMENT_ROOTS = (
+    "run_id",
+    "kind",
+    "label",
+    "python_version",
+    "operating_system",
+    "dependencies",
+    "dependencies_digest",
+    "senselab_version",
+)
+
+
+def _digest(payload: Sequence[object], roots: Sequence[str]) -> str:
+    """Return the 16-hex id of `payload`: `tagged_digest("provenance-id@2", ...)` over each part, normalised.
+
+    `roots` names each part of `payload`, for the path an `UnrecordableValue` reports.
 
     Raises:
-        TypeError: on what `normalised` refuses.
-        ValueError: on what `jcs_dumps` refuses of the normalised payload: two keys equal after NFC, a
-            container that contains itself, nesting deeper than `MAX_DEPTH`.
+        UnrecordableValue: if a part holds a value outside the provenance value type, or nests deeper than
+            `MAX_DEPTH` once its tokens are counted.
     """
-    return tagged_digest("provenance-id@2", normalised(payload))[:16]
+    parts = [normalised(part, root) for part, root in zip(payload, roots, strict=True)]
+    try:
+        return tagged_digest("provenance-id@2", parts)[:16]
+    except ValueError as err:
+        raise UnrecordableValue(".".join(roots), payload, str(err)) from err
 
 
 def file_digest(path: str | Path) -> tuple[str | None, str | None]:
@@ -361,7 +455,7 @@ class ProvStore:
                 than an ``artifact``.
         """
         _check_entity_attributes(prov_type, attributes)
-        eid = f"{prov_type}-{_digest([self.run_id, prov_type, extent, attributes])}"
+        eid = f"{prov_type}-{_digest([self.run_id, prov_type, extent, attributes], _ENTITY_ROOTS)}"
         self._entities[eid] = Entity(id=eid, prov_type=prov_type, extent=extent, attributes=dict(attributes))
         return eid
 
@@ -386,7 +480,7 @@ class ProvStore:
         Returns:
             Its id — the same for two executions that differ only in ``started``/``ended``.
         """
-        aid = f"act-{_digest([self.run_id, node, step, parameters])}"
+        aid = f"act-{_digest([self.run_id, node, step, parameters], _ACTIVITY_ROOTS)}"
         self._activities[aid] = Activity(
             id=aid, node=node, step=step, started=started, ended=ended, parameters=dict(parameters)
         )
@@ -420,7 +514,8 @@ class ProvStore:
                 missing.
         """
         _check_agent_fields(agent_type, model_id, commit_sha, unresolved_reason)
-        gid = f"agent-{_digest([self.run_id, agent_type, model_id, commit_sha, unresolved_reason, version])}"
+        payload = [self.run_id, agent_type, model_id, commit_sha, unresolved_reason, version]
+        gid = f"agent-{_digest(payload, _AGENT_ROOTS)}"
         self._agents[gid] = Agent(
             id=gid,
             agent_type=agent_type,
@@ -467,7 +562,7 @@ class ProvStore:
             dependencies_digest,
             senselab_version,
         ]
-        eid = f"env-{_digest(payload)}"
+        eid = f"env-{_digest(payload, _ENVIRONMENT_ROOTS)}"
         self._environments[eid] = Environment(
             id=eid,
             kind=kind,
@@ -722,11 +817,14 @@ class ProvStore:
     def fingerprint(self) -> str:
         """A content hash that ignores insertion order."""
         return _digest(
-            {
-                "e": sorted(self._entities),
-                "act": sorted(self._activities),
-                "ag": sorted(self._agents),
-                "env": sorted(self._environments),
-                "r": sorted(f"{r}:{s}:{t}" for r, s, t in self._relations),
-            }
+            [
+                {
+                    "e": sorted(self._entities),
+                    "act": sorted(self._activities),
+                    "ag": sorted(self._agents),
+                    "env": sorted(self._environments),
+                    "r": sorted(f"{r}:{s}:{t}" for r, s, t in self._relations),
+                }
+            ],
+            ("store",),
         )

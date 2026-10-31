@@ -396,13 +396,20 @@ them to a principle.
 **One provenance store** (`ProvStore`, append-only, content-derived ids) is written around every
 node with the attested identities. BEP028 export is how runs are published. `reproduce` becomes a
 consumer of this store.
-Its ids are `tagged_digest("provenance-id@2", normalised(payload))[:16]`. The digest must be total over every
-value a pipeline records, so one step before the shared encoder maps scalars outside the JSON domain to tokens:
-a non-finite float to `{"$f": "NaN" | "Infinity" | "-Infinity"}` (a silent level is `-inf` dB), an integer beyond
-±(2^53−1) to `{"$i": "<decimal>"}` (`mtime_ns` is about 1.7e18). An object key starting with `$` gains one more
-`$`, so no recorded object reads as a token; escaping was chosen over refusal because refusal would make the
-digest partial. The encoder itself is unchanged and is still the only canonical form. Non-`str` keys stay
-refused. Under JCS `1` and `1.0` are one number, so they give one id; that is accepted (H-R29).
+Its ids are `tagged_digest("provenance-id@2", ...)[:16]` over each part of an entity, activity, agent or
+environment after `normalised`, the one step before the shared encoder. The attributes and parameters have a
+declared provenance value type: JSON values plus tagged families, each a one-key token: non-finite floats
+(`$f`), integers beyond ±(2^53−1) (`$int`, the token `value@1` uses), `Path` (`$path`, posix text), `Enum`
+(`$enum`, qualified name and value), `ndarray` (`$nd`, dtype name, shape, flat values), `Decimal` (`$dec`),
+`bytes` (`$bytes`, hex), `set`/`frozenset` (`$set`, sorted by JCS bytes), and numpy scalars as their value.
+The digest is total over that type by construction. Pipelines record `-inf` dB for silence and nanosecond
+`mtime_ns` stamps, and branch evidence (`**finding.evidence`) is typed `Any`, so totality cannot rest on the
+suites that happen to run. A held key starting with `$` gains one more (`canonical.escaped_key`, shared with
+`value@1`), so no recorded object reads as a token; escaping rather than refusal keeps the digest total.
+Anything else (another type, a non-`str` key, two keys equal after NFC, a cycle, nesting past `MAX_DEPTH`
+once tokens are counted) raises `UnrecordableValue` at the `ProvStore` boundary, naming the attribute path
+and the type. Cycles and depth go through `canonical.entered`. JCS numeric equality (`1` = `1.0`) and the
+other ADR-006 equivalences are accepted (H-R29, H-R30).
 
 ### 4.9 Execution (P-2, P-5, P-6, P-7)
 

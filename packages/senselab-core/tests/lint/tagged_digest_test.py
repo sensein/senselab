@@ -423,7 +423,7 @@ def test_provenance_ids_are_tagged_digests() -> None:
     from senselab_core.runtime import provenance
     from senselab_worker.canonical import tagged_digest
 
-    assert provenance._digest(["r", "span"]) == tagged_digest("provenance-id@2", ["r", "span"])[:16]
+    assert provenance._digest(["r", "span"], ("a", "b")) == tagged_digest("provenance-id@2", ["r", "span"])[:16]
 
 
 @pytest.mark.logic

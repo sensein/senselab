@@ -20,7 +20,14 @@ from pydantic import (
     Strict,
     StringConstraints,
 )
-from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps, tagged_digest
+from senselab_worker.canonical import (
+    INT_TOKEN,
+    MAX_SAFE_INT,
+    canonical_npy_bytes,
+    escaped_key,
+    jcs_dumps,
+    tagged_digest,
+)
 from senselab_worker.hashing import sha256_bytes
 
 K = TypeVar("K")
@@ -28,7 +35,6 @@ V = TypeVar("V")
 F = TypeVar("F", bound="Frozen")
 
 _DIGEST_TAG = "value@1"
-_MAX_SAFE_INT = 2**53 - 1
 
 
 class FrozenMapping(Mapping[K, V]):
@@ -105,18 +111,14 @@ def _canonical_value(v: object) -> object:
         return os.fspath(v)
     if isinstance(v, type):
         return f"{v.__module__}.{v.__qualname__}"
-    if type(v) is int and abs(v) > _MAX_SAFE_INT:
-        return {INT_MARKER: str(v)}
+    if type(v) is int and abs(v) > MAX_SAFE_INT:
+        return {INT_TOKEN: str(v)}
     return v
-
-
-INT_MARKER = "$int"
-"""The one key of the object that stands for an integer outside the I-JSON range in a `value@1` digest."""
 
 
 def _key_text(k: object) -> object:
     text = k.value if isinstance(k, Enum) else k
-    return "$" + text if isinstance(text, str) and text.startswith("$") else text
+    return escaped_key(text) if isinstance(text, str) else text
 
 
 def value_digest(type_name: str, fields: Mapping[str, object]) -> str:

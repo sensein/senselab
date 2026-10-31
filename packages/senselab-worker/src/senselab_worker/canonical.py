@@ -16,7 +16,8 @@ from typing import Callable, cast
 
 import numpy
 
-_MAX_SAFE_INT = 2**53 - 1
+MAX_SAFE_INT = 2**53 - 1
+"""The I-JSON integer bound: an integer is JSON only within +/-MAX_SAFE_INT."""
 _PLATFORM_DTYPE_CHARS = "gG"
 _CANONICAL_KINDS = "biufU"
 _PY_SCALARS = (type(None), bool, int, float, str)
@@ -64,6 +65,26 @@ def canonical_scalar(v: object) -> Scalar:
     raise TypeError(f"not a canonical JSON scalar: {t.__module__}.{t.__qualname__}")
 
 
+TOKEN_PREFIX = "$"
+"""A one-key object whose key starts with it is a token for a value outside JSON; held keys get one more."""
+INT_TOKEN = "$int"
+"""The one key of the token that stands for an integer outside the I-JSON range."""
+
+
+def escaped_key(key: str) -> str:
+    """Return `key` with one more `TOKEN_PREFIX` if it starts with one, so no held object reads as a token."""
+    return TOKEN_PREFIX + key if key.startswith(TOKEN_PREFIX) else key
+
+
+def in_json_domain(scalar: Scalar) -> bool:
+    """Whether an exact JSON scalar is one `jcs_dumps` writes: a finite float, an integer within +/-MAX_SAFE_INT."""
+    if type(scalar) is float:
+        return math.isfinite(scalar)
+    if type(scalar) is int:
+        return abs(scalar) <= MAX_SAFE_INT
+    return True
+
+
 def jcs_dumps(obj: object) -> bytes:
     """Serialise a JSON value as RFC 8785 canonical UTF-8 bytes.
 
@@ -95,7 +116,7 @@ def jcs_loads(data: bytes | str) -> object:
 
 def _parse_int(text: str) -> int | float:
     value = int(text)
-    return value if abs(value) <= _MAX_SAFE_INT else float(text)
+    return value if abs(value) <= MAX_SAFE_INT else float(text)
 
 
 def _refuse_constant(text: str) -> object:
@@ -201,7 +222,7 @@ def utf16_sort_key(key: str) -> bytes:
 
 
 def _int_text(value: int) -> str:
-    if abs(value) > _MAX_SAFE_INT:
+    if not in_json_domain(value):
         raise ValueError(f"integer outside the I-JSON range of +/-(2**53 - 1): {value}")
     return str(value)
 
@@ -214,7 +235,7 @@ def _string_text(value: str) -> str:
 
 def _float_text(value: float) -> str:
     """Format a finite float as ECMAScript Number.prototype.toString does."""
-    if not math.isfinite(value):
+    if not in_json_domain(value):
         raise ValueError(f"non-finite number is not JSON: {value}")
     if value == 0.0:
         return "0"
