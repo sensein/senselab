@@ -812,3 +812,33 @@ def test_a_provenance_1_file_reads_with_its_ids_kept(tmp_path: Path) -> None:
     written = tmp_path / "new.jsonl"
     back.write_jsonl(written)
     assert ProvStore.read_jsonl(written).records() == back.records()
+
+
+@settings(max_examples=300, deadline=None)
+@given(attributes=st.dictionaries(_KEYS, _PAYLOADS, max_size=3), extra=_PAYLOADS)
+def test_the_store_records_again_every_form_it_returns(
+    tmp_path_factory: pytest.TempPathFactory, attributes: dict[str, object], extra: object
+) -> None:
+    """A read-back's attributes, whole, nested in a new mapping, or revised, record the same values; files agree.
+
+    Recording `get_entity(x).attributes` mints `x` again; a new mapping holding read-back objects records them as
+    they are; `revised` adds a value as the store would record it; write, read and write give identical lines.
+    """
+    store = ProvStore(run_id="run")
+    eid = store.entity(prov_type="measurement", extent=(0.0, 1.0), attributes=attributes)
+    path = tmp_path_factory.mktemp("prov") / "prov.jsonl"
+    store.write_jsonl(path)
+    back = ProvStore.read_jsonl(path, run_id="run")
+    held = back.get_entity(eid).attributes
+    assert back.entity(prov_type="measurement", extent=(0.0, 1.0), attributes=held) == eid
+    nested = back.entity(prov_type="measurement", extent=None, attributes={"inner": held, "list": [held]})
+    assert back.get_entity(nested).attributes == {"inner": held, "list": (held,)}
+    with_extra = provenance.revised(held, added=extra)
+    direct = back.entity(prov_type="measurement", extent=None, attributes={**dict(attributes), "added": extra})
+    assert back.entity(prov_type="measurement", extent=None, attributes=with_extra) == direct
+    again = path.with_name("again.jsonl")
+    back.write_jsonl(again)
+    third = path.with_name("third.jsonl")
+    ProvStore.read_jsonl(again, run_id="run").write_jsonl(third)
+    assert again.read_bytes() == third.read_bytes()
+    assert all(record.minted_id() == record.id for record in ProvStore.read_jsonl(third).records())

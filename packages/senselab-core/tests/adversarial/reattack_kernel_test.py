@@ -17,7 +17,8 @@ from senselab_core.kernel.license import License
 from senselab_core.kernel.results import Events, Intervals
 from senselab_core.kernel.signals import Audio, Recording, RegularGroup, StaleSource
 from senselab_core.kernel.time import Span, TimeMap
-from senselab_core.runtime.provenance import ProvStore, UnrecordableValue, normalised
+from senselab_core.runtime.provenance import ProvStore, UnrecordableValue, normalised, revised
+from senselab_worker.canonical import jcs_dumps
 
 RATE = 8_000
 
@@ -113,7 +114,7 @@ def test_xk4_config_private_state_and_dict_cannot_change_a_value() -> None:
 
 
 @pytest.mark.logic
-def test_xk5_recorded_content_cannot_drift_from_its_id() -> None:
+def test_xk5_recorded_content_cannot_drift_from_its_id(tmp_path: Path) -> None:
     """Mutating what was passed in, or what `get_entity` returns, cannot change a recorded entity."""
     store = ProvStore(run_id="r")
     attributes: dict[str, object] = {"ev": {"n": [1, 2, 3]}}
@@ -134,10 +135,16 @@ def test_xk5_recorded_content_cannot_drift_from_its_id() -> None:
     act = store.get_activity(store.activity(node="N", step=None, parameters={"p": [1]}))
     with pytest.raises(TypeError):
         act.parameters["p"] = 2  # type: ignore[index]
-    rival = ProvStore(run_id="r")
-    rival.activity(node="N", step=None, parameters={"p": [1]}, started="2026-01-01T00:00:00Z")
+    timed = ProvStore(run_id="r")
+    timed.activity(node="N", step=None, parameters={"p": [1]}, started="2026-01-01T00:00:00Z")
+    one, other = ProvStore.merge([store, timed]), ProvStore.merge([timed, store])
+    assert one.records() == other.records() and one.get_activity(act.id).started == "2026-01-01T00:00:00Z"
+    path = tmp_path / "rival.jsonl"
+    rival = revised(entity, attributes={"ev": {"n": [9]}})
+    lines = [{"format": "provenance@1.1", "record": "format"}, rival.as_record()]
+    path.write_bytes(b"".join(jcs_dumps(line) + b"\n" for line in lines))
     with pytest.raises(ValueError, match="two different records"):
-        ProvStore.merge([store, rival])
+        ProvStore.merge([store, ProvStore.read_jsonl(path)])
 
 
 @pytest.mark.logic
@@ -178,6 +185,42 @@ def test_xk6_jsonl_is_lossless_and_ids_recompute(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
+def test_xk6_unverified_records_never_pass_as_verified(tmp_path: Path) -> None:
+    """A 2.0 line without a run_id is refused; a provenance@1 store is written back as 1.1, never as 2.0."""
+    store = ProvStore(run_id="r")
+    eid = store.entity(prov_type="span", extent=(0.0, 1.0), attributes={"a": 1})
+    edited = revised(store.get_entity(eid), attributes={"a": 2})
+    assert edited.id == eid and not edited.verified
+    path = tmp_path / "edited.jsonl"
+    path.write_bytes(
+        b"".join(
+            jcs_dumps(line) + b"\n" for line in [{"format": "provenance@2.0", "record": "format"}, edited.as_record()]
+        )
+    )
+    with pytest.raises(ValueError, match="no run_id"):
+        ProvStore.read_jsonl(path)
+    legacy = tmp_path / "old.jsonl"
+    legacy.write_text(
+        '{"record": "entity", "id": "span-0123456789abcdef", "prov_type": "span", "extent": [0, 1], "attributes": {}}\n'
+    )
+    back = ProvStore.read_jsonl(legacy)
+    assert not back.verified
+    back.entity(prov_type="span", extent=None, attributes={"new": True})
+    written = tmp_path / "written.jsonl"
+    back.write_jsonl(written)
+    assert written.read_text().splitlines()[0] == '{"format":"provenance@1.1","record":"format"}'
+    again = ProvStore.read_jsonl(written)
+    assert again.records() == back.records() and not again.verified
+    for bad in ("[NaN, 1.0]", "[0, 1e400]"):
+        legacy.write_text(
+            f'{{"record": "entity", "id": "span-0123456789abcdef", "prov_type": "span", "extent": {bad}, '
+            '"attributes": {}}\n'
+        )
+        with pytest.raises(ValueError, match="finite"):
+            ProvStore.read_jsonl(legacy)
+
+
+@pytest.mark.logic
 def test_xk7_write_refuses_what_read_refuses() -> None:
     """Unknown types and kinds, non-mapping attributes and malformed extents are refused when written."""
     store = ProvStore(run_id="r")
@@ -195,15 +238,19 @@ def test_xk7_write_refuses_what_read_refuses() -> None:
 
 
 @pytest.mark.logic
-def test_xk8_a_ten_million_element_array_normalises_in_under_a_second() -> None:
-    """Arrays normalise as canonical `.npy` bytes, not element by element."""
-    import time
+def test_xk8_a_ten_million_element_array_normalises_as_bytes_not_elements() -> None:
+    """Arrays normalise as canonical `.npy` bytes, so memory stays a small multiple of the data, not of its elements."""
+    import tracemalloc
 
     a = numpy.arange(10_000_000, dtype=numpy.float64)
-    started = time.monotonic()
-    token = normalised(a)
-    assert time.monotonic() - started < 1.0
+    tracemalloc.start()
+    try:
+        token = normalised(a)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
     assert isinstance(token, dict) and list(token) == ["$nd"]
+    assert peak < 4 * a.nbytes
 
 
 @pytest.mark.logic

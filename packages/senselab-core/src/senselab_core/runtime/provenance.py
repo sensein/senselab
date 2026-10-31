@@ -11,10 +11,11 @@ import base64
 import binascii
 import io
 import json
+import math
 import re
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, ClassVar, Literal, NoReturn, Sequence, TypeVar, cast, get_args
@@ -30,12 +31,14 @@ from senselab_worker.canonical import (
     canonical_npy_bytes,
     canonical_scalar,
     canonical_text,
+    escaped_key,
     in_json_domain,
     jcs_dumps,
     jcs_loads,
 )
 from senselab_worker.digest import identity_digest
 
+from senselab_core.kernel._base import FrozenDict, thawed
 from senselab_core.runtime.storage import write_atomically
 
 PROV_TYPE = Literal[
@@ -195,10 +198,16 @@ def _check_agent_fields(
 
 
 PROVENANCE_FORMAT = "provenance@2.0"
-"""The format `write_jsonl` writes: its first line is `{"format":"provenance@2.0","record":"format"}`.
+"""The format `write_jsonl` writes a store whose every record is verified: its first line is the format record.
 
-A file whose first line is not a format record is `provenance@1`, the previous major, which
-`read_jsonl` still reads.
+Every record in it carries a `run_id`, and its id is checked against its content when it is read.
+"""
+
+UNVERIFIED_FORMAT = "provenance@1.1"
+"""The format `write_jsonl` writes a store holding records read from `provenance@1`.
+
+The lines are canonical like `provenance@2.0`'s; a record with `run_id` null is unverified and keeps the
+id the `provenance@1` file gave it. A file whose first line is not a format record is `provenance@1`.
 """
 
 _ID_TAG = "provenance-id@4"
@@ -223,14 +232,16 @@ def _nd_token(a: numpy.ndarray, recurse: Recurse, path: str) -> object:
     return {"$nd": base64.b64encode(canonical_npy_bytes(a)).decode("ascii")}
 
 
-_TOKENISER = Tokeniser(array=_nd_token, error=UnrecordableValue)
+_TOKENISER = Tokeniser(array=_nd_token, error=UnrecordableValue, verbatim=FrozenDict)
 
 
 def normalised(value: object, path: str = "value") -> object:
     """Return `value` as JSON the shared encoder accepts, every value outside the JSON domain as a tagged token.
 
     The provenance value type is what the shared `canonical.Tokeniser` writes, with a `numpy.ndarray`
-    written as `{"$nd": <base64 of its canonical .npy bytes>}`.
+    written as `{"$nd": <base64 of its canonical .npy bytes>}`. A `FrozenDict` is a form a record
+    holds, already normalised, and is written as it is, so a value read back from a record records
+    the same value again.
 
     Raises:
         UnrecordableValue: naming `path` and the type, for a value of no family, an array of a dtype
@@ -238,43 +249,6 @@ def normalised(value: object, path: str = "value") -> object:
             itself, an integer too long to write, or nesting deeper than `MAX_DEPTH`.
     """
     return _TOKENISER(value, path)
-
-
-class FrozenDict(dict[str, Any]):
-    """A provenance object as a record holds it: a `dict` whose every mutating method raises `TypeError`."""
-
-    __slots__ = ()
-
-    def _refuse(self, *args: object, **kwargs: object) -> NoReturn:
-        raise TypeError("a provenance record is read-only")
-
-    __setitem__ = __delitem__ = __ior__ = _refuse  # type: ignore[assignment]
-    clear = pop = popitem = setdefault = update = _refuse  # type: ignore[assignment]
-
-    def __reduce__(self) -> tuple[type[FrozenDict], tuple[dict[str, Any]]]:
-        """Pickle as a new read-only mapping of the same items."""
-        return type(self), (dict(self),)
-
-    def __copy__(self) -> FrozenDict:
-        """Return `self`, which cannot change."""
-        return self
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> FrozenDict:
-        """Return `self`, which cannot change, nor can anything it holds."""
-        return self
-
-
-def _thawed(value: object, walk: Walk | None = None) -> Any:  # noqa: ANN401
-    """Return a canonical form as plain `dict` and `list`, each shared container thawed once."""
-    walk = Walk() if walk is None else walk
-    t = type(value)
-    if t is dict or t is FrozenDict:
-        items = cast("dict[str, object]", value)
-        return walk.enter(value, lambda: {k: _thawed(v, walk) for k, v in items.items()})
-    if t is list or t is tuple:
-        elements = cast("Sequence[object]", value)
-        return walk.enter(value, lambda: [_thawed(v, walk) for v in elements])
-    return value
 
 
 def _refuse(path: str, value: object, reason: str) -> NoReturn:
@@ -319,12 +293,18 @@ def _check_token(key: str, payload: object, path: str, check: Callable[[object, 
         forms = []
         for i, item in enumerate(payload):
             check(item, f"{where}[{i}]")
-            forms.append(jcs_dumps(_thawed(item)))
+            forms.append(jcs_dumps(thawed(item)))
         if any(a >= b for a, b in zip(forms, forms[1:])):
             _refuse(where, payload, "is not its elements, one per JCS form, sorted by their JCS bytes")
 
 
+_CHECKED_NPY: dict[str, None] = {}
+_CHECKED_NPY_ENTRIES = 64
+
+
 def _check_npy(text: str, where: str) -> None:
+    if text in _CHECKED_NPY:
+        return
     try:
         data = base64.b64decode(text, validate=True)
     except binascii.Error as err:
@@ -338,6 +318,9 @@ def _check_npy(text: str, where: str) -> None:
         _refuse(where, text, f"is not a .npy array: {err}")
     if canonical != data:
         _refuse(where, text, "is not an array's canonical .npy bytes")
+    _CHECKED_NPY[text] = None
+    while len(_CHECKED_NPY) > _CHECKED_NPY_ENTRIES:
+        del _CHECKED_NPY[next(iter(_CHECKED_NPY))]
 
 
 def check_normal(value: object, path: str = "value") -> None:
@@ -452,6 +435,8 @@ def _extent(value: object) -> tuple[float, float] | None:
     if any(isinstance(x, bool) or not isinstance(x, (int, float)) for x in value):
         raise ValueError(f"extent must hold two finite numbers of seconds, got {value!r}")
     start, end = float(value[0]), float(value[1])
+    if not (math.isfinite(start) and math.isfinite(end)):
+        raise ValueError(f"extent must hold two finite numbers of seconds, got {value!r}")
     if start > end:
         raise ValueError(f"extent ends before it starts: {value!r}")
     return start, end
@@ -461,12 +446,15 @@ class _Record:
     """What every provenance record shares: it is canonical, read-only, and bound to its id.
 
     `_DIGESTED` names the fields the id covers, after `run_id`; `_CANONICAL` the fields held in
-    canonical form. A record whose `run_id` is `None` was read from a `provenance@1` file and keeps the
-    id that file gave it; any other record's id is checked against its content when it is built.
+    canonical form. A record with a `run_id` is verified: its id is checked against its content when it
+    is built. A record whose `run_id` is `None` is unverified: one read from a `provenance@1` file, which
+    keeps the id that file gave it, or a copy `revised` returns; a store holds an unverified record only
+    when it read it from a file that may carry one.
     """
 
     _DIGESTED: ClassVar[tuple[str, ...]]
     _CANONICAL: ClassVar[tuple[str, ...]]
+    _RAW: ClassVar[tuple[str, ...]] = ()
     _KIND: ClassVar[str]
     id: str
     run_id: str | None
@@ -500,16 +488,21 @@ class _Record:
         run = self.run_id if run_id is None else run_id
         if run is None:
             raise ValueError(f"{self._KIND} {self.id!r} was read from provenance@1 and has no run_id to mint from")
-        parts = [run, *(_thawed(getattr(self, name)) for name in self._DIGESTED)]
+        parts = [run, *(thawed(getattr(self, name)) for name in self._DIGESTED)]
         try:
             digest = identity_digest(_ID_TAG, parts)
         except ValueError as err:
             raise UnrecordableValue(".".join(("run_id", *self._DIGESTED)), parts, str(err)) from err
         return f"{self._prefix()}-{digest[:16]}"
 
+    @property
+    def verified(self) -> bool:
+        """Whether this record's id was checked against its content: it has a `run_id`."""
+        return self.run_id is not None
+
     def as_record(self) -> dict[str, Any]:
         """Return the JSON object a file holds for this record."""
-        return {"record": self._KIND, **{f.name: _thawed(getattr(self, f.name)) for f in fields(cast(Any, self))}}
+        return {"record": self._KIND, **{f.name: thawed(getattr(self, f.name)) for f in fields(cast(Any, self))}}
 
 
 @dataclass(frozen=True)
@@ -526,6 +519,7 @@ class Entity(_Record):
 
     _DIGESTED: ClassVar[tuple[str, ...]] = ("prov_type", "extent", "attributes")
     _CANONICAL: ClassVar[tuple[str, ...]] = ("attributes",)
+    _RAW: ClassVar[tuple[str, ...]] = ("attributes",)
     _KIND: ClassVar[str] = "entity"
 
     id: str
@@ -562,6 +556,7 @@ class Activity(_Record):
 
     _DIGESTED: ClassVar[tuple[str, ...]] = ("node", "step", "parameters")
     _CANONICAL: ClassVar[tuple[str, ...]] = ("node", "step", "started", "ended", "parameters")
+    _RAW: ClassVar[tuple[str, ...]] = ("parameters",)
     _KIND: ClassVar[str] = "activity"
 
     id: str
@@ -692,6 +687,8 @@ _LEGACY_NORMALISED = {"entity": ("attributes",), "activity": ("parameters",), "e
 
 
 _R = TypeVar("_R", bound=_Record)
+_M = TypeVar("_M", bound="_Record | Mapping[str, Any]")
+_UNTIMED: dict[str, Any] = {"started": None, "ended": None}
 
 
 def _mint(cls: type[_R], run_id: str, raw: Mapping[str, object], **plain: object) -> _R:
@@ -703,18 +700,57 @@ def _mint(cls: type[_R], run_id: str, raw: Mapping[str, object], **plain: object
     """
     normal = {name: normalised(value, name) for name, value in raw.items()}
     draft = cls(id="", run_id=None, **normal, **plain)  # type: ignore[call-arg]
-    return cls(id=draft.minted_id(run_id), run_id=run_id, **normal, **plain)  # type: ignore[call-arg]
+    return cast(_R, replace(cast(Any, draft), id=draft.minted_id(run_id), run_id=run_id))
+
+
+def revised(target: _M, /, **changes: object) -> _M:
+    """Return a copy of a record, or of a mapping a record holds, with `changes`; the original is untouched.
+
+    For a mapping (attributes, parameters, an object inside them): a `FrozenDict` of its items with each
+    change normalised and its key escaped as the store escapes keys, so recording it through a store
+    method records exactly these values. For a record: a copy with the changed fields (attributes and
+    parameters given as raw values are normalised) that keeps the record's id; the copy is unverified
+    (`run_id` None), so a store refuses to hold it. It is a view, such as a word with a bounded extent.
+
+    Raises:
+        UnrecordableValue: if a change holds a value outside the provenance value type.
+        ValueError: if a record's changed fields are refused, or a change names no field of the record.
+    """
+    if isinstance(target, _Record):
+        names = {f.name for f in fields(cast(Any, target))}
+        unknown = sorted(set(changes) - names)
+        if unknown:
+            raise ValueError(f"{type(target).__name__} has no fields {unknown}")
+        normal = {k: normalised(v, k) if k in target._RAW else v for k, v in changes.items()}
+        return cast(_M, replace(cast(Any, target), run_id=None, **normal))
+    if not isinstance(target, Mapping):
+        raise TypeError(f"revised takes a record or a mapping a record holds, not {type(target).__name__}")
+    merged = {**target, **{escaped_key(k): normalised(v, k) for k, v in changes.items()}}
+    return cast(_M, _canonical(merged, "revised"))
+
+
+def _timing(record: _Record) -> tuple[str, str]:
+    if isinstance(record, Activity):
+        return record.started or "", record.ended or ""
+    return "", ""
 
 
 def _put(table: dict[str, _R], record: _R, where: str = "") -> None:
     """Hold `record` under its id, refusing a different record already held there.
+
+    Two activities that differ only in `started` and `ended` are one activity: the held one is the
+    later by `(started, ended)`, so holding them in either order holds the same record.
 
     Raises:
         ValueError: if a different record holds the id.
     """
     held = table.get(record.id)
     if held is not None and held != record:
-        raise ValueError(f"{where}two different records hold the id {record.id!r}: {held!r} and {record!r}")
+        untimed = isinstance(record, Activity) and replace(cast(Any, held), **_UNTIMED) == replace(record, **_UNTIMED)
+        if not untimed:
+            raise ValueError(f"{where}two different records hold the id {record.id!r}: {held!r} and {record!r}")
+        if _timing(held) >= _timing(record):
+            return
     table[record.id] = record
 
 
@@ -734,7 +770,7 @@ class ProvStore:
         self._environments: dict[str, Environment] = {}
         self._relations: list[tuple[RELATION, str, str]] = []
 
-    def entity(self, *, prov_type: PROV_TYPE, extent: tuple[float, float] | None, attributes: dict[str, Any]) -> str:
+    def entity(self, *, prov_type: PROV_TYPE, extent: tuple[float, float] | None, attributes: Mapping[str, Any]) -> str:
         """Add an entity holding the normalised, read-only form of `attributes`.
 
         Args:
@@ -760,11 +796,11 @@ class ProvStore:
         *,
         node: str,
         step: str | None,
-        parameters: dict[str, Any],
+        parameters: Mapping[str, Any],
         started: str | None = None,
         ended: str | None = None,
     ) -> str:
-        """Add an activity, replacing the timing of one already held with the same id.
+        """Add an activity; of two with one id, differing only in timing, the store holds the later.
 
         Args:
             node: The node executing.
@@ -782,7 +818,7 @@ class ProvStore:
         record = _mint(
             Activity, self.run_id, {"parameters": parameters}, node=node, step=step, started=started, ended=ended
         )
-        self._activities[record.id] = record
+        _put(self._activities, record)
         return record.id
 
     def agent(
@@ -832,7 +868,7 @@ class ProvStore:
         label: str,
         python_version: str,
         operating_system: str | None = None,
-        dependencies: dict[str, str] | None = None,
+        dependencies: Mapping[str, str] | None = None,
         dependencies_digest: str | None = None,
         senselab_version: str | None = None,
     ) -> str:
@@ -1005,7 +1041,14 @@ class ProvStore:
             *self._environments.values(),
         ]
 
-    def _hold(self, record: _Record, where: str = "") -> None:
+    @property
+    def verified(self) -> bool:
+        """Whether every record's id was checked against its content; False once it holds a `provenance@1` record."""
+        return all(record.verified for record in self.records())
+
+    def _hold(self, record: _Record, where: str = "", *, unverified: bool = False) -> None:
+        if not (record.verified or unverified):
+            raise ValueError(f"{where}{record._KIND} {record.id!r} has no run_id; a store holds it only from a file")
         tables: dict[str, dict[str, Any]] = {
             "entity": self._entities,
             "activity": self._activities,
@@ -1015,16 +1058,19 @@ class ProvStore:
         _put(tables[record._KIND], record, where)
 
     def write_jsonl(self, path: str | Path) -> None:
-        """Write the store as `provenance@2.0`, one canonical JSON (RFC 8785) record per line, atomically.
+        """Write the store as one canonical JSON (RFC 8785) record per line, atomically.
 
-        The first line is the format record. Each entity, activity, agent and environment line holds
-        every field of the record as the store holds it, `run_id` included, so `read_jsonl` rebuilds
-        the same records and checks each id against its content. The records go to a temporary file in
+        The first line is the format record: `provenance@2.0` when every record is verified, and
+        `provenance@1.1` when the store holds records read from `provenance@1`, which are written with
+        `run_id` null. Each entity, activity, agent and environment line holds every field of the record
+        as the store holds it, so `read_jsonl` rebuilds the same records and checks each verified id
+        against its content. The records go to a temporary file in
         the target's directory, which is flushed, fsynced and renamed onto the target, so the file at
         ``path`` is always either the previous store or the new one whole. An existing target's
         permission bits are kept.
         """
-        lines = [jcs_dumps({"format": PROVENANCE_FORMAT, "record": "format"})]
+        written = PROVENANCE_FORMAT if self.verified else UNVERIFIED_FORMAT
+        lines = [jcs_dumps({"format": written, "record": "format"})]
         lines += [jcs_dumps(record.as_record()) for record in self.records()]
         lines += [
             jcs_dumps({"record": "relation", "relation": r, "source": s, "target": t}) for r, s, t in self._relations
@@ -1035,13 +1081,14 @@ class ProvStore:
     def read_jsonl(cls, path: str | Path, run_id: str = "read") -> "ProvStore":
         """Read a store back through the same record validation the store's own methods use.
 
-        A `provenance@2.0` file (`write_jsonl`) is read line by line as canonical JSON; every record is
-        rebuilt as its type, which checks its fields and, for a record with a `run_id`, that its id is
-        the id of its content. A file without a format line is `provenance@1`: its values are
-        normalised as the writer normalises them, and its records keep the ids that file gave them,
-        with no `run_id`. Relations pass through the same membership check as the relation methods, so
-        a relation line repeated reads back as one triple; a record repeated is held once, and two
-        different records with one id are refused.
+        A `provenance@2.0` file is read line by line as canonical JSON; every record is rebuilt as its
+        type, which checks its fields and that its id is the id of its content, and a record without a
+        `run_id` is refused. A `provenance@1.1` file is read the same way, its records without a `run_id`
+        held unverified. A file without a format line is `provenance@1`: its values are normalised as
+        the writer normalises them, and its records keep the ids that file gave them, unverified.
+        Relations pass through the same membership check as the relation methods, so a relation line
+        repeated reads back as one triple; a record repeated is held once, and two different records
+        with one id are refused.
 
         Args:
             path: The JSONL file to read.
@@ -1058,15 +1105,16 @@ class ProvStore:
         """
         store = cls(run_id=run_id)
         lines = [(n, line) for n, line in enumerate(Path(path).read_bytes().split(b"\n"), start=1) if line.strip()]
-        legacy = True
+        legacy, unverified = True, True
         if lines:
             first = _parse(lines[0][1], f"{path}, line {lines[0][0]}", legacy=True)
             if first.get("record") == "format":
-                if first != {"format": PROVENANCE_FORMAT, "record": "format"}:
+                readable = {PROVENANCE_FORMAT, UNVERIFIED_FORMAT}
+                if set(first) != {"format", "record"} or first["format"] not in readable:
                     raise ValueError(
-                        f"{path}, line {lines[0][0]}: reads {PROVENANCE_FORMAT} and provenance@1, got {first!r}"
+                        f"{path}, line {lines[0][0]}: reads {sorted(readable)} and provenance@1, got {first!r}"
                     )
-                legacy = False
+                legacy, unverified = False, first["format"] == UNVERIFIED_FORMAT
                 lines = lines[1:]
         for line_no, line in lines:
             where = f"{path}, line {line_no}"
@@ -1096,12 +1144,14 @@ class ProvStore:
                 record = _RECORD_TYPES[cast(str, kind)](**rec)
             except (ValueError, TypeError) as err:
                 raise ValueError(f"{where}: {kind} {rec.get('id')!r}: {err}") from err
-            store._hold(record, f"{where}: ")
+            store._hold(record, f"{where}: ", unverified=unverified)
         return store
 
     @classmethod
     def merge(cls, stores: Sequence["ProvStore"]) -> "ProvStore":
-        """Union several stores; order-independent, since one id holds one record.
+        """Union several stores; order-independent, since one id holds one record and two timings of an activity one.
+
+        A record a store holds unverified is held unverified by the union.
 
         Raises:
             ValueError: If two stores hold different records under one id.
@@ -1109,7 +1159,7 @@ class ProvStore:
         out = cls(run_id="merged")
         for s in stores:
             for record in s.records():
-                out._hold(record)
+                out._hold(record, unverified=True)
         seen: set[tuple[RELATION, str, str]] = set()
         for s in stores:
             for rel in s._relations:
