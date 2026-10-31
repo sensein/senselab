@@ -1703,3 +1703,45 @@ def test_every_build_backend_requirement_is_pinned_exactly() -> None:
             assert spec.operator == "==" and "*" not in spec.version and requirement.marker is None, line
             seen.setdefault(requirement.name, set()).add(spec.version)
     assert set(seen) == {"hatchling", "hatch-vcs"} and all(len(v) == 1 for v in seen.values())
+
+
+@pytest.mark.logic
+def test_the_sdist_gitignore_is_the_first_one_up_from_the_distribution_root(mini: Path) -> None:
+    """A ``.gitignore`` between a package root and the repository root is the one hatchling copies, and is derived."""
+    core = Path("packages/senselab-core")
+    assert gate.located_gitignore(mini, core) == ".gitignore"
+    (mini / "packages/.gitignore").write_text("*.tmp\n")
+    subprocess.run(["git", "add", "-A"], cwd=mini, check=True)
+    assert gate.located_gitignore(mini, core) == "packages/.gitignore"
+    expected = gate.expected_members(Path("senselab_core-2.0.0.tar.gz"), mini, gate.tracked_modes(mini))
+    assert expected["senselab_core-2.0.0/.gitignore"] == "packages/.gitignore"
+
+
+@pytest.mark.logic
+def test_license_files_follow_the_declared_globs_component_by_component(mini: Path) -> None:
+    """``license-files`` globs match nested paths by component; ``license = {file}`` adds nothing of its own."""
+    regular = set(gate.tracked_modes(mini))
+    assert gate.declared_license_files(mini, Path("."), regular) == {"LICENSE.md"}
+    (mini / "LICENSES").mkdir()
+    (mini / "LICENSES/MIT.txt").write_text("mit\n")
+    pyproject = mini / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text().replace("requires-python", 'license-files = ["LICENSES/*"]\nrequires-python', 1)
+    )
+    subprocess.run(["git", "add", "-A"], cwd=mini, check=True)
+    assert gate.declared_license_files(mini, Path("."), set(gate.tracked_modes(mini))) == {"LICENSES/MIT.txt"}
+
+
+@pytest.mark.logic
+def test_the_tracked_set_is_read_from_a_repository_owned_by_anyone(mini: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Git runs with the repository as its one safe directory, whoever owns the checkout."""
+    seen: list[list[str]] = []
+    real = subprocess.run
+
+    def run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:  # noqa: ANN401
+        seen.append(list(args))
+        return real(args, **kwargs)
+
+    monkeypatch.setattr(gate.subprocess, "run", run)
+    gate.tracked_modes(mini)
+    assert seen[0][:3] == ["git", "-c", f"safe.directory={mini.resolve()}"]
