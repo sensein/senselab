@@ -115,9 +115,11 @@ root (C-1, I-1). The rules below are stated as what is guaranteed after that rou
   locks, storage, provenance, BEP-028, run manifests, 1.x `reproduce.build` and `reproduce.cache`)
   reports any write without a listed grammar, and any write, rename, link, removal, mode or time change or
   write-mode open by `os`, `io`, `shutil`, `tempfile`, builtin `open` or `pathlib.Path`, under any alias
-  the shared import resolver folds, outside `StorageDir`. The raw sites that remain (BEP-028's sidecars
-  and the 1.x reproduce trees, by path in caller-chosen trees, deferred to the 1.x cleanup) are counted in
-  the lint, so a new one fails it. A contract plants a symlink, a hard link, a directory and corrupt
+  the shared import resolver folds, outside `StorageDir`. BEP-028's sidecars are written with `write_atomically`,
+  which replaces a planted symlink rather than writing through it. The raw sites that remain, by path in
+  caller-chosen trees and deferred to the 1.x cleanup, are counted per function in the lint's `ALLOWED_RAW`
+  table, so a new one fails it: at the H9 cleanup, 17 functions and 41 sites in 1.x `reproduce.build` (10
+  functions, 25 sites) and `reproduce.cache` (7, 16), plus the BEP-028 `prov/` directory's creation. A contract plants a symlink, a hard link, a directory and corrupt
   content at every name a clean run writes.
 - **A wrong kind at an owned path is corrupt, never retryable.** A symlink or a non-directory where a
   store or cache directory belongs, or anything but a regular file at `blobs/<sha256>` or a completion
