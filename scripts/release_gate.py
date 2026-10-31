@@ -20,8 +20,9 @@ uploaded:
   generated files, each a byte copy of its source: a missing member and an extra one are both refused;
 - each wheel's ``WHEEL`` states the filename's tag, its RECORD lists its members with their hashes and its entry
   points are the declared ones;
-- each distribution installs alone, with all its extras and only its own siblings, into a fresh venv at its
-  floor Python, and every one of its modules imports there from the installed files;
+- each distribution installs alone, with only its own siblings, into a fresh venv at its floor Python, and
+  imports there from the installed files: every module of core and the worker, and every top-level package and
+  subpackage of the root distribution;
 - each sdist builds a wheel whose members are byte-identical to the wheel in ``dist/``.
 
 Every subprocess runs in ``gate_environment``: only the variables it names, whatever the caller exports.
@@ -72,6 +73,10 @@ WHEEL_TAG = Tag("py3", "none", "any")
 """The one tag every wheel is built for: pure Python 3."""
 VERSION_GRAMMAR = re.compile(r"\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?")
 """The releasable version strings: a final release or a numbered alpha, beta or release candidate."""
+TAG_GRAMMAR = re.compile(r"\d+\.\d+\.\d+-(?:alpha|beta|rc)\.\d+")
+"""The repository's release-tag spelling of a pre-release, ``X.Y.Z-(alpha|beta|rc).N``, accepted beside the canonical one."""
+IMPORT_EVERY_MODULE = frozenset({"senselab-core", "senselab-worker"})
+"""Distributions whose every module the install check imports; the others import their packages and subpackages."""
 WHEEL_GENERATED = ("METADATA", "WHEEL", "RECORD")
 """The ``dist-info`` files every wheel build writes; ``entry_points.txt`` and ``licenses/`` are derived per wheel."""
 DEFAULT_LICENSE_FILES = ("LICEN[CS]E*", "COPYING*", "NOTICE*", "AUTHORS*")
@@ -114,6 +119,13 @@ def version_problem(text: str) -> str | None:
     if not VERSION_GRAMMAR.fullmatch(text) or str(version) != text:
         return "is not written X.Y.Z or X.Y.Z(a|b|rc)N"
     return None
+
+
+def tag_problem(tag: str) -> str | None:
+    """Return why ``tag`` is not a release tag, or ``None``: a releasable version string or ``X.Y.Z-(alpha|beta|rc).N``."""
+    if TAG_GRAMMAR.fullmatch(tag):
+        return None
+    return version_problem(tag)
 
 
 def _escaped(name: str) -> str:
@@ -288,7 +300,8 @@ def check_versions(
 
     Raises:
         GateError: If the files disagree, the version is not ``X.Y.Z(a|b|rc)N``-shaped (epoch, local, post and dev
-            segments included), is below ``floor``, differs from ``tag`` (itself held to the same grammar), or
+            segments included), is below ``floor``, is not the version of ``tag`` (a releasable version string or
+            ``X.Y.Z-(alpha|beta|rc).N``), or
             ``prerelease`` differs from the version's own pre-release status.
     """
     found = {path.name: core_metadata(path)[1] for path in files}
@@ -305,10 +318,10 @@ def check_versions(
     if version < floor:
         raise GateError(f"version {version} is below the release floor {floor}")
     if tag is not None:
-        problem = version_problem(tag)
+        problem = tag_problem(tag)
         if problem:
             raise GateError(f"tag {tag!r} {problem}")
-        if tag != text:
+        if Version(tag) != version:
             raise GateError(f"version {text} was built for another tag than {tag!r}")
     if prerelease is not None and prerelease != version.is_prerelease:
         raise GateError(
@@ -854,6 +867,19 @@ def wheel_modules(wheel: Path) -> list[str]:
     return modules
 
 
+def import_targets(wheel: Path) -> list[str]:
+    """Return what the install check imports from ``wheel``.
+
+    Every module for the distributions in ``IMPORT_EVERY_MODULE``; for the others each top-level package and each
+    of its direct subpackages, whose members the member check already proves complete.
+    """
+    modules = wheel_modules(wheel)
+    if _metadata(wheel)[0] in IMPORT_EVERY_MODULE:
+        return modules
+    names = {m for m, _, _ in artifact_members(wheel)}
+    return [m for m in modules if m.count(".") <= 1 and m.replace(".", "/") + "/__init__.py" in names]
+
+
 def wheel_file_hashes(wheel: Path) -> dict[str, str]:
     """Return the RECORD-notation hash of every file in ``wheel`` except its RECORD."""
     return {
@@ -883,17 +909,17 @@ def selected_requirements(
 
 
 def check_installs(files: list[Path], pythons: Mapping[str, str], *, index_url: str = PYPI) -> None:
-    """Install each distribution alone, with all its extras, into its own fresh venv at ``pythons[name]``; import it.
+    """Install each distribution alone into its own fresh venv at ``pythons[name]``; import its ``import_targets``.
 
     Only the distribution's own wheel is passed by path. Its siblings must be reached by the resolver through
     ``--find-links`` on the directory of ``files``, with no index (``--no-index``), in an install that neither
     reads nor writes any uv cache (``--no-cache``), so neither a cached wheel nor an index serving the same name
     and version can stand in for the one in ``dist/``. Every ``uv`` call runs with ``--no-config`` in
     ``gate_environment``, so no configuration file or variable of the caller redirects resolution.
-    The third-party requirements of the distribution (with every extra it provides) and of its siblings are
+    The third-party requirements of the distribution and of its siblings, no extra requested, are
     installed first, by name, from ``index_url`` only, through the host's cache, which no first-party wheel enters.
-    Each sibling must then be installed with the version and file hashes of the wheel in ``dist/``. Every module
-    of the distribution is imported by the venv's interpreter in isolated mode (``-I``) from a scratch directory,
+    Each sibling must then be installed with the version and file hashes of the wheel in ``dist/``. The import
+    targets are imported by the venv's interpreter in isolated mode (``-I``) from a scratch directory,
     and every first-party module loaded must come from the venv.
 
     Raises:
@@ -914,18 +940,16 @@ def check_installs(files: list[Path], pythons: Mapping[str, str], *, index_url: 
             _run("uv", "venv", "--python", pythons[name], str(venv), cwd=tmp)
             interpreter = str(venv / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python"))
             environment = json.loads(_run(interpreter, "-I", "-c", _MARKER_ENVIRONMENT, cwd=tmp))
-            extras = sorted(meta[name].provides_extra or [])
             requirements = []
-            for n, wanted in ((name, extras), *((s, []) for s in siblings)):
+            for n in (name, *siblings):
                 third_party = [r for r in meta[n].requires_dist or [] if canonicalize_name(r.name) not in DISTRIBUTIONS]
-                requirements += selected_requirements(third_party, environment, wanted)
+                requirements += selected_requirements(third_party, environment, ())
             if requirements:
                 _run("uv", "pip", "install", "--python", interpreter, "--index-url", index_url, *requirements, cwd=tmp)
             install = ("uv", "pip", "install", "--no-cache", "--no-index", "--python", interpreter)
             install += ("--find-links", str(links))
-            target = f"{name}[{','.join(extras)}] @ {wheels[name].as_uri()}" if extras else str(wheels[name])
-            _run(*install, target, cwd=tmp)
-            modules = json.dumps(wheel_modules(wheels[name]))
+            _run(*install, str(wheels[name]), cwd=tmp)
+            modules = json.dumps(import_targets(wheels[name]))
             _run(interpreter, "-I", "-c", _VERIFY, json.dumps(siblings), modules, json.dumps(tops), cwd=tmp)
 
 

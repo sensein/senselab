@@ -712,10 +712,12 @@ whole of `dist/` before the upload step runs. One listing of `dist/` feeds every
   `.`, empty or backslash component, and no case-duplicate. Each sdist holds everything under its one top
   directory `<name>-<version>/`.
 - **Versions.** The version string must be `X.Y.Z` or `X.Y.Z(a|b|rc)N`, written canonically, in every
-  metadata file and file name, and in the tag. An epoch (`1!1.0.0` outranks every 2.x release on PyPI), a
-  local, post or dev segment and a non-canonical spelling (`2.1.0-rc.1`) are all refused. The version is
-  at or above `RELEASE_FLOOR` (`2.0.0a0`, read once from the root pyproject), equals `github.ref_name`, and
-  matches `github.event.release.prerelease`. `git describe` picks one tag when several sit on a commit, so a
+  metadata file and file name. The tag (`github.ref_name`) is either that canonical string or the
+  repository's pre-release spelling `X.Y.Z-(alpha|beta|rc).N` (`2.0.0-alpha.3`), and `Version(tag)` must
+  equal the built version exactly. An epoch (`1!1.0.0` outranks every 2.x release on PyPI), a local, post or
+  dev segment, a `v` prefix and any other spelling are refused, in tag and version alike. The version is at
+  or above `RELEASE_FLOOR` (`2.0.0a0`, read once from the root pyproject) and matches
+  `github.event.release.prerelease`. `git describe` picks one tag when several sit on a commit, so a
   release for the other tag is refused by the tag check.
 - **Metadata.** Core metadata (METADATA and PKG-INFO) is parsed with `packaging.metadata`, and a repeated
   single-use field is refused. Name, `Requires-Python`, `Requires-Dist`, `Provides-Extra` and `License-File`
@@ -735,13 +737,15 @@ whole of `dist/` before the upload step runs. One listing of `dist/` feeds every
 - **RECORD and entry points.** Each wheel's RECORD lists exactly its members, each once, with the sha256 and
   size of its bytes (RECORD itself with neither). Its `entry_points.txt` equals what the pyproject declares,
   and a `.data/scripts/<name>` member ships only where `shared-scripts` declares it.
-- **Installs.** Each distribution is installed alone, with every extra it provides, into a fresh venv at its
-  floor Python (worker 3.10, core 3.11, root 3.11). Its siblings are reached only through its exact pin, and
+- **Installs.** Each distribution is installed alone, with no extra, into a fresh venv at its floor Python
+  (worker 3.10, core 3.11, root 3.11). Its siblings are reached only through its exact pin, and
   the files of the siblings in the venv must hash to those of the `dist/` wheels.
-  - Extra requirements are selected by evaluating their markers against the venv interpreter's environment.
-  - Every module of the distribution is imported by that interpreter in isolated mode (`-I`) from a scratch
-    directory. A module is every `.py` whose directories all hold an `__init__.py`; a `__main__` module is
-    compiled, not run.
+  - Requirement markers are evaluated against the venv interpreter's environment.
+  - For core and the worker, every module is imported by that interpreter in isolated mode (`-I`) from a
+    scratch directory. A module is every `.py` whose directories all hold an `__init__.py`; a `__main__`
+    module is compiled, not run. For the root distribution, each top-level package and its direct
+    subpackages are imported: the member check already proves no module is missing, and a broken deep 1.x
+    import is caught by the `cpu-tests` CI job, not by the gate.
   - Every first-party module loaded must come from the venv.
   - One shared venv would hide a dependency that only a sibling declares, and a top-level import would hide
     a dropped or broken submodule.
@@ -787,7 +791,12 @@ whole of `dist/` before the upload step runs. One listing of `dist/` feeds every
 every `${{ }}` in every string value of every workflow and composite action. The one exception is `env:`
 values, the sanctioned channel for untrusted text.
 - **Clean values.** An expression passes only when its value cannot carry text an outsider chose:
-  - a literal or a trusted context (repository numbers, flags, names, secrets, vars);
+  - a literal or a trusted context, exactly: `github.token`, `github.workflow`, `github.event_name`,
+    `github.ref`, `github.repository`, `github.run_id`, `github.sha`, `github.event.pull_request.number`,
+    `github.event.pull_request.draft`, `github.event.issue.number`, `github.event.release.prerelease`,
+    `runner.os`, `runner.arch`, `runner.temp`, `job.status`, `secrets.<name>`, `vars.<name>`,
+    `steps.<id>.outputs.<name>`, `steps.<id>.outcome`, `steps.<id>.conclusion`, `needs.<id>.outputs.<name>`,
+    `needs.<id>.result`, and `matrix.<name>` under the matrix rule below;
   - a boolean: a comparison, `!`, `contains`/`startsWith`/`endsWith` or a status function;
   - `hashFiles`;
   - `fromJSON`, `toJSON`, `format`, `join`, `&&` or `||` over clean operands.

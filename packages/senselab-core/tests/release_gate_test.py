@@ -255,7 +255,10 @@ def test_c1_release_gate_refuses_a_sibling_the_graph_does_not_give(extra: str, f
         ("2.0.0", False, True),
         ("2.0.0", None, True),
         ("2.1.0rc1", True, True),
-        ("2.1.0-rc.1", True, False),
+        ("2.1.0-rc.1", True, True),
+        ("2.1.0-alpha.1", True, False),
+        ("v2.1.0rc1", True, False),
+        ("v2.0.0", False, False),
         ("2.1.0", False, False),
         ("2.0.0", True, False),
         ("2.1.0rc1", False, False),
@@ -266,7 +269,7 @@ def test_c1_release_gate_refuses_a_sibling_the_graph_does_not_give(extra: str, f
 def test_i2_release_gate_binds_the_version_to_the_tag_and_prerelease_flag(
     tag: str, prerelease: bool | None, ok: bool, fabricate: Callable[..., Path]
 ) -> None:
-    """The built version must equal the tag, written canonically, and the release's prerelease flag must match it."""
+    """The tag, canonical or ``X.Y.Z-(alpha|beta|rc).N``, names the built version; the prerelease flag matches."""
     version = "2.1.0rc1" if tag.startswith("2.1.0") else "2.0.0"
     wheels = _release(fabricate, version)
     if ok:
@@ -1199,6 +1202,99 @@ def test_xg4_only_the_grammar_is_a_releasable_version(parts: tuple[str, ...]) ->
     text = "".join(parts)
     releasable = re.fullmatch(r"\d+\.\d+\.\d+((a|b|rc)\d+)?", text) is not None and str(Version(text)) == text
     assert (gate.version_problem(text) is None) is releasable
+
+
+_TAG_SEGMENTS = st.tuples(
+    st.sampled_from(["", "v", "V"]),
+    st.sampled_from(["", "1!", "0!"]),
+    st.lists(st.integers(0, 12), min_size=1, max_size=4).map(lambda p: ".".join(map(str, p))),
+    st.sampled_from(
+        ["", "a1", "b2", "rc3", "-alpha.1", "-beta.2", "-rc.3", "alpha1", "-rc1", "rc", "-a.1", "c1", "-alpha", ".rc.1"]
+    ),
+    st.sampled_from(["", ".post1", "-1", ".dev0", "-dev.3"]),
+    st.sampled_from(["", "+g1234", "+local.1"]),
+)
+
+
+@pytest.mark.contract
+@settings(max_examples=400, deadline=None)
+@given(parts=_TAG_SEGMENTS)
+def test_xg4_a_tag_is_canonical_or_the_repository_pre_release_spelling(parts: tuple[str, ...]) -> None:
+    """A tag is accepted exactly when it is a releasable version string or ``X.Y.Z-(alpha|beta|rc).N``."""
+    text = "".join(parts)
+    canonical = re.fullmatch(r"\d+\.\d+\.\d+((a|b|rc)\d+)?", text) is not None and str(Version(text)) == text
+    repository = re.fullmatch(r"\d+\.\d+\.\d+-(alpha|beta|rc)\.\d+", text) is not None
+    assert (gate.tag_problem(text) is None) is (canonical or repository)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("tag", "version", "ok"),
+    [
+        ("2.0.0-alpha.3", "2.0.0a3", True),
+        ("2.0.0-beta.1", "2.0.0b1", True),
+        ("2.0.0-rc.2", "2.0.0rc2", True),
+        ("2.0.0a3", "2.0.0a3", True),
+        ("2.0.0-alpha.3", "2.0.0a4", False),
+        ("2.0.0-alpha.3", "2.0.0", False),
+        ("v2.0.0-alpha.3", "2.0.0a3", False),
+        ("1!2.0.0-alpha.3", "2.0.0a3", False),
+        ("2.0.0-alpha.3+g1", "2.0.0a3", False),
+        ("2.0.0-alpha.3.post1", "2.0.0a3", False),
+        ("2.0.0-alpha.3.dev0", "2.0.0a3", False),
+    ],
+)
+def test_xg4_the_repository_tag_spelling_binds_to_the_built_version(
+    tag: str, version: str, ok: bool, fabricate: Callable[..., Path]
+) -> None:
+    """``X.Y.Z-(alpha|beta|rc).N`` passes when it parses to exactly the built version; any other segment is refused."""
+    wheels = _release(fabricate, version)
+    if ok:
+        gate.check_versions(wheels, FLOOR, tag=tag, prerelease=True)
+    else:
+        with pytest.raises(gate.GateError):
+            gate.check_versions(wheels, FLOOR, tag=tag, prerelease=True)
+
+
+@pytest.mark.logic
+def test_root_imports_its_packages_and_subpackages_and_core_imports_every_module(mini: Path) -> None:
+    """The root distribution imports each package to depth two; core and the worker import every module."""
+    fixture = sys.modules["release_fixture"]
+    deep = {"senselab/audio/__init__.py": b"", "senselab/audio/tasks/__init__.py": b"", "senselab/audio/x.py": b""}
+    root = fixture.write_mini_wheel(mini, mini.parent, "senselab", "2.0.0", lambda m: m.update(deep))
+    assert gate.import_targets(root) == ["senselab", "senselab.audio"]
+    core = fixture.write_mini_wheel(mini, mini.parent, "senselab-core", "2.0.0")
+    assert (
+        gate.import_targets(core)
+        == gate.wheel_modules(core)
+        == [
+            "senselab_core",
+            "senselab_core.kernel",
+            "senselab_core.kernel.identity",
+        ]
+    )
+
+
+@pytest.mark.logic
+def test_no_install_requests_an_extra(fabricate: Callable[..., Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Extra-only requirements are not installed and the own wheel is installed by plain path, with no extra."""
+    seen: list[tuple[str, ...]] = []
+
+    def run(args: tuple[str, ...], **kwargs: Any) -> subprocess.CompletedProcess[str]:  # noqa: ANN401
+        seen.append(tuple(args))
+        out = json.dumps({"sys_platform": "linux", "python_version": "3.11"}) if "-c" in args else ""
+        return subprocess.CompletedProcess(args, 0, out, "")
+
+    wheels = _release(fabricate, "2.0.0")
+    dist = wheels[0].parent
+    (dist / wheels[2].name).unlink()
+    sys.modules["release_fixture"].write_wheel(
+        dist, "senselab", "2.0.0", ["senselab-core==2.0.0", "numpy>=1", "jiwer>=3.0; extra == 'nlp'"]
+    )
+    monkeypatch.setattr(gate.subprocess, "run", run)
+    gate.check_installs(gate.dist_files(dist), HERE_PYTHON)
+    flat = [a for args in seen if args[0] == "uv" for a in args]
+    assert "numpy>=1" in flat and not [a for a in flat if "jiwer" in a or "[" in a]
 
 
 def _drop(member: str) -> Callable[[dict[str, bytes]], None]:
