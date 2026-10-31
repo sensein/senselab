@@ -1,5 +1,6 @@
 """The host side of the wire protocol, against the fake worker and a scripted one."""
 
+import errno
 import gc
 import json
 import logging
@@ -610,3 +611,92 @@ def test_graceful_close_leaves_sigterm_its_own_grace(
     terms = [t for t, _, sig in sent if sig == signal.SIGTERM]
     assert terms and terms[0] - t0 < 2.0 - 1.0 + 0.5
     assert signal.SIGKILL not in [sig for _, _, sig in sent]
+
+
+def _probe_fails(monkeypatch: pytest.MonkeyPatch, how: str) -> list[float]:
+    """Route the leader probe through the `ps` path and make every run of it fail as `how`."""
+    calls: list[float] = []
+
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        timeout = kwargs["timeout"]
+        assert isinstance(timeout, float) and timeout <= worker_client.LEADER_PROBE_TIMEOUT_S
+        calls.append(timeout)
+        if how == "missing":
+            raise FileNotFoundError(2, "No such file or directory", argv[0])
+        time.sleep(timeout)
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    monkeypatch.setattr(worker_client, "_HAS_WAITID", False)
+    monkeypatch.setattr(worker_client, "_PROBE_RUN", run)
+    return calls
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("how", ["missing", "timeout"])
+def test_unknown_leader_state_is_bounded_and_never_read_as_reaped(
+    array_parent: Path, monkeypatch: pytest.MonkeyPatch, how: str
+) -> None:
+    """With `ps` missing or timing out after an idle crash, `close()` returns within the bound and signals nothing."""
+    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent)
+    pid = client.hello["pid"]
+    os.kill(pid, signal.SIGKILL)
+    end = time.monotonic() + STOPPED_WAIT_S
+    while client.alive:
+        assert time.monotonic() < end
+    calls = _probe_fails(monkeypatch, how)
+    sent = _record_killpg(monkeypatch)
+    t0 = time.monotonic()
+    client.close()
+    assert time.monotonic() - t0 < SHUTDOWN_BOUND_S
+    assert calls and [s for s in sent if s[2] != 0] == []
+    assert client.returncode == -signal.SIGKILL and not alive(pid)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("how", ["missing", "timeout"])
+def test_running_leader_is_stopped_without_asking_ps(
+    tmp_path: Path, array_parent: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch, how: str
+) -> None:
+    """A leader whose exit has not been observed is held: a timed-out worker's group is stopped without `ps`."""
+    pid_file = tmp_path / "pids"
+    client = WorkerClient(
+        sys.executable,
+        "backends.forking_backend_fixture",
+        init={"pid_file": str(pid_file)},
+        array_parent=array_parent,
+        request_timeout=1,
+    )
+    pgid = client.hello["pid"]
+    calls = _probe_fails(monkeypatch, how)
+    t0 = time.monotonic()
+    with pytest.raises(TimeoutError):
+        client.run([{"id": "a", "inputs": {}}], {"mode": "hang"})
+    assert time.monotonic() - t0 < 1 + SHUTDOWN_BOUND_S
+    client.close()
+    assert calls == [] and not group_alive(pgid) and not any(map(alive, recorded_pids(pid_file)))
+
+
+@pytest.mark.logic
+def test_unexpected_signal_errors_are_logged(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """ESRCH is silent; EPERM is silent only for a zombie leader on macOS; any other errno is logged."""
+
+    def fail(err: int) -> None:
+        def killpg(pgid: int, sig: int) -> None:
+            raise OSError(err, os.strerror(err))
+
+        monkeypatch.setattr(os, "killpg", killpg)
+
+    with caplog.at_level(logging.WARNING):
+        fail(errno.ESRCH)
+        worker_client._signal_group(4242, signal.SIGTERM, leader_exited=False)
+        assert caplog.text == ""
+        fail(errno.EINVAL)
+        worker_client._signal_group(4242, signal.SIGTERM, leader_exited=True)
+        assert "SIGTERM" in caplog.text and "4242" in caplog.text
+        caplog.clear()
+        fail(errno.EPERM)
+        worker_client._signal_group(4242, signal.SIGKILL, leader_exited=False)
+        assert "SIGKILL" in caplog.text
+        caplog.clear()
+        worker_client._signal_group(4242, signal.SIGKILL, leader_exited=True)
+        assert (caplog.text == "") is (sys.platform == "darwin")

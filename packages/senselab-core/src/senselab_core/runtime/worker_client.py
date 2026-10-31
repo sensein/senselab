@@ -159,6 +159,9 @@ class _Pump:
 
 _NOTE_EXITSTATUS = 0x04000000 if sys.platform == "darwin" else 0
 _PS = "/bin/ps"
+_HAS_WAITID = hasattr(os, "waitid")
+_PROBE_RUN: Callable[..., "subprocess.CompletedProcess[str]"] = subprocess.run
+LEADER_PROBE_TIMEOUT_S = 2.0
 
 
 def _wait_exit(pid: int) -> int | None:
@@ -201,27 +204,38 @@ def _reap(pid: int, exited: threading.Event, status: list[int], stdout: _Pump) -
         stdout.finish()
 
 
-def _leader_held(pid: int) -> bool:
-    """Whether `pid` is still this process's child, running or exited but not yet reaped."""
-    if hasattr(os, "waitid"):
+def _leader_held(pid: int, exited: threading.Event, timeout: float) -> bool | None:
+    """Whether child `pid` is unreaped, so its pid and group id are still reserved; `None` if that cannot be told.
+
+    A leader whose exit has not been observed is running, hence held. After its exit the answer comes
+    from `waitid(WNOHANG|WNOWAIT)` where the platform has it, else from `ps -o ppid=` run by
+    `_PROBE_RUN` within `timeout` seconds.
+    """
+    if not exited.is_set():
+        return True
+    if _HAS_WAITID:
         try:
-            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)  # type: ignore[attr-defined,unused-ignore]
         except ChildProcessError:
             return False
         return True
     try:
-        out = subprocess.run([_PS, "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True, timeout=10)
+        out = _PROBE_RUN([_PS, "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("cannot tell whether worker %d is still this process's child: %s", pid, exc)
-        return False
+        return None
     return out.stdout.strip() == str(os.getpid())
 
 
-def _signal_group(pgid: int, sig: signal.Signals) -> None:
+def _signal_group(pgid: int, sig: signal.Signals, *, leader_exited: bool) -> None:
     try:
         os.killpg(pgid, sig)
-    except OSError:
+    except ProcessLookupError:
         pass
+    except OSError as exc:
+        # macOS answers EPERM for a group whose only member is its zombie leader.
+        if not (isinstance(exc, PermissionError) and leader_exited and sys.platform == "darwin"):
+            logger.warning("signal %s to worker process group %d failed: %s", sig.name, pgid, exc)
 
 
 def _live_members(pgid: int) -> bool:
@@ -594,6 +608,15 @@ class WorkerClient:
                     left = []
                 logger.warning("left %s: it holds names this client did not write: %s", self._array_dir, left)
 
+    def _signal_group_until_gone(self, pgid: int, stop: Deadline) -> None:
+        exited = self._exited
+        _signal_group(pgid, signal.SIGTERM, leader_exited=exited.is_set())
+        _signal_group(pgid, signal.SIGCONT, leader_exited=exited.is_set())
+        if not _members_gone(pgid, exited, stop):
+            _signal_group(pgid, signal.SIGKILL, leader_exited=exited.is_set())
+            if not _members_gone(pgid, exited, Deadline(KILL_GRACE_S)):
+                logger.error("worker process group %d still has members after SIGKILL", pgid)
+
     def _terminate(self, *, graceful: bool) -> None:
         proc = self._proc
         if proc is None:
@@ -612,17 +635,22 @@ class WorkerClient:
             pass
         if graceful:
             self._exited.wait(max((stop.remaining() or 0.0) - TERM_GRACE_S, 0.0))
-        if _leader_held(pgid):
-            _signal_group(pgid, signal.SIGTERM)
-            _signal_group(pgid, signal.SIGCONT)
-            if not _members_gone(pgid, self._exited, stop):
-                _signal_group(pgid, signal.SIGKILL)
-                if not _members_gone(pgid, self._exited, Deadline(KILL_GRACE_S)):
-                    logger.error("worker process group %d still has members after SIGKILL", pgid)
-            if self._exited.is_set():
-                proc.wait()
+        held: bool | None = False
+        if proc.returncode is None:
+            held = _leader_held(pgid, self._exited, min(LEADER_PROBE_TIMEOUT_S, stop.remaining() or 0.0))
+        if held:
+            try:
+                self._signal_group_until_gone(pgid, stop)
+            except Exception:
+                logger.exception("stopping worker process group %d failed; sending SIGKILL", pgid)
+                _signal_group(pgid, signal.SIGKILL, leader_exited=self._exited.is_set())
+        elif held is None:
+            logger.warning(
+                "worker %d: cannot tell whether it is still unreaped; its process group is not signalled", pgid
+            )
         else:
             logger.warning("worker %d was reaped outside this client; its process group is not signalled", pgid)
+        if self._exited.is_set() and proc.returncode is None:
             proc.wait()
         join = Deadline(JOIN_GRACE_S)
         for pump in self._pumps:

@@ -146,7 +146,11 @@ ADR-009.
   and the group is the unit of kill. The host notices the worker's exit without reaping it
   (`waitid(WNOWAIT)` on Linux, a kqueue `NOTE_EXIT` on macOS) and reaps it only after the group has
   been signalled, so the group id cannot be reused by another process while the host may still
-  signal it; if the worker was reaped by someone else, the group is not signalled at all. Stopping
+  signal it. A worker whose exit has not been observed is held; after its exit, whether it is still
+  unreaped is asked of `waitid(WNOHANG|WNOWAIT)` (Linux) or `ps -o ppid=` within 2 s (macOS). If it
+  was reaped by someone else, or that cannot be told, the group is not signalled, which is logged,
+  and every wait stays bounded. Signal errors other than "no such process" (and, on macOS, EPERM
+  for a group whose only member is the zombie leader) are logged. Stopping
   the worker: on close, write `{"stop": true}` if the pipe takes it at once and wait for the worker
   to exit, leaving 3 s (`TERM_GRACE_S`) of the 10 s stop window (`STOP_GRACE_S`); then send SIGTERM
   and SIGCONT to the group and wait, for the rest of that window, until no live member remains;

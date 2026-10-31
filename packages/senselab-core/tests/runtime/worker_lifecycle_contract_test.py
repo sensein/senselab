@@ -48,8 +48,15 @@ def _signals_only_while_the_leader_is_held(monkeypatch: pytest.MonkeyPatch) -> l
     real = os.killpg
 
     def checked(pgid: int, sig: int) -> None:
-        if sig != 0 and not worker_client._leader_held(pgid):
-            late.append((pgid, sig))
+        if sig != 0:
+            probe_exit_state = threading.Event()
+            probe_exit_state.set()
+            try:
+                held = worker_client._leader_held(pgid, probe_exit_state, worker_client.LEADER_PROBE_TIMEOUT_S)
+            except Exception:  # noqa: BLE001 - a probe failure must not stop the client's kill
+                held = None
+            if held is False:
+                late.append((pgid, sig))
         real(pgid, sig)
 
     monkeypatch.setattr(os, "killpg", checked)
