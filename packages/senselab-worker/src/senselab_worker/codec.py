@@ -1,7 +1,7 @@
 """Wire framing and array references of the worker protocol.
 
 A message is one JSON object per newline-terminated UTF-8 line. Every numpy array travels as
-`{"__array__": {"path", "sha256", "dtype", "shape"}}`, naming a canonical `.npy` file in the
+`{"__array__": {"path", "sha256", "dtype", "shape"}}`, naming an `.npy` file (`npy_bytes`) in the
 array directory.
 """
 
@@ -18,7 +18,7 @@ from typing import Any, Callable, Literal
 
 import numpy
 
-from senselab_worker.canonical import MAX_DEPTH, canonical_npy_bytes, canonical_scalar, entered, require_depth
+from senselab_worker.canonical import MAX_DEPTH, canonical_scalar, entered, npy_bytes, require_depth
 from senselab_worker.faults import ArrayIntegrityError, FaultClass, ProtocolError, ValueTooLarge, WireValueError
 from senselab_worker.hashing import sha256_bytes
 from senselab_worker.ownership import ARRAY_TEMP_NAME, remove_owned
@@ -292,7 +292,7 @@ class _Encoder:
 
 
 def _write_array(a: numpy.ndarray, array_dir: Path) -> dict[str, Any]:
-    data = canonical_npy_bytes(a)
+    data = npy_bytes(a)
     sha = sha256_bytes(data)
     root = array_dir.absolute()
     path = root / f"{sha}.npy"

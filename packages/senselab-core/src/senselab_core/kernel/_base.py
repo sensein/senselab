@@ -1,10 +1,7 @@
 """Shared base model and field types of the kernel."""
 
 import math
-import os
 from collections.abc import Callable, Iterator, Mapping
-from enum import Enum
-from pathlib import PurePath
 from types import MappingProxyType
 from typing import Annotated, Any, Self, TypeVar
 
@@ -20,21 +17,13 @@ from pydantic import (
     Strict,
     StringConstraints,
 )
-from senselab_worker.canonical import (
-    INT_TOKEN,
-    MAX_SAFE_INT,
-    canonical_npy_bytes,
-    escaped_key,
-    jcs_dumps,
-    tagged_digest,
-)
-from senselab_worker.hashing import sha256_bytes
+from senselab_worker.canonical import Tokeniser, tagged_digest
 
 K = TypeVar("K")
 V = TypeVar("V")
 F = TypeVar("F", bound="Frozen")
 
-_DIGEST_TAG = "value@1"
+_DIGEST_TAG = "value@2"
 
 
 class FrozenMapping(Mapping[K, V]):
@@ -90,40 +79,49 @@ def frozen_array(a: object) -> numpy.ndarray:
     return numpy.frombuffer(data, dtype=dtype).reshape(x.shape)
 
 
-def _canonical_value(v: object) -> object:
-    """Return a dumped field value as the JSON value its digest covers (the `value@1` rules in `canonical_digest`)."""
-    if isinstance(v, numpy.integer):
-        v = int(v)
-    if isinstance(v, numpy.ndarray):
-        return sha256_bytes(canonical_npy_bytes(v))
+def _value_family(v: object) -> tuple[str | None, object] | None:
     if isinstance(v, Frozen):
-        return _canonical_value(v.model_dump())
-    if isinstance(v, Mapping):
-        return {_key_text(k): _canonical_value(x) for k, x in v.items()}
-    if isinstance(v, (list, tuple)):
-        return [_canonical_value(x) for x in v]
-    if isinstance(v, (set, frozenset)):
-        items = [_canonical_value(x) for x in v]
-        return sorted(items, key=jcs_dumps)
-    if isinstance(v, Enum):
-        return _canonical_value(v.value)
-    if isinstance(v, PurePath):
-        return os.fspath(v)
+        return "$value", {"type": _type_name(type(v)), "fields": _fields(v)}
     if isinstance(v, type):
-        return f"{v.__module__}.{v.__qualname__}"
-    if type(v) is int and abs(v) > MAX_SAFE_INT:
-        return {INT_TOKEN: str(v)}
-    return v
+        return "$type", _type_name(v)
+    if isinstance(v, Mapping):
+        return None, dict(v)
+    return None
 
 
-def _key_text(k: object) -> object:
-    text = k.value if isinstance(k, Enum) else k
-    return escaped_key(text) if isinstance(text, str) else text
+def _type_name(t: type) -> str:
+    return f"{t.__module__}.{t.__qualname__}"
+
+
+def _fields(v: "Frozen") -> dict[str, object]:
+    return {name: getattr(v, name) for name in type(v).model_fields}
+
+
+_TOKENISER = Tokeniser(extra=_value_family)
 
 
 def value_digest(type_name: str, fields: Mapping[str, object]) -> str:
-    """Return `tagged_digest("value@1", {"type": type_name, "fields": fields})` with arrays as their `.npy` sha256."""
-    return tagged_digest(_DIGEST_TAG, {"type": type_name, "fields": _canonical_value(fields)})
+    """Return `tagged_digest("value@2", {"type": type_name, "fields": <fields in tokens>})`.
+
+    `fields` is written by the shared `canonical.Tokeniser`, which gives each family outside JSON its
+    own token: an array is `{"$array": <sha256 of its canonical .npy>}`, a set `{"$set": [...]}`, an
+    enum `{"$enum": [<type>, <value>]}`, a path `{"$path": <posix text>}`, an integer outside the
+    I-JSON range `{"$int": "<decimal>"}`, a non-finite float `{"$f": ...}`, a type
+    `{"$type": "<module>.<qualname>"}` and a `Frozen` value `{"$value": {"type": ..., "fields": ...}}`;
+    any other mapping is an object, and a key that starts with `$` gains one more `$`.
+
+    Raises:
+        NoCanonicalForm: on a value of no family, text `nfc` refuses, nesting deeper than `MAX_DEPTH`, or a
+            container that contains itself.
+        ValueError: if the tokens, inside the `{"type", "fields"}` envelope, nest deeper than `MAX_DEPTH` or
+            exceed `MAX_CANONICAL_CHARS`.
+    """
+    return tagged_digest(_DIGEST_TAG, {"type": type_name, "fields": _TOKENISER(fields, "fields")})
+
+
+def digest_of(v: "Frozen") -> str:
+    """Return `v`'s `value@2` digest over its held fields, computed rather than read from its cache."""
+    return value_digest(_type_name(type(v)), _fields(v))
 
 
 def _rebuild(cls: type[F], fields: dict[str, Any]) -> F:
@@ -143,18 +141,14 @@ class Frozen(BaseModel):
     _canonical: str | None = PrivateAttr(default=None)
 
     def canonical_digest(self) -> str:
-        """Return `tagged_digest("value@1", {"type": <module.qualname>, "fields": <dump>})`.
+        """Return `value_digest("<module>.<qualname>", <each field's held value>)`, computed once.
 
-        Each array in the dump is replaced by the sha256 of its canonical `.npy` bytes, mappings by
-        objects, sets by sorted arrays, enums by their values, paths by their text, types by their
-        qualified names, and an integer outside the I-JSON range (int64 nanoseconds, stat fields) by
-        `{"$int": "<decimal>"}`. A mapping key that starts with `$` gains one more `$`, so no mapping
-        held in a value encodes as that marker. A file-backed value's digest covers its path and
-        stamp, not its bytes: two values over the same bytes at two paths are unequal.
+        Fields are read as held, not dumped, so a `Frozen` value inside is `{"$value": ...}` and a
+        held value and a mapping of its fields differ. A file-backed value's digest covers its path
+        and stamp, not its bytes: two values over the same bytes at two paths are unequal.
         """
         if self._canonical is None:
-            t = type(self)
-            self._canonical = value_digest(f"{t.__module__}.{t.__qualname__}", self.model_dump())
+            self._canonical = digest_of(self)
         return self._canonical
 
     def __eq__(self, other: object) -> bool:

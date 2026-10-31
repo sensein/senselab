@@ -12,6 +12,9 @@ dependencies = [
   "numpy>=1.23"
 ]
 
+[tool.hatch.build]
+artifacts = ["/src/senselab_worker/data/"]
+
 [tool.hatch.version]
 source = "vcs"
 

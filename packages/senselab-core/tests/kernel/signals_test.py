@@ -222,7 +222,7 @@ def test_audio_from_array_identity_construction() -> None:
     x = numpy.linspace(-1, 1, 50, dtype=numpy.float32)
     a = Audio.from_array(x, 16_000)
     expected = "content:" + tagged_digest(
-        "audio@2", {"npy": sha256_bytes(canonical_npy_bytes(x.reshape(1, -1))), "sampling_rate": 16_000}
+        "audio@3", {"npy": sha256_bytes(canonical_npy_bytes(x.reshape(1, -1))), "sampling_rate": 16_000}
     )
     assert a.identity == expected
     assert Audio.from_array(x.reshape(1, -1), 16_000.0).identity == expected

@@ -42,7 +42,7 @@ from senselab_worker.canonical import canonical_npy_bytes
 
 import senselab_core.kernel
 import senselab_core.runtime
-from senselab_core.kernel._base import Frozen, value_digest
+from senselab_core.kernel._base import Frozen, digest_of
 from senselab_core.kernel.declare import BackendSpec, TaskParams, TaskSpec
 from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ModelRef, ResolvedModel
@@ -220,8 +220,7 @@ def _scribble(a: numpy.ndarray) -> None:
 
 def _fresh_digest(v: Frozen) -> str:
     """Return the canonical digest recomputed from the held fields, bypassing the cached one."""
-    t = type(v)
-    return value_digest(f"{t.__module__}.{t.__qualname__}", v.model_dump())
+    return digest_of(v)
 
 
 def _owns_bytes(factory: Factory) -> None:

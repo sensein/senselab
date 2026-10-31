@@ -10,7 +10,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from senselab_worker import runtime_identity
-from senselab_worker.canonical import canonical_npy_bytes
+from senselab_worker.canonical import npy_bytes
 from senselab_worker.codec import (
     MAX_DEPTH,
     MAX_LINE_BYTES,
@@ -53,15 +53,25 @@ def test_array_roundtrip_across_numpy_majors(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_array_file_is_canonical_npy_named_by_its_sha256(tmp_path: Path) -> None:
-    """The file holds `canonical_npy_bytes` and its name and reference carry their sha256."""
+def test_array_file_is_npy_named_by_its_sha256(tmp_path: Path) -> None:
+    """The file holds `npy_bytes` and its name and reference carry their sha256."""
     a = numpy.arange(6, dtype=">i4").reshape(2, 3)[:, ::2]
     ref = to_wire(a, array_dir=tmp_path, at="line")["__array__"]
-    data = canonical_npy_bytes(a)
+    data = npy_bytes(a)
     assert Path(ref["path"]).read_bytes() == data
     assert ref["sha256"] == sha256_bytes(data) and Path(ref["path"]).name == f"{ref['sha256']}.npy"
     assert ref["dtype"] == "<i4" and ref["shape"] == [2, 2]
     assert numpy.array_equal(from_wire({"__array__": ref}, array_dir=tmp_path), a)
+
+
+@pytest.mark.logic
+def test_the_wire_carries_every_value_bit(tmp_path: Path) -> None:
+    """A NaN payload, a NaN sign, `-0.0` and a bool byte of 2 arrive as sent; only identity canonicalises them."""
+    floats = numpy.array([0x7FF8000000000001, 0xFFF8000000000000, 0x8000000000000000], dtype="<u8").view("<f8")
+    bools = numpy.frombuffer(bytes([0, 1, 2]), dtype=numpy.bool_)
+    for a in (floats, bools):
+        back = from_wire(to_wire(a, array_dir=tmp_path, at="line"), array_dir=tmp_path)
+        assert back.tobytes() == a.tobytes()
 
 
 @pytest.mark.logic

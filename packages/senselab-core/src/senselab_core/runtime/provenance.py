@@ -9,26 +9,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import re
 import stat
 import threading
-import unicodedata
 import uuid
 from dataclasses import asdict, dataclass, field
-from decimal import Decimal
-from enum import Enum
-from pathlib import Path, PurePath
+from pathlib import Path
 from typing import Any, Literal, Sequence, cast, get_args
 
 import numpy
 from senselab_worker.canonical import (
-    INT_TOKEN,
-    canonical_scalar,
-    entered,
-    escaped_key,
-    in_json_domain,
+    NoCanonicalForm,
+    Recurse,
+    Tokeniser,
     jcs_dumps,
     tagged_digest,
 )
@@ -189,11 +183,7 @@ class Environment:
     senselab_version: str | None = None
 
 
-TOKENS = ("$f", INT_TOKEN, "$path", "$enum", "$nd", "$dec", "$bytes", "$set")
-"""The keys of the tagged tokens `normalised` writes, one per family of values outside the JSON domain."""
-
-
-class UnrecordableValue(TypeError, ValueError):
+class UnrecordableValue(NoCanonicalForm):
     """A provenance attribute or parameter holds a value outside the declared provenance value type.
 
     Attributes:
@@ -201,88 +191,29 @@ class UnrecordableValue(TypeError, ValueError):
         type_name: The offending value's type, `module.qualname`.
     """
 
-    def __init__(self, path: str, value: object, reason: str) -> None:
-        """Name the path, the value's type and why it cannot be recorded."""
-        self.path = path
-        self.type_name = f"{type(value).__module__}.{type(value).__qualname__}"
-        super().__init__(f"{path}: {self.type_name} {reason}")
+    refusal = "is not a provenance value"
 
 
-def normalised(value: object, path: str = "value", active: set[int] | None = None) -> object:
+def _nd_token(a: numpy.ndarray, recurse: Recurse, path: str) -> object:
+    flat = a.reshape(-1)
+    values = [recurse(flat[i], f"{path}[{i}]") for i in range(flat.size)]
+    return {"$nd": {"dtype": a.dtype.name, "shape": list(a.shape), "values": values}}
+
+
+_TOKENISER = Tokeniser(array=_nd_token, error=UnrecordableValue)
+
+
+def normalised(value: object, path: str = "value") -> object:
     """Return `value` as JSON the shared encoder accepts, every value outside the JSON domain as a tagged token.
 
-    The provenance value type is JSON (`None`, `bool`, `int`, `float`, `str`, `list`, `tuple`, `dict` with
-    `str` keys) plus these families, each written as a one-key object:
-
-    - a non-finite float: `{"$f": "NaN" | "Infinity" | "-Infinity"}`;
-    - an integer outside +/-`MAX_SAFE_INT`: `{"$int": "<decimal>"}`;
-    - a `PurePath`: `{"$path": <posix string>}`;
-    - an `Enum` member: `{"$enum": ["<module>.<qualname>", <its value, normalised>]}`;
-    - a `numpy.ndarray`: `{"$nd": {"dtype": <dtype name>, "shape": [...], "values": [<flat values, normalised>]}}`;
-    - a `Decimal`: `{"$dec": <str>}`; `bytes` or `bytearray`: `{"$bytes": <hex>}`;
-    - a `set` or `frozenset`: `{"$set": [<elements, normalised, sorted by their JCS bytes>]}`;
-    - a numpy scalar: its value, through `canonical_scalar`.
-
-    An object key starting with `$` gains one more `$`, so no recorded object reads as a token. Containers
-    are entered through `canonical.entered`, the shared cycle and depth guard.
+    The provenance value type is what the shared `canonical.Tokeniser` writes, with a `numpy.ndarray`
+    written as `{"$nd": {"dtype": <dtype name>, "shape": [...], "values": [<flat values, normalised>]}}`.
 
     Raises:
-        UnrecordableValue: naming `path` and the type, for any other type, a non-`str` key, two keys equal
-            after NFC, a container that contains itself, or nesting deeper than `MAX_DEPTH`.
+        UnrecordableValue: naming `path` and the type, for a value of no family, a non-`str` key, two keys
+            equal after NFC, a container that contains itself, or nesting deeper than `MAX_DEPTH`.
     """
-    active = set() if active is None else active
-    t = type(value)
-    if t is dict or t is list or t is tuple or t is set or t is frozenset or t is numpy.ndarray:
-        try:
-            with entered(value, active):
-                return _container(value, path, active)
-        except UnrecordableValue:
-            raise
-        except ValueError as err:
-            raise UnrecordableValue(path, value, str(err)) from err
-    if isinstance(value, Enum):
-        qualname = f"{t.__module__}.{t.__qualname__}"
-        return {"$enum": [qualname, normalised(value.value, f"{path}.value", active)]}
-    if isinstance(value, PurePath):
-        return {"$path": value.as_posix()}
-    if t is bytes or t is bytearray:
-        return {"$bytes": cast("bytes | bytearray", value).hex()}
-    if t is Decimal:
-        return {"$dec": str(value)}
-    try:
-        scalar = canonical_scalar(value)
-    except TypeError as err:
-        raise UnrecordableValue(path, value, "is not a provenance value") from err
-    if in_json_domain(scalar):
-        return scalar
-    if type(scalar) is int:
-        return {INT_TOKEN: str(scalar)}
-    number = cast(float, scalar)
-    return {"$f": "NaN" if math.isnan(number) else ("Infinity" if number > 0 else "-Infinity")}
-
-
-def _container(value: Any, path: str, active: set[int]) -> object:  # noqa: ANN401
-    t = type(value)
-    if t is dict:
-        out: dict[str, object] = {}
-        seen: set[str] = set()
-        for key, item in value.items():
-            if type(key) is not str:
-                raise UnrecordableValue(f"{path}[{key!r}]", key, "is not a str object key")
-            nfc = unicodedata.normalize("NFC", key)
-            if nfc in seen:
-                raise UnrecordableValue(f"{path}.{key}", key, "is a key equal after NFC to another key of its object")
-            seen.add(nfc)
-            out[escaped_key(key)] = normalised(item, f"{path}.{key}", active)
-        return out
-    if t is list or t is tuple:
-        return [normalised(item, f"{path}[{i}]", active) for i, item in enumerate(value)]
-    if t is set or t is frozenset:
-        items = [normalised(item, f"{path}{{}}", active) for item in value]
-        return {"$set": sorted(items, key=jcs_dumps)}
-    flat = value.reshape(-1)
-    values = [normalised(flat[i], f"{path}[{i}]", active) for i in range(flat.size)]
-    return {"$nd": {"dtype": value.dtype.name, "shape": list(value.shape), "values": values}}
+    return _TOKENISER(value, path)
 
 
 _ENTITY_ROOTS = ("run_id", "prov_type", "extent", "attributes")

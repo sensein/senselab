@@ -38,6 +38,9 @@ ALLOWED_BY_REASON: dict[str, tuple[str, ...]] = {
     "worker content hashing of raw bytes and content roots": (
         "packages/senselab-worker/src/senselab_worker/hashing.py",
     ),
+    "the Unicode table generator: a fingerprint of the floor interpreter's NFC data, not a value digest": (
+        "packages/senselab-worker/scripts/unicode_table.py",
+    ),
     "file checksums of provenance records": ("packages/senselab-core/src/senselab_core/runtime/provenance.py",),
     "reproduce package: digests of files, inputs, locks and weights": tuple(
         f"src/senselab/utils/reproduce/{m}.py"

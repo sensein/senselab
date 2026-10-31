@@ -2,7 +2,7 @@
 
 Layout under `root`:
 
-- `store@2/<d[:2]>/<d>/<f>/`, where `d` is `LogicalKey.digest()` and `f` is
+- `store@3/<d[:2]>/<d>/<f>/`, where `d` is `LogicalKey.digest()` and `f` is
   `ExecutionContext.fingerprint()`, holding:
   - `result.json`: JCS JSON with `format: "result@1.0"`, the key, its digest, the encoded outputs
     and their output identity;
@@ -22,7 +22,7 @@ writing is raised as `StoreUnavailable` (`StorageFull` for `ENOSPC` and `EDQUOT`
 Outputs are a mapping of JSON values (what `canonical_scalar` accepts, in exact `list`, `tuple` and
 `str`-keyed `dict` containers) and plain numpy arrays, nested to any depth. In the encoded form each
 array is replaced by `{"$array": <sha256 of its canonical .npy>}`, so `$array` is a reserved key.
-The output identity is `"output:" + tagged_digest("output@2", encoded form)`.
+The output identity is `"output:" + tagged_digest("output@3", encoded form)`.
 """
 
 import io
@@ -36,14 +36,15 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import numpy
 from pydantic import ValidationError
 from senselab_worker.canonical import (
+    ARRAY_TOKEN,
+    Walk,
     canonical_npy_bytes,
     canonical_scalar,
-    entered,
     jcs_dumps,
     jcs_loads,
     tagged_digest,
@@ -68,12 +69,12 @@ from senselab_core.runtime.storage import (
 
 logger = logging.getLogger("senselab")
 
-STORE_DIR = "store@2"
+STORE_DIR = "store@3"
 STAGING_DIR = "tmp"
 QUARANTINE_DIR = "quarantine"
 RESULT_FORMAT = "result@1.0"
 CONTEXT_FORMAT = "execution-context@1.0"
-ARRAY_TAG = "$array"
+ARRAY_TAG = ARRAY_TOKEN
 COMMIT_ATTEMPTS = 3
 """How many times `put` stages and renames before giving up on a target that keeps turning out corrupt."""
 
@@ -110,35 +111,40 @@ class StoredResult:
     policy_used: ReusePolicy
 
 
-def _encode(value: object, arrays: dict[str, bytes], active: set[int]) -> object:
+def _encode(value: object, arrays: dict[str, bytes], walk: Walk) -> object:
     if type(value) is numpy.ndarray:
-        data = canonical_npy_bytes(value)
-        sha = sha256_bytes(data)
-        arrays[sha] = data
-        return {ARRAY_TAG: sha}
+        a = value
+        return walk.enter(a, lambda: _array(a, arrays))
     if type(value) is dict:
-        if ARRAY_TAG in value:
+        d = cast("dict[str, object]", value)
+        if ARRAY_TAG in d:
             raise ValueError(f"{ARRAY_TAG!r} is a reserved key in stored outputs")
-        with entered(value, active):
-            return {k: _encode(v, arrays, active) for k, v in value.items()}
+        return walk.enter(d, lambda: {k: _encode(v, arrays, walk) for k, v in d.items()})
     if type(value) is list or type(value) is tuple:
-        with entered(value, active):
-            return [_encode(v, arrays, active) for v in value]
+        items = cast("list[object] | tuple[object, ...]", value)
+        return walk.enter(items, lambda: [_encode(v, arrays, walk) for v in items])
     return canonical_scalar(value)
 
 
+def _array(a: numpy.ndarray, arrays: dict[str, bytes]) -> object:
+    data = canonical_npy_bytes(a)
+    sha = sha256_bytes(data)
+    arrays[sha] = data
+    return {ARRAY_TAG: sha}
+
+
 def _tree_identity(tree: object) -> OutputIdentity:
-    return "output:" + tagged_digest("output@2", tree)
+    return "output:" + tagged_digest("output@3", tree)
 
 
 def _serialise(outputs: Mapping[str, object]) -> tuple[object, dict[str, bytes], OutputIdentity]:
     arrays: dict[str, bytes] = {}
-    tree = _encode(dict(outputs), arrays, set())
+    tree = _encode(dict(outputs), arrays, Walk())
     return tree, arrays, _tree_identity(tree)
 
 
 def output_identity(outputs: Mapping[str, object]) -> OutputIdentity:
-    """Return the output identity of `outputs`: `"output:" + tagged_digest("output@2", encoded form)`.
+    """Return the output identity of `outputs`: `"output:" + tagged_digest("output@3", encoded form)`.
 
     Raises:
         TypeError: on a value that is neither a canonical JSON value nor a plain numpy array.
@@ -708,7 +714,7 @@ class ResultStore:
         prov.was_generated_by(self._result_entity(identity, digest), activity)
 
     def _result_entity(self, identity: OutputIdentity, digest: str) -> str:
-        """Record a result: `checksum_sha256` is the hex of its tagged `output@2` digest, not a file hash."""
+        """Record a result: `checksum_sha256` is the hex of its tagged `output@3` digest, not a file hash."""
         return self.provenance.entity(
             prov_type="artifact",
             extent=None,

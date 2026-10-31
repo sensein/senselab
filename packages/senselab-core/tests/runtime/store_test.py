@@ -244,9 +244,9 @@ def test_output_identity_enables_early_cutoff(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_output_identity_is_tagged_over_array_digests() -> None:
-    """The identity is the `output@2` digest of the outputs with each array replaced by its .npy digest."""
+    """The identity is the `output@3` digest of the outputs with each array replaced by its .npy digest."""
     a = numpy.arange(4, dtype="<i8")
-    expected = "output:" + tagged_digest("output@2", {"y": {"$array": sha256_bytes(canonical_npy_bytes(a))}, "z": 1})
+    expected = "output:" + tagged_digest("output@3", {"y": {"$array": sha256_bytes(canonical_npy_bytes(a))}, "z": 1})
     assert output_identity({"z": 1, "y": a}) == expected
     assert output_identity({"y": numpy.asarray(a, dtype=">i8")}) == output_identity({"y": a})
 
@@ -281,7 +281,7 @@ def _rewrite_json(path: Path, change: Callable[[dict[str, Any]], None]) -> None:
     _unseal(path.parent)
     record = json.loads(path.read_bytes())
     change(record)
-    path.write_bytes(json.dumps(record).encode())
+    path.write_bytes(jcs_dumps(record))
 
 
 def _only_npy(entry: Path) -> Path:
@@ -325,7 +325,7 @@ def _only_npy_name(entry: Path) -> Path:
 def _forge(record: dict[str, Any], outputs: dict[str, object]) -> None:
     """Replace a record's outputs and recompute their output identity, as a forger with write access could."""
     record["outputs"] = outputs
-    record["output_identity"] = "output:" + tagged_digest("output@2", outputs)
+    record["output_identity"] = "output:" + tagged_digest("output@3", outputs)
 
 
 @pytest.mark.logic
@@ -438,7 +438,7 @@ def test_a31_output_identity_differs_from_key_digest_of_same_tree() -> None:
     k = _key()
     tree = k.model_dump()
     assert output_identity(tree).removeprefix("output:") != k.digest()
-    assert output_identity(tree) == "output:" + tagged_digest("output@2", tree)
+    assert output_identity(tree) == "output:" + tagged_digest("output@3", tree)
 
 
 @pytest.mark.logic
@@ -502,9 +502,9 @@ def test_a23_get_coerces_policy(tmp_path: Path, policy: object) -> None:
 
 
 @pytest.mark.logic
-def test_store_dir_is_format_2() -> None:
+def test_store_dir_is_format_3() -> None:
     """Changed digests put entries in a new key space."""
-    assert STORE_DIR == "store@2"
+    assert STORE_DIR == "store@3"
 
 
 def _cycles() -> list[object]:

@@ -19,6 +19,7 @@ from senselab_worker.canonical import (
     canonical_scalar,
     jcs_dumps,
     jcs_loads,
+    nfc,
     tagged_digest,
 )
 
@@ -148,7 +149,15 @@ def test_jcs_refuses_lone_surrogates() -> None:
         jcs_dumps("\ud800")
 
 
-_NFC_TEXT = st.text().map(lambda s: unicodedata.normalize("NFC", s))
+def _portable(text: str) -> bool:
+    try:
+        nfc(text)
+    except ValueError:
+        return False
+    return True
+
+
+_NFC_TEXT = st.text().filter(_portable).map(nfc)
 _I_JSON_INTS = st.integers(min_value=-(2**53) + 1, max_value=2**53 - 1)
 _FINITE_FLOATS = st.floats(allow_nan=False, allow_infinity=False).filter(
     lambda x: not (x.is_integer() and abs(x) >= 2**53)
@@ -459,7 +468,7 @@ def test_tagged_digest_separates_domains() -> None:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("tag", ["", "output", "output@3", "logical-key@2\x00", "nope@1"])
+@pytest.mark.parametrize("tag", ["", "output", "output@2", "audio@2", "value@1", "logical-key@2\x00", "nope@1"])
 def test_tagged_digest_refuses_unregistered_tags(tag: str) -> None:
     """Only a registered tag may name a digest domain."""
     with pytest.raises(ValueError, match="unregistered"):

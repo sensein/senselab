@@ -1,18 +1,25 @@
 """Canonical byte forms of JSON values and numpy arrays, and the tagged digest over them (ADR-006).
 
-`jcs_dumps` writes RFC 8785 (JCS) JSON with strings in Unicode NFC; `canonical_npy_bytes` writes
-`.npy` version 1.0, C order, little-endian; `tagged_digest` hashes a JSON value under a registered
-domain tag. Both encoders accept an exact-type whitelist and refuse everything else.
+`jcs_dumps` writes RFC 8785 (JCS) JSON with strings in Unicode NFC (`nfc`); `canonical_npy_bytes`
+writes `.npy` version 1.0, C order, little-endian, one byte form per value; `tagged_digest` hashes a
+JSON value under a registered domain tag; `Tokeniser` writes a value outside JSON as JSON with a
+one-key token object per family. Every encoder accepts an exact-type whitelist, refuses everything
+else, and walks containers through one `Walk`.
 """
 
 import hashlib
 import json
 import math
+import re
 import struct
 import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Callable, cast
+from decimal import Decimal
+from enum import Enum
+from importlib import resources
+from pathlib import PurePath
+from typing import Any, Callable, TypeVar, cast
 
 import numpy
 
@@ -25,16 +32,18 @@ _NPY_MAGIC = b"\x93NUMPY\x01\x00"
 _NPY_ALIGN = 64
 MAX_DEPTH = 64
 """The most containers on any path from a value's root to a leaf, the root included."""
+MAX_CANONICAL_CHARS = 64 * 2**20
+"""The most characters one `Walk` may write or replay: the work bound of encoding a value that shares children."""
 
 DIGEST_TAGS: frozenset[str] = frozenset(
     {
         "logical-key@2",
-        "output@2",
+        "output@3",
         "context@2",
         "content-root@2",
-        "audio@2",
+        "audio@3",
         "weights@2",
-        "value@1",
+        "value@2",
         "provenance-id@2",
         "data-manifest@2",
     }
@@ -42,6 +51,58 @@ DIGEST_TAGS: frozenset[str] = frozenset(
 """The registered domain tags of `tagged_digest`; no tag is a prefix of another."""
 
 Scalar = None | bool | int | float | str
+T = TypeVar("T")
+
+UNICODE_VERSION = "13.0.0"
+"""The Unicode version whose assigned code points canonical text may hold: the database of Python 3.10."""
+UNICODE_TABLE = "data/unicode-assigned.txt"
+"""The table of those code points, inside the package; `scripts/unicode_table.py` generates it."""
+
+
+def _unassigned_pattern() -> "re.Pattern[str]":
+    text = resources.files("senselab_worker").joinpath(UNICODE_TABLE).read_text(encoding="ascii")
+    header: dict[str, str] = {}
+    gaps: list[str] = []
+    following = 0
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        first, second = line.split(" ")
+        if not all(c in "0123456789ABCDEF" for c in first):
+            header[first] = second
+            continue
+        start, end = int(first, 16), int(second, 16)
+        if start > following:
+            gaps.append(f"\\U{following:08x}-\\U{start - 1:08x}")
+        following = end + 1
+    if header.get("unicode_version") != UNICODE_VERSION:
+        raise RuntimeError(f"{UNICODE_TABLE} is for Unicode {header.get('unicode_version')}, not {UNICODE_VERSION}")
+    if following <= 0x10FFFF:
+        gaps.append(f"\\U{following:08x}-\\U0010ffff")
+    return re.compile("[" + "".join(gaps) + "]")
+
+
+_UNASSIGNED = _unassigned_pattern()
+
+
+class UnportableText(ValueError):
+    """Text holding a lone surrogate or a code point unassigned in `UNICODE_VERSION`."""
+
+
+def nfc(text: str) -> str:
+    """Return `text` in Unicode NFC, the same on every supported Python.
+
+    Raises:
+        UnportableText: if `text` holds a lone surrogate or a code point unassigned in `UNICODE_VERSION`.
+    """
+    if text.isascii():
+        return text
+    found = _UNASSIGNED.search(text)
+    if found is not None:
+        cp = ord(found.group())
+        what = "a lone surrogate" if 0xD800 <= cp <= 0xDFFF else f"unassigned in Unicode {UNICODE_VERSION}"
+        raise UnportableText(f"U+{cp:04X} at index {found.start()} is {what}")
+    return unicodedata.normalize("NFC", text)
 
 
 def canonical_scalar(v: object) -> Scalar:
@@ -69,6 +130,12 @@ TOKEN_PREFIX = "$"
 """A one-key object whose key starts with it is a token for a value outside JSON; held keys get one more."""
 INT_TOKEN = "$int"
 """The one key of the token that stands for an integer outside the I-JSON range."""
+FLOAT_TOKEN = "$f"
+"""The one key of the token that stands for a non-finite float."""
+ARRAY_TOKEN = "$array"
+"""The one key of the token that stands for an array by the sha256 of its canonical `.npy`."""
+TOKENS = (FLOAT_TOKEN, INT_TOKEN, "$path", "$enum", "$nd", ARRAY_TOKEN, "$dec", "$bytes", "$set", "$type", "$value")
+"""The keys of the tokens canonical forms use, one per family of values outside the JSON domain."""
 
 
 def escaped_key(key: str) -> str:
@@ -83,56 +150,6 @@ def in_json_domain(scalar: Scalar) -> bool:
     if type(scalar) is int:
         return abs(scalar) <= MAX_SAFE_INT
     return True
-
-
-def jcs_dumps(obj: object) -> bytes:
-    """Serialise a JSON value as RFC 8785 canonical UTF-8 bytes.
-
-    Containers are exactly `list`, `tuple` and `dict` with `str` keys; scalars are what
-    `canonical_scalar` accepts. Strings and keys are NFC-normalised; keys sort by UTF-16 code units.
-
-    Raises:
-        ValueError: on a NaN or infinite float, an integer outside +/-(2**53 - 1), a string that
-            is not valid Unicode, two keys of one object that are equal after NFC, a container
-            that contains itself, or nesting deeper than `MAX_DEPTH`.
-        TypeError: on any other type, including container subclasses, non-`str` keys and arrays.
-    """
-    parts: list[str] = []
-    _write(obj, parts.append, set())
-    return "".join(parts).encode("utf-8")
-
-
-def jcs_loads(data: bytes | str) -> object:
-    """Parse JCS bytes back to the value `jcs_dumps` wrote them from.
-
-    An integer literal outside +/-(2**53 - 1) can only come from a float, so it parses as that
-    float; `jcs_dumps(jcs_loads(b)) == b` for every `b` that `jcs_dumps` returns.
-
-    Raises:
-        ValueError: on text that is not JSON, or on `NaN` and `Infinity` literals.
-    """
-    return json.loads(data, parse_int=_parse_int, parse_constant=_refuse_constant)
-
-
-def _parse_int(text: str) -> int | float:
-    value = int(text)
-    return value if abs(value) <= MAX_SAFE_INT else float(text)
-
-
-def _refuse_constant(text: str) -> object:
-    raise ValueError(f"non-finite number is not JSON: {text}")
-
-
-def tagged_digest(tag: str, value: object) -> str:
-    """Return the sha256 hex of `tag` in ASCII, a zero byte and the JCS of `value`.
-
-    Raises:
-        ValueError: if `tag` is not in `DIGEST_TAGS`, or `jcs_dumps` refuses `value`.
-        TypeError: if `jcs_dumps` refuses `value`.
-    """
-    if tag not in DIGEST_TAGS:
-        raise ValueError(f"unregistered digest tag {tag!r}; registered: {sorted(DIGEST_TAGS)}")
-    return hashlib.sha256(tag.encode("ascii") + b"\x00" + jcs_dumps(value)).hexdigest()
 
 
 def require_depth(depth: int) -> None:
@@ -168,52 +185,218 @@ def entered(container: object, active: set[int], base: int = 0) -> Iterator[None
         active.discard(id(container))
 
 
-def _write(obj: object, out: Callable[[str], object], active: set[int]) -> None:
-    t = type(obj)
-    if t is list or t is tuple or t is dict:
-        with entered(obj, active):
-            if t is dict:
-                _write_object(cast("dict[object, object]", obj), out, active)
-            else:
-                out("[")
-                for i, item in enumerate(cast("list[object] | tuple[object, ...]", obj)):
-                    if i:
-                        out(",")
-                    _write(item, out, active)
-                out("]")
-        return
-    scalar = canonical_scalar(obj)
-    if scalar is None:
-        out("null")
-    elif scalar is True:
-        out("true")
-    elif scalar is False:
-        out("false")
-    elif type(scalar) is int:
-        out(_int_text(scalar))
-    elif type(scalar) is float:
-        out(_float_text(scalar))
-    else:
-        out(_string_text(scalar))  # type: ignore[arg-type]
+class WorkBudgetExceeded(ValueError):
+    """An encoding would write or replay more than its `Walk`'s budget of characters."""
 
 
-def _write_object(obj: dict[object, object], out: Callable[[str], object], active: set[int]) -> None:
-    members: dict[str, object] = {}
-    for key, value in obj.items():
-        if type(key) is not str:
-            raise TypeError(f"JSON object key is not a str: {type(key).__qualname__}")
-        nfc = unicodedata.normalize("NFC", key)
-        if nfc in members:
-            raise ValueError(f"duplicate JSON object key after NFC: {nfc!r}")
-        members[nfc] = value
-    out("{")
-    for i, key in enumerate(sorted(members, key=utf16_sort_key)):
-        if i:
-            out(",")
-        out(_string_text(key))
-        out(":")
-        _write(members[key], out, active)
-    out("}")
+class Walk:
+    """One encoder's pass over a value: the shared cycle and depth guard, a work budget and a memo.
+
+    `enter` builds a container's result inside `entered` and keeps it by identity and depth, so a
+    container shared by many parents is built once per depth. The memo holds each container it
+    keys, so no identity is reused while the pass lives.
+    """
+
+    def __init__(self, base: int = 0, budget: int = MAX_CANONICAL_CHARS) -> None:
+        """Start a pass whose root is enclosed by `base` containers and may spend `budget` characters."""
+        self.active: set[int] = set()
+        self.base = base
+        self.budget = budget
+        self.spent = 0
+        self._done: dict[tuple[int, int], tuple[object, object]] = {}
+
+    def charge(self, size: int) -> None:
+        """Spend `size` characters.
+
+        Raises:
+            WorkBudgetExceeded: once the pass has spent more than its budget.
+        """
+        self.spent += size
+        if self.spent > self.budget:
+            raise WorkBudgetExceeded(f"canonical form exceeds {self.budget} characters")
+
+    def enter(self, container: object, build: Callable[[], T]) -> T:
+        """Return `build()` for `container`, or the result kept from building it at this depth before.
+
+        Raises:
+            ValueError: if `container` contains itself or nests deeper than `MAX_DEPTH` (`entered`).
+        """
+        key = (id(container), len(self.active))
+        held = self._done.get(key)
+        if held is not None:
+            return cast(T, held[1])
+        with entered(container, self.active, self.base):
+            result = build()
+        self._done[key] = (container, result)
+        return result
+
+    def remember(self, value: object, build: Callable[[], T]) -> T:
+        """Return `build()` for `value`, kept by identity and depth like `enter`, without entering it."""
+        key = (id(value), len(self.active))
+        held = self._done.get(key)
+        if held is not None:
+            return cast(T, held[1])
+        result = build()
+        self._done[key] = (value, result)
+        return result
+
+
+def jcs_dumps(obj: object) -> bytes:
+    """Serialise a JSON value as RFC 8785 canonical UTF-8 bytes.
+
+    Containers are exactly `list`, `tuple` and `dict` with `str` keys; scalars are what
+    `canonical_scalar` accepts. Strings and keys are in NFC (`nfc`); keys sort by UTF-16 code units.
+
+    Raises:
+        ValueError: on a NaN or infinite float, an integer outside +/-(2**53 - 1), text `nfc`
+            refuses (`UnportableText`), two keys of one object that are equal after NFC, a container
+            that contains itself, nesting deeper than `MAX_DEPTH`, or text longer than
+            `MAX_CANONICAL_CHARS` (`WorkBudgetExceeded`).
+        TypeError: on any other type, including container subclasses, non-`str` keys and arrays.
+    """
+    writer = _Writer()
+    writer.write(obj)
+    return "".join(writer.parts).encode("utf-8")
+
+
+class _Writer:
+    def __init__(self) -> None:
+        self.parts: list[str] = []
+        self.walk = Walk()
+
+    def out(self, text: str) -> None:
+        self.walk.charge(len(text))
+        self.parts.append(text)
+
+    def write(self, obj: object) -> None:
+        t = type(obj)
+        if t is list or t is tuple or t is dict:
+            before = len(self.parts)
+            start, end, size = self.walk.enter(obj, lambda: self._container(obj))
+            if start < before:
+                self.walk.charge(size)
+                self.parts.extend(self.parts[start:end])
+            return
+        scalar = canonical_scalar(obj)
+        if scalar is None:
+            self.out("null")
+        elif scalar is True:
+            self.out("true")
+        elif scalar is False:
+            self.out("false")
+        elif type(scalar) is int:
+            self.out(_int_text(scalar))
+        elif type(scalar) is float:
+            self.out(_float_text(scalar))
+        else:
+            self.out(_json_string(nfc(cast(str, scalar))))
+
+    def _container(self, obj: object) -> tuple[int, int, int]:
+        start, spent = len(self.parts), self.walk.spent
+        if type(obj) is dict:
+            self._object(cast("dict[object, object]", obj))
+        else:
+            self.out("[")
+            for i, item in enumerate(cast("list[object] | tuple[object, ...]", obj)):
+                if i:
+                    self.out(",")
+                self.write(item)
+            self.out("]")
+        return start, len(self.parts), self.walk.spent - spent
+
+    def _object(self, obj: dict[object, object]) -> None:
+        members: dict[str, object] = {}
+        for key, value in obj.items():
+            if type(key) is not str:
+                raise TypeError(f"JSON object key is not a str: {type(key).__qualname__}")
+            text = nfc(key)
+            if text in members:
+                raise ValueError(f"duplicate JSON object key after NFC: {text!r}")
+            members[text] = value
+        self.out("{")
+        for i, key in enumerate(sorted(members, key=utf16_sort_key)):
+            if i:
+                self.out(",")
+            self.out(_json_string(key))
+            self.out(":")
+            self.write(members[key])
+        self.out("}")
+
+
+class NotCanonicalJSON(ValueError):
+    """Text `jcs_dumps` cannot have written."""
+
+
+def jcs_loads(data: bytes | str) -> object:
+    """Parse JCS text back to the value `jcs_dumps` wrote it from.
+
+    An integer literal outside +/-(2**53 - 1) can only come from a float, so it parses as that
+    float. Only text `jcs_dumps` returns is accepted, so `jcs_dumps(jcs_loads(b)) == b`.
+
+    Raises:
+        NotCanonicalJSON: on text that is not UTF-8 JSON, repeats a key within one object, holds a
+            `NaN` or `Infinity` literal or a number that overflows to infinity, nests deeper than
+            `MAX_DEPTH`, or is not the canonical form of the value it parses to.
+    """
+    raw = data.encode("utf-8", "surrogatepass") if isinstance(data, str) else bytes(data)
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            parse_int=_parse_int,
+            parse_float=_parse_float,
+            parse_constant=_refuse_constant,
+            object_pairs_hook=_unique_object,
+        )
+    except RecursionError as err:
+        raise NotCanonicalJSON(f"JSON nests deeper than {MAX_DEPTH} containers") from err
+    except NotCanonicalJSON:
+        raise
+    except ValueError as err:
+        raise NotCanonicalJSON(f"not JSON: {err}") from err
+    try:
+        canonical = jcs_dumps(value)
+    except (ValueError, TypeError) as err:
+        raise NotCanonicalJSON(f"JSON jcs_dumps cannot write: {err}") from err
+    if canonical != raw:
+        raise NotCanonicalJSON("JSON is not in its canonical form")
+    return value
+
+
+def _parse_int(text: str) -> int | float:
+    value = int(text)
+    return value if abs(value) <= MAX_SAFE_INT else _parse_float(text)
+
+
+def _parse_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise NotCanonicalJSON(f"number {text[:40]} overflows to infinity")
+    return value
+
+
+def _refuse_constant(text: str) -> object:
+    raise NotCanonicalJSON(f"non-finite number is not JSON: {text}")
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise NotCanonicalJSON(f"repeated key {key[:40]!r} in one object")
+        out[key] = value
+    return out
+
+
+def tagged_digest(tag: str, value: object) -> str:
+    """Return the sha256 hex of `tag` in ASCII, a zero byte and the JCS of `value`.
+
+    Raises:
+        ValueError: if `tag` is not in `DIGEST_TAGS`, or `jcs_dumps` refuses `value`.
+        TypeError: if `jcs_dumps` refuses `value`.
+    """
+    if tag not in DIGEST_TAGS:
+        raise ValueError(f"unregistered digest tag {tag!r}; registered: {sorted(DIGEST_TAGS)}")
+    return hashlib.sha256(tag.encode("ascii") + b"\x00" + jcs_dumps(value)).hexdigest()
 
 
 def utf16_sort_key(key: str) -> bytes:
@@ -227,10 +410,8 @@ def _int_text(value: int) -> str:
     return str(value)
 
 
-def _string_text(value: str) -> str:
-    nfc = unicodedata.normalize("NFC", value)
-    nfc.encode("utf-8")
-    return json.dumps(nfc, ensure_ascii=False)
+def _json_string(text: str) -> str:
+    return json.dumps(text, ensure_ascii=False)
 
 
 def _float_text(value: float) -> str:
@@ -260,8 +441,12 @@ def _float_text(value: float) -> str:
     return f"{sign}{head}e{exp_sign}{abs(exponent)}"
 
 
-def canonical_npy_bytes(a: numpy.ndarray) -> bytes:
-    """Serialise an array as canonical `.npy`: version 1.0, C order, little-endian.
+QUIET_NAN_BITS = {2: 0x7E00, 4: 0x7FC00000, 8: 0x7FF8000000000000}
+"""Per float itemsize, the bits of the positive quiet NaN with no payload: every NaN's canonical form."""
+
+
+def npy_bytes(a: numpy.ndarray) -> bytes:
+    """Serialise an array as `.npy` version 1.0, C order, little-endian, keeping every value's bits.
 
     The header is numpy's version 1.0 dict, space-padded so the data starts on a 64-byte boundary.
 
@@ -283,3 +468,211 @@ def canonical_npy_bytes(a: numpy.ndarray) -> bytes:
     padding = -(len(_NPY_MAGIC) + 2 + len(header) + 1) % _NPY_ALIGN
     header_bytes = (header + " " * padding + "\n").encode("latin1")
     return _NPY_MAGIC + struct.pack("<H", len(header_bytes)) + header_bytes + data.tobytes(order="C")
+
+
+def canonical_npy_bytes(a: numpy.ndarray) -> bytes:
+    """Serialise an array as canonical `.npy`: `npy_bytes` of its values, each in its one canonical form.
+
+    Every NaN becomes the positive quiet NaN with no payload (`QUIET_NAN_BITS`), `-0.0` becomes
+    `0.0`, every nonzero bool byte becomes 1, and every string is in NFC (`nfc`), at a `U` width no
+    narrower than the array's.
+
+    Raises:
+        TypeError: if `a` is not exactly a `numpy.ndarray` (masked arrays and other subclasses).
+        ValueError: on a dtype `npy_bytes` refuses, or a string `nfc` refuses (`UnportableText`).
+    """
+    if type(a) is not numpy.ndarray:
+        raise TypeError(f"not a plain numpy.ndarray: {type(a).__module__}.{type(a).__qualname__}")
+    if a.dtype.fields is None and a.dtype.char not in _PLATFORM_DTYPE_CHARS:
+        if a.dtype.kind == "f":
+            a = _canonical_floats(a)
+        elif a.dtype.kind == "b":
+            a = _canonical_bools(a)
+        elif a.dtype.kind == "U":
+            a = _canonical_strings(a)
+    return npy_bytes(a)
+
+
+def _canonical_floats(a: numpy.ndarray) -> numpy.ndarray:
+    nan = numpy.isnan(a)
+    negative_zero = (a == 0) & numpy.signbit(a)
+    if not (nan.any() or negative_zero.any()):
+        return a
+    out = numpy.array(a, dtype=a.dtype.newbyteorder("<"), order="C", copy=True)
+    bits = out.view(f"<u{out.dtype.itemsize}")
+    bits[nan] = QUIET_NAN_BITS[out.dtype.itemsize]
+    bits[negative_zero] = 0
+    return out
+
+
+def _canonical_bools(a: numpy.ndarray) -> numpy.ndarray:
+    raw = numpy.ascontiguousarray(a).view(numpy.uint8)
+    if not (raw > 1).any():
+        return a
+    return numpy.asarray(raw != 0)
+
+
+def _canonical_strings(a: numpy.ndarray) -> numpy.ndarray:
+    held = [str(x) for x in a.reshape(-1).tolist()]
+    if all(x.isascii() for x in held):
+        return a
+    texts = [nfc(x) for x in held]
+    if texts == held:
+        return a
+    width = max(a.dtype.itemsize // 4, *(len(t) for t in texts))
+    return numpy.array(texts, dtype=f"<U{width}").reshape(a.shape)
+
+
+class NoCanonicalForm(TypeError, ValueError):
+    """A value outside the families a `Tokeniser` writes.
+
+    Attributes:
+        path: Where the value sits, from the root, e.g. `value.evidence[2]`.
+        type_name: The offending value's type, `module.qualname`.
+    """
+
+    refusal = "has no canonical form"
+    """What a value of no family is said to be, after its path and type."""
+
+    def __init__(self, path: str, value: object, reason: str) -> None:
+        """Name the path, the value's type and why it has no canonical form."""
+        self.path = path
+        self.type_name = f"{type(value).__module__}.{type(value).__qualname__}"
+        super().__init__(f"{path}: {self.type_name} {reason}")
+
+
+Recurse = Callable[[object, str], object]
+"""Writes a value found inside another, at a path: what `Tokeniser` passes to `array`."""
+ArrayToken = Callable[[numpy.ndarray, Recurse, str], object]
+"""Writes an array, given the recursion and the array's path."""
+Extra = Callable[[object], "tuple[str | None, object] | None"]
+"""Maps a value outside the shared families to `(token, payload)`, or returns `None` if it has none."""
+
+
+def array_token(a: numpy.ndarray, recurse: Recurse, path: str) -> object:
+    """Return `{"$array": <sha256 of canonical_npy_bytes(a)>}`."""
+    return {ARRAY_TOKEN: hashlib.sha256(canonical_npy_bytes(a)).hexdigest()}
+
+
+class Tokeniser:
+    """Writes a value as JSON `jcs_dumps` accepts, each value outside the JSON domain as a one-key token.
+
+    The families, dispatched on exact type for the JSON ones:
+
+    - `None`, `bool`, `str`, a finite `float`, an `int` within +/-`MAX_SAFE_INT`, or a numpy scalar
+      `canonical_scalar` accepts: itself;
+    - a non-finite float: `{"$f": "NaN" | "Infinity" | "-Infinity"}`;
+    - an integer outside +/-`MAX_SAFE_INT`: `{"$int": "<decimal>"}`;
+    - `dict` with `str` keys: an object, a key starting with `$` gaining one more `$`;
+    - `list` and `tuple`: an array;
+    - `set` and `frozenset`: `{"$set": [<elements, one per JCS form, sorted by their JCS bytes>]}`;
+    - `numpy.ndarray`: what `array` returns for it;
+    - an `Enum` member: `{"$enum": ["<module>.<qualname>", <its value>]}`;
+    - a `PurePath`: `{"$path": <posix string>}`;
+    - a `Decimal`: `{"$dec": <str>}`; `bytes` or `bytearray`: `{"$bytes": <hex>}`;
+    - a value `extra` maps to `(token, payload)`: `{token: <payload>}`, entered like a container, or
+      the payload itself when `token` is `None`.
+
+    Each call is one `Walk`: containers, arrays and `extra` tokens are entered through the shared
+    guard, and one shared by many parents is written once per depth.
+    """
+
+    def __init__(
+        self,
+        *,
+        array: ArrayToken = array_token,
+        extra: Extra | None = None,
+        error: type[NoCanonicalForm] = NoCanonicalForm,
+    ) -> None:
+        """Write arrays with `array` and values of no shared family with `extra`; refuse with `error`."""
+        self.array = array
+        self.extra = extra
+        self.error = error
+
+    def __call__(self, value: object, path: str = "value") -> object:
+        """Return `value` in tokens.
+
+        Raises:
+            NoCanonicalForm: (`error`) naming the path and type, for a value of no family, a non-`str`
+                key, a key `nfc` refuses, two keys equal after NFC, a container that contains itself,
+                nesting deeper than `MAX_DEPTH`, or set elements over `MAX_CANONICAL_CHARS`.
+        """
+        return _Tokens(self, Walk()).value(value, path)
+
+
+class _Tokens:
+    def __init__(self, spec: Tokeniser, walk: Walk) -> None:
+        self.spec = spec
+        self.walk = walk
+
+    def value(self, value: object, path: str) -> object:
+        t = type(value)
+        if t is dict or t is list or t is tuple or t is set or t is frozenset or t is numpy.ndarray:
+            try:
+                return self.walk.enter(value, lambda: self.container(value, path))
+            except NoCanonicalForm:
+                raise
+            except (ValueError, TypeError) as err:
+                raise self.spec.error(path, value, str(err)) from err
+        if isinstance(value, Enum):
+            qualname = f"{t.__module__}.{t.__qualname__}"
+            return {"$enum": [qualname, self.value(value.value, f"{path}.value")]}
+        if isinstance(value, PurePath):
+            return {"$path": value.as_posix()}
+        if t is bytes or t is bytearray:
+            return {"$bytes": cast("bytes | bytearray", value).hex()}
+        if t is Decimal:
+            return {"$dec": str(value)}
+        if self.spec.extra is not None:
+            found = self.spec.extra(value)
+            if found is not None:
+                return self.extra(value, found[0], found[1], path)
+        try:
+            scalar = canonical_scalar(value)
+        except TypeError as err:
+            raise self.spec.error(path, value, self.spec.error.refusal) from err
+        if in_json_domain(scalar):
+            return scalar
+        if type(scalar) is int:
+            return {INT_TOKEN: str(scalar)}
+        number = cast(float, scalar)
+        return {FLOAT_TOKEN: "NaN" if math.isnan(number) else ("Infinity" if number > 0 else "-Infinity")}
+
+    def extra(self, value: object, token: str | None, payload: object, path: str) -> object:
+        try:
+            if token is None:
+                return self.walk.remember(value, lambda: self.value(payload, path))
+            return self.walk.enter(value, lambda: {token: self.value(payload, path)})
+        except NoCanonicalForm:
+            raise
+        except ValueError as err:
+            raise self.spec.error(path, value, str(err)) from err
+
+    def container(self, value: Any, path: str) -> object:  # noqa: ANN401
+        t = type(value)
+        if t is dict:
+            out: dict[str, object] = {}
+            seen: set[str] = set()
+            for key, item in value.items():
+                if type(key) is not str:
+                    raise self.spec.error(f"{path}[{key!r}]", key, "is not a str object key")
+                try:
+                    text = nfc(key)
+                except UnportableText as err:
+                    raise self.spec.error(f"{path}[{key!r}]", key, str(err)) from err
+                if text in seen:
+                    raise self.spec.error(f"{path}.{key}", key, "is a key equal after NFC to another key of its object")
+                seen.add(text)
+                out[escaped_key(key)] = self.value(item, f"{path}.{key}")
+            return out
+        if t is list or t is tuple:
+            return [self.value(item, f"{path}[{i}]") for i, item in enumerate(value)]
+        if t is set or t is frozenset:
+            forms: dict[bytes, object] = {}
+            for item in value:
+                token = self.value(item, f"{path}{{}}")
+                form = jcs_dumps(token)
+                self.walk.charge(len(form))
+                forms.setdefault(form, token)
+            return {"$set": [forms[form] for form in sorted(forms)]}
+        return self.spec.array(value, self.value, path)

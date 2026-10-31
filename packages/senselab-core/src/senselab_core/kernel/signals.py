@@ -435,7 +435,7 @@ class Audio(Recording):
     """A recording of one regular group named `audio` whose channels are all of type `audio`, in one unit.
 
     Held samples are float32 (`AUDIO_DTYPE`). An in-memory audio's identity is `"content:" +
-    tagged_digest("audio@2", {"npy": sha256 of the canonical .npy of the (channels, samples) data,
+    tagged_digest("audio@3", {"npy": sha256 of the canonical .npy of the (channels, samples) data,
     "sampling_rate": rate})`; a file-backed one's is `content:` and the root of the file's content identity.
     """
 
@@ -462,7 +462,7 @@ class Audio(Recording):
         if group.data is None:
             return "content:" + _source_root(group)
         npy = sha256_bytes(canonical_npy_bytes(group.data))
-        return "content:" + tagged_digest("audio@2", {"npy": npy, "sampling_rate": group.sampling_rate})
+        return "content:" + tagged_digest("audio@3", {"npy": npy, "sampling_rate": group.sampling_rate})
 
     @classmethod
     def _of(cls, group: RegularGroup) -> "Audio":
