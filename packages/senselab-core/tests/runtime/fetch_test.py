@@ -168,7 +168,7 @@ def test_transient_read_error_does_not_discard_blob(tmp_path: Path, monkeypatch:
     def flaky(tag: str, path: object) -> str:
         raise OSError(5, "Input/output error")
 
-    monkeypatch.setattr(fetch_module, "blob_digest", flaky)
+    monkeypatch.setattr(fetch_module, "file_digest", flaky)
     with pytest.raises(StoreUnavailable):
         fetch(_manifest(), cache_root=tmp_path, opener=_opener({}), verify="full")
     assert (tmp_path / "blobs" / SHA).read_bytes() == PAYLOAD
@@ -354,13 +354,13 @@ def test_size_mode_skips_rehash_and_full_mode_catches_same_size_corruption(
     """A cache hit checks size only by default; verify='full' re-hashes."""
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     hashed: list[object] = []
-    real = fetch_module.blob_digest
+    real = fetch_module.file_digest
 
     def spy(tag: str, path: Path) -> str:
         hashed.append(path)
         return real(tag, path)
 
-    monkeypatch.setattr(fetch_module, "blob_digest", spy)
+    monkeypatch.setattr(fetch_module, "file_digest", spy)
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
     assert hashed == []
     _unseal(tmp_path / "blobs" / SHA).write_bytes(b"x" * len(PAYLOAD))
@@ -435,7 +435,7 @@ def test_disk_full_is_storage_error_not_network(tmp_path: Path, monkeypatch: pyt
     def full(tag: str, path: object) -> str:
         raise OSError(errno.ENOSPC, "No space left on device")
 
-    monkeypatch.setattr(fetch_module, "blob_digest", full)
+    monkeypatch.setattr(fetch_module, "file_digest", full)
     with pytest.raises(StorageFull) as err:
         fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     assert "network" not in str(err.value) and "space" in str(err.value)
@@ -998,13 +998,13 @@ def test_repaired_blob_is_trusted_again_by_size(tmp_path: Path, monkeypatch: pyt
     _unseal(tmp_path / "blobs" / SHA).write_bytes(b"x" * len(PAYLOAD))
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     hashed: list[object] = []
-    real = fetch_module.blob_digest
+    real = fetch_module.file_digest
 
     def spy(tag: str, path: Path) -> str:
         hashed.append(path)
         return real(tag, path)
 
-    monkeypatch.setattr(fetch_module, "blob_digest", spy)
+    monkeypatch.setattr(fetch_module, "file_digest", spy)
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
     assert hashed == []
 

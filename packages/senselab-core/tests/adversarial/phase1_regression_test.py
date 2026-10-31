@@ -35,6 +35,7 @@ PACKAGES = REPO / "packages"
 REPORT = REPO / "specs" / "20261030-140022-senselab-2x-api" / "reviews" / "phase1-adversarial.md"
 BUDGET = REPO / "scripts" / "check_fixture_budget.py"
 GUARD = REPO / "src" / "tests" / "utils" / "moved_modules_test.py"
+RESOLVER = GUARD.with_name("import_resolver_fixture.py")
 DEFERRED = frozenset({15, 30})
 OWNER_ACTION = frozenset({39})
 
@@ -76,11 +77,14 @@ def _pytest(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
 
 
 def _guard_tree(base: Path, plant: dict[str, str]) -> Path:
-    """A miniature repository holding the moved-module guard, the budget script it loads, and ``plant``."""
+    """A miniature repository holding the moved-module guard, the files it loads that exist, and ``plant``."""
     for rel, source in {
         "src/tests/utils/moved_modules_test.py": GUARD,
+        "src/tests/utils/import_resolver_fixture.py": RESOLVER,
         "scripts/check_fixture_budget.py": BUDGET,
     }.items():
+        if not source.exists():
+            continue
         (base / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(source, base / rel)
     for pkg in ("senselab", "senselab/utils", "senselab/audio"):

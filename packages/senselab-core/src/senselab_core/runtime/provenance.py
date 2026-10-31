@@ -18,12 +18,13 @@ from pathlib import Path
 from typing import Any, Literal, Sequence, cast, get_args
 
 import numpy
+from senselab_worker import digest as worker_digest
 from senselab_worker.canonical import (
     NoCanonicalForm,
     Recurse,
     Tokeniser,
 )
-from senselab_worker.digest import blob_digest, identity_digest
+from senselab_worker.digest import identity_digest
 
 from senselab_core.runtime.storage import write_atomically
 
@@ -245,7 +246,7 @@ def _digest(payload: Sequence[object], roots: Sequence[str]) -> str:
 
 
 def file_digest(path: str | Path) -> tuple[str | None, str | None]:
-    """Read a file and return `blob_digest("file@1", file)`, or the reason it has none.
+    """Read a file and return `worker_digest.file_digest("file@1", file)`, or the reason it has none.
 
     Args:
         path: The file to digest.
@@ -257,7 +258,7 @@ def file_digest(path: str | Path) -> tuple[str | None, str | None]:
     target = Path(path)
     try:
         with target.open("rb") as handle:
-            digest = blob_digest("file@1", handle)
+            digest = worker_digest.file_digest("file@1", handle)
     except FileNotFoundError:
         return None, "file not found"
     except IsADirectoryError:

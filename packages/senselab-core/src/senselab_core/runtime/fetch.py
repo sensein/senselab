@@ -31,7 +31,7 @@ from typing import IO, Annotated, Any, BinaryIO, Literal, NamedTuple
 import yaml
 from pydantic import Field, ValidationError, field_validator, model_validator
 from senselab_worker.canonical import is_portable, jcs_dumps
-from senselab_worker.digest import blob_digest, identity_digest
+from senselab_worker.digest import file_digest, identity_digest
 from senselab_worker.ownership import UUID_HEX, remove_owned
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
@@ -366,7 +366,7 @@ class _BlobFormat:
     def address_of(self, path: Path) -> str:
         if _regular(path) is None:
             raise BlobMismatchError(f"blob {path} is not a regular file")
-        return blob_digest("file@1", path)
+        return file_digest("file@1", path)
 
     def address_at(self, path: Path) -> str:
         return path.name
@@ -417,7 +417,7 @@ def _ensure_blob(
         staged = root / "tmp" / uuid.uuid4().hex
         try:
             _download(url, opener, staged, size=file.size, mode=file_mode)
-            actual = blob_digest("file@1", staged)
+            actual = file_digest("file@1", staged)
             if actual != file.sha256:
                 tried.append(f"{url} (sha256 {actual[:12]}..., expected {file.sha256[:12]}...)")
                 continue

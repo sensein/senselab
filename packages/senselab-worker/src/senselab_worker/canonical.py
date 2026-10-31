@@ -22,8 +22,6 @@ from typing import Any, Callable, TypeVar, cast
 
 import numpy
 
-from senselab_worker.digest import blob_digest
-
 MAX_SAFE_INT = 2**53 - 1
 """The I-JSON integer bound: an integer is JSON only within +/-MAX_SAFE_INT."""
 _PLATFORM_DTYPE_CHARS = "gG"
@@ -537,8 +535,10 @@ Extra = Callable[[object], "tuple[str | None, object] | None"]
 
 
 def array_token(a: numpy.ndarray, recurse: Recurse, path: str) -> object:
-    """Return `{"$array": blob_digest("npy@1", canonical_npy_bytes(a))}`."""
-    return {ARRAY_TOKEN: blob_digest("npy@1", canonical_npy_bytes(a))}
+    """Return `{"$array": npy_digest("npy@1", a)}`."""
+    from senselab_worker.digest import npy_digest
+
+    return {ARRAY_TOKEN: npy_digest("npy@1", a)}
 
 
 class Tokeniser:

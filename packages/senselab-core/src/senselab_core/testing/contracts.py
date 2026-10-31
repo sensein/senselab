@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
-from senselab_worker.digest import blob_digest
+from senselab_worker.digest import identity_digest
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import FaultClass
 
@@ -169,7 +169,7 @@ def base_call(task: TaskSpec) -> dict[str, Any]:
     """Return the key builder arguments every key case starts from: default params and `BASE_MODEL`."""
     return {
         "params": task.params(),
-        "inputs": {port: "content:" + blob_digest("file@1", port.encode()) for port in task.inputs},
+        "inputs": {port: "content:" + identity_digest("contract-probe@1", ["input", port]) for port in task.inputs},
         "model": BASE_MODEL,
         "profile_slices": {},
     }
@@ -237,12 +237,16 @@ def _varied_call(
         return (
             task,
             backend,
-            {**call, "inputs": {**call["inputs"], port: "content:" + blob_digest("file@1", b"varied")}},
+            {**call, "inputs": {**call["inputs"], port: "content:" + identity_digest("contract-probe@1", ["varied"])}},
         )
     if field == "model":
         return task, backend, {**call, "model": VARIED_MODEL}
     if field == "profile_slices":
-        return task, backend, {**call, "profile_slices": {"profile": "profile:" + blob_digest("file@1", b"slice")}}
+        return (
+            task,
+            backend,
+            {**call, "profile_slices": {"profile": "profile:" + identity_digest("contract-probe@1", ["slice"])}},
+        )
     raise AssertionError(
         f"LogicalKey.{field} has no contract variation: add it to _varied_call, KEY_FORMAT_FIELDS or NOT_YET_WIRED"
     )

@@ -40,6 +40,7 @@ from typing import Any, TypeVar, cast
 
 import numpy
 from pydantic import ValidationError
+from senselab_worker import _raw_digest
 from senselab_worker.canonical import (
     ARRAY_TOKEN,
     Walk,
@@ -48,7 +49,7 @@ from senselab_worker.canonical import (
     jcs_dumps,
     jcs_loads,
 )
-from senselab_worker.digest import blob_digest, identity_digest
+from senselab_worker.digest import identity_digest
 from senselab_worker.ownership import UUID_HEX, remove_owned
 
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputIdentity, ReusePolicy, acceptable
@@ -128,7 +129,7 @@ def _encode(value: object, arrays: dict[str, bytes], walk: Walk) -> object:
 
 def _array(a: numpy.ndarray, arrays: dict[str, bytes]) -> object:
     data = canonical_npy_bytes(a)
-    sha = blob_digest("npy@1", data)
+    sha = _raw_digest.bytes_digest("npy@1", data)
     arrays[sha] = data
     return {ARRAY_TAG: sha}
 
@@ -185,7 +186,7 @@ def _decode(value: object, entry: Path, load_arrays: bool) -> object:
             if not load_arrays:
                 return None
             data = path.read_bytes()
-            if blob_digest("npy@1", data) != sha:
+            if _raw_digest.bytes_digest("npy@1", data) != sha:
                 raise CorruptEntryError(f"corrupt store entry {entry}: {sha}.npy does not hash to its name")
             try:
                 return numpy.load(io.BytesIO(data), allow_pickle=False)

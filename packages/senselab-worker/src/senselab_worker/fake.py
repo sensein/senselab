@@ -14,7 +14,7 @@ import numpy
 
 from senselab_worker.canonical import canonical_npy_bytes
 from senselab_worker.codec import MAX_LINE_BYTES
-from senselab_worker.digest import blob_digest, identity_digest
+from senselab_worker.digest import identity_digest, npy_digest
 from senselab_worker.faults import ContentFault, ResourceFault
 
 EXIT_CRASH = 70
@@ -100,7 +100,7 @@ def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -
     """Return `{"outputs": {"value": identity_digest("fake-output@1", {"inputs", "params"})}}` per item.
 
     `params["faults"]` is excluded from the digest; a batch adds `"batch"` and `nondeterministic` a random `"nonce"`.
-    Arrays enter it as `blob_digest("npy@1", <canonical .npy bytes>)`.
+    Arrays enter it as `npy_digest("npy@1", array)`.
     """
     if not isinstance(state, _State):
         raise TypeError("state must come from load")
@@ -141,7 +141,7 @@ def _one(item: dict[str, Any], params: object, faults: FakeFaults, batch: list[o
 
 def _identity_view(value: object) -> object:
     if isinstance(value, numpy.ndarray):
-        return blob_digest("npy@1", canonical_npy_bytes(value))
+        return npy_digest("npy@1", value)
     if isinstance(value, dict):
         return {k: _identity_view(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):

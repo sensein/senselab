@@ -48,7 +48,7 @@ layers =
     senselab_worker
 
 [importlinter:contract:digests-are-tagged]
-name = only senselab_worker.digest imports a digest module (ADR-006); 1.x owners are the H-R19 worklist
+name = only senselab_worker.digest and _raw_digest import a digest module (ADR-006); 1.x owners are the H-R19 worklist
 type = forbidden
 source_modules =
     senselab_worker
@@ -70,9 +70,12 @@ forbidden_modules =
     _sha2
     _sha3
     _blake2
+    _sha256
+    _sha512
 allow_indirect_imports = True
 ignore_imports =
     senselab_worker.digest -> hashlib
+    senselab_worker._raw_digest -> hashlib
     # H-R19: 1.x modules and scripts, the migration worklist in migration-ledger.md
     scripts.analyze_audio -> hashlib
     scripts.build_classifier_ontology_map -> hashlib
@@ -119,3 +122,19 @@ ignore_imports =
     senselab.utils.venv_worker -> hashlib
     senselab.utils.vllm_server -> hashlib
     senselab.utils.work_pool -> hashlib
+
+[importlinter:contract:raw-digest-owners]
+name = only the named owners hash bytes already in memory (senselab_worker._raw_digest, ADR-006)
+type = forbidden
+source_modules =
+    senselab_worker
+    senselab_core
+    senselab
+    scripts
+forbidden_modules =
+    senselab_worker._raw_digest
+allow_indirect_imports = True
+ignore_imports =
+    senselab_worker.codec -> senselab_worker._raw_digest
+    senselab_worker.hashing -> senselab_worker._raw_digest
+    senselab_core.runtime.store -> senselab_worker._raw_digest

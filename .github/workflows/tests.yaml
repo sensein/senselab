@@ -222,7 +222,7 @@ jobs:
     - name: Install the core distributions alone
       run: |
         uv venv -p ${{ matrix.python-version }} .core
-        uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core pytest pytest-timeout hypothesis import-linter
+        uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core pytest pytest-timeout hypothesis import-linter ruff==0.15.11
     - name: Run core tests
       run: .core/bin/pytest packages -m "logic or contract or limits or usecase" -p no:cacheprovider
     - name: Check import contracts

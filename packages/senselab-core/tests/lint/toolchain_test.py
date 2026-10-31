@@ -1,5 +1,6 @@
 """One ruff: the version uv.lock pins is the one pyproject requires and the one pre-commit runs."""
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -80,3 +81,16 @@ def test_a_planted_divergence_is_reported(plant: object) -> None:
     assert toolchain_divergences(pyproject, lock, precommit) == []
     plant(pyproject, lock, precommit)  # type: ignore[operator]
     assert toolchain_divergences(pyproject, lock, precommit) != []
+
+
+def workflow_ruff_pins(text: str) -> set[str]:
+    """Every `ruff==<version>` a workflow installs."""
+    return set(re.findall(r"\bruff==([0-9][0-9A-Za-z.]*)", text))
+
+
+@pytest.mark.logic
+def test_ci_installs_the_locked_ruff() -> None:
+    """The ruff the core-only job installs, so the banned-name tests run there, is the version uv.lock pins."""
+    lock = tomllib.loads((REPO / "uv.lock").read_text())
+    pins = workflow_ruff_pins((REPO / ".github" / "workflows" / "tests.yaml").read_text())
+    assert pins == {locked_version(lock, "ruff")}

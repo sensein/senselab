@@ -270,6 +270,9 @@ convention = "google"
 "importlib.util".msg = "a dynamic import is outside the digest import contract (ADR-006); import statically or mark the site"
 "importlib.machinery".msg = "a dynamic import is outside the digest import contract (ADR-006); import statically or mark the site"
 "sys.modules".msg = "a dynamic import is outside the digest import contract (ADR-006); import statically or mark the site"
+"builtins.__import__".msg = "a dynamic import is outside the digest import contract (ADR-006); import statically or mark the site"
+"operator.attrgetter".msg = "a dynamic import is outside the digest import contract (ADR-006); import statically or mark the site"
+"operator.methodcaller".msg = "a dynamic import is outside the digest import contract (ADR-006); import statically or mark the site"
 "uuid.uuid3".msg = "an untagged digest; use senselab_worker.digest (ADR-006)"
 "uuid.uuid5".msg = "an untagged digest; use senselab_worker.digest (ADR-006)"
 "zlib.crc32".msg = "an untagged digest; use senselab_worker.digest (ADR-006)"
@@ -285,7 +288,7 @@ convention = "google"
 "src/tests/**/*.py" = []
 "**/tests/**" = ["TID251", "B009", "S102", "S307"]
 "**/conftest.py" = ["TID251", "B009", "S102", "S307"]
-"**/scripts/**" = ["ANN", "D", "E", "F", "I"]
+"**/scripts/**" = ["ANN", "D", "E", "I", "F541"]
 # Notebooks: cells share state but ruff lints per-cell, causing false positives
 "tutorials/**/*.ipynb" = ["F821", "E402", "I001", "F811", "ANN001", "ANN201", "D103"]
 

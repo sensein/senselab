@@ -15,15 +15,17 @@ import textwrap
 import types
 from pathlib import Path
 
+import numpy
 import pytest
 import senselab_core
 import senselab_worker
-from senselab_worker import digest
+from senselab_worker import _raw_digest, digest
 
 REPO = Path(__file__).resolve().parents[4]
 IMPORTLINTER = REPO / ".importlinter"
 CONTRACT = "importlinter:contract:digests-are-tagged"
-MEMBER_RULES = ("TID251", "B009", "S102", "S307")
+RAW_CONTRACT = "importlinter:contract:raw-digest-owners"
+MEMBER_RULES = ("TID251", "B009", "S102", "S307", "F403")
 OUT_OF_GRAPH = {
     "packages/senselab-core/hatch_pin_loader.py",
     "packages/senselab-worker/scripts/unicode_table.py",
@@ -52,15 +54,15 @@ def _write(base: Path, rel: str, text: str) -> None:
 
 
 def _lint_imports(base: Path, *, extra_ignore: str = "", alerting: str = "none") -> subprocess.CompletedProcess[str]:
-    """Run the repository's digest contract, alone, over the stub packages planted in `base`."""
+    """Run the repository's two digest contracts, alone, over the stub packages planted in `base`."""
     parser = configparser.ConfigParser()
     parser.read(IMPORTLINTER)
-    section = {**parser[CONTRACT], "unmatched_ignore_imports_alerting": alerting}
-    if extra_ignore:
-        section["ignore_imports"] += f"\n{extra_ignore}"
     config = configparser.ConfigParser()
     config["importlinter"] = dict(parser["importlinter"])
-    config[CONTRACT] = section
+    for name in (CONTRACT, RAW_CONTRACT):
+        config[name] = {**parser[name], "unmatched_ignore_imports_alerting": alerting}
+    if extra_ignore:
+        config[CONTRACT]["ignore_imports"] += f"\n{extra_ignore}"
     path = base / "contract.ini"
     with path.open("w") as f:
         config.write(f)
@@ -97,6 +99,15 @@ XG1_IMPORTS = {
         "hashlib",
     ),
     "scripts/zz_probe.py": ("import hmac\nhmac.new(b'k', b'm', 'sha256')\n", "hmac"),
+    "senselab/zz/raw.py": (
+        "import json\nfrom senselab_worker import _raw_digest\n"
+        "_raw_digest.bytes_digest('npy@1', json.dumps(1).encode())\n",
+        "senselab_worker._raw_digest",
+    ),
+    "senselab_core/runtime/fetch.py": (
+        "from senselab_worker._raw_digest import bytes_digest\n",
+        "senselab_worker._raw_digest",
+    ),
 }
 """XG-1: a module outside the owner hashes serialised data; the raw primitive it used no longer exists."""
 
@@ -165,6 +176,8 @@ def test_an_allowance_that_matches_no_import_fails_the_contract(tmp_path: Path) 
 def _ruff() -> str:
     found = shutil.which("ruff", path=sysconfig.get_path("scripts")) or shutil.which("ruff")
     if found is None:
+        if os.environ.get("CI"):
+            pytest.fail("ruff is not installed, and CI must run the banned-name tests")
         pytest.skip("ruff is not installed in this environment")
     return str(found)
 
@@ -206,6 +219,10 @@ XG3_SPELLINGS = {
     "exec": "exec('import hashlib')",
     "eval": "eval('__import__')",
     "importlib_dunder": "import importlib\nimportlib.__import__('hashlib')",
+    "builtins_dunder": "import builtins\nbuiltins.__import__('hashlib')",
+    "attrgetter": "import operator, zlib\noperator.attrgetter('crc32')(zlib)",
+    "methodcaller": "import operator, uuid\noperator.methodcaller('uuid5', ns, 'x')(uuid)",
+    "star_import": "from zlib import *\ncrc32(b'')",
 }
 """XG-3: re-spellings of a dynamic import that the capability-import lint missed."""
 
@@ -330,18 +347,18 @@ def _capability(obj: object) -> bool:
     if isinstance(obj, types.ModuleType):
         return obj.__name__.partition(".")[0] in CAPABILITIES
     module = getattr(obj, "__module__", None) or ""
-    return module.partition(".")[0] in CAPABILITIES
+    return module.partition(".")[0] in CAPABILITIES or module == _raw_digest.__name__
 
 
 @pytest.mark.contract
 @pytest.mark.parametrize("package", [senselab_worker, senselab_core], ids=lambda p: p.__name__)
 def test_xg1_xg3_no_module_exposes_a_digest_capability(package: types.ModuleType) -> None:
-    """No module namespace holds a digest module or a function from one, so none can be re-exported."""
+    """No namespace holds a digest module or a function from one or from the raw form, so none is re-exported."""
     hits = [
         f"{module.__name__}.{name}"
         for module in _modules(package)
         for name, obj in vars(module).items()
-        if _capability(obj)
+        if _capability(obj) and module is not _raw_digest
     ]
     assert hits == []
 
@@ -356,6 +373,8 @@ def test_xg1_xg3_no_module_exposes_a_digest_capability(package: types.ModuleType
         "from senselab_worker.canonical import tagged_digest",
         "from senselab_worker.hashing import hashlib",
         "from senselab_worker.digest import hashlib",
+        "from senselab_worker.digest import blob_digest",
+        "from senselab_worker._raw_digest import hashlib",
     ],
 )
 def test_xg1_xg3_the_raw_primitives_and_reexports_do_not_exist(statement: str) -> None:
@@ -364,19 +383,24 @@ def test_xg1_xg3_the_raw_primitives_and_reexports_do_not_exist(statement: str) -
         exec(statement, {})  # noqa: S102
 
 
-def untagged_surface(module: types.ModuleType) -> list[str]:
-    """Return each function `module` defines other than the two tagged digests, and each that accepts a bad tag."""
+DIGEST_PROBES: dict[str, object] = {"identity_digest": 0, "file_digest": "/nonexistent", "npy_digest": numpy.zeros(1)}
+RAW_PROBES: dict[str, object] = {"bytes_digest": b""}
+"""Each function an owner module may define, with a valid input to call it on under an unregistered tag."""
+
+
+def untagged_surface(module: types.ModuleType, probes: dict[str, object]) -> list[str]:
+    """Return each function `module` defines outside `probes`, and each that does not lead with a checked tag."""
     found = []
     for name, obj in vars(module).items():
         if inspect.isfunction(obj) and obj.__module__ == module.__name__:
-            if name not in ("identity_digest", "blob_digest"):
+            if name not in probes:
                 found.append(f"{name}: not a tagged digest")
                 continue
             params = list(inspect.signature(obj).parameters)
             if params[:1] != ["tag"]:
                 found.append(f"{name}: first parameter is not the tag")
             try:
-                obj("unregistered@0", b"" if name == "blob_digest" else 0)
+                obj("unregistered@0", probes[name])
             except ValueError:
                 pass
             else:
@@ -386,9 +410,18 @@ def untagged_surface(module: types.ModuleType) -> list[str]:
 
 @pytest.mark.contract
 def test_the_digest_module_defines_only_tagged_digests() -> None:
-    """`senselab_worker.digest`, the one owner of a digest module, defines exactly the two tagged functions."""
-    assert digest.__all__ == ["BLOB_TAGS", "IDENTITY_TAGS", "blob_digest", "identity_digest"]
-    assert untagged_surface(digest) == []
+    """`digest` defines exactly the three typed digests and `_raw_digest` the owners' raw form, each tag-checked."""
+    assert digest.__all__ == [
+        "BLOB_TAGS",
+        "FILE_TAGS",
+        "IDENTITY_TAGS",
+        "NPY_TAGS",
+        "file_digest",
+        "identity_digest",
+        "npy_digest",
+    ]
+    assert untagged_surface(digest, DIGEST_PROBES) == []
+    assert untagged_surface(_raw_digest, RAW_PROBES) == []
 
 
 @pytest.mark.contract
@@ -401,14 +434,15 @@ def test_the_digest_module_defines_only_tagged_digests() -> None:
             "def identity_digest(tag, value):\n    import hashlib\n    return hashlib.sha256(b'').hexdigest()\n",
             "identity_digest: accepts an unregistered tag",
         ),
-        ("def blob_digest(data, tag='file@1'):\n    raise ValueError\n", "blob_digest: first parameter is not the tag"),
+        ("def file_digest(data, tag='file@1'):\n    raise ValueError\n", "file_digest: first parameter is not the tag"),
+        ("def bytes_digest(tag, data):\n    return ''\n", "bytes_digest: not a tagged digest"),
     ],
 )
 def test_xg2_a_planted_function_in_the_owner_is_reported(addition: str, expected: str) -> None:
     """A helper added to the owner module, or a digest that stops checking its tag, is reported."""
     planted = types.ModuleType(digest.__name__)
     exec(compile(Path(digest.__file__).read_text() + "\n" + addition, digest.__file__, "exec"), vars(planted))  # noqa: S102
-    assert expected in untagged_surface(planted)
+    assert expected in untagged_surface(planted, DIGEST_PROBES)
 
 
 @pytest.mark.logic
