@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from senselab_core.runtime import fetch as fetch_module
-from senselab_core.runtime import provenance as provenance_module
+from senselab_core.runtime import storage as storage_module
 from senselab_core.runtime.locks import SharedFileLock
 
 
@@ -45,7 +45,7 @@ def test_link_staging_cleanup_refuses_a_name_outside_its_grammar(
     _foreign_uuid(monkeypatch)
     _failing_replace(monkeypatch)
     with pytest.raises(OSError, match="replace refused"):
-        fetch_module._link(link, blob)
+        fetch_module._link(link, blob, 0o2770)
     assert (tmp_path / ".voice.wav.notes").is_symlink()
 
 
@@ -58,7 +58,7 @@ def test_atomic_write_cleanup_refuses_a_name_outside_its_grammar(
     _foreign_uuid(monkeypatch)
     _failing_replace(monkeypatch)
     with pytest.raises(OSError, match="replace refused"):
-        provenance_module._write_atomically(target, b"x")
+        storage_module.write_atomically(target, b"x")
     assert [p.name.endswith(".notes.tmp") for p in tmp_path.iterdir()] == [True]
 
 
@@ -68,7 +68,7 @@ def test_atomic_write_cleanup_refuses_a_name_outside_its_grammar(
     [
         (fetch_module.LINK_STAGING_NAME, ".voice.wav." + "0" * 32, ["voice.wav", ".voice.wav.notes", "notes.md"]),
         (
-            provenance_module.TEMPORARY_NAME,
+            storage_module.TEMPORARY_NAME,
             ".prov.jsonl.12.34." + "0" * 32 + ".tmp",
             ["prov.jsonl", ".prov.jsonl.12.34.notes.tmp", "notes.md"],
         ),

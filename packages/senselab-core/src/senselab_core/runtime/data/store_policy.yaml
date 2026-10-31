@@ -1,0 +1,26 @@
+format: store-policy@1.0
+# Modes and retention ages of the result store and the data-fetch cache. Each value carries its
+# derivation; StorePolicy.load_default() refuses an entry without one.
+
+world_readable:
+  value: false
+  derivation: >-
+    Store entries hold participant-derived outputs, and fetch blobs may hold participant recordings.
+    Neither is shared outside the group that runs the analyses by default, so committed objects and
+    the directories above them carry no world bits. A site that publishes a public store sets this
+    to true; that adds read (and, on directories, search) for others and nothing else.
+
+quarantine_retention_s:
+  value: 604800
+  derivation: >-
+    Seven days. Quarantine holds only entries that failed a completed verification; nothing reads
+    them, so the age bounds disk use, not correctness. One week lets someone inspect what was
+    quarantined after a weekly batch before `collect` removes it.
+
+staging_stale_s:
+  value: 86400
+  derivation: >-
+    One day, as before this policy existed. A staging directory or download lives for one `put` or
+    one transfer. A transfer of the largest dataset in a manifest is the longest of these; a day is
+    above any single transfer we run, so an older staging entry belongs to a writer that crashed.
+    Ages are judged against the storage's own clock, so clock skew between nodes does not shorten it.

@@ -58,6 +58,7 @@ from senselab_core.kernel.signals import (
 )
 from senselab_core.kernel.time import Span, TimeAnchor, TimeMap
 from senselab_core.runtime.fetch import DataFile, DataManifest
+from senselab_core.runtime.storage import StorePolicy
 
 Case = Callable[[], None]
 Factory = Callable[[], Sequence[Frozen]]
@@ -407,12 +408,14 @@ def _key(task: str = "t") -> LogicalKey:
 
 
 def _data_file(path: str = "a/b.wav") -> DataFile:
-    return DataFile(path=path, url=f"https://example.org/{path}", sha256=_SHA, mirrors=("https://m.example.org/x",))
+    return DataFile(
+        path=path, url=f"https://example.org/{path}", sha256=_SHA, size=3, mirrors=("https://m.example.org/x",)
+    )
 
 
 def _manifest(version: str = "1") -> DataManifest:
     return DataManifest(
-        format="data-manifest@1.0",
+        format="data-manifest@2.0",
         name="set",
         version=version,
         license=_license(),
@@ -619,12 +622,24 @@ def _register_runtime_samples() -> None:
     register_samples(
         DataFile,
         lambda: [_data_file(), _data_file("c.wav")],
-        invalid_updates=[{"path": "../x"}, {"sha256": "x"}],
+        invalid_updates=[{"path": "../x"}, {"path": "a/./b"}, {"sha256": "x"}, {"size": -1}],
     )
     register_samples(
         DataManifest,
         lambda: [_manifest(), _manifest("2")],
-        invalid_updates=[{"files": (_data_file(), _data_file())}, {"name": "a/b"}],
+        invalid_updates=[
+            {"files": (_data_file(), _data_file())},
+            {"files": (_data_file("a"), _data_file("a/b"))},
+            {"name": "a/b"},
+        ],
+    )
+    register_samples(
+        StorePolicy,
+        lambda: [
+            StorePolicy.load_default(),
+            StorePolicy(world_readable=True, quarantine_retention_s=60, staging_stale_s=60),
+        ],
+        invalid_updates=[{"quarantine_retention_s": 0}, {"staging_stale_s": -1}, {"world_readable": "yes"}],
     )
 
 

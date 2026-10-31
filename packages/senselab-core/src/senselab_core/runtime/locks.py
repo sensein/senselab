@@ -38,6 +38,8 @@ from filelock import FileLock, Timeout
 from filelock._unix import UnixFileLock, has_fcntl
 from senselab_worker.ownership import remove_owned
 
+from senselab_core.runtime.storage import fs_now, set_mode, write_atomically
+
 logger = logging.getLogger("senselab")
 
 SIDECAR_NAME = re.compile(r"^.+\.(heartbeat|holder)$")
@@ -132,12 +134,13 @@ def _ensure_dir(path: Path, *, manage_mode: bool = True) -> None:
         pass
 
 
-def ensure_dirs(path: Path) -> None:
-    """Create ``path`` and any missing parents, each directory this call creates (and ``path``) mode ``LOCK_DIR_MODE``.
+def ensure_dirs(path: Path, *, mode: int = LOCK_DIR_MODE) -> None:
+    """Create ``path`` and any missing parents, each directory this call creates (and ``path``) set to ``mode``.
 
     Unlike ``mkdir(parents=True)`` followed by one chmod, no intermediate directory is left with the
-    caller's umask. Directories that already exist above ``path`` are not touched. A failed chmod is
-    ignored, as in :func:`_ensure_dir`.
+    caller's umask. Directories that already exist above ``path`` are not touched. The setgid bit is
+    dropped where the OS refuses it (``set_mode``); any other failed chmod is ignored, as in
+    :func:`_ensure_dir`.
     """
     missing: list[Path] = []
     current = Path(path)
@@ -147,7 +150,7 @@ def ensure_dirs(path: Path) -> None:
     for directory in (*reversed(missing), Path(path)):
         directory.mkdir(exist_ok=True)
         try:
-            os.chmod(directory, LOCK_DIR_MODE)
+            set_mode(directory, mode)
         except OSError:
             pass
 
@@ -289,6 +292,7 @@ class SharedFileLock:
         self._lock_path = Path(str(path) + ".lock")
         self._heartbeat_path = Path(str(path) + ".heartbeat")
         self._holder_path = Path(str(path) + ".holder")
+        self._clock_path = Path(str(path) + ".clock")
         self._timeout = timeout
         self._heartbeat_interval = heartbeat_interval
         self._stale_after = stale_after
@@ -319,12 +323,13 @@ class SharedFileLock:
     def _heartbeat_age(self) -> Optional[float]:
         """Return seconds since the heartbeat file was last touched, or None if it cannot be read.
 
-        ``None`` covers a missing file and every other ``OSError`` from ``stat`` alike --
-        see ``specs/20260907-shared-lock-heartbeat-inf/`` for why this must not be coerced
-        to ``float("inf")``.
+        The age is measured on the storage's own clock (``fs_now`` on the ``.clock`` sidecar), so
+        clock skew between the holder's host and this one does not age a live heartbeat. ``None``
+        covers a missing file and every other ``OSError`` alike -- see
+        ``specs/20260907-shared-lock-heartbeat-inf/`` for why this must not be coerced to ``float("inf")``.
         """
         try:
-            return time.time() - self._heartbeat_path.stat().st_mtime
+            return fs_now(self._clock_path) - self._heartbeat_path.stat().st_mtime
         except OSError:
             return None
 
@@ -353,13 +358,7 @@ class SharedFileLock:
             "taken_at": time.time(),
             "token": self._token,
         }
-        self._holder_path.write_text(json.dumps(payload))
-        # write_text recreates the inode on some filesystems, which can drop the
-        # group-writable bit _touch_shared set up before acquisition; reassert it.
-        try:
-            os.chmod(self._holder_path, LOCK_FILE_MODE)
-        except OSError:
-            pass
+        write_atomically(self._holder_path, json.dumps(payload).encode("utf-8"), mode=LOCK_FILE_MODE)
 
     def owns(self) -> bool:
         """Return whether this instance is still the identity recorded at the holder path.

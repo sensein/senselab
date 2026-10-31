@@ -1,13 +1,16 @@
 """The content-addressed result store: layout, reuse policy, concurrent writers and provenance."""
 
+import errno
 import json
 import multiprocessing as mp
 import os
+import shutil
 import stat
 import time
 from collections.abc import Callable, Iterator
 from multiprocessing.queues import Queue as MpQueue
 from multiprocessing.synchronize import Barrier as MpBarrier
+from multiprocessing.synchronize import Event as MpEvent
 from pathlib import Path
 from typing import Any
 
@@ -15,13 +18,13 @@ import numpy
 import pytest
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ReusePolicy
 from senselab_core.runtime import store as store_module
-from senselab_core.runtime.locks import LOCK_DIR_MODE, LOCK_FILE_MODE
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
+from senselab_core.runtime.storage import StorageFull, StorePolicy, StoreUnavailable
 from senselab_core.runtime.store import (
     QUARANTINE_DIR,
-    STAGING_STALE_SECONDS,
     STORE_DIR,
     CorruptEntryError,
+    MisfiledEntryError,
     ResultStore,
     StoredResult,
     output_identity,
@@ -186,9 +189,9 @@ def test_losing_rename_returns_winner_identity(tmp_path: Path, monkeypatch: pyte
     real = store_module._committed_identity
     calls: list[Path] = []
 
-    def miss_first(entry: Path) -> str | None:
+    def miss_first(entry: Path, *, digest: str, fingerprint: str) -> str | None:
         calls.append(entry)
-        return None if len(calls) == 1 else real(entry)
+        return None if len(calls) == 1 else real(entry, digest=digest, fingerprint=fingerprint)
 
     monkeypatch.setattr(store_module, "_committed_identity", miss_first)
     loser = s.put(k, {"y": 2}, c)
@@ -209,7 +212,7 @@ def test_crash_leaves_no_entry(tmp_path: Path) -> None:
     stale = tmp_path / "tmp" / ("5" * 32)
     stale.mkdir(parents=True)
     (stale / "result.json").write_bytes(jcs_dumps({"format": "result@1.0", "outputs": {}, "output_identity": "x"}))
-    old = time.time() - STAGING_STALE_SECONDS - 60
+    old = time.time() - StorePolicy.load_default().staging_stale_s - 60
     os.utime(stale, (old, old))
     live = tmp_path / "tmp" / ("1" * 32)
     live.mkdir()
@@ -261,30 +264,63 @@ def _entry_dir(root: Path, k: LogicalKey, c: ExecutionContext) -> Path:
     return root / STORE_DIR / d[:2] / d / c.fingerprint()
 
 
+def _unseal(entry: Path) -> Path:
+    """Make a committed entry writable, as an operator with the owner's rights could."""
+    entry.chmod(0o770)
+    for member in entry.iterdir():
+        member.chmod(0o660)
+    return entry
+
+
 def _rewrite_json(path: Path, change: Callable[[dict[str, Any]], None]) -> None:
+    _unseal(path.parent)
     record = json.loads(path.read_bytes())
     change(record)
     path.write_bytes(json.dumps(record).encode())
 
 
 def _only_npy(entry: Path) -> Path:
-    (npy,) = entry.glob("*.npy")
+    (npy,) = _unseal(entry).glob("*.npy")
     return npy
 
 
 CORRUPTIONS: dict[str, Callable[[Path], object]] = {
     "npy_hash": lambda e: _only_npy(e).write_bytes(canonical_npy_bytes(numpy.zeros(3, "<f4"))),
     "npy_missing": lambda e: _only_npy(e).unlink(),
-    "context_missing": lambda e: (e / "context.json").unlink(),
-    "result_missing": lambda e: (e / "result.json").unlink(),
-    "result_garbled": lambda e: (e / "result.json").write_bytes(b"{not json"),
-    "context_garbled": lambda e: (e / "context.json").write_bytes(b"[1, 2"),
+    "context_missing": lambda e: (_unseal(e) / "context.json").unlink(),
+    "result_missing": lambda e: (_unseal(e) / "result.json").unlink(),
+    "result_garbled": lambda e: (_unseal(e) / "result.json").write_bytes(b"{not json"),
+    "context_garbled": lambda e: (_unseal(e) / "context.json").write_bytes(b"[1, 2"),
+    "npy_fifo": lambda e: _npy_to_fifo(e),
+    "array_ref_escapes": lambda e: _rewrite_json(
+        e / "result.json", lambda r: _forge(r, {"y": {"$array": "../" * 3 + "x"}, "n": 1})
+    ),
     "context_field_missing": lambda e: _rewrite_json(e / "context.json", lambda r: r.pop("platform")),
     "identity_missing": lambda e: _rewrite_json(e / "result.json", lambda r: r.pop("output_identity")),
     "result_format": lambda e: _rewrite_json(e / "result.json", lambda r: r.update(format="result@2.0")),
     "context_format": lambda e: _rewrite_json(e / "context.json", lambda r: r.update(format="nope@1.0")),
     "outputs_tampered": lambda e: _rewrite_json(e / "result.json", lambda r: r["outputs"].update(n=2)),
+    "key_digest_rewritten": lambda e: _rewrite_json(e / "result.json", lambda r: r.update(key_digest="0" * 64)),
+    "key_rewritten": lambda e: _rewrite_json(
+        e / "result.json", lambda r: r.update(key=_key(task="other").model_dump())
+    ),
+    "entry_is_file": lambda e: (shutil.rmtree(_unseal(e)), e.write_bytes(b"stray")),
 }
+
+
+def _npy_to_fifo(entry: Path) -> None:
+    _only_npy(entry).unlink()
+    os.mkfifo(_only_npy_name(entry))
+
+
+def _only_npy_name(entry: Path) -> Path:
+    return entry / str(json.loads((entry / "result.json").read_bytes())["outputs"]["y"]["$array"] + ".npy")
+
+
+def _forge(record: dict[str, Any], outputs: dict[str, object]) -> None:
+    """Replace a record's outputs and recompute their output identity, as a forger with write access could."""
+    record["outputs"] = outputs
+    record["output_identity"] = "output:" + tagged_digest("output@2", outputs)
 
 
 @pytest.mark.logic
@@ -296,7 +332,7 @@ def test_corrupt_entry_is_quarantined_not_served(tmp_path: Path, kind: str) -> N
     entry = _entry_dir(tmp_path, k, c)
     CORRUPTIONS[kind](entry)
     with pytest.raises(CorruptEntryError):
-        store_module._committed_identity(entry)
+        store_module._read_result(entry, digest=k.digest(), fingerprint=c.fingerprint())
     assert s.get(k, c, ReusePolicy.TOLERANT) is None
     assert not entry.exists()
     assert len(list((tmp_path / QUARANTINE_DIR).iterdir())) == 1
@@ -313,7 +349,8 @@ def test_put_replaces_corrupt_entry(tmp_path: Path) -> None:
     _only_npy(_entry_dir(tmp_path, k, c)).unlink()
     ident = s.put(k, {"y": numpy.zeros(3, "<f4")}, c)
     assert ident == output_identity({"y": numpy.zeros(3, "<f4")})
-    assert {a.parameters["outcome"] for a in s.provenance.activities()} == {"committed"}
+    assert {a.parameters["outcome"] for a in s.provenance.activities(node="asr")} == {"committed"}
+    assert [a.parameters["outcome"] for a in s.provenance.activities(node="store.quarantine")] == ["quarantined"]
     assert ident in {e.attributes.get("output_identity") for e in s.provenance.entities("artifact")}
     got = s.get(k, c, ReusePolicy.EXACT)
     assert got is not None and got.output_identity == ident
@@ -327,7 +364,7 @@ def test_get_falls_through_to_sibling_context(tmp_path: Path) -> None:
     linux, mac = _ctx(platform="linux"), _ctx(platform="macos")
     s.put(k, {"y": 1}, linux)
     s.put(k, {"y": 2}, mac)
-    (_entry_dir(tmp_path, k, mac) / "result.json").write_bytes(b"")
+    (_unseal(_entry_dir(tmp_path, k, mac)) / "result.json").write_bytes(b"")
     got = s.get(k, mac, ReusePolicy.TOLERANT)
     assert got is not None and got.outputs == {"y": 1} and got.policy_used is ReusePolicy.TOLERANT
     assert not _entry_dir(tmp_path, k, mac).exists()
@@ -338,7 +375,7 @@ def test_get_falls_through_to_sibling_context(tmp_path: Path) -> None:
 def test_quarantine_tolerates_concurrent_quarantine(tmp_path: Path) -> None:
     """Quarantining an entry another process already moved is not an error."""
     s = ResultStore(tmp_path)
-    s._quarantine(tmp_path / STORE_DIR / "ab" / ("ab" * 32) / ("0" * 64))
+    s._quarantine(tmp_path / STORE_DIR / "ab" / ("ab" * 32) / ("0" * 64), digest="ab" * 32, fingerprint="0" * 64)
     assert list((tmp_path / QUARANTINE_DIR).iterdir()) == []
 
 
@@ -350,20 +387,6 @@ def restrictive_umask() -> Iterator[None]:
         yield
     finally:
         os.umask(old)
-
-
-@pytest.mark.logic
-def test_modes_are_shared_whatever_the_umask(tmp_path: Path, restrictive_umask: None) -> None:
-    """Directories the store creates are 0o2775 and files 0o664 under umask 0o077."""
-    root = tmp_path / "shared"
-    s, k, c = ResultStore(root), _key(), _ctx()
-    s.put(k, {"y": numpy.ones(3, "<f4")}, c)
-    entry = _entry_dir(root, k, c)
-    dirs = [root, root / "tmp", root / STORE_DIR, entry.parent.parent, entry.parent, entry]
-    assert {str(d): stat.S_IMODE(d.stat().st_mode) for d in dirs} == {str(d): LOCK_DIR_MODE for d in dirs}
-    files = sorted(entry.iterdir())
-    assert len(files) == 3
-    assert {f.name: stat.S_IMODE(f.stat().st_mode) for f in files} == {f.name: LOCK_FILE_MODE for f in files}
 
 
 @pytest.mark.logic
@@ -511,3 +534,433 @@ def test_integral_float_output_reads_back_as_int(tmp_path: Path) -> None:
     assert got is not None and got.output_identity == ident
     assert got.outputs == {"x": 3, "y": 2.5, "z": [1]}
     assert type(got.outputs["x"]) is int and type(got.outputs["y"]) is float
+
+
+def _modes(root: Path) -> dict[str, int]:
+    return {str(p.relative_to(root)): stat.S_IMODE(p.lstat().st_mode) for p in [root, *root.rglob("*")]}
+
+
+@pytest.mark.logic
+def test_committed_entry_is_read_only(tmp_path: Path) -> None:
+    """Every file and the directory of a committed entry carry no write bit for anyone."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    s.put(k, {"y": numpy.ones(3, "<f4"), "n": 1}, c)
+    entry = _entry_dir(tmp_path, k, c)
+    members = sorted(entry.rglob("*"))
+    assert len(members) == 3
+    for p in [entry, *members]:
+        assert not (p.stat().st_mode & 0o222), p
+    assert {stat.S_IMODE(p.stat().st_mode) for p in members} == {0o440}
+    assert stat.S_IMODE(entry.stat().st_mode) & 0o777 == 0o550
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("umask", [0o077, 0o022, 0o000])
+def test_umask_077_gives_no_world_bits(tmp_path: Path, umask: int) -> None:
+    """Whatever the umask, nothing the store creates grants anything to others unless the policy says so."""
+    root = tmp_path / "s"
+    old = os.umask(umask)
+    try:
+        s, k, c = ResultStore(root), _key(), _ctx()
+        s.put(k, {"y": numpy.ones(3, "<f4")}, c)
+        s.put(k, {"y": 1}, _ctx(platform="macos"))
+    finally:
+        os.umask(old)
+    created = {name: mode for name, mode in _modes(root).items() if name != "."}
+    assert created and all(mode & 0o007 == 0 for mode in created.values()), created
+    dirs = [p for p in root.rglob("*") if p.is_dir() and p.parent.name != c.fingerprint()]
+    entries = {_entry_dir(root, k, c), _entry_dir(root, k, _ctx(platform="macos"))}
+    for d in dirs:
+        expected = 0o2550 if d in entries else 0o2770
+        assert stat.S_IMODE(d.stat().st_mode) & ~stat.S_ISGID == expected & ~stat.S_ISGID, d
+
+
+@pytest.mark.logic
+def test_world_readable_policy_adds_only_world_read(tmp_path: Path) -> None:
+    """A world-readable policy adds read (and search on directories) for others, and no write."""
+    policy = StorePolicy(world_readable=True, quarantine_retention_s=60, staging_stale_s=60)
+    old = os.umask(0o077)
+    try:
+        s, k, c = ResultStore(tmp_path / "s", policy=policy), _key(), _ctx()
+        s.put(k, {"y": numpy.ones(3, "<f4")}, c)
+    finally:
+        os.umask(old)
+    entry = _entry_dir(tmp_path / "s", k, c)
+    assert {stat.S_IMODE(p.stat().st_mode) for p in entry.iterdir()} == {0o444}
+    assert stat.S_IMODE(entry.stat().st_mode) & 0o777 == 0o555
+    assert all(stat.S_IMODE(p.stat().st_mode) & 0o002 == 0 for p in (tmp_path / "s").rglob("*"))
+
+
+def _swap_entry(src: Path, dst: Path) -> None:
+    """Replace the entry at `dst` with a copy of the one at `src` (an rsync or restore mix-up)."""
+    shutil.rmtree(_unseal(dst))
+    shutil.copytree(src, dst)
+
+
+@pytest.mark.logic
+def test_a2_misfiled_entry_is_not_served(tmp_path: Path) -> None:
+    """The probe: B's entry copied onto A's path was served for A, and put(A) returned B's identity."""
+    s, c = ResultStore(tmp_path), _ctx()
+    a, b = _key(audio="a" * 64), _key(audio="b" * 64)
+    s.put(a, {"text": "transcript of A"}, c)
+    b_identity = s.put(b, {"text": "transcript of B"}, c)
+    _swap_entry(_entry_dir(tmp_path, b, c), _entry_dir(tmp_path, a, c))
+    with pytest.raises(MisfiledEntryError):
+        store_module._read_result(_entry_dir(tmp_path, a, c), digest=a.digest(), fingerprint=c.fingerprint())
+    assert s.get(a, c, ReusePolicy.TOLERANT) is None
+    a_identity = s.put(a, {"text": "transcript of A"}, c)
+    assert a_identity != b_identity
+    got = s.get(a, c, ReusePolicy.EXACT)
+    assert got is not None and got.outputs == {"text": "transcript of A"}
+    (moved,) = (tmp_path / QUARANTINE_DIR).iterdir()
+    assert json.loads((moved / "result.json").read_bytes())["outputs"] == {"text": "transcript of B"}
+
+
+@pytest.mark.logic
+def test_a2_misfiled_context_is_not_served(tmp_path: Path) -> None:
+    """An entry moved to another context's fingerprint directory is not served under that context."""
+    s, k = ResultStore(tmp_path), _key()
+    linux, mac = _ctx(platform="linux"), _ctx(platform="macos")
+    s.put(k, {"y": "linux"}, linux)
+    s.put(k, {"y": "mac"}, mac)
+    _swap_entry(_entry_dir(tmp_path, k, linux), _entry_dir(tmp_path, k, mac))
+    got = s.get(k, mac, ReusePolicy.TOLERANT)
+    assert got is not None and got.outputs == {"y": "linux"} and got.policy_used is ReusePolicy.TOLERANT
+    assert not _entry_dir(tmp_path, k, mac).exists()
+
+
+@pytest.mark.logic
+def test_forged_result_with_recomputed_identity_is_not_served(tmp_path: Path) -> None:
+    """A rewritten result.json whose outputs, identity, key and key digest agree with each other but not the path."""
+    s, c = ResultStore(tmp_path), _ctx()
+    a, other = _key(audio="a" * 64), _key(audio="b" * 64)
+    s.put(a, {"text": "real"}, c)
+    entry = _entry_dir(tmp_path, a, c)
+
+    def forge(r: dict[str, Any]) -> None:
+        _forge(r, {"text": "FORGED"})
+        r["key"] = _jcs_value(other)
+        r["key_digest"] = other.digest()
+
+    _rewrite_json(entry / "result.json", forge)
+    with pytest.raises(MisfiledEntryError):
+        store_module._read_result(entry, digest=a.digest(), fingerprint=c.fingerprint())
+    assert s.get(a, c, ReusePolicy.EXACT) is None
+    assert s.put(a, {"text": "real"}, c) == output_identity({"text": "real"})
+
+
+def _jcs_value(key: LogicalKey) -> object:
+    return json.loads(jcs_dumps(key.model_dump()))
+
+
+def _raising_once(err: OSError, name: str) -> Callable[[Path], bytes]:
+    real = Path.read_bytes
+    state = {"raised": False}
+
+    def read_bytes(self: Path) -> bytes:
+        if self.name == name and not state["raised"]:
+            state["raised"] = True
+            raise err
+        return real(self)
+
+    return read_bytes
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("member", ["context.json", "result.json", "npy"])
+@pytest.mark.parametrize("err", [errno.EACCES, errno.ESTALE, errno.EIO, errno.EMFILE])
+def test_transient_error_never_quarantines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int, member: str
+) -> None:
+    """An I/O error while reading any member raises StoreUnavailable and leaves the entry in place, servable."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    outputs = {"y": numpy.ones(3, "<f4")}
+    s.put(k, outputs, c)
+    entry = _entry_dir(tmp_path, k, c)
+    name = _only_npy_name(entry).name if member == "npy" else member
+    monkeypatch.setattr(Path, "read_bytes", _raising_once(OSError(err, os.strerror(err)), name))
+    with pytest.raises(StoreUnavailable) as caught:
+        s.get(k, c, ReusePolicy.EXACT)
+    assert caught.value.errno == err
+    assert entry.is_dir() and not any((tmp_path / QUARANTINE_DIR).glob("*"))
+    got = s.get(k, c, ReusePolicy.EXACT)
+    assert got is not None
+    numpy.testing.assert_array_equal(got.outputs["y"], outputs["y"])  # type: ignore[arg-type]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("err", [errno.ESTALE, errno.EIO])
+def test_a3_transient_error_in_put_never_quarantines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int) -> None:
+    """The probe: one ESTALE moved a healthy entry into quarantine; a put that cannot read raises instead."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    ident = s.put(k, {"y": "healthy"}, c)
+    monkeypatch.setattr(Path, "read_bytes", _raising_once(OSError(err, os.strerror(err)), "result.json"))
+    with pytest.raises(StoreUnavailable):
+        s.put(k, {"y": "healthy"}, c)
+    assert not any((tmp_path / QUARANTINE_DIR).glob("*"))
+    assert s.put(k, {"y": "other"}, c) == ident
+
+
+@pytest.mark.logic
+def test_put_does_not_reread_arrays_of_an_existing_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A put over a valid committed entry reads its JSON members but none of its arrays."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    ident = s.put(k, {"y": numpy.ones(1000, "<f8"), "z": numpy.zeros(4, "<i4")}, c)
+    read: list[str] = []
+    real = Path.read_bytes
+
+    def spy(self: Path) -> bytes:
+        read.append(self.name)
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", spy)
+    assert s.put(k, {"y": numpy.ones(1000, "<f8"), "z": numpy.zeros(4, "<i4")}, c) == ident
+    assert sorted(read) == ["context.json", "result.json"]
+
+
+def _heal_during_quarantine(root: str, detected: MpEvent, go: MpEvent, out: "MpQueue[Any]") -> None:
+    """Find the corrupt entry, then pause before moving it until the parent has healed the address."""
+    real = store_module.ResultStore._quarantine
+
+    def paused(self: ResultStore, entry: Path, *, digest: str, fingerprint: str) -> None:
+        detected.set()
+        assert go.wait(60)
+        real(self, entry, digest=digest, fingerprint=fingerprint)
+
+    store_module.ResultStore._quarantine = paused  # type: ignore[method-assign]
+    s = ResultStore(Path(root))
+    s.get(_key(), _ctx(), ReusePolicy.EXACT)
+    out.put([a.parameters for a in s.provenance.activities(node="store.quarantine")])
+
+
+@pytest.mark.logic
+def test_quarantine_restores_an_entry_healed_in_between(tmp_path: Path) -> None:
+    """A reader that found a corrupt entry, then lost the race to a writer that replaced it, restores the new one."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    s.put(k, {"v": "v1"}, c)
+    entry = _entry_dir(tmp_path, k, c)
+    (_unseal(entry) / "context.json").write_bytes(b"torn")
+    ctx = mp.get_context("spawn")
+    detected, go, out = ctx.Event(), ctx.Event(), ctx.Queue()
+    reader = ctx.Process(target=_heal_during_quarantine, args=(str(tmp_path), detected, go, out))
+    reader.start()
+    try:
+        assert detected.wait(120)
+        healed = s.put(k, {"v": "v2"}, c)
+    finally:
+        go.set()
+    (activity,) = out.get(timeout=120)
+    reader.join(60)
+    assert reader.exitcode == 0
+    assert activity["verdict"] == "verified" and activity["outcome"] == "restored"
+    got = s.get(k, c, ReusePolicy.EXACT)
+    assert got is not None and got.output_identity == healed and got.outputs == {"v": "v2"}
+    assert stat.S_IMODE(entry.stat().st_mode) & 0o222 == 0
+
+
+@pytest.mark.logic
+def test_quarantine_keeps_the_copy_when_the_address_was_retaken(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A verified copy is not renamed over an entry committed after it was moved; it stays in quarantine."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    s.put(k, {"v": "v1"}, c)
+    entry = _entry_dir(tmp_path, k, c)
+    real = store_module.ResultStore._verdict
+
+    def commit_meanwhile(moved: Path, is_dir: bool, *, digest: str, fingerprint: str) -> tuple[str, str]:
+        ResultStore(tmp_path).put(k, {"v": "v2"}, c)
+        return real(moved, is_dir, digest=digest, fingerprint=fingerprint)
+
+    monkeypatch.setattr(store_module.ResultStore, "_verdict", staticmethod(commit_meanwhile))
+    s._quarantine(entry, digest=k.digest(), fingerprint=c.fingerprint())
+    (activity,) = s.provenance.activities(node="store.quarantine")
+    assert activity.parameters["outcome"] == "superseded"
+    got = ResultStore(tmp_path).get(k, c, ReusePolicy.EXACT)
+    assert got is not None and got.outputs == {"v": "v2"}
+    assert len(list((tmp_path / QUARANTINE_DIR).iterdir())) == 1
+
+
+@pytest.mark.logic
+def test_quarantine_records_reason(tmp_path: Path) -> None:
+    """Quarantining a corrupt entry records the verification failure in provenance."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    s.put(k, {"y": 1}, c)
+    CORRUPTIONS["result_garbled"](_entry_dir(tmp_path, k, c))
+    assert s.get(k, c, ReusePolicy.EXACT) is None
+    (activity,) = s.provenance.activities(node="store.quarantine")
+    assert activity.parameters["outcome"] == "quarantined" and activity.parameters["verdict"] == "corrupt"
+    assert "result.json" in activity.parameters["reason"] or "JSON" in activity.parameters["reason"]
+
+
+@pytest.mark.logic
+def test_collect_removes_only_aged_quarantine(tmp_path: Path) -> None:
+    """`collect` removes quarantined entries and staging past their ages, keeps younger ones and foreign names."""
+    policy = StorePolicy(world_readable=False, quarantine_retention_s=1000, staging_stale_s=100)
+    s, c = ResultStore(tmp_path, policy=policy), _ctx()
+    for audio in ("a", "b"):
+        k = _key(audio=audio * 64)
+        s.put(k, {"y": 1}, c)
+        CORRUPTIONS["result_garbled"](_entry_dir(tmp_path, k, c))
+        assert s.get(k, c, ReusePolicy.EXACT) is None
+    old_q, young_q = sorted((tmp_path / QUARANTINE_DIR).iterdir(), key=lambda p: p.stat().st_mtime)
+    stale, live = tmp_path / "tmp" / ("5" * 32), tmp_path / "tmp" / ("6" * 32)
+    stale.mkdir()
+    live.mkdir()
+    foreign = tmp_path / QUARANTINE_DIR / "keep-me"
+    foreign.write_bytes(b"x")
+    now = time.time()
+    for path, age in ((old_q, 1001), (young_q, 999), (stale, 101), (live, 99), (foreign, 10**6)):
+        os.utime(path, (now - age, now - age), follow_symlinks=False)
+    assert s.collect(now=now) == 2
+    assert {p.name for p in (tmp_path / QUARANTINE_DIR).iterdir()} == {young_q.name, "keep-me"}
+    assert not stale.exists() and live.exists()
+
+
+@pytest.mark.logic
+def test_a17_quarantine_is_collected_by_put(tmp_path: Path) -> None:
+    """The probe: 406 quarantine directories were never collected; put now collects the aged ones."""
+    policy = StorePolicy(world_readable=False, quarantine_retention_s=60, staging_stale_s=60)
+    s, k, c = ResultStore(tmp_path, policy=policy), _key(), _ctx()
+    for _ in range(5):
+        s.put(k, {"y": 1}, c)
+        CORRUPTIONS["result_garbled"](_entry_dir(tmp_path, k, c))
+        assert s.get(k, c, ReusePolicy.EXACT) is None
+    quarantined = list((tmp_path / QUARANTINE_DIR).iterdir())
+    assert len(quarantined) == 5
+    for path in quarantined:
+        os.utime(path, (0, 0))
+    s.put(_key(task="other"), {"y": 1}, c)
+    assert list((tmp_path / QUARANTINE_DIR).iterdir()) == []
+
+
+@pytest.mark.logic
+def test_staging_age_uses_the_storage_clock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local clock running a day ahead does not make a live staging directory look stale."""
+    s, c = ResultStore(tmp_path), _ctx()
+    s.put(_key(), {"y": 1}, c)
+    live = tmp_path / "tmp" / ("1" * 32)
+    live.mkdir()
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + 2 * StorePolicy.load_default().staging_stale_s)
+    s.put(_key(task="other"), {"y": 1}, c)
+    assert live.is_dir()
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("stray", ["file", "dangling_symlink", "fifo"])
+def test_stray_file_at_entry_is_corrupt_not_fatal(tmp_path: Path, stray: str) -> None:
+    """A non-directory at an entry path is quarantined; put commits and get serves the real entry."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    entry = _entry_dir(tmp_path, k, c)
+    entry.parent.mkdir(parents=True)
+    if stray == "file":
+        entry.write_text("stray")
+    elif stray == "dangling_symlink":
+        entry.symlink_to(tmp_path / "nowhere")
+    else:
+        os.mkfifo(entry)
+    assert s.get(k, c, ReusePolicy.EXACT) is None
+    ident = s.put(k, {"y": 1}, c)
+    got = s.get(k, c, ReusePolicy.EXACT)
+    assert got is not None and got.output_identity == ident
+    (moved,) = (tmp_path / QUARANTINE_DIR).iterdir()
+    assert not moved.is_dir() or moved.is_symlink()
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("err", [errno.ENOSPC, errno.EDQUOT])
+def test_enospc_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int) -> None:
+    """Running out of space while staging is StorageFull; no entry and no staging directory remain."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    real = store_module._write_synced
+    calls = {"n": 0}
+
+    def full(path: Path, data: bytes, mode: int) -> None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError(err, os.strerror(err))
+        real(path, data, mode)
+
+    monkeypatch.setattr(store_module, "_write_synced", full)
+    with pytest.raises(StorageFull) as caught:
+        s.put(k, {"y": numpy.ones(3, "<f4")}, c)
+    assert caught.value.errno == err and "space" in str(caught.value)
+    assert _entries(tmp_path) == []
+    assert list((tmp_path / "tmp").iterdir()) == []
+
+
+@pytest.mark.logic
+def test_unwritable_quarantine_never_raises_a_raw_permission_error(tmp_path: Path) -> None:
+    """When the quarantine cannot be created, get skips the corrupt entry and put raises StoreUnavailable."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    s.put(k, {"y": 1}, c)
+    CORRUPTIONS["result_garbled"](_entry_dir(tmp_path, k, c))
+    (tmp_path / QUARANTINE_DIR).write_bytes(b"not a directory")
+    assert s.get(k, c, ReusePolicy.EXACT) is None
+    with pytest.raises(StoreUnavailable):
+        s.put(k, {"y": 1}, c)
+    assert _entry_dir(tmp_path, k, c).is_dir()
+
+
+@pytest.mark.logic
+def test_storage_fault_is_the_one_mapping() -> None:
+    """Every OSError maps to StoreUnavailable with its errno; ENOSPC and EDQUOT to StorageFull; faults pass through."""
+    from senselab_core.runtime.storage import storage_fault
+
+    for code in (errno.EACCES, errno.EIO, errno.ESTALE, errno.EMFILE, errno.ENOENT, errno.EROFS):
+        fault = storage_fault(OSError(code, os.strerror(code)), Path("/x"))
+        assert type(fault) is StoreUnavailable and fault.errno == code and fault.filename == "/x"
+    for code in (errno.ENOSPC, errno.EDQUOT):
+        assert type(storage_fault(OSError(code, "full"), Path("/x"))) is StorageFull
+    fault = StoreUnavailable(errno.EIO, "x")
+    assert storage_fault(fault, Path("/y")) is fault
+
+
+@pytest.mark.logic
+def test_a35_participant_outputs_are_not_world_readable_under_umask_077(tmp_path: Path) -> None:
+    """The probe: under umask 077 result.json came out 0664 in a 2775 directory, readable by every user."""
+    old = os.umask(0o077)
+    try:
+        s, k, c = ResultStore(tmp_path / "s"), _key(), _ctx()
+        s.put(k, {"y": "private"}, c)
+    finally:
+        os.umask(old)
+    result = _entry_dir(tmp_path / "s", k, c) / "result.json"
+    assert stat.S_IMODE(result.stat().st_mode) & 0o007 == 0
+    assert stat.S_IMODE(result.parent.stat().st_mode) & 0o007 == 0
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("stray", ["file", "dangling_symlink"])
+def test_a36_stray_file_at_entry_does_not_block_put(tmp_path: Path, stray: str) -> None:
+    """The probe: a stray file or dangling symlink at the entry path made every put raise NotADirectoryError."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    entry = _entry_dir(tmp_path, k, c)
+    entry.parent.mkdir(parents=True)
+    if stray == "file":
+        entry.write_text("stray")
+    else:
+        os.symlink("/nonexistent/x", entry)
+    for _ in range(2):
+        assert s.put(k, {"y": 1}, c) == output_identity({"y": 1})
+    assert entry.is_dir() and not entry.is_symlink()
+
+
+@pytest.mark.logic
+def test_a36_enospc_mid_entry_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The probe: ENOSPC on the second staged file surfaced as a raw OSError; it is StorageFull, nothing left behind."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    real = store_module._write_synced
+    calls = {"n": 0}
+
+    def boom(path: Path, data: bytes, mode: int) -> None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        real(path, data, mode)
+
+    monkeypatch.setattr(store_module, "_write_synced", boom)
+    with pytest.raises(StorageFull):
+        s.put(k, {"a": "x"}, c)
+    assert _entries(tmp_path) == [] and list((tmp_path / "tmp").iterdir()) == []

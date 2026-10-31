@@ -5,7 +5,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, StorageError, default_cache_root, fetch
+from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -14,7 +14,7 @@ def _build_parser() -> argparse.ArgumentParser:
     data = groups.add_parser("data", help="versioned datasets")
     commands = data.add_subparsers(dest="command", required=True)
     fetch_cmd = commands.add_parser("fetch", help="download and verify the files of a data manifest")
-    fetch_cmd.add_argument("manifest", type=Path, help="path to a data-manifest@1.0 YAML file")
+    fetch_cmd.add_argument("manifest", type=Path, help="path to a data-manifest@2.0 YAML file")
     fetch_cmd.add_argument(
         "--cache",
         type=Path,
@@ -33,7 +33,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         manifest = DataManifest.load(args.manifest)
         paths = fetch(manifest, cache_root=args.cache or default_cache_root(), verify="full" if args.verify else "size")
-    except (ManifestError, FetchError, StorageError) as err:
+    except (ManifestError, FetchError) as err:
         print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
         return 1
     except OSError as err:

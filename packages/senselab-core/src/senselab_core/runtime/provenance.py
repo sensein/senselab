@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Sequence, cast, get_args
 
-from senselab_worker.ownership import remove_owned
+from senselab_core.runtime.storage import write_atomically
 
 PROV_TYPE = Literal[
     "span",
@@ -71,36 +71,6 @@ _PROV_TYPES = frozenset(get_args(PROV_TYPE))
 _AGENT_TYPES = frozenset(get_args(AGENT_TYPE))
 _ENVIRONMENT_KINDS = frozenset(get_args(ENVIRONMENT_KIND))
 _RELATIONS = frozenset(get_args(RELATION))
-
-
-TEMPORARY_NAME = re.compile(r"^\..+\.[0-9]+\.[0-9]+\.[0-9a-f]{32}\.tmp$")
-"""A file being written atomically: `.<name>.<pid>.<thread id>.<uuid4 hex>.tmp`."""
-
-
-def _write_atomically(target: Path, data: bytes) -> None:
-    """Replace ``target`` with ``data`` through a fsynced temporary file in the same directory.
-
-    Args:
-        target: The file to write.
-        data: Its new content.
-    """
-    try:
-        mode: int | None = stat.S_IMODE(target.stat().st_mode)
-    except FileNotFoundError:
-        mode = None
-    temporary = target.with_name(f".{target.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        if mode is not None:
-            os.chmod(temporary, mode)
-        os.replace(temporary, target)
-    except BaseException:
-        remove_owned(target.parent, temporary, pattern=TEMPORARY_NAME)
-        raise
 
 
 _RECORD_KEYS: dict[str, frozenset[str]] = {
@@ -619,7 +589,7 @@ class ProvStore:
             json.dumps({"record": "relation", "relation": r, "source": s, "target": t}, sort_keys=True)
             for r, s, t in self._relations
         ]
-        _write_atomically(Path(path), ("\n".join(lines) + "\n").encode("utf-8"))
+        write_atomically(Path(path), ("\n".join(lines) + "\n").encode("utf-8"))
 
     @classmethod
     def read_jsonl(cls, path: str | Path, run_id: str = "read") -> "ProvStore":

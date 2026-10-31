@@ -9,10 +9,15 @@ Layout under `root`:
   - `context.json`: JCS JSON with `format: "execution-context@1.0"` and the context's fields;
   - `<sha256>.npy`: each array output in canonical `.npy`, named by the sha256 of its bytes.
 - `tmp/<uuid>/`: a writer's staging directory, committed by renaming it onto the entry.
-- `quarantine/<uuid>/`: entries found corrupt, moved aside by rename.
+- `quarantine/<uuid>`: entries that failed verification, moved aside by rename.
 
-Directories the store creates are mode `LOCK_DIR_MODE` (0o2775) and files `LOCK_FILE_MODE` (0o664),
-whatever the umask; an existing `root` is left as it is.
+An entry is bound to its address: a reader recomputes the key digest from the stored key and the
+fingerprint from the stored context, and requires both to equal the path it read. A committed
+entry is read-only (`committed_modes`); directories that hold entries are `shared_dir_mode`. World
+bits are set only when the `StorePolicy` allows them. An existing `root` is left as it is.
+
+Only a completed read that fails verification moves an entry. An `OSError` while reading or
+writing is raised as `StoreUnavailable` (`StorageFull` for `ENOSPC` and `EDQUOT`) and changes nothing.
 
 Outputs are a mapping of JSON values (what `canonical_scalar` accepts, in exact `list`, `tuple` and
 `str`-keyed `dict` containers) and plain numpy arrays, nested to any depth. In the encoded form each
@@ -20,11 +25,11 @@ array is replaced by `{"$array": <sha256 of its canonical .npy>}`, so `$array` i
 The output identity is `"output:" + tagged_digest("output@2", encoded form)`.
 """
 
-import errno
 import io
 import logging
 import os
-import time
+import re
+import stat
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -45,8 +50,19 @@ from senselab_worker.hashing import sha256_bytes
 from senselab_worker.ownership import UUID_HEX, remove_owned
 
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputIdentity, ReusePolicy, acceptable
-from senselab_core.runtime.locks import LOCK_FILE_MODE, ensure_dirs
+from senselab_core.runtime.locks import ensure_dirs
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
+from senselab_core.runtime.storage import (
+    CLOCK_NAME,
+    STAGING_DIR_MODE,
+    StorePolicy,
+    StoreUnavailable,
+    committed_modes,
+    fs_now,
+    set_mode,
+    shared_dir_mode,
+    storage_fault,
+)
 
 logger = logging.getLogger("senselab")
 
@@ -56,18 +72,20 @@ QUARANTINE_DIR = "quarantine"
 RESULT_FORMAT = "result@1.0"
 CONTEXT_FORMAT = "execution-context@1.0"
 ARRAY_TAG = "$array"
-STAGING_STALE_SECONDS = 24 * 60 * 60
-"""A staging directory whose mtime is older than this is a crashed writer's and is removed by `put`."""
 COMMIT_ATTEMPTS = 3
 """How many times `put` stages and renames before giving up on a target that keeps turning out corrupt."""
 
 _POLICY_ORDER = (ReusePolicy.EXACT, ReusePolicy.EQUIVALENT, ReusePolicy.TOLERANT)
-_HEX = frozenset("0123456789abcdef")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 T = TypeVar("T")
 
 
 class CorruptEntryError(ValueError):
-    """A committed store entry that cannot be read back as written."""
+    """A committed store entry that a completed read found not to be what was written."""
+
+
+class MisfiledEntryError(CorruptEntryError):
+    """A store entry whose stored key or context does not match the address it was read from."""
 
 
 @dataclass(frozen=True)
@@ -128,17 +146,46 @@ def output_identity(outputs: Mapping[str, object]) -> OutputIdentity:
     return _serialise(outputs)[2]
 
 
-def _decode(value: object, entry: Path) -> object:
+def _require_directory(entry: Path) -> None:
+    try:
+        mode = os.lstat(entry).st_mode
+    except FileNotFoundError as err:
+        raise CorruptEntryError(f"store entry {entry} is gone") from err
+    if not stat.S_ISDIR(mode):
+        raise CorruptEntryError(f"corrupt store entry {entry}: not a directory")
+
+
+def _member_path(entry: Path, name: str) -> Path:
+    """Return `entry/name` after checking with `lstat` that it is a regular file; otherwise the entry is corrupt."""
+    path = entry / name
+    try:
+        mode = os.lstat(path).st_mode
+    except FileNotFoundError as err:
+        raise CorruptEntryError(f"corrupt store entry {entry}: {name} is missing") from err
+    if not stat.S_ISREG(mode):
+        raise CorruptEntryError(f"corrupt store entry {entry}: {name} is not a regular file")
+    return path
+
+
+def _decode(value: object, entry: Path, load_arrays: bool) -> object:
     if isinstance(value, dict):
         if set(value) == {ARRAY_TAG}:
             sha = value[ARRAY_TAG]
-            data = (entry / f"{sha}.npy").read_bytes()
+            if not isinstance(sha, str) or not _SHA256.fullmatch(sha):
+                raise CorruptEntryError(f"corrupt store entry {entry}: array reference {sha!r} is not a sha256")
+            path = _member_path(entry, f"{sha}.npy")
+            if not load_arrays:
+                return None
+            data = path.read_bytes()
             if sha256_bytes(data) != sha:
                 raise CorruptEntryError(f"corrupt store entry {entry}: {sha}.npy does not hash to its name")
-            return numpy.load(io.BytesIO(data), allow_pickle=False)
-        return {k: _decode(v, entry) for k, v in value.items()}
+            try:
+                return numpy.load(io.BytesIO(data), allow_pickle=False)
+            except OSError as err:
+                raise CorruptEntryError(f"corrupt store entry {entry}: {sha}.npy is not an array: {err}") from err
+        return {k: _decode(v, entry, load_arrays) for k, v in value.items()}
     if isinstance(value, list):
-        return [_decode(v, entry) for v in value]
+        return [_decode(v, entry, load_arrays) for v in value]
     return value
 
 
@@ -150,15 +197,16 @@ def _fsync_dir(path: Path) -> None:
         os.close(fd)
 
 
-def _write_synced(path: Path, data: bytes) -> None:
+def _write_synced(path: Path, data: bytes, mode: int) -> None:
     with open(path, "xb") as handle:
         handle.write(data)
         handle.flush()
-        os.fchmod(handle.fileno(), LOCK_FILE_MODE)
+        set_mode(path, mode, fd=handle.fileno())
         os.fsync(handle.fileno())
 
 
-def _read_object(path: Path, fmt: str) -> dict[str, Any]:
+def _read_object(entry: Path, name: str, fmt: str) -> dict[str, Any]:
+    path = _member_path(entry, name)
     record = jcs_loads(path.read_bytes())
     if not isinstance(record, dict):
         raise CorruptEntryError(f"corrupt store entry: {path} is not a JSON object")
@@ -168,51 +216,128 @@ def _read_object(path: Path, fmt: str) -> dict[str, Any]:
 
 
 def _guarded(entry: Path, read: Callable[[], T]) -> T:
+    """Run `read`; a failed verification is `CorruptEntryError`, an `OSError` is a storage fault."""
     try:
         return read()
     except CorruptEntryError:
         raise
-    except (OSError, ValueError, KeyError, TypeError, ValidationError) as err:
+    except OSError as err:
+        raise storage_fault(err, entry) from err
+    except (ValueError, KeyError, TypeError, ValidationError) as err:
         raise CorruptEntryError(f"corrupt store entry {entry}: {type(err).__name__}: {err}") from err
 
 
-def _read_context(entry: Path) -> ExecutionContext:
-    """Return the context recorded in `entry`; raise `CorruptEntryError` if it cannot be read."""
-    return _guarded(
-        entry, lambda: ExecutionContext.model_validate(_read_object(entry / "context.json", CONTEXT_FORMAT))
-    )
+def _stored_context(entry: Path) -> ExecutionContext:
+    _require_directory(entry)
+    return ExecutionContext.model_validate(_read_object(entry, "context.json", CONTEXT_FORMAT))
 
 
-def _read_result(entry: Path) -> tuple[str, dict[str, object]]:
-    """Return the output identity and decoded outputs of `entry`; raise `CorruptEntryError` if it is corrupt."""
+def _stored_key_digest(record: Mapping[str, Any]) -> str:
+    """Return the digest of the key stored in `record`; it must equal the digest stored beside it."""
+    digest = LogicalKey.model_validate(record["key"]).digest()
+    if record["key_digest"] != digest:
+        raise MisfiledEntryError(f"stored key digest {record['key_digest']!r} is not the digest of the stored key")
+    return digest
 
-    def read() -> tuple[str, dict[str, object]]:
-        record = _read_object(entry / "result.json", RESULT_FORMAT)
-        tree, identity = record["outputs"], record["output_identity"]
-        if not isinstance(identity, str) or _tree_identity(tree) != identity:
-            raise CorruptEntryError(f"corrupt store entry {entry}: outputs do not hash to their output identity")
-        outputs = _decode(tree, entry)
-        if not isinstance(outputs, dict):
-            raise CorruptEntryError(f"corrupt store entry {entry}: outputs are not an object")
-        return identity, outputs
+
+def _bound(entry: Path, digest: str, fingerprint: str, stored_digest: str, stored_fingerprint: str) -> None:
+    if (stored_digest, stored_fingerprint) != (digest, fingerprint):
+        raise MisfiledEntryError(
+            f"misfiled store entry {entry}: holds key {stored_digest[:12]}... context {stored_fingerprint[:12]}..., "
+            f"read as key {digest[:12]}... context {fingerprint[:12]}..."
+        )
+
+
+def _read_context(entry: Path, fingerprint: str) -> ExecutionContext:
+    """Return the context recorded in `entry`, whose fingerprint must be `fingerprint`.
+
+    Raises:
+        CorruptEntryError: the entry is gone, corrupt, or (`MisfiledEntryError`) holds another context.
+        StoreUnavailable: the entry could not be read.
+    """
+
+    def read() -> ExecutionContext:
+        context = _stored_context(entry)
+        if context.fingerprint() != fingerprint:
+            raise MisfiledEntryError(f"misfiled store entry {entry}: its context is not {fingerprint[:12]}...")
+        return context
 
     return _guarded(entry, read)
 
 
-def _committed_identity(entry: Path) -> str | None:
-    """Return the output identity of the entry at `entry`, None if there is none.
+def _read_result(
+    entry: Path, *, digest: str, fingerprint: str, load_arrays: bool = True
+) -> tuple[str, dict[str, object], ExecutionContext]:
+    """Return the output identity, decoded outputs and context of the entry at `entry`.
+
+    The key stored in `result.json` must digest to its stored `key_digest` and to `digest`, and the
+    context in `context.json` must fingerprint to `fingerprint`. With `load_arrays` False each array
+    file is checked to be present and regular but is neither read nor hashed, and decodes as None.
 
     Raises:
-        CorruptEntryError: if an entry exists but cannot be read back whole.
+        CorruptEntryError: the entry is gone or fails verification; `MisfiledEntryError` when it
+            belongs to another address.
+        StoreUnavailable: the entry could not be read.
     """
-    if not entry.is_dir():
+
+    def read() -> tuple[str, dict[str, object], ExecutionContext]:
+        context = _stored_context(entry)
+        record = _read_object(entry, "result.json", RESULT_FORMAT)
+        _bound(entry, digest, fingerprint, _stored_key_digest(record), context.fingerprint())
+        tree, identity = record["outputs"], record["output_identity"]
+        if not isinstance(identity, str) or _tree_identity(tree) != identity:
+            raise CorruptEntryError(f"corrupt store entry {entry}: outputs do not hash to their output identity")
+        outputs = _decode(tree, entry, load_arrays)
+        if not isinstance(outputs, dict):
+            raise CorruptEntryError(f"corrupt store entry {entry}: outputs are not an object")
+        return identity, outputs, context
+
+    return _guarded(entry, read)
+
+
+def _committed_identity(entry: Path, *, digest: str, fingerprint: str) -> str | None:
+    """Return the output identity of the entry at `entry`, None if nothing is there.
+
+    Array files are checked to be present, not re-read.
+
+    Raises:
+        CorruptEntryError: something is at `entry` that is not a valid entry for this address.
+        StoreUnavailable: the entry could not be read.
+    """
+    try:
+        os.lstat(entry)
+    except FileNotFoundError:
         return None
-    _read_context(entry)
-    return _read_result(entry)[0]
+    except OSError as err:
+        raise storage_fault(err, entry) from err
+    return _read_result(entry, digest=digest, fingerprint=fingerprint, load_arrays=False)[0]
 
 
 def _is_fingerprint(name: str) -> bool:
-    return len(name) == 64 and set(name) <= _HEX
+    return _SHA256.fullmatch(name) is not None
+
+
+class _StoreEntryFormat:
+    """The store entry as an addressed format: `<key digest>/<context fingerprint>`."""
+
+    name = "store-entry"
+
+    def address_of(self, path: Path) -> str:
+        def read() -> str:
+            context = _stored_context(path)
+            digest = _stored_key_digest(_read_object(path, "result.json", RESULT_FORMAT))
+            return f"{digest}/{context.fingerprint()}"
+
+        return _guarded(path, read)
+
+    def address_at(self, path: Path) -> str:
+        return f"{path.parent.name}/{path.name}"
+
+    def read(self, path: Path) -> object:
+        return _read_result(path, digest=path.parent.name, fingerprint=path.name)[1]
+
+
+STORE_ENTRY = _StoreEntryFormat()
 
 
 def _commit(
@@ -220,20 +345,28 @@ def _commit(
     context: ExecutionContext,
     entry: Path,
     staging_root: Path,
-    tree: object,
-    arrays: dict[str, bytes],
-    identity: str,
+    payload: tuple[object, dict[str, bytes], str],
+    policy: StorePolicy,
 ) -> bool:
-    """Stage an entry and rename it onto `entry`; return False if another entry was there first."""
+    """Stage an entry, make its files read-only, and rename it onto `entry`; return False if another was there first.
+
+    The entry directory is made read-only after the rename.
+
+    Raises:
+        StoreUnavailable: staging or renaming failed for any reason but an occupied target.
+    """
+    tree, arrays, identity = payload
+    file_mode, dir_mode = committed_modes(policy)
     staging = staging_root / uuid.uuid4().hex
-    staging.mkdir()
     try:
-        ensure_dirs(staging)
+        staging.mkdir()
+        set_mode(staging, STAGING_DIR_MODE)
         for sha, data in arrays.items():
-            _write_synced(staging / f"{sha}.npy", data)
+            _write_synced(staging / f"{sha}.npy", data, file_mode)
         _write_synced(
             staging / "context.json",
             jcs_dumps({"format": CONTEXT_FORMAT, **context.model_dump(mode="json")}),
+            file_mode,
         )
         result = {
             "format": RESULT_FORMAT,
@@ -242,18 +375,33 @@ def _commit(
             "output_identity": identity,
             "outputs": tree,
         }
-        _write_synced(staging / "result.json", jcs_dumps(result))
+        _write_synced(staging / "result.json", jcs_dumps(result), file_mode)
         _fsync_dir(staging)
         try:
             os.rename(staging, entry)
-        except OSError as err:
-            if err.errno not in (errno.EEXIST, errno.ENOTEMPTY):
-                raise
-            return False
+        except OSError:
+            if _occupied(entry):
+                return False
+            raise
+        _seal(entry, dir_mode)
         _fsync_dir(entry.parent)
         return True
+    except OSError as err:
+        raise storage_fault(err, entry) from err
     finally:
         _discard_staging(staging_root, staging)
+
+
+def _occupied(entry: Path) -> bool:
+    """Return whether something is at `entry`, so that a failed rename onto it means the address is taken."""
+    return os.path.lexists(entry)
+
+
+def _seal(entry: Path, dir_mode: int) -> None:
+    try:
+        set_mode(entry, dir_mode)
+    except OSError as err:
+        logger.warning("cannot make store entry %s read-only: %s", entry, err)
 
 
 def _discard_staging(staging_root: Path, staging: Path) -> None:
@@ -263,19 +411,26 @@ def _discard_staging(staging_root: Path, staging: Path) -> None:
         logger.warning("cannot remove staging directory %s: %s", staging, err)
 
 
-def _remove_stale_staging(staging_root: Path) -> None:
-    cutoff = time.time() - STAGING_STALE_SECONDS
+def _remove_older(directory: Path, cutoff: float) -> int:
+    """Remove the owned children of `directory` whose mtime is before `cutoff`; return how many. Failures are logged."""
     try:
-        children = list(staging_root.iterdir())
+        names = os.listdir(directory)
     except FileNotFoundError:
-        return
-    for child in children:
+        return 0
+    except OSError as err:
+        logger.warning("cannot list %s to collect it: %s", directory, err)
+        return 0
+    removed = 0
+    for name in names:
+        child = directory / name
         try:
-            stale = child.stat().st_mtime < cutoff
+            if os.lstat(child).st_mtime < cutoff and remove_owned(directory, child, pattern=UUID_HEX):
+                removed += 1
         except FileNotFoundError:
             continue
-        if stale:
-            _discard_staging(staging_root, child)
+        except OSError as err:
+            logger.warning("cannot collect %s: %s", child, err)
+    return removed
 
 
 class ResultStore:
@@ -283,77 +438,175 @@ class ResultStore:
 
     Each entry is staged in `root/tmp/<uuid>/` and committed by `os.rename`; the first writer to
     rename wins and later writers discard their staging and return the committed identity. A
-    staging directory is never read by `get`; `put` removes those older than
-    `STAGING_STALE_SECONDS` (24 hours, by directory mtime). An entry found corrupt by `get` or
-    `put` is renamed into `root/quarantine/<uuid>/` and never served.
+    staging directory is never read by `get`. An entry that a completed read finds corrupt or
+    misfiled is moved into `root/quarantine/<uuid>` (see `_quarantine`) and never served. `collect`,
+    which `put` calls, removes quarantined entries and staging directories older than the policy's ages.
 
     Args:
         root: The store root.
-        provenance: Where `put` and relaxed-policy `get` hits record activities; the store owns a
-            fresh one when None.
+        provenance: Where `put`, quarantines and relaxed-policy `get` hits record activities; the
+            store owns a fresh one when None.
+        policy: Modes and retention ages; `StorePolicy.load_default()` when None.
     """
 
-    def __init__(self, root: Path, provenance: ProvStore | None = None) -> None:
+    def __init__(self, root: Path, provenance: ProvStore | None = None, *, policy: StorePolicy | None = None) -> None:
         """Open a store at `root`; nothing is created until the first `put`."""
         self.root = Path(root)
         self.provenance = provenance if provenance is not None else ProvStore(run_id=f"store-{uuid.uuid4().hex}")
+        self.policy = policy if policy is not None else StorePolicy.load_default()
 
     def _entry(self, key: LogicalKey) -> Path:
         d = key.digest()
         return self.root / STORE_DIR / d[:2] / d
 
     def _ensure(self, *parts: str) -> Path:
-        if not self.root.exists():
-            ensure_dirs(self.root)
+        """Create `root/<parts...>` as object directories and return it.
+
+        Raises:
+            StoreUnavailable: a directory could not be created.
+        """
+        mode = shared_dir_mode(self.policy)
         path = self.root
-        for part in parts:
-            path = path / part
-            ensure_dirs(path)
+        try:
+            if not self.root.exists():
+                ensure_dirs(self.root, mode=mode)
+            for part in parts:
+                path = path / part
+                ensure_dirs(path, mode=mode)
+        except OSError as err:
+            raise storage_fault(err, path) from err
         return path
 
-    def _quarantine(self, entry: Path) -> None:
-        """Rename `entry` into `root/quarantine/<uuid>`; a concurrent quarantine of it is not an error."""
-        target = self._ensure(QUARANTINE_DIR) / uuid.uuid4().hex
-        try:
-            os.rename(entry, target)
-        except FileNotFoundError:
-            pass
+    def _quarantine(self, entry: Path, *, digest: str, fingerprint: str) -> None:
+        """Move `entry` into `root/quarantine/<uuid>`, re-verify the moved copy, and put it back if it verifies.
 
-    def _existing(self, entry: Path) -> str | None:
+        The re-verification uses the address the entry was read at (`digest`, `fingerprint`). A copy
+        that verifies, or cannot be read, is renamed back without replacing anything: if a new entry
+        took the address meanwhile the copy stays in quarantine. Nothing is done if `entry` is
+        already gone. A provenance activity records the outcome and the reason.
+
+        Raises:
+            StoreUnavailable: the quarantine directory cannot be created or `entry` cannot be moved.
+        """
+        moved = self._ensure(QUARANTINE_DIR) / uuid.uuid4().hex
+        is_dir = False
         try:
-            return _committed_identity(entry)
-        except CorruptEntryError:
-            self._quarantine(entry)
-            return None
+            is_dir = stat.S_ISDIR(os.lstat(entry).st_mode)
+            if is_dir:
+                set_mode(entry, STAGING_DIR_MODE)
+            os.rename(entry, moved)
+        except FileNotFoundError:
+            return
+        except OSError as err:
+            if is_dir:
+                _seal(entry, committed_modes(self.policy)[1])
+            raise storage_fault(err, entry) from err
+        try:
+            os.utime(moved, follow_symlinks=False)
+        except OSError as err:
+            logger.warning("cannot stamp quarantined entry %s: %s", moved, err)
+        verdict, reason = self._verdict(moved, is_dir, digest=digest, fingerprint=fingerprint)
+        outcome = "quarantined"
+        if verdict != "corrupt":
+            outcome = self._restore(moved, entry)
+        logger.warning("store entry %s %s (%s): %s", entry, outcome, verdict, reason)
+        self.provenance.activity(
+            node="store.quarantine",
+            step=None,
+            parameters={
+                "key": digest,
+                "context": fingerprint,
+                "moved_to": moved.name,
+                "verdict": verdict,
+                "outcome": outcome,
+                "reason": reason,
+            },
+        )
+
+    @staticmethod
+    def _verdict(moved: Path, is_dir: bool, *, digest: str, fingerprint: str) -> tuple[str, str]:
+        """Return `("corrupt" | "verified" | "unreadable", reason)` for a moved entry."""
+        if not is_dir:
+            return "corrupt", "not a directory"
+        try:
+            _read_result(moved, digest=digest, fingerprint=fingerprint)
+        except CorruptEntryError as err:
+            return "corrupt", str(err)
+        except StoreUnavailable as err:
+            return "unreadable", str(err)
+        return "verified", "the moved copy verifies"
+
+    def _restore(self, moved: Path, entry: Path) -> str:
+        """Rename `moved` back onto `entry` unless something now occupies it; return the outcome."""
+        try:
+            os.rename(moved, entry)
+        except OSError as err:
+            if _occupied(entry):
+                return "superseded"
+            raise storage_fault(err, entry) from err
+        _seal(entry, committed_modes(self.policy)[1])
+        return "restored"
+
+    def _set_aside(self, entry: Path, *, digest: str, fingerprint: str) -> None:
+        """Quarantine `entry`; if the store cannot be written, log it and leave the entry unserved."""
+        try:
+            self._quarantine(entry, digest=digest, fingerprint=fingerprint)
+        except StoreUnavailable as err:
+            logger.warning("cannot quarantine store entry %s, skipping it: %s", entry, err)
+
+    def collect(self, now: float | None = None) -> int:
+        """Remove quarantined entries and staging directories older than the policy's ages; return how many.
+
+        Ages are measured from each directory's mtime to `now`, which defaults to the storage's own
+        clock (`fs_now` on `root`). Only uuid-named children are removed, through `remove_owned`.
+        A failure to read the clock, list or remove is logged and skips that item.
+        """
+        if not self.root.exists():
+            return 0
+        if now is None:
+            try:
+                now = fs_now(self.root / CLOCK_NAME)
+            except OSError as err:
+                logger.warning("cannot read the clock of store %s; not collecting: %s", self.root, err)
+                return 0
+        return _remove_older(self.root / QUARANTINE_DIR, now - self.policy.quarantine_retention_s) + _remove_older(
+            self.root / STAGING_DIR, now - self.policy.staging_stale_s
+        )
 
     def put(self, key: LogicalKey, outputs: dict[str, object], context: ExecutionContext) -> OutputIdentity:
         """Store `outputs` under `key` and `context`, and return the committed output identity.
 
         Outputs are stored as JCS canonicalises them: `1.0` is stored as `1`, strings are
         NFC-normalised and tuples become lists, and the output identity is taken over that form.
-        If a readable entry for `key` and `context` is already committed, nothing is written and
-        that entry's identity is returned, which may differ from the identity of `outputs`; a
-        corrupt one is quarantined and replaced. Either way one provenance activity is appended.
+        If a valid entry for `key` and `context` is already committed, nothing is written and that
+        entry's identity is returned, which may differ from the identity of `outputs`; its array
+        files are checked to be present, not re-read. Anything else at the entry's path is
+        quarantined and replaced. Either way one provenance activity is appended.
 
         Raises:
             TypeError: on an output that is neither a JSON value nor a numpy array.
             ValueError: on a container that contains itself, a reserved `$array` key, a value
                 `jcs_dumps` refuses, or an array dtype `canonical_npy_bytes` refuses.
+            StoreUnavailable: the store could not be read or written (`StorageFull` when out of space).
             RuntimeError: if the target is still corrupt after `COMMIT_ATTEMPTS` commits.
         """
-        tree, arrays, identity = _serialise(outputs)
-        d = key.digest()
+        payload = _serialise(outputs)
+        d, f = key.digest(), context.fingerprint()
         staging_root = self._ensure(STAGING_DIR)
-        _remove_stale_staging(staging_root)
-        entry = self._ensure(STORE_DIR, d[:2], d) / context.fingerprint()
+        self.collect()
+        entry = self._ensure(STORE_DIR, d[:2], d) / f
         for _ in range(COMMIT_ATTEMPTS):
-            existing = self._existing(entry)
+            try:
+                existing = _committed_identity(entry, digest=d, fingerprint=f)
+            except CorruptEntryError:
+                self._quarantine(entry, digest=d, fingerprint=f)
+                existing = None
             if existing is not None:
                 self._record_put(key, context, existing, outcome="existing")
                 return existing
-            if _commit(key, context, entry, staging_root, tree, arrays, identity):
-                self._record_put(key, context, identity, outcome="committed")
-                return identity
+            if _commit(key, context, entry, staging_root, payload, self.policy):
+                self._record_put(key, context, payload[2], outcome="committed")
+                return payload[2]
         raise RuntimeError(f"{entry} was still corrupt after {COMMIT_ATTEMPTS} commits")
 
     def _record_put(self, key: LogicalKey, context: ExecutionContext, identity: str, *, outcome: str) -> None:
@@ -404,26 +657,31 @@ class ResultStore:
         """Return a committed result for `key` whose context `policy` admits for `context`, or None.
 
         Candidates are tried narrowest admitting policy first, the current fingerprint first among
-        `exact`, then by fingerprint. A corrupt candidate is quarantined and the next one tried. A
-        hit admitted under a policy other than `exact` appends a reuse activity to provenance.
+        `exact`, then by fingerprint. A candidate that fails verification is quarantined (or, if the
+        store cannot be written, skipped) and the next one tried. A hit admitted under a policy other
+        than `exact` appends a reuse activity to provenance.
 
         Raises:
             ValueError: if `policy` is not a `ReusePolicy` value.
+            StoreUnavailable: a candidate could not be read; nothing was quarantined.
         """
         policy = ReusePolicy(policy)
+        d = key.digest()
         base = self._entry(key)
         try:
             names = sorted(n for n in os.listdir(base) if _is_fingerprint(n))
-        except FileNotFoundError:
+        except (FileNotFoundError, NotADirectoryError):
             return None
+        except OSError as err:
+            raise storage_fault(err, base) from err
         allowed = _POLICY_ORDER[: _POLICY_ORDER.index(policy) + 1]
         current = context.fingerprint()
         candidates: list[tuple[int, bool, str, ExecutionContext]] = []
         for name in names:
             try:
-                stored = _read_context(base / name)
+                stored = _read_context(base / name, name)
             except CorruptEntryError:
-                self._quarantine(base / name)
+                self._set_aside(base / name, digest=d, fingerprint=name)
                 continue
             rank = next(
                 (i for i, p in enumerate(allowed) if acceptable(stored, context, p, backend=key.backend)),
@@ -431,11 +689,11 @@ class ResultStore:
             )
             if rank is not None:
                 candidates.append((rank, name != current, name, stored))
-        for rank, _, name, stored in sorted(candidates, key=lambda c: c[:3]):
+        for rank, _, name, _stored in sorted(candidates, key=lambda c: c[:3]):
             try:
-                identity, outputs = _read_result(base / name)
+                identity, outputs, stored = _read_result(base / name, digest=d, fingerprint=name)
             except CorruptEntryError:
-                self._quarantine(base / name)
+                self._set_aside(base / name, digest=d, fingerprint=name)
                 continue
             hit = StoredResult(outputs=outputs, output_identity=identity, context=stored, policy_used=allowed[rank])
             if hit.policy_used is not ReusePolicy.EXACT:

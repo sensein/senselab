@@ -4,6 +4,7 @@ import getpass
 import json
 import os
 import stat
+from multiprocessing.synchronize import Barrier as MpBarrier
 from multiprocessing.synchronize import Event as MpEvent
 from pathlib import Path
 
@@ -584,3 +585,48 @@ def test_a_waiter_that_locked_the_released_file_does_not_share_the_lock(
             import shutil
 
             shutil.rmtree(root, ignore_errors=True)
+
+
+def _rewrite_holder(resource: str, rounds: int, barrier: MpBarrier, done: MpEvent) -> None:
+    """Rewrite the holder identity `rounds` times, as repeated acquires do; module-scoped for spawn."""
+    lock = SharedFileLock(Path(resource), timeout=1.0)
+    barrier.wait(60)
+    for _ in range(rounds):
+        lock._write_holder()
+    done.set()
+
+
+@pytest.mark.logic
+def test_holder_identity_is_never_read_partially_written(tmp_path: Path) -> None:
+    """While another process rewrites the holder identity, a reader always sees a whole identity."""
+    import multiprocessing as mp
+
+    resource = tmp_path / "thing"
+    lock = SharedFileLock(resource, timeout=1.0)
+    lock._write_holder()
+    ctx = mp.get_context("spawn")
+    barrier, done = ctx.Barrier(2), ctx.Event()
+    writer = ctx.Process(target=_rewrite_holder, args=(str(resource), 3000, barrier, done))
+    writer.start()
+    barrier.wait(60)
+    reads = torn = 0
+    while not done.is_set():
+        reads += 1
+        torn += lock_holder(_holder_file(resource)) is None
+    writer.join(60)
+    assert writer.exitcode == 0
+    assert reads > 0 and torn == 0, f"{torn} of {reads} reads saw no identity"
+
+
+@pytest.mark.logic
+def test_heartbeat_age_uses_the_storage_clock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local clock running ahead of the storage clock does not age a fresh heartbeat."""
+    import time
+
+    resource = tmp_path / "thing"
+    lock = SharedFileLock(resource, timeout=1.0, stale_after=120.0)
+    with lock:
+        real = time.time
+        monkeypatch.setattr(time, "time", lambda: real() + 3600)
+        age = lock._heartbeat_age()
+    assert age is not None and age < 120.0
