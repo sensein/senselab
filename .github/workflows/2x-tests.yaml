@@ -51,7 +51,7 @@ jobs:
     - name: Install dependencies with uv
       run: uv sync --all-extras --group dev
     - name: Fetch the 1.x freeze branch
-      run: git fetch --no-tags --depth=1 origin freeze-1x-2026-10-30:refs/remotes/origin/freeze-1x-2026-10-30
+      run: bash .github/scripts/fetch-1x-freeze.sh
     - name: Run pre-commit
       run: uv run pre-commit run --all-files
       shell: bash
@@ -81,6 +81,8 @@ jobs:
       run: bash scripts/install-ffmpeg.sh
     - name: Install dependencies with uv
       run: uv sync --all-extras --group dev
+    - name: Fetch the 1.x freeze branch
+      run: bash .github/scripts/fetch-1x-freeze.sh
     - name: Run CPU tests
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
