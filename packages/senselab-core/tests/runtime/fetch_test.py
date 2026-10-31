@@ -442,6 +442,98 @@ def test_cli_verify_maps_to_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert seen == ["size", "full"]
 
 
+def _repair_fetch(root: str, started: "mp.synchronize.Event", release: "mp.synchronize.Event") -> None:
+    def opener(url: str) -> BinaryIO:
+        started.set()
+        release.wait(60)
+        return io.BytesIO(PAYLOAD)
+
+    fetch(_manifest(), cache_root=Path(root), opener=opener, verify="full")
+
+
+@pytest.mark.logic
+def test_blob_path_exists_throughout_repair(tmp_path: Path) -> None:
+    """While a corrupt blob is re-downloaded, a concurrent reader's path always exists."""
+    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    blob = tmp_path / "blobs" / SHA
+    blob.write_bytes(b"bit rot")
+    ctx = mp.get_context("spawn")
+    started, release = ctx.Event(), ctx.Event()
+    proc = ctx.Process(target=_repair_fetch, args=(str(tmp_path), started, release))
+    proc.start()
+    try:
+        assert started.wait(120)
+        assert blob.exists() and blob.read_bytes() == b"bit rot"
+    finally:
+        release.set()
+        proc.join(60)
+    assert proc.exitcode == 0
+    assert blob.read_bytes() == PAYLOAD
+
+
+@pytest.mark.logic
+def test_failed_repair_leaves_corrupt_blob_untouched(tmp_path: Path) -> None:
+    """If every mirror fails, the corrupt blob stays and FetchError is raised."""
+    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    blob = tmp_path / "blobs" / SHA
+    blob.write_bytes(b"bit rot")
+    with pytest.raises(FetchError):
+        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+    assert blob.read_bytes() == b"bit rot"
+
+
+@pytest.mark.logic
+def test_corrupt_marker_is_replaced_once_dataset_verifies(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A corrupt marker is rewritten, so later fetches stop warning."""
+    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    marker = tmp_path / "datasets" / "demo@1" / ".complete"
+    marker.write_text("{not json")
+    fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+    assert json.loads(marker.read_text())["manifest_sha256"] == _manifest().digest()
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="senselab"):
+        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+    assert caplog.text == ""
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[]",
+        "null",
+        "{}",
+        '{"manifest_sha256": 1, "sizes": {}}',
+        '{"manifest_sha256": "x", "sizes": []}',
+        '{"manifest_sha256": "x", "sizes": {"a": "big"}}',
+        '{"manifest_sha256": "x", "sizes": {"a": true}}',
+        '{"manifest_sha256": "x", "sizes": {"a": -1}}',
+        "\xff",
+    ],
+)
+def test_malformed_marker_is_treated_as_absent(tmp_path: Path, text: str) -> None:
+    """Any malformed marker is logged and ignored, never raised."""
+    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    marker = tmp_path / "datasets" / "demo@1" / ".complete"
+    marker.write_bytes(text.encode("latin-1"))
+    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+    assert paths["a/voice.wav"].read_bytes() == PAYLOAD
+    assert json.loads(marker.read_text())["manifest_sha256"] == _manifest().digest()
+
+
+@pytest.mark.logic
+def test_no_hardlink_support_is_storage_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A filesystem without hard links gets a StorageError naming the fix."""
+
+    def refuse(src: object, dst: object) -> None:
+        raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+    monkeypatch.setattr(os, "link", refuse)
+    with pytest.raises(StorageError) as err:
+        fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    assert "hard links" in str(err.value)
+
+
 LIVE_URL = "https://raw.githubusercontent.com/sensein/senselab/5e2f8755de12c256f80437e7f32216b47afa91f8/LICENSE.md"
 LIVE_SHA = "75009e0aaa9374223af0c954d175a91d39407acf13bc8e2ae2c882f6a1904f8d"
 

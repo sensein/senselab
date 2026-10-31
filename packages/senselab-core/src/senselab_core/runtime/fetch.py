@@ -33,6 +33,7 @@ _CHUNK = 1 << 20
 COMPLETE_MARKER = ".complete"
 logger = logging.getLogger("senselab")
 _STORAGE_ERRNOS = (errno.ENOSPC, errno.EDQUOT)
+_NO_HARDLINK_ERRNOS = (errno.EPERM, errno.ENOTSUP, errno.EXDEV)
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -182,12 +183,27 @@ def _fsync_dir(path: Path) -> None:
         os.close(fd)
 
 
-def _commit(staged: Path, final: Path) -> None:
-    """Link `staged` to `final`, first writer wins, then drop `staged` and sync the directory."""
+def _commit(staged: Path, final: Path, *, replace: bool = False) -> None:
+    """Move verified `staged` into `final`, then sync the directory.
+
+    With `replace` False the first writer wins (`os.link`, an existing `final` is kept). With `replace`
+    True `final` is atomically replaced, so a reader sees the old or the new bytes, never a missing path.
+    """
     try:
-        os.link(staged, final)
-    except FileExistsError:
-        pass
+        if replace:
+            os.replace(staged, final)
+        else:
+            try:
+                os.link(staged, final)
+            except FileExistsError:
+                pass
+            except OSError as err:
+                if err.errno in _NO_HARDLINK_ERRNOS:
+                    raise StorageError(
+                        f"cannot hard-link into {final.parent} ({err.strerror}); "
+                        "use a cache root on a filesystem that supports hard links"
+                    ) from err
+                raise
     finally:
         staged.unlink(missing_ok=True)
     _fsync_dir(final.parent)
@@ -210,8 +226,6 @@ def _ensure_blob(
     present = blob.exists()
     if _blob_ok(blob, file.sha256, recorded, verify):
         return blob
-    if present:
-        blob.unlink(missing_ok=True)  # the only reason to discard a blob: it does not match its name
     tried: list[str] = []
     for url in (file.url, *file.mirrors):
         staged = root / "tmp" / uuid.uuid4().hex
@@ -221,7 +235,7 @@ def _ensure_blob(
             if actual != file.sha256:
                 tried.append(f"{url} (sha256 {actual[:12]}..., expected {file.sha256[:12]}...)")
                 continue
-            _commit(staged, blob)
+            _commit(staged, blob, replace=present)
             return blob
         except _SourceError as err:
             tried.append(f"{url} ({err})")
@@ -247,23 +261,42 @@ def _link(link: Path, blob: Path) -> None:
         staged.unlink(missing_ok=True)
 
 
-def _read_marker(dataset: Path, digest: str, subject: str) -> dict[str, int]:
-    """Return the blob sizes recorded by a matching completion marker; `{}` when there is none."""
+def _valid_sizes(value: object) -> dict[str, int] | None:
+    if not isinstance(value, dict):
+        return None
+    sizes: dict[str, int] = {}
+    for key, size in value.items():
+        if not isinstance(key, str) or isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            return None
+        sizes[key] = size
+    return sizes
+
+
+def _read_marker(dataset: Path, digest: str, subject: str) -> tuple[dict[str, int], str]:
+    """Return `(recorded blob sizes, state)`; state is `"valid"`, `"absent"` or `"corrupt"`.
+
+    A marker that is unreadable or not `{"manifest_sha256": str, "sizes": {str: int}}` is `"corrupt"` and
+    contributes no sizes.
+    """
+    path = dataset / COMPLETE_MARKER
     try:
-        marker = json.loads((dataset / COMPLETE_MARKER).read_text(encoding="utf-8"))
+        marker = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return {}
-    except ValueError:
-        logger.warning("ignoring unreadable completion marker in %s", dataset)
-        return {}
-    if marker.get("manifest_sha256") != digest:
+        return {}, "absent"
+    except (OSError, ValueError) as err:
+        logger.warning("ignoring unreadable completion marker %s: %s", path, err)
+        return {}, "corrupt"
+    sizes = _valid_sizes(marker.get("sizes")) if isinstance(marker, dict) else None
+    recorded_digest = marker.get("manifest_sha256") if isinstance(marker, dict) else None
+    if sizes is None or not isinstance(recorded_digest, str):
+        logger.warning("ignoring malformed completion marker %s", path)
+        return {}, "corrupt"
+    if recorded_digest != digest:
         raise ManifestConflictError(
-            f"{subject} was already fetched from a different manifest "
-            f"(hash {str(marker.get('manifest_sha256'))[:12]}...); "
+            f"{subject} was already fetched from a different manifest (hash {recorded_digest[:12]}...); "
             "bump the manifest version, or remove that datasets/ directory to refetch"
         )
-    sizes = marker.get("sizes", {})
-    return {str(k): int(v) for k, v in sizes.items()}
+    return sizes, "valid"
 
 
 def fetch(
@@ -294,7 +327,7 @@ def fetch(
         for part in ("blobs", "tmp", "datasets"):
             ensure_dirs(root / part)
         _remove_stale_downloads(root / "tmp")
-        recorded = _read_marker(dataset, digest, f"{manifest.name}@{manifest.version}")
+        recorded, marker_state = _read_marker(dataset, digest, f"{manifest.name}@{manifest.version}")
         ensure_dirs(dataset)
         result: dict[str, Path] = {}
         sizes: dict[str, int] = {}
@@ -303,13 +336,14 @@ def fetch(
             _link(dataset / file.path, blob)
             result[file.path] = dataset / file.path
             sizes[file.sha256] = blob.stat().st_size
-        staged = root / "tmp" / uuid.uuid4().hex
-        with open(staged, "xb") as out:
-            os.fchmod(out.fileno(), LOCK_FILE_MODE)
-            out.write(jcs_dumps({"manifest_sha256": digest, "sizes": sizes}))
-            out.flush()
-            os.fsync(out.fileno())
-        _commit(staged, dataset / COMPLETE_MARKER)
+        if marker_state != "valid":
+            staged = root / "tmp" / uuid.uuid4().hex
+            with open(staged, "xb") as out:
+                os.fchmod(out.fileno(), LOCK_FILE_MODE)
+                out.write(jcs_dumps({"manifest_sha256": digest, "sizes": sizes}))
+                out.flush()
+                os.fsync(out.fileno())
+            _commit(staged, dataset / COMPLETE_MARKER, replace=marker_state == "corrupt")
         return result
     except OSError as err:
         if err.errno in _STORAGE_ERRNOS:
