@@ -11,7 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
-import uuid
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 
@@ -24,6 +24,30 @@ BUDGET = REPO / "scripts" / "check_fixture_budget.py"
 GUARD = REPO / "src" / "tests" / "utils" / "moved_modules_test.py"
 DEFERRED = frozenset({15, 30})
 OWNER_ACTION = frozenset({39})
+
+
+def _load(path: Path, name: str) -> ModuleType:
+    """Import the module at ``path`` under ``name``."""
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _porcelain() -> str:
+    return subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"], cwd=REPO, capture_output=True, text=True, check=True
+    ).stdout
+
+
+@pytest.fixture
+def worktree_untouched() -> Iterator[None]:
+    """Fail the test if it changes anything ``git status`` can see."""
+    before = _porcelain()
+    yield
+    assert _porcelain() == before, "the test wrote under the worktree"
 
 
 def _pytest(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -78,26 +102,17 @@ def test_moved_module_guard_passes_a_clean_tree(tmp_path: Path) -> None:
 
 @pytest.mark.contract
 @pytest.mark.parametrize("bypass", sorted(BYPASSES))
-def test_a26_moved_module_guard_catches_the_bypass(tmp_path: Path, bypass: str) -> None:
+def test_a26_moved_module_guard_catches_the_bypass(tmp_path: Path, bypass: str, worktree_untouched: None) -> None:
     """A relative import, a concatenated ``importlib`` argument and a shim at the old path each fail the guard."""
     guard = _guard_tree(tmp_path, BYPASSES[bypass])
     result = _pytest(["-q", "--rootdir", str(tmp_path), "-k", GUARD_SELECTION, str(guard)], tmp_path)
     assert result.returncode == 1, f"{bypass} passed the guard:\n{result.stdout}{result.stderr}"
 
 
-def _load_budget() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("a27_check_fixture_budget", BUDGET)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 @pytest.mark.logic
-def test_a27_fixture_budget_refuses_a_symlink_and_a_base64_code_file(tmp_path: Path) -> None:
+def test_a27_fixture_budget_refuses_a_symlink_and_a_base64_code_file(tmp_path: Path, worktree_untouched: None) -> None:
     """A tracked symlink is a violation, and a 5 MB base64 ``.py`` under a test tree exceeds the code-file cap."""
-    budget = _load_budget()
+    budget = _load(BUDGET, "a27_check_fixture_budget")
     tests = tmp_path / "src" / "tests"
     tests.mkdir(parents=True)
     target = tests / "real.txt"
@@ -117,33 +132,32 @@ def test_a27_fixture_budget_refuses_a_symlink_and_a_base64_code_file(tmp_path: P
 
 
 @pytest.mark.contract
-def test_a28_untiered_test_under_packages_fails_collection() -> None:
+def test_a28_untiered_test_under_packages_fails_collection(pytester: pytest.Pytester, worktree_untouched: None) -> None:
     """The collection hook of ``packages/`` refuses a test with no tier marker, which CI's ``-m`` would skip."""
-    probe = PACKAGES / f"_a28_probe_{uuid.uuid4().hex}"
-    probe.mkdir()
-    try:
-        (probe / "untiered_test.py").write_text("def test_never_runs_in_ci():\n    pass\n")
-        result = _pytest(["-q", "--collect-only", str(probe / "untiered_test.py")], REPO)
-    finally:
-        shutil.rmtree(probe)
-    assert result.returncode == 4, result.stdout + result.stderr
-    assert "test_never_runs_in_ci" in result.stderr
+    hook = PACKAGES / "conftest.py"
+    pytester.makeini("[pytest]\nmarkers =\n    logic\n    contract\n    limits\n    usecase\n    env\n")
+    pytester.mkdir("packages")
+    (pytester.path / "packages" / "conftest.py").write_text(hook.read_text() if hook.is_file() else "")
+    (pytester.path / "packages" / "untiered_test.py").write_text("def test_never_runs_in_ci():\n    pass\n")
+    result = pytester.runpytest("packages/untiered_test.py")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR, result.stdout.str()
+    assert "test_never_runs_in_ci" in result.stderr.str()
 
 
 @pytest.mark.contract
-def test_a33_undeclared_external_import_in_a_package_fails() -> None:
-    """A package module importing a distribution it does not declare fails the declared-dependency contract."""
-    module = PACKAGES / "senselab-core" / "src" / "senselab_core" / f"_a33_probe_{uuid.uuid4().hex}.py"
-    module.write_text("import librosa\n")
-    try:
-        result = _pytest(
-            ["-q", str(PACKAGES / "senselab-core/tests/lint/dependencies_test.py"), "-k", "only_declared_dependencies"],
-            REPO,
-        )
-    finally:
-        module.unlink()
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "librosa" in result.stdout
+def test_a33_undeclared_external_import_in_a_package_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, worktree_untouched: None
+) -> None:
+    """A package module importing a distribution it does not declare is reported by the dependency contract."""
+    guard = _load(PACKAGES / "senselab-core" / "tests" / "lint" / "dependencies_test.py", "a33_dependencies_test")
+    pkg = tmp_path / "a33pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "mod.py").write_text("import os\nimport librosa\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    graph = guard.grimp.build_graph("a33pkg", include_external_packages=True)
+    bad = guard.undeclared_by_module(guard.external_imports(graph, {"a33pkg"}), set(), {})
+    assert bad == {"a33pkg.mod": {"librosa"}}
 
 
 def _report_rows() -> set[int]:
