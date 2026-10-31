@@ -73,6 +73,7 @@ three audience paths that share the same pages:
   `senselab data fetch <manifest>`.
   - It downloads into a content-addressed cache outside the repo and verifies every hash.
   - It refuses a mismatch and accepts a mirror only on a matching hash.
+  - A cache hit checks existence and size; a full re-hash is opt-in (`--verify`), so a cached fetch of a large dataset does not re-read it.
   - A dataset adapter (P-11) reads the result.
 - **Identity:** a pulled file's identity is its content hash, so results computed on it key
   correctly (ADR-002). CI caches by manifest hash.

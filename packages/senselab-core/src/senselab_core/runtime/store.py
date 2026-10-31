@@ -38,7 +38,7 @@ from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
 from senselab_worker.hashing import sha256_bytes
 
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ReusePolicy, acceptable
-from senselab_core.runtime.locks import LOCK_FILE_MODE, _ensure_dir
+from senselab_core.runtime.locks import LOCK_FILE_MODE, ensure_dirs
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
 
 STORE_DIR = "store@1"
@@ -217,7 +217,7 @@ def _commit(
     staging = staging_root / uuid.uuid4().hex
     staging.mkdir()
     try:
-        _ensure_dir(staging)
+        ensure_dirs(staging)
         for sha, data in arrays.items():
             _write_synced(staging / f"{sha}.npy", data)
         _write_synced(
@@ -286,11 +286,11 @@ class ResultStore:
 
     def _ensure(self, *parts: str) -> Path:
         if not self.root.exists():
-            _ensure_dir(self.root)
+            ensure_dirs(self.root)
         path = self.root
         for part in parts:
             path = path / part
-            _ensure_dir(path)
+            ensure_dirs(path)
         return path
 
     def _quarantine(self, entry: Path) -> None:

@@ -5,7 +5,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
+from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, StorageError, default_cache_root, fetch
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -21,6 +21,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="cache directory (default: $SENSELAB_DATA_CACHE or ~/.cache/senselab/data)",
     )
+    fetch_cmd.add_argument(
+        "--verify", action="store_true", help="re-hash every cached file instead of checking its size"
+    )
     return parser
 
 
@@ -29,9 +32,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         manifest = DataManifest.load(args.manifest)
-        paths = fetch(manifest, cache_root=args.cache or default_cache_root())
-    except (ManifestError, FetchError, OSError) as err:
+        paths = fetch(manifest, cache_root=args.cache or default_cache_root(), verify="full" if args.verify else "size")
+    except (ManifestError, FetchError, StorageError) as err:
         print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
+        return 1
+    except OSError as err:
+        cause = " ".join(str(err).split())
+        print(
+            f"senselab: error: {cause}; check the paths exist and the cache directory is writable (--cache DIR)",
+            file=sys.stderr,
+        )
         return 1
     for name, path in paths.items():
         print(f"{name}\t{path}")

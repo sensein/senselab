@@ -127,6 +127,26 @@ def _ensure_dir(path: Path, *, manage_mode: bool = True) -> None:
         pass
 
 
+def ensure_dirs(path: Path) -> None:
+    """Create ``path`` and any missing parents, each directory this call creates (and ``path``) mode ``LOCK_DIR_MODE``.
+
+    Unlike ``mkdir(parents=True)`` followed by one chmod, no intermediate directory is left with the
+    caller's umask. Directories that already exist above ``path`` are not touched. A failed chmod is
+    ignored, as in :func:`_ensure_dir`.
+    """
+    missing: list[Path] = []
+    current = Path(path)
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for directory in (*reversed(missing), Path(path)):
+        directory.mkdir(exist_ok=True)
+        try:
+            os.chmod(directory, LOCK_DIR_MODE)
+        except OSError:
+            pass
+
+
 def _touch_shared(path: Path) -> None:
     """Create ``path`` if it does not exist, then force it group-writable.
 
