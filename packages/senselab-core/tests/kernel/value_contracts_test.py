@@ -6,8 +6,17 @@ from collections.abc import Callable
 
 import numpy
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from pydantic import ConfigDict, TypeAdapter, ValidationError
-from senselab_core.kernel._base import FrozenMapping, as_label_array, as_ns_array, as_numeric_array, frozen_array
+from senselab_core.kernel._base import (
+    FrozenMapping,
+    as_label_array,
+    as_ns_array,
+    as_numeric_array,
+    frozen_array,
+    value_digest,
+)
 from senselab_core.kernel.results import Embedding, Intervals
 from senselab_core.kernel.signals import Audio, ChannelInfo, RegularGroup, SignalArray
 from senselab_core.kernel.time import Span, TimeAnchor
@@ -186,3 +195,22 @@ def test_frozenmapping_has_no_mutable_reach() -> None:
     with pytest.raises(AttributeError):
         m._items = {"k": 1}  # type: ignore[misc, assignment]
     assert m["k"] == 0 and pickle.loads(pickle.dumps(m)) == m and copy.deepcopy(m) == m
+
+
+@pytest.mark.contract
+@settings(max_examples=200, deadline=None)
+@given(n=st.integers())
+def test_value_digest_tells_ints_from_strings(n: int) -> None:
+    """An int, its decimal text and a mapping spelling the out-of-range marker digest differently."""
+    forms = [n, str(n), {"$int": str(n)}, {"$$int": str(n)}]
+    digests = [value_digest("t", {"x": f}) for f in forms]
+    assert len(set(digests)) == len(forms)
+
+
+@pytest.mark.contract
+def test_int_marker_cannot_be_forged_by_a_mapping() -> None:
+    """A held mapping with a `$`-key never encodes as the marker an out-of-range int encodes as."""
+    big = 2**60
+    assert value_digest("t", {"x": {"$int": str(big)}}) != value_digest("t", {"x": big})
+    assert value_digest("t", {"$x": 1}) != value_digest("t", {"x": 1})
+    assert value_digest("t", {"$x": 1}) != value_digest("t", {"$$x": 1})

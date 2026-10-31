@@ -24,6 +24,21 @@ Architect review §5 (R-42) found:
   `dict` with `str` keys. Arrays are exactly `numpy.ndarray` with dtype kind `b i u f U`. Everything
   else raises: subclasses, `Enum` members, `datetime64`, `timedelta64`, `void`, complex, masked
   arrays. One scalar encoder (`canonical_scalar`) serves every caller.
+- **A kernel value's canonical form (`value@1`)** is `{"type": <name>, "fields": <fields>}`, and
+  `<fields>` is the value's dump mapped to JSON:
+  - an array becomes the sha256 of its canonical `.npy`;
+  - a mapping becomes an object, and a key that starts with `$` gains one more `$`;
+  - a set becomes an array sorted by JCS bytes;
+  - an enum becomes its value, a path its text, and a type its qualified name;
+  - an integer outside the I-JSON range (±(2**53 − 1)) becomes `{"$int": "<decimal>"}`. No string
+    takes this form, and after key escaping no held mapping does either.
+
+  The form keeps no other type distinctions. A list and a tuple, a set and a sorted list, a path
+  and its text, an enum and its value, and `1` and `1.0` each encode the same way. Field types are
+  fixed by the value's type, so this matters only for a field typed as a union or `Any`.
+
+  Durable identities never name a Python class: a recording's `content:` identity hashes a
+  declared type token (`recording`, or `audio@2` for in-memory audio), not a module path.
 - **Every digest is `tagged_digest(tag, value)` with a registered tag:**
   `sha256(tag || 0x00 || JCS(value))`. The tags are `logical-key@2`, `output@2`, `context@2`,
   `content-root@2`, `audio@2`, `weights@2`, `value@1` and `data-manifest@2`. No tag is a prefix of

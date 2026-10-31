@@ -17,8 +17,11 @@ Contracts per type:
   digests compare unequal; neither raises.
 - `copy_revalidates`: each registered invalid update raises `ValidationError` through `model_copy`.
 - `construct_refused`: `model_construct` raises `TypeError`.
+- `copy_refuses_unknown_fields`: `model_copy(update=)` naming a field the type lacks raises `ValueError`.
 - `identity_derived` (types with an `identity` field not in `ATTESTED_IDENTITIES`): a forged
   identity is refused by validation.
+- `identity_form` (types in `ATTESTED_IDENTITIES`): an identity in the form of another source (a
+  sha256 for a hub model, a commit for a url or local model) or a ref name is refused.
 """
 
 import copy
@@ -117,8 +120,11 @@ def value_cases() -> list[tuple[str, Case]]:
             "eq_hash_consistent": functools.partial(_eq_hash_consistent, factory),
             "copy_revalidates": functools.partial(_copy_revalidates, factory, invalid),
             "construct_refused": functools.partial(_construct_refused, cls),
+            "copy_refuses_unknown_fields": functools.partial(_copy_refuses_unknown_fields, factory),
         }
-        if "identity" in cls.model_fields and cls not in ATTESTED_IDENTITIES:
+        if cls in ATTESTED_IDENTITIES:
+            contracts["identity_form"] = functools.partial(_identity_form, factory)
+        elif "identity" in cls.model_fields:
             contracts["identity_derived"] = functools.partial(_identity_derived, factory)
         cases.extend((f"{cls.__qualname__}::{name}", case) for name, case in contracts.items())
     return cases
@@ -271,6 +277,34 @@ def _construct_refused(cls: type[Frozen]) -> None:
     except TypeError:
         return
     raise AssertionError(f"{cls.__qualname__}.model_construct() built a value without validation")
+
+
+def _copy_refuses_unknown_fields(factory: Factory) -> None:
+    for v in _samples(factory):
+        try:
+            v.model_copy(update={"no_such_field": 1})
+        except ValueError:
+            continue
+        raise AssertionError(f"{type(v).__qualname__}.model_copy accepted an unknown field")
+
+
+def _source_of(v: Frozen) -> str:
+    source = getattr(v, "source", None)
+    if source is None:
+        source = getattr(getattr(v, "ref"), "source")
+    assert isinstance(source, str)
+    return source
+
+
+def _identity_form(factory: Factory) -> None:
+    for v in _samples(factory):
+        other_form = "a" * 64 if _source_of(v) == "hf" else "a" * 40
+        for wrong in (other_form, "main", "A" * 64):
+            try:
+                type(v).model_validate({**v.model_dump(), "identity": wrong})
+            except ValidationError:
+                continue
+            raise AssertionError(f"{type(v).__qualname__} accepted the identity {wrong!r} for a {_source_of(v)} model")
 
 
 def _identity_derived(factory: Factory) -> None:

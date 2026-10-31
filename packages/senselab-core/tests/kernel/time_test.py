@@ -121,7 +121,7 @@ def test_a37_drift_cannot_reverse_or_stop_time(drift: float) -> None:
     t=st.integers(-(2**61), 2**61),
     step=st.integers(1, 10**12),
 )
-def test_timemap_is_strictly_increasing(offset: int, drift: float, t: int, step: int) -> None:
+def test_timemap_never_reverses_time(offset: int, drift: float, t: int, step: int) -> None:
     """A map with drift inside its bounds never reverses time.
 
     The exact map is strictly increasing; rounded to integer nanoseconds it is non-decreasing, and

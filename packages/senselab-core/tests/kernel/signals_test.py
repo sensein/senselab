@@ -1,5 +1,8 @@
 """Recordings, channel groups and audio."""
 
+import builtins
+import copy
+import os
 import pickle
 from collections.abc import Iterator
 from pathlib import Path
@@ -8,6 +11,7 @@ import numpy
 import pytest
 import soundfile
 from pydantic import ValidationError
+from senselab_core.kernel._base import value_digest
 from senselab_core.kernel.signals import (
     Audio,
     ChannelInfo,
@@ -292,13 +296,13 @@ def test_audio_pickles_and_deep_copies(tmp_path: Path) -> None:
         Audio.from_array(numpy.arange(6.0, dtype=numpy.float32), 8_000),
         Audio.from_path(write_wav(tmp_path)),
     ):
-        for copy in (pickle.loads(pickle.dumps(audio)), audio.model_copy(deep=True)):
-            assert copy.identity == audio.identity and list(copy.groups) == list(audio.groups)
-            g, h = copy.groups["audio"], audio.groups["audio"]
+        for copied in (pickle.loads(pickle.dumps(audio)), audio.model_copy(deep=True)):
+            assert copied.identity == audio.identity and list(copied.groups) == list(audio.groups)
+            g, h = copied.groups["audio"], audio.groups["audio"]
             assert isinstance(g, RegularGroup) and isinstance(h, RegularGroup)
             assert g.frames == h.frames and numpy.array_equal(g.read(), h.read())
             with pytest.raises(TypeError):
-                copy.groups["b"] = g  # type: ignore[index]
+                copied.groups["b"] = g  # type: ignore[index]
 
 
 @pytest.mark.logic
@@ -312,7 +316,10 @@ def test_recording_round_trips_through_model_validate() -> None:
 
 
 def _rewrite(path: Path, frames: int, value: float) -> None:
+    """Rewrite `path` in place and move its mtime one second on, so the change shows on any mtime granularity."""
+    before = path.stat().st_mtime_ns
     soundfile.write(path, numpy.full((frames, 2), value, dtype=numpy.float32), RATE, subtype="FLOAT")
+    os.utime(path, ns=(before + 10**9, before + 10**9))
 
 
 @pytest.mark.logic
@@ -428,3 +435,57 @@ def test_audio_holds_float32_only() -> None:
     )
     with pytest.raises(ValidationError, match="float32"):
         Audio(groups={"audio": g}, anchor=anchor)
+
+
+@pytest.fixture
+def open_spy(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
+    """Record the path of every `open` and `SoundFile` construction."""
+    calls: list[str] = []
+    original_open = builtins.open
+    original_sound = soundfile.SoundFile.__init__
+
+    def spy_open(file: object, *args: object, **kwargs: object) -> object:
+        calls.append(f"open:{file}")
+        return original_open(file, *args, **kwargs)  # type: ignore[call-overload]
+
+    def spy_sound(self: soundfile.SoundFile, file: object, *args: object, **kwargs: object) -> None:
+        calls.append("sound")
+        original_sound(self, file, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "open", spy_open)
+    monkeypatch.setattr(soundfile.SoundFile, "__init__", spy_sound)
+    yield calls
+
+
+@pytest.mark.logic
+def test_copies_of_a_source_recording_do_not_read_the_file(tmp_path: Path, open_spy: list[str]) -> None:
+    """Opening hashes and stamps the file once; copies check it by stat and never read it."""
+    p = write_wav(tmp_path)
+    open_spy.clear()
+    a = Audio.from_path(p)
+    assert open_spy.count(f"open:{p}") == 2 and len(open_spy) == 3, open_spy
+    open_spy.clear()
+    r = Recording.model_validate(a.model_dump())
+    copies = [copy.copy(a), copy.deepcopy(a), pickle.loads(pickle.dumps(a)), a.model_copy(), copy.deepcopy(r)]
+    assert open_spy == []
+    assert all(c.identity == a.identity for c in copies)
+
+
+@pytest.mark.logic
+def test_recording_identity_is_independent_of_the_class_path() -> None:
+    """A recording's identity names a declared type token, not the Python class that holds it."""
+    groups = {"ecg": _group(1, 250.0, 10)}
+    anchor = TimeAnchor(clock_id="dev", absolute_start_ns=None)
+    moved = type("Moved", (Recording,), {"__module__": "elsewhere.module"})
+    base = Recording(groups=groups, anchor=anchor)
+    assert moved(groups=groups, anchor=anchor).identity == base.identity
+    expected = value_digest("recording", {"groups": {"ecg": base.groups["ecg"].model_dump()}})
+    assert base.identity == "content:" + expected
+
+
+@pytest.mark.logic
+def test_recording_identity_is_required_or_derived() -> None:
+    """The identity field has no placeholder default: validation derives it or checks the supplied one."""
+    assert Recording.model_fields["identity"].is_required()
+    r = Recording(groups={"ecg": _group(1, 250.0, 10)}, anchor=TimeAnchor(clock_id="dev", absolute_start_ns=None))
+    assert r.identity.startswith("content:") and Recording.model_validate(r.model_dump()) == r

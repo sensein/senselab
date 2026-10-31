@@ -85,7 +85,9 @@ def frozen_array(a: object) -> numpy.ndarray:
 
 
 def _canonical_value(v: object) -> object:
-    """Return a dumped field value as the JSON value its digest covers; arrays become their `.npy` sha256."""
+    """Return a dumped field value as the JSON value its digest covers (the `value@1` rules in `canonical_digest`)."""
+    if isinstance(v, numpy.integer):
+        v = int(v)
     if isinstance(v, numpy.ndarray):
         return sha256_bytes(canonical_npy_bytes(v))
     if isinstance(v, Frozen):
@@ -104,12 +106,17 @@ def _canonical_value(v: object) -> object:
     if isinstance(v, type):
         return f"{v.__module__}.{v.__qualname__}"
     if type(v) is int and abs(v) > _MAX_SAFE_INT:
-        return str(v)
+        return {INT_MARKER: str(v)}
     return v
 
 
+INT_MARKER = "$int"
+"""The one key of the object that stands for an integer outside the I-JSON range in a `value@1` digest."""
+
+
 def _key_text(k: object) -> object:
-    return k.value if isinstance(k, Enum) else k
+    text = k.value if isinstance(k, Enum) else k
+    return "$" + text if isinstance(text, str) and text.startswith("$") else text
 
 
 def value_digest(type_name: str, fields: Mapping[str, object]) -> str:
@@ -138,8 +145,10 @@ class Frozen(BaseModel):
 
         Each array in the dump is replaced by the sha256 of its canonical `.npy` bytes, mappings by
         objects, sets by sorted arrays, enums by their values, paths by their text, types by their
-        qualified names, and integers outside the I-JSON range (int64 nanoseconds, stat fields) by
-        their decimal text.
+        qualified names, and an integer outside the I-JSON range (int64 nanoseconds, stat fields) by
+        `{"$int": "<decimal>"}`. A mapping key that starts with `$` gains one more `$`, so no mapping
+        held in a value encodes as that marker. A file-backed value's digest covers its path and
+        stamp, not its bytes: two values over the same bytes at two paths are unequal.
         """
         if self._canonical is None:
             t = type(self)
@@ -172,7 +181,14 @@ class Frozen(BaseModel):
         return copied
 
     def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
-        """Return `model_validate` of the dump merged with `update`, so every validator runs; `deep` has no effect."""
+        """Return `model_validate` of the dump merged with `update`, so every validator runs; `deep` has no effect.
+
+        Raises:
+            ValueError: if `update` names a field the type does not have.
+        """
+        unknown = sorted(set(update or {}) - set(type(self).model_fields), key=str)
+        if unknown:
+            raise ValueError(f"{type(self).__name__} has no fields {unknown}; known: {sorted(type(self).model_fields)}")
         return type(self).model_validate({**self.model_dump(), **(update or {})})
 
     @classmethod  # type: ignore[no-redef]

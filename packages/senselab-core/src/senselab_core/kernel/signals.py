@@ -6,16 +6,18 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from fractions import Fraction
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Self
 
 import numpy
 import soundfile
 from pydantic import (
     AfterValidator,
     BeforeValidator,
+    ConfigDict,
     Field,
+    ModelWrapValidatorHandler,
     PlainSerializer,
-    ValidationInfo,
+    TypeAdapter,
     model_validator,
 )
 from senselab_worker.canonical import canonical_npy_bytes, tagged_digest
@@ -50,7 +52,14 @@ Integer PCM maps to float32 full scale as the decoder maps it (`x / 2**(bits - 1
 """
 
 _NS_PER_S = 10**9
-_PROBED = "senselab_core.probed_source"
+SourceStampKey = str
+"""A source stamp's `canonical_digest`, the key of the per-process stamp and root memos."""
+
+_VERIFIED: set[tuple[str, SourceStampKey]] = set()
+"""(path, stamp) pairs this process opened and stamped; a copy carrying one is checked by `os.stat` alone."""
+
+_ROOTS: dict[tuple[str, SourceStampKey], str] = {}
+"""Content identity roots this process hashed, by (path, stamp); one entry per distinct file state opened."""
 
 SignalArray = Annotated[numpy.ndarray, BeforeValidator(lambda v: as_numeric_array(v, 2))]
 """A frozen integer or float array of shape `(channels, samples)`."""
@@ -78,9 +87,25 @@ class SourceStamp(Frozen):
 
     @classmethod
     def of(cls, path: str | os.PathLike[str]) -> "SourceStamp":
-        """Return the current stamp of the file at `path`."""
+        """Open the file at `path` and return its current stamp."""
         with _opened(path) as (_, stamp):
             return stamp
+
+    def checked(self, path: str | os.PathLike[str]) -> None:
+        """Check that the file at `path` still has this stamp.
+
+        A stamp this process took from the file is checked by `os.stat` alone, without reading the
+        file; any other stamp is checked by opening the file and stamping it again. An in-place
+        rewrite that keeps size, mtime, inode and device is not detected.
+
+        Raises:
+            StaleSource: if the file differs from the stamp.
+        """
+        if (os.fspath(path), self.canonical_digest()) in _VERIFIED:
+            if not self.same_file(path):
+                raise StaleSource(f"{path} changed since it was opened: recorded {self!r}")
+            return
+        _require_stamp(self, SourceStamp.of(path), path)
 
     def same_file(self, path: str | os.PathLike[str]) -> bool:
         """Return whether the stat fields of the file at `path` still match, without reading its header."""
@@ -111,6 +136,7 @@ def _opened(path: str | os.PathLike[str]) -> Iterator[tuple[soundfile.SoundFile,
                 sampling_rate=f.samplerate,
                 header=value_digest("soundfile.info", header),
             )
+            _VERIFIED.add((os.fspath(path), stamp.canonical_digest()))
             yield f, stamp
 
 
@@ -147,7 +173,8 @@ class RegularGroup(Frozen):
 
     Exactly one of `data` and `source` is given. A source group carries `source_stamp`, the stamp of
     the file when it was opened: recorded at validation when not supplied, and checked against the
-    file when supplied (raising `StaleSource` if it differs). The header must match the declared
+    file when supplied (`SourceStamp.checked`, raising `StaleSource` if it differs), so a copy made
+    in this process does not read the file. The header must match the declared
     channel count and rate; samples are decoded only by `read`, which checks the stamp again.
     """
 
@@ -159,17 +186,15 @@ class RegularGroup(Frozen):
 
     @model_validator(mode="before")
     @classmethod
-    def _stamp_source(cls, data: object, validation: ValidationInfo) -> object:
+    def _stamp_source(cls, data: object) -> object:
         if not isinstance(data, Mapping) or data.get("source") is None:
             return data
-        source = data["source"]
-        probed = (validation.context or {}).get(_PROBED)
-        current = probed[1] if probed is not None and probed[0] == os.fspath(source) else SourceStamp.of(source)
         supplied = data.get("source_stamp")
         if supplied is None:
-            return {**data, "source_stamp": current}
-        _require_stamp(SourceStamp.model_validate(supplied), current, source)
-        return data
+            return {**data, "source_stamp": SourceStamp.of(data["source"])}
+        stamp = supplied if isinstance(supplied, SourceStamp) else SourceStamp.model_validate(supplied)
+        stamp.checked(data["source"])
+        return {**data, "source_stamp": stamp}
 
     @model_validator(mode="after")
     def _check_layout(self) -> "RegularGroup":
@@ -262,23 +287,42 @@ Groups = Annotated[
 class Recording(Frozen):
     """Named channel groups sharing one clock, anchored by `anchor`; `groups` is read-only.
 
-    `identity` is derived from the content and recomputed by validation; a supplied identity that
-    differs is refused. A recording of one source group is identified by `content:` and the content
-    identity root of the file. Otherwise it is `content:` and `value_digest` of the recording's type
-    over its groups, each source group standing as its channels, rate and content identity root.
+    `identity` is derived from the content by validation: omitted, it is filled in; supplied, it must
+    equal the derived one. A recording of one source group is identified by `content:` and the
+    content identity root of the file. Otherwise it is `content:` and `value_digest(IDENTITY_TYPE,
+    {"groups": ...})`, each source group standing as its channels, rate and content identity root.
+    `IDENTITY_TYPE` is a declared token, so moving, renaming or subclassing the class keeps identities.
+    A file's root is hashed once per process and file state (path and stamp) and reused by copies.
     """
+
+    IDENTITY_TYPE: ClassVar[str] = "recording"
 
     groups: Groups
     anchor: TimeAnchor
-    identity: ContentIdentity = Field(default="")
+    identity: ContentIdentity
 
-    @model_validator(mode="after")
-    def _derive_identity(self) -> "Recording":
-        derived = self.identity_of(self.groups)
-        if "identity" in self.model_fields_set and self.identity != derived:
-            raise ValueError(f"identity {self.identity!r} is not the content identity {derived!r}")
-        object.__setattr__(self, "identity", derived)
-        return self
+    if TYPE_CHECKING:
+
+        def __init__(
+            self,
+            *,
+            groups: Mapping[str, "RegularGroup | IrregularGroup"],
+            anchor: TimeAnchor,
+            identity: str | None = None,
+        ) -> None:
+            """Validate `groups` and `anchor`, deriving `identity` or checking the one supplied."""
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _derive_identity(cls, data: object, handler: ModelWrapValidatorHandler[Self]) -> Self:
+        if isinstance(data, Mapping) and "groups" in data:
+            groups = _GROUPS.validate_python(data["groups"])
+            derived = cls.identity_of(groups)
+            supplied = data.get("identity")
+            if supplied is not None and supplied != derived:
+                raise ValueError(f"identity {supplied!r} is not the content identity {derived!r}")
+            data = {**data, "groups": groups, "identity": derived}
+        return handler(data)
 
     @classmethod
     def identity_of(cls, groups: Mapping[str, "RegularGroup | IrregularGroup"]) -> str:
@@ -292,16 +336,23 @@ class Recording(Frozen):
         if len(values) == 1 and isinstance(values[0], RegularGroup) and values[0].source is not None:
             return "content:" + _source_root(values[0])
         fields = {name: _group_content(g) for name, g in groups.items()}
-        return "content:" + value_digest(f"{cls.__module__}.{cls.__qualname__}", {"groups": fields})
+        return "content:" + value_digest(cls.IDENTITY_TYPE, {"groups": fields})
 
 
 def _source_root(group: RegularGroup) -> str:
-    """Return the content identity root of a source group's file, refusing a file that changed since it was opened."""
+    """Return the content identity root of a source group's file, hashed once per path and stamp.
+
+    Raises:
+        StaleSource: if the file changed while it was hashed.
+    """
     assert group.source is not None and group.source_stamp is not None
-    root = content_identity(group.source)["root"]
-    if not group.source_stamp.same_file(group.source):
-        raise StaleSource(f"{group.source} changed since it was opened")
-    return root
+    key = (os.fspath(group.source), group.source_stamp.canonical_digest())
+    if key not in _ROOTS:
+        root = content_identity(group.source)["root"]
+        if not group.source_stamp.same_file(group.source):
+            raise StaleSource(f"{group.source} changed since it was opened")
+        _ROOTS[key] = root
+    return _ROOTS[key]
 
 
 def _group_content(group: RegularGroup | IrregularGroup) -> object:
@@ -324,6 +375,11 @@ def _audio_group(groups: Mapping[str, RegularGroup | IrregularGroup]) -> Regular
     return group
 
 
+_GROUPS: TypeAdapter[Mapping[str, RegularGroup | IrregularGroup]] = TypeAdapter(
+    Groups, config=ConfigDict(arbitrary_types_allowed=True)
+)
+
+
 class Audio(Recording):
     """A recording of one regular group named `audio` whose channels are all of type `audio`, in one unit.
 
@@ -331,6 +387,17 @@ class Audio(Recording):
     tagged_digest("audio@2", {"npy": sha256 of the canonical .npy of the (channels, samples) data,
     "sampling_rate": rate})`; a file-backed one's is `content:` and the root of the file's content identity.
     """
+
+    if TYPE_CHECKING:
+
+        def __init__(
+            self,
+            *,
+            groups: Mapping[str, "RegularGroup | IrregularGroup"],
+            anchor: TimeAnchor,
+            identity: str | None = None,
+        ) -> None:
+            """Validate `groups` and `anchor`, deriving `identity` or checking the one supplied."""
 
     @classmethod
     def identity_of(cls, groups: Mapping[str, "RegularGroup | IrregularGroup"]) -> str:
@@ -369,8 +436,7 @@ class Audio(Recording):
                 "sampling_rate": stamp.sampling_rate,
                 "source": Path(path),
                 "source_stamp": stamp,
-            },
-            context={_PROBED: (os.fspath(path), stamp)},
+            }
         )
         return cls._of(group)
 
@@ -398,6 +464,6 @@ class Audio(Recording):
         if x.dtype.name not in SIGNAL_DTYPES:
             raise ValueError(f"audio samples must be one of {sorted(SIGNAL_DTYPES)}, got {x.dtype}")
         scale = SIGNAL_DTYPES[x.dtype.name]
-        held = (x.astype(numpy.float64) / scale if scale is not None else x).astype(AUDIO_DTYPE)
+        held = x.astype(AUDIO_DTYPE) if scale is None else x.astype(AUDIO_DTYPE) / AUDIO_DTYPE.type(scale)
         group = RegularGroup(channels=cls._channels(x.shape[0]), sampling_rate=sampling_rate, data=held)
         return cls._of(group)
