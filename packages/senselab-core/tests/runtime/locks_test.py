@@ -168,9 +168,9 @@ def test_a_fresh_heartbeat_is_not_taken_over(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_a_live_holder_with_a_stale_heartbeat_is_not_displaced(tmp_path: Path) -> None:
-    """A ``filelock.Timeout`` means a live process holds the lock -- never break it.
+    """A wait that times out against a held flock never breaks the lock.
 
-    Reaching ``except Timeout:`` proves the OS-level flock was held
+    Timing out proves the OS-level flock was held
     continuously for the entire wait, which a crashed process cannot do (the
     kernel drops its flock the instant it exits). This forces exactly that
     branch against a holder whose heartbeat has gone stale independently of
@@ -516,19 +516,18 @@ NFS_ENV = "SENSELAB_WORK_POOL_NFS_DIR"
 def test_a_waiter_that_locked_the_released_file_does_not_share_the_lock(
     where: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A waiter that opened the lock file before the holder released it never ends up holding a stale inode.
+    """A waiter that opened a lock file which then left its name never ends up holding that stale inode.
 
-    ``filelock`` unlinks the lock file before it unlocks, and only rejects a lock taken on a file with
-    ``st_nlink == 0``. On NFS the releasing client silly-renames a file it still has open (to ``.nfsXXXX``), so
-    the old inode keeps ``st_nlink == 1``: a waiter that opened it beforehand locks it, and the next caller creates
-    a new file at the path and locks that too. ``local`` simulates the silly-rename (the unlink renames the file);
-    ``nfs`` runs on the directory named by ``SENSELAB_WORK_POOL_NFS_DIR``, where the client does it itself.
+    On NFS a file unlinked while open is silly-renamed (`.nfsXXXX`) and keeps a link, so a waiter can lock an
+    inode no longer at the name while the next caller locks the new file there. `local` moves the lock file
+    away under the waiter between its open and its `flock`; `nfs` runs on the directory named by
+    `SENSELAB_WORK_POOL_NFS_DIR`.
     """
     import fcntl
     import threading
     import uuid
 
-    import filelock._unix as unix
+    from senselab_core.runtime import locks as locks_module
 
     if where == "nfs":
         base = os.environ.get(NFS_ENV, "")
@@ -538,25 +537,22 @@ def test_a_waiter_that_locked_the_released_file_does_not_share_the_lock(
         root.mkdir(parents=True)
     else:
         root = tmp_path
-
-        class SillyRenamePath(type(Path())):  # type: ignore[misc]
-            def unlink(self, missing_ok: bool = False) -> None:
-                os.rename(self, self.with_name(f".nfs{uuid.uuid4().hex[:12]}"))
-
-        monkeypatch.setattr(unix, "Path", SillyRenamePath)
     resource = root / "resource"
     opened, released, holding, done = (threading.Event() for _ in range(4))
     real_flock = fcntl.flock
     waiter: list[threading.Thread] = []
 
     def flock(fd: int, operation: int) -> None:
-        # The waiter's first poll: it has the old file open; let the holder release before it locks.
+        # The waiter's first poll: it has the old file open; move that file off the name and let the holder
+        # release before the waiter locks it.
         if waiter and threading.current_thread() is waiter[0] and not opened.is_set():
+            lock_file = root / "resource.lock"
+            os.rename(lock_file, root / f".nfs{uuid.uuid4().hex[:12]}")
             opened.set()
             released.wait(10)
         real_flock(fd, operation)
 
-    monkeypatch.setattr(unix.fcntl, "flock", flock)
+    monkeypatch.setattr(locks_module.fcntl, "flock", flock)
 
     def wait_then_hold() -> None:
         with SharedFileLock(resource, timeout=10, manage_dir_mode=False):

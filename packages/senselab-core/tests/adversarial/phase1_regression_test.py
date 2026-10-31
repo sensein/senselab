@@ -423,16 +423,19 @@ def test_a2_probe_misfiled_entry_is_not_served(tmp_path: Path) -> None:
 
 
 def _raising_once(err: OSError, name: str) -> Any:
-    real = Path.read_bytes
+    """A store member reader that raises `err` the first time it reads `name`."""
+    from senselab_core.runtime.storage import StorageDir
+
+    real = StorageDir.read_regular
     state = {"raised": False}
 
-    def read_bytes(self: Path) -> bytes:
-        if self.name == name and not state["raised"]:
+    def read_regular(self: Any, member: str, *, limit: int | None = None) -> bytes | None:
+        if member == name and not state["raised"]:
             state["raised"] = True
             raise err
-        return real(self)
+        return real(self, member, limit=limit)
 
-    return read_bytes
+    return read_regular
 
 
 @pytest.mark.logic
@@ -442,7 +445,9 @@ def test_a3_probe_one_transient_read_error_does_not_quarantine(tmp_path: Path, m
 
     store, key, ctx = ResultStore(tmp_path), _key(), _ctx()
     store.put(key, {"y": "healthy"}, ctx)
-    monkeypatch.setattr(Path, "read_bytes", _raising_once(OSError(errno.ESTALE, "stale"), "result.json"))
+    from senselab_core.runtime.storage import StorageDir
+
+    monkeypatch.setattr(StorageDir, "read_regular", _raising_once(OSError(errno.ESTALE, "stale"), "result.json"))
     try:
         store.put(key, {"y": "healthy"}, ctx)
     except Exception:  # noqa: BLE001

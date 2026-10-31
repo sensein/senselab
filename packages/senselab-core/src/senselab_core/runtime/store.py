@@ -31,6 +31,7 @@ array is replaced by `{"$array": <sha256 of its canonical .npy>}`, so `$array` i
 The output identity is `"output:" + identity_digest("output@3", encoded form)`.
 """
 
+import errno
 import io
 import logging
 import os
@@ -60,14 +61,13 @@ from senselab_worker.ownership import UUID_HEX
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputIdentity, ReusePolicy, acceptable
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
 from senselab_core.runtime.storage import (
-    CLOCK_NAME,
+    ASIDE_NAME,
     STAGING_DIR_MODE,
     StorageDir,
     StorePolicy,
     StoreUnavailable,
     WrongKindError,
     committed_modes,
-    fs_now,
     owner_remedy,
     shared_dir_mode,
     storage_fault,
@@ -86,6 +86,13 @@ COMMIT_ATTEMPTS = 3
 
 _POLICY_ORDER = (ReusePolicy.EXACT, ReusePolicy.EQUIVALENT, ReusePolicy.TOLERANT)
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_PREFIX = re.compile(r"[0-9a-f]{2}")
+MEMBER_NAME = re.compile(r"result\.json|context\.json|[0-9a-f]{64}\.npy")
+"""A file of an entry, written in its staging directory."""
+FINGERPRINT_NAME = _SHA256
+"""An entry, renamed from its staging directory onto `<key digest>/<context fingerprint>`."""
+WRITTEN_NAMES = frozenset({MEMBER_NAME, FINGERPRINT_NAME, ASIDE_NAME})
+"""The grammars of the names this module writes (besides `storage.WRITTEN_NAMES`)."""
 T = TypeVar("T")
 
 
@@ -170,16 +177,26 @@ def _require_directory(entry: Path) -> None:
         raise CorruptEntryError(f"corrupt store entry {entry}: not a directory")
 
 
-def _member_path(entry: Path, name: str) -> Path:
-    """Return `entry/name` after checking with `lstat` that it is a regular file; otherwise the entry is corrupt."""
-    path = entry / name
+def _read_member(entry: Path, name: str) -> bytes:
+    """Return the bytes of the regular file `entry/name`, read through the entry's descriptor.
+
+    The member is neither followed nor waited on; anything but a regular file there, or a gone entry,
+    makes the entry corrupt.
+    """
     try:
-        mode = os.lstat(path).st_mode
-    except FileNotFoundError as err:
-        raise CorruptEntryError(f"corrupt store entry {entry}: {name} is missing") from err
-    if not stat.S_ISREG(mode):
-        raise CorruptEntryError(f"corrupt store entry {entry}: {name} is not a regular file")
-    return path
+        directory = StorageDir.open_unfollowed(entry)
+    except OSError as err:
+        if err.errno not in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
+            raise
+        raise CorruptEntryError(f"corrupt store entry {entry}: it is gone or not a directory") from err
+    with directory:
+        try:
+            data = directory.read_regular(name)
+        except WrongKindError as err:
+            raise CorruptEntryError(f"corrupt store entry {entry}: {name} is not a regular file") from err
+    if data is None:
+        raise CorruptEntryError(f"corrupt store entry {entry}: {name} is missing")
+    return data
 
 
 def _decode(value: object, entry: Path) -> object:
@@ -188,7 +205,7 @@ def _decode(value: object, entry: Path) -> object:
             sha = value[ARRAY_TAG]
             if not isinstance(sha, str) or not _SHA256.fullmatch(sha):
                 raise CorruptEntryError(f"corrupt store entry {entry}: array reference {sha!r} is not a sha256")
-            data = _member_path(entry, f"{sha}.npy").read_bytes()
+            data = _read_member(entry, f"{sha}.npy")
             if _raw_digest.bytes_digest("npy@1", data) != sha:
                 raise CorruptEntryError(f"corrupt store entry {entry}: {sha}.npy does not hash to its name")
             try:
@@ -202,12 +219,12 @@ def _decode(value: object, entry: Path) -> object:
 
 
 def _write_synced(directory: StorageDir, name: str, data: bytes, mode: int) -> None:
-    directory.write_new(name, data, mode)
+    directory.write_new(name, data, mode, grammar=MEMBER_NAME)
 
 
 def _read_object(entry: Path, name: str, fmt: str) -> dict[str, Any]:
-    path = _member_path(entry, name)
-    record = jcs_loads(path.read_bytes())
+    path = entry / name
+    record = jcs_loads(_read_member(entry, name))
     if not isinstance(record, dict):
         raise CorruptEntryError(f"corrupt store entry: {path} is not a JSON object")
     if record.pop("format", None) != fmt:
@@ -385,7 +402,7 @@ def _commit(
             _write_synced(staging, "result.json", jcs_dumps(result), file_mode)
             staging.fsync()
         try:
-            staging_root.rename(staging_name, parent, name)
+            staging_root.rename(staging_name, parent, name, grammar=FINGERPRINT_NAME)
         except OSError:
             if parent.kind(name) is not None:
                 return False
@@ -421,33 +438,6 @@ def _listed(directory: StorageDir) -> list[str]:
     except OSError as err:
         logger.warning("cannot list %s to collect it: %s", directory.path, err)
         return []
-
-
-def _remove_older(directory: StorageDir, cutoff: float) -> int:
-    """Remove the uuid-named children of `directory` whose mtime is before `cutoff`; return how many.
-
-    A uuid-named directory is made writable by its owner first, so a sealed entry's files can be
-    unlinked. Failures are logged.
-    """
-    removed = 0
-    for name in _listed(directory):
-        if not UUID_HEX.fullmatch(name):
-            continue
-        try:
-            removed += _remove_one_older(directory, name, cutoff)
-        except (OSError, WrongKindError) as err:
-            logger.warning("cannot collect %s: %s", directory.path / name, err)
-    return removed
-
-
-def _remove_one_older(directory: StorageDir, name: str, cutoff: float) -> int:
-    info = directory.lstat(name)
-    if info is None or info.st_mtime >= cutoff:
-        return 0
-    if stat.S_ISDIR(info.st_mode):
-        with directory.child(name) as child:
-            child.set_mode(STAGING_DIR_MODE)
-    return 1 if directory.remove_owned(name, pattern=UUID_HEX) else 0
 
 
 def _opened(directory: StorageDir, *parts: str) -> StorageDir | None:
@@ -575,7 +565,7 @@ class ResultStore:
         try:
             failure: OSError | None = None
             try:
-                parent.rename(name, target, moved_name)
+                parent.rename(name, target, moved_name, grammar=ASIDE_NAME)
             except FileNotFoundError:
                 return
             except OSError as err:
@@ -586,7 +576,7 @@ class ResultStore:
                 raise storage_fault(failure, entry, hint=owner_remedy(entry)) from failure
             moved = target.path / moved_name
             try:
-                os.utime(moved_name, dir_fd=target.fd, follow_symlinks=False)
+                target.stamp(moved_name)
             except OSError as err:
                 logger.warning("cannot stamp quarantined entry %s: %s", moved, err)
             verdict, reason = self._verdict(moved, is_dir, digest=digest, fingerprint=fingerprint)
@@ -643,7 +633,7 @@ class ResultStore:
         """Rename `holder/moved_name` back onto `parent/name` unless something now occupies it; return the outcome."""
         failure: OSError | None = None
         try:
-            holder.rename(moved_name, parent, name)
+            holder.rename(moved_name, parent, name, grammar=FINGERPRINT_NAME)
         except OSError as err:
             failure = err
         if failure is not None:
@@ -680,11 +670,11 @@ class ResultStore:
     def collect(self, now: float | None = None) -> int:
         """Remove quarantined entries and staging directories older than the policy's ages; return how many.
 
-        Entries set aside in place (`<uuid>` beside the fingerprints of their key) count as
-        quarantined. Ages are measured from each directory's mtime to `now`, which defaults to the storage's own
-        clock (`fs_now` on `root`). Only uuid-named children are removed, through `remove_owned`; no
-        directory below `root` is reached through a symlink. A failure to read the clock, list or remove
-        is logged and skips that item.
+        Objects set aside in place (`<uuid>` under the root, `store@4/`, a prefix or a key, beside what
+        they displaced) count as quarantined. Ages are measured from each object's mtime to `now`, which
+        defaults to the storage's own clock (`StorageDir.fs_now` on `root`). Only uuid-named children are
+        removed, through `remove_owned`; no directory below `root` is reached through a symlink. A failure
+        to read the clock, list or remove is logged and skips that item.
         """
         try:
             root = self._open_root(create=False)
@@ -695,31 +685,33 @@ class ResultStore:
         with root:
             if now is None:
                 try:
-                    now = fs_now(self.root / CLOCK_NAME)
-                except OSError as err:
+                    now = root.fs_now()
+                except (OSError, WrongKindError) as err:
                     logger.warning("cannot read the clock of store %s; not collecting: %s", self.root, err)
                     return 0
             aside = now - self.policy.quarantine_retention_s
-            removed = 0
+            removed = root.remove_older(aside)
             for parts, cutoff in (((QUARANTINE_DIR,), aside), ((STAGING_DIR,), now - self.policy.staging_stale_s)):
                 directory = _opened(root, *parts)
                 if directory is not None:
                     with directory:
-                        removed += _remove_older(directory, cutoff)
+                        removed += directory.remove_older(cutoff)
             store = _opened(root, STORE_DIR)
             if store is None:
                 return removed
             with store:
+                removed += store.remove_older(aside)
                 for prefix in _listed(store):
-                    prefix_dir = _opened(store, prefix)
+                    prefix_dir = _opened(store, prefix) if _PREFIX.fullmatch(prefix) else None
                     if prefix_dir is None:
                         continue
                     with prefix_dir:
+                        removed += prefix_dir.remove_older(aside)
                         for digest in _listed(prefix_dir):
-                            key_dir = _opened(prefix_dir, digest)
+                            key_dir = _opened(prefix_dir, digest) if _SHA256.fullmatch(digest) else None
                             if key_dir is not None:
                                 with key_dir:
-                                    removed += _remove_older(key_dir, aside)
+                                    removed += key_dir.remove_older(aside)
             return removed
 
     def put(self, key: LogicalKey, outputs: dict[str, object], context: ExecutionContext) -> OutputIdentity:

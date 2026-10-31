@@ -1,18 +1,8 @@
 """Run-scoped resolution of HuggingFace refs to immutable commit SHAs.
 
-A cluster sweep is an array of jobs across nodes, each spawning subprocess venvs,
-running over hours or days. If upstream pushes to ``main`` partway through, tasks
-that resolve after the push get different weights from those before it — every
-task recording its own SHA correctly, and the run as a whole quietly
-inhomogeneous. Per-task provenance documents that split; it does not prevent it.
-
-So a run resolves each ``(repo_id, ref)`` exactly once and every participant binds
-to that answer. Entries are append-if-absent and immutable for the run's life;
-that immutability is the entire guarantee.
-
-This module imports nothing from ``senselab.utils.data_structures`` —
-``dependencies.py`` imports it, and that module carries a circular-import
-constraint.
+A run resolves each `(repo_id, ref)` once, in `runs/<run id>/resolutions@2.json` under the cache root,
+and every participant binds to that answer; entries are append-if-absent. This module imports nothing from
+`senselab.utils.data_structures`. Rationale: `specs/20260809-200421-hf-revision-pinning/design.md`.
 """
 
 import json
@@ -28,9 +18,11 @@ from senselab_worker.canonical import jcs_dumps
 from senselab_core.runtime.locks import SharedFileLock
 from senselab_core.runtime.retry import retry_on_transient_error
 from senselab_core.runtime.storage import (
+    STAGING_FILE_MODE,
     TEMPORARY_NAME,
     StorageDir,
     StorePolicy,
+    WrongKindError,
     committed_modes,
     path_component,
     shared_dir_mode,
@@ -42,6 +34,13 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 MANIFEST_NAME = "resolutions@2.json"
 """The run manifest's file name; its `@<major>` is the format of its keys (`manifest_key`)."""
+MANIFEST = re.compile(re.escape(MANIFEST_NAME))
+LEGACY_TEMPORARY = re.compile(re.escape(MANIFEST_NAME) + r"\.tmp\.[0-9]+")
+"""A temporary the manifest writer named before H9b: `resolutions@2.json.tmp.<pid>`."""
+WRITTEN_NAMES = frozenset({MANIFEST})
+"""The grammars of the file names this module writes (besides `storage` and `locks`)."""
+MANIFEST_LIMIT = 1 << 24
+"""The most bytes a run manifest is read to."""
 
 # Process-local. _RUN_ID caches the run identity; _MEMO avoids re-reading the
 # manifest from disk for a pair already resolved in this process.
@@ -66,37 +65,11 @@ def manifest_key(repo_id: str, ref: str) -> str:
 def run_id() -> str:
     """Return this run's id, generating and exporting one if unset.
 
-    Inherited from ``SENSELAB_RUN_ID`` when present, so a single Slurm submission
-    that exports one value shares it across every node, task and subprocess venv.
-    When absent, the Slurm job identity is used so a submission is self-consistent
-    with no configuration required — ``SLURM_ARRAY_JOB_ID`` (shared by every task of
-    an array) is preferred over per-task ``SLURM_JOB_ID`` so an N-task array reuses
-    one ``runs/<id>/`` manifest dir instead of leaking N of them into an
-    inode-quota'd cache root. Only a truly bare launch falls through to a fresh
-    UUID4. Whatever is chosen is exported, so any subprocess senselab spawns inherits
-    it through the environment.
+    The id is `SENSELAB_RUN_ID`, else `SLURM_ARRAY_JOB_ID`, else `SLURM_JOB_ID`, else a fresh UUID4, and is
+    exported as `SENSELAB_RUN_ID` so subprocesses inherit it.
 
-    That shrinks the manifest-dir leak without closing it: an array goes from N dirs to 1, but a
-    non-array job still leaves one dir per job and a bare launch is unchanged (a fresh UUID4 dir
-    every time). Run dirs are small and cleanup remains manual, as ``audio_analysis/doc.md``
-    documents.
-
-    Two consequences of preferring the Slurm identity, both real behaviour changes:
-
-    - **Same-allocation merging.** Every senselab invocation inside one allocation now shares a
-      manifest, where previously each process minted its own identity. Entries are immutable for
-      the run's life (see :func:`record_resolution`), so a second experiment later in the same
-      batch script — or unrelated work in a long-lived ``salloc`` — is silently pinned to the SHAs
-      the first one resolved, with no way to re-resolve. Setting ``SENSELAB_RUN_ID`` explicitly is
-      the escape hatch: it outranks everything here, so give each experiment its own value when
-      they must resolve independently.
-    - **Job-id reuse (known edge, unmitigated).** Slurm ids wrap at ``MaxJobId`` and reset when a
-      controller is reinstalled, and nothing garbage-collects ``runs/``. A recycled id can
-      therefore land on a months-old ``runs/<jobid>/`` manifest and adopt its SHAs as
-      authoritative — confidently wrong provenance, which the module docstring names as the
-      outcome worse than no provenance at all. Low probability, and deliberately not handled here:
-      the cheap mitigations (folding ``SLURM_CLUSTER_NAME`` into the id, or ageing a manifest out
-      by mtime) each change what an id *means* and belong in their own change, measured.
+    Raises:
+        ValueError: the chosen id is not one path component.
     """
     global _RUN_ID
     if _RUN_ID is None:
@@ -140,100 +113,126 @@ def manifest_path(run: Optional[str] = None) -> Path:
     return _cache_root() / "runs" / path_component(run_id() if run is None else run) / MANIFEST_NAME
 
 
-def read_manifest(run: Optional[str] = None) -> dict[str, str]:
-    """Return a run's recorded resolutions, or an empty mapping.
+def _run_dir(run: Optional[str], *, create: bool, policy: Optional[StorePolicy] = None) -> StorageDir:
+    """Open `runs/<run>/` under the cache root (this run's when `run` is None), without following any symlink.
 
-    A manifest that is missing, empty, or unparsable reads as empty rather than
-    raising: a corrupt manifest must degrade to "resolve again", never to a crash
-    that takes down every job in the run. Missing/empty is the expected steady
-    state for a run's first resolution and is silent; a *non-empty* file that
-    fails to parse is a materially worse signal (a truncated write, disk
-    corruption) and is logged at warning so it doesn't disappear silently.
+    With `create`, missing directories get the policy's `shared_dir_mode`, and an object of the wrong kind at
+    `runs/` or the run's directory is moved aside beside itself.
     """
-    path = manifest_path(run)
-    try:
-        text = path.read_text()
-    except OSError:
+    name = manifest_path(run).parent.name
+    mode = shared_dir_mode(policy) if policy is not None else None
+    with StorageDir.open_root(_cache_root(), create=create, mode=mode) as root:
+        if not create:
+            return root.walk("runs", name)
+        return root.walk("runs", name, create=True, mode=mode, aside=lambda: None)
+
+
+def _parse_manifest(data: Optional[bytes], where: Path) -> dict[str, str]:
+    if not data or not data.strip():
         return {}
-    if not text.strip():
-        return {}
     try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        logger.warning("Run manifest %s is non-empty but unparsable; treating as empty", path)
+        payload = json.loads(data.decode("utf-8"))
+    except ValueError:
+        logger.warning("Run manifest %s is non-empty but unparsable; treating as empty", where)
         return {}
     if not isinstance(payload, dict):
         return {}
     return {str(k): str(v) for k, v in payload.items()}
 
 
+def _read_in(run_dir: StorageDir) -> dict[str, str]:
+    try:
+        data = run_dir.read_regular(MANIFEST_NAME, limit=MANIFEST_LIMIT)
+    except (WrongKindError, ValueError) as err:
+        logger.warning("Run manifest %s cannot be read (%s); treating as empty", run_dir.path / MANIFEST_NAME, err)
+        return {}
+    return _parse_manifest(data, run_dir.path / MANIFEST_NAME)
+
+
+def read_manifest(run: Optional[str] = None) -> dict[str, str]:
+    """Return a run's recorded resolutions, or an empty mapping.
+
+    The manifest is read through `runs/<run>/`'s descriptor without following or blocking. A missing,
+    empty, unreadable or unparsable manifest, or anything but a regular file at its name, reads as empty;
+    a non-empty one that fails to parse is logged at warning.
+
+    Raises:
+        ValueError: `run` (or this run's id) is not one path component.
+    """
+    try:
+        run_dir = _run_dir(run, create=False)
+    except (OSError, WrongKindError):
+        return {}
+    with run_dir:
+        try:
+            return _read_in(run_dir)
+        except OSError:
+            return {}
+
+
 def record_resolution(repo_id: str, ref: str, sha: str, run: Optional[str] = None) -> str:
     """Record ``(repo_id, ref) -> sha`` for this run and return the binding SHA.
 
-    Append-if-absent under a :class:`SharedFileLock`: two nodes resolving the same
-    model concurrently must not lose one another's entries, and the loser of the
-    race adopts the winner's SHA rather than overwriting it. The returned value is
-    therefore the *authoritative* SHA for the run, which may not be ``sha``.
-
-    ``runs/<run>/`` is reached through `StorageDir` and made with the `StorePolicy`'s
-    `shared_dir_mode`; the manifest is replaced atomically with its committed file mode, whatever
-    the umask. Temporaries a dead writer left beside it are removed under the lock.
+    Append-if-absent under a `SharedFileLock` on the manifest: a concurrent writer's entries are kept,
+    and an existing commit SHA for the key wins over ``sha``. ``runs/<run>/`` is reached through
+    `StorageDir` and made with the `StorePolicy`'s `shared_dir_mode`; the manifest and the lock's files
+    get the policy's file modes, whatever the umask. Under the lock, a dead writer's temporaries beside the
+    manifest are removed, as are objects moved aside under ``runs/`` past the quarantine age.
 
     Raises:
         RevisionResolutionError: ``sha`` is not a 40-hex commit SHA.
         ValueError: ``run`` (or this run's id) is not one path component.
-        WrongKindError: an object of the wrong kind at ``runs/`` or the run's directory cannot be moved aside.
+        LockTimeout: the manifest's lock could not be taken within its timeout.
+        WrongKindError: an object of the wrong kind at ``runs/``, the run's directory or a lock name
+            cannot be moved aside.
     """
-    # Reject a non-SHA at the door rather than only filtering it on read: an entry is immutable
-    # for the run's life, so one bad write poisons every later participant that adopts it.
     if not _SHA_RE.fullmatch(sha):
         raise RevisionResolutionError(
             f"Refusing to record {sha!r} as the commit for {manifest_key(repo_id, ref)}: "
             "a run manifest entry must be a 40-hex commit SHA."
         )
-
-    path = manifest_path(run)
     policy = StorePolicy.load_default()
-    dir_mode = shared_dir_mode(policy)
-    with StorageDir.open_root(_cache_root(), create=True, mode=dir_mode) as root:
-        with root.walk("runs", path.parent.name, create=True, mode=dir_mode, aside=lambda: None) as run_dir:
-            return _record_in(run_dir, path, manifest_key(repo_id, ref), sha, run, committed_modes(policy)[0])
+    with _run_dir(run, create=True, policy=policy) as run_dir:
+        return _record_in(run_dir, manifest_key(repo_id, ref), sha, policy)
 
 
-def _record_in(run_dir: StorageDir, path: Path, key: str, sha: str, run: Optional[str], file_mode: int) -> str:
-    """Append-if-absent `key -> sha` to the manifest at `path` in `run_dir`, under the manifest's lock."""
-    lock = SharedFileLock(path, manage_dir_mode=False)
-    while True:
-        try:
-            lock.__enter__()
-            break
-        except TimeoutError:
-            # A timeout proves a live holder: a crashed process's flock is
-            # kernel-released, so it cannot hold continuously through the window.
-            logger.info("Waiting to record a resolution for %s in the run manifest", key)
-            continue
-    try:
-        _remove_leftover_temporaries(run_dir)
-        current = read_manifest(run)
+def _record_in(run_dir: StorageDir, key: str, sha: str, policy: StorePolicy) -> str:
+    """Append-if-absent `key -> sha` to the manifest in `run_dir`, under the manifest's lock."""
+    lock_mode = STAGING_FILE_MODE | (0o004 if policy.world_readable else 0)
+    lock = SharedFileLock(run_dir.path / MANIFEST_NAME, manage_dir_mode=False, file_mode=lock_mode, directory=run_dir)
+    with lock:
+        _remove_leftovers(run_dir, policy)
+        current = _read_in(run_dir)
         winner = current.get(key)
-        # Adopt an existing entry only if it is a real commit; a non-SHA entry is the one replaced.
         if winner is not None and _SHA_RE.fullmatch(winner):
             return winner
         current[key] = sha
         run_dir.write_atomically(
-            MANIFEST_NAME, json.dumps(current, indent=2, sort_keys=True).encode("utf-8"), mode=file_mode
+            MANIFEST_NAME,
+            json.dumps(current, indent=2, sort_keys=True).encode("utf-8"),
+            grammar=MANIFEST,
+            mode=committed_modes(policy)[0],
         )
         return sha
-    finally:
-        lock.__exit__(None, None, None)
 
 
-def _remove_leftover_temporaries(run_dir: StorageDir) -> None:
-    """Remove the manifest's temporary files in `run_dir`; under the manifest's lock any there is a dead writer's."""
+def _remove_leftovers(run_dir: StorageDir, policy: StorePolicy) -> None:
+    """Remove dead writers' leftovers under the manifest's lock.
+
+    That is the manifest's temporaries in `run_dir` (any there under the lock is a dead writer's), the
+    temporaries writers before H9b left, and objects moved aside under `runs/` past the quarantine age.
+    """
     prefix = f".{MANIFEST_NAME}."
     for name in run_dir.listdir():
         if name.startswith(prefix) and TEMPORARY_NAME.fullmatch(name):
             run_dir.remove_owned(name, pattern=TEMPORARY_NAME)
+        elif LEGACY_TEMPORARY.fullmatch(name):
+            run_dir.remove_owned(name, pattern=LEGACY_TEMPORARY)
+    try:
+        with StorageDir.open_root(_cache_root()) as root, root.walk("runs") as runs:
+            runs.remove_older(run_dir.fs_now() - policy.quarantine_retention_s)
+    except (OSError, WrongKindError) as err:
+        logger.warning("cannot collect what was set aside under runs/: %s", err)
 
 
 def get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:
@@ -287,17 +286,11 @@ def get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:
 def _resolve_uncached(repo_id: str, ref: str, token: Optional[str] = None) -> str:
     """Resolve a ref to a SHA without consulting the manifest or the memo.
 
-    Filesystem first, network only on a miss: re-checking the Hub on every
-    resolution would reintroduce the 429 rate-limiting that ``load_hf_resilient``
-    exists to avoid.
+    The local cache first, the Hub only on a miss, through `retry_on_transient_error`.
     """
     try:
         local = get_cached_commit_hash(repo_id, ref)
     except Exception as exc:  # noqa: BLE001 — any local-read failure just means "ask the Hub"
-        # Never surfaces a wrong answer, but a *persistent* local problem (bad
-        # HF_HUB_CACHE, permissions) would otherwise force every resolution onto
-        # the network with zero diagnostic trail. debug, not warning: a cold
-        # cache is the normal first-resolution case, not an anomaly.
         logger.debug("Local cache lookup failed for %s@%s: %s", repo_id, ref, exc)
         local = None
     if local and _SHA_RE.fullmatch(local):
@@ -306,21 +299,6 @@ def _resolve_uncached(repo_id: str, ref: str, token: Optional[str] = None) -> st
     try:
         from huggingface_hub import HfApi
 
-        # The mandatory Hub round-trip on the cold-cache path, and the *first* network call a
-        # cold run makes: resolve_model calls resolve_revision before ensure_hf_model. Wrap it in
-        # the same transient-retry every other Hub call uses, so a rate-limit burst during a
-        # parallel batch is survived rather than fatal at cache-key computation. It also has to be
-        # retried here rather than left to load_hf_resilient's outer retry, because the wrapper
-        # below turns any failure into RevisionResolutionError -- a RuntimeError, which
-        # _is_transient classifies as non-transient, so a 429 escaping this line would defeat that
-        # outer retry as well.
-        #
-        # What is retried is _is_transient's judgement (retry.py): 429, 5xx and statusless
-        # connection/timeout failures. A definitive 4xx -- 401, 403, 404 -- is not retried and
-        # surfaces below as RevisionResolutionError on the first attempt. That last part only
-        # became true when _is_transient learned to read exc.response.status_code, which is the
-        # only place huggingface_hub records a status; before that every one of its errors read as
-        # statusless and a genuine 404 cost three attempts and 3s of backoff.
         sha = retry_on_transient_error(lambda: HfApi(token=token).model_info(repo_id=repo_id, revision=ref).sha)
     except Exception as exc:
         raise RevisionResolutionError(
@@ -351,12 +329,6 @@ def resolve_revision(repo_id: str, ref: str = "main", *, token: Optional[str] = 
         return memoized
 
     recorded = read_manifest().get(key)
-    # Validate rather than trust: read_manifest coerces every value with str(), so a JSON null
-    # becomes the string "None", and a hand-edit or a partial write on a filesystem where
-    # os.replace is not atomic can leave anything at all here. An unvalidated entry would flow
-    # straight into cache keys, provenance and worker payloads -- "confidently wrong" with the
-    # loud-failure path bypassed, which is the one outcome this module exists to prevent. A
-    # non-SHA entry is therefore treated as absent and re-resolved.
     if recorded is not None and _SHA_RE.fullmatch(recorded):
         _MEMO[key] = recorded
         return recorded

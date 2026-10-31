@@ -666,17 +666,18 @@ def _jcs_value(key: LogicalKey) -> object:
     return json.loads(jcs_dumps(key.model_dump()))
 
 
-def _raising_once(err: OSError, name: str) -> Callable[[Path], bytes]:
-    real = Path.read_bytes
+def _raising_once(err: OSError, name: str) -> Callable[..., bytes | None]:
+    """A `StorageDir.read_regular` that raises `err` the first time it reads `name`."""
+    real = storage_module.StorageDir.read_regular
     state = {"raised": False}
 
-    def read_bytes(self: Path) -> bytes:
-        if self.name == name and not state["raised"]:
+    def read_regular(self: storage_module.StorageDir, member: str, *, limit: int | None = None) -> bytes | None:
+        if member == name and not state["raised"]:
             state["raised"] = True
             raise err
-        return real(self)
+        return real(self, member, limit=limit)
 
-    return read_bytes
+    return read_regular
 
 
 @pytest.mark.logic
@@ -691,7 +692,7 @@ def test_transient_error_never_quarantines(
     s.put(k, outputs, c)
     entry = _entry_dir(tmp_path, k, c)
     name = _only_npy_name(entry).name if member == "npy" else member
-    monkeypatch.setattr(Path, "read_bytes", _raising_once(OSError(err, os.strerror(err)), name))
+    monkeypatch.setattr(storage_module.StorageDir, "read_regular", _raising_once(OSError(err, os.strerror(err)), name))
     with pytest.raises(StoreUnavailable) as caught:
         s.get(k, c, ReusePolicy.EXACT)
     assert caught.value.errno == err
@@ -707,7 +708,9 @@ def test_a3_transient_error_in_put_never_quarantines(tmp_path: Path, monkeypatch
     """The probe: one ESTALE moved a healthy entry into quarantine; a put that cannot read raises instead."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     ident = s.put(k, {"y": "healthy"}, c)
-    monkeypatch.setattr(Path, "read_bytes", _raising_once(OSError(err, os.strerror(err)), "result.json"))
+    monkeypatch.setattr(
+        storage_module.StorageDir, "read_regular", _raising_once(OSError(err, os.strerror(err)), "result.json")
+    )
     with pytest.raises(StoreUnavailable):
         s.put(k, {"y": "healthy"}, c)
     assert not any((tmp_path / QUARANTINE_DIR).glob("*"))
@@ -720,13 +723,13 @@ def test_put_verifies_the_arrays_of_an_existing_entry(tmp_path: Path, monkeypatc
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     ident = s.put(k, {"y": numpy.ones(1000, "<f8"), "z": numpy.zeros(4, "<i4")}, c)
     read: list[str] = []
-    real = Path.read_bytes
+    real = storage_module.StorageDir.read_regular
 
-    def spy(self: Path) -> bytes:
-        read.append(self.name)
-        return real(self)
+    def spy(self: storage_module.StorageDir, name: str, *, limit: int | None = None) -> bytes | None:
+        read.append(name)
+        return real(self, name, limit=limit)
 
-    monkeypatch.setattr(Path, "read_bytes", spy)
+    monkeypatch.setattr(storage_module.StorageDir, "read_regular", spy)
     assert s.put(k, {"y": numpy.ones(1000, "<f8"), "z": numpy.zeros(4, "<i4")}, c) == ident
     assert sorted(read)[-2:] == ["context.json", "result.json"] and len([n for n in read if n.endswith(".npy")]) == 2
 
@@ -947,13 +950,14 @@ def test_unwritable_quarantine_never_raises_a_raw_permission_error(
 
 
 def _refuse_chmod_on(monkeypatch: pytest.MonkeyPatch, target: Path) -> None:
-    """Refuse chmod on `target` with EPERM, as for an entry another user owns."""
+    """Refuse chmod on `target` (matched by inode) with EPERM, as for an entry another user owns."""
     real = storage_module.set_mode
+    inode = os.lstat(target).st_ino
 
-    def set_mode(path: Path | str, mode: int, *, fd: int | None = None) -> None:
-        if Path(path) == target:
-            raise PermissionError(errno.EPERM, "Operation not permitted", str(path))
-        real(path, mode, fd=fd)
+    def set_mode(fd: int, mode: int) -> None:
+        if os.fstat(fd).st_ino == inode:
+            raise PermissionError(errno.EPERM, "Operation not permitted", str(target))
+        real(fd, mode)
 
     monkeypatch.setattr(storage_module, "set_mode", set_mode)
 
@@ -1020,9 +1024,11 @@ def test_entry_set_aside_in_place_is_collected(tmp_path: Path, monkeypatch: pyte
     entry = _entry_dir(tmp_path, k, c)
     CORRUPTIONS["result_garbled"](entry)
     _seal_entry(entry)
+    real_set_mode = storage_module.set_mode
     _refuse_chmod_on(monkeypatch, entry)
     s.put(k, {"y": 2}, c)
     (aside,) = [p for p in entry.parent.iterdir() if p != entry]
+    monkeypatch.setattr(storage_module, "set_mode", real_set_mode)
     assert s.collect(now=time.time() + s.policy.quarantine_retention_s + 1) == 1
     assert [p.name for p in entry.parent.iterdir()] == [entry.name]
 

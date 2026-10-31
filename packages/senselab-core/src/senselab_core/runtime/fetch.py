@@ -47,7 +47,6 @@ from senselab_core.runtime.storage import (
     StoreUnavailable,
     WrongKindError,
     committed_modes,
-    fs_now,
     path_component,
     shared_dir_mode,
     storage_fault,
@@ -64,6 +63,18 @@ logger = logging.getLogger("senselab")
 
 LINK_STAGING_NAME = re.compile(r"^\..+\.[0-9a-f]{32}$")
 """A symlink being placed: a dot, the link's name, a dot and a uuid4 hex."""
+MANIFEST_PART = re.compile(r"[^/\\\x00]+")
+"""A link under `files/`, named by the last part of a manifest path."""
+STAGED_BLOB = "blob"
+STAGED_MARKER = "marker"
+STAGED_NAME = re.compile(r"blob|marker")
+"""A download or a marker, written in a private staging directory `tmp/<uuid>/`."""
+COMMITTED_NAME = re.compile(r"[0-9a-f]{64}|\.complete")
+"""A blob `blobs/<sha256>` or a dataset's completion marker, linked or renamed from private staging."""
+WRITTEN_NAMES = frozenset({LINK_STAGING_NAME, MANIFEST_PART, STAGED_NAME, COMMITTED_NAME})
+"""The grammars of the file names this module writes (besides `storage.WRITTEN_NAMES`)."""
+MARKER_LIMIT = 1 << 24
+"""The most bytes a completion marker is read to."""
 _NO_HARDLINK_ERRNOS = frozenset({errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV})
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
@@ -240,27 +251,18 @@ def _urlopen(url: str) -> BinaryIO:
     return _https_opener().open(url, timeout=60)  # type: ignore[no-any-return]
 
 
-def _remove_stale_downloads(root: Path, tmp: StorageDir, stale_s: int) -> None:
+def _remove_stale_downloads(top: StorageDir, tmp: StorageDir, stale_s: int) -> None:
     """Remove downloads in `tmp` older than `stale_s` on the cache's own clock; failures are logged."""
     try:
-        cutoff = fs_now(root / CLOCK_NAME) - stale_s
-        children = tmp.listdir()
-    except OSError as err:
+        cutoff = top.fs_now() - stale_s
+    except (OSError, WrongKindError) as err:
         logger.warning("cannot clear stale downloads in %s: %s", tmp.path, err)
         return
-    for child in children:
-        try:
-            info = tmp.lstat(child)
-            if info is not None and info.st_mtime < cutoff:
-                tmp.remove_owned(child, pattern=UUID_HEX)
-        except OSError as err:
-            logger.warning("cannot remove stale download %s: %s", tmp.path / child, err)
+    tmp.remove_older(cutoff)
 
 
-def _download(
-    url: str, opener: Callable[[str], BinaryIO], directory: StorageDir, name: str, *, size: int, mode: int = 0o440
-) -> None:
-    """Stream `url` into the new file `directory/name` (created with `mode`), reading at most `size + 1` bytes.
+def _download(url: str, opener: Callable[[str], BinaryIO], out: BinaryIO, *, size: int) -> None:
+    """Stream `url` into the open file `out`, reading at most `size + 1` bytes.
 
     Raises:
         FetchError: the URL is not `https`, the opener or a read failed, or the source served more
@@ -274,46 +276,80 @@ def _download(
         raise _SourceError(f"{type(err).__name__}: {err}") from err
     received = 0
     with source:
-        out = os.fdopen(directory.open_new(name, mode), "wb")
-        with out:
-            while True:
-                try:
-                    chunk = source.read(min(_CHUNK, size + 1 - received))
-                except Exception as err:  # noqa: BLE001 - a dropped connection is this source's failure
-                    raise _SourceError(f"{type(err).__name__}: {err}") from err
-                if not chunk:
-                    break
-                received += len(chunk)
-                if received > size:
-                    raise _SourceError(f"served more than the declared {size} bytes")
-                out.write(chunk)
-            if received < size:
-                raise _SourceError(f"ended after {received} of the declared {size} bytes")
-            out.flush()
-            os.fsync(out.fileno())
+        while True:
+            try:
+                chunk = source.read(min(_CHUNK, size + 1 - received))
+            except Exception as err:  # noqa: BLE001 - a dropped connection is this source's failure
+                raise _SourceError(f"{type(err).__name__}: {err}") from err
+            if not chunk:
+                break
+            received += len(chunk)
+            if received > size:
+                raise _SourceError(f"served more than the declared {size} bytes")
+            out.write(chunk)
+        if received < size:
+            raise _SourceError(f"ended after {received} of the declared {size} bytes")
+        out.flush()
+        os.fsync(out.fileno())
+
+
+class _PrivateStaging:
+    """`tmp/<uuid4 hex>/`, made `0o700` by this process and removed with everything in it on exit.
+
+    Only this process's user can create, rename or replace a file in it, so a file staged there keeps
+    the bytes written and hashed through its descriptor until it is linked or renamed out.
+    """
+
+    def __init__(self, tmp: StorageDir) -> None:
+        self.tmp = tmp
+        self.name = uuid.uuid4().hex
+        self.dir: StorageDir | None = None
+
+    def __enter__(self) -> StorageDir:
+        made = self.tmp.child(self.name, create=True, mode=0o700)
+        st = os.fstat(made.fd)
+        if st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) != 0o700:
+            made.close()
+            raise WrongKindError(made.path, "directory", f"{made.path} is not a private staging directory")
+        self.dir = made
+        return made
+
+    def __exit__(self, *exc: object) -> None:
+        if self.dir is not None:
+            self.dir.close()
+        self.tmp.remove_owned(self.name, pattern=UUID_HEX)
 
 
 def _commit(
-    source: StorageDir, name: str, target: StorageDir, final: str, *, replace: bool, keeps: Callable[[Path], bool]
-) -> None:
-    """Move verified `source/name` into `target/final`, then sync `target`.
+    source: StorageDir,
+    name: str,
+    target: StorageDir,
+    final: str,
+    *,
+    replace: bool,
+    keeps: Callable[[], bool],
+) -> bool:
+    """Move verified `source/name` (in a private staging directory) into `target/final`, then sync `target`.
 
     With `replace` False the first writer wins (a hard link): a `final` that appeared meanwhile is
-    kept if `keeps(<its path>)` verifies it, and otherwise atomically replaced. With `replace` True
-    `final` is atomically replaced, so a reader sees the old or the new bytes, never a missing path.
+    kept if `keeps()` verifies it, and otherwise atomically replaced. With `replace` True `final` is
+    atomically replaced, so a reader sees the old or the new bytes, never a missing path. A symlink or
+    hard link at `final` is replaced as a name. Return whether the staged file is what `final` now names.
 
     Raises:
         StoreUnavailable: the filesystem has no hard links.
         OSError: the move failed.
     """
-    try:
-        if not replace:
-            replace = not _link_first(source, name, target, final) and not keeps(target.path / final)
-        if replace:
-            source.rename(name, target, final, replace=True)
-    finally:
-        source.remove_owned(name, pattern=UUID_HEX)
+    placed = True
+    if not replace:
+        if not _link_first(source, name, target, final):
+            placed = replace = not keeps()
+    if replace:
+        if target.kind(final) not in (None, "file", "symlink"):
+            target.set_aside(final, None)
+        source.rename(name, target, final, grammar=COMMITTED_NAME, replace=True)
     target.fsync()
+    return placed
 
 
 def _link_first(source: StorageDir, name: str, target: StorageDir, final: str) -> bool:
@@ -324,7 +360,7 @@ def _link_first(source: StorageDir, name: str, target: StorageDir, final: str) -
         OSError: the link failed otherwise.
     """
     try:
-        source.link(name, target, final)
+        source.link(name, target, final, grammar=COMMITTED_NAME)
     except FileExistsError:
         return False
     except OSError as err:
@@ -386,24 +422,32 @@ class _BlobFormat:
 BLOB = _BlobFormat()
 
 
-def _blob_state(
-    blob: Path, sha256: str, recorded: Mapping[str, BlobStamp], verify: str
-) -> Literal["absent", "present", "verified"]:
-    """Return whether `blob` is absent (missing, a symlink or not a regular file), present but unverified, or verified.
+def _hashed(fd: int) -> str:
+    """Return the `file@1` digest of the file open on `fd`, read from its start through a second descriptor."""
+    with os.fdopen(os.dup(fd), "rb") as handle:
+        handle.seek(0)
+        return file_digest("file@1", handle)
 
-    With `verify="size"` a blob whose `BlobStamp` equals the recorded one is verified without reading
-    it; otherwise its bytes are hashed.
+
+def _verified_stamp(blobs: StorageDir, sha256: str, recorded: Mapping[str, BlobStamp], verify: str) -> BlobStamp | None:
+    """Return the stamp of `blobs/<sha256>` if it is a regular file whose bytes hash to its name, else None.
+
+    It is opened without following or blocking and judged through that descriptor. With `verify="size"`
+    a stamp equal to the recorded one (which was taken from a hashed inode) stands for the hash.
     """
-    st = _regular(blob)
-    if st is None:
-        return "absent"
-    if verify == "size" and recorded.get(sha256) == _stamp(st):
-        return "verified"
     try:
-        BLOB.read(blob)
-    except BlobMismatchError:
-        return "present"
-    return "verified"
+        fd = blobs.open_regular(sha256)
+    except WrongKindError:
+        return None
+    if fd is None:
+        return None
+    try:
+        stamp = _stamp(os.fstat(fd))
+        if verify == "size" and recorded.get(sha256) == stamp:
+            return stamp
+        return stamp if _hashed(fd) == sha256 else None
+    finally:
+        os.close(fd)
 
 
 def _ensure_blob(
@@ -414,37 +458,45 @@ def _ensure_blob(
     recorded: Mapping[str, BlobStamp],
     verify: str,
     file_mode: int,
-) -> Path:
+) -> tuple[Path, BlobStamp | None]:
+    """Return `blobs/<sha256>` holding the file's bytes, and the stamp of the inode this call verified there.
+
+    A download is written and hashed through one descriptor in a private staging directory and linked from
+    there. The stamp is None when the name no longer holds the verified inode, so no marker trusts it.
+    """
     blob = blobs.path / file.sha256
-    if _blob_state(blob, file.sha256, recorded, verify) == "verified":
-        return blob
+    stamp = _verified_stamp(blobs, file.sha256, recorded, verify)
+    if stamp is not None:
+        return blob, stamp
     tried: list[str] = []
     for url in (file.url, *file.mirrors):
-        staged = uuid.uuid4().hex
         try:
-            _download(url, opener, tmp, staged, size=file.size, mode=file_mode)
-            actual = file_digest("file@1", tmp.path / staged)
-            if actual != file.sha256:
-                tried.append(f"{url} (sha256 {actual[:12]}..., expected {file.sha256[:12]}...)")
-                continue
-            present = blobs.kind(file.sha256)
-            if present not in (None, "file"):
-                moved = blobs.set_aside(file.sha256, tmp)
-                logger.warning("moved the %s at blob %s aside to %s", present, blob, moved)
-                present = None
-            _commit(
-                tmp,
-                staged,
-                blobs,
-                file.sha256,
-                replace=present is not None,
-                keeps=lambda existing: _blob_state(existing, file.sha256, {}, "full") == "verified",
-            )
-            return blob
+            with _PrivateStaging(tmp) as private:
+                with os.fdopen(private.open_new(STAGED_BLOB, file_mode, grammar=STAGED_NAME), "w+b") as out:
+                    _download(url, opener, out, size=file.size)
+                    actual = _hashed(out.fileno())
+                    if actual != file.sha256:
+                        tried.append(f"{url} (sha256 {actual[:12]}..., expected {file.sha256[:12]}...)")
+                        continue
+                    if blobs.kind(file.sha256) not in (None, "file", "symlink"):
+                        moved = blobs.set_aside(file.sha256, tmp)
+                        logger.warning("moved the object at blob %s aside to %s", blob, moved)
+                    kept: list[BlobStamp | None] = []
+
+                    def keeps() -> bool:
+                        kept.append(_verified_stamp(blobs, file.sha256, {}, "full"))
+                        return kept[-1] is not None
+
+                    placed = _commit(private, STAGED_BLOB, blobs, file.sha256, replace=False, keeps=keeps)
+                    if not placed:
+                        return blob, kept[-1]
+                    private.remove_owned(STAGED_BLOB, pattern=STAGED_NAME)
+                    written = os.fstat(out.fileno())
+                    now = blobs.lstat(file.sha256)
+            same = now is not None and (now.st_dev, now.st_ino) == (written.st_dev, written.st_ino)
+            return blob, _stamp(written) if same else None
         except _SourceError as err:
             tried.append(f"{url} ({err})")
-        finally:
-            tmp.remove_owned(staged, pattern=UUID_HEX)
     raise FetchError(
         f"could not fetch {file.path!r}: no source served {file.size} bytes with sha256 {file.sha256}; tried "
         + "; ".join(tried)
@@ -477,9 +529,9 @@ def _link(files: StorageDir, path: str, blob: Path, dir_mode: int) -> Path:
         if kind == "directory":
             raise ManifestConflictError(f"{link} is a directory where a file of the manifest belongs; remove it")
         staged = f".{name}.{uuid.uuid4().hex}"
-        parent.symlink(target, staged)
+        parent.symlink(target, staged, grammar=LINK_STAGING_NAME)
         try:
-            parent.rename(staged, parent, name, replace=True)
+            parent.rename(staged, parent, name, grammar=MANIFEST_PART, replace=True)
         finally:
             parent.remove_owned(staged, pattern=LINK_STAGING_NAME)
     return link
@@ -499,13 +551,19 @@ def _stamps(value: object) -> dict[str, BlobStamp] | None:
     return stamps
 
 
-def _marker_record(path: Path) -> dict[str, Any] | None:
-    """Return the marker at `path` as a JSON object, None if it is not one."""
+def _marker_record(data: bytes) -> dict[str, Any] | None:
+    """Return the marker bytes `data` as a JSON object, None if they are not one."""
     try:
-        record = json.loads(path.read_bytes().decode("utf-8"))
+        record = json.loads(data.decode("utf-8"))
     except ValueError:
         return None
     return record if isinstance(record, dict) else None
+
+
+def _marker_address(record: dict[str, Any] | None, path: Path) -> str:
+    if record is None or not isinstance(record.get("name"), str) or not isinstance(record.get("version"), str):
+        raise ManifestConflictError(f"completion marker {path} names no dataset")
+    return f"{record['name']}@{record['version']}"
 
 
 class _DatasetMarkerFormat:
@@ -513,22 +571,28 @@ class _DatasetMarkerFormat:
 
     name = "fetch-dataset-marker"
 
+    def _bytes(self, path: Path) -> bytes:
+        try:
+            with StorageDir.open_root(path.parent) as directory:
+                data = directory.read_regular(path.name, limit=MARKER_LIMIT)
+        except (WrongKindError, ValueError) as err:
+            raise ManifestConflictError(f"{path} is not a regular marker; remove {path.parent} to refetch") from err
+        if data is None:
+            raise ManifestConflictError(f"completion marker {path} is missing")
+        return data
+
     def address_of(self, path: Path) -> str:
-        record = _marker_record(path)
-        if record is None or not isinstance(record.get("name"), str) or not isinstance(record.get("version"), str):
-            raise ManifestConflictError(f"completion marker {path} names no dataset")
-        return f"{record['name']}@{record['version']}"
+        return _marker_address(_marker_record(self._bytes(path)), path)
 
     def address_at(self, path: Path) -> str:
         return path.parent.name
 
     def read(self, path: Path) -> object:
-        if _regular(path) is None:
-            raise ManifestConflictError(f"{path} is not a regular file; remove {path.parent} to refetch")
-        found = self.address_of(path)
+        record = _marker_record(self._bytes(path))
+        found = _marker_address(record, path)
         if found != self.address_at(path):
             raise ManifestConflictError(f"completion marker {path} belongs to {found}; remove {path.parent} to refetch")
-        return _marker_record(path)
+        return record
 
 
 DATASET_MARKER = _DatasetMarkerFormat()
@@ -548,38 +612,45 @@ def _foreign_files(files_dir: Path, manifest: DataManifest) -> list[str]:
     return sorted(foreign)
 
 
-def _read_marker(dataset: Path, manifest: DataManifest) -> tuple[dict[str, BlobStamp], str]:
+def _read_marker(ds: StorageDir, manifest: DataManifest, tmp: StorageDir) -> tuple[dict[str, BlobStamp], str]:
     """Return `(recorded blob stamps, state)`; state is `"valid"`, `"absent"` or `"corrupt"`.
 
-    A marker that is not a whole `dataset-marker@2.0` record is `"corrupt"` and contributes no
-    stamps, but a dataset or manifest digest it still names must be this one.
+    The marker is read through `ds` without following or blocking. Anything but a regular file there is
+    moved into `tmp` and the state is `"corrupt"`. A marker that is not a whole `dataset-marker@2.0`
+    record is `"corrupt"` and contributes no stamps, but a dataset or manifest digest it still names must
+    be this one.
 
     Raises:
-        ManifestConflictError: the marker is not a regular file, belongs to another dataset, or names
-            another manifest.
+        ManifestConflictError: the marker belongs to another dataset or names another manifest.
+        WrongKindError: an object at the marker cannot be moved aside.
     """
-    path = dataset / COMPLETE_MARKER
-    if not os.path.lexists(path):
+    path = ds.path / COMPLETE_MARKER
+    try:
+        data = ds.read_regular(COMPLETE_MARKER, limit=MARKER_LIMIT)
+    except (WrongKindError, ValueError) as err:
+        logger.warning("moving aside the completion marker %s: %s", path, err)
+        if ds.kind(COMPLETE_MARKER) not in (None, "file"):
+            ds.set_aside(COMPLETE_MARKER, tmp)
+        return {}, "corrupt"
+    if data is None:
         return {}, "absent"
-    if _regular(path) is None:
-        raise ManifestConflictError(f"{path} is not a regular file; remove {dataset} to refetch")
-    record = _marker_record(path)
+    record = _marker_record(data)
     if record is None:
         logger.warning("ignoring unreadable completion marker %s", path)
         return {}, "corrupt"
     recorded_digest = record.get("manifest_sha256")
     if isinstance(recorded_digest, str) and recorded_digest != manifest.digest():
         raise ManifestConflictError(
-            f"{dataset.name} was already fetched from a different manifest (hash {recorded_digest[:12]}...); "
-            f"bump the manifest version, or remove {dataset} to refetch"
+            f"{ds.path.name} was already fetched from a different manifest (hash {recorded_digest[:12]}...); "
+            f"bump the manifest version, or remove {ds.path} to refetch"
         )
     try:
-        DATASET_MARKER.read(path)
+        found = _marker_address(record, path)
     except ManifestConflictError:
-        if isinstance(record.get("name"), str) and isinstance(record.get("version"), str):
-            raise
         logger.warning("ignoring malformed completion marker %s", path)
         return {}, "corrupt"
+    if found != ds.path.name:
+        raise ManifestConflictError(f"completion marker {path} belongs to {found}; remove {ds.path} to refetch")
     stamps = _stamps(record.get("stamps"))
     if record.get("format") != MARKER_FORMAT or stamps is None or not isinstance(recorded_digest, str):
         logger.warning("ignoring malformed completion marker %s", path)
@@ -640,12 +711,12 @@ def _fetch_into(
     def aside() -> StorageDir:
         return StorageDir(tmp.path, os.dup(tmp.fd))
 
-    _remove_stale_downloads(top.path, tmp, policy.staging_stale_s)
+    _remove_stale_downloads(top, tmp, policy.staging_stale_s)
     with (
         top.walk("blobs", create=True, mode=dir_mode, aside=aside) as blobs,
         top.walk("datasets", f"{manifest.name}@{manifest.version}", create=True, mode=dir_mode, aside=aside) as ds,
     ):
-        recorded, marker_state = _read_marker(ds.path, manifest)
+        recorded, marker_state = _read_marker(ds, manifest, tmp)
         with ds.walk(FILES_DIR, create=True, mode=dir_mode, aside=aside) as files:
             if marker_state != "valid" and (foreign := _foreign_files(files.path, manifest)):
                 raise ManifestConflictError(
@@ -655,11 +726,11 @@ def _fetch_into(
             result: dict[str, Path] = {}
             stamps: dict[str, BlobStamp] = {}
             for file in manifest.files:
-                blob = _ensure_blob(file, blobs, tmp, open_url, recorded, verify, file_mode)
+                blob, stamp = _ensure_blob(file, blobs, tmp, open_url, recorded, verify, file_mode)
                 result[file.path] = _link(files, file.path, blob, dir_mode)
-                stamps[file.sha256] = _stamp(os.lstat(blob))
+                if stamp is not None:
+                    stamps[file.sha256] = stamp
         if marker_state != "valid" or stamps != recorded:
-            staged = uuid.uuid4().hex
             record = {
                 "format": MARKER_FORMAT,
                 "name": manifest.name,
@@ -675,15 +746,16 @@ def _fetch_into(
                     for sha, st in stamps.items()
                 },
             }
-            tmp.write_new(staged, jcs_dumps(record), file_mode)
-            _commit(
-                tmp,
-                staged,
-                ds,
-                COMPLETE_MARKER,
-                replace=marker_state != "absent",
-                keeps=lambda _: _read_marker(ds.path, manifest)[1] == "valid",
-            )
+            with _PrivateStaging(tmp) as private:
+                private.write_new(STAGED_MARKER, jcs_dumps(record), file_mode, grammar=STAGED_NAME)
+                _commit(
+                    private,
+                    STAGED_MARKER,
+                    ds,
+                    COMPLETE_MARKER,
+                    replace=marker_state != "absent",
+                    keeps=lambda: _read_marker(ds, manifest, tmp)[1] == "valid",
+                )
         return result
 
 

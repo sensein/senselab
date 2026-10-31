@@ -11,9 +11,11 @@ symlinks point only at a victim directory inside the probe's own scratch directo
 import errno
 import functools
 import hashlib
+import importlib
 import io
 import json
 import os
+import re
 import stat
 import sys
 import threading
@@ -129,11 +131,11 @@ def _snapshot(directory: Path) -> dict[str, list[Any]]:
             st = os.lstat(path)
             rel = str(path.relative_to(directory))
             if stat.S_ISLNK(st.st_mode):
-                seen[rel] = ["symlink", os.readlink(path), 0]
+                seen[rel] = ["symlink", os.readlink(path), 0, st.st_mtime_ns]
             elif stat.S_ISDIR(st.st_mode):
-                seen[rel] = ["directory", "", stat.S_IMODE(st.st_mode)]
+                seen[rel] = ["directory", "", stat.S_IMODE(st.st_mode), st.st_mtime_ns]
             else:
-                seen[rel] = ["file", path.read_bytes().decode("latin-1"), stat.S_IMODE(st.st_mode)]
+                seen[rel] = ["file", path.read_bytes().decode("latin-1"), stat.S_IMODE(st.st_mode), st.st_mtime_ns]
     return seen
 
 
@@ -702,25 +704,41 @@ def probe_primitive(scratch: str, operation: str) -> dict[str, Any]:
             if operation == "walk_intermediate":
                 return top.walk("link", "below", create=True, mode=0o2770)
             if operation == "open_new":
-                return top.open_new("file_link", 0o640)
+                return top.open_new("file_link", 0o640, grammar=ANY)
             if operation == "write_new":
-                return top.write_new("file_link", b"overwritten", 0o640)
+                return top.write_new("file_link", b"overwritten", 0o640, grammar=ANY)
             if operation == "write_atomically":
-                top.write_atomically("file_link", b"overwritten", mode=0o640)
+                top.write_atomically("file_link", b"overwritten", grammar=ANY, mode=0o640)
                 return top.kind("file_link")
+            if operation == "write_atomically_hard_link":
+                os.link(victim / "f", root / "hard_link")
+                top.write_atomically("hard_link", b"overwritten", grammar=ANY, mode=0o640)
+                return top.kind("hard_link")
+            if operation == "fs_now_symlink":
+                os.symlink(victim / "f", root / ".clock")
+                top.fs_now()
+                return top.kind(".clock")
+            if operation == "fs_now_hard_link":
+                os.link(victim / "f", root / ".clock")
+                top.fs_now()
+                return top.kind(".clock")
+            if operation == "read_regular":
+                return top.read_regular("file_link")
+            if operation == "outside_grammar":
+                return top.write_new("not-owned", b"x", 0o640, grammar=re.compile("owned"))
             if operation == "symlink":
-                return top.symlink("elsewhere", "link")
+                return top.symlink("elsewhere", "link", grammar=ANY)
             if operation == "link_source":
-                top.link("file_link", top, "hard")
+                top.link("file_link", top, "hard", grammar=ANY)
                 return top.kind("hard")
             if operation == "link_target":
                 (root / "real" / "x").write_bytes(b"x")
                 with top.child("real") as real:
-                    return real.link("x", top, "file_link")
+                    return real.link("x", top, "file_link", grammar=ANY)
             if operation == "rename_onto":
                 (root / "real" / "x").write_bytes(b"x")
                 with top.child("real") as real:
-                    real.rename("x", top, "file_link", replace=True)
+                    real.rename("x", top, "file_link", grammar=ANY, replace=True)
                 return top.kind("file_link")
             if operation == "remove_owned":
                 os.symlink(victim / "f", root / ("0" * 32))
@@ -745,7 +763,13 @@ def probe_primitive(scratch: str, operation: str) -> dict[str, Any]:
     }
 
 
+ANY = re.compile(r".+")
 PRIMITIVE = {
+    "write_atomically_hard_link": "",
+    "fs_now_symlink": "",
+    "fs_now_hard_link": "",
+    "read_regular": "WrongKindError",
+    "outside_grammar": "ValueError",
     "child": "WrongKindError",
     "child_create": "WrongKindError",
     "walk_intermediate": "WrongKindError",
@@ -773,7 +797,314 @@ def test_every_storage_operation_on_a_planted_symlink_leaves_its_target_alone(tm
     report = _bounded("probe_primitive", str(tmp_path), operation)
     assert report["victim_unchanged"], report
     assert report["error"] == PRIMITIVE[operation], report
-    if operation in ("write_atomically", "rename_onto"):
+    if operation in ("write_atomically", "rename_onto", "write_atomically_hard_link", "fs_now_symlink"):
         assert report["value"] == "file"
     if operation == "link_source":
         assert report["value"] == "symlink"
+
+
+# -- H-R40: every name a writer writes, planted with a symlink, a hard link, a directory or corrupt content --
+
+NAME_OPERATIONS = ("put", "get", "collect", "fetch", "record", "lock")
+PLANTS = ("symlink", "hardlink", "directory", "corrupt")
+NAME_TYPED = {"", "WrongKindError", "ManifestConflictError", "LockTimeout"}
+OLD = 10**9
+NAME_BOUND_S = 30.0
+
+
+def _run_named(op: str, root: Path) -> bool:
+    """Run `op` (the directory contract's operations, plus taking and releasing a lock) against `root`."""
+    if op != "lock":
+        return _run(op, root)
+    from senselab_core.runtime.locks import SharedFileLock
+
+    with SharedFileLock(root / "thing", timeout=5, heartbeat_interval=0.05, stale_after=0.5) as lock:
+        time.sleep(0.2)
+        return lock.owns()
+
+
+def _recording() -> list[Path]:
+    """Wrap every `StorageDir` write so the child records the path of each name it writes; return the record."""
+    from senselab_core.runtime.storage import StorageDir
+
+    written: list[Path] = []
+
+    def wrap(method: str, position: int, target_position: int | None = None) -> None:
+        real = getattr(StorageDir, method)
+
+        def recorded(self: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            where = args[target_position] if target_position is not None else self
+            written.append(Path(where.path) / args[position])
+            return real(self, *args, **kwargs)
+
+        setattr(StorageDir, method, recorded)
+
+    for method in ("open_new", "write_new", "write_atomically", "open_or_create"):
+        wrap(method, 0)
+    wrap("symlink", 1)
+    wrap("link", 2, 1)
+    wrap("rename", 2, 1)
+    real_now = StorageDir.fs_now
+
+    def now(self: StorageDir, name: str = ".clock") -> float:
+        written.append(Path(self.path) / name)
+        return real_now(self, name)
+
+    StorageDir.fs_now = now  # type: ignore[method-assign]
+    return written
+
+
+def _ephemeral(rel: Path) -> bool:
+    from senselab_core.runtime.fetch import LINK_STAGING_NAME
+    from senselab_core.runtime.storage import TEMPORARY_NAME
+    from senselab_worker.ownership import UUID_HEX
+
+    return any(UUID_HEX.fullmatch(p) for p in rel.parts) or bool(
+        TEMPORARY_NAME.fullmatch(rel.name) or LINK_STAGING_NAME.fullmatch(rel.name)
+    )
+
+
+def _names(op: str, scratch: Path, written: list[Path]) -> tuple[list[str], list[str]]:
+    """Run `op` cleanly; return the names it wrote that no listed grammar matches, and the names to plant at."""
+    from lint_written_names import written_names
+
+    grammars = written_names()
+    root = scratch / "clean" / "root"
+    _setup(op, root)
+    written.clear()
+    _run_named(op, root)
+    real_root = root.resolve()
+    rels = {Path(os.path.realpath(p.parent)).relative_to(real_root) / p.name for p in written}
+    unlisted = sorted(str(r) for r in rels if not any(g.fullmatch(r.name) for g in grammars))
+    final = {Path(c).relative_to(root) / n for c, _, files in os.walk(root) for n in files}
+    clocks = {r.with_name(r.name.removesuffix(".lock") + ".clock") for r in rels if r.name.endswith(".lock")}
+    targets = sorted(str(r) for r in rels | final | clocks if not _ephemeral(r))
+    return unlisted, targets
+
+
+def _plant(target: Path, plant: str, victim: Path) -> None:
+    if os.path.lexists(target):
+        os.chmod(target.parent, 0o770)
+        _remove_tree(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if plant == "symlink":
+        os.symlink(victim / "f", target)
+        os.utime(target, (OLD, OLD), follow_symlinks=False)
+    elif plant == "hardlink":
+        os.link(victim / "f", target)
+    elif plant == "directory":
+        target.mkdir()
+        (target / "inside").write_bytes(b"inside")
+        os.utime(target, (OLD, OLD))
+    else:
+        target.write_bytes(b"\x00{corrupt")
+        os.utime(target, (OLD, OLD))
+
+
+def probe_planted_names(scratch: str, op: str, plant: str) -> dict[str, Any]:
+    """At each name `op` writes, plant `plant` and run `op`; report each outcome, the victim and what is outside."""
+    sys.path.insert(0, str(HERE.parent / "lint"))
+    sys.modules["lint_written_names"] = importlib.import_module("written_names_test")
+    written = _recording()
+    base = Path(scratch)
+    unlisted, targets = _names(op, base, written)
+    reports = []
+    for i, rel in enumerate(targets):
+        case = base / f"case{i}"
+        root, victim = case / "root", case / "victim"
+        victim.mkdir(parents=True)
+        (victim / "f").write_bytes(VICTIM_BYTES)
+        os.chmod(victim / "f", 0o600)
+        os.utime(victim / "f", (OLD, OLD))
+        _setup(op, root)
+        _plant(root / rel, plant, victim)
+        before = _snapshot(victim)
+        started = time.monotonic()
+        error, right = _outcome(lambda root=root: _run_named(op, root))  # type: ignore[misc]
+        reports.append(
+            {
+                "at": rel,
+                "error": error,
+                "right": right,
+                "seconds": time.monotonic() - started,
+                "victim_unchanged": _snapshot(victim) == before,
+                "outside": sorted(p.name for p in case.iterdir()),
+            }
+        )
+    return {"unlisted": unlisted, "reports": reports}
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("plant", PLANTS)
+@pytest.mark.parametrize("op", NAME_OPERATIONS)
+def test_no_written_name_is_written_through_or_wedged_by_a_planted_object(tmp_path: Path, op: str, plant: str) -> None:
+    """At every name the store, fetch, a lock or a run manifest writes, a planted object changes no victim.
+
+    No victim's bytes, mode or mtime change, nothing is made outside the root, every name written matches a
+    grammar the modules list, and each outcome is a completed operation or a typed error within the bound.
+    """
+    result = _bounded("probe_planted_names", str(tmp_path), op, plant)
+    assert result["unlisted"] == []
+    assert result["reports"], "the operation wrote no name"
+    for report in result["reports"]:
+        assert report["victim_unchanged"], report
+        assert report["outside"] == ["root", "victim"], report
+        assert report["error"] in NAME_TYPED, report
+        assert report["error"] or report["right"], report
+        assert report["seconds"] < NAME_BOUND_S, report
+
+
+# -- the H9b review's C-1 and I-1..I-4, on the run manifests, the lock and fetch --
+
+SIDECARS = ("resolutions@2.json.lock", "resolutions@2.json.holder", "resolutions@2.json.heartbeat")
+
+
+def probe_record_with_plant(scratch: str, name: str, plant: str) -> dict[str, Any]:
+    """Plant `plant` at `runs/r1/<name>` and record a resolution; report the error, the victim and what is outside."""
+    from senselab_core.runtime import revision
+
+    base = Path(scratch)
+    cache, victim = base / "cache", base / "victim"
+    victim.mkdir()
+    (victim / "f").write_bytes(VICTIM_BYTES)
+    os.chmod(victim / "f", 0o600)
+    os.utime(victim / "f", (OLD, OLD))
+    target = cache / "runs" / "r1" / name
+    target.parent.mkdir(parents=True)
+    if plant == "symlink":
+        os.symlink(victim / "f", target)
+    elif plant == "dangling":
+        os.symlink(victim / "created-outside", target)
+    elif plant == "hardlink":
+        os.link(victim / "f", target)
+    elif plant == "directory":
+        target.mkdir()
+    elif plant == "fifo":
+        os.mkfifo(target)
+    else:
+        target.write_bytes(plant.encode())
+    if plant != "hardlink":
+        os.utime(target, (OLD, OLD), follow_symlinks=False)
+    before = _snapshot(victim)
+    os.environ["SENSELAB_CACHE"] = str(cache)
+    started = time.monotonic()
+    error, _ = _outcome(lambda: revision.record_resolution("org/m", "main", "a" * 40, run="r1"))
+    return {
+        "error": error,
+        "seconds": time.monotonic() - started,
+        "recorded": revision.read_manifest("r1"),
+        "victim_unchanged": _snapshot(victim) == before,
+        "victim": sorted(p.name for p in victim.iterdir()),
+    }
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("plant", ["symlink", "dangling"])
+@pytest.mark.parametrize("name", SIDECARS)
+def test_c1_lock_files_of_a_run_manifest_never_follow_a_planted_symlink(tmp_path: Path, name: str, plant: str) -> None:
+    """A symlink at the lock, holder or heartbeat of a run manifest is neither chmodded nor created through."""
+    report = _bounded("probe_record_with_plant", str(tmp_path), name, plant)
+    assert report["error"] == "" and report["recorded"]
+    assert report["victim_unchanged"] and report["victim"] == ["f"], report
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("name", [*SIDECARS, ".clock"])
+def test_i1_a_hard_link_at_a_lock_file_or_clock_leaves_its_target_alone(tmp_path: Path, name: str) -> None:
+    """A hard link at a lock file, sidecar or clock: the file it shares is not chmodded, truncated or re-stamped."""
+    report = _bounded("probe_record_with_plant", str(tmp_path), name, "hardlink")
+    assert report["error"] == "" and report["recorded"]
+    assert report["victim_unchanged"], report
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("content", ["{}", "garbage", " ", '{"user": "u", "host": "h", "pid": 1}'])
+def test_i2_a_corrupt_holder_never_hangs_record_resolution(tmp_path: Path, content: str) -> None:
+    """A holder that is not a whole identity is moved aside and, once stale, the resolution is recorded."""
+    report = _bounded("probe_record_with_plant", str(tmp_path), "resolutions@2.json.holder", content)
+    assert report["error"] == "" and report["recorded"] and report["seconds"] < NAME_BOUND_S, report
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("plant", ["directory", "fifo", "symlink"])
+@pytest.mark.parametrize("name", ["resolutions@2.json.lock", "resolutions@2.json.holder"])
+def test_i3_a_wrong_kind_at_a_lock_name_is_set_aside(tmp_path: Path, name: str, plant: str) -> None:
+    """A directory, fifo or symlink at the lock or holder is moved aside; the resolution is recorded, no OSError."""
+    report = _bounded("probe_record_with_plant", str(tmp_path), name, plant)
+    assert report["error"] == "" and report["recorded"], report
+
+
+def probe_fresh_corrupt_holder(scratch: str, content: str, stale_after: str, timeout: str) -> dict[str, Any]:
+    """Plant a fresh corrupt holder and take the lock; report how long it took, the outcome and what was set aside."""
+    from senselab_core.runtime.locks import SharedFileLock
+
+    resource = Path(scratch) / "thing"
+    Path(str(resource) + ".holder").write_bytes(content.encode())
+    lock = SharedFileLock(resource, stale_after=float(stale_after), timeout=float(timeout))
+    started = time.monotonic()
+    try:
+        with lock:
+            return {
+                "error": "",
+                "seconds": time.monotonic() - started,
+                "took_over": lock.took_over,
+                "set_aside": len(lock.set_aside),
+                "owns": lock.owns(),
+            }
+    except Exception as err:  # noqa: BLE001
+        return {"error": type(err).__name__, "seconds": time.monotonic() - started, "is_timeout": True}
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("content", ["{}", "garbage", ""])
+def test_i2_a_fresh_corrupt_holder_is_taken_after_the_stale_bound(tmp_path: Path, content: str) -> None:
+    """A fresh corrupt holder is moved aside and the lock taken once its age passes `stale_after`, not before."""
+    report = _bounded("probe_fresh_corrupt_holder", str(tmp_path), content, "0.5", "10")
+    assert report["error"] == "" and report["took_over"] and report["set_aside"] == 1 and report["owns"], report
+    assert 0.3 <= report["seconds"] < 10, report
+
+
+@pytest.mark.logic
+def test_i2_a_wait_on_a_corrupt_holder_is_bounded_and_typed(tmp_path: Path) -> None:
+    """With `timeout` below the stale bound, the wait ends in `LockTimeout` at the timeout."""
+    report = _bounded("probe_fresh_corrupt_holder", str(tmp_path), "{}", "60", "0.5")
+    assert report["error"] == "LockTimeout" and report["seconds"] < 5, report
+
+
+def probe_i4_swap_after_link(scratch: str) -> dict[str, Any]:
+    """Swap `blobs/<sha>` for other bytes right after fetch links it; report the marker's stamps and a re-fetch."""
+    import json as json_module
+
+    from senselab_core.runtime import fetch as fetch_module
+
+    cache = Path(scratch) / "cache"
+    real_commit = fetch_module._commit
+    modes: list[int] = []
+
+    def commit(source: Any, name: str, target: Any, final: str, **kwargs: Any) -> bool:  # noqa: ANN401
+        modes.append(stat.S_IMODE(os.fstat(source.fd).st_mode))
+        placed = real_commit(source, name, target, final, **kwargs)
+        if final == SHA:
+            swap = Path(target.path) / ".swap"
+            swap.write_bytes(b"x" * len(PAYLOAD))
+            os.replace(swap, Path(target.path) / final)
+        return placed
+
+    fetch_module._commit = commit  # type: ignore[assignment]
+    fetch_module.fetch(_manifest(["a/voice.wav"]), cache_root=cache, opener=_opener)
+    fetch_module._commit = real_commit  # type: ignore[assignment]
+    marker = json_module.loads((cache / "datasets" / "demo@1" / ".complete").read_bytes())
+    paths = fetch_module.fetch(_manifest(["a/voice.wav"]), cache_root=cache, opener=_opener, verify="size")
+    return {
+        "stamped": sorted(marker["stamps"]),
+        "served": paths["a/voice.wav"].read_bytes() == PAYLOAD,
+        "staging_modes": sorted(set(modes)),
+    }
+
+
+@pytest.mark.logic
+def test_i4_a_blob_swapped_after_its_link_is_never_trusted_by_size(tmp_path: Path) -> None:
+    """Fetch stages in a private 0700 directory, and stamps only the inode it hashed, so a swap is re-hashed."""
+    report = _bounded("probe_i4_swap_after_link", str(tmp_path))
+    assert report["stamped"] == [] and report["served"] is True, report
+    assert report["staging_modes"] == [0o700], report

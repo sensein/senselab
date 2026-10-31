@@ -35,18 +35,18 @@ def test_lock_release_refuses_a_name_that_is_not_a_sidecar(tmp_path: Path) -> No
 
 
 @pytest.mark.logic
-def test_link_staging_cleanup_refuses_a_name_outside_its_grammar(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A staged symlink whose suffix is not a uuid4 hex is left when the link cannot be placed."""
+def test_link_staging_refuses_a_name_outside_its_grammar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A staged symlink whose suffix is not a uuid4 hex is never created: the write grammar refuses it."""
     blob = tmp_path / "blob"
     blob.write_bytes(b"b")
     link = tmp_path / "voice.wav"
     _foreign_uuid(monkeypatch)
-    _failing_replace(monkeypatch)
-    with pytest.raises(OSError, match="replace refused"), storage_module.StorageDir.open_root(tmp_path) as files:
+    with (
+        pytest.raises(ValueError, match="not a name this writer owns"),
+        storage_module.StorageDir.open_root(tmp_path) as files,
+    ):
         fetch_module._link(files, link.name, blob, 0o2770)
-    assert (tmp_path / ".voice.wav.notes").is_symlink()
+    assert not os.path.lexists(tmp_path / ".voice.wav.notes") and not os.path.lexists(link)
 
 
 @pytest.mark.logic

@@ -385,18 +385,19 @@ def test_link_race_keeps_an_existing_blob_only_if_it_verifies(tmp_path: Path, ex
     else:
         final.symlink_to(good if existing == "symlink_to_good" else tmp_path / "nowhere")
     before = os.lstat(final).st_ino
-    staged = tmp_path / ("5" * 32)
-    staged.write_bytes(PAYLOAD)
-    with StorageDir.open_root(tmp_path) as source, StorageDir.open_root(blobs) as target:
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    (private / "blob").write_bytes(PAYLOAD)
+    with StorageDir.open_root(private) as source, StorageDir.open_root(blobs) as target:
         fetch_module._commit(
             source,
-            staged.name,
+            "blob",
             target,
             final.name,
             replace=False,
-            keeps=lambda p: fetch_module._blob_state(p, SHA, {}, "full") == "verified",
+            keeps=lambda: fetch_module._verified_stamp(target, SHA, {}, "full") is not None,
         )
-    assert not os.path.islink(final) and final.read_bytes() == PAYLOAD and not staged.exists()
+    assert not os.path.islink(final) and final.read_bytes() == PAYLOAD
     assert (os.lstat(final).st_ino == before) is (existing == "good")
 
 
@@ -450,17 +451,17 @@ def test_disk_full_is_storage_error_not_network(tmp_path: Path, monkeypatch: pyt
 def test_stale_cleanup_tolerates_unremovable_entries(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """A stale entry that cannot be removed does not abort the fetch; the failure is logged."""
     odd = tmp_path / "tmp" / ("5" * 32)
-    odd.mkdir(parents=True)
-    (odd / "inner").write_bytes(b"x")
-    odd.chmod(0o500)
+    (odd / "inner").mkdir(parents=True)
+    (odd / "inner" / "x").write_bytes(b"x")
+    (odd / "inner").chmod(0o500)
     old = time.time() - STALE_SECONDS - 60
     os.utime(odd, (old, old))
     try:
         with caplog.at_level("WARNING", logger="senselab"):
             fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     finally:
-        odd.chmod(0o700)
-    assert "cannot remove stale download" in caplog.text
+        (odd / "inner").chmod(0o700)
+    assert "cannot collect" in caplog.text
 
 
 @pytest.mark.logic
@@ -765,7 +766,8 @@ def test_symlinked_or_dangling_blob_is_absent(tmp_path: Path, kind: str) -> None
         blob.symlink_to(tmp_path / "outside")
     else:
         blob.mkdir()
-    assert fetch_module._blob_state(blob, SHA, {}, "full") == "absent"
+    with StorageDir.open_root(blob.parent) as blobs:
+        assert fetch_module._verified_stamp(blobs, SHA, {}, "full") is None
     calls: list[str] = []
     paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}, calls))
     assert calls == ["https://x/a.wav"]
@@ -807,8 +809,8 @@ def probe_download_from_an_endless_source(directory: str, size: str) -> dict[str
     staged = Path(directory) / ("5" * 32)
     error = ""
     try:
-        with StorageDir.open_root(Path(directory)) as opened:
-            fetch_module._download("https://x/a", lambda url: source, opened, staged.name, size=int(size))  # type: ignore[arg-type,return-value]
+        with open(staged, "xb") as out:
+            fetch_module._download("https://x/a", lambda url: source, out, size=int(size))  # type: ignore[arg-type,return-value]
     except Exception as err:  # noqa: BLE001 - the report names whatever was raised
         error = f"{type(err).__name__}: {err}"
     return {"error": error, "served": source.served, "written": staged.stat().st_size}
@@ -843,8 +845,8 @@ def test_download_short_of_declared_size_is_refused(tmp_path: Path) -> None:
     manifest = _manifest([_file("v.wav", "https://x/a", mirrors=["https://m/a"])])
     routes = {"https://x/a": PAYLOAD[:-1], "https://m/a": PAYLOAD}
     assert fetch(manifest, cache_root=tmp_path, opener=_opener(routes))["v.wav"].read_bytes() == PAYLOAD
-    with pytest.raises(FetchError, match="ended after"), StorageDir.open_root(tmp_path) as directory:
-        fetch_module._download("https://x/a", _opener(routes), directory, "6" * 32, size=len(PAYLOAD))
+    with pytest.raises(FetchError, match="ended after"), open(tmp_path / ("6" * 32), "xb") as out:
+        fetch_module._download("https://x/a", _opener(routes), out, size=len(PAYLOAD))
 
 
 @pytest.mark.logic
@@ -898,8 +900,8 @@ def test_redirect_to_non_https_refused(target: str) -> None:
 def test_enospc_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int) -> None:
     """Out of space while writing a download is StorageFull, with no staged file left behind."""
 
-    def full(url: str, opener: object, directory: StorageDir, name: str, *, size: int, mode: int) -> None:
-        (directory.path / name).write_bytes(b"partial")
+    def full(url: str, opener: object, out: BinaryIO, *, size: int) -> None:
+        out.write(b"partial")
         raise OSError(err, os.strerror(err))
 
     monkeypatch.setattr(fetch_module, "_download", full)
@@ -910,14 +912,15 @@ def test_enospc_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 
 
 @pytest.mark.logic
-def test_marker_that_is_a_directory_is_a_conflict(tmp_path: Path) -> None:
-    """A `.complete` that is a directory is reported as a conflict, never a raw OSError from os.replace."""
+def test_marker_that_is_a_directory_is_set_aside_and_rewritten(tmp_path: Path) -> None:
+    """A `.complete` that is a directory is moved into `tmp/` and the marker written again, never a raw OSError."""
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     marker = _dataset(tmp_path) / ".complete"
     marker.unlink()
     marker.mkdir()
-    with pytest.raises(ManifestConflictError, match="not a regular file"):
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+    fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+    assert stat.S_ISREG(marker.lstat().st_mode)
+    assert json.loads(marker.read_bytes())["manifest_sha256"] == _manifest().digest()
 
 
 @pytest.mark.logic
