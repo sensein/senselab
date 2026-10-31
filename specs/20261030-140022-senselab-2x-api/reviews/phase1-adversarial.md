@@ -91,3 +91,26 @@ Phase 1's exit claims are "keys are exact and portable", "results never lost onc
 - A-7, A-8, A-9 and A-10 (unbounded shutdown, request theft, data deletion, batch-mate failure).
 
 Each needs its contract test landed, not only a patch. A-11 and A-29 block the first tagged release rather than the phase.
+
+## 7. Re-run (H8c, after hardening H1–H8b)
+
+Five attackers, one per surface, at `b42d3cf0`, each briefed to break an invariant rather than re-find
+a pinned case; every high and medium finding was then reproduced independently at `99a6d5f8`. Raw
+findings with reproductions are in `phase1-reattack/` (wire, store, kernel, gate, canon).
+
+| Surface | Critical | High | Medium | Low | Rows |
+|---|---|---|---|---|---|
+| Worker wire and lifecycle | 0 | 1 | 2 | 2 | R-99 |
+| Store, fetch, locks | 0 | 1 | 3 | 3 | R-100, R-101 |
+| Kernel values, provenance | 0 | 1 | 5 | 6 | R-102, R-103, R-104 |
+| Guards, packaging, release gate | 0 | 2 | 8 | 2 | R-106, R-107, R-108 |
+| Canonical encoding, hashing | 0 | 0 | 4 | 4 | R-105 |
+
+All 31 high and medium findings reproduced; XG-12's red test was already fixed by H8b. What held, per
+surface, is listed in each findings file: JCS number and string vectors, `.npy` across endianness and
+numpy 1.23/2.x, tag unambiguity, the `path_key` sweep over 194,558 code points on APFS, concurrent
+fetch and crash-mid-link, H5's per-item totality, H7's pin, tag and cache-isolation checks.
+
+The pattern across surfaces: invariants enforced by checking spellings or one construction path hold
+against the cases that motivated them and fail against ordinary alternatives. Each row's resolution
+replaces the check with a structure in which the violating state cannot be constructed.
