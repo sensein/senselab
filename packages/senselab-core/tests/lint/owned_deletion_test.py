@@ -11,15 +11,30 @@ DELETING_ATTRIBUTES = {"unlink", "rmtree", "rmdir", "removedirs"}
 DELETING_NAMES = {("os", "remove"), ("os", "unlink"), ("os", "rmdir"), ("os", "removedirs"), ("shutil", "rmtree")}
 ALLOWED = {
     ("senselab_worker/ownership.py", "remove_owned"): None,
-    ("senselab_core/runtime/worker_client.py", "WorkerClient._shutdown"): {"os.rmdir"},
+    ("senselab_core/runtime/worker_client.py", "WorkerClient._shutdown"): {"os.rmdir(self._array_dir)"},
 }
+"""Per (module, qualname), the calls allowed there as `<resolved target>(<argument source>)`; None allows any."""
 
 
-def _call_name(call: ast.Call) -> str | None:
+def _imports(tree: ast.AST) -> dict[str, str]:
+    """Map each name a module binds by `import` to the module it resolves to."""
+    bound: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                bound[alias.asname or alias.name.split(".")[0]] = (
+                    alias.name if alias.asname else alias.name.split(".")[0]
+                )
+    return bound
+
+
+def _call_name(call: ast.Call, bound: dict[str, str]) -> str | None:
+    """Return the deletion call's resolved target, the base module through the module's imports, or None."""
     func = call.func
     if isinstance(func, ast.Attribute):
-        base = func.value.id if isinstance(func.value, ast.Name) else "?"
-        if func.attr in DELETING_ATTRIBUTES or (base, func.attr) in DELETING_NAMES:
+        name = func.value.id if isinstance(func.value, ast.Name) else "?"
+        base = bound.get(name, f"<unbound {name}>")
+        if func.attr in DELETING_ATTRIBUTES or {(base, func.attr), (name, func.attr)} & DELETING_NAMES:
             return f"{base}.{func.attr}"
     if isinstance(func, ast.Name) and any(func.id == name for _, name in DELETING_NAMES):
         return func.id
@@ -29,6 +44,8 @@ def _call_name(call: ast.Call) -> str | None:
 def deletions(source: str, module: str) -> list[str]:
     """Return `module:line qualname call` for every deletion call or import that the allowlist does not cover."""
     found: list[str] = []
+    tree = ast.parse(source)
+    bound = _imports(tree)
 
     def visit(node: ast.AST, scope: tuple[str, ...]) -> None:
         for child in ast.iter_child_nodes(node):
@@ -39,19 +56,20 @@ def deletions(source: str, module: str) -> list[str]:
                 for alias in child.names:
                     if (child.module, alias.name) in DELETING_NAMES:
                         found.append(f"{module}:{child.lineno} import {child.module}.{alias.name}")
-            if isinstance(child, ast.Call) and (name := _call_name(child)) is not None:
-                if not _allowed(module, inner, name):
-                    found.append(f"{module}:{child.lineno} {'.'.join(scope) or '<module>'} {name}")
+            if isinstance(child, ast.Call) and (name := _call_name(child, bound)) is not None:
+                call = f"{name}({', '.join(ast.unparse(a) for a in [*child.args, *child.keywords])})"
+                if not _allowed(module, inner, call):
+                    found.append(f"{module}:{child.lineno} {'.'.join(scope) or '<module>'} {call}")
             visit(child, inner)
 
-    visit(ast.parse(source), ())
+    visit(tree, ())
     return found
 
 
-def _allowed(module: str, scope: tuple[str, ...], name: str) -> bool:
-    for (where, qualname), names in ALLOWED.items():
+def _allowed(module: str, scope: tuple[str, ...], call: str) -> bool:
+    for (where, qualname), calls in ALLOWED.items():
         parts = tuple(qualname.split("."))
-        if module.endswith(where) and scope[: len(parts)] == parts and (names is None or name in names):
+        if module.endswith(where) and scope[: len(parts)] == parts and (calls is None or call in calls):
             return True
     return False
 
@@ -82,7 +100,29 @@ def test_the_lint_finds_every_deletion_form(line: str) -> None:
     assert deletions(f"def f(p):\n    {line}\n", "senselab_core/other.py")
     assert not deletions(f"def remove_owned(p):\n    {line}\n", "senselab_worker/ownership.py")
     in_shutdown = f"class WorkerClient:\n    def _shutdown(self, p):\n        {line}\n"
-    assert bool(deletions(in_shutdown, "senselab_core/runtime/worker_client.py")) == (line != "os.rmdir(p)")
+    assert deletions(in_shutdown, "senselab_core/runtime/worker_client.py")
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize(
+    ("imports", "line", "allowed"),
+    [
+        ("import os", "os.rmdir(self._array_dir)", True),
+        ("import os as o", "o.rmdir(self._array_dir)", True),
+        ("import shutil as os", "os.rmdir(self._array_dir)", False),
+        ("import pathlib as os", "os.rmdir(self._array_dir)", False),
+        ("", "os.rmdir(self._array_dir)", False),
+        ("import os", "os.rmdir(p)", False),
+        ("import os", "os.rmdir(self._array_dir.parent)", False),
+        ("import os", "os.rmdir(self._array_dir, dir_fd=3)", False),
+        ("import os", "os.removedirs(self._array_dir)", False),
+        ("import os", "self._array_dir.rmdir()", False),
+    ],
+)
+def test_shutdown_allowance_is_one_resolved_call_on_one_argument(imports: str, line: str, allowed: bool) -> None:
+    """`WorkerClient._shutdown` may call only `os.rmdir(self._array_dir)`, with `os` resolved through the imports."""
+    source = f"{imports}\nclass WorkerClient:\n    def _shutdown(self, p):\n        {line}\n"
+    assert (deletions(source, "senselab_core/runtime/worker_client.py") == []) is allowed
 
 
 @pytest.mark.logic

@@ -7,6 +7,7 @@ import os
 import pwd
 import shutil
 import stat
+import tempfile
 import time
 from collections.abc import Callable, Iterator
 from multiprocessing.queues import Queue as MpQueue
@@ -17,6 +18,8 @@ from typing import Any
 
 import numpy
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ReusePolicy
 from senselab_core.runtime import store as store_module
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
@@ -939,6 +942,55 @@ def test_corrupt_entry_of_another_user_does_not_wedge_the_key(tmp_path: Path, mo
     assert aside.parent == entry.parent and UUID_HEX.fullmatch(aside.name)
     assert stat.S_IMODE(aside.stat().st_mode) & 0o222 == 0
     assert not (tmp_path / QUARANTINE_DIR).exists() or list((tmp_path / QUARANTINE_DIR).iterdir()) == []
+
+
+@pytest.mark.contract
+@settings(max_examples=30, deadline=None)
+@given(
+    ages=st.lists(st.tuples(st.sampled_from(["uuid", "fingerprint", "other"]), st.integers(0, 2000)), max_size=6),
+    sealed=st.booleans(),
+)
+def test_collect_removes_exactly_the_aged_entries_set_aside_in_place(ages: list[tuple[str, int]], sealed: bool) -> None:
+    """Under every key, `collect` removes the uuid-named children past the quarantine age, sealed or not, only."""
+    policy = StorePolicy(world_readable=False, quarantine_retention_s=1000, staging_stale_s=100, collect_interval_s=60)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        s, k, c = ResultStore(root, policy=policy), _key(), _ctx()
+        s.put(k, {"y": 1}, c)
+        entry = _entry_dir(root, k, c)
+        base = entry.parent
+        now = time.time()
+        expected = {entry.name}
+        for i, (kind, age) in enumerate(ages):
+            name = {"uuid": f"{i:032x}", "fingerprint": f"{i:064x}", "other": f"keep-{i}"}[kind]
+            child = base / name
+            child.mkdir()
+            (child / "result.json").write_bytes(b"{}")
+            if sealed:
+                child.chmod(0o550)
+            os.utime(child, (now - age, now - age))
+            if not (kind == "uuid" and age > 1000):
+                expected.add(name)
+        os.utime(entry, (now - 10**6, now - 10**6))
+        s.collect(now=now)
+        assert {p.name for p in base.iterdir()} == expected
+        for p in base.iterdir():
+            p.chmod(0o750)
+
+
+@pytest.mark.logic
+def test_entry_set_aside_in_place_is_collected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A corrupt entry renamed aside beside its key, read-only, is removed by `collect` once past the quarantine age."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    s.put(k, {"y": 1}, c)
+    entry = _entry_dir(tmp_path, k, c)
+    CORRUPTIONS["result_garbled"](entry)
+    _seal_entry(entry)
+    _refuse_chmod_on(monkeypatch, entry)
+    s.put(k, {"y": 2}, c)
+    (aside,) = [p for p in entry.parent.iterdir() if p != entry]
+    assert s.collect(now=time.time() + s.policy.quarantine_retention_s + 1) == 1
+    assert [p.name for p in entry.parent.iterdir()] == [entry.name]
 
 
 @pytest.mark.logic

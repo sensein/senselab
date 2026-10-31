@@ -368,16 +368,31 @@ def test_size_mode_skips_rehash_and_full_mode_catches_same_size_corruption(
     assert hashed
 
 
-@pytest.mark.logic
-def test_first_writer_wins_blob_commit(tmp_path: Path) -> None:
-    """An existing blob is never replaced by a later commit; the staged file is dropped."""
+@pytest.mark.contract
+@pytest.mark.parametrize("existing", ["good", "other_bytes", "truncated", "empty", "symlink_to_good", "dangling"])
+def test_link_race_keeps_an_existing_blob_only_if_it_verifies(tmp_path: Path, existing: str) -> None:
+    """A blob that appeared before the link is kept only if it verifies; else the verified staged copy replaces it."""
+    blobs = tmp_path / "blobs"
+    blobs.mkdir()
+    final = blobs / SHA
+    good = tmp_path / "good"
+    good.write_bytes(PAYLOAD)
+    content = {"good": PAYLOAD, "other_bytes": b"y" * len(PAYLOAD), "truncated": PAYLOAD[:-1], "empty": b""}
+    if existing in content:
+        final.write_bytes(content[existing])
+    else:
+        final.symlink_to(good if existing == "symlink_to_good" else tmp_path / "nowhere")
+    before = os.lstat(final).st_ino
     staged = tmp_path / ("5" * 32)
-    final = tmp_path / "blob"
-    final.write_bytes(b"first")
-    staged.write_bytes(b"second")
-    fetch_module._commit(staged, final)
-    assert final.read_bytes() == b"first"
-    assert not staged.exists()
+    staged.write_bytes(PAYLOAD)
+    fetch_module._commit(
+        staged,
+        final,
+        replace=False,
+        keeps=lambda p: fetch_module._blob_state(p, SHA, {}, "full") == "verified",
+    )
+    assert not os.path.islink(final) and final.read_bytes() == PAYLOAD and not staged.exists()
+    assert (os.lstat(final).st_ino == before) is (existing == "good")
 
 
 @pytest.mark.logic
@@ -631,6 +646,20 @@ def test_a18_paths_that_are_not_prefix_free_are_refused(paths: list[str]) -> Non
 
 
 _PLAIN_PARTS = ["a", "A", "b", "c", "\u00e9", "e\u0301", ".complete", "files", "tmp", "blobs"]
+_PLAIN_PARTS += [
+    "\u03c3",
+    "\u03c2",
+    "\u03a3",
+    "\u00b5",
+    "\u03bc",
+    "\u017f",
+    "s",
+    "\u00df",
+    "ss",
+    "\u1e9e",
+    "\u212a",
+    "k",
+]
 _BAD_PARTS = [".", "..", "", ".a." + "0" * 32, "x\\y"]
 
 
@@ -643,14 +672,40 @@ def manifest_path_sets(draw: st.DrawFn) -> list[str]:
 
 
 def _acceptable(paths: list[str]) -> bool:
-    """The oracle: every part is a plain name, and no path equals or contains another under case and NFC folding."""
+    """The oracle: every part is a plain name, and no path equals or contains another under canonical caseless match."""
     keys = []
     for p in paths:
         parts = p.split("/")
         if "\\" in p or any(x in ("", ".", "..") or (x.startswith(".a.") and x.endswith("0" * 32)) for x in parts):
             return False
-        keys.append(tuple(unicodedata.normalize("NFC", x).lower() for x in parts))
+        keys.append(tuple(unicodedata.normalize("NFD", unicodedata.normalize("NFD", x).casefold()) for x in parts))
     return all(a != b and a[: len(b)] != b for a in keys for b in keys if a is not b)
+
+
+_FOLD_CLASSES = [
+    ["\u03c3", "\u03c2", "\u03a3"],
+    ["\u00b5", "\u03bc", "\u039c"],
+    ["\u017f", "s", "S"],
+    ["\u00df", "ss", "SS", "\u1e9e", "s\u017f"],
+    ["\u212a", "k", "K"],
+    ["\u00e9", "e\u0301", "\u00c9", "E\u0301"],
+    ["\u212b", "\u00c5", "\u00e5", "a\u030a"],
+    ["\u1e69", "s\u0323\u0307", "s\u0307\u0323", "\u1e68"],
+]
+
+
+@pytest.mark.contract
+@settings(max_examples=300, deadline=None)
+@given(
+    picks=st.lists(st.tuples(st.integers(0, len(_FOLD_CLASSES) - 1), st.integers(0, 9), st.integers(0, 9)), max_size=6)
+)
+def test_path_key_joins_every_spelling_of_one_caseless_name(picks: list[tuple[int, int, int]]) -> None:
+    """Names built from spellings one filesystem may store as one file share a key; other names never do."""
+    left = "".join(_FOLD_CLASSES[c][i % len(_FOLD_CLASSES[c])] for c, i, _ in picks)
+    right = "".join(_FOLD_CLASSES[c][j % len(_FOLD_CLASSES[c])] for c, _, j in picks)
+    assert fetch_module.path_key(f"d/{left}") == fetch_module.path_key(f"D/{right}")
+    other = "".join(_FOLD_CLASSES[(c + 1) % len(_FOLD_CLASSES)][0] for c, _, _ in picks)
+    assert (fetch_module.path_key(left) == fetch_module.path_key(other)) is (not picks)
 
 
 @pytest.mark.logic

@@ -381,6 +381,15 @@ them to a principle.
 - failures are not cached;
 - every entry carries a format version, and format changes migrate rather than wipe
   ([ADR-006](adr/ADR-006-formats.md)). A new key space is created only by an identity change.
+- **Who can change a sealed entry.** A committed entry is read-only (files 0440, its directory
+  2550), but the key directory that holds it is 2770 with no sticky bit, so any member of the
+  store's group can rename or remove a sealed entry (not rewrite its files). Read-only modes stop an
+  accidental write by the owner; they are not a boundary between group members. A reader still
+  binds every entry to its address, so a renamed or replaced entry is refused or recomputed, never
+  served under the wrong key. A corrupt entry that cannot be moved into `quarantine/` (it belongs
+  to another user) is renamed to `<uuid>` beside it; `collect` removes such names, like quarantined
+  entries, once past `quarantine_retention_s`, after making the directory writable, which only its
+  owner can do.
 
 **One provenance store** (`ProvStore`, append-only, content-derived ids) is written around every
 node with the attested identities. BEP028 export is how runs are published. `reproduce` becomes a

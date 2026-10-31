@@ -109,12 +109,14 @@ class DataFile(Frozen):
 
 
 def path_key(path: str) -> tuple[str, ...]:
-    """Return how a filesystem may compare `path`: part by part, NFC-normalised and lower-cased.
+    """Return how a filesystem may compare `path`: part by part, by Unicode canonical caseless match.
 
-    Two manifest paths equal under this key are one path, since a case-insensitive filesystem
-    (macOS, Windows) stores them as one file.
+    Each part is decomposed (NFD), fully case-folded (`str.casefold`) and recomposed (NFC). Two
+    manifest paths equal under this key are one path.
     """
-    return tuple(unicodedata.normalize("NFC", part).lower() for part in path.split("/"))
+    return tuple(
+        unicodedata.normalize("NFC", unicodedata.normalize("NFD", part).casefold()) for part in path.split("/")
+    )
 
 
 class DataManifest(Frozen):
@@ -281,10 +283,11 @@ def _fsync_dir(path: Path) -> None:
         os.close(fd)
 
 
-def _commit(staged: Path, final: Path, *, replace: bool = False) -> None:
+def _commit(staged: Path, final: Path, *, replace: bool, keeps: Callable[[Path], bool]) -> None:
     """Move verified `staged` into `final`, then sync the directory.
 
-    With `replace` False the first writer wins (`os.link`, an existing `final` is kept). With `replace`
+    With `replace` False the first writer wins (`os.link`): a `final` that appeared meanwhile is
+    kept if `keeps(final)` verifies it, and otherwise atomically replaced by `staged`. With `replace`
     True `final` is atomically replaced, so a reader sees the old or the new bytes, never a missing path.
 
     Raises:
@@ -292,24 +295,35 @@ def _commit(staged: Path, final: Path, *, replace: bool = False) -> None:
         OSError: the move failed.
     """
     try:
+        if not replace:
+            replace = not _link_first(staged, final) and not keeps(final)
         if replace:
             os.replace(staged, final)
-        else:
-            try:
-                os.link(staged, final)
-            except FileExistsError:
-                pass
-            except OSError as err:
-                if err.errno in _NO_HARDLINK_ERRNOS:
-                    raise storage_fault(
-                        err,
-                        final.parent,
-                        hint="this filesystem has no hard links; use a cache root on a filesystem that supports them",
-                    ) from err
-                raise
     finally:
         remove_owned(staged.parent, staged, pattern=UUID_HEX)
     _fsync_dir(final.parent)
+
+
+def _link_first(staged: Path, final: Path) -> bool:
+    """Hard-link `staged` at `final`; return False if `final` already exists.
+
+    Raises:
+        StoreUnavailable: the filesystem has no hard links.
+        OSError: the link failed otherwise.
+    """
+    try:
+        os.link(staged, final)
+    except FileExistsError:
+        return False
+    except OSError as err:
+        if err.errno in _NO_HARDLINK_ERRNOS:
+            raise storage_fault(
+                err,
+                final.parent,
+                hint="this filesystem has no hard links; use a cache root on a filesystem that supports them",
+            ) from err
+        raise
+    return True
 
 
 class BlobStamp(NamedTuple):
@@ -400,7 +414,12 @@ def _ensure_blob(
             if actual != file.sha256:
                 tried.append(f"{url} (sha256 {actual[:12]}..., expected {file.sha256[:12]}...)")
                 continue
-            _commit(staged, blob, replace=os.path.lexists(blob))
+            _commit(
+                staged,
+                blob,
+                replace=os.path.lexists(blob),
+                keeps=lambda existing: _blob_state(existing, file.sha256, {}, "full") == "verified",
+            )
             return blob
         except _SourceError as err:
             tried.append(f"{url} ({err})")
@@ -606,7 +625,12 @@ def fetch(
                 out.write(jcs_dumps(record))
                 out.flush()
                 os.fsync(out.fileno())
-            _commit(staged, dataset / COMPLETE_MARKER, replace=marker_state != "absent")
+            _commit(
+                staged,
+                dataset / COMPLETE_MARKER,
+                replace=marker_state != "absent",
+                keeps=lambda _: _read_marker(dataset, manifest)[1] == "valid",
+            )
         return result
     except OSError as err:
         raise storage_fault(err, root) from err

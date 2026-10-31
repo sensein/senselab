@@ -429,20 +429,35 @@ def _discard_staging(staging_root: Path, staging: Path) -> None:
         logger.warning("cannot remove staging directory %s: %s", staging, err)
 
 
-def _remove_older(directory: Path, cutoff: float) -> int:
-    """Remove the owned children of `directory` whose mtime is before `cutoff`; return how many. Failures are logged."""
+def _listed(directory: Path) -> list[str]:
+    """Return the names in `directory`; none if it is missing or cannot be listed, which is logged."""
     try:
-        names = os.listdir(directory)
-    except FileNotFoundError:
-        return 0
+        return os.listdir(directory)
+    except (FileNotFoundError, NotADirectoryError):
+        return []
     except OSError as err:
         logger.warning("cannot list %s to collect it: %s", directory, err)
-        return 0
+        return []
+
+
+def _remove_older(directory: Path, cutoff: float) -> int:
+    """Remove the uuid-named children of `directory` whose mtime is before `cutoff`; return how many.
+
+    A uuid-named directory is made writable by its owner first, so a sealed entry's files can be
+    unlinked. Failures are logged.
+    """
     removed = 0
-    for name in names:
+    for name in _listed(directory):
         child = directory / name
+        if not UUID_HEX.fullmatch(name):
+            continue
         try:
-            if os.lstat(child).st_mtime < cutoff and remove_owned(directory, child, pattern=UUID_HEX):
+            info = os.lstat(child)
+            if info.st_mtime >= cutoff:
+                continue
+            if stat.S_ISDIR(info.st_mode):
+                set_mode(child, STAGING_DIR_MODE)
+            if remove_owned(directory, child, pattern=UUID_HEX):
                 removed += 1
         except FileNotFoundError:
             continue
@@ -613,7 +628,8 @@ class ResultStore:
     def collect(self, now: float | None = None) -> int:
         """Remove quarantined entries and staging directories older than the policy's ages; return how many.
 
-        Ages are measured from each directory's mtime to `now`, which defaults to the storage's own
+        Entries set aside in place (`<uuid>` beside the fingerprints of their key) count as
+        quarantined. Ages are measured from each directory's mtime to `now`, which defaults to the storage's own
         clock (`fs_now` on `root`). Only uuid-named children are removed, through `remove_owned`.
         A failure to read the clock, list or remove is logged and skips that item.
         """
@@ -625,9 +641,14 @@ class ResultStore:
             except OSError as err:
                 logger.warning("cannot read the clock of store %s; not collecting: %s", self.root, err)
                 return 0
-        return _remove_older(self.root / QUARANTINE_DIR, now - self.policy.quarantine_retention_s) + _remove_older(
-            self.root / STAGING_DIR, now - self.policy.staging_stale_s
-        )
+        aside = now - self.policy.quarantine_retention_s
+        removed = _remove_older(self.root / QUARANTINE_DIR, aside)
+        removed += _remove_older(self.root / STAGING_DIR, now - self.policy.staging_stale_s)
+        store = self.root / STORE_DIR
+        for prefix in _listed(store):
+            for digest in _listed(store / prefix):
+                removed += _remove_older(store / prefix / digest, aside)
+        return removed
 
     def put(self, key: LogicalKey, outputs: dict[str, object], context: ExecutionContext) -> OutputIdentity:
         """Store `outputs` under `key` and `context`, and return the committed output identity.
