@@ -72,10 +72,10 @@ def test_weights_identity_ignores_listing_order(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_weights_identity_is_tagged_digest_of_sorted_pairs(tmp_path: Path) -> None:
-    """The identity is the `weights@2` digest of sorted [POSIX relpath, file sha256] pairs."""
+    """The identity is the `weights@3` digest of sorted [POSIX relpath, file sha256] pairs."""
     root = _weights_dir(tmp_path)
     expected = tagged_digest(
-        "weights@2", [["config.json", sha256_bytes(b"{}")], ["sub/w.bin", sha256_bytes(b"\x00\x01\x02")]]
+        "weights@3", [["config.json", sha256_bytes(b"{}")], ["sub/w.bin", sha256_bytes(b"\x00\x01\x02")]]
     )
     assert weights_identity([root / "sub" / "w.bin", root / "config.json"], root=root) == expected
 
@@ -101,7 +101,7 @@ def test_weights_identity_hashes_symlink_targets_under_root_names(tmp_path: Path
     root = tmp_path / "snapshot"
     root.mkdir()
     os.symlink(blob, root / "model.bin")
-    expected = tagged_digest("weights@2", [["model.bin", sha256_bytes(b"weights")]])
+    expected = tagged_digest("weights@3", [["model.bin", sha256_bytes(b"weights")]])
     assert weights_identity([root / "model.bin"], root=root) == expected
 
 
@@ -124,7 +124,7 @@ def test_weights_identity_normalises_names_to_nfc(tmp_path: Path) -> None:
     root.mkdir()
     nfd = "café.bin"
     (root / nfd).write_bytes(b"w")
-    expected = tagged_digest("weights@2", [["café.bin", sha256_bytes(b"w")]])
+    expected = tagged_digest("weights@3", [["café.bin", sha256_bytes(b"w")]])
     assert weights_identity([root / nfd], root=root) == expected
     with pytest.raises(ValueError):
         weights_identity([root / nfd, root / "café.bin"], root=root)
@@ -138,7 +138,7 @@ def test_weights_identity_sorts_by_utf16_code_units(tmp_path: Path) -> None:
     for name in ("ﬁ.bin", "\U0001f600.bin"):
         (root / name).write_bytes(name.encode())
     pairs = [[n, sha256_bytes(n.encode())] for n in ("\U0001f600.bin", "ﬁ.bin")]
-    assert weights_identity([root / "ﬁ.bin", root / "\U0001f600.bin"], root=root) == tagged_digest("weights@2", pairs)
+    assert weights_identity([root / "ﬁ.bin", root / "\U0001f600.bin"], root=root) == tagged_digest("weights@3", pairs)
 
 
 @pytest.mark.logic
@@ -156,4 +156,4 @@ def test_a31_content_root_covers_chunk_size(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_hashing_uses_registered_tags() -> None:
     """The tags `hashing` digests under are registered."""
-    assert {"content-root@2", "weights@2"} <= DIGEST_TAGS
+    assert {"content-root@2", "weights@3"} <= DIGEST_TAGS

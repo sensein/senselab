@@ -30,7 +30,7 @@ from typing import IO, Annotated, Any, BinaryIO, Literal, NamedTuple
 
 import yaml
 from pydantic import Field, ValidationError, field_validator, model_validator
-from senselab_worker.canonical import jcs_dumps, tagged_digest
+from senselab_worker.canonical import is_portable, jcs_dumps, tagged_digest
 from senselab_worker.hashing import sha256_file
 from senselab_worker.ownership import UUID_HEX, remove_owned
 
@@ -111,13 +111,19 @@ class DataFile(Frozen):
 def path_key(path: str) -> tuple[str, ...]:
     """Return how a filesystem may compare `path`: part by part, by Unicode canonical caseless match.
 
-    Each part is decomposed (NFD), upper-cased (`str.upper`), fully case-folded (`str.casefold`) and
-    recomposed (NFC), so it joins what full case folding joins and what a filesystem comparing by
-    upper case joins (`ı` with `I` and `i`). Two manifest paths equal under this key are one path.
+    Each part whose code points are all assigned in Unicode 13.0 (`canonical.is_portable`) is decomposed
+    (NFD), upper-cased (`str.upper`), fully case-folded (`str.casefold`) and recomposed (NFC), so it joins
+    what full case folding joins and what a filesystem comparing by upper case joins (`ı` with `I` and
+    `i`). Any other part is kept as given, so the key is the same on every supported Python. Two manifest
+    paths equal under this key are one path.
     """
-    return tuple(
-        unicodedata.normalize("NFC", unicodedata.normalize("NFD", part).upper().casefold()) for part in path.split("/")
-    )
+    return tuple(_part_key(part) for part in path.split("/"))
+
+
+def _part_key(part: str) -> str:
+    if not is_portable(part):
+        return part
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFD", part).upper().casefold())
 
 
 class DataManifest(Frozen):
@@ -156,8 +162,8 @@ class DataManifest(Frozen):
         return self
 
     def digest(self) -> str:
-        """Return `tagged_digest("data-manifest@2", <the manifest's JSON form>)`."""
-        return tagged_digest("data-manifest@2", self.model_dump(mode="json"))
+        """Return `tagged_digest("data-manifest@3", <the manifest's JSON form>)`."""
+        return tagged_digest("data-manifest@3", self.model_dump(mode="json"))
 
     @classmethod
     def load(cls, path: Path) -> "DataManifest":

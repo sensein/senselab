@@ -602,9 +602,9 @@ def test_live_fetch(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_manifest_digest_is_tagged() -> None:
-    """The manifest digest is the registered `data-manifest@2` tagged digest of its JSON form."""
+    """The manifest digest is the registered `data-manifest@3` tagged digest of its JSON form."""
     manifest = _manifest()
-    assert manifest.digest() == tagged_digest("data-manifest@2", manifest.model_dump(mode="json"))
+    assert manifest.digest() == tagged_digest("data-manifest@3", manifest.model_dump(mode="json"))
     assert manifest.digest() != hashlib.sha256(jcs_dumps(manifest.model_dump(mode="json"))).hexdigest()
 
 
@@ -1048,3 +1048,10 @@ def test_directory_at_a_link_path_is_a_conflict(tmp_path: Path) -> None:
     link.mkdir()
     with pytest.raises(ManifestConflictError, match="is a directory"):
         fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+
+
+@pytest.mark.logic
+def test_path_key_keeps_a_part_with_post_13_code_points_as_given() -> None:
+    """A part holding a code point unassigned in Unicode 13.0 is its own key, on every interpreter; others fold."""
+    raw = "é\U0001e08f̣.wav"
+    assert fetch_module.path_key(f"Data/{raw}") == ("data", raw)

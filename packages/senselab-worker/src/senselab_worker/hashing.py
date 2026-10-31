@@ -75,7 +75,7 @@ def weights_identity(paths: Sequence[str | os.PathLike[str]], *, root: str | os.
 
     Each file contributes `[relpath, sha256]`: its path relative to `root` with POSIX separators,
     in canonical form (`canonical_text`; symlinks are not resolved, so a link is named by where it sits and hashed by
-    what it points to), and the sha256 of its bytes. The identity is `tagged_digest("weights@2", pairs)`
+    what it points to), and the sha256 of its bytes. The identity is `tagged_digest("weights@3", pairs)`
     over the pairs sorted by relpath in UTF-16 code-unit order, the order JCS uses for object keys.
 
     Raises:
@@ -93,4 +93,4 @@ def weights_identity(paths: Sequence[str | os.PathLike[str]], *, root: str | os.
             raise ValueError(f"weight file listed twice: {posix}")
         pairs[posix] = sha256_file(path)
     ordered = sorted(pairs, key=utf16_sort_key)
-    return tagged_digest("weights@2", [[rel, pairs[rel]] for rel in ordered])
+    return tagged_digest("weights@3", [[rel, pairs[rel]] for rel in ordered])

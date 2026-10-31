@@ -41,11 +41,16 @@ Architect review §5 (R-42) found:
   - The allowed code points are `senselab_worker/data/unicode-assigned.txt`: the ranges whose general
     category in `unicodedata` 13.0.0 is neither `Cn` nor `Cs`. `packages/senselab-worker/scripts/unicode_table.py`
     regenerates it and refuses to run on any other Unicode version.
-  - The file carries an NFC fingerprint: the sha256 over every allowed code point of its combining class,
-    decomposition mapping, NFD and NFC, which together determine NFC on every string over those code points.
+  - The file carries a normalisation fingerprint that hashes outputs only, never database metadata (whose
+    API shapes change: CPython 3.14's `unicodedata.decomposition` returns Hangul syllable mappings that
+    3.10-3.13 left empty): the NFD and NFC of every allowed code point; the NFC of each of the floor's 941
+    canonical composition pairs; and, for every code point that reorders against a class-1 or class-240
+    probe mark, its NFD before one reference mark per combining class. The pairs and the reference marks are
+    read once from 3.10's database and stored in the table.
     `tests/unicode_table_test.py` regenerates the table under 3.10 and, under any later Python, recomputes the
-    fingerprint from that interpreter's database; both must equal the file. 3.10 and 3.12 agree, and the
-    digests of raw strings pinned under 3.10 are reproduced under 3.12.
+    fingerprint from that interpreter's database; both must equal the file. 3.10, 3.12 and 3.14 agree, and the
+    digests of raw strings pinned under 3.10 are reproduced under 3.12 and 3.14. The 3.10 floor CI job runs
+    the regeneration.
 - **The canonical encoders accept an exact-type whitelist.** JSON scalars are exactly `None`,
   `bool`, `int`, `float` and `str`, or a numpy scalar defined by numpy whose dtype kind is one of
   `b i u f U` and whose `.item()` is one of those types. Containers are exactly `list`, `tuple` and
@@ -57,7 +62,9 @@ Architect review §5 (R-42) found:
   (`MAX_DEPTH` = 64 containers), a memo that writes a container shared by many parents once per depth, and a
   work budget of `MAX_CANONICAL_CHARS` = 64 Mi characters of JCS text written or replayed. A shared DAG
   (`x = [x, x]` 63 times) was expanded as a tree (XC-5); it is now refused in about 0.2 s, and 23 levels
-  (42 MB of text, 16 s before) encode in 0.3 s. The budget is four
+  (42 MB of text, 16 s before) encode in 0.3 s. A replayed container is appended as one joined string, so
+  memory follows the text, not the number of tokens: 161 MB peak for those 23 levels and 75 MB for the
+  refused 63, against 1.04 GB each when replay copied one list entry per token. The budget is four
   times the wire's 16 MiB line (`MAX_LINE_BYTES`): any value a worker can return encodes with room for NFC
   expansion and number spelling.
 - **`jcs_loads` accepts only what `jcs_dumps` writes** (`jcs_dumps(jcs_loads(b)) == b`) and raises
@@ -95,29 +102,44 @@ Architect review §5 (R-42) found:
     assigned in Unicode 13.0 (two such keys in one object are refused, not merged; a `U` array keeps a width
     no narrower than its own); text holding any other code point is equal only to itself;
   - containers: a list and a tuple; a set and a frozenset; two elements of one set with one JCS form are one
-    element (XC-7);
-  - arrays: equal in dtype name, shape and canonical values whatever their byte order and layout;
-  - provenance only: `bytes` and `bytearray` of the same content.
+    element (XC-7); in `value@2`, any `Mapping` (a `FrozenMapping`, `MappingProxyType`, `OrderedDict`) and a
+    `dict` with the same items;
+  - paths: a `PurePosixPath`, a `PureWindowsPath` and a `Path` with one `as_posix()` text (`$path` is that text);
+  - arrays: equal in dtype name, shape and canonical values whatever their byte order and layout; a 0-d array
+    is never equal to a one-element array;
+  - bytes: `bytes` and `bytearray` of the same content (provenance and `value@2`).
 
   Provenance and `value@2` keep every other family apart as tagged tokens. The worker wire is transport,
   not identity: it writes `npy_bytes`, the same layout keeping every value's bits, and only an identity
-  canonicalises them.
+  canonicalises them. The result store is identity: it writes and reads back the canonical forms, so a cached
+  output has `-0.0` as `0.0`, one NaN without payload, bools as 0/1 and text in canonical form, where a freshly
+  computed one keeps what the backend returned.
 - **Every digest is `tagged_digest(tag, value)` with a registered tag:**
   `sha256(tag || 0x00 || JCS(value))`. No tag is a prefix of another, so two kinds of digest never coincide
   over the same value. A new kind of digest registers a new tag; changing what a digest covers bumps its
   tag's major.
 
-  **Registered digest tags** (`canonical.DIGEST_TAGS`): `logical-key@2` (a task's logical key),
-  `output@3` (a result's outputs, arrays as canonical `.npy`), `context@2` (an execution context),
-  `content-root@2` (a file's chunked content root), `audio@3` (in-memory audio), `weights@2` (a weight
-  set), `value@2` (a kernel value), `provenance-id@2` (a provenance record's id) and `data-manifest@2`
+  **Registered digest tags** (`canonical.DIGEST_TAGS`): `logical-key@3` (a task's logical key),
+  `output@3` (a result's outputs, arrays as canonical `.npy`), `context@3` (an execution context),
+  `content-root@2` (a file's chunked content root), `audio@3` (in-memory audio), `weights@3` (a weight
+  set), `value@2` (a kernel value), `provenance-id@3` (a provenance record's id) and `data-manifest@3`
   (a dataset manifest).
 
-  H9d bumped `output@2` → `output@3` and `audio@2` → `audio@3` (canonical `.npy` now writes each value in
-  its one form) and `value@1` → `value@2` (per-family tokens, held fields). The store moved to `store@3`, a new
-  key space, because entries under `store@2` carry `output@2` identities. `provenance-id@2` is unchanged: its
-  arrays were already written by value, and its digests differ only for a set holding two elements of one
-  JCS form, which it counted twice against this list; 1.x triage records keep their ids.
+  H9d changed two things every digest can see, and bumped every tag whose payload can carry them:
+  - canonical `.npy` now writes each value in its one form: `output@2` → `output@3`, `audio@2` → `audio@3`,
+    and `value@1` → `value@2`, which also took per-family tokens and held fields;
+  - text holding a code point unassigned in Unicode 13.0 is now written raw (H-R34), where before it was put
+    in NFC, so its JCS bytes changed on every interpreter: every tag whose payload can hold such text is
+    bumped. That is `logical-key@3` (task, backend, model and parameter text), `context@3` (environment,
+    platform and driver text), `weights@3` (relative paths), `provenance-id@3` (attributes and parameters,
+    which also merge a set's elements of one JCS form) and `data-manifest@3` (paths, licence and terms), along
+    with `output@3` and `value@2` above.
+  - `content-root@2` (an integer and sha256 hex strings) and `audio@3` (a sha256 hex string and a rate) carry
+    no text and keep their majors.
+
+  The store moved to `store@3`, a new key space, because its addresses are `logical-key` digests and its
+  entries carry `output` identities. Every provenance id changes, for 13.0-only inputs too, since the tag is
+  hashed with the payload: 1.x triage records written before H9d do not share ids with records written after.
 
 - **Every artifact carries `format: <name>@<major>.<minor>`.** That covers results, logical plans,
   placements, profiles, provenance records, fitted artifacts, store indexes and graph documents.

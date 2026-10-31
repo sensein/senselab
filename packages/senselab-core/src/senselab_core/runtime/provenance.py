@@ -232,7 +232,7 @@ _ENVIRONMENT_ROOTS = (
 
 
 def _digest(payload: Sequence[object], roots: Sequence[str]) -> str:
-    """Return the 16-hex id of `payload`: `tagged_digest("provenance-id@2", ...)` over each part, normalised.
+    """Return the 16-hex id of `payload`: `tagged_digest("provenance-id@3", ...)` over each part, normalised.
 
     `roots` names each part of `payload`, for the path an `UnrecordableValue` reports.
 
@@ -242,7 +242,7 @@ def _digest(payload: Sequence[object], roots: Sequence[str]) -> str:
     """
     parts = [normalised(part, root) for part, root in zip(payload, roots, strict=True)]
     try:
-        return tagged_digest("provenance-id@2", parts)[:16]
+        return tagged_digest("provenance-id@3", parts)[:16]
     except ValueError as err:
         raise UnrecordableValue(".".join(roots), payload, str(err)) from err
 

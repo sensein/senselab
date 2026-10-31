@@ -227,11 +227,11 @@ class LogicalKey(Frozen):
 
     @model_validator(mode="after")
     def _compute_digest(self) -> "LogicalKey":
-        self._digest = tagged_digest("logical-key@2", self.model_dump())
+        self._digest = tagged_digest("logical-key@3", self.model_dump())
         return self
 
     def digest(self) -> str:
-        """Return `tagged_digest("logical-key@2", fields)`, computed at construction."""
+        """Return `tagged_digest("logical-key@3", fields)`, computed at construction."""
         return self._digest
 
 
@@ -251,8 +251,8 @@ class ExecutionContext(Frozen):
     protocol: NonEmptyStr
 
     def fingerprint(self) -> str:
-        """Return `tagged_digest("context@2", fields)` over every field except `host` and `protocol`."""
-        return tagged_digest("context@2", self.model_dump(exclude={"host", "protocol"}))
+        """Return `tagged_digest("context@3", fields)` over every field except `host` and `protocol`."""
+        return tagged_digest("context@3", self.model_dump(exclude={"host", "protocol"}))
 
 
 class ReusePolicy(str, Enum):

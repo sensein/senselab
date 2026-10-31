@@ -460,7 +460,23 @@ def test_tagged_digest_separates_domains() -> None:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("tag", ["", "output", "output@2", "audio@2", "value@1", "logical-key@2\x00", "nope@1"])
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "",
+        "output",
+        "output@2",
+        "audio@2",
+        "value@1",
+        "logical-key@2",
+        "context@2",
+        "weights@2",
+        "provenance-id@2",
+        "data-manifest@2",
+        "logical-key@3\x00",
+        "nope@1",
+    ],
+)
 def test_tagged_digest_refuses_unregistered_tags(tag: str) -> None:
     """Only a registered tag may name a digest domain."""
     with pytest.raises(ValueError, match="unregistered"):

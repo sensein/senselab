@@ -96,8 +96,9 @@ class StoredResult:
     """A result read from the store.
 
     Attributes:
-        outputs: The decoded outputs, as JCS canonicalised them: arrays come back as little-endian
-            numpy arrays, tuples as lists, integral floats as ints, strings NFC-normalised.
+        outputs: The decoded outputs, in their canonical forms (ADR-006): arrays come back as
+            little-endian numpy arrays of their shape with `-0.0` as `0.0`, one NaN and bools as 0/1,
+            tuples as lists, integral floats as ints, strings in canonical text.
         output_identity: The `output:` identity of the encoded outputs.
         context: The execution context the result was computed in.
         policy_used: The narrowest policy, no wider than the one requested, under which `context`

@@ -132,7 +132,7 @@ def test_digest_is_the_tagged_digest_of_the_fields() -> None:
         "chunk_grid": None,
     }
     assert k.model_dump() == expected
-    assert k.digest() == tagged_digest("logical-key@2", expected)
+    assert k.digest() == tagged_digest("logical-key@3", expected)
     assert len(k.digest()) == 64
 
 
@@ -352,9 +352,9 @@ def test_every_policy_member_is_dispatched(policy: ReusePolicy) -> None:
 
 @pytest.mark.logic
 def test_fingerprint_is_the_context_tagged_digest() -> None:
-    """The fingerprint is `tagged_digest("context@2", fields without host and protocol)`."""
+    """The fingerprint is `tagged_digest("context@3", fields without host and protocol)`."""
     c = _ctx()
-    assert c.fingerprint() == tagged_digest("context@2", c.model_dump(exclude={"host", "protocol"}))
+    assert c.fingerprint() == tagged_digest("context@3", c.model_dump(exclude={"host", "protocol"}))
 
 
 @pytest.mark.logic

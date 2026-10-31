@@ -37,15 +37,15 @@ MAX_CANONICAL_CHARS = 64 * 2**20
 
 DIGEST_TAGS: frozenset[str] = frozenset(
     {
-        "logical-key@2",
+        "logical-key@3",
         "output@3",
-        "context@2",
+        "context@3",
         "content-root@2",
         "audio@3",
-        "weights@2",
+        "weights@3",
         "value@2",
-        "provenance-id@2",
-        "data-manifest@2",
+        "provenance-id@3",
+        "data-manifest@3",
     }
 )
 """The registered domain tags of `tagged_digest`; no tag is a prefix of another."""
@@ -288,7 +288,7 @@ class _Writer:
             start, end, size = self.walk.enter(obj, lambda: self._container(obj))
             if start < before:
                 self.walk.charge(size)
-                self.parts.extend(self.parts[start:end])
+                self.parts.append("".join(self.parts[start:end]))
             return
         scalar = canonical_scalar(obj)
         if scalar is None:

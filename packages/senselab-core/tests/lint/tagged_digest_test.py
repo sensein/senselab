@@ -422,11 +422,11 @@ def test_strict_mode_passes_digests_of_raw_bytes() -> None:
 
 @pytest.mark.logic
 def test_provenance_ids_are_tagged_digests() -> None:
-    """The provenance store derives ids from `tagged_digest("provenance-id@2", ...)`, not a bare hash."""
+    """The provenance store derives ids from `tagged_digest("provenance-id@3", ...)`, not a bare hash."""
     from senselab_core.runtime import provenance
     from senselab_worker.canonical import tagged_digest
 
-    assert provenance._digest(["r", "span"], ("a", "b")) == tagged_digest("provenance-id@2", ["r", "span"])[:16]
+    assert provenance._digest(["r", "span"], ("a", "b")) == tagged_digest("provenance-id@3", ["r", "span"])[:16]
 
 
 @pytest.mark.logic

@@ -112,7 +112,7 @@ def test_xc1_weights_paths_with_post_13_code_points_are_named_raw(tmp_path: obje
     f = root / name
     f.write_bytes(b"x")
     pairs = json.dumps([[name, hashlib.sha256(b"x").hexdigest()]], ensure_ascii=False, separators=(",", ":"))
-    expected = hashlib.sha256(b"weights@2\x00" + pairs.encode("utf-8")).hexdigest()
+    expected = hashlib.sha256(b"weights@3\x00" + pairs.encode("utf-8")).hexdigest()
     assert weights_identity([f], root=root) == expected
 
 
@@ -341,3 +341,30 @@ def test_x_i1_a_zero_d_bool_with_byte_2_keeps_its_shape() -> None:
     assert canonical_npy_bytes(b) == canonical_npy_bytes(numpy.array(True))
     assert canonical_npy_bytes(b) != canonical_npy_bytes(numpy.array([True]))
     assert numpy.load(io.BytesIO(canonical_npy_bytes(b))).shape == ()
+
+
+@st.composite
+def _shared_dag(draw: st.DrawFn) -> object:
+    """A value whose containers are drawn from those already built, so children are shared at varying depths."""
+    nodes: list[object] = [draw(st.integers(-3, 3)), "s", None]
+    for _ in range(draw(st.integers(1, 12))):
+        children = draw(st.lists(st.sampled_from(nodes), min_size=0, max_size=3))
+        if draw(st.booleans()):
+            nodes.append(list(children))
+        else:
+            nodes.append({f"k{i}": child for i, child in enumerate(children)})
+    return nodes[-1]
+
+
+@pytest.mark.contract
+@given(_shared_dag())
+def test_a_shared_dag_encodes_as_its_expanded_tree(dag: object) -> None:
+    """JCS and the tokeniser write a DAG exactly as the tree it expands to, whatever is shared and at what depth."""
+    import json
+
+    from senselab_worker.canonical import Tokeniser, jcs_dumps
+
+    tree = json.loads(json.dumps(dag))
+    assert jcs_dumps(dag) == jcs_dumps(tree)
+    tokens = Tokeniser()
+    assert jcs_dumps(tokens(dag)) == jcs_dumps(tokens(tree))
