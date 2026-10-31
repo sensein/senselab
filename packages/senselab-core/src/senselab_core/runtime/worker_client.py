@@ -291,11 +291,16 @@ def _members_gone(pgid: int, exited: threading.Event, deadline: Deadline) -> boo
         delay = min(delay * 2, _GROUP_POLL_MAX_S)
 
 
+ESCALATE_HINT = "stopping the worker; press Ctrl-C again to kill it now"
+
+
 @contextlib.contextmanager
-def _signals_deferred() -> Iterator[None]:
+def _signals_deferred(*, escalate: bool) -> Iterator[None]:
     """On the main thread, hold `DEFERRED_SIGNALS` for the body, then restore their handlers and raise each held one.
 
-    A signal whose handler was not installed from Python cannot be restored, so it is not held.
+    With `escalate`, the first SIGINT is held and logs `ESCALATE_HINT`, and a second raises `KeyboardInterrupt`
+    at once. A signal whose handler was not installed from Python cannot be restored, so it is not held. Held
+    signals are not raised again when a wakeup fd is set, since its writer already saw them.
     """
     if threading.current_thread() is not threading.main_thread():
         yield
@@ -304,6 +309,11 @@ def _signals_deferred() -> Iterator[None]:
     previous: dict[int, Any] = {}
 
     def hold(signum: int, frame: object) -> None:
+        if escalate and signum == signal.SIGINT:
+            if signal.SIGINT in held:
+                held[:] = [s for s in held if s != signal.SIGINT]
+                raise KeyboardInterrupt
+            logger.warning(ESCALATE_HINT)
         held.append(signum)
 
     try:
@@ -314,8 +324,11 @@ def _signals_deferred() -> Iterator[None]:
     finally:
         for number, handler in previous.items():
             signal.signal(number, handler)
-        for number in dict.fromkeys(held):
-            signal.raise_signal(number)
+        wakeup = signal.set_wakeup_fd(-1)
+        signal.set_wakeup_fd(wakeup)
+        if wakeup == -1:
+            for number in dict.fromkeys(held):
+                signal.raise_signal(number)
 
 
 def _code_text(returncode: int | None) -> str:
@@ -337,8 +350,9 @@ class WorkerClient:
 
     Shutdown is two steps, stopping the process group and then removing the files, each recorded
     only once it has completed and each run once. On the main thread SIGINT and SIGTERM are held
-    while it runs and raised after it; anything that interrupts it SIGKILLs the group before
-    propagating.
+    while it runs and raised after it; a second SIGINT, or anything else that interrupts it,
+    SIGKILLs the group, reaps it and removes the files before propagating. A copy of the client in
+    a forked child is foreign: closing or collecting it closes only the child's descriptors.
     """
 
     def __init__(
@@ -356,12 +370,15 @@ class WorkerClient:
 
         Raises:
             ValueError: if `init` uses the reserved key `array_dir` or has no wire form.
-            ProtocolMismatch: if the hello is missing or its wire or runtime differ from the host's
-                (`expect_runtime` overrides the host's runtime identity).
+            ProtocolMismatch: if the worker's first message is not a hello, its wire or runtime differ
+                from the host's (`expect_runtime` overrides the host's runtime identity), or no hello
+                arrives within `HELLO_TIMEOUT_S`.
+            WorkerLost: if the worker exits or closes its output before it is ready.
             WorkerFatal: if loading fails.
             TimeoutError: if sending `init` and loading exceed `load_timeout`.
         """
         self._closed = True
+        self._owner_pid = os.getpid()
         if "array_dir" in init:
             raise ValueError("init key 'array_dir' is reserved")
         self._request_timeout = request_timeout
@@ -389,6 +406,7 @@ class WorkerClient:
         except BaseException:
             os.close(self._wake_r)
             os.close(self._wake_w)
+            self._stopped = self._released = True
             raise
         self._closed = False
         try:
@@ -400,8 +418,17 @@ class WorkerClient:
             self._send(dump_line({"init": wire_init}, "init"), deadline)
             self._receive(deadline, "loading the backend", "ready")
         except BaseException as exc:
-            self._fail(exc)
-            raise
+            raised = exc
+            if self._closed_by_caller and isinstance(exc, Exception) and not isinstance(exc, WorkerLost):
+                raised = WorkerLost("the client was closed while it was starting")
+            try:
+                self._fail(raised)
+            finally:
+                if not (self._stopped and self._released):
+                    self._shutdown(graceful=False)
+            if raised is exc:
+                raise
+            raise raised from exc
 
     @property
     def array_dir(self) -> Path:
@@ -435,6 +462,8 @@ class WorkerClient:
             ProtocolError, WorkerLost, WorkerFatal: infrastructure faults; the worker is discarded.
             TimeoutError: if the request exceeds `request_timeout`; the worker is killed.
         """
+        if self._foreign():
+            raise WorkerLost(f"this client belongs to process {self._owner_pid}; start a new WorkerClient")
         if not self._run_lock.acquire(blocking=False):
             raise ConcurrentUse("run is already in flight on this client; use one client per thread")
         self._run_owner = threading.get_ident()
@@ -466,9 +495,13 @@ class WorkerClient:
         Safe to call twice and from another thread; a `run` in flight then raises `WorkerLost`.
         Called again on a thread already closing this client, as from a signal handler, it returns at
         once and the outer call finishes. Called on the thread running `run`, as from a signal
-        handler, it marks the client closed and returns; that `run` stops the worker and raises
-        `WorkerLost`.
+        handler, it marks the client closed and returns; that `run`, if it has not finished, stops
+        the worker and raises `WorkerLost`. In a forked child it closes only the child's copies of
+        the client's descriptors.
         """
+        if self._foreign():
+            self._disown()
+            return
         if not self._closed:
             self._closed_by_caller = True
         if self._run_owner == threading.get_ident():
@@ -492,14 +525,42 @@ class WorkerClient:
         self.close()
 
     def __del__(self) -> None:
-        """Close a client that was never closed, with a `ResourceWarning`."""
-        if getattr(self, "_closed", True):
+        """Close a client that was never closed, with a `ResourceWarning`, and finish a shutdown that was cut short."""
+        if getattr(self, "_released", True) and getattr(self, "_stopped", True):
             return
-        warnings.warn(f"WorkerClient for {self._array_dir} was not closed", ResourceWarning, source=self)
         try:
-            self.close()
+            if self._foreign():
+                self._disown()
+                return
+            if not self._closed:
+                warnings.warn(f"WorkerClient for {self._array_dir} was not closed", ResourceWarning, source=self)
+            self._shutdown(graceful=not self._closed)
         except Exception:  # noqa: BLE001 - a finaliser must not raise
             logger.exception("closing a leaked WorkerClient failed")
+
+    def _foreign(self) -> bool:
+        """Whether this is a copy of the client in a process forked from its owner."""
+        return os.getpid() != self._owner_pid
+
+    def _disown(self) -> None:
+        """In a forked child, close the child's copies of the client's descriptors; touch nothing the owner has."""
+        self._closed = True
+        self._stopped = self._released = True
+        proc = self._proc
+        streams = [] if proc is None else [proc.stdin, proc.stdout, proc.stderr]
+        for stream in streams:
+            if stream is not None:
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
+        for pump in self._pumps:
+            pump.close()
+        for name in ("_wake_r", "_wake_w"):
+            fd = getattr(self, name)
+            setattr(self, name, -1)
+            if fd >= 0:
+                os.close(fd)
 
     def _run(self, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
         if self._closed:
@@ -537,7 +598,10 @@ class WorkerClient:
     def _start(self, python: str | os.PathLike[str], module: str) -> None:
         pipe = subprocess.PIPE
         argv = [os.fspath(python), "-m", LAUNCHER, module]
-        self._proc = proc = subprocess.Popen(argv, stdin=pipe, stdout=pipe, stderr=pipe, start_new_session=True)
+        with self._shutdown_lock:
+            if self._closed:
+                raise WorkerLost("the client was closed before its worker started")
+            self._proc = proc = subprocess.Popen(argv, stdin=pipe, stdout=pipe, stderr=pipe, start_new_session=True)
         assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
         os.set_blocking(proc.stdin.fileno(), False)
         tail = self._stderr
@@ -561,10 +625,7 @@ class WorkerClient:
                 break
             if line is None:
                 self._lines.put(None)
-                raise ProtocolMismatch(
-                    f"the worker closed its output before its hello; host expects ({WIRE_VERSION!r}, "
-                    f"{expected_runtime!r})"
-                )
+                raise WorkerLost("the worker exited or closed its output before its hello")
             try:
                 msg = parse_line(line)
             except ProtocolError:
@@ -720,35 +781,50 @@ class WorkerClient:
             )
 
     def _shutdown(self, *, graceful: bool) -> None:
-        """Run each shutdown step not yet completed: stop the group, then, once no run is in flight, remove files."""
+        """Run each shutdown step not yet completed: stop the group, then, once no run is in flight, remove files.
+
+        If the steps are interrupted, the group is SIGKILLed and the steps are finished, with signals held,
+        before the interruption propagates.
+        """
+        if self._foreign():
+            self._disown()
+            return
         me = threading.get_ident()
         if me in self._shutting_down:
             return
-        self._shutting_down.add(me)
         try:
+            self._shutting_down.add(me)
             self._closed = True
-            bound = Deadline(SHUTDOWN_BOUND_S)
             try:
-                with _signals_deferred():
-                    if self._acquire_shutdown(bound):
-                        try:
-                            if not self._stopped:
-                                self._stop(graceful=graceful)
-                        finally:
-                            self._shutdown_lock.release()
-                    if self._run_owner not in (None, me):
-                        self._run_idle.wait(bound.remaining())
-                    if self._acquire_shutdown(bound):
-                        try:
-                            if not self._released and self._run_owner in (None, me):
-                                self._release()
-                        finally:
-                            self._shutdown_lock.release()
+                with _signals_deferred(escalate=True):
+                    self._steps(graceful=graceful, me=me)
             except BaseException:
-                self._kill_group_now()
+                with _signals_deferred(escalate=False):
+                    try:
+                        self._kill_group_now()
+                        self._steps(graceful=False, me=me)
+                    except BaseException:  # noqa: BLE001 - the first interruption is the one raised
+                        logger.exception("finishing an interrupted shutdown failed")
                 raise
         finally:
             self._shutting_down.discard(me)
+
+    def _steps(self, *, graceful: bool, me: int) -> None:
+        bound = Deadline(SHUTDOWN_BOUND_S)
+        if self._acquire_shutdown(bound):
+            try:
+                if not self._stopped:
+                    self._stop(graceful=graceful)
+            finally:
+                self._shutdown_lock.release()
+        if self._run_owner not in (None, me):
+            self._run_idle.wait(bound.remaining())
+        if self._acquire_shutdown(bound):
+            try:
+                if not self._released and self._run_owner in (None, me):
+                    self._release()
+            finally:
+                self._shutdown_lock.release()
 
     def _acquire_shutdown(self, bound: Deadline) -> bool:
         if self._shutdown_lock.acquire(timeout=max(bound.remaining() or 0.0, 0.0)):
@@ -823,6 +899,7 @@ class WorkerClient:
                 except Exception:
                     logger.exception("stopping worker process group %d failed; sending SIGKILL", pgid)
                     _signal_group(pgid, signal.SIGKILL, leader_exited=self._exited.is_set())
+                    self._exited.wait(KILL_GRACE_S)
             elif held is None:
                 logger.warning(
                     "worker %d: cannot tell whether it is still unreaped; its process group is not signalled", pgid

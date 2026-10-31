@@ -20,7 +20,7 @@ import senselab_worker
 from backends.subdir_backend_fixture import ARRAY_LIKE
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from lifecycle_probes_fixture import alive, gate, group_alive, listing, recorded_pids, state
+from lifecycle_probes_fixture import alive, gate, group_alive, interpreter, listing, recorded_pids, state
 from senselab_core.runtime import worker_client
 from senselab_core.runtime.worker_client import (
     SHUTDOWN_BOUND_S,
@@ -87,14 +87,6 @@ def worker(array_parent: Path) -> Iterator[WorkerClient]:
     assert not client.alive
 
 
-def _interpreter(directory: Path, body: str) -> Path:
-    """Write an executable that stands in for the worker's interpreter and ignores its arguments."""
-    path = directory / "interpreter"
-    path.write_text(f"#!/bin/sh\n{body}\n")
-    path.chmod(0o755)
-    return path
-
-
 def _lines(reply: dict | list) -> list[str]:
     return [
         part if isinstance(part, str) else json.dumps(part) for part in (reply if isinstance(reply, list) else [reply])
@@ -103,7 +95,7 @@ def _lines(reply: dict | list) -> list[str]:
 
 def _scripted(array_parent: Path, *replies: dict | list, **init: object) -> WorkerClient:
     """A client over the scripted worker; each reply is one line (a dict) or a list of lines."""
-    python = _interpreter(array_parent.parent, f'exec "{sys.executable}" "{SCRIPTED}"')
+    python = interpreter(array_parent.parent, f'exec "{sys.executable}" "{SCRIPTED}"')
     return WorkerClient(
         python, "unused", init={"replies": [_lines(r) for r in replies], **init}, array_parent=array_parent
     )
@@ -184,11 +176,20 @@ def test_handshake_mismatch_refuses(array_parent: Path) -> None:
 
 @pytest.mark.logic
 @posix_only
-@pytest.mark.parametrize(("body", "stderr"), [("echo junk", None), ("echo oops >&2; exit 3", "oops")])
-def test_non_worker_is_a_mismatch(array_parent: Path, body: str, stderr: str | None) -> None:
-    """A first line that is not a hello, or no line at all, is a mismatch carrying the stderr tail."""
-    with pytest.raises(ProtocolMismatch) as info:
-        WorkerClient(_interpreter(array_parent.parent, body), FAKE, init={}, array_parent=array_parent)
+def test_non_worker_answer_is_a_mismatch(array_parent: Path) -> None:
+    """A first JSON message that is not a hello is a mismatch."""
+    with pytest.raises(ProtocolMismatch):
+        WorkerClient(interpreter(array_parent.parent, "echo '{\"x\": 1}'"), FAKE, init={}, array_parent=array_parent)
+
+
+@pytest.mark.logic
+@posix_only
+@pytest.mark.parametrize(("body", "code", "stderr"), [("echo junk", 0, None), ("echo oops >&2; exit 3", 3, "oops")])
+def test_exit_before_hello_is_worker_lost(array_parent: Path, body: str, code: int, stderr: str | None) -> None:
+    """A worker that exits before its hello is lost, with its exit code and the stderr tail."""
+    with pytest.raises(WorkerLost) as info:
+        WorkerClient(interpreter(array_parent.parent, body), FAKE, init={}, array_parent=array_parent)
+    assert info.value.returncode == code
     if stderr:
         assert any(stderr in note for note in info.value.__notes__)
 
@@ -418,7 +419,7 @@ def test_a34_hello_wire_must_be_an_int_on_the_host(array_parent: Path, wire: obj
     hello = {"wire": wire, "runtime": runtime_identity(), "python": "", "numpy": "", "pid": 0}
     line = json.dumps({"hello": hello})
     with pytest.raises(ProtocolMismatch):
-        WorkerClient(_interpreter(array_parent.parent, f"echo '{line}'"), FAKE, init={}, array_parent=array_parent)
+        WorkerClient(interpreter(array_parent.parent, f"echo '{line}'"), FAKE, init={}, array_parent=array_parent)
 
 
 @pytest.mark.contract
@@ -515,11 +516,14 @@ def test_forking_backend_leaves_no_survivor(tmp_path: Path, backends_importable:
 
 @pytest.mark.limits
 def test_a7_timeout_returns_though_a_grandchild_holds_stderr(tmp_path: Path, backends_importable: None) -> None:
-    """The probe: a backend leaves a grandchild on stderr and hangs; `run` alone returns and kills it."""
+    """The probe: a backend leaves a grandchild on stderr and hangs; `run` alone returns and kills it.
+
+    The grandchildren start in `load`, so they exist before the request's timeout starts.
+    """
     pid_file = tmp_path / "pids"
-    client = WorkerClient(
-        sys.executable, "backends.forking_backend_fixture", init={"pid_file": str(pid_file)}, request_timeout=2
-    )
+    init = {"pid_file": str(pid_file), "spawn_at_load": True}
+    client = WorkerClient(sys.executable, "backends.forking_backend_fixture", init=init, request_timeout=2)
+    assert len(recorded_pids(pid_file)) == 2
     t0 = time.monotonic()
     with pytest.raises(TimeoutError):
         client.run([{"id": "a", "inputs": {}}], {"mode": "hang"})

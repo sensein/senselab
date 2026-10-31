@@ -45,6 +45,14 @@ def recorded_pids(pid_file: Path) -> list[int]:
     return [int(json.loads(line)) for line in pid_file.read_text().splitlines()]
 
 
+def interpreter(directory: Path, body: str) -> Path:
+    """Write an executable shell script that stands in for the worker's interpreter and ignores its arguments."""
+    path = directory / "interpreter"
+    path.write_text(f"#!/bin/sh\n{body}\n")
+    path.chmod(0o755)
+    return path
+
+
 def listing(directory: Path) -> set[str]:
     """Every path under `directory`, relative to it, without following symlinks."""
     return {str(p.relative_to(directory)) for p in directory.rglob("*")}

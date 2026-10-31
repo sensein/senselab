@@ -1,16 +1,19 @@
 # ruff: noqa: ANN401
-"""H8c re-attack findings on the worker lifecycle (XW-1..XW-4), rebuilt from reviews/phase1-reattack/wire.md.
+"""H8c re-attack findings on the worker lifecycle (XW-1..XW-4) and the H9a review's (I-1, I-3, Ctrl-C).
 
-Each `test_xw<n>_*` rebuilds its finding's probe and fails at 99a6d5f8; the parametrised and generated tests
-are contracts over the class the finding belongs to. Probes that could hang at the base run in the shutdown
-schedule driver, which bounds each case.
+The XW findings are rebuilt from reviews/phase1-reattack/wire.md, the I items from the H9a review. Each
+`test_xw<n>_*` and `test_i<n>_*` rebuilds its probe; the parametrised and generated tests are contracts over the
+class the finding belongs to. Probes that could hang run in the shutdown schedule driver, which bounds each case.
 """
 
+import gc
+import logging
 import os
 import signal
 import sys
 import threading
 import time
+import warnings
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -18,7 +21,13 @@ from typing import Any
 import numpy
 import pytest
 from senselab_core.runtime import worker_client
-from senselab_core.runtime.worker_client import SHUTDOWN_BOUND_S, ProtocolMismatch, WorkerClient, WorkerLost
+from senselab_core.runtime.worker_client import (
+    ESCALATE_HINT,
+    SHUTDOWN_BOUND_S,
+    WorkerClient,
+    WorkerLost,
+    _signals_deferred,
+)
 
 RUNTIME_TESTS = Path(__file__).resolve().parents[1] / "runtime"
 FAKE = "senselab_worker.fake"
@@ -36,6 +45,15 @@ def schedule(monkeypatch: pytest.MonkeyPatch) -> Any:
 
 
 @pytest.fixture
+def probes(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """The lifecycle probes the runtime tests share."""
+    monkeypatch.syspath_prepend(str(RUNTIME_TESTS))
+    import lifecycle_probes_fixture
+
+    return lifecycle_probes_fixture
+
+
+@pytest.fixture
 def parent(tmp_path: Path) -> Iterator[Path]:
     """A parent for the client's array directory, which must hold nothing after the test."""
     path = tmp_path / "arrays"
@@ -50,7 +68,7 @@ def test_xw1_sigint_inside_shutdown_still_kills_the_group(tmp_path: Path, schedu
     case = {"path": "timeout", "boundary": "module:_members_gone", "kind": "sigint", "occurrence": 1}
     [report] = schedule.run_schedule(tmp_path, [case])
     assert report["fired"] and report["outcome"] == "KeyboardInterrupt"
-    assert not report["group_alive"], "the group was running when KeyboardInterrupt surfaced"
+    assert not report["at_outcome"]["group_alive"], "the group was running when KeyboardInterrupt surfaced"
     assert schedule.violations(report) == []
 
 
@@ -98,13 +116,6 @@ def test_xw3_close_from_another_thread_while_encoding_is_worker_lost(
     assert [type(e) for e in outcome] == [WorkerLost], outcome
 
 
-def _interpreter(directory: Path, body: str) -> Path:
-    path = directory / "interpreter"
-    path.write_text(f"#!/bin/sh\n{body}\n")
-    path.chmod(0o755)
-    return path
-
-
 def _await_exit(client: WorkerClient) -> None:
     end = time.monotonic() + WAIT_S
     while client.alive:
@@ -124,15 +135,17 @@ def _late_notification(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.logic
 @pytest.mark.parametrize("how", ["idle_sigkill", "crash_mid_request", "late_exit_notification", "exit_before_hello"])
-def test_xw4_every_death_carries_its_exit_code(parent: Path, monkeypatch: pytest.MonkeyPatch, how: str) -> None:
+def test_xw4_every_death_carries_its_exit_code(
+    parent: Path, monkeypatch: pytest.MonkeyPatch, probes: Any, how: str
+) -> None:
     """The probes: the exit code was lost when the worker died idle, before its hello, or before kqueue registered.
 
     Every way the worker can die surfaces as a typed fault naming the code the worker exited with.
     """
     if how == "exit_before_hello":
-        with pytest.raises(ProtocolMismatch) as mismatch:
-            WorkerClient(_interpreter(parent.parent, "exit 7"), FAKE, init={}, array_parent=parent)
-        assert any("worker exit code 7;" in note for note in mismatch.value.__notes__)
+        with pytest.raises(WorkerLost) as before:
+            WorkerClient(probes.interpreter(parent.parent, "exit 7"), FAKE, init={}, array_parent=parent)
+        assert before.value.returncode == 7
         return
     if how == "late_exit_notification":
         _late_notification(monkeypatch)
@@ -150,3 +163,144 @@ def test_xw4_every_death_carries_its_exit_code(parent: Path, monkeypatch: pytest
         assert client.returncode == expected
     finally:
         client.close()
+
+
+FORK_WAIT_S = 30.0
+
+
+def _forked(action: Any) -> int:
+    """Run `action` in a forked child that exits 0, or 1 if it raised; return the child's exit status."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        pid = os.fork()
+    if pid == 0:
+        code = 1
+        try:
+            action()
+            code = 0
+        finally:
+            os._exit(code)
+    end = time.monotonic() + FORK_WAIT_S
+    while True:
+        done, status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            return os.waitstatus_to_exitcode(status)
+        if time.monotonic() > end:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            raise AssertionError("the forked child did not finish")
+        time.sleep(0.01)
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("how", ["close", "collect", "run"])
+def test_i1_a_forked_child_never_touches_the_parents_worker(parent: Path, how: str) -> None:
+    """The probe: a forked child's `close()` stopped the parent's worker and deleted its array directory.
+
+    In a forked child, closing, collecting or running the inherited client leaves the parent's worker, files and
+    channel as they were.
+    """
+    box = [WorkerClient(sys.executable, FAKE, init={}, array_parent=parent)]
+    try:
+
+        def act() -> None:
+            if how == "close":
+                box[0].close()
+            elif how == "collect":
+                box.clear()
+                gc.collect()
+            else:
+                with pytest.raises(WorkerLost):
+                    box[0].run([{"id": "a", "inputs": {}}], {})
+
+        assert _forked(act) == 0
+        client = box[0]
+        assert client.alive and client.array_dir.is_dir()
+        assert "outputs" in client.run([{"id": "a", "inputs": {}}], {})[0]
+    finally:
+        box[0].close()
+
+
+def _interrupting(monkeypatch: pytest.MonkeyPatch, *, times: int) -> None:
+    """Make the first `times` calls of `_members_gone` raise `SystemExit`, as a signal handler might."""
+    real = worker_client._members_gone
+    calls = [0]
+
+    def interrupted(*args: Any) -> bool:
+        calls[0] += 1
+        if calls[0] <= times:
+            raise SystemExit(1)
+        return bool(real(*args))
+
+    monkeypatch.setattr(worker_client, "_members_gone", interrupted)
+
+
+@pytest.mark.logic
+def test_i3_an_interrupted_idle_close_still_reaps_and_removes_the_files(
+    parent: Path, monkeypatch: pytest.MonkeyPatch, probes: Any
+) -> None:
+    """The probe: `SystemExit` inside an idle `close()` left the leader unreaped and the array directory behind."""
+    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=parent)
+    pgid = client.hello["pid"]
+    _interrupting(monkeypatch, times=1)
+    with pytest.raises(SystemExit):
+        client.close()
+    assert client.returncode is not None and not client.array_dir.exists()
+    assert not probes.group_alive(pgid)
+
+
+@pytest.mark.logic
+def test_i3_collecting_a_client_whose_shutdown_was_cut_short_finishes_it(
+    parent: Path, monkeypatch: pytest.MonkeyPatch, probes: Any
+) -> None:
+    """A client whose close and finishing pass were both interrupted is finished when it is collected.
+
+    Nothing may keep the interruption's traceback, which holds the client: the log record is suppressed.
+    """
+    box = [WorkerClient(sys.executable, FAKE, init={}, array_parent=parent)]
+    pgid = box[0].hello["pid"]
+    array_dir = box[0].array_dir
+    _interrupting(monkeypatch, times=2)
+    monkeypatch.setattr(worker_client.logger, "disabled", True)
+    try:
+        box[0].close()
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("close() was not interrupted")
+    assert array_dir.exists()
+    monkeypatch.undo()
+    box.clear()
+    gc.collect()
+    assert not array_dir.exists() and not probes.group_alive(pgid)
+
+
+@pytest.mark.logic
+def test_ctrl_c_held_once_with_a_hint_and_escalated_by_a_second(caplog: pytest.LogCaptureFixture) -> None:
+    """The first SIGINT during shutdown is held and logs the hint; the second raises `KeyboardInterrupt` at once."""
+    with caplog.at_level(logging.WARNING), pytest.raises(KeyboardInterrupt):
+        with _signals_deferred(escalate=True):
+            signal.raise_signal(signal.SIGINT)
+            assert caplog.messages.count(ESCALATE_HINT) == 1
+            signal.raise_signal(signal.SIGINT)
+            raise AssertionError("the second SIGINT did not interrupt")
+
+
+@pytest.mark.contract
+def test_ctrl_c_twice_kills_reaps_and_releases_within_a_second(tmp_path: Path, schedule: Any) -> None:
+    """With the real graces, a second SIGINT while a SIGTERM-ignoring group is stopped ends the close in about 1 s.
+
+    The group is SIGKILLed and reaped and the files are removed before `KeyboardInterrupt` surfaces.
+    """
+    case = {
+        "path": "timeout",
+        "boundary": "module:_members_gone",
+        "kind": "double_sigint",
+        "occurrence": 1,
+        "real_graces": True,
+    }
+    [report] = schedule.run_schedule(tmp_path, [case])
+    assert report["fired"] and report["outcome"] == "KeyboardInterrupt"
+    assert report["elapsed"] < schedule.REQUEST_TIMEOUT_S + schedule.SECOND_SIGINT_AFTER_S + 1.0
+    assert report["at_outcome"] == schedule.CLEAN
+    assert schedule.violations(report) == []
