@@ -338,3 +338,24 @@ def test_ctrl_c_twice_kills_reaps_and_releases_within_the_ctrl_c_bound(tmp_path:
     assert report["elapsed"] < schedule.ctrl_c_bound()
     assert report["at_outcome"] == schedule.CLEAN
     assert schedule.violations(report) == []
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("kind", ["handler_close", "close_same_thread", "close_other_thread"])
+def test_l2_close_during_the_spawn_leaves_no_group(tmp_path: Path, schedule: Any, kind: str) -> None:
+    """`close()` while the constructor spawns the worker ends in `WorkerLost` or a built client, never an orphan."""
+    case = {"path": "init", "boundary": "client:_start", "kind": kind, "occurrence": 1}
+    [report] = schedule.run_schedule(tmp_path, [case])
+    assert report["fired"] and report["outcome"] in {None, "WorkerLost"}
+    assert not (report["at_outcome"]["group_alive"] and not report["client_open"])
+    assert schedule.violations(report) == []
+
+
+@pytest.mark.contract
+def test_l2_an_exception_in_the_kill_fallback_still_reaps_the_leader(tmp_path: Path, schedule: Any) -> None:
+    """A `RuntimeError` from a handler while a SIGTERM-ignoring group is stopped leaves the leader reaped."""
+    case = {"path": "timeout", "boundary": "module:_members_gone", "kind": "handler_raises_exception", "occurrence": 1}
+    [report] = schedule.run_schedule(tmp_path, [case])
+    assert report["fired"] and report["calls"]["module:_signal_group"] >= 3
+    assert report["at_outcome"]["reaped"] and not report["at_outcome"]["group_alive"]
+    assert schedule.violations(report) == []
