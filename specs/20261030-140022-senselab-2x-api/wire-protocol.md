@@ -1,8 +1,14 @@
-# Wire protocol v1
+# Wire protocol v2
 
 The protocol between a host (`WorkerClient` in core) and a worker (`senselab_worker.serve`) in an
-isolated env. `WIRE_VERSION = 1`. Closes R-37; implements I-2 (design §4.12) and the fault table of
+isolated env. `WIRE_VERSION = 2`. Closes R-37; implements I-2 (design §4.12) and the typed faults of
 ADR-009.
+
+**v2 against v1.** A response is one line per item result, then a `done` line, instead of one line
+holding every result. The line budget therefore applies per item, and one large result can no
+longer fail its batch-mates (R-68). Every message is checked by one validator on both sides, and
+the error path is total (R-92). There is no migration: a v1 worker and a v2 host refuse each other
+at the handshake.
 
 ## Framing
 
@@ -21,23 +27,37 @@ ADR-009.
   backend module is imported during load.
 - stderr is never parsed. The host drains it continuously and keeps the last 100 lines, which it
   attaches to every fault it raises itself.
-- A line longer than 16 MiB, or one that is not a JSON object, is a protocol violation.
-- Unknown keys inside a known message are ignored. A line with no recognised top-level key is a
-  protocol violation.
+- A line longer than 16 MiB (`MAX_LINE_BYTES`, newline included), or one that is not a JSON
+  object, is a protocol violation. The budget is per line, and so per item result; there is no
+  aggregate budget for a response.
+- **Strict values.** The reader (`parse_line`) refuses, as a protocol violation: a key repeated
+  within one object; a number that is `NaN`, `Infinity` or overflows to infinity (`1e999`); and
+  nesting deeper than 64 containers (`MAX_DEPTH`, counting the line's own object). The writer
+  (`dump_line`) refuses the same depth, as do `to_wire` and `jcs_dumps` (through the shared
+  `canonical.entered` guard, which also refuses a container that contains itself), so neither
+  side writes what the other refuses and no encoder or decoder recurses without bound.
+- **One validator.** `validate_message(msg, kind)` is the schema of every message kind (`hello`,
+  `init`, `ready`, `request`, `result`, `done`, `fatal`, `stop`). The writer calls it, through
+  `dump_line(msg, kind)`, before every send, and the reader after every parse. Field types are
+  exact: an integer is `type(v) is int`, so `true` and `1.0` are not integers; ids are strings of
+  valid Unicode (no lone surrogates) of at most 1024 characters (`MAX_ID_CHARS`).
+- Unknown keys inside a known message are ignored. A line that is not a valid message of the
+  kind expected at that point is a protocol violation.
 - One request is outstanding at a time. The host sends the next request only after it has read
   the response to the previous one; a second concurrent `run` on one client raises
   `ConcurrentUse` and sends nothing.
 
 ## Messages
 
-| Direction | Message | Shape |
+| Direction | Kind | Shape |
 |---|---|---|
-| W → H | hello (first line) | `{"hello": {"wire": 1, "runtime": "<sha256>", "python": "3.10.14", "numpy": "1.23.5", "pid": 123}}` |
+| W → H | hello (first line) | `{"hello": {"wire": 2, "runtime": "<sha256>", "python": "3.10.14", "numpy": "1.23.5", "pid": 123}}`; `wire` and `pid` are ints, the others strings |
 | H → W | init | `{"init": {"array_dir": "<abs path>", ...}}` |
-| W → H | ready | `{"ready": {"load_s": float}}` |
-| H → W | request | `{"id": "<uuid>", "items": [{"id": "<item>", "inputs": {...}}], "params": {...}}` |
-| W → H | response | `{"id": "<uuid>", "results": [{"id": "<item>", "outputs": {...}} \| {"id": "<item>", "error": {...}}]}`; each entry has exactly one of `outputs` and `error` |
-| W → H | fatal | `{"error": {...}, "fatal": true}` |
+| W → H | ready | `{"ready": {"load_s": <int or float>}}` |
+| H → W | request | `{"id": "<uuid>", "items": [{"id": "<item>", "inputs": {...}}], "params": {...}}`; item ids unique |
+| W → H | result (one per item) | `{"id": "<uuid>", "item": "<item>", "outputs": {...}}` or `{"id": "<uuid>", "item": "<item>", "error": {...}}`; exactly one of `outputs` and `error`; the error is a complete error record |
+| W → H | done | `{"id": "<uuid>", "done": <number of items>}` |
+| W → H | fatal | `{"error": <any>, "fatal": true}` |
 | H → W | stop | `{"stop": true}` |
 
 ## Handshake
@@ -50,8 +70,9 @@ ADR-009.
      gate the connection.
 2. Lines that are not JSON objects before the first JSON object (a `.pth` file or
    `sitecustomize` printing at interpreter start, before the launcher claims fd 1) are logged and
-   discarded. The first JSON object must be the hello. The host accepts only if `wire` and
-   `runtime` both equal its own. Otherwise, or if the first JSON object is not a hello, or none
+   discarded. The first JSON object must be a valid hello (`validate_message`, so `"wire": true`
+   or `1.0` is refused). The host accepts only if `wire` is the int `2` and `runtime` equals its
+   own. Otherwise, or if the first JSON object is not a valid hello, or none
    arrives within 60 s, it sends `{"stop": true}` and raises `ProtocolMismatch` (an
    `infrastructure` fault) naming both values. Nothing else is decoded.
 3. The host sends `init`. `array_dir` is reserved; every other key is the backend's.
@@ -60,9 +81,22 @@ ADR-009.
 
 ## Requests and responses
 
-- `id` is a UUID string; the response carries the same `id`. Item ids are unique within a request.
-- `results` has exactly one entry per item, in item order, with matching ids. A failure in one
-  item never fails its batch-mates.
+- `id` is a UUID string; every reply line carries the same `id`. Item ids are unique within a
+  request.
+- **Reply.** The worker writes one `result` line per item, in item order, each naming its `item`,
+  then `{"id": <request>, "done": <n>}` with `n` the number of items. A request with no items is
+  answered by `done` alone. The host reads exactly that sequence; a line with the wrong `id`,
+  `item`, kind or count is a protocol violation.
+- **Per-item budget.** An item whose result line would exceed `MAX_LINE_BYTES` is sent as that
+  item's error, `{"type": "ResponseTooLarge", "fault": "resource", "gap": false, ...}`. Its
+  batch-mates are unaffected. Large data travels as arrays.
+- **Totality.** A failure in one item never fails its batch-mates or the worker. Building an
+  item's result line is total: any exception from encoding its outputs (`to_wire`) or framing the
+  line (`dump_line`) becomes that item's error record, and an error record always fits the budget
+  (its text fields are bounded and ids are at most 1024 characters). `serve` loops until stop or
+  end of input; nothing an item or `handle` does ends it, except `KeyboardInterrupt` and
+  `SystemExit`. This is pinned by a property test that drives the real `serve` with hostile
+  `handle` behaviours (`test_serve_is_total_fuzz`).
 - **Backend contract.** The backend module defines
   `load: Callable[[dict], object]` and `handle: Callable[[object, list[dict], dict], list[dict]]`;
   the launcher serves them.
@@ -70,11 +104,19 @@ ADR-009.
   - `handle(state, items, params)` gets the decoded items (`{"id", "inputs"}`) and returns one dict
     per item, in item order: `{"outputs": {...}}`, or `{"error": exc}` with an exception instance
     for a per-item failure. `serve` adds the ids and classifies each `exc` by the fault table.
-  - If `handle` raises, every item gets that error, classified.
-  - If it returns the wrong count, or an entry without exactly one of `outputs` and `error`,
-    every item gets an `infrastructure` error of type `ProtocolError`.
-- A line the worker cannot parse as a request is answered with `fatal`, and the worker exits.
-- The host validates `id`, length, order and item ids. A mismatch is a protocol violation.
+  - If `handle` raises any exception other than `KeyboardInterrupt` and `SystemExit`, including
+    a `BaseException` subclass, every item gets that error, classified.
+  - If it returns anything but exactly a `list` of the right length whose entries are exactly
+    `dict`s with one of `outputs` (exactly a `dict`) and `error` (an exception instance), every
+    item gets an `infrastructure` error of type `ProtocolError`.
+  - Outputs are encoded by `to_wire`, which accepts exact types only: `dict` with `str` keys,
+    `list`, `tuple`, the scalars `canonical_scalar` accepts (so a numpy scalar is its `.item()`),
+    and exactly `numpy.ndarray`. Anything else, a non-finite float, a string that is not valid
+    Unicode, a cycle or nesting past `MAX_DEPTH` is a `WireValueError`, a typed `content` fault.
+- A line the worker cannot parse as a valid `init`, `request` or `stop` message is answered with
+  `fatal` (`ProtocolError`), and the worker exits `EXIT_FATAL`. In particular a message with a
+  top-level `stop` key whose value is not exactly `true` is such a violation, not a stop: it is
+  answered, never taken as a silent exit.
 
 ## Arrays
 
@@ -87,7 +129,7 @@ ADR-009.
 - The file is canonical `.npy` (ADR-006): version 1.0, C order, little-endian. The writer
   converts non-contiguous and big-endian arrays to that form, so `dtype` is always `<…` or `|…`.
   `sha256` is over the file bytes and names the file.
-- Object and structured dtypes are refused with a `content` error (`ValueError`): on the worker,
+- Object and structured dtypes are refused with a `content` error (`WireValueError`): on the worker,
   for that item; on the host, before the request is sent.
 - The writer writes to a temporary name `.<uuid4 hex>.tmp` in `array_dir` and renames, so a
   reader never sees a partial file and equal arrays share one file.
@@ -114,27 +156,41 @@ ADR-009.
 ## Errors and faults
 
 ```json
-{"type": "ValueError", "message": "...", "fault": "content", "traceback": "...", "gap": false}
+{"type": "ContentFault", "message": "...", "fault": "content", "traceback": "...", "gap": false}
 ```
 
-- `type` is the exception's class name; `traceback` is the last 8 frames.
-- **Precedence.** `ArrayIntegrityError` and `ProtocolError` are `infrastructure` by definition and
-  are decided before the table. Every other exception is classified by the table, by
-  `isinstance`, first match wins:
+- **Typed at the source (ADR-009).** A backend states a fault's class by raising
+  `ContentFault`, `ResourceFault` or `InfrastructureFault` (or a subclass). These decide the class,
+  in that precedence when an exception is more than one (`InfrastructureFault`, then
+  `ResourceFault`, then `ContentFault`), and the record has `"gap": false`. `ProtocolError`,
+  `ArrayIntegrityError` are `InfrastructureFault`s; `WireValueError` is a `ContentFault`;
+  `ResponseTooLarge` is a `ResourceFault`.
+- **Fallback.** Every other exception is classified by the table, by `isinstance`, first match
+  wins, and its record always has `"gap": true`, whatever class it gets:
 
 | Exception | `fault` |
 |---|---|
 | `ValueError`, `TypeError`, `KeyError` | `content` |
 | `MemoryError`, `TimeoutError`, any class whose MRO has a class named `OutOfMemoryError` | `resource` |
-| anything else | `infrastructure`, with `"gap": true` |
+| anything else | `infrastructure` |
 
-- `gap: true` marks a classification gap; the host reports it.
+- `gap: true` marks a classification gap; the host logs it. A gap is not a verdict on the item: a
+  `KeyError` from a backend bug is `content` by the table, but its gap says the class was guessed
+  (R-83; the executor's rule that a gap fault is never cached is Phase 3).
+- **The record is total** (`error_record`). `type` is the class name; `message` is `str(exc)`,
+  else `repr(exc)`, else `<unprintable TypeName>`; `traceback` is the last 8 frames, formatted
+  under the same guard. Each text field has every code point UTF-8 cannot encode, such as a lone
+  surrogate from a `surrogateescape` filename, backslash-escaped, and is cut to 65 536 characters
+  (`MAX_TEXT_CHARS`), so a record always encodes and always fits the line budget.
 - Faults the host raises itself: `ProtocolMismatch`, `ProtocolError`, `WorkerLost` and
   `WorkerFatal` are `infrastructure`; a host timeout is `resource` (`TimeoutError`). Each fails
   every item of the request in flight, and the worker is discarded.
 - **Fatal.** On a `fatal` line, during load or a request, the host raises
   `WorkerFatal(RuntimeError)` carrying the worker's error object; its fault is `infrastructure`,
-  whatever the error object's `fault` says.
+  whatever the error object's `fault` says. The decode of a fatal's error object is total: `type`
+  and `message` are kept when they are strings (else placeholders say what was received), and a
+  missing or unknown `fault`, or a `gap` that is not a bool, makes the record `infrastructure`
+  with `gap: true`. A fatal never loses the worker's message to a `ProtocolError`.
 
 ## Timeouts and shutdown
 
@@ -162,17 +218,22 @@ ADR-009.
   if it holds the worker's stdout or stderr, the host leaves those pipes open and logs it rather
   than block.
 - **Worker lost.** EOF on the worker's stdout, or the exit of the worker process (after the
-  lines it wrote are read), while a reply is awaited is `WorkerLost`, with the exit code and
-  stderr tail. A forked descendant holding the channel open does not delay it.
-- **Stop.** On `{"stop": true}`, or EOF on stdin, the worker exits 0 without replying.
+  lines it wrote are read), while a reply is awaited, including after some of a request's result
+  lines and before its `done`, is `WorkerLost`, carrying the exit code as `returncode` and the
+  stderr tail. A partial last line is discarded, never parsed. A forked descendant holding the
+  channel open does not delay it.
+- **Stop.** On `{"stop": true}` (exactly `true`), or EOF on stdin, the worker exits 0 without
+  replying.
 
 ## Example
 
 ```text
-W→H {"hello": {"wire": 1, "runtime": "9f2c…e1", "python": "3.10.14", "numpy": "1.23.5", "pid": 4711}}
+W→H {"hello": {"wire": 2, "runtime": "9f2c…e1", "python": "3.10.14", "numpy": "1.23.5", "pid": 4711}}
 H→W {"init": {"array_dir": "/tmp/sl-w-4711", "model": "fake"}}
 W→H {"ready": {"load_s": 0.042}}
 H→W {"id": "6d1f0c3a-5b7e-4c2d-9a10-3e8f2b7c4d55", "items": [{"id": "a", "inputs": {"x": {"__array__": {"path": "/tmp/sl-w-4711/3b5d…7a.npy", "sha256": "3b5d…7a", "dtype": "<f4", "shape": [1, 16000]}}}}, {"id": "b", "inputs": {}}], "params": {"faults": {"fail_items": ["b"]}}}
-W→H {"id": "6d1f0c3a-5b7e-4c2d-9a10-3e8f2b7c4d55", "results": [{"id": "a", "outputs": {"value": "c0ff…ee"}}, {"id": "b", "error": {"type": "ValueError", "message": "fake failure for item b", "fault": "content", "traceback": "…", "gap": false}}]}
+W→H {"id": "6d1f0c3a-5b7e-4c2d-9a10-3e8f2b7c4d55", "item": "a", "outputs": {"value": "c0ff…ee"}}
+W→H {"id": "6d1f0c3a-5b7e-4c2d-9a10-3e8f2b7c4d55", "item": "b", "error": {"type": "ContentFault", "message": "fake failure for item b", "fault": "content", "traceback": "…", "gap": false}}
+W→H {"id": "6d1f0c3a-5b7e-4c2d-9a10-3e8f2b7c4d55", "done": 2}
 H→W {"stop": true}
 ```

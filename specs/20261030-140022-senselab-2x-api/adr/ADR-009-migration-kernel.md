@@ -31,13 +31,24 @@
 - **Enforced by import-linter** in CI.
 
 **Faults typed at the source.**
-- The worker runtime's error table classifies each fault where it happens:
+- Each fault is classified where it happens, into one of three classes:
   - `content`: bad input, or a model error on this item;
   - `resource`: OOM, timeout;
   - `infrastructure`: environment, handshake, network, lost service, preemption.
+- **Backends raise typed faults.** A backend states the class by raising `ContentFault`,
+  `ResourceFault` or `InfrastructureFault` (from `senselab_worker.faults`), or a subclass. The
+  runtime's own faults are typed the same way (`WireValueError` is content, `ResponseTooLarge`
+  resource, `ProtocolError` and `ArrayIntegrityError` infrastructure). A typed fault's record has
+  `gap: false`.
+- **The exception table is a fallback, and it always marks a gap.** Any other exception is
+  classified by type (`ValueError`, `TypeError`, `KeyError` → content; `MemoryError`,
+  `TimeoutError`, `*OutOfMemoryError` → resource; anything else → infrastructure), and its record
+  has `gap: true` whatever class it gets. The class of an untyped exception is a guess: a `KeyError`
+  from a backend bug is not a verdict on the input (R-83).
+- A gap is reported by the host. Each backend's contract is zero gaps over its fault fixtures
+  (Phase 2), and the executor never caches a fault with a gap (Phase 3).
 - Only `content` faults charge an item's retry budget. The others re-place the job
   (`execution.md`).
-- An unclassified exception is `infrastructure` and is reported as a classification gap.
 
 ## Consequences
 - Half-migrated time is bounded per use case, not global.
@@ -46,3 +57,6 @@
 ## Alternatives rejected
 - **Migrating by phase across all use cases.** That is a long global coexistence period.
 - **Classifying faults in the coordinator.** It has no context about the failure.
+- **Classifying by exception type alone.** Library exceptions do not say whose fault they are; a
+  bug and bad input both raise `KeyError`. The type table survives only as a fallback whose every
+  answer is flagged as a gap.

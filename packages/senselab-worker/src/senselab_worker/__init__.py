@@ -5,7 +5,7 @@ from pathlib import Path
 
 from senselab_worker.hashing import sha256_bytes
 
-WIRE_VERSION = 1
+WIRE_VERSION = 2
 
 
 @functools.lru_cache(maxsize=1)

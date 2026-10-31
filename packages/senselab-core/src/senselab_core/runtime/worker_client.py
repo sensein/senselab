@@ -1,6 +1,7 @@
 """The host side of the worker wire protocol: start a worker, send it requests, map its faults."""
 
 import collections
+import json
 import logging
 import os
 import queue
@@ -23,12 +24,13 @@ from senselab_worker import WIRE_VERSION, runtime_identity
 from senselab_worker.codec import (
     MAX_LINE_BYTES,
     Deadline,
+    Kind,
     array_paths,
-    check_request,
     dump_line,
     from_wire,
     parse_line,
     to_wire,
+    validate_message,
 )
 from senselab_worker.faults import (
     ArrayIntegrityError,
@@ -36,6 +38,7 @@ from senselab_worker.faults import (
     InfrastructureFault,
     ProtocolError,
     error_record,
+    wire_text,
 )
 from senselab_worker.ownership import ARRAY_NAME, ARRAY_TEMP_NAME, remove_owned
 
@@ -61,7 +64,15 @@ class ProtocolMismatch(InfrastructureFault):
 
 
 class WorkerLost(InfrastructureFault):
-    """The worker exited or closed its output while a reply was awaited, or was already discarded."""
+    """The worker exited or closed its output while a reply was awaited, or was already discarded.
+
+    `returncode` is the worker's exit code when it is known, else `None`.
+    """
+
+    def __init__(self, message: str, *, returncode: int | None = None) -> None:
+        """Carry the message and the worker's exit code."""
+        super().__init__(message)
+        self.returncode = returncode
 
 
 class WorkerFatal(InfrastructureFault):
@@ -339,9 +350,8 @@ class WorkerClient:
             self._start(python, module)
             self.hello = self._handshake(expect_runtime or runtime_identity())
             deadline = Deadline(load_timeout)
-            self._send(dump_line({"init": wire_init}), deadline)
-            if "ready" not in self._receive(deadline, "loading the backend"):
-                raise ProtocolError("expected ready after init")
+            self._send(dump_line({"init": wire_init}, "init"), deadline)
+            self._receive(deadline, "loading the backend", "ready")
         except BaseException as exc:
             self._fail(exc)
             raise
@@ -421,7 +431,10 @@ class WorkerClient:
         if self._closed:
             raise WorkerLost("worker was discarded or closed; start a new WorkerClient")
         request_id = str(uuid.uuid4())
-        check_request({"id": request_id, "items": items, "params": params})
+        try:
+            validate_message({"id": request_id, "items": items, "params": params}, "request")
+        except ProtocolError as exc:
+            raise ValueError(f"malformed request: {exc}") from exc
         wire_params = to_wire(params, array_dir=self._array_dir)
         results: list[dict[str, Any]] = [{} for _ in items]
         sent: list[tuple[int, dict[str, Any]]] = []
@@ -433,12 +446,11 @@ class WorkerClient:
         if not sent:
             return results
         request = {"id": request_id, "items": [wire for _, wire in sent], "params": wire_params}
-        line = dump_line(request)
+        line = dump_line(request, "request")
         deadline = Deadline(self._request_timeout)
         try:
             self._send(line, deadline)
-            response = self._receive(deadline, "running the request")
-            replies = self._decode_response(response, request, deadline)
+            replies = self._read_replies(request, deadline)
         except BaseException as exc:
             self._fail(exc)
             raise
@@ -481,8 +493,12 @@ class WorkerClient:
             except ProtocolError:
                 logger.warning("worker wrote a non-JSON line before its hello: %r", line[:_LOGGED_LINE_BYTES])
                 continue
-            found = msg.get("hello")
-            hello = found if isinstance(found, dict) else None
+            try:
+                hello = validate_message(msg, "hello")["hello"]
+            except ProtocolError as exc:
+                raise ProtocolMismatch(
+                    f"first message is not a hello: {exc}; host expects wire {WIRE_VERSION!r}"
+                ) from exc
             break
         got = (hello.get("wire"), hello.get("runtime")) if hello is not None else None
         if hello is None or got != (WIRE_VERSION, expected_runtime):
@@ -508,7 +524,8 @@ class WorkerClient:
                 deadline.check("sending to the worker")
                 sel.select(deadline.remaining())
 
-    def _receive(self, deadline: Deadline, what: str) -> dict[str, Any]:
+    def _receive(self, deadline: Deadline, what: str, *kinds: Kind) -> dict[str, Any]:
+        """Return the next line as a message of one of `kinds`, the first that has its key; a `fatal` raises."""
         assert self._proc is not None
         try:
             line = self._lines.get(timeout=deadline.remaining())
@@ -519,40 +536,42 @@ class WorkerClient:
             self._lines.put(None)
             self._exited.wait(EXIT_CODE_WAIT_S)
             code = self._exit_status[0] if self._exit_status else None
-            raise WorkerLost(f"worker closed its output while a reply was awaited; exit code {code}")
+            raise WorkerLost(f"worker closed its output while {what}; exit code {code}", returncode=code)
         msg = parse_line(line)
-        if msg.get("fatal") is True:
-            raise WorkerFatal(_mapped(msg.get("error")))
-        return msg
+        if "fatal" in msg:
+            raise WorkerFatal(_fatal_record(validate_message(msg, "fatal")["error"]))
+        kind = next((k for k in kinds if k in msg), kinds[-1])
+        return validate_message(msg, kind)
 
-    def _decode_response(
-        self, response: dict[str, Any], request: dict[str, Any], deadline: Deadline
-    ) -> list[dict[str, Any]]:
-        results = response.get("results")
-        expected = [item["id"] for item in request["items"]]
-        if (
-            response.get("id") != request["id"]
-            or not isinstance(results, list)
-            or [r.get("id") if isinstance(r, dict) else None for r in results] != expected
-        ):
-            raise ProtocolError("response does not answer the request: its id, count, order or item ids differ")
-        return [self._decode_result(r, deadline) for r in results]
+    def _read_replies(self, request: dict[str, Any], deadline: Deadline) -> list[dict[str, Any]]:
+        """Read one result line per item, in request order, then `done`."""
+        replies = []
+        for item in request["items"]:
+            reply = self._receive(deadline, "running the request", "result")
+            if (reply["id"], reply["item"]) != (request["id"], item["id"]):
+                raise ProtocolError(
+                    f"expected the result of item {item['id']!r} of request {request['id']!r}, "
+                    f"got item {reply['item']!r} of request {reply['id']!r}"
+                )
+            replies.append(self._decode_result(reply, deadline))
+        done = self._receive(deadline, "running the request", "done")
+        if (done["id"], done["done"]) != (request["id"], len(request["items"])):
+            raise ProtocolError(
+                f"expected done for {len(request['items'])} items of request {request['id']!r}, got {done!r}"
+            )
+        return replies
 
     def _decode_result(self, result: dict[str, Any], deadline: Deadline) -> dict[str, Any]:
-        if ("outputs" in result) == ("error" in result):
-            raise ProtocolError(f"result for item {result['id']!r} needs exactly one of outputs and error")
         if "error" in result:
             error = _mapped(result["error"])
             if error["gap"]:
-                logger.warning("worker fault classification gap: %s: %s", error.get("type"), error.get("message"))
-            return {"id": result["id"], "error": error}
-        if not isinstance(result["outputs"], dict):
-            raise ProtocolError(f"outputs for item {result['id']!r} are not an object")
+                logger.warning("worker fault classification gap: %s: %s", error["type"], error["message"])
+            return {"id": result["item"], "error": error}
         try:
             outputs = from_wire(result["outputs"], array_dir=self._array_dir, deadline=deadline)
         except ArrayIntegrityError as exc:
-            return {"id": result["id"], "error": _mapped(error_record(exc))}
-        return {"id": result["id"], "outputs": outputs}
+            return {"id": result["item"], "error": _mapped(error_record(exc))}
+        return {"id": result["item"], "outputs": outputs}
 
     def _owned(self, paths: set[Path]) -> set[str]:
         root = self._array_dir.resolve()
@@ -626,7 +645,7 @@ class WorkerClient:
         stop = Deadline(STOP_GRACE_S)
         if graceful and not self._exited.is_set():
             try:
-                self._send(dump_line({"stop": True}), Deadline(0))
+                self._send(dump_line({"stop": True}, "stop"), Deadline(0))
             except (WorkerLost, TimeoutError):
                 pass
         try:
@@ -668,12 +687,28 @@ class WorkerClient:
         proc.stderr.close()
 
 
-def _mapped(error: object) -> dict[str, Any]:
-    """Return a wire error object with `fault` as a `FaultClass`, or raise `ProtocolError`."""
-    if not (isinstance(error, dict) and isinstance(error.get("gap"), bool)):
-        raise ProtocolError(f"malformed error object: {error!r}")
-    try:
-        fault = FaultClass(error.get("fault"))
-    except ValueError as exc:
-        raise ProtocolError(f"unknown fault class in error object: {error.get('fault')!r}") from exc
-    return {**error, "fault": fault}
+def _mapped(error: dict[str, Any]) -> dict[str, Any]:
+    """Return a validated wire error record with `fault` as a `FaultClass`."""
+    return {**error, "fault": FaultClass(error["fault"])}
+
+
+def _fatal_record(error: object) -> dict[str, Any]:
+    """Return a `fatal` message's error object as an error record; total over any JSON value.
+
+    `type` and `message` are kept when they are strings, else replaced by placeholders naming what
+    was received. A missing or unknown `fault`, or a `gap` that is not a bool, makes the record
+    `infrastructure` with `gap: true`.
+    """
+    fields: dict[str, Any] = dict(error) if type(error) is dict else {}
+    record: dict[str, Any] = {**fields}
+    record["type"] = fields["type"] if type(fields.get("type")) is str else "<unknown>"
+    if type(fields.get("message")) is str:
+        record["message"] = fields["message"]
+    else:
+        record["message"] = wire_text(f"<no message; the worker sent {json.dumps(error)[:_LOGGED_LINE_BYTES]}>")
+    record["traceback"] = fields["traceback"] if type(fields.get("traceback")) is str else ""
+    fault = fields.get("fault")
+    known = type(fault) is str and fault in {f.value for f in FaultClass} and type(fields.get("gap")) is bool
+    record["fault"] = FaultClass(fault) if known else FaultClass.INFRASTRUCTURE
+    record["gap"] = fields["gap"] if known else True
+    return record

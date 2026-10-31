@@ -13,6 +13,8 @@ from typing import Any
 import numpy
 
 from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
+from senselab_worker.codec import MAX_LINE_BYTES
+from senselab_worker.faults import ContentFault, ResourceFault
 from senselab_worker.hashing import sha256_bytes
 
 EXIT_CRASH = 70
@@ -24,12 +26,14 @@ class FakeFaults:
     """Faults the fake injects; the default injects none.
 
     Attributes:
-        fail_items: item ids that fail with a `ValueError` (content).
-        oom_items: item ids that fail with `OutOfMemoryError` (resource).
+        fail_items: item ids that fail with a `ContentFault`.
+        oom_items: item ids that fail with `OutOfMemoryError`, a `ResourceFault`.
         crash_after: the process exits abruptly before its next item once it has handled this many.
         batch_coupled: each value also depends on its batch-mates' inputs.
         nondeterministic: each value also depends on fresh random bytes.
         latency_s: seconds spent per item.
+        oversize_items: item ids whose value is a string longer than the wire line budget.
+        unprintable_items: item ids that fail with `UnprintableFault`, a `ContentFault` that cannot be printed.
     """
 
     fail_items: frozenset[str] = frozenset()
@@ -38,6 +42,8 @@ class FakeFaults:
     batch_coupled: bool = False
     nondeterministic: bool = False
     latency_s: float = 0.0
+    oversize_items: frozenset[str] = frozenset()
+    unprintable_items: frozenset[str] = frozenset()
 
     @classmethod
     def from_json(cls, value: object) -> "FakeFaults":
@@ -48,12 +54,27 @@ class FakeFaults:
         """
         if not isinstance(value, dict):
             raise TypeError(f"faults must be an object, got {type(value).__name__}")
-        fields: dict[str, Any] = {k: frozenset(v) if k in ("fail_items", "oom_items") else v for k, v in value.items()}
+        fields: dict[str, Any] = {k: frozenset(v) if k in _ID_SETS else v for k, v in value.items()}
         return cls(**fields)
 
 
-class OutOfMemoryError(RuntimeError):
+_ID_SETS = ("fail_items", "oom_items", "oversize_items", "unprintable_items")
+
+
+class OutOfMemoryError(ResourceFault):
     """Out of memory, named as model frameworks name it."""
+
+
+class UnprintableFault(ContentFault):
+    """A content fault whose `__str__` and `__repr__` raise."""
+
+    def __str__(self) -> str:
+        """Raise: this fault cannot be printed."""
+        raise RuntimeError("this fault cannot be printed")
+
+    def __repr__(self) -> str:
+        """Raise: this fault cannot be printed."""
+        raise RuntimeError("this fault cannot be represented")
 
 
 @dataclass
@@ -103,9 +124,13 @@ def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -
 def _one(item: dict[str, Any], params: object, faults: FakeFaults, batch: list[object] | None) -> dict[str, Any]:
     item_id = item["id"]
     if item_id in faults.fail_items:
-        return {"error": ValueError(f"fake failure for item {item_id}")}
+        return {"error": ContentFault(f"fake failure for item {item_id}")}
     if item_id in faults.oom_items:
         return {"error": OutOfMemoryError(f"fake out of memory for item {item_id}")}
+    if item_id in faults.unprintable_items:
+        return {"error": UnprintableFault()}
+    if item_id in faults.oversize_items:
+        return {"outputs": {"value": "x" * (MAX_LINE_BYTES + 1)}}
     payload = {"inputs": _identity_view(item["inputs"]), "params": params}
     if batch is not None:
         payload["batch"] = batch

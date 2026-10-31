@@ -17,6 +17,8 @@ import numpy
 import pytest
 import senselab_worker
 from backends.subdir_backend_fixture import ARRAY_LIKE
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from lifecycle_probes_fixture import alive, gate, group_alive, listing, recorded_pids, state
 from senselab_core.runtime import worker_client
 from senselab_core.runtime.worker_client import (
@@ -30,6 +32,7 @@ from senselab_core.runtime.worker_client import (
 from senselab_worker import runtime_identity
 from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
 from senselab_worker.codec import to_wire
+from senselab_worker.fake import EXIT_CRASH
 from senselab_worker.faults import FaultClass, ProtocolError, classify
 from senselab_worker.hashing import sha256_bytes
 
@@ -91,10 +94,17 @@ def _interpreter(directory: Path, body: str) -> Path:
     return path
 
 
-def _scripted(array_parent: Path, *replies: dict, **init: object) -> WorkerClient:
+def _lines(reply: dict | list) -> list[str]:
+    return [
+        part if isinstance(part, str) else json.dumps(part) for part in (reply if isinstance(reply, list) else [reply])
+    ]
+
+
+def _scripted(array_parent: Path, *replies: dict | list, **init: object) -> WorkerClient:
+    """A client over the scripted worker; each reply is one line (a dict) or a list of lines."""
     python = _interpreter(array_parent.parent, f'exec "{sys.executable}" "{SCRIPTED}"')
     return WorkerClient(
-        python, "unused", init={"replies": [json.dumps(r) for r in replies], **init}, array_parent=array_parent
+        python, "unused", init={"replies": [_lines(r) for r in replies], **init}, array_parent=array_parent
     )
 
 
@@ -132,8 +142,8 @@ def test_unencodable_item_fails_alone_on_the_host(worker: WorkerClient) -> None:
     """An item with an object array fails as content before sending; its batch-mates run."""
     items = [{"id": "a", "inputs": {"x": numpy.array([object()])}}, {"id": "b", "inputs": {}}]
     out = worker.run(items, {})
-    assert (out[0]["error"]["type"], out[0]["error"]["fault"]) == ("ValueError", FaultClass.CONTENT)
-    assert out[1]["outputs"]["value"] == _value({}, {})
+    assert (out[0]["error"]["type"], out[0]["error"]["fault"]) == ("WireValueError", FaultClass.CONTENT)
+    assert out[0]["error"]["gap"] is False and out[1]["outputs"]["value"] == _value({}, {})
 
 
 @pytest.mark.logic
@@ -233,6 +243,7 @@ def test_crash_mid_batch_is_worker_lost(array_parent: Path) -> None:
     with pytest.raises(WorkerLost) as info:
         client.run([{"id": "a", "inputs": {}}, {"id": "b", "inputs": {}}], {})
     assert classify(info.value) is FaultClass.INFRASTRUCTURE and info.value.__notes__
+    assert info.value.returncode == EXIT_CRASH and str(EXIT_CRASH) in str(info.value)
     assert not client.alive and list(array_parent.iterdir()) == []
     with pytest.raises(WorkerLost):
         client.run([{"id": "a", "inputs": {}}], {})
@@ -258,26 +269,43 @@ def test_close_is_idempotent_and_context_managed(array_parent: Path) -> None:
     assert not client.alive
 
 
-def _ok(item: str) -> dict:
-    return {"id": item, "outputs": {}}
+def _ok(item: str, request: str = "$ID") -> dict:
+    return {"id": request, "item": item, "outputs": {}}
+
+
+def _done(n: int, request: str = "$ID") -> dict:
+    return {"id": request, "done": n}
+
+
+_ERROR = {"type": "ValueError", "message": "m", "fault": "content", "traceback": "", "gap": False}
 
 
 @pytest.mark.logic
 @pytest.mark.parametrize(
     "reply",
     [
-        {"id": "other", "results": [_ok("a")]},
-        {"id": "$ID", "results": []},
-        {"id": "$ID", "results": [_ok("b"), _ok("a")]},
-        {"id": "$ID", "results": [_ok("a")]},
-        {"id": "$ID", "results": [{"id": "a"}, _ok("b")]},
-        {"id": "$ID", "results": [{**_ok("a"), "error": {}}, _ok("b")]},
-        {"id": "$ID", "results": [{"id": "a", "error": {"fault": "weird", "gap": False}}, _ok("b")]},
-        {"ready": {}},
+        [_ok("a", "other"), _ok("b"), _done(2)],
+        [_done(0)],
+        [_ok("b"), _ok("a"), _done(2)],
+        [_ok("a"), _done(1)],
+        [_ok("a"), _ok("b"), _ok("b"), _done(2)],
+        [_ok("a"), _ok("b"), _done(3)],
+        [_ok("a"), _ok("b"), _done(2, "other")],
+        [_ok("a"), _ok("b"), {"id": "$ID", "done": True}],
+        [{"id": "$ID", "item": "a"}, _ok("b"), _done(2)],
+        [{**_ok("a"), "error": _ERROR}, _ok("b"), _done(2)],
+        [{"id": "$ID", "item": "a", "error": {**_ERROR, "fault": "weird"}}, _ok("b"), _done(2)],
+        [{"id": "$ID", "item": "a", "error": {"fault": "content", "gap": False}}, _ok("b"), _done(2)],
+        [{"id": "$ID", "item": "a", "outputs": [1]}, _ok("b"), _done(2)],
+        ['{"id": "$ID", "item": "a", "item": "b", "outputs": {}}', _ok("b"), _done(2)],
+        ['{"id": "$ID", "item": "a", "outputs": {"x": 1e999}}', _ok("b"), _done(2)],
+        ["[1]"],
+        [{"ready": {}}],
+        [{"id": "$ID", "results": [_ok("a"), _ok("b")]}],
     ],
 )
-def test_malformed_responses_are_protocol_errors(array_parent: Path, reply: dict) -> None:
-    """A response with the wrong id, count, order or entry shape raises `ProtocolError`."""
+def test_malformed_responses_are_protocol_errors(array_parent: Path, reply: list) -> None:
+    """A reply line with the wrong id, item, order, count or shape raises `ProtocolError`."""
     client = _scripted(array_parent, reply)
     with pytest.raises(ProtocolError):
         client.run([{"id": "a", "inputs": {}}, {"id": "b", "inputs": {}}], {})
@@ -297,6 +325,121 @@ def test_fatal_during_a_request_is_worker_fatal(array_parent: Path) -> None:
 
 
 @pytest.mark.logic
+@pytest.mark.parametrize(
+    ("error", "kept"),
+    [
+        ({**_ERROR, "fault": "weird"}, ("ValueError", "m")),
+        ({k: v for k, v in _ERROR.items() if k != "gap"}, ("ValueError", "m")),
+        ({**_ERROR, "gap": "no"}, ("ValueError", "m")),
+        ({"message": "only a message"}, (None, "only a message")),
+        ({"type": 3, "message": ["not", "text"]}, (None, None)),
+        ({**_ERROR, "fault": ["content"]}, ("ValueError", "m")),
+        ("a bare string", (None, None)),
+        (None, (None, None)),
+    ],
+)
+def test_unknown_fatal_keeps_message(array_parent: Path, error: object, kept: tuple) -> None:
+    """A `fatal` whose fault is unknown or whose `gap` is missing is `infrastructure` with a gap, and keeps its text.
+
+    The probe: such a `fatal` became a `ProtocolError` and the worker's message was lost.
+    """
+    client = _scripted(array_parent, {"error": error, "fatal": True})
+    with pytest.raises(WorkerFatal) as info:
+        client.run([{"id": "a", "inputs": {}}], {})
+    got = info.value.error
+    assert (got["fault"], got["gap"]) == (FaultClass.INFRASTRUCTURE, True)
+    assert isinstance(got["type"], str) and isinstance(got["message"], str)
+    type_name, message = kept
+    if type_name is not None:
+        assert got["type"] == type_name
+    if message is not None:
+        assert got["message"] == message and message in str(info.value)
+    client.close()
+
+
+_JSON = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False) | st.text(),
+    lambda children: st.lists(children, max_size=3) | st.dictionaries(st.text(max_size=8), children, max_size=3),
+    max_leaves=10,
+)
+_ERROR_FIELDS = st.fixed_dictionaries(
+    {},
+    optional={key: _JSON | st.sampled_from(["content", "resource", "weird", True, False]) for key in _ERROR},
+)
+
+
+@pytest.mark.logic
+@settings(max_examples=300, deadline=None)
+@given(error=_JSON | _ERROR_FIELDS)
+def test_fatal_decode_is_total(error: object) -> None:
+    """Any JSON value as a fatal's error decodes to a record: text fields are strings, an unknown fault is a gap."""
+    record = worker_client._fatal_record(error)
+    assert all(type(record[k]) is str for k in ("type", "message", "traceback"))
+    assert isinstance(record["fault"], FaultClass) and type(record["gap"]) is bool
+    sent = error if type(error) is dict else {}
+    if sent.get("fault") not in ("content", "resource", "infrastructure") or type(sent.get("gap")) is not bool:
+        assert (record["fault"], record["gap"]) == (FaultClass.INFRASTRUCTURE, True)
+    else:
+        assert (record["fault"].value, record["gap"]) == (sent["fault"], sent["gap"])
+    for key in ("type", "message"):
+        if type(sent.get(key)) is str:
+            assert record[key] == sent[key]
+    str(worker_client.WorkerFatal(record))
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("tail", "code"),
+    [
+        (["$EXIT:3"], 3),
+        (['$RAW:{"id": "$ID", "item": "b", "outp', "$EXIT:4"], 4),
+        ([_ok("b"), "$EXIT:0"], 0),
+    ],
+)
+def test_crash_mid_reply_is_worker_lost_with_returncode(array_parent: Path, tail: list, code: int) -> None:
+    """A worker that exits after some of a reply's lines raises `WorkerLost` carrying its exit code.
+
+    The probe: a crash mid-reply surfaced as `ProtocolError`, with no exit code.
+    """
+    client = _scripted(array_parent, [_ok("a"), *tail])
+    with pytest.raises(WorkerLost) as info:
+        client.run([{"id": "a", "inputs": {}}, {"id": "b", "inputs": {}}], {})
+    assert info.value.returncode == code and f"exit code {code}" in str(info.value)
+    assert not client.alive
+    client.close()
+
+
+@pytest.mark.logic
+@posix_only
+@pytest.mark.parametrize("wire", [True, 1.0, "2", 1, None])
+def test_a34_hello_wire_must_be_an_int_on_the_host(array_parent: Path, wire: object) -> None:
+    """The probe: a hello with `"wire": true` or `1.0` was accepted; a wire that is not the int 2 is refused."""
+    hello = {"wire": wire, "runtime": runtime_identity(), "python": "", "numpy": "", "pid": 0}
+    line = json.dumps({"hello": hello})
+    with pytest.raises(ProtocolMismatch):
+        WorkerClient(_interpreter(array_parent.parent, f"echo '{line}'"), FAKE, init={}, array_parent=array_parent)
+
+
+@pytest.mark.contract
+def test_serve_is_total_through_a_real_worker(worker: WorkerClient) -> None:
+    """One case of the serve fuzz property over a real worker: typed, oversize and unprintable faults stay per item."""
+    ids = ["fail", "oom", "big", "mute", "ok"]
+    faults = {"fail_items": ["fail"], "oom_items": ["oom"], "oversize_items": ["big"], "unprintable_items": ["mute"]}
+    out = worker.run([{"id": i, "inputs": {}} for i in ids], {"faults": faults})
+    assert [r["id"] for r in out] == ids
+    summary = [(r["error"]["type"], r["error"]["fault"], r["error"]["gap"]) for r in out[:4]]
+    assert summary == [
+        ("ContentFault", FaultClass.CONTENT, False),
+        ("OutOfMemoryError", FaultClass.RESOURCE, False),
+        ("ResponseTooLarge", FaultClass.RESOURCE, False),
+        ("UnprintableFault", FaultClass.CONTENT, False),
+    ]
+    assert out[3]["error"]["message"] == "<unprintable UnprintableFault>"
+    assert out[4]["outputs"]["value"] == _value({}, {})
+    assert worker.alive and worker.run([{"id": "x", "inputs": {}}], {})[0]["outputs"]
+
+
+@pytest.mark.logic
 def test_output_arrays_decode_per_item_and_init_files_survive(array_parent: Path, tmp_path: Path) -> None:
     """A damaged output array fails only its item; request and response files go, init files stay."""
     staging = tmp_path / "staging"
@@ -309,10 +452,11 @@ def test_output_arrays_decode_per_item_and_init_files_survive(array_parent: Path
         moved = dict(ref["__array__"], path="$DIR/" + Path(ref["__array__"]["path"]).name)
         return {"__array__": moved}
 
-    reply = {
-        "id": "$ID",
-        "results": [{"id": "a", "outputs": {"y": placed(good_ref)}}, {"id": "b", "outputs": {"y": placed(bad_ref)}}],
-    }
+    reply = [
+        {"id": "$ID", "item": "a", "outputs": {"y": placed(good_ref)}},
+        {"id": "$ID", "item": "b", "outputs": {"y": placed(bad_ref)}},
+        _done(2),
+    ]
     weights = numpy.full(5, 7.0)
     client = _scripted(array_parent, reply, w=weights)
     init_files = set(client.array_dir.iterdir())
@@ -329,7 +473,7 @@ def test_output_arrays_decode_per_item_and_init_files_survive(array_parent: Path
 def test_classification_gap_is_reported(array_parent: Path, caplog: pytest.LogCaptureFixture) -> None:
     """An error marked as a classification gap is logged by the host."""
     error = {"type": "OSError", "message": "m", "fault": "infrastructure", "traceback": "", "gap": True}
-    client = _scripted(array_parent, {"id": "$ID", "results": [{"id": "a", "error": error}]})
+    client = _scripted(array_parent, [{"id": "$ID", "item": "a", "error": error}, _done(1)])
     with caplog.at_level(logging.WARNING):
         out = client.run([{"id": "a", "inputs": {}}], {})
     assert out[0]["error"]["gap"] is True and "OSError" in caplog.text
@@ -516,7 +660,7 @@ def test_a21_fifo_named_like_an_array_does_not_hang_the_host(array_parent: Path)
     """The probe: a response naming a FIFO at `<sha>.npy` fails its item at once instead of blocking."""
     sha = "a" * 64
     ref = {"__array__": {"path": f"$DIR/{sha}.npy", "sha256": sha, "dtype": "<f4", "shape": [1]}}
-    client = _scripted(array_parent, {"id": "$ID", "results": [{"id": "a", "outputs": {"y": ref}}]})
+    client = _scripted(array_parent, [{"id": "$ID", "item": "a", "outputs": {"y": ref}}, _done(1)])
     os.mkfifo(client.array_dir / f"{sha}.npy")
     t0 = time.monotonic()
     [out] = client.run([{"id": "a", "inputs": {}}], {})

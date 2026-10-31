@@ -7,13 +7,15 @@ import sys
 from pathlib import Path
 
 import pytest
-from senselab_worker.codec import encode
+from senselab_worker.codec import Kind, encode
 
 TESTS = Path(__file__).parent
 
 
 def _launch(tmp_path: Path, backend: str, *messages: dict) -> subprocess.CompletedProcess[bytes]:
-    stdin = b"".join(encode(m, array_dir=tmp_path) for m in messages)
+    kinds: tuple[Kind, ...] = ("init", "stop")
+    default: Kind = "request"
+    stdin = b"".join(encode(m, next((k for k in kinds if k in m), default), array_dir=tmp_path) for m in messages)
     env = {**os.environ, "PYTHONPATH": str(TESTS)}
     return subprocess.run(
         [sys.executable, "-m", "senselab_worker.launch", backend],
@@ -37,7 +39,7 @@ def _session(tmp_path: Path) -> list[dict]:
 def test_backend_prints_at_import_never_reach_the_protocol_stream(tmp_path: Path) -> None:
     """Writes to `sys.stdout` or fd 1 at import time or in `load` go to stderr."""
     proc = _launch(tmp_path, "printing_backend_fixture", *_session(tmp_path))
-    assert proc.returncode == 0 and _keys(proc.stdout) == ["hello", "ready", "id"]
+    assert proc.returncode == 0 and _keys(proc.stdout) == ["hello", "ready", "id", "id"]
     for noise in (b"noise at import", b"noise on fd 1 at import", b"noise from load"):
         assert noise in proc.stderr
 
@@ -47,7 +49,8 @@ def test_fake_runs_through_the_launcher(tmp_path: Path) -> None:
     """The fake backend serves a session through the launcher."""
     proc = _launch(tmp_path, "senselab_worker.fake", *_session(tmp_path))
     assert proc.returncode == 0
-    assert "value" in json.loads(proc.stdout.splitlines()[-1])["results"][0]["outputs"]
+    *_, result, done = proc.stdout.splitlines()
+    assert "value" in json.loads(result)["outputs"] and json.loads(done) == {"id": "r", "done": 1}
 
 
 @pytest.mark.logic
@@ -67,7 +70,7 @@ def test_a8_backend_children_inherit_dev_null_not_the_channel(tmp_path: Path) ->
     """The probe's cause: fd 0 is `/dev/null`, fd 1 is stderr, and only fds 0-2 are inheritable."""
     proc = _launch(tmp_path, "channel_probe_backend_fixture", *_session(tmp_path))
     assert proc.returncode == 0, proc.stderr
-    report = json.loads(proc.stdout.splitlines()[-1])["results"][0]["outputs"]
+    report = json.loads(proc.stdout.splitlines()[-2])["outputs"]
     assert report == {
         "fd0_is_devnull": True,
         "fd1_is_fd2": True,

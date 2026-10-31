@@ -3,8 +3,9 @@
 import numpy
 import pytest
 from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
+from senselab_worker.codec import MAX_LINE_BYTES
 from senselab_worker.fake import FakeFaults, OutOfMemoryError, handle, load
-from senselab_worker.faults import FaultClass, classify
+from senselab_worker.faults import ContentFault, FaultClass, ResourceFault, classify, error_record
 from senselab_worker.hashing import sha256_bytes
 
 ITEMS = [{"id": "a", "inputs": {"x": 1}}, {"id": "b", "inputs": {"x": 2}}, {"id": "c", "inputs": {"x": 3}}]
@@ -61,12 +62,28 @@ def test_nondeterministic_values_differ_between_calls() -> None:
 
 
 @pytest.mark.logic
-def test_fail_and_oom_items_are_content_and_resource_errors() -> None:
-    """`fail_items` give a content error, `oom_items` a resource error."""
+def test_fail_and_oom_items_are_typed_content_and_resource_faults() -> None:
+    """`fail_items` raise a `ContentFault`, `oom_items` a `ResourceFault`; neither is a classification gap."""
     results = handle(load({}), ITEMS, {"faults": {"fail_items": ["a"], "oom_items": ["c"]}})
-    assert classify(results[0]["error"]) is FaultClass.CONTENT
+    assert isinstance(results[0]["error"], ContentFault) and classify(results[0]["error"]) is FaultClass.CONTENT
     assert "outputs" in results[1]
-    assert isinstance(results[2]["error"], OutOfMemoryError) and classify(results[2]["error"]) is FaultClass.RESOURCE
+    assert isinstance(results[2]["error"], (OutOfMemoryError, ResourceFault))
+    assert classify(results[2]["error"]) is FaultClass.RESOURCE
+    assert [error_record(results[i]["error"])["gap"] for i in (0, 2)] == [False, False]
+
+
+@pytest.mark.logic
+def test_oversize_and_unprintable_items() -> None:
+    """`oversize_items` answer outputs over the line budget; `unprintable_items` an error that cannot be printed."""
+    results = handle(load({}), ITEMS, {"faults": {"oversize_items": ["a"], "unprintable_items": ["b"]}})
+    assert len(results[0]["outputs"]["value"]) > MAX_LINE_BYTES
+    error = results[1]["error"]
+    assert isinstance(error, ContentFault)
+    for show in (str, repr):
+        with pytest.raises(Exception):  # noqa: B017 - any exception: the point is that printing fails
+            show(error)
+    assert error_record(error)["message"] == f"<unprintable {type(error).__name__}>"
+    assert "outputs" in results[2]
 
 
 @pytest.mark.logic
@@ -88,4 +105,4 @@ def test_unknown_init_is_refused(init: dict) -> None:
 @pytest.mark.logic
 def test_fake_faults_defaults() -> None:
     """The default fault model injects nothing."""
-    assert FakeFaults() == FakeFaults(frozenset(), frozenset(), None, False, False, 0.0)
+    assert FakeFaults() == FakeFaults(frozenset(), frozenset(), None, False, False, 0.0, frozenset(), frozenset())

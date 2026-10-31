@@ -1,4 +1,4 @@
-"""The worker side of the wire protocol: handshake, request loop and per-item fault reporting."""
+"""The worker side of the wire protocol: handshake, request loop and per-item result lines."""
 
 import os
 import platform
@@ -11,18 +11,21 @@ import numpy
 from senselab_worker import WIRE_VERSION, runtime_identity
 from senselab_worker.codec import (
     MAX_LINE_BYTES,
-    check_request,
+    Kind,
+    LineTooLarge,
     dump_line,
     from_wire,
     parse_line,
     to_wire,
+    validate_message,
 )
-from senselab_worker.faults import ArrayIntegrityError, ProtocolError, error_record
+from senselab_worker.faults import ArrayIntegrityError, ProtocolError, ResponseTooLarge, error_record
 
 Load = Callable[[dict[str, Any]], object]
 Handle = Callable[[object, list[dict[str, Any]], dict[str, Any]], list[dict[str, Any]]]
 
 EXIT_FATAL = 1
+_PASS_THROUGH = (KeyboardInterrupt, SystemExit)
 
 
 def serve(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO) -> int:
@@ -30,7 +33,10 @@ def serve(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO) -> int:
 
     `load(init)` is called once and returns the state. `handle(state, items, params)` gets the
     decoded items (`{"id", "inputs"}`) and returns one `{"outputs": dict}` or `{"error": exception}`
-    per item, in order. Returns 0 on stop or EOF and `EXIT_FATAL` after reporting a fatal error.
+    per item, in order. Each item's result is written as its own line, then `done`. Nothing an item
+    or `handle` does ends the loop, except `KeyboardInterrupt` and `SystemExit`. Returns 0 on stop
+    or EOF, and `EXIT_FATAL` after reporting a fatal error: a failed load, or a line from the host
+    that is not a valid message.
     """
     hello = {
         "wire": WIRE_VERSION,
@@ -39,25 +45,29 @@ def serve(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO) -> int:
         "numpy": numpy.__version__,
         "pid": os.getpid(),
     }
-    _send(tx, {"hello": hello})
+    _send(tx, {"hello": hello}, "hello")
     try:
         msg = _receive(rx)
-        if msg is None or "stop" in msg:
+        if msg is None or _is_stop(msg):
             return 0
         array_dir, init = _init(msg)
         start = time.perf_counter()
         state = load(init)
-        _send(tx, {"ready": {"load_s": time.perf_counter() - start}})
-        while (msg := _receive(rx)) is not None and "stop" not in msg:
-            _send(tx, _respond(handle, state, msg, array_dir))
+        _send(tx, {"ready": {"load_s": time.perf_counter() - start}}, "ready")
+        while (msg := _receive(rx)) is not None and not _is_stop(msg):
+            _respond(handle, state, validate_message(msg, "request"), array_dir, tx)
     except Exception as exc:
-        _send(tx, {"error": error_record(exc), "fatal": True})
+        _send(tx, {"error": error_record(exc), "fatal": True}, "fatal")
         return EXIT_FATAL
     return 0
 
 
-def _send(tx: BinaryIO, msg: dict[str, Any]) -> None:
-    tx.write(dump_line(msg))
+def _send(tx: BinaryIO, msg: dict[str, Any], kind: Kind) -> None:
+    _write(tx, dump_line(msg, kind))
+
+
+def _write(tx: BinaryIO, line: bytes) -> None:
+    tx.write(line)
     tx.flush()
 
 
@@ -66,19 +76,21 @@ def _receive(rx: BinaryIO) -> dict[str, Any] | None:
     return parse_line(line) if line else None
 
 
+def _is_stop(msg: dict[str, Any]) -> bool:
+    """Whether `msg` is a stop; a `stop` key with any value but `true` is a `ProtocolError`."""
+    if "stop" not in msg:
+        return False
+    validate_message(msg, "stop")
+    return True
+
+
 def _init(msg: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
-    init = msg.get("init")
-    if not (isinstance(init, dict) and isinstance(init.get("array_dir"), str)):
-        raise ProtocolError("expected an init message with a string array_dir")
+    init = validate_message(msg, "init")["init"]
     array_dir = Path(init["array_dir"])
     return array_dir, from_wire(init, array_dir=array_dir)
 
 
-def _respond(handle: Handle, state: object, msg: dict[str, Any], array_dir: Path) -> dict[str, Any]:
-    try:
-        check_request(msg)
-    except ValueError as exc:
-        raise ProtocolError(f"not a request: {exc}") from exc
+def _respond(handle: Handle, state: object, msg: dict[str, Any], array_dir: Path, tx: BinaryIO) -> None:
     items: list[dict[str, Any]] = msg["items"]
     entries: list[dict[str, Any]] = [{} for _ in items]
     try:
@@ -95,30 +107,45 @@ def _respond(handle: Handle, state: object, msg: dict[str, Any], array_dir: Path
         if decoded:
             for (i, _), entry in zip(decoded, _call(handle, state, [item for _, item in decoded], params)):
                 entries[i] = entry
-    return {"id": msg["id"], "results": [_result(item["id"], e, array_dir) for item, e in zip(items, entries)]}
+    for item, entry in zip(items, entries):
+        _write(tx, _result(msg["id"], item["id"], entry, array_dir))
+    _send(tx, {"id": msg["id"], "done": len(items)}, "done")
 
 
 def _call(handle: Handle, state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
     try:
         entries = handle(state, items, params)
-    except Exception as exc:
+    except _PASS_THROUGH:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - whatever handle raises is every item's error
         return [{"error": exc} for _ in items]
-    if not (isinstance(entries, list) and len(entries) == len(items) and all(map(_well_formed, entries))):
+    if not (type(entries) is list and len(entries) == len(items) and all(map(_well_formed, entries))):
         error = ProtocolError("handle must return one {'outputs': dict} or {'error': exception} per item, in order")
         return [{"error": error} for _ in items]
     return entries
 
 
 def _well_formed(entry: object) -> bool:
-    if not isinstance(entry, dict) or len(entry.keys() & {"outputs", "error"}) != 1:
+    if type(entry) is not dict or len(entry.keys() & {"outputs", "error"}) != 1:
         return False
-    return isinstance(entry["outputs"], dict) if "outputs" in entry else isinstance(entry["error"], BaseException)
+    return type(entry["outputs"]) is dict if "outputs" in entry else isinstance(entry["error"], BaseException)
 
 
-def _result(item_id: str, entry: dict[str, Any], array_dir: Path) -> dict[str, Any]:
-    if "error" in entry:
-        return {"id": item_id, "error": error_record(entry["error"])}
+def _result(request_id: str, item_id: str, entry: dict[str, Any], array_dir: Path) -> bytes:
+    """Return the item's result line; total, so a failure to encode it becomes the item's error line.
+
+    `request_id` and `item_id` come from a validated request, and an error record is bounded, so the
+    error line always fits the line budget.
+    """
+    head = {"id": request_id, "item": item_id}
     try:
-        return {"id": item_id, "outputs": to_wire(entry["outputs"], array_dir=array_dir)}
-    except Exception as exc:
-        return {"id": item_id, "error": error_record(exc)}
+        if "error" in entry:
+            return dump_line({**head, "error": error_record(entry["error"])}, "result")
+        return dump_line({**head, "outputs": to_wire(entry["outputs"], array_dir=array_dir)}, "result")
+    except _PASS_THROUGH:
+        raise
+    except LineTooLarge as exc:
+        record = error_record(ResponseTooLarge(f"result line of {exc.size} bytes exceeds {MAX_LINE_BYTES}"))
+    except BaseException as exc:  # noqa: BLE001 - an item's encoding failure is that item's error
+        record = error_record(exc)
+    return dump_line({**head, "error": record}, "result")

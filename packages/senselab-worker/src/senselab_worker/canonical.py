@@ -22,6 +22,8 @@ _CANONICAL_KINDS = "biufU"
 _PY_SCALARS = (type(None), bool, int, float, str)
 _NPY_MAGIC = b"\x93NUMPY\x01\x00"
 _NPY_ALIGN = 64
+MAX_DEPTH = 64
+"""The most containers on any path from a value's root to a leaf, the root included."""
 
 DIGEST_TAGS: frozenset[str] = frozenset(
     {
@@ -69,8 +71,8 @@ def jcs_dumps(obj: object) -> bytes:
 
     Raises:
         ValueError: on a NaN or infinite float, an integer outside +/-(2**53 - 1), a string that
-            is not valid Unicode, two keys of one object that are equal after NFC, or a container
-            that contains itself.
+            is not valid Unicode, two keys of one object that are equal after NFC, a container
+            that contains itself, or nesting deeper than `MAX_DEPTH`.
         TypeError: on any other type, including container subclasses, non-`str` keys and arrays.
     """
     parts: list[str] = []
@@ -115,14 +117,18 @@ def tagged_digest(tag: str, value: object) -> str:
 def entered(container: object, active: set[int]) -> Iterator[None]:
     """Mark `container` as being encoded for the duration of the block, on the path held in `active`.
 
-    Every encoder that recurses into JSON containers enters each one through this, so a cycle
-    raises the same error wherever values are encoded; a child shared by two parents is not a cycle.
+    Every encoder that recurses into JSON containers enters each one through this, so a cycle or
+    excess nesting raises the same error wherever values are encoded; a child shared by two parents
+    is not a cycle.
 
     Raises:
-        ValueError: if `container` is already on the path, that is, it contains itself.
+        ValueError: if `container` is already on the path, that is, it contains itself, or if the
+            path already holds `MAX_DEPTH` containers.
     """
     if id(container) in active:
         raise ValueError(f"a {type(container).__name__} contains itself; JSON has no cycles")
+    if len(active) >= MAX_DEPTH:
+        raise ValueError(f"nesting deeper than {MAX_DEPTH} containers")
     active.add(id(container))
     try:
         yield
