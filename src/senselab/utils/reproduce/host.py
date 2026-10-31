@@ -126,10 +126,10 @@ def _host_cuda() -> str | None:
 
 
 def _cpus_allowed() -> int | None:
-    """CPUs this process may run on: the Linux affinity mask, else ``os.cpu_count()`` where there is no such call."""
+    """CPUs this process may run on (the Linux affinity mask), or None where the platform has no such call."""
     getter: Callable[[int], set[int]] | None = getattr(os, "sched_getaffinity", None)
     if getter is None:
-        return os.cpu_count()
+        return None
     try:
         return len(getter(0))
     except OSError:
