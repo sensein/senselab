@@ -233,7 +233,7 @@ at the handshake.
   unreaped is asked of `waitid(WNOHANG|WNOWAIT)` (Linux) or `ps -o ppid=` within 2 s (macOS). If it
   was reaped by someone else, or that cannot be told, the group is not signalled, which is logged,
   and every wait stays bounded. Signal errors other than "no such process" (and, on macOS, EPERM
-  for a group whose only member is the zombie leader) are logged. Stopping
+  for a group whose members are all zombies or exiting) are logged. Stopping
   the worker: on close, write `{"stop": true}` if the pipe takes it at once and wait for the worker
   to exit, leaving 3 s (`TERM_GRACE_S`) of the 10 s stop window (`STOP_GRACE_S`); then send SIGTERM
   and SIGCONT to the group and wait, for the rest of that window, until no live member remains;
@@ -241,6 +241,16 @@ at the handshake.
   2 s (`JOIN_GRACE_S`). Pipes are closed only after that. `close()` returns within the sum of the
   three (`SHUTDOWN_BOUND_S`), also when called from another thread during a `run`, which then
   raises `WorkerLost`. A host fault skips the stop line.
+- **Live member.** A member is live while it can still run user code: it is neither a zombie nor
+  exiting. On macOS a member that has taken its fatal signal is first reparented to `launchd` with
+  `P_WEXIT` set, still answers `kill(pid, 0)` and is shown with the `E` flag by `ps`, while
+  `killpg(pgid, 0)` already answers EPERM for a group holding only such members and zombies. So
+  when `close()` returns, members may still be finishing their exit or waiting to be reaped by
+  `init`; neither is a survivor. Measured under a 40-60 process CPU load on a 10-core macOS host:
+  4 of 80 timed-out forking workers still had a member in that state when `close()` returned, for
+  0.6-5 ms. The lifecycle tests' probes (`lifecycle_probes_fixture`) therefore read liveness from
+  `ps` state, not from `killpg` errors: a test that read EPERM as alive asserted a state the OS
+  does not reach by the time `close()` returns.
 - **Limit.** A descendant that calls `setsid` (or `setpgid`) leaves the group and is not reached;
   if it holds the worker's stdout or stderr, the host leaves those pipes open and logs it rather
   than block.

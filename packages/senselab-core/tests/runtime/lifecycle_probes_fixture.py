@@ -12,15 +12,17 @@ RUNTIME_TESTS = Path(__file__).parent
 GATE_TIMEOUT_S = 30.0
 
 
+def can_run(stat: str) -> bool:
+    """Whether a `ps` state string names a process that can still run user code: not a zombie, not exiting.
+
+    The first letter is the run state (`Z` zombie, `X` dead); macOS adds an `E` flag while a process exits.
+    """
+    return bool(stat) and stat[0] not in "ZX" and "E" not in stat[1:]
+
+
 def alive(pid: int) -> bool:
-    """Whether `pid` names a process that exists and is not a zombie."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return not state(pid).startswith("Z")
+    """Whether `pid` names a process that can still run user code."""
+    return can_run(state(pid))
 
 
 def state(pid: int) -> str:
@@ -30,14 +32,10 @@ def state(pid: int) -> str:
 
 
 def group_alive(pgid: int) -> bool:
-    """Whether any process of group `pgid` can still be signalled."""
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    """Whether any process of group `pgid` can still run user code, by `ps` over every process."""
+    out = subprocess.run(["ps", "-A", "-o", "pgid=,stat="], capture_output=True, text=True, check=True)
+    rows = (line.split() for line in out.stdout.splitlines())
+    return any(len(row) == 2 and int(row[0]) == pgid and can_run(row[1]) for row in rows)
 
 
 def recorded_pids(pid_file: Path) -> list[int]:

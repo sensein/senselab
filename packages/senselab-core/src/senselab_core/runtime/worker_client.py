@@ -245,13 +245,13 @@ def _signal_group(pgid: int, sig: signal.Signals, *, leader_exited: bool) -> Non
     except ProcessLookupError:
         pass
     except OSError as exc:
-        # macOS answers EPERM for a group whose only member is its zombie leader.
+        # macOS answers EPERM for a group whose members are all zombies or exiting.
         if not (isinstance(exc, PermissionError) and leader_exited and sys.platform == "darwin"):
             logger.warning("signal %s to worker process group %d failed: %s", sig.name, pgid, exc)
 
 
 def _live_members(pgid: int) -> bool:
-    """Whether group `pgid` has a member that is not a zombie: by `/proc` where it exists, else by `killpg(pgid, 0)`."""
+    """Whether group `pgid` has a member that is neither a zombie nor exiting: by `/proc`, else by `killpg(pgid, 0)`."""
     if os.path.isdir("/proc/self/task"):
         for entry in os.listdir("/proc"):
             if not entry.isdigit():
