@@ -79,6 +79,20 @@ ALLOWED_BY_REASON: dict[str, tuple[str, ...]] = {
 ALLOWED = {path: reason for reason, paths in ALLOWED_BY_REASON.items() for path in paths}
 
 
+DYNAMIC_ALLOWED: dict[str, frozenset[str]] = {
+    "packages/senselab-core/src/senselab_core/testing/values.py": frozenset({"<dynamic:module.name>"}),
+    "packages/senselab-core/src/senselab_core/testing/contracts.py": frozenset({"<dynamic:module>"}),
+    "packages/senselab-worker/src/senselab_worker/launch.py": frozenset({"<dynamic:argv[1]>"}),
+    "src/senselab/utils/venv_lock.py": frozenset({"<dynamic:module_name>"}),
+    "src/senselab/audio/workflows/audio_analysis/__init__.py": frozenset({"<dynamic:f'{__name__}.{submodule}'>"}),
+}
+"""Call sites of ``import_module`` / ``__import__`` whose argument is not a literal, by file and argument source."""
+
+
+def _real(found: set[str]) -> set[str]:
+    return {f for f in found if not f.startswith("<dynamic:")}
+
+
 def _name(func: ast.expr) -> str:
     return func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
 
@@ -90,7 +104,8 @@ def _top(name: str) -> str:
 def capability_imports(source: str) -> set[str]:
     """Digest-capability modules ``source`` imports, by any import statement, ``import_module`` or ``__import__``.
 
-    An alias of ``import_module`` or ``__import__`` is followed. Only a string-literal argument is read.
+    An alias of ``import_module`` or ``__import__`` is followed. A string-literal argument is read; any other argument
+    is reported as ``<dynamic:SOURCE>``, the form the moved-module guard uses.
     """
     tree = ast.parse(source)
     importers = set(IMPORTERS)
@@ -107,27 +122,36 @@ def capability_imports(source: str) -> set[str]:
             found.add(node.module)
         elif isinstance(node, ast.Call) and _name(node.func) in importers and node.args:
             arg = node.args[0]
-            if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and _top(arg.value) in CAPABILITIES:
+            if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
+                found.add(f"<dynamic:{ast.unparse(arg)}>")
+            elif _top(arg.value) in CAPABILITIES:
                 found.add(arg.value)
     return found
 
 
-def _jcs_aliases(tree: ast.AST) -> set[str]:
-    aliases = {"jcs_dumps"}
+SERIALISERS = {"dumps", "dump", "repr", "str", "pformat", "format"}
+"""Calls that turn a value into text or bytes; with ``strict``, data derived from one counts as serialised."""
+
+
+def _jcs_aliases(tree: ast.AST, strict: bool) -> set[str]:
+    aliases = {"jcs_dumps"} | (SERIALISERS if strict else set())
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             aliases |= {a.asname for a in node.names if a.name == "jcs_dumps" and a.asname}
     return aliases
 
 
-def untagged_digests(source: str, module: str) -> list[str]:
-    """``module:line`` of each digest call whose data is, or comes from a name assigned from, ``jcs_dumps(...)``.
+def untagged_digests(source: str, module: str, strict: bool = False) -> list[str]:
+    """``module:line`` of each digest call whose data is, or comes from a name assigned from, a serialisation.
+
+    The serialisation is ``jcs_dumps(...)``; with ``strict`` also ``json.dumps``, ``pickle.dumps``, ``repr``, ``str``
+    and ``format``, with ``.encode()`` of any of them followed through.
 
     Hash calls are ``sha256``-family constructors, ``hashlib.new`` and ``.update``, under any import alias. The
     body of ``tagged_digest`` in ``canonical.py`` is exempt.
     """
     tree = ast.parse(source)
-    jcs = _jcs_aliases(tree)
+    jcs = _jcs_aliases(tree, strict)
     hashers = set(HASH_NAMES)
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module in CAPABILITIES:
@@ -180,7 +204,12 @@ def test_only_allowlisted_modules_import_a_digest_capability() -> None:
     """No production module under ``packages/``, ``src/`` or ``scripts/`` imports a digest module unlisted."""
     sources = {p.relative_to(REPO).as_posix(): p for p in _sources()}
     assert CANONICAL in sources
-    hits = [m for m, p in sorted(sources.items()) if m not in ALLOWED and capability_imports(p.read_text())]
+    hits = []
+    for module, path in sorted(sources.items()):
+        found = capability_imports(path.read_text())
+        if module not in ALLOWED and _real(found):
+            hits.append(f"{module}: {sorted(_real(found))}")
+        hits += [f"{module}: {f}" for f in sorted(found - _real(found)) if f not in DYNAMIC_ALLOWED.get(module, ())]
     assert hits == []
 
 
@@ -188,13 +217,16 @@ def test_only_allowlisted_modules_import_a_digest_capability() -> None:
 def test_every_allowlist_entry_still_imports_a_capability() -> None:
     """An allowlisted module exists and still imports a digest module, so the list cannot hold dead entries."""
     for module in ALLOWED:
-        assert capability_imports((REPO / module).read_text()), module
+        assert _real(capability_imports((REPO / module).read_text())), module
 
 
 @pytest.mark.logic
 def test_allowlisted_modules_hash_canonical_json_only_through_the_helper() -> None:
-    """In every allowlisted module, no digest takes ``jcs_dumps`` bytes, directly or through a name."""
-    hits = [h for m in ALLOWED for h in untagged_digests((REPO / m).read_text(), m)]
+    """In every allowlisted module, no digest takes ``jcs_dumps`` bytes, directly or through a name.
+
+    Modules under ``packages/`` are held to the strict form: no serialisation at all feeds a digest.
+    """
+    hits = [h for m in ALLOWED for h in untagged_digests((REPO / m).read_text(), m, m.startswith("packages/"))]
     assert hits == []
 
 
@@ -234,11 +266,9 @@ def test_a_planted_capability_import_is_found(source: str) -> None:
 
 @pytest.mark.logic
 def test_other_imports_are_not_capabilities() -> None:
-    """Unrelated modules, and a dynamic import with no literal, are not reported."""
-    assert (
-        capability_imports("import os, json\nfrom pathlib import Path\nimport importlib\nimportlib.import_module(n)")
-        == set()
-    )
+    """Unrelated modules and literal imports of them are not reported."""
+    src = "import os, json\nfrom pathlib import Path\nimport importlib\nimportlib.import_module('json')"
+    assert capability_imports(src) == set()
 
 
 @pytest.mark.logic
@@ -266,6 +296,42 @@ def test_a_planted_untagged_digest_is_found(body: str) -> None:
     assert untagged_digests(source, "pkg/mod.py")
     if "j(x)" not in body:
         assert untagged_digests(source.replace("jcs_dumps(x)", "j(x)"), "pkg/mod.py")
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "body",
+    [
+        "return hashlib.sha256(json.dumps(x, sort_keys=True).encode()).hexdigest()",
+        "d = json.dumps(x)\n    return hashlib.sha256(d.encode()).hexdigest()",
+        "return hashlib.sha256(pickle.dumps(x)).hexdigest()",
+        "return hashlib.sha256(repr(x).encode()).hexdigest()",
+        "return hashlib.sha256(str(x).encode()).hexdigest()",
+        "m = hashlib.sha256()\n    m.update(json.dumps(x).encode())\n    return m.hexdigest()",
+        "t = repr(x)\n    return sha256_bytes(t.encode('utf-8'))",
+    ],
+)
+def test_strict_mode_finds_any_serialisation_fed_to_a_digest(body: str) -> None:
+    """Under ``strict``, ``json.dumps``, ``pickle.dumps``, ``repr`` and ``str`` are found, even via ``.encode()``."""
+    source = f"import hashlib\ndef f(x):\n    {body}\n"
+    assert untagged_digests(source, "pkg/mod.py", strict=True)
+    assert untagged_digests(source, "pkg/mod.py") == []
+
+
+@pytest.mark.logic
+def test_strict_mode_passes_digests_of_raw_bytes() -> None:
+    """Hashing file chunks or a ``bytes`` value is not a serialisation."""
+    src = "def f(h, chunk, b):\n    h.update(chunk)\n    return sha256_bytes(b)\n"
+    assert untagged_digests(src, "pkg/mod.py", strict=True) == []
+
+
+@pytest.mark.logic
+def test_provenance_ids_are_tagged_digests() -> None:
+    """The provenance store derives ids from `tagged_digest("provenance-id@1", ...)`, not a bare hash."""
+    from senselab_core.runtime import provenance
+    from senselab_worker.canonical import tagged_digest
+
+    assert provenance._digest(["r", "span"]) == tagged_digest("provenance-id@1", ["r", "span"])[:16]
 
 
 @pytest.mark.logic

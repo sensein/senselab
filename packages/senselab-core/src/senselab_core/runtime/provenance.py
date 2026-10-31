@@ -18,6 +18,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Sequence, cast, get_args
 
+from senselab_worker.canonical import tagged_digest
+
 from senselab_core.runtime.storage import write_atomically
 
 PROV_TYPE = Literal[
@@ -174,8 +176,24 @@ class Environment:
     senselab_version: str | None = None
 
 
+_MAX_SAFE_INT = 2**53 - 1
+
+
+def _canonical(value: object) -> object:
+    """Return `value` as JSON-canonical data: tuples as lists, keys as text, big integers and other objects as text."""
+    if isinstance(value, dict):
+        return {str(k): _canonical(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonical(v) for v in value]
+    if isinstance(value, bool) or value is None or isinstance(value, (str, float)):
+        return value
+    if isinstance(value, int) and abs(value) <= _MAX_SAFE_INT:
+        return int(value)
+    return str(value)
+
+
 def _digest(payload: object) -> str:
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    return tagged_digest("provenance-id@1", _canonical(payload))[:16]
 
 
 def file_digest(path: str | Path) -> tuple[str | None, str | None]:

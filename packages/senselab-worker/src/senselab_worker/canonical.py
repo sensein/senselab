@@ -34,6 +34,7 @@ DIGEST_TAGS: frozenset[str] = frozenset(
         "audio@2",
         "weights@2",
         "value@1",
+        "provenance-id@1",
         "data-manifest@2",
     }
 )
