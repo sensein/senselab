@@ -652,11 +652,18 @@ class StorageDir:
 def write_atomically(target: Path, data: bytes, *, mode: int | None = None) -> None:
     """Replace the caller's file `target` with `data` as `StorageDir.write_atomically` does, beside it.
 
+    The new file gets `mode`, or the mode a regular file at `target` had (read with `lstat`), or the umask's
+    default.
+
     Raises:
         OSError: if the temporary cannot be written or renamed.
     """
     target = Path(target)
     with StorageDir.open_root(target.parent) as directory:
+        if mode is None:
+            existing = directory.lstat(target.name)
+            if existing is not None and stat.S_ISREG(existing.st_mode):
+                mode = stat.S_IMODE(existing.st_mode)
         directory.write_atomically(target.name, data, grammar=_CALLER_FILE, mode=mode)
 
 
