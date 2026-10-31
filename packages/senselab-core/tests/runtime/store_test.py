@@ -1,8 +1,11 @@
 """The content-addressed result store: layout, reuse policy, concurrent writers and provenance."""
 
 import json
+import multiprocessing as mp
 import os
+import stat
 import time
+from collections.abc import Callable, Iterator
 from multiprocessing.queues import Queue as MpQueue
 from multiprocessing.synchronize import Barrier as MpBarrier
 from pathlib import Path
@@ -12,10 +15,13 @@ import numpy
 import pytest
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ReusePolicy
 from senselab_core.runtime import store as store_module
+from senselab_core.runtime.locks import LOCK_DIR_MODE, LOCK_FILE_MODE
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
 from senselab_core.runtime.store import (
+    QUARANTINE_DIR,
     STAGING_STALE_SECONDS,
     STORE_DIR,
+    CorruptEntryError,
     ResultStore,
     StoredResult,
     output_identity,
@@ -131,8 +137,6 @@ def _put_racing(root: str, value: int, barrier: MpBarrier, out: "MpQueue[Any]") 
 @pytest.mark.logic
 def test_two_writers_one_entry(tmp_path: Path) -> None:
     """Two processes putting one key leave one entry and both return the winner's identity."""
-    import multiprocessing as mp
-
     ctx = mp.get_context("spawn")
     barrier, out = ctx.Barrier(2), ctx.Queue()
     procs = [ctx.Process(target=_put_racing, args=(str(tmp_path), v, barrier, out)) for v in (1, 2)]
@@ -159,8 +163,6 @@ def _put_many(root: str, value: int, keys: int, barrier: MpBarrier, out: "MpQueu
 @pytest.mark.logic
 def test_four_writers_agree_on_every_key(tmp_path: Path) -> None:
     """Four processes racing over twenty keys leave one entry per key and agree on every identity."""
-    import multiprocessing as mp
-
     ctx, writers, keys = mp.get_context("spawn"), 4, 20
     barrier, out = ctx.Barrier(writers), ctx.Queue()
     procs = [ctx.Process(target=_put_many, args=(str(tmp_path), v, keys, barrier, out)) for v in range(writers)]
@@ -254,15 +256,134 @@ def test_put_refuses_what_it_cannot_serialise(tmp_path: Path) -> None:
     assert _entries(tmp_path) == []
 
 
+def _entry_dir(root: Path, k: LogicalKey, c: ExecutionContext) -> Path:
+    d = k.digest()
+    return root / STORE_DIR / d[:2] / d / c.fingerprint()
+
+
+def _rewrite_json(path: Path, change: Callable[[dict[str, Any]], None]) -> None:
+    record = json.loads(path.read_bytes())
+    change(record)
+    path.write_bytes(json.dumps(record).encode())
+
+
+def _only_npy(entry: Path) -> Path:
+    (npy,) = entry.glob("*.npy")
+    return npy
+
+
+CORRUPTIONS: dict[str, Callable[[Path], object]] = {
+    "npy_hash": lambda e: _only_npy(e).write_bytes(canonical_npy_bytes(numpy.zeros(3, "<f4"))),
+    "npy_missing": lambda e: _only_npy(e).unlink(),
+    "context_missing": lambda e: (e / "context.json").unlink(),
+    "result_missing": lambda e: (e / "result.json").unlink(),
+    "result_garbled": lambda e: (e / "result.json").write_bytes(b"{not json"),
+    "context_garbled": lambda e: (e / "context.json").write_bytes(b"[1, 2"),
+    "context_field_missing": lambda e: _rewrite_json(e / "context.json", lambda r: r.pop("platform")),
+    "identity_missing": lambda e: _rewrite_json(e / "result.json", lambda r: r.pop("output_identity")),
+    "result_format": lambda e: _rewrite_json(e / "result.json", lambda r: r.update(format="result@2.0")),
+    "context_format": lambda e: _rewrite_json(e / "context.json", lambda r: r.update(format="nope@1.0")),
+    "outputs_tampered": lambda e: _rewrite_json(e / "result.json", lambda r: r["outputs"].update(n=2)),
+}
+
+
 @pytest.mark.logic
-def test_corrupt_array_is_refused_not_served(tmp_path: Path) -> None:
-    """An array file that no longer hashes to its name raises rather than being served."""
+@pytest.mark.parametrize("kind", sorted(CORRUPTIONS))
+def test_corrupt_entry_is_quarantined_not_served(tmp_path: Path, kind: str) -> None:
+    """Every corruption is quarantined by get, never served, and a later put recommits the key."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    s.put(k, {"y": numpy.ones(3, "<f4"), "n": 1}, c)
+    entry = _entry_dir(tmp_path, k, c)
+    CORRUPTIONS[kind](entry)
+    with pytest.raises(CorruptEntryError):
+        store_module._committed_identity(entry)
+    assert s.get(k, c, ReusePolicy.TOLERANT) is None
+    assert not entry.exists()
+    assert len(list((tmp_path / QUARANTINE_DIR).iterdir())) == 1
+    ident = s.put(k, {"y": numpy.ones(3, "<f4"), "n": 1}, c)
+    got = s.get(k, c, ReusePolicy.EXACT)
+    assert got is not None and got.output_identity == ident
+
+
+@pytest.mark.logic
+def test_put_replaces_corrupt_entry(tmp_path: Path) -> None:
+    """A put whose target entry is corrupt quarantines it and commits its own outputs."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     s.put(k, {"y": numpy.ones(3, "<f4")}, c)
-    (npy,) = (tmp_path / STORE_DIR).rglob("*.npy")
-    npy.write_bytes(canonical_npy_bytes(numpy.zeros(3, "<f4")))
-    with pytest.raises(ValueError, match="corrupt"):
-        s.get(k, c, ReusePolicy.EXACT)
+    _only_npy(_entry_dir(tmp_path, k, c)).unlink()
+    ident = s.put(k, {"y": numpy.zeros(3, "<f4")}, c)
+    assert ident == output_identity({"y": numpy.zeros(3, "<f4")})
+    assert {a.parameters["outcome"] for a in s.provenance.activities()} == {"committed"}
+    assert ident in {e.attributes.get(CHECKSUM_KEY) for e in s.provenance.entities("artifact")}
+    got = s.get(k, c, ReusePolicy.EXACT)
+    assert got is not None and got.output_identity == ident
+    assert len(list((tmp_path / QUARANTINE_DIR).iterdir())) == 1
+
+
+@pytest.mark.logic
+def test_get_falls_through_to_sibling_context(tmp_path: Path) -> None:
+    """A corrupt current-context entry is quarantined and an admitted sibling context served instead."""
+    s, k = ResultStore(tmp_path), _key()
+    linux, mac = _ctx(platform="linux"), _ctx(platform="macos")
+    s.put(k, {"y": 1}, linux)
+    s.put(k, {"y": 2}, mac)
+    (_entry_dir(tmp_path, k, mac) / "result.json").write_bytes(b"")
+    got = s.get(k, mac, ReusePolicy.TOLERANT)
+    assert got is not None and got.outputs == {"y": 1} and got.policy_used is ReusePolicy.TOLERANT
+    assert not _entry_dir(tmp_path, k, mac).exists()
+    assert _entry_dir(tmp_path, k, linux).is_dir()
+
+
+@pytest.mark.logic
+def test_quarantine_tolerates_concurrent_quarantine(tmp_path: Path) -> None:
+    """Quarantining an entry another process already moved is not an error."""
+    s = ResultStore(tmp_path)
+    s._quarantine(tmp_path / STORE_DIR / "ab" / ("ab" * 32) / ("0" * 64))
+    assert list((tmp_path / QUARANTINE_DIR).iterdir()) == []
+
+
+@pytest.fixture
+def restrictive_umask() -> Iterator[None]:
+    """Run the test under umask 0o077."""
+    old = os.umask(0o077)
+    try:
+        yield
+    finally:
+        os.umask(old)
+
+
+@pytest.mark.logic
+def test_modes_are_shared_whatever_the_umask(tmp_path: Path, restrictive_umask: None) -> None:
+    """Directories the store creates are 0o2775 and files 0o664 under umask 0o077."""
+    root = tmp_path / "shared"
+    s, k, c = ResultStore(root), _key(), _ctx()
+    s.put(k, {"y": numpy.ones(3, "<f4")}, c)
+    entry = _entry_dir(root, k, c)
+    dirs = [root, root / "tmp", root / STORE_DIR, entry.parent.parent, entry.parent, entry]
+    assert {str(d): stat.S_IMODE(d.stat().st_mode) for d in dirs} == {str(d): LOCK_DIR_MODE for d in dirs}
+    files = sorted(entry.iterdir())
+    assert len(files) == 3
+    assert {f.name: stat.S_IMODE(f.stat().st_mode) for f in files} == {f.name: LOCK_FILE_MODE for f in files}
+
+
+@pytest.mark.logic
+def test_relaxed_reuse_is_recorded_in_provenance(tmp_path: Path) -> None:
+    """A hit admitted under a policy other than exact appends a reuse activity; an exact hit does not."""
+    s, k = ResultStore(tmp_path), _key()
+    linux, mac = _ctx(platform="linux"), _ctx(platform="macos")
+    ident = s.put(k, {"y": 1}, linux)
+    assert s.get(k, linux, ReusePolicy.TOLERANT) is not None
+    assert s.provenance.activities(node="store.reuse") == []
+    assert s.get(k, mac, ReusePolicy.TOLERANT) is not None
+    (act,) = s.provenance.activities(node="store.reuse")
+    assert act.parameters == {
+        "key": k.digest(),
+        "stored_context": linux.fingerprint(),
+        "current_context": mac.fingerprint(),
+        "policy_used": "tolerant",
+    }
+    (used,) = [s.provenance.get_entity(e) for e in s.provenance.uses_of(act.id)]
+    assert used.attributes[CHECKSUM_KEY] == ident
 
 
 @pytest.mark.logic
