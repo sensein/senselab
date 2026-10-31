@@ -111,11 +111,12 @@ class DataFile(Frozen):
 def path_key(path: str) -> tuple[str, ...]:
     """Return how a filesystem may compare `path`: part by part, by Unicode canonical caseless match.
 
-    Each part is decomposed (NFD), fully case-folded (`str.casefold`) and recomposed (NFC). Two
-    manifest paths equal under this key are one path.
+    Each part is decomposed (NFD), upper-cased (`str.upper`), fully case-folded (`str.casefold`) and
+    recomposed (NFC), so it joins what full case folding joins and what a filesystem comparing by
+    upper case joins (`ı` with `I` and `i`). Two manifest paths equal under this key are one path.
     """
     return tuple(
-        unicodedata.normalize("NFC", unicodedata.normalize("NFD", part).casefold()) for part in path.split("/")
+        unicodedata.normalize("NFC", unicodedata.normalize("NFD", part).upper().casefold()) for part in path.split("/")
     )
 
 

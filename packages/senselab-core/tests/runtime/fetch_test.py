@@ -659,7 +659,17 @@ _PLAIN_PARTS += [
     "\u1e9e",
     "\u212a",
     "k",
+    "\u0131",
+    "I",
+    "i",
 ]
+
+
+def _oracle_fold(part: str) -> str:
+    """Canonical caseless match (NFD, casefold, NFD), plus the one join simple upper case adds: dotless ı is i."""
+    return unicodedata.normalize("NFD", unicodedata.normalize("NFD", part).casefold()).replace("\u0131", "i")
+
+
 _BAD_PARTS = [".", "..", "", ".a." + "0" * 32, "x\\y"]
 
 
@@ -678,7 +688,7 @@ def _acceptable(paths: list[str]) -> bool:
         parts = p.split("/")
         if "\\" in p or any(x in ("", ".", "..") or (x.startswith(".a.") and x.endswith("0" * 32)) for x in parts):
             return False
-        keys.append(tuple(unicodedata.normalize("NFD", unicodedata.normalize("NFD", x).casefold()) for x in parts))
+        keys.append(tuple(_oracle_fold(x) for x in parts))
     return all(a != b and a[: len(b)] != b for a in keys for b in keys if a is not b)
 
 
@@ -691,6 +701,7 @@ _FOLD_CLASSES = [
     ["\u00e9", "e\u0301", "\u00c9", "E\u0301"],
     ["\u212b", "\u00c5", "\u00e5", "a\u030a"],
     ["\u1e69", "s\u0323\u0307", "s\u0307\u0323", "\u1e68"],
+    ["\u0131", "i", "I"],
 ]
 
 
