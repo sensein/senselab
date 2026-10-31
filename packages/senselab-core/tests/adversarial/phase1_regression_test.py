@@ -706,10 +706,13 @@ def test_a20_probe_endless_source_is_cut_at_the_declared_size(tmp_path: Path) ->
 BACKEND_SOURCES = {
     "a7_backend": (
         "import os, subprocess, sys, time\n"
-        "def load(init):\n    return init\n"
-        "def handle(state, items, params):\n"
+        "def load(init):\n"
         "    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(3600)'])\n"
-        "    open(state['pid_file'], 'w').write(str(child.pid))\n"
+        "    with open(init['pid_file'] + '.tmp', 'w') as f:\n"
+        "        f.write(str(child.pid))\n"
+        "    os.replace(init['pid_file'] + '.tmp', init['pid_file'])\n"
+        "    return init\n"
+        "def handle(state, items, params):\n"
         "    time.sleep(3600)\n"
     ),
     "a8_backend": (
@@ -755,17 +758,23 @@ def _client(tmp_path: Path, module: str, init: dict[str, Any], parent: Path | No
             os.environ["PYTHONPATH"] = existing
 
 
-def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
+def _alive(pid: int, monkeypatch: pytest.MonkeyPatch) -> bool:
+    """Whether `pid` can still run user code, by its `ps` state: a zombie or exiting process is not alive."""
+    probes = _load(
+        PACKAGES / "senselab-core" / "tests" / "runtime" / "lifecycle_probes_fixture.py", "_probes", monkeypatch
+    )
+    return bool(probes.alive(pid))
 
 
 @pytest.mark.limits
-def test_a7_probe_timeout_returns_though_a_grandchild_holds_stderr(tmp_path: Path) -> None:
-    """A request that times out returns within a bound and leaves no grandchild running."""
+def test_a7_probe_timeout_returns_though_a_grandchild_holds_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A request that times out returns within a bound and leaves no grandchild running.
+
+    The grandchild is started in `load` and its pid published by rename, so it exists before the request's timeout
+    starts; liveness is read from `ps` state, since a killed grandchild may still be a zombie awaiting its new parent.
+    """
     import threading
 
     pid_file = tmp_path / "pid"
@@ -788,9 +797,9 @@ def test_a7_probe_timeout_returns_though_a_grandchild_holds_stderr(tmp_path: Pat
     try:
         assert returned, f"run() had not returned after {elapsed:.0f} s with request_timeout=2"
         assert isinstance(outcome[0], TimeoutError)
-        assert pid is not None and not _alive(pid)
+        assert pid is not None and not _alive(pid, monkeypatch)
     finally:
-        if pid is not None and _alive(pid):
+        if pid is not None and _alive(pid, monkeypatch):
             os.kill(pid, signal.SIGKILL)
         proc = getattr(client, "_proc", None)
         if proc is not None and proc.poll() is None:
