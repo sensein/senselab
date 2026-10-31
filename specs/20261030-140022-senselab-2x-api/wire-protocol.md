@@ -27,9 +27,11 @@ at the handshake.
   from the interpreter's own record (`sys.__stdin__`, `__stdout__`, `__stderr__` is `None`), never
   from the descriptor table later: any file opened at start or during an import lands on the lowest
   free descriptor, so a closed fd 0 can be taken before the launcher runs. On Linux at 97cddd8b a
-  module imported during start held a file on fd 0 and the launcher read it as the channel
-  (`'utf-8' codec can't decode byte 0xde`); a `sitecustomize` holding files reproduces it on every
-  platform. As its first act the launcher opens `/dev/null` on each fd closed at start, replacing
+  worker started with fd 0 closed read a file held there as the channel (`'utf-8' codec can't
+  decode byte 0xde`). H9d had added `importlib.resources`, and with it `tempfile` and `random`, to
+  the import graph; the likely holder is `random`'s seed falling back to a cached `/dev/urandom`
+  descriptor where `getrandom` is refused (unconfirmed, no Linux host was at hand). A
+  `sitecustomize` holding files on the closed descriptors reproduces the class on every platform. As its first act the launcher opens `/dev/null` on each fd closed at start, replacing
   whatever was opened there since, and only then claims the channel. The package's `__init__`
   imports nothing, so the claim precedes every senselab and numpy import. A worker started with
   fd 0 closed reads end of file and exits 0 after its hello; one started with fd 1 closed writes
@@ -37,7 +39,8 @@ at the handshake.
 - stderr is never parsed. The host drains it continuously and keeps the last 100 lines, which it
   attaches to every fault it raises itself.
 - A line longer than 16 MiB (`MAX_LINE_BYTES`, newline included), or one that is not a JSON
-  object, is a protocol violation. The budget is per line, and so per item result; there is no
+  object, or one holding a lone surrogate (an escaped `U+D800`-`U+DFFF` without its pair) in any
+  key or string, is a protocol violation. The budget is per line, and so per item result; there is no
   aggregate budget for a response.
 - **Strict values.** The reader (`parse_line`) refuses, as a protocol violation: a key repeated
   within one object; a number that is `NaN`, `Infinity` or overflows to infinity (`1e999`); and
@@ -182,8 +185,12 @@ at the handshake.
 - The reader rejects a path that is not `<sha256>.npy` directly in `array_dir`. It opens the file
   with `O_NOFOLLOW | O_NONBLOCK` and requires a regular file, so a symlink or a FIFO is an
   `ArrayIntegrityError` and never blocks. It reads in chunks against the request deadline,
-  recomputes the sha256 and checks `dtype` and `shape`. It loads the array into memory; it does
-  not memory-map.
+  recomputes the sha256 and checks `dtype` and `shape`, and requires the file to be exactly
+  `npy_bytes` of the array it holds: the version 1.0 header the writer writes, C order,
+  little-endian, nothing after the data. A big-endian, Fortran-order, version 2.0, re-padded or
+  re-ordered header, or a trailing byte, is an `ArrayIntegrityError` even when its sha256 agrees,
+  so the reader never returns an array the writer could not have written (XW-5). It loads the
+  array into memory; it does not memory-map.
 - **Decode failure scope.** On either side, a missing, unreadable or mismatched array fails only
   the item that references it, with an `infrastructure` error of type `ArrayIntegrityError`; on
   the worker, that item is not passed to `handle`. The same failure in `params` fails every item
@@ -260,6 +267,36 @@ at the handshake.
   2 s (`JOIN_GRACE_S`). Pipes are closed only after that. `close()` returns within the sum of the
   three (`SHUTDOWN_BOUND_S`), also when called from another thread during a `run`, which then
   raises `WorkerLost`. A host fault skips the stop line.
+- **Shutdown is a state machine (R-99).** It has two steps, stopping the group (stop line, closing
+  the worker's stdin, signals, reaping the leader, stopping the pipe readers) and then, once no
+  `run` is in flight, removing the client's files. Each step is recorded only after it completes,
+  so an interrupted step runs again on the next `close()` or at the end of the `run`; every part
+  of it is idempotent. On the main thread SIGINT and SIGTERM are held while shutdown runs and
+  raised, in arrival order, after their handlers are restored; any exception that still
+  interrupts it (another signal's handler, or one arriving before the handlers are swapped)
+  SIGKILLs the group, if its leader is still the client's unreaped child, before it propagates.
+  The H8c probe (XW-1) set the "terminated" flag before the kill and caught only `Exception`, so a
+  second SIGINT during the SIGTERM wait left a SIGTERM-trapping group running with its client
+  closed.
+- **Re-entry.** `close()` called again on a thread already inside the shutdown, as from a signal
+  handler (XW-2: a SIGUSR1 handler deadlocked on the non-reentrant shutdown lock), returns at once
+  and the outer call finishes. `close()` called on the thread running `run`, again only possible
+  from a signal handler, marks the client closed, wakes the run and returns; the run stops the
+  worker on its own frame, never inside the handler, whose interrupted frame may hold a lock the
+  shutdown needs. Each lock the shutdown takes is acquired within the bound.
+- **Closed under a run.** Every write to the worker's stdin is made under one channel lock, and only
+  while the client is open; closing the stdin takes the same lock and then wakes a write waiting
+  for the pipe. So a write never reaches a closed or recycled descriptor, and a `run` whose client
+  is closed under it, at any point, raises `WorkerLost`, never a content fault (XW-3: `ValueError`
+  from the closed stdin's `fileno()`).
+- **Interruption schedule.** `worker_shutdown_schedule_test` injects SIGINT, SIGTERM (whose handler
+  closes the client and exits), a SIGUSR1 handler's `close()`, `close()` on the same thread and
+  `close()` on another thread at the first main-thread call of every run boundary (`to_wire`,
+  `_send`, `_receive`) and every shutdown boundary, on a timed-out `run` of a SIGTERM-ignoring
+  worker and on an idle `close()`. Each case runs in a driver process under `faulthandler`, so a
+  deadlock fails the case. Each must surface a typed outcome within the bound, with the group dead
+  unless the client is still open, and after a final `close()` leave no group member, no
+  grandchild, the leader reaped and the array directory gone.
 - **Live member.** A member is live while it can still run user code: it is neither a zombie nor
   exiting. On macOS a member that has taken its fatal signal is first reparented to `launchd` with
   `P_WEXIT` set, still answers `kill(pid, 0)` and is shown with the `E` flag by `ps`, while
@@ -276,7 +313,12 @@ at the handshake.
 - **Worker lost.** EOF on the worker's stdout, or the exit of the worker process (after the
   lines it wrote are read), while a reply is awaited, including after some of a request's result
   lines and before its `done`, is `WorkerLost`, carrying the exit code as `returncode` and the
-  stderr tail. A partial last line is discarded, never parsed. A forked descendant holding the
+  stderr tail. A failed write to an idle worker that has died is the same. The exit code is the
+  one the client reaps after stopping the group, on every path, and `str()` of a `WorkerLost`
+  names it; it is never read from the exit notification, which on macOS has no status for a
+  leader that exited before the kqueue event was registered (XW-4). EOF before the hello is a
+  `ProtocolMismatch`. Every host fault carries a note with the reaped exit code and the stderr
+  tail. A partial last line is discarded, never parsed. A forked descendant holding the
   channel open does not delay it.
 - **Stop.** On `{"stop": true}` (exactly `true`), or EOF on stdin, the worker exits 0 without
   replying.
