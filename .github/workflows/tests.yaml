@@ -271,7 +271,7 @@ jobs:
         uv venv -p 3.10 .floor
         uv pip install --python .floor dist/senselab_worker-*.whl numpy==1.23.5 pytest pytest-timeout hypothesis
     - name: Run worker tests
-      run: .floor/bin/pytest packages/senselab-worker/tests -m "logic or env" -p no:cacheprovider
+      run: .floor/bin/pytest packages/senselab-worker/tests -m "logic or env or contract" -p no:cacheprovider
 
   # ── EC2 GPU Runner Jobs ───────────────────────────────────────────────
   # Ephemeral GPU instances via machulav/ec2-github-runner.
