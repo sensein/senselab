@@ -154,6 +154,41 @@ The summary below follows that model.
 - **Identity** of source data is the hash of its raw content bytes, chunked for long recordings
   ([ADR-002](adr/ADR-002-identity-v2.md)). The decoder is recorded as execution context. Data
   objects are immutable, and a transform records its parent (`wasDerivedFrom`).
+- **One construction path for values** (H9c, R-102). A kernel value (`Frozen`) is built only by
+  validating a mapping of its fields; any other input object, `from_attributes` included, is refused by
+  a wrapper around the type's whole schema, outside every model validator, so no identity derivation or
+  stamp check is skipped by the input's form. An instance of the type passes as itself, which is safe
+  because a built value cannot change: attribute writes and deletions raise a `frozen_instance` `ValidationError` whatever the config says,
+  `__dict__` is a read-only dict, private values (the canonical digest, a key's digest) are computed when
+  the value is built and held in a read-only mapping, `__setstate__` on a built value raises and on a blank
+  one validates, `FrozenMapping.__init__` runs once, and a class's `model_config` is a read-only mapping
+  its metaclass will not rebind. What stays reachable is the interpreter's own bypasses
+  (`object.__setattr__`, `dict.__setitem__` on the unbound type). Computing the digest at construction
+  means a value that validates can be digested: a cycle or a form past the work budget is refused when
+  built, not when first compared. Validation errors do not repeat their input (`hide_input_in_errors`),
+  since the repr of a shared DAG or a long array is itself unbounded. The cost measured on an hour of
+  16 kHz float32 audio held in memory: `Audio.from_array` 0.63 s (M-series laptop, 2026-10-31).
+  A type that is not `Formatted` refuses unknown fields, so `model_validate` and `model_copy(update=)`
+  agree; `Formatted` ignores them, for minor-version readers.
+- **A source stamp binds the file's content** (H9c, R-103). `SourceStamp.content` is the file's
+  content-identity root (`content-root@2`, the root a recording of the file is identified by), taken
+  over every byte when the stamp is taken. A stamp this process took is re-checked by `os.stat` when a
+  copy is validated; any other stamp (a fresh process, an unpickled copy, an evicted memo entry) is
+  checked by stamping the file again. Every decoded `read` stamps the file again, content included, so a
+  rewrite that keeps size, mtime, inode and device (`cp -p`, `rsync -t`, a tar restore) raises
+  `StaleSource` instead of returning other samples. Measured on a one-hour 16 kHz mono PCM-16 WAV
+  (115 MB, 2026-10-31, M-series laptop, local SSD): taking a stamp 0.060 s, `Audio.from_path` 0.062 s
+  (one hash, which is also the identity), a 30 s window `read` 0.063 s, a whole-file `read` 0.19 s. A
+  read therefore costs one full hash of the file whatever its window, about 0.5 s per GB; a chunked
+  reader of a long file that needs less verifies the chunks a window decodes against the stamp's
+  per-chunk digests, which is not built in Phase 1.
+- **A recording's anchor is not its identity.** `Audio.from_path` and `from_array` name the clock by
+  the identity, but a recording placed on a session clock carries that clock's name, so validation does
+  not tie `anchor.clock_id` to `identity` (XK-12, ruled not a defect); the anchor is part of the value's
+  canonical digest, not of its content identity.
+- **Signals are finite.** A signal group's samples are finite; `Audio.from_array` refuses NaN, infinite
+  and float32-overflowing samples. Label arrays of strings are held at the width of their longest string,
+  so two label columns holding the same strings are one value.
 - **One timeline.** Every timed result is a `Span{start_ns, end_ns, clock_id}`. A `TimeMap`
   (offset plus drift, with uncertainty) relates clocks. It comes from metadata or a synchronisation
   task, and is a declared input.
@@ -396,12 +431,16 @@ them to a principle.
 **One provenance store** (`ProvStore`, append-only, content-derived ids) is written around every
 node with the attested identities. BEP028 export is how runs are published. `reproduce` becomes a
 consumer of this store.
-Its ids are `identity_digest("provenance-id@3", ...)[:16]` over each part of an entity, activity, agent or
-environment after `normalised`, the one step before the shared encoder. `normalised` is the shared
-`canonical.Tokeniser` (the one `value@2` uses), with arrays written by value. The attributes and parameters have a
+Its ids are `identity_digest("provenance-id@4", [run_id, ...])[:16]` over each part of an entity, activity,
+agent or environment in the record's canonical form: `normalised`, then JCS written and read back, held
+read-only. `normalised` is the shared `canonical.Tokeniser` (the one `value@2` uses), with arrays written by
+value as the base64 of their canonical `.npy` bytes. A record holds that canonical form and nothing else:
+what the caller passed is not referenced, `get_entity` returns a read-only record, and its id is checked
+against its content whenever it is built, so a record cannot come to disagree with its id (H9c, R-102).
+The file format and the read-write contract are in ADR-006 (`provenance@2.0`, R-104). The attributes and parameters have a
 declared provenance value type: JSON values plus tagged families, each a one-key token: non-finite floats
 (`$f`), integers beyond ±(2^53−1) (`$int`), `Path` (`$path`, posix text), `Enum`
-(`$enum`, qualified name and value), `ndarray` (`$nd`, dtype name, shape, flat values), `Decimal` (`$dec`),
+(`$enum`, qualified name and value), `ndarray` (`$nd`, base64 of canonical `.npy`), `Decimal` (`$dec`),
 `bytes` (`$bytes`, hex), `set`/`frozenset` (`$set`, one element per JCS form, sorted by JCS bytes), and numpy
 scalars as their value.
 The digest is total over that type by construction. Pipelines record `-inf` dB for silence and nanosecond

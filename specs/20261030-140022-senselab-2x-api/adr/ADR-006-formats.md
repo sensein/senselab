@@ -172,7 +172,7 @@ Architect review §5 (R-42) found:
   **Registered identity tags** (`digest.IDENTITY_TAGS`): `logical-key@3` (a task's logical key),
   `output@3` (a result's outputs, arrays as canonical `.npy`), `context@3` (an execution context),
   `content-root@2` (a file's chunked content root), `audio@3` (in-memory audio), `weights@3` (a weight
-  set), `value@2` (a kernel value), `provenance-id@3` (a provenance record's id), `data-manifest@3`
+  set), `value@2` (a kernel value), `provenance-id@4` (a provenance record's id), `data-manifest@3`
   (a dataset manifest), `worker-runtime@1` (the worker runtime's source files), `fake-output@1` (the
   fake backend's output value) and `contract-probe@1` (the stand-in input and profile ids of the backend
   contract suite).
@@ -200,10 +200,28 @@ Architect review §5 (R-42) found:
   - `content-root@2` (an integer and sha256 hex strings) and `audio@3` (a sha256 hex string and a rate) carry
     no text and keep their majors.
 
+  H9c bumped `provenance-id@3` → `provenance-id@4`: an array in an attribute or parameter is now the token
+  `{"$nd": <base64 of its canonical .npy bytes>}`, where it was `{"$nd": {dtype, shape, values}}` with every
+  element tokenised in turn (15 s at 1e7 elements; base64 of `.npy` is under 1 s), and an id is the digest of
+  the record's canonical parts as the record holds them (below). Every provenance id changes again.
+
   The store moved to `store@3`, a new key space, because its addresses are `logical-key` digests and its
   entries carry `output` identities. Every provenance id changes, for 13.0-only inputs too, since the tag is
   hashed with the payload: 1.x triage records written before H9d do not share ids with records written after.
 
+- **A provenance file is `provenance@2.0`** (H9c, R-104). Its first line is
+  `{"format":"provenance@2.0","record":"format"}` and every line is canonical JSON (JCS). An entity, activity,
+  agent or environment line holds every field of its record, `run_id` included, in the record's canonical form:
+  the attributes, parameters and dependencies `normalised` wrote, then put through JCS and read back (text in
+  canonical form, an integral float in the I-JSON range as an integer, objects and arrays read-only). The id
+  is `<prefix>-` and 16 hex of `identity_digest("provenance-id@4", [run_id, <the digested fields>])`, so it is
+  recomputed from the line, and the reader refuses a line whose id is not its content's. The writer and the
+  reader build each record through the record type itself, so the writer emits nothing the reader refuses,
+  `read_jsonl(write_jsonl(s))` holds records equal to `s`'s, and writing it again gives the same bytes. Two
+  different records under one id are refused, by `read_jsonl` and by `merge`.
+  A file without a format line is `provenance@1`, the previous major, still read: its values are normalised
+  as the writer normalises them and its records keep the ids it gave them, with `run_id` null; such an id is
+  not recomputable and is said to be so by the null.
 - **Every artifact carries `format: <name>@<major>.<minor>`.** That covers results, logical plans,
   placements, profiles, provenance records, fitted artifacts, store indexes and graph documents.
   - A minor change is additive, and readers ignore unknown fields.
