@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 import pytest
+from bounded_probe_fixture import MIB, FiniteSource, run_bounded
 from hypothesis import event, given, settings
 from hypothesis import strategies as st
 from senselab_core.cli import main as cli_main
@@ -800,32 +801,40 @@ def test_same_size_rewrite_is_not_trusted(tmp_path: Path, change: str) -> None:
     assert paths["a/voice.wav"].read_bytes() == PAYLOAD
 
 
-class _Endless(io.RawIOBase):
-    def __init__(self) -> None:
-        self.served = 0
-
-    def readable(self) -> bool:
-        return True
-
-    def read(self, size: int = -1) -> bytes:
-        n = size if size >= 0 else _ENDLESS_CHUNK
-        self.served += n
-        return b"\0" * n
-
-
-_ENDLESS_CHUNK = 1 << 20
+def probe_download_from_an_endless_source(directory: str, size: str) -> dict[str, Any]:
+    """Download from a source that would serve far more than `size`; report what it served and what was written."""
+    source = FiniteSource(int(size))
+    staged = Path(directory) / ("5" * 32)
+    error = ""
+    try:
+        with StorageDir.open_root(Path(directory)) as opened:
+            fetch_module._download("https://x/a", lambda url: source, opened, staged.name, size=int(size))  # type: ignore[arg-type,return-value]
+    except Exception as err:  # noqa: BLE001 - the report names whatever was raised
+        error = f"{type(err).__name__}: {err}"
+    return {"error": error, "served": source.served, "written": staged.stat().st_size}
 
 
-@pytest.mark.logic
-@pytest.mark.parametrize("size", [0, 1, 100, 3 * _ENDLESS_CHUNK + 5])
+def probe_fetch_from_an_endless_source(cache_root: str) -> dict[str, Any]:
+    """Fetch the default manifest from a source that would serve far more than declared; report the outcome."""
+    source = FiniteSource(len(PAYLOAD))
+    error = ""
+    try:
+        fetch(_manifest(), cache_root=Path(cache_root), opener=lambda url: source)  # type: ignore[arg-type,return-value]
+    except Exception as err:  # noqa: BLE001 - the report names whatever was raised
+        error = f"{type(err).__name__}: {err}"
+    return {"error": error, "served": source.served, "tmp": sorted(os.listdir(Path(cache_root) / "tmp"))}
+
+
+@pytest.mark.limits
+@pytest.mark.parametrize("size", [0, 1, 100, 3 * MIB + 5])
 def test_download_aborts_past_declared_size(tmp_path: Path, size: int) -> None:
     """The probe: an endless source streamed 3.86 GB in 3 s; it now stops after size + 1 bytes."""
-    source = _Endless()
-    staged = tmp_path / ("5" * 32)
-    with pytest.raises(FetchError, match="more than the declared"), StorageDir.open_root(tmp_path) as directory:
-        fetch_module._download("https://x/a", lambda url: source, directory, staged.name, size=size)  # type: ignore[arg-type,return-value]
-    assert source.served == size + 1
-    assert staged.stat().st_size <= size
+    report = run_bounded(
+        "fetch_test:probe_download_from_an_endless_source", str(tmp_path), str(size), fsize=size + 2 * MIB
+    )
+    assert report["error"].startswith("_SourceError") and "more than the declared" in report["error"]
+    assert report["served"] == size + 1
+    assert report["written"] <= size
 
 
 @pytest.mark.logic
@@ -980,14 +989,13 @@ def test_a19_poisoned_blob_is_not_served_under_size_verification(tmp_path: Path)
     assert paths["a/voice.wav"].read_bytes() == PAYLOAD and calls == ["https://x/a.wav"]
 
 
-@pytest.mark.logic
+@pytest.mark.limits
 def test_a20_endless_source_is_cut_at_declared_size(tmp_path: Path) -> None:
     """The probe: an endless source wrote 3.86 GB to tmp/ before any check; fetch now stops at size + 1 bytes."""
-    source = _Endless()
-    with pytest.raises(FetchError, match="more than the declared"):
-        fetch(_manifest(), cache_root=tmp_path, opener=lambda url: source)  # type: ignore[arg-type,return-value]
-    assert source.served == len(PAYLOAD) + 1
-    assert list((tmp_path / "tmp").iterdir()) == []
+    report = run_bounded("fetch_test:probe_fetch_from_an_endless_source", str(tmp_path), fsize=len(PAYLOAD) + 2 * MIB)
+    assert report["error"].startswith("FetchError") and "more than the declared" in report["error"]
+    assert report["served"] == len(PAYLOAD) + 1
+    assert report["tmp"] == []
 
 
 @pytest.mark.logic

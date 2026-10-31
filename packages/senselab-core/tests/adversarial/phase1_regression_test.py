@@ -667,38 +667,42 @@ def test_a20_probe_file_url_is_not_read(tmp_path: Path) -> None:
     assert not (tmp_path / "c" / "blobs").exists() or not any((tmp_path / "c" / "blobs").iterdir())
 
 
-ENDLESS_STOP = 64 << 20
+RUNTIME_TESTS = Path(__file__).resolve().parents[1] / "runtime"
 
 
-class _Endless(io.RawIOBase):
-    def __init__(self) -> None:
-        self.served = 0
-
-    def readable(self) -> bool:
-        return True
-
-    def read(self, size: int = -1) -> bytes:
-        if self.served >= ENDLESS_STOP:
-            return b""
-        n = size if size >= 0 else 1 << 20
-        self.served += n
-        return b"\0" * n
-
-
-@pytest.mark.logic
-def test_a20_probe_endless_source_is_cut_at_the_declared_size(tmp_path: Path) -> None:
-    """An endless source is abandoned within a few MB of the declared size, not streamed without bound."""
+def probe_a20_endless_source(cache_root: str) -> dict[str, Any]:
+    """Fetch from a source that would serve far more than declared; report what it served and what was raised."""
+    from bounded_probe_fixture import FiniteSource
     from senselab_core.runtime.fetch import fetch
 
-    source = _Endless()
+    source = FiniteSource(len(PAYLOAD))
+    error = ""
+    try:
+        fetch(_manifest([("a", "https://x/a", PAYLOAD)]), cache_root=Path(cache_root), opener=lambda url: source)  # type: ignore[arg-type,return-value]
+    except Exception as err:  # noqa: BLE001 - the report names whatever was raised
+        error = type(err).__name__
+    return {"error": error, "served": source.served, "limit": source.limit}
 
-    def opener(url: str) -> io.RawIOBase:
-        return source
 
-    manifest = _manifest([("a", "https://x/a", PAYLOAD)])
-    with pytest.raises(Exception):  # noqa: B017, PT011
-        fetch(manifest, cache_root=tmp_path, opener=opener)  # type: ignore[arg-type]
-    assert source.served <= len(PAYLOAD) + (1 << 20)
+@pytest.mark.limits
+def test_a20_probe_endless_source_is_cut_at_the_declared_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An endless source is abandoned at the declared size, not streamed without bound.
+
+    The source is finite (declared size + 1 MiB, then it raises) and the fetch runs in a child under
+    `RLIMIT_FSIZE` and a timeout, so the probe is bounded at any commit.
+    """
+    monkeypatch.syspath_prepend(str(RUNTIME_TESTS))
+    from bounded_probe_fixture import MIB, run_bounded
+
+    report = run_bounded(
+        "phase1_regression_test:probe_a20_endless_source",
+        str(tmp_path),
+        where=Path(__file__).resolve().parent,
+        fsize=len(PAYLOAD) + 2 * MIB,
+        timeout=120,
+    )
+    assert report["error"] == "FetchError"
+    assert report["served"] == len(PAYLOAD) + 1 < report["limit"]
 
 
 # -- worker client --
