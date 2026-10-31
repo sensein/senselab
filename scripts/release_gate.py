@@ -877,7 +877,12 @@ _VERIFY = (
     "    if k.partition('.')[0] in tops and not os.path.realpath(getattr(v, '__file__', None) or '').startswith(prefix))\n"
     "assert not stray, f'first-party modules imported from outside the venv: {stray[:3]}'\n"
 )
-"""Checks the siblings' files, imports every listed module and requires every first-party module to be installed."""
+"""Checks the siblings' files, imports every listed module and requires every first-party module to be installed.
+
+Run as `python -c _VERIFY <siblings> <modules> <tops>`, each argument JSON: `<siblings>` maps each sibling
+distribution to `{"version": ..., "files": {path: RECORD hash}}`, `<modules>` lists the modules to import (a
+`__main__` module is compiled, not run), and `<tops>` lists the first-party top-level package names.
+"""
 
 
 def wheel_modules(wheel: Path) -> list[str]:
