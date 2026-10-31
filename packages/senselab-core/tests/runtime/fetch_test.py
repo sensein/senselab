@@ -573,6 +573,7 @@ LIVE_SHA = "75009e0aaa9374223af0c954d175a91d39407acf13bc8e2ae2c882f6a1904f8d"
 LIVE_SIZE = 16423
 
 
+@pytest.mark.env
 @pytest.mark.network
 def test_live_fetch(tmp_path: Path) -> None:
     """A real download of an immutable public file lands in blobs/ and verifies."""

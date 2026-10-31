@@ -20,7 +20,9 @@ repos:
   hooks:
   - id: mypy
     args: [--ignore-missing-imports, --extra-checks]
-    exclude: ^(scripts|specs)/
+    # `packages/conftest.py` and `packages/senselab-core/tests/runtime/conftest.py` are both top-level `conftest`
+    # modules to mypy, which refuses a duplicate module name.
+    exclude: ^(scripts|specs)/|^packages/conftest\.py$
     additional_dependencies:
     - pydantic>=1.10.4
     - types-requests

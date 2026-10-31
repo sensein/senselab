@@ -1,6 +1,11 @@
 name: tests
 
 on:
+  # A direct push to a protected branch is guarded by the same jobs as a pull request. Jobs gated on
+  # `pull_request.draft == false` run on a push because the field is null there, which compares equal to false;
+  # the label-gated jobs do not run, since a push carries no labels.
+  push:
+    branches: [alpha, main, 2x/**]
   pull_request:
     # `ready_for_review` matters because every job below is gated on
     # `pull_request.draft == false`. Without it, a PR opened as a draft and later
@@ -10,7 +15,7 @@ on:
     types: [opened, synchronize, reopened, labeled, ready_for_review]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -109,6 +114,8 @@ jobs:
         python-version: '3.12'
     - name: Install dependencies with uv
       run: uv sync --all-extras --group dev
+    - name: Fetch the 1.x freeze branch
+      run: git fetch --no-tags --depth=1 origin freeze-1x-2026-10-30:refs/remotes/origin/freeze-1x-2026-10-30
     - name: Run pre-commit
       run: uv run pre-commit run --all-files
       shell: bash
@@ -220,7 +227,7 @@ jobs:
         uv venv -p ${{ matrix.python-version }} .core
         uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core pytest pytest-timeout hypothesis import-linter
     - name: Run core tests
-      run: .core/bin/pytest packages -m "logic or contract" -p no:cacheprovider
+      run: .core/bin/pytest packages -m "logic or contract or limits or usecase" -p no:cacheprovider
     - name: Check import contracts
       run: .core/bin/lint-imports
     - name: Build each sdist into a wheel on its own
@@ -250,7 +257,7 @@ jobs:
         uv venv -p 3.10 .floor
         uv pip install --python .floor dist/senselab_worker-*.whl numpy==1.23.5 pytest pytest-timeout hypothesis
     - name: Run worker tests
-      run: .floor/bin/pytest packages/senselab-worker/tests -m logic -p no:cacheprovider
+      run: .floor/bin/pytest packages/senselab-worker/tests -m "logic or env" -p no:cacheprovider
 
   # ── EC2 GPU Runner Jobs ───────────────────────────────────────────────
   # Ephemeral GPU instances via machulav/ec2-github-runner.

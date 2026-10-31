@@ -182,7 +182,7 @@ pythonpath = [
 testpaths = [
   "src/tests"
 ]
-addopts = "--strict-markers"
+addopts = "--strict-markers -p pytester"
 markers = [
   "logic: pure logic, no I/O beyond tmp files",
   "contract: a boundary contract between components",

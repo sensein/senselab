@@ -1,0 +1,13 @@
+code_file_max_bytes: 524288
+generated_files:
+- uv.lock
+- src/senselab/utils/data/venv_locks/*.txt
+derivation: |
+  code_file_max_bytes: the largest tracked code file (.py, .pyi, .ipynb) is
+  src/tests/audio/workflows/triage/nodes/speech_test.py at 189306 bytes, measured with `git ls-files` on
+  2026-10-31. The cap is 512 KiB, 2.77 times that, so hand-written code is never near it while a
+  committed base64 payload in a .py file (the bypass that motivated the cap: a 5 MB blob in a .py was
+  exempt from the fixture limit) is refused.
+  generated_files: files that `uv lock` and scripts/lock_subprocess_venvs.py rewrite. Their size follows the
+  dependency set, not an author's choice, so a byte cap would fail every dependency bump. They are the only
+  non-code files exempt from the per-file limit.

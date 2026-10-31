@@ -155,6 +155,7 @@ def test_resolve_hf_delegates_to_resolve_revision(monkeypatch: pytest.MonkeyPatc
     assert r.identity == "a" * 40 and seen == {"repo": "org/m", "ref": "main", "token": "t"}
 
 
+@pytest.mark.env
 @pytest.mark.network
 def test_resolve_hf_returns_commit() -> None:
     """A live hub ref resolves to a 40-hex commit."""

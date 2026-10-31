@@ -28,6 +28,7 @@ from senselab.utils.reproduce import cache, digest, env, host, provenance, restr
 from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.run import RunConfig, StepOutcome, evaluate_expect, run_step, run_steps
 from senselab.utils.reproduce.spec import Manifest, Profile, SourcesRef, StepSpec, parse_manifest
+from tests.utils.reproduce.first_party_fixture import first_party_packages
 from tests.utils.reproduce.sources_fixture import lock_data, register_input, write_lock
 
 SHA = "ab" * 32
@@ -526,11 +527,11 @@ def test_gpu_guard_and_driver_floor(world: World, monkeypatch: pytest.MonkeyPatc
         "import senselab_core.runtime.locks",
         "from senselab.utils import fastio",
         "import importlib; importlib.import_module('senselab.utils.fastio')",
-        "import senselab",
+        *(f"import {package}" for package in first_party_packages()),
     ],
 )
 def test_an_adapter_may_import_only_the_reproduce_package(world: World, line: str) -> None:
-    """Importing any senselab module outside ``senselab.utils.reproduce`` fails the step with ``E_ADAPTER_IMPORT``."""
+    """Importing a module outside the stdlib and ``senselab.utils.reproduce`` fails with ``E_ADAPTER_IMPORT``."""
     (world.base / "adapter.py").write_text(f"{line}\n" + ADAPTER)
     manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
     world.prefetch(manifest)

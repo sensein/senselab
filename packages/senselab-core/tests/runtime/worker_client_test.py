@@ -480,6 +480,7 @@ def test_classification_gap_is_reported(array_parent: Path, caplog: pytest.LogCa
     client.close()
 
 
+@pytest.mark.logic
 def test_leak_fixture_records_a_child_until_it_is_waited_on(no_leaked_processes: list[subprocess.Popen[bytes]]) -> None:
     """An exited child nobody waited on still has no returncode, which is what the fixture rejects."""
     proc = subprocess.Popen([sys.executable, "-c", "pass"])

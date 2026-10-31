@@ -35,3 +35,12 @@ forbidden_modules =
     transformers
     speechbrain
     pyannote
+
+[importlinter:contract:layers]
+name = senselab_core and senselab_worker are layered, each importing only downward
+type = layers
+layers =
+    senselab_core.cli | senselab_core.testing
+    senselab_core.runtime
+    senselab_core.kernel
+    senselab_worker
