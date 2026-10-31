@@ -31,7 +31,7 @@ from senselab_core.runtime.worker_client import (
 )
 from senselab_worker import runtime_identity
 from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
-from senselab_worker.codec import to_wire
+from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_DEPTH, to_wire
 from senselab_worker.fake import EXIT_CRASH
 from senselab_worker.faults import FaultClass, ProtocolError, classify
 from senselab_worker.hashing import sha256_bytes
@@ -445,7 +445,7 @@ def test_output_arrays_decode_per_item_and_init_files_survive(array_parent: Path
     staging = tmp_path / "staging"
     staging.mkdir()
     good, bad = numpy.arange(4, dtype="<i8"), numpy.ones(3)
-    good_ref, bad_ref = to_wire(good, array_dir=staging), to_wire(bad, array_dir=staging)
+    good_ref, bad_ref = to_wire(good, array_dir=staging, at="line"), to_wire(bad, array_dir=staging, at="line")
     bad_ref["__array__"]["sha256"] = "e" * 64
 
     def placed(ref: dict) -> dict:
@@ -844,3 +844,57 @@ def test_unexpected_signal_errors_are_logged(monkeypatch: pytest.MonkeyPatch, ca
         caplog.clear()
         worker_client._signal_group(4242, signal.SIGKILL, leader_exited=True)
         assert (caplog.text == "") is (sys.platform == "darwin")
+
+
+def _chain(height: int, leaf: object) -> object:
+    value = leaf
+    for i in range(height):
+        value = [value] if i % 2 else {"k": value}
+    return value
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("leaf", ["scalar", "empty", "array"])
+def test_input_depth_band_is_sent_or_a_content_fault(worker: WorkerClient, leaf: str) -> None:
+    """Inputs across the depth band are sent, or are that item's `WireValueError`; `run` never raises.
+
+    The band runs from MAX_DEPTH - 4 to MAX_DEPTH + 1 on the request line; the worker stays alive.
+    """
+    leaf_value, leaf_height = {"scalar": (0, 0), "empty": ({}, 1), "array": (numpy.zeros(2), ARRAY_REF_HEIGHT)}[leaf]
+    band = range(MAX_DEPTH - ENVELOPE["inputs"] - 4, MAX_DEPTH - ENVELOPE["inputs"] + 2)
+    items = [{"id": f"h{h}", "inputs": {"k": _chain(h - 1 - leaf_height, leaf_value)}} for h in band]
+    out = worker.run([*items, {"id": "mate", "inputs": {}}], {})
+    assert out[-1]["outputs"]["value"] == _value({}, {}) and worker.alive
+    for h, r in zip(band, out):
+        if ENVELOPE["inputs"] + h <= MAX_DEPTH:
+            assert "outputs" in r, (h, r)
+        else:
+            assert (r["error"]["type"], r["error"]["fault"], r["error"]["gap"]) == (
+                "WireValueError",
+                FaultClass.CONTENT,
+                False,
+            )
+
+
+@pytest.mark.logic
+def test_a10_exponentially_shared_input_fails_only_its_item(worker: WorkerClient) -> None:
+    """The host's encoder is bounded too: an input `l = [l, l]` sixty times is that item's `ValueTooLarge`."""
+    value: object = 0
+    for _ in range(60):
+        value = [value, value]
+    out = worker.run([{"id": "dag", "inputs": {"s": value}}, {"id": "mate", "inputs": {}}], {})
+    assert (out[0]["error"]["type"], out[0]["error"]["fault"], out[0]["error"]["gap"]) == (
+        "ValueTooLarge",
+        FaultClass.RESOURCE,
+        False,
+    )
+    assert out[1]["outputs"]["value"] == _value({}, {}) and worker.alive
+
+
+@pytest.mark.logic
+def test_request_that_cannot_fit_one_line_is_a_value_error(worker: WorkerClient) -> None:
+    """Items that each fit but together exceed the line budget refuse the request; the worker stays usable."""
+    items = [{"id": str(i), "inputs": {"s": "x" * 10**6}} for i in range(20)]
+    with pytest.raises(ValueError, match="does not fit one line"):
+        worker.run(items, {})
+    assert worker.alive and worker.run(items[:2], {})[0]["outputs"]

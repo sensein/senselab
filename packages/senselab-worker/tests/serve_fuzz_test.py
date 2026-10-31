@@ -12,7 +12,7 @@ import numpy
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from senselab_worker.codec import MAX_LINE_BYTES, validate_message
+from senselab_worker.codec import ENVELOPE, MAX_DEPTH, MAX_LINE_BYTES, validate_message
 from senselab_worker.faults import ContentFault, ResourceFault
 from senselab_worker.serve import serve
 
@@ -60,6 +60,26 @@ def _nested(depth: int) -> object:
     for i in range(depth):
         value = [value] if i % 2 else {"k": value}
     return value
+
+
+def _depth_expectation(outputs_height: int) -> tuple[str, str | None]:
+    """An outputs value `outputs_height` containers tall fits its line iff the line's depth is within MAX_DEPTH."""
+    fits = ENVELOPE["outputs"] + outputs_height <= MAX_DEPTH
+    return ("outputs", None) if fits else ("error", "WireValueError")
+
+
+def _shared(levels: int, as_dict: bool) -> object:
+    """A value of `levels` containers, each holding its child twice: linear in memory, exponential as a tree."""
+    value: object = 0
+    for _ in range(levels):
+        value = {"a": value, "b": value} if as_dict else [value, value]
+    return {"s": value}
+
+
+def _shared_expectation(levels: int) -> tuple[str, str | None]:
+    if ENVELOPE["outputs"] + levels + 1 > MAX_DEPTH:
+        return ("error", "WireValueError")
+    return ("outputs", None) if levels <= 16 else ("error", "ResponseTooLarge")
 
 
 def _cyclic_list() -> object:
@@ -149,8 +169,14 @@ def _items() -> st.SearchStrategy[Item]:
     non_json = st.sampled_from(_NON_JSON).map(
         lambda f: Item(lambda: {"outputs": {"x": f()}}, ("error", "WireValueError"))
     )
-    deep = st.sampled_from([10, 61, 62, 63, 64, 200, 5000]).map(
-        lambda d: Item(lambda: {"outputs": {"x": _nested(d)}}, ("any", None))
+    deep = st.sampled_from([10, *range(MAX_DEPTH - 6, MAX_DEPTH + 2), 200, 5000]).map(
+        lambda d: Item(lambda: {"outputs": {"x": _nested(d)}}, _depth_expectation(d + 1))
+    )
+    shared = st.tuples(st.sampled_from([3, 10, 16, 30, 60, 62, 63, 70]), st.booleans()).map(
+        lambda kd: Item(lambda: {"outputs": _shared(*kd)}, _shared_expectation(kd[0]))
+    )
+    shared_arrays = st.integers(1, 2000).map(
+        lambda n: Item(lambda: {"outputs": {"a": [numpy.zeros(3)] * n}}, ("outputs", None))
     )
     huge = st.sampled_from(_SIZES).map(
         lambda n: Item(
@@ -159,7 +185,7 @@ def _items() -> st.SearchStrategy[Item]:
         )
     )
     error = st.sampled_from(_ERRORS).map(lambda f: Item(lambda: {"error": f()}, ("error", None)))
-    return json_ok | array | non_json | deep | huge | error
+    return json_ok | array | non_json | deep | shared | shared_arrays | huge | error
 
 
 _MALFORMED_ENTRIES: list[Callable[[], object]] = [
@@ -207,8 +233,13 @@ class Behaviour:
         if self.batch == "hostile_list":
             return _HostileList(entries)
         if self.batch == "one_malformed" and entries:
-            entries[len(entries) // 2] = self.malformed()  # type: ignore[call-overload]
+            entries[self.malformed_at] = self.malformed()  # type: ignore[call-overload]
         return entries
+
+    @property
+    def malformed_at(self) -> int:
+        """The index of the item whose entry `one_malformed` breaks."""
+        return self.n // 2
 
 
 @st.composite
@@ -264,13 +295,17 @@ def test_serve_is_total_fuzz(behaviour: Behaviour) -> None:
         assert ("outputs" in r) != ("error" in r)
         validate_message(r, "result")
         assert r["id"] == REQ
-    if behaviour.batch == "well":
-        for item, r in zip(behaviour.items, replies[:-1]):
+    if behaviour.batch in ("well", "one_malformed"):
+        for i, (item, r) in enumerate(zip(behaviour.items, replies[:-1])):
             kind, type_name = item.expect
+            if behaviour.batch == "one_malformed" and i == behaviour.malformed_at:
+                kind, type_name = "error", "ProtocolError"
             if kind != "any":
                 assert kind in r, (item.expect, r)
             if type_name is not None:
-                assert r["error"]["type"] == type_name
+                assert r["error"]["type"] == type_name, r["error"]
     else:
         assert all("error" in r for r in replies[:-1])
+    for r in replies[:-1]:
+        assert "error" not in r or r["error"]["type"] != "ProtocolError" or behaviour.batch != "well"
     assert out[2 + behaviour.n + 1 :] == [{"id": GOOD, "item": "g", "outputs": {"ok": True}}, {"id": GOOD, "done": 1}]

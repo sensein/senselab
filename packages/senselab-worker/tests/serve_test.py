@@ -8,7 +8,7 @@ from typing import Callable, NoReturn
 import numpy
 import pytest
 from senselab_worker import WIRE_VERSION, runtime_identity
-from senselab_worker.codec import MAX_LINE_BYTES, to_wire, validate_message
+from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_DEPTH, MAX_LINE_BYTES, to_wire, validate_message
 from senselab_worker.faults import ContentFault
 from senselab_worker.serve import EXIT_FATAL, serve
 
@@ -38,7 +38,7 @@ def _session(
 
 def _line(msg: dict, array_dir: Path) -> bytes:
     """Frame `msg` without validating it, so tests can send what a host never would."""
-    return json.dumps(to_wire(msg, array_dir=array_dir)).encode() + b"\n"
+    return json.dumps(to_wire(msg, array_dir=array_dir, at="line")).encode() + b"\n"
 
 
 def _replies(out: list[dict], request_id: str = "req-1") -> list[dict]:
@@ -153,8 +153,8 @@ def test_unusable_lines_are_fatal_and_exit_nonzero(tmp_path: Path, messages: lis
 
 @pytest.mark.logic
 @pytest.mark.parametrize("stop", [False, None, 0, 1, "true", [], {}])
-def test_stop_false_is_a_protocol_error_not_an_exit(tmp_path: Path, stop: object) -> None:
-    """A message whose `stop` is not exactly `true` is answered with a `ProtocolError`, never taken as a stop.
+def test_stop_not_exactly_true_is_a_fatal_protocol_error_and_exits_fatal(tmp_path: Path, stop: object) -> None:
+    """A message whose `stop` is not exactly `true` is answered with a fatal `ProtocolError`, then `EXIT_FATAL`.
 
     The probe: `{"stop": false, ...}` on a request made the worker exit 0 without a reply.
     """
@@ -251,7 +251,10 @@ class _Dict(dict):
 def test_malformed_handle_result_is_protocol_error_for_every_item(
     tmp_path: Path, bad: Callable[[list[dict]], object]
 ) -> None:
-    """A wrong count or a malformed entry gives every item an infrastructure `ProtocolError`."""
+    """A result that is not a list of one entry per item, or whose every entry is malformed, fails every item.
+
+    Each item gets an infrastructure `ProtocolError`.
+    """
     _, out = _session(tmp_path, [_init(tmp_path), _request("a", "b")], handle=lambda s, items, p: bad(items))  # type: ignore[arg-type, return-value]
     errors = [r["error"] for r in _replies(out)]
     assert {(e["type"], e["fault"], e["gap"]) for e in errors} == {("ProtocolError", "infrastructure", False)}
@@ -287,7 +290,7 @@ def test_per_item_errors_and_output_encoding_failures_stay_with_their_item(tmp_p
 
 
 def _damaged_ref(tmp_path: Path) -> dict:
-    wire = to_wire(numpy.zeros(2), array_dir=tmp_path)
+    wire = to_wire(numpy.zeros(2), array_dir=tmp_path, at="line")
     wire["__array__"]["sha256"] = "f" * 64
     return wire
 
@@ -301,7 +304,7 @@ def test_bad_array_in_an_item_fails_only_that_item_before_handle(tmp_path: Path)
         seen.extend(item["id"] for item in items)
         return [{"outputs": {"sum": float(item["inputs"]["x"].sum())}} for item in items]
 
-    good = to_wire(numpy.ones(2), array_dir=tmp_path)
+    good = to_wire(numpy.ones(2), array_dir=tmp_path, at="line")
     request = {
         "id": "r",
         "items": [{"id": "a", "inputs": {"x": good}}, {"id": "b", "inputs": {"x": _damaged_ref(tmp_path)}}],
@@ -400,3 +403,72 @@ def test_a10_unprintable_or_surrogate_error_fails_only_its_item(tmp_path: Path) 
     assert first[0]["error"]["message"] == "<unprintable _Unprintable>"
     assert first[2]["error"]["message"] == "cannot open /data/\\udcff.wav"
     assert _replies(out, "req-2")[0]["outputs"] == {"ok": 1}
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "malformed", [{"outputs": [1]}, {"error": "text"}, {}, None, {"outputs": {}, "error": ValueError()}, ["outputs"]]
+)
+def test_one_malformed_entry_fails_only_its_item(tmp_path: Path, malformed: object) -> None:
+    """In a list of the right length, a malformed entry is that item's `ProtocolError`; its batch-mates keep theirs."""
+
+    def handle(state: object, items: list[dict], params: dict) -> list[object]:
+        return [malformed if item["id"] == "b" else {"outputs": {"id": item["id"]}} for item in items]
+
+    _, out = _session(tmp_path, [_init(tmp_path), _request("a", "b", "c")], handle=handle)  # type: ignore[arg-type]
+    a, b, c = _replies(out)
+    assert (a["outputs"], c["outputs"]) == ({"id": "a"}, {"id": "c"})
+    assert (b["error"]["type"], b["error"]["fault"], b["error"]["gap"]) == ("ProtocolError", "infrastructure", False)
+
+
+def _chain(height: int, leaf: object) -> object:
+    value = leaf
+    for i in range(height):
+        value = [value] if i % 2 else {"k": value}
+    return value
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("leaf", ["scalar", "empty", "array"])
+def test_output_depth_band_is_outputs_or_a_content_fault(tmp_path: Path, leaf: str) -> None:
+    """Outputs across the depth band are sent, or are that item's `WireValueError`, never a `ProtocolError`.
+
+    The band runs from MAX_DEPTH - 4 to MAX_DEPTH + 1 on the result line; the batch-mate is unaffected.
+    """
+    leaf_value, leaf_height = {"scalar": (0, 0), "empty": ({}, 1), "array": (numpy.zeros(2), ARRAY_REF_HEIGHT)}[leaf]
+    band = range(MAX_DEPTH - ENVELOPE["outputs"] - 4, MAX_DEPTH - ENVELOPE["outputs"] + 2)
+
+    def handle(state: object, items: list[dict], params: dict) -> list[dict]:
+        heights = {f"h{h}": h for h in band}
+        return [
+            {"outputs": {"k": _chain(heights[i["id"]] - 1 - leaf_height, leaf_value)}}
+            if i["id"] in heights
+            else {"outputs": {"ok": 1}}
+            for i in items
+        ]
+
+    ids = [f"h{h}" for h in band] + ["mate"]
+    code, out = _session(tmp_path, [_init(tmp_path), _request(*ids), {"stop": True}], handle=handle)
+    replies = _replies(out)
+    assert code == 0 and replies[-1]["outputs"] == {"ok": 1}
+    for h, r in zip(band, replies):
+        if ENVELOPE["outputs"] + h <= MAX_DEPTH:
+            assert "outputs" in r, (h, r)
+        else:
+            assert (r["error"]["type"], r["error"]["fault"], r["error"]["gap"]) == ("WireValueError", "content", False)
+
+
+@pytest.mark.logic
+def test_a10_exponentially_shared_output_fails_only_its_item(tmp_path: Path) -> None:
+    """The probe: an output `l = [l, l]` sixty times hung the worker. It is now that item's `ResponseTooLarge`."""
+
+    def handle(state: object, items: list[dict], params: dict) -> list[dict]:
+        value: object = 0
+        for _ in range(60):
+            value = [value, value]
+        return [{"outputs": {"s": value}} if i["id"] == "dag" else {"outputs": {"ok": 1}} for i in items]
+
+    code, out = _session(tmp_path, [_init(tmp_path), _request("dag", "mate"), {"stop": True}], handle=handle)
+    dag, mate = _replies(out)
+    assert code == 0 and mate["outputs"] == {"ok": 1}
+    assert (dag["error"]["type"], dag["error"]["fault"], dag["error"]["gap"]) == ("ResponseTooLarge", "resource", False)

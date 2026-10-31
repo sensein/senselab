@@ -25,6 +25,7 @@ from senselab_worker.codec import (
     MAX_LINE_BYTES,
     Deadline,
     Kind,
+    LineTooLarge,
     array_paths,
     dump_line,
     from_wire,
@@ -345,7 +346,7 @@ class WorkerClient:
         self._array_dir = Path(tempfile.mkdtemp(prefix="senselab-arrays-", dir=array_parent)).absolute()
         self._closed = False
         try:
-            wire_init = to_wire({"array_dir": str(self._array_dir), **init}, array_dir=self._array_dir)
+            wire_init = to_wire({"array_dir": str(self._array_dir), **init}, array_dir=self._array_dir, at="init")
             self._init_names = self._owned(array_paths(wire_init))
             self._start(python, module)
             self.hello = self._handshake(expect_runtime or runtime_identity())
@@ -375,13 +376,15 @@ class WorkerClient:
         """Run one request and return one result per item, in order.
 
         Each result is `{"id", "outputs"}` with arrays loaded, or `{"id", "error"}` with the error
-        object's `fault` as a `FaultClass`. An item whose inputs have no wire form fails alone with
-        a content error and is not sent. One `request_timeout` covers sending the request, receiving
-        the response and reading its arrays.
+        object's `fault` as a `FaultClass`. An item whose inputs have no wire form fails alone, with
+        its content error (`ValueTooLarge`, a resource error, if they cannot fit a line), and is not
+        sent. One `request_timeout` covers sending the request, receiving the response and reading
+        its arrays.
 
         Raises:
             ConcurrentUse: if another `run` on this client is in flight; that call is unaffected.
-            ValueError: if `items` or `params` are malformed, or `params` has no wire form.
+            ValueError: if `items` or `params` are malformed, `params` has no wire form, or the request
+                with every encodable item does not fit one wire line.
             ProtocolError, WorkerLost, WorkerFatal: infrastructure faults; the worker is discarded.
             TimeoutError: if the request exceeds `request_timeout`; the worker is killed.
         """
@@ -435,18 +438,23 @@ class WorkerClient:
             validate_message({"id": request_id, "items": items, "params": params}, "request")
         except ProtocolError as exc:
             raise ValueError(f"malformed request: {exc}") from exc
-        wire_params = to_wire(params, array_dir=self._array_dir)
+        wire_params = to_wire(params, array_dir=self._array_dir, at="params")
         results: list[dict[str, Any]] = [{} for _ in items]
         sent: list[tuple[int, dict[str, Any]]] = []
         for i, item in enumerate(items):
             try:
-                sent.append((i, {"id": item["id"], "inputs": to_wire(item["inputs"], array_dir=self._array_dir)}))
+                sent.append(
+                    (i, {"id": item["id"], "inputs": to_wire(item["inputs"], array_dir=self._array_dir, at="inputs")})
+                )
             except Exception as exc:
                 results[i] = {"id": item["id"], "error": _mapped(error_record(exc))}
         if not sent:
             return results
         request = {"id": request_id, "items": [wire for _, wire in sent], "params": wire_params}
-        line = dump_line(request, "request")
+        try:
+            line = dump_line(request, "request")
+        except LineTooLarge as exc:
+            raise ValueError(f"request of {len(sent)} items does not fit one line; send fewer items: {exc}") from exc
         deadline = Deadline(self._request_timeout)
         try:
             self._send(line, deadline)

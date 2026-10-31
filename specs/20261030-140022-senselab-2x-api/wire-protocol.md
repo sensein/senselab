@@ -32,10 +32,30 @@ at the handshake.
   aggregate budget for a response.
 - **Strict values.** The reader (`parse_line`) refuses, as a protocol violation: a key repeated
   within one object; a number that is `NaN`, `Infinity` or overflows to infinity (`1e999`); and
-  nesting deeper than 64 containers (`MAX_DEPTH`, counting the line's own object). The writer
-  (`dump_line`) refuses the same depth, as do `to_wire` and `jcs_dumps` (through the shared
-  `canonical.entered` guard, which also refuses a container that contains itself), so neither
-  side writes what the other refuses and no encoder or decoder recurses without bound.
+  nesting deeper than 64 containers (`MAX_DEPTH`, counting the line's own object as depth 1).
+- **One depth mechanism.** Every encoder and both sides of the wire count depth the same way, by
+  entering each container through `canonical.entered` (which also refuses a container that
+  contains itself) and checking it with `canonical.require_depth`: `parse_line`, `dump_line`,
+  `to_wire` and `jcs_dumps`. Depth is always counted from the root of the line the value will sit
+  on. `to_wire(value, at=slot)` therefore takes the slot it encodes for, and starts from that
+  slot's envelope (`ENVELOPE`): `outputs` and `params` and `init` sit inside one container
+  (`{"outputs": v}`, `{"params": v}`, `{"init": v}`), `inputs` inside three
+  (`{"items": [{"inputs": v}]}`), and `line` is a whole message. An array reference is three
+  containers tall (`ARRAY_REF_HEIGHT`: the `__array__` object, the reference object, its `shape`
+  list). So a value that passes `to_wire` always passes `dump_line` and the reader's
+  `parse_line` on that line, and a value that is too deep fails in `to_wire`, as that item's
+  `WireValueError` (`content`), never later as a `ProtocolError`. Without the offset the band
+  between the value's own bound and the line's bound (two levels for outputs, four for inputs)
+  passed `to_wire` and then failed the line as infrastructure, or escaped `run()` on the host.
+- **Bounded work.** `to_wire` encodes each distinct container and array once and charges every
+  further use of it again, against a lower bound on the encoded bytes (one byte per value, a
+  string's or key's length plus its quotes, brackets and separators). Once the charge exceeds
+  `MAX_LINE_BYTES`, the value cannot fit one line, and `to_wire` raises `ValueTooLarge`
+  (a `resource` fault). A shared subtree is therefore linear work however many paths reach it:
+  `l = [l, l]` sixty times is 2^60 nodes as a tree, and is refused after about 22 levels and
+  61 containers entered. On the worker an output refused this way, like one whose framed line is
+  over budget, is that item's `ResponseTooLarge`; on the host an item whose inputs are refused
+  this way is that item's `ValueTooLarge` and is not sent.
 - **One validator.** `validate_message(msg, kind)` is the schema of every message kind (`hello`,
   `init`, `ready`, `request`, `result`, `done`, `fatal`, `stop`). The writer calls it, through
   `dump_line(msg, kind)`, before every send, and the reader after every parse. Field types are
@@ -90,6 +110,9 @@ at the handshake.
 - **Per-item budget.** An item whose result line would exceed `MAX_LINE_BYTES` is sent as that
   item's error, `{"type": "ResponseTooLarge", "fault": "resource", "gap": false, ...}`. Its
   batch-mates are unaffected. Large data travels as arrays.
+- **Request budget.** A request is one line. The host leaves out items whose inputs fail to
+  encode; if the request with the remaining items still exceeds `MAX_LINE_BYTES`, `run` raises
+  `ValueError` and sends nothing, and the worker stays usable. The caller sends fewer items.
 - **Totality.** A failure in one item never fails its batch-mates or the worker. Building an
   item's result line is total: any exception from encoding its outputs (`to_wire`) or framing the
   line (`dump_line`) becomes that item's error record, and an error record always fits the budget
@@ -106,17 +129,21 @@ at the handshake.
     for a per-item failure. `serve` adds the ids and classifies each `exc` by the fault table.
   - If `handle` raises any exception other than `KeyboardInterrupt` and `SystemExit`, including
     a `BaseException` subclass, every item gets that error, classified.
-  - If it returns anything but exactly a `list` of the right length whose entries are exactly
-    `dict`s with one of `outputs` (exactly a `dict`) and `error` (an exception instance), every
-    item gets an `infrastructure` error of type `ProtocolError`.
+  - If it returns anything but exactly a `list` with one entry per item, no entry can be
+    attributed to an item, and every item gets an `infrastructure` error of type `ProtocolError`.
+  - In a list of the right length, an entry that is not exactly a `dict` with one of `outputs`
+    (exactly a `dict`) and `error` (an exception instance) is that item's `ProtocolError`; the
+    other entries are sent as they are.
   - Outputs are encoded by `to_wire`, which accepts exact types only: `dict` with `str` keys,
     `list`, `tuple`, the scalars `canonical_scalar` accepts (so a numpy scalar is its `.item()`),
     and exactly `numpy.ndarray`. Anything else, a non-finite float, a string that is not valid
     Unicode, a cycle or nesting past `MAX_DEPTH` is a `WireValueError`, a typed `content` fault.
 - A line the worker cannot parse as a valid `init`, `request` or `stop` message is answered with
   `fatal` (`ProtocolError`), and the worker exits `EXIT_FATAL`. In particular a message with a
-  top-level `stop` key whose value is not exactly `true` is such a violation, not a stop: it is
-  answered, never taken as a silent exit.
+  top-level `stop` key whose value is not exactly `true` is such a violation, not a stop: the
+  worker answers it with a `fatal` `ProtocolError` and exits `EXIT_FATAL`, never 0 and never
+  without a reply (ruling H-R13). v2 has no non-fatal message-level error, so an invalid host
+  message cannot be answered without ending the session.
 
 ## Arrays
 

@@ -19,13 +19,19 @@ from senselab_worker.codec import (
     to_wire,
     validate_message,
 )
-from senselab_worker.faults import ArrayIntegrityError, ProtocolError, ResponseTooLarge, error_record
+from senselab_worker.faults import (
+    PASS_THROUGH,
+    ArrayIntegrityError,
+    ProtocolError,
+    ResponseTooLarge,
+    ValueTooLarge,
+    error_record,
+)
 
 Load = Callable[[dict[str, Any]], object]
 Handle = Callable[[object, list[dict[str, Any]], dict[str, Any]], list[dict[str, Any]]]
 
 EXIT_FATAL = 1
-_PASS_THROUGH = (KeyboardInterrupt, SystemExit)
 
 
 def serve(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO) -> int:
@@ -115,14 +121,15 @@ def _respond(handle: Handle, state: object, msg: dict[str, Any], array_dir: Path
 def _call(handle: Handle, state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
     try:
         entries = handle(state, items, params)
-    except _PASS_THROUGH:
+    except PASS_THROUGH:
         raise
     except BaseException as exc:  # noqa: BLE001 - whatever handle raises is every item's error
         return [{"error": exc} for _ in items]
-    if not (type(entries) is list and len(entries) == len(items) and all(map(_well_formed, entries))):
-        error = ProtocolError("handle must return one {'outputs': dict} or {'error': exception} per item, in order")
+    if not (type(entries) is list and len(entries) == len(items)):
+        error = ProtocolError("handle must return a list with one entry per item, in order")
         return [{"error": error} for _ in items]
-    return entries
+    malformed = ProtocolError("handle's entry for this item is not one {'outputs': dict} or {'error': exception}")
+    return [entry if _well_formed(entry) else {"error": malformed} for entry in entries]
 
 
 def _well_formed(entry: object) -> bool:
@@ -132,20 +139,16 @@ def _well_formed(entry: object) -> bool:
 
 
 def _result(request_id: str, item_id: str, entry: dict[str, Any], array_dir: Path) -> bytes:
-    """Return the item's result line; total, so a failure to encode it becomes the item's error line.
-
-    `request_id` and `item_id` come from a validated request, and an error record is bounded, so the
-    error line always fits the line budget.
-    """
+    """Return the item's result line; total: a failure to encode or frame it becomes the item's error line."""
     head = {"id": request_id, "item": item_id}
     try:
         if "error" in entry:
             return dump_line({**head, "error": error_record(entry["error"])}, "result")
-        return dump_line({**head, "outputs": to_wire(entry["outputs"], array_dir=array_dir)}, "result")
-    except _PASS_THROUGH:
+        return dump_line({**head, "outputs": to_wire(entry["outputs"], array_dir=array_dir, at="outputs")}, "result")
+    except PASS_THROUGH:
         raise
-    except LineTooLarge as exc:
-        record = error_record(ResponseTooLarge(f"result line of {exc.size} bytes exceeds {MAX_LINE_BYTES}"))
+    except (LineTooLarge, ValueTooLarge) as exc:
+        record = error_record(ResponseTooLarge(f"result for item {item_id!r} exceeds {MAX_LINE_BYTES} bytes: {exc}"))
     except BaseException as exc:  # noqa: BLE001 - an item's encoding failure is that item's error
         record = error_record(exc)
     return dump_line({**head, "error": record}, "result")

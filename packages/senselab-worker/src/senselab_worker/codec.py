@@ -18,15 +18,21 @@ from typing import Any, Callable, Literal
 
 import numpy
 
-from senselab_worker.canonical import MAX_DEPTH, canonical_npy_bytes, canonical_scalar, entered
-from senselab_worker.faults import ArrayIntegrityError, FaultClass, ProtocolError, WireValueError
+from senselab_worker.canonical import MAX_DEPTH, canonical_npy_bytes, canonical_scalar, entered, require_depth
+from senselab_worker.faults import ArrayIntegrityError, FaultClass, ProtocolError, ValueTooLarge, WireValueError
 from senselab_worker.hashing import sha256_bytes
 from senselab_worker.ownership import ARRAY_TEMP_NAME, remove_owned
 
 MAX_LINE_BYTES = 16 * 2**20
 MAX_ID_CHARS = 1024
 Kind = Literal["hello", "init", "ready", "request", "result", "done", "fatal", "stop"]
+Slot = Literal["line", "init", "params", "inputs", "outputs"]
+ENVELOPE: dict[str, int] = {"line": 0, "init": 1, "params": 1, "inputs": 3, "outputs": 1}
+"""Per slot, the containers that enclose a value on its line: `{"init": v}`, `{"params": v}`,
+`{"items": [{"inputs": v}]}`, `{"outputs": v}`; `line` is a whole message."""
 ARRAY_KEY = "__array__"
+ARRAY_REF_HEIGHT = 3
+"""Containers in an array reference: the `__array__` object, the reference object, its `shape` list."""
 READ_CHUNK_BYTES = 2**20
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
@@ -61,7 +67,7 @@ def encode(msg: dict[str, Any], kind: Kind, *, array_dir: Path) -> bytes:
         ProtocolError: if the message is not a valid `kind` message (see `validate_message`), or the
             line exceeds `MAX_LINE_BYTES` (`LineTooLarge`).
     """
-    return dump_line(to_wire(msg, array_dir=array_dir), kind)
+    return dump_line(to_wire(msg, array_dir=array_dir, at="line"), kind)
 
 
 def decode(line: bytes, kind: Kind, *, array_dir: Path) -> dict[str, Any]:
@@ -125,13 +131,22 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _check_depth(msg: object) -> None:
-    stack: list[tuple[object, int]] = [(msg, 1)]
-    while stack:
-        value, depth = stack.pop()
-        children = value.values() if isinstance(value, dict) else value
-        if depth > MAX_DEPTH:
-            raise ProtocolError(f"wire message nests deeper than {MAX_DEPTH} containers")
-        stack.extend((child, depth + 1) for child in children if isinstance(child, (dict, list, tuple)))  # type: ignore[attr-defined]
+    try:
+        _walk(msg, set())
+    except ValueError as exc:
+        raise ProtocolError(f"wire message: {exc}") from exc
+
+
+def _walk(value: object, active: set[int]) -> None:
+    if isinstance(value, dict):
+        children: Any = value.values()
+    elif isinstance(value, (list, tuple)):
+        children = value
+    else:
+        return
+    with entered(value, active):
+        for child in children:
+            _walk(child, active)
 
 
 def parse_line(line: bytes) -> dict[str, Any]:
@@ -161,50 +176,103 @@ def parse_line(line: bytes) -> dict[str, Any]:
     return msg
 
 
-def to_wire(value: object, *, array_dir: Path) -> Any:  # noqa: ANN401
+def to_wire(value: object, *, array_dir: Path, at: Slot) -> Any:  # noqa: ANN401
     """Return `value` as plain JSON data, writing each numpy array into `array_dir` as a reference.
 
-    Containers are exactly `dict` with `str` keys, `list` and `tuple` (which becomes a list);
-    scalars are what `canonical_scalar` accepts, so a numpy scalar becomes its `.item()`; arrays
-    are exactly `numpy.ndarray`. Every container is entered through `canonical.entered`.
+    `at` names where the value sits on its line, and so how many containers enclose it
+    (`ENVELOPE`): its containers' depths are counted from the line's root, as the reader counts
+    them. Containers are exactly `dict` with `str` keys, `list` and `tuple` (which becomes a
+    list); scalars are what `canonical_scalar` accepts, so a numpy scalar becomes its `.item()`;
+    arrays are exactly `numpy.ndarray`, and a reference is `ARRAY_REF_HEIGHT` containers tall. Every container is
+    entered through `canonical.entered`. A container or array met again is encoded once and
+    charged again, so the work done is bounded by the line budget, never by the number of paths.
 
     Raises:
         WireValueError: on any other type or a subclass, a non-finite float, a string or key that
             is not valid Unicode, an object or structured array, a dict whose only key is
-            `__array__`, a container that contains itself, or nesting deeper than `MAX_DEPTH`.
+            `__array__`, a container that contains itself, or a container deeper than `MAX_DEPTH`
+            on the line.
+        ValueTooLarge: once a lower bound on the value's encoded size exceeds `MAX_LINE_BYTES`.
     """
+    encoder = _Encoder(Path(array_dir), ENVELOPE[at])
     try:
-        return _to_wire(value, Path(array_dir), set())
-    except WireValueError:
+        return encoder.encode(value)[0]
+    except (WireValueError, ValueTooLarge):
         raise
     except (ValueError, TypeError) as exc:
         raise WireValueError(f"no wire form: {exc}") from exc
 
 
-def _to_wire(value: object, array_dir: Path, active: set[int]) -> Any:  # noqa: ANN401
-    t = type(value)
-    if isinstance(value, numpy.ndarray):
-        return {ARRAY_KEY: _write_array(value, array_dir)}
-    if t is dict:
-        with entered(value, active):
-            if list(value) == [ARRAY_KEY]:  # type: ignore[call-overload]
-                raise ValueError(f"a dict whose only key is {ARRAY_KEY!r} is reserved for array references")
-            out = {}
-            for key, item in value.items():  # type: ignore[attr-defined]
-                if type(key) is not str:
-                    raise TypeError(f"JSON object key is not a str: {type(key).__qualname__}")
-                key.encode("utf-8")
-                out[key] = _to_wire(item, array_dir, active)
-            return out
-    if t is list or t is tuple:
-        with entered(value, active):
-            return [_to_wire(item, array_dir, active) for item in value]  # type: ignore[attr-defined]
-    scalar = canonical_scalar(value)
-    if type(scalar) is float and not math.isfinite(scalar):
-        raise ValueError(f"non-finite number is not JSON: {scalar}; pass it inside an array")
-    if type(scalar) is str:
-        scalar.encode("utf-8")
-    return scalar
+class _Encoder:
+    """One `to_wire` call: the path of open containers, the finished ones, and the bytes charged so far."""
+
+    def __init__(self, array_dir: Path, base: int) -> None:
+        self.array_dir = array_dir
+        self.base = base
+        self.active: set[int] = set()
+        self.done: dict[int, tuple[Any, int, int]] = {}
+        self.spent = 0
+
+    def charge(self, size: int) -> None:
+        self.spent += size
+        if self.spent > MAX_LINE_BYTES:
+            raise ValueTooLarge(f"wire form exceeds {MAX_LINE_BYTES} bytes; pass large data as arrays")
+
+    def encode(self, value: object) -> tuple[Any, int]:
+        """Return the wire form of `value` and its height in containers (0 for a scalar)."""
+        t = type(value)
+        if not (t is dict or t is list or t is tuple or isinstance(value, numpy.ndarray)):
+            return self.scalar(value), 0
+        found = self.done.get(id(value))
+        if found is not None:
+            wire, height, size = found
+            require_depth(self.base + len(self.active) + height)
+            self.charge(size)
+            return wire, height
+        start = self.spent
+        wire, height = self.array(value) if isinstance(value, numpy.ndarray) else self.container(value)
+        self.done[id(value)] = (wire, height, self.spent - start)
+        return wire, height
+
+    def array(self, a: numpy.ndarray) -> tuple[Any, int]:
+        require_depth(self.base + len(self.active) + ARRAY_REF_HEIGHT)
+        ref = _write_array(a, self.array_dir)
+        self.charge(len(ref["path"]) + len(ref["sha256"]))
+        return {ARRAY_KEY: ref}, ARRAY_REF_HEIGHT
+
+    def container(self, value: Any) -> tuple[Any, int]:  # noqa: ANN401
+        with entered(value, self.active, self.base):
+            self.charge(1 + max(len(value), 1))
+            height = 0
+            if type(value) is dict:
+                if list(value) == [ARRAY_KEY]:
+                    raise ValueError(f"a dict whose only key is {ARRAY_KEY!r} is reserved for array references")
+                out: Any = {}
+                for key, item in value.items():
+                    if type(key) is not str:
+                        raise TypeError(f"JSON object key is not a str: {type(key).__qualname__}")
+                    self.charge(len(key) + 3)
+                    key.encode("utf-8")
+                    out[key], child = self.encode(item)
+                    height = max(height, child)
+            else:
+                out = []
+                for item in value:
+                    wire, child = self.encode(item)
+                    out.append(wire)
+                    height = max(height, child)
+            return out, height + 1
+
+    def scalar(self, value: object) -> object:
+        scalar = canonical_scalar(value)
+        if type(scalar) is str:
+            self.charge(len(scalar) + 2)
+            scalar.encode("utf-8")
+        else:
+            self.charge(1)
+        if type(scalar) is float and not math.isfinite(scalar):
+            raise ValueError(f"non-finite number is not JSON: {scalar}; pass it inside an array")
+        return scalar
 
 
 def _write_array(a: numpy.ndarray, array_dir: Path) -> dict[str, Any]:

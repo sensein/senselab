@@ -48,10 +48,15 @@ class ResponseTooLarge(ResourceFault):
     """An item's result line would exceed the line budget."""
 
 
+class ValueTooLarge(ResourceFault, ValueError):
+    """A value's wire form cannot fit one line: a lower bound on its encoded size exceeds the line budget."""
+
+
 _CONTENT = (ValueError, TypeError, KeyError)
 _RESOURCE = (MemoryError, TimeoutError)
 _OOM_CLASS_NAME = "OutOfMemoryError"
-_PASS_THROUGH = (KeyboardInterrupt, SystemExit)
+PASS_THROUGH = (KeyboardInterrupt, SystemExit)
+"""Exceptions no total function in the worker turns into a record; they end the process as usual."""
 
 
 def _classify(exc: BaseException) -> tuple[FaultClass, bool]:
@@ -85,7 +90,7 @@ def _safe_text(exc: BaseException) -> str:
             text = show(exc)
             if isinstance(text, str):
                 return wire_text(text)
-        except _PASS_THROUGH:
+        except PASS_THROUGH:
             raise
         except BaseException:  # noqa: BLE001, S112 - a failing __str__ falls through to the next form
             continue
@@ -96,7 +101,7 @@ def _safe_traceback(exc: BaseException) -> str:
     try:
         frames = traceback.format_exception(type(exc), exc, exc.__traceback__, limit=-TRACEBACK_FRAMES)
         return wire_text("".join(frames))
-    except _PASS_THROUGH:
+    except PASS_THROUGH:
         raise
     except BaseException as failure:  # noqa: BLE001 - the record is total; a broken traceback is named, not raised
         return f"<traceback could not be formatted: {wire_text(type(failure).__name__)}>"

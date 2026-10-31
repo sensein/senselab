@@ -113,22 +113,32 @@ def tagged_digest(tag: str, value: object) -> str:
     return hashlib.sha256(tag.encode("ascii") + b"\x00" + jcs_dumps(value)).hexdigest()
 
 
+def require_depth(depth: int) -> None:
+    """Refuse a container at `depth`, counted from its line's root (the root is at depth 1).
+
+    Raises:
+        ValueError: if `depth` exceeds `MAX_DEPTH`.
+    """
+    if depth > MAX_DEPTH:
+        raise ValueError(f"nesting deeper than {MAX_DEPTH} containers")
+
+
 @contextmanager
-def entered(container: object, active: set[int]) -> Iterator[None]:
+def entered(container: object, active: set[int], base: int = 0) -> Iterator[None]:
     """Mark `container` as being encoded for the duration of the block, on the path held in `active`.
 
     Every encoder that recurses into JSON containers enters each one through this, so a cycle or
     excess nesting raises the same error wherever values are encoded; a child shared by two parents
-    is not a cycle.
+    is not a cycle. `base` is the number of containers enclosing the encoded value's root, so the
+    container's depth is `base + len(active) + 1`.
 
     Raises:
-        ValueError: if `container` is already on the path, that is, it contains itself, or if the
-            path already holds `MAX_DEPTH` containers.
+        ValueError: if `container` is already on the path, that is, it contains itself, or if its
+            depth exceeds `MAX_DEPTH` (`require_depth`).
     """
     if id(container) in active:
         raise ValueError(f"a {type(container).__name__} contains itself; JSON has no cycles")
-    if len(active) >= MAX_DEPTH:
-        raise ValueError(f"nesting deeper than {MAX_DEPTH} containers")
+    require_depth(base + len(active) + 1)
     active.add(id(container))
     try:
         yield

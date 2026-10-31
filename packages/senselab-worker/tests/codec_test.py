@@ -7,11 +7,14 @@ from pathlib import Path
 
 import numpy
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from senselab_worker import runtime_identity
 from senselab_worker.canonical import canonical_npy_bytes
 from senselab_worker.codec import (
     MAX_LINE_BYTES,
     Deadline,
+    LineTooLarge,
     array_paths,
     decode,
     dump_line,
@@ -19,8 +22,16 @@ from senselab_worker.codec import (
     from_wire,
     parse_line,
     to_wire,
+    validate_message,
 )
-from senselab_worker.faults import ArrayIntegrityError, ContentFault, ProtocolError, WireValueError, error_record
+from senselab_worker.faults import (
+    ArrayIntegrityError,
+    ContentFault,
+    ProtocolError,
+    ValueTooLarge,
+    WireValueError,
+    error_record,
+)
 from senselab_worker.hashing import sha256_bytes
 
 
@@ -44,7 +55,7 @@ def test_array_roundtrip_across_numpy_majors(tmp_path: Path) -> None:
 def test_array_file_is_canonical_npy_named_by_its_sha256(tmp_path: Path) -> None:
     """The file holds `canonical_npy_bytes` and its name and reference carry their sha256."""
     a = numpy.arange(6, dtype=">i4").reshape(2, 3)[:, ::2]
-    ref = to_wire(a, array_dir=tmp_path)["__array__"]
+    ref = to_wire(a, array_dir=tmp_path, at="line")["__array__"]
     data = canonical_npy_bytes(a)
     assert Path(ref["path"]).read_bytes() == data
     assert ref["sha256"] == sha256_bytes(data) and Path(ref["path"]).name == f"{ref['sha256']}.npy"
@@ -56,7 +67,7 @@ def test_array_file_is_canonical_npy_named_by_its_sha256(tmp_path: Path) -> None
 def test_equal_arrays_share_one_file_and_no_temp_file_remains(tmp_path: Path) -> None:
     """Writing equal arrays twice leaves exactly one file."""
     a = numpy.ones(4, dtype="<f8")
-    to_wire([a, a.copy()], array_dir=tmp_path)
+    to_wire([a, a.copy()], array_dir=tmp_path, at="line")
     assert [p.suffix for p in tmp_path.iterdir()] == [".npy"]
 
 
@@ -79,7 +90,7 @@ def test_equal_arrays_share_one_file_and_no_temp_file_remains(tmp_path: Path) ->
 def test_unencodable_values_are_content_errors(tmp_path: Path, value: object) -> None:
     """Values with no wire form raise `WireValueError`, a typed content fault and a `ValueError`."""
     with pytest.raises(WireValueError) as info:
-        to_wire({"x": value}, array_dir=tmp_path)
+        to_wire({"x": value}, array_dir=tmp_path, at="line")
     assert isinstance(info.value, (ContentFault, ValueError))
     assert (error_record(info.value)["fault"], error_record(info.value)["gap"]) == ("content", False)
 
@@ -87,13 +98,15 @@ def test_unencodable_values_are_content_errors(tmp_path: Path, value: object) ->
 @pytest.mark.logic
 def test_numpy_scalars_travel_as_items(tmp_path: Path) -> None:
     """Numpy scalars are written as their `.item()`."""
-    wire = to_wire({"a": numpy.float32(0.5), "b": numpy.int64(3), "c": numpy.bool_(True)}, array_dir=tmp_path)
+    wire = to_wire(
+        {"a": numpy.float32(0.5), "b": numpy.int64(3), "c": numpy.bool_(True)}, array_dir=tmp_path, at="line"
+    )
     assert wire == {"a": 0.5, "b": 3, "c": True}
     assert [type(v) for v in wire.values()] == [float, int, bool]
 
 
 def _ref(tmp_path: Path, a: numpy.ndarray) -> dict:
-    return to_wire(a, array_dir=tmp_path)
+    return to_wire(a, array_dir=tmp_path, at="line")
 
 
 @pytest.mark.logic
@@ -136,7 +149,9 @@ def test_bad_lines_are_protocol_errors(line: bytes) -> None:
 @pytest.mark.logic
 def test_oversized_line_is_refused_on_write(tmp_path: Path) -> None:
     """The writer refuses a line over the limit."""
-    with pytest.raises(ProtocolError):
+    with pytest.raises(LineTooLarge):
+        dump_line({"id": "r", "item": "i", "outputs": {"x": "a" * (MAX_LINE_BYTES - 30)}}, "result")
+    with pytest.raises(ValueTooLarge):
         encode({"id": "r", "item": "i", "outputs": {"x": "a" * MAX_LINE_BYTES}}, "result", array_dir=tmp_path)
 
 
@@ -144,7 +159,7 @@ def test_oversized_line_is_refused_on_write(tmp_path: Path) -> None:
 def test_array_paths_lists_every_reference(tmp_path: Path) -> None:
     """`array_paths` finds references at any depth."""
     a, b = numpy.zeros(2), numpy.ones(2)
-    wire = to_wire({"p": [a, {"q": b}], "r": 1}, array_dir=tmp_path)
+    wire = to_wire({"p": [a, {"q": b}], "r": 1}, array_dir=tmp_path, at="line")
     assert array_paths(wire) == {Path(p) for p in tmp_path.iterdir()}
 
 
@@ -194,7 +209,7 @@ def test_symlinked_array_ref_is_refused(tmp_path: Path, target: str) -> None:
     """A symlink at `<sha>.npy` is refused even when it points at the right bytes."""
     root = tmp_path / "arrays"
     root.mkdir()
-    ref = to_wire(numpy.arange(3, dtype="<f4"), array_dir=root)
+    ref = to_wire(numpy.arange(3, dtype="<f4"), array_dir=root, at="line")
     real = Path(ref["__array__"]["path"])
     elsewhere = (root if target == "inside" else tmp_path) / "real.bin"
     real.replace(elsewhere)
@@ -206,7 +221,7 @@ def test_symlinked_array_ref_is_refused(tmp_path: Path, target: str) -> None:
 @pytest.mark.logic
 def test_array_read_stops_at_the_deadline(tmp_path: Path) -> None:
     """A spent deadline stops the read with `TimeoutError`, not an integrity error."""
-    ref = to_wire(numpy.zeros(2**20, dtype="<f8"), array_dir=tmp_path)
+    ref = to_wire(numpy.zeros(2**20, dtype="<f8"), array_dir=tmp_path, at="line")
     with pytest.raises(TimeoutError):
         from_wire(ref, array_dir=tmp_path, deadline=Deadline(0))
 
@@ -216,7 +231,7 @@ def test_writer_leaves_no_temporary_after_a_failed_write(tmp_path: Path, monkeyp
     """A write that fails after the temporary file exists removes it."""
     monkeypatch.setattr(os, "replace", lambda *a: (_ for _ in ()).throw(OSError("disk full")))
     with pytest.raises(OSError, match="disk full"):
-        to_wire(numpy.ones(3), array_dir=tmp_path)
+        to_wire(numpy.ones(3), array_dir=tmp_path, at="line")
     assert list(tmp_path.iterdir()) == []
 
 
@@ -432,7 +447,7 @@ def test_nesting_bound_is_the_same_for_reader_writer_encoder_and_jcs(tmp_path: P
         result = {"id": "r", "item": "a", "outputs": {"k": _nested(depth - 2)}} if depth > 2 else None
         checks = [
             (lambda: parse_line(line), ProtocolError),
-            (lambda: to_wire(value, array_dir=tmp_path), WireValueError),
+            (lambda: to_wire(value, array_dir=tmp_path, at="line"), WireValueError),
             (lambda: jcs_dumps(value), ValueError),
         ]
         if result is not None:
@@ -463,9 +478,12 @@ def test_to_wire_cycle_is_a_content_error(tmp_path: Path) -> None:
     cyclic_dict["self"] = {"inner": cyclic_dict}
     for value in (cyclic_list, cyclic_dict, {"x": [cyclic_list]}):
         with pytest.raises(WireValueError, match="contains itself"):
-            to_wire(value, array_dir=tmp_path)
+            to_wire(value, array_dir=tmp_path, at="line")
     shared = [1, 2]
-    assert to_wire({"a": shared, "b": [shared, shared]}, array_dir=tmp_path) == {"a": [1, 2], "b": [[1, 2], [1, 2]]}
+    assert to_wire({"a": shared, "b": [shared, shared]}, array_dir=tmp_path, at="line") == {
+        "a": [1, 2],
+        "b": [[1, 2], [1, 2]],
+    }
 
 
 def _numpy_scalars() -> list[object]:
@@ -490,11 +508,11 @@ def test_every_numpy_scalar_is_encoded_by_canonical_scalar_or_refused(tmp_path: 
             expected = canonical_scalar(v)
         except TypeError:
             with pytest.raises(WireValueError):
-                to_wire(v, array_dir=tmp_path)
+                to_wire(v, array_dir=tmp_path, at="line")
             continue
         if isinstance(expected, float) and not numpy.isfinite(expected):
             continue
-        got = to_wire(v, array_dir=tmp_path)
+        got = to_wire(v, array_dir=tmp_path, at="line")
         assert got == expected and type(got) is type(expected), v
 
 
@@ -511,4 +529,93 @@ class _Dict(dict):
 def test_to_wire_accepts_exact_types_only(tmp_path: Path, value: object) -> None:
     """Subclasses of the JSON types and of `ndarray` are refused, as by the canonical encoder."""
     with pytest.raises(WireValueError):
-        to_wire(value, array_dir=tmp_path)
+        to_wire(value, array_dir=tmp_path, at="line")
+
+
+def _chain(height: int, leaf: object) -> object:
+    value = leaf
+    for i in range(height):
+        value = [value] if i % 2 else {"k": value}
+    return value
+
+
+def _line_for(slot: str, wire: dict) -> tuple[dict, str]:
+    if slot == "outputs":
+        return {"id": "r", "item": "a", "outputs": wire}, "result"
+    if slot == "inputs":
+        return {"id": "r", "items": [{"id": "a", "inputs": wire}], "params": {}}, "request"
+    if slot == "params":
+        return {"id": "r", "items": [], "params": wire}, "request"
+    return {"init": {**wire, "array_dir": "/tmp/x"}}, "init"
+
+
+@pytest.mark.contract
+@settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    slot=st.sampled_from(["outputs", "inputs", "params", "init"]),
+    offset=st.integers(-4, 1),
+    leaf=st.sampled_from(["scalar", "empty", "array"]),
+)
+def test_depth_band_composes_to_wire_and_the_line(tmp_path: Path, slot: str, offset: int, leaf: str) -> None:
+    """Across the depth band, a value passes `to_wire` and its whole line, or `to_wire` refuses it.
+
+    The band runs below and past `MAX_DEPTH`. A refusal is a `WireValueError`, never a `ProtocolError`
+    from `dump_line` or `parse_line`.
+    """
+    from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_DEPTH
+
+    leaf_value, leaf_height = {"scalar": (0, 0), "empty": ({}, 1), "array": (numpy.zeros(2), ARRAY_REF_HEIGHT)}[leaf]
+    height = MAX_DEPTH - ENVELOPE[slot] + offset
+    chain_height = height - 1 - leaf_height
+    value = {"k": _chain(chain_height, leaf_value)}
+    fits = ENVELOPE[slot] + height <= MAX_DEPTH
+    if not fits:
+        with pytest.raises(WireValueError, match="deeper"):
+            to_wire(value, array_dir=tmp_path, at=slot)  # type: ignore[arg-type]
+        return
+    wire = to_wire(value, array_dir=tmp_path, at=slot)  # type: ignore[arg-type]
+    line, kind = _line_for(slot, wire)
+    parsed = parse_line(dump_line(line, kind))  # type: ignore[arg-type]
+    validate_message(parsed, kind)  # type: ignore[arg-type]
+
+
+def _doubling(levels: int) -> object:
+    value: object = 0
+    for _ in range(levels):
+        value = [value, value]
+    return value
+
+
+@pytest.mark.logic
+def test_a10_exponentially_shared_value_is_refused_after_linear_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The probe: `l = [l, l]` sixty times never finished in `to_wire`; it now stops at the line budget.
+
+    It is small in memory but 2**60 nodes as a tree. Each container is encoded once and charged per use.
+    """
+    import senselab_worker.codec as codec
+
+    entries = 0
+    real = codec.entered
+
+    def counting(*args: object) -> object:
+        nonlocal entries
+        entries += 1
+        return real(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(codec, "entered", counting)
+    with pytest.raises(ValueTooLarge):
+        to_wire({"s": _doubling(60)}, array_dir=tmp_path, at="outputs")
+    assert entries <= 61
+    assert error_record(ValueTooLarge("x"))["fault"] == "resource"
+    small = to_wire({"s": _doubling(4)}, array_dir=tmp_path, at="outputs")
+    assert json.dumps(small) == json.dumps({"s": json.loads(json.dumps(_doubling(4)))})
+
+
+@pytest.mark.logic
+def test_shared_array_is_written_once(tmp_path: Path) -> None:
+    """An array met many times is written once and referenced each time."""
+    a = numpy.arange(3.0)
+    wire = to_wire({"a": [a] * 1000}, array_dir=tmp_path, at="outputs")
+    assert len({json.dumps(ref) for ref in wire["a"]}) == 1 and len(list(tmp_path.iterdir())) == 1
