@@ -16,6 +16,8 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Mapping, NamedTuple, Sequence
 
+from senselab_core.runtime.provenance import Entity, ProvStore
+
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.triage.classifier_ontology import PROFILE_PATH_KEY, corroboration_sets
@@ -82,7 +84,6 @@ from senselab.audio.workflows.triage.nodes.common import (
 from senselab.audio.workflows.triage.routing_analysis.families import task_id_of
 from senselab.audio.workflows.triage.task_speech import write_task_speech
 from senselab.audio.workflows.triage.vocabulary import TASK
-from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "AIRWAY"
 """The branch's name, in the vocabulary's own spelling."""

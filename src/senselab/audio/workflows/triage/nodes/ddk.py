@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.ddk_task import (
@@ -61,7 +62,6 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.task_events import GenericView, generic_view_of
 from senselab.audio.workflows.triage.task_extent import agreed_speech_runs, task_extent_parameters
-from senselab.utils.prov_store import Entity, ProvStore
 
 RATE = "ddk_syllable_rate_from_envelope_modulation_hz"
 """The envelope modulation channel's rate, named for the instrument that took it."""

@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 import yaml
+from senselab_core.runtime.bep028 import SHA256_ALGORITHM, check_graph, convert_store_file, store_id
+from senselab_core.runtime.provenance import CHECKSUM_KEY, PATH_KEY, ProvStore
 
-from senselab.utils.prov_bep028 import SHA256_ALGORITHM, check_graph, convert_store_file, store_id
-from senselab.utils.prov_store import CHECKSUM_KEY, PATH_KEY, ProvStore
 from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.env import INSTALLED, MARKER, VenvResult, installed_sha256
 from senselab.utils.reproduce.host import HOST_KEYS

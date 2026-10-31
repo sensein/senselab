@@ -8,8 +8,9 @@ node that was wrong.
 
 from typing import Any, Callable
 
+from senselab_core.runtime.provenance import ProvStore
+
 from senselab.audio.workflows.triage.nodes.common import find_measurement, find_measurements, live_entities
-from senselab.utils.prov_store import ProvStore
 
 
 def _steps(store: ProvStore) -> list[str | None]:

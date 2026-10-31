@@ -339,8 +339,9 @@ def test_a_nonmatch_under_the_shared_bounds_stays_a_ground() -> None:
 
 def test_the_condition_reads_level_and_the_clip_detectors_spans_off_the_store() -> None:
     """RMS from PREPROCESS's level; clipped seconds from the live clip spans; no level, no clipping reading."""
+    from senselab_core.runtime.provenance import ProvStore
+
     from senselab.audio.workflows.triage.cohort_stage import condition_readings
-    from senselab.utils.prov_store import ProvStore
 
     store = ProvStore(run_id="r")
     assert condition_readings(store, None) == {"rms_dbfs": None, "clipped_s": None, "snr_db": None}

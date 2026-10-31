@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import yaml
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.workflows.triage.nodes.branches import AIRWAY_EXPECTATIONS, VOICE_EXPECTATIONS
 from senselab.audio.workflows.triage.nodes.common import (
@@ -39,7 +40,6 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.residue import is_function_word, is_non_lexical, token_key
 from senselab.audio.workflows.triage.task_content import task_content_ids, task_content_parameters, task_events
-from senselab.utils.prov_store import Entity, ProvStore
 
 if TYPE_CHECKING:
     from senselab.audio.data_structures import AudioHints

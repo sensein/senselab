@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import soundfile
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.background_model import (
     BACKGROUND_MODEL,
@@ -25,7 +26,6 @@ from senselab.audio.workflows.triage.nodes.background import (
 )
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.audio.workflows.triage.task_events import generic_view, generic_view_of
-from senselab.utils.prov_store import ProvStore
 
 RATE = 16000
 

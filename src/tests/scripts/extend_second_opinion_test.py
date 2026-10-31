@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.vocabulary import (
@@ -20,7 +21,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     SECOND_OPINION_ANSWERS,
     SECOND_OPINION_DISAGREES,
 )
-from senselab.utils.prov_store import ProvStore
 from tests.scripts.extend_llm_review_test import _finished_run, _hints, _manifest, _seed_verdicts
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]

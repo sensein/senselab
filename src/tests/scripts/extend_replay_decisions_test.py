@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import soundfile as sf
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.config import load_triage_config
@@ -35,7 +36,6 @@ from senselab.audio.workflows.triage.extend import (
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_stream, write_verdict
 from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, Outcome
-from senselab.utils.prov_store import ProvStore
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_replay_decisions.py"

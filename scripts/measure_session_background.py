@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Iterator, Sequence
 
 import numpy as np
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage import breath_pattern, cough_pattern, task_events, voice_phonation
 from senselab.audio.workflows.triage.background_model import (
@@ -40,9 +41,9 @@ from senselab.audio.workflows.triage.background_model import (
     regions_of,
 )
 from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.ddk_task import DDK_READING
 from senselab.audio.workflows.triage.extend import RUN_SUBDIR, read_manifest, read_store, run_root_of, take_slice
 from senselab.audio.workflows.triage.nodes import ddk as ddk_node
-from senselab.audio.workflows.triage.ddk_task import DDK_READING
 from senselab.audio.workflows.triage.nodes.airway_task import BREATH_READING, COUGH_READING, measure_airway_task
 from senselab.audio.workflows.triage.nodes.background import (
     SESSION_FLOOR,
@@ -55,7 +56,6 @@ from senselab.audio.workflows.triage.nodes.common import describe_exception, fin
 from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING, read_phonation
 from senselab.audio.workflows.triage.session_background import kind_of, session_background_of
 from senselab.audio.workflows.triage.task_events import GenericView, generic_view_of
-from senselab.utils.prov_store import ProvStore
 
 DECIDED_KINDS = ("airway", "voice", "syllable_repetition")
 READINGS = {

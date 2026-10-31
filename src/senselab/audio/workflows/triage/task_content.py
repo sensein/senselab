@@ -19,12 +19,12 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.workflows.audio_analysis.harmonize import normalise_token
 from senselab.audio.workflows.triage.nodes.common import find_measurement, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
 from senselab.audio.workflows.triage.routing_analysis import families as family_sets
-from senselab.utils.prov_store import Entity, ProvStore
 
 TASK_CONTENT_PATH = Path(__file__).parent / "data" / "task_content.yaml"
 

@@ -37,6 +37,8 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
+from senselab_core.runtime.provenance import ProvStore
+
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.extend import (
     ABSENT,
@@ -60,7 +62,6 @@ from senselab.audio.workflows.triage.extend import (
 )
 from senselab.audio.workflows.triage.nodes.common import capture_environments, describe_exception
 from senselab.audio.workflows.triage.nodes.quality import clip_spans
-from senselab.utils.prov_store import ProvStore
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -11,6 +11,7 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 import pytest
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
@@ -85,7 +86,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     RunState,
     fold_file_verdict,
 )
-from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.nodes.conftest import gated_from_store, level_of_raster, seed_background_view
 
 SR = 16000

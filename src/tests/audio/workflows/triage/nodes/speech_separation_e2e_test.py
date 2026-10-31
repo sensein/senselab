@@ -20,13 +20,13 @@ from typing import Callable, Iterator
 
 import pytest
 import torch
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.nodes import speech as speech_module
 from senselab.audio.workflows.triage.nodes.speech import speech
-from senselab.utils.prov_store import ProvStore
 
 from . import speech_test
 from .speech_test import _report_entity, _seed_diarization, _seed_speech_store, live_entities

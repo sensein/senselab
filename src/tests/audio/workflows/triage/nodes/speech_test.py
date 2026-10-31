@@ -11,6 +11,7 @@ import soundfile as sf
 import torch
 import yaml
 from scipy.signal import lfilter
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.data_structures import (
     Audio,
@@ -46,7 +47,6 @@ from senselab.audio.workflows.triage.stimulus import NearMatch, near_match
 from senselab.audio.workflows.triage.vocabulary import UNDETERMINED
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors
 from senselab.utils.data_structures import ScriptLine
-from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.nodes.conftest import (
     gated_from_store,
     level_of_raster,

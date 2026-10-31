@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -24,7 +25,6 @@ from senselab.audio.workflows.triage.nodes.second_opinion import (
     second_opinion,
 )
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, SECOND_OPINION_ANSWERS
-from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 ON = "second_opinion:\n  enabled: true\n"

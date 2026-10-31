@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions
@@ -25,7 +26,6 @@ from senselab.audio.workflows.triage.task_audio import (
     task_extent,
 )
 from senselab.audio.workflows.triage.vocabulary import Release
-from senselab.utils.prov_store import ProvStore
 
 RECORDING_HZ = 44_100
 PLAIN_HZ = 16_000

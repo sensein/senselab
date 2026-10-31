@@ -6,13 +6,13 @@ from typing import Callable, cast
 
 import numpy as np
 import pytest
+from senselab_core.runtime.provenance import CHECKSUM_KEY, MTIME_KEY, SIZE_KEY, ProvStore
 
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes import admit as admit_module
 from senselab.audio.workflows.triage.nodes.admit import AdmitResult, admit
 from senselab.audio.workflows.triage.nodes.common import resolve_stream
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.prov_store import CHECKSUM_KEY, MTIME_KEY, SIZE_KEY, ProvStore
 
 
 def _sine(duration_s: float = 1.0, amplitude: float = 0.5, sampling_rate: int = 16000) -> np.ndarray:

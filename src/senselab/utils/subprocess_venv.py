@@ -251,7 +251,7 @@ def venv_environment(name: str, venv_dir: Path) -> dict[str, Any]:
         venv_dir: Its resolved directory, from :func:`ensure_venv` or :func:`record_venv_use`.
 
     Returns:
-        Keyword arguments for :meth:`~senselab.utils.prov_store.ProvStore.environment`: ``label``
+        Keyword arguments for :meth:`~senselab_core.runtime.provenance.ProvStore.environment`: ``label``
         (the resolved directory's own name, which encodes its device key), ``python_version``,
         ``dependencies`` (the declared subset actually installed — see
         :data:`_DECLARED_ENV_PACKAGES`) and ``dependencies_digest`` (a SHA-256 over the full

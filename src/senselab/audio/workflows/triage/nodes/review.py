@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from senselab_core.runtime.provenance import ProvStore
+
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
 from senselab.audio.workflows.triage.config import TriageConfig
@@ -77,7 +79,6 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     unplaced_phrase_quotes,
 )
 from senselab.text.tasks.pii_detection.redaction_review_vllm import ENGINE_TRANSFORMERS, engine_identity
-from senselab.utils.prov_store import ProvStore
 from senselab.utils.tasks.cached_inference import (
     canonical_params,
     result_cache_key,

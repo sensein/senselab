@@ -74,6 +74,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from senselab_core.runtime.provenance import Entity, ProvStore
+
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.extend import (
@@ -117,7 +119,6 @@ from senselab.audio.workflows.triage.run import RELEASE_SUBDIR, REPORT_NODE, SUM
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION
 from senselab.text.tasks.pii_detection.redaction_review import PROMPT_VERSION
 from senselab.text.tasks.pii_detection.redaction_review_vllm import ENGINE_TRANSFORMERS, engine_identity
-from senselab.utils.prov_store import Entity, ProvStore
 from senselab.utils.subprocess_venv import record_venv_use
 
 STREAM_SUFFIX = ".flac"

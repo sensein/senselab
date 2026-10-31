@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 import pytest
 import soundfile
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.background_model import measure_background
 from senselab.audio.workflows.triage.nodes.background import (
@@ -31,7 +32,6 @@ from senselab.audio.workflows.triage.session_background import (
     speech_residual_of,
 )
 from senselab.audio.workflows.triage.vocabulary import _speech_quality_items
-from senselab.utils.prov_store import ProvStore
 
 RATE = 16000
 SPEECH = [(1.0, 2.0), (3.0, 4.0), (5.0, 6.0)]

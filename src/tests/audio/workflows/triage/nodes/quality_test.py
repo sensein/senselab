@@ -20,6 +20,7 @@ from typing import Callable
 
 import numpy as np
 import pytest
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.admit import admit
@@ -35,7 +36,6 @@ from senselab.audio.workflows.triage.nodes.quality import (
     quality,
 )
 from senselab.audio.workflows.triage.vocabulary import STORE_ASSERTIONS, UNDETERMINED
-from senselab.utils.prov_store import Entity, ProvStore
 
 SR = 16000
 """The fixture's sampling rate, so a sample index and a time are one conversion apart."""

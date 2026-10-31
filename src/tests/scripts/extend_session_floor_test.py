@@ -10,6 +10,7 @@ from types import ModuleType
 
 import numpy as np
 import soundfile as sf
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.extend import read_store, write_store
 from senselab.audio.workflows.triage.nodes.background import (
@@ -19,7 +20,6 @@ from senselab.audio.workflows.triage.nodes.background import (
     SPEECH_RESIDUAL,
 )
 from senselab.audio.workflows.triage.nodes.common import find_measurement
-from senselab.utils.prov_store import ProvStore
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 RATE = 16000

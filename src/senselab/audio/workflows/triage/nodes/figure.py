@@ -29,6 +29,7 @@ from matplotlib.colors import Colormap
 from matplotlib.figure import Figure
 from matplotlib.layout_engine import ConstrainedLayoutEngine
 from matplotlib.text import Text
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY
@@ -47,7 +48,6 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.nodes.taxonomy import SUMMARISED_CLASSIFIERS
 from senselab.audio.workflows.triage.vocabulary import BRANCHES, RULESET_ROUTING
-from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "FIGURE"
 

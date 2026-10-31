@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.cohort_fold import (
     COHORT_READING,
@@ -51,7 +52,6 @@ from senselab.audio.workflows.triage.cohort_stage import (
 )
 from senselab.audio.workflows.triage.decision import ANNOTATION, REVIEW
 from senselab.audio.workflows.triage.nodes.common import find_measurement, find_measurements
-from senselab.utils.prov_store import ProvStore
 
 RATE = 100
 DIM = 8

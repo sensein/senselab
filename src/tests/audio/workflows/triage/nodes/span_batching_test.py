@@ -4,11 +4,11 @@ from typing import Any, Callable
 
 import numpy as np
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.nodes.preprocess import _classify_spans_in_batch
 from senselab.audio.workflows.triage.nodes.taxonomy import _consolidate, _per_span_label_scores
-from senselab.utils.prov_store import ProvStore
 
 
 def _audio(seconds: float, value: float) -> Audio:

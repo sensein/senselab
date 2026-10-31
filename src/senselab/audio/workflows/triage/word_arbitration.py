@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.consensus import (
     ConsensusWord,
@@ -33,7 +34,6 @@ from senselab.audio.workflows.triage.nodes.common import (
     software_agent,
     write_measurement,
 )
-from senselab.utils.prov_store import ProvStore
 
 PREPROCESS_NODE = "PREPROCESS"
 CONSENSUS_TRANSCRIPT = "consensus_transcript"

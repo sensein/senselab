@@ -32,6 +32,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 
+from senselab_core.runtime.bep028 import to_bep028_graph, write_bep028_files
+from senselab_core.runtime.provenance import Entity, ProvStore
+
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.classification.huggingface import AudioTooShortForAST
 from senselab.audio.tasks.classification.yamnet import SpanTooShortForYAMNet
@@ -99,8 +102,6 @@ from senselab.audio.workflows.triage.run import (
 )
 from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, QUALITY, REDACTION_LLM_ANNOTATION
 from senselab.audio.workflows.triage.word_arbitration import arbitrate_words
-from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
-from senselab.utils.prov_store import Entity, ProvStore
 from senselab.utils.subprocess_venv import record_venv_use
 
 RUN_SUBDIR = "run"

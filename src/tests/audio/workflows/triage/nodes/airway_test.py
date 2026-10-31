@@ -16,6 +16,7 @@ from typing import Any, Literal, Sequence
 import numpy as np
 import pytest
 import soundfile as sf
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -45,7 +46,6 @@ from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.nodes.verdict import verdict
 from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.vocabulary import Outcome, RunStatus, Triage
-from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.nodes.conftest import gated_from_store, store_readings, word_attributes
 
 PROV_ASSERTION: Literal["assertion"] = "assertion"

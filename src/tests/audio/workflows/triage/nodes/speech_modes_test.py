@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 import yaml
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import AudioHints, ExpectedSpeech
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -46,7 +47,6 @@ from senselab.audio.workflows.triage.nodes.speech import (
     align_speech,
     detect_speech,
 )
-from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import gated_conformance
 
 HARVARD = "The birch canoe slid on the smooth planks."

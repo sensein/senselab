@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import pytest
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.branches import PROPOSERS, propose_spans
@@ -42,7 +43,6 @@ from senselab.audio.workflows.triage.nodes.figure import (
 from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
 from senselab.audio.workflows.triage.vocabulary import BRANCHES, TASK, Conformance
-from senselab.utils.prov_store import Entity, ProvStore
 
 
 def _pdf_page_count(path: Path) -> int:

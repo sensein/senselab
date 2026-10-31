@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
+from senselab_core.runtime.provenance import ProvStore
+
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.cohort_fold import COHORT_NODE
 from senselab.audio.workflows.triage.cohort_stage import write_cohort_unavailable
@@ -58,7 +60,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     RunState,
     release_value,
 )
-from senselab.utils.prov_store import ProvStore
 from senselab.utils.subprocess_venv import record_venv_use
 
 REPORT_NODE = "REPORT"

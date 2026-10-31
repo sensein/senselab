@@ -21,9 +21,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from senselab_core.runtime.provenance import CHECKSUM_KEY
 
 import senselab
-from senselab.utils.prov_store import CHECKSUM_KEY
 from senselab.utils.reproduce import cache, digest, env, host, provenance, restricted, run, sandbox, source, weights
 from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.run import RunConfig, StepOutcome, evaluate_expect, run_step, run_steps

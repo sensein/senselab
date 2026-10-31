@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import cast, get_args
 
 import pytest
+from senselab_core.runtime.provenance import PROV_TYPE, Activity, Agent, Entity, ProvStore
 
-from senselab.utils.prov_store import PROV_TYPE, Activity, Agent, Entity, ProvStore
+pytestmark = pytest.mark.logic
 
 
 def _store() -> ProvStore:
@@ -538,7 +539,7 @@ class TestAtomicWrite:
         def _killed(descriptor: int) -> None:
             raise KeyboardInterrupt("SIGTERM during the write")
 
-        monkeypatch.setattr("senselab.utils.prov_store.os.fsync", _killed)
+        monkeypatch.setattr("senselab_core.runtime.provenance.os.fsync", _killed)
         with pytest.raises(KeyboardInterrupt):
             s.write_jsonl(target)
         assert target.read_bytes() == before

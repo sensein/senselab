@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 import pytest
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage import vocabulary as vocabulary_module
@@ -47,7 +48,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     RunStatus,
     Triage,
 )
-from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 

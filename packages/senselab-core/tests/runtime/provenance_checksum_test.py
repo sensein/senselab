@@ -7,8 +7,7 @@ from pathlib import Path
 from typing import get_args
 
 import pytest
-
-from senselab.utils.prov_store import (
+from senselab_core.runtime.provenance import (
     CHECKSUM_KEY,
     CHECKSUM_UNRESOLVED_KEY,
     MTIME_KEY,
@@ -18,6 +17,8 @@ from senselab.utils.prov_store import (
     file_attributes,
     file_digest,
 )
+
+pytestmark = pytest.mark.logic
 
 
 def test_digest_matches_hashlib(tmp_path: Path) -> None:

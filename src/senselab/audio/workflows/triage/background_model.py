@@ -16,8 +16,7 @@ from typing import Any, Sequence
 
 import numpy as np
 import yaml
-
-from senselab.utils.prov_store import ProvStore
+from senselab_core.runtime.provenance import ProvStore
 
 BACKGROUND_MODEL_PATH = Path(__file__).parent / "data" / "background_model.yaml"
 BACKGROUND_MODEL = "background_model"

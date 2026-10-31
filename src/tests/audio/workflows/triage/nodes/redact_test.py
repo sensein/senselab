@@ -16,6 +16,7 @@ from typing import Any, Iterable, Mapping, Sequence
 import numpy as np
 import pytest
 import soundfile as sf
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.data_structures.audio_hints import AudioHints, ExpectedSpeech
@@ -72,7 +73,6 @@ from senselab.audio.workflows.triage.vocabulary import (
 )
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan
 from senselab.text.tasks.pii_detection.api import scan_for_pii as real_scan_for_pii
-from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 SR = 16000

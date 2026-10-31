@@ -8,6 +8,13 @@ from typing import Callable
 
 import numpy as np
 import pytest
+from senselab_core.runtime.provenance import (
+    CHECKSUM_KEY,
+    CHECKSUM_UNRESOLVED_KEY,
+    MTIME_KEY,
+    SIZE_KEY,
+    ProvStore,
+)
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.nodes.common import (
@@ -31,13 +38,6 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_verdict,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.prov_store import (
-    CHECKSUM_KEY,
-    CHECKSUM_UNRESOLVED_KEY,
-    MTIME_KEY,
-    SIZE_KEY,
-    ProvStore,
-)
 
 
 class TestWriteVerdict:

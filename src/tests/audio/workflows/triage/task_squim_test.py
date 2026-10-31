@@ -8,6 +8,7 @@ from typing import Any, Sequence
 
 import pytest
 import torch
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -25,7 +26,6 @@ from senselab.audio.workflows.triage.task_squim import (
     task_squim_parameters,
     task_windows,
 )
-from senselab.utils.prov_store import ProvStore
 
 RATE = 16_000
 CONFIG = WindowConfig(window_s=10.0, min_window_s=3.0, floor_s=1.0)

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
@@ -92,7 +93,6 @@ from senselab.audio.workflows.triage.voice_phonation import (
     voice_phonation_parameters,
     voice_task_extent,
 )
-from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "VOICE"
 KIND = "voice"

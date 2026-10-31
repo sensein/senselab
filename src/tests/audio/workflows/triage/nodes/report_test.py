@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 import torch
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -31,7 +32,6 @@ from senselab.audio.workflows.triage.nodes.report import (
 )
 from senselab.audio.workflows.triage.nodes.verdict import verdict as fold_verdict
 from senselab.audio.workflows.triage.vocabulary import TASK, Outcome
-from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import SEED_SOURCES, word_attributes
 
 _SHA = "0" * 39 + "1"

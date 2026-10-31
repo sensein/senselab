@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Callable, Collection, Mapping, Sequence
 
 import yaml
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
@@ -116,7 +117,6 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     review_inputs_complete,
     safe_harbor_codes,
 )
-from senselab.utils.prov_store import Entity, ProvStore
 from senselab.utils.tasks.cached_inference import annotate_result_origin
 
 NODE = "REDACT"

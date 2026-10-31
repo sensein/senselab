@@ -7,13 +7,14 @@ have their own suites; this one pins what the node as a whole runs, writes and c
 from pathlib import Path
 from typing import Callable
 
+from senselab_core.runtime.provenance import ProvStore
+
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import taxonomy as taxonomy_module
 from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.prov_store import ProvStore
 
 
 def _config(tmp_path: Path) -> TriageConfig:

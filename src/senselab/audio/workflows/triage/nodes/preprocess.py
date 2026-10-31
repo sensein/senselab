@@ -23,6 +23,7 @@ from typing import Any, Callable, Sequence, cast
 
 import numpy as np
 import torch
+from senselab_core.runtime.provenance import CHECKSUM_KEY, PATH_KEY, Entity, ProvStore, file_digest
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.data_structures.audio_hints import ExpectedSpeech
@@ -149,7 +150,6 @@ from senselab.audio.workflows.triage.stimulus import (
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.audio.workflows.triage.word_arbitration import WORD_ARBITRATION, arbitrate_words
 from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioModel, ScriptLine
-from senselab.utils.prov_store import CHECKSUM_KEY, PATH_KEY, Entity, ProvStore, file_digest
 
 NODE = "PREPROCESS"
 CRISPERWHISPER_ID = "nyralabs/CrisperWhisper2.0_turbo"

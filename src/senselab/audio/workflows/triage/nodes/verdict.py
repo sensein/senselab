@@ -34,6 +34,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 import yaml
+from senselab_core.runtime.provenance import PROV_TYPE, Entity, ProvStore
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.redaction.api import apply_redactions
@@ -156,7 +157,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     reviewer_may_unmask,
     standing_task_extents,
 )
-from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
 
 NODE = "VERDICT"
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.consensus import (
     SourceHypothesis,
@@ -19,7 +20,6 @@ from senselab.audio.workflows.triage.word_arbitration import (
     arbitrate_words,
     held_voicing,
 )
-from senselab.utils.prov_store import ProvStore
 
 CRISPER = "asr_crisperwhisper"
 QWEN = "asr_qwen"

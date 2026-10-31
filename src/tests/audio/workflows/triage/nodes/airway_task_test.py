@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from senselab_core.runtime.provenance import Entity, ProvStore
+
 from senselab.audio.workflows.triage.breath_pattern import BreathPattern
 from senselab.audio.workflows.triage.cough_pattern import CoughPattern
 from senselab.audio.workflows.triage.nodes import airway_task
@@ -9,7 +11,6 @@ from senselab.audio.workflows.triage.nodes import verdict as verdict_module
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_measurement
 from senselab.audio.workflows.triage.task_events import TaskEvent, TaskEvidence
 from senselab.audio.workflows.triage.vocabulary import SUPERSEDES, standing_task_extents
-from senselab.utils.prov_store import Entity, ProvStore
 
 
 def test_the_measure_extent_stands_in_place_of_airways_and_settles_on_rerun() -> None:

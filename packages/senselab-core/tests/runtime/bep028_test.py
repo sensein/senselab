@@ -4,8 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-
-from senselab.utils.prov_bep028 import (
+from senselab_core.runtime.bep028 import (
     BEP028_CONTEXT,
     SHA256_ALGORITHM,
     bids_uri,
@@ -15,7 +14,9 @@ from senselab.utils.prov_bep028 import (
     to_bep028_graph,
     write_bep028_files,
 )
-from senselab.utils.prov_store import CHECKSUM_KEY, CHECKSUM_UNRESOLVED_KEY, ProvStore
+from senselab_core.runtime.provenance import CHECKSUM_KEY, CHECKSUM_UNRESOLVED_KEY, ProvStore
+
+pytestmark = pytest.mark.logic
 
 DIGEST = "b" * 64
 

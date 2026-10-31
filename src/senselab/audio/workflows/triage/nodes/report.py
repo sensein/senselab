@@ -18,6 +18,7 @@ from typing import Any, Iterable
 
 import numpy as np
 from matplotlib.figure import Figure
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.health_acoustics import HEAR_EVENT_LABELS
@@ -55,7 +56,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     REDACTION_LLM_ANNOTATION,
     RULESET_ROUTING,
 )
-from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "REPORT"
 SUMMARY_STEM = "summary"

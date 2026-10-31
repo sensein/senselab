@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import torch
+from senselab_core.runtime.provenance import Entity, ProvStore, file_digest
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.redaction.api import RedactionExtent
@@ -37,7 +38,6 @@ from senselab.audio.workflows.triage.nodes.common import (
 from senselab.audio.workflows.triage.nodes.redact import released_audio
 from senselab.audio.workflows.triage.nodes.verdict import NODE as VERDICT_NODE
 from senselab.audio.workflows.triage.vocabulary import Release, Triage, standing_task_extents
-from senselab.utils.prov_store import Entity, ProvStore, file_digest
 
 NODE = "TASK_AUDIO"
 """The node name the cut's own activities carry."""

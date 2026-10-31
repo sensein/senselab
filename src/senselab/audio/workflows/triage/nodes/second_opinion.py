@@ -17,6 +17,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from senselab_core.runtime.provenance import ProvStore
+
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.branches import declared_task_family
@@ -38,7 +40,6 @@ from senselab.text.tasks.decision_model.second_opinion import (
     ask_second_opinion,
 )
 from senselab.text.tasks.pii_detection.redaction_review import redaction_policy_text, task_guidance_digest
-from senselab.utils.prov_store import ProvStore
 from senselab.utils.tasks.cached_inference import (
     result_cache_key,
     result_lookup,

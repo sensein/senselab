@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 import torch
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
@@ -28,7 +29,6 @@ from senselab.audio.workflows.triage.nodes.gates import (
 from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
 from senselab.audio.workflows.triage.nodes.verdict import reading_absences
 from senselab.utils.data_structures import ScriptLine
-from senselab.utils.prov_store import ProvStore
 
 SR = 16000
 

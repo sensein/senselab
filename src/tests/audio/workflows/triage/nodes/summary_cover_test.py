@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.figure import (
@@ -16,7 +17,6 @@ from senselab.audio.workflows.triage.nodes.figure import (
     summary_panel_lines,
 )
 from senselab.audio.workflows.triage.nodes.report import report
-from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.report_test import _seed_report_store, _write
 
 #: Every classifier column the cover lays side by side, with enough labels to fill the block.

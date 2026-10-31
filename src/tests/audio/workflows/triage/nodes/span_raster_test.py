@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.label_membership import LabelMembership
@@ -17,7 +18,6 @@ from senselab.audio.workflows.triage.nodes.figure import (
 from senselab.audio.workflows.triage.nodes.preprocess import _span_window_attributes
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.prov_store import ProvStore
 
 
 def _seed_stream_header(

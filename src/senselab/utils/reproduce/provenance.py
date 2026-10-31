@@ -32,8 +32,9 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from senselab.utils.prov_bep028 import check_graph, to_bep028_graph, write_bep028_files
-from senselab.utils.prov_store import CHECKSUM_KEY, ProvStore
+from senselab_core.runtime.bep028 import check_graph, to_bep028_graph, write_bep028_files
+from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
+
 from senselab.utils.reproduce.env import VenvResult, installed_sha256
 from senselab.utils.reproduce.host import HOST_KEYS
 

@@ -19,6 +19,7 @@ from typing import Any, Callable
 import numpy as np
 import pytest
 import soundfile as sf
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.nodes.admit import admit
@@ -31,7 +32,6 @@ from senselab.audio.workflows.triage.nodes.common import (
 from senselab.audio.workflows.triage.nodes.preprocess import write_clip_spans
 from senselab.audio.workflows.triage.nodes.quality import CLIP_FAMILY, CONTRADICTED_CLIP
 from senselab.audio.workflows.triage.vocabulary import QUALITY, UNDETERMINED, Outcome
-from senselab.utils.prov_store import ProvStore
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_quality.py"

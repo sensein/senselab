@@ -7,6 +7,7 @@ from typing import Any, Callable
 import numpy as np
 import pytest
 import torch
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.data_structures.audio_hints import ExpectedSpeech
@@ -43,7 +44,6 @@ from senselab.audio.workflows.triage.nodes.preprocess import (
 from senselab.audio.workflows.triage.nodes.quality import quality
 from senselab.audio.workflows.triage.vocabulary import UNDETERMINED, Outcome
 from senselab.utils.data_structures import ScriptLine
-from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import (
     FAKE_PPGS_SHA,
     SR,

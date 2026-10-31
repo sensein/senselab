@@ -11,12 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import torch
+from senselab_core.runtime.provenance import ProvStore, file_attributes, file_digest
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.prov_store import ProvStore, file_attributes, file_digest
 
 NODE = "ADMIT"
 

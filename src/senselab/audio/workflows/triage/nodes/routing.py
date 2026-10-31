@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from senselab_core.runtime.provenance import ProvStore
+
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.live_evidence import evaluate_live_routes, route_attributes
@@ -38,7 +40,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     UNGATED,
     Outcome,
 )
-from senselab.utils.prov_store import ProvStore
 
 NODE = "routing"
 

@@ -47,6 +47,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterator, Sequence
 
+from senselab_core.runtime.provenance import Entity, ProvStore
+
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.extend import (
@@ -71,7 +73,6 @@ from senselab.audio.workflows.triage.nodes.second_opinion import ABSENT, NODE, A
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, SECOND_OPINION_ANSWERS
 from senselab.text.tasks.decision_model.ollama import OllamaServer, PinMismatchError, ask_decisions, verify_pin
 from senselab.text.tasks.decision_model.second_opinion import QUESTION_SET_VERSION
-from senselab.utils.prov_store import Entity, ProvStore
 
 OPINION_SUPERSEDED = "opinion_superseded"
 _SUPERSEDED_REASON = "asked again under a later configuration"

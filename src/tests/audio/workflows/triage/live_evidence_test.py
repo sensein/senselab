@@ -1,6 +1,6 @@
 """The ruleset run inside the graph reads the same evidence the analysis reads outside it.
 
-Every test here builds one live :class:`~senselab.utils.prov_store.ProvStore`, evaluates the ruleset
+Every test here builds one live :class:`~senselab_core.runtime.provenance.ProvStore`, evaluates the ruleset
 over it both ways — through the in-pipeline reader and through the analysis reader over the same
 store written to disk — and asserts the two agree. That equivalence is the whole point of the stage;
 a narrowing of either path that broke it would be two definitions of one gate.
@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -39,7 +40,6 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     evaluate_routes,
     load_ruleset,
 )
-from senselab.utils.prov_store import ProvStore
 
 STEM = "sub-01_ses-01_task-free-speech"
 """The stem the synthetic recordings carry; its ``task-`` id is the recording's own declaration."""

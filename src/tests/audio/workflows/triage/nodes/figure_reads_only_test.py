@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.figure import _continuity
-from senselab.utils.prov_store import ProvStore
 
 #: Anything that would let FIGURE measure instead of read. Importing one of these is the regression
 #: this guard exists to catch: a curve derived here can differ from the one the spans in the same

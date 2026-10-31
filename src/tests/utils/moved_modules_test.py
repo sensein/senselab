@@ -14,10 +14,14 @@ MOVED = {
     "senselab.utils.model_revision",
     "senselab/utils/file_lock",
     "senselab/utils/model_revision",
+    "senselab.utils.prov_store",
+    "senselab.utils.prov_bep028",
+    "senselab/utils/prov_store",
+    "senselab/utils/prov_bep028",
 }
 
 # Moved module basenames, for the `from senselab.utils import <name>` form.
-MOVED_NAMES = {"file_lock", "model_revision"}
+MOVED_NAMES = {"file_lock", "model_revision", "prov_store", "prov_bep028"}
 
 # Names that now live in senselab_core and must not be imported from `senselab.utils.dependencies`.
 MOVED_HELPERS = {"retry_on_transient_error", "_is_transient", "_http_status", "get_cached_commit_hash"}

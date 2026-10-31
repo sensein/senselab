@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.extend import (
@@ -45,7 +46,6 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     ReviewResult,
     parse_completion,
 )
-from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 LLM_ON = "redaction:\n  llm_check:\n    enabled: true\n"

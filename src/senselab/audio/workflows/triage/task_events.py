@@ -19,6 +19,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 import yaml
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.background_model import (
     BACKGROUND_MODEL,
@@ -45,7 +46,6 @@ from senselab.audio.workflows.triage.task_extent import (
     reachable_outside,
     task_extent_parameters,
 )
-from senselab.utils.prov_store import ProvStore
 
 TASK_EVENTS_PATH = Path(__file__).parent / "data" / "task_events.yaml"
 MODULATION = "modulation"

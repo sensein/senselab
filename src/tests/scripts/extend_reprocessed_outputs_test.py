@@ -19,6 +19,7 @@ from typing import Any, Callable
 import numpy as np
 import pytest
 import soundfile as sf
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.tasks.phonation import F0RangeFailed, F0RangeUnavailable
 from senselab.audio.workflows.triage.config import load_triage_config
@@ -46,7 +47,6 @@ from senselab.audio.workflows.triage.nodes.common import (
 from senselab.audio.workflows.triage.nodes.preprocess import phonation_tracks
 from senselab.audio.workflows.triage.nodes.taxonomy import NODE as TAXONOMY_NODE
 from senselab.audio.workflows.triage.nodes.taxonomy import PER_SPAN_CLASSIFIERS, _write_consensus_taxonomy
-from senselab.utils.prov_store import ProvStore
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_reprocessed_outputs.py"
@@ -489,7 +489,7 @@ class TestThePhonationTracks:
         and is compared.
 
         The consequence worth knowing: entity ids are content-addressed over attributes
-        (`utils/prov_store.py`), so **no derivative that writes a sidecar can converge** -- a
+        (`runtime/provenance.py`), so **no derivative that writes a sidecar can converge** -- a
         re-derivation always mints a new id. ``praat_features`` converges only because it writes no
         sidecar and keeps its forty-five scalars in attributes.
         """
