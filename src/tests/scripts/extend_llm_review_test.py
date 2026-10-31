@@ -786,7 +786,7 @@ class TestResumeIsPerRowAndPerEngine:
     def test_a_reading_stands_only_under_its_prompt_and_engine(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """VLLM reads once and resumes as present; the transformers config reads again and retires it."""
+        """vLLM reads once and resumes as present; the transformers config reads again and retires it."""
         from senselab.text.tasks.pii_detection.redaction_review_vllm import engine_identity
 
         run_root = _finished_run(tmp_path / "corpus")
