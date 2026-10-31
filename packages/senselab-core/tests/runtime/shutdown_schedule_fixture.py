@@ -1,11 +1,15 @@
 """Run shutdown schedules in a process of their own: `python shutdown_schedule_fixture.py <array_parent> <cases json>`.
 
-Each case starts a `WorkerClient` over the forking backend, wraps one boundary (a function or method the
-run or the shutdown calls) so that its `occurrence`-th call on the main thread first injects `kind`, and
-then takes `path`: `timeout` runs a request in `deaf` mode (SIGTERM ignored, so the group needs SIGKILL)
-past its timeout; `close` closes the idle client. One JSON line per case reports what surfaced and the
-state at that moment, then the state after a final `close()`. `faulthandler` ends the process with a
-traceback if a case outlives `CASE_BOUND_S`, so a deadlock is a failed case, not a hung test.
+A case names a `path`, a `boundary` (a function or method the client calls), an `occurrence` and a `kind`.
+Every boundary is wrapped to count its calls on the main thread; at the `occurrence`-th call of the named one,
+`kind` is injected before the call proceeds. Paths: `init` constructs the client under injection, and
+`init_lost` does so over a worker that exits during load (its grandchildren left running); `timeout`
+runs a request in `deaf` mode (SIGTERM ignored, so the group needs SIGKILL) past its timeout; `close` closes
+the idle client. A case of kind `count` injects nothing and reports the calls each boundary got, from which
+the schedule is generated. The graces are shrunk to `GRACES` unless the case sets `real_graces`, and the
+bound is derived from the graces in force. One JSON line per case reports what surfaced, the state at that
+moment and after a final `close()`. `faulthandler` ends the process with a traceback if a case outlives
+`CASE_BOUND_S`, so a deadlock fails the case instead of hanging the test.
 """
 
 import faulthandler
@@ -22,69 +26,95 @@ from typing import Any, Callable
 
 from lifecycle_probes_fixture import alive, group_alive, recorded_pids
 from senselab_core.runtime import worker_client
-from senselab_core.runtime.worker_client import SHUTDOWN_BOUND_S, WorkerClient, _Pump
+from senselab_core.runtime.worker_client import WorkerClient, _Pump
 
 RUNTIME_TESTS = Path(__file__).parent
 BACKEND = "backends.forking_backend_fixture"
-REQUEST_TIMEOUT_S = 0.3
-STOP_GRACE_S = 0.6
-TERM_GRACE_S = 0.3
-CASE_BOUND_S = 2 * SHUTDOWN_BOUND_S + 10
+REQUEST_TIMEOUT_S = 0.2
+GRACES = {"STOP_GRACE_S": 0.3, "TERM_GRACE_S": 0.1, "KILL_GRACE_S": 0.5, "JOIN_GRACE_S": 0.5, "EXIT_CODE_WAIT_S": 0.2}
+REAL_GRACES = {name: getattr(worker_client, name) for name in GRACES}
+CASE_BOUND_S = 60.0
 OTHER_THREAD_JOIN_S = 0.05
-PATHS = ("timeout", "close")
-KINDS = ("sigint", "sigterm", "handler_close", "close_same_thread", "close_other_thread")
-"""`sigint` raises SIGINT; `sigterm` raises SIGTERM, whose handler closes the client and exits;
-`handler_close` raises SIGUSR1, whose handler closes the client; `close_same_thread` calls `close()`
+SECOND_SIGINT_AFTER_S = 0.2
+PATHS = ("init", "init_lost", "timeout", "close")
+RAISES = {
+    "sigint": "KeyboardInterrupt",
+    "double_sigint": "KeyboardInterrupt",
+    "sigterm": "SystemExit",
+    "handler_raises_base": "SystemExit",
+    "handler_raises_exception": "RuntimeError",
+}
+KINDS = (*RAISES, "handler_close", "close_same_thread", "close_other_thread")
+"""`sigint` raises SIGINT; `double_sigint` raises it twice; `sigterm` raises SIGTERM, whose handler closes the
+client and exits; `handler_close`, `handler_raises_base` and `handler_raises_exception` raise SIGUSR1, whose
+handler closes the client, raises `SystemExit` or raises `RuntimeError`; `close_same_thread` calls `close()`
 where the boundary is reached; `close_other_thread` starts `close()` on another thread."""
-RUN_BOUNDARIES = ("module:to_wire", "client:_send", "client:_receive")
-SHUTDOWN_BOUNDARIES = (
-    "client:_shutdown",
-    "client:_terminate",
-    "client:_write_stop",
-    "client:_retire_channel",
+BOUNDARIES = (
+    "module:to_wire",
     "module:_leader_held",
     "module:_signal_group",
     "module:_members_gone",
+    "client:_start",
+    "client:_handshake",
+    "client:_send",
+    "client:_receive",
+    "client:_fail",
+    "client:_shutdown",
+    "client:_steps",
+    "client:_acquire_shutdown",
+    "client:_stop",
+    "client:_terminate",
+    "client:_write_stop",
+    "client:_retire_channel",
+    "client:_kill_group_now",
     "client:_remove_arrays",
     "client:_release",
     "pump:finish",
+    "pump:close",
+    "popen:wait",
 )
-UNREACHED = frozenset({("timeout", "client:_write_stop")})
-"""A host fault skips the stop line."""
 ITEMS = [{"id": "a", "inputs": {}}]
-
-
-def cases() -> list[dict[str, Any]]:
-    """Every (kind, path, boundary) whose boundary the path reaches: run boundaries only on `timeout`."""
-    out = []
-    for kind in KINDS:
-        for boundary in RUN_BOUNDARIES:
-            out.append({"path": "timeout", "boundary": boundary, "kind": kind, "occurrence": 1})
-        for path in PATHS:
-            for boundary in SHUTDOWN_BOUNDARIES:
-                if (path, boundary) not in UNREACHED:
-                    out.append({"path": path, "boundary": boundary, "kind": kind, "occurrence": 1})
-    return out
+TYPED: dict[str, set[str | None]] = {
+    "init": {None, "WorkerLost"},
+    "init_lost": {"WorkerLost"},
+    "timeout": {"TimeoutError", "WorkerLost"},
+    "close": {None},
+}
+"""Per path, the outcomes it may end in besides the injected exception."""
+CLEAN = {"group_alive": False, "grandchild_alive": False, "reaped": True, "array_dir_gone": True}
 
 
 def _owner(boundary: str) -> tuple[Any, str]:
     where, name = boundary.split(":")
-    return {"module": worker_client, "client": WorkerClient, "pump": _Pump}[where], name
+    return {"module": worker_client, "client": WorkerClient, "pump": _Pump, "popen": subprocess.Popen}[where], name
+
+
+def shutdown_bound(graces: dict[str, float]) -> float:
+    """`SHUTDOWN_BOUND_S` under `graces`."""
+    return graces["STOP_GRACE_S"] + graces["KILL_GRACE_S"] + graces["JOIN_GRACE_S"]
+
+
+def case_bound(case: dict[str, Any]) -> float:
+    """How long a case may take: the request timeout, the exit-code wait, one shutdown and one finishing pass."""
+    graces = REAL_GRACES if case.get("real_graces") else GRACES
+    timeout = REQUEST_TIMEOUT_S if case["path"] == "timeout" else 0.0
+    return timeout + graces["EXIT_CODE_WAIT_S"] + 2 * shutdown_bound(graces)
 
 
 class _Injector:
-    def __init__(self, case: dict[str, Any], client: WorkerClient) -> None:
+    def __init__(self, case: dict[str, Any]) -> None:
         self.case = case
-        self.client = client
-        self.calls = 0
+        self.calls: dict[str, int] = dict.fromkeys(BOUNDARIES, 0)
         self.fired = False
+        self.clients: list[WorkerClient] = []
         self.other: threading.Thread | None = None
+        self.timer: threading.Timer | None = None
 
-    def wrap(self, real: Callable[..., Any]) -> Callable[..., Any]:
+    def wrap(self, boundary: str, real: Callable[..., Any]) -> Callable[..., Any]:
         def hooked(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
             if threading.current_thread() is threading.main_thread():
-                self.calls += 1
-                if self.calls == self.case["occurrence"]:
+                self.calls[boundary] += 1
+                if boundary == self.case["boundary"] and self.calls[boundary] == self.case["occurrence"]:
                     self.fired = True
                     self.inject()
             return real(*args, **kwargs)
@@ -93,82 +123,137 @@ class _Injector:
 
     def inject(self) -> None:
         kind = self.case["kind"]
+        client = self.clients[0]
         if kind == "sigint":
             signal.raise_signal(signal.SIGINT)
+        elif kind == "double_sigint":
+            signal.raise_signal(signal.SIGINT)
+            if self.case.get("real_graces"):
+                self.timer = threading.Timer(SECOND_SIGINT_AFTER_S, signal.raise_signal, (signal.SIGINT,))
+                self.timer.start()
+            else:
+                signal.raise_signal(signal.SIGINT)
         elif kind == "sigterm":
             signal.raise_signal(signal.SIGTERM)
-        elif kind == "handler_close":
+        elif kind.startswith("handler_"):
             signal.raise_signal(signal.SIGUSR1)
         elif kind == "close_same_thread":
-            self.client.close()
+            client.close()
         elif kind == "close_other_thread":
-            self.other = threading.Thread(target=self.client.close, daemon=True)
+            self.other = threading.Thread(target=client.close, daemon=True)
             self.other.start()
             self.other.join(OTHER_THREAD_JOIN_S)
 
 
-def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
-    """Run one case and return its report."""
-    pid_file = parent / f"pids-{index}"
-    client = WorkerClient(
-        sys.executable,
-        BACKEND,
-        init={"pid_file": str(pid_file)},
-        array_parent=parent,
-        request_timeout=REQUEST_TIMEOUT_S if case["path"] == "timeout" else None,
-    )
-    pgid = client.hello["pid"]
-    injector = _Injector(case, client)
-
+def _handlers(kind: str, clients: list[WorkerClient]) -> None:
     def on_term(signum: int, frame: object) -> None:
-        client.close()
+        clients[0].close()
         raise SystemExit(128 + signum)
+
+    def on_usr1(signum: int, frame: object) -> None:
+        if kind == "handler_raises_base":
+            raise SystemExit(128 + signum)
+        if kind == "handler_raises_exception":
+            raise RuntimeError("raised by a SIGUSR1 handler")
+        clients[0].close()
 
     signal.signal(signal.SIGINT, signal.default_int_handler)
     signal.signal(signal.SIGTERM, on_term)
-    signal.signal(signal.SIGUSR1, lambda signum, frame: client.close())
-    owner, name = _owner(case["boundary"])
-    real = getattr(owner, name)
-    setattr(owner, name, injector.wrap(real))
+    signal.signal(signal.SIGUSR1, on_usr1)
+
+
+def _state(client: WorkerClient, pid_file: Path) -> dict[str, Any]:
+    pgid = client._proc.pid if client._proc is not None else None
+    return {
+        "group_alive": pgid is not None and group_alive(pgid),
+        "grandchild_alive": any(map(alive, recorded_pids(pid_file))),
+        "reaped": pgid is None or client.returncode is not None,
+        "array_dir_gone": not client.array_dir.exists(),
+    }
+
+
+def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
+    """Run one case and return its report."""
+    graces = REAL_GRACES if case.get("real_graces") else GRACES
+    for name, value in graces.items():
+        setattr(worker_client, name, value)
+    worker_client.SHUTDOWN_BOUND_S = shutdown_bound(graces)
+    pid_file = parent / f"pids-{index}"
+    injector = _Injector(case)
+    real_init = WorkerClient.__init__
+
+    def capture(self: WorkerClient, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+        injector.clients.append(self)
+        real_init(self, *args, **kwargs)
+
+    def build() -> None:
+        timeout = REQUEST_TIMEOUT_S if case["path"] == "timeout" else None
+        init = {"pid_file": str(pid_file), "exit_at_load": case["path"] == "init_lost"}
+        WorkerClient(sys.executable, BACKEND, init=init, array_parent=parent, request_timeout=timeout)
+
+    _handlers(case["kind"], injector.clients)
+    reals = {boundary: getattr(*_owner(boundary)) for boundary in BOUNDARIES}
     outcome = None
+    built = False
     started = time.monotonic()
     try:
-        if case["path"] == "timeout":
-            client.run(ITEMS, {"mode": "deaf"})
+        WorkerClient.__init__ = capture  # type: ignore[method-assign]
+        constructing = case["path"].startswith("init")
+        if not constructing:
+            build()
+            started = time.monotonic()
+        for boundary, real in reals.items():
+            setattr(*_owner(boundary), injector.wrap(boundary, real))
+        if constructing:
+            build()
+            built = True
+        elif case["path"] == "timeout":
+            injector.clients[0].run(ITEMS, {"mode": "deaf"})
         else:
-            client.close()
+            injector.clients[0].close()
     except BaseException as exc:  # noqa: BLE001 - the case reports whatever surfaced
         outcome = type(exc).__name__
     finally:
-        setattr(owner, name, real)
+        WorkerClient.__init__ = real_init  # type: ignore[method-assign]
+        for boundary, real in reals.items():
+            setattr(*_owner(boundary), real)
     elapsed = time.monotonic() - started
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    if injector.timer is not None:
+        injector.timer.cancel()
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    signal.signal(signal.SIGUSR1, signal.SIG_DFL)
+    client = injector.clients[0]
     report = {
         **case,
         "fired": injector.fired,
+        "calls": injector.calls,
         "outcome": outcome,
         "elapsed": elapsed,
-        "group_alive": group_alive(pgid),
+        "bound": case_bound(case),
+        "abandoned": case["path"].startswith("init") and not built,
         "client_open": client.alive,
+        "at_outcome": _state(client, pid_file),
     }
-    signal.signal(signal.SIGTERM, signal.SIG_DFL)
-    signal.signal(signal.SIGUSR1, signal.SIG_DFL)
     if injector.other is not None:
-        injector.other.join(SHUTDOWN_BOUND_S)
+        injector.other.join(case_bound(case))
         report["other_thread_done"] = not injector.other.is_alive()
     client.close()
-    report["after_close"] = {
-        "group_alive": group_alive(pgid),
-        "grandchild_alive": any(map(alive, recorded_pids(pid_file))),
-        "reaped": client.returncode is not None,
-        "array_dir_gone": not client.array_dir.exists(),
-    }
+    report["after_close"] = _state(client, pid_file)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
     return report
 
 
-TYPED: dict[str, set[str | None]] = {
-    "timeout": {"TimeoutError", "WorkerLost", "KeyboardInterrupt", "SystemExit"},
-    "close": {None, "KeyboardInterrupt", "SystemExit"},
-}
+def schedule(counts: dict[str, dict[str, int]], occurrences: range) -> list[dict[str, Any]]:
+    """Every (kind, path, boundary, occurrence) the counted runs reached, for occurrences in `occurrences`."""
+    return [
+        {"path": path, "boundary": boundary, "occurrence": n, "kind": kind}
+        for kind in KINDS
+        for path in PATHS
+        for boundary in BOUNDARIES
+        for n in occurrences
+        if n <= counts[path][boundary]
+    ]
 
 
 def _bounded() -> None:
@@ -197,33 +282,42 @@ def run_schedule(tmp_path: Path, todo: list[dict[str, Any]]) -> list[dict[str, A
     return reports
 
 
+def counted(tmp_path: Path) -> dict[str, dict[str, int]]:
+    """Per path, the calls each boundary gets when nothing is injected."""
+    todo = [{"path": path, "boundary": "", "occurrence": 0, "kind": "count"} for path in PATHS]
+    return {r["path"]: r["calls"] for r in run_schedule(tmp_path, todo)}
+
+
 def violations(report: dict[str, Any]) -> list[str]:
-    """What a case's report breaks: typed outcome, bound, no live group under a closed client, a clean end."""
+    """What a case's report breaks: reach, typed outcome, bound, no live group under a closed client, clean ends.
+
+    A constructor that raised hands the caller nothing to close, so its state must already be clean.
+    """
     found = []
     if not report["fired"]:
         found.append("the boundary was never reached")
-    if report["outcome"] not in TYPED[report["path"]]:
+    allowed = TYPED[report["path"]] | {RAISES.get(report["kind"])}
+    if report["kind"] == "handler_raises_exception":
+        allowed |= {None}
+    if report["outcome"] not in allowed:
         found.append(f"untyped outcome {report['outcome']}")
-    bound = SHUTDOWN_BOUND_S + (REQUEST_TIMEOUT_S if report["path"] == "timeout" else 0.0)
-    if report["elapsed"] >= bound:
-        found.append(f"took {report['elapsed']:.1f} s, bound {bound:.1f} s")
-    if report["group_alive"] and not report["client_open"]:
+    if report["elapsed"] >= report["bound"]:
+        found.append(f"took {report['elapsed']:.2f} s, bound {report['bound']:.2f} s")
+    if report["at_outcome"]["group_alive"] and not report["client_open"]:
         found.append("the group outlived the client when the outcome surfaced")
+    if report["abandoned"] and report["at_outcome"] != CLEAN:
+        found.append(f"a raising constructor left {report['at_outcome']}")
     if report.get("other_thread_done") is False:
         found.append("close() on the other thread did not return")
-    after = report["after_close"]
-    if after != {"group_alive": False, "grandchild_alive": False, "reaped": True, "array_dir_gone": True}:
-        found.append(f"after close: {after}")
+    if report["after_close"] != CLEAN:
+        found.append(f"after close: {report['after_close']}")
     return found
 
 
 def main(argv: list[str]) -> None:
-    """Run the cases named in `argv[2]` (a JSON list, or `all`), printing one JSON report per line."""
-    worker_client.STOP_GRACE_S = STOP_GRACE_S
-    worker_client.TERM_GRACE_S = TERM_GRACE_S
+    """Run the cases in `argv[2]` (a JSON list), printing one JSON report per line."""
     parent = Path(argv[1])
-    todo = cases() if argv[2] == "all" else json.loads(argv[2])
-    for index, case in enumerate(todo):
+    for index, case in enumerate(json.loads(argv[2])):
         faulthandler.dump_traceback_later(CASE_BOUND_S, exit=True)
         print(json.dumps(run_case(case, parent, index)), flush=True)
         faulthandler.cancel_dump_traceback_later()
