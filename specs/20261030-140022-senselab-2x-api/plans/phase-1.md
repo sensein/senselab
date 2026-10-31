@@ -837,7 +837,7 @@ for one live fetch.
   `worker-floor` is green on 3.10 with numpy 1.23.5, `lint-imports` passes, and pre-commit passes.
 - [ ] **Step 2:** Run the full 1.x suite serially on ORCD from a pinned checkout of `alpha`. Use a
   CPU partition named in the job and respect the QOS cap (P-29). It passes with the pass and skip
-  counts of `1x-freeze-2026-10-30` plus the moved tests.
+  counts of branch `freeze-1x-2026-10-30` plus the moved tests.
 - [ ] **Step 3: Adversarial round brief.**
   - Give the opus lead the Phase 1 surfaces: the worker protocol, canonical serialisation, identity
     types, the store, the fetch cache, the import layering and the rewires.

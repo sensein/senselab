@@ -20,6 +20,7 @@ from typing import Any, Sequence
 
 import numpy as np
 import yaml
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.background_model import bridge, floor_db, runs_of, shutoff_runs
 from senselab.audio.workflows.triage.task_events import (
@@ -29,7 +30,6 @@ from senselab.audio.workflows.triage.task_events import (
     task_events_parameters,
 )
 from senselab.audio.workflows.triage.task_extent import enabled, extent_check, task_extent_parameters
-from senselab.utils.prov_store import ProvStore
 
 VOICE_PHONATION_PATH = Path(__file__).parent / "data" / "voice_phonation.yaml"
 PLAIN_STREAM = "plain"

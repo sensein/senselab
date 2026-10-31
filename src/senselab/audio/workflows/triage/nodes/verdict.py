@@ -34,6 +34,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 import yaml
+from senselab_core.runtime.provenance import PROV_TYPE, Entity, ProvStore, revised
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.redaction.api import apply_redactions
@@ -156,7 +157,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     reviewer_may_unmask,
     standing_task_extents,
 )
-from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
 
 NODE = "VERDICT"
 
@@ -517,7 +517,7 @@ def _airway_reading(store: ProvStore, name: str) -> tuple[dict[str, Any] | None,
         return None, ((f"AIRWAY:{name}",) if reported else ())
     absent = tuple(str(each) for each in measurement.attributes.get("absent") or ())
     absent = absent or _undecidable(name, "AIRWAY", measurement.attributes)
-    return (None, absent) if absent else (dict(measurement.attributes), ())
+    return (None, absent) if absent else (revised(measurement.attributes), ())
 
 
 def _train_rise_db(reading: dict[str, Any] | None) -> float | None:
@@ -544,7 +544,7 @@ def _voice_reading(store: ProvStore) -> tuple[dict[str, Any] | None, tuple[str, 
         return None, ((f"VOICE:{PHONATION_READING}",) if reported else ())
     absent = tuple(f"VOICE:{each}" for each in measurement.attributes.get("absent") or ())
     absent = absent or _undecidable(PHONATION_READING, "VOICE", measurement.attributes)
-    return (None, absent) if absent else (dict(measurement.attributes), ())
+    return (None, absent) if absent else (revised(measurement.attributes), ())
 
 
 def _speech_ddk_reading(store: ProvStore) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
@@ -564,7 +564,7 @@ def _speech_ddk_reading(store: ProvStore) -> tuple[dict[str, Any] | None, tuple[
         return None, ((f"SPEECH:{DDK_READING}",) if reported else ())
     absent = tuple(f"SPEECH:{each}" for each in measurement.attributes.get("absent") or ())
     absent = absent or _undecidable(DDK_READING, "SPEECH", measurement.attributes)
-    return (None, absent) if absent else (dict(measurement.attributes), ())
+    return (None, absent) if absent else (revised(measurement.attributes), ())
 
 
 def _task_evidence(

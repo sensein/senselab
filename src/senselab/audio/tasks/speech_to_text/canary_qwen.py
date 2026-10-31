@@ -241,8 +241,8 @@ class CanaryQwenASR:
             # already populated by HFModel's constructor-time resolution when model is given;
             # resolve directly for the no-model-passed default path. Deferred import (not at
             # module top) keeps this monkeypatch-friendly at
-            # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
-            from senselab.utils.model_revision import resolve_revision
+            # senselab_core.runtime.revision.resolve_revision, matching the rest of the codebase.
+            from senselab_core.runtime.revision import resolve_revision
 
             revision = (
                 model.commit_sha

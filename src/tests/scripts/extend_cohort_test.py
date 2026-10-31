@@ -5,17 +5,19 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from collections.abc import Mapping
+from typing import Any
 from pathlib import Path
 from types import ModuleType
 
 import numpy as np
 import pytest
 import soundfile as sf
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.cohort_fold import COHORT_READING, MEASURED
 from senselab.audio.workflows.triage.extend import read_store, write_store
 from senselab.audio.workflows.triage.nodes.common import find_measurement
-from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -164,7 +166,7 @@ def _quantiles(manifest: Path) -> Path:
     return out
 
 
-def _reading(row: dict) -> dict:
+def _reading(row: dict) -> Mapping[str, Any]:
     store = read_store(Path(row["enhanced"]).parents[2])
     found = find_measurement(store, COHORT_READING)
     assert found is not None

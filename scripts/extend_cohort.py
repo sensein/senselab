@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.cohort_fold import COHORT_READING, POOLS
 from senselab.audio.workflows.triage.cohort_stage import (
@@ -88,7 +89,6 @@ from senselab.audio.workflows.triage.extend import (
 from senselab.audio.workflows.triage.nodes.background import session_key
 from senselab.audio.workflows.triage.nodes.common import capture_environments, describe_exception, find_measurement
 from senselab.audio.workflows.triage.routing_analysis.families import task_family
-from senselab.utils.prov_store import ProvStore
 
 FACTS_PREFIX = "cohort-facts-slice-"
 

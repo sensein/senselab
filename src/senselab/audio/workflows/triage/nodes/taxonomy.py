@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.classification.label_scores import label_scores
@@ -34,7 +35,6 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_verdict,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.prov_store import ProvStore
 
 NODE = "TAXONOMY"
 

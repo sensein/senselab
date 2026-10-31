@@ -21,13 +21,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage import nodes as nodes_package
 from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY, PROPOSERS
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_report
 from senselab.audio.workflows.triage.nodes.verdict import _branch_report_from_entity
 from senselab.audio.workflows.triage.vocabulary import STORE_ASSERTIONS, TASK, UNDETERMINED, BranchReport
-from senselab.utils.prov_store import ProvStore
 
 TRIAGE_ROOT = Path(nodes_package.__file__ or "").parent.parent
 

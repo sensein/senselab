@@ -103,7 +103,7 @@ def resolved_commit_sha(model_id: str, ref: str) -> str | None:
     fell back to the ref on a Hub outage would be indistinguishable from one that successfully
     pinned a commit, silently reintroducing the ambiguity this task exists to remove.
     """
-    from senselab.utils.model_revision import RevisionResolutionError, resolve_revision
+    from senselab_core.runtime.revision import RevisionResolutionError, resolve_revision
 
     try:
         return resolve_revision(model_id, ref)

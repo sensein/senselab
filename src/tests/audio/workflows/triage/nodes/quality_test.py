@@ -15,11 +15,14 @@ not be able to tell them apart.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
 import pytest
+from senselab_core.runtime.provenance import Entity, ProvStore
+from senselab_core.testing.provenance import hand_edited
 
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.admit import admit
@@ -35,7 +38,6 @@ from senselab.audio.workflows.triage.nodes.quality import (
     quality,
 )
 from senselab.audio.workflows.triage.vocabulary import STORE_ASSERTIONS, UNDETERMINED
-from senselab.utils.prov_store import Entity, ProvStore
 
 SR = 16000
 """The fixture's sampling rate, so a sample index and a time are one conversion apart."""
@@ -431,7 +433,7 @@ class TestTheStreamItReads:
         samples[24000] = np.float32(0.9)
         _seed(store, tmp_path, wav_writer, samples, [clipped])
         elsewhere = [span for span in live_entities(store, "span")][0]
-        elsewhere.attributes["signal"] = "plain"
+        store = hand_edited(store, elsewhere.id, signal="plain")
         result = quality(store, "recording", config, run_dir=tmp_path)
         assert result.report.conformance == UNDETERMINED
         assert store.get_entity(result.report_entity_id).attributes["clip_spans_n"] == 0

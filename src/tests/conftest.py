@@ -18,6 +18,7 @@ import pytest
 import torch
 
 from senselab.utils.data_structures import DeviceType
+from tests.lazy_module_guard_fixture import prune_unimportable_lazy_modules
 
 # All dependencies that must be importable in the test environment.
 # Grouped by pyproject.toml section for clarity.
@@ -96,6 +97,12 @@ def pytest_configure(config: pytest.Config) -> None:
             "",
         ]
         pytest.exit("\n".join(lines), returncode=1)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems() -> None:
+    """Drop unimportable lazy modules before hypothesis walks ``sys.modules``."""
+    prune_unimportable_lazy_modules()
 
 
 # ---------------------------------------------------------------------------

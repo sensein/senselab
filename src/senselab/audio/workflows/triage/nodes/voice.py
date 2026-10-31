@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from senselab_core.runtime.provenance import Entity, ProvStore, revised
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
@@ -92,7 +93,6 @@ from senselab.audio.workflows.triage.voice_phonation import (
     voice_phonation_parameters,
     voice_task_extent,
 )
-from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "VOICE"
 KIND = "voice"
@@ -403,7 +403,7 @@ def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: B
                 rejected.append(Rejection(span, "lexical_separator", None, None, {}))
                 continue
             carrier_extent = free
-            span = replace(span, extent=free)
+            span = revised(span, extent=free)
         track = track_slice(evidence.tracks, carrier_extent, strength_min)
         if track.strength.size == 0:
             rejected.append(Rejection(span, "no_track_over_carrier", None, None, {}))

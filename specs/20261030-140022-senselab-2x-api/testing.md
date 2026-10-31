@@ -104,6 +104,12 @@ module over the registry, with ids equal to the task, backend or profile name.
   the fake stack through the same registry users use.
 - `no_hub` and `fake_env` fixtures cover model resolution and env building.
 - Monkeypatching senselab internals is forbidden in 2.x tests.
+- **Every probe bounds itself, whatever the code under test does** (H-R37). A source standing in for an
+  endless one is finite: `bounded_probe_fixture.FiniteSource` serves the declared size plus 1 MiB and then
+  raises. A probe that writes through code under test runs in a child (`run_bounded`) under
+  `RLIMIT_FSIZE`, `RLIMIT_AS` where the platform accepts one (macOS refuses a limit below the current
+  mapping) and a timeout. The A-20 probe once wrote 129 GB when run at a commit without the fix; with
+  both it is bounded at any commit. Planted symlinks point only into the probe's own scratch directory.
 
 ## 4. Limits and use-case tests
 
@@ -155,6 +161,11 @@ module over the registry, with ids equal to the task, backend or profile name.
 - `uv run pytest` runs logic tests in under a few minutes on a laptop, serially, scoped to the
   package changed.
 - `uv run pytest -m limits -k <backend>` runs one backend's limits.
+- A test that builds a wheel or sdist, creates a venv or installs from an index carries `network`
+  beside its tier, so `-m "not network"` runs none of them. The release-gate and packaging ones
+  (`packages/senselab-core/tests/release_gate_test.py`, `package_data_test.py`) run in the
+  `core-env` CI job with `-m "env and not slow"`; the full gate over a real tagged build
+  (`slow`) runs on ORCD.
 
 **ORCD**
 - GPU limits, use cases and env builds run as submitted jobs from a pinned checkout, on the

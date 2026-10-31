@@ -158,7 +158,7 @@ def extract_per_window_embeddings(
             # visible to a call-time lookup of the name -- a module-level `from ... import` would
             # bind the pre-patch function object here and never see the substitution. Same
             # constraint as `api._resolve_embedding_model`.
-            from senselab.utils.model_revision import resolve_revision
+            from senselab_core.runtime.revision import resolve_revision
 
             resolved_revision = resolve_revision(model_id, revision or "main")
             sb_model: SpeechBrainModel = SpeechBrainModel(path_or_uri=model_id, revision=resolved_revision)

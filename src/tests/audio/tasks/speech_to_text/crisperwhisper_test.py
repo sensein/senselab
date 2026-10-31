@@ -32,7 +32,7 @@ def test_worker_output_maps_to_scriptlines(monkeypatch: pytest.MonkeyPatch) -> N
     # staging), so both the constructor's Hub validation and the module's own
     # resolve_model call (which would otherwise download the real snapshot) are faked.
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
     monkeypatch.setattr(cw, "resolve_model", lambda *a, **k: ("f" * 40, Path("/fake/snapshot")))
     monkeypatch.setattr(cw, "ensure_venv", lambda *a, **k: "/fake/venv")
     monkeypatch.setattr(cw, "venv_python", lambda *a, **k: "/fake/venv/bin/python")
@@ -71,7 +71,7 @@ def test_worker_output_maps_to_scriptlines(monkeypatch: pytest.MonkeyPatch) -> N
 def _stub_out_staging(monkeypatch: pytest.MonkeyPatch) -> None:
     """Point the backend at a fake venv + snapshot so no Hub or venv work happens."""
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
     monkeypatch.setattr(cw, "resolve_model", lambda *a, **k: ("f" * 40, Path("/fake/snapshot")))
     monkeypatch.setattr(cw, "ensure_venv", lambda *a, **k: "/fake/venv")
     monkeypatch.setattr(cw, "venv_python", lambda *a, **k: "/fake/venv/bin/python")

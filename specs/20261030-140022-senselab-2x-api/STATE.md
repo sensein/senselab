@@ -9,10 +9,11 @@ task or decision changes state. Newest entries go first in the log.
 |---|---|
 | Design branch (specs only) | `senselab-2x-api` → draft PR sensein/senselab#617 to `alpha` |
 | Durable worktree | `~/software/sensein/senselab-2x` (branch `senselab-2x-api`) |
-| 1.x freeze tag (Phase 0) | `1x-freeze-2026-10-30` → `19834fdd` (= `1.4.0-alpha.11`) |
+| 1.x freeze marker (Phase 0) | branch `freeze-1x-2026-10-30` → `19834fdd` (= `1.4.0-alpha.11`) |
 | pydra proposal | branch `enh/execution-extensions` → draft PR nipype/pydra#891; worktree `~/software/nipype/pydra-ext` |
-| Implementation branches | `2x/p1-<task>` off `alpha`, one PR per task to `alpha` (P-27) |
-| Phase plans | `plans/phase-1.md` (this directory) |
+| Implementation branch | `2x/phase-1` (worktree `~/software/sensein/senselab-2x-impl`), stacked on `senselab-2x-api`; one reviewed commit series per task; all spec edits during Phase 1 go here too (SDD ruling R2) |
+| SDD ledger | `.superpowers/sdd/phase-1/progress.md` in the impl worktree (git-ignored; task completion lines and rulings) |
+| Phase plans | `plans/phase-1.md`, `plans/phase-1-hardening.md` (this directory) |
 
 ## Document map (this directory)
 
@@ -27,7 +28,8 @@ task or decision changes state. Newest entries go first in the log.
   - `testing.md`;
   - `docs.md`.
 - **Why:**
-  - `review-register.md` (R-1..R-54, all resolved);
+  - `review-register.md` (R-1..R-98; open: R-55..R-58, the ADV rows R-59..R-98 and the rows they re-open);
+  - `reviews/phase1-adversarial.md` (the Phase 1 adversarial report, A-1..A-39);
   - `architect-review.md`;
   - `engine-choice.md`;
   - `workflow-engines.md`;
@@ -41,8 +43,8 @@ task or decision changes state. Newest entries go first in the log.
 | Phase | State |
 |---|---|
 | Design | done; owner approved 2026-10-30 ("go ahead") |
-| 0: freeze tag | done (`1x-freeze-2026-10-30`) |
-| 1: kernel, worker runtime, identity, store, data fetch | planned in `plans/phase-1.md` (16 tasks); execution not started |
+| 0: freeze marker | done (branch `freeze-1x-2026-10-30`) |
+| 1: kernel, worker runtime, identity, store, data fetch | T0–T15a done; adversarial round found 11 high / 19 medium / 9 low (R-59…R-97, plus R-98 unverified); hardening plan `plans/phase-1-hardening.md` (H1–H8) before Phase 1 exit |
 | 2–5 | not started |
 | pydra PRs (A0…K1) | proposed in #891; none implemented |
 
@@ -70,9 +72,23 @@ vLLM-omni kept, license taint kept and combinators deferred, prose review by mod
 
 ## Log
 
+- **2026-10-30 (Phase 1 adversarial round):** the round against `94e81479` found 11 high, 19 medium
+  and 9 low findings (A-1..A-39), plus 9 unverified suspicions. They are recorded as R-59..R-97 and
+  R-98, and they re-open R-5, R-10, R-30, R-33, R-44 and R-52. The report is in
+  `reviews/phase1-adversarial.md`. The hardening plan `plans/phase-1-hardening.md` has 8 tasks
+  (H1–H8), which must merge before Phase 1 exit. A-15 is deferred to Phase 3 and A-30 to Phase 2.
+  Branch protection for A-39 is an owner action.
+
+- **2026-10-30 (Phase 1 start):** P-39 scan found no drift (`origin/alpha` = `19834fdd` = every
+  ledger mark). Execution began on `2x/phase-1`.
+
 - **2026-10-30:**
   - Design completed through five reviews and an architect review.
   - ADR-001..009 written.
   - Phase 0 tag pushed.
   - Worktrees moved to durable paths.
   - Phase 1 planning started.
+  - Phase 1 delivered (T0–T14): workspace and three distributions; worker runtime and wire protocol v1;
+    canonical serialisation and identity v2; kernel signal types; model resolution and weights manifest;
+    locks/revision/provenance/hardware moved into core; result store; declaration registry, fake stack and
+    generated contracts; data fetch; synthetic generators and fixture budget.

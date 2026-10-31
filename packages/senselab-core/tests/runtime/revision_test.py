@@ -1,0 +1,417 @@
+"""Tests for run-scoped HF revision resolution."""
+
+import json
+import multiprocessing as mp
+import os
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+from huggingface_hub.errors import RepositoryNotFoundError
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
+from senselab_core.runtime.revision import (
+    MANIFEST_NAME,
+    RevisionResolutionError,
+    get_cached_commit_hash,
+    manifest_key,
+    manifest_path,
+    read_manifest,
+    record_resolution,
+    resolve_revision,
+    run_id,
+)
+
+SHA_A = "a" * 40
+SHA_B = "b" * 40
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point SENSELAB_CACHE at a temp dir and clear any inherited run id."""
+    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "senselab"))
+    monkeypatch.delenv("SENSELAB_RUN_ID", raising=False)
+    # Also drop any Slurm identity: run_id() now falls back to it, so a test running inside an
+    # allocation would otherwise see the real job id instead of a hermetic value.
+    monkeypatch.delenv("SLURM_ARRAY_JOB_ID", raising=False)
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    import senselab_core.runtime.revision as mr
+
+    mr._RUN_ID = None
+    mr._MEMO.clear()
+
+
+@pytest.mark.logic
+def test_run_id_is_generated_once_and_exported() -> None:
+    """A generated run id is stable within the process and exported to the environment."""
+    first = run_id()
+    second = run_id()
+    assert first == second, "run_id must be stable within a process"
+    assert os.environ["SENSELAB_RUN_ID"] == first, "run id must be exported so subprocesses inherit it"
+
+
+@pytest.mark.logic
+def test_run_id_is_inherited_when_already_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pre-set SENSELAB_RUN_ID is reused rather than replaced with a fresh UUID."""
+    monkeypatch.setenv("SENSELAB_RUN_ID", "job-12345")
+    import senselab_core.runtime.revision as mr
+
+    mr._RUN_ID = None
+    assert run_id() == "job-12345"
+
+
+@pytest.mark.logic
+def test_run_id_falls_back_to_the_slurm_job_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without SENSELAB_RUN_ID, a Slurm job shares one manifest via its job id.
+
+    Finding #9 of the #550 review: a fresh UUID4 per process leaked one ``runs/<id>/`` dir per
+    array task into an inode-quota'd cache root. A plain job now reuses ``SLURM_JOB_ID``.
+    """
+    monkeypatch.setenv("SLURM_JOB_ID", "778899")
+    import senselab_core.runtime.revision as mr
+
+    mr._RUN_ID = None
+    assert run_id() == "778899"
+    assert os.environ["SENSELAB_RUN_ID"] == "778899", "the chosen id must be exported for subprocesses"
+
+
+@pytest.mark.logic
+def test_run_id_prefers_the_array_job_id_so_an_array_shares_one_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SLURM_ARRAY_JOB_ID (shared by the whole array) wins over per-task SLURM_JOB_ID."""
+    monkeypatch.setenv("SLURM_ARRAY_JOB_ID", "112233")
+    monkeypatch.setenv("SLURM_JOB_ID", "112240")  # differs across an array's tasks
+    import senselab_core.runtime.revision as mr
+
+    mr._RUN_ID = None
+    assert run_id() == "112233"
+
+
+@pytest.mark.logic
+def test_explicit_run_id_wins_over_slurm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit SENSELAB_RUN_ID still takes precedence over any Slurm identity."""
+    monkeypatch.setenv("SENSELAB_RUN_ID", "explicit")
+    monkeypatch.setenv("SLURM_ARRAY_JOB_ID", "112233")
+    import senselab_core.runtime.revision as mr
+
+    mr._RUN_ID = None
+    assert run_id() == "explicit"
+
+
+@pytest.mark.logic
+def test_a_full_sha_short_circuits_without_touching_the_manifest() -> None:
+    """A ref that is already a full commit SHA resolves with no filesystem I/O."""
+    assert resolve_revision("org/model", SHA_A) == SHA_A
+    assert not manifest_path().exists(), "a 40-hex ref must resolve with no I/O at all"
+
+
+@pytest.mark.logic
+def test_record_then_read_round_trips() -> None:
+    """A recorded resolution is readable back from the manifest."""
+    record_resolution("org/model", "main", SHA_A)
+    assert read_manifest()[manifest_key("org/model", "main")] == SHA_A
+
+
+@pytest.mark.logic
+def test_a38_manifest_key_is_injective() -> None:
+    """The probe: `a@b` + `c` and `a` + `b@c` named one manifest entry."""
+    assert manifest_key("a@b", "c") != manifest_key("a", "b@c")
+    assert manifest_key("org/model", "main") == '["org/model","main"]'
+
+
+_PART = st.text(alphabet='ab@\\"[],', max_size=4)
+
+
+@pytest.mark.logic
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(st.tuples(_PART, _PART), st.tuples(_PART, _PART))
+def test_manifest_key_is_injective_over_pairs(x: tuple[str, str], y: tuple[str, str]) -> None:
+    """Two different (repo, ref) pairs never share a key, whatever separators and escapes they hold."""
+    assert (manifest_key(*x) == manifest_key(*y)) == (x == y)
+
+
+@pytest.mark.logic
+def test_manifest_file_carries_its_key_format() -> None:
+    """The manifest's name carries the format of its keys, so manifests keyed the old way are not read."""
+    assert manifest_path().name == MANIFEST_NAME == "resolutions@2.json"
+
+
+@pytest.mark.logic
+def test_manifest_entries_are_immutable_for_the_run() -> None:
+    """A second recording for the same key adopts the first SHA instead of overwriting it."""
+    record_resolution("org/model", "main", SHA_A)
+    returned = record_resolution("org/model", "main", SHA_B)
+    assert returned == SHA_A, "the loser of a race adopts the winner's SHA, never overwrites it"
+    assert read_manifest()[manifest_key("org/model", "main")] == SHA_A
+
+
+@pytest.mark.logic
+def test_the_manifest_pins_across_an_upstream_move(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Once recorded, a run keeps its SHA even after upstream moves the ref."""
+    record_resolution("org/model", "main", SHA_A)
+
+    def _moved(repo_id: str, ref: str, token: object = None) -> str:
+        raise AssertionError("resolution must not be attempted when the manifest already has an answer")
+
+    monkeypatch.setattr("senselab_core.runtime.revision._resolve_uncached", _moved)
+    assert resolve_revision("org/model", "main") == SHA_A
+
+
+@pytest.mark.logic
+def test_an_unresolvable_ref_raises_rather_than_falling_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ref that cannot be resolved raises instead of silently returning the ref itself."""
+
+    def _fails(repo_id: str, ref: str, token: object = None) -> str:
+        raise RevisionResolutionError("cold cache, hub unreachable")
+
+    monkeypatch.setattr("senselab_core.runtime.revision._resolve_uncached", _fails)
+    with pytest.raises(RevisionResolutionError):
+        resolve_revision("org/model", "main")
+
+
+@pytest.mark.logic
+def test_a_resolved_ref_is_recorded_so_the_rest_of_the_run_follows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A freshly resolved SHA is written to the manifest so later calls skip resolution."""
+    calls = []
+
+    def _once(repo_id: str, ref: str, token: object = None) -> str:
+        calls.append((repo_id, ref))
+        return SHA_A
+
+    monkeypatch.setattr("senselab_core.runtime.revision._resolve_uncached", _once)
+    assert resolve_revision("org/model", "main") == SHA_A
+    import senselab_core.runtime.revision as mr
+
+    mr._MEMO.clear()  # force the manifest, not the memo, to answer the second call
+    assert resolve_revision("org/model", "main") == SHA_A
+    assert len(calls) == 1, "the manifest must answer after the first resolution"
+
+
+@pytest.mark.logic
+def test_a_corrupt_manifest_does_not_crash_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unparsable manifest file degrades to 'resolve again' rather than raising."""
+    manifest_path().parent.mkdir(parents=True, exist_ok=True)
+    manifest_path().write_text("{not json")
+    monkeypatch.setattr("senselab_core.runtime.revision._resolve_uncached", lambda *a, **k: SHA_A)
+    assert resolve_revision("org/model", "main") == SHA_A
+
+
+def _record_resolution_worker(sha: str, cache_dir: str, out: "mp.Queue[str]") -> None:
+    """Run ``record_resolution`` in a spawned process and report the winning SHA.
+
+    Module-level, not a closure inside the test: the ``spawn`` start method
+    pickles the target by qualified name, and a function nested inside the test
+    is a local object that plain ``pickle`` cannot resolve by name, so the
+    original nested-closure version of this test failed with
+    ``AttributeError: Can't pickle local object`` before any locking logic ran.
+    The cache directory is passed as an explicit argument rather than captured
+    from an enclosing scope for the same reason.
+    """
+    os.environ["SENSELAB_CACHE"] = cache_dir
+    os.environ["SENSELAB_RUN_ID"] = "shared-run"
+    import importlib
+
+    import senselab_core.runtime.revision as mr
+
+    importlib.reload(mr)
+    out.put(mr.record_resolution("org/model", "main", sha))
+
+
+@pytest.mark.logic
+def test_concurrent_first_resolution_agrees_on_one_sha(tmp_path: Path) -> None:
+    """Two processes recording different SHAs must converge on one winner."""
+    cache = tmp_path / "shared"
+
+    ctx = mp.get_context("spawn")
+    q: "mp.Queue[str]" = ctx.Queue()
+    procs = [ctx.Process(target=_record_resolution_worker, args=(s, str(cache), q)) for s in (SHA_A, SHA_B)]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=60)
+    results = {q.get(timeout=5) for _ in procs}
+    assert len(results) == 1, f"both processes must adopt one SHA, got {results}"
+
+
+@pytest.mark.logic
+def test_a_corrupt_manifest_entry_is_ignored_rather_than_trusted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-SHA entry must be re-resolved, not propagated into keys and provenance."""
+    manifest_path().parent.mkdir(parents=True, exist_ok=True)
+    manifest_path().write_text(json.dumps({manifest_key("org/model", "main"): "main"}))
+    monkeypatch.setattr("senselab_core.runtime.revision._resolve_uncached", lambda *a, **k: SHA_A)
+    assert resolve_revision("org/model", "main") == SHA_A
+
+
+@pytest.mark.logic
+def test_recording_a_non_sha_is_refused() -> None:
+    """One bad write would poison every later participant, since entries are immutable."""
+    with pytest.raises(RevisionResolutionError):
+        record_resolution("org/model", "main", "main")
+
+
+@pytest.mark.logic
+def test_recording_a_newline_suffixed_sha_is_refused() -> None:
+    """Unstripped subprocess stdout must not enter the manifest looking like a resolved commit."""
+    with pytest.raises(RevisionResolutionError):
+        record_resolution("org/model", "main", SHA_A + "\n")
+
+
+@pytest.mark.logic
+def test_a_newline_suffixed_sha_does_not_short_circuit_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A newline-suffixed full SHA — unstripped ``git rev-parse`` output — is not returned unchanged.
+
+    It is not a commit, so it goes through resolution like any other ref instead of riding the
+    already-a-SHA short-circuit into provenance.
+    """
+    monkeypatch.setattr("senselab_core.runtime.revision._resolve_uncached", lambda *a, **k: SHA_A)
+    assert resolve_revision("org/model", SHA_A + "\n") == SHA_A
+
+
+@pytest.mark.logic
+def test_a_newline_suffixed_manifest_entry_is_re_resolved(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A manifest entry carrying a trailing newline reads as absent, not as the run's answer."""
+    manifest_path().parent.mkdir(parents=True, exist_ok=True)
+    manifest_path().write_text(json.dumps({manifest_key("org/model", "main"): SHA_A + "\n"}))
+    monkeypatch.setattr("senselab_core.runtime.revision._resolve_uncached", lambda *a, **k: SHA_B)
+    assert resolve_revision("org/model", "main") == SHA_B
+
+
+@pytest.mark.logic
+def test_a_newline_suffixed_winner_is_overwritten_not_adopted() -> None:
+    """``record_resolution`` replaces a newline-suffixed manifest winner instead of handing it back."""
+    manifest_path().parent.mkdir(parents=True, exist_ok=True)
+    manifest_path().write_text(json.dumps({manifest_key("org/model", "main"): SHA_A + "\n"}))
+    assert record_resolution("org/model", "main", SHA_B) == SHA_B
+    assert read_manifest()[manifest_key("org/model", "main")] == SHA_B
+
+
+@pytest.mark.logic
+def test_a_newline_suffixed_local_cache_answer_falls_through_to_the_hub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A malformed local-cache answer degrades to a Hub lookup instead of becoming the resolved commit."""
+    import senselab_core.runtime.revision as mr
+
+    class _Info:
+        sha = SHA_B
+
+    monkeypatch.setattr("senselab_core.runtime.revision.get_cached_commit_hash", lambda *a, **k: SHA_A + "\n")
+    monkeypatch.setattr("huggingface_hub.HfApi.model_info", lambda _self, *, repo_id, revision: _Info())
+    assert mr._resolve_uncached("org/model", "main") == SHA_B
+
+
+@pytest.mark.logic
+def test_a_newline_suffixed_hub_sha_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Hub answer carrying a trailing newline raises rather than leaving ``_resolve_uncached`` as a commit."""
+    import senselab_core.runtime.revision as mr
+
+    class _Info:
+        sha = SHA_A + "\n"
+
+    monkeypatch.setattr("senselab_core.runtime.revision.get_cached_commit_hash", lambda *a, **k: None)
+    monkeypatch.setattr("huggingface_hub.HfApi.model_info", lambda _self, *, repo_id, revision: _Info())
+    with pytest.raises(RevisionResolutionError, match="no usable commit SHA"):
+        mr._resolve_uncached("org/model", "main")
+
+
+@pytest.mark.logic
+def test_resolution_retries_a_transient_hub_error(
+    monkeypatch: pytest.MonkeyPatch, hub_error: Callable[..., Exception]
+) -> None:
+    """The mandatory model_info round-trip is retried on a transient error, not fatal.
+
+    Finding #3 of the #550 review: this was the one Hub call without ``retry_on_transient_error``,
+    so a 429 / connection blip during a parallel batch failed ``HFModel`` construction outright.
+    """
+    calls = {"n": 0}
+
+    class _Info:
+        sha = SHA_A
+
+    def _flaky(_self: object, *, repo_id: str, revision: str) -> object:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # A real 429 rather than a stand-in: the rate-limit burst is the case finding #3 is
+            # about, and it only classifies as transient because ``_is_transient`` reads the
+            # status off ``.response`` -- which no hand-rolled double would have exercised.
+            raise hub_error(429)
+        return _Info()
+
+    # Force the network path (no local cache hit) and make the retry backoff instant.
+    monkeypatch.setattr("senselab_core.runtime.revision.get_cached_commit_hash", lambda *a, **k: None)
+    monkeypatch.setattr("huggingface_hub.HfApi.model_info", _flaky)
+    monkeypatch.setattr("senselab_core.runtime.retry.time.sleep", lambda *_a, **_k: None)
+
+    assert resolve_revision("org/model", "main") == SHA_A
+    assert calls["n"] == 2, "the transient error must have been retried once"
+
+
+@pytest.mark.logic
+def test_a_missing_repo_fails_without_being_retried(
+    monkeypatch: pytest.MonkeyPatch, hub_error: Callable[..., Exception]
+) -> None:
+    """A genuine 404 surfaces as RevisionResolutionError on the first attempt.
+
+    The version of this test that shipped with the retry raised ``ValueError("not found")`` as a
+    stand-in for a 404. That passed for a reason a real 404 did not share -- a ``ValueError``
+    matches nothing in ``_TRANSIENT_EXCEPTIONS`` -- while the real
+    ``RepositoryNotFoundError`` classified as *transient* and was retried three times, which is
+    the opposite of what the docstring claimed. Use the real error, and assert the attempt count,
+    so the test fails if that regresses.
+    """
+    calls = {"n": 0}
+
+    def _always(_self: object, *, repo_id: str, revision: str) -> object:
+        calls["n"] += 1
+        raise hub_error(404, RepositoryNotFoundError)
+
+    monkeypatch.setattr("senselab_core.runtime.revision.get_cached_commit_hash", lambda *a, **k: None)
+    monkeypatch.setattr("huggingface_hub.HfApi.model_info", _always)
+    monkeypatch.setattr("senselab_core.runtime.retry.time.sleep", lambda *_a, **_k: None)
+
+    with pytest.raises(RevisionResolutionError):
+        resolve_revision("org/model", "main")
+    assert calls["n"] == 1, "a 404 is a verdict, not a blip -- it must not be retried"
+
+
+def _fake_cache(monkeypatch: pytest.MonkeyPatch, root: Path, repo_id: str, revision: str, sha: str) -> Path:
+    """Fabricate an HF cache with ``refs/<revision> -> <sha>`` and a snapshot dir."""
+    import huggingface_hub.constants as hf_constants
+
+    monkeypatch.setattr(hf_constants, "HF_HUB_CACHE", str(root))
+    repo_dir = root / f"models--{repo_id.replace('/', '--')}"
+    (repo_dir / "refs").mkdir(parents=True)
+    (repo_dir / "refs" / revision).write_text(sha)
+    snap = repo_dir / "snapshots" / sha
+    snap.mkdir(parents=True)
+    (snap / "config.json").write_text("{}")
+    return snap
+
+
+@pytest.mark.logic
+def test_get_cached_commit_hash_resolves_real_sha_from_refs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_cached_commit_hash returns the commit SHA from refs/<ref>, not the mutable branch name."""
+    sha = "a" * 40
+    _fake_cache(monkeypatch, tmp_path, "org/model", "main", sha)
+    assert get_cached_commit_hash("org/model", "main") == sha
+
+
+@pytest.mark.logic
+def test_sha_revision_is_passed_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A full-SHA revision is returned as-is (already immutable)."""
+    sha = "e" * 40
+    _fake_cache(monkeypatch, tmp_path, "org/model", "main", "f" * 40)
+    assert get_cached_commit_hash("org/model", sha) == sha
+
+
+@pytest.mark.logic
+def test_cached_commit_hash_raises_rather_than_returning_a_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cold cache must raise, not hand back the mutable ref as if it were a SHA."""
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
+    with pytest.raises(RevisionResolutionError):
+        get_cached_commit_hash("org/never-downloaded", "main")
+
+
+@pytest.mark.logic
+def test_a_newline_suffixed_sha_is_not_passed_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unstripped subprocess stdout must not ride the full-SHA shortcut into provenance."""
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
+    with pytest.raises(RevisionResolutionError):
+        get_cached_commit_hash("org/model", "e" * 40 + "\n")

@@ -1,0 +1,104 @@
+"""Each runtime call site that deletes refuses a name outside its own grammar."""
+
+import os
+import uuid
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from senselab_core.runtime import fetch as fetch_module
+from senselab_core.runtime import storage as storage_module
+from senselab_core.runtime.locks import SharedFileLock
+
+
+def _foreign_uuid(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(uuid, "uuid4", lambda: SimpleNamespace(hex="notes"))
+
+
+def _failing_replace(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise OSError("replace refused")
+
+    monkeypatch.setattr(os, "replace", refuse)
+
+
+@pytest.mark.logic
+def test_lock_release_refuses_a_name_that_is_not_a_sidecar(tmp_path: Path) -> None:
+    """A holder path that is not `<name>.heartbeat` or `<name>.holder` survives the lock's release."""
+    foreign = tmp_path / "notes.md"
+    lock = SharedFileLock(tmp_path / "resource")
+    with lock:
+        foreign.write_text("mine")
+        lock._holder_path = foreign
+    assert foreign.read_text() == "mine"
+    assert not (tmp_path / "resource.heartbeat").exists()
+
+
+@pytest.mark.logic
+def test_link_staging_refuses_a_name_outside_its_grammar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A staged symlink whose suffix is not a uuid4 hex is never created: the write grammar refuses it."""
+    blob = tmp_path / "blob"
+    blob.write_bytes(b"b")
+    link = tmp_path / "voice.wav"
+    _foreign_uuid(monkeypatch)
+    with (
+        pytest.raises(ValueError, match="not a name this writer owns"),
+        storage_module.StorageDir.open_root(tmp_path) as files,
+    ):
+        fetch_module._link(files, link.name, blob, 0o2770)
+    assert not os.path.lexists(tmp_path / ".voice.wav.notes") and not os.path.lexists(link)
+
+
+@pytest.mark.logic
+def test_atomic_write_cleanup_refuses_a_name_outside_its_grammar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A temporary file whose suffix is not a uuid4 hex is left when the write fails."""
+    target = tmp_path / "prov.jsonl"
+    _foreign_uuid(monkeypatch)
+    _failing_replace(monkeypatch)
+    with pytest.raises(OSError, match="replace refused"):
+        storage_module.write_atomically(target, b"x")
+    assert [p.name.endswith(".notes.tmp") for p in tmp_path.iterdir()] == [True]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("grammar", "own", "foreign"),
+    [
+        (fetch_module.LINK_STAGING_NAME, ".voice.wav." + "0" * 32, ["voice.wav", ".voice.wav.notes", "notes.md"]),
+        (
+            storage_module.TEMPORARY_NAME,
+            ".prov.jsonl.12.34." + "0" * 32 + ".tmp",
+            ["prov.jsonl", ".prov.jsonl.12.34.notes.tmp", "notes.md"],
+        ),
+    ],
+)
+def test_staging_grammars_accept_their_own_names_only(grammar: object, own: str, foreign: list[str]) -> None:
+    """The fixed grammars match what the runtime writes and nothing a caller would name."""
+    assert grammar.fullmatch(own)  # type: ignore[attr-defined]
+    assert not any(grammar.fullmatch(name) for name in foreign)  # type: ignore[attr-defined]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("version", [(3, 10), (3, 12)])
+def test_a_removed_tree_never_follows_a_symlink_inside_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: tuple[int, int]
+) -> None:
+    """Removing a uuid-named tree, by 3.10's walk or `shutil.rmtree`, unlinks a symlink in it, never its target."""
+    from types import SimpleNamespace
+
+    from senselab_worker import ownership
+
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep").write_bytes(b"k")
+    root = tmp_path / "root"
+    tree = root / ("a" * 32)
+    (tree / "inner").mkdir(parents=True)
+    (tree / "inner" / "f").write_bytes(b"x")
+    os.symlink(victim, tree / "inner" / "out")
+    monkeypatch.setattr(ownership, "sys", SimpleNamespace(version_info=version))
+    with storage_module.StorageDir.open_root(root) as directory:
+        assert directory.remove_owned(tree.name, pattern=ownership.UUID_HEX)
+    assert list(root.iterdir()) == [] and (victim / "keep").read_bytes() == b"k"

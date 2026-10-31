@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from senselab_core.runtime.locks import SharedFileLock
 
-from senselab.utils.file_lock import SharedFileLock
 from senselab.utils.reproduce import cache, digest, run
 from senselab.utils.reproduce.cache import CacheError
 from senselab.utils.reproduce.spec import Manifest
@@ -237,8 +237,8 @@ def test_a_waiter_after_a_clean_release_is_not_an_attempt(world: World) -> None:
 def test_a_fresh_leftover_holder_is_taken_over_without_error(tmp_path: Path) -> None:
     """Regression pin of `SharedFileLock.__enter__`: a leftover holder with a 10 s old heartbeat is taken over.
 
-    The one refusing branch is a leftover with no heartbeat and no ``taken_at``, which a killed job does not
-    leave, since its heartbeat file stays.
+    A holder that is not a whole identity (here, no ``taken_at``) is corrupt: past the stale bound it is moved
+    aside and the claim taken, as a leftover.
     """
     root = tmp_path / "results"
     claims = root / cache.CLAIMS
@@ -260,10 +260,11 @@ def test_a_fresh_leftover_holder_is_taken_over_without_error(tmp_path: Path) -> 
             assert leftover is True and out == root / SHA
     with cache.claim(root, SHA) as (_, leftover):
         assert leftover is False
-    (claims / f"{SHA}.holder").write_text(json.dumps({"user": "u", "host": "h", "pid": 1}))
-    with pytest.raises(CacheError, match="E_CLAIM_HELD"):
-        with cache.claim(root, SHA):
-            pass
+    corrupt = claims / f"{SHA}.holder"
+    corrupt.write_text(json.dumps({"user": "u", "host": "h", "pid": 1}))
+    os.utime(corrupt, (time.time() - 3600, time.time() - 3600))
+    with cache.claim(root, SHA) as (_, leftover):
+        assert leftover is True
 
 
 def test_resume_dir_is_required_and_keyed(tmp_path: Path) -> None:

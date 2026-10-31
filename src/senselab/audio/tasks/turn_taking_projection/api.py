@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 import pandas as pd
 import torch
+from senselab_core.runtime.models import WEIGHTS
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
@@ -164,7 +165,7 @@ def project_voice_activity(
         }
         for job in jobs
     }
-    models["encoder"] = {"url": maai.CPC_URL, "sha256": maai.CPC_SHA256}
+    models["encoder"] = {"url": maai.CPC_URL, "sha256": WEIGHTS["maai-cpc"]}
     flat_timing = {f"{name}_{k}": v for name, t in timing.items() for k, v in t.items()}
     flat_timing.update({"wall_s": wall, "audio_s": duration, "x_real_time": duration / wall if wall > 0 else 0.0})
     return VAPResult(

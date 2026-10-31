@@ -38,7 +38,7 @@ STAGED_SHA = "e" * 40
 def offline_hub(monkeypatch: pytest.MonkeyPatch) -> None:
     """Construct ``HFModel`` without reaching the Hub."""
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kwargs: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: STAGED_SHA)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: STAGED_SHA)
 
 
 @pytest.fixture

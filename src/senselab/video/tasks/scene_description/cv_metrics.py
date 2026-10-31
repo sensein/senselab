@@ -169,7 +169,7 @@ def camera_off_tiles(luma: np.ndarray, tiles: Sequence[Box]) -> List[bool]:
 def _face_cascade() -> Any:  # noqa: ANN401
     import cv2
 
-    cascade = cv2.CascadeClassifier(getattr(cv2, "data").haarcascades + "haarcascade_frontalface_default.xml")
+    cascade = cv2.CascadeClassifier(getattr(cv2, "data").haarcascades + "haarcascade_frontalface_default.xml")  # noqa: B009
     if cascade.empty():
         raise RuntimeError("OpenCV's bundled Haar face cascade could not be loaded")
     return cascade

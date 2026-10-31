@@ -20,6 +20,7 @@ from typing import Any, Callable
 
 import numpy as np
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
@@ -35,7 +36,6 @@ from senselab.audio.workflows.triage.task_extent import task_extent_parameters
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors
 from senselab.utils.data_structures import ScriptLine
-from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import level_of_raster, seed_background_view
 
 SENTINEL = "alicia"  # the name the scan finds; nothing released may carry it

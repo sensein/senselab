@@ -7,19 +7,18 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
+from senselab_core.runtime.models import WEIGHTS
 
 from senselab.video.tasks.facial_analysis.results import Rect
 
 YUNET_REPO = "opencv/face_detection_yunet"
 YUNET_FILE = "face_detection_yunet_2023mar.onnx"
 YUNET_COMMIT = "3cc26e7f1014a5ee5d74a42acee58bafc9d0a310"
-YUNET_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
 YUNET_LICENSE = "MIT"
 
 SFACE_REPO = "opencv/face_recognition_sface"
 SFACE_FILE = "face_recognition_sface_2021dec.onnx"
 SFACE_COMMIT = "3d7082438a6e4551e840c9b2bb60b71e8da4b524"
-SFACE_SHA256 = "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"
 SFACE_LICENSE = "Apache-2.0"
 
 
@@ -33,16 +32,17 @@ def identity_model_paths() -> Dict[str, Path]:
     Returns:
         ``detector`` and ``recognizer`` local ``.onnx`` paths.
     """
-    from senselab.utils.model_revision import cache_root
+    from senselab_core.runtime.revision import cache_root
+
     from senselab.video.tasks.facial_analysis.backends import download_pinned
 
     folder = cache_root() / "models" / "opencv"
     return {
         "detector": download_pinned(
-            _url(YUNET_REPO, YUNET_COMMIT, YUNET_FILE), YUNET_SHA256, folder / f"{YUNET_SHA256[:12]}_{YUNET_FILE}"
+            _url(YUNET_REPO, YUNET_COMMIT, YUNET_FILE), "yunet", folder / f"{WEIGHTS['yunet'][:12]}_{YUNET_FILE}"
         ),
         "recognizer": download_pinned(
-            _url(SFACE_REPO, SFACE_COMMIT, SFACE_FILE), SFACE_SHA256, folder / f"{SFACE_SHA256[:12]}_{SFACE_FILE}"
+            _url(SFACE_REPO, SFACE_COMMIT, SFACE_FILE), "sface", folder / f"{WEIGHTS['sface'][:12]}_{SFACE_FILE}"
         ),
     }
 
@@ -52,12 +52,12 @@ def identity_provenance(cosine_threshold: float) -> Dict[str, Any]:
     return {
         "detector": {
             "url": _url(YUNET_REPO, YUNET_COMMIT, YUNET_FILE),
-            "sha256": YUNET_SHA256,
+            "sha256": WEIGHTS["yunet"],
             "license": YUNET_LICENSE,
         },
         "recognizer": {
             "url": _url(SFACE_REPO, SFACE_COMMIT, SFACE_FILE),
-            "sha256": SFACE_SHA256,
+            "sha256": WEIGHTS["sface"],
             "license": SFACE_LICENSE,
         },
         "cosine_threshold": float(cosine_threshold),

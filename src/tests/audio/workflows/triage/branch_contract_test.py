@@ -177,8 +177,9 @@ class TestNoBranchWritesAnOutcome:
 
     def test_a_report_carries_conformance_and_never_an_outcome(self, tmp_path: Path) -> None:
         """The written entity's own attributes, read back."""
+        from senselab_core.runtime.provenance import ProvStore
+
         from senselab.audio.workflows.triage.nodes.common import software_agent
-        from senselab.utils.prov_store import ProvStore
 
         del tmp_path
         store = ProvStore(run_id="contract")
@@ -204,8 +205,9 @@ class TestNoBranchWritesAnOutcome:
 
     def test_the_writer_refuses_an_unknown_conformance_referent(self) -> None:
         """A referent outside the two is a claim the fold cannot read; it is refused at the write."""
+        from senselab_core.runtime.provenance import ProvStore
+
         from senselab.audio.workflows.triage.nodes.common import software_agent
-        from senselab.utils.prov_store import ProvStore
 
         store = ProvStore(run_id="contract")
         agent = software_agent(store)
@@ -659,9 +661,10 @@ class TestTheReportSurvivesTheStore:
     @staticmethod
     def _round_trip(**written: Any) -> BranchReport:  # noqa: ANN401 — the writer's own kwargs
         """One report through ``write_report`` and back out through VERDICT's own reader."""
+        from senselab_core.runtime.provenance import ProvStore
+
         from senselab.audio.workflows.triage.nodes.common import software_agent
         from senselab.audio.workflows.triage.nodes.verdict import _branch_reports
-        from senselab.utils.prov_store import ProvStore
 
         store = ProvStore(run_id="round-trip")
         agent = software_agent(store)

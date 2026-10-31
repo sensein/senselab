@@ -17,7 +17,7 @@ from trying. :func:`install_network_guard` installs the same guard in the curren
 
 from __future__ import annotations
 
-import importlib.util
+import importlib.util  # noqa: TID251
 import os
 from pathlib import Path
 from typing import Dict, Mapping, MutableMapping, Optional
@@ -98,6 +98,6 @@ def install_network_guard() -> None:
     os.environ.update(OFFLINE_ENV)
     if getattr(socket, "senselab_network_guard", False):
         return
-    spec = importlib.util.spec_from_file_location("_senselab_network_guard", GUARD_DIR / "sitecustomize.py")
+    spec = importlib.util.spec_from_file_location("_senselab_network_guard", GUARD_DIR / "sitecustomize.py")  # noqa: TID251
     assert spec is not None and spec.loader is not None
-    spec.loader.exec_module(importlib.util.module_from_spec(spec))
+    spec.loader.exec_module(importlib.util.module_from_spec(spec))  # noqa: TID251

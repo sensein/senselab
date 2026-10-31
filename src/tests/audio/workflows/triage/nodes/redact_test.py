@@ -16,6 +16,8 @@ from typing import Any, Iterable, Mapping, Sequence
 import numpy as np
 import pytest
 import soundfile as sf
+from senselab_core.runtime.provenance import Entity, ProvStore
+from senselab_core.testing.provenance import hand_edited
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.data_structures.audio_hints import AudioHints, ExpectedSpeech
@@ -72,7 +74,6 @@ from senselab.audio.workflows.triage.vocabulary import (
 )
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan
 from senselab.text.tasks.pii_detection.api import scan_for_pii as real_scan_for_pii
-from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 SR = 16000
@@ -1244,7 +1245,7 @@ class TestTheStoresScanIsEvidenceOrItIsNot:
         """A detector's failure message may quote the scanned input, so only its name is recorded."""
         _seed_redact_store(store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
         scan = next(e for e in store.entities("measurement") if e.attributes.get("name") == "pii_scan")
-        scan.attributes["failed"] = {"gliner": "ValueError on 'jane doe'"}
+        store = hand_edited(store, scan.id, failed={"gliner": "ValueError on 'jane doe'"})
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.FAIL
         assert _verdict_entity(store, "REDACT").attributes["scan_failed"] == ["gliner"]

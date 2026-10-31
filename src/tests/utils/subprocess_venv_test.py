@@ -19,9 +19,9 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 import pytest
+from senselab_core.runtime.hardware import HostCuda, SenselabCudaCompatibilityError, TorchIndex
 
 from senselab.utils import subprocess_venv
-from senselab.utils.cuda_probe import HostCuda, SenselabCudaCompatibilityError, TorchIndex
 from senselab.utils.subprocess_venv import (
     _classify_uv_failure,
     _normalize_package_name,
@@ -404,7 +404,7 @@ def test_a_takeover_during_build_refuses_to_certify_the_venv(
     the "importable-looking venv missing a shared object" corruption reported in
     specs/20260817-triage-workflow-dag/benchmarks/orcd-scheduling-2026-09-08.md.
     """
-    from senselab.utils.file_lock import SharedFileLock
+    from senselab_core.runtime.locks import SharedFileLock
 
     name = "t-lost-lock"
     venv_dir = fake_cache_dir / name
@@ -583,7 +583,7 @@ def test_dir_name_carries_every_tag_pick_torch_index_can_produce(
     ``SENSELAB_TORCH_INDEX_URL``). Adding a future ``cuXXX`` entry to the map is picked
     up automatically -- this test does not hardcode the tag list.
     """
-    from senselab.utils.cuda_probe import _PYTORCH_INDEX_MAP
+    from senselab_core.runtime.hardware import _PYTORCH_INDEX_MAP
 
     tags = {tag for tag, _ in _PYTORCH_INDEX_MAP} | {"cpu", "override"}
     assert tags == {"cu130", "cu128", "cu126", "cu124", "cu121", "cpu", "override"}, (

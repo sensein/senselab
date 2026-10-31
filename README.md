@@ -308,6 +308,20 @@ export LD_LIBRARY_PATH="/opt/miniforge/lib:$LD_LIBRARY_PATH"   # macOS: DYLD_LIB
 uv run pre-commit install
 ```
 
+**After every pull, run step 1 again** (`uv sync --all-extras --group dev`, plus `--group docs` if you build
+the docs). The workspace installs `senselab`, `senselab-core` and `senselab-worker` as three editable
+distributions whose versions come from git describe, and a pull can change what each of them declares. A
+partial sync rebuilds only some of them. `uv sync` is subtractive: it removes extras and groups you do not
+name, so always pass the full set.
+
+Re-sync before running `pre-commit` too. Its ruff hooks run `uv run --frozen --no-sync ruff`, the ruff installed
+in your environment, so after a pull that bumps ruff in `uv.lock` an environment not re-synced lints with the old
+version.
+
+`senselab_core` refuses to import when its version differs from `senselab-worker`'s, but only when both are
+installed from wheels. Editable workspace installs are exempt: their versions drift with every commit and the
+lock pins them together instead. The check guards a pip install of mismatched releases, not your checkout.
+
 Then:
 
 ```bash

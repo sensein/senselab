@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.consensus import word_timing_parameters
@@ -18,7 +19,6 @@ from senselab.audio.workflows.triage.nodes.common import (
 from senselab.audio.workflows.triage.nodes.preprocess import preprocess
 from senselab.audio.workflows.triage.task_speech import task_speech_of
 from senselab.utils.data_structures import ScriptLine
-from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import _audio, _line, _seed_admit, _stub_models, word_attributes
 
 BREATH_STEM = "sub-x_ses-y_task-respiration-and-cough-v2-threebreathsnose"

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import pytest
 import torch
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -25,7 +26,6 @@ from senselab.audio.workflows.triage.task_squim import (
     task_squim_parameters,
     task_windows,
 )
-from senselab.utils.prov_store import ProvStore
 
 RATE = 16_000
 CONFIG = WindowConfig(window_s=10.0, min_window_s=3.0, floor_s=1.0)
@@ -154,7 +154,7 @@ class TestTheStore:
         back = ProvStore.read_jsonl(path, run_id="task-squim-test")
         held = find_measurement(back, MEASUREMENT)
         assert held is not None
-        a: dict[str, Any] = held.attributes
+        a: Mapping[str, Any] = held.attributes
         assert (a["pesq"], a["stoi"], a["si_sdr"]) == (2.9, 0.98, 17.0)
         assert a["windows_n"] == 3 and a["covered_s"] == pytest.approx(23.5)
         assert a["signal"] == "plain" and a["extent_source"] == EXTENT_FROM_SPANS

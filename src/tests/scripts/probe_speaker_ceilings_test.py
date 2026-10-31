@@ -46,7 +46,7 @@ def _no_real_hf_lookups(monkeypatch: pytest.MonkeyPatch) -> None:
     identical fixture in `speaker_ceiling_evaluate_test.py`.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
 
 
 class _FakeAudio:

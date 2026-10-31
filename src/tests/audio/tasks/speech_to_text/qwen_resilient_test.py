@@ -26,7 +26,7 @@ def test_qwen_worker_env_built_via_hf_subprocess_env(tmp_path: Path, monkeypatch
     # Every ref this backend resolves (the ASR model via HFModel construction, and the
     # forced-aligner companion via a bare resolve_revision call) fakes to the same SHA, so
     # this test observes routing rather than depending on network/local-cache resolution.
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
     monkeypatch.setattr(qwen_mod, "ensure_venv", lambda *a, **k: tmp_path)
     monkeypatch.setattr(qwen_mod, "venv_python", lambda *a, **k: "python")
 

@@ -62,6 +62,8 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
+from senselab_core.runtime.provenance import ProvStore
+
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction import (
     PpgsPosteriorgramUnavailable,
@@ -99,7 +101,6 @@ from senselab.audio.workflows.triage.nodes.preprocess import (
     write_ppg_posteriorgram,
 )
 from senselab.utils.data_structures import DeviceType
-from senselab.utils.prov_store import ProvStore
 from senselab.utils.subprocess_venv import record_venv_use
 
 DEFAULT_BATCH_SIZE = 500

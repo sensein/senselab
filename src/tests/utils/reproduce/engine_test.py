@@ -17,8 +17,8 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
+from senselab_core.runtime import hardware
 
-from senselab.utils import cuda_probe
 from senselab.utils.reproduce import cache, engine, host, run, sandbox
 from senselab.utils.reproduce.spec import Manifest, StepSpec
 from tests.utils.reproduce.resume_test import _killed
@@ -128,7 +128,7 @@ def _manifest(world: World, mode: str = "ok", **change: Any) -> Manifest:  # noq
     return manifest
 
 
-def _raises() -> cuda_probe.HostCuda:
+def _raises() -> hardware.HostCuda:
     raise PermissionError("nvidia-smi")
 
 
@@ -398,13 +398,13 @@ def test_engine_identity_is_keyed_and_in_provenance(world: World, monkeypatch: p
             StepSpec.model_validate(_step(world, **change))
 
     monkeypatch.setattr(
-        cuda_probe, "detect_host_cuda", lambda: cuda_probe.HostCuda((13, 0), "nvidia-smi", "CUDA Version: 13.0")
+        hardware, "detect_host_cuda", lambda: hardware.HostCuda((13, 0), "nvidia-smi", "CUDA Version: 13.0")
     )
     record = host.host_record(None, runner=_gpu)
     assert (record["gpu_name"], record["gpu_driver"], record["host_cuda"]) == ("Test GPU", DRIVER, "13.0")
-    for probe in (lambda: cuda_probe.HostCuda((12, 9), "nvcc", "release 12.9"), _raises):
+    for probe in (lambda: hardware.HostCuda((12, 9), "nvcc", "release 12.9"), _raises):
         with monkeypatch.context() as patched:
-            patched.setattr(cuda_probe, "detect_host_cuda", probe)
+            patched.setattr(hardware, "detect_host_cuda", probe)
             assert host.host_record(None, runner=_gpu)["host_cuda"] is None
     manifest = _manifest(world)
     outcome = _run(world, manifest)

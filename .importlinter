@@ -1,0 +1,140 @@
+[importlinter]
+root_packages =
+    senselab_worker
+    senselab_core
+    senselab
+    scripts
+include_external_packages = True
+
+[importlinter:contract:worker-is-the-base]
+name = senselab_worker imports nothing above it
+type = forbidden
+source_modules = senselab_worker
+forbidden_modules =
+    senselab_core
+    senselab
+    pydantic
+    torch
+    transformers
+    speechbrain
+    pyannote
+
+[importlinter:contract:kernel-below-runtime]
+name = senselab_core.kernel imports neither the runtime nor senselab
+type = forbidden
+source_modules = senselab_core.kernel
+forbidden_modules =
+    senselab_core.runtime
+    senselab
+
+[importlinter:contract:core-is-framework-free]
+name = senselab_core imports neither senselab nor a model framework
+type = forbidden
+source_modules = senselab_core
+forbidden_modules =
+    senselab
+    torch
+    transformers
+    speechbrain
+    pyannote
+
+[importlinter:contract:layers]
+name = senselab_core and senselab_worker are layered, each importing only downward
+type = layers
+layers =
+    senselab_core.cli | senselab_core.testing
+    senselab_core.runtime
+    senselab_core.kernel
+    senselab_worker
+
+[importlinter:contract:digests-are-tagged]
+name = only senselab_worker.digest and _raw_digest import a digest module (ADR-006); 1.x owners are the H-R19 worklist
+type = forbidden
+source_modules =
+    senselab_worker
+    senselab_core
+    senselab
+    scripts
+forbidden_modules =
+    hashlib
+    _hashlib
+    hmac
+    blake3
+    xxhash
+    mmh3
+    Crypto
+    Cryptodome
+    cryptography
+    _md5
+    _sha1
+    _sha2
+    _sha3
+    _blake2
+    _sha256
+    _sha512
+allow_indirect_imports = True
+ignore_imports =
+    senselab_worker.digest -> hashlib
+    senselab_worker._raw_digest -> hashlib
+    # H-R19: 1.x modules and scripts, the migration worklist in migration-ledger.md
+    scripts.analyze_audio -> hashlib
+    scripts.build_classifier_ontology_map -> hashlib
+    scripts.check_fixture_budget -> hashlib
+    scripts.extend_cohort -> hashlib
+    scripts.free_speech_review_page -> hashlib
+    scripts.release_gate -> hashlib
+    scripts.verify_grid_unification -> hashlib
+    senselab.audio.tasks.speech_to_text.crisperwhisper -> hashlib
+    senselab.audio.workflows.audio_analysis.adaptive.belief -> hashlib
+    senselab.audio.workflows.audio_analysis.adaptive.policy -> hashlib
+    senselab.audio.workflows.audio_analysis.fuse -> hashlib
+    senselab.audio.workflows.audio_analysis.run_config -> hashlib
+    senselab.audio.workflows.triage.cohort_stage -> hashlib
+    senselab.audio.workflows.triage.config -> hashlib
+    senselab.audio.workflows.triage.nodes.second_opinion -> hashlib
+    senselab.audio.workflows.triage.recording_vectors -> hashlib
+    senselab.audio.workflows.triage.review_page.page -> hashlib
+    senselab.audio.workflows.triage.speaker_vectors -> hashlib
+    senselab.audio.workflows.triage.task_audio -> hashlib
+    senselab.audio.workflows.triage.task_squim -> hashlib
+    senselab.text.tasks.decision_model.ollama -> hashlib
+    senselab.text.tasks.pii_detection.redaction_review -> hashlib
+    senselab.text.tasks.pii_detection.subprocess_backend -> hashlib
+    senselab.utils.reproduce.build -> hashlib
+    senselab.utils.reproduce.cache -> hashlib
+    senselab.utils.reproduce.cli -> hashlib
+    senselab.utils.reproduce.digest -> hashlib
+    senselab.utils.reproduce.engine -> hashlib
+    senselab.utils.reproduce.env -> hashlib
+    senselab.utils.reproduce.inputs -> hashlib
+    senselab.utils.reproduce.inputs -> xxhash
+    senselab.utils.reproduce.lock -> hashlib
+    senselab.utils.reproduce.lockgen -> hashlib
+    senselab.utils.reproduce.locks -> hashlib
+    senselab.utils.reproduce.run -> hashlib
+    senselab.utils.reproduce.sandbox -> hashlib
+    senselab.utils.reproduce.source -> hashlib
+    senselab.utils.reproduce.weights -> hashlib
+    senselab.utils.subprocess_venv -> hashlib
+    senselab.utils.tasks.cached_inference -> hashlib
+    senselab.utils.uv_tools -> hashlib
+    senselab.utils.venv_lock -> hashlib
+    senselab.utils.venv_worker -> hashlib
+    senselab.utils.vllm_server -> hashlib
+    senselab.utils.work_pool -> hashlib
+
+[importlinter:contract:raw-digest-owners]
+name = only the named owners hash bytes already in memory (senselab_worker._raw_digest, ADR-006)
+type = forbidden
+source_modules =
+    senselab_worker
+    senselab_core
+    senselab
+    scripts
+forbidden_modules =
+    senselab_worker._raw_digest
+allow_indirect_imports = True
+ignore_imports =
+    senselab_worker.codec -> senselab_worker._raw_digest
+    senselab_worker.hashing -> senselab_worker._raw_digest
+    senselab_core.runtime.store -> senselab_worker._raw_digest

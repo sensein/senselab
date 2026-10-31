@@ -21,6 +21,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 import yaml  # type: ignore[import-untyped]
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.config import TriageConfig
@@ -37,7 +38,6 @@ from senselab.audio.workflows.triage.recording_vectors import stem_of
 from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
 from senselab.audio.workflows.triage.task_audio import MEASUREMENT as TASK_AUDIO_MEASUREMENT
 from senselab.audio.workflows.triage.task_audio import PLAIN, sample_bounds, task_extent
-from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "TASK_SQUIM"
 """The node name this measurement's activities carry."""

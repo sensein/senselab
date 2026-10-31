@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 import yaml
+from senselab_core.runtime.bep028 import SHA256_ALGORITHM, check_graph, convert_store_file, store_id
+from senselab_core.runtime.provenance import CHECKSUM_KEY, PATH_KEY, ProvStore
 
-from senselab.utils.prov_bep028 import SHA256_ALGORITHM, check_graph, convert_store_file, store_id
-from senselab.utils.prov_store import CHECKSUM_KEY, PATH_KEY, ProvStore
 from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.env import INSTALLED, MARKER, VenvResult, installed_sha256
 from senselab.utils.reproduce.host import HOST_KEYS
@@ -431,12 +431,13 @@ def _parameters(out: Path, prov: str = "prov") -> dict[str, Any]:
 @needs_userns
 def test_draw_and_engine_are_in_the_details(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The record's ``draw`` holds seeds, sampling, engine, concurrency, batch size, GPU, CUDA and env lock together."""
-    from senselab.utils import cuda_probe
+    from senselab_core.runtime import hardware
+
     from senselab.utils.reproduce import engine
     from tests.utils.reproduce.engine_test import DRIVER, _gpu
 
     monkeypatch.setattr(
-        cuda_probe, "detect_host_cuda", lambda: cuda_probe.HostCuda((13, 0), "nvidia-smi", "CUDA Version: 13.0")
+        hardware, "detect_host_cuda", lambda: hardware.HostCuda((13, 0), "nvidia-smi", "CUDA Version: 13.0")
     )
     world = _draw_world(tmp_path)
     manifest = world.manifest(_draw_step(world))

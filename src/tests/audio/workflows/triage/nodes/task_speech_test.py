@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Sequence
 
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.tasks.redaction.api import RedactionExtent
 from senselab.audio.workflows.triage.config import load_triage_config
@@ -45,7 +46,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     fold_file_verdict,
     release_ground_key,
 )
-from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 from tests.audio.workflows.triage.nodes.redact_test import _seed_redact_store, _word_extent
 

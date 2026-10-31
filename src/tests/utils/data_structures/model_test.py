@@ -44,7 +44,7 @@ def test_hfmodel_valid_hf_repo_check(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test valid HFModel repo check."""
     sha = "a" * 40
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kw: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: sha)
     model: HFModel = HFModel(path_or_uri="valid_repo")
     assert model.revision == "main"
     assert model.commit_sha == sha
@@ -54,7 +54,7 @@ def test_hf_model_records_the_resolved_commit_sha(monkeypatch: pytest.MonkeyPatc
     """Revision keeps the ref asked for; commit_sha carries what it resolved to."""
     sha = "c" * 40
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kw: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: sha)
 
     model: HFModel = HFModel(path_or_uri="org/model", revision="main")
     assert model.revision == "main", "the requested ref must survive"
@@ -112,15 +112,14 @@ def test_hfmodel_wraps_a_resolution_failure_as_validationerror(monkeypatch: pyte
     ``ValidationError``/``ValueError`` around ``HFModel(...)`` saw an unhandled crash instead.
     """
     from pydantic import ValidationError
-
-    from senselab.utils.model_revision import RevisionResolutionError
+    from senselab_core.runtime.revision import RevisionResolutionError
 
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kw: True)
 
     def _boom(*a: object, **k: object) -> str:
         raise RevisionResolutionError("cannot resolve org/model@main")
 
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _boom)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", _boom)
     with pytest.raises(ValidationError):
         HFModel(path_or_uri="org/model", revision="main")
 
@@ -156,7 +155,7 @@ def test_get_huggingface_token_prefers_environment_over_dotenv(tmp_path: Path, m
     assert get_huggingface_token() == "hf_from_env"
 
 
-@patch("senselab.utils.model_revision.resolve_revision", return_value="c" * 40)
+@patch("senselab_core.runtime.revision.resolve_revision", return_value="c" * 40)
 @patch("senselab.utils.dependencies.ensure_hf_model", return_value="abc123")
 def test_hfmodel_caches_hf_repo_check(mock_ensure: MagicMock, mock_resolve: MagicMock) -> None:
     """Test that we successfully cache HF repo checks and only make the check once."""
@@ -188,7 +187,7 @@ def _offline_model_construction(monkeypatch: pytest.MonkeyPatch) -> None:
     an empty ``HF_HUB_CACHE``.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kw: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "e" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "e" * 40)
 
 
 def test_model_for_task_routes_diarization_by_prefix(_offline_model_construction: None) -> None:

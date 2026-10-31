@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.background_model import (
     BACKGROUND_MODEL,
@@ -51,7 +52,6 @@ from senselab.audio.workflows.triage.session_background import (
     session_background_parameters,
     speech_residual_of,
 )
-from senselab.utils.prov_store import ProvStore
 
 OWN_FLOOR = "background_floor"
 """PREPROCESS's measurement of the recording's own floor and level."""

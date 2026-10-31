@@ -256,7 +256,7 @@ def discover_backends(package_root: Optional[Path] = None) -> dict[str, Backend]
         ]
         if not calls:
             continue
-        module = importlib.import_module(module_name)
+        module = importlib.import_module(module_name)  # noqa: TID251
 
         def value(node: Optional[ast.expr], module: object = module) -> object:
             if node is None:
@@ -397,7 +397,7 @@ def torch_only_cuda_packages(packages: dict[str, tuple[str, set[str]]]) -> list[
 
 def top_cuda_tag(max_cuda_version: Optional[tuple[int, int]]) -> str:
     """The newest PyTorch CUDA index this venv can be routed to."""
-    from senselab.utils.cuda_probe import _PYTORCH_INDEX_MAP, DEFAULT_MAX_CUDA
+    from senselab_core.runtime.hardware import _PYTORCH_INDEX_MAP, DEFAULT_MAX_CUDA
 
     ceiling = max_cuda_version if max_cuda_version is not None else DEFAULT_MAX_CUDA
     for tag, version in _PYTORCH_INDEX_MAP:

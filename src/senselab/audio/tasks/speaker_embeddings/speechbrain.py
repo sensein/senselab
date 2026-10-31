@@ -4,12 +4,12 @@ from typing import Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
+from senselab_core.runtime.retry import retry_on_transient_error
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, SpeechBrainModel, _select_device_and_dtype, device_run_opt
 from senselab.utils.dependencies import (
     resolve_model,
-    retry_on_transient_error,
     speechbrain_load_device,
     speechbrain_loading_cwd,
     speechbrain_move_to,

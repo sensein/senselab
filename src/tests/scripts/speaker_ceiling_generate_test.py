@@ -76,11 +76,11 @@ def _mock_hf_and_tts(monkeypatch: pytest.MonkeyPatch) -> None:
     ``check_hf_repo_exists``/``resolve_revision`` are patched at the modules that actually
     define them (not re-exported names), matching this repo's established convention --
     patching the re-exported name in ``generate.py`` would miss the deferred
-    ``from senselab.utils.model_revision import resolve_revision`` import inside
+    ``from senselab_core.runtime.revision import resolve_revision`` import inside
     ``HFModel._resolve_commit_sha``.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
     monkeypatch.setattr(_generate, "supported_speakers", lambda model=None: list(_VOICE_POOL))
     monkeypatch.setattr(_generate, "synthesize_texts_with_qwen", _fake_synthesize_texts_with_qwen)
 

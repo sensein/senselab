@@ -41,8 +41,8 @@ when the run ends with one of `INTEGRITY_CODES`. The summary carries ``attempt``
 6. Digest the inputs again and repeat the registered inputs' pre-check (``E_INPUT_MUTATED``), verify the
    checkout (``E_SRC_MUTATED``) and the venv (``E_ENV_CHANGED``), and refuse and delete any ``summary.json``,
    ``metrics.json``, ``run.json`` or ``extracted.json`` under ``work/`` (``E_RESERVED_NAME``).
-7. Run the adapter in the sandbox with the driver's interpreter; it may import nothing from senselab
-   outside ``senselab.utils.reproduce`` (``E_ADAPTER_IMPORT``) and returns its metrics on a pipe.
+7. Run the adapter in the sandbox with the driver's interpreter; it may import only the standard library and
+   ``senselab.utils.reproduce`` (``E_ADAPTER_IMPORT``) and returns its metrics on a pipe.
    Validate, evaluate ``expect`` (`evaluate_expect`), validate again as the driver with the same
    ``policy.min_cell`` of the profile and write ``R/metrics.json``. A step that declares ``extract``
    gets ``{"metrics": ..., "extracted": ...}`` from its adapter; the extracted values are checked
@@ -314,25 +314,31 @@ import builtins, importlib, os, pkgutil, runpy, sys, traceback
 sys.path.insert(0, sys.argv[1])
 _fd = int(sys.argv[2])
 ALLOWED = "senselab.utils.reproduce"
+PARENTS = ("senselab", "senselab.utils")
 import senselab.utils.reproduce as _pkg
 for _m in pkgutil.iter_modules(_pkg.__path__):
     importlib.import_module(ALLOWED + "." + _m.name)
 
-def _senselab(name):
-    return name == "senselab" or name.startswith("senselab.")
+_stdlib = frozenset(sys.stdlib_module_names)
+_before = frozenset(sys.modules)
+
+def _top(name):
+    return name.partition(".")[0]
 
 def _allowed(name):
-    return name == ALLOWED or name.startswith(ALLOWED + ".")
+    return name == ALLOWED or name.startswith(ALLOWED + ".") or _top(name) in _stdlib
 
-_before = {n for n in sys.modules if _senselab(n)}
+def _trusted(importer):
+    return bool(importer) and importer != "__main__" and (importer in _before or _allowed(importer))
+
 _violations = []
 _import = builtins.__import__
 _import_module = importlib.import_module
 
 def _refuse(name, fromlist, importer):
-    if _senselab(importer) or not _senselab(name) or _allowed(name):
+    if _trusted(importer) or _allowed(name):
         return False
-    if name in ("senselab", "senselab.utils") and fromlist:
+    if name in PARENTS and fromlist:
         return not all(_allowed(name + "." + f) for f in fromlist)
     return True
 
@@ -365,7 +371,7 @@ try:
     os.close(_fd)
 except OSError:
     pass
-_new = sorted(n for n in sys.modules if _senselab(n) and n not in _before and not _allowed(n))
+_new = sorted(n for n in sys.modules if n not in _before and not _allowed(n))
 if _violations or _new:
     print("E_ADAPTER_IMPORT", file=sys.stderr)
     sys.stdout.flush()
@@ -375,8 +381,9 @@ sys.exit(_code)
 """
 """Runs an adapter as ``__main__`` with ``sys.argv = [adapter, work dir, metrics path]``, where the metrics
 path is the driver's pipe. It first imports every ``senselab.utils.reproduce`` module, then refuses any
-import, by an adapter, of a senselab module outside that package, and exits 86 if one was attempted or one
-was loaded anyway."""
+import, by an adapter, of a module that is neither in the standard library nor in that package, and exits 86
+if one was attempted or one was loaded anyway. It guards against accidental first-party imports and is not a
+sandbox: the namespace sandbox the adapter runs in is the security boundary."""
 
 
 class RunError(Exception):
@@ -1916,7 +1923,7 @@ class _Execution:
         config = engine.launcher_config(
             spec, executable=self._render("{venv}/bin/vllm"), model_dir=model_dir, tmp=self._render("{tmp}")
         )
-        senselab_root = str(Path(sys.modules["senselab"].__file__ or "").resolve().parent.parent)
+        senselab_root = str(Path(sys.modules["senselab"].__file__ or "").resolve().parent.parent)  # noqa: TID251
         launcher = [sys.executable, "-I", "-B", "-c", engine.LAUNCHER_CODE]
         return [*launcher, senselab_root, str(report_fd), json.dumps(config)]
 
@@ -2068,7 +2075,7 @@ class _Execution:
             os.close(fd)
         scratch = _mkdir(self.result / ADAPTER_TMP)
         _mkdir(scratch / "home")
-        senselab_root = str(Path(sys.modules["senselab"].__file__ or "").resolve().parent.parent)
+        senselab_root = str(Path(sys.modules["senselab"].__file__ or "").resolve().parent.parent)  # noqa: TID251
         read, write = os.pipe()
         argv = [sys.executable, "-I", "-B", "-c", ADAPTER_RUNNER, senselab_root, str(write), str(copy), str(self.work)]
         inner = self._inner([scratch], scratch)

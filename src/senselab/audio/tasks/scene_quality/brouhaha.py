@@ -202,9 +202,9 @@ def _build_worker_input(
             scene-quality signals rather than crash the whole run (FR-023).
     """
     # Deferred import (not at module top): keeps this module monkeypatch-friendly at
-    # `senselab.utils.model_revision.resolve_revision`, matching the rest of the codebase's
+    # `senselab_core.runtime.revision.resolve_revision`, matching the rest of the codebase's
     # convention for cross-module helpers (see e.g. HFModel._resolve_commit_sha).
-    from senselab.utils.model_revision import resolve_revision
+    from senselab_core.runtime.revision import resolve_revision
 
     resolved = resolve_revision(model_name, revision, token=token)
     return {

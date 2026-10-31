@@ -35,8 +35,8 @@ from typing import Any
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
+from senselab_core.runtime.locks import SharedFileLock
 
-from senselab.utils.file_lock import SharedFileLock
 from senselab.utils.reproduce import engine
 from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.env import env_key
@@ -631,8 +631,8 @@ def claim(results_root: Path, key: str, *, timeout: float = CLAIM_TIMEOUT_S) -> 
 
     The lock files are ``<results_root>/.claims/<key>.{lock,heartbeat,holder}``; the results root's own
     mode is never changed. ``leftover`` is the lock's own takeover verdict (`SharedFileLock.took_over`): an
-    identity in ``.holder`` read before an uncontended acquire means a holder that never released, i.e. one that
-    was killed, since a clean release clears ``.holder`` and a waiter's acquire is contended.
+    identity in ``.holder`` once the lock is held means a holder that never released, i.e. one that was killed,
+    since a clean release clears ``.holder`` before unlocking.
 
     Args:
         results_root: The profile's results root.

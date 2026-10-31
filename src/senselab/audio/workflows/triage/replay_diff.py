@@ -21,6 +21,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
+from senselab_core.runtime.provenance import Entity, ProvStore
+
 from senselab.audio.workflows.triage.corpus_report import reason_ground
 from senselab.audio.workflows.triage.extend import (
     DECISION_SUPERSEDED,
@@ -32,7 +34,6 @@ from senselab.audio.workflows.triage.extend import (
 )
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, SCANNED
 from senselab.utils import fastio
-from senselab.utils.prov_store import Entity, ProvStore
 
 VERDICT_NODE = "VERDICT"
 """The node whose verdict entity carries the whole file-level decision."""

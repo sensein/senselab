@@ -13,6 +13,7 @@ from typing import Any, Mapping
 
 import numpy as np
 import yaml
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.breath_pattern import (
@@ -25,7 +26,6 @@ from senselab.audio.workflows.triage.nodes.branches import Expectation
 from senselab.audio.workflows.triage.nodes.common import clamp_to_recording, mint_live, write_measurement
 from senselab.audio.workflows.triage.task_events import REVIEW
 from senselab.audio.workflows.triage.vocabulary import SUPERSEDES, TASK_EXTENT_SPAN_ROLE
-from senselab.utils.prov_store import ProvStore
 
 AIRWAY_EVENT_REQUIREMENTS_PATH = Path(__file__).parents[1] / "data" / "airway_event_requirements.yaml"
 

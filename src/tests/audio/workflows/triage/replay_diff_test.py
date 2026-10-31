@@ -16,6 +16,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from senselab_core.runtime.provenance import ProvStore
+
 from senselab.audio.workflows.triage.extend import (
     REPLAY_MARKER_STEP,
     REPLAY_NODE,
@@ -50,7 +52,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     RunState,
     Triage,
 )
-from senselab.utils.prov_store import ProvStore
 
 SECRET = "Marguerite Okonkwo of 14 Ellery Street"
 """A string standing in for what a transcript and a PII finding carry. It must reach no row."""

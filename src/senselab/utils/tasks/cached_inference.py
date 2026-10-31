@@ -257,7 +257,7 @@ the disagreements ranking and the LS bins. ``theta_low`` / ``theta_high`` were n
 composition and must be re-measured rather than carried over.
 
 Bumped 22 → 23 when the key became commit-aware. Every load resolves ``model_id`` to an immutable
-40-hex commit SHA (:func:`senselab.utils.model_revision.resolve_revision`), and :func:`cache_key`
+40-hex commit SHA (:func:`senselab_core.runtime.revision.resolve_revision`), and :func:`cache_key`
 now hashes that SHA alongside the ref-shaped ``model_id`` it already carried. Before this, the key
 was blind to *which* commit produced an entry: an upstream push to a tracked ref (``"main"``, a
 branch) made every load pick up the new weights while the key stayed byte-identical, so a stale
@@ -793,7 +793,7 @@ def result_cache_dir() -> Path | None:
     if raw:
         root = Path(raw)
     else:
-        from senselab.utils.model_revision import cache_root
+        from senselab_core.runtime.revision import cache_root
 
         root = cache_root() / "results"
     return root / f"schema-{CACHE_SCHEMA_VERSION}"

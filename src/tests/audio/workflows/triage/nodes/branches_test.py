@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import DATA_MAP_PATHS, TriageConfig, load_triage_config
@@ -109,7 +110,6 @@ from senselab.audio.workflows.triage.routing_analysis.families import (
     SYLLABLE_REPETITION,
     VOICE_ELICITING,
 )
-from senselab.utils.prov_store import Entity, ProvStore
 
 BIDS_STEM = "sub-abc123_ses-1_task-harvard-sentences-list-10-3"
 """A real stem shape: two trailing numeric segments, which ``task_family`` collapses."""

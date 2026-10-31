@@ -107,7 +107,7 @@ def _commit(model: "HFModel") -> str:
     """The 40-hex commit ``model`` is pinned to (resolved at construction; re-resolved if unset)."""
     if model.commit_sha:
         return model.commit_sha
-    from senselab.utils.model_revision import resolve_revision
+    from senselab_core.runtime.revision import resolve_revision
 
     return resolve_revision(str(model.path_or_uri), model.revision or "main")
 
@@ -699,8 +699,8 @@ def _classify_continuous_ser_venv(
         # run. commit_sha is already populated by HFModel's constructor-time resolution;
         # resolve_revision is only a defensive fallback if it somehow was not. Deferred import
         # (not at module top) keeps this monkeypatch-friendly at
-        # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
-        from senselab.utils.model_revision import resolve_revision
+        # senselab_core.runtime.revision.resolve_revision, matching the rest of the codebase.
+        from senselab_core.runtime.revision import resolve_revision
 
         revision = model.commit_sha or resolve_revision(str(model.path_or_uri), model.revision or "main")
         input_json = json.dumps(

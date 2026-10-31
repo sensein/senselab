@@ -30,7 +30,6 @@ that mechanism. Every design decision, deviation and measurement behind this mod
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
@@ -40,9 +39,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from senselab_core.runtime import models as _models
+from senselab_core.runtime.locks import SharedFileLock
+
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype, device_run_opt
 from senselab.utils.data_structures.logging import logger
-from senselab.utils.file_lock import SharedFileLock
 from senselab.utils.subprocess_venv import (
     _cache_dir_path,
     _clean_subprocess_env,
@@ -257,8 +258,7 @@ def stage_clearvoice_checkpoints(spec: ClearVoiceModelSpec, revision: str = "mai
         weight files it names, and the 40-hex commit those bytes came from.
     """
     from huggingface_hub import hf_hub_download
-
-    from senselab.utils.model_revision import resolve_revision
+    from senselab_core.runtime.revision import resolve_revision
 
     sha = resolve_revision(spec.model_id, revision)
     manifest = Path(hf_hub_download(spec.model_id, "last_best_checkpoint", revision=sha))
@@ -274,8 +274,7 @@ def stage_clearvoice_checkpoints(spec: ClearVoiceModelSpec, revision: str = "mai
 _S3FD_COMMIT = "6b3774dc79c46ae8bed2a4fa5f706f0ac8c75c61"
 _S3FD_PATH_IN_REPO = "clearvoice/clearvoice/models/av_mossformer2_tse/faceDetector/s3fd/sfd_face.pth"
 _S3FD_URL = f"https://raw.githubusercontent.com/modelscope/ClearerVoice-Studio/{_S3FD_COMMIT}/{_S3FD_PATH_IN_REPO}"
-# Measured against the bytes at _S3FD_COMMIT (89,844,381 bytes); a mismatch is fatal.
-_S3FD_SHA256 = "d54a87c2b7543b64729c9a25eafd188da15fd3f6e02f0ecec76ae1b30d86c491"
+# The file digest is the manifest entry "s3fd", measured against the bytes at _S3FD_COMMIT; a mismatch is fatal.
 _S3FD_SIZE_BYTES = 89844381
 
 
@@ -289,9 +288,10 @@ def stage_s3fd_weights() -> Path:
         Path to ``sfd_face.pth``.
 
     Raises:
-        RuntimeError: If the downloaded bytes do not match :data:`_S3FD_SHA256`. See design.md D-7.
+        WeightsMismatch: If the bytes do not match the manifest's ``s3fd`` entry (a ``RuntimeError``).
+            See design.md D-7.
     """
-    root = _cache_dir_path() / "clearvoice" / "s3fd" / _S3FD_SHA256
+    root = _cache_dir_path() / "clearvoice" / "s3fd" / _models.WEIGHTS["s3fd"]
     weights = root / "sfd_face.pth"
     if weights.is_file():
         return weights
@@ -301,21 +301,16 @@ def stage_s3fd_weights() -> Path:
         if weights.is_file():
             return weights
         logger.info(f"ClearerVoice: fetching S3FD face-detector weights at commit {_S3FD_COMMIT[:12]}")
-        digest = hashlib.sha256()
         with tempfile.NamedTemporaryFile(dir=str(root), delete=False, suffix=".part") as tmp:
             tmp_path = Path(tmp.name)
             with urllib.request.urlopen(_S3FD_URL) as response:  # noqa: S310 -- constant https URL
                 while chunk := response.read(1 << 20):
-                    digest.update(chunk)
                     tmp.write(chunk)
-        actual = digest.hexdigest()
-        if actual != _S3FD_SHA256:
+        try:
+            _models.verify_weights("s3fd", tmp_path)
+        except _models.WeightsMismatch:
             tmp_path.unlink(missing_ok=True)
-            raise RuntimeError(
-                f"S3FD weights fetched at commit {_S3FD_COMMIT} hashed {actual}, expected "
-                f"{_S3FD_SHA256}. This file has no revision-addressable home upstream, so the digest "
-                "is its only identity; refusing it rather than running an unknown face detector."
-            )
+            raise
         os.replace(tmp_path, weights)
     return weights
 

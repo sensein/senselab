@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.breath_pattern import (
     ALTERNATING_BREATHS,
@@ -36,7 +37,6 @@ from senselab.audio.workflows.triage.breath_pattern import (
     train_parameters,
     voice_segments,
 )
-from senselab.utils.prov_store import ProvStore
 
 HOP_S = 0.005
 BIN_HZ = 50.0

@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
-from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import window
 
 

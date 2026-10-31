@@ -11,17 +11,14 @@ from pathlib import Path
 
 import huggingface_hub
 import pytest
-from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
+from senselab_core.runtime.locks import lock_holder
 
 import senselab.utils.dependencies as dep
 from senselab.utils.dependencies import (
-    _get_cached_commit_hash,
     hf_subprocess_env,
     load_hf_resilient,
     resolve_model,
 )
-from senselab.utils.file_lock import lock_holder
-from tests.utils.conftest import hub_error
 
 
 def _fake_cache(monkeypatch: pytest.MonkeyPatch, root: Path, repo_id: str, revision: str, sha: str) -> Path:
@@ -39,39 +36,6 @@ def _fake_cache(monkeypatch: pytest.MonkeyPatch, root: Path, repo_id: str, revis
     # fixture that omits this would be fabricating a state the code is right to reject.
     (snap / "config.json").write_text("{}")
     return snap
-
-
-def test_get_cached_commit_hash_resolves_real_sha_from_refs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """_get_cached_commit_hash returns the commit SHA from refs/<ref>, not the mutable branch name."""
-    sha = "a" * 40
-    _fake_cache(monkeypatch, tmp_path, "org/model", "main", sha)
-    assert _get_cached_commit_hash("org/model", "main") == sha
-
-
-def test_sha_revision_is_passed_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A full-SHA revision is returned as-is (already immutable)."""
-    sha = "e" * 40
-    _fake_cache(monkeypatch, tmp_path, "org/model", "main", "f" * 40)
-    assert _get_cached_commit_hash("org/model", sha) == sha
-
-
-def test_cached_commit_hash_raises_rather_than_returning_a_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A cold cache must raise, not hand back the mutable ref as if it were a SHA."""
-    from senselab.utils.dependencies import _get_cached_commit_hash
-    from senselab.utils.model_revision import RevisionResolutionError
-
-    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
-    with pytest.raises(RevisionResolutionError):
-        _get_cached_commit_hash("org/never-downloaded", "main")
-
-
-def test_a_newline_suffixed_sha_is_not_passed_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unstripped subprocess stdout must not ride the full-SHA shortcut into provenance."""
-    from senselab.utils.model_revision import RevisionResolutionError
-
-    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
-    with pytest.raises(RevisionResolutionError):
-        _get_cached_commit_hash("org/model", "e" * 40 + "\n")
 
 
 def test_point_ref_at_does_not_mistake_a_newline_suffixed_sha_for_a_commit(tmp_path: Path) -> None:
@@ -135,7 +99,7 @@ def test_load_hf_resilient_no_hub_call_when_cached(tmp_path: Path, monkeypatch: 
     sha = "d" * 40
     _fake_cache(monkeypatch, tmp_path, "org/model", "main", sha)
     monkeypatch.setattr(dep, "is_hf_model_cached", lambda *a, **k: True)
-    monkeypatch.setattr(dep, "_get_cached_commit_hash", lambda *a, **k: sha)
+    monkeypatch.setattr(dep, "get_cached_commit_hash", lambda *a, **k: sha)
 
     def boom(*a: object, **k: object) -> None:
         raise AssertionError("HfApi.model_info was called for a cached model")
@@ -251,7 +215,7 @@ def test_ensure_hf_model_locks_via_shared_file_lock(tmp_path: Path, monkeypatch:
     monkeypatch.setattr(dep, "is_hf_model_cached", lambda *a, **k: False)
     monkeypatch.setattr(dep, "_read_result_cache", lambda *a, **k: None)
     monkeypatch.setattr(dep, "_write_result_cache", lambda *a, **k: None)
-    monkeypatch.setattr(dep, "_get_cached_commit_hash", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr(dep, "get_cached_commit_hash", lambda *a, **k: "f" * 40)
     monkeypatch.setattr("senselab.utils.data_structures.model.get_huggingface_token", lambda: None)
 
     captured: dict = {}
@@ -335,7 +299,7 @@ def test_resolve_model_refuses_to_return_a_snapshot_path_that_does_not_exist(
 
     sha = "d" * 40
     monkeypatch.setattr(hf_constants, "HF_HUB_CACHE", str(tmp_path / "hf"))
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: sha)
     monkeypatch.setattr(dep, "ensure_hf_model", lambda *a, **k: sha)
 
     with pytest.raises(RuntimeError, match="snapshot"):
@@ -370,78 +334,24 @@ def test_is_hf_model_cached_honours_an_explicit_cache_dir(tmp_path: Path, monkey
     assert dep.is_hf_model_cached("org/model", "main", cache_dir=tmp_path / "empty") is False
 
 
-def test_a_definitive_404_is_not_retried() -> None:
-    """A missing repo is a verdict, not a blip: retrying it only delays the real error.
+def test_cache_root_agrees_with_dependencies_cache_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_cache_root`` must not drift from ``dependencies._senselab_cache_dir``.
 
-    ``RepositoryNotFoundError`` subclasses ``httpx.HTTPError`` -> ``OSError``, so it matches
-    ``_TRANSIENT_EXCEPTIONS``, and it carries its status only on ``.response.status_code``. Before
-    ``_http_status`` read that attribute, this classified as transient and every genuine 404 cost
-    three attempts and 3s of backoff.
+    The two duplicate the same env var and default path -- duplication forced by
+    the circular-import constraint (``dependencies`` imports this module) -- and
+    nothing else catches the two definitions drifting apart, which would put the
+    run manifest in a different tree from the rest of the HF cache.
     """
-    exc = hub_error(404, RepositoryNotFoundError)
-    assert not hasattr(exc, "code") and not hasattr(exc, "status_code"), (
-        "the status lives on .response.status_code alone -- that is the whole point of this test"
-    )
-    assert dep._is_transient(exc) is False
+    import senselab_core.runtime.revision as mr
 
+    import senselab.utils.dependencies as deps
 
-def test_a_gated_403_is_not_retried() -> None:
-    """403 means the token lacks access; waiting does not grant it."""
-    assert dep._is_transient(hub_error(403, GatedRepoError)) is False
+    override = tmp_path / "explicit-cache"
+    monkeypatch.setenv("SENSELAB_CACHE", str(override))
+    assert mr._cache_root() == deps._senselab_cache_dir()
 
-
-def test_a_429_is_retried() -> None:
-    """The one 4xx that is transient: the server asking for backoff is what backoff is for."""
-    assert dep._is_transient(hub_error(429)) is True
-
-
-def test_a_500_is_retried() -> None:
-    """Server-side failures are the canonical retryable case."""
-    assert dep._is_transient(hub_error(500)) is True
-    assert dep._is_transient(hub_error(503)) is True
-
-
-def test_connection_and_timeout_errors_are_retried() -> None:
-    """The statusless cases, in the shapes each client in play actually raises them.
-
-    ``httpx`` is huggingface_hub 1.x's transport and its transport errors descend from
-    ``httpx.HTTPError``, not ``OSError``, so they matched nothing in ``_TRANSIENT_EXCEPTIONS``
-    until it learned about them.
-    """
-    import httpx
-
-    assert dep._is_transient(httpx.ConnectError("connection refused")) is True
-    assert dep._is_transient(httpx.ReadTimeout("timed out")) is True
-    assert dep._is_transient(ConnectionError("reset by peer")) is True
-    assert dep._is_transient(TimeoutError("timed out")) is True
-
-
-def test_a_non_network_error_is_never_retried() -> None:
-    """A programming error must fail on the first attempt, not three seconds later."""
-    assert dep._is_transient(ValueError("bad argument")) is False
-
-
-def test_retry_stops_on_a_404_and_backs_off_on_a_429(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The classification is only worth anything if ``retry_on_transient_error`` acts on it."""
-    monkeypatch.setattr(dep.time, "sleep", lambda *_a, **_k: None)
-
-    calls = {"n": 0}
-
-    def _not_found() -> str:
-        calls["n"] += 1
-        raise hub_error(404, RepositoryNotFoundError)
-
-    with pytest.raises(RepositoryNotFoundError):
-        dep.retry_on_transient_error(_not_found)
-    assert calls["n"] == 1, "a 404 must fail on the first attempt"
-
-    calls["n"] = 0
-
-    def _throttled_once() -> str:
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise hub_error(429)
-        return "ok"
-
-    assert dep.retry_on_transient_error(_throttled_once) == "ok"
-    assert calls["n"] == 2, "a 429 must be retried"
+    # Unset case: also pin HOME so dependencies._senselab_cache_dir()'s mkdir
+    # lands under tmp_path rather than creating ~/.cache/senselab/hf for real.
+    monkeypatch.delenv("SENSELAB_CACHE", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert mr._cache_root() == deps._senselab_cache_dir()

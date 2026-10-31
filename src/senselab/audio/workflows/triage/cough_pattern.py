@@ -20,6 +20,7 @@ from typing import Any, Sequence
 import numpy as np
 import yaml
 from scipy.signal import find_peaks
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.background_speech import background_speech_parameters
@@ -34,7 +35,6 @@ from senselab.audio.workflows.triage.task_events import (
     task_events_parameters,
 )
 from senselab.audio.workflows.triage.task_extent import diarized_turns, task_extent_parameters
-from senselab.utils.prov_store import ProvStore
 
 COUGH_PATTERN_PATH = Path(__file__).parent / "data" / "cough_pattern.yaml"
 

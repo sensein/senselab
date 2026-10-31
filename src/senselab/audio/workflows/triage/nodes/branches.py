@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, NamedTuple, Protocol, Sequence
 
 import numpy as np
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
@@ -49,7 +50,6 @@ from senselab.audio.workflows.triage.routing_analysis.families import (
     task_family,
     task_id_of,
 )
-from senselab.utils.prov_store import Entity, ProvStore
 
 UNDETERMINED: Literal["UNDETERMINED"] = "UNDETERMINED"
 """What a mode returns when it evaluated no task, or when its only instrument is absent."""

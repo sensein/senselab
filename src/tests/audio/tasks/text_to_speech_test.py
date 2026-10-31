@@ -32,7 +32,7 @@ def _offline_hfmodel_construction(monkeypatch: pytest.MonkeyPatch) -> None:
     construction in tests.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
 
 
 # Coqui TTS synthesis still uses direct TTS import (not subprocess venv yet).
@@ -254,7 +254,7 @@ def test_synthesis_stages_via_the_ref_but_pins_the_worker_payload_to_the_sha(
     test would fail if that ref/SHA split were collapsed back to passing the SHA everywhere.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "c" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "c" * 40)
 
     staging_calls = []
 
@@ -286,7 +286,7 @@ def test_none_speaker_reaches_the_worker_payload_unresolved(monkeypatch: pytest.
     host-side default speaker were substituted into the payload before it is sent.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "d" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "d" * 40)
     monkeypatch.setattr(qwen_tts, "hf_subprocess_env", lambda *a, **k: {})
     monkeypatch.setattr(qwen_tts, "ensure_venv", lambda *a, **k: Path("/tmp/fake-qwen-tts-venv"))
     monkeypatch.setattr(qwen_tts, "venv_python", lambda venv_dir: "/tmp/fake-python")
@@ -321,7 +321,7 @@ def test_supported_speakers_reads_config_json_directly_without_a_full_snapshot(
     fail if that ever happened, since ``resolve_model`` is mocked to raise.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "a" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "a" * 40)
 
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({"talker_config": {"spk_id": {"ryan": 0, "aiden": 1, "vivian": 2}}}))
@@ -350,7 +350,7 @@ def test_supported_speakers_raises_when_checkpoint_has_no_named_speakers(
 ) -> None:
     """A checkpoint with no ``talker_config.spk_id`` mapping (e.g. Base/VoiceDesign) raises."""
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "b" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "b" * 40)
 
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({"talker_config": {}}))

@@ -17,12 +17,12 @@ from typing import Any, Callable, List, Optional, Sequence
 import numpy as np
 import pytest
 import soundfile as sf
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
 from senselab.audio.workflows.triage.nodes.common import find_measurement, path_attributes, software_agent
 from senselab.audio.workflows.triage.nodes.preprocess import diarization_measurement
 from senselab.utils.data_structures import ScriptLine
-from senselab.utils.prov_store import ProvStore
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_diarization.py"

@@ -714,8 +714,8 @@ def detect_pii_via_subprocess(
         # Resolve the ref to a commit SHA before staging, then forward that SHA (never
         # the ref) to both the worker and hf_subprocess_env. Deferred import (not at module
         # top) keeps this monkeypatch-friendly at
-        # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
-        from senselab.utils.model_revision import resolve_revision
+        # senselab_core.runtime.revision.resolve_revision, matching the rest of the codebase.
+        from senselab_core.runtime.revision import resolve_revision
 
         gliner_revision = resolve_revision(str(gliner_model), "main")
 

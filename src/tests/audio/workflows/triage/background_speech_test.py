@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.background_speech import background_speech_of, measure_background_speech
-from senselab.utils.prov_store import ProvStore
 
 RATE = 1000
 DURATION = 10.0

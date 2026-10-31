@@ -15,12 +15,13 @@ import json
 import sys
 from pathlib import Path
 
+from senselab_core.runtime.provenance import ProvStore
+
 from senselab.audio.workflows.triage.extend import REPLAY_MARKER_STEP, REPLAY_NODE, live_decisions, retire_decisions
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
 from senselab.audio.workflows.triage.replay_diff import NO_STORE, OK
 from senselab.audio.workflows.triage.run import entity_subdir
 from senselab.audio.workflows.triage.vocabulary import FileVerdict, Release, Triage
-from senselab.utils.prov_store import ProvStore
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "triage_replay_diff.py"

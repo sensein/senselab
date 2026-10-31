@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 import pytest
 import soundfile
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -44,7 +45,6 @@ from senselab.audio.workflows.triage.nodes.voice import (
     read_evidence,
     voice,
 )
-from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import gated_conformance, gated_flags, readings_of
 
 HOP_S = 0.01

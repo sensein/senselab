@@ -179,7 +179,7 @@ def _emotion2vec_ready() -> bool:
 @pytest.mark.skipif(not _emotion2vec_ready(), reason="emotion2vec venv or emotion2vec_plus_base not provisioned")
 def test_emotion2vec_runs_offline_behind_the_network_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """The FunASR worker classifies with SENSELAB_BLOCK_NETWORK=1: nine labels, posteriors summing to one."""
-    from senselab.utils.model_revision import resolve_revision
+    from senselab_core.runtime.revision import resolve_revision
 
     monkeypatch.setenv("SENSELAB_BLOCK_NETWORK", "1")
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")

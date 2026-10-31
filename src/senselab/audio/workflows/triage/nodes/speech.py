@@ -24,6 +24,7 @@ from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
 import torch
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.disruptions.api import detect_disruptions
@@ -134,7 +135,6 @@ from senselab.audio.workflows.triage.task_speech import item_utterances, write_t
 from senselab.audio.workflows.triage.vocabulary import TASK
 from senselab.text.tasks.pii_detection.api import PiiScan, scan_for_pii
 from senselab.utils.data_structures import HFModel, SpeechBrainModel
-from senselab.utils.prov_store import Entity, ProvStore
 from senselab.utils.tasks.cached_inference import annotate_result_origin
 
 NODE = "SPEECH"

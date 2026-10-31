@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling==1.33.0", "hatch-vcs==0.5.0", "setuptools-scm==10.3.4", "vcs-versioning==2.6.0", "packaging==26.3"]
+build-backend = "hatchling.build"
+
+[project]
+name = "senselab-worker"
+dynamic = ["version"]
+description = "Subprocess worker runtime for senselab: stdlib and numpy only."
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.23"
+]
+
+[tool.hatch.build]
+artifacts = ["/src/**/data/**"]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+root = "../.."
+version_scheme = "guess-next-dev"
+local_scheme = "no-local-version"
+git_describe_command = "git describe --dirty --tags --long --match '[0-9]*.[0-9]*.[0-9]*'"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/senselab_worker"]

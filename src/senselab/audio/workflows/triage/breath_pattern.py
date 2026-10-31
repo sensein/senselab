@@ -22,6 +22,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import yaml
 from scipy.signal import find_peaks
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.triage.background_speech import background_speech_parameters
@@ -43,7 +44,6 @@ from senselab.audio.workflows.triage.task_events import (
 )
 from senselab.audio.workflows.triage.task_extent import diarized_turns, enabled, task_extent_parameters
 from senselab.audio.workflows.triage.vocabulary import SUPERSEDES
-from senselab.utils.prov_store import Entity, ProvStore
 
 BREATH_PATTERN_PATH = Path(__file__).parent / "data" / "breath_pattern.yaml"
 

@@ -255,7 +255,7 @@ def require_posteriorgram(result: "torch.Tensor | PpgsPosteriorgramUnavailable")
 def ppgs_checkpoint(revision: str = PPGS_REVISION) -> Tuple[str, Path]:
     """Resolve the ppgs ``mel`` checkpoint to a commit and stage that commit's file locally.
 
-    The commit comes from :func:`~senselab.utils.model_revision.resolve_revision` (recorded in the
+    The commit comes from :func:`~senselab_core.runtime.revision.resolve_revision` (recorded in the
     run manifest); :data:`PPGS_CHECKPOINT_FILE` is downloaded at that SHA. The worker is handed the
     local file and makes no Hub call.
 
@@ -266,8 +266,7 @@ def ppgs_checkpoint(revision: str = PPGS_REVISION) -> Tuple[str, Path]:
         ``(commit_sha, checkpoint_path)``; the path lies under the cache's ``snapshots/<commit_sha>/``.
     """
     from huggingface_hub import hf_hub_download
-
-    from senselab.utils.model_revision import resolve_revision
+    from senselab_core.runtime.revision import resolve_revision
 
     sha = resolve_revision(PPGS_REPO_ID, revision)
     return sha, Path(hf_hub_download(PPGS_REPO_ID, PPGS_CHECKPOINT_FILE, revision=sha))
@@ -282,7 +281,7 @@ def ppgs_model_revision(revision: str = PPGS_REVISION) -> str:
     Returns:
         The 40-hex commit SHA (memoized for the run; no I/O after the first resolution).
     """
-    from senselab.utils.model_revision import resolve_revision
+    from senselab_core.runtime.revision import resolve_revision
 
     return resolve_revision(PPGS_REPO_ID, revision)
 

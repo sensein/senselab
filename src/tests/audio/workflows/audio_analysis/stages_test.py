@@ -42,7 +42,7 @@ def _stub_commit_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     non-hermetic failure mode the rest of this file avoids by monkeypatching the backend call
     itself.
     """
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda repo_id, ref="main", **kw: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda repo_id, ref="main", **kw: "f" * 40)
 
 
 @pytest.fixture

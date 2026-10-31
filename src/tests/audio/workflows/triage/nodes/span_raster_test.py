@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.label_membership import LabelMembership
@@ -17,7 +18,6 @@ from senselab.audio.workflows.triage.nodes.figure import (
 from senselab.audio.workflows.triage.nodes.preprocess import _span_window_attributes
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.prov_store import ProvStore
 
 
 def _seed_stream_header(
@@ -314,7 +314,7 @@ class TestTheSummaryFits:
         text = _taxonomy_panel(axis, lines, style)
         figure.canvas.draw()
         assert text is not None, "_taxonomy_panel must return its artist so its extent can be measured"
-        extent = text.get_window_extent(renderer=figure.canvas.get_renderer())
+        extent = text.get_window_extent(renderer=getattr(figure.canvas, "get_renderer")())
         axis_extent = axis.get_window_extent()
         plt.close(figure)
         assert extent.x1 <= axis_extent.x1 + 1.0, "the cover overruns the right edge of its axis"

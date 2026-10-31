@@ -73,6 +73,7 @@ three audience paths that share the same pages:
   `senselab data fetch <manifest>`.
   - It downloads into a content-addressed cache outside the repo and verifies every hash.
   - It refuses a mismatch and accepts a mirror only on a matching hash.
+  - A cache hit trusts a blob, without reading it, only if `lstat` shows a regular file (not a symlink) whose size, mtime, inode and ctime equal the `BlobStamp` recorded when the dataset was completed; any other blob is re-hashed and refetched on a mismatch. A full re-hash of every blob is opt-in (`--verify`), so a cached fetch of a large dataset does not re-read it. Blobs and markers are read-only, and manifest paths are compared by Unicode canonical caseless match (NFD, full case folding with `str.casefold`, NFC), so two paths that a case-insensitive filesystem (APFS, NTFS) may store as one file are refused. Full folding is wider than NTFS's simple upcase table (it joins `ß` and `ss`); refusing such a pair is the safe side. If two writers commit one blob and the first `os.link` loses to a file that appeared meanwhile, that file is kept only if its bytes hash to the blob's name; otherwise the verified staged copy replaces it.
   - A dataset adapter (P-11) reads the result.
 - **Identity:** a pulled file's identity is its content hash, so results computed on it key
   correctly (ADR-002). CI caches by manifest hash.

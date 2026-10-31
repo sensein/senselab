@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from senselab_core.runtime.provenance import ProvStore, revised
 
 from senselab.audio.workflows.triage.consensus import (
     ConsensusWord,
@@ -33,7 +34,6 @@ from senselab.audio.workflows.triage.nodes.common import (
     software_agent,
     write_measurement,
 )
-from senselab.utils.prov_store import ProvStore
 
 PREPROCESS_NODE = "PREPROCESS"
 CONSENSUS_TRANSCRIPT = "consensus_transcript"
@@ -305,13 +305,13 @@ def arbitrate_words(store: ProvStore, *, run_dir: Path | None, family: str | Non
             software,
             name=CONSENSUS_TRANSCRIPT,
             signal=str(consensus.attributes["signal"]),
-            attributes={
-                **{k: v for k, v in consensus.attributes.items() if k not in ("name", "signal")},
-                "word_ids": word_ids,
-                "text": render_transcript(result.words, strong=("", "")),
-                "arbitrated_n": result.record["retimed_n"],
-                "arbitration_unlocated_n": result.record["unlocated_n"],
-            },
+            attributes=revised(
+                {k: v for k, v in consensus.attributes.items() if k not in ("name", "signal")},
+                word_ids=word_ids,
+                text=render_transcript(result.words, strong=("", "")),
+                arbitrated_n=result.record["retimed_n"],
+                arbitration_unlocated_n=result.record["unlocated_n"],
+            ),
             derived_from=(consensus.id,),
             extent=consensus.extent,
         )

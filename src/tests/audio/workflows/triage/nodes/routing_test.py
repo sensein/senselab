@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -14,7 +15,6 @@ from senselab.audio.workflows.triage.nodes.common import find_measurement, live_
 from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.vocabulary import BRANCH_ROUTE_STATES, BRANCHES, RULESET_ROUTING, Outcome
-from senselab.utils.prov_store import ProvStore
 
 
 def _config(tmp_path: Path, entries: str) -> TriageConfig:

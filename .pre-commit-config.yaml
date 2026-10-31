@@ -1,8 +1,7 @@
 fail_fast: false
 
 repos:
-- repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.14.5
+- repo: local
   hooks:
   # Spec trees hold design notes plus the one-off scripts that reproduce a finding. Those scripts are
   # evidence -- several deliberately contain the defective pattern they demonstrate -- so linting
@@ -10,9 +9,20 @@ repos:
   # record of what was measured. Excluded here rather than in pyproject's ruff config, because
   # pyproject describes the package and `specs/` is not part of it (it is not in the wheel, and as
   # of this change not in the sdist either). The mypy hook below excludes the same trees.
+  # Both hooks run the ruff that uv.lock pins, so the hook and `uv run ruff` are one version.
   - id: ruff
+    name: ruff check (locked)
+    entry: uv run --frozen --no-sync ruff check --force-exclude
+    language: system
+    types_or: [python, pyi, jupyter]
+    require_serial: true
     exclude: ^specs/
   - id: ruff-format
+    name: ruff format (locked)
+    entry: uv run --frozen --no-sync ruff format --force-exclude
+    language: system
+    types_or: [python, pyi, jupyter]
+    require_serial: true
     exclude: ^specs/
 
 - repo: https://github.com/pre-commit/mirrors-mypy
@@ -20,13 +30,33 @@ repos:
   hooks:
   - id: mypy
     args: [--ignore-missing-imports, --extra-checks]
-    exclude: ^(scripts|specs)/
+    # `packages/conftest.py` and `packages/senselab-core/tests/runtime/conftest.py` are both top-level `conftest`
+    # modules to mypy, which refuses a duplicate module name.
+    exclude: ^(scripts|specs)/|^packages/conftest\.py$
     additional_dependencies:
     - pydantic>=1.10.4
     - types-requests
     # `run_config.py` reads the packaged YAML, and this hook's mypy runs in an isolated env —
     # so the stubs the dev group provides are not visible to it. Without this the hook fails
     # with `Library stubs not installed for "yaml"` while a local `uv run mypy .` passes.
+    - types-PyYAML
+  - id: mypy
+    name: mypy (linux)
+    alias: mypy-linux
+    args: [--ignore-missing-imports, --extra-checks, --platform, linux]
+    files: ^packages/senselab-core/src/senselab_core/runtime/worker_client\.py$
+    additional_dependencies:
+    - pydantic>=1.10.4
+    - types-requests
+    - types-PyYAML
+  - id: mypy
+    name: mypy (darwin)
+    alias: mypy-darwin
+    args: [--ignore-missing-imports, --extra-checks, --platform, darwin]
+    files: ^packages/senselab-core/src/senselab_core/runtime/worker_client\.py$
+    additional_dependencies:
+    - pydantic>=1.10.4
+    - types-requests
     - types-PyYAML
 - repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
   rev: v2.15.0
@@ -39,12 +69,17 @@ repos:
     args:
     - --autofix
     - --indent=2
+    additional_dependencies:
+    - ruamel.yaml==0.19.1
   - id: pretty-format-toml
     exclude: ^uv.lock$
     args:
     - --autofix
     - --indent=2
     - --no-sort
+    additional_dependencies:
+    - toml-sort==0.25.0
+    - tomlrt==2.2.13
 
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v6.0.0
@@ -111,3 +146,9 @@ repos:
     name: No research-participant identifiers in tracked files.
     entry: python scripts/check_participant_ids.py
     language: python
+  - id: fixture-budget
+    name: Committed test fixtures stay within the data-policy budget.
+    entry: uv run python scripts/check_fixture_budget.py
+    language: system
+    pass_filenames: false
+    always_run: true

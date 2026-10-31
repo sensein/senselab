@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 import pytest
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage import vocabulary as vocabulary_module
@@ -47,7 +48,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     RunStatus,
     Triage,
 )
-from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 
@@ -208,15 +208,12 @@ def _write_redaction_evidence(store: ProvStore, activity: str, agent: str, *, sc
         pii_n: How many findings the scan left behind.
     """
     if scanned is not None:
-        scan = store.entity(
-            prov_type="measurement",
-            extent=None,
-            attributes=(
-                {"name": "pii_scan", "signal": "consensus_transcript", "scanned_by": ["rules"], "failed": []}
-                if scanned
-                else {"name": "pii_scan", "signal": "consensus", "scanned": False, "why": "all in the stimulus"}
-            ),
+        attributes: dict[str, Any] = (
+            {"name": "pii_scan", "signal": "consensus_transcript", "scanned_by": ["rules"], "failed": []}
+            if scanned
+            else {"name": "pii_scan", "signal": "consensus", "scanned": False, "why": "all in the stimulus"}
         )
+        scan = store.entity(prov_type="measurement", extent=None, attributes=attributes)
         store.was_generated_by(scan, activity)
         store.was_attributed_to(scan, agent)
     for index in range(pii_n):

@@ -41,15 +41,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Optional, Sequence
 
-from senselab.utils import venv_lock
-from senselab.utils.cuda_probe import (
+from senselab_core.runtime.hardware import (
     HostCuda,
     SenselabCudaCompatibilityError,
     TorchIndex,
     detect_host_cuda,
     pick_torch_index,
 )
-from senselab.utils.file_lock import SharedFileLock
+from senselab_core.runtime.locks import SharedFileLock
+
+from senselab.utils import venv_lock
 from senselab.utils.uv_tools import find_uv
 from senselab.utils.venv_lock import VenvLock, load_lock
 
@@ -250,7 +251,7 @@ def venv_environment(name: str, venv_dir: Path) -> dict[str, Any]:
         venv_dir: Its resolved directory, from :func:`ensure_venv` or :func:`record_venv_use`.
 
     Returns:
-        Keyword arguments for :meth:`~senselab.utils.prov_store.ProvStore.environment`: ``label``
+        Keyword arguments for :meth:`~senselab_core.runtime.provenance.ProvStore.environment`: ``label``
         (the resolved directory's own name, which encodes its device key), ``python_version``,
         ``dependencies`` (the declared subset actually installed — see
         :data:`_DECLARED_ENV_PACKAGES`) and ``dependencies_digest`` (a SHA-256 over the full
@@ -814,7 +815,7 @@ def _pack_value(key: str, value: object, data_dir: Path) -> dict:
     # PIL Image → PNG (lossless)
     if type(value).__module__.startswith("PIL") or type(value).__name__ == "Image":
         path = data_dir / f"{key}.png"
-        getattr(value, "save")(str(path), format="PNG")
+        getattr(value, "save")(str(path), format="PNG")  # noqa: B009
         return {"type": "image", "file": f"{key}.png"}
 
     # bytes/bytearray → raw binary

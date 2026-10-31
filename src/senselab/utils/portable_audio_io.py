@@ -50,6 +50,10 @@ _PREFERENCE_BY_KIND = {
 
 _FLOAT_SUBTYPES = ("FLOAT", "DOUBLE")
 
+_SFC_SET_ADD_PEAK_CHUNK = 0x1050
+_PEAK_CHUNK_BY_DEFAULT = frozenset({"WAV", "WAVEX", "AIFF"})
+"""Containers whose float writes carry libsndfile's timestamped PEAK chunk unless it is switched off."""
+
 
 class AudioWriteReport(NamedTuple):
     """What a write did, so a caller can record it rather than assume it."""
@@ -301,7 +305,7 @@ def write_audio(
     resolved = resolve_subtype(fmt, array.dtype, subtype)
     array, peak, fraction, gain = apply_range_policy(array, fmt, resolved, out_of_range, os.fspath(path))
 
-    sf.write(os.fspath(path), array, sampling_rate, subtype=resolved, format=fmt)
+    _write_libsndfile(os.fspath(path), array, sampling_rate, fmt, resolved)
     return AudioWriteReport(
         path=os.fspath(path),
         format=fmt,
@@ -310,6 +314,15 @@ def write_audio(
         out_of_range_fraction=fraction,
         gain=gain,
     )
+
+
+def _write_libsndfile(destination: str, array: np.ndarray, sampling_rate: int, fmt: str, subtype: str) -> None:
+    """Write `array` (time first) with libsndfile, with no PEAK chunk, so the bytes do not depend on the clock."""
+    channels = 1 if array.ndim == 1 else array.shape[1]
+    with sf.SoundFile(destination, "w", sampling_rate, channels, subtype=subtype, format=fmt) as handle:
+        if fmt.upper() in _PEAK_CHUNK_BY_DEFAULT and is_float_subtype(subtype):
+            sf._snd.sf_command(handle._file, _SFC_SET_ADD_PEAK_CHUNK, sf._ffi.NULL, 0)
+        handle.write(array)
 
 
 ENCODER_SUBTYPE = "PCM_16"

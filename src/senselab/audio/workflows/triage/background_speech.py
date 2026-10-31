@@ -26,10 +26,10 @@ from typing import Any, Sequence
 
 import numpy as np
 import yaml
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.triage.nodes.common import find_measurement
-from senselab.utils.prov_store import ProvStore
 
 BACKGROUND_SPEECH_PATH = Path(__file__).parent / "data" / "background_speech.yaml"
 PLAIN_STREAM = "plain"

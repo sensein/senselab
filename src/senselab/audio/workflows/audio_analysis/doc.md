@@ -193,9 +193,9 @@ set it to `$SLURM_ARRAY_JOB_ID`:
 export SENSELAB_RUN_ID="$SLURM_ARRAY_JOB_ID"
 ```
 
-The bindings live in `$SENSELAB_CACHE/runs/<run_id>/resolutions.json`, mapping
-`"<repo_id>@<ref>" -> "<40-hex commit>"`. Resolution consults it before the local `refs/` read and
-before any network call, so the first participant to need a model decides for the whole run and
+The bindings live in `$SENSELAB_CACHE/runs/<run_id>/resolutions@2.json`, mapping the JCS of the
+pair, `["<repo_id>","<ref>"]`, to its 40-hex commit. Resolution consults it before the local `refs/`
+read and before any network call, so the first participant to need a model decides for the whole run and
 everyone after follows — including a task starting on a cold node a day later.
 
 Three properties worth knowing:

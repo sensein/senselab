@@ -271,9 +271,9 @@ def synthesize_texts_with_qwen(
 
     # Resolve to the immutable commit this run pins to -- never forward model.revision
     # (a mutable ref) into the worker payload. Deferred import (not at module top) keeps
-    # this monkeypatch-friendly at senselab.utils.model_revision.resolve_revision,
+    # this monkeypatch-friendly at senselab_core.runtime.revision.resolve_revision,
     # matching the rest of the codebase.
-    from senselab.utils.model_revision import resolve_revision
+    from senselab_core.runtime.revision import resolve_revision
 
     revision = model.commit_sha or resolve_revision(model_name, model.revision or "main")
 
@@ -380,7 +380,7 @@ def supported_speakers(model: Optional[HFModel] = None) -> List[str]:
         model = HFModel(path_or_uri=_QWEN_TTS_DEFAULT_MODEL)
     model_name = str(model.path_or_uri)
 
-    from senselab.utils.model_revision import resolve_revision
+    from senselab_core.runtime.revision import resolve_revision
 
     revision = model.commit_sha or resolve_revision(model_name, model.revision or "main")
 

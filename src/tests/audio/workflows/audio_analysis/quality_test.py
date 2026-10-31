@@ -40,7 +40,7 @@ def _stub_commit_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     Brouhaha signals report ``"ok"`` — most tests here supply real (synthetic) Brouhaha frames via
     ``_const_brouhaha``, so without this stub they would make a live Hub call for a gated model.
     """
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: _FAKE_SHA)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: _FAKE_SHA)
 
 
 def _audio(y: np.ndarray) -> Audio:

@@ -138,7 +138,7 @@ class HFModel(SenselabModel[PROVIDER_T]):
         """
         if isinstance(self.path_or_uri, Path) or self.commit_sha is not None:
             return self
-        from senselab.utils.model_revision import RevisionResolutionError, resolve_revision
+        from senselab_core.runtime.revision import RevisionResolutionError, resolve_revision
 
         # resolve_revision raises RevisionResolutionError, a RuntimeError. Pydantic only converts
         # ValueError/AssertionError raised inside a validator into ValidationError, so a RuntimeError

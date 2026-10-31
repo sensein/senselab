@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
+from senselab_core.runtime.models import WEIGHTS
 
 from senselab.video.tasks.facial_analysis import backends
 from senselab.video.tasks.facial_analysis.frame_stream import probe_video
@@ -238,7 +239,7 @@ def extract_face_geometry(
             "backend": "mediapipe-face-landmarker",
             "mediapipe_version": status.get("mediapipe_version"),
             "model_url": backends.MEDIAPIPE_MODEL_URL,
-            "model_sha256": backends.MEDIAPIPE_MODEL_SHA256,
+            "model_sha256": WEIGHTS["mediapipe"],
             "decode_size": status.get("decode_size"),
             "config": {k: v for k, v in geometry.items() if k != "derivation"},
         },

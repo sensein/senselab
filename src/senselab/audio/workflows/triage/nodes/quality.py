@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from senselab_core.runtime.provenance import Entity, ProvStore
+
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL, _named_stream
 from senselab.audio.workflows.triage.background_speech import background_speech_of, background_speech_parameters
@@ -65,7 +67,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     Conformance,
     standing_task_extents,
 )
-from senselab.utils.prov_store import Entity, ProvStore
 
 ENHANCED_STREAM = "enhanced"
 EVENT_READINGS = (

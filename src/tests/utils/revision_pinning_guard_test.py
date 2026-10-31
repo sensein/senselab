@@ -128,7 +128,7 @@ LOADER_CANNOT_PIN_SUBPROCESS_FILES = {
 def test_worker_input_json_carries_a_sha_not_a_ref(monkeypatch: pytest.MonkeyPatch) -> None:
     """Brouhaha's worker payload carries the resolved commit, never the ref it was given."""
     sha = "e" * 40
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: sha)
     from senselab.audio.tasks.scene_quality import brouhaha
 
     payload = brouhaha._build_worker_input(  # noqa: SLF001 -- payload construction is what's under test
@@ -143,7 +143,7 @@ def test_worker_input_json_carries_a_sha_not_a_ref(monkeypatch: pytest.MonkeyPat
 
 def test_subprocess_env_propagates_the_run_id(monkeypatch: pytest.MonkeyPatch) -> None:
     """A worker must join its parent's run rather than starting its own."""
-    import senselab.utils.model_revision as mr
+    import senselab_core.runtime.revision as mr
 
     # This module caches the run id process-wide (_RUN_ID); an earlier test in this session
     # may already have set it, which would make the assertion below pass regardless of what
@@ -298,11 +298,11 @@ def test_the_two_call_rule_holds_against_the_real_hub(tmp_path: Path, monkeypatc
     # Keeps the run-resolution manifest (a *different* cache, see model_revision.py) out of this
     # machine's real ~/.cache/senselab/hf too, and out of any other test's manifest.
     monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "senselab"))
-    import senselab.utils.model_revision as mr
+    import senselab_core.runtime.revision as mr
 
     mr._RUN_ID = None
     mr._MEMO.clear()
-    from senselab.utils.model_revision import resolve_revision
+    from senselab_core.runtime.revision import resolve_revision
 
     repo = "hf-internal-testing/tiny-random-gpt2"
     try:
@@ -350,7 +350,7 @@ def test_resolve_model_stages_the_manifest_commit_not_the_local_ref(
     from huggingface_hub import constants
 
     monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path / "hub"))
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: manifest_sha)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: manifest_sha)
 
     def _record(repo_id: str, revision: str = "main", token: object = None) -> str:
         staged["revision"] = revision
@@ -382,7 +382,7 @@ def test_resolve_model_points_the_ref_at_the_pinned_commit(tmp_path: Path, monke
     pinned = "9" * 40
     repo = "org/model"
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: pinned)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: pinned)
     monkeypatch.setattr(
         "senselab.utils.dependencies.ensure_hf_model",
         lambda repo_id, *a, **k: (_stage(tmp_path / "hub", repo_id, pinned), pinned)[1],
@@ -406,7 +406,7 @@ def test_resolve_model_does_not_write_a_ref_for_a_sha_revision(tmp_path: Path, m
     """A 40-hex revision is not a ref name, so no pointer file should be created for it."""
     pinned = "8" * 40
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: pinned)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: pinned)
     monkeypatch.setattr(
         "senselab.utils.dependencies.ensure_hf_model",
         lambda repo_id, *a, **k: (_stage(tmp_path / "hub", repo_id, pinned), pinned)[1],

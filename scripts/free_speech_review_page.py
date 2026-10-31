@@ -42,6 +42,7 @@ from senselab.audio.workflows.triage.recording_vectors import (
 from senselab.audio.workflows.triage.residue import is_content_word
 from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
 from senselab.utils import fastio
+from senselab_core.runtime.provenance import plain_values
 
 PII_LABEL = "pii"
 LABEL_VERB = "label"
@@ -137,7 +138,7 @@ def read_store_light(path: Path, extra_markers: Sequence[str] = ()) -> StoreView
                         id=str(record.get("id")),
                         prov_type=str(record.get("prov_type")),
                         extent=(float(extent[0]), float(extent[1])) if extent else None,
-                        attributes=record.get("attributes") or {},
+                        attributes=plain_values(record.get("attributes") or {}),
                     )
                 )
             elif kind == "relation":

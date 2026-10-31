@@ -33,6 +33,7 @@ from typing import Any
 
 import numpy as np
 import yaml
+from senselab_core.runtime.provenance import Entity, ProvStore
 
 from senselab.audio.workflows.triage.cohort_fold import (
     CHECKS,
@@ -80,7 +81,6 @@ from senselab.audio.workflows.triage.task_speech import (
     task_text_ids,
 )
 from senselab.audio.workflows.triage.vocabulary import standing_task_extents
-from senselab.utils.prov_store import Entity, ProvStore
 
 PARAMETERS_PATH = Path(__file__).parent / "data" / "cohort_stage.yaml"
 

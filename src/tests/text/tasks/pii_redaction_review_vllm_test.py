@@ -139,7 +139,7 @@ def mocked_vllm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dic
     monkeypatch.setattr(rv, "ensure_venv", lambda *a, **k: venv)
     monkeypatch.setattr(rv, "hf_subprocess_env", lambda *a, **k: dict(os.environ))
     monkeypatch.setattr(rr, "_staged_snapshot", lambda repo, revision: str(model_dir))
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: SHA)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: SHA)
     rr.shutdown_review_worker()
     yield {"log": log, "answer": answer, "model_dir": model_dir}
     rr.shutdown_review_worker()

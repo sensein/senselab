@@ -25,7 +25,7 @@ Still deferred: ``P2_fine_posteriors`` and v2's ``U4_overlap_separation``
 
 from __future__ import annotations
 
-import importlib.util
+import importlib.util  # noqa: TID251
 import json
 import sys
 from pathlib import Path
@@ -131,7 +131,7 @@ def _pick_ok(entries: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 def _spec_missing(module: str) -> bool:
     try:
-        return importlib.util.find_spec(module) is None
+        return importlib.util.find_spec(module) is None  # noqa: TID251
     except (ImportError, ValueError, ModuleNotFoundError):
         return True
 

@@ -29,6 +29,7 @@ from typing import Any, Optional
 
 import numpy as np
 import pyarrow as pa
+from senselab_core.runtime.provenance import plain_values
 
 SCHEMA_VERSION = 2
 """Bumped whenever a column is added, removed or retyped, or the pooling rule changes."""
@@ -210,7 +211,7 @@ def read_task_extents(run_root: Path) -> list[Extent]:
                 continue
             if record.get("record") != "entity" or record.get("prov_type") != SPAN_TYPE:
                 continue
-            attributes = record.get("attributes") or {}
+            attributes = plain_values(record.get("attributes") or {})
             if attributes.get("role") != TASK_EXTENT_ROLE:
                 continue
             span = record.get("extent")
@@ -631,6 +632,7 @@ def embed_subject(
         ValueError: If ``extents`` is empty, or no window survived extraction for any of them.
     """
     import torch  # noqa: PLC0415
+    from senselab_core.runtime.revision import resolve_revision  # noqa: PLC0415
 
     from senselab.audio.data_structures import Audio  # noqa: PLC0415
     from senselab.audio.data_structures.audio_hints import (  # noqa: PLC0415
@@ -640,7 +642,6 @@ def embed_subject(
     from senselab.audio.tasks.speaker_embeddings.windowing import (  # noqa: PLC0415
         extract_per_window_embeddings,
     )
-    from senselab.utils.model_revision import resolve_revision  # noqa: PLC0415
     from senselab.utils.portable_audio_io import audio_info, read_audio  # noqa: PLC0415
     from senselab.utils.tasks.embedding_distribution import (  # noqa: PLC0415
         describe_embedding_distribution,

@@ -17,10 +17,11 @@ import sys
 import traceback
 from pathlib import Path
 
+from senselab_core.runtime.provenance import ProvStore
+
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.report import SUMMARY_STEM, report
 from senselab.utils import fastio
-from senselab.utils.prov_store import ProvStore
 
 STORE_NAME = "store.jsonl"
 

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage import cough_pattern as cough_pattern_module
 from senselab.audio.workflows.triage.cough_pattern import (
@@ -17,7 +18,6 @@ from senselab.audio.workflows.triage.cough_pattern import (
     measure_cough_pattern,
 )
 from senselab.audio.workflows.triage.task_events import generic_view
-from senselab.utils.prov_store import ProvStore
 
 HOP = 0.005
 BANDS = 9

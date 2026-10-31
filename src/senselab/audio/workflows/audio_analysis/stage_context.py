@@ -241,7 +241,7 @@ class StageContext:
         """
         if not model_id or "/" not in model_id:
             return None
-        from senselab.utils.model_revision import RevisionResolutionError, resolve_revision
+        from senselab_core.runtime.revision import RevisionResolutionError, resolve_revision
 
         try:
             return resolve_revision(model_id, ref=_DEFAULT_REVISION_REF)

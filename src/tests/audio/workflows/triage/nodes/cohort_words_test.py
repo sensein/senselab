@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.cohort_fold import (
     MEASURED,
@@ -29,7 +30,6 @@ from senselab.audio.workflows.triage.cohort_stage import (
 )
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_measurement
 from senselab.audio.workflows.triage.task_speech import TASK_SPEECH_READING, task_speech_of
-from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.cohort_stage_test import (
     CUT,
     MIN_S,

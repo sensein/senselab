@@ -655,7 +655,7 @@ FINAL = StageContract(
         Artifact("final/summary.md", "the human-facing summary"),
         # Not "model revisions": summary.json records none. Each model's resolved commit is stamped
         # per stage in that stage's provenance block, and the run-wide model -> commit mapping is
-        # $SENSELAB_CACHE/runs/<run_id>/resolutions.json. Saying otherwise sent a reader looking
+        # $SENSELAB_CACHE/runs/<run_id>/resolutions@2.json. Saying otherwise sent a reader looking
         # here for an attribution this file has never carried.
         Artifact("final/summary.json", "run provenance: policy hash, versions, budget"),
         Artifact("final/run_summary.json", "the headline numbers of the last round"),

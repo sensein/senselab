@@ -304,7 +304,7 @@ def test_a_foreign_model_is_rejected(mono_audio_sample: Audio, monkeypatch: pyte
     field validator.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: "f" * 40)
     foreign: HFModel = HFModel(path_or_uri="openai/whisper-tiny")
     with pytest.raises(ValueError, match="unasdiff"):
         separate_audios([mono_audio_sample], model=foreign, mode="speech_speech", n_sources=2)

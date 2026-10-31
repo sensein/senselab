@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import pytest
+from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.classifier_ontology import canonical_names
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import find_measurement, software_agent
 from senselab.audio.workflows.triage.nodes.taxonomy import PER_SPAN_CLASSIFIERS, _write_consensus_taxonomy
-from senselab.utils.prov_store import ProvStore
 
 
 def _seed_spans(store: ProvStore, per_classifier: Mapping[str, Sequence[Mapping[str, float]]]) -> None:
