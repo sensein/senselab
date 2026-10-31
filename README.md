@@ -314,6 +314,10 @@ distributions whose versions come from git describe, and a pull can change what 
 partial sync rebuilds only some of them. `uv sync` is subtractive: it removes extras and groups you do not
 name, so always pass the full set.
 
+Re-sync before running `pre-commit` too. Its ruff hooks run `uv run --frozen --no-sync ruff`, the ruff installed
+in your environment, so after a pull that bumps ruff in `uv.lock` an environment not re-synced lints with the old
+version.
+
 `senselab_core` refuses to import when its version differs from `senselab-worker`'s, but only when both are
 installed from wheels. Editable workspace installs are exempt: their versions drift with every commit and the
 lock pins them together instead. The check guards a pip install of mismatched releases, not your checkout.
