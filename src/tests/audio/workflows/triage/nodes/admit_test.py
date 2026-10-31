@@ -196,7 +196,7 @@ class TestInputChecksum:
         [stream] = store.entities("stream")
         assert stream.attributes[CHECKSUM_KEY] == hashlib.sha256(path.read_bytes()).hexdigest()
         assert stream.attributes[SIZE_KEY] == path.stat().st_size
-        assert stream.attributes[MTIME_KEY] == path.stat().st_mtime_ns
+        assert stream.attributes[MTIME_KEY] == str(path.stat().st_mtime_ns)
 
     def test_a_recording_rewritten_during_the_decode_fails(
         self,

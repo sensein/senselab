@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import cast, get_args
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+from senselab_core.runtime import provenance
 from senselab_core.runtime.provenance import PROV_TYPE, Activity, Agent, Entity, ProvStore
+from senselab_worker.canonical import tagged_digest
 
 pytestmark = pytest.mark.logic
 
@@ -559,3 +563,51 @@ class TestAtomicWrite:
         target.chmod(0o640)
         s.write_jsonl(target)
         assert target.stat().st_mode & 0o777 == 0o640
+
+
+_STAMPS = st.integers(min_value=0, max_value=2**63 - 1)
+_JSON = st.recursive(
+    st.none()
+    | st.booleans()
+    | st.integers(-(2**53) + 1, 2**53 - 1)
+    | st.floats(allow_nan=False, allow_infinity=False)
+    | st.text(max_size=8),
+    lambda inner: st.lists(inner, max_size=3) | st.dictionaries(st.text(max_size=4), inner, max_size=3),
+    max_leaves=12,
+)
+
+
+@settings(max_examples=150, deadline=None)
+@given(stamp=_STAMPS, size=st.integers(0, 2**53 - 1), extra=st.dictionaries(st.text(max_size=6), _JSON, max_size=4))
+def test_entity_ids_of_payloads_with_large_stamps_are_deterministic(stamp: int, size: int, extra: dict) -> None:
+    """A stamp of any size, as `file_attributes` writes it, digests; the id ignores key order and repeats exactly."""
+    attributes = {**extra, provenance.SIZE_KEY: size, provenance.MTIME_KEY: str(stamp), "path": "a.wav"}
+    attributes[provenance.CHECKSUM_KEY] = "0" * 64
+    reordered = dict(reversed(list(attributes.items())))
+    ids = {
+        ProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=a) for a in (attributes, reordered)
+    }
+    assert len(ids) == 1
+
+
+@settings(max_examples=100, deadline=None)
+@given(n=st.integers(-(2**53) + 1, 2**53 - 1), s=st.text(max_size=6), x=_JSON, y=_JSON)
+def test_provenance_digest_refuses_what_the_shared_encoder_refuses(n: int, s: str, x: object, y: object) -> None:
+    """Mixed `int` and `str` keys are refused, not collapsed; an integer beyond 2**53 is refused, not stringified."""
+    with pytest.raises(TypeError):
+        provenance._digest({n: x, str(n): y})
+    with pytest.raises(TypeError):
+        provenance._digest({s: x, n: y})
+    with pytest.raises(ValueError, match="I-JSON"):
+        provenance._digest([s, 2**53 + abs(n)])
+    assert provenance._digest([s, x]) == tagged_digest("provenance-id@2", [s, x])[:16]
+
+
+def test_file_attributes_write_the_stamp_as_a_decimal_string(tmp_path: Path) -> None:
+    """`mtime_ns` is a stamp, so a real file's entity, whose stamp exceeds 2**53, gets an id."""
+    target = tmp_path / "a.wav"
+    target.write_bytes(b"x")
+    attributes = {"path": str(target), **provenance.file_attributes(target)}
+    assert attributes[provenance.MTIME_KEY] == str(target.stat().st_mtime_ns)
+    assert int(attributes[provenance.MTIME_KEY]) > 2**53
+    ProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=attributes)

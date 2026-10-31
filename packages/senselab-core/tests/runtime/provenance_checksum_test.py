@@ -46,7 +46,7 @@ def test_attributes_carry_size_and_mtime(tmp_path: Path) -> None:
     target.write_bytes(b"x" * 17)
     attributes = file_attributes(target)
     assert attributes[SIZE_KEY] == 17
-    assert attributes[MTIME_KEY] == target.stat().st_mtime_ns
+    assert attributes[MTIME_KEY] == str(target.stat().st_mtime_ns)
     assert CHECKSUM_UNRESOLVED_KEY not in attributes
 
 

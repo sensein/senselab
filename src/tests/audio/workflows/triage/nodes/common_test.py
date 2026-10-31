@@ -435,7 +435,7 @@ class TestPathAttributes:
         assert attributes["path"] == "streams/plain.flac"
         assert attributes[CHECKSUM_KEY] == hashlib.sha256(b"payload").hexdigest()
         assert attributes[SIZE_KEY] == 7
-        assert attributes[MTIME_KEY] == target.stat().st_mtime_ns
+        assert attributes[MTIME_KEY] == str(target.stat().st_mtime_ns)
 
     def test_a_file_that_is_not_there_says_so(self, tmp_path: Path) -> None:
         """A write that did not land records the reason, not a null and not an exception."""

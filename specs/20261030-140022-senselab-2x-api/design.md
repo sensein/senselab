@@ -396,6 +396,10 @@ them to a principle.
 **One provenance store** (`ProvStore`, append-only, content-derived ids) is written around every
 node with the attested identities. BEP028 export is how runs are published. `reproduce` becomes a
 consumer of this store.
+Its ids are `tagged_digest("provenance-id@2", payload)[:16]` through the shared encoder, so a payload holds
+exact JSON types only: an integer beyond ±(2^53−1), a non-finite float or a non-`str` key is refused, never
+stringified. A stamp is not a quantity, so `mtime_ns` (about 1.7e18) is written as a decimal string, as fetch's
+`BlobStamp` marker already does. Under JCS `1` and `1.0` are one number, so they give one id.
 
 ### 4.9 Execution (P-2, P-5, P-6, P-7)
 

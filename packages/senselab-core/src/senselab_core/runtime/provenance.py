@@ -176,24 +176,14 @@ class Environment:
     senselab_version: str | None = None
 
 
-_MAX_SAFE_INT = 2**53 - 1
-
-
-def _canonical(value: object) -> object:
-    """Return `value` as JSON-canonical data: tuples as lists, keys as text, big integers and other objects as text."""
-    if isinstance(value, dict):
-        return {str(k): _canonical(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_canonical(v) for v in value]
-    if isinstance(value, bool) or value is None or isinstance(value, (str, float)):
-        return value
-    if isinstance(value, int) and abs(value) <= _MAX_SAFE_INT:
-        return int(value)
-    return str(value)
-
-
 def _digest(payload: object) -> str:
-    return tagged_digest("provenance-id@1", _canonical(payload))[:16]
+    """Return the 16-hex id of a JSON payload: `tagged_digest("provenance-id@2", payload)`, exact types only.
+
+    Raises:
+        ValueError, TypeError: on what `jcs_dumps` refuses: a non-finite float, an integer outside
+            +/-(2**53 - 1), a non-`str` key, a value of another type.
+    """
+    return tagged_digest("provenance-id@2", payload)[:16]
 
 
 def file_digest(path: str | Path) -> tuple[str | None, str | None]:
@@ -234,7 +224,7 @@ def file_attributes(path: str | Path, *, digest: str | None = None, reason: str 
 
     Returns:
         ``checksum_sha256`` or ``checksum_unresolved_reason``, and ``size_bytes`` and ``mtime_ns``
-        when the file can be stat'd.
+        when the file can be stat'd. ``mtime_ns`` is a stamp, written as a decimal string.
 
     Raises:
         ValueError: If both ``digest`` and ``reason`` are supplied.
@@ -249,7 +239,7 @@ def file_attributes(path: str | Path, *, digest: str | None = None, reason: str 
     except OSError:
         return out
     out[SIZE_KEY] = int(stat.st_size)
-    out[MTIME_KEY] = int(stat.st_mtime_ns)
+    out[MTIME_KEY] = str(stat.st_mtime_ns)
     return out
 
 
