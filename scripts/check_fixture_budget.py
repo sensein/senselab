@@ -4,7 +4,8 @@ Every `git ls-files` path is scanned:
 
 - a non-code file over `PER_FILE` bytes, or a code file (`.py`, `.pyi`, `.ipynb`) over `code_file_max_bytes`
   from `data/fixture_budget.yaml`, fails unless it is on the allowlist;
-- the files under the test trees that are not allowlisted may total at most `TOTAL` bytes;
+- the files under the test trees that are not allowlisted may total at most `TOTAL` bytes, and the code files
+  under them at most `code_total_max_bytes` from `data/fixture_budget.yaml`;
 - a tracked symlink (mode 120000) fails, without exception;
 - the allowlist lines are `<path>\t<sha256>\t<bytes>`. Each path must exist in the freeze branch with the same
   content hash, the recorded size may not exceed the frozen size, and the current file must still hash to the
@@ -55,6 +56,7 @@ class Policy(NamedTuple):
     """The byte policy read from `data/fixture_budget.yaml`."""
 
     code_file_max_bytes: int
+    code_total_max_bytes: int
     generated_files: tuple[str, ...]
 
 
@@ -62,18 +64,26 @@ def load_policy(path: Path = POLICY) -> Policy:
     """Read the policy file.
 
     Raises:
-        ValueError: if `code_file_max_bytes` is not a positive integer.
+        ValueError: if `code_file_max_bytes` or `code_total_max_bytes` is not a positive integer.
     """
     data = yaml.safe_load(path.read_text())
-    cap = data.get("code_file_max_bytes")
-    if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
-        raise ValueError(f"{path}: code_file_max_bytes must be a positive integer, got {cap!r}")
-    return Policy(cap, tuple(data.get("generated_files", ())))
+    caps = []
+    for name in ("code_file_max_bytes", "code_total_max_bytes"):
+        cap = data.get(name)
+        if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
+            raise ValueError(f"{path}: {name} must be a positive integer, got {cap!r}")
+        caps.append(cap)
+    return Policy(caps[0], caps[1], tuple(data.get("generated_files", ())))
+
+
+def in_test_tree(rel: str) -> bool:
+    """Whether the repo-relative path is under a test tree."""
+    return any(fnmatch.fnmatch(rel, p) for p in TEST_TREES)
 
 
 def is_fixture(rel: str) -> bool:
     """Whether the repo-relative path is a tracked non-source file under a test tree."""
-    return any(fnmatch.fnmatch(rel, p) for p in TEST_TREES) and not rel.endswith(SOURCE_SUFFIXES)
+    return in_test_tree(rel) and not rel.endswith(SOURCE_SUFFIXES)
 
 
 def parse_allowlist(text: str) -> dict[str, Entry]:
@@ -104,7 +114,9 @@ def resolve_freeze_ref(root: Path = ROOT) -> str:
         LookupError: if neither exists, naming the fetch that creates it.
     """
     for ref in (f"origin/{FREEZE_BRANCH}", FREEZE_BRANCH):
-        probe = subprocess.run(["git", "rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], cwd=root, capture_output=True)
+        probe = subprocess.run(
+            ["git", "rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], cwd=root, capture_output=True
+        )
         if probe.returncode == 0:
             return ref
     raise LookupError(
@@ -155,16 +167,19 @@ def check(
     allow: Mapping[str, int],
     root: Path = ROOT,
     code_max: int | None = None,
+    code_total: int | None = None,
     generated: Sequence[str] = (),
 ) -> list[str]:
     """Return one violation message per problem among `paths`, naming the file, its size and the limit.
 
     `allow` maps each grandfathered repo-relative path (relative to `root`) to its recorded size. A symlink
     among `paths` is a violation. `code_max` caps code files
-    (`CODE_SUFFIXES`); `generated` are globs exempt from the per-file limit.
+    (`CODE_SUFFIXES`) one by one, and `code_total` caps the sum of those under the test trees that are not
+    allowlisted; `generated` are globs exempt from the per-file limit.
     """
     out: list[str] = []
     counted = 0
+    code_counted = 0
     for path in paths:
         rel = Path(os.path.relpath(os.path.abspath(path), os.path.abspath(root))).as_posix()
         if path.is_symlink():
@@ -178,12 +193,21 @@ def check(
         if is_fixture(rel):
             counted += size
         if rel.endswith(CODE_SUFFIXES):
+            if in_test_tree(rel):
+                code_counted += size
             if code_max is not None and size > code_max:
-                out.append(f"{rel}: {size} bytes exceeds the {code_max} byte code-file limit; code is not a data carrier")
+                out.append(
+                    f"{rel}: {size} bytes exceeds the {code_max} byte code-file limit; code is not a data carrier"
+                )
         elif size > per_file and not any(fnmatch.fnmatch(rel, g) for g in generated):
             out.append(f"{rel}: {size} bytes exceeds the {per_file} byte per-file limit; {_FIX}")
     if counted > total:
         out.append(f"total of non-allowlisted fixtures: {counted} bytes exceeds the {total} byte limit; {_FIX}")
+    if code_total is not None and code_counted > code_total:
+        out.append(
+            f"total of code files under the test trees: {code_counted} bytes exceeds the {code_total} byte limit; "
+            "code is not a data carrier"
+        )
     return out
 
 
@@ -214,6 +238,7 @@ def main(root: Path = ROOT, allowlist: Path = ALLOWLIST, policy: Path = POLICY) 
         allow={p: e.size for p, e in allow.items()},
         root=root,
         code_max=limits.code_file_max_bytes,
+        code_total=limits.code_total_max_bytes,
         generated=limits.generated_files,
     )
     for v in violations:

@@ -1,4 +1,5 @@
 code_file_max_bytes: 524288
+code_total_max_bytes: 12582912
 generated_files:
 - uv.lock
 - src/senselab/utils/data/venv_locks/*.txt
@@ -8,6 +9,12 @@ derivation: |
   2026-10-31. The cap is 512 KiB, 2.77 times that, so hand-written code is never near it while a
   committed base64 payload in a .py file (the bypass that motivated the cap: a 5 MB blob in a .py was
   exempt from the fixture limit) is refused.
+  code_total_max_bytes: the code files (.py, .pyi, .ipynb) under src/tests/ and packages/*/tests/ total
+  7511605 bytes in 478 files, measured with `git ls-files` on 2026-10-31. The cap is 12 MiB, 1.68 times
+  that: about 5 MB of headroom, the size of ten code files at code_file_max_bytes, so ordinary test growth
+  passes while the bypass the per-file cap leaves open (many code files each just under it, each carrying a
+  payload) is refused. The 1.x half of the test trees shrinks as modules move to packages/; re-measure and
+  lower the cap when it does.
   generated_files: files that `uv lock` and scripts/lock_subprocess_venvs.py rewrite. Their size follows the
   dependency set, not an author's choice, so a byte cap would fail every dependency bump. They are the only
   non-code files exempt from the per-file limit.

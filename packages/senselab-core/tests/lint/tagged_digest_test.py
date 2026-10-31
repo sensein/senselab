@@ -1,6 +1,7 @@
 """Digest constructors are imported only by allowlisted modules, which never hash canonical JSON untagged."""
 
 import ast
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -212,6 +213,39 @@ def test_only_allowlisted_modules_import_a_digest_capability() -> None:
             hits.append(f"{module}: {sorted(_real(found))}")
         hits += [f"{module}: {f}" for f in sorted(found - _real(found)) if f not in DYNAMIC_ALLOWED.get(module, ())]
     assert hits == []
+
+
+def dead_dynamic_entries(allowed: dict[str, frozenset[str]], sites: Callable[[str], set[str]]) -> list[str]:
+    """Return `file: argument` for each allowance whose file is gone or no longer has that dynamic import site."""
+    dead = []
+    for module, arguments in sorted(allowed.items()):
+        path = REPO / module
+        found = sites(path.read_text()) if path.is_file() else set()
+        dead += [f"{module}: {a}" for a in sorted(arguments - found)]
+    return dead
+
+
+@pytest.mark.logic
+def test_every_dynamic_allowance_still_matches_a_site() -> None:
+    """Each `DYNAMIC_ALLOWED` entry names a file that still has that dynamic import, so no entry is dead."""
+    assert dead_dynamic_entries(DYNAMIC_ALLOWED, capability_imports) == []
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize(
+    "planted",
+    [
+        {"packages/senselab-worker/src/senselab_worker/launch.py": frozenset({"<dynamic:argv[2]>"})},
+        {"packages/senselab-worker/src/senselab_worker/no_such_module.py": frozenset({"<dynamic:x>"})},
+        {CANONICAL: frozenset({"<dynamic:module>"})},
+    ],
+)
+def test_a_dead_dynamic_allowance_is_reported(planted: dict[str, frozenset[str]]) -> None:
+    """An allowance for a site that does not exist, or in a file that does not exist, is reported by name."""
+    ((module, arguments),) = planted.items()
+    assert dead_dynamic_entries({**DYNAMIC_ALLOWED, **planted}, capability_imports) == [
+        f"{module}: {a}" for a in sorted(arguments)
+    ]
 
 
 @pytest.mark.logic

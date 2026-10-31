@@ -49,7 +49,6 @@ TOMBSTONES = {
 
 DYNAMIC_ALLOWED: dict[str, frozenset[str]] = {
     "src/senselab/utils/venv_lock.py": frozenset({"<dynamic:module_name>"}),
-    "src/senselab/utils/subprocess_venv.py": frozenset({"<dynamic:call['module']>"}),
     "src/senselab/audio/workflows/audio_analysis/__init__.py": frozenset({"<dynamic:f'{__name__}.{submodule}'>"}),
     "packages/senselab-core/src/senselab_core/testing/values.py": frozenset({"<dynamic:module.name>"}),
     "packages/senselab-core/src/senselab_core/testing/contracts.py": frozenset({"<dynamic:module>"}),
@@ -310,6 +309,38 @@ def test_no_file_imports_a_moved_module() -> None:
             if n.startswith(("<dynamic:", "<unparseable")) and n not in DYNAMIC_ALLOWED.get(rel, frozenset())
         ]
     assert hits == []
+
+
+def dead_dynamic_entries(allowed: dict[str, frozenset[str]]) -> list[str]:
+    """Return `file: argument` for each allowance whose file is gone or no longer has that dynamic import."""
+    dead = []
+    for rel, arguments in sorted(allowed.items()):
+        path = REPO / rel
+        found = _imports(path) if path.is_file() else set()
+        dead += [f"{rel}: {a}" for a in sorted(arguments - found)]
+    return dead
+
+
+@pytest.mark.logic
+def test_every_dynamic_allowance_still_matches_a_site() -> None:
+    """Each `DYNAMIC_ALLOWED` entry names a file that still has that dynamic import, so no entry is dead."""
+    assert dead_dynamic_entries(DYNAMIC_ALLOWED) == []
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize(
+    "planted",
+    [
+        {"src/senselab/utils/venv_lock.py": frozenset({"<dynamic:other_name>"})},
+        {"src/senselab/utils/no_such_module.py": frozenset({"<dynamic:x>"})},
+        {"src/senselab/__init__.py": frozenset({"<dynamic:module>"})},
+    ],
+)
+def test_a_dead_dynamic_allowance_is_reported(planted: dict[str, frozenset[str]]) -> None:
+    """An allowance for a site that does not exist, or in a file that does not exist, is reported by name."""
+    ((rel, arguments),) = planted.items()
+    expected = [f"{rel}: {a}" for a in sorted(arguments)]
+    assert dead_dynamic_entries({**DYNAMIC_ALLOWED, **planted}) == expected
 
 
 @pytest.mark.logic

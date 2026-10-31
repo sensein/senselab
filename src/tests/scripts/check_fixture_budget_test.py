@@ -147,6 +147,42 @@ def test_large_code_file_is_refused(tmp_path: Path, capsys: pytest.CaptureFixtur
         assert f"src/pkg/blob.{suffix}" in out and "code-file limit" in out and "ok.py" not in out
 
 
+@pytest.mark.parametrize("count", [1, 2, 3, 4])
+@pytest.mark.parametrize("where", ["src/tests/x", "packages/senselab-core/tests/x", "src/senselab/x"])
+def test_code_files_under_test_trees_are_capped_in_total(tmp_path: Path, where: str, count: int) -> None:
+    """Code files each under the per-file cap are refused once their sum under the test trees passes the total."""
+    sizes = [400] * count
+    paths = [_file(tmp_path, f"{where}/m{i}.py", n) for i, n in enumerate(sizes)]
+    found = budget.check(paths, allow={}, root=tmp_path, code_max=500, code_total=1000)
+    over = where != "src/senselab/x" and sum(sizes) > 1000
+    assert [m for m in found if "total of code files" in m] == (
+        [
+            f"total of code files under the test trees: {sum(sizes)} bytes exceeds the 1000 byte limit; "
+            "code is not a data carrier"
+        ]
+        if over
+        else []
+    )
+    allowed = budget.check(
+        paths,
+        allow={p.relative_to(tmp_path).as_posix(): 400 for p in paths},
+        root=tmp_path,
+        code_max=500,
+        code_total=1000,
+    )
+    assert allowed == []
+
+
+def test_policy_caps_are_positive_integers(tmp_path: Path) -> None:
+    """Each byte cap in the policy must be a positive integer; the shipped policy loads."""
+    assert budget.load_policy().code_total_max_bytes > budget.load_policy().code_file_max_bytes
+    for bad in ("0", "-1", "true", "1.5", "x"):
+        path = tmp_path / "p.yaml"
+        path.write_text(f"code_file_max_bytes: 10\ncode_total_max_bytes: {bad}\n")
+        with pytest.raises(ValueError, match="code_total_max_bytes"):
+            budget.load_policy(path)
+
+
 def test_symlink_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A tracked symlink to a file or to a directory fails."""
     allow = _repo(tmp_path, {"real/a.txt": 10}, {}, "")
