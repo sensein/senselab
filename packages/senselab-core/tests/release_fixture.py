@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import io
 import os
 import subprocess
@@ -54,15 +56,20 @@ def write_wheel(
         f"Version: {version}",
         *(f"Requires-Dist: {r}" for r in requires),
     ]
+    files = {
+        **(modules or {}),
+        f"{stem}.dist-info/METADATA": "\n".join(meta) + "\n",
+        f"{stem}.dist-info/WHEEL": "Wheel-Version: 1.0\nGenerator: t\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    }
     record = f"{stem}.dist-info/RECORD"
+    lines = []
+    for member, text in files.items():
+        digest = base64.urlsafe_b64encode(hashlib.sha256(text.encode()).digest()).rstrip(b"=").decode()
+        lines.append(f"{member},sha256={digest},{len(text.encode())}")
+    files[record] = "\n".join([*lines, f"{record},,"]) + "\n"
     with zipfile.ZipFile(path, "w") as archive:
-        for module, source in (modules or {}).items():
-            archive.writestr(module, source)
-        archive.writestr(f"{stem}.dist-info/METADATA", "\n".join(meta) + "\n")
-        archive.writestr(
-            f"{stem}.dist-info/WHEEL", "Wheel-Version: 1.0\nGenerator: t\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
-        )
-        archive.writestr(record, "")
+        for member, text in files.items():
+            archive.writestr(member, text)
     return path
 
 

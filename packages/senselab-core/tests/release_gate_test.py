@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import json
 import re
+import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -343,6 +347,146 @@ def test_n3_gitignored_file_does_not_ship_and_is_not_refused(
     gate.check_contents(_core_files(root, tmp_path / "out"), root)
 
 
+def _rewrite_sdist(path: Path, edits: dict[str, bytes | tuple[str, str]]) -> None:
+    """Rewrite the sdist at ``path``: bytes replace or add a member; ``(kind, target)`` adds a non-regular one."""
+    with tarfile.open(path) as tar:
+        top = tar.getnames()[0].split("/")[0]
+        kept = [(m, tar.extractfile(m).read() if m.isreg() else None) for m in tar.getmembers()]  # type: ignore[union-attr]
+    with tarfile.open(path, "w:gz") as out:
+        for member, data in kept:
+            replaced = next((v for k, v in edits.items() if member.name == f"{top}/{k}" and isinstance(v, bytes)), None)
+            data = replaced if replaced is not None else data
+            if data is not None:
+                member.size = len(data)
+                out.addfile(member, io.BytesIO(data))
+            else:
+                out.addfile(member)
+        for name, edit in edits.items():
+            if isinstance(edit, bytes):
+                if not any(m.name == f"{top}/{name}" for m, _ in kept):
+                    info = tarfile.TarInfo(f"{top}/{name}")
+                    info.size = len(edit)
+                    out.addfile(info, io.BytesIO(edit))
+                continue
+            kind, target = edit
+            info = tarfile.TarInfo(f"{top}/{name}")
+            info.type = {
+                "symlink": tarfile.SYMTYPE,
+                "hardlink": tarfile.LNKTYPE,
+                "fifo": tarfile.FIFOTYPE,
+                "chr": tarfile.CHRTYPE,
+            }[kind]
+            info.linkname = target
+            out.addfile(info)
+
+
+def _rewrite_wheel(path: Path, edits: dict[str, bytes | str]) -> None:
+    """Rewrite the wheel at ``path``: bytes replace or add a member; the string ``"symlink"`` adds a symlink entry."""
+    with zipfile.ZipFile(path) as archive:
+        kept = {n: archive.read(n) for n in archive.namelist()}
+    with zipfile.ZipFile(path, "w") as out:
+        for name, data in {**kept, **{k: v for k, v in edits.items() if isinstance(v, bytes)}}.items():
+            out.writestr(name, data)
+        for name, kind in edits.items():
+            if kind == "symlink":
+                info = zipfile.ZipInfo(name)
+                info.external_attr = (stat.S_IFLNK | 0o777) << 16
+                out.writestr(info, "/etc/passwd")
+
+
+@pytest.mark.env
+def test_m1_m2_m4_mutating_a_real_build_is_refused(tagged_workspace: Callable[..., Path], tmp_path: Path) -> None:
+    """Aliases are bound to content, extra dist-info or data dirs and non-regular entries are refused."""
+    root = tagged_workspace(["2.0.0"])
+    built = _core_files(root, tmp_path / "out")
+    gate.check_contents(built, root)
+    wheel, sdist = (next(p for p in built if p.suffix == s) for s in (".whl", ".gz"))
+    stem = "senselab_core-2.0.0"
+    wheel_cases: dict[str, dict[str, bytes | str]] = {
+        "second dist-info": {"evil-1.0.dist-info/entry_points.txt": b"[console_scripts]\nx=y:z\n"},
+        "other-version dist-info": {"senselab_core-9.9.9.dist-info/entry_points.txt": b"x"},
+        "data dir": {f"{stem}.data/scripts/run": b"#!/bin/sh\n"},
+        "license not named": {f"{stem}.dist-info/licenses/pyproject.toml": b"x"},
+        "symlink entry": {"senselab_core/link.py": "symlink"},
+        "changed package file": {"senselab_core/py.typed": b"changed"},
+        "unknown dist-info file": {f"{stem}.dist-info/extra.txt": b"x"},
+    }
+    for label, edits in wheel_cases.items():
+        target = tmp_path / label.replace(" ", "_") / wheel.name
+        target.parent.mkdir()
+        shutil.copy(wheel, target)
+        _rewrite_wheel(target, edits)
+        with pytest.raises(gate.GateError, match="not copies of tracked files"):
+            gate.check_contents([target], root)
+    sdist_cases: dict[str, dict[str, bytes | tuple[str, str]]] = {
+        "alias content": {"_shared_hatch_build_pins.py": b"print('evil')\n"},
+        "gitignore content": {".gitignore": b"!*\n"},
+        "symlink": {"link": ("symlink", "/etc/passwd")},
+        "hardlink": {"hard": ("hardlink", "src/senselab_core/__init__.py")},
+        "fifo": {"pipe": ("fifo", "")},
+        "device": {"dev": ("chr", "")},
+    }
+    for label, sdist_edits in sdist_cases.items():
+        target = tmp_path / f"s-{label.replace(' ', '_')}" / sdist.name
+        target.parent.mkdir()
+        shutil.copy(sdist, target)
+        _rewrite_sdist(target, sdist_edits)
+        with pytest.raises(gate.GateError, match="not copies of tracked files"):
+            gate.check_contents([target], root)
+
+
+@pytest.mark.env
+def test_m1_an_untracked_gitignore_in_a_package_root_that_ships_is_refused(
+    tagged_workspace: Callable[..., Path], tmp_path: Path
+) -> None:
+    """The sdist ``.gitignore`` must equal a tracked one: an untracked file with other content ships and fails."""
+    root = tagged_workspace(["2.0.0"])
+    (root / "packages/senselab-core/.gitignore").write_text("!*\n")
+    files = _core_files(root, tmp_path / "out")
+    with pytest.raises(gate.GateError, match="gitignore"):
+        gate.check_contents(files, root)
+
+
+@pytest.mark.env
+def test_m1_the_root_distribution_license_must_be_a_named_tracked_copy(
+    tagged_workspace: Callable[..., Path], tmp_path: Path
+) -> None:
+    """The root wheel's license file passes when it is the tracked LICENSE.md and fails when its bytes differ."""
+    root = tagged_workspace(["2.0.0"])
+    files = [p for p in build(root, tmp_path / "out", "--package", "senselab") if not p.name.startswith(".")]
+    gate.check_contents(files, root)
+    wheel = next(p for p in files if p.suffix == ".whl")
+    names = zipfile.ZipFile(wheel).namelist()
+    license_member = next(n for n in names if "/licenses/" in n)
+    _rewrite_wheel(wheel, {license_member: b"forged"})
+    with pytest.raises(gate.GateError, match="licenses"):
+        gate.check_contents([wheel], root)
+
+
+@pytest.mark.env
+def test_m2_sibling_verification_binds_content_not_version(fabricate: Callable[..., Path], tmp_path: Path) -> None:
+    """A sibling installed at the right version but from other files than the dist wheel fails the check."""
+    dist = fabricate("senselab-worker", "2.0.0", modules={"senselab_worker/__init__.py": "A = 1\n"}).parent
+    genuine = gate.wheel_file_hashes(next(dist.glob("*.whl")))
+    other = tmp_path / "other"
+    other.mkdir()
+    sys.modules["release_fixture"].write_wheel(
+        other, "senselab-worker", "2.0.0", modules={"senselab_worker/__init__.py": "A = 2\n"}
+    )
+    venv = tmp_path / "venv"
+    subprocess.run(["uv", "venv", "-q", "--python", HERE_PYTHON["senselab"], str(venv)], check=True)
+    python = str(venv / "bin/python")
+    subprocess.run(["uv", "pip", "install", "-q", "--python", python, str(next(other.glob("*.whl")))], check=True)
+    run = lambda files: subprocess.run(  # noqa: E731
+        [python, "-c", gate._VERIFY, json.dumps({"senselab-worker": {"version": "2.0.0", "files": files}})],
+        capture_output=True,
+        text=True,
+    )
+    assert run(gate.wheel_file_hashes(next(other.glob("*.whl")))).returncode == 0
+    refused = run(genuine)
+    assert refused.returncode != 0 and "not installed from dist" in refused.stderr
+
+
 @pytest.mark.logic
 def test_n3_contents_check_refuses_a_directory_that_is_not_a_repository(
     fabricate: Callable[..., Path], tmp_path: Path
@@ -391,18 +535,78 @@ def test_n4_root_is_tested_at_its_declared_floor() -> None:
     assert floors["senselab"] == "3.11" and floors["senselab-core"] == "3.11" and floors["senselab-worker"] == "3.10"
 
 
+SAFE_EXPRESSIONS = {"github.event.pull_request.number", "matrix.python-version"}
+
+
+def _strings(node: Any) -> list[str]:  # noqa: ANN401
+    """Return every ``run`` string and github-script ``script`` string among the steps under ``node``."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("run", "script") and isinstance(value, str):
+                found.append(value)
+            else:
+                found += _strings(value)
+    elif isinstance(node, list):
+        for item in node:
+            found += _strings(item)
+    return found
+
+
+def interpolation_offenders(directory: Path) -> list[str]:
+    """Parse every workflow and composite action under ``directory``; list each ``${{ }}`` in a script not allowed.
+
+    A script is inspected as one whole string, so an expression split over lines, or inside a literal or folded
+    block scalar, is found. An opener with no closer is an offender too.
+    """
+    offenders = []
+    for path in sorted([*directory.rglob("*.yml"), *directory.rglob("*.yaml")]):
+        for script in _strings(yaml.safe_load(path.read_text())):
+            found = re.findall(r"\$\{\{(.*?)\}\}", script, flags=re.S)
+            offenders += [
+                f"{path.name}: {' '.join(e.split())}" for e in found if " ".join(e.split()) not in SAFE_EXPRESSIONS
+            ]
+            if script.count("${{") != len(found):
+                offenders.append(f"{path.name}: unterminated ${{{{")
+    return offenders
+
+
 @pytest.mark.logic
 def test_n5_no_workflow_interpolates_an_expression_into_a_run_script() -> None:
-    """Untrusted contexts reach shell only through ``env:``; ``run:`` holds no ``${{ }}`` but numbers and the matrix."""
-    safe = {"github.event.pull_request.number", "matrix.python-version"}
-    offenders = []
-    for path in sorted((REPO / ".github/workflows").glob("*.y*ml")):
-        for job, body in yaml.safe_load(path.read_text())["jobs"].items():
-            for step in body.get("steps", []):
-                for expression in re.findall(r"\$\{\{(.*?)\}\}", step.get("run", "")):
-                    if expression.strip() not in safe:
-                        offenders.append(f"{path.name}:{job}: {expression.strip()}")
-    assert offenders == []
+    """Untrusted contexts reach shell only through ``env:``; scripts hold no ``${{ }}`` but numbers and the matrix."""
+    assert interpolation_offenders(REPO / ".github") == []
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("script", "bad"),
+    [
+        ("run: echo ${{ github.head_ref }}", True),
+        ("run: |\n        echo ${{\n          github.head_ref }}", True),
+        ("run: |\n        echo hi\n        echo ${{ github.event.pull_request.title }}", True),
+        ("run: >\n        echo\n        ${{ github.head_ref }}", True),
+        ("run: >\n        echo ${{\n        github.head_ref\n        }}", True),
+        ("run: echo ${{ github.head_ref", True),
+        ("run: echo ${{ matrix.python-version }}", False),
+        ("run: |\n        echo ${{\n          github.event.pull_request.number }}", False),
+        ('run: echo "$HEAD"', False),
+    ],
+)
+def test_m3_interpolation_guard_inspects_whole_scripts(script: str, bad: bool, tmp_path: Path) -> None:
+    """The guard parses YAML and scans each script as a whole: multi-line, literal and folded forms are all caught."""
+    (tmp_path / "w.yaml").write_text(f"jobs:\n  j:\n    steps:\n    - {script}\n")
+    assert bool(interpolation_offenders(tmp_path)) is bad
+
+
+@pytest.mark.logic
+def test_m3_interpolation_guard_covers_composite_actions_and_github_script(tmp_path: Path) -> None:
+    """A composite action's ``run`` and a github-script ``with.script`` are scripts too."""
+    (tmp_path / "action.yml").write_text("runs:\n  steps:\n  - run: echo ${{ github.head_ref }}\n")
+    (tmp_path / "w.yaml").write_text(
+        "jobs:\n  j:\n    steps:\n    - uses: actions/github-script@v7\n"
+        "      with:\n        script: x(${{ github.head_ref }})\n"
+    )
+    assert len(interpolation_offenders(tmp_path)) == 2
 
 
 @pytest.mark.logic

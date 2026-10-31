@@ -14,8 +14,11 @@ Python and imports. The floor defaults to ``[tool.senselab.release] RELEASE_FLOO
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import re
+import stat
 import subprocess
 import sys
 import tarfile
@@ -40,8 +43,8 @@ DIST_ROOTS = {"senselab": ".", "senselab-core": "packages/senselab-core", "sense
 """Each distribution's root, relative to the repository."""
 GENERATED = frozenset({"METADATA", "WHEEL", "RECORD", "entry_points.txt", "PKG-INFO"})
 """File names a build writes into an artifact that no tracked file corresponds to."""
-SDIST_ALIASES = {"_shared_hatch_build_pins.py": "hatch_build_pins.py", ".gitignore": ".gitignore"}
-"""Sdist members that come from the repository root: the shared hook, and the ignore file hatchling adds."""
+SDIST_ALIASES = {"_shared_hatch_build_pins.py": "hatch_build_pins.py"}
+"""Sdist members force-included from the repository root under another name."""
 IMPORTS = {
     "senselab-worker": "senselab_worker",
     "senselab-core": "senselab_worker, senselab_core",
@@ -220,59 +223,95 @@ def _wheel_sources(repo: Path, root: Path) -> dict[str, str]:
     return {Path(p).name: (root / p).as_posix() for p in packages}
 
 
-def artifact_sources(path: Path, repo: Path) -> tuple[str, list[tuple[str, str | None]]]:
-    """Return the distribution name and, for each file in the artifact, the repo path it must come from.
+def _hash(data: bytes) -> str:
+    """Return ``data``'s digest in the RECORD notation, ``sha256=<urlsafe base64 without padding>``."""
+    return "sha256=" + base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
 
-    The path is ``None`` for a build-generated file in ``GENERATED``.
+
+def artifact_members(path: Path) -> list[tuple[str, bytes | None, str | None]]:
+    """Return ``(member, content, problem)`` for every entry of a wheel or sdist that is not a plain directory.
+
+    ``content`` is ``None`` and ``problem`` names the reason for an entry that is not a regular file: a symlink,
+    hardlink, device or FIFO in an sdist, or a symlink in a wheel.
     """
-    name = _metadata(path)[0]
-    root = Path(DIST_ROOTS[name]) if name in DIST_ROOTS else None
-    out: list[tuple[str, str | None]] = []
-    if root is None:
-        return name, out
+    out: list[tuple[str, bytes | None, str | None]] = []
     if path.suffix == ".whl":
-        sources = _wheel_sources(repo, root)
         with zipfile.ZipFile(path) as archive:
-            members = [n for n in archive.namelist() if not n.endswith("/")]
-        for member in members:
-            top, _, rest = member.partition("/")
-            if top.endswith(".dist-info"):
-                if rest in GENERATED:
-                    out.append((member, None))
-                elif rest.startswith("licenses/"):
-                    out.append((member, (root / rest.removeprefix("licenses/")).as_posix()))
+            for info in archive.infolist():
+                mode = info.external_attr >> 16
+                if info.is_dir():
+                    continue
+                if stat.S_IFMT(mode) not in (0, stat.S_IFREG):
+                    out.append((info.filename, None, "not a regular file"))
                 else:
-                    out.append((member, f"{top}/{rest}"))
-            else:
-                src = sources.get(top)
-                out.append((member, f"{src}/{rest}" if src else f"{root.as_posix()}/{member}"))
-        return name, out
+                    out.append((info.filename, archive.read(info), None))
+        return out
     with tarfile.open(path) as tar:
-        members = [m.name for m in tar.getmembers() if m.isfile()]
-    for member in members:
-        rest = member.partition("/")[2]
-        if rest == "PKG-INFO":
-            out.append((member, None))
-        elif rest in SDIST_ALIASES:
-            out.append((member, SDIST_ALIASES[rest]))
-        else:
-            out.append((member, (root / rest).as_posix()))
-    return name, out
+        for member in tar.getmembers():
+            if member.isdir():
+                continue
+            if not member.isreg():
+                out.append((member.name, None, "not a regular file"))
+            else:
+                handle = tar.extractfile(member)
+                assert handle is not None
+                out.append((member.name, handle.read(), None))
+    return out
+
+
+def _candidates(path: Path, member: str, root: Path, license_files: set[str], sources: dict[str, str]) -> list[str] | None:
+    """Return the repo paths ``member`` may be a copy of, ``[]`` when none is allowed, ``None`` when generated."""
+    posix = root.as_posix()
+    if path.suffix == ".whl":
+        stem = "-".join(path.name.split("-")[:2])
+        top, _, rest = member.partition("/")
+        if top == f"{stem}.dist-info":
+            if rest in GENERATED:
+                return None
+            if rest.startswith("licenses/") and rest.removeprefix("licenses/") in license_files:
+                return [(root / rest.removeprefix("licenses/")).as_posix()]
+            return []
+        if top.endswith((".dist-info", ".data")) or top not in sources:
+            return []
+        return [f"{sources[top]}/{rest}"]
+    rest = member.partition("/")[2]
+    if rest == "PKG-INFO":
+        return None
+    if rest == ".gitignore":
+        return [(root / ".gitignore").as_posix(), ".gitignore"]
+    if rest in SDIST_ALIASES:
+        return [SDIST_ALIASES[rest]]
+    return [f"{posix}/{rest}" if posix != "." else rest]
 
 
 def check_contents(files: list[Path], repo: Path) -> None:
-    """Require every file inside every artifact to be a git-tracked file of its package, or a generated one.
+    """Require every file in every artifact to be a byte-identical copy of a git-tracked file, or a generated one.
+
+    Aliased members (the shared hook, the ignore file, license files) are bound to their content, not only
+    their name. Entries that are not regular files, and extra dist-info or data directories, are refused.
 
     Raises:
-        GateError: If an artifact holds a file with no tracked source, or ``repo`` is not a git work tree.
+        GateError: If an artifact holds such an entry, or ``repo`` is not a git work tree.
     """
     tracked = _tracked(repo)
     stray = []
     for path in files:
-        _, entries = artifact_sources(path, repo)
-        stray += [f"{path.name}:{member}" for member, source in entries if source is not None and source not in tracked]
+        name = _metadata(path)[0]
+        root = Path(DIST_ROOTS[name])
+        sources = _wheel_sources(repo, root) if path.suffix == ".whl" else {}
+        license_files = set(_message(path).get_all("License-File") or [])
+        for member, content, problem in artifact_members(path):
+            label = f"{path.name}:{member}"
+            if problem:
+                stray.append(f"{label} ({problem})")
+                continue
+            candidates = _candidates(path, member, root, license_files, sources)
+            if candidates is None:
+                continue
+            if not any(c in tracked and (repo / c).read_bytes() == content for c in candidates):
+                stray.append(f"{label} (no identical tracked file)")
     if stray:
-        raise GateError(f"artifacts hold files that git does not track: {', '.join(stray[:5])}")
+        raise GateError(f"artifacts hold files that are not copies of tracked files: {', '.join(stray[:5])}")
 
 
 def _run(*args: str) -> None:
@@ -296,11 +335,26 @@ def floor_pythons(repo: Path = ROOT) -> dict[str, str]:
 
 
 _VERIFY = (
-    "import json, sys\n"
+    "import csv, io, json, sys\n"
     "from importlib import metadata\n"
-    "bad = {n: metadata.version(n) for n, v in json.loads(sys.argv[1]).items() if metadata.version(n) != v}\n"
-    "assert not bad, f'siblings not at the built version: {bad}'\n"
+    "bad = []\n"
+    "for n, want in json.loads(sys.argv[1]).items():\n"
+    "    dist = metadata.distribution(n)\n"
+    "    record = {r[0]: r[1] for r in csv.reader(io.StringIO(dist.read_text('RECORD'))) if len(r) > 1 and r[1]}\n"
+    "    wrong = [f for f, h in want['files'].items() if record.get(f) != h]\n"
+    "    if dist.version != want['version'] or wrong:\n"
+    "        bad.append(f'{n} {dist.version}: {wrong[:3]}')\n"
+    "assert not bad, f'siblings not installed from dist: {bad}'\n"
 )
+
+
+def wheel_file_hashes(wheel: Path) -> dict[str, str]:
+    """Return the RECORD-notation hash of every file in ``wheel`` except its RECORD."""
+    return {
+        member: _hash(content)
+        for member, content, _ in artifact_members(wheel)
+        if content is not None and not member.endswith(".dist-info/RECORD")
+    }
 
 
 def check_installs(files: list[Path], pythons: Mapping[str, str]) -> None:
@@ -308,19 +362,21 @@ def check_installs(files: list[Path], pythons: Mapping[str, str]) -> None:
 
     Only the distribution's own wheel is passed by path. Its siblings must be reached by the resolver through
     ``--find-links`` on the directory of ``files``; third-party requirements come from the index. Each sibling
-    must then be installed at the built version.
+    must then be installed with the version and file hashes of the wheel in ``dist/``, not merely the version.
 
     Raises:
         GateError: If creating an environment, installing, a sibling's version or importing fails.
     """
     wheels = {_metadata(p)[0]: p.resolve() for p in files if p.suffix == ".whl"}
-    versions = {_metadata(p)[0]: str(_metadata(p)[1]) for p in wheels.values()}
+    built = {
+        n: {"version": str(_metadata(p)[1]), "files": wheel_file_hashes(p)} for n, p in wheels.items()
+    }
     links = next(iter(wheels.values())).parent
     with tempfile.TemporaryDirectory(prefix="release-gate-") as tmp:
         for name in DISTRIBUTIONS:
             siblings, link = {}, DEPENDS_ON[name]
             while link is not None:
-                siblings[link] = versions[link]
+                siblings[link] = built[link]
                 link = DEPENDS_ON[link]
             venv = Path(tmp) / name
             _run("uv", "venv", "--python", pythons[name], str(venv))

@@ -73,6 +73,7 @@ ALLOWED_BY_REASON: dict[str, tuple[str, ...]] = {
         "scripts/check_fixture_budget.py",
         "scripts/extend_cohort.py",
         "scripts/free_speech_review_page.py",
+        "scripts/release_gate.py",
         "scripts/verify_grid_unification.py",
     ),
 }
