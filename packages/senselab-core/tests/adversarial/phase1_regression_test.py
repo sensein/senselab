@@ -155,28 +155,19 @@ def test_a26_moved_module_guard_catches_the_bypass(tmp_path: Path, bypass: str, 
     assert result.returncode == 1, f"{bypass} passed the guard:\n{result.stdout}{result.stderr}"
 
 
-@pytest.mark.logic
+@pytest.mark.contract
 def test_a27_fixture_budget_refuses_a_symlink_and_a_base64_code_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, worktree_untouched: None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], worktree_untouched: None
 ) -> None:
     """A tracked symlink is a violation, and a 5 MB base64 ``.py`` under a test tree exceeds the code-file cap."""
     budget = _load(BUDGET, "a27_check_fixture_budget", monkeypatch)
-    tests = tmp_path / "src" / "tests"
-    tests.mkdir(parents=True)
-    target = tests / "real.txt"
-    target.write_text("x")
-    link = tests / "link.txt"
-    link.symlink_to(target)
-    assert any("symlink" in v for v in budget.check([link], allow={}, root=tmp_path))
-
-    blob = tests / "payload.py"
-    blob.write_text("DATA = '" + base64.b64encode(os.urandom(3_750_000)).decode() + "'\n")
-    assert blob.stat().st_size > 5_000_000
-    policy = budget.load_policy()
-    violations = budget.check(
-        [blob], allow={}, root=tmp_path, code_max=policy.code_file_max_bytes, code_total=policy.code_total_max_bytes
-    )
-    assert any("payload.py" in v for v in violations)
+    payload = "DATA = '" + base64.b64encode(os.urandom(3_750_000)).decode() + "'\n"
+    _budget_repo(tmp_path, budget, {}, {"src/tests/link.txt": "small.txt"})
+    (tmp_path / "src" / "tests" / "payload.py").write_text(payload)
+    _git(tmp_path, "add", "-A")
+    assert _budget_main(budget, tmp_path, _empty_allowlist(tmp_path)) == 1
+    out = capsys.readouterr().out
+    assert "link.txt" in out and "symlink" in out and "payload.py" in out
 
 
 def _git(root: Path, *args: str) -> None:
@@ -205,6 +196,26 @@ def _budget_repo(root: Path, budget: ModuleType, later: dict[str, int], links: d
     _git(root, "add", "-A")
 
 
+def _empty_allowlist(root: Path) -> Path:
+    allow = root / "allow.txt"
+    allow.write_text("")
+    return allow
+
+
+def _budget_main(budget: ModuleType, root: Path, allow: Path) -> int:
+    """Run the budget's ``main`` on ``root``; where the policy is bound to the freeze, with one measured on it."""
+    if not hasattr(budget, "measure"):
+        return int(budget.main(root, allow))
+    import yaml
+
+    frozen = budget.measure(
+        budget.frozen_objects(root, budget.FREEZE_BRANCH), budget.parse_allowlist(allow.read_text()), {}
+    )
+    policy = root / "policy.yaml"
+    policy.write_text(yaml.safe_dump({name: {"measured": frozen[name], "headroom": 2} for name in budget.CAPS}))
+    return int(budget.main(root, allow, policy))
+
+
 def _allowlist_for(budget: ModuleType, path: str, size: int, root: Path) -> Path:
     """An allowlist naming ``path``, in whichever column format the budget script parses."""
     sha = hashlib.sha256(b"\0" * size).hexdigest()
@@ -228,7 +239,7 @@ def test_a27_new_allowlist_entry_for_a_9mb_file_is_refused(
     size = 9 * 1024 * 1024
     _budget_repo(tmp_path, budget, {"src/tests/data/new.bin": size})
     allow = _allowlist_for(budget, "src/tests/data/new.bin", size, tmp_path)
-    assert budget.main(tmp_path, allow) == 1
+    assert _budget_main(budget, tmp_path, allow) == 1
     assert "new.bin" in capsys.readouterr().out
 
 
@@ -238,17 +249,15 @@ def test_a27_directory_symlink_and_non_test_tree_are_refused(
 ) -> None:
     """A tracked symlink to a directory fails the budget, and so does a 9 MB file outside every test tree."""
     budget = _load(BUDGET, "a27_budget_trees", monkeypatch)
-    allow = tmp_path / "allow.txt"
-    allow.write_text("")
-    for case in ("directory-symlink", "non-test-tree"):
+    for case, name in (("directory-symlink", "dirlink"), ("non-test-tree", "big.wav")):
         root = tmp_path / case
         root.mkdir()
         if case == "directory-symlink":
             _budget_repo(root, budget, {}, {"src/tests/dirlink": "."})
         else:
             _budget_repo(root, budget, {"docs/big.wav": 9 * 1024 * 1024})
-        assert budget.main(root, allow) == 1, case
-        capsys.readouterr()
+        assert _budget_main(budget, root, _empty_allowlist(root)) == 1, case
+        assert name in capsys.readouterr().out, case
 
 
 @pytest.mark.contract
