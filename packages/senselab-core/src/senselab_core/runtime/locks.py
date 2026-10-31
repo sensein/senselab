@@ -26,6 +26,7 @@ import getpass
 import json
 import logging
 import os
+import re
 import socket
 import threading
 import time
@@ -35,6 +36,7 @@ from typing import Optional
 
 from filelock import FileLock, Timeout
 from filelock._unix import UnixFileLock, has_fcntl
+from senselab_worker.ownership import remove_owned
 
 logger = logging.getLogger("senselab")
 
@@ -484,6 +486,6 @@ class SharedFileLock:
         self._stop_event.set()
         if self._heartbeat_thread is not None:
             self._heartbeat_thread.join(timeout=5)
-        self._heartbeat_path.unlink(missing_ok=True)
-        self._holder_path.unlink(missing_ok=True)
+        for owned in (self._heartbeat_path, self._holder_path):
+            remove_owned(owned.parent, owned, pattern=re.compile(re.escape(owned.name)))
         self._lock.release()

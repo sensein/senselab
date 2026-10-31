@@ -1,7 +1,8 @@
 """Worker entry point: `python -m senselab_worker.launch <backend_module>`.
 
-Before anything else, fd 1 and `sys.stdout` are pointed at stderr and the protocol keeps a private
-duplicate of fd 1, so nothing a backend prints reaches the host. The backend module defines
+Before anything else, the protocol moves to private, non-inheritable duplicates of fd 0 and fd 1;
+fd 0 and `sys.stdin` then read `/dev/null` and fd 1 and `sys.stdout` write to stderr, so nothing a
+backend or its children read or print touches the channel. The backend module defines
 `load(init) -> state` and `handle(state, items, params) -> list[dict]` (see `serve`); it is
 imported during load, so an import failure is reported as a fatal error.
 """
@@ -14,17 +15,22 @@ from typing import Any, BinaryIO
 from senselab_worker.serve import serve
 
 
-def _claim_stdout() -> BinaryIO:
+def _claim_channel() -> tuple[BinaryIO, BinaryIO]:
     sys.stdout.flush()
-    protocol = os.fdopen(os.dup(1), "wb")
+    rx = os.fdopen(os.dup(0), "rb")
+    tx = os.fdopen(os.dup(1), "wb")
+    devnull = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(devnull, 0)
+    os.close(devnull)
     os.dup2(2, 1)
+    sys.stdin = open(os.devnull)  # noqa: SIM115 - replaces the interpreter's stdin for the process lifetime
     sys.stdout = sys.stderr
-    return protocol
+    return rx, tx
 
 
 def main(argv: list[str]) -> int:
-    """Serve the backend named by `argv[1]` on stdin and the original stdout; return the exit code."""
-    protocol = _claim_stdout()
+    """Serve the backend named by `argv[1]` on the original stdin and stdout; return the exit code."""
+    rx, tx = _claim_channel()
     if len(argv) != 2:
         print("usage: python -m senselab_worker.launch <backend_module>", file=sys.stderr)
         return 2
@@ -39,7 +45,7 @@ def main(argv: list[str]) -> int:
         result: list[dict[str, Any]] = backend["handle"](state, items, params)
         return result
 
-    return serve(load, handle, sys.stdin.buffer, protocol)
+    return serve(load, handle, rx, tx)
 
 
 if __name__ == "__main__":

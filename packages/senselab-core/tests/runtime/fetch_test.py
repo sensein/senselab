@@ -175,8 +175,8 @@ def test_permissions_independent_of_umask(tmp_path: Path) -> None:
 def test_stale_download_removed_but_live_one_kept(tmp_path: Path) -> None:
     """Stale download removed but live one kept."""
     (tmp_path / "tmp").mkdir()
-    stale = tmp_path / "tmp" / "stale"
-    live = tmp_path / "tmp" / "live"
+    stale = tmp_path / "tmp" / ("5" * 32)
+    live = tmp_path / "tmp" / ("1" * 32)
     stale.write_bytes(b"x")
     live.write_bytes(b"y")
     old = time.time() - DOWNLOAD_STALE_SECONDS - 60
@@ -349,7 +349,7 @@ def test_size_mode_skips_rehash_and_full_mode_catches_same_size_corruption(
 @pytest.mark.logic
 def test_first_writer_wins_blob_commit(tmp_path: Path) -> None:
     """An existing blob is never replaced by a later commit; the staged file is dropped."""
-    staged = tmp_path / "staged"
+    staged = tmp_path / ("5" * 32)
     final = tmp_path / "blob"
     final.write_bytes(b"first")
     staged.write_bytes(b"second")
@@ -403,13 +403,20 @@ def test_disk_full_is_storage_error_not_network(tmp_path: Path, monkeypatch: pyt
 
 
 @pytest.mark.logic
+@pytest.mark.skipif(os.geteuid() == 0, reason="root removes a directory whatever its mode")
 def test_stale_cleanup_tolerates_unremovable_entries(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """A directory in tmp/ does not abort the fetch; the failure is logged."""
-    (tmp_path / "tmp" / "odd").mkdir(parents=True)
+    """A stale entry that cannot be removed does not abort the fetch; the failure is logged."""
+    odd = tmp_path / "tmp" / ("5" * 32)
+    odd.mkdir(parents=True)
+    (odd / "inner").write_bytes(b"x")
+    odd.chmod(0o500)
     old = time.time() - DOWNLOAD_STALE_SECONDS - 60
-    os.utime(tmp_path / "tmp" / "odd", (old, old))
-    with caplog.at_level("WARNING", logger="senselab"):
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    os.utime(odd, (old, old))
+    try:
+        with caplog.at_level("WARNING", logger="senselab"):
+            fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    finally:
+        odd.chmod(0o700)
     assert "cannot remove stale download" in caplog.text
 
 

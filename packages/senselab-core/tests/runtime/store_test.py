@@ -206,12 +206,12 @@ def test_losing_rename_returns_winner_identity(tmp_path: Path, monkeypatch: pyte
 def test_crash_leaves_no_entry(tmp_path: Path) -> None:
     """A staging dir never renamed is invisible to get; put removes it once stale and keeps a fresh one."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
-    stale = tmp_path / "tmp" / "crashed"
+    stale = tmp_path / "tmp" / ("5" * 32)
     stale.mkdir(parents=True)
     (stale / "result.json").write_bytes(jcs_dumps({"format": "result@1.0", "outputs": {}, "output_identity": "x"}))
     old = time.time() - STAGING_STALE_SECONDS - 60
     os.utime(stale, (old, old))
-    live = tmp_path / "tmp" / "live"
+    live = tmp_path / "tmp" / ("1" * 32)
     live.mkdir()
     assert s.get(k, c, ReusePolicy.TOLERANT) is None
     s.put(_key(task="other"), {"y": 1}, c)

@@ -60,3 +60,18 @@ def test_unusable_backend_is_fatal_after_hello(tmp_path: Path, backend: str, err
     out = [json.loads(line) for line in proc.stdout.splitlines()]
     assert proc.returncode != 0 and _keys(proc.stdout) == ["hello", "error"]
     assert out[1]["fatal"] is True and out[1]["error"]["type"] == error_type
+
+
+@pytest.mark.logic
+def test_a8_backend_children_inherit_dev_null_not_the_channel(tmp_path: Path) -> None:
+    """The probe's cause: fd 0 is `/dev/null`, fd 1 is stderr, and only fds 0-2 are inheritable."""
+    proc = _launch(tmp_path, "channel_probe_backend_fixture", *_session(tmp_path))
+    assert proc.returncode == 0, proc.stderr
+    report = json.loads(proc.stdout.splitlines()[-1])["results"][0]["outputs"]
+    assert report == {
+        "fd0_is_devnull": True,
+        "fd1_is_fd2": True,
+        "sys_stdin_is_devnull": True,
+        "sys_stdout_is_stderr": True,
+        "inheritable": [0, 1, 2],
+    }

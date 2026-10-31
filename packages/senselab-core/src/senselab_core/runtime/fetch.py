@@ -21,6 +21,7 @@ import yaml
 from pydantic import ValidationError, field_validator, model_validator
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.hashing import sha256_bytes, sha256_file
+from senselab_worker.ownership import UUID_HEX, remove_owned
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.license import License
@@ -149,7 +150,7 @@ def _remove_stale_downloads(tmp_root: Path) -> None:
     for child in children:
         try:
             if child.stat().st_mtime < cutoff:
-                child.unlink()
+                remove_owned(tmp_root, child, pattern=UUID_HEX)
         except FileNotFoundError:
             continue
         except OSError as err:
@@ -205,7 +206,7 @@ def _commit(staged: Path, final: Path, *, replace: bool = False) -> None:
                     ) from err
                 raise
     finally:
-        staged.unlink(missing_ok=True)
+        remove_owned(staged.parent, staged, pattern=UUID_HEX)
     _fsync_dir(final.parent)
 
 
@@ -240,7 +241,7 @@ def _ensure_blob(
         except _SourceError as err:
             tried.append(f"{url} ({err})")
         finally:
-            staged.unlink(missing_ok=True)
+            remove_owned(staged.parent, staged, pattern=UUID_HEX)
     raise FetchError(
         f"could not fetch {file.path!r}: no source matched sha256 {file.sha256}; tried "
         + "; ".join(tried)
@@ -258,7 +259,7 @@ def _link(link: Path, blob: Path) -> None:
     try:
         os.replace(staged, link)
     finally:
-        staged.unlink(missing_ok=True)
+        remove_owned(link.parent, staged, pattern=re.compile(rf"^\.{re.escape(link.name)}\.[0-9a-f]{{32}}$"))
 
 
 def _valid_sizes(value: object) -> dict[str, int] | None:

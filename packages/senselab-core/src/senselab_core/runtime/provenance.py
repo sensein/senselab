@@ -18,6 +18,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Sequence, cast, get_args
 
+from senselab_worker.ownership import remove_owned
+
 PROV_TYPE = Literal[
     "span",
     "word",
@@ -93,7 +95,8 @@ def _write_atomically(target: Path, data: bytes) -> None:
             os.chmod(temporary, mode)
         os.replace(temporary, target)
     except BaseException:
-        temporary.unlink(missing_ok=True)
+        pattern = re.compile(rf"^\.{re.escape(target.name)}\.[0-9]+\.[0-9]+\.[0-9a-f]{{32}}\.tmp$")
+        remove_owned(target.parent, temporary, pattern=pattern)
         raise
 
 

@@ -1,13 +1,24 @@
 """Wire codec: framing, array references and their integrity checks."""
 
 import json
+import os
+import time
 from pathlib import Path
 
 import numpy
 import pytest
 from senselab_worker import runtime_identity
 from senselab_worker.canonical import canonical_npy_bytes
-from senselab_worker.codec import MAX_LINE_BYTES, array_paths, decode, encode, from_wire, parse_line, to_wire
+from senselab_worker.codec import (
+    MAX_LINE_BYTES,
+    Deadline,
+    array_paths,
+    decode,
+    encode,
+    from_wire,
+    parse_line,
+    to_wire,
+)
 from senselab_worker.faults import ArrayIntegrityError, ProtocolError
 from senselab_worker.hashing import sha256_bytes
 
@@ -145,3 +156,61 @@ def test_malformed_file_with_matching_sha256_is_integrity_error(tmp_path: Path, 
     ref = {"__array__": {"path": str(tmp_path / f"{sha}.npy"), "sha256": sha, "dtype": "<f4", "shape": [1]}}
     with pytest.raises(ArrayIntegrityError):
         from_wire(ref, array_dir=tmp_path)
+
+
+@pytest.mark.logic
+def test_deadline_counts_down_and_names_what_expired() -> None:
+    """`None` never expires; a spent deadline raises `TimeoutError` naming the step."""
+    assert Deadline(None).remaining() is None and not Deadline(None).expired()
+    Deadline(None).check("anything")
+    live = Deadline(60)
+    remaining = live.remaining()
+    assert remaining is not None and 0 < remaining <= 60 and not live.expired()
+    spent = Deadline(0)
+    assert spent.expired() and spent.remaining() == 0
+    with pytest.raises(TimeoutError, match="reading arrays"):
+        spent.check("reading arrays")
+
+
+@pytest.mark.logic
+def test_fifo_array_ref_is_refused_without_blocking(tmp_path: Path) -> None:
+    """A FIFO at `<sha>.npy` is not a regular file: refused at once, never opened for a blocking read."""
+    sha = "b" * 64
+    os.mkfifo(tmp_path / f"{sha}.npy")
+    ref = {"__array__": {"path": str(tmp_path / f"{sha}.npy"), "sha256": sha, "dtype": "<f4", "shape": [1]}}
+    t0 = time.monotonic()
+    with pytest.raises(ArrayIntegrityError, match="regular file"):
+        from_wire(ref, array_dir=tmp_path)
+    assert time.monotonic() - t0 < 1
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("target", ["inside", "outside"])
+def test_symlinked_array_ref_is_refused(tmp_path: Path, target: str) -> None:
+    """A symlink at `<sha>.npy` is refused even when it points at the right bytes."""
+    root = tmp_path / "arrays"
+    root.mkdir()
+    ref = to_wire(numpy.arange(3, dtype="<f4"), array_dir=root)
+    real = Path(ref["__array__"]["path"])
+    elsewhere = (root if target == "inside" else tmp_path) / "real.bin"
+    real.replace(elsewhere)
+    os.symlink(elsewhere, real)
+    with pytest.raises(ArrayIntegrityError):
+        from_wire(ref, array_dir=root)
+
+
+@pytest.mark.logic
+def test_array_read_stops_at_the_deadline(tmp_path: Path) -> None:
+    """A spent deadline stops the read with `TimeoutError`, not an integrity error."""
+    ref = to_wire(numpy.zeros(2**20, dtype="<f8"), array_dir=tmp_path)
+    with pytest.raises(TimeoutError):
+        from_wire(ref, array_dir=tmp_path, deadline=Deadline(0))
+
+
+@pytest.mark.logic
+def test_writer_leaves_no_temporary_after_a_failed_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A write that fails after the temporary file exists removes it."""
+    monkeypatch.setattr(os, "replace", lambda *a: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError, match="disk full"):
+        to_wire(numpy.ones(3), array_dir=tmp_path)
+    assert list(tmp_path.iterdir()) == []

@@ -10,7 +10,9 @@ import json
 import math
 import os
 import re
-import tempfile
+import stat
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -19,10 +21,34 @@ import numpy
 from senselab_worker.canonical import canonical_npy_bytes
 from senselab_worker.faults import ArrayIntegrityError, ProtocolError
 from senselab_worker.hashing import sha256_bytes
+from senselab_worker.ownership import ARRAY_TEMP_NAME, remove_owned
 
 MAX_LINE_BYTES = 16 * 2**20
 ARRAY_KEY = "__array__"
+READ_CHUNK_BYTES = 2**20
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+
+
+class Deadline:
+    """A point in monotonic time by which a sequence of steps must finish; `None` seconds never expires."""
+
+    def __init__(self, seconds: float | None) -> None:
+        """Start the clock: the deadline falls `seconds` from now."""
+        self._seconds = seconds
+        self._end = None if seconds is None else time.monotonic() + max(seconds, 0.0)
+
+    def remaining(self) -> float | None:
+        """Return the seconds left, at least 0, or `None` if the deadline never expires."""
+        return None if self._end is None else max(self._end - time.monotonic(), 0.0)
+
+    def expired(self) -> bool:
+        """Return whether no time is left."""
+        return self._end is not None and time.monotonic() >= self._end
+
+    def check(self, what: str) -> None:
+        """Raise `TimeoutError` naming `what` if the deadline has passed."""
+        if self.expired():
+            raise TimeoutError(f"{what} did not finish within {self._seconds} s")
 
 
 def encode(msg: dict[str, Any], *, array_dir: Path) -> bytes:
@@ -122,14 +148,16 @@ def to_wire(value: object, *, array_dir: Path) -> Any:  # noqa: ANN401
 def _write_array(a: numpy.ndarray, array_dir: Path) -> dict[str, Any]:
     data = canonical_npy_bytes(a)
     sha = sha256_bytes(data)
-    path = array_dir.absolute() / f"{sha}.npy"
-    fd, tmp = tempfile.mkstemp(dir=array_dir, prefix=".", suffix=".tmp")
+    root = array_dir.absolute()
+    path = root / f"{sha}.npy"
+    tmp = root / f".{uuid.uuid4().hex}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
         os.replace(tmp, path)
     except BaseException:
-        Path(tmp).unlink(missing_ok=True)
+        remove_owned(root, tmp, pattern=ARRAY_TEMP_NAME)
         raise
     return {"path": str(path), "sha256": sha, "dtype": a.dtype.newbyteorder("<").str, "shape": list(a.shape)}
 
@@ -144,32 +172,55 @@ def _map_refs(value: object, on_ref: Callable[[object], object]) -> Any:  # noqa
     return value
 
 
-def from_wire(value: object, *, array_dir: Path) -> Any:  # noqa: ANN401
+def from_wire(value: object, *, array_dir: Path, deadline: Deadline | None = None) -> Any:  # noqa: ANN401
     """Return wire data with each array reference replaced by its array, loaded into memory.
+
+    Each file is opened without following a symlink and without blocking, must be a regular file,
+    and is read in chunks of `READ_CHUNK_BYTES`, checking `deadline` between them.
 
     Raises:
         ArrayIntegrityError: if a reference is malformed, points outside `array_dir`, or its file
-            is missing, unreadable, or differs from its sha256, dtype or shape.
+            is missing, not a regular file, unreadable, or differs from its sha256, dtype or shape.
+        TimeoutError: if `deadline` passes while reading.
     """
     root = Path(array_dir).resolve()
-    return _map_refs(value, lambda ref: _read_array(ref, root))
+    return _map_refs(value, lambda ref: _read_array(ref, root, deadline or Deadline(None)))
 
 
-def _read_array(ref: object, root: Path) -> numpy.ndarray:
+def _read_file(path: Path, deadline: Deadline) -> bytes:
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError(f"array file is not a regular file: {path}")
+        chunks: list[bytes] = []
+        while True:
+            deadline.check(f"reading array file {path}")
+            chunk = os.read(fd, READ_CHUNK_BYTES)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    finally:
+        os.close(fd)
+
+
+def _read_array(ref: object, root: Path, deadline: Deadline) -> numpy.ndarray:
     try:
         if not isinstance(ref, dict):
             raise TypeError(f"array reference is a {type(ref).__name__}, not an object")
         sha = ref["sha256"]
         if not (isinstance(sha, str) and _SHA256_HEX.fullmatch(sha)):
             raise ValueError(f"sha256 is not 64 lowercase hex digits: {sha!r}")
-        if Path(ref["path"]).resolve() != root / f"{sha}.npy":
+        named = Path(ref["path"])
+        if named.name != f"{sha}.npy" or named.parent.resolve() != root:
             raise ValueError(f"array path is not {sha}.npy in {root}: {ref['path']}")
-        data = (root / f"{sha}.npy").read_bytes()
+        data = _read_file(root / f"{sha}.npy", deadline)
         if sha256_bytes(data) != sha:
             raise ValueError(f"array file bytes do not match sha256 {sha}")
         a: numpy.ndarray = numpy.load(io.BytesIO(data), allow_pickle=False)
         if a.dtype.str != ref["dtype"] or list(a.shape) != ref["shape"]:
             raise ValueError(f"array is {a.dtype.str} {list(a.shape)}, reference says {ref['dtype']} {ref['shape']}")
+    except TimeoutError:
+        raise
     except Exception as exc:
         raise ArrayIntegrityError(f"bad array reference: {type(exc).__name__}: {exc}") from exc
     return a

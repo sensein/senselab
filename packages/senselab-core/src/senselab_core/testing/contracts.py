@@ -333,10 +333,9 @@ def _content_fault_isolated(task: TaskSpec, backend: BackendSpec) -> None:
     items = [{"id": i, "inputs": {port: f"{i}:{port}" for port in task.inputs}} for i in ("a", "b", "c")]
     params = task.params().model_dump(mode="json")
     with tempfile.TemporaryDirectory(prefix="senselab-contract-") as scratch:
-        clean_dir, faulted_dir = Path(scratch) / "clean", Path(scratch) / "faulted"
-        clean = run_fake(items, params, FakeFaults(), array_dir=clean_dir)
-        faulted = run_fake(items, params, FakeFaults(fail_items=frozenset({"b"})), array_dir=faulted_dir)
-        assert not clean_dir.exists() and not faulted_dir.exists(), "the worker's array directory was left behind"
+        clean = run_fake(items, params, FakeFaults(), array_parent=Path(scratch))
+        faulted = run_fake(items, params, FakeFaults(fail_items=frozenset({"b"})), array_parent=Path(scratch))
+        assert not any(Path(scratch).iterdir()), "the worker's array directory was left behind"
     assert all("outputs" in r for r in clean), f"a fault-free run failed: {clean}"
     assert faulted[1].get("error", {}).get("fault") is FaultClass.CONTENT, f"item b did not fail as content: {faulted}"
     assert (faulted[0], faulted[2]) == (clean[0], clean[2]), "a content fault on b changed its batch-mates"

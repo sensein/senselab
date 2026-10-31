@@ -22,8 +22,8 @@ The output identity is `"output:" + tagged_digest("output@2", encoded form)`.
 
 import errno
 import io
+import logging
 import os
-import shutil
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -42,6 +42,7 @@ from senselab_worker.canonical import (
     tagged_digest,
 )
 from senselab_worker.hashing import sha256_bytes
+from senselab_worker.ownership import UUID_HEX, remove_owned
 
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputIdentity, ReusePolicy, acceptable
 from senselab_core.runtime.locks import LOCK_FILE_MODE, ensure_dirs
@@ -54,6 +55,8 @@ RESULT_FORMAT = "result@1.0"
 CONTEXT_FORMAT = "execution-context@1.0"
 ARRAY_TAG = "$array"
 STAGING_STALE_SECONDS = 24 * 60 * 60
+
+logger = logging.getLogger("senselab")
 """A staging directory whose mtime is older than this is a crashed writer's and is removed by `put`."""
 COMMIT_ATTEMPTS = 3
 """How many times `put` stages and renames before giving up on a target that keeps turning out corrupt."""
@@ -250,7 +253,14 @@ def _commit(
         _fsync_dir(entry.parent)
         return True
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        _discard_staging(staging_root, staging)
+
+
+def _discard_staging(staging_root: Path, staging: Path) -> None:
+    try:
+        remove_owned(staging_root, staging, pattern=UUID_HEX)
+    except OSError as err:
+        logger.warning("cannot remove staging directory %s: %s", staging, err)
 
 
 def _remove_stale_staging(staging_root: Path) -> None:
@@ -265,7 +275,7 @@ def _remove_stale_staging(staging_root: Path) -> None:
         except FileNotFoundError:
             continue
         if stale:
-            shutil.rmtree(child, ignore_errors=True)
+            _discard_staging(staging_root, child)
 
 
 class ResultStore:

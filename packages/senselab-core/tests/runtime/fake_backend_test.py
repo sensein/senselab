@@ -22,13 +22,12 @@ def test_import_registers_echo_and_its_backend() -> None:
 @pytest.mark.logic
 def test_run_fake_hashes_inputs_and_params(tmp_path: Path) -> None:
     """Each value is the sha256 of the JCS of the item's inputs and the params; the array dir is removed."""
-    array_dir = tmp_path / "arrays"
     items = [{"id": "a", "inputs": {"payload": "x"}}, {"id": "b", "inputs": {"payload": "y"}}]
     params = EchoParams(salt="s").model_dump()
-    results = run_fake(items, params, FakeFaults(), array_dir=array_dir)
+    results = run_fake(items, params, FakeFaults(), array_parent=tmp_path)
     expected = [sha256_bytes(jcs_dumps({"inputs": i["inputs"], "params": params})) for i in items]
     assert [r["outputs"]["value"] for r in results] == expected
-    assert not array_dir.exists()
+    assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.logic
@@ -42,9 +41,8 @@ def test_run_fake_injects_declared_faults() -> None:
 @pytest.mark.logic
 def test_fake_worker_process_has_exited_on_exit(tmp_path: Path) -> None:
     """Leaving `fake_worker`, which `run_fake` runs inside, reaps the worker process and removes its array dir."""
-    array_dir = tmp_path / "arrays"
-    with fake_worker(FakeFaults(), array_dir=array_dir) as client:
+    with fake_worker(FakeFaults(), array_parent=tmp_path) as client:
         client.run([{"id": "a", "inputs": {"payload": "x"}}], {})
         assert client.returncode is None
     assert client.returncode is not None
-    assert not array_dir.exists()
+    assert list(tmp_path.iterdir()) == []
