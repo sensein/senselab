@@ -155,6 +155,9 @@ dependencies = [
 [tool.senselab.release]
 RELEASE_FLOOR = "2.0.0a0"
 
+[tool.hatch.build]
+artifacts = ["/src/**/data/**"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/senselab"]
 

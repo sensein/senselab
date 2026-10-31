@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [tool.hatch.build]
-artifacts = ["/src/senselab_worker/data/"]
+artifacts = ["/src/**/data/**"]
 
 [tool.hatch.version]
 source = "vcs"
