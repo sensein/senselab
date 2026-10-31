@@ -71,9 +71,10 @@ DIST_ROOTS = {"senselab": ".", "senselab-core": "packages/senselab-core", "sense
 """Each distribution's root, relative to the repository."""
 WHEEL_TAG = Tag("py3", "none", "any")
 """The one tag every wheel is built for: pure Python 3."""
-VERSION_GRAMMAR = re.compile(r"\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?")
+_NUMBER = r"(?:0|[1-9][0-9]*)"
+VERSION_GRAMMAR = re.compile(rf"{_NUMBER}\.{_NUMBER}\.{_NUMBER}(?:(?:a|b|rc){_NUMBER})?")
 """The releasable version strings: a final release or a numbered alpha, beta or release candidate."""
-TAG_GRAMMAR = re.compile(r"\d+\.\d+\.\d+-(?:alpha|beta|rc)\.\d+")
+TAG_GRAMMAR = re.compile(rf"{_NUMBER}\.{_NUMBER}\.{_NUMBER}-(?:alpha|beta|rc)\.{_NUMBER}")
 """The repository's release-tag spelling of a pre-release, ``X.Y.Z-(alpha|beta|rc).N``, accepted beside the canonical one."""
 IMPORT_EVERY_MODULE = frozenset({"senselab-core", "senselab-worker"})
 """Distributions whose every module the install check imports; the others import their packages and subpackages."""
@@ -218,9 +219,7 @@ def _metadata(path: Path) -> tuple[str, Version, list[Requirement]]:
 
 
 def dist_files(dist: Path) -> list[Path]:
-    """Return every file ``dist/*`` matches, refusing anything that is not a wheel or an sdist.
-
-    Dotfiles, such as the ``.gitignore`` uv writes into ``dist/``, are not matched by the upload glob.
+    """Return every file ``dist/*`` matches, dotfiles excluded as the shell glob excludes them.
 
     Raises:
         GateError: If ``dist`` holds a directory or a file of another kind.
@@ -321,7 +320,11 @@ def check_versions(
         problem = tag_problem(tag)
         if problem:
             raise GateError(f"tag {tag!r} {problem}")
-        if Version(tag) != version:
+        try:
+            tagged = Version(tag)
+        except InvalidVersion as exc:
+            raise GateError(f"tag {tag!r} is not a version") from exc
+        if tagged != version:
             raise GateError(f"version {text} was built for another tag than {tag!r}")
     if prerelease is not None and prerelease != version.is_prerelease:
         raise GateError(
@@ -382,7 +385,8 @@ def gate_git(repo: Path, *args: str) -> bytes:
         GateError: If git fails, as it does when ``repo`` is not a git work tree.
     """
     env = {**gate_environment(os.environ), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
-    done = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, env=env)
+    command = ["git", "-c", f"safe.directory={Path(repo).resolve()}", "-C", str(repo), *args]
+    done = subprocess.run(command, capture_output=True, env=env)
     if done.returncode != 0:
         raise GateError(f"{repo} is not a git work tree: the artifact contents cannot be checked")
     return done.stdout
@@ -442,15 +446,36 @@ def _under(paths: Iterable[str], source: str) -> dict[str, str]:
 
 
 def declared_license_files(repo: Path, root: Path, regular: set[str]) -> set[str]:
-    """Return the license files, relative to ``root``, that hatchling records for the distribution at ``root``."""
-    project = _pyproject(repo, root)["project"]
-    at_root = {rel for rel in _under(regular, _join(root, ".")).values() if "/" not in rel}
-    globs = project.get("license-files", DEFAULT_LICENSE_FILES)
-    found = {rel for rel in at_root if any(fnmatch.fnmatchcase(rel, g) for g in globs)}
-    license_ = project.get("license")
-    if isinstance(license_, dict) and "file" in license_:
-        found.add(posixpath.normpath(license_["file"]))
-    return found
+    """Return the license files, relative to ``root``, that hatchling records for the distribution at ``root``.
+
+    These are the tracked files under ``root`` matching ``[project] license-files``, or the default globs, one
+    path component per glob component.
+    """
+    globs = _pyproject(repo, root)["project"].get("license-files", DEFAULT_LICENSE_FILES)
+
+    def matches(rel: str, glob: str) -> bool:
+        parts, pattern = rel.split("/"), glob.split("/")
+        return len(parts) == len(pattern) and all(
+            fnmatch.fnmatchcase(a, b) for a, b in zip(parts, pattern, strict=True)
+        )
+
+    return {rel for rel in _under(regular, _join(root, ".")).values() if any(matches(rel, g) for g in globs)}
+
+
+def located_gitignore(repo: Path, root: Path) -> str:
+    """Return the repo-relative ``.gitignore`` hatchling copies into an sdist: the first one up from ``root``.
+
+    Raises:
+        GateError: If there is none between ``root`` and the repository root.
+    """
+    directory = _join(root, ".")
+    while True:
+        candidate = posixpath.normpath(posixpath.join(directory, ".gitignore"))
+        if (repo / candidate).is_file():
+            return candidate
+        if directory in (".", ""):
+            raise GateError(f"no .gitignore between {root} and the repository root")
+        directory = posixpath.dirname(directory) or "."
 
 
 def expected_members(path: Path, repo: Path, modes: Mapping[str, str]) -> dict[str, str | None]:
@@ -500,8 +525,7 @@ def expected_members(path: Path, repo: Path, modes: Mapping[str, str]) -> dict[s
     for source, dest in sdist.get("force-include", {}).items():
         add(posixpath.join(top, dest), _join(root, source))
     out[f"{top}/PKG-INFO"] = None
-    own = _join(root, ".gitignore")
-    out[f"{top}/.gitignore"] = own if own in regular else ".gitignore"
+    out[f"{top}/.gitignore"] = located_gitignore(repo, root)
     return out
 
 
@@ -895,7 +919,7 @@ def selected_requirements(
     """Return the requirements that apply to ``environment`` with ``extras`` requested, each without its marker.
 
     A requirement applies when it has no marker, or its marker holds in ``environment`` with ``extra`` empty or
-    set to one of ``extras``. Markers are evaluated here because an installer evaluates ``extra`` as unset.
+    set to one of ``extras``.
     """
     out = []
     for requirement in requirements:
@@ -911,12 +935,9 @@ def selected_requirements(
 def check_installs(files: list[Path], pythons: Mapping[str, str], *, index_url: str = PYPI) -> None:
     """Install each distribution alone into its own fresh venv at ``pythons[name]``; import its ``import_targets``.
 
-    Only the distribution's own wheel is passed by path. Its siblings must be reached by the resolver through
-    ``--find-links`` on the directory of ``files``, with no index (``--no-index``), in an install that neither
-    reads nor writes any uv cache (``--no-cache``), so neither a cached wheel nor an index serving the same name
-    and version can stand in for the one in ``dist/``. Every ``uv`` call runs with ``--no-config`` in
-    ``gate_environment``, so no configuration file or variable of the caller redirects resolution.
-    The third-party requirements of the distribution and of its siblings, no extra requested, are
+    Only the distribution's own wheel is passed by path. Its siblings are reached by the resolver through
+    ``--find-links`` on the directory of ``files``, with ``--no-index`` and ``--no-cache``. Every ``uv`` call runs
+    with ``--no-config`` in ``gate_environment``. The third-party requirements of the distribution and of its siblings, no extra requested, are
     installed first, by name, from ``index_url`` only, through the host's cache, which no first-party wheel enters.
     Each sibling must then be installed with the version and file hashes of the wheel in ``dist/``. The import
     targets are imported by the venv's interpreter in isolated mode (``-I``) from a scratch directory,
@@ -1012,10 +1033,14 @@ def main(
     """
     try:
         files = dist_files(dist)
-        static_checks(files, repo, Version(floor) if floor else release_floor(), tag=tag, prerelease=prerelease)
+        try:
+            lowest = Version(floor) if floor else release_floor()
+        except InvalidVersion as exc:
+            raise GateError(f"floor {floor!r} is not a version") from exc
+        static_checks(files, repo, lowest, tag=tag, prerelease=prerelease)
         check_installs(files, pythons or floor_pythons(), index_url=index_url)
         check_sdist_builds(files, index_url=index_url)
-    except GateError as exc:
+    except (GateError, ValueError) as exc:
         print(f"release gate refused: {exc}", file=sys.stderr)
         return 1
     print(

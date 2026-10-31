@@ -8,6 +8,7 @@ import io
 import os
 import subprocess
 import tarfile
+import tomllib
 import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -128,6 +129,14 @@ def tagged_workspace(tmp_path_factory: pytest.TempPathFactory) -> Callable[..., 
     return make
 
 
+HATCHLING = next(
+    r.split("==")[1]
+    for r in tomllib.loads((REPO / "pyproject.toml").read_text())["build-system"]["requires"]
+    if r.startswith("hatchling==")
+)
+"""The hatchling version every pyproject pins, whose output the mini artifacts reproduce."""
+
+
 MINI_FILES = {
     ".gitignore": "__pycache__/\ndata/\n",
     "LICENSE.md": "license text\n",
@@ -199,7 +208,7 @@ def mini_metadata(name: str, version: str) -> str:
             "Requires-Dist: jiwer>=3.0; extra == 'nlp'",
         ],
     }[name]
-    return "\n".join(["Metadata-Version: 2.4", f"Name: {name}", f"Version: {version}", *lines]) + "\n"
+    return "\n".join(["Metadata-Version: 2.5", f"Name: {name}", f"Version: {version}", *lines]) + "\n"
 
 
 MINI_ROOTS = {
@@ -239,7 +248,7 @@ def write_mini_wheel(
     members = _mini_sources(repo, name, "wheel")
     members[f"{stem}.dist-info/METADATA"] = mini_metadata(name, version).encode()
     members[f"{stem}.dist-info/WHEEL"] = (
-        b"Wheel-Version: 1.0\nGenerator: hatchling 1.27.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+        f"Wheel-Version: 1.0\nGenerator: hatchling {HATCHLING}\nRoot-Is-Purelib: true\nTag: py3-none-any\n".encode()
     )
     if name == "senselab":
         members[f"{stem}.dist-info/entry_points.txt"] = b"[console_scripts]\nsenselab = senselab.cli:main\n"

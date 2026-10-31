@@ -24,7 +24,7 @@ from typing import Any
 
 import pytest
 import yaml
-from hypothesis import given, settings
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from packaging.version import Version
 
@@ -494,7 +494,14 @@ def test_m2_sibling_verification_binds_content_not_version(fabricate: Callable[.
         ["uv", "pip", "install", "-q", "--no-cache", "--python", python, str(next(other.glob("*.whl")))], check=True
     )
     run = lambda files: subprocess.run(  # noqa: E731
-        [python, "-c", gate._VERIFY, json.dumps({"senselab-worker": {"version": "2.0.0", "files": files}})],
+        [
+            python,
+            "-c",
+            gate._VERIFY,
+            json.dumps({"senselab-worker": {"version": "2.0.0", "files": files}}),
+            json.dumps([]),
+            json.dumps([]),
+        ],
         capture_output=True,
         text=True,
     )
@@ -1185,46 +1192,79 @@ def test_xg4_an_epoch_version_is_refused_whatever_the_tag(tag: str, fabricate: C
         gate.check_versions(_release(fabricate, "2.0.0"), FLOOR, tag=tag, prerelease=False)
 
 
-_SEGMENTS = st.tuples(
-    st.sampled_from(["", "1!", "0!"]),
-    st.lists(st.integers(0, 12), min_size=1, max_size=4).map(lambda p: ".".join(map(str, p))),
-    st.sampled_from(["", "a1", "b2", "rc3", "alpha1", "c1", "-rc.1", "pre2", "a"]),
-    st.sampled_from(["", ".post1", "-1", ".dev0", ".dev3"]),
-    st.sampled_from(["", "+g1234", "+local.1"]),
-)
-
-
-@pytest.mark.contract
-@settings(max_examples=300, deadline=None)
-@given(parts=_SEGMENTS)
-def test_xg4_only_the_grammar_is_a_releasable_version(parts: tuple[str, ...]) -> None:
-    """A version string is releasable exactly when it is ``X.Y.Z`` or ``X.Y.Z(a|b|rc)N`` written canonically."""
-    text = "".join(parts)
-    releasable = re.fullmatch(r"\d+\.\d+\.\d+((a|b|rc)\d+)?", text) is not None and str(Version(text)) == text
-    assert (gate.version_problem(text) is None) is releasable
-
-
-_TAG_SEGMENTS = st.tuples(
+_NUMBERS = [("0", True), ("7", True), ("12", True), ("01", False), ("007", False), ("٣", False), ("２", False)]
+"""Release and pre-release numbers, each with whether it is a canonical ASCII number."""
+_PRE = [
+    ("", "final", True),
+    ("a{n}", "canonical", True),
+    ("b{n}", "canonical", True),
+    ("rc{n}", "canonical", True),
+    ("-alpha.{n}", "repository", True),
+    ("-beta.{n}", "repository", True),
+    ("-rc.{n}", "repository", True),
+    ("alpha{n}", "other", True),
+    ("-rc{n}", "other", True),
+    ("c{n}", "other", True),
+    ("-a.{n}", "other", True),
+    ("-ALPHA.{n}", "other", True),
+    (".rc.{n}", "other", True),
+    ("-alpha", "other", False),
+    ("rc", "other", False),
+]
+"""Pre-release spellings: which grammar each belongs to and whether it carries a number."""
+_VERSION_PARTS = st.tuples(
     st.sampled_from(["", "v", "V"]),
     st.sampled_from(["", "1!", "0!"]),
-    st.lists(st.integers(0, 12), min_size=1, max_size=4).map(lambda p: ".".join(map(str, p))),
-    st.sampled_from(
-        ["", "a1", "b2", "rc3", "-alpha.1", "-beta.2", "-rc.3", "alpha1", "-rc1", "rc", "-a.1", "c1", "-alpha", ".rc.1"]
-    ),
-    st.sampled_from(["", ".post1", "-1", ".dev0", "-dev.3"]),
-    st.sampled_from(["", "+g1234", "+local.1"]),
+    st.lists(st.sampled_from(_NUMBERS), min_size=1, max_size=4),
+    st.sampled_from(_PRE),
+    st.sampled_from(_NUMBERS),
+    st.sampled_from(["", ".post1", "-1", ".dev0", "-dev.3", "+g1234", "+local.1"]),
 )
 
 
+def _expected(parts: tuple[Any, ...]) -> tuple[str, bool, bool]:
+    """The text the parts spell, whether it is a releasable version, and whether it is a release tag.
+
+    The verdict is composed from the parts: no prefix, epoch or suffix; three canonical ASCII release numbers;
+    and a final release, a canonical pre-release, or (for a tag) the repository's ``-alpha.N`` spelling, whose
+    number is canonical too.
+    """
+    prefix, epoch, release, (pre, grammar, numbered), (number, number_ok), suffix = parts
+    text = prefix + epoch + ".".join(n for n, _ in release) + pre.format(n=number) + suffix
+    base = not prefix and not epoch and not suffix and len(release) == 3 and all(ok for _, ok in release)
+    pre_ok = grammar == "final" or (numbered and number_ok)
+    return text, base and pre_ok and grammar in ("final", "canonical"), base and pre_ok and grammar != "other"
+
+
 @pytest.mark.contract
-@settings(max_examples=400, deadline=None)
-@given(parts=_TAG_SEGMENTS)
-def test_xg4_a_tag_is_canonical_or_the_repository_pre_release_spelling(parts: tuple[str, ...]) -> None:
-    """A tag is accepted exactly when it is a releasable version string or ``X.Y.Z-(alpha|beta|rc).N``."""
-    text = "".join(parts)
-    canonical = re.fullmatch(r"\d+\.\d+\.\d+((a|b|rc)\d+)?", text) is not None and str(Version(text)) == text
-    repository = re.fullmatch(r"\d+\.\d+\.\d+-(alpha|beta|rc)\.\d+", text) is not None
-    assert (gate.tag_problem(text) is None) is (canonical or repository)
+@settings(max_examples=600, deadline=None)
+@given(parts=_VERSION_PARTS)
+def test_xg4_the_version_and_tag_grammars_match_an_independent_oracle(parts: tuple[Any, ...]) -> None:
+    """Versions and tags are accepted exactly as the composed expectation says, and what is accepted parses.
+
+    Every accepted spelling parses with ``packaging``, is a pre-release exactly when it has a pre-release part,
+    and a releasable version is its own canonical form.
+    """
+    text, version_ok, tag_ok = _expected(parts)
+    assert (gate.version_problem(text) is None) is version_ok, text
+    assert (gate.tag_problem(text) is None) is tag_ok, text
+    if tag_ok:
+        assert Version(text).is_prerelease is (parts[3][1] != "final")
+    if version_ok:
+        assert str(Version(text)) == text
+
+
+@pytest.mark.contract
+@settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(tag=st.one_of(st.text(max_size=16), _VERSION_PARTS.map(lambda p: _expected(p)[0])))
+def test_xg4_any_tag_text_is_accepted_or_refused_with_a_gate_error(tag: str, fabricate: Callable[..., Path]) -> None:
+    """No tag text, Unicode digits and leading zeros included, escapes the gate as another exception."""
+    wheels = _release(fabricate, "2.0.0a3")
+    try:
+        gate.check_versions(wheels, FLOOR, tag=tag)
+    except gate.GateError:
+        return
+    assert Version(tag) == Version("2.0.0a3")
 
 
 @pytest.mark.logic
@@ -1648,3 +1688,18 @@ def test_xg5_a_real_build_of_a_tagged_checkout_passes_every_static_check(
     root = tagged_workspace([RELEASE_FLOOR])
     build(root, root / "dist", "--all-packages")
     gate.static_checks(gate.dist_files(root / "dist"), root, FLOOR, tag=RELEASE_FLOOR, prerelease=True)
+
+
+@pytest.mark.logic
+def test_every_build_backend_requirement_is_pinned_exactly() -> None:
+    """Each ``[build-system] requires`` names one exact version, the same in all three pyprojects."""
+    from packaging.requirements import Requirement
+
+    seen: dict[str, set[str]] = {}
+    for root in gate.DIST_ROOTS.values():
+        for line in tomllib.loads((REPO / root / "pyproject.toml").read_text())["build-system"]["requires"]:
+            requirement = Requirement(line)
+            (spec,) = requirement.specifier
+            assert spec.operator == "==" and "*" not in spec.version and requirement.marker is None, line
+            seen.setdefault(requirement.name, set()).add(spec.version)
+    assert set(seen) == {"hatchling", "hatch-vcs"} and all(len(v) == 1 for v in seen.values())
