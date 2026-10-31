@@ -11,6 +11,7 @@ from senselab_worker.ownership import ARRAY_NAME, ARRAY_TEMP_NAME, UUID_HEX, rem
 KINDS = ["file", "dir", "link_to_file", "link_to_dir", "fifo"]
 PLACES = ["child", "grandchild", "sibling"]
 PATTERN = re.compile(r"^owned-[0-9]$")
+GRAMMARS = {"plain": (PATTERN, "owned-1"), "uuid": (UUID_HEX, "0" * 32)}
 
 
 def _make(where: Path, name: str, kind: str, victim: Path) -> Path:
@@ -32,18 +33,26 @@ def _make(where: Path, name: str, kind: str, victim: Path) -> Path:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize(("kind", "place", "matches"), list(itertools.product(KINDS, PLACES, [True, False])))
-def test_removes_exactly_a_matching_direct_child(tmp_path: Path, kind: str, place: str, matches: bool) -> None:
-    """Removed iff a direct child of `root` with a matching name; a link is removed, its target never touched."""
+@pytest.mark.parametrize(
+    ("kind", "place", "matches", "grammar"), list(itertools.product(KINDS, PLACES, [True, False], GRAMMARS))
+)
+def test_removes_exactly_a_matching_direct_child(
+    tmp_path: Path, kind: str, place: str, matches: bool, grammar: str
+) -> None:
+    """Removed iff a direct child of `root` with a matching name, and a directory only under a uuid-hex name.
+
+    A link is removed, its target never touched.
+    """
+    pattern, owned_name = GRAMMARS[grammar]
     victim = tmp_path / "victim"
     victim.mkdir()
     (victim / "keep.bin").write_bytes(b"k")
     root = tmp_path / "root"
     root.mkdir()
     where = {"child": root, "grandchild": root / "sub", "sibling": tmp_path / "other"}[place]
-    path = _make(where, "owned-1" if matches else "other-1", kind, victim)
-    expected = matches and place == "child"
-    assert remove_owned(root, path, pattern=PATTERN) is expected
+    path = _make(where, owned_name if matches else "other-1", kind, victim)
+    expected = matches and place == "child" and (kind != "dir" or grammar == "uuid")
+    assert remove_owned(root, path, pattern=pattern) is expected
     assert os.path.lexists(path) is not expected
     assert sorted(p.name for p in victim.iterdir()) == ["keep.bin"] and (victim / "keep.bin").read_bytes() == b"k"
 

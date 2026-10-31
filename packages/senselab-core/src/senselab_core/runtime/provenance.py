@@ -73,6 +73,10 @@ _ENVIRONMENT_KINDS = frozenset(get_args(ENVIRONMENT_KIND))
 _RELATIONS = frozenset(get_args(RELATION))
 
 
+TEMPORARY_NAME = re.compile(r"^\..+\.[0-9]+\.[0-9]+\.[0-9a-f]{32}\.tmp$")
+"""A file being written atomically: `.<name>.<pid>.<thread id>.<uuid4 hex>.tmp`."""
+
+
 def _write_atomically(target: Path, data: bytes) -> None:
     """Replace ``target`` with ``data`` through a fsynced temporary file in the same directory.
 
@@ -95,8 +99,7 @@ def _write_atomically(target: Path, data: bytes) -> None:
             os.chmod(temporary, mode)
         os.replace(temporary, target)
     except BaseException:
-        pattern = re.compile(rf"^\.{re.escape(target.name)}\.[0-9]+\.[0-9]+\.[0-9a-f]{{32}}\.tmp$")
-        remove_owned(target.parent, temporary, pattern=pattern)
+        remove_owned(target.parent, temporary, pattern=TEMPORARY_NAME)
         raise
 
 

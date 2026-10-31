@@ -48,6 +48,8 @@ from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputId
 from senselab_core.runtime.locks import LOCK_FILE_MODE, ensure_dirs
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
 
+logger = logging.getLogger("senselab")
+
 STORE_DIR = "store@2"
 STAGING_DIR = "tmp"
 QUARANTINE_DIR = "quarantine"
@@ -55,8 +57,6 @@ RESULT_FORMAT = "result@1.0"
 CONTEXT_FORMAT = "execution-context@1.0"
 ARRAY_TAG = "$array"
 STAGING_STALE_SECONDS = 24 * 60 * 60
-
-logger = logging.getLogger("senselab")
 """A staging directory whose mtime is older than this is a crashed writer's and is removed by `put`."""
 COMMIT_ATTEMPTS = 3
 """How many times `put` stages and renames before giving up on a target that keeps turning out corrupt."""

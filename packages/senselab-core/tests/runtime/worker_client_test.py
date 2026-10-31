@@ -4,6 +4,7 @@ import gc
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -14,7 +15,9 @@ from pathlib import Path
 import numpy
 import pytest
 import senselab_worker
+from backends.subdir_backend_fixture import ARRAY_LIKE
 from lifecycle_probes_fixture import alive, gate, group_alive, listing, recorded_pids, state
+from senselab_core.runtime import worker_client
 from senselab_core.runtime.worker_client import (
     SHUTDOWN_BOUND_S,
     ConcurrentUse,
@@ -428,7 +431,10 @@ def test_concurrent_run_is_refused(array_parent: Path, backends_importable: None
     with (
         gate() as g,
         WorkerClient(
-            sys.executable, "backends.subdir_backend_fixture", init={"gate_port": g.port}, array_parent=array_parent
+            sys.executable,
+            "backends.slow_reader_backend_fixture",
+            init={"gate_port": g.port},
+            array_parent=array_parent,
         ) as c,
     ):
         a = numpy.arange(32, dtype="<f8")
@@ -441,24 +447,26 @@ def test_concurrent_run_is_refused(array_parent: Path, backends_importable: None
             c.run([{"id": "b", "inputs": {"x": numpy.zeros(4)}}], {})
         g.release()
         thread.join(30)
-        assert first and first[0][0]["outputs"] == {"made": "f" * 64 + ".npy"}  # type: ignore[index]
+        assert first and first[0][0]["outputs"] == {"ok": True}  # type: ignore[index]
         assert c.run([{"id": "c", "inputs": {}}], {})[0]["outputs"]
 
 
 @pytest.mark.logic
-def test_backend_subdir_in_array_dir_does_not_fail_runs(
-    array_parent: Path, tmp_path: Path, backends_importable: None
-) -> None:
-    """A directory a backend makes under an array name is removed as a tree, never following its symlinks."""
+def test_backend_subdir_in_array_dir_does_not_fail_runs(tmp_path: Path, backends_importable: None) -> None:
+    """A directory a backend makes under an array name is refused, never entered, and runs succeed."""
     victim = tmp_path / "victim"
     victim.mkdir()
     (victim / "keep.npy").write_bytes(b"k")
+    parent = tmp_path / "parent"
+    parent.mkdir()
     with WorkerClient(
-        sys.executable, "backends.subdir_backend_fixture", init={"victim": str(victim)}, array_parent=array_parent
+        sys.executable, "backends.subdir_backend_fixture", init={"victim": str(victim)}, array_parent=parent
     ) as c:
         for _ in range(3):
-            assert c.run(ITEMS, {})[0]["outputs"] == {"made": "f" * 64 + ".npy"}
-            assert list(c.array_dir.iterdir()) == []
+            assert c.run(ITEMS, {})[0]["outputs"] == {"made": ARRAY_LIKE}
+            assert [p.name for p in c.array_dir.iterdir()] == [ARRAY_LIKE]
+    assert [p.name for p in c.array_dir.iterdir()] == [ARRAY_LIKE]
+    assert sorted(p.name for p in (c.array_dir / ARRAY_LIKE).iterdir()) == ["scratch.bin", "victim"]
     assert (victim / "keep.npy").read_bytes() == b"k"
 
 
@@ -544,3 +552,61 @@ def test_print_from_a_pth_before_the_channel_is_claimed_is_discarded(
     ):
         assert c.run([{"id": "a", "inputs": {}}], {})[0]["outputs"]
     assert "noise from a pth" in caplog.text
+
+
+def _record_killpg(monkeypatch: pytest.MonkeyPatch) -> list[tuple[float, int, int]]:
+    sent: list[tuple[float, int, int]] = []
+    real = os.killpg
+
+    def record(pgid: int, sig: int) -> None:
+        sent.append((time.monotonic(), pgid, sig))
+        real(pgid, sig)
+
+    monkeypatch.setattr(os, "killpg", record)
+    return sent
+
+
+@pytest.mark.logic
+def test_late_close_after_the_leader_was_reaped_elsewhere_sends_no_signal(
+    array_parent: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once the leader is reaped outside the client its pid may be reused, so `close()` signals nothing."""
+    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent)
+    pid = client.hello["pid"]
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+    sent = _record_killpg(monkeypatch)
+    client.close()
+    assert [s for s in sent if s[2] != 0] == []
+
+
+@pytest.mark.logic
+def test_idle_crash_keeps_the_leader_unreaped_until_close(array_parent: Path) -> None:
+    """A leader that dies while idle stays a zombie, holding its pid and group id, until `close()` reaps it."""
+    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent)
+    pid = client.hello["pid"]
+    os.kill(pid, signal.SIGKILL)
+    end = time.monotonic() + STOPPED_WAIT_S
+    while client.alive:
+        assert time.monotonic() < end
+    assert client.returncode is None and state(pid).startswith("Z")
+    client.close()
+    assert client.returncode == -signal.SIGKILL
+
+
+@pytest.mark.limits
+def test_graceful_close_leaves_sigterm_its_own_grace(
+    array_parent: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker that ignores the stop line gets SIGTERM with `TERM_GRACE_S` of the stop window left."""
+    monkeypatch.setattr(worker_client, "STOP_GRACE_S", 2.0)
+    monkeypatch.setattr(worker_client, "TERM_GRACE_S", 1.0)
+    client = WorkerClient(sys.executable, "backends.slow_reader_backend_fixture", init={}, array_parent=array_parent)
+    client.run([{"id": "a", "inputs": {}}], {"mode": "stop_reading"})
+    _wait_stopped(client.hello["pid"])
+    sent = _record_killpg(monkeypatch)
+    t0 = time.monotonic()
+    client.close()
+    terms = [t for t, _, sig in sent if sig == signal.SIGTERM]
+    assert terms and terms[0] - t0 < 2.0 - 1.0 + 0.5
+    assert signal.SIGKILL not in [sig for _, _, sig in sent]

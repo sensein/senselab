@@ -2,7 +2,9 @@
 
 Before anything else, the protocol moves to private, non-inheritable duplicates of fd 0 and fd 1;
 fd 0 and `sys.stdin` then read `/dev/null` and fd 1 and `sys.stdout` write to stderr, so nothing a
-backend or its children read or print touches the channel. The backend module defines
+backend or its children read or print touches the channel. If fd 0 is closed at start it is first
+opened on `/dev/null`, so the channel reads end of file and the worker exits 0 after its hello. The
+backend module defines
 `load(init) -> state` and `handle(state, items, params) -> list[dict]` (see `serve`); it is
 imported during load, so an import failure is reported as a fatal error.
 """
@@ -17,6 +19,10 @@ from senselab_worker.serve import serve
 
 def _claim_channel() -> tuple[BinaryIO, BinaryIO]:
     sys.stdout.flush()
+    try:
+        os.fstat(0)
+    except OSError:
+        os.open(os.devnull, os.O_RDONLY)
     rx = os.fdopen(os.dup(0), "rb")
     tx = os.fdopen(os.dup(1), "wb")
     devnull = os.open(os.devnull, os.O_RDONLY)

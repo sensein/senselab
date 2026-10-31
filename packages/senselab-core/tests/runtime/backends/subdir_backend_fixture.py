@@ -1,7 +1,7 @@
 """A backend that makes a directory in the array directory on every request.
 
-The directory is named `init["subdir"]` (default: an array file name) and holds a file and a symlink
-to `init["victim"]` when one is given.
+The directory is named `init["subdir"]` (default: an array file name, which the client refuses to
+delete as a directory) and holds a file and a symlink to `init["victim"]` when one is given.
 """
 
 import os

@@ -16,7 +16,9 @@ ADR-009.
   at `/dev/null` and fd 1 and `sys.stdout` at stderr. A backend's prints cannot reach the protocol
   stream, and a child it starts with the default stdin (`subprocess.run(["ffmpeg", ...])`) reads
   `/dev/null`, not requests. A child made by `fork` without `exec` still holds the private
-  descriptors. The backend module is imported during load.
+  descriptors. If fd 0 is closed when the worker starts, the launcher first opens it on
+  `/dev/null`, so the channel reads end of file and the worker exits 0 after its hello. The
+  backend module is imported during load.
 - stderr is never parsed. The host drains it continuously and keeps the last 100 lines, which it
   attaches to every fault it raises itself.
 - A line longer than 16 MiB, or one that is not a JSON object, is a protocol violation.
@@ -102,7 +104,8 @@ ADR-009.
   `mkdtemp(prefix="senselab-arrays-")` under a parent the caller may name; it never adopts an
   existing directory. It deletes only the names the runtime writes there (`<sha256>.npy` and
   `.<uuid4 hex>.tmp`), through the one deletion helper `remove_owned`, which removes a matching
-  direct child without following symlinks. After each request it deletes every such file except
+  direct child without following symlinks, and a directory only if its name is a uuid4 hex (a
+  staging directory the runtime made); a directory named like an array file is left. After each request it deletes every such file except
   those referenced by `init`, including files written for items that failed to encode. On close
   it deletes the rest and removes `array_dir` if it is then empty; any other name is left, with
   the directory, and logged. Cleanup failures are logged and never replace a result. The worker
@@ -140,11 +143,15 @@ ADR-009.
   writes, so a worker that has stopped reading cannot hold the host), receiving its response and
   reading its arrays. On expiry the host raises `TimeoutError` and stops the worker.
 - **Process group.** The worker is started in a new session, so it leads its own process group,
-  and the group is the unit of kill. Stopping the worker: on close, write `{"stop": true}` if the
-  pipe takes it at once and wait for the worker to exit; then send SIGTERM and SIGCONT to the
-  group and wait until no member remains, all within 10 s (`STOP_GRACE_S`); then SIGKILL the
-  group and wait up to 5 s (`KILL_GRACE_S`); then stop the pipe readers within 2 s
-  (`JOIN_GRACE_S`). Pipes are closed only after that. `close()` returns within the sum of the
+  and the group is the unit of kill. The host notices the worker's exit without reaping it
+  (`waitid(WNOWAIT)` on Linux, a kqueue `NOTE_EXIT` on macOS) and reaps it only after the group has
+  been signalled, so the group id cannot be reused by another process while the host may still
+  signal it; if the worker was reaped by someone else, the group is not signalled at all. Stopping
+  the worker: on close, write `{"stop": true}` if the pipe takes it at once and wait for the worker
+  to exit, leaving 3 s (`TERM_GRACE_S`) of the 10 s stop window (`STOP_GRACE_S`); then send SIGTERM
+  and SIGCONT to the group and wait, for the rest of that window, until no live member remains;
+  then SIGKILL the group and wait up to 5 s (`KILL_GRACE_S`); then stop the pipe readers within
+  2 s (`JOIN_GRACE_S`). Pipes are closed only after that. `close()` returns within the sum of the
   three (`SHUTDOWN_BOUND_S`), also when called from another thread during a `run`, which then
   raises `WorkerLost`. A host fault skips the stop line.
 - **Limit.** A descendant that calls `setsid` (or `setpgid`) leaves the group and is not reached;

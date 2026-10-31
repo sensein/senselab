@@ -4,9 +4,11 @@ import collections
 import logging
 import os
 import queue
+import select
 import selectors
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -40,6 +42,7 @@ from senselab_worker.ownership import ARRAY_NAME, ARRAY_TEMP_NAME, remove_owned
 LAUNCHER = "senselab_worker.launch"
 HELLO_TIMEOUT_S = 60.0
 STOP_GRACE_S = 10.0
+TERM_GRACE_S = 3.0
 KILL_GRACE_S = 5.0
 JOIN_GRACE_S = 2.0
 SHUTDOWN_BOUND_S = STOP_GRACE_S + KILL_GRACE_S + JOIN_GRACE_S
@@ -154,32 +157,101 @@ class _Pump:
             start = 0
 
 
-def _reap(proc: "subprocess.Popen[bytes]", exited: threading.Event, stdout: _Pump) -> None:
+_NOTE_EXITSTATUS = 0x04000000 if sys.platform == "darwin" else 0
+_PS = "/bin/ps"
+
+
+def _wait_exit(pid: int) -> int | None:
+    """Block until child `pid` exits, without reaping it; return its exit code when the platform reports one.
+
+    Uses `waitid(WNOWAIT)` where the platform has it (Linux) and a kqueue `NOTE_EXIT` otherwise (macOS).
+
+    Raises:
+        ChildProcessError: if `pid` is not an unreaped child (waitid only).
+    """
+    if hasattr(os, "waitid"):
+        info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+        if info is None:
+            return None
+        return int(info.si_status) if info.si_code == os.CLD_EXITED else -int(info.si_status)
+    kq = select.kqueue()
     try:
-        proc.wait()
+        flags = select.KQ_EV_ADD | select.KQ_EV_ONESHOT
+        event = select.kevent(
+            pid, filter=select.KQ_FILTER_PROC, flags=flags, fflags=select.KQ_NOTE_EXIT | _NOTE_EXITSTATUS
+        )
+        for fired in kq.control([event], 1, None):
+            if fired.fflags & _NOTE_EXITSTATUS and not fired.flags & select.KQ_EV_ERROR:
+                return os.waitstatus_to_exitcode(fired.data)
+        return None
+    finally:
+        kq.close()
+
+
+def _reap(pid: int, exited: threading.Event, status: list[int], stdout: _Pump) -> None:
+    """Wait for the leader to exit without reaping it, so its pid and process group id stay reserved."""
+    try:
+        code = _wait_exit(pid)
+        if code is not None:
+            status.append(code)
+    except ChildProcessError:
+        pass
     finally:
         exited.set()
         stdout.finish()
 
 
+def _leader_held(pid: int) -> bool:
+    """Whether `pid` is still this process's child, running or exited but not yet reaped."""
+    if hasattr(os, "waitid"):
+        try:
+            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        except ChildProcessError:
+            return False
+        return True
+    try:
+        out = subprocess.run([_PS, "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("cannot tell whether worker %d is still this process's child: %s", pid, exc)
+        return False
+    return out.stdout.strip() == str(os.getpid())
+
+
 def _signal_group(pgid: int, sig: signal.Signals) -> None:
     try:
         os.killpg(pgid, sig)
-    except (ProcessLookupError, PermissionError):
+    except OSError:
         pass
 
 
-def _group_gone(pgid: int, exited: threading.Event, deadline: Deadline) -> bool:
-    """Wait until the leader is reaped and no process of group `pgid` remains; return whether that happened."""
+def _live_members(pgid: int) -> bool:
+    """Whether group `pgid` has a member that is not a zombie: by `/proc` where it exists, else by `killpg(pgid, 0)`."""
+    if os.path.isdir("/proc/self/task"):
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry}/stat", "rb") as f:
+                    data = f.read()
+            except OSError:
+                continue
+            fields = data[data.rfind(b")") + 2 :].split()
+            if len(fields) > 2 and int(fields[2]) == pgid and fields[0] not in (b"Z", b"X"):
+                return True
+        return False
+    try:
+        os.killpg(pgid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def _members_gone(pgid: int, exited: threading.Event, deadline: Deadline) -> bool:
+    """Wait until the leader has exited and group `pgid` has no live member; return whether that happened."""
     delay = 0.001
     while True:
-        if exited.is_set():
-            try:
-                os.killpg(pgid, 0)
-            except ProcessLookupError:
-                return True
-            except PermissionError:
-                pass
+        if exited.is_set() and not _live_members(pgid):
+            return True
         remaining = deadline.remaining()
         if remaining is not None and remaining <= 0:
             return False
@@ -235,6 +307,7 @@ class WorkerClient:
         self._pumps: list[_Pump] = []
         self._reaper: threading.Thread | None = None
         self._exited = threading.Event()
+        self._exit_status: list[int] = []
         self._run_lock = threading.Lock()
         self._run_owner: int | None = None
         self._run_idle = threading.Event()
@@ -373,7 +446,9 @@ class WorkerClient:
 
         stdout = _Pump(proc.stdout.fileno(), MAX_LINE_BYTES + 1, self._lines.put, keep_partial=False)
         self._pumps = [stdout, _Pump(proc.stderr.fileno(), _STDERR_LINE_BYTES, keep, keep_partial=True)]
-        self._reaper = threading.Thread(target=_reap, args=(proc, self._exited, stdout), daemon=True)
+        self._reaper = threading.Thread(
+            target=_reap, args=(proc.pid, self._exited, self._exit_status, stdout), daemon=True
+        )
         self._reaper.start()
 
     def _handshake(self, expected_runtime: str) -> dict[str, Any]:
@@ -429,7 +504,8 @@ class WorkerClient:
         if line is None:
             self._lines.put(None)
             self._exited.wait(EXIT_CODE_WAIT_S)
-            raise WorkerLost(f"worker closed its output while a reply was awaited; exit code {self._proc.returncode}")
+            code = self._exit_status[0] if self._exit_status else None
+            raise WorkerLost(f"worker closed its output while a reply was awaited; exit code {code}")
         msg = parse_line(line)
         if msg.get("fatal") is True:
             raise WorkerFatal(_mapped(msg.get("error")))
@@ -535,13 +611,19 @@ class WorkerClient:
         except OSError:
             pass
         if graceful:
-            self._exited.wait(stop.remaining())
-        _signal_group(pgid, signal.SIGTERM)
-        _signal_group(pgid, signal.SIGCONT)
-        if not _group_gone(pgid, self._exited, stop):
-            _signal_group(pgid, signal.SIGKILL)
-            if not _group_gone(pgid, self._exited, Deadline(KILL_GRACE_S)):
-                logger.error("worker process group %d still has members after SIGKILL", pgid)
+            self._exited.wait(max((stop.remaining() or 0.0) - TERM_GRACE_S, 0.0))
+        if _leader_held(pgid):
+            _signal_group(pgid, signal.SIGTERM)
+            _signal_group(pgid, signal.SIGCONT)
+            if not _members_gone(pgid, self._exited, stop):
+                _signal_group(pgid, signal.SIGKILL)
+                if not _members_gone(pgid, self._exited, Deadline(KILL_GRACE_S)):
+                    logger.error("worker process group %d still has members after SIGKILL", pgid)
+            if self._exited.is_set():
+                proc.wait()
+        else:
+            logger.warning("worker %d was reaped outside this client; its process group is not signalled", pgid)
+            proc.wait()
         join = Deadline(JOIN_GRACE_S)
         for pump in self._pumps:
             pump.finish()

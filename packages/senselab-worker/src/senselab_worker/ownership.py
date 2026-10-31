@@ -21,8 +21,9 @@ def remove_owned(root: Path, path: Path, *, pattern: re.Pattern[str]) -> bool:
     """Remove `path` if it is a direct child of `root` whose name fully matches `pattern`; return whether it did.
 
     The child is examined with `lstat` relative to an open descriptor of `root`. A directory is
-    removed as a tree without following symlinks; anything else, a symlink included, is unlinked and
-    its target is never touched. `.`, `..` and `root` itself are never children. A missing `root` or
+    removed, as a tree without following symlinks, only if its name also matches `UUID_HEX`;
+    any other directory is refused. Anything else, a symlink included, is unlinked and its target is
+    never touched. `.`, `..` and `root` itself are never children. A missing `root` or
     child returns False.
 
     Raises:
@@ -40,6 +41,8 @@ def remove_owned(root: Path, path: Path, *, pattern: re.Pattern[str]) -> bool:
         try:
             mode = os.lstat(name, dir_fd=root_fd).st_mode
         except FileNotFoundError:
+            return False
+        if stat.S_ISDIR(mode) and not UUID_HEX.fullmatch(name):
             return False
         try:
             if not stat.S_ISDIR(mode):

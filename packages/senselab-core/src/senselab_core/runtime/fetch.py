@@ -33,6 +33,9 @@ DOWNLOAD_STALE_SECONDS = 24 * 60 * 60
 _CHUNK = 1 << 20
 COMPLETE_MARKER = ".complete"
 logger = logging.getLogger("senselab")
+
+LINK_STAGING_NAME = re.compile(r"^\..+\.[0-9a-f]{32}$")
+"""A symlink being placed: a dot, the link's name, a dot and a uuid4 hex."""
 _STORAGE_ERRNOS = (errno.ENOSPC, errno.EDQUOT)
 _NO_HARDLINK_ERRNOS = (errno.EPERM, errno.ENOTSUP, errno.EXDEV)
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -259,7 +262,7 @@ def _link(link: Path, blob: Path) -> None:
     try:
         os.replace(staged, link)
     finally:
-        remove_owned(link.parent, staged, pattern=re.compile(rf"^\.{re.escape(link.name)}\.[0-9a-f]{{32}}$"))
+        remove_owned(link.parent, staged, pattern=LINK_STAGING_NAME)
 
 
 def _valid_sizes(value: object) -> dict[str, int] | None:

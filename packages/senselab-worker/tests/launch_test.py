@@ -75,3 +75,12 @@ def test_a8_backend_children_inherit_dev_null_not_the_channel(tmp_path: Path) ->
         "sys_stdout_is_stderr": True,
         "inheritable": [0, 1, 2],
     }
+
+
+@pytest.mark.logic
+def test_closed_fd0_at_start_reads_dev_null() -> None:
+    """A worker started with fd 0 closed says hello and exits 0 at the end of its (empty) channel."""
+    script = 'exec "$0" -m senselab_worker.launch senselab_worker.fake <&-'
+    proc = subprocess.run(["/bin/sh", "-c", script, sys.executable], capture_output=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert _keys(proc.stdout) == ["hello"]

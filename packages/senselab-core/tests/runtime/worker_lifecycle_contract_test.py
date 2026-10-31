@@ -1,5 +1,6 @@
 """Every fixture backend, on every shutdown path, leaves no process and no file behind, within the bound."""
 
+import os
 import sys
 import threading
 import time
@@ -7,7 +8,9 @@ from pathlib import Path
 
 import numpy
 import pytest
+from backends.subdir_backend_fixture import ARRAY_LIKE
 from lifecycle_probes_fixture import alive, gate, group_alive, listing, recorded_pids
+from senselab_core.runtime import worker_client
 from senselab_core.runtime.worker_client import SHUTDOWN_BOUND_S, WorkerClient, WorkerLost
 
 BACKENDS = [
@@ -39,18 +42,38 @@ def _close_during_run(client: WorkerClient, g: object) -> list[BaseException]:
     return errors
 
 
+def _signals_only_while_the_leader_is_held(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
+    """Wrap `os.killpg`; return the (pgid, signal) pairs sent after the group leader had been reaped."""
+    late: list[tuple[int, int]] = []
+    real = os.killpg
+
+    def checked(pgid: int, sig: int) -> None:
+        if sig != 0 and not worker_client._leader_held(pgid):
+            late.append((pgid, sig))
+        real(pgid, sig)
+
+    monkeypatch.setattr(os, "killpg", checked)
+    return late
+
+
 @pytest.mark.contract
 @pytest.mark.parametrize("path", PATHS)
 @pytest.mark.parametrize("backend", BACKENDS)
 def test_shutdown_leaves_no_process_and_no_file(
-    backend: str, path: str, tmp_path: Path, backends_importable: None
+    backend: str, path: str, tmp_path: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """After `close()`: the group is empty, the call returned within its bound, the parent is unchanged."""
+    """After `close()`: no process remains, the call met its bound and the parent is unchanged.
+
+    The group was signalled only while its leader was unreaped. The one exception is a directory the
+    backend made in the array directory: it is not the client's, so it stays there, and nothing else
+    does.
+    """
     parent = tmp_path / "parent"
     parent.mkdir()
     (parent / "theirs.txt").write_text("t")
     before = listing(parent)
     pid_file = tmp_path / "pids"
+    late = _signals_only_while_the_leader_is_held(monkeypatch)
     with gate() as g:
         client = WorkerClient(
             sys.executable,
@@ -77,5 +100,9 @@ def test_shutdown_leaves_no_process_and_no_file(
         elapsed = time.monotonic() - t0
     assert elapsed < bound
     assert not group_alive(pgid)
+    assert late == [], "a signal went to the group after its leader was reaped"
     assert not any(map(alive, recorded_pids(pid_file)))
-    assert listing(parent) == before
+    made = backend == "backends.subdir_backend_fixture"
+    name = client.array_dir.name
+    left = {name, f"{name}/{ARRAY_LIKE}", f"{name}/{ARRAY_LIKE}/scratch.bin"} if made else set()
+    assert listing(parent) == before | left

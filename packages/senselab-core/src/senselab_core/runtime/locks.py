@@ -40,6 +40,9 @@ from senselab_worker.ownership import remove_owned
 
 logger = logging.getLogger("senselab")
 
+SIDECAR_NAME = re.compile(r"^.+\.(heartbeat|holder)$")
+"""The heartbeat and holder files a lock writes beside the guarded path."""
+
 # rw-rw-r--: owner and group can both write the lock/heartbeat files, so a
 # second user's heartbeat touch (and lock takeover) does not fail silently.
 LOCK_FILE_MODE = 0o664
@@ -487,5 +490,5 @@ class SharedFileLock:
         if self._heartbeat_thread is not None:
             self._heartbeat_thread.join(timeout=5)
         for owned in (self._heartbeat_path, self._holder_path):
-            remove_owned(owned.parent, owned, pattern=re.compile(re.escape(owned.name)))
+            remove_owned(owned.parent, owned, pattern=SIDECAR_NAME)
         self._lock.release()
