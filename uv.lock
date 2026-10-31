@@ -6565,7 +6565,7 @@ dev = [
     { name = "pytest-timeout", specifier = "~=2.4" },
     { name = "pytest-xdist", extras = ["psutil"], specifier = "~=3.8.0" },
     { name = "python-dotenv", specifier = "~=1.1" },
-    { name = "ruff", specifier = "~=0.3" },
+    { name = "ruff", specifier = "==0.15.11" },
     { name = "types-pyyaml", specifier = "~=6.0" },
     { name = "types-requests", specifier = "~=2.32" },
     { name = "uvloop", specifier = "~=0.22" },
