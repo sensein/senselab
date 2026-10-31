@@ -166,8 +166,9 @@ Architect review §5 (R-42) found:
 
   **What stays residual is computed names only**: `getattr(m, name)`, `vars(m)[name]` and
   `m.__dict__[name]` where `name` is not a literal, and `__import__`/`import_module` of a non-literal. A 1.x
-  worklist module can still hash serialised data until it is ported (P-39). Notebooks under `tutorials/` are
-  not production code and are outside both checks.
+  worklist module can still hash serialised data until it is ported (P-39). Tracked notebooks are scanned by
+  both: ruff lints their code cells, and the binding guard reads their code cells as one namespace (a module
+  bound in one cell resolves in the next), with no allowance, and reports a notebook it cannot read.
 
   **Registered identity tags** (`digest.IDENTITY_TAGS`): `logical-key@3` (a task's logical key),
   `output@3` (a result's outputs, arrays as canonical `.npy`), `context@3` (an execution context),

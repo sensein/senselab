@@ -704,42 +704,102 @@ isolated; senselab as a whole is not torch-free.
 **Python floors.** The uv workspace locks one `requires-python`, so the worker's floor is tested
 from the built wheel in a separate env.
 
-**Release gate (H7).** `scripts/release_gate.py` runs after `uv build --all-packages` and before any upload.
-- A version with a `.dev` segment is what hatch-vcs writes when HEAD is not on a release tag, so the gate
-  refuses dev, local and post versions and any version below `RELEASE_FLOOR` (`2.0.0a0`, read once from the
-  root pyproject, so every 2.0 pre-release is publishable).
-- `git describe` picks one tag when several sit on a commit, so a release for the other tag would publish the
-  wrong version. The job passes `github.ref_name` and `github.event.release.prerelease`; the built version must
-  equal the normalised tag and match the flag.
-- The dependency graph is declared once (root pins core, core pins worker, worker pins nothing) and the gate
-  requires each edge as exactly `==version`. Checking only the pins that are present passes a release whose
-  hook stopped writing them.
-- Each distribution is installed alone, from wheel paths with dependency resolution on, into a fresh venv at its
-  floor Python (worker 3.10, core 3.11, root 3.12) and imported. One shared venv hides a dependency that only
-  a sibling declares.
-- Every file in `dist/` is checked and `uv publish dist/*` uploads only those files. Untracked files under a
-  package root refuse the build, because hatch-vcs ignores them and they would ship in a clean-versioned wheel.
-- `senselab_core` compares its own version with the worker's at import only when both are non-editable
-  installs (PEP 610 `direct_url.json`). In a workspace the editable versions drift on every commit, and the
-  lock pins them instead.
-- `workflow_dispatch` runs the gate and cannot upload: the upload step carries
+**Release gate (H7, H9f).** `scripts/release_gate.py` runs after `uv build --all-packages` and validates the
+whole of `dist/` before the upload step runs. One listing of `dist/` feeds every check.
+- **Names.** Every file is named exactly `<name>-<version>-py3-none-any.whl` or `<name>-<version>.tar.gz`,
+  with the name escaped and the version normalised. A build tag, another tag (`py2.py3`, `cp39-cp39-win32`), a
+  rename or two files swapped is refused. Member names must be normalised relative names: no absolute, `..`,
+  `.`, empty or backslash component, and no case-duplicate. Each sdist holds everything under its one top
+  directory `<name>-<version>/`.
+- **Versions.** The version string must be `X.Y.Z` or `X.Y.Z(a|b|rc)N`, written canonically, in every
+  metadata file and file name, and in the tag. An epoch (`1!1.0.0` outranks every 2.x release on PyPI), a
+  local, post or dev segment and a non-canonical spelling (`2.1.0-rc.1`) are all refused. The version is
+  at or above `RELEASE_FLOOR` (`2.0.0a0`, read once from the root pyproject), equals `github.ref_name`, and
+  matches `github.event.release.prerelease`. `git describe` picks one tag when several sit on a commit, so a
+  release for the other tag is refused by the tag check.
+- **Metadata.** Core metadata (METADATA and PKG-INFO) is parsed with `packaging.metadata`, and a repeated
+  single-use field is refused. Name, `Requires-Python`, `Requires-Dist`, `Provides-Extra` and `License-File`
+  must equal the pyproject's declaration: the pin hook's dependencies plus the exact sibling pin, and each
+  extra with self-references expanded as hatch expands them. An extra requirement, extra or Python range is
+  refused, in sdists as in wheels. The dependency graph is declared once (root pins core, core pins worker,
+  worker pins nothing), and the gate requires each edge as exactly `==version`, with no marker, extra or URL.
+  `WHEEL` must state version 1.0, a pure-Python root and the file name's one tag.
+- **Members.** Each artifact's members must equal exactly the set derived from the hatch config. For a wheel
+  that is the tracked regular files under each `packages` entry, the declared `shared-scripts` and
+  `force-include`, the generated `METADATA`, `WHEEL` and `RECORD`, `entry_points.txt` when entry points are
+  declared, and `licenses/` for the declared license files. For an sdist it is the tracked files under the
+  root or its `only-include` entries, its `force-include`, `PKG-INFO`, and the `.gitignore` hatchling copies
+  in. A missing member and an extra one are both refused, and each sourced member must be a byte copy of its
+  tracked file. A hatch setting the derivation does not model refuses the release by name, so a config change
+  cannot ship underived members. A tracked symlink or submodule under a selected path is refused.
+- **RECORD and entry points.** Each wheel's RECORD lists exactly its members, each once, with the sha256 and
+  size of its bytes (RECORD itself with neither). Its `entry_points.txt` equals what the pyproject declares,
+  and a `.data/scripts/<name>` member ships only where `shared-scripts` declares it.
+- **Installs.** Each distribution is installed alone, with every extra it provides, into a fresh venv at its
+  floor Python (worker 3.10, core 3.11, root 3.11). Its siblings are reached only through its exact pin, and
+  the files of the siblings in the venv must hash to those of the `dist/` wheels.
+  - Extra requirements are selected by evaluating their markers against the venv interpreter's environment.
+  - Every module of the distribution is imported by that interpreter in isolated mode (`-I`) from a scratch
+    directory. A module is every `.py` whose directories all hold an `__init__.py`; a `__main__` module is
+    compiled, not run.
+  - Every first-party module loaded must come from the venv.
+  - One shared venv would hide a dependency that only a sibling declares, and a top-level import would hide
+    a dropped or broken submodule.
+- **Rebuild.** Each sdist, unpacked alone, builds a wheel whose members are byte-identical to the wheel in
+  `dist/`.
+- **Environment.** Every subprocess (git, uv, the venv interpreters) runs with an allowlisted environment
+  (`ENV_KEPT`): where tools and temporaries are, the locale, uv's own directories and how to reach the
+  network. `PYTHONPATH`, `PYTHONHOME`, `GIT_INDEX_FILE`, `GIT_DIR`, `VIRTUAL_ENV`, `PIP_*` and every other
+  variable are dropped whatever the caller exports. Git also runs without system or global configuration.
+  Every `uv` call has `--no-config`. The first-party install runs with `--no-index --no-cache`, so a
+  caller's index, find-links, config file or cache cannot replace a `dist/` wheel. Third-party requirements
+  come only from the index the gate's `--index-url` names (default PyPI).
+- **Dirty trees.** A tracked file modified but not committed passes the member check, which compares
+  artifact bytes with the working tree. The version check refuses it instead: the `--dirty` describe makes
+  hatch-vcs write the next `.dev0` version for a dirty tree even on the tag (measured: tag `2.0.0` plus one
+  modified file builds `2.0.1.dev0`). Tagged CI is not exposed either way, because the publish job builds
+  from a fresh checkout of the tag.
+- **Editable installs.** `senselab_core` compares its own version with the worker's at import only when
+  both are non-editable installs (PEP 610 `direct_url.json`). In a workspace the editable versions drift on
+  every commit, and the lock pins them instead.
+- **Dispatch.** `workflow_dispatch` runs the gate and cannot upload: the upload step carries
   `if: github.event_name == 'release'`.
-- Each wheel's RECORD must list exactly its zip members, each once, with the sha256 and size of its bytes
-  (RECORD itself with neither), and its `entry_points.txt` must equal what the pyproject declares
-  (`[project.scripts]` as `console_scripts`, `[project.gui-scripts]`, `[project.entry-points.*]`); a wheel
-  that declares none carries none. A `.data/scripts/<name>` member ships only where the hatch wheel config
-  declares it in `shared-scripts`, as a byte copy of its declared source; every other `.data` member is refused.
-- A tracked file that is modified but not committed passes the contents check, which compares artifact bytes
-  with the working tree. The version check refuses it instead: the `--dirty` describe makes hatch-vcs write the
-  next `.dev0` version for a dirty tree even on the tag (measured: tag `2.0.0` plus one modified file builds
-  `2.0.1.dev0`). Tagged CI is not exposed either way, because the publish job builds from a fresh checkout of
-  the tag, where no file can differ from the commit.
-- The gate's subprocesses run with `--no-config` on every `uv` call and an environment without `PIP_*`,
-  `VIRTUAL_ENV` and every `UV_*` variable except those naming uv's own directories and network behaviour
-  (`UV_KEPT`). The first-party install runs with `--no-index`, so a caller's index, find-links or config file
-  serving a same-version first-party wheel, even one with a more specific tag, cannot replace the one in
-  `dist/`. Third-party requirements come only from the index the gate's `--index-url` names (default PyPI),
-  so a mirror is chosen by argument, never inherited from the environment.
+- **On every PR.** `package_data_test.py` builds this tree and runs every static check except the version
+  check, so a member derivation that disagrees with hatch fails CI before a release.
+
+**Fixture budget (H6, H9f).** `scripts/check_fixture_budget.py` runs in pre-commit on every commit.
+- **Objects.** Every entry of the git index is counted, read from the index, not the work tree. A symlink
+  (mode 120000) or submodule (160000) fails without exception, whether or not the checkout holds it, and so
+  does any other non-regular mode.
+- **Kinds.** A code file (`.py`, `.pyi`, `.ipynb`) is capped per file and in total across the whole tree.
+  Every other suffix is data (`.mjs` and `.json` included): it is capped per file, in total across the whole
+  tree, and in total under the test trees.
+- **Allowlist.** Allowlisted files are spared and left out of the data totals. Each allowlist entry is bound
+  to the freeze branch by content hash and size.
+- **Generated files.** The exemptions from the data per-file cap are exact paths, never globs. Each must
+  exist in the freeze and parse as the lock kind the policy names (a uv lock, or a subprocess-venv lock). It
+  still counts in the data total.
+- **Caps.** Each cap in `scripts/data/fixture_budget.yaml` is a recorded freeze measurement times a
+  headroom. The script recomputes the measurement on the freeze branch and fails when the record differs,
+  so a cap moves only when its headroom does, and the derivation beside it says why.
+
+**Workflow expressions (H7, H9f).** `packages/senselab-core/tests/lint/workflow_expressions_test.py` parses
+every `${{ }}` in every string value of every workflow and composite action. The one exception is `env:`
+values, the sanctioned channel for untrusted text.
+- **Clean values.** An expression passes only when its value cannot carry text an outsider chose:
+  - a literal or a trusted context (repository numbers, flags, names, secrets, vars);
+  - a boolean: a comparison, `!`, `contains`/`startsWith`/`endsWith` or a status function;
+  - `hashFiles`;
+  - `fromJSON`, `toJSON`, `format`, `join`, `&&` or `||` over clean operands.
+- **Refused.** `env.*` is untrusted: reading an `env:` value back into a script would undo the channel. So
+  are a dynamic index, an unknown function and an unparseable expression. `shell`, `with` values,
+  `working-directory`, `uses`, names, `runs-on` and outputs are inspected like `run`.
+- **Matrix.** `matrix.*` is trusted in a job only when every expression in that job's matrix definition is
+  clean. A literal matrix has none. A label-driven `contains(...) && fromJSON('[...]') || fromJSON('[...]')`
+  is clean. A matrix built from a pull-request title is not.
+- **Accepted limit.** Outputs of the repository's own steps and jobs (`steps.*.outputs.*`,
+  `needs.*.outputs.*`) are trusted. The guard checks the producing step's interpolation, not what its shell
+  writes to `$GITHUB_OUTPUT`; a step that copies an untrusted value into an output must be caught in review.
 
 ## 6. Migration
 
