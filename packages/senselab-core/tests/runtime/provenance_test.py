@@ -16,10 +16,10 @@ from typing import cast, get_args
 
 import numpy
 import pytest
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from senselab_core.runtime import provenance
-from senselab_core.runtime.provenance import PROV_TYPE, Activity, Agent, Entity, ProvStore
+from senselab_core.runtime.provenance import PROV_TYPE, Activity, Agent, Entity, ProvStore, recorded
 from senselab_worker.canonical import jcs_dumps
 
 pytestmark = pytest.mark.logic
@@ -933,3 +933,36 @@ def test_every_read_path_hands_back_the_decoded_value_never_a_token(
     for how, read in reads.items():
         assert _read_as_decoded(read, value), f"{how}: {read!r} for {value!r}"
         assert provenance.normalised(read) == expected, how
+
+
+def _compares_by_value(value: object) -> bool:
+    """Whether Python equality is reflexive on `value`'s read-back: no NaN and no array anywhere in it."""
+    if isinstance(value, numpy.ndarray):
+        return False
+    if isinstance(value, (float, numpy.floating)):
+        return not math.isnan(value)
+    if isinstance(value, Decimal):
+        return not value.is_nan()
+    if isinstance(value, dict):
+        return all(_compares_by_value(v) for v in value.values())
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return all(_compares_by_value(v) for v in value)
+    if isinstance(value, enum.Enum):
+        return _compares_by_value(value.value)
+    return True
+
+
+def test_m1_an_enum_read_back_equals_another_read_back_of_the_same_member() -> None:
+    """`recorded(x) == recorded(x)` for an enum member, alone and nested; another type or value is unequal."""
+    assert recorded(Colour.RED) == recorded(Colour.RED)
+    assert recorded({"e": [Colour.ONE]}) == recorded({"e": [Colour.ONE]})
+    assert hash(recorded(Colour.RED)) == hash(recorded(Colour.RED))
+    assert recorded(Colour.ONE) != recorded(Level.ONE) and recorded(Colour.ONE) != recorded(Colour.RED)
+
+
+@settings(max_examples=300, deadline=None)
+@given(value=_PAYLOADS)
+def test_every_read_back_equals_another_read_back_of_the_same_value(value: object) -> None:
+    """Two read-backs of one value are equal for every family; arrays and NaN compare as numpy and IEEE do."""
+    assume(_compares_by_value(value))
+    assert recorded(value) == recorded(copy.deepcopy(value))

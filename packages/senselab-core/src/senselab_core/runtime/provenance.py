@@ -228,9 +228,9 @@ class UnrecordableValue(NoCanonicalForm):
     refusal = "is not a provenance value"
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True)
 class EnumMember:
-    """An enum member as a record holds it: the qualified name of its type and its value, read back."""
+    """An enum member as a record holds it: the qualified name of its type and its value, equal by both."""
 
     type_name: str
     value: Any

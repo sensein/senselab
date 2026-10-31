@@ -235,8 +235,8 @@ Architect review §5 (R-42) found:
   token stands for: objects as `FrozenDict` and arrays as `FrozenList` (read-only `dict` and `list`, equal to a
   `dict` and a `list` of the same items, as JSON writes them), `$f` as the float, `$int` as the integer, `$path`
   as a `Path`, `$nd` as a read-only `numpy.ndarray`, `$set` as a `frozenset` (its arrays as tuples), `$bytes`
-  as `bytes`, `$dec` as a `Decimal`, `$enum` as an `EnumMember` (its type's qualified name and its value; the
-  type is not imported), and a `$$`-escaped key as the key it escapes. Decoding is the inverse of `normalised`
+  as `bytes`, `$dec` as a `Decimal`, `$enum` as an `EnumMember` (its type's qualified name and its value, and equal to
+  another exactly when both are; the type is not imported), and a `$$`-escaped key as the key it escapes. Decoding is the inverse of `normalised`
   on what the writer writes, so recording a read-back, whole, nested in a new mapping or through `revised`,
   records the same tokens and mints the same id. `revised(target, **changes)` is the one copy-with-changes: of a
   held mapping, the decoded mapping with the changes; of a record, a copy keeping its id with `run_id` null,
