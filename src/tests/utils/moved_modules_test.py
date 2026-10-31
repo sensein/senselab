@@ -4,6 +4,7 @@ import ast
 import importlib.util
 import json
 import re
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -85,32 +86,50 @@ def _imported_names(text: str, module: str) -> set[str]:
 FORBIDDEN_PATTERNS: tuple[re.Pattern[str], ...] = ()
 
 
+TEXT_EXCLUDED = ("specs/", ".specify/", ".claude/")
+"""Tracked trees of records and agent configuration, which name moved paths as history."""
+
+
 def _scanned_files() -> list[Path]:
-    """Every text source under the scan roots, excluding this file."""
-    files: list[Path] = []
-    for root in SCAN_ROOTS:
-        for suffix in ("*.py", "*.md"):
-            files.extend(p for p in (REPO / root).rglob(suffix) if p.resolve() != SELF)
+    """Every tracked text file of any suffix outside `TEXT_EXCLUDED`, excluding this file."""
+    listed = subprocess.run(["git", "ls-files", "-z"], cwd=REPO, capture_output=True, check=True).stdout
+    files = []
+    for rel in listed.decode().split("\0"):
+        path = REPO / rel
+        if rel and not rel.startswith(TEXT_EXCLUDED) and path.is_file() and path.resolve() != SELF:
+            if b"\0" not in path.read_bytes()[:8192]:
+                files.append(path)
     return files
+
+
+def _text_hits(path: Path) -> list[str]:
+    """Each moved path, forbidden pattern or moved name the text of ``path`` mentions."""
+    text = path.read_text(errors="replace")
+    hits = [m for m in sorted(MOVED) if m in text]
+    hits += [p.pattern for p in FORBIDDEN_PATTERNS if p.search(text)]
+    hits += [f"from senselab.utils import {n}" for n in sorted(MOVED_NAMES & _imported_names(text, "senselab.utils"))]
+    hits += [
+        f"{n} imported from senselab.utils.dependencies"
+        for n in sorted(MOVED_HELPERS & _imported_names(text, "senselab.utils.dependencies"))
+    ]
+    return hits
 
 
 @pytest.mark.logic
 def test_no_moved_module_paths_remain() -> None:
-    """No scanned file mentions an old module path, worker-script strings included."""
-    hits = []
-    for path in _scanned_files():
-        text = path.read_text(errors="replace")
-        hits += [f"{path.relative_to(REPO)}: {m}" for m in sorted(MOVED) if m in text]
-        hits += [f"{path.relative_to(REPO)}: {p.pattern}" for p in FORBIDDEN_PATTERNS if p.search(text)]
-        hits += [
-            f"{path.relative_to(REPO)}: from senselab.utils import {n}"
-            for n in sorted(MOVED_NAMES & _imported_names(text, "senselab.utils"))
-        ]
-        hits += [
-            f"{path.relative_to(REPO)}: {n} imported from senselab.utils.dependencies"
-            for n in sorted(MOVED_HELPERS & _imported_names(text, "senselab.utils.dependencies"))
-        ]
+    """No tracked text file mentions an old module path, worker-script strings and non-Python files included."""
+    hits = [f"{path.relative_to(REPO)}: {h}" for path in _scanned_files() for h in _text_hits(path)]
     assert hits == []
+
+
+@pytest.mark.logic
+def test_xg12_files_of_every_suffix_are_text_scanned(tmp_path: Path) -> None:
+    """Shell, YAML and TOML files are scanned, and a `python -m` of a moved module in one is found."""
+    suffixes = {p.suffix for p in _scanned_files()}
+    assert {".sh", ".yaml", ".toml", ".py", ".md"} <= suffixes
+    for name in ("run.sh", "job.yaml", "pyproject.toml"):
+        planted = _write(tmp_path, name, "python -m senselab.utils.cuda_probe\n")
+        assert _text_hits(planted) == ["senselab.utils.cuda_probe"]
 
 
 _SHA_LITERAL = re.compile(r"\b\w*SHA256\s*=\s*[\"'][0-9a-f]{64}[\"']")
@@ -195,23 +214,57 @@ def _importer_aliases(tree: ast.AST) -> set[str]:
     return names
 
 
+def _argument(node: ast.Call, position: int, keyword: str) -> ast.expr | None:
+    if len(node.args) > position:
+        return node.args[position]
+    return next((k.value for k in node.keywords if k.arg == keyword), None)
+
+
 def _dynamic_target(node: ast.Call, importers: set[str] | None = None) -> ast.expr | None:
     """The module argument of ``importlib.import_module(x)``, ``import_module(x)`` or ``__import__(x)``, or ``None``."""
     func = node.func
     name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
     if name not in (importers or {"import_module", "__import__"}):
         return None
-    if node.args:
-        return node.args[0]
-    return next((k.value for k in node.keywords if k.arg == "name"), None)
+    return _argument(node, 0, "name")
+
+
+def _dynamic_module(node: ast.Call, target: ast.expr) -> str:
+    """The absolute module ``node`` imports, resolving a relative name against its ``package`` argument."""
+    folded = _fold(target)
+    if folded is None:
+        return f"<dynamic:{ast.unparse(target)}>"
+    if not folded.startswith("."):
+        return folded
+    package = _argument(node, 1, "package")
+    anchor = _fold(package) if package is not None else None
+    if anchor is None:
+        return f"<dynamic:{ast.unparse(target)}, {ast.unparse(package) if package is not None else None}>"
+    try:
+        return importlib.util.resolve_name(folded, anchor)
+    except ImportError:
+        return f"<dynamic:{ast.unparse(target)}, {anchor}>"
 
 
 def _chain(node: ast.AST) -> list[str] | None:
-    """``[root, attr, ...]`` of a ``Name.attr.attr`` expression, else ``None``."""
+    """``[root, attr, ...]`` of a ``Name.attr`` chain, where ``getattr(x, "attr")`` with a folded name is ``x.attr``."""
     parts: list[str] = []
-    while isinstance(node, ast.Attribute):
-        parts.insert(0, node.attr)
-        node = node.value
+    while True:
+        if isinstance(node, ast.Attribute):
+            parts.insert(0, node.attr)
+            node = node.value
+            continue
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+            and (attr := _fold(node.args[1])) is not None
+        ):
+            parts[:0] = attr.split(".")
+            node = node.args[0]
+            continue
+        break
     if isinstance(node, ast.Name):
         return [node.id, *parts]
     return None
@@ -248,10 +301,10 @@ def _imports_of(tree: ast.AST, module: str, is_package: bool, label: str) -> set
             target = _dynamic_target(node, importers)
             if target is None:
                 continue
-            folded = _fold(target)
-            found.add(folded if folded is not None else f"<dynamic:{ast.unparse(target)}>")
+            found.add(_dynamic_module(node, target))
     for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and not isinstance(getattr(node, "ctx", None), ast.Store):
+        is_getattr = isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr"
+        if is_getattr or (isinstance(node, ast.Attribute) and not isinstance(getattr(node, "ctx", None), ast.Store)):
             chain = _chain(node)
             if chain and chain[0] in bound:
                 dotted = bound[chain[0]].split(".") + chain[1:]
@@ -450,3 +503,33 @@ def test_clean_file_has_no_moved_hits(tmp_path: Path) -> None:
         tmp_path, "a.py", "import os\nfrom senselab.utils import fastio\nimport senselab_core.runtime.locks\n"
     )
     assert _hits(_imports(path)) == []
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("import importlib\nimportlib.import_module('.file_lock', 'senselab.utils')\n", "senselab.utils.file_lock"),
+        (
+            "from importlib import import_module\nimport_module(name='.model_revision', package='senselab.utils')\n",
+            "senselab.utils.model_revision",
+        ),
+        (
+            "import importlib\nimportlib.import_module('..utils.cuda_probe', 'senselab.audio')\n",
+            "senselab.utils.cuda_probe",
+        ),
+        ("import senselab.utils\ngetattr(senselab.utils, 'prov_store')\n", "senselab.utils.prov_store"),
+        ("import senselab\ngetattr(getattr(senselab, 'utils'), 'prov_bep028').run\n", "senselab.utils.prov_bep028"),
+        ("from senselab import utils\ngetattr(utils, 'file_' + 'lock')\n", "senselab.utils.file_lock"),
+    ],
+)
+def test_xg12_relative_keyword_and_getattr_imports_are_found(tmp_path: Path, source: str, expected: str) -> None:
+    """A relative name resolved against its ``package`` argument, by position or keyword, and ``getattr`` are found."""
+    assert expected in _hits(_imports(_write(tmp_path, "a.py", source)))
+
+
+@pytest.mark.logic
+def test_a_relative_import_against_an_unfoldable_package_is_dynamic(tmp_path: Path) -> None:
+    """A relative name whose package does not fold is reported as dynamic, not dropped."""
+    names = _imports(_write(tmp_path, "a.py", "import importlib\nimportlib.import_module('.file_lock', pkg)\n"))
+    assert "<dynamic:'.file_lock', pkg>" in names

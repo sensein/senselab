@@ -89,6 +89,8 @@ def _guard_tree(base: Path, plant: dict[str, str]) -> Path:
     for rel, text in plant.items():
         (base / rel).parent.mkdir(parents=True, exist_ok=True)
         (base / rel).write_text(text)
+    subprocess.run(["git", "init", "-q"], cwd=base, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=base, check=True)
     return base / "src" / "tests" / "utils" / "moved_modules_test.py"
 
 
@@ -116,6 +118,19 @@ BYPASSES = {
     "attribute-chain-off-an-alias": {
         "src/senselab/audio/bypass.py": "from senselab import utils as u\nu.prov_bep028.run()\n"
     },
+    "xg12-relative-name-with-package": {
+        "src/senselab/audio/bypass.py": f"import importlib\nimportlib.import_module('.{_FILE_LOCK}', '{_UTILS}')\n"
+    },
+    "xg12-keyword-name-and-package": {
+        "src/senselab/audio/bypass.py": (
+            f"from importlib import import_module\nimport_module(name='.{_MODEL_REVISION}', package='{_UTILS}')\n"
+        )
+    },
+    "xg12-getattr": {
+        "src/senselab/audio/bypass.py": "import senselab.utils\ngetattr(senselab.utils, 'prov_' + 'store')\n"
+    },
+    "xg12-shell-python-m": {"scripts/bypass.sh": f"python -m {_UTILS}.cuda" + "_probe\n"},
+    "xg12-yaml": {".github/workflows/bypass.yaml": f"run: python -m {_UTILS}.cuda" + "_probe\n"},
 }
 
 
