@@ -2,7 +2,9 @@
 
 import math
 import os
-from collections.abc import Iterator, Mapping
+import threading
+from collections import OrderedDict
+from collections.abc import Hashable, Iterator, Mapping
 from contextlib import contextmanager
 from fractions import Fraction
 from pathlib import Path
@@ -55,11 +57,56 @@ _NS_PER_S = 10**9
 SourceStampKey = str
 """A source stamp's `canonical_digest`, the key of the per-process stamp and root memos."""
 
-_VERIFIED: set[tuple[str, SourceStampKey]] = set()
-"""(path, stamp) pairs this process opened and stamped; a copy carrying one is checked by `os.stat` alone."""
+SOURCE_MEMO_ENTRIES = 65_536
+"""How many (path, stamp) entries each per-process source memo keeps; the least recently used is evicted first."""
 
-_ROOTS: dict[tuple[str, SourceStampKey], str] = {}
-"""Content identity roots this process hashed, by (path, stamp); one entry per distinct file state opened."""
+
+class Memo:
+    """A thread-safe mapping that keeps at most `maxsize` entries, evicting the least recently used.
+
+    A miss is always safe: callers recompute what was evicted.
+    """
+
+    def __init__(self, maxsize: int) -> None:
+        """Start empty, keeping at most `maxsize` (at least 1) entries."""
+        if maxsize < 1:
+            raise ValueError(f"a memo keeps at least one entry, got {maxsize}")
+        self.maxsize = maxsize
+        self._items: OrderedDict[Hashable, object] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key: Hashable) -> object | None:
+        """Return the value held for `key`, marking it recently used, or `None`."""
+        with self._lock:
+            if key not in self._items:
+                return None
+            self._items.move_to_end(key)
+            return self._items[key]
+
+    def put(self, key: Hashable, value: object) -> None:
+        """Hold `value` for `key`, evicting the least recently used entry beyond `maxsize`."""
+        with self._lock:
+            self._items[key] = value
+            self._items.move_to_end(key)
+            while len(self._items) > self.maxsize:
+                self._items.popitem(last=False)
+
+    def __len__(self) -> int:
+        """Return the number of entries held."""
+        with self._lock:
+            return len(self._items)
+
+
+_VERIFIED = Memo(SOURCE_MEMO_ENTRIES)
+"""(path, stamp) pairs this process stamped from the file and kept; a copy with one is checked by `os.stat` alone."""
+
+_ROOTS = Memo(SOURCE_MEMO_ENTRIES)
+"""Content identity roots this process hashed, by (path, stamp)."""
+
+
+def _remember(path: str | os.PathLike[str], stamp: "SourceStamp") -> None:
+    _VERIFIED.put((os.fspath(path), stamp.canonical_digest()), True)
+
 
 SignalArray = Annotated[numpy.ndarray, BeforeValidator(lambda v: as_numeric_array(v, 2))]
 """A frozen integer or float array of shape `(channels, samples)`."""
@@ -101,11 +148,12 @@ class SourceStamp(Frozen):
         Raises:
             StaleSource: if the file differs from the stamp.
         """
-        if (os.fspath(path), self.canonical_digest()) in _VERIFIED:
+        if _VERIFIED.get((os.fspath(path), self.canonical_digest())) is not None:
             if not self.same_file(path):
                 raise StaleSource(f"{path} changed since it was opened: recorded {self!r}")
             return
         _require_stamp(self, SourceStamp.of(path), path)
+        _remember(path, self)
 
     def same_file(self, path: str | os.PathLike[str]) -> bool:
         """Return whether the stat fields of the file at `path` still match, without reading its header."""
@@ -136,7 +184,6 @@ def _opened(path: str | os.PathLike[str]) -> Iterator[tuple[soundfile.SoundFile,
                 sampling_rate=f.samplerate,
                 header=value_digest("soundfile.info", header),
             )
-            _VERIFIED.add((os.fspath(path), stamp.canonical_digest()))
             yield f, stamp
 
 
@@ -191,7 +238,9 @@ class RegularGroup(Frozen):
             return data
         supplied = data.get("source_stamp")
         if supplied is None:
-            return {**data, "source_stamp": SourceStamp.of(data["source"])}
+            taken = SourceStamp.of(data["source"])
+            _remember(data["source"], taken)
+            return {**data, "source_stamp": taken}
         stamp = supplied if isinstance(supplied, SourceStamp) else SourceStamp.model_validate(supplied)
         stamp.checked(data["source"])
         return {**data, "source_stamp": stamp}
@@ -347,12 +396,14 @@ def _source_root(group: RegularGroup) -> str:
     """
     assert group.source is not None and group.source_stamp is not None
     key = (os.fspath(group.source), group.source_stamp.canonical_digest())
-    if key not in _ROOTS:
-        root = content_identity(group.source)["root"]
-        if not group.source_stamp.same_file(group.source):
-            raise StaleSource(f"{group.source} changed since it was opened")
-        _ROOTS[key] = root
-    return _ROOTS[key]
+    held = _ROOTS.get(key)
+    if isinstance(held, str):
+        return held
+    root = content_identity(group.source)["root"]
+    if not group.source_stamp.same_file(group.source):
+        raise StaleSource(f"{group.source} changed since it was opened")
+    _ROOTS.put(key, root)
+    return root
 
 
 def _group_content(group: RegularGroup | IrregularGroup) -> object:
@@ -430,6 +481,7 @@ class Audio(Recording):
         The recording's clock is named by its identity.
         """
         stamp = SourceStamp.of(path)
+        _remember(path, stamp)
         group = RegularGroup.model_validate(
             {
                 "channels": cls._channels(stamp.channels),
@@ -445,7 +497,9 @@ class Audio(Recording):
         """Hold a float32 full-scale copy of samples shaped `(samples,)` or `(channels, samples)`.
 
         Integer PCM is divided by its full scale (`SIGNAL_DTYPES`) as the decoder divides it; floats
-        are cast. The recording's clock is named by its identity.
+        are cast. The integer conversion is done in float32 (round to float32, then scale by a power of
+        two) and is bit-identical to dividing in float64 and casting to float32. The recording's clock
+        is named by its identity.
 
         Raises:
             ValueError: if `a` is neither 1-D nor 2-D, is empty, or its dtype is not in `SIGNAL_DTYPES`

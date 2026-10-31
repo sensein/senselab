@@ -11,6 +11,7 @@ import numpy
 import pytest
 import soundfile
 from pydantic import ValidationError
+from senselab_core.kernel import signals
 from senselab_core.kernel._base import value_digest
 from senselab_core.kernel.signals import (
     Audio,
@@ -489,3 +490,53 @@ def test_recording_identity_is_required_or_derived() -> None:
     assert Recording.model_fields["identity"].is_required()
     r = Recording(groups={"ecg": _group(1, 250.0, 10)}, anchor=TimeAnchor(clock_id="dev", absolute_start_ns=None))
     assert r.identity.startswith("content:") and Recording.model_validate(r.model_dump()) == r
+
+
+@pytest.mark.logic
+def test_memo_stays_at_its_bound_and_evicts_the_least_recently_used() -> None:
+    """Inserting past the bound keeps the size at the bound; the least recently used entry goes first."""
+    memo = signals.Memo(3)
+    for i in range(10):
+        memo.put(i, i)
+        assert len(memo) == min(i + 1, 3)
+    assert memo.get(7) == 7
+    memo.put(10, 10)
+    assert [memo.get(k) for k in (7, 8, 9, 10)] == [7, None, 9, 10]
+    with pytest.raises(ValueError):
+        signals.Memo(0)
+
+
+@pytest.mark.logic
+def test_source_memos_are_bounded_and_rederive_evicted_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With room for one file, opening a second evicts the first; a copy of the first re-derives its identity."""
+    monkeypatch.setattr(signals, "_VERIFIED", signals.Memo(1))
+    monkeypatch.setattr(signals, "_ROOTS", signals.Memo(1))
+    hashed: list[object] = []
+    original = signals.content_identity
+
+    def spy(path: object, **kwargs: object) -> object:
+        hashed.append(path)
+        return original(path)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(signals, "content_identity", spy)
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    first = Audio.from_path(write_wav(tmp_path / "a"))
+    second = Audio.from_path(write_wav(tmp_path / "b", frames=RATE // 2))
+    assert len(signals._VERIFIED) == len(signals._ROOTS) == 1 and len(hashed) == 2
+    again = copy.copy(first)
+    assert again == first and again.identity == first.identity != second.identity
+    assert len(hashed) == 3 and len(signals._VERIFIED) == len(signals._ROOTS) == 1
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("dtype", ["int16", "int32"])
+def test_float32_pcm_conversion_is_bit_identical_to_float64(dtype: str) -> None:
+    """Integer PCM converted in float32 equals, bit for bit, the float64 division cast to float32."""
+    info = numpy.iinfo(dtype)
+    x = numpy.random.default_rng(1).integers(info.min, info.max, size=4096, endpoint=True, dtype=dtype)
+    x[:3] = [info.min, info.max, 0]
+    held = Audio.from_array(x, RATE).groups["audio"]
+    assert isinstance(held, RegularGroup)
+    expected = (x.astype(numpy.float64) / float(-info.min)).astype(numpy.float32)
+    assert held.read()[0].tobytes() == expected.tobytes()
