@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import math
+import unicodedata
 from collections.abc import Callable
+from fractions import Fraction
 from pathlib import Path
 from typing import cast, get_args
 
@@ -12,7 +16,6 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from senselab_core.runtime import provenance
 from senselab_core.runtime.provenance import PROV_TYPE, Activity, Agent, Entity, ProvStore
-from senselab_worker.canonical import tagged_digest
 
 pytestmark = pytest.mark.logic
 
@@ -565,49 +568,92 @@ class TestAtomicWrite:
         assert target.stat().st_mode & 0o777 == 0o640
 
 
-_STAMPS = st.integers(min_value=0, max_value=2**63 - 1)
-_JSON = st.recursive(
+_KEYS = st.text(alphabet="abf$i", max_size=4)
+_SCALARS = (
     st.none()
     | st.booleans()
-    | st.integers(-(2**53) + 1, 2**53 - 1)
-    | st.floats(allow_nan=False, allow_infinity=False)
-    | st.text(max_size=8),
-    lambda inner: st.lists(inner, max_size=3) | st.dictionaries(st.text(max_size=4), inner, max_size=3),
-    max_leaves=12,
+    | st.integers(-(2**70), 2**70)
+    | st.floats()
+    | st.sampled_from([float("inf"), float("-inf"), float("nan"), -0.0, 2.0**60, 1e300])
+    | st.text(alphabet="aé\u0301$fNI", max_size=5)
+)
+_PAYLOADS = st.recursive(
+    _SCALARS,
+    lambda inner: st.lists(inner, max_size=3) | st.dictionaries(_KEYS, inner, max_size=3),
+    max_leaves=10,
 )
 
 
-@settings(max_examples=150, deadline=None)
-@given(stamp=_STAMPS, size=st.integers(0, 2**53 - 1), extra=st.dictionaries(st.text(max_size=6), _JSON, max_size=4))
-def test_entity_ids_of_payloads_with_large_stamps_are_deterministic(stamp: int, size: int, extra: dict) -> None:
-    """A stamp of any size, as `file_attributes` writes it, digests; the id ignores key order and repeats exactly."""
-    attributes = {**extra, provenance.SIZE_KEY: size, provenance.MTIME_KEY: str(stamp), "path": "a.wav"}
-    attributes[provenance.CHECKSUM_KEY] = "0" * 64
-    reordered = dict(reversed(list(attributes.items())))
-    ids = {
-        ProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=a) for a in (attributes, reordered)
-    }
-    assert len(ids) == 1
+def _oracle(value: object) -> object:
+    """An independent identity: JCS numeric equality for finite numbers, NFC for text, tokens kept apart."""
+    if value is None or isinstance(value, bool):
+        return ("c", value)
+    if isinstance(value, int):
+        return ("n", Fraction(value)) if abs(value) <= 2**53 - 1 else ("bigint", value)
+    if isinstance(value, float):
+        return ("nonfinite", repr(value)) if not math.isfinite(value) else ("n", Fraction(value))
+    if isinstance(value, str):
+        return ("s", unicodedata.normalize("NFC", value))
+    if isinstance(value, (list, tuple)):
+        return ("l", tuple(_oracle(v) for v in value))
+    assert isinstance(value, dict)
+    return ("d", frozenset((k, _oracle(v)) for k, v in value.items()))
 
 
-@settings(max_examples=100, deadline=None)
-@given(n=st.integers(-(2**53) + 1, 2**53 - 1), s=st.text(max_size=6), x=_JSON, y=_JSON)
-def test_provenance_digest_refuses_what_the_shared_encoder_refuses(n: int, s: str, x: object, y: object) -> None:
-    """Mixed `int` and `str` keys are refused, not collapsed; an integer beyond 2**53 is refused, not stringified."""
+@settings(max_examples=400, deadline=None)
+@given(a=_PAYLOADS, b=_PAYLOADS)
+def test_provenance_digest_is_total_deterministic_and_collision_free(a: object, b: object) -> None:
+    """Over nested payloads with +/-inf, NaN, huge ints and `$` keys, the id always exists, repeats, and separates.
+
+    Two payloads share an id exactly when an independent oracle calls them equal: finite numbers by JCS value
+    (so `1` and `1.0` are one), text after NFC, non-finite floats and out-of-range integers by their own value.
+    """
+    for value in (a, b):
+        assert provenance._digest(value) == provenance._digest(copy.deepcopy(value))
+    assert (provenance._digest(a) == provenance._digest(b)) is (_oracle(a) == _oracle(b))
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        (float("nan"), {"$f": "NaN"}),
+        (float("-inf"), {"$f": "-Infinity"}),
+        (float("-inf"), "-Infinity"),
+        (2**60, {"$i": str(2**60)}),
+        (2**60, str(2**60)),
+        (2**60, float(2**60)),
+        ({"$f": "NaN"}, {"$$f": "NaN"}),
+        ([float("inf")], [float("-inf")]),
+    ],
+)
+def test_tokens_never_collide_with_recorded_objects_or_strings(a: object, b: object) -> None:
+    """A token is never the id of an ordinary object or string; an escaped `$` key is never its unescaped twin."""
+    assert provenance._digest(a) != provenance._digest(b)
+
+
+@settings(max_examples=50, deadline=None)
+@given(n=st.integers(-(2**53) + 1, 2**53 - 1), x=_PAYLOADS)
+def test_mixed_int_and_str_keys_are_refused(n: int, x: object) -> None:
+    """A non-`str` key is refused rather than collapsed onto its string twin."""
     with pytest.raises(TypeError):
-        provenance._digest({n: x, str(n): y})
-    with pytest.raises(TypeError):
-        provenance._digest({s: x, n: y})
-    with pytest.raises(ValueError, match="I-JSON"):
-        provenance._digest([s, 2**53 + abs(n)])
-    assert provenance._digest([s, x]) == tagged_digest("provenance-id@2", [s, x])[:16]
+        provenance._digest({n: x, str(n): x})
 
 
-def test_file_attributes_write_the_stamp_as_a_decimal_string(tmp_path: Path) -> None:
-    """`mtime_ns` is a stamp, so a real file's entity, whose stamp exceeds 2**53, gets an id."""
+def test_a_level_measurement_of_silence_gets_an_id() -> None:
+    """The regression: a measurement entity carrying `-inf` dB (digital silence) is recorded with an id."""
+    store = ProvStore(run_id="r")
+    first = store.entity(prov_type="measurement", extent=(0.0, 1.0), attributes={"level_dbfs": float("-inf")})
+    again = ProvStore(run_id="r").entity(
+        prov_type="measurement", extent=(0.0, 1.0), attributes={"level_dbfs": -math.inf}
+    )
+    other = store.entity(prov_type="measurement", extent=(0.0, 1.0), attributes={"level_dbfs": -120.0})
+    assert first == again != other
+
+
+def test_a_real_file_entity_gets_an_id(tmp_path: Path) -> None:
+    """`mtime_ns` stays an integer stamp beyond 2**53; it is tokenised for the digest, not rewritten."""
     target = tmp_path / "a.wav"
     target.write_bytes(b"x")
     attributes = {"path": str(target), **provenance.file_attributes(target)}
-    assert attributes[provenance.MTIME_KEY] == str(target.stat().st_mtime_ns)
-    assert int(attributes[provenance.MTIME_KEY]) > 2**53
+    assert attributes[provenance.MTIME_KEY] == target.stat().st_mtime_ns > 2**53
     ProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=attributes)

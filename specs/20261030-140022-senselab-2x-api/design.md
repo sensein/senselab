@@ -396,10 +396,13 @@ them to a principle.
 **One provenance store** (`ProvStore`, append-only, content-derived ids) is written around every
 node with the attested identities. BEP028 export is how runs are published. `reproduce` becomes a
 consumer of this store.
-Its ids are `tagged_digest("provenance-id@2", payload)[:16]` through the shared encoder, so a payload holds
-exact JSON types only: an integer beyond ±(2^53−1), a non-finite float or a non-`str` key is refused, never
-stringified. A stamp is not a quantity, so `mtime_ns` (about 1.7e18) is written as a decimal string, as fetch's
-`BlobStamp` marker already does. Under JCS `1` and `1.0` are one number, so they give one id.
+Its ids are `tagged_digest("provenance-id@2", normalised(payload))[:16]`. The digest must be total over every
+value a pipeline records, so one step before the shared encoder maps scalars outside the JSON domain to tokens:
+a non-finite float to `{"$f": "NaN" | "Infinity" | "-Infinity"}` (a silent level is `-inf` dB), an integer beyond
+±(2^53−1) to `{"$i": "<decimal>"}` (`mtime_ns` is about 1.7e18). An object key starting with `$` gains one more
+`$`, so no recorded object reads as a token; escaping was chosen over refusal because refusal would make the
+digest partial. The encoder itself is unchanged and is still the only canonical form. Non-`str` keys stay
+refused. Under JCS `1` and `1.0` are one number, so they give one id; that is accepted (H-R29).
 
 ### 4.9 Execution (P-2, P-5, P-6, P-7)
 

@@ -1,6 +1,7 @@
 """Digest constructors are imported only by allowlisted modules, which never hash canonical JSON untagged."""
 
 import ast
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -29,6 +30,8 @@ CANONICAL = "packages/senselab-worker/src/senselab_worker/canonical.py"
 HELPER = "tagged_digest"
 HASH_NAMES = {"sha256", "sha256_bytes", "sha1", "sha3_256", "sha512", "blake2b", "blake2s", "md5", "new"}
 """Hash constructors and one-shot digest functions; ``.update`` counts only on a receiver one of them made."""
+HASH_TYPE = re.compile(r"\b(_Hash|HASH|hashlib\.\w+)\b")
+"""An annotation naming a hash object's type: ``hashlib._Hash``, ``_hashlib.HASH`` or another hashlib name."""
 
 ALLOWED_BY_REASON: dict[str, tuple[str, ...]] = {
     "the tagged digest helper": (CANONICAL,),
@@ -168,6 +171,16 @@ def untagged_digests(source: str, module: str, strict: bool = False) -> list[str
         and _name(n.value.func) in hashers
         for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
     }
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            positional = [*n.args.posonlyargs, *n.args.args]
+            defaults = dict(zip(reversed(positional), reversed(n.args.defaults)))
+            defaults.update({a: d for a, d in zip(n.args.kwonlyargs, n.args.kw_defaults) if d is not None})
+            for arg in [*positional, *n.args.kwonlyargs]:
+                default = defaults.get(arg)
+                annotated = arg.annotation is not None and HASH_TYPE.search(ast.unparse(arg.annotation))
+                if annotated or (isinstance(default, ast.Call) and _name(default.func) in hashers):
+                    hash_objects.add(arg.arg)
 
     def is_hash_call(call: ast.Call) -> bool:
         func = call.func
@@ -384,6 +397,11 @@ def test_strict_mode_finds_any_serialisation_fed_to_a_digest(body: str) -> None:
         ("m = hashlib.sha256()\n    m.update(str(x).encode())", True),
         ("m = hashlib.blake2b()\n    m.update(json.dumps(x).encode())", True),
         ("hashlib.sha256().update(repr(x).encode())", True),
+        ("pass\ndef g(h: hashlib._Hash, x):\n    h.update(str(x).encode())", True),
+        ("pass\ndef g(h: '_hashlib.HASH', x):\n    h.update(json.dumps(x).encode())", True),
+        ("pass\ndef g(x, h=hashlib.sha256()):\n    h.update(repr(x).encode())", True),
+        ("pass\ndef g(d: dict, x):\n    d.update(str(x))", False),
+        ("pass\ndef g(x, d=dict()):\n    d.update(str(x))", False),
     ],
 )
 def test_strict_mode_counts_update_only_on_a_hash_object(body: str, hashed: bool) -> None:

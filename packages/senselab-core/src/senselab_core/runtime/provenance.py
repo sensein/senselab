@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -18,7 +19,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Sequence, cast, get_args
 
-from senselab_worker.canonical import tagged_digest
+from senselab_worker.canonical import canonical_scalar, tagged_digest
 
 from senselab_core.runtime.storage import write_atomically
 
@@ -176,14 +177,49 @@ class Environment:
     senselab_version: str | None = None
 
 
-def _digest(payload: object) -> str:
-    """Return the 16-hex id of a JSON payload: `tagged_digest("provenance-id@2", payload)`, exact types only.
+_MAX_SAFE_INT = 2**53 - 1
+TOKEN_PREFIX = "$"
+"""Object keys starting with it are escaped by one more; a token is an object whose only key is `$f` or `$i`."""
+
+
+def normalised(value: object) -> object:
+    """Return `value` with every scalar outside the JSON domain replaced by a token the shared encoder accepts.
+
+    A non-finite float becomes `{"$f": "NaN" | "Infinity" | "-Infinity"}`, an integer outside
+    +/-(2**53 - 1) becomes `{"$i": "<decimal>"}`, and an object key starting with `$` gains one more `$`,
+    so no recorded object reads as a token. Tuples become lists. Numpy scalars pass through
+    `canonical_scalar` first.
 
     Raises:
-        ValueError, TypeError: on what `jcs_dumps` refuses: a non-finite float, an integer outside
-            +/-(2**53 - 1), a non-`str` key, a value of another type.
+        TypeError: on a non-`str` object key or a value `canonical_scalar` refuses.
     """
-    return tagged_digest("provenance-id@2", payload)[:16]
+    t = type(value)
+    if t is dict:
+        out: dict[str, object] = {}
+        for key, item in value.items():  # type: ignore[attr-defined]
+            if type(key) is not str:
+                raise TypeError(f"provenance object key is not a str: {type(key).__qualname__}")
+            out[TOKEN_PREFIX + key if key.startswith(TOKEN_PREFIX) else key] = normalised(item)
+        return out
+    if t is list or t is tuple:
+        return [normalised(item) for item in value]  # type: ignore[attr-defined]
+    scalar = canonical_scalar(value)
+    if type(scalar) is float and not math.isfinite(scalar):
+        return {"$f": "NaN" if math.isnan(scalar) else ("Infinity" if scalar > 0 else "-Infinity")}
+    if type(scalar) is int and abs(scalar) > _MAX_SAFE_INT:
+        return {"$i": str(scalar)}
+    return scalar
+
+
+def _digest(payload: object) -> str:
+    """Return the 16-hex id of a payload: `tagged_digest("provenance-id@2", normalised(payload))`.
+
+    Raises:
+        TypeError: on what `normalised` refuses.
+        ValueError: on what `jcs_dumps` refuses of the normalised payload: two keys equal after NFC, a
+            container that contains itself, nesting deeper than `MAX_DEPTH`.
+    """
+    return tagged_digest("provenance-id@2", normalised(payload))[:16]
 
 
 def file_digest(path: str | Path) -> tuple[str | None, str | None]:
@@ -224,7 +260,7 @@ def file_attributes(path: str | Path, *, digest: str | None = None, reason: str 
 
     Returns:
         ``checksum_sha256`` or ``checksum_unresolved_reason``, and ``size_bytes`` and ``mtime_ns``
-        when the file can be stat'd. ``mtime_ns`` is a stamp, written as a decimal string.
+        when the file can be stat'd.
 
     Raises:
         ValueError: If both ``digest`` and ``reason`` are supplied.
@@ -239,7 +275,7 @@ def file_attributes(path: str | Path, *, digest: str | None = None, reason: str 
     except OSError:
         return out
     out[SIZE_KEY] = int(stat.st_size)
-    out[MTIME_KEY] = str(stat.st_mtime_ns)
+    out[MTIME_KEY] = int(stat.st_mtime_ns)
     return out
 
 
