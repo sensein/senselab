@@ -3,7 +3,7 @@
 Usage::
 
     uv build --all-packages
-    uv run python scripts/release_gate.py dist [--tag TAG --prerelease true|false] [--floor VERSION]
+    uv run python scripts/release_gate.py dist [--tag TAG --prerelease true|false] [--floor VERSION] [--index-url URL]
 
 Exit status 0 means every file in ``dist/`` is a wheel or sdist of one of the three distributions at one
 releasable version, the sibling pins are exact, every file inside every artifact is a git-tracked file of its package,
@@ -50,6 +50,8 @@ GENERATED = frozenset({"METADATA", "WHEEL", "RECORD", "entry_points.txt", "PKG-I
 """File names a build writes into an artifact that no tracked file corresponds to."""
 SDIST_ALIASES = {"_shared_hatch_build_pins.py": "hatch_build_pins.py"}
 """Sdist members force-included from the repository root under another name."""
+PYPI = "https://pypi.org/simple"
+"""The index third-party requirements come from unless ``--index-url`` names another."""
 IMPORTS = {
     "senselab-worker": "senselab_worker",
     "senselab-core": "senselab_worker, senselab_core",
@@ -477,7 +479,7 @@ def wheel_file_hashes(wheel: Path) -> dict[str, str]:
     }
 
 
-def check_installs(files: list[Path], pythons: Mapping[str, str]) -> None:
+def check_installs(files: list[Path], pythons: Mapping[str, str], *, index_url: str = PYPI) -> None:
     """Install each distribution alone into its own fresh venv at ``pythons[name]``, check its siblings, import it.
 
     Only the distribution's own wheel is passed by path. Its siblings must be reached by the resolver through
@@ -485,9 +487,9 @@ def check_installs(files: list[Path], pythons: Mapping[str, str]) -> None:
     reads nor writes any uv cache (``--no-cache``), so neither a cached wheel nor an index serving the same name
     and version can stand in for the one in ``dist/``. Every ``uv`` call runs with ``--no-config`` in
     ``gate_environment``, so no configuration file or variable of the caller redirects resolution.
-    The third-party requirements of the distribution and its siblings are installed first, by name, through the
-    host's cache, which no first-party wheel enters. Each sibling must then be installed with the version and
-    file hashes of the wheel in ``dist/``, not merely the version.
+    The third-party requirements of the distribution and its siblings are installed first, by name, from
+    ``index_url`` only, through the host's cache, which no first-party wheel enters. Each sibling must then be
+    installed with the version and file hashes of the wheel in ``dist/``, not merely the version.
 
     Raises:
         GateError: If creating an environment, installing, a sibling's version or importing fails.
@@ -512,7 +514,7 @@ def check_installs(files: list[Path], pythons: Mapping[str, str]) -> None:
             interpreter = str(venv / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python"))
             requirements = [r for n in (name, *siblings) for r in third_party[n]]
             if requirements:
-                _run("uv", "pip", "install", "--python", interpreter, *requirements)
+                _run("uv", "pip", "install", "--python", interpreter, "--index-url", index_url, *requirements)
             install = ("uv", "pip", "install", "--no-cache", "--no-index", "--python", interpreter)
             install += ("--find-links", str(links))
             _run(*install, str(wheels[name]))
@@ -527,6 +529,7 @@ def main(
     prerelease: bool | None = None,
     pythons: Mapping[str, str] | None = None,
     repo: Path | None = None,
+    index_url: str = PYPI,
 ) -> int:
     """Run every check over one listing of ``dist``; print the reason and return 1 on the first failure, else 0.
 
@@ -540,7 +543,7 @@ def main(
         if repo is not None:
             check_contents(files, repo)
             check_wheel_metadata(files, repo)
-        check_installs(files, pythons or floor_pythons())
+        check_installs(files, pythons or floor_pythons(), index_url=index_url)
     except GateError as exc:
         print(f"release gate refused: {exc}", file=sys.stderr)
         return 1
@@ -555,6 +558,7 @@ if __name__ == "__main__":
     parser.add_argument("--tag")
     parser.add_argument("--prerelease", choices=("true", "false"))
     parser.add_argument("--repo", type=Path, help="git work tree the dist was built from; default: dist's parent")
+    parser.add_argument("--index-url", default=PYPI, help=f"index for third-party requirements; default: {PYPI}")
     arguments = parser.parse_args()
     sys.exit(
         main(
@@ -563,5 +567,6 @@ if __name__ == "__main__":
             tag=arguments.tag,
             prerelease=None if arguments.prerelease is None else arguments.prerelease == "true",
             repo=(arguments.repo or arguments.dist.resolve().parent),
+            index_url=arguments.index_url,
         )
     )

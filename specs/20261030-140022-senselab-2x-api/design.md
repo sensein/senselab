@@ -381,6 +381,8 @@ them to a principle.
 - failures are not cached;
 - every entry carries a format version, and format changes migrate rather than wipe
   ([ADR-006](adr/ADR-006-formats.md)). A new key space is created only by an identity change.
+- **Fetch-store paths fold fully.** Manifest paths compare by Unicode canonical caseless match, so `ß` and `ss`
+  are one path and a manifest naming both is refused, even where NTFS would keep them apart.
 - **Who can change a sealed entry.** A committed entry is read-only (files 0440, its directory
   2550), but the key directory that holds it is 2770 with no sticky bit, so any member of the
   store's group can rename or remove a sealed entry (not rewrite its files). Read-only modes stop an
@@ -664,7 +666,8 @@ from the built wheel in a separate env.
   `VIRTUAL_ENV` and every `UV_*` variable except those naming uv's own directories and network behaviour
   (`UV_KEPT`). The first-party install runs with `--no-index`, so a caller's index, find-links or config file
   serving a same-version first-party wheel, even one with a more specific tag, cannot replace the one in
-  `dist/`. Third-party requirements still come from the default index.
+  `dist/`. Third-party requirements come only from the index the gate's `--index-url` names (default PyPI),
+  so a mirror is chosen by argument, never inherited from the environment.
 
 ## 6. Migration
 

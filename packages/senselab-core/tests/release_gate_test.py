@@ -1100,3 +1100,73 @@ def test_an_index_serving_a_same_version_first_party_wheel_cannot_win(
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+class _SimpleIndex:
+    """A PEP 503 index on localhost serving the given wheels; ``url`` is its ``/simple`` root."""
+
+    def __init__(self, root: Path, wheels: list[Path]) -> None:
+        for wheel in wheels:
+            project = root / "simple" / wheel.name.split("-")[0].replace("_", "-")
+            project.mkdir(parents=True, exist_ok=True)
+            shutil.copy(wheel, project / wheel.name)
+        for project in (root / "simple").iterdir() if (root / "simple").exists() else []:
+            links = "".join(f'<a href="{p.name}">{p.name}</a>\n' for p in project.glob("*.whl"))
+            (project / "index.html").write_text(links)
+        (root / "simple").mkdir(parents=True, exist_ok=True)
+        handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(root))
+        self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self.url = f"http://127.0.0.1:{self._server.server_address[1]}/simple"
+
+    def __enter__(self) -> _SimpleIndex:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join()
+
+
+@pytest.mark.env
+def test_third_party_requirements_come_from_the_index_argument_and_never_from_the_environment(
+    fabricate: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``index_url`` is where third-party requirements resolve; ``UV_INDEX_URL`` and friends cannot substitute for it.
+
+    The worker requires ``sl-gate-probe``, which only one local index serves. Named by ``index_url`` it installs;
+    named only by the caller's environment, with ``index_url`` an index that lacks it, the install fails.
+    """
+    _release(fabricate, "2.0.0", **OK_MODULES)
+    dist = tmp_path / "dist"
+    worker = next(dist.glob("senselab_worker-*.whl"))
+    worker.unlink()
+    write = sys.modules["release_fixture"].write_wheel
+    write(dist, "senselab-worker", "2.0.0", ["sl-gate-probe==1.0"], OK_MODULES["worker"]["modules"])
+    deps = tmp_path / "deps"
+    deps.mkdir()
+    probe = write(deps, "sl-gate-probe", "1.0", modules={"sl_gate_probe/__init__.py": "\n"})
+    files = gate.dist_files(dist)
+    with _SimpleIndex(tmp_path / "serving", [probe]) as serving, _SimpleIndex(tmp_path / "empty", []) as empty:
+        gate.check_installs(files, HERE_PYTHON, index_url=serving.url)
+        for key in ("UV_INDEX_URL", "UV_DEFAULT_INDEX", "UV_EXTRA_INDEX_URL", "UV_INDEX", "PIP_INDEX_URL"):
+            monkeypatch.setenv(key, serving.url)
+        monkeypatch.setenv("UV_FIND_LINKS", str(deps))
+        with pytest.raises(gate.GateError, match="sl-gate-probe"):
+            gate.check_installs(files, HERE_PYTHON, index_url=empty.url)
+
+
+@pytest.mark.logic
+def test_main_passes_the_index_argument_to_the_installs(
+    fabricate: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``main`` hands ``index_url`` to ``check_installs``; it defaults to PyPI."""
+    wheels = _release(fabricate, "2.0.0", **OK_MODULES)
+    for name in gate.DISTRIBUTIONS:
+        sys.modules["release_fixture"].write_sdist(wheels[0].parent, name, "2.0.0")
+    seen: list[str] = []
+    monkeypatch.setattr(gate, "check_installs", lambda files, pythons, *, index_url: seen.append(index_url))
+    assert gate.main(wheels[0].parent, pythons=HERE_PYTHON) == 0
+    assert gate.main(wheels[0].parent, pythons=HERE_PYTHON, index_url="http://mirror.invalid/simple") == 0
+    assert seen == [gate.PYPI, "http://mirror.invalid/simple"]
