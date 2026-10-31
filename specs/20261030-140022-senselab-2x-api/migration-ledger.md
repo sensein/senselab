@@ -22,9 +22,10 @@ The strict form of the tagged-digest data-flow lint (`untagged_digests(..., stri
 R-106), run over every allowlisted module outside `packages/`, reported 28 sites where `json.dumps`, `str`,
 `repr` or `format` output reaches a hash call. They are migration debt under ADR-006, not fixed in Phase 1: each
 is ported when its module moves (P-39). Line numbers are at `deb84049`. Replacements name the 2.x mechanism:
-`identity_digest(<tag>, value)` from `senselab_worker.digest` with a tag registered in `IDENTITY_TAGS`,
-`blob_digest(<tag>, data)` with a tag in `BLOB_TAGS` for bytes that are already canonical, or a typed identity
-from `senselab_core.kernel.identity`. The lint is gone; the table is the list it produced.
+`identity_digest(<tag>, value)` from `senselab_worker.digest` with a tag registered in `IDENTITY_TAGS` for any
+structured value, `file_digest("file@1", path)` for a file as written, `npy_digest("npy@1", array)` for an
+array, or a typed identity from `senselab_core.kernel.identity`. There is no public digest of bytes in memory
+(H-R36): serialised data is never hashed as a blob. The lint is gone; the table is the list it produced.
 
 An earlier count of 32 included four `dict.update` calls fed by `str()` (`cohort_stage.py:317`,
 `recording_vectors.py:1144`, `speaker_vectors.py:479`, `reproduce/source.py:830`). The guard now counts
@@ -37,7 +38,7 @@ An earlier count of 32 included four `dict.update` calls fed by `str()` (`cohort
 | `src/senselab/audio/workflows/audio_analysis/adaptive/policy.py:62` | `load_policy` | `policy_hash` of the merged adaptive policy | `identity_digest` under a registered policy tag; the policy becomes a `Frozen` config with `canonical_digest()` |
 | `src/senselab/audio/workflows/audio_analysis/run_config.py:301` | `load_run_config` | `config_hash` of the merged run config (`default=str` stringifies non-JSON values) | `ExecutionContext` config field digested by `identity_digest("context@3", …)`; non-JSON values refused, not stringified |
 | `src/senselab/audio/workflows/triage/cohort_stage.py:144` | `_digest` | cohort-stage parameter and input digests (`default=str`) | `identity_digest` under a registered cohort tag; the stage's key becomes a `LogicalKey` |
-| `src/senselab/audio/workflows/triage/cohort_stage.py:1715` | `write_quantile_artefact` | sha256 of the artefact file's bytes, written as indented `json.dumps` | write the artefact as JCS (`jcs_dumps`) and hash it with `sha256_bytes`, or key it by `identity_digest` over the record |
+| `src/senselab/audio/workflows/triage/cohort_stage.py:1715` | `write_quantile_artefact` | sha256 of the artefact file's bytes, written as indented `json.dumps` | key it by `identity_digest` over the record, or hash the written file with `file_digest` |
 | `src/senselab/audio/workflows/triage/config.py:203` | `load_triage_config` | `config_hash` of the merged triage config (`default=str`) | as `load_run_config`: one config identity through `identity_digest("context@3", …)` |
 | `src/senselab/audio/workflows/triage/review_page/page.py:259` | `index_of` | review-page build id over the page index (`default=str`) | `identity_digest` under a registered review-page tag |
 | `src/senselab/audio/workflows/triage/task_audio.py:293` | `cut_key` | cache key of a task-audio cut: input digest, definition, sample range, extras (`default=str`) | `LogicalKey` of the cut node, digested by `identity_digest("logical-key@3", …)` |
@@ -65,7 +66,7 @@ An earlier count of 32 included four `dict.update` calls fed by `str()` (`cohort
 
 The import contract `digests-are-tagged` (`.importlinter`, ADR-006) forbids every root package to import
 `hashlib`, `hmac` and the other digest modules. Its allowances outside `senselab_worker.digest` are these
-1.x modules and scripts; each leaves the list when it is ported to `identity_digest` / `blob_digest`, and an
+1.x modules and scripts; each leaves the list when it is ported to `identity_digest`, `file_digest` or `npy_digest`, and an
 allowance that no longer matches an import fails the contract.
 
 | Module | Imports |
@@ -115,3 +116,14 @@ allowance that no longer matches an import fails the contract.
 | `senselab.utils.venv_worker` | `hashlib` |
 | `senselab.utils.vllm_server` | `hashlib` |
 | `senselab.utils.work_pool` | `hashlib` |
+
+## Suppressed banned-name sites (H9e, H-R36)
+
+These production sites call a name ruff's banned-api forbids (ADR-006) and carry a per-site `# noqa`. The
+digests among them are migration debt like the rows above; the dynamic imports are reviewed loaders.
+
+| Site | Name | What it is | 2.x replacement |
+|---|---|---|---|
+| `src/senselab/audio/data_structures/audio.py:187` | `uuid.uuid3` | `Audio.generate_id`, a name-based UUID of `str(self.waveform)` (a truncated tensor repr) and the rate | `identity_digest` over the content identity (`audio@3`) |
+| `src/senselab/video/data_structures/video.py:201-202` | `uuid.uuid3` | `Video.generate_id`, a name-based UUID of `str(self.frames)`, the frame rate and the audio id | a registered identity over the frames' `npy_digest` |
+| `src/senselab/utils/constants.py:5` | `uuid.uuid3` | `SENSELAB_NAMESPACE`, the namespace of the two ids above | removed with them |
