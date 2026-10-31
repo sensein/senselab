@@ -27,7 +27,8 @@ CAPABILITIES = {
 IMPORTERS = {"import_module", "__import__"}
 CANONICAL = "packages/senselab-worker/src/senselab_worker/canonical.py"
 HELPER = "tagged_digest"
-HASH_NAMES = {"sha256", "sha256_bytes", "sha1", "sha3_256", "sha512", "blake2b", "blake2s", "md5", "new", "update"}
+HASH_NAMES = {"sha256", "sha256_bytes", "sha1", "sha3_256", "sha512", "blake2b", "blake2s", "md5", "new"}
+"""Hash constructors and one-shot digest functions; ``.update`` counts only on a receiver one of them made."""
 
 ALLOWED_BY_REASON: dict[str, tuple[str, ...]] = {
     "the tagged digest helper": (CANONICAL,),
@@ -159,6 +160,23 @@ def untagged_digests(source: str, module: str, strict: bool = False) -> list[str
         if isinstance(node, ast.ImportFrom) and node.module in CAPABILITIES:
             hashers |= {a.asname for a in node.names if a.asname}
     found: list[str] = []
+    hash_objects = {
+        ast.unparse(t)
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.Assign, ast.AnnAssign))
+        and isinstance(n.value, ast.Call)
+        and _name(n.value.func) in hashers
+        for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
+    }
+
+    def is_hash_call(call: ast.Call) -> bool:
+        func = call.func
+        if isinstance(func, ast.Attribute) and func.attr == "update":
+            receiver = func.value
+            return ast.unparse(receiver) in hash_objects or (
+                isinstance(receiver, ast.Call) and _name(receiver.func) in hashers
+            )
+        return _name(func) in hashers
 
     def tainted_names(scope_node: ast.AST) -> set[str]:
         names: set[str] = set()
@@ -175,7 +193,7 @@ def untagged_digests(source: str, module: str, strict: bool = False) -> list[str
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 inner = (*scope, child.name)
                 inner_taint = tainted | tainted_names(child)
-            if isinstance(child, ast.Call) and _name(child.func) in hashers:
+            if isinstance(child, ast.Call) and is_hash_call(child):
                 data = (*child.args, *(k.value for k in child.keywords))
                 hit = any(
                     (isinstance(n, ast.Call) and _name(n.func) in jcs) or (isinstance(n, ast.Name) and n.id in tainted)
@@ -321,6 +339,8 @@ def test_other_imports_are_not_capabilities() -> None:
         "return hashlib.new('sha256', jcs_dumps(x)).hexdigest()",
         "m = hashlib.sha256()\n    m.update(jcs_dumps(x))\n    return m.hexdigest()",
         "d = jcs_dumps(x)\n    m = hashlib.blake2b()\n    m.update(d)",
+        "hashlib.sha256().update(jcs_dumps(x))",
+        "self.m = h()\n    self.m.update(jcs_dumps(x))",
         "return hashlib.sha3_256(jcs_dumps(x)).hexdigest()",
     ],
 )
@@ -353,6 +373,25 @@ def test_strict_mode_finds_any_serialisation_fed_to_a_digest(body: str) -> None:
     assert untagged_digests(source, "pkg/mod.py") == []
 
 
+@pytest.mark.contract
+@pytest.mark.parametrize(
+    ("body", "hashed"),
+    [
+        ("d = {}\n    d.update({str(k): v for k, v in x.items()})", False),
+        ("row = dict(x)\n    row.update(name=str(x))", False),
+        ("m = hashlib.sha256()\n    other = {}\n    other.update(str(x))", False),
+        ("x.update(str(x))", False),
+        ("m = hashlib.sha256()\n    m.update(str(x).encode())", True),
+        ("m = hashlib.blake2b()\n    m.update(json.dumps(x).encode())", True),
+        ("hashlib.sha256().update(repr(x).encode())", True),
+    ],
+)
+def test_strict_mode_counts_update_only_on_a_hash_object(body: str, hashed: bool) -> None:
+    """``.update`` fed by a serialisation is a digest only when its receiver was made by a hash constructor."""
+    source = f"import hashlib, json\ndef f(x):\n    {body}\n"
+    assert bool(untagged_digests(source, "src/mod.py", strict=True)) is hashed
+
+
 @pytest.mark.logic
 def test_strict_mode_passes_digests_of_raw_bytes() -> None:
     """Hashing file chunks or a ``bytes`` value is not a serialisation."""
@@ -362,11 +401,11 @@ def test_strict_mode_passes_digests_of_raw_bytes() -> None:
 
 @pytest.mark.logic
 def test_provenance_ids_are_tagged_digests() -> None:
-    """The provenance store derives ids from `tagged_digest("provenance-id@1", ...)`, not a bare hash."""
+    """The provenance store derives ids from `tagged_digest("provenance-id@2", ...)`, not a bare hash."""
     from senselab_core.runtime import provenance
     from senselab_worker.canonical import tagged_digest
 
-    assert provenance._digest(["r", "span"]) == tagged_digest("provenance-id@1", ["r", "span"])[:16]
+    assert provenance._digest(["r", "span"]) == tagged_digest("provenance-id@2", ["r", "span"])[:16]
 
 
 @pytest.mark.logic
