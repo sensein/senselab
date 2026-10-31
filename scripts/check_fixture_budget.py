@@ -5,7 +5,7 @@ Every `git ls-files` path is scanned:
 - a non-code file over `PER_FILE` bytes, or a code file (`.py`, `.pyi`, `.ipynb`) over `code_file_max_bytes`
   from `data/fixture_budget.yaml`, fails unless it is on the allowlist;
 - the files under the test trees that are not allowlisted may total at most `TOTAL` bytes;
-- a tracked symlink (mode 120000) fails, except the pinned `ALLOWED_SYMLINKS`;
+- a tracked symlink (mode 120000) fails, without exception;
 - the allowlist lines are `<path>\t<sha256>\t<bytes>`. Each path must exist in the freeze branch with the same
   content hash, the recorded size may not exceed the frozen size, and the current file must still hash to the
   recorded value, so an entry can neither be added after the freeze nor be replaced by other bytes.
@@ -38,8 +38,6 @@ SOURCE_SUFFIXES = (".py", ".pyi", ".mjs")
 """Code suffixes present under the test trees; every other tracked file, data formats included, is scanned."""
 CODE_SUFFIXES = (".py", ".pyi", ".ipynb")
 SYMLINK_MODE = "120000"
-ALLOWED_SYMLINKS = {"packages/senselab-core/hatch_build_pins.py": "../../hatch_build_pins.py"}
-"""Tracked symlinks that may exist, each with the exact target it must have."""
 PER_FILE = 256 * 1024
 TOTAL = 2 * 1024 * 1024
 _FIX = "generate it with senselab_core.testing.synth, or pull it through a data manifest"
@@ -106,7 +104,9 @@ def resolve_freeze_ref(root: Path = ROOT) -> str:
         LookupError: if neither exists, naming the fetch that creates it.
     """
     for ref in (f"origin/{FREEZE_BRANCH}", FREEZE_BRANCH):
-        probe = subprocess.run(["git", "rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], cwd=root, capture_output=True)
+        probe = subprocess.run(
+            ["git", "rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], cwd=root, capture_output=True
+        )
         if probe.returncode == 0:
             return ref
     raise LookupError(
@@ -162,7 +162,7 @@ def check(
     """Return one violation message per problem among `paths`, naming the file, its size and the limit.
 
     `allow` maps each grandfathered repo-relative path (relative to `root`) to its recorded size. A symlink
-    among `paths` is a violation unless `ALLOWED_SYMLINKS` pins its target. `code_max` caps code files
+    among `paths` is a violation. `code_max` caps code files
     (`CODE_SUFFIXES`); `generated` are globs exempt from the per-file limit.
     """
     out: list[str] = []
@@ -170,8 +170,7 @@ def check(
     for path in paths:
         rel = Path(os.path.relpath(os.path.abspath(path), os.path.abspath(root))).as_posix()
         if path.is_symlink():
-            if os.readlink(path) != ALLOWED_SYMLINKS.get(rel):
-                out.append(f"{rel}: tracked symlink; commit the file itself")
+            out.append(f"{rel}: tracked symlink; commit the file itself")
             continue
         size = path.stat().st_size
         if rel in allow:
@@ -182,7 +181,9 @@ def check(
             counted += size
         if rel.endswith(CODE_SUFFIXES):
             if code_max is not None and size > code_max:
-                out.append(f"{rel}: {size} bytes exceeds the {code_max} byte code-file limit; code is not a data carrier")
+                out.append(
+                    f"{rel}: {size} bytes exceeds the {code_max} byte code-file limit; code is not a data carrier"
+                )
         elif size > per_file and not any(fnmatch.fnmatch(rel, g) for g in generated):
             out.append(f"{rel}: {size} bytes exceeds the {per_file} byte per-file limit; {_FIX}")
     if counted > total:

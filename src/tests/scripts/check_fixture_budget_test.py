@@ -158,16 +158,21 @@ def test_symlink_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     assert "link.txt: tracked symlink" in out and "linkdir: tracked symlink" in out
 
 
-def test_pinned_symlink_is_allowed_only_with_its_target(tmp_path: Path) -> None:
-    """The pinned symlink passes at its pinned target and fails when retargeted."""
-    name, target = next(iter(budget.ALLOWED_SYMLINKS.items()))
-    link = tmp_path / name
-    link.parent.mkdir(parents=True)
-    os.symlink(target, link)
-    assert budget.check([link], allow={}, root=tmp_path) == []
-    link.unlink()
-    os.symlink("elsewhere", link)
-    assert "tracked symlink" in budget.check([link], allow={}, root=tmp_path)[0]
+def test_no_symlink_is_exempt(tmp_path: Path) -> None:
+    """A symlink fails whatever its name and target, including the one the hatch hook used to be."""
+    for name, target in {
+        "packages/senselab-core/hatch_build_pins.py": "../../hatch_build_pins.py",
+        "a.txt": "b",
+    }.items():
+        link = tmp_path / name
+        link.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(target, link)
+        assert "tracked symlink" in budget.check([link], allow={}, root=tmp_path)[0]
+
+
+def test_repository_tracks_no_symlink() -> None:
+    """Nothing in this repository's index has mode 120000."""
+    assert [path for mode, path in budget._tracked(budget.ROOT) if mode == budget.SYMLINK_MODE] == []
 
 
 @pytest.mark.parametrize("where", ["docs/new.png", "specs/x/new.json", "src/senselab/data/new.bin", "new.bin"])

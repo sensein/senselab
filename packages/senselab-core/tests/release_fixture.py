@@ -1,0 +1,98 @@
+"""Fixtures that fabricate wheels and throwaway tagged workspaces; none touches this repository's tags."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import zipfile
+from collections.abc import Callable, Sequence
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[3]
+WORKSPACE_FILES = (
+    "pyproject.toml",
+    "hatch_build_pins.py",
+    "README.md",
+    "LICENSE.md",
+    "SECURITY.md",
+    "packages/senselab-core/pyproject.toml",
+    "packages/senselab-core/hatch_pin_loader.py",
+    "packages/senselab-worker/pyproject.toml",
+)
+WORKSPACE_TREES = ("packages/senselab-core/src", "packages/senselab-worker/src", "src/senselab")
+_GIT_ENV = {
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_SYSTEM": os.devnull,
+    "GIT_AUTHOR_NAME": "t",
+    "GIT_AUTHOR_EMAIL": "t@t",
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@t",
+}
+
+
+def _git(root: Path, *args: str) -> str:
+    """Run git inside the throwaway repository ``root`` with no user configuration."""
+    assert REPO not in (root, *root.parents), "a throwaway repository must live outside the real one"
+    env = {**os.environ, **_GIT_ENV}
+    return subprocess.run(["git", *args], cwd=root, env=env, check=True, capture_output=True, text=True).stdout
+
+
+def write_wheel(
+    directory: Path, name: str, version: str, requires: Sequence[str] = (), modules: dict[str, str] | None = None
+) -> Path:
+    """Write a minimal wheel of ``name`` at ``version``, with Requires-Dist lines and module sources."""
+    stem = f"{name.replace('-', '_')}-{version}"
+    path = directory / f"{stem}-py3-none-any.whl"
+    meta = [
+        "Metadata-Version: 2.1",
+        f"Name: {name}",
+        f"Version: {version}",
+        *(f"Requires-Dist: {r}" for r in requires),
+    ]
+    record = f"{stem}.dist-info/RECORD"
+    with zipfile.ZipFile(path, "w") as archive:
+        for module, source in (modules or {}).items():
+            archive.writestr(module, source)
+        archive.writestr(f"{stem}.dist-info/METADATA", "\n".join(meta) + "\n")
+        archive.writestr(
+            f"{stem}.dist-info/WHEEL", "Wheel-Version: 1.0\nGenerator: t\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+        )
+        archive.writestr(record, "")
+    return path
+
+
+@pytest.fixture
+def fabricate(tmp_path: Path) -> Callable[..., Path]:
+    """Return ``fabricate(name, version, requires=(), modules=None)``, writing a wheel under ``tmp_path/dist``."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    return lambda *a, **k: write_wheel(dist, *a, **k)
+
+
+@pytest.fixture
+def tagged_workspace(tmp_path_factory: pytest.TempPathFactory) -> Callable[..., Path]:
+    """Return ``make(tags, commits_after=0)``: a copy of the packaging inputs as a fresh git repo with those tags.
+
+    Every tag sits on the first commit; ``commits_after`` further commits follow it.
+    """
+
+    def make(tags: Sequence[str], commits_after: int = 0) -> Path:
+        root = tmp_path_factory.mktemp("workspace")
+        listing = ["git", "ls-files", "-z", "--", *WORKSPACE_TREES]
+        listed = subprocess.run(listing, cwd=REPO, check=True, capture_output=True, text=True).stdout.split("\0")
+        for rel in (*WORKSPACE_FILES, *(p for p in listed if p)):
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((REPO / rel).read_bytes())
+        _git(root, "init", "-q", "-b", "main")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "-m", "first", "--no-gpg-sign")
+        for tag in tags:
+            _git(root, "tag", tag)
+        for i in range(commits_after):
+            _git(root, "commit", "-q", "--allow-empty", "-m", f"c{i}", "--no-gpg-sign")
+        return root
+
+    return make

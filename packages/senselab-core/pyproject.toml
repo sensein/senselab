@@ -22,7 +22,7 @@ git_describe_command = "git describe --dirty --tags --long --match '[0-9]*.[0-9]
 packages = ["src/senselab_core"]
 
 [tool.hatch.metadata.hooks.custom]
-path = "hatch_build_pins.py"
+path = "hatch_pin_loader.py"
 pin = "senselab-worker"
 dependencies = [
   "numpy>=1.23",
@@ -36,8 +36,5 @@ dependencies = [
 [tool.uv.sources]
 senselab-worker = { workspace = true }
 
-[tool.hatch.build.targets.sdist]
-exclude = ["hatch_build_pins.py"]
-
 [tool.hatch.build.targets.sdist.force-include]
-"../../hatch_build_pins.py" = "hatch_build_pins.py"
+"../../hatch_build_pins.py" = "_shared_hatch_build_pins.py"
