@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import io
 import os
 import subprocess
+import tarfile
 import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -12,6 +14,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 WORKSPACE_FILES = (
+    ".gitignore",
     "pyproject.toml",
     "hatch_build_pins.py",
     "README.md",
@@ -63,11 +66,31 @@ def write_wheel(
     return path
 
 
+def write_sdist(directory: Path, name: str, version: str) -> Path:
+    """Write a minimal sdist of ``name`` at ``version`` holding only its PKG-INFO."""
+    stem = f"{name.replace('-', '_')}-{version}"
+    path = directory / f"{stem}.tar.gz"
+    info = f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n".encode()
+    with tarfile.open(path, "w:gz") as archive:
+        member = tarfile.TarInfo(f"{stem}/PKG-INFO")
+        member.size = len(info)
+        archive.addfile(member, io.BytesIO(info))
+    return path
+
+
+@pytest.fixture
+def fabricate_sdist(tmp_path: Path) -> Callable[..., Path]:
+    """Return ``fabricate_sdist(name, version)``, writing an sdist beside the fabricated wheels."""
+    dist = tmp_path / "dist"
+    dist.mkdir(exist_ok=True)
+    return lambda *a, **k: write_sdist(dist, *a, **k)
+
+
 @pytest.fixture
 def fabricate(tmp_path: Path) -> Callable[..., Path]:
     """Return ``fabricate(name, version, requires=(), modules=None)``, writing a wheel under ``tmp_path/dist``."""
     dist = tmp_path / "dist"
-    dist.mkdir()
+    dist.mkdir(exist_ok=True)
     return lambda *a, **k: write_wheel(dist, *a, **k)
 
 

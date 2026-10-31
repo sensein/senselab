@@ -104,9 +104,7 @@ def resolve_freeze_ref(root: Path = ROOT) -> str:
         LookupError: if neither exists, naming the fetch that creates it.
     """
     for ref in (f"origin/{FREEZE_BRANCH}", FREEZE_BRANCH):
-        probe = subprocess.run(
-            ["git", "rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], cwd=root, capture_output=True
-        )
+        probe = subprocess.run(["git", "rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], cwd=root, capture_output=True)
         if probe.returncode == 0:
             return ref
     raise LookupError(
@@ -181,9 +179,7 @@ def check(
             counted += size
         if rel.endswith(CODE_SUFFIXES):
             if code_max is not None and size > code_max:
-                out.append(
-                    f"{rel}: {size} bytes exceeds the {code_max} byte code-file limit; code is not a data carrier"
-                )
+                out.append(f"{rel}: {size} bytes exceeds the {code_max} byte code-file limit; code is not a data carrier")
         elif size > per_file and not any(fnmatch.fnmatch(rel, g) for g in generated):
             out.append(f"{rel}: {size} bytes exceeds the {per_file} byte per-file limit; {_FIX}")
     if counted > total:

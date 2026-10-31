@@ -3,6 +3,7 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 jobs:
   pypi-release:
@@ -27,10 +28,14 @@ jobs:
       shell: bash
     - name: Gate the release
       run: |
-        RELEASE_FLOOR=$(uv run --no-project python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['tool']['senselab']['release']['RELEASE_FLOOR'])")
-        uv run --no-project --with packaging python scripts/release_gate.py dist --floor "$RELEASE_FLOOR"
+        args=()
+        if [ "${{ github.event_name }}" = "release" ]; then
+          args=(--tag "${{ github.ref_name }}" --prerelease "${{ github.event.release.prerelease }}")
+        fi
+        uv run --no-project --python "${{ matrix.python-version }}" --with packaging python scripts/release_gate.py dist "${args[@]}"
       shell: bash
     - name: Publish to PyPI
+      if: github.event_name == 'release'
       env:
         UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
       run: uv publish dist/*

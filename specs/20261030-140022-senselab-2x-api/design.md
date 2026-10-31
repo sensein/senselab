@@ -621,6 +621,27 @@ isolated; senselab as a whole is not torch-free.
 **Python floors.** The uv workspace locks one `requires-python`, so the worker's floor is tested
 from the built wheel in a separate env.
 
+**Release gate (H7).** `scripts/release_gate.py` runs after `uv build --all-packages` and before any upload.
+- A version with a `.dev` segment is what hatch-vcs writes when HEAD is not on a release tag, so the gate
+  refuses dev, local and post versions and any version below `RELEASE_FLOOR` (`2.0.0a0`, read once from the
+  root pyproject, so every 2.0 pre-release is publishable).
+- `git describe` picks one tag when several sit on a commit, so a release for the other tag would publish the
+  wrong version. The job passes `github.ref_name` and `github.event.release.prerelease`; the built version must
+  equal the normalised tag and match the flag.
+- The dependency graph is declared once (root pins core, core pins worker, worker pins nothing) and the gate
+  requires each edge as exactly `==version`. Checking only the pins that are present passes a release whose
+  hook stopped writing them.
+- Each distribution is installed alone, from wheel paths with dependency resolution on, into a fresh venv at its
+  floor Python (worker 3.10, core 3.11, root 3.12) and imported. One shared venv hides a dependency that only
+  a sibling declares.
+- Every file in `dist/` is checked and `uv publish dist/*` uploads only those files. Untracked files under a
+  package root refuse the build, because hatch-vcs ignores them and they would ship in a clean-versioned wheel.
+- `senselab_core` compares its own version with the worker's at import only when both are non-editable
+  installs (PEP 610 `direct_url.json`). In a workspace the editable versions drift on every commit, and the
+  lock pins them instead.
+- `workflow_dispatch` runs the gate and cannot upload: the upload step carries
+  `if: github.event_name == 'release'`.
+
 ## 6. Migration
 
 ### 6.1 Strategy (in place on `alpha`, P-14, P-27)
