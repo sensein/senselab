@@ -1,6 +1,6 @@
 """Fail when committed test fixtures exceed the data-policy budget.
 
-Scans every tracked non-source file under `src/tests/` and `packages/*/tests/`. Allowlisted
+Scans every tracked non-code file under `src/tests/` and `packages/*/tests/`. Allowlisted
 (grandfathered) files are listed as `path bytes` in `fixture_budget_allowlist.txt`; they do not count
 toward the budgets, and may not grow past the recorded size. Usage::
 
@@ -18,8 +18,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWLIST = Path(__file__).resolve().parent / "fixture_budget_allowlist.txt"
 TEST_TREES = ("src/tests/*", "packages/*/tests/*")
-SOURCE_SUFFIXES = (".py", ".pyi", ".mjs", ".md", ".toml", ".yaml", ".json")
-"""Text sources that are code or configuration rather than fixtures; every other tracked file is scanned."""
+SOURCE_SUFFIXES = (".py", ".pyi", ".mjs")
+"""Code suffixes present under the test trees; every other tracked file, data formats included, is scanned."""
 PER_FILE = 256 * 1024
 TOTAL = 2 * 1024 * 1024
 _FIX = "generate it with senselab_core.testing.synth, or pull it through a data manifest"

@@ -90,6 +90,23 @@ def test_main_catches_new_large_wav_anywhere_in_test_trees(tmp_path: Path, where
     assert budget.is_fixture(where) and not budget.is_fixture("src/tests/big_test.py")
 
 
+def test_large_json_is_caught_and_py_is_not_counted(tmp_path: Path) -> None:
+    """A new large `.json` (or yaml, md, toml) under src/tests counts toward the budget; code does not."""
+    for ext in ("json", "yaml", "md", "toml"):
+        assert budget.is_fixture(f"src/tests/x/data.{ext}")
+    path = _repo(tmp_path, {"src/tests/x/data.json": 300 * 1024, "src/tests/x/big_test.py": 3 * 1024 * 1024}, "")
+    assert budget.main(tmp_path, path) == 1
+    path.write_text("src/tests/x/data.json 307200\n")
+    assert budget.main(tmp_path, path) == 0
+
+
+def test_allowlist_has_no_dead_entries() -> None:
+    """Every allowlist entry names a tracked file the check scans."""
+    allow = budget.parse_allowlist(budget.ALLOWLIST.read_text())
+    tracked = set(budget._tracked(budget.ROOT))
+    assert allow and set(allow) <= tracked
+
+
 def test_budget_passes_on_current_tree() -> None:
     """The script exits 0 on the committed tree."""
     assert subprocess.run([sys.executable, str(_SCRIPT)], capture_output=True).returncode == 0
