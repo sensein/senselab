@@ -142,11 +142,6 @@ class Registry:
         """Return the declared tasks."""
         return list(self._tasks.values())
 
-    def task(self, name: str) -> TaskSpec:
-        """Return the task named `name`, or raise `UnknownTask`."""
-        self._task_backends(name)
-        return self._tasks[name]
-
     def backends(self, task: str) -> list[BackendSpec]:
         """Return the backends of `task`, or raise `UnknownTask`."""
         return list(self._task_backends(task).values())
@@ -169,11 +164,14 @@ def key_for(
     params: BaseModel,
     inputs: Mapping[str, str],
     model: str | None = None,
+    profile_slices: Mapping[str, str] | None = None,
 ) -> LogicalKey:
     """Return the logical key of calling `backend` for `task` (ADR-002).
 
     `params` is an instance of the task's params model; `inputs` maps each declared input port, and
-    no other, to its content or upstream output identity; `model` is the weight identity.
+    no other, to its content or upstream output identity; `model` is the weight identity;
+    `profile_slices` maps each profile slice the call reads to its identity. Batch formation and
+    chunk grid are not set: `BackendSpec.output_affecting` does not reach the key yet.
 
     Raises:
         ValueError: if the backend implements another task, or params or inputs do not match the task.
@@ -192,4 +190,5 @@ def key_for(
         model=model,
         params=params.model_dump(mode="json"),
         inputs=inputs,
+        profile_slices=profile_slices or {},
     )

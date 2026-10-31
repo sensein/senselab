@@ -4,9 +4,11 @@ Importing this module declares both in `REGISTRY`. Each output `value` is the sh
 item's inputs and the params; `FakeFaults` injects the declared fault model.
 """
 
+import contextlib
 import dataclasses
 import sys
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +63,18 @@ def faults_json(faults: FakeFaults) -> dict[str, Any]:
     return {k: sorted(v) if isinstance(v, frozenset) else v for k, v in dataclasses.asdict(faults).items()}
 
 
+@contextlib.contextmanager
+def fake_worker(faults: FakeFaults, *, array_dir: Path | None = None) -> Iterator[WorkerClient]:
+    """Yield a client over a fresh fake worker injecting `faults`; stop it and remove `array_dir` on exit.
+
+    `array_dir` defaults to a temporary directory.
+    """
+    with tempfile.TemporaryDirectory(prefix="senselab-fake-") as scratch:
+        target = array_dir if array_dir is not None else Path(scratch) / "arrays"
+        with WorkerClient(sys.executable, WORKER_MODULE, init={"faults": faults_json(faults)}, array_dir=target) as w:
+            yield w
+
+
 def run_fake(
     items: list[dict[str, Any]],
     params: dict[str, Any],
@@ -76,7 +90,5 @@ def run_fake(
     Raises:
         ProtocolError, WorkerLost, WorkerFatal: infrastructure faults, such as a `crash_after` crash.
     """
-    with tempfile.TemporaryDirectory(prefix="senselab-fake-") as scratch:
-        target = array_dir if array_dir is not None else Path(scratch) / "arrays"
-        with WorkerClient(sys.executable, WORKER_MODULE, init={"faults": faults_json(faults)}, array_dir=target) as w:
-            return w.run(items, params)
+    with fake_worker(faults, array_dir=array_dir) as w:
+        return w.run(items, params)

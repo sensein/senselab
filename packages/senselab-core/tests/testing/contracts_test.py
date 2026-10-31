@@ -1,15 +1,18 @@
 """Generated contract tests over the registry (testing.md §3), and checks that each contract can fail."""
 
+import subprocess
+import sys
+import unittest
 from collections.abc import Callable
 from typing import Any
 
 import pytest
 import senselab_core.runtime.fake_backend  # noqa: F401  registers fake.echo and its backend
 from pydantic import BaseModel, ConfigDict
-from senselab_core.kernel.declare import REGISTRY, BackendSpec, Registry, TaskParams, TaskSpec
+from senselab_core.kernel.declare import REGISTRY, BackendSpec, Registry, TaskParams, TaskSpec, key_for
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey
 from senselab_core.runtime.fake_backend import FAKE
-from senselab_core.testing.contracts import contract_cases
+from senselab_core.testing.contracts import NOT_YET_WIRED, NoContractRunner, contract_cases
 
 
 @pytest.mark.contract
@@ -56,16 +59,20 @@ def _registry(task: dict[str, Any], backend: dict[str, Any] | None = None) -> Re
     return registry
 
 
-def _case(registry: Registry, name: str) -> Callable[[], None]:
-    return dict(contract_cases(registry))[name]
+def _case(registry: Registry, name: str, **kwargs: Any) -> Callable[[], None]:  # noqa: ANN401
+    return dict(contract_cases(registry, **kwargs))[name]
 
 
 @pytest.mark.logic
 def test_a_good_declaration_passes_every_offline_case() -> None:
     """The fixture declaration is valid, so the failures below come from the one defect each introduces."""
     for name, case in contract_cases(_registry({})):
-        if not name.endswith("content_fault_isolated"):
+        if name.endswith("content_fault_isolated"):
+            continue
+        try:
             case()
+        except unittest.SkipTest:
+            assert name.removeprefix("fake::key_changes_with_") in NOT_YET_WIRED
 
 
 class _Lax(BaseModel):
@@ -114,3 +121,65 @@ def test_a_backend_shared_by_name_across_tasks_is_qualified() -> None:
     ids = {name for name, _ in contract_cases(registry)}
     assert {"t.bad/fake::license_present", "t.two/fake::license_present"} <= ids
     assert "fake::license_present" not in ids
+
+
+def _drops_params(task: TaskSpec, backend: BackendSpec, *, params: BaseModel, **call: Any) -> LogicalKey:  # noqa: ANN401
+    return key_for(task, backend, params=task.params(), **call)
+
+
+def _drops_inputs(task: TaskSpec, backend: BackendSpec, *, inputs: dict[str, str], **call: Any) -> LogicalKey:  # noqa: ANN401
+    return key_for(task, backend, inputs={port: "fixed" for port in task.inputs}, **call)
+
+
+def _drops_model(task: TaskSpec, backend: BackendSpec, *, model: str | None, **call: Any) -> LogicalKey:  # noqa: ANN401
+    return key_for(task, backend, **call)
+
+
+def _drops_profile_slices(task: TaskSpec, backend: BackendSpec, *, profile_slices: Any, **call: Any) -> LogicalKey:  # noqa: ANN401
+    return key_for(task, backend, **call)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "builder,field",
+    [
+        (_drops_params, "params"),
+        (_drops_inputs, "inputs"),
+        (_drops_model, "model"),
+        (_drops_profile_slices, "profile_slices"),
+    ],
+    ids=["drops_params", "drops_inputs", "drops_model", "drops_profile_slices"],
+)
+def test_a_key_builder_that_drops_a_component_fails_its_case(builder: Callable[..., LogicalKey], field: str) -> None:
+    """The key cases go through the key builder, so one that ignores a call component fails that case only."""
+    registry = _registry({})
+    with pytest.raises(AssertionError, match=field):
+        _case(registry, f"fake::key_changes_with_{field}", key_builder=builder)()
+    _case(registry, "fake::key_changes_with_task", key_builder=builder)()
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("field", sorted(NOT_YET_WIRED))
+def test_unwired_key_fields_skip_naming_their_owner(field: str) -> None:
+    """A key field no call can set yet is listed, and its case skips with the owner rather than passing."""
+    assert field in LogicalKey.model_fields
+    with pytest.raises(unittest.SkipTest, match="owner"):
+        _case(_registry({}), f"fake::key_changes_with_{field}")()
+
+
+@pytest.mark.logic
+def test_a_stack_without_a_runner_is_refused() -> None:
+    """A backend on a stack with no contract runner fails case generation instead of getting fewer cases (P-34)."""
+    with pytest.raises(NoContractRunner, match="'venv'"):
+        contract_cases(_registry({}, {"stack": "venv"}))
+
+
+@pytest.mark.logic
+def test_importing_the_contracts_module_registers_nothing() -> None:
+    """Only importing the fake stack declares `fake.echo`; the contracts module alone leaves REGISTRY empty."""
+    code = (
+        "import senselab_core.testing.contracts\n"
+        "from senselab_core.kernel.declare import REGISTRY\n"
+        "assert REGISTRY.tasks() == [], REGISTRY.tasks()\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)

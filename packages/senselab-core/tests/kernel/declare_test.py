@@ -155,7 +155,9 @@ def test_output_affecting_names_only_key_components() -> None:
 @pytest.mark.logic
 def test_key_for_builds_the_logical_key() -> None:
     """The key carries the declared task and backend identities, the params' JSON and the input identities."""
-    key = key_for(_task(), _backend(), params=_Params(window=5), inputs={"audio": "a" * 64})
+    key = key_for(
+        _task(), _backend(), params=_Params(window=5), inputs={"audio": "a" * 64}, profile_slices={"p": "b" * 64}
+    )
     assert (key.task, key.task_version, key.backend, key.backend_version, key.model) == (
         "t.measure",
         "1",
@@ -165,6 +167,8 @@ def test_key_for_builds_the_logical_key() -> None:
     )
     assert dict(key.params) == {"window": 5}
     assert dict(key.inputs) == {"audio": "a" * 64}
+    assert dict(key.profile_slices) == {"p": "b" * 64}
+    assert (key.batch_formation, key.chunk_grid) == (None, None)
 
 
 class _Other(BaseModel):

@@ -114,6 +114,11 @@ class WorkerClient:
         """Whether the worker process is running and not discarded."""
         return not self._closed and self._proc is not None and self._proc.poll() is None
 
+    @property
+    def returncode(self) -> int | None:
+        """The worker process's exit code once it has been reaped, else `None`."""
+        return None if self._proc is None else self._proc.returncode
+
     def run(self, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
         """Run one request and return one result per item, in order.
 
