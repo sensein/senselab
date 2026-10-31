@@ -1,4 +1,9 @@
-"""Host CUDA probe and PyTorch wheel index picker for subprocess venvs.
+"""Host hardware probe, CUDA probe and PyTorch wheel index picker.
+
+``probe_hardware`` reports CPU count, memory, GPUs and platform without importing ``torch``;
+``numerics_class`` reduces that to the portable facts an execution context records.
+
+Host CUDA probe and PyTorch wheel index picker for subprocess venvs.
 
 Used by ``ensure_venv`` to route ``torch`` and ``torchaudio`` installs through
 the matching official PyTorch wheel index (``cu130`` / ``cu128`` / ``cu126`` /
@@ -16,10 +21,12 @@ or unusual hosts can override the chosen index via the
 from __future__ import annotations
 
 import logging
+import os
+import platform
 import re
 import subprocess
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 logger = logging.getLogger("senselab")
 
@@ -220,3 +227,115 @@ def pick_torch_index(
         cuda_version=None,
         source="static-map",
     )
+
+
+_MIB = 1024 * 1024
+_NVIDIA_SMI_GPU_QUERY = [
+    "nvidia-smi",
+    "--query-gpu=name,memory.total,driver_version",
+    "--format=csv,noheader,nounits",
+]
+
+
+@dataclass(frozen=True)
+class GpuInfo:
+    """One GPU as ``nvidia-smi`` reports it; ``memory_bytes`` is total device memory."""
+
+    name: str
+    memory_bytes: int
+    driver: Optional[str]
+
+
+@dataclass(frozen=True)
+class HardwareInfo:
+    """Host hardware facts, gathered without importing ``torch``.
+
+    ``gpu_probe_error`` is None when the GPU probe found nothing wrong, including when ``nvidia-smi`` is
+    absent. It carries a message when ``nvidia-smi`` exited non-zero or printed a line that could not be
+    parsed; ``gpus`` is then empty.
+    """
+
+    cpu_count: int
+    memory_bytes: int
+    gpus: tuple[GpuInfo, ...]
+    apple_silicon: bool
+    platform: str
+    gpu_probe_error: Optional[str] = None
+
+
+def _run(cmd: list[str]) -> str:
+    """Run ``cmd`` and return its stdout; raise on a missing binary, a timeout or a non-zero exit."""
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT_S, check=True).stdout
+
+
+def _parse_gpus(output: str) -> tuple[GpuInfo, ...]:
+    """Parse ``name, memory MiB, driver`` CSV lines; raise ``ValueError`` on any malformed line."""
+    gpus = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        fields = [f.strip() for f in line.split(",")]
+        if len(fields) != 3 or not fields[0] or not fields[1].isdigit():
+            raise ValueError(f"unparseable nvidia-smi line: {line!r}")
+        gpus.append(GpuInfo(name=fields[0], memory_bytes=int(fields[1]) * _MIB, driver=fields[2] or None))
+    return tuple(gpus)
+
+
+def _probe_gpus(run: Callable[[list[str]], str]) -> tuple[tuple[GpuInfo, ...], Optional[str]]:
+    try:
+        output = run(_NVIDIA_SMI_GPU_QUERY)
+    except (FileNotFoundError, PermissionError):
+        return (), None
+    except subprocess.CalledProcessError as exc:
+        message = f"nvidia-smi exited {exc.returncode}"
+    except subprocess.TimeoutExpired:
+        message = "nvidia-smi timed out"
+    else:
+        try:
+            return _parse_gpus(output), None
+        except ValueError as exc:
+            message = str(exc)
+    logger.warning("GPU probe found no GPUs: %s", message)
+    return (), message
+
+
+def _physical_memory_bytes() -> int:
+    try:
+        return int(os.sysconf("SC_PAGE_SIZE")) * int(os.sysconf("SC_PHYS_PAGES"))
+    except (ValueError, OSError, AttributeError):
+        return 0
+
+
+def probe_hardware(*, run: Callable[[list[str]], str] = _run) -> HardwareInfo:
+    """Probe CPU, memory, GPUs and platform; never imports ``torch``.
+
+    ``run`` executes the ``nvidia-smi`` query and returns stdout; tests inject it.
+    """
+    system = platform.system()
+    machine = platform.machine()
+    gpus, error = _probe_gpus(run)
+    return HardwareInfo(
+        cpu_count=os.cpu_count() or 1,
+        memory_bytes=_physical_memory_bytes(),
+        gpus=gpus,
+        apple_silicon=system == "Darwin" and machine == "arm64",
+        platform=f"{system.lower()}-{machine}",
+        gpu_probe_error=error,
+    )
+
+
+def numerics_class(info: HardwareInfo, device: str, precision: str) -> dict[str, str]:
+    """Portable numerics facts for an execution context: device kind, precision, GPU architecture.
+
+    ``device`` is a torch-style string (``cpu``, ``cuda``, ``cuda:1``, ``mps``). The GPU name stands in
+    for the architecture on ``cuda`` devices; ``mps`` reports ``apple-silicon``. The result never feeds
+    a logical key.
+    """
+    kind, _, index = device.partition(":")
+    facts = {"device_kind": kind, "precision": precision}
+    if kind == "cuda" and info.gpus:
+        position = int(index) if index.isdigit() and int(index) < len(info.gpus) else 0
+        facts["gpu_architecture"] = info.gpus[position].name
+    elif kind == "mps" and info.apple_silicon:
+        facts["gpu_architecture"] = "apple-silicon"
+    return facts

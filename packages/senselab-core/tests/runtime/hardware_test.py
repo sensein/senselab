@@ -1,18 +1,25 @@
-"""Unit tests for ``senselab.utils.cuda_probe``.
+"""Unit tests for ``senselab_core.runtime.hardware``.
 
 All ``subprocess.run`` calls are mocked — these tests must run on CPU-only
 CI without shelling out to ``nvidia-smi`` or ``nvcc``.
 """
 
 import subprocess
+import sys
+from typing import Callable
 from unittest.mock import patch
 
-from senselab.utils.cuda_probe import (
+import pytest
+from senselab_core.runtime.hardware import (
+    GpuInfo,
+    HardwareInfo,
     HostCuda,
     SenselabCudaCompatibilityError,
     TorchIndex,
     detect_host_cuda,
+    numerics_class,
     pick_torch_index,
+    probe_hardware,
 )
 
 
@@ -23,6 +30,7 @@ def _fake_run(returncode: int, stdout: str = "", stderr: str = "") -> subprocess
 # ── detect_host_cuda ─────────────────────────────────────────────────
 
 
+@pytest.mark.logic
 def test_detect_host_cuda_parses_nvidia_smi_header() -> None:
     """nvidia-smi prints `CUDA Version: 12.9` in its default header."""
     nvidia_smi_stdout = (
@@ -35,6 +43,7 @@ def test_detect_host_cuda_parses_nvidia_smi_header() -> None:
     assert host == HostCuda(version=(12, 9), source="nvidia-smi", raw="CUDA Version: 12.9")
 
 
+@pytest.mark.logic
 def test_detect_host_cuda_falls_through_to_nvcc_when_nvidia_smi_missing() -> None:
     """When nvidia-smi raises FileNotFoundError, nvcc must be tried next."""
     nvcc_stdout = "nvcc: NVIDIA (R) Cuda compiler driver\nrelease 12.4, V12.4.131\n"
@@ -52,6 +61,7 @@ def test_detect_host_cuda_falls_through_to_nvcc_when_nvidia_smi_missing() -> Non
     assert host == HostCuda(version=(12, 4), source="nvcc", raw="release 12.4")
 
 
+@pytest.mark.logic
 def test_detect_host_cuda_returns_none_when_both_probes_missing() -> None:
     """No CUDA tooling at all → source="none" + version=None."""
     with patch("subprocess.run", side_effect=FileNotFoundError("missing")):
@@ -59,6 +69,7 @@ def test_detect_host_cuda_returns_none_when_both_probes_missing() -> None:
     assert host == HostCuda(version=None, source="none", raw="")
 
 
+@pytest.mark.logic
 def test_detect_host_cuda_returns_none_when_nvidia_smi_succeeds_without_cuda_line() -> None:
     """Defensive: a future nvidia-smi that drops the header line falls through to nvcc, then none."""
 
@@ -76,6 +87,7 @@ def test_detect_host_cuda_returns_none_when_nvidia_smi_succeeds_without_cuda_lin
     assert host.source == "none"
 
 
+@pytest.mark.logic
 def test_detect_host_cuda_handles_timeout() -> None:
     """A hung nvidia-smi (rare but possible) must not block forever."""
     with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="nvidia-smi", timeout=5)):
@@ -87,6 +99,7 @@ def test_detect_host_cuda_handles_timeout() -> None:
 # ── pick_torch_index ─────────────────────────────────────────────────
 
 
+@pytest.mark.logic
 def test_pick_torch_index_cuda_12_9_chooses_cu128() -> None:
     """The headline case: a CUDA-12.9 host must route through the cu128 index."""
     host = HostCuda(version=(12, 9), source="nvidia-smi", raw="CUDA Version: 12.9")
@@ -97,6 +110,7 @@ def test_pick_torch_index_cuda_12_9_chooses_cu128() -> None:
     assert idx.source == "static-map"
 
 
+@pytest.mark.logic
 def test_pick_torch_index_cuda_12_8_chooses_cu128() -> None:
     """Exact match on a map entry returns that entry."""
     host = HostCuda(version=(12, 8), source="nvidia-smi", raw="CUDA Version: 12.8")
@@ -104,6 +118,7 @@ def test_pick_torch_index_cuda_12_8_chooses_cu128() -> None:
     assert idx.tag == "cu128"
 
 
+@pytest.mark.logic
 def test_pick_torch_index_cuda_12_1_chooses_cu121() -> None:
     """Lower CUDA versions resolve to lower index entries."""
     host = HostCuda(version=(12, 1), source="nvcc", raw="release 12.1")
@@ -112,6 +127,7 @@ def test_pick_torch_index_cuda_12_1_chooses_cu121() -> None:
     assert idx.cuda_version == (12, 1)
 
 
+@pytest.mark.logic
 def test_pick_torch_index_cuda_11_8_below_map_falls_to_cpu() -> None:
     """Hosts older than every map entry get CPU wheels — better than crashing."""
     host = HostCuda(version=(11, 8), source="nvcc", raw="release 11.8")
@@ -120,6 +136,7 @@ def test_pick_torch_index_cuda_11_8_below_map_falls_to_cpu() -> None:
     assert idx.cuda_version is None
 
 
+@pytest.mark.logic
 def test_pick_torch_index_no_cuda_chooses_cpu() -> None:
     """When the host has no CUDA at all, the picker returns the CPU index."""
     host = HostCuda(version=None, source="none", raw="")
@@ -129,6 +146,7 @@ def test_pick_torch_index_no_cuda_chooses_cpu() -> None:
     assert idx.source == "static-map"
 
 
+@pytest.mark.logic
 def test_pick_torch_index_ceiling_caps_modern_host_to_cu121() -> None:
     """The brouhaha case: a CUDA-12.8 host with a (12, 1) ceiling routes cu121, not cu128.
 
@@ -142,6 +160,7 @@ def test_pick_torch_index_ceiling_caps_modern_host_to_cu121() -> None:
     assert idx.source == "static-map"
 
 
+@pytest.mark.logic
 def test_pick_torch_index_ceiling_above_host_has_no_effect() -> None:
     """A ceiling higher than the host CUDA never raises the selected index."""
     host = HostCuda(version=(12, 1), source="nvcc", raw="release 12.1")
@@ -149,6 +168,7 @@ def test_pick_torch_index_ceiling_above_host_has_no_effect() -> None:
     assert idx.tag == "cu121"
 
 
+@pytest.mark.logic
 def test_pick_torch_index_ceiling_ignored_when_host_has_no_cuda() -> None:
     """On a CPU-only host the ceiling is moot — the CPU index is returned."""
     host = HostCuda(version=None, source="none", raw="")
@@ -156,6 +176,7 @@ def test_pick_torch_index_ceiling_ignored_when_host_has_no_cuda() -> None:
     assert idx.tag == "cpu"
 
 
+@pytest.mark.logic
 def test_pick_torch_index_env_override_beats_ceiling() -> None:
     """An explicit operator override wins over both host detection and the ceiling."""
     host = HostCuda(version=(12, 8), source="nvidia-smi", raw="CUDA Version: 12.8")
@@ -164,6 +185,7 @@ def test_pick_torch_index_env_override_beats_ceiling() -> None:
     assert idx.url == "https://mirror.example/cu999"
 
 
+@pytest.mark.logic
 def test_pick_torch_index_env_override_wins_over_host_cuda() -> None:
     """SENSELAB_TORCH_INDEX_URL must short-circuit the static map even on CUDA hosts."""
     host = HostCuda(version=(12, 9), source="nvidia-smi", raw="CUDA Version: 12.9")
@@ -174,6 +196,7 @@ def test_pick_torch_index_env_override_wins_over_host_cuda() -> None:
     assert idx.cuda_version is None
 
 
+@pytest.mark.logic
 def test_pick_torch_index_empty_string_override_treated_as_unset() -> None:
     """Bare ``SENSELAB_TORCH_INDEX_URL=`` (empty) must not be honored as an override."""
     host = HostCuda(version=(12, 9), source="nvidia-smi", raw="CUDA Version: 12.9")
@@ -185,6 +208,7 @@ def test_pick_torch_index_empty_string_override_treated_as_unset() -> None:
 # ── SenselabCudaCompatibilityError ───────────────────────────────────
 
 
+@pytest.mark.logic
 def test_compatibility_error_message_includes_diagnostic_fields() -> None:
     """The error message names host CUDA, attempted index, failing packages, and the recommended action."""
     host = HostCuda(version=(12, 9), source="nvidia-smi", raw="CUDA Version: 12.9")
@@ -207,6 +231,7 @@ def test_compatibility_error_message_includes_diagnostic_fields() -> None:
     assert "SENSELAB_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu" in msg
 
 
+@pytest.mark.logic
 def test_compatibility_error_message_handles_no_cuda_host() -> None:
     """The error formatter doesn't crash when there is no host CUDA version to print."""
     host = HostCuda(version=None, source="none", raw="")
@@ -220,23 +245,118 @@ def test_compatibility_error_message_handles_no_cuda_host() -> None:
 # ── pytest collection sanity check ───────────────────────────────────
 
 
+@pytest.mark.logic
 def test_module_exposes_expected_names() -> None:
-    """Guard against accidental rename of any public name from cuda_probe."""
-    from senselab.utils import cuda_probe
+    """Guard against accidental rename of any public name from hardware."""
+    from senselab_core.runtime import hardware
 
     for name in ("HostCuda", "TorchIndex", "SenselabCudaCompatibilityError", "detect_host_cuda", "pick_torch_index"):
-        assert hasattr(cuda_probe, name), f"cuda_probe missing public name: {name}"
+        assert hasattr(hardware, name), f"hardware missing public name: {name}"
 
 
+@pytest.mark.logic
 def test_pick_torch_index_cuda_13_stays_on_cu128_without_a_declared_ceiling() -> None:
     """A CUDA-13 host routes every venv that declares no ceiling to cu128, the default ceiling."""
     host = HostCuda(version=(13, 1), source="nvidia-smi", raw="CUDA Version: 13.1")
     assert pick_torch_index(host).tag == "cu128"
 
 
+@pytest.mark.logic
 def test_pick_torch_index_a_declared_cuda_13_ceiling_routes_cu130() -> None:
     """A venv whose wheels need CUDA 13 (vLLM's torch) declares (13, 0) and gets cu130 on a CUDA-13 host."""
     host = HostCuda(version=(13, 1), source="nvidia-smi", raw="CUDA Version: 13.1")
     assert pick_torch_index(host, max_cuda_version=(13, 0)).tag == "cu130"
     older = HostCuda(version=(12, 9), source="nvidia-smi", raw="CUDA Version: 12.9")
     assert pick_torch_index(older, max_cuda_version=(13, 0)).tag == "cu128"
+
+
+# ── probe_hardware ───────────────────────────────────────────────────
+
+
+def _smi(output: str) -> Callable[[list[str]], str]:
+    return lambda cmd: output
+
+
+def _raising(exc: Exception) -> Callable[[list[str]], str]:
+    def run(cmd: list[str]) -> str:
+        raise exc
+
+    return run
+
+
+@pytest.mark.logic
+def test_parses_two_gpus_from_nvidia_smi_csv() -> None:
+    """Two CSV lines give two GpuInfo with memory in bytes."""
+    info = probe_hardware(
+        run=_smi("NVIDIA H100 80GB HBM3, 81559, 550.54.15\nNVIDIA A100-SXM4-40GB, 40960, 550.54.15\n")
+    )
+    assert info.gpus == (
+        GpuInfo("NVIDIA H100 80GB HBM3", 81559 * 1024 * 1024, "550.54.15"),
+        GpuInfo("NVIDIA A100-SXM4-40GB", 40960 * 1024 * 1024, "550.54.15"),
+    )
+    assert info.gpu_probe_error is None
+    assert info.cpu_count >= 1
+
+
+@pytest.mark.logic
+def test_no_nvidia_smi_means_no_gpus() -> None:
+    """A missing binary is an absent GPU, not an error."""
+    info = probe_hardware(run=_raising(FileNotFoundError("nvidia-smi")))
+    assert info.gpus == () and info.gpu_probe_error is None
+
+
+@pytest.mark.logic
+def test_nonzero_exit_means_no_gpus_with_error() -> None:
+    """A failing nvidia-smi gives no GPUs and says so in gpu_probe_error."""
+    info = probe_hardware(run=_raising(subprocess.CalledProcessError(9, "nvidia-smi")))
+    assert info.gpus == () and info.gpu_probe_error == "nvidia-smi exited 9"
+
+
+@pytest.mark.logic
+def test_unparseable_output_means_no_gpus_with_error() -> None:
+    """Garbage output gives no GPUs and the typed gpu_probe_error field names the line."""
+    info = probe_hardware(run=_smi("NVIDIA-SMI has failed\n"))
+    assert info.gpus == ()
+    assert info.gpu_probe_error is not None and "NVIDIA-SMI has failed" in info.gpu_probe_error
+
+
+@pytest.mark.logic
+def test_apple_silicon_detected_from_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Darwin on arm64 is Apple silicon; Darwin on x86_64 and Linux on arm64 are not."""
+    for system, machine, expected in (
+        ("Darwin", "arm64", True),
+        ("Darwin", "x86_64", False),
+        ("Linux", "arm64", False),
+    ):
+        monkeypatch.setattr("platform.system", lambda s=system: s)
+        monkeypatch.setattr("platform.machine", lambda m=machine: m)
+        info = probe_hardware(run=_raising(FileNotFoundError()))
+        assert info.apple_silicon is expected
+        assert info.platform == f"{system.lower()}-{machine}"
+
+
+@pytest.mark.logic
+def test_probe_imports_no_torch() -> None:
+    """Importing the module and probing leaves torch out of sys.modules."""
+    code = (
+        "import sys\n"
+        "from senselab_core.runtime.hardware import probe_hardware\n"
+        "probe_hardware(run=lambda c: '')\n"
+        "assert 'torch' not in sys.modules\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+@pytest.mark.logic
+def test_numerics_class_reports_portable_facts_only() -> None:
+    """The class names device kind, precision and GPU architecture, nothing host-specific."""
+    gpu = GpuInfo("NVIDIA H100", 1, "550")
+    info = HardwareInfo(8, 1, (gpu,), False, "linux-x86_64")
+    assert numerics_class(info, "cuda:0", "bf16") == {
+        "device_kind": "cuda",
+        "precision": "bf16",
+        "gpu_architecture": "NVIDIA H100",
+    }
+    assert numerics_class(info, "cpu", "fp32") == {"device_kind": "cpu", "precision": "fp32"}
+    mac = HardwareInfo(8, 1, (), True, "darwin-arm64")
+    assert numerics_class(mac, "mps", "fp16")["gpu_architecture"] == "apple-silicon"

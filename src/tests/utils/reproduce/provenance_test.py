@@ -431,12 +431,13 @@ def _parameters(out: Path, prov: str = "prov") -> dict[str, Any]:
 @needs_userns
 def test_draw_and_engine_are_in_the_details(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The record's ``draw`` holds seeds, sampling, engine, concurrency, batch size, GPU, CUDA and env lock together."""
-    from senselab.utils import cuda_probe
+    from senselab_core.runtime import hardware
+
     from senselab.utils.reproduce import engine
     from tests.utils.reproduce.engine_test import DRIVER, _gpu
 
     monkeypatch.setattr(
-        cuda_probe, "detect_host_cuda", lambda: cuda_probe.HostCuda((13, 0), "nvidia-smi", "CUDA Version: 13.0")
+        hardware, "detect_host_cuda", lambda: hardware.HostCuda((13, 0), "nvidia-smi", "CUDA Version: 13.0")
     )
     world = _draw_world(tmp_path)
     manifest = world.manifest(_draw_step(world))
