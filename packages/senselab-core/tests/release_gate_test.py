@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+import http.server
 import importlib.util
 import io
 import json
@@ -11,6 +13,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import threading
 import tomllib
 import types
 import zipfile
@@ -20,6 +23,8 @@ from typing import Any
 
 import pytest
 import yaml
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from packaging.version import Version
 
 pytest_plugins = ["release_fixture"]
@@ -171,6 +176,7 @@ def test_main_refuses_and_names_the_reason(
     assert reason in capsys.readouterr().err
 
 
+PY_TAG = f"{sys.version_info.major}{sys.version_info.minor}"
 HERE_PYTHON = {name: f"{sys.version_info.major}.{sys.version_info.minor}" for name in gate.DISTRIBUTIONS}
 OK_MODULES: dict[str, dict[str, dict[str, str]]] = {
     "worker": {"modules": {"senselab_worker/__init__.py": "\n"}},
@@ -832,3 +838,265 @@ def test_release_gate_installs_dist(tagged_workspace: Callable[..., Path], tmp_p
     root = tagged_workspace([RELEASE_FLOOR])
     build(root, root / "dist", "--all-packages")
     assert gate.main(root / "dist", tag=RELEASE_FLOOR, prerelease=True, repo=root) == 0
+
+
+def _rows(wheel: Path) -> tuple[str, list[list[str]], dict[str, bytes]]:
+    """Return the wheel's RECORD name, its rows and every member's bytes."""
+    with zipfile.ZipFile(wheel) as archive:
+        members = {i.filename: archive.read(i) for i in archive.infolist()}
+    record = next(n for n in members if n.endswith(".dist-info/RECORD"))
+    rows = [r.split(",") for r in members[record].decode().splitlines() if r]
+    return record, rows, members
+
+
+def _write(wheel: Path, members: list[tuple[str, bytes]]) -> None:
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, data in members:
+            archive.writestr(name, data)
+
+
+def _mutate_record(wheel: Path, how: str) -> None:
+    """Rewrite ``wheel`` so that its RECORD and its members disagree in the way ``how`` names."""
+    record, rows, members = _rows(wheel)
+    module = next(r for r in rows if r[0].endswith(".py"))
+    if how == "row dropped":
+        rows.remove(module)
+    elif how == "row for an absent member":
+        rows.insert(0, ["pkg/absent.py", module[1], module[2]])
+    elif how == "wrong hash":
+        module[1] = "sha256=" + "A" * 43
+    elif how == "wrong size":
+        module[2] = str(int(module[2]) + 1)
+    elif how == "other algorithm":
+        module[1] = module[1].replace("sha256=", "sha512=")
+    elif how == "row repeated":
+        rows.insert(0, list(module))
+    elif how == "malformed row":
+        rows.insert(0, ["only-a-path"])
+    elif how == "record hashes itself":
+        rows[-1] = [record, module[1], module[2]]
+    lines = "\n".join(",".join(r) for r in rows) + "\n"
+    items = [(n, d) for n, d in members.items() if n != record]
+    if how == "member not in RECORD":
+        items.append(("senselab_worker/extra.py", b"X = 1\n"))
+    if how == "member repeated":
+        items.append((module[0], members[module[0]]))
+    _write(wheel, [*items, (record, lines.encode())])
+
+
+RECORD_MUTATIONS = [
+    "row dropped",
+    "row for an absent member",
+    "wrong hash",
+    "wrong size",
+    "other algorithm",
+    "row repeated",
+    "malformed row",
+    "record hashes itself",
+    "member not in RECORD",
+    "member repeated",
+]
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("how", RECORD_MUTATIONS)
+def test_wheel_record_must_list_exactly_its_members_with_their_hashes(how: str, fabricate: Callable[..., Path]) -> None:
+    """A RECORD listing a member too few or too many, or with another hash or size, is refused; the true one is not."""
+    wheel = fabricate("senselab-worker", "2.0.0", modules={"senselab_worker/__init__.py": "A = 1\n"})
+    assert gate.record_problems(wheel) == []
+    with pytest.warns(UserWarning) if how == "member repeated" else _no_warning():
+        _mutate_record(wheel, how)
+    assert gate.record_problems(wheel) != []
+
+
+class _no_warning:
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+def _repo_declaring(tmp_path: Path, scripts: dict[str, str], extra: str = "") -> Path:
+    """A repository whose worker pyproject declares ``scripts`` as ``[project.scripts]``, plus ``extra`` TOML."""
+    root = tmp_path / "repo" / "packages" / "senselab-worker"
+    root.mkdir(parents=True)
+    lines = ["[project]", 'name = "senselab-worker"', "[project.scripts]"]
+    lines += [f'{k} = "{v}"' for k, v in scripts.items()]
+    (root / "pyproject.toml").write_text("\n".join(lines) + "\n" + extra)
+    return tmp_path / "repo"
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize(
+    ("shipped", "same"),
+    [
+        ("[console_scripts]\nrun = senselab_worker.cli:main\n", True),
+        ("[console_scripts]\nrun=senselab_worker.cli:main\n", True),
+        (None, False),
+        ("", False),
+        ("[console_scripts]\nrun = senselab_worker.cli:other\n", False),
+        ("[console_scripts]\nRun = senselab_worker.cli:main\n", False),
+        ("[console_scripts]\nrun = senselab_worker.cli:main\nevil = os:system\n", False),
+        ("[console_scripts]\nrun = senselab_worker.cli:main\n[gui_scripts]\nrun = senselab_worker.cli:main\n", False),
+        ("[gui_scripts]\nrun = senselab_worker.cli:main\n", False),
+    ],
+)
+def test_entry_points_must_equal_the_pyproject_declaration(
+    shipped: str | None, same: bool, fabricate: Callable[..., Path], tmp_path: Path
+) -> None:
+    """``entry_points.txt`` passes only when its groups and names map to exactly what the pyproject declares."""
+    stem = "senselab_worker-2.0.0"
+    modules = {"senselab_worker/__init__.py": "\n"}
+    if shipped is not None:
+        modules[f"{stem}.dist-info/entry_points.txt"] = shipped
+    wheel = fabricate("senselab-worker", "2.0.0", modules=modules)
+    repo = _repo_declaring(tmp_path, {"run": "senselab_worker.cli:main"})
+    if same:
+        gate.check_wheel_metadata([wheel], repo)
+    else:
+        with pytest.raises(gate.GateError, match="entry_points.txt"):
+            gate.check_wheel_metadata([wheel], repo)
+
+
+@pytest.mark.logic
+def test_no_declared_entry_points_means_no_entry_points_file(fabricate: Callable[..., Path], tmp_path: Path) -> None:
+    """With nothing declared, a wheel without ``entry_points.txt`` passes and one carrying a script is refused."""
+    repo = _repo_declaring(tmp_path, {})
+    gate.check_wheel_metadata(
+        [fabricate("senselab-worker", "2.0.0", modules={"senselab_worker/__init__.py": ""})], repo
+    )
+    stem = "senselab_worker-2.0.0"
+    evil = {f"{stem}.dist-info/entry_points.txt": "[console_scripts]\nx = os:system\n"}
+    with pytest.raises(gate.GateError, match="entry_points.txt"):
+        gate.check_wheel_metadata([fabricate("senselab-worker", "2.0.0", modules=evil)], repo)
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize(
+    ("member", "allowed"),
+    [
+        ("senselab_worker-2.0.0.data/scripts/run-worker", ["packages/senselab-worker/bin/run.sh"]),
+        ("senselab_worker-2.0.0.data/scripts/other", []),
+        ("senselab_worker-2.0.0.data/purelib/run-worker", []),
+        ("senselab_worker-2.0.0.data/data/run-worker", []),
+        ("senselab_worker-9.9.9.data/scripts/run-worker", []),
+    ],
+)
+def test_data_scripts_ship_only_as_the_hatch_config_declares(member: str, allowed: list[str]) -> None:
+    """A ``.data/scripts`` member maps to its declared source; any other ``.data`` member maps to nothing."""
+    wheel = Path("senselab_worker-2.0.0-py3-none-any.whl")
+    scripts = {"run-worker": "packages/senselab-worker/bin/run.sh"}
+    root = Path("packages/senselab-worker")
+    assert gate._candidates(wheel, member, root, set(), {"senselab_worker": "x"}, scripts) == allowed
+
+
+@pytest.mark.env
+def test_a_real_build_passes_the_wheel_metadata_check(tagged_workspace: Callable[..., Path], tmp_path: Path) -> None:
+    """The RECORD and entry points a clean hatch build writes pass the checks."""
+    root = tagged_workspace(["2.0.0"])
+    built = _core_files(root, tmp_path / "out")
+    gate.check_wheel_metadata(built, root)
+
+
+UV_STEERING = [
+    "UV_INDEX_URL",
+    "UV_EXTRA_INDEX_URL",
+    "UV_INDEX",
+    "UV_DEFAULT_INDEX",
+    "UV_FIND_LINKS",
+    "UV_CONFIG_FILE",
+    "UV_INDEX_STRATEGY",
+    "UV_PRERELEASE",
+    "UV_CONSTRAINT",
+    "UV_OVERRIDE",
+    "UV_NO_INDEX",
+    "UV_SOME_FUTURE_SETTING",
+]
+
+
+@pytest.mark.contract
+@settings(max_examples=100, deadline=None)
+@given(
+    env=st.dictionaries(
+        st.sampled_from([*UV_STEERING, *sorted(gate.UV_KEPT), "PIP_INDEX_URL", "VIRTUAL_ENV", "PATH", "HOME", "LANG"]),
+        st.text(max_size=8),
+    )
+)
+def test_the_gate_environment_keeps_no_variable_that_steers_resolution(env: dict[str, str]) -> None:
+    """Every ``UV_*`` outside the kept set, ``PIP_*`` and ``VIRTUAL_ENV`` are removed; the rest pass unchanged."""
+    out = gate.gate_environment(env)
+    assert not [k for k in out if (k.startswith("UV_") and k not in gate.UV_KEPT) or k.startswith("PIP_")]
+    assert "VIRTUAL_ENV" not in out
+    assert {k: v for k, v in env.items() if k not in out} == {
+        k: v for k, v in env.items() if k.startswith(("UV_", "PIP_")) and k not in gate.UV_KEPT or k == "VIRTUAL_ENV"
+    }
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (("uv", "venv", "--python", "3.12", "v"), ("uv", "venv", "--no-config", "--python", "3.12", "v")),
+        (("uv", "pip", "install", "x"), ("uv", "pip", "install", "--no-config", "x")),
+        (("python", "-c", "pass"), ("python", "-c", "pass")),
+    ],
+)
+def test_every_uv_call_of_the_gate_ignores_configuration(
+    argv: tuple[str, ...], expected: tuple[str, ...], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_run`` adds ``--no-config`` to each uv command and runs it in the gate environment."""
+    seen: list[tuple[tuple[str, ...], dict[str, str]]] = []
+
+    def run(args: tuple[str, ...], **kwargs: Any) -> subprocess.CompletedProcess[str]:  # noqa: ANN401
+        seen.append((tuple(args), kwargs["env"]))
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setenv("UV_INDEX_URL", "http://127.0.0.1:9/simple")
+    monkeypatch.setattr(gate.subprocess, "run", run)
+    gate._run(*argv)
+    assert seen[0][0] == expected and "UV_INDEX_URL" not in seen[0][1]
+
+
+@pytest.mark.env
+def test_an_index_serving_a_same_version_first_party_wheel_cannot_win(
+    fabricate: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An impostor 2.0.0, tagged for this exact Python so it outranks dist's ``py3`` wheel, is never installed.
+
+    It is offered by every uv setting of the caller: index URLs, find-links, a config file and the index strategy.
+    """
+    _release(fabricate, "2.0.0", **OK_MODULES)
+    impostors = tmp_path / "impostors"
+    project = tmp_path / "index" / "simple" / "senselab-worker"
+    project.mkdir(parents=True)
+    impostors.mkdir()
+    for name, version in (("senselab-worker", "2.0.0"), ("senselab-core", "2.0.0")):
+        modules = {f"{name.replace('-', '_')}/__init__.py": "IMPOSTOR = 1\n"}
+        written = sys.modules["release_fixture"].write_wheel(impostors, name, version, modules=modules)
+        wheel = written.rename(written.with_name(written.name.replace("-py3-", f"-py{PY_TAG}-")))
+        shutil.copy(wheel, project / wheel.name)
+    (project / "index.html").write_text("".join(f'<a href="{p.name}">{p.name}</a>\n' for p in project.glob("*.whl")))
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(tmp_path / "index"))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/simple"
+        config = tmp_path / "uv.toml"
+        config.write_text(f'index-url = "{url}"\nfind-links = ["{impostors}"]\n')
+        for key, value in {
+            "UV_INDEX_URL": url,
+            "UV_DEFAULT_INDEX": url,
+            "UV_EXTRA_INDEX_URL": url,
+            "UV_INDEX": url,
+            "UV_FIND_LINKS": str(impostors),
+            "UV_CONFIG_FILE": str(config),
+            "UV_INDEX_STRATEGY": "unsafe-best-match",
+        }.items():
+            monkeypatch.setenv(key, value)
+        gate.check_installs(gate.dist_files(tmp_path / "dist"), HERE_PYTHON)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()

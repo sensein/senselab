@@ -6,7 +6,8 @@ Usage::
     uv run python scripts/release_gate.py dist [--tag TAG --prerelease true|false] [--floor VERSION]
 
 Exit status 0 means every file in ``dist/`` is a wheel or sdist of one of the three distributions at one
-releasable version, the sibling pins are exact, every file inside every artifact is a git-tracked file of its package, and each
+releasable version, the sibling pins are exact, every file inside every artifact is a git-tracked file of its package,
+each wheel's RECORD lists exactly its members with their hashes and its entry points are the declared ones, and each
 distribution installs on its own, with only its own siblings, into a fresh virtual environment at its floor
 Python and imports. The floor defaults to ``[tool.senselab.release] RELEASE_FLOOR`` in the root pyproject.
 """
@@ -15,8 +16,12 @@ from __future__ import annotations
 
 import argparse
 import base64
+import configparser
+import csv
 import hashlib
+import io
 import json
+import os
 import re
 import stat
 import subprocess
@@ -215,12 +220,93 @@ def _tracked(repo: Path) -> set[str]:
     return {p for p in done.stdout.decode().split("\0") if p}
 
 
+def _pyproject(repo: Path, root: Path) -> dict:
+    with (repo / root / "pyproject.toml").open("rb") as handle:
+        return tomllib.load(handle)
+
+
 def _wheel_sources(repo: Path, root: Path) -> dict[str, str]:
     """Map each top-level name a wheel of the distribution at ``root`` ships to its repo-relative source directory."""
-    with (repo / root / "pyproject.toml").open("rb") as handle:
-        config = tomllib.load(handle)
-    packages = config["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]
+    packages = _pyproject(repo, root)["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]
     return {Path(p).name: (root / p).as_posix() for p in packages}
+
+
+def _shared_scripts(repo: Path, root: Path) -> dict[str, str]:
+    """Map each ``.data/scripts/`` name the hatch wheel config declares to its repo-relative source file."""
+    wheel = _pyproject(repo, root)["tool"]["hatch"]["build"]["targets"]["wheel"]
+    return {dest: (root / src).as_posix() for src, dest in wheel.get("shared-scripts", {}).items()}
+
+
+def declared_entry_points(repo: Path, root: Path) -> dict[str, dict[str, str]]:
+    """Return the entry points the pyproject at ``root`` declares, by group, as ``entry_points.txt`` holds them."""
+    project = _pyproject(repo, root)["project"]
+    groups = {"console_scripts": project.get("scripts", {}), "gui_scripts": project.get("gui-scripts", {})}
+    groups.update(project.get("entry-points", {}))
+    return {group: dict(points) for group, points in groups.items() if points}
+
+
+def _entry_points(text: str) -> dict[str, dict[str, str]]:
+    parser = configparser.ConfigParser(delimiters=("=",), interpolation=None)
+    parser.optionxform = str  # type: ignore[assignment,method-assign]
+    parser.read_string(text)
+    return {group: dict(parser[group]) for group in parser.sections()}
+
+
+def check_wheel_metadata(files: list[Path], repo: Path) -> None:
+    """Require each wheel's RECORD to list its members with their hashes, and its entry points to be the declared ones.
+
+    Raises:
+        GateError: If a member is missing from RECORD or RECORD names an absent one, a row is repeated or its hash
+            or size differs from the member's bytes, or ``entry_points.txt`` differs from the declaration.
+    """
+    for path in files:
+        if path.suffix != ".whl":
+            continue
+        name = _metadata(path)[0]
+        problems = record_problems(path)
+        stem = "-".join(path.name.split("-")[:2])
+        members = dict((m, c) for m, c, _ in artifact_members(path))
+        shipped = members.get(f"{stem}.dist-info/entry_points.txt")
+        found = _entry_points(shipped.decode()) if shipped is not None else {}
+        declared = declared_entry_points(repo, Path(DIST_ROOTS[name]))
+        if found != declared:
+            problems.append(f"entry_points.txt holds {found}, the pyproject declares {declared}")
+        if problems:
+            raise GateError(f"{path.name}: {'; '.join(problems[:5])}")
+
+
+def record_problems(wheel: Path) -> list[str]:
+    """Return how the wheel's RECORD differs from its members: names, sha256 hashes and sizes, one entry each."""
+    with zipfile.ZipFile(wheel) as archive:
+        names = [i.filename for i in archive.infolist() if not i.is_dir()]
+        records = [n for n in names if re.fullmatch(r"[^/]+\.dist-info/RECORD", n)]
+        if len(records) != 1:
+            return [f"expected one dist-info/RECORD, found {len(records)}"]
+        (record,) = records
+        rows = list(csv.reader(io.StringIO(archive.read(record).decode("utf-8"))))
+        problems = [f"{n} appears {names.count(n)} times" for n in sorted(set(names)) if names.count(n) > 1]
+        listed: dict[str, list[str]] = {}
+        for row in rows:
+            if not row:
+                continue
+            if len(row) != 3:
+                problems.append(f"RECORD row {row} is not path,hash,size")
+            elif row[0] in listed:
+                problems.append(f"RECORD lists {row[0]} twice")
+            else:
+                listed[row[0]] = row
+        problems += [f"{n} is not in RECORD" for n in sorted(set(names) - set(listed))]
+        problems += [f"RECORD lists {n}, which the wheel lacks" for n in sorted(set(listed) - set(names))]
+        for member in sorted(set(names) & set(listed)):
+            _, digest, size = listed[member]
+            if member == record:
+                if digest or size:
+                    problems.append("RECORD records a hash or size for itself")
+                continue
+            data = archive.read(member)
+            if digest != _hash(data) or size != str(len(data)):
+                problems.append(f"{member} is recorded as {digest},{size}, holds {_hash(data)},{len(data)}")
+    return problems
 
 
 def _hash(data: bytes) -> str:
@@ -259,7 +345,9 @@ def artifact_members(path: Path) -> list[tuple[str, bytes | None, str | None]]:
     return out
 
 
-def _candidates(path: Path, member: str, root: Path, license_files: set[str], sources: dict[str, str]) -> list[str] | None:
+def _candidates(
+    path: Path, member: str, root: Path, license_files: set[str], sources: dict[str, str], scripts: dict[str, str]
+) -> list[str] | None:
     """Return the repo paths ``member`` may be a copy of, ``[]`` when none is allowed, ``None`` when generated."""
     posix = root.as_posix()
     if path.suffix == ".whl":
@@ -271,6 +359,8 @@ def _candidates(path: Path, member: str, root: Path, license_files: set[str], so
             if rest.startswith("licenses/") and rest.removeprefix("licenses/") in license_files:
                 return [(root / rest.removeprefix("licenses/")).as_posix()]
             return []
+        if top == f"{stem}.data" and rest.startswith("scripts/") and rest.removeprefix("scripts/") in scripts:
+            return [scripts[rest.removeprefix("scripts/")]]
         if top.endswith((".dist-info", ".data")) or top not in sources:
             return []
         return [f"{sources[top]}/{rest}"]
@@ -299,13 +389,14 @@ def check_contents(files: list[Path], repo: Path) -> None:
         name = _metadata(path)[0]
         root = Path(DIST_ROOTS[name])
         sources = _wheel_sources(repo, root) if path.suffix == ".whl" else {}
+        scripts = _shared_scripts(repo, root) if path.suffix == ".whl" else {}
         license_files = set(_message(path).get_all("License-File") or [])
         for member, content, problem in artifact_members(path):
             label = f"{path.name}:{member}"
             if problem:
                 stray.append(f"{label} ({problem})")
                 continue
-            candidates = _candidates(path, member, root, license_files, sources)
+            candidates = _candidates(path, member, root, license_files, sources, scripts)
             if candidates is None:
                 continue
             if not any(c in tracked and (repo / c).read_bytes() == content for c in candidates):
@@ -314,9 +405,38 @@ def check_contents(files: list[Path], repo: Path) -> None:
         raise GateError(f"artifacts hold files that are not copies of tracked files: {', '.join(stray[:5])}")
 
 
+UV_KEPT = frozenset(
+    {
+        "UV_CACHE_DIR",
+        "UV_PYTHON_INSTALL_DIR",
+        "UV_PYTHON_BIN_DIR",
+        "UV_HTTP_TIMEOUT",
+        "UV_CONCURRENT_DOWNLOADS",
+        "UV_NATIVE_TLS",
+        "UV_NO_PROGRESS",
+    }
+)
+"""The ``UV_*`` variables the gate passes on: where uv keeps its files and how it talks to the network."""
+
+
+def gate_environment(environ: Mapping[str, str]) -> dict[str, str]:
+    """Return ``environ`` without any ``UV_*`` variable outside ``UV_KEPT``, nor ``PIP_*`` or ``VIRTUAL_ENV``."""
+    return {
+        k: v
+        for k, v in environ.items()
+        if not (k.startswith("PIP_") or k == "VIRTUAL_ENV" or (k.startswith("UV_") and k not in UV_KEPT))
+    }
+
+
 def _run(*args: str) -> None:
-    """Run a command; raise ``GateError`` carrying its output on a non-zero status."""
-    done = subprocess.run(args, capture_output=True, text=True)
+    """Run a command in ``gate_environment``; a ``uv`` command also gets ``--no-config``.
+
+    Raises:
+        GateError: carrying the command's output on a non-zero status.
+    """
+    if args[0] == "uv":
+        args = (*args[: 3 if args[1] == "pip" else 2], "--no-config", *args[3 if args[1] == "pip" else 2 :])
+    done = subprocess.run(args, capture_output=True, text=True, env=gate_environment(os.environ))
     if done.returncode != 0:
         raise GateError(f"{' '.join(args)} failed ({done.returncode}):\n{done.stdout}{done.stderr}")
 
@@ -361,8 +481,10 @@ def check_installs(files: list[Path], pythons: Mapping[str, str]) -> None:
     """Install each distribution alone into its own fresh venv at ``pythons[name]``, check its siblings, import it.
 
     Only the distribution's own wheel is passed by path. Its siblings must be reached by the resolver through
-    ``--find-links`` on the directory of ``files``, in an install that neither reads nor writes any uv cache
-    (``--no-cache``), so a cached wheel of the same name and version cannot stand in for the one in ``dist/``.
+    ``--find-links`` on the directory of ``files``, with no index (``--no-index``), in an install that neither
+    reads nor writes any uv cache (``--no-cache``), so neither a cached wheel nor an index serving the same name
+    and version can stand in for the one in ``dist/``. Every ``uv`` call runs with ``--no-config`` in
+    ``gate_environment``, so no configuration file or variable of the caller redirects resolution.
     The third-party requirements of the distribution and its siblings are installed first, by name, through the
     host's cache, which no first-party wheel enters. Each sibling must then be installed with the version and
     file hashes of the wheel in ``dist/``, not merely the version.
@@ -391,7 +513,8 @@ def check_installs(files: list[Path], pythons: Mapping[str, str]) -> None:
             requirements = [r for n in (name, *siblings) for r in third_party[n]]
             if requirements:
                 _run("uv", "pip", "install", "--python", interpreter, *requirements)
-            install = ("uv", "pip", "install", "--no-cache", "--python", interpreter, "--find-links", str(links))
+            install = ("uv", "pip", "install", "--no-cache", "--no-index", "--python", interpreter)
+            install += ("--find-links", str(links))
             _run(*install, str(wheels[name]))
             _run(interpreter, "-c", _VERIFY + f"import {IMPORTS[name]}", json.dumps(siblings))
 
@@ -416,6 +539,7 @@ def main(
         check_closure([p for p in files if p.suffix == ".whl"])
         if repo is not None:
             check_contents(files, repo)
+            check_wheel_metadata(files, repo)
         check_installs(files, pythons or floor_pythons())
     except GateError as exc:
         print(f"release gate refused: {exc}", file=sys.stderr)

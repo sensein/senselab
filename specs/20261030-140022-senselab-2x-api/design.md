@@ -650,6 +650,20 @@ from the built wheel in a separate env.
   lock pins them instead.
 - `workflow_dispatch` runs the gate and cannot upload: the upload step carries
   `if: github.event_name == 'release'`.
+- Each wheel's RECORD must list exactly its zip members, each once, with the sha256 and size of its bytes
+  (RECORD itself with neither), and its `entry_points.txt` must equal what the pyproject declares
+  (`[project.scripts]` as `console_scripts`, `[project.gui-scripts]`, `[project.entry-points.*]`); a wheel
+  that declares none carries none. A `.data/scripts/<name>` member ships only where the hatch wheel config
+  declares it in `shared-scripts`, as a byte copy of its declared source; every other `.data` member is refused.
+- A tracked file that is modified but not committed is not caught: the contents check compares artifact bytes
+  with the working tree, and hatch-vcs writes a `.dev`/local version only for a dirty tree when the tag is not
+  on HEAD. Tagged CI is not exposed, because the publish job builds from a fresh checkout of the tag, where no
+  file can differ from the commit. A local build from a dirty tree at a tag can ship the modification.
+- The gate's subprocesses run with `--no-config` on every `uv` call and an environment without `PIP_*`,
+  `VIRTUAL_ENV` and every `UV_*` variable except those naming uv's own directories and network behaviour
+  (`UV_KEPT`). The first-party install runs with `--no-index`, so a caller's index, find-links or config file
+  serving a same-version first-party wheel, even one with a more specific tag, cannot replace the one in
+  `dist/`. Third-party requirements still come from the default index.
 
 ## 6. Migration
 
