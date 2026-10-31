@@ -1,20 +1,50 @@
-code_file_max_bytes: 524288
-code_total_max_bytes: 12582912
+code_file_max_bytes:
+  measured: 189299
+  headroom: 2.77
+code_total_max_bytes:
+  measured: 16884936
+  headroom: 1.5
+data_file_max_bytes:
+  measured: 254841
+  headroom: 1.03
+data_total_max_bytes:
+  measured: 18200542
+  headroom: 1.25
+test_data_total_max_bytes:
+  measured: 148716
+  headroom: 14
 generated_files:
-- uv.lock
-- src/senselab/utils/data/venv_locks/*.txt
+  uv.lock: uv-lock
+  src/senselab/utils/data/venv_locks/nemo-canary-qwen.txt: venv-lock
+  src/senselab/utils/data/venv_locks/nemo-diarization.txt: venv-lock
+  src/senselab/utils/data/venv_locks/pii-review-vllm.txt: venv-lock
+  src/senselab/utils/data/venv_locks/vllm-server.txt: venv-lock
 derivation: |
-  code_file_max_bytes: the largest tracked code file (.py, .pyi, .ipynb) is
-  src/tests/audio/workflows/triage/nodes/speech_test.py at 189306 bytes, measured with `git ls-files` on
-  2026-10-31. The cap is 512 KiB, 2.77 times that, so hand-written code is never near it while a
-  committed base64 payload in a .py file (the bypass that motivated the cap: a 5 MB blob in a .py was
-  exempt from the fixture limit) is refused.
-  code_total_max_bytes: the code files (.py, .pyi, .ipynb) under src/tests/ and packages/*/tests/ total
-  7511605 bytes in 478 files, measured with `git ls-files` on 2026-10-31. The cap is 12 MiB, 1.68 times
-  that: about 5 MB of headroom, the size of ten code files at code_file_max_bytes, so ordinary test growth
-  passes while the bypass the per-file cap leaves open (many code files each just under it, each carrying a
-  payload) is refused. The 1.x half of the test trees shrinks as modules move to packages/; re-measure and
-  lower the cap when it does.
-  generated_files: files that `uv lock` and scripts/lock_subprocess_venvs.py rewrite. Their size follows the
-  dependency set, not an author's choice, so a byte cap would fail every dependency bump. They are the only
-  non-code files exempt from the per-file limit.
+  Every cap is `measured` times `headroom`, rounded down. `measured` is the quantity the cap bounds, measured by
+  scripts/check_fixture_budget.py on the freeze branch freeze-1x-2026-10-30 over every regular file of its tree
+  (allowlisted files left out of the data quantities, generated files left out of the largest data file only);
+  the script recomputes it on every run and fails if the recorded number differs, so a cap moves only when its
+  headroom does.
+  code_file_max_bytes: the largest code file (.py, .pyi, .ipynb) at the freeze is
+  src/tests/audio/workflows/triage/nodes/speech_test.py at 189299 bytes. Headroom 2.77 gives 524358 bytes,
+  about 512 KiB: hand-written code is never near it, while a committed base64 payload in a .py file (a 5 MB blob
+  in a .py was the bypass that motivated the cap) is refused.
+  code_total_max_bytes: the code files of the whole tree total 16884936 bytes at the freeze; on 2026-10-31 the
+  index held 18189856 (1.08 times). Headroom 1.5 gives 25327404 bytes, room for the 2.x packages to grow while
+  many code files each just under the per-file cap, each carrying a payload, are refused. Re-measure and lower
+  the headroom when the 1.x tree shrinks.
+  data_file_max_bytes: the largest data file that is neither allowlisted nor generated at the freeze is
+  src/senselab/audio/workflows/triage/viewer/recording_vectors_viewer.html at 254841 bytes. Headroom 1.03 gives
+  262486 bytes, the 256 KiB per-file limit of the data policy (P-41) with that file inside it.
+  data_total_max_bytes: data files that are not allowlisted total 18200542 bytes across the whole tree at the
+  freeze, generated locks included; on 2026-10-31 the index held 18910274 (1.04 times). Headroom 1.25 gives
+  22750677 bytes: about 3.8 MB above the index, the size of fifteen files at the per-file cap, so lock churn and
+  ordinary documents pass while a bulk of files each under the per-file cap (60 x 250 KB = 15 MB) is refused.
+  test_data_total_max_bytes: data files under src/tests/ and packages/*/tests/ that are not allowlisted total
+  148716 bytes at the freeze. Headroom 14 gives 2082024 bytes, the 2 MiB test-fixture budget of the data policy (P-41):
+  new fixtures are generated (senselab_core.testing.synth) or fetched through a data manifest, not committed.
+  generated_files: files that `uv lock` and scripts/lock_subprocess_venvs.py rewrite and that exceed the per-file
+  cap at the freeze. Their size follows the dependency set, not an author's choice, so a per-file cap would fail
+  every dependency bump. Each entry is one exact path of the freeze and must parse as the lock kind it names; it
+  is still counted in data_total_max_bytes. A lock that newly exceeds the per-file cap is a policy change, made by
+  re-measuring at a new freeze.

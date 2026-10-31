@@ -1,13 +1,15 @@
-"""The fixture budget flags new large files and growth, binds its allowlist to the freeze, and scans every path."""
+"""The fixture budget counts every tracked object, binds its allowlist and its policy to the freeze, and caps totals."""
 
 import hashlib
 import importlib.util
-import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 pytestmark = pytest.mark.logic
 
@@ -20,27 +22,48 @@ _spec.loader.exec_module(budget)
 
 FREEZE = budget.FREEZE_BRANCH
 SHA0 = "0" * 64
+LIMITS = {
+    "code_file_max_bytes": 1000,
+    "code_total_max_bytes": 5000,
+    "data_file_max_bytes": 500,
+    "data_total_max_bytes": 4000,
+    "test_data_total_max_bytes": 2000,
+}
+Obj = budget.TrackedObject
 
 
-def _file(root: Path, name: str, size: int) -> Path:
-    """Write `size` zero bytes at `root/name`."""
+def _file(root: Path, name: str, size: int, fill: bytes = b"\0") -> Path:
+    """Write `size` bytes of `fill` at `root/name`."""
     path = root / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"\0" * size)
+    path.write_bytes(fill * size)
     return path
 
 
-def _git(root: Path, *args: str) -> None:
-    subprocess.run(
+def _git(root: Path, *args: str) -> str:
+    return subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", *args],
         cwd=root,
         check=True,
         capture_output=True,
-    )
+        text=True,
+    ).stdout
 
 
 def _line(name: str, size: int, *, fill: bytes = b"\0") -> str:
     return f"{name}\t{hashlib.sha256(fill * size).hexdigest()}\t{size}\n"
+
+
+def _policy(root: Path, *, generated: dict[str, str] | None = None, measured: dict[str, int] | None = None) -> Path:
+    """A policy for the throwaway repo `root`: each cap's `measured` is what its freeze measures, unless overridden."""
+    allow_path = root / "allow.txt"
+    allow = budget.parse_allowlist(allow_path.read_text()) if allow_path.exists() else {}
+    generated = generated or {}
+    actual = budget.measure(budget.frozen_objects(root, FREEZE), allow, generated)
+    caps = {n: {"measured": (measured or {}).get(n, actual[n]), "headroom": 2} for n in budget.CAPS}
+    path = root / "policy.yaml"
+    path.write_text(yaml.safe_dump({**caps, "generated_files": generated, "derivation": "test"}))
+    return path
 
 
 def _repo(root: Path, frozen: dict[str, int], later: dict[str, int], allowlist: str) -> Path:
@@ -59,27 +82,22 @@ def _repo(root: Path, frozen: dict[str, int], later: dict[str, int], allowlist: 
     return path
 
 
-def test_budget_flags_large_new_file(tmp_path: Path) -> None:
-    """A new file over the per-file limit yields one message naming it, its size and the fix."""
-    big = _file(tmp_path, "tests/data/big.wav", 300 * 1024)
-    msgs = budget.check([big], allow={}, root=tmp_path)
-    assert len(msgs) == 1 and "tests/data/big.wav" in msgs[0] and "262144" in msgs[0] and "generate" in msgs[0]
+def _main(root: Path, allow: Path, **measured: int) -> int:
+    return budget.main(root, allow, _policy(root, measured=measured))
 
 
-def test_budget_allows_grandfathered(tmp_path: Path) -> None:
-    """An allowlisted file is spared at its recorded size and flagged once it grows."""
-    big = _file(tmp_path, "tests/data/big.wav", 300 * 1024)
-    assert budget.check([big], allow={"tests/data/big.wav": 300 * 1024}, root=tmp_path) == []
-    grown = budget.check([big], allow={"tests/data/big.wav": 1000}, root=tmp_path)
+def test_budget_flags_large_new_file() -> None:
+    """A new data file over the per-file limit yields one message naming it, its size, the limit and the fix."""
+    msgs = budget.check([Obj("tests/data/big.wav", "100644", "x", 600)], allow={}, limits=LIMITS)
+    assert len(msgs) == 1 and "tests/data/big.wav" in msgs[0] and "500" in msgs[0] and "generate" in msgs[0]
+
+
+def test_budget_allows_grandfathered() -> None:
+    """An allowlisted file is spared at its recorded size, left out of the totals, and flagged once it grows."""
+    big = Obj("src/tests/data/big.wav", "100644", "x", 9000)
+    assert budget.check([big], allow={big.path: 9000}, limits=LIMITS) == []
+    grown = budget.check([big], allow={big.path: 1000}, limits=LIMITS)
     assert len(grown) == 1 and "grew" in grown[0]
-
-
-def test_budget_total_counts_only_non_allowlisted(tmp_path: Path) -> None:
-    """Only non-allowlisted test-tree fixtures count toward the total."""
-    names = [f"src/tests/d/{i}.bin" for i in range(11)]
-    files = [_file(tmp_path, n, 200 * 1024) for n in names]
-    assert any("total" in m for m in budget.check(files, allow={}, root=tmp_path))
-    assert budget.check(files, allow={n: 200 * 1024 for n in names}, root=tmp_path) == []
 
 
 def test_allowlist_parser_rejects_missing_and_malformed_columns() -> None:
@@ -97,21 +115,23 @@ def test_allowlist_parser_rejects_missing_and_malformed_columns() -> None:
 
 
 def test_main_passes_on_a_frozen_entry_and_catches_growth(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """A grandfathered file passes at its frozen bytes; one that grows or changes fails."""
+    """A grandfathered file passes at its frozen bytes; one whose indexed bytes grow or change fails."""
     name = "src/tests/data_for_testing/a.wav"
     allow = _repo(tmp_path, {name: 500}, {}, _line(name, 500))
-    assert budget.main(tmp_path, allow) == 0
-    (tmp_path / name).write_bytes(b"\0" * 600)
-    assert budget.main(tmp_path, allow) == 1 and "grew" in capsys.readouterr().out
-    (tmp_path / name).write_bytes(b"\1" * 500)
-    assert budget.main(tmp_path, allow) == 1 and "content differs" in capsys.readouterr().out
+    assert _main(tmp_path, allow) == 0
+    _file(tmp_path, name, 600)
+    _git(tmp_path, "add", name)
+    assert _main(tmp_path, allow) == 1 and "grew" in capsys.readouterr().out
+    _file(tmp_path, name, 500, b"\1")
+    _git(tmp_path, "add", name)
+    assert _main(tmp_path, allow) == 1 and "content differs" in capsys.readouterr().out
 
 
 def test_new_allowlist_entry_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """An entry for a path absent from the freeze fails, however large or well hashed the file."""
     name = "src/tests/data_for_testing/new.wav"
-    allow = _repo(tmp_path, {}, {name: 9 * 1024 * 1024}, _line(name, 9 * 1024 * 1024))
-    assert budget.main(tmp_path, allow) == 1
+    allow = _repo(tmp_path, {}, {name: 9 * 1024}, _line(name, 9 * 1024))
+    assert _main(tmp_path, allow) == 1
     assert f"{name}: not in" in capsys.readouterr().out
 
 
@@ -121,117 +141,223 @@ def test_entry_with_other_hash_or_larger_size_than_the_freeze_is_refused(
     """An entry must record the frozen content's hash and no more than its size."""
     name = "src/tests/data_for_testing/a.wav"
     allow = _repo(tmp_path, {name: 500}, {}, _line(name, 500, fill=b"\1"))
-    assert budget.main(tmp_path, allow) == 1 and "not the content" in capsys.readouterr().out
+    assert _main(tmp_path, allow) == 1 and "not the content" in capsys.readouterr().out
     allow.write_text(f"{name}\t{hashlib.sha256(bytes(500)).hexdigest()}\t900\n")
-    assert budget.main(tmp_path, allow) == 1 and "larger" in capsys.readouterr().out
+    assert _main(tmp_path, allow) == 1 and "larger" in capsys.readouterr().out
 
 
-def test_grown_fixture_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """A frozen fixture that grew past its frozen size fails even when the allowlist is edited to its new size."""
-    name = "src/tests/data_for_testing/a.wav"
-    allow = _repo(tmp_path, {name: 500}, {}, _line(name, 500))
-    _file(tmp_path, name, 700)
-    allow.write_text(_line(name, 700))
-    assert budget.main(tmp_path, allow) == 1
-    assert capsys.readouterr().out
-
-
-def test_large_code_file_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """A code file over the policy's cap fails in a non-test tree; a small one passes."""
-    cap = budget.load_policy().code_file_max_bytes
+def test_large_code_file_is_refused() -> None:
+    """A code file over the code-file cap fails wherever it is; a small one passes."""
     for suffix in ("py", "pyi", "ipynb"):
-        (tmp_path / suffix).mkdir()
-        allow = _repo(tmp_path / suffix, {}, {f"src/pkg/blob.{suffix}": cap + 1, "src/pkg/ok.py": 100}, "")
-        assert budget.main(tmp_path / suffix, allow) == 1
-        out = capsys.readouterr().out
-        assert f"src/pkg/blob.{suffix}" in out and "code-file limit" in out and "ok.py" not in out
+        msgs = budget.check(
+            [Obj(f"src/pkg/blob.{suffix}", "100644", "x", 1001), Obj("src/pkg/ok.py", "100644", "y", 100)],
+            allow={},
+            limits=LIMITS,
+        )
+        assert len(msgs) == 1 and f"src/pkg/blob.{suffix}" in msgs[0] and "code-file limit" in msgs[0]
 
 
-@pytest.mark.parametrize("count", [1, 2, 3, 4])
-@pytest.mark.parametrize("where", ["src/tests/x", "packages/senselab-core/tests/x", "src/senselab/x"])
-def test_code_files_under_test_trees_are_capped_in_total(tmp_path: Path, where: str, count: int) -> None:
-    """Code files each under the per-file cap are refused once their sum under the test trees passes the total."""
-    sizes = [400] * count
-    paths = [_file(tmp_path, f"{where}/m{i}.py", n) for i, n in enumerate(sizes)]
-    found = budget.check(paths, allow={}, root=tmp_path, code_max=500, code_total=1000)
-    over = where != "src/senselab/x" and sum(sizes) > 1000
-    assert [m for m in found if "total of code files" in m] == (
-        [
-            f"total of code files under the test trees: {sum(sizes)} bytes exceeds the 1000 byte limit; "
-            "code is not a data carrier"
-        ]
-        if over
-        else []
+@pytest.mark.parametrize("where", ["src/tests/x", "packages/senselab-core/tests/x", "src/senselab/x", "docs"])
+def test_code_files_are_capped_in_total_everywhere(where: str) -> None:
+    """Code files each under the per-file cap are refused once their sum across the whole tree passes the total."""
+    objects = [Obj(f"{where}/m{i}.py", "100644", str(i), 900) for i in range(6)]
+    msgs = budget.check(objects, allow={}, limits=LIMITS)
+    assert len(msgs) == 1 and "total of code files: 5400 bytes exceeds the 5000 byte limit" in msgs[0]
+
+
+def test_xg10_mjs_files_under_the_test_trees_count_as_data() -> None:
+    """A suffix that is not code is data: many `.mjs` files under the per-file cap exceed the test-tree total."""
+    objects = [Obj(f"src/tests/js/m{i}.mjs", "100644", str(i), 450) for i in range(5)]
+    msgs = budget.check(objects, allow={}, limits=LIMITS)
+    assert any("under the test trees: 2250 bytes" in m for m in msgs)
+
+
+def test_xg10_data_outside_the_test_trees_is_totalled() -> None:
+    """Data files under a package's data directory, each under the per-file cap, are capped in total."""
+    objects = [Obj(f"src/senselab/audio/data/f{i}.bin", "100644", str(i), 450) for i in range(10)]
+    msgs = budget.check(objects, allow={}, limits=LIMITS)
+    assert msgs and "total of non-allowlisted data files: 4500 bytes" in msgs[0]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/senselab/utils/data/venv_locks/sub/payload.txt",
+        "src/senselab/utils/data/venv_locks/payload.txt",
+        "src/senselab/utils/data/venv_locks/a.txt.bak",
+        "uv.lock.old",
+    ],
+)
+def test_xg10_an_exemption_covers_exactly_its_path(path: str) -> None:
+    """An exemption is one exact path: a sibling, a nested file or a similar name under it is capped."""
+    generated = {"uv.lock": "uv-lock", "src/senselab/utils/data/venv_locks/a.txt": "venv-lock"}
+    msgs = budget.check([Obj(path, "100644", "x", 900)], allow={}, limits=LIMITS, generated=generated)
+    assert len(msgs) == 1 and "per-file limit" in msgs[0]
+    assert budget.check([Obj("uv.lock", "100644", "x", 900)], allow={}, limits=LIMITS, generated=generated) == []
+
+
+@pytest.mark.parametrize(
+    "glob", ["src/senselab/utils/data/venv_locks/*.txt", "uv.lo?k", "[u]v.lock", "/uv.lock", "a/../b"]
+)
+def test_xg10_a_glob_or_unanchored_exemption_is_refused(glob: str, tmp_path: Path) -> None:
+    """The policy names exemptions by exact path; a glob, an absolute or a `..` path fails to load."""
+    path = tmp_path / "p.yaml"
+    data = yaml.safe_load(budget.POLICY.read_text())
+    data["generated_files"] = {glob: "venv-lock"}
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(ValueError, match="exact"):
+        budget.load_policy(path)
+
+
+def test_xg10_a_tracked_submodule_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A gitlink (mode 160000) is refused, whatever it holds."""
+    allow = _repo(tmp_path, {"a.txt": 10}, {}, "")
+    commit = _git(tmp_path, "rev-parse", "HEAD").strip()
+    _git(tmp_path, "update-index", "--add", "--cacheinfo", f"160000,{commit},src/tests/data/bigsubmodule")
+    assert _main(tmp_path, allow) == 1
+    assert "src/tests/data/bigsubmodule: tracked submodule" in capsys.readouterr().out
+
+
+def test_xg10_an_indexed_symlink_is_refused_with_no_link_in_the_work_tree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Mode 120000 is read from the index: a symlink absent from the checkout, or checked out as a file, fails."""
+    allow = _repo(tmp_path, {"real/a.txt": 10}, {}, "")
+    hashed = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=tmp_path, input=b"real/a.txt", capture_output=True, check=True
     )
-    allowed = budget.check(
-        paths,
-        allow={p.relative_to(tmp_path).as_posix(): 400 for p in paths},
-        root=tmp_path,
-        code_max=500,
-        code_total=1000,
-    )
-    assert allowed == []
-
-
-def test_policy_caps_are_positive_integers(tmp_path: Path) -> None:
-    """Each byte cap in the policy must be a positive integer; the shipped policy loads."""
-    assert budget.load_policy().code_total_max_bytes > budget.load_policy().code_file_max_bytes
-    for bad in ("0", "-1", "true", "1.5", "x"):
-        path = tmp_path / "p.yaml"
-        path.write_text(f"code_file_max_bytes: 10\ncode_total_max_bytes: {bad}\n")
-        with pytest.raises(ValueError, match="code_total_max_bytes"):
-            budget.load_policy(path)
+    blob = hashed.stdout.decode().strip()
+    _git(tmp_path, "update-index", "--add", "--cacheinfo", f"120000,{blob},absent-link")
+    _git(tmp_path, "update-index", "--add", "--cacheinfo", f"120000,{blob},as-file")
+    _file(tmp_path, "as-file", 10)
+    assert not (tmp_path / "absent-link").exists() and not (tmp_path / "as-file").is_symlink()
+    assert _main(tmp_path, allow) == 1
+    out = capsys.readouterr().out
+    assert "absent-link: tracked symlink" in out and "as-file: tracked symlink" in out
 
 
 def test_symlink_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A tracked symlink to a file or to a directory fails."""
     allow = _repo(tmp_path, {"real/a.txt": 10}, {}, "")
-    os.symlink("real/a.txt", tmp_path / "link.txt")
-    os.symlink("real", tmp_path / "linkdir")
+    (tmp_path / "link.txt").symlink_to("real/a.txt")
+    (tmp_path / "linkdir").symlink_to("real")
     _git(tmp_path, "add", "-A")
-    assert budget.main(tmp_path, allow) == 1
+    assert _main(tmp_path, allow) == 1
     out = capsys.readouterr().out
     assert "link.txt: tracked symlink" in out and "linkdir: tracked symlink" in out
 
 
-def test_no_symlink_is_exempt(tmp_path: Path) -> None:
-    """A symlink fails whatever its name and target, including the one the hatch hook used to be."""
-    for name, target in {
-        "packages/senselab-core/hatch_build_pins.py": "../../hatch_build_pins.py",
-        "a.txt": "b",
-    }.items():
-        link = tmp_path / name
-        link.parent.mkdir(parents=True, exist_ok=True)
-        os.symlink(target, link)
-        assert "tracked symlink" in budget.check([link], allow={}, root=tmp_path)[0]
+def test_xg10_the_index_is_measured_not_the_work_tree(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A large indexed file deleted from the checkout still counts; an untracked large file does not."""
+    allow = _repo(tmp_path, {"docs/small.bin": 400}, {"docs/big.bin": 9000}, "")
+    (tmp_path / "docs/big.bin").unlink()
+    _file(tmp_path, "untracked.bin", 9000)
+    assert _main(tmp_path, allow) == 1
+    out = capsys.readouterr().out
+    assert "docs/big.bin: 9000 bytes" in out and "untracked.bin" not in out
 
 
-def test_repository_tracks_no_symlink() -> None:
-    """Nothing in this repository's index has mode 120000."""
-    assert [path for mode, path in budget._tracked(budget.ROOT) if mode == budget.SYMLINK_MODE] == []
+def test_xg10_the_policy_measurements_are_bound_to_the_freeze(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A cap whose recorded measurement is not what the freeze measures fails, so a cap moves only by its headroom."""
+    allow = _repo(tmp_path, {"src/tests/a.py": 300, "docs/x.bin": 200}, {}, "")
+    assert _main(tmp_path, allow) == 0
+    assert _main(tmp_path, allow, code_file_max_bytes=10_000_000) == 1
+    assert "code_file_max_bytes: records 10000000 as measured at the freeze" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("where", ["docs/new.png", "specs/x/new.json", "src/senselab/data/new.bin", "new.bin"])
-def test_non_test_tree_is_scanned(tmp_path: Path, where: str) -> None:
-    """An oversized non-code file is caught under any tree, not only the test trees."""
-    allow = _repo(tmp_path, {}, {where: 300 * 1024}, "")
-    assert budget.main(tmp_path, allow) == 1
+@pytest.mark.parametrize(
+    ("frozen", "content", "message"),
+    [
+        (False, "# senselab subprocess-venv lock: x\n# requirements-sha256: y\nz==1\n", "not in"),
+        (True, "payload\n" * 100, "is not a venv-lock"),
+    ],
+)
+def test_xg10_an_exemption_must_be_a_frozen_lock(
+    frozen: bool, content: str, message: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An exempt path must exist in the freeze and parse as its lock kind."""
+    rel = "src/senselab/utils/data/venv_locks/a.txt"
+    allow = _repo(tmp_path, {rel: 10} if frozen else {"other.txt": 10}, {}, "")
+    (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / rel).write_text(content)
+    _git(tmp_path, "add", "-A")
+    assert budget.main(tmp_path, allow, _policy(tmp_path, generated={rel: "venv-lock"})) == 1
+    assert message in capsys.readouterr().out
 
 
-def test_generated_files_are_exempt_from_the_per_file_limit(tmp_path: Path) -> None:
-    """A file matching the policy's generated globs is not capped; the same bytes elsewhere are."""
-    gen = _file(tmp_path, "uv.lock", 300 * 1024)
-    other = _file(tmp_path, "other.lock", 300 * 1024)
-    assert budget.check([gen], allow={}, root=tmp_path, generated=("uv.lock",)) == []
-    assert len(budget.check([other], allow={}, root=tmp_path, generated=("uv.lock",))) == 1
+@pytest.mark.parametrize(
+    ("kind", "content", "ok"),
+    [
+        ("uv-lock", 'version = 1\n[[package]]\nname = "a"\n', True),
+        ("uv-lock", "version = 1\n", False),
+        ("uv-lock", "not toml [", False),
+        ("venv-lock", "# senselab subprocess-venv lock: a\n# requirements-sha256: b\nc==1\n", True),
+        ("venv-lock", "a==1\nb==2\nc==3\n", False),
+    ],
+)
+def test_lock_kinds_are_recognised_by_content(kind: str, content: str, ok: bool) -> None:
+    """A uv lock is TOML with a version and packages; a venv lock starts with its two header lines."""
+    assert budget.is_lock(content.encode(), kind) is ok
 
 
-@pytest.mark.parametrize("where", ["src/tests/some/other/new.wav", "packages/senselab-core/tests/new.wav"])
-def test_main_catches_new_large_wav_anywhere_in_test_trees(tmp_path: Path, where: str) -> None:
-    """A new oversized `.wav` outside data_for_testing is caught; a large `.py` source is not a fixture."""
-    allow = _repo(tmp_path, {}, {where: 300 * 1024, "src/tests/big_test.py": 300 * 1024}, "")
-    assert budget.main(tmp_path, allow) == 1
-    assert budget.is_fixture(where) and not budget.is_fixture("src/tests/big_test.py")
+def test_policy_caps_are_measured_quantities_with_a_headroom(tmp_path: Path) -> None:
+    """Each cap is `{measured: <int >= 0>, headroom: <number >= 1>}`; unknown keys fail; the shipped one loads."""
+    policy = budget.load_policy()
+    assert policy.caps["code_total_max_bytes"].limit > policy.caps["code_file_max_bytes"].limit
+    data = yaml.safe_load(budget.POLICY.read_text())
+    path = tmp_path / "p.yaml"
+    for bad in (-1, True, 1.5, "x", None):
+        path.write_text(yaml.safe_dump({**data, "code_total_max_bytes": {"measured": bad, "headroom": 1}}))
+        with pytest.raises(ValueError, match="code_total_max_bytes"):
+            budget.load_policy(path)
+    for bad in (0.5, "2", True, None):
+        path.write_text(yaml.safe_dump({**data, "code_total_max_bytes": {"measured": 10, "headroom": bad}}))
+        with pytest.raises(ValueError, match="code_total_max_bytes"):
+            budget.load_policy(path)
+    path.write_text(yaml.safe_dump({**data, "code_total_max_bytes": 12_000_000}))
+    with pytest.raises(ValueError, match="code_total_max_bytes"):
+        budget.load_policy(path)
+    path.write_text(yaml.safe_dump({**data, "extra_cap": 1}))
+    with pytest.raises(ValueError, match="unknown"):
+        budget.load_policy(path)
+
+
+_PLACES = ["src/tests/d", "packages/senselab-core/tests", "src/senselab/data", "docs", "specs/x", ""]
+_SUFFIXES = [".py", ".pyi", ".ipynb", ".mjs", ".json", ".wav", ".txt", ".lock", ""]
+_MODES = ["100644", "100755", "120000", "160000"]
+
+
+@settings(max_examples=200, deadline=None)
+@given(
+    st.lists(
+        st.tuples(st.sampled_from(_PLACES), st.sampled_from(_SUFFIXES), st.sampled_from(_MODES), st.integers(0, 1200)),
+        max_size=12,
+    )
+)
+def test_xg10_every_tracked_object_is_counted(rows: list[tuple[str, str, str, int]]) -> None:
+    """Whatever the place, suffix and mode, an object is refused when non-regular, over its cap or over a total."""
+    objects = [Obj(f"{p}/f{i}{s}".lstrip("/"), mode, str(i), size) for i, (p, s, mode, size) in enumerate(rows)]
+    regular = [o for o in objects if o.mode in ("100644", "100755")]
+    code = [o for o in regular if o.path.endswith((".py", ".pyi", ".ipynb"))]
+    data = [o for o in regular if o not in code]
+    tests = [o for o in data if o.path.startswith(("src/tests/", "packages/senselab-core/tests/"))]
+    passes = (
+        len(regular) == len(objects)
+        and all(o.size <= LIMITS["code_file_max_bytes"] for o in code)
+        and all(o.size <= LIMITS["data_file_max_bytes"] for o in data)
+        and sum(o.size for o in code) <= LIMITS["code_total_max_bytes"]
+        and sum(o.size for o in data) <= LIMITS["data_total_max_bytes"]
+        and sum(o.size for o in tests) <= LIMITS["test_data_total_max_bytes"]
+    )
+    assert (budget.check(objects, allow={}, limits=LIMITS) == []) is passes
+
+
+def test_repository_tracks_no_symlink_or_submodule() -> None:
+    """Nothing in this repository's index has mode 120000 or 160000."""
+    modes = {o.mode for o in budget.indexed_objects(budget.ROOT)}
+    assert modes <= budget.REGULAR_MODES
 
 
 def test_a_local_freeze_branch_never_takes_precedence(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -246,7 +372,9 @@ def test_a_local_freeze_branch_never_takes_precedence(tmp_path: Path, capsys: py
     _git(tmp_path, "checkout", "-q", "main")
     allow.write_text(_line(name, 500))
     assert budget.resolve_freeze_ref(tmp_path) == f"origin/{FREEZE}"
-    assert budget.main(tmp_path, allow) == 1 and f"{name}: not in origin/{FREEZE}" in capsys.readouterr().out
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(budget.POLICY.read_text())
+    assert budget.main(tmp_path, allow, policy) == 1 and f"{name}: not in origin/{FREEZE}" in capsys.readouterr().out
 
 
 def test_main_errors_without_the_freeze_branch(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -261,14 +389,15 @@ def test_main_errors_without_the_freeze_branch(tmp_path: Path, capsys: pytest.Ca
 def test_allowlist_has_no_dead_entries() -> None:
     """Every allowlist entry names a tracked file."""
     allow = budget.parse_allowlist(budget.ALLOWLIST.read_text())
-    tracked = {p for _mode, p in budget._tracked(budget.ROOT)}
+    tracked = {o.path for o in budget.indexed_objects(budget.ROOT)}
     assert allow and set(allow) <= tracked
 
 
 def test_budget_passes_on_current_tree() -> None:
-    """The script exits 0 on the committed tree, which also binds the allowlist to the freeze branch."""
+    """The script exits 0 on the committed tree, which also binds the allowlist and the policy to the freeze branch."""
     try:
         budget.resolve_freeze_ref(budget.ROOT)
     except LookupError:
         pytest.skip("freeze branch not fetched here; the pre-commit job runs the script with it")
-    assert subprocess.run([sys.executable, str(_SCRIPT)], capture_output=True).returncode == 0
+    done = subprocess.run([sys.executable, str(_SCRIPT)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout
