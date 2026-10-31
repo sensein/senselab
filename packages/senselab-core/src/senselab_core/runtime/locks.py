@@ -42,8 +42,8 @@ from senselab_core.runtime.storage import fs_now, set_mode, write_atomically
 
 logger = logging.getLogger("senselab")
 
-SIDECAR_NAME = re.compile(r"^.+\.(heartbeat|holder)$")
-"""The heartbeat and holder files a lock writes beside the guarded path."""
+SIDECAR_NAME = re.compile(r"^.+\.(heartbeat|holder|clock)$")
+"""The heartbeat, holder and clock files a lock writes beside the guarded path."""
 
 # rw-rw-r--: owner and group can both write the lock/heartbeat files, so a
 # second user's heartbeat touch (and lock takeover) does not fail silently.
@@ -484,10 +484,10 @@ class SharedFileLock:
         return self
 
     def __exit__(self, *exc: object) -> None:
-        """Stop the heartbeat, clear holder identity, and release the lock."""
+        """Stop the heartbeat, remove the heartbeat, holder and clock sidecars, and release the lock."""
         self._stop_event.set()
         if self._heartbeat_thread is not None:
             self._heartbeat_thread.join(timeout=5)
-        for owned in (self._heartbeat_path, self._holder_path):
+        for owned in (self._heartbeat_path, self._holder_path, self._clock_path):
             remove_owned(owned.parent, owned, pattern=SIDECAR_NAME)
         self._lock.release()

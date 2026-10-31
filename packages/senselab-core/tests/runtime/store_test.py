@@ -4,6 +4,7 @@ import errno
 import json
 import multiprocessing as mp
 import os
+import pwd
 import shutil
 import stat
 import time
@@ -31,6 +32,7 @@ from senselab_core.runtime.store import (
 )
 from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps, tagged_digest
 from senselab_worker.hashing import sha256_bytes
+from senselab_worker.ownership import UUID_HEX
 
 
 def _key(task: str = "asr", **inputs: str) -> LogicalKey:
@@ -220,7 +222,7 @@ def test_crash_leaves_no_entry(tmp_path: Path) -> None:
     s.put(_key(task="other"), {"y": 1}, c)
     assert not stale.exists()
     os.utime(live, (old, old))
-    s.put(_key(task="other"), {"y": 1}, c)
+    ResultStore(tmp_path).put(_key(task="other"), {"y": 1}, c)
     assert not live.exists()
     live.mkdir()
     assert live.is_dir()
@@ -376,7 +378,8 @@ def test_quarantine_tolerates_concurrent_quarantine(tmp_path: Path) -> None:
     """Quarantining an entry another process already moved is not an error."""
     s = ResultStore(tmp_path)
     s._quarantine(tmp_path / STORE_DIR / "ab" / ("ab" * 32) / ("0" * 64), digest="ab" * 32, fingerprint="0" * 64)
-    assert list((tmp_path / QUARANTINE_DIR).iterdir()) == []
+    assert not (tmp_path / QUARANTINE_DIR).exists() or list((tmp_path / QUARANTINE_DIR).iterdir()) == []
+    assert s.provenance.activities(node="store.quarantine") == []
 
 
 @pytest.fixture
@@ -578,7 +581,7 @@ def test_umask_077_gives_no_world_bits(tmp_path: Path, umask: int) -> None:
 @pytest.mark.logic
 def test_world_readable_policy_adds_only_world_read(tmp_path: Path) -> None:
     """A world-readable policy adds read (and search on directories) for others, and no write."""
-    policy = StorePolicy(world_readable=True, quarantine_retention_s=60, staging_stale_s=60)
+    policy = StorePolicy(world_readable=True, quarantine_retention_s=60, staging_stale_s=60, collect_interval_s=60)
     old = os.umask(0o077)
     try:
         s, k, c = ResultStore(tmp_path / "s", policy=policy), _key(), _ctx()
@@ -796,7 +799,7 @@ def test_quarantine_records_reason(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_collect_removes_only_aged_quarantine(tmp_path: Path) -> None:
     """`collect` removes quarantined entries and staging past their ages, keeps younger ones and foreign names."""
-    policy = StorePolicy(world_readable=False, quarantine_retention_s=1000, staging_stale_s=100)
+    policy = StorePolicy(world_readable=False, quarantine_retention_s=1000, staging_stale_s=100, collect_interval_s=60)
     s, c = ResultStore(tmp_path, policy=policy), _ctx()
     for audio in ("a", "b"):
         k = _key(audio=audio * 64)
@@ -820,7 +823,7 @@ def test_collect_removes_only_aged_quarantine(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_a17_quarantine_is_collected_by_put(tmp_path: Path) -> None:
     """The probe: 406 quarantine directories were never collected; put now collects the aged ones."""
-    policy = StorePolicy(world_readable=False, quarantine_retention_s=60, staging_stale_s=60)
+    policy = StorePolicy(world_readable=False, quarantine_retention_s=60, staging_stale_s=60, collect_interval_s=60)
     s, k, c = ResultStore(tmp_path, policy=policy), _key(), _ctx()
     for _ in range(5):
         s.put(k, {"y": 1}, c)
@@ -830,7 +833,7 @@ def test_a17_quarantine_is_collected_by_put(tmp_path: Path) -> None:
     assert len(quarantined) == 5
     for path in quarantined:
         os.utime(path, (0, 0))
-    s.put(_key(task="other"), {"y": 1}, c)
+    ResultStore(tmp_path, policy=policy).put(_key(task="other"), {"y": 1}, c)
     assert list((tmp_path / QUARANTINE_DIR).iterdir()) == []
 
 
@@ -843,7 +846,7 @@ def test_staging_age_uses_the_storage_clock(tmp_path: Path, monkeypatch: pytest.
     live.mkdir()
     real = time.time
     monkeypatch.setattr(time, "time", lambda: real() + 2 * StorePolicy.load_default().staging_stale_s)
-    s.put(_key(task="other"), {"y": 1}, c)
+    ResultStore(tmp_path).put(_key(task="other"), {"y": 1}, c)
     assert live.is_dir()
 
 
@@ -892,15 +895,116 @@ def test_enospc_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 
 @pytest.mark.logic
 def test_unwritable_quarantine_never_raises_a_raw_permission_error(tmp_path: Path) -> None:
-    """When the quarantine cannot be created, get skips the corrupt entry and put raises StoreUnavailable."""
+    """When the quarantine cannot be created, the corrupt entry is set aside in place and the key stays usable."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     s.put(k, {"y": 1}, c)
-    CORRUPTIONS["result_garbled"](_entry_dir(tmp_path, k, c))
+    entry = _entry_dir(tmp_path, k, c)
+    CORRUPTIONS["result_garbled"](entry)
     (tmp_path / QUARANTINE_DIR).write_bytes(b"not a directory")
     assert s.get(k, c, ReusePolicy.EXACT) is None
-    with pytest.raises(StoreUnavailable):
+    assert s.put(k, {"y": 2}, c) == output_identity({"y": 2})
+    got = s.get(k, c, ReusePolicy.EXACT)
+    assert got is not None and got.outputs == {"y": 2}
+    (aside,) = [p for p in entry.parent.iterdir() if p != entry]
+    assert UUID_HEX.fullmatch(aside.name)
+
+
+def _refuse_chmod_on(monkeypatch: pytest.MonkeyPatch, target: Path) -> None:
+    """Refuse chmod on `target` with EPERM, as for an entry another user owns."""
+    real = store_module.set_mode
+
+    def set_mode(path: Path | str, mode: int, *, fd: int | None = None) -> None:
+        if fd is None and Path(path) == target:
+            raise PermissionError(errno.EPERM, "Operation not permitted", str(path))
+        real(path, mode, fd=fd)
+
+    monkeypatch.setattr(store_module, "set_mode", set_mode)
+
+
+@pytest.mark.logic
+def test_corrupt_entry_of_another_user_does_not_wedge_the_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A corrupt entry that cannot be chmod-ed is renamed aside within its parent; put then commits the key."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    s.put(k, {"y": 1}, c)
+    entry = _entry_dir(tmp_path, k, c)
+    CORRUPTIONS["result_garbled"](entry)
+    _seal_entry(entry)
+    _refuse_chmod_on(monkeypatch, entry)
+    assert s.put(k, {"y": 2}, c) == output_identity({"y": 2})
+    got = s.get(k, c, ReusePolicy.EXACT)
+    assert got is not None and got.outputs == {"y": 2}
+    (activity,) = s.provenance.activities(node="store.quarantine")
+    assert activity.parameters["outcome"] == "set aside in place"
+    aside = tmp_path / activity.parameters["moved_to"]
+    assert aside.parent == entry.parent and UUID_HEX.fullmatch(aside.name)
+    assert stat.S_IMODE(aside.stat().st_mode) & 0o222 == 0
+    assert not (tmp_path / QUARANTINE_DIR).exists() or list((tmp_path / QUARANTINE_DIR).iterdir()) == []
+
+
+@pytest.mark.logic
+def test_unmovable_corrupt_entry_names_owner_and_remedy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the corrupt entry cannot be moved at all, the error names the entry, its owner and the command to run."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    s.put(k, {"y": 1}, c)
+    entry = _entry_dir(tmp_path, k, c)
+    CORRUPTIONS["result_garbled"](entry)
+    _refuse_chmod_on(monkeypatch, entry)
+    real_rename = os.rename
+
+    def rename(src: object, dst: object) -> None:
+        if Path(str(src)) == entry:
+            raise PermissionError(errno.EACCES, "Permission denied", str(src))
+        real_rename(src, dst)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "rename", rename)
+    with pytest.raises(StoreUnavailable) as caught:
+        s.put(k, {"y": 2}, c)
+    owner = pwd.getpwuid(os.getuid()).pw_name
+    message = str(caught.value)
+    assert str(entry) in message and f"owned by {owner}" in message and "rm -rf" in message
+    assert entry.is_dir()
+
+
+def _seal_entry(entry: Path) -> None:
+    for member in entry.iterdir():
+        member.chmod(0o440)
+    entry.chmod(0o550)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("reader", ["put", "get"])
+def test_writable_committed_entry_is_resealed(tmp_path: Path, reader: str) -> None:
+    """An entry left writable by a writer that died between rename and seal is sealed when next found valid."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    s.put(k, {"y": 1}, c)
+    entry = _entry_dir(tmp_path, k, c)
+    entry.chmod(0o2770)
+    if reader == "put":
         s.put(k, {"y": 1}, c)
-    assert _entry_dir(tmp_path, k, c).is_dir()
+    else:
+        assert s.get(k, c, ReusePolicy.EXACT) is not None
+    assert stat.S_IMODE(entry.stat().st_mode) & 0o222 == 0
+
+
+@pytest.mark.logic
+def test_put_collects_at_most_once_per_interval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Puts within `collect_interval_s` of each other run one collection, not one each."""
+    s, c = ResultStore(tmp_path), _ctx()
+    calls: list[object] = []
+    real = ResultStore.collect
+
+    def spy(self: ResultStore, now: float | None = None) -> int:
+        calls.append(now)
+        return real(self, now)
+
+    monkeypatch.setattr(ResultStore, "collect", spy)
+    for i in range(5):
+        s.put(_key(audio=f"{i:064x}"), {"y": i}, c)
+    assert len(calls) == 1
+    clock = time.monotonic() + s.policy.collect_interval_s
+    monkeypatch.setattr(time, "monotonic", lambda: clock)
+    s.put(_key(task="other"), {"y": 1}, c)
+    assert len(calls) == 2
 
 
 @pytest.mark.logic

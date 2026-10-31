@@ -109,8 +109,12 @@ class DataFile(Frozen):
 
 
 def path_key(path: str) -> tuple[str, ...]:
-    """Return how a filesystem may compare `path`: part by part, NFC-normalised and case-folded."""
-    return tuple(unicodedata.normalize("NFC", part).casefold() for part in path.split("/"))
+    """Return how a filesystem may compare `path`: part by part, NFC-normalised and lower-cased.
+
+    Two manifest paths equal under this key are one path, since a case-insensitive filesystem
+    (macOS, Windows) stores them as one file.
+    """
+    return tuple(unicodedata.normalize("NFC", part).lower() for part in path.split("/"))
 
 
 class DataManifest(Frozen):
@@ -309,15 +313,19 @@ def _commit(staged: Path, final: Path, *, replace: bool = False) -> None:
 
 
 class BlobStamp(NamedTuple):
-    """What `verify="size"` trusts a blob by: its size, mtime and inode when its dataset was completed."""
+    """What `verify="size"` trusts a blob by: its size, mtime, inode and ctime when its dataset was completed."""
 
     size: int
     mtime_ns: int
     inode: int
+    ctime_ns: int
+
+
+_STAMP_FIELDS = frozenset(BlobStamp._fields)
 
 
 def _stamp(st: os.stat_result) -> BlobStamp:
-    return BlobStamp(st.st_size, st.st_mtime_ns, st.st_ino)
+    return BlobStamp(st.st_size, st.st_mtime_ns, st.st_ino, st.st_ctime_ns)
 
 
 def _regular(path: Path) -> os.stat_result | None:
@@ -406,9 +414,16 @@ def _ensure_blob(
 
 
 def _link(link: Path, blob: Path, dir_mode: int) -> None:
+    """Point `link` at `blob` through a staged symlink and an atomic rename.
+
+    Raises:
+        ManifestConflictError: a directory occupies the link's path.
+    """
     target = os.path.relpath(blob, link.parent)
     if link.is_symlink() and os.readlink(link) == target:
         return
+    if link.is_dir() and not link.is_symlink():
+        raise ManifestConflictError(f"{link} is a directory where a file of the manifest belongs; remove it")
     ensure_dirs(link.parent, mode=dir_mode)
     staged = link.with_name(f".{link.name}.{uuid.uuid4().hex}")
     os.symlink(target, staged)
@@ -423,14 +438,12 @@ def _stamps(value: object) -> dict[str, BlobStamp] | None:
         return None
     stamps: dict[str, BlobStamp] = {}
     for key, raw in value.items():
-        if not isinstance(raw, dict) or set(raw) != {"size", "mtime_ns", "inode"}:
+        if not isinstance(raw, dict) or set(raw) != _STAMP_FIELDS:
             return None
-        size, mtime_ns, inode = raw["size"], raw["mtime_ns"], raw["inode"]
-        if type(size) is not int or size < 0 or not isinstance(mtime_ns, str) or not isinstance(inode, str):
+        size, counters = raw["size"], [raw[name] for name in ("mtime_ns", "inode", "ctime_ns")]
+        if type(size) is not int or size < 0 or not all(isinstance(v, str) and v.isdecimal() for v in counters):
             return None
-        if not (mtime_ns.isdecimal() and inode.isdecimal()):
-            return None
-        stamps[key] = BlobStamp(size, int(mtime_ns), int(inode))
+        stamps[key] = BlobStamp(size, *(int(v) for v in counters))
     return stamps
 
 
@@ -533,7 +546,7 @@ def fetch(
     """Download every file of `manifest` into the cache and return `{file path: path under datasets/.../files/}`.
 
     A present blob is reused with no network call. `verify="size"` trusts a regular-file blob whose
-    `BlobStamp` (size, mtime, inode) equals the one recorded when its dataset was completed; `"full"`,
+    `BlobStamp` (size, mtime, inode, ctime) equals the one recorded when its dataset was completed; `"full"`,
     and any other blob, re-hashes it. A download streams to `tmp/<uuid>`, is bounded by the declared
     size, is hashed, and is linked into `blobs/<sha256>` only on a match (first writer wins); on a
     mismatch or failed transfer the next mirror is tried. When every link is in place
@@ -579,7 +592,12 @@ def fetch(
                 "version": manifest.version,
                 "manifest_sha256": manifest.digest(),
                 "stamps": {
-                    sha: {"size": st.size, "mtime_ns": str(st.mtime_ns), "inode": str(st.inode)}
+                    sha: {
+                        "size": st.size,
+                        "mtime_ns": str(st.mtime_ns),
+                        "inode": str(st.inode),
+                        "ctime_ns": str(st.ctime_ns),
+                    }
                     for sha, st in stamps.items()
                 },
             }

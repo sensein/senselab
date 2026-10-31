@@ -24,3 +24,11 @@ staging_stale_s:
     one transfer. A transfer of the largest dataset in a manifest is the longest of these; a day is
     above any single transfer we run, so an older staging entry belongs to a writer that crashed.
     Ages are judged against the storage's own clock, so clock skew between nodes does not shorten it.
+
+collect_interval_s:
+  value: 3600
+  derivation: >-
+    One hour. A collection touches the clock sentinel and lists quarantine/ and tmp/, which costs
+    metadata round trips on NFS; running it on every put multiplied them by the put rate. What it
+    removes is at least a day old (staging_stale_s) or a week old (quarantine_retention_s), so
+    collecting hourly delays a removal by at most an hour against ages of a day or more.

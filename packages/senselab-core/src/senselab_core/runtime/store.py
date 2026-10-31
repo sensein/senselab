@@ -28,8 +28,10 @@ The output identity is `"output:" + tagged_digest("output@2", encoded form)`.
 import io
 import logging
 import os
+import pwd
 import re
 import stat
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -397,6 +399,22 @@ def _occupied(entry: Path) -> bool:
     return os.path.lexists(entry)
 
 
+def _owner_remedy(path: Path) -> str:
+    """Return who owns `path` and what they must run to remove it."""
+    try:
+        uid = os.lstat(path).st_uid
+    except OSError:
+        return f"{path} could not be examined; remove it as its owner"
+    try:
+        owner = pwd.getpwuid(uid).pw_name
+    except KeyError:
+        owner = f"uid {uid}"
+    return (
+        f"{path} is owned by {owner} (uid {uid}); as {owner}, run "
+        f"`chmod -R u+w '{path}' && rm -rf '{path}'` to remove it"
+    )
+
+
 def _seal(entry: Path, dir_mode: int) -> None:
     try:
         set_mode(entry, dir_mode)
@@ -440,7 +458,8 @@ class ResultStore:
     rename wins and later writers discard their staging and return the committed identity. A
     staging directory is never read by `get`. An entry that a completed read finds corrupt or
     misfiled is moved into `root/quarantine/<uuid>` (see `_quarantine`) and never served. `collect`,
-    which `put` calls, removes quarantined entries and staging directories older than the policy's ages.
+    which `put` runs at most once per `policy.collect_interval_s`, removes quarantined entries and
+    staging directories older than the policy's ages. An entry found valid but writable is re-sealed.
 
     Args:
         root: The store root.
@@ -454,6 +473,7 @@ class ResultStore:
         self.root = Path(root)
         self.provenance = provenance if provenance is not None else ProvStore(run_id=f"store-{uuid.uuid4().hex}")
         self.policy = policy if policy is not None else StorePolicy.load_default()
+        self._last_collect: float | None = None
 
     def _entry(self, key: LogicalKey) -> Path:
         d = key.digest()
@@ -478,37 +498,45 @@ class ResultStore:
         return path
 
     def _quarantine(self, entry: Path, *, digest: str, fingerprint: str) -> None:
-        """Move `entry` into `root/quarantine/<uuid>`, re-verify the moved copy, and put it back if it verifies.
+        """Move `entry` aside, re-verify the moved copy, and put it back if it verifies.
 
-        The re-verification uses the address the entry was read at (`digest`, `fingerprint`). A copy
-        that verifies, or cannot be read, is renamed back without replacing anything: if a new entry
-        took the address meanwhile the copy stays in quarantine. Nothing is done if `entry` is
-        already gone. A provenance activity records the outcome and the reason.
+        The entry goes to `root/quarantine/<uuid>`. If it cannot be made writable for that move (it
+        belongs to another user) or the quarantine cannot be created, it is renamed to `<uuid>`
+        beside itself instead, which needs write permission only on its parent; that name is never
+        a fingerprint, so `get` ignores it, and its owner must remove it. The re-verification uses
+        the address the entry was read at (`digest`, `fingerprint`). A copy that verifies, or cannot
+        be read, is renamed back without replacing anything: if a new entry took the address
+        meanwhile the copy stays aside. Nothing is done if `entry` is already gone. A provenance
+        activity records where it went, the outcome and the reason.
 
         Raises:
-            StoreUnavailable: the quarantine directory cannot be created or `entry` cannot be moved.
+            StoreUnavailable: `entry` cannot be moved at all; the message names its owner and the remedy.
         """
-        moved = self._ensure(QUARANTINE_DIR) / uuid.uuid4().hex
-        is_dir = False
         try:
             is_dir = stat.S_ISDIR(os.lstat(entry).st_mode)
-            if is_dir:
-                set_mode(entry, STAGING_DIR_MODE)
+        except FileNotFoundError:
+            return
+        except OSError as err:
+            raise storage_fault(err, entry) from err
+        moved = self._aside(entry, is_dir)
+        try:
             os.rename(entry, moved)
         except FileNotFoundError:
             return
         except OSError as err:
-            if is_dir:
+            if is_dir and moved.parent != entry.parent:
                 _seal(entry, committed_modes(self.policy)[1])
-            raise storage_fault(err, entry) from err
+            raise storage_fault(err, entry, hint=_owner_remedy(entry)) from err
         try:
             os.utime(moved, follow_symlinks=False)
         except OSError as err:
             logger.warning("cannot stamp quarantined entry %s: %s", moved, err)
         verdict, reason = self._verdict(moved, is_dir, digest=digest, fingerprint=fingerprint)
-        outcome = "quarantined"
+        outcome = "quarantined" if moved.parent != entry.parent else "set aside in place"
         if verdict != "corrupt":
             outcome = self._restore(moved, entry)
+        elif moved.parent == entry.parent:
+            logger.warning("corrupt store entry set aside at %s; %s", moved, _owner_remedy(moved))
         logger.warning("store entry %s %s (%s): %s", entry, outcome, verdict, reason)
         self.provenance.activity(
             node="store.quarantine",
@@ -516,12 +544,23 @@ class ResultStore:
             parameters={
                 "key": digest,
                 "context": fingerprint,
-                "moved_to": moved.name,
+                "moved_to": str(moved.relative_to(self.root)),
                 "verdict": verdict,
                 "outcome": outcome,
                 "reason": reason,
             },
         )
+
+    def _aside(self, entry: Path, is_dir: bool) -> Path:
+        """Return where to move `entry`: the quarantine if it can go there, else a uuid name beside it."""
+        try:
+            quarantine = self._ensure(QUARANTINE_DIR)
+            if is_dir:
+                set_mode(entry, STAGING_DIR_MODE)
+        except OSError as err:
+            logger.warning("cannot move %s into the quarantine, setting it aside in place: %s", entry, err)
+            return entry.parent / uuid.uuid4().hex
+        return quarantine / uuid.uuid4().hex
 
     @staticmethod
     def _verdict(moved: Path, is_dir: bool, *, digest: str, fingerprint: str) -> tuple[str, str]:
@@ -553,6 +592,23 @@ class ResultStore:
             self._quarantine(entry, digest=digest, fingerprint=fingerprint)
         except StoreUnavailable as err:
             logger.warning("cannot quarantine store entry %s, skipping it: %s", entry, err)
+
+    def _collect_due(self) -> None:
+        """Run `collect` if this store has not collected within `policy.collect_interval_s` (monotonic)."""
+        now = time.monotonic()
+        if self._last_collect is None or now - self._last_collect >= self.policy.collect_interval_s:
+            self._last_collect = now
+            self.collect()
+
+    def _reseal(self, entry: Path) -> None:
+        """Make a verified entry's directory read-only again if a writer died between its rename and seal."""
+        try:
+            writable = os.lstat(entry).st_mode & 0o222
+        except OSError as err:
+            logger.warning("cannot examine store entry %s: %s", entry, err)
+            return
+        if writable:
+            _seal(entry, committed_modes(self.policy)[1])
 
     def collect(self, now: float | None = None) -> int:
         """Remove quarantined entries and staging directories older than the policy's ages; return how many.
@@ -593,7 +649,7 @@ class ResultStore:
         payload = _serialise(outputs)
         d, f = key.digest(), context.fingerprint()
         staging_root = self._ensure(STAGING_DIR)
-        self.collect()
+        self._collect_due()
         entry = self._ensure(STORE_DIR, d[:2], d) / f
         for _ in range(COMMIT_ATTEMPTS):
             try:
@@ -602,6 +658,7 @@ class ResultStore:
                 self._quarantine(entry, digest=d, fingerprint=f)
                 existing = None
             if existing is not None:
+                self._reseal(entry)
                 self._record_put(key, context, existing, outcome="existing")
                 return existing
             if _commit(key, context, entry, staging_root, payload, self.policy):
@@ -695,6 +752,7 @@ class ResultStore:
             except CorruptEntryError:
                 self._set_aside(base / name, digest=d, fingerprint=name)
                 continue
+            self._reseal(base / name)
             hit = StoredResult(outputs=outputs, output_identity=identity, context=stored, policy_used=allowed[rank])
             if hit.policy_used is not ReusePolicy.EXACT:
                 self._record_reuse(key, stored, context, hit)

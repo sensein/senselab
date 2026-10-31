@@ -630,3 +630,14 @@ def test_heartbeat_age_uses_the_storage_clock(tmp_path: Path, monkeypatch: pytes
         monkeypatch.setattr(time, "time", lambda: real() + 3600)
         age = lock._heartbeat_age()
     assert age is not None and age < 120.0
+    assert not Path(str(resource) + ".clock").exists()
+
+
+@pytest.mark.logic
+def test_lock_leaves_no_sidecars_after_release(tmp_path: Path) -> None:
+    """After a release, including one that read the heartbeat's age, no heartbeat, holder or clock sidecar remains."""
+    resource = tmp_path / "thing"
+    lock = SharedFileLock(resource, timeout=1.0)
+    with lock:
+        assert lock._heartbeat_age() is not None
+    assert [p.name for p in tmp_path.iterdir() if p.suffix in (".heartbeat", ".holder", ".clock")] == []

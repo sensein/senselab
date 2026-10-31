@@ -535,10 +535,11 @@ def test_corrupt_marker_is_replaced_once_dataset_verifies(tmp_path: Path, caplog
         "{}",
         '{"manifest_sha256": 1, "stamps": {}}',
         '{MARKER, "stamps": []}',
-        '{MARKER, "stamps": {"a": {"size": "big", "mtime_ns": "1", "inode": "1"}}}',
-        '{MARKER, "stamps": {"a": {"size": true, "mtime_ns": "1", "inode": "1"}}}',
-        '{MARKER, "stamps": {"a": {"size": -1, "mtime_ns": "1", "inode": "1"}}}',
-        '{MARKER, "stamps": {"a": {"size": 1, "mtime_ns": 1, "inode": "1"}}}',
+        '{MARKER, "stamps": {"a": {"size": "big", "mtime_ns": "1", "inode": "1", "ctime_ns": "1"}}}',
+        '{MARKER, "stamps": {"a": {"size": true, "mtime_ns": "1", "inode": "1", "ctime_ns": "1"}}}',
+        '{MARKER, "stamps": {"a": {"size": -1, "mtime_ns": "1", "inode": "1", "ctime_ns": "1"}}}',
+        '{MARKER, "stamps": {"a": {"size": 1, "mtime_ns": 1, "inode": "1", "ctime_ns": "1"}}}',
+        '{MARKER, "stamps": {"a": {"size": 1, "mtime_ns": "1", "inode": "1"}}}',
         '{MARKER, "format": "dataset-marker@1.0", "stamps": {}}',
         "\xff",
     ],
@@ -647,7 +648,7 @@ def _acceptable(paths: list[str]) -> bool:
         parts = p.split("/")
         if "\\" in p or any(x in ("", ".", "..") or (x.startswith(".a.") and x.endswith("0" * 32)) for x in parts):
             return False
-        keys.append(tuple(unicodedata.normalize("NFC", x).casefold() for x in parts))
+        keys.append(tuple(unicodedata.normalize("NFC", x).lower() for x in parts))
     return all(a != b and a[: len(b)] != b for a in keys for b in keys if a is not b)
 
 
@@ -954,3 +955,29 @@ def test_complete_read_only_cache_still_serves(tmp_path: Path) -> None:
         for d in dirs:
             d.chmod(0o770)
     assert again == paths and again["a/voice.wav"].read_bytes() == PAYLOAD
+
+
+@pytest.mark.logic
+def test_mtime_restored_rewrite_is_caught_by_ctime(tmp_path: Path) -> None:
+    """A same-size rewrite whose mtime is put back with utime still changes ctime, so it is re-hashed and refetched."""
+    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    blob = tmp_path / "blobs" / SHA
+    before = blob.stat()
+    _unseal(blob).write_bytes(b"POISONED!!!!" + PAYLOAD[12:])
+    blob.chmod(0o440)
+    os.utime(blob, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert blob.stat().st_mtime_ns == before.st_mtime_ns and blob.stat().st_ino == before.st_ino
+    calls: list[str] = []
+    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}, calls))
+    assert calls == ["https://x/a.wav"] and paths["a/voice.wav"].read_bytes() == PAYLOAD
+
+
+@pytest.mark.logic
+def test_directory_at_a_link_path_is_a_conflict(tmp_path: Path) -> None:
+    """A directory where a manifest file's link belongs is a typed conflict, not a retryable storage fault."""
+    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    link = _dataset(tmp_path) / "files" / "a" / "voice.wav"
+    link.unlink()
+    link.mkdir()
+    with pytest.raises(ManifestConflictError, match="is a directory"):
+        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))

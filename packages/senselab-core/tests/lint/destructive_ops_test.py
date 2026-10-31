@@ -22,12 +22,25 @@ DESTRUCTIVE_METHODS = {"unlink", "rename", "rmdir", "_quarantine"}
 DESTRUCTIVE_FUNCTIONS = {"remove_owned"}
 BROAD = {"OSError", "Exception", "BaseException"}
 SCRATCH_CLEANUP = {
-    ("senselab_core.runtime.storage", "write_atomically"): "removes the temporary file it just created",
-    ("senselab_worker.codec", "_write_array"): "removes the temporary array file it just created",
-    ("senselab_core.runtime.worker_client", "WorkerClient._remove_arrays"): "empties the worker's private channel",
-    ("senselab_core.runtime.worker_client", "WorkerClient._shutdown"): "removes the worker's private channel",
+    ("senselab_core.runtime.storage", "write_atomically", "remove_owned(pattern=TEMPORARY_NAME)"): "its temporary",
+    ("senselab_worker.codec", "_write_array", "remove_owned(pattern=ARRAY_TEMP_NAME)"): "its temporary array file",
+    ("senselab_core.runtime.worker_client", "WorkerClient._remove_arrays", "remove_owned(pattern=ARRAY_NAME)"): (
+        "an array file in the worker's private channel"
+    ),
+    ("senselab_core.runtime.worker_client", "WorkerClient._remove_arrays", "remove_owned(pattern=ARRAY_TEMP_NAME)"): (
+        "a temporary array file in the worker's private channel"
+    ),
+    (
+        "senselab_core.runtime.worker_client",
+        "WorkerClient._shutdown",
+        "os.rmdir",
+    ): "the worker's emptied private channel",
 }
-"""Functions whose deletions touch only scratch the same object created, never stored data, and may run on failure."""
+"""Call sites, by module, enclosing function and call, whose deletions touch only scratch the same object created.
+
+A `remove_owned` call is identified with its `pattern=` argument, so a site deleting under another
+grammar, or any other destructive call added to these functions, is reported.
+"""
 
 
 def _module_name(path: Path) -> str:
@@ -112,7 +125,12 @@ def _dotted(expr: ast.expr) -> str | None:
 
 
 def _destructive(call: ast.Call) -> str | None:
+    """Return the call's signature if it is destructive: `os.rename`, `.unlink`, `remove_owned(pattern=X)`, ..."""
     func = call.func
+    name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else None
+    if name in DESTRUCTIVE_FUNCTIONS:
+        pattern = next((ast.unparse(k.value) for k in call.keywords if k.arg == "pattern"), "?")
+        return f"{name}(pattern={pattern})"
     if isinstance(func, ast.Attribute):
         if isinstance(func.value, ast.Name) and (func.value.id, func.attr) in DESTRUCTIVE_MODULE_CALLS:
             return f"{func.value.id}.{func.attr}"
@@ -146,7 +164,7 @@ def _reachable(module: _Module, body: list[ast.stmt], scope: tuple[str, ...], wh
         for node in ast.walk(stmt):
             if not isinstance(node, ast.Call):
                 continue
-            if (name := _destructive(node)) is not None and (module.name, where) not in SCRATCH_CLEANUP:
+            if (name := _destructive(node)) is not None and (module.name, where, name) not in SCRATCH_CLEANUP:
                 found.append(f"{name} (line {node.lineno})")
             callee = _callee(module, node, scope)
             if callee is not None and callee not in seen:
@@ -235,10 +253,25 @@ def test_the_lint_finds_every_destructive_call_under_every_oserror_clause(call: 
 
 @pytest.mark.logic
 def test_scratch_cleanup_allowance_names_existing_functions() -> None:
-    """Each allowed scratch cleanup names a function that exists, so a rename cannot widen the allowance silently."""
+    """Each allowed scratch cleanup names a call that exists in its function, with the same `pattern=` argument."""
     modules = {_module_name(p): _Module(p.read_text(), _module_name(p)) for p in SOURCES}
-    for module, function in SCRATCH_CLEANUP:
-        assert function in modules[module].functions, (module, function)
+    for module, function, call in SCRATCH_CLEANUP:
+        fn = modules[module].functions[function]
+        sites = {_destructive(node) for node in ast.walk(fn) if isinstance(node, ast.Call)}
+        assert call in sites, (module, function, call)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "call",
+    ["remove_owned(r, a, pattern=OTHER_NAME)", "remove_owned(r, a, TEMPORARY_NAME)", "os.unlink(a)", "a.rename(b)"],
+)
+def test_scratch_allowance_does_not_cover_other_calls_in_the_same_function(call: str) -> None:
+    """Inside an allowed function, a deletion under another grammar, or any other destructive call, is reported."""
+    source = f"import os\ndef write_atomically(r, a, b):\n    try:\n        pass\n    except OSError:\n        {call}\n"
+    assert violations(source, "senselab_core.runtime.storage")
+    allowed = source.replace(call, "remove_owned(r, a, pattern=TEMPORARY_NAME)")
+    assert violations(allowed, "senselab_core.runtime.storage") == []
 
 
 @pytest.mark.logic
