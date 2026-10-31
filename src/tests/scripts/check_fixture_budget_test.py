@@ -413,10 +413,9 @@ def test_allowlist_has_no_dead_entries() -> None:
 
 
 def test_budget_passes_on_current_tree() -> None:
-    """The script exits 0 on the committed tree, which also binds the allowlist and the policy to the freeze."""
-    try:
-        budget.freeze_problems(budget.ROOT, budget.load_policy().freeze_commit)
-    except LookupError:
-        pytest.skip("freeze commit not fetched here; the pre-commit job runs the script with it")
+    """The script exits 0 on the committed tree, which also binds the allowlist and the policy to the freeze.
+
+    A clone without the freeze commit fails here, with the script's message naming the fetch that brings it.
+    """
     done = subprocess.run([sys.executable, str(_SCRIPT)], capture_output=True, text=True)
     assert done.returncode == 0, done.stdout
