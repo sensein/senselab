@@ -1,7 +1,8 @@
 """Fail when committed test fixtures exceed the data-policy budget.
 
-Scans tracked files under the fixture locations. Allowlisted (grandfathered) files do not count toward
-the budgets, but may not grow. Usage::
+Scans every tracked non-source file under `src/tests/` and `packages/*/tests/`. Allowlisted
+(grandfathered) files are listed as `path bytes` in `fixture_budget_allowlist.txt`; they do not count
+toward the budgets, and may not grow past the recorded size. Usage::
 
     uv run python scripts/check_fixture_budget.py
 """
@@ -11,15 +12,39 @@ from __future__ import annotations
 import fnmatch
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWLIST = Path(__file__).resolve().parent / "fixture_budget_allowlist.txt"
-FIXTURE_PATTERNS = ("src/tests/data_for_testing/*", "packages/*/tests/*/data/*", "packages/*/tests/data/*")
+TEST_TREES = ("src/tests/*", "packages/*/tests/*")
+SOURCE_SUFFIXES = (".py", ".pyi", ".mjs", ".md", ".toml", ".yaml", ".json")
+"""Text sources that are code or configuration rather than fixtures; every other tracked file is scanned."""
 PER_FILE = 256 * 1024
 TOTAL = 2 * 1024 * 1024
 _FIX = "generate it with senselab_core.testing.synth, or pull it through a data manifest"
+
+
+def is_fixture(rel: str) -> bool:
+    """Whether the repo-relative path is a tracked non-source file under a test tree."""
+    return any(fnmatch.fnmatch(rel, p) for p in TEST_TREES) and not rel.endswith(SOURCE_SUFFIXES)
+
+
+def parse_allowlist(text: str) -> dict[str, int]:
+    """Parse `path bytes` lines (blank lines and `#` comments skipped) into `{path: recorded size}`.
+
+    Raises:
+        ValueError: naming the line, if a line has no size or a malformed one.
+    """
+    out: dict[str, int] = {}
+    for n, line in enumerate(text.splitlines(), 1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        parts = line.rsplit(None, 1)
+        if len(parts) != 2 or not parts[1].isdigit():
+            raise ValueError(f"allowlist line {n}: expected 'path bytes', got {line!r}")
+        out[parts[0].strip()] = int(parts[1])
+    return out
 
 
 def check(
@@ -27,27 +52,21 @@ def check(
     *,
     per_file: int = PER_FILE,
     total: int = TOTAL,
-    allow: set[str],
+    allow: Mapping[str, int],
     root: Path = ROOT,
-    sizes: dict[str, int] | None = None,
 ) -> list[str]:
     """Return one violation message per problem among `paths`, naming the file, its size and the limit.
 
-    `allow` holds repo-relative paths (relative to `root`) that are grandfathered; `sizes` optionally
-    maps an allowlisted path to its recorded maximum size.
+    `allow` maps each grandfathered repo-relative path (relative to `root`) to its recorded size.
     """
     out: list[str] = []
     counted = 0
     for path in paths:
-        try:
-            rel = path.resolve().relative_to(root.resolve()).as_posix()
-        except ValueError:
-            rel = path.as_posix()
+        rel = path.resolve().relative_to(root.resolve()).as_posix()
         size = path.stat().st_size
         if rel in allow:
-            cap = (sizes or {}).get(rel)
-            if cap is not None and size > cap:
-                out.append(f"{rel}: {size} bytes, grew past its grandfathered {cap} bytes; {_FIX}")
+            if size > allow[rel]:
+                out.append(f"{rel}: {size} bytes, grew past its grandfathered {allow[rel]} bytes; {_FIX}")
             continue
         counted += size
         if size > per_file:
@@ -59,24 +78,18 @@ def check(
 
 def _tracked(root: Path) -> list[str]:
     result = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True)
-    return [f for f in result.stdout.splitlines() if any(fnmatch.fnmatch(f, p) for p in FIXTURE_PATTERNS)]
+    return [f for f in result.stdout.splitlines() if is_fixture(f)]
 
 
-def _allowlist(path: Path) -> set[str]:
-    return {line.strip() for line in path.read_text().splitlines() if line.strip() and not line.startswith("#")}
-
-
-def main() -> int:
+def main(root: Path = ROOT, allowlist: Path = ALLOWLIST) -> int:
     """Run the check over the tracked fixtures; return the exit status."""
-    allow = _allowlist(ALLOWLIST)
-    files = [ROOT / f for f in _tracked(ROOT) if (ROOT / f).is_file()]
-    sizes = {rel: (ROOT / rel).stat().st_size for rel in allow if (ROOT / rel).is_file()}
-    # Growth is judged against the size recorded in git HEAD, so the allowlist stays a plain path list.
-    for rel in list(sizes):
-        head = subprocess.run(["git", "cat-file", "-s", f"HEAD:{rel}"], cwd=ROOT, capture_output=True, text=True)
-        if head.returncode == 0:
-            sizes[rel] = int(head.stdout)
-    violations = check(files, allow=allow, root=ROOT, sizes=sizes)
+    try:
+        allow = parse_allowlist(allowlist.read_text())
+    except ValueError as e:
+        print(e)
+        return 1
+    files = [root / f for f in _tracked(root) if (root / f).is_file()]
+    violations = check(files, allow=allow, root=root)
     for v in violations:
         print(v)
     return 1 if violations else 0

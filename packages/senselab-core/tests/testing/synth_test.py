@@ -35,12 +35,16 @@ def test_noise_is_seeded() -> None:
 
 
 def test_chirp_sweeps() -> None:
-    """The spectral peak rises from the first half to the second."""
-    sr = 16_000
-    x = _x(chirp(200.0, 2000.0, duration_s=1.0, sampling_rate=sr))[0]
-    half = len(x) // 2
-    peak = [numpy.argmax(numpy.abs(numpy.fft.rfft(h))) * sr / len(h) for h in (x[:half], x[half:])]
-    assert peak[0] < peak[1] and peak[0] < 1100 < peak[1]
+    """The spectral peak in each of 6 Hann-windowed segments follows `f0 + (f1 - f0) * t / T` to within one FFT bin."""
+    sr, f0, f1, dur, windows = 16_000, 200.0, 2000.0, 1.0, 6
+    x = _x(chirp(f0, f1, duration_s=dur, sampling_rate=sr))[0]
+    size = len(x) // windows
+    bin_hz = sr / size
+    for k in range(windows):
+        seg = x[k * size : (k + 1) * size]
+        peak = numpy.argmax(numpy.abs(numpy.fft.rfft(seg * numpy.hanning(size)))) * bin_hz
+        centre = (k + 0.5) * size / sr
+        assert abs(peak - (f0 + (f1 - f0) * centre / dur)) <= bin_hz
 
 
 def test_write_wav_roundtrip(tmp_path: Path) -> None:

@@ -28,7 +28,7 @@ def tone(
 
 
 def noise(*, duration_s: float, sampling_rate: int = 16_000, seed: int = 0) -> Audio:
-    """Return mono Gaussian noise (scaled to peak 0.5 and clipped to `[-1, 1]`) that is the same for the same `seed`."""
+    """Return mono Gaussian noise of standard deviation 0.1, clipped to `[-1, 1]`; deterministic in `seed`."""
     rng = numpy.random.default_rng(seed)
     wave = numpy.clip(rng.standard_normal(_frames(duration_s, sampling_rate)) * 0.1, -1.0, 1.0)
     return Audio.from_array(wave.astype(numpy.float32).reshape(1, -1), sampling_rate)
@@ -45,6 +45,7 @@ def chirp(f0_hz: float, f1_hz: float, *, duration_s: float, sampling_rate: int =
 def write_wav(audio: Audio, path: Path) -> Path:
     """Write `audio` to `path` as 16-bit PCM WAV and return `path`."""
     group = audio.groups[AUDIO_GROUP]
-    assert isinstance(group, RegularGroup)
+    if not isinstance(group, RegularGroup):
+        raise TypeError(f"audio group must be a RegularGroup, got {type(group).__name__}")
     soundfile.write(path, group.read().T, int(group.sampling_rate), subtype="PCM_16", format="WAV")
     return path
