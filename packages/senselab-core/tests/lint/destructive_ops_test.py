@@ -32,7 +32,7 @@ SCRATCH_CLEANUP = {
     ),
     (
         "senselab_core.runtime.worker_client",
-        "WorkerClient._shutdown",
+        "WorkerClient._release",
         "os.rmdir",
     ): "the worker's emptied private channel",
 }

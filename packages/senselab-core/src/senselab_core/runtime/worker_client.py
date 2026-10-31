@@ -1,6 +1,7 @@
 """The host side of the worker wire protocol: start a worker, send it requests, map its faults."""
 
 import collections
+import contextlib
 import json
 import logging
 import os
@@ -15,7 +16,7 @@ import threading
 import time
 import uuid
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -53,6 +54,7 @@ KILL_GRACE_S = 5.0
 JOIN_GRACE_S = 2.0
 SHUTDOWN_BOUND_S = STOP_GRACE_S + KILL_GRACE_S + JOIN_GRACE_S
 EXIT_CODE_WAIT_S = 1.0
+DEFERRED_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 STDERR_TAIL_LINES = 100
 _STDERR_LINE_BYTES = 64 * 2**10
 _READ_BYTES = 2**16
@@ -67,15 +69,19 @@ class ProtocolMismatch(InfrastructureFault):
 
 
 class WorkerLost(InfrastructureFault):
-    """The worker exited or closed its output while a reply was awaited, or was already discarded.
+    """The worker exited or closed its output while a reply was awaited, the client was closed, or it was discarded.
 
-    `returncode` is the worker's exit code when it is known, else `None`.
+    `returncode` is the worker's exit code once the client has reaped it, else `None`; `str()` names it.
     """
 
     def __init__(self, message: str, *, returncode: int | None = None) -> None:
         """Carry the message and the worker's exit code."""
         super().__init__(message)
         self.returncode = returncode
+
+    def __str__(self) -> str:
+        """The message and the exit code."""
+        return f"{super().__str__()}; exit code {_code_text(self.returncode)}"
 
 
 class WorkerFatal(InfrastructureFault):
@@ -171,49 +177,40 @@ class _Pump:
             start = 0
 
 
-_NOTE_EXITSTATUS = 0x04000000 if sys.platform == "darwin" else 0
 _PS = "/bin/ps"
 _HAS_WAITID = sys.platform == "linux"
 _PROBE_RUN: Callable[..., "subprocess.CompletedProcess[str]"] = subprocess.run
 LEADER_PROBE_TIMEOUT_S = 2.0
 
 
-def _wait_exit(pid: int) -> int | None:
-    """Block until child `pid` exits, without reaping it; return its exit code when the platform reports one.
+def _wait_exit(pid: int) -> None:
+    """Block until child `pid` exits, without reaping it.
 
-    Uses `waitid(WNOWAIT)` where the platform has it (Linux) and a kqueue `NOTE_EXIT` on macOS.
+    Uses `waitid(WNOWAIT)` on Linux and a kqueue `NOTE_EXIT` on macOS, which also returns for a
+    leader that exited before the event was registered. The exit code is read when the client reaps.
 
     Raises:
         ChildProcessError: if `pid` is not an unreaped child (waitid only).
         NotImplementedError: on a platform that is neither Linux nor macOS.
     """
     if sys.platform == "linux":
-        info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
-        if info is None:
-            return None
-        return int(info.si_status) if info.si_code == os.CLD_EXITED else -int(info.si_status)
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+        return
     if sys.platform == "darwin":
         kq = select.kqueue()
         try:
             flags = select.KQ_EV_ADD | select.KQ_EV_ONESHOT
-            event = select.kevent(
-                pid, filter=select.KQ_FILTER_PROC, flags=flags, fflags=select.KQ_NOTE_EXIT | _NOTE_EXITSTATUS
-            )
-            for fired in kq.control([event], 1, None):
-                if fired.fflags & _NOTE_EXITSTATUS and not fired.flags & select.KQ_EV_ERROR:
-                    return os.waitstatus_to_exitcode(fired.data)
-            return None
+            kq.control([select.kevent(pid, filter=select.KQ_FILTER_PROC, flags=flags, fflags=select.KQ_NOTE_EXIT)], 1)
         finally:
             kq.close()
+        return
     raise NotImplementedError(f"no exit notification for platform {sys.platform!r}")
 
 
-def _reap(pid: int, exited: threading.Event, status: list[int], stdout: _Pump) -> None:
+def _reap(pid: int, exited: threading.Event, stdout: _Pump) -> None:
     """Wait for the leader to exit without reaping it, so its pid and process group id stay reserved."""
     try:
-        code = _wait_exit(pid)
-        if code is not None:
-            status.append(code)
+        _wait_exit(pid)
     except ChildProcessError:
         pass
     finally:
@@ -294,6 +291,37 @@ def _members_gone(pgid: int, exited: threading.Event, deadline: Deadline) -> boo
         delay = min(delay * 2, _GROUP_POLL_MAX_S)
 
 
+@contextlib.contextmanager
+def _signals_deferred() -> Iterator[None]:
+    """On the main thread, hold `DEFERRED_SIGNALS` for the body, then restore their handlers and raise each held one.
+
+    A signal whose handler was not installed from Python cannot be restored, so it is not held.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    held: list[int] = []
+    previous: dict[int, Any] = {}
+
+    def hold(signum: int, frame: object) -> None:
+        held.append(signum)
+
+    try:
+        for sig in DEFERRED_SIGNALS:
+            if signal.getsignal(sig) is not None:
+                previous[sig] = signal.signal(sig, hold)
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+        for number in dict.fromkeys(held):
+            signal.raise_signal(number)
+
+
+def _code_text(returncode: int | None) -> str:
+    return "unknown" if returncode is None else str(returncode)
+
+
 class WorkerClient:
     """A worker process running `python -m senselab_worker.launch <module>`, spoken to over the wire protocol.
 
@@ -304,8 +332,13 @@ class WorkerClient:
     its own process group, which `close` and every host fault stop within `SHUTDOWN_BOUND_S`; a
     descendant that calls `setsid` leaves the group and is not reached. One `run` may be in flight at
     a time. Host faults (`ProtocolMismatch`, `ProtocolError`, `WorkerLost`, `WorkerFatal`,
-    `TimeoutError`) discard the worker and carry its last stderr lines as a note. `hello` holds the
-    worker's hello.
+    `TimeoutError`) discard the worker and carry its exit code and last stderr lines as a note.
+    `hello` holds the worker's hello.
+
+    Shutdown is two steps, stopping the process group and then removing the files, each recorded
+    only once it has completed and each run once. On the main thread SIGINT and SIGTERM are held
+    while it runs and raised after it; anything that interrupts it SIGKILLs the group before
+    propagating.
     """
 
     def __init__(
@@ -333,22 +366,30 @@ class WorkerClient:
             raise ValueError("init key 'array_dir' is reserved")
         self._request_timeout = request_timeout
         self._stderr: collections.deque[str] = collections.deque(maxlen=STDERR_TAIL_LINES)
-        self._lines: queue.Queue[bytes | None] = queue.Queue()
+        self._lines: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
         self._proc: subprocess.Popen[bytes] | None = None
         self._pumps: list[_Pump] = []
         self._reaper: threading.Thread | None = None
         self._exited = threading.Event()
-        self._exit_status: list[int] = []
         self._run_lock = threading.Lock()
         self._run_owner: int | None = None
         self._run_idle = threading.Event()
         self._run_idle.set()
+        self._channel_lock = threading.Lock()
         self._shutdown_lock = threading.Lock()
-        self._terminated = False
+        self._shutting_down: set[int] = set()
+        self._closed_by_caller = False
+        self._stopped = False
         self._released = False
         self._init_names: set[str] = set()
         self.hello: dict[str, Any] = {}
-        self._array_dir = Path(tempfile.mkdtemp(prefix="senselab-arrays-", dir=array_parent)).absolute()
+        self._wake_r, self._wake_w = os.pipe()
+        try:
+            self._array_dir = Path(tempfile.mkdtemp(prefix="senselab-arrays-", dir=array_parent)).absolute()
+        except BaseException:
+            os.close(self._wake_r)
+            os.close(self._wake_w)
+            raise
         self._closed = False
         try:
             wire_init = to_wire({"array_dir": str(self._array_dir), **init}, array_dir=self._array_dir, at="init")
@@ -400,20 +441,44 @@ class WorkerClient:
         self._run_idle.clear()
         try:
             return self._run(items, params)
+        except Exception as exc:
+            if self._closed_by_caller and not isinstance(exc, WorkerLost):
+                lost = WorkerLost("the client was closed during the run")
+                self._fail(lost)
+                raise lost from exc
+            raise
         finally:
-            if self._closed:
-                self._shutdown(graceful=False)
-            else:
-                self._remove_arrays(keep=self._init_names)
-            self._run_owner = None
-            self._run_idle.set()
-            self._run_lock.release()
+            try:
+                if not self._closed:
+                    self._remove_arrays(keep=self._init_names)
+            finally:
+                self._run_owner = None
+                try:
+                    if self._closed:
+                        self._shutdown(graceful=False)
+                finally:
+                    self._run_idle.set()
+                    self._run_lock.release()
 
     def close(self) -> None:
         """Stop the worker's process group and remove this client's files, within `SHUTDOWN_BOUND_S`.
 
         Safe to call twice and from another thread; a `run` in flight then raises `WorkerLost`.
+        Called again on a thread already closing this client, as from a signal handler, it returns at
+        once and the outer call finishes. Called on the thread running `run`, as from a signal
+        handler, it marks the client closed and returns; that `run` stops the worker and raises
+        `WorkerLost`.
         """
+        if not self._closed:
+            self._closed_by_caller = True
+        if self._run_owner == threading.get_ident():
+            self._closed = True
+            self._lines.put(None)
+            try:
+                os.write(self._wake_w, b"x")
+            except OSError:
+                pass
+            return
         self._shutdown(graceful=self._run_owner is None)
 
     def __enter__(self) -> "WorkerClient":
@@ -438,7 +503,7 @@ class WorkerClient:
 
     def _run(self, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
         if self._closed:
-            raise WorkerLost("worker was discarded or closed; start a new WorkerClient")
+            raise WorkerLost("worker was discarded or closed; start a new WorkerClient", returncode=self.returncode)
         request_id = str(uuid.uuid4())
         try:
             validate_message({"id": request_id, "items": items, "params": params}, "request")
@@ -483,9 +548,7 @@ class WorkerClient:
 
         stdout = _Pump(proc.stdout.fileno(), MAX_LINE_BYTES + 1, self._lines.put, keep_partial=False)
         self._pumps = [stdout, _Pump(proc.stderr.fileno(), _STDERR_LINE_BYTES, keep, keep_partial=True)]
-        self._reaper = threading.Thread(
-            target=_reap, args=(proc.pid, self._exited, self._exit_status, stdout), daemon=True
-        )
+        self._reaper = threading.Thread(target=_reap, args=(proc.pid, self._exited, stdout), daemon=True)
         self._reaper.start()
 
     def _handshake(self, expected_runtime: str) -> dict[str, Any]:
@@ -498,7 +561,10 @@ class WorkerClient:
                 break
             if line is None:
                 self._lines.put(None)
-                break
+                raise ProtocolMismatch(
+                    f"the worker closed its output before its hello; host expects ({WIRE_VERSION!r}, "
+                    f"{expected_runtime!r})"
+                )
             try:
                 msg = parse_line(line)
             except ProtocolError:
@@ -519,21 +585,56 @@ class WorkerClient:
         return hello
 
     def _send(self, line: bytes, deadline: Deadline) -> None:
+        """Write `line` by non-blocking writes, each under the channel lock and only while the client is open."""
         assert self._proc is not None and self._proc.stdin is not None
-        fd = self._proc.stdin.fileno()
+        stdin = self._proc.stdin
         view = memoryview(line)
         with selectors.DefaultSelector() as sel:
-            sel.register(fd, selectors.EVENT_WRITE)
+            sel.register(self._wake_r, selectors.EVENT_READ)
+            watched = False
             while view:
-                try:
-                    view = view[os.write(fd, view) :]
-                    continue
-                except BlockingIOError:
-                    pass
-                except OSError as exc:
-                    raise WorkerLost(f"cannot write to the worker: {exc}") from exc
+                with self._channel_lock:
+                    if self._closed or stdin.closed:
+                        raise WorkerLost("the client was closed while sending to the worker")
+                    fd = stdin.fileno()
+                    if not watched:
+                        sel.register(fd, selectors.EVENT_WRITE)
+                        watched = True
+                    try:
+                        view = view[os.write(fd, view) :]
+                        continue
+                    except BlockingIOError:
+                        pass
+                    except OSError as exc:
+                        raise WorkerLost(f"cannot write to the worker: {exc}") from exc
                 deadline.check("sending to the worker")
                 sel.select(deadline.remaining())
+
+    def _write_stop(self) -> None:
+        """Write the stop line if the pipe takes it at once."""
+        assert self._proc is not None and self._proc.stdin is not None
+        stdin = self._proc.stdin
+        with self._channel_lock:
+            if stdin.closed:
+                return
+            try:
+                os.write(stdin.fileno(), dump_line({"stop": True}, "stop"))
+            except OSError:
+                pass
+
+    def _retire_channel(self) -> None:
+        """Close the worker's stdin under the channel lock, then wake a `_send` waiting on it."""
+        assert self._proc is not None and self._proc.stdin is not None
+        with self._channel_lock:
+            try:
+                self._proc.stdin.close()
+            except OSError:
+                pass
+        if not self._released:
+            try:
+                os.write(self._wake_w, b"x")
+            except OSError:
+                pass
 
     def _receive(self, deadline: Deadline, what: str, *kinds: Kind) -> dict[str, Any]:
         """Return the next line as a message of one of `kinds`, the first that has its key; a `fatal` raises."""
@@ -545,9 +646,9 @@ class WorkerClient:
             raise TimeoutError(f"{what} did not finish in time") from None
         if line is None:
             self._lines.put(None)
-            self._exited.wait(EXIT_CODE_WAIT_S)
-            code = self._exit_status[0] if self._exit_status else None
-            raise WorkerLost(f"worker closed its output while {what}; exit code {code}", returncode=code)
+            if self._closed_by_caller:
+                raise WorkerLost(f"the client was closed while {what}")
+            raise WorkerLost(f"worker closed its output while {what}")
         msg = parse_line(line)
         if "fatal" in msg:
             raise WorkerFatal(_fatal_record(validate_message(msg, "fatal")["error"]))
@@ -605,38 +706,92 @@ class WorkerClient:
                 logger.warning("cannot remove array file %s: %s", path, exc)
 
     def _fail(self, exc: BaseException) -> None:
+        """Stop the worker for the host fault `exc`, then give `exc` the exit code and the stderr tail."""
+        self._closed = True
+        if isinstance(exc, WorkerLost) and not self._closed_by_caller:
+            self._exited.wait(EXIT_CODE_WAIT_S)
         self._shutdown(graceful=isinstance(exc, ProtocolMismatch))
+        if isinstance(exc, WorkerLost) and exc.returncode is None:
+            exc.returncode = self.returncode
         if isinstance(exc, (InfrastructureFault, TimeoutError)):
-            exc.add_note(f"worker stderr, last {len(self._stderr)} lines:\n" + "\n".join(self._stderr))
+            exc.add_note(
+                f"worker exit code {_code_text(self.returncode)}; stderr, last {len(self._stderr)} lines:\n"
+                + "\n".join(self._stderr)
+            )
 
     def _shutdown(self, *, graceful: bool) -> None:
-        bound = Deadline(SHUTDOWN_BOUND_S)
-        self._closed = True
-        with self._shutdown_lock:
-            if not self._terminated:
-                self._terminated = True
-                try:
-                    self._terminate(graceful=graceful)
-                except Exception:  # noqa: BLE001 - shutdown is total
-                    logger.exception("stopping the worker failed")
+        """Run each shutdown step not yet completed: stop the group, then, once no run is in flight, remove files."""
         me = threading.get_ident()
-        if self._run_owner not in (None, me):
-            self._run_idle.wait(bound.remaining())
-        with self._shutdown_lock:
-            if self._released or self._run_owner not in (None, me):
-                return
-            self._released = True
-            self._remove_arrays(keep=set())
+        if me in self._shutting_down:
+            return
+        self._shutting_down.add(me)
+        try:
+            self._closed = True
+            bound = Deadline(SHUTDOWN_BOUND_S)
             try:
-                os.rmdir(self._array_dir)
-            except FileNotFoundError:
-                pass
+                with _signals_deferred():
+                    if self._acquire_shutdown(bound):
+                        try:
+                            if not self._stopped:
+                                self._stop(graceful=graceful)
+                        finally:
+                            self._shutdown_lock.release()
+                    if self._run_owner not in (None, me):
+                        self._run_idle.wait(bound.remaining())
+                    if self._acquire_shutdown(bound):
+                        try:
+                            if not self._released and self._run_owner in (None, me):
+                                self._release()
+                        finally:
+                            self._shutdown_lock.release()
+            except BaseException:
+                self._kill_group_now()
+                raise
+        finally:
+            self._shutting_down.discard(me)
+
+    def _acquire_shutdown(self, bound: Deadline) -> bool:
+        if self._shutdown_lock.acquire(timeout=max(bound.remaining() or 0.0, 0.0)):
+            return True
+        logger.error("another thread's shutdown of this client did not finish within %s s", SHUTDOWN_BOUND_S)
+        return False
+
+    def _stop(self, *, graceful: bool) -> None:
+        try:
+            self._terminate(graceful=graceful)
+        except Exception:  # noqa: BLE001 - shutdown is total
+            logger.exception("stopping the worker failed")
+            self._kill_group_now()
+            return
+        self._stopped = True
+
+    def _kill_group_now(self) -> None:
+        """SIGKILL the group if its leader is still this client's unreaped child."""
+        proc = self._proc
+        if proc is None or proc.returncode is not None:
+            return
+        exited = self._exited.is_set()
+        if not exited or _leader_held(proc.pid, self._exited, LEADER_PROBE_TIMEOUT_S):
+            _signal_group(proc.pid, signal.SIGKILL, leader_exited=exited)
+
+    def _release(self) -> None:
+        self._remove_arrays(keep=set())
+        try:
+            os.rmdir(self._array_dir)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            try:
+                left = sorted(os.listdir(self._array_dir))
             except OSError:
-                try:
-                    left = sorted(os.listdir(self._array_dir))
-                except OSError:
-                    left = []
-                logger.warning("left %s: it holds names this client did not write: %s", self._array_dir, left)
+                left = []
+            logger.warning("left %s: it holds names this client did not write: %s", self._array_dir, left)
+        for name in ("_wake_r", "_wake_w"):
+            fd = getattr(self, name)
+            setattr(self, name, -1)
+            if fd >= 0:
+                os.close(fd)
+        self._released = True
 
     def _signal_group_until_gone(self, pgid: int, stop: Deadline) -> None:
         exited = self._exited
@@ -648,40 +803,34 @@ class WorkerClient:
                 logger.error("worker process group %d still has members after SIGKILL", pgid)
 
     def _terminate(self, *, graceful: bool) -> None:
+        """Stop the group and reap its leader, then stop the pipe readers; each part may be run again."""
         proc = self._proc
         if proc is None:
             return
-        assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
+        assert proc.stdout is not None and proc.stderr is not None
         pgid = proc.pid
         stop = Deadline(STOP_GRACE_S)
         if graceful and not self._exited.is_set():
-            try:
-                self._send(dump_line({"stop": True}, "stop"), Deadline(0))
-            except (WorkerLost, TimeoutError):
-                pass
-        try:
-            proc.stdin.close()
-        except OSError:
-            pass
+            self._write_stop()
+        self._retire_channel()
         if graceful:
             self._exited.wait(max((stop.remaining() or 0.0) - TERM_GRACE_S, 0.0))
-        held: bool | None = False
         if proc.returncode is None:
             held = _leader_held(pgid, self._exited, min(LEADER_PROBE_TIMEOUT_S, stop.remaining() or 0.0))
-        if held:
-            try:
-                self._signal_group_until_gone(pgid, stop)
-            except Exception:
-                logger.exception("stopping worker process group %d failed; sending SIGKILL", pgid)
-                _signal_group(pgid, signal.SIGKILL, leader_exited=self._exited.is_set())
-        elif held is None:
-            logger.warning(
-                "worker %d: cannot tell whether it is still unreaped; its process group is not signalled", pgid
-            )
-        else:
-            logger.warning("worker %d was reaped outside this client; its process group is not signalled", pgid)
-        if self._exited.is_set() and proc.returncode is None:
-            proc.wait()
+            if held:
+                try:
+                    self._signal_group_until_gone(pgid, stop)
+                except Exception:
+                    logger.exception("stopping worker process group %d failed; sending SIGKILL", pgid)
+                    _signal_group(pgid, signal.SIGKILL, leader_exited=self._exited.is_set())
+            elif held is None:
+                logger.warning(
+                    "worker %d: cannot tell whether it is still unreaped; its process group is not signalled", pgid
+                )
+            else:
+                logger.warning("worker %d was reaped outside this client; its process group is not signalled", pgid)
+            if self._exited.is_set() and proc.returncode is None:
+                proc.wait()
         join = Deadline(JOIN_GRACE_S)
         for pump in self._pumps:
             pump.finish()

@@ -2,12 +2,14 @@
 
 - `ok` (default): return normally.
 - `hang`: block forever.
+- `deaf`: ignore SIGTERM, then block forever.
 - `crash`: exit at once with status 70.
 - `gate`: connect to `127.0.0.1:init["gate_port"]`, send `in`, and block until two bytes come back.
 """
 
 import json
 import os
+import signal
 import socket
 import threading
 from collections.abc import Iterable
@@ -19,7 +21,9 @@ EXIT_CRASH = 70
 def apply(init: dict[str, Any], params: dict[str, Any]) -> None:
     """Act out `params["mode"]`."""
     mode = params.get("mode", "ok")
-    if mode == "hang":
+    if mode == "deaf":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    if mode in ("hang", "deaf"):
         threading.Event().wait()
     elif mode == "crash":
         os._exit(EXIT_CRASH)

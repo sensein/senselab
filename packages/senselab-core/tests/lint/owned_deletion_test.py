@@ -11,7 +11,7 @@ DELETING_ATTRIBUTES = {"unlink", "rmtree", "rmdir", "removedirs"}
 DELETING_NAMES = {("os", "remove"), ("os", "unlink"), ("os", "rmdir"), ("os", "removedirs"), ("shutil", "rmtree")}
 ALLOWED = {
     ("senselab_worker/ownership.py", "remove_owned"): None,
-    ("senselab_core/runtime/worker_client.py", "WorkerClient._shutdown"): {"os.rmdir(self._array_dir)"},
+    ("senselab_core/runtime/worker_client.py", "WorkerClient._release"): {"os.rmdir(self._array_dir)"},
 }
 """Per (module, qualname), the calls allowed there as `<resolved target>(<argument source>)`; None allows any."""
 
@@ -99,7 +99,7 @@ def test_the_lint_finds_every_deletion_form(line: str) -> None:
     """Each form of deletion is reported in an ordinary module, and an allowed scope covers only its own call."""
     assert deletions(f"def f(p):\n    {line}\n", "senselab_core/other.py")
     assert not deletions(f"def remove_owned(p):\n    {line}\n", "senselab_worker/ownership.py")
-    in_shutdown = f"class WorkerClient:\n    def _shutdown(self, p):\n        {line}\n"
+    in_shutdown = f"class WorkerClient:\n    def _release(self, p):\n        {line}\n"
     assert deletions(in_shutdown, "senselab_core/runtime/worker_client.py")
 
 
@@ -120,8 +120,8 @@ def test_the_lint_finds_every_deletion_form(line: str) -> None:
     ],
 )
 def test_shutdown_allowance_is_one_resolved_call_on_one_argument(imports: str, line: str, allowed: bool) -> None:
-    """`WorkerClient._shutdown` may call only `os.rmdir(self._array_dir)`, with `os` resolved through the imports."""
-    source = f"{imports}\nclass WorkerClient:\n    def _shutdown(self, p):\n        {line}\n"
+    """`WorkerClient._release` may call only `os.rmdir(self._array_dir)`, with `os` resolved through the imports."""
+    source = f"{imports}\nclass WorkerClient:\n    def _release(self, p):\n        {line}\n"
     assert (deletions(source, "senselab_core/runtime/worker_client.py") == []) is allowed
 
 
