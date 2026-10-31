@@ -33,7 +33,8 @@ def _read_chunks(path: str | os.PathLike[str], chunk_size: int) -> Iterator[byte
             yield chunk
 
 
-def _sha256_file(path: str | os.PathLike[str]) -> str:
+def sha256_file(path: str | os.PathLike[str]) -> str:
+    """Return the lowercase hex sha256 of the file at `path`, read one chunk at a time."""
     digest = hashlib.sha256()
     for chunk in _read_chunks(path, DEFAULT_CHUNK_SIZE):
         digest.update(chunk)
@@ -79,6 +80,6 @@ def weights_identity(paths: Sequence[str | os.PathLike[str]], *, root: str | os.
         posix = unicodedata.normalize("NFC", PurePath(rel).as_posix())
         if posix in pairs:
             raise ValueError(f"weight file listed twice: {posix}")
-        pairs[posix] = _sha256_file(path)
+        pairs[posix] = sha256_file(path)
     ordered = sorted(pairs, key=utf16_sort_key)
     return sha256_bytes(jcs_dumps([[rel, pairs[rel]] for rel in ordered]))

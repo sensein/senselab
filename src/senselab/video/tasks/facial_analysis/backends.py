@@ -7,7 +7,6 @@ goes in and per-tile arrays come back as one ``.npz``.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
 import tempfile
@@ -17,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+from senselab_core.runtime.models import WEIGHTS, WeightsMismatch, verify_weights
 from senselab_core.runtime.revision import cache_root
 
 from senselab.utils.data_structures.logging import logger
@@ -31,7 +31,6 @@ MEDIAPIPE_PYTHON = "3.12"
 MEDIAPIPE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 )
-MEDIAPIPE_MODEL_SHA256 = "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
 
 PYFEAT_VENV = "pyfeat"
 PYFEAT_REQUIREMENTS = ["py-feat==2.1.5", "av>=15", "numpy", "safetensors"]
@@ -56,35 +55,40 @@ def mediapipe_model_path() -> Path:
     Raises:
         RuntimeError: When the downloaded bytes do not match the pinned SHA-256.
     """
-    target = cache_root() / "models" / "mediapipe" / f"face_landmarker_float16_v1_{MEDIAPIPE_MODEL_SHA256[:12]}.task"
-    return download_pinned(MEDIAPIPE_MODEL_URL, MEDIAPIPE_MODEL_SHA256, target)
+    target = cache_root() / "models" / "mediapipe" / f"face_landmarker_float16_v1_{WEIGHTS['mediapipe'][:12]}.task"
+    return download_pinned(MEDIAPIPE_MODEL_URL, "mediapipe", target)
 
 
-def download_pinned(url: str, sha256: str, target: Path) -> Path:
-    """Download ``url`` to ``target`` once, verifying its SHA-256.
+def download_pinned(url: str, name: str, target: Path) -> Path:
+    """Download ``url`` to ``target`` once, verifying the file's SHA-256 against the weights manifest.
 
     Args:
         url: The source URL.
-        sha256: The pinned digest.
+        name: The key in :data:`senselab_core.runtime.models.WEIGHTS`.
         target: The cache file.
 
     Returns:
         ``target``.
 
     Raises:
-        RuntimeError: When the downloaded bytes do not match the pinned SHA-256.
+        WeightsMismatch: When the downloaded bytes do not match the manifest entry (a ``RuntimeError``).
     """
-    if target.exists() and _sha256(target) == sha256:
-        return target
+    if target.exists():
+        try:
+            verify_weights(name, target)
+            return target
+        except WeightsMismatch:
+            pass
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name(target.name + ".partial")
     request = urllib.request.Request(url, headers={"User-Agent": "senselab (https://github.com/sensein/senselab)"})
     with urllib.request.urlopen(request, timeout=120) as response, open(partial, "wb") as handle:  # noqa: S310
         handle.write(response.read())
-    digest = _sha256(partial)
-    if digest != sha256:
+    try:
+        verify_weights(name, partial)
+    except WeightsMismatch:
         partial.unlink(missing_ok=True)
-        raise RuntimeError(f"{target.name} SHA-256 {digest} != pinned {sha256} ({url})")
+        raise
     partial.replace(target)
     return target
 
@@ -105,14 +109,6 @@ def pyfeat_weight_paths() -> Dict[str, str]:
         "multitask_weights": fetch(PYFEAT_MULTITASK_REPO, PYFEAT_MULTITASK_FILE, PYFEAT_MULTITASK_SHA),
         "retinaface_weights": fetch(PYFEAT_RETINAFACE_REPO, PYFEAT_RETINAFACE_FILE, PYFEAT_RETINAFACE_SHA),
     }
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _tile_payload(layout: GalleryLayout) -> List[Dict[str, Any]]:

@@ -19,7 +19,6 @@ files, as is the CPC encoder checkpoint, verified against its SHA-256. The worke
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
@@ -32,6 +31,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from senselab_core.runtime.locks import SharedFileLock
+from senselab_core.runtime.models import WEIGHTS, WeightsMismatch, verify_weights
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType
@@ -101,8 +101,7 @@ DEFAULT_VAP_CHECKPOINT = "vap_en_kyoto_mc"
 DEFAULT_BC_CHECKPOINT = "vap_bc_en"
 
 CPC_URL = "https://dl.fbaipublicfiles.com/librilight/CPC_checkpoints/60k_epoch4-d0f474de.pt"
-CPC_SHA256 = "d0f474de968c7243c20f43dee1626681618f2f150d3e638e82b79e22563b17f1"
-"""The Libri-light CPC encoder MaAI's ``normal`` models are built on, and its file digest."""
+"""The Libri-light CPC encoder MaAI's ``normal`` models are built on; its file digest is ``WEIGHTS["maai-cpc"]``."""
 
 _MAAI_VENV = "maai"
 _MAAI_REQUIREMENTS = ["maai==0.2.24", "torch>=2.6", "numpy", "soundfile"]
@@ -250,7 +249,7 @@ def stage_checkpoint(checkpoint: MaaiCheckpoint) -> str:
 
 
 def stage_cpc(cache_dir: Optional[Path] = None) -> str:
-    """Return a local copy of the CPC encoder checkpoint, downloading it once and checking its digest.
+    """Return a local copy of the CPC encoder checkpoint, downloading it once and checking its file SHA-256.
 
     Args:
         cache_dir: Where to keep it; defaults to senselab's cache.
@@ -259,29 +258,32 @@ def stage_cpc(cache_dir: Optional[Path] = None) -> str:
         The file's path.
 
     Raises:
-        RuntimeError: If the file's SHA-256 is not :data:`CPC_SHA256`.
+        WeightsMismatch: If the file's SHA-256 is not the manifest's ``maai-cpc`` entry (a ``RuntimeError``).
     """
     directory = cache_dir or (_cache_dir().parent / "maai")
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"cpc-{CPC_SHA256[:16]}.pt"
+    path = directory / f"cpc-{WEIGHTS['maai-cpc'][:16]}.pt"
     with SharedFileLock(path):
-        if not path.is_file() or _sha256(path) != CPC_SHA256:
+        if not _verified(path):
             partial = path.with_name(path.name + ".partial")
             urllib.request.urlretrieve(CPC_URL, partial)  # noqa: S310 -- a fixed https URL
-            digest = _sha256(partial)
-            if digest != CPC_SHA256:
+            try:
+                verify_weights("maai-cpc", partial)
+            except WeightsMismatch:
                 partial.unlink(missing_ok=True)
-                raise RuntimeError(f"CPC checkpoint from {CPC_URL} has SHA-256 {digest}, expected {CPC_SHA256}")
+                raise
             partial.replace(path)
     return str(path)
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _verified(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        verify_weights("maai-cpc", path)
+    except WeightsMismatch:
+        return False
+    return True
 
 
 def run_maai(

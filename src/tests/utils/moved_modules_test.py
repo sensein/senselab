@@ -63,3 +63,18 @@ def test_no_moved_module_paths_remain() -> None:
             for n in sorted(MOVED_HELPERS & _imported_names(text, "senselab.utils.dependencies"))
         ]
     assert hits == []
+
+
+_SHA_LITERAL = re.compile(r"\b\w*SHA256\s*=\s*[\"'][0-9a-f]{64}[\"']")
+
+
+@pytest.mark.logic
+def test_no_weight_sha256_literals_remain() -> None:
+    """Weight digests live in `weights.yaml`; no `*_SHA256 = "<64 hex>"` literal is left outside `reproduce/`."""
+    hits = [
+        str(path.relative_to(REPO))
+        for path in (REPO / "src" / "senselab").rglob("*.py")
+        if "reproduce" not in path.relative_to(REPO / "src" / "senselab").parts
+        and _SHA_LITERAL.search(path.read_text())
+    ]
+    assert hits == []
