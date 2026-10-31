@@ -29,17 +29,8 @@ def _generator() -> ModuleType:
 
 
 def _table() -> tuple[dict[str, str], list[tuple[int, int]]]:
-    header: dict[str, str] = {}
-    ranges: list[tuple[int, int]] = []
-    for line in TABLE.read_text(encoding="ascii").splitlines():
-        if not line or line.startswith("#"):
-            continue
-        first, second = line.split(" ")
-        if first in ("unicode_version", "nfc_fingerprint"):
-            header[first] = second
-        else:
-            ranges.append((int(first, 16), int(second, 16)))
-    return header, ranges
+    table = _generator().read(TABLE.read_text(encoding="ascii"))
+    return {"unicode_version": table.version, "nfc_fingerprint": table.fingerprint}, table.ranges
 
 
 def _allowed(cp: int, ranges: list[tuple[int, int]]) -> bool:
@@ -55,17 +46,18 @@ def test_table_names_the_floor_unicode_version() -> None:
 
 @pytest.mark.contract
 def test_this_interpreter_normalises_every_allowed_code_point_as_the_floor_does() -> None:
-    """The NFC fingerprint of every allowed code point under this interpreter equals the one the floor wrote."""
-    header, ranges = _table()
+    """Under 3.10 the table is what the generator writes; under any Python its normalisation fingerprint holds."""
     generator = _generator()
+    text = TABLE.read_text(encoding="ascii")
+    table = generator.read(text)
     if unicodedata.unidata_version == UNICODE_VERSION:
-        assert generator.render(generator.allowed(), header["nfc_fingerprint"], UNICODE_VERSION) == TABLE.read_text(
-            encoding="ascii"
-        ), "the table is not what the generator writes from this database"
+        assert generator.render(generator.generate()) == text, "the table is not what the generator writes"
     else:
-        assert all(unicodedata.category(chr(a)) != "Cn" and unicodedata.category(chr(b)) != "Cn" for a, b in ranges)
-    assert generator.nfc_fingerprint(ranges) == header["nfc_fingerprint"], (
-        f"Python {sys.version_info[:2]} (Unicode {unicodedata.unidata_version}) normalises an allowed code point "
+        assert all(
+            unicodedata.category(chr(a)) != "Cn" and unicodedata.category(chr(b)) != "Cn" for a, b in table.ranges
+        )
+    assert generator.nfc_fingerprint(table) == table.fingerprint, (
+        f"Python {sys.version_info[:2]} (Unicode {unicodedata.unidata_version}) normalises text over the table "
         f"differently from Unicode {UNICODE_VERSION}"
     )
 

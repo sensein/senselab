@@ -67,11 +67,11 @@ def _unassigned_pattern() -> "re.Pattern[str]":
     for line in text.splitlines():
         if not line or line.startswith("#"):
             continue
-        first, second = line.split(" ")
+        first, *rest = line.split(" ")
         if not all(c in "0123456789ABCDEF" for c in first):
-            header[first] = second
+            header[first] = " ".join(rest)
             continue
-        start, end = int(first, 16), int(second, 16)
+        start, end = int(first, 16), int(rest[0], 16)
         if start > following:
             gaps.append(f"\\U{following:08x}-\\U{start - 1:08x}")
         following = end + 1
