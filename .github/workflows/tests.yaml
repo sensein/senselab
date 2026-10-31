@@ -2,7 +2,7 @@ name: tests
 
 on:
   push:
-    branches: [alpha, main, 2x/**]
+    branches: [alpha, main, 2.x, 2x/**]
   pull_request:
     # `ready_for_review` matters because every job below is gated on
     # `pull_request.draft == false`. Without it, a PR opened as a draft and later
