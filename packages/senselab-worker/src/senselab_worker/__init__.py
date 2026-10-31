@@ -3,18 +3,18 @@
 import functools
 from pathlib import Path
 
-from senselab_worker.hashing import sha256_bytes
+from senselab_worker.digest import blob_digest, identity_digest
 
 WIRE_VERSION = 2
 
 
 @functools.lru_cache(maxsize=1)
 def runtime_identity() -> str:
-    """Return the hex sha256 identifying this worker runtime's source.
+    """Return `identity_digest("worker-runtime@1", files)` over this worker runtime's source.
 
-    Over the package's `*.py` files sorted by POSIX path relative to the package root, the digest
-    covers, per file, the UTF-8 path, a NUL byte, the file bytes and a NUL byte.
+    `files` is `[[relpath, blob_digest("file@1", path)], ...]` over the package's `*.py` files, each named by its
+    POSIX path relative to the package root and sorted by it.
     """
     root = Path(__file__).parent
     files = sorted((p.relative_to(root).as_posix(), p) for p in root.rglob("*.py"))
-    return sha256_bytes(b"".join(rel.encode("utf-8") + b"\0" + path.read_bytes() + b"\0" for rel, path in files))
+    return identity_digest("worker-runtime@1", [[rel, blob_digest("file@1", path)] for rel, path in files])

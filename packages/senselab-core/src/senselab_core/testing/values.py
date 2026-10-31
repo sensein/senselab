@@ -98,7 +98,7 @@ def frozen_types() -> list[type[Frozen]]:
     """Return every `Frozen` subclass defined under `SCANNED_PACKAGES`, after importing all their modules."""
     for package in (senselab_core.kernel, senselab_core.runtime):
         for module in pkgutil.walk_packages(package.__path__, package.__name__ + "."):
-            importlib.import_module(module.name)
+            importlib.import_module(module.name)  # noqa: TID251
     found: list[type[Frozen]] = []
     pending = list(Frozen.__subclasses__())
     while pending:
@@ -291,7 +291,7 @@ def _copy_refuses_unknown_fields(factory: Factory) -> None:
 def _source_of(v: Frozen) -> str:
     source = getattr(v, "source", None)
     if source is None:
-        source = getattr(getattr(v, "ref"), "source")
+        source = getattr(getattr(v, "ref"), "source")  # noqa: B009
     assert isinstance(source, str)
     return source
 

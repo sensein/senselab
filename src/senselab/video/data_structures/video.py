@@ -198,8 +198,8 @@ class Video(BaseModel):
         Returns:
             A string unique identifier.
         """
-        temp_hash = uuid.uuid3(uuid.uuid3(SENSELAB_NAMESPACE, str(self.frames)), str(self.frame_rate))
-        return str(temp_hash) if self._audio is None else str(uuid.uuid3(temp_hash, self._audio.generate_id()))
+        temp_hash = uuid.uuid3(uuid.uuid3(SENSELAB_NAMESPACE, str(self.frames)), str(self.frame_rate))  # noqa: TID251
+        return str(temp_hash) if self._audio is None else str(uuid.uuid3(temp_hash, self._audio.generate_id()))  # noqa: TID251
 
     def __eq__(self, other: object) -> bool:
         """Determines equality between Video instances based on their generated unique identifiers."""

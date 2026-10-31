@@ -1,22 +1,13 @@
 """Content identities of bytes, files and weight sets (ADR-002, P-4)."""
 
-import hashlib
 import os
 from pathlib import PurePath
 from typing import Iterator, Sequence, TypedDict
 
-from senselab_worker.canonical import DIGEST_TAGS, canonical_text, tagged_digest, utf16_sort_key
+from senselab_worker.canonical import canonical_text, utf16_sort_key
+from senselab_worker.digest import blob_digest, identity_digest
 
-__all__ = [
-    "DEFAULT_CHUNK_SIZE",
-    "DIGEST_TAGS",
-    "ContentId",
-    "content_identity",
-    "sha256_bytes",
-    "sha256_file",
-    "tagged_digest",
-    "weights_identity",
-]
+__all__ = ["DEFAULT_CHUNK_SIZE", "ContentId", "content_identity", "weights_identity"]
 
 DEFAULT_CHUNK_SIZE = 64 * 2**20
 
@@ -30,11 +21,6 @@ class ContentId(TypedDict):
     root: str
 
 
-def sha256_bytes(b: bytes) -> str:
-    """Return the lowercase hex sha256 of `b`."""
-    return hashlib.sha256(b).hexdigest()
-
-
 def _read_chunks(path: str | os.PathLike[str], chunk_size: int) -> Iterator[bytes]:
     if chunk_size < 1:
         raise ValueError(f"chunk_size must be at least 1 byte, got {chunk_size}")
@@ -43,30 +29,22 @@ def _read_chunks(path: str | os.PathLike[str], chunk_size: int) -> Iterator[byte
             yield chunk
 
 
-def sha256_file(path: str | os.PathLike[str]) -> str:
-    """Return the lowercase hex sha256 of the file at `path`, read one chunk at a time."""
-    digest = hashlib.sha256()
-    for chunk in _read_chunks(path, DEFAULT_CHUNK_SIZE):
-        digest.update(chunk)
-    return digest.hexdigest()
-
-
 def content_identity(path: str | os.PathLike[str], *, chunk_size: int = DEFAULT_CHUNK_SIZE) -> ContentId:
     """Return the chunked identity of a file, read one chunk at a time.
 
-    `chunks` holds the sha256 of each consecutive `chunk_size`-byte chunk (the last may be shorter;
-    an empty file has none). `root` is `tagged_digest("content-root@2", {"chunk_size": chunk_size,
+    `chunks` holds `blob_digest("file@1", chunk)` of each consecutive `chunk_size`-byte chunk (the last may be shorter;
+    an empty file has none). `root` is `identity_digest("content-root@2", {"chunk_size": chunk_size,
     "chunks": chunks})`, so the same bytes read in two chunk sizes have two roots.
 
     Raises:
         ValueError: if `chunk_size` is below 1.
     """
-    chunks = [sha256_bytes(chunk) for chunk in _read_chunks(path, chunk_size)]
+    chunks = [blob_digest("file@1", chunk) for chunk in _read_chunks(path, chunk_size)]
     return {
         "algo": "sha256",
         "chunk_size": chunk_size,
         "chunks": chunks,
-        "root": tagged_digest("content-root@2", {"chunk_size": chunk_size, "chunks": chunks}),
+        "root": identity_digest("content-root@2", {"chunk_size": chunk_size, "chunks": chunks}),
     }
 
 
@@ -75,7 +53,7 @@ def weights_identity(paths: Sequence[str | os.PathLike[str]], *, root: str | os.
 
     Each file contributes `[relpath, sha256]`: its path relative to `root` with POSIX separators,
     in canonical form (`canonical_text`; symlinks are not resolved, so a link is named by where it sits and hashed by
-    what it points to), and the sha256 of its bytes. The identity is `tagged_digest("weights@3", pairs)`
+    what it points to), and `blob_digest("file@1", path)`. The identity is `identity_digest("weights@3", pairs)`
     over the pairs sorted by relpath in UTF-16 code-unit order, the order JCS uses for object keys.
 
     Raises:
@@ -91,6 +69,6 @@ def weights_identity(paths: Sequence[str | os.PathLike[str]], *, root: str | os.
         posix = canonical_text(PurePath(rel).as_posix())
         if posix in pairs:
             raise ValueError(f"weight file listed twice: {posix}")
-        pairs[posix] = sha256_file(path)
+        pairs[posix] = blob_digest("file@1", path)
     ordered = sorted(pairs, key=utf16_sort_key)
-    return tagged_digest("weights@3", [[rel, pairs[rel]] for rel in ordered])
+    return identity_digest("weights@3", [[rel, pairs[rel]] for rel in ordered])

@@ -1923,7 +1923,7 @@ class _Execution:
         config = engine.launcher_config(
             spec, executable=self._render("{venv}/bin/vllm"), model_dir=model_dir, tmp=self._render("{tmp}")
         )
-        senselab_root = str(Path(sys.modules["senselab"].__file__ or "").resolve().parent.parent)
+        senselab_root = str(Path(sys.modules["senselab"].__file__ or "").resolve().parent.parent)  # noqa: TID251
         launcher = [sys.executable, "-I", "-B", "-c", engine.LAUNCHER_CODE]
         return [*launcher, senselab_root, str(report_fd), json.dumps(config)]
 
@@ -2075,7 +2075,7 @@ class _Execution:
             os.close(fd)
         scratch = _mkdir(self.result / ADAPTER_TMP)
         _mkdir(scratch / "home")
-        senselab_root = str(Path(sys.modules["senselab"].__file__ or "").resolve().parent.parent)
+        senselab_root = str(Path(sys.modules["senselab"].__file__ or "").resolve().parent.parent)  # noqa: TID251
         read, write = os.pipe()
         argv = [sys.executable, "-I", "-B", "-c", ADAPTER_RUNNER, senselab_root, str(write), str(copy), str(self.work)]
         inner = self._inner([scratch], scratch)

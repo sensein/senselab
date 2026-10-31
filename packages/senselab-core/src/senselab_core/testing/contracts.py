@@ -32,9 +32,9 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
+from senselab_worker.digest import blob_digest
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import FaultClass
-from senselab_worker.hashing import sha256_bytes
 
 from senselab_core.kernel.declare import VERDICT_TYPES, BackendSpec, Registry, TaskSpec, key_for
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelRef, ResolvedModel
@@ -169,7 +169,7 @@ def base_call(task: TaskSpec) -> dict[str, Any]:
     """Return the key builder arguments every key case starts from: default params and `BASE_MODEL`."""
     return {
         "params": task.params(),
-        "inputs": {port: "content:" + sha256_bytes(port.encode()) for port in task.inputs},
+        "inputs": {port: "content:" + blob_digest("file@1", port.encode()) for port in task.inputs},
         "model": BASE_MODEL,
         "profile_slices": {},
     }
@@ -234,11 +234,15 @@ def _varied_call(
         if not call["inputs"]:
             raise unittest.SkipTest(f"{task.name!r} declares no inputs; nothing to vary")
         port = sorted(call["inputs"])[0]
-        return task, backend, {**call, "inputs": {**call["inputs"], port: "content:" + sha256_bytes(b"varied")}}
+        return (
+            task,
+            backend,
+            {**call, "inputs": {**call["inputs"], port: "content:" + blob_digest("file@1", b"varied")}},
+        )
     if field == "model":
         return task, backend, {**call, "model": VARIED_MODEL}
     if field == "profile_slices":
-        return task, backend, {**call, "profile_slices": {"profile": "profile:" + sha256_bytes(b"slice")}}
+        return task, backend, {**call, "profile_slices": {"profile": "profile:" + blob_digest("file@1", b"slice")}}
     raise AssertionError(
         f"LogicalKey.{field} has no contract variation: add it to _varied_call, KEY_FORMAT_FIELDS or NOT_YET_WIRED"
     )
@@ -281,7 +285,7 @@ print(import_qualified(*spec["builder"])(task, backend, **base_call(task)).diges
 
 def import_qualified(module: str, qualname: str) -> Any:  # noqa: ANN401
     """Return the object named `qualname` in `module`, importing the module."""
-    obj: Any = importlib.import_module(module)
+    obj: Any = importlib.import_module(module)  # noqa: TID251
     for part in qualname.split("."):
         obj = getattr(obj, part)
     return obj

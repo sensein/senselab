@@ -17,7 +17,8 @@ from pydantic import (
     Strict,
     StringConstraints,
 )
-from senselab_worker.canonical import Tokeniser, tagged_digest
+from senselab_worker.canonical import Tokeniser
+from senselab_worker.digest import identity_digest
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -101,7 +102,7 @@ _TOKENISER = Tokeniser(extra=_value_family)
 
 
 def value_digest(type_name: str, fields: Mapping[str, object]) -> str:
-    """Return `tagged_digest("value@2", {"type": type_name, "fields": <fields in tokens>})`.
+    """Return `identity_digest("value@2", {"type": type_name, "fields": <fields in tokens>})`.
 
     `fields` is written by the shared `canonical.Tokeniser`, which gives each family outside JSON its
     own token: an array is `{"$array": <sha256 of its canonical .npy>}`, a set `{"$set": [...]}`, an
@@ -116,7 +117,7 @@ def value_digest(type_name: str, fields: Mapping[str, object]) -> str:
         ValueError: if the tokens, inside the `{"type", "fields"}` envelope, nest deeper than `MAX_DEPTH` or
             exceed `MAX_CANONICAL_CHARS`.
     """
-    return tagged_digest(_DIGEST_TAG, {"type": type_name, "fields": _TOKENISER(fields, "fields")})
+    return identity_digest(_DIGEST_TAG, {"type": type_name, "fields": _TOKENISER(fields, "fields")})
 
 
 def digest_of(v: "Frozen") -> str:

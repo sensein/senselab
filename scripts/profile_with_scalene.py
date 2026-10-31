@@ -22,7 +22,7 @@ See specs/20260503-235625-scalene-profiling/contracts/cli.md for the full CLI re
 from __future__ import annotations
 
 import argparse
-import importlib.util
+import importlib.util  # noqa: TID251
 import os
 import re
 import secrets
@@ -120,7 +120,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def check_scalene_available() -> None:
     """Exit with code 3 and an install hint if Scalene is missing."""
-    if importlib.util.find_spec("scalene") is None:
+    if importlib.util.find_spec("scalene") is None:  # noqa: TID251
         print(
             "ERROR: Scalene is not installed in this environment.\nTo install: uv sync --group profiling",
             file=sys.stderr,
@@ -130,7 +130,7 @@ def check_scalene_available() -> None:
 
 def check_nbconvert_available() -> None:
     """Exit with code 5 and an install hint if nbconvert is missing."""
-    if importlib.util.find_spec("nbconvert") is None:
+    if importlib.util.find_spec("nbconvert") is None:  # noqa: TID251
         print(
             "ERROR: nbconvert is not installed; required to profile notebooks.\nTo install: uv sync --group profiling",
             file=sys.stderr,

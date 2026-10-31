@@ -184,7 +184,7 @@ class Audio(BaseModel):
             A string representing the generated unique identifier.
         """
         # Use the waveform property so that lazy loading is triggered if needed.
-        unique_hash = uuid.uuid3(uuid.uuid3(SENSELAB_NAMESPACE, str(self.waveform)), str(self.sampling_rate))
+        unique_hash = uuid.uuid3(uuid.uuid3(SENSELAB_NAMESPACE, str(self.waveform)), str(self.sampling_rate))  # noqa: TID251
         return str(unique_hash)
 
     def __eq__(self, other: object) -> bool:

@@ -7,7 +7,6 @@ and is order-independent.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -23,9 +22,8 @@ from senselab_worker.canonical import (
     NoCanonicalForm,
     Recurse,
     Tokeniser,
-    jcs_dumps,
-    tagged_digest,
 )
+from senselab_worker.digest import blob_digest, identity_digest
 
 from senselab_core.runtime.storage import write_atomically
 
@@ -75,7 +73,6 @@ CHECKSUM_UNRESOLVED_KEY = "checksum_unresolved_reason"
 SIZE_KEY = "size_bytes"
 MTIME_KEY = "mtime_ns"
 PATH_KEY = "path"
-_READ_CHUNK = 1 << 20
 _PROV_TYPES = frozenset(get_args(PROV_TYPE))
 _AGENT_TYPES = frozenset(get_args(AGENT_TYPE))
 _ENVIRONMENT_KINDS = frozenset(get_args(ENVIRONMENT_KIND))
@@ -232,7 +229,7 @@ _ENVIRONMENT_ROOTS = (
 
 
 def _digest(payload: Sequence[object], roots: Sequence[str]) -> str:
-    """Return the 16-hex id of `payload`: `tagged_digest("provenance-id@3", ...)` over each part, normalised.
+    """Return the 16-hex id of `payload`: `identity_digest("provenance-id@3", ...)` over each part, normalised.
 
     `roots` names each part of `payload`, for the path an `UnrecordableValue` reports.
 
@@ -242,13 +239,13 @@ def _digest(payload: Sequence[object], roots: Sequence[str]) -> str:
     """
     parts = [normalised(part, root) for part, root in zip(payload, roots, strict=True)]
     try:
-        return tagged_digest("provenance-id@3", parts)[:16]
+        return identity_digest("provenance-id@3", parts)[:16]
     except ValueError as err:
         raise UnrecordableValue(".".join(roots), payload, str(err)) from err
 
 
 def file_digest(path: str | Path) -> tuple[str | None, str | None]:
-    """Read a file and return its SHA-256, or the reason it has none.
+    """Read a file and return `blob_digest("file@1", file)`, or the reason it has none.
 
     Args:
         path: The file to digest.
@@ -258,11 +255,9 @@ def file_digest(path: str | Path) -> tuple[str | None, str | None]:
         the digest could not be taken.
     """
     target = Path(path)
-    digest = hashlib.sha256()
     try:
         with target.open("rb") as handle:
-            while chunk := handle.read(_READ_CHUNK):
-                digest.update(chunk)
+            digest = blob_digest("file@1", handle)
     except FileNotFoundError:
         return None, "file not found"
     except IsADirectoryError:
@@ -271,7 +266,7 @@ def file_digest(path: str | Path) -> tuple[str | None, str | None]:
         return None, "permission denied"
     except OSError as err:
         return None, f"read failed: {type(err).__name__}"
-    return digest.hexdigest(), None
+    return digest, None
 
 
 def file_attributes(path: str | Path, *, digest: str | None = None, reason: str | None = None) -> dict[str, Any]:

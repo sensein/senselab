@@ -1,13 +1,12 @@
-"""Canonical byte forms of JSON values and numpy arrays, and the tagged digest over them (ADR-006).
+"""Canonical byte forms of JSON values and numpy arrays (ADR-006).
 
 `jcs_dumps` writes RFC 8785 (JCS) JSON with strings in their canonical form (`canonical_text`);
 `canonical_npy_bytes` writes `.npy` version 1.0, C order, little-endian, one byte form per value;
-`tagged_digest` hashes a JSON value under a registered domain tag; `Tokeniser` writes a value outside
+`Tokeniser` writes a value outside
 JSON as JSON with a one-key token object per family. Every encoder accepts an exact-type whitelist, refuses everything
 else, and walks containers through one `Walk`.
 """
 
-import hashlib
 import json
 import math
 import re
@@ -23,6 +22,8 @@ from typing import Any, Callable, TypeVar, cast
 
 import numpy
 
+from senselab_worker.digest import blob_digest
+
 MAX_SAFE_INT = 2**53 - 1
 """The I-JSON integer bound: an integer is JSON only within +/-MAX_SAFE_INT."""
 _PLATFORM_DTYPE_CHARS = "gG"
@@ -34,21 +35,6 @@ MAX_DEPTH = 64
 """The most containers on any path from a value's root to a leaf, the root included."""
 MAX_CANONICAL_CHARS = 64 * 2**20
 """The most characters one `Walk` may write or replay: the work bound of encoding a value that shares children."""
-
-DIGEST_TAGS: frozenset[str] = frozenset(
-    {
-        "logical-key@3",
-        "output@3",
-        "context@3",
-        "content-root@2",
-        "audio@3",
-        "weights@3",
-        "value@2",
-        "provenance-id@3",
-        "data-manifest@3",
-    }
-)
-"""The registered domain tags of `tagged_digest`; no tag is a prefix of another."""
 
 Scalar = None | bool | int | float | str
 T = TypeVar("T")
@@ -400,18 +386,6 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return out
 
 
-def tagged_digest(tag: str, value: object) -> str:
-    """Return the sha256 hex of `tag` in ASCII, a zero byte and the JCS of `value`.
-
-    Raises:
-        ValueError: if `tag` is not in `DIGEST_TAGS`, or `jcs_dumps` refuses `value`.
-        TypeError: if `jcs_dumps` refuses `value`.
-    """
-    if tag not in DIGEST_TAGS:
-        raise ValueError(f"unregistered digest tag {tag!r}; registered: {sorted(DIGEST_TAGS)}")
-    return hashlib.sha256(tag.encode("ascii") + b"\x00" + jcs_dumps(value)).hexdigest()
-
-
 def utf16_sort_key(key: str) -> bytes:
     """Return the sort key that orders strings by UTF-16 code units, as JCS orders object keys."""
     return key.encode("utf-16-be", "surrogatepass")
@@ -563,8 +537,8 @@ Extra = Callable[[object], "tuple[str | None, object] | None"]
 
 
 def array_token(a: numpy.ndarray, recurse: Recurse, path: str) -> object:
-    """Return `{"$array": <sha256 of canonical_npy_bytes(a)>}`."""
-    return {ARRAY_TOKEN: hashlib.sha256(canonical_npy_bytes(a)).hexdigest()}
+    """Return `{"$array": blob_digest("npy@1", canonical_npy_bytes(a))}`."""
+    return {ARRAY_TOKEN: blob_digest("npy@1", canonical_npy_bytes(a))}
 
 
 class Tokeniser:

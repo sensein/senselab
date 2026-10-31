@@ -1,5 +1,6 @@
 """Wire codec: framing, array references and their integrity checks."""
 
+import hashlib
 import json
 import os
 import time
@@ -33,7 +34,6 @@ from senselab_worker.faults import (
     WireValueError,
     error_record,
 )
-from senselab_worker.hashing import sha256_bytes
 
 
 @pytest.mark.logic
@@ -59,7 +59,7 @@ def test_array_file_is_npy_named_by_its_sha256(tmp_path: Path) -> None:
     ref = to_wire(a, array_dir=tmp_path, at="line")["__array__"]
     data = npy_bytes(a)
     assert Path(ref["path"]).read_bytes() == data
-    assert ref["sha256"] == sha256_bytes(data) and Path(ref["path"]).name == f"{ref['sha256']}.npy"
+    assert ref["sha256"] == hashlib.sha256(data).hexdigest() and Path(ref["path"]).name == f"{ref['sha256']}.npy"
     assert ref["dtype"] == "<i4" and ref["shape"] == [2, 2]
     assert numpy.array_equal(from_wire({"__array__": ref}, array_dir=tmp_path), a)
 
@@ -181,7 +181,7 @@ def test_array_paths_lists_every_reference(tmp_path: Path) -> None:
 )
 def test_malformed_file_with_matching_sha256_is_integrity_error(tmp_path: Path, data: bytes) -> None:
     """A file whose sha256 matches its reference but which numpy cannot load raises `ArrayIntegrityError`."""
-    sha = sha256_bytes(data)
+    sha = hashlib.sha256(data).hexdigest()
     (tmp_path / f"{sha}.npy").write_bytes(data)
     ref = {"__array__": {"path": str(tmp_path / f"{sha}.npy"), "sha256": sha, "dtype": "<f4", "shape": [1]}}
     with pytest.raises(ArrayIntegrityError):

@@ -22,8 +22,9 @@ from pydantic import (
     TypeAdapter,
     model_validator,
 )
-from senselab_worker.canonical import canonical_npy_bytes, tagged_digest
-from senselab_worker.hashing import content_identity, sha256_bytes
+from senselab_worker.canonical import canonical_npy_bytes
+from senselab_worker.digest import blob_digest, identity_digest
+from senselab_worker.hashing import content_identity
 
 from senselab_core.kernel._base import (
     Frozen,
@@ -435,7 +436,7 @@ class Audio(Recording):
     """A recording of one regular group named `audio` whose channels are all of type `audio`, in one unit.
 
     Held samples are float32 (`AUDIO_DTYPE`). An in-memory audio's identity is `"content:" +
-    tagged_digest("audio@3", {"npy": sha256 of the canonical .npy of the (channels, samples) data,
+    identity_digest("audio@3", {"npy": blob_digest("npy@1", <canonical .npy>) of the (channels, samples) data,
     "sampling_rate": rate})`; a file-backed one's is `content:` and the root of the file's content identity.
     """
 
@@ -461,8 +462,8 @@ class Audio(Recording):
         group = _audio_group(groups)
         if group.data is None:
             return "content:" + _source_root(group)
-        npy = sha256_bytes(canonical_npy_bytes(group.data))
-        return "content:" + tagged_digest("audio@3", {"npy": npy, "sampling_rate": group.sampling_rate})
+        npy = blob_digest("npy@1", canonical_npy_bytes(group.data))
+        return "content:" + identity_digest("audio@3", {"npy": npy, "sampling_rate": group.sampling_rate})
 
     @classmethod
     def _of(cls, group: RegularGroup) -> "Audio":

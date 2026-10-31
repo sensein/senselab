@@ -19,8 +19,8 @@ from typing import Any, Callable, Literal
 import numpy
 
 from senselab_worker.canonical import MAX_DEPTH, canonical_scalar, entered, npy_bytes, require_depth
+from senselab_worker.digest import blob_digest
 from senselab_worker.faults import ArrayIntegrityError, FaultClass, ProtocolError, ValueTooLarge, WireValueError
-from senselab_worker.hashing import sha256_bytes
 from senselab_worker.ownership import ARRAY_TEMP_NAME, remove_owned
 
 MAX_LINE_BYTES = 16 * 2**20
@@ -293,7 +293,7 @@ class _Encoder:
 
 def _write_array(a: numpy.ndarray, array_dir: Path) -> dict[str, Any]:
     data = npy_bytes(a)
-    sha = sha256_bytes(data)
+    sha = blob_digest("npy@1", data)
     root = array_dir.absolute()
     path = root / f"{sha}.npy"
     tmp = root / f".{uuid.uuid4().hex}.tmp"
@@ -360,7 +360,7 @@ def _read_array(ref: object, root: Path, deadline: Deadline) -> numpy.ndarray:
         if named.name != f"{sha}.npy" or named.parent.resolve() != root:
             raise ValueError(f"array path is not {sha}.npy in {root}: {ref['path']}")
         data = _read_file(root / f"{sha}.npy", deadline)
-        if sha256_bytes(data) != sha:
+        if blob_digest("npy@1", data) != sha:
             raise ValueError(f"array file bytes do not match sha256 {sha}")
         a: numpy.ndarray = numpy.load(io.BytesIO(data), allow_pickle=False)
         if a.dtype.str != ref["dtype"] or list(a.shape) != ref["shape"]:

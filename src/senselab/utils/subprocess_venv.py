@@ -815,7 +815,7 @@ def _pack_value(key: str, value: object, data_dir: Path) -> dict:
     # PIL Image → PNG (lossless)
     if type(value).__module__.startswith("PIL") or type(value).__name__ == "Image":
         path = data_dir / f"{key}.png"
-        getattr(value, "save")(str(path), format="PNG")
+        getattr(value, "save")(str(path), format="PNG")  # noqa: B009
         return {"type": "image", "file": f"{key}.png"}
 
     # bytes/bytearray → raw binary

@@ -396,7 +396,7 @@ them to a principle.
 **One provenance store** (`ProvStore`, append-only, content-derived ids) is written around every
 node with the attested identities. BEP028 export is how runs are published. `reproduce` becomes a
 consumer of this store.
-Its ids are `tagged_digest("provenance-id@3", ...)[:16]` over each part of an entity, activity, agent or
+Its ids are `identity_digest("provenance-id@3", ...)[:16]` over each part of an entity, activity, agent or
 environment after `normalised`, the one step before the shared encoder. `normalised` is the shared
 `canonical.Tokeniser` (the one `value@2` uses), with arrays written by value. The attributes and parameters have a
 declared provenance value type: JSON values plus tagged families, each a one-key token: non-finite floats

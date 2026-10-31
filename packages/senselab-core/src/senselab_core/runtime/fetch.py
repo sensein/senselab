@@ -30,8 +30,8 @@ from typing import IO, Annotated, Any, BinaryIO, Literal, NamedTuple
 
 import yaml
 from pydantic import Field, ValidationError, field_validator, model_validator
-from senselab_worker.canonical import is_portable, jcs_dumps, tagged_digest
-from senselab_worker.hashing import sha256_file
+from senselab_worker.canonical import is_portable, jcs_dumps
+from senselab_worker.digest import blob_digest, identity_digest
 from senselab_worker.ownership import UUID_HEX, remove_owned
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
@@ -162,8 +162,8 @@ class DataManifest(Frozen):
         return self
 
     def digest(self) -> str:
-        """Return `tagged_digest("data-manifest@3", <the manifest's JSON form>)`."""
-        return tagged_digest("data-manifest@3", self.model_dump(mode="json"))
+        """Return `identity_digest("data-manifest@3", <the manifest's JSON form>)`."""
+        return identity_digest("data-manifest@3", self.model_dump(mode="json"))
 
     @classmethod
     def load(cls, path: Path) -> "DataManifest":
@@ -366,7 +366,7 @@ class _BlobFormat:
     def address_of(self, path: Path) -> str:
         if _regular(path) is None:
             raise BlobMismatchError(f"blob {path} is not a regular file")
-        return sha256_file(path)
+        return blob_digest("file@1", path)
 
     def address_at(self, path: Path) -> str:
         return path.name
@@ -417,7 +417,7 @@ def _ensure_blob(
         staged = root / "tmp" / uuid.uuid4().hex
         try:
             _download(url, opener, staged, size=file.size, mode=file_mode)
-            actual = sha256_file(staged)
+            actual = blob_digest("file@1", staged)
             if actual != file.sha256:
                 tried.append(f"{url} (sha256 {actual[:12]}..., expected {file.sha256[:12]}...)")
                 continue

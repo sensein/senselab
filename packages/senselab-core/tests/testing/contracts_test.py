@@ -1,5 +1,6 @@
 """Generated contract tests over the registry (testing.md §3), and checks that each contract can fail."""
 
+import hashlib
 import subprocess
 import sys
 import unittest
@@ -14,7 +15,6 @@ from senselab_core.kernel.declare import REGISTRY, BackendSpec, Registry, TaskPa
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ResolvedModel
 from senselab_core.runtime.fake_backend import FAKE
 from senselab_core.testing.contracts import NOT_YET_WIRED, NoContractRunner, contract_cases
-from senselab_worker.hashing import sha256_bytes
 
 
 @pytest.mark.contract
@@ -193,7 +193,7 @@ class _Tagged(TaskParams):
 
 
 def _seed_dependent(task: TaskSpec, backend: BackendSpec, *, inputs: dict[str, str], **call: Any) -> LogicalKey:  # noqa: ANN401
-    salted = {port: "content:" + sha256_bytes(str(hash(port)).encode()) for port in inputs}
+    salted = {port: "content:" + hashlib.sha256(str(hash(port)).encode()).hexdigest() for port in inputs}
     return key_for(task, backend, inputs=salted, **call)
 
 
@@ -205,7 +205,7 @@ def _seed_dependent_model(
     **call: Any,  # noqa: ANN401
 ) -> LogicalKey:
     assert model is not None, "the base call carries a model"
-    salted = model.model_copy(update={"identity": sha256_bytes(str(hash(model.ref.id)).encode())[:40]})
+    salted = model.model_copy(update={"identity": hashlib.sha256(str(hash(model.ref.id)).encode()).hexdigest()[:40]})
     return key_for(task, backend, model=salted, **call)
 
 

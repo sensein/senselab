@@ -366,11 +366,11 @@ def _word_leaves(line: Any) -> list[tuple[float, float]]:  # noqa: ANN401 — Sc
 def senselab_transcribe_available() -> bool:
     """True when the full senselab ASR stack is importable (U1 primary path)."""
     try:
-        import importlib.util
+        import importlib.util  # noqa: TID251
 
         return (
-            importlib.util.find_spec("torch") is not None
-            and importlib.util.find_spec("senselab.audio.tasks.speech_to_text") is not None
+            importlib.util.find_spec("torch") is not None  # noqa: TID251
+            and importlib.util.find_spec("senselab.audio.tasks.speech_to_text") is not None  # noqa: TID251
         )
     except (ImportError, ValueError, ModuleNotFoundError):
         return False

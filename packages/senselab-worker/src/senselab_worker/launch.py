@@ -43,7 +43,7 @@ def main(argv: list[str]) -> int:
     backend: dict[str, Any] = {}
 
     def load(init: dict[str, Any]) -> object:
-        module = importlib.import_module(argv[1])
+        module = importlib.import_module(argv[1])  # noqa: TID251
         backend["handle"] = module.handle
         return module.load(init)
 

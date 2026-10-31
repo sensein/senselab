@@ -53,6 +53,7 @@ DYNAMIC_ALLOWED: dict[str, frozenset[str]] = {
     "packages/senselab-core/src/senselab_core/testing/values.py": frozenset({"<dynamic:module.name>"}),
     "packages/senselab-core/src/senselab_core/testing/contracts.py": frozenset({"<dynamic:module>"}),
     "packages/senselab-core/tests/lint/destructive_ops_test.py": frozenset({"<dynamic:module>"}),
+    "packages/senselab-core/tests/lint/digest_contract_test.py": frozenset({"<dynamic:n>"}),
     "packages/senselab-worker/src/senselab_worker/launch.py": frozenset({"<dynamic:argv[1]>"}),
     "src/tests/conftest.py": frozenset({"<dynamic:module>"}),
     "src/tests/audio/tasks/audio_understanding_test.py": frozenset({"<dynamic:name>"}),

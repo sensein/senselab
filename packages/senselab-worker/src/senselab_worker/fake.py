@@ -12,10 +12,10 @@ from typing import Any
 
 import numpy
 
-from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
+from senselab_worker.canonical import canonical_npy_bytes
 from senselab_worker.codec import MAX_LINE_BYTES
+from senselab_worker.digest import blob_digest, identity_digest
 from senselab_worker.faults import ContentFault, ResourceFault
-from senselab_worker.hashing import sha256_bytes
 
 EXIT_CRASH = 70
 _NONCE_BYTES = 16
@@ -97,10 +97,10 @@ def load(init: dict[str, Any]) -> object:
 
 
 def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return `{"outputs": {"value": sha256(jcs(inputs and params))}}` per item, perturbed by faults.
+    """Return `{"outputs": {"value": identity_digest("fake-output@1", {"inputs", "params"})}}` per item.
 
-    `params["faults"]` is excluded from the hash. Arrays enter it by the sha256 of their canonical
-    `.npy` bytes.
+    `params["faults"]` is excluded from the digest; a batch adds `"batch"` and `nondeterministic` a random `"nonce"`.
+    Arrays enter it as `blob_digest("npy@1", <canonical .npy bytes>)`.
     """
     if not isinstance(state, _State):
         raise TypeError("state must come from load")
@@ -134,15 +134,14 @@ def _one(item: dict[str, Any], params: object, faults: FakeFaults, batch: list[o
     payload = {"inputs": _identity_view(item["inputs"]), "params": params}
     if batch is not None:
         payload["batch"] = batch
-    data = jcs_dumps(payload)
     if faults.nondeterministic:
-        data += os.urandom(_NONCE_BYTES)
-    return {"outputs": {"value": sha256_bytes(data)}}
+        payload["nonce"] = os.urandom(_NONCE_BYTES).hex()
+    return {"outputs": {"value": identity_digest("fake-output@1", payload)}}
 
 
 def _identity_view(value: object) -> object:
     if isinstance(value, numpy.ndarray):
-        return sha256_bytes(canonical_npy_bytes(value))
+        return blob_digest("npy@1", canonical_npy_bytes(value))
     if isinstance(value, dict):
         return {k: _identity_view(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):

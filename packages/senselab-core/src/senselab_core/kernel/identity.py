@@ -16,7 +16,8 @@ from pydantic import (
     StringConstraints,
     model_validator,
 )
-from senselab_worker.canonical import jcs_dumps, jcs_loads, tagged_digest
+from senselab_worker.canonical import jcs_dumps, jcs_loads
+from senselab_worker.digest import identity_digest
 
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap
 from senselab_core.kernel.license import License
@@ -227,11 +228,11 @@ class LogicalKey(Frozen):
 
     @model_validator(mode="after")
     def _compute_digest(self) -> "LogicalKey":
-        self._digest = tagged_digest("logical-key@3", self.model_dump())
+        self._digest = identity_digest("logical-key@3", self.model_dump())
         return self
 
     def digest(self) -> str:
-        """Return `tagged_digest("logical-key@3", fields)`, computed at construction."""
+        """Return `identity_digest("logical-key@3", fields)`, computed at construction."""
         return self._digest
 
 
@@ -251,8 +252,8 @@ class ExecutionContext(Frozen):
     protocol: NonEmptyStr
 
     def fingerprint(self) -> str:
-        """Return `tagged_digest("context@3", fields)` over every field except `host` and `protocol`."""
-        return tagged_digest("context@3", self.model_dump(exclude={"host", "protocol"}))
+        """Return `identity_digest("context@3", fields)` over every field except `host` and `protocol`."""
+        return identity_digest("context@3", self.model_dump(exclude={"host", "protocol"}))
 
 
 class ReusePolicy(str, Enum):

@@ -22,7 +22,7 @@ writing is raised as `StoreUnavailable` (`StorageFull` for `ENOSPC` and `EDQUOT`
 Outputs are a mapping of JSON values (what `canonical_scalar` accepts, in exact `list`, `tuple` and
 `str`-keyed `dict` containers) and plain numpy arrays, nested to any depth. In the encoded form each
 array is replaced by `{"$array": <sha256 of its canonical .npy>}`, so `$array` is a reserved key.
-The output identity is `"output:" + tagged_digest("output@3", encoded form)`.
+The output identity is `"output:" + identity_digest("output@3", encoded form)`.
 """
 
 import io
@@ -47,9 +47,8 @@ from senselab_worker.canonical import (
     canonical_scalar,
     jcs_dumps,
     jcs_loads,
-    tagged_digest,
 )
-from senselab_worker.hashing import sha256_bytes
+from senselab_worker.digest import blob_digest, identity_digest
 from senselab_worker.ownership import UUID_HEX, remove_owned
 
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputIdentity, ReusePolicy, acceptable
@@ -129,13 +128,13 @@ def _encode(value: object, arrays: dict[str, bytes], walk: Walk) -> object:
 
 def _array(a: numpy.ndarray, arrays: dict[str, bytes]) -> object:
     data = canonical_npy_bytes(a)
-    sha = sha256_bytes(data)
+    sha = blob_digest("npy@1", data)
     arrays[sha] = data
     return {ARRAY_TAG: sha}
 
 
 def _tree_identity(tree: object) -> OutputIdentity:
-    return "output:" + tagged_digest("output@3", tree)
+    return "output:" + identity_digest("output@3", tree)
 
 
 def _serialise(outputs: Mapping[str, object]) -> tuple[object, dict[str, bytes], OutputIdentity]:
@@ -145,7 +144,7 @@ def _serialise(outputs: Mapping[str, object]) -> tuple[object, dict[str, bytes],
 
 
 def output_identity(outputs: Mapping[str, object]) -> OutputIdentity:
-    """Return the output identity of `outputs`: `"output:" + tagged_digest("output@3", encoded form)`.
+    """Return the output identity of `outputs`: `"output:" + identity_digest("output@3", encoded form)`.
 
     Raises:
         TypeError: on a value that is neither a canonical JSON value nor a plain numpy array.
@@ -186,7 +185,7 @@ def _decode(value: object, entry: Path, load_arrays: bool) -> object:
             if not load_arrays:
                 return None
             data = path.read_bytes()
-            if sha256_bytes(data) != sha:
+            if blob_digest("npy@1", data) != sha:
                 raise CorruptEntryError(f"corrupt store entry {entry}: {sha}.npy does not hash to its name")
             try:
                 return numpy.load(io.BytesIO(data), allow_pickle=False)

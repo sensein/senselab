@@ -66,10 +66,14 @@ def undeclared_imports(graph: grimp.ImportGraph, roots: set[str], allowed: set[s
     return externals - allowed - set(sys.stdlib_module_names)
 
 
+REPOSITORY_ROOTS = {"senselab", "scripts"}
+"""Root packages outside ``packages/``: the 1.x tree and the repository scripts, which the digest contract covers."""
+
+
 @pytest.mark.logic
 def test_every_package_is_a_root_package() -> None:
-    """The import names under ``packages/*/src/*`` equal the import-linter ``root_packages``."""
-    assert import_names(PACKAGES) == root_packages(IMPORTLINTER.read_text())
+    """The import-linter ``root_packages`` are the import names under ``packages/*/src/*`` and the repository roots."""
+    assert root_packages(IMPORTLINTER.read_text()) == import_names(PACKAGES) | REPOSITORY_ROOTS
 
 
 @pytest.mark.logic

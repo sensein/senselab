@@ -256,7 +256,7 @@ def discover_backends(package_root: Optional[Path] = None) -> dict[str, Backend]
         ]
         if not calls:
             continue
-        module = importlib.import_module(module_name)
+        module = importlib.import_module(module_name)  # noqa: TID251
 
         def value(node: Optional[ast.expr], module: object = module) -> object:
             if node is None:

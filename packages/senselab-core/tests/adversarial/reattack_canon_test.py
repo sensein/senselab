@@ -248,14 +248,15 @@ def test_a_set_is_its_elements_canonical_forms(strings: frozenset[str]) -> None:
     assert Holder(x=strings) == Holder(x=forms)
 
 
-def _adr_tags() -> set[str]:
-    _, heading, rest = ADR_006.read_text(encoding="utf-8").partition("**Registered digest tags**")
-    return set(re.findall(r"`([a-z][a-z0-9-]*@\d+)`", rest.split("\n\n", 1)[0])) if heading else set()
+def _adr_tags(heading: str) -> set[str]:
+    _, found, rest = ADR_006.read_text(encoding="utf-8").partition(f"**{heading}**")
+    return set(re.findall(r"`([a-z][a-z0-9-]*@\d+)`", rest.split("\n\n", 1)[0])) if found else set()
 
 
 @pytest.mark.contract
 def test_xc8_adr006_lists_exactly_the_registered_tags() -> None:
-    """ADR-006's list of digest tags is `DIGEST_TAGS`, no more and no fewer."""
-    from senselab_worker.canonical import DIGEST_TAGS
+    """ADR-006's lists of identity and blob tags are `IDENTITY_TAGS` and `BLOB_TAGS`, no more and no fewer."""
+    from senselab_worker.digest import BLOB_TAGS, IDENTITY_TAGS
 
-    assert _adr_tags() == set(DIGEST_TAGS)
+    assert _adr_tags("Registered identity tags") == set(IDENTITY_TAGS)
+    assert _adr_tags("Registered blob tags") == set(BLOB_TAGS)

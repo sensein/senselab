@@ -31,7 +31,8 @@ from senselab_core.runtime.fetch import (
     fetch,
 )
 from senselab_core.runtime.storage import StorageFull, StorePolicy, StoreUnavailable
-from senselab_worker.canonical import jcs_dumps, tagged_digest
+from senselab_worker.canonical import jcs_dumps
+from senselab_worker.digest import identity_digest
 
 STALE_SECONDS = StorePolicy.load_default().staging_stale_s
 
@@ -164,10 +165,10 @@ def test_transient_read_error_does_not_discard_blob(tmp_path: Path, monkeypatch:
     """Transient read error does not discard blob."""
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
 
-    def flaky(path: object) -> str:
+    def flaky(tag: str, path: object) -> str:
         raise OSError(5, "Input/output error")
 
-    monkeypatch.setattr(fetch_module, "sha256_file", flaky)
+    monkeypatch.setattr(fetch_module, "blob_digest", flaky)
     with pytest.raises(StoreUnavailable):
         fetch(_manifest(), cache_root=tmp_path, opener=_opener({}), verify="full")
     assert (tmp_path / "blobs" / SHA).read_bytes() == PAYLOAD
@@ -353,13 +354,13 @@ def test_size_mode_skips_rehash_and_full_mode_catches_same_size_corruption(
     """A cache hit checks size only by default; verify='full' re-hashes."""
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     hashed: list[object] = []
-    real = fetch_module.sha256_file
+    real = fetch_module.blob_digest
 
-    def spy(path: Path) -> str:
+    def spy(tag: str, path: Path) -> str:
         hashed.append(path)
-        return real(path)
+        return real(tag, path)
 
-    monkeypatch.setattr(fetch_module, "sha256_file", spy)
+    monkeypatch.setattr(fetch_module, "blob_digest", spy)
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
     assert hashed == []
     _unseal(tmp_path / "blobs" / SHA).write_bytes(b"x" * len(PAYLOAD))
@@ -431,10 +432,10 @@ def test_same_name_version_different_manifest_raises(tmp_path: Path) -> None:
 def test_disk_full_is_storage_error_not_network(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """ENOSPC while staging is reported as StorageFull."""
 
-    def full(path: object) -> str:
+    def full(tag: str, path: object) -> str:
         raise OSError(errno.ENOSPC, "No space left on device")
 
-    monkeypatch.setattr(fetch_module, "sha256_file", full)
+    monkeypatch.setattr(fetch_module, "blob_digest", full)
     with pytest.raises(StorageFull) as err:
         fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     assert "network" not in str(err.value) and "space" in str(err.value)
@@ -604,7 +605,7 @@ def test_live_fetch(tmp_path: Path) -> None:
 def test_manifest_digest_is_tagged() -> None:
     """The manifest digest is the registered `data-manifest@3` tagged digest of its JSON form."""
     manifest = _manifest()
-    assert manifest.digest() == tagged_digest("data-manifest@3", manifest.model_dump(mode="json"))
+    assert manifest.digest() == identity_digest("data-manifest@3", manifest.model_dump(mode="json"))
     assert manifest.digest() != hashlib.sha256(jcs_dumps(manifest.model_dump(mode="json"))).hexdigest()
 
 
@@ -997,13 +998,13 @@ def test_repaired_blob_is_trusted_again_by_size(tmp_path: Path, monkeypatch: pyt
     _unseal(tmp_path / "blobs" / SHA).write_bytes(b"x" * len(PAYLOAD))
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     hashed: list[object] = []
-    real = fetch_module.sha256_file
+    real = fetch_module.blob_digest
 
-    def spy(path: Path) -> str:
+    def spy(tag: str, path: Path) -> str:
         hashed.append(path)
-        return real(path)
+        return real(tag, path)
 
-    monkeypatch.setattr(fetch_module, "sha256_file", spy)
+    monkeypatch.setattr(fetch_module, "blob_digest", spy)
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
     assert hashed == []
 

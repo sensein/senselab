@@ -5,10 +5,9 @@ from pathlib import Path
 import pytest
 from senselab_core.kernel.declare import REGISTRY
 from senselab_core.runtime.fake_backend import ECHO, FAKE, EchoParams, fake_worker, run_fake
-from senselab_worker.canonical import jcs_dumps
+from senselab_worker.digest import identity_digest
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import FaultClass
-from senselab_worker.hashing import sha256_bytes
 
 
 @pytest.mark.logic
@@ -25,7 +24,7 @@ def test_run_fake_hashes_inputs_and_params(tmp_path: Path) -> None:
     items = [{"id": "a", "inputs": {"payload": "x"}}, {"id": "b", "inputs": {"payload": "y"}}]
     params = EchoParams(salt="s").model_dump()
     results = run_fake(items, params, FakeFaults(), array_parent=tmp_path)
-    expected = [sha256_bytes(jcs_dumps({"inputs": i["inputs"], "params": params})) for i in items]
+    expected = [identity_digest("fake-output@1", {"inputs": i["inputs"], "params": params}) for i in items]
     assert [r["outputs"]["value"] for r in results] == expected
     assert list(tmp_path.iterdir()) == []
 

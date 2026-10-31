@@ -2,6 +2,7 @@
 
 import builtins
 import copy
+import hashlib
 import os
 import pickle
 from collections.abc import Iterator
@@ -22,8 +23,9 @@ from senselab_core.kernel.signals import (
     StaleSource,
 )
 from senselab_core.kernel.time import TimeAnchor
-from senselab_worker.canonical import canonical_npy_bytes, tagged_digest
-from senselab_worker.hashing import content_identity, sha256_bytes
+from senselab_worker.canonical import canonical_npy_bytes
+from senselab_worker.digest import identity_digest
+from senselab_worker.hashing import content_identity
 
 RATE = 8_000
 
@@ -221,8 +223,8 @@ def test_audio_from_array_identity_construction() -> None:
     """In-memory audio's identity hashes the canonical array with the sampling rate."""
     x = numpy.linspace(-1, 1, 50, dtype=numpy.float32)
     a = Audio.from_array(x, 16_000)
-    expected = "content:" + tagged_digest(
-        "audio@3", {"npy": sha256_bytes(canonical_npy_bytes(x.reshape(1, -1))), "sampling_rate": 16_000}
+    expected = "content:" + identity_digest(
+        "audio@3", {"npy": hashlib.sha256(canonical_npy_bytes(x.reshape(1, -1))).hexdigest(), "sampling_rate": 16_000}
     )
     assert a.identity == expected
     assert Audio.from_array(x.reshape(1, -1), 16_000.0).identity == expected

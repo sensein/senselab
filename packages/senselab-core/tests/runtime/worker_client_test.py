@@ -2,6 +2,7 @@
 
 import errno
 import gc
+import hashlib
 import json
 import logging
 import os
@@ -30,11 +31,11 @@ from senselab_core.runtime.worker_client import (
     WorkerLost,
 )
 from senselab_worker import codec, runtime_identity
-from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
+from senselab_worker.canonical import canonical_npy_bytes
 from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_DEPTH, to_wire
+from senselab_worker.digest import identity_digest
 from senselab_worker.fake import EXIT_CRASH
 from senselab_worker.faults import FaultClass, ProtocolError, ValueTooLarge, classify
-from senselab_worker.hashing import sha256_bytes
 
 FAKE = "senselab_worker.fake"
 SCRIPTED = Path(__file__).parent / "scripted_worker_fixture.py"
@@ -109,7 +110,7 @@ def _scripted(array_parent: Path, *replies: dict | list, **init: object) -> Work
 
 
 def _value(inputs: dict, params: dict) -> str:
-    return sha256_bytes(jcs_dumps({"inputs": inputs, "params": params}))
+    return identity_digest("fake-output@1", {"inputs": inputs, "params": params})
 
 
 @pytest.mark.logic
@@ -133,7 +134,7 @@ def test_arrays_travel_and_request_files_are_removed(worker: WorkerClient) -> No
     """An input array reaches the worker, and its file is deleted once the response is read."""
     a = numpy.linspace(0, 1, 32, dtype="<f4")
     [out] = worker.run([{"id": "a", "inputs": {"x": a}}], {"k": 1})
-    assert out["outputs"]["value"] == _value({"x": sha256_bytes(canonical_npy_bytes(a))}, {"k": 1})
+    assert out["outputs"]["value"] == _value({"x": hashlib.sha256(canonical_npy_bytes(a)).hexdigest()}, {"k": 1})
     assert list(worker.array_dir.iterdir()) == []
 
 

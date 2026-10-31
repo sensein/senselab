@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-import importlib.util
+import importlib.util  # noqa: TID251
 import json
 import sys
 from collections import Counter
@@ -67,12 +67,12 @@ EXTRACT_VERSION = 3
 def _free_speech_page() -> Any:  # noqa: ANN401 -- a module
     """The free-speech review page's module, whose transcript reader and mark rules this page shares."""
     name = "free_speech_review_page"
-    if name in sys.modules:
-        return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(f"{name}.py"))
+    if name in sys.modules:  # noqa: TID251
+        return sys.modules[name]  # noqa: TID251
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(f"{name}.py"))  # noqa: TID251
     assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
+    module = importlib.util.module_from_spec(spec)  # noqa: TID251
+    sys.modules[name] = module  # noqa: TID251
     spec.loader.exec_module(module)
     return module
 

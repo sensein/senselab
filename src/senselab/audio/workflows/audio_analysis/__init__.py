@@ -59,7 +59,7 @@ def __getattr__(name: str) -> Any:  # noqa: ANN401 — lazy re-export
     submodule = _LAZY_EXPORTS.get(name)
     if submodule is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    from importlib import import_module
+    from importlib import import_module  # noqa: TID251
 
     return getattr(import_module(f"{__name__}.{submodule}"), name)
 

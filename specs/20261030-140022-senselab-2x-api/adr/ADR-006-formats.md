@@ -74,7 +74,7 @@ Architect review §5 (R-42) found:
 - **A kernel value's canonical form (`value@2`)** is `{"type": <name>, "fields": <fields>}`. `<fields>` holds
   each field as the value holds it (not its pydantic dump), written by the shared tokeniser
   (`canonical.Tokeniser`), which gives every family outside JSON its own one-key token:
-  - an array: `{"$array": <sha256 of its canonical .npy>}`;
+  - an array: `{"$array": blob_digest("npy@1", <its canonical .npy>)}`;
   - a set or frozenset: `{"$set": [<elements, one per JCS form, sorted by JCS bytes>]}`;
   - an enum member: `{"$enum": [<qualified type name>, <its value>]}`; a path: `{"$path": <posix text>}`;
   - a type: `{"$type": <qualified name>}`; a held `Frozen` value: `{"$value": {"type": ..., "fields": ...}}`;
@@ -114,16 +114,57 @@ Architect review §5 (R-42) found:
   canonicalises them. The result store is identity: it writes and reads back the canonical forms, so a cached
   output has `-0.0` as `0.0`, one NaN without payload, bools as 0/1 and text in canonical form, where a freshly
   computed one keeps what the backend returned.
-- **Every digest is `tagged_digest(tag, value)` with a registered tag:**
-  `sha256(tag || 0x00 || JCS(value))`. No tag is a prefix of another, so two kinds of digest never coincide
-  over the same value. A new kind of digest registers a new tag; changing what a digest covers bumps its
-  tag's major.
+- **Every digest names a registered tag, and no other digest function exists** (`senselab_worker.digest`,
+  H9e, R-106). There are two:
+  - `identity_digest(tag, value)` = `sha256(tag || 0x00 || JCS(value))` over a canonical value. No tag is a
+    prefix of another, so two kinds of identity never coincide over the same value. A new kind registers a
+    new tag; changing what an identity covers bumps its tag's major.
+  - `blob_digest(tag, bytes | path | binary stream)` = the plain lowercase sha256 of raw content. The tag is
+    checked against the blob registry and not hashed, so a blob digest equals the content's published
+    sha256: the store's and the wire's array file names, fetch manifest checksums, weight pins and provenance
+    file checksums keep their values. Both functions refuse an unregistered tag.
 
-  **Registered digest tags** (`canonical.DIGEST_TAGS`): `logical-key@3` (a task's logical key),
+  The raw primitives (`sha256_bytes`, `sha256_file`, the untagged `tagged_digest` re-export) are gone, not
+  private: `digest.py` imports `hashlib` inside its two functions, so no module namespace in `senselab_worker`
+  or `senselab_core` holds a digest module or a function from one.
+
+  **Enforcement.** One import-linter contract, `digests-are-tagged` in `.importlinter`, forbids every root
+  package (`senselab_worker`, `senselab_core`, `senselab`, `scripts`) to import `hashlib`, `_hashlib`, `hmac`,
+  `blake3`, `xxhash`, `mmh3`, `Crypto`, `Cryptodome`, `cryptography` or the `_md5`/`_sha*`/`_blake2`
+  extension modules. Its only 2.x allowance is `senselab_worker.digest -> hashlib`; the others are the 1.x
+  modules and scripts of H-R19, the migration worklist (`migration-ledger.md`). An allowance that matches no
+  import fails the contract. A digest reachable without importing a digest module is a name, not a module,
+  so ruff's banned-api (TID251) bans it, per call site: name-based UUIDs (`uuid.uuid3`, `uuid.uuid5`), other
+  libraries' hashes (`joblib.hash`, `zlib.crc32`/`adler32`, `binascii.crc32`/`crc_hqx`, sklearn's
+  `murmurhash3_32`, dask's `tokenize`), and the dynamic-import entry points that would reach a digest module
+  unseen (`importlib.import_module`, `importlib.__import__`, `importlib.util`, `importlib.machinery`,
+  `sys.modules`). `getattr` with a literal name (B009), `exec` (S102) and `eval` (S307) are reported too. An
+  existing site carries its own `# noqa`, so a second site in the same file is reported, and a mark that no
+  longer suppresses anything is reported by `digest_contract_test.py`. Tests are exempt: they use `hashlib`
+  as the independent oracle.
+
+  **What the contract does not see.** Files outside every root package (`hatch_pin_loader.py`, the
+  floor-interpreter generator `packages/senselab-worker/scripts/unicode_table.py`, which runs without the
+  worker installed and hashes normalisation output, and the network guard's `sitecustomize.py`) are listed in
+  the test that checks every production file is in the graph, so a new one fails it. Reflection with a
+  computed name (`getattr(m, name)`, the builtin `__import__`, `vars(m)[...]`) is not decidable statically.
+  A 1.x worklist module can still hash serialised data until it is ported (P-39).
+
+  **Registered identity tags** (`digest.IDENTITY_TAGS`): `logical-key@3` (a task's logical key),
   `output@3` (a result's outputs, arrays as canonical `.npy`), `context@3` (an execution context),
   `content-root@2` (a file's chunked content root), `audio@3` (in-memory audio), `weights@3` (a weight
-  set), `value@2` (a kernel value), `provenance-id@3` (a provenance record's id) and `data-manifest@3`
-  (a dataset manifest).
+  set), `value@2` (a kernel value), `provenance-id@3` (a provenance record's id), `data-manifest@3`
+  (a dataset manifest), `worker-runtime@1` (the worker runtime's source files) and `fake-output@1` (the
+  fake backend's output value).
+
+  **Registered blob tags** (`digest.BLOB_TAGS`): `file@1` (a file's or a source's bytes, and each chunk of
+  a content root) and `npy@1` (an array's `.npy` bytes).
+
+  H9e registered two identity tags for digests that were untagged: `worker-runtime@1` replaces the sha256 of
+  the concatenated `path NUL bytes NUL` records of the worker's source, now
+  `identity_digest("worker-runtime@1", [[relpath, blob_digest("file@1", path)], ...])`; `fake-output@1`
+  replaces the sha256 of the fake backend's JCS payload, whose random nonce is now a payload field. Both
+  values changed; neither addresses stored data (the runtime identity is compared live in the handshake).
 
   H9d changed two things every digest can see, and bumped every tag whose payload can carry them:
   - canonical `.npy` now writes each value in its one form: `output@2` → `output@3`, `audio@2` → `audio@3`,

@@ -8,7 +8,8 @@ from pathlib import Path
 from types import MappingProxyType
 
 import yaml
-from senselab_worker.hashing import sha256_file, weights_identity
+from senselab_worker.digest import blob_digest
+from senselab_worker.hashing import weights_identity
 
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
 from senselab_core.runtime.revision import resolve_revision
@@ -76,7 +77,7 @@ def verify_weights(name: str, path: Path) -> None:
         WeightsMismatch: if the sha256 differs.
     """
     expected = WEIGHTS[name]
-    actual = sha256_file(path)
+    actual = blob_digest("file@1", path)
     if actual != expected:
         raise WeightsMismatch(name, expected, actual, Path(path))
 
@@ -94,7 +95,7 @@ def verify_model(model: ResolvedModel, path: Path) -> None:
     if model.ref.source != "url":
         raise ValueError(f"verify_model checks url models, got {model.ref.source}")
     path = Path(path)
-    actual = sha256_file(path) if path.is_file() else weights_identity(_files_under(path), root=path)
+    actual = blob_digest("file@1", path) if path.is_file() else weights_identity(_files_under(path), root=path)
     if actual != model.identity:
         raise WeightsMismatch(str(model.ref), model.identity, actual, path)
 

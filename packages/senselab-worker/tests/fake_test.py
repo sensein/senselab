@@ -1,14 +1,20 @@
 """The fake backend and its declared fault model."""
 
+import hashlib
+
 import numpy
 import pytest
-from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
+from senselab_worker.canonical import canonical_npy_bytes
 from senselab_worker.codec import MAX_LINE_BYTES
+from senselab_worker.digest import identity_digest
 from senselab_worker.fake import FakeFaults, OutOfMemoryError, handle, load
 from senselab_worker.faults import ContentFault, FaultClass, ResourceFault, classify, error_record
-from senselab_worker.hashing import sha256_bytes
 
 ITEMS = [{"id": "a", "inputs": {"x": 1}}, {"id": "b", "inputs": {"x": 2}}, {"id": "c", "inputs": {"x": 3}}]
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def _values(results: list[dict]) -> list[str | None]:
@@ -17,11 +23,11 @@ def _values(results: list[dict]) -> list[str | None]:
 
 @pytest.mark.logic
 def test_value_is_hash_of_inputs_and_params_without_faults() -> None:
-    """Each value is sha256 of the JCS of the item's inputs and the params, faults excluded."""
+    """Each value is the `fake-output@1` digest of the item's inputs and the params, faults excluded."""
     state = load({})
     params = {"scale": 2, "faults": {}}
     [out] = handle(state, ITEMS[:1], params)
-    assert out == {"outputs": {"value": sha256_bytes(jcs_dumps({"inputs": {"x": 1}, "params": {"scale": 2}}))}}
+    assert out == {"outputs": {"value": identity_digest("fake-output@1", {"inputs": {"x": 1}, "params": {"scale": 2}})}}
 
 
 @pytest.mark.logic
@@ -29,7 +35,7 @@ def test_arrays_enter_the_value_by_their_canonical_bytes() -> None:
     """An input array contributes the sha256 of its canonical `.npy` bytes, whatever its layout."""
     a = numpy.arange(6, dtype="<f4").reshape(2, 3)
     item = [{"id": "a", "inputs": {"x": a}}]
-    expected = sha256_bytes(jcs_dumps({"inputs": {"x": sha256_bytes(canonical_npy_bytes(a))}, "params": {}}))
+    expected = identity_digest("fake-output@1", {"inputs": {"x": _sha(canonical_npy_bytes(a))}, "params": {}})
     assert _values(handle(load({}), item, {})) == [expected]
     swapped = [{"id": "a", "inputs": {"x": numpy.asfortranarray(a.astype(">f4"))}}]
     assert _values(handle(load({}), swapped, {})) == [expected]

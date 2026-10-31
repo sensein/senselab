@@ -1,6 +1,7 @@
 """The content-addressed result store: layout, reuse policy, concurrent writers and provenance."""
 
 import errno
+import hashlib
 import json
 import multiprocessing as mp
 import os
@@ -33,9 +34,13 @@ from senselab_core.runtime.store import (
     StoredResult,
     output_identity,
 )
-from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps, tagged_digest
-from senselab_worker.hashing import sha256_bytes
+from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
+from senselab_worker.digest import identity_digest
 from senselab_worker.ownership import UUID_HEX
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def _key(task: str = "asr", **inputs: str) -> LogicalKey:
@@ -89,7 +94,7 @@ def test_put_get_exact(tmp_path: Path) -> None:
     result = json.loads((entry / "result.json").read_bytes())
     assert result["format"] == "result@1.0"
     assert result["output_identity"] == ident
-    sha = sha256_bytes(canonical_npy_bytes(outputs["y"]))  # type: ignore[arg-type]
+    sha = _sha(canonical_npy_bytes(outputs["y"]))  # type: ignore[arg-type]
     assert (entry / f"{sha}.npy").read_bytes() == canonical_npy_bytes(outputs["y"])  # type: ignore[arg-type]
     assert json.loads((entry / "context.json").read_bytes())["format"] == "execution-context@1.0"
     assert s.get(_key(task="other"), c, ReusePolicy.TOLERANT) is None
@@ -246,7 +251,7 @@ def test_output_identity_enables_early_cutoff(tmp_path: Path) -> None:
 def test_output_identity_is_tagged_over_array_digests() -> None:
     """The identity is the `output@3` digest of the outputs with each array replaced by its .npy digest."""
     a = numpy.arange(4, dtype="<i8")
-    expected = "output:" + tagged_digest("output@3", {"y": {"$array": sha256_bytes(canonical_npy_bytes(a))}, "z": 1})
+    expected = "output:" + identity_digest("output@3", {"y": {"$array": _sha(canonical_npy_bytes(a))}, "z": 1})
     assert output_identity({"z": 1, "y": a}) == expected
     assert output_identity({"y": numpy.asarray(a, dtype=">i8")}) == output_identity({"y": a})
 
@@ -325,7 +330,7 @@ def _only_npy_name(entry: Path) -> Path:
 def _forge(record: dict[str, Any], outputs: dict[str, object]) -> None:
     """Replace a record's outputs and recompute their output identity, as a forger with write access could."""
     record["outputs"] = outputs
-    record["output_identity"] = "output:" + tagged_digest("output@3", outputs)
+    record["output_identity"] = "output:" + identity_digest("output@3", outputs)
 
 
 @pytest.mark.logic
@@ -438,7 +443,7 @@ def test_a31_output_identity_differs_from_key_digest_of_same_tree() -> None:
     k = _key()
     tree = k.model_dump()
     assert output_identity(tree).removeprefix("output:") != k.digest()
-    assert output_identity(tree) == "output:" + tagged_digest("output@3", tree)
+    assert output_identity(tree) == "output:" + identity_digest("output@3", tree)
 
 
 @pytest.mark.logic

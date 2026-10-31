@@ -226,6 +226,8 @@ jobs:
     - name: Run core tests
       run: .core/bin/pytest packages -m "logic or contract or limits or usecase" -p no:cacheprovider
     - name: Check import contracts
+      env:
+        PYTHONPATH: src
       run: .core/bin/lint-imports
     - name: Build each sdist into a wheel on its own
       run: |

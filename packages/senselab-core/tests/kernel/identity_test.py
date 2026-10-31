@@ -23,7 +23,7 @@ from senselab_core.kernel.identity import (
     acceptable,
 )
 from senselab_core.kernel.license import License
-from senselab_worker.canonical import tagged_digest
+from senselab_worker.digest import identity_digest
 
 COMMIT = "41f01f3fe87f28c78e2fbf8b568835947dd65ed9"
 SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
@@ -132,7 +132,7 @@ def test_digest_is_the_tagged_digest_of_the_fields() -> None:
         "chunk_grid": None,
     }
     assert k.model_dump() == expected
-    assert k.digest() == tagged_digest("logical-key@3", expected)
+    assert k.digest() == identity_digest("logical-key@3", expected)
     assert len(k.digest()) == 64
 
 
@@ -352,9 +352,9 @@ def test_every_policy_member_is_dispatched(policy: ReusePolicy) -> None:
 
 @pytest.mark.logic
 def test_fingerprint_is_the_context_tagged_digest() -> None:
-    """The fingerprint is `tagged_digest("context@3", fields without host and protocol)`."""
+    """The fingerprint is `identity_digest("context@3", fields without host and protocol)`."""
     c = _ctx()
-    assert c.fingerprint() == tagged_digest("context@3", c.model_dump(exclude={"host", "protocol"}))
+    assert c.fingerprint() == identity_digest("context@3", c.model_dump(exclude={"host", "protocol"}))
 
 
 @pytest.mark.logic

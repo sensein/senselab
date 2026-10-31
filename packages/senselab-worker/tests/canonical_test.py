@@ -14,14 +14,13 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from senselab_worker.canonical import (
-    DIGEST_TAGS,
     canonical_npy_bytes,
     canonical_scalar,
     canonical_text,
     jcs_dumps,
     jcs_loads,
-    tagged_digest,
 )
+from senselab_worker.digest import IDENTITY_TAGS, identity_digest
 
 
 @pytest.mark.logic
@@ -443,7 +442,7 @@ def test_a24_large_integral_float_parses_back_as_a_float() -> None:
 @pytest.mark.logic
 def test_digest_tags_distinct_and_prefix_free() -> None:
     """No registered tag is a prefix of another, and each is ASCII with a `@<major>`."""
-    tags = sorted(DIGEST_TAGS)
+    tags = sorted(IDENTITY_TAGS)
     assert all(not b.startswith(a) for a in tags for b in tags if a != b)
     assert all(t.isascii() and "\x00" not in t and "@" in t for t in tags)
 
@@ -452,11 +451,11 @@ def test_digest_tags_distinct_and_prefix_free() -> None:
 def test_tagged_digest_separates_domains() -> None:
     """One value under every tag gives as many digests, none of them the bare sha256 of its JCS."""
     value = {"a": [1, "x"]}
-    digests = {tagged_digest(t, value) for t in DIGEST_TAGS}
-    assert len(digests) == len(DIGEST_TAGS)
+    digests = {identity_digest(t, value) for t in IDENTITY_TAGS}
+    assert len(digests) == len(IDENTITY_TAGS)
     assert hashlib.sha256(jcs_dumps(value)).hexdigest() not in digests
-    for tag in DIGEST_TAGS:
-        assert tagged_digest(tag, value) == hashlib.sha256(tag.encode() + b"\x00" + jcs_dumps(value)).hexdigest()
+    for tag in IDENTITY_TAGS:
+        assert identity_digest(tag, value) == hashlib.sha256(tag.encode() + b"\x00" + jcs_dumps(value)).hexdigest()
 
 
 @pytest.mark.logic
@@ -480,4 +479,4 @@ def test_tagged_digest_separates_domains() -> None:
 def test_tagged_digest_refuses_unregistered_tags(tag: str) -> None:
     """Only a registered tag may name a digest domain."""
     with pytest.raises(ValueError, match="unregistered"):
-        tagged_digest(tag, 1)
+        identity_digest(tag, 1)

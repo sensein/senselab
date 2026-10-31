@@ -2,4 +2,4 @@
 
 import uuid
 
-SENSELAB_NAMESPACE = uuid.uuid3(uuid.NAMESPACE_URL, "https://github.com/sensein/senselab")
+SENSELAB_NAMESPACE = uuid.uuid3(uuid.NAMESPACE_URL, "https://github.com/sensein/senselab")  # noqa: TID251

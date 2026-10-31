@@ -21,7 +21,7 @@ See ``specs/20260912-extend-reprocessed-outputs/design.md`` and
 
 from __future__ import annotations
 
-import importlib.util
+import importlib.util  # noqa: TID251
 import json
 import os
 import statistics
@@ -804,10 +804,10 @@ def load_hint_builder(directory: Path) -> Callable[[Path], Any]:
     Raises:
         FileNotFoundError: If the directory holds no importable ``hints.py``.
     """
-    spec = importlib.util.spec_from_file_location("extend_hints", directory / "hints.py")
+    spec = importlib.util.spec_from_file_location("extend_hints", directory / "hints.py")  # noqa: TID251
     if spec is None or spec.loader is None:
         raise FileNotFoundError(f"no importable hints.py in {directory}")
-    module = importlib.util.module_from_spec(spec)
+    module = importlib.util.module_from_spec(spec)  # noqa: TID251
     spec.loader.exec_module(module)
     builder: Callable[[Path], Any] = module.build_hint
     return builder
