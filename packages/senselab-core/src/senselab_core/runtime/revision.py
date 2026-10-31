@@ -132,12 +132,12 @@ def cache_root() -> Path:
 
 
 def manifest_path(run: Optional[str] = None) -> Path:
-    """Return the path to a run's resolution manifest.
+    """Return the path to run ``run``'s resolution manifest (this run's when ``run`` is None).
 
     Raises:
         ValueError: `run` is not one path component.
     """
-    return _cache_root() / "runs" / path_component(run or run_id()) / MANIFEST_NAME
+    return _cache_root() / "runs" / path_component(run_id() if run is None else run) / MANIFEST_NAME
 
 
 def read_manifest(run: Optional[str] = None) -> dict[str, str]:
