@@ -3,7 +3,7 @@
 import math
 from collections.abc import Callable, Iterator, Mapping
 from types import MappingProxyType
-from typing import Annotated, Any, Self, TypeVar
+from typing import Annotated, Any, NoReturn, Self, TypeVar
 
 import numpy
 from pydantic import (
@@ -12,11 +12,14 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    GetCoreSchemaHandler,
     PlainSerializer,
-    PrivateAttr,
     Strict,
     StringConstraints,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
 )
+from pydantic._internal._model_construction import ModelMetaclass
 from senselab_worker.canonical import Tokeniser
 from senselab_worker.digest import identity_digest
 
@@ -30,14 +33,21 @@ _DIGEST_TAG = "value@2"
 class FrozenMapping(Mapping[K, V]):
     """A read-only mapping that pickles and deep-copies.
 
-    Item assignment and deletion raise `TypeError`; attribute assignment raises `AttributeError`.
+    Item assignment and deletion raise `TypeError`; attribute assignment raises `AttributeError`; a
+    second call of `__init__` on a built mapping raises `TypeError`.
     """
 
     __slots__ = ("_items",)
     _items: MappingProxyType[K, V]
 
     def __init__(self, items: Mapping[K, V]) -> None:
-        object.__setattr__(self, "_items", MappingProxyType(dict(items)))
+        """Hold a copy of `items`; a mapping is initialised once."""
+        try:
+            object.__getattribute__(self, "_items")
+        except AttributeError:
+            object.__setattr__(self, "_items", MappingProxyType(dict(items)))
+            return
+        raise TypeError("a FrozenMapping is initialised once")
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError(f"FrozenMapping is read-only; cannot set {name!r}")
@@ -129,28 +139,125 @@ def _rebuild(cls: type[F], fields: dict[str, Any]) -> F:
     return cls.model_validate(fields)
 
 
-class Frozen(BaseModel):
+class SealedDict(dict[str, Any]):
+    """The `__dict__` of a built `Frozen` value: every mutating method raises `TypeError`."""
+
+    __slots__ = ()
+
+    def _refuse(self, *args: object, **kwargs: object) -> NoReturn:
+        raise TypeError("a Frozen value's fields are read-only")
+
+    __setitem__ = __delitem__ = __ior__ = _refuse
+    clear = pop = popitem = setdefault = update = _refuse
+
+
+def _is_sealed(v: "Frozen") -> bool:
+    return type(object.__getattribute__(v, "__dict__")) is SealedDict
+
+
+def _seal(v: "Frozen") -> None:
+    """Make a freshly validated value read-only: its fields, its fields-set and its derived private values."""
+    if _is_sealed(v):
+        return
+    private = MappingProxyType(dict(v._derived()))
+    object.__setattr__(v, "__pydantic_private__", private)
+    object.__setattr__(v, "__pydantic_fields_set__", frozenset(object.__getattribute__(v, "__pydantic_fields_set__")))
+    object.__setattr__(v, "__dict__", SealedDict(object.__getattribute__(v, "__dict__")))
+
+
+class _FrozenMeta(ModelMetaclass):
+    """The metaclass of `Frozen`: a class's `model_config` is a read-only mapping that cannot be rebound."""
+
+    def __new__(mcs, name: str, bases: tuple[type, ...], namespace: dict[str, Any], **kwargs: Any) -> type:  # noqa: ANN401
+        """Build the model class, then hold its config as a read-only mapping."""
+        cls = super().__new__(mcs, name, bases, namespace, **kwargs)
+        type.__setattr__(cls, "model_config", MappingProxyType(dict(cls.model_config)))  # type: ignore[attr-defined]
+        return cls
+
+    def __setattr__(cls, name: str, value: object) -> None:
+        """Refuse rebinding `model_config`; set any other class attribute."""
+        if name == "model_config":
+            raise AttributeError(f"{cls.__name__}.model_config is read-only")
+        super().__setattr__(name, value)
+
+    def __delattr__(cls, name: str) -> None:
+        """Refuse deleting `model_config`; delete any other class attribute."""
+        if name == "model_config":
+            raise AttributeError(f"{cls.__name__}.model_config is read-only")
+        super().__delattr__(name)
+
+
+class Frozen(BaseModel, metaclass=_FrozenMeta):
     """Immutable pydantic model that may hold numpy arrays.
 
-    Every array a value holds is a `frozen_array`. Values compare and hash by `canonical_digest`, and
-    every copy (pickle, `copy`, `deepcopy`, `model_copy`) is rebuilt through `model_validate`, so it
-    runs every validator. `model_construct` is refused.
+    Every array a value holds is a `frozen_array`. A value is built only by validating a mapping of
+    its fields (`__init__`, `model_validate`, `model_validate_json`, nested validation); validation
+    of any other object, `from_attributes` included, is refused, and an instance of the type passes
+    as itself. Values compare and hash by `canonical_digest`, computed when the value is built.
+    Every copy (pickle, `copy`, `deepcopy`, `model_copy`, `__setstate__` on a blank instance) is
+    rebuilt through `model_validate`, so it runs every validator. `model_construct` is refused.
+
+    A built value is read-only: attribute assignment and deletion raise `ValidationError`, its
+    `__dict__` and private values are read-only mappings, `__setstate__` on it raises `TypeError`, and
+    the class's `model_config` can be neither changed nor rebound.
     """
 
-    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True, extra="forbid", hide_input_in_errors=True)
 
-    _canonical: str | None = PrivateAttr(default=None)
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source: type[BaseModel], handler: GetCoreSchemaHandler) -> Any:  # noqa: ANN401
+        """Wrap the model's schema so it accepts only a mapping or an instance, and seals what it builds."""
+        inner = handler(source)
+
+        def build(data: object, validate: ValidatorFunctionWrapHandler) -> object:
+            if not isinstance(data, (Mapping, cls)):
+                raise ValueError(
+                    f"{cls.__name__} is built from a mapping of its fields, not from a {type(data).__qualname__}"
+                )
+            value = validate(data)
+            if isinstance(value, Frozen):
+                _seal(value)
+            return value
+
+        return {"type": "function-wrap", "function": {"type": "no-info", "function": build}, "schema": inner}
+
+    def _derived(self) -> Mapping[str, object]:
+        """Return the private values a built value holds; a subclass extends this mapping."""
+        return {"_canonical": digest_of(self)}
 
     def canonical_digest(self) -> str:
-        """Return `value_digest("<module>.<qualname>", <each field's held value>)`, computed once.
+        """Return `value_digest("<module>.<qualname>", <each field's held value>)`, computed when the value was built.
 
         Fields are read as held, not dumped, so a `Frozen` value inside is `{"$value": ...}` and a
         held value and a mapping of its fields differ. A file-backed value's digest covers its path
         and stamp, not its bytes: two values over the same bytes at two paths are unequal.
         """
-        if self._canonical is None:
-            self._canonical = digest_of(self)
-        return self._canonical
+        return str(self.__pydantic_private__["_canonical"])  # type: ignore[index]
+
+    def __setattr__(self, name: str, value: object) -> NoReturn:
+        """Refuse with pydantic's `frozen_instance` `ValidationError`, whatever the name and the config."""
+        raise ValidationError.from_exception_data(
+            type(self).__name__, [{"type": "frozen_instance", "loc": (name,), "input": value}]
+        )
+
+    def __delattr__(self, name: str) -> NoReturn:
+        """Refuse with pydantic's `frozen_instance` `ValidationError`, whatever the name and the config."""
+        raise ValidationError.from_exception_data(
+            type(self).__name__, [{"type": "frozen_instance", "loc": (name,), "input": None}]
+        )
+
+    def __setstate__(self, state: dict[Any, Any]) -> None:
+        """Initialise a blank instance from `state["__dict__"]` through `model_validate`.
+
+        Raises:
+            TypeError: if the instance is already built.
+            ValidationError: if the state's fields do not validate.
+        """
+        if _is_sealed(self):
+            raise TypeError(f"{type(self).__name__} is read-only; __setstate__ applies only to a blank instance")
+        built = type(self).model_validate(dict(state.get("__dict__", {})))
+        for name in ("__pydantic_extra__", "__pydantic_private__", "__pydantic_fields_set__", "__dict__"):
+            object.__setattr__(self, name, object.__getattribute__(built, name))
 
     def __eq__(self, other: object) -> bool:
         """Return whether `other` is of the same type with the same `canonical_digest`."""
@@ -247,10 +354,17 @@ def as_numeric_array(v: object, ndim: int) -> numpy.ndarray:
 
 
 def as_label_array(v: object) -> numpy.ndarray:
-    """Validate a 1-D array of bools, numbers or strings and return a frozen copy."""
+    """Validate a 1-D array of bools, numbers or strings and return a frozen copy.
+
+    A string array is held at the width of its longest string (at least 1), so two arrays holding the
+    same strings are one value whatever width they were built at.
+    """
     a = _plain_array(v)
     if a.ndim != 1 or a.dtype.kind not in LABEL_KINDS or a.dtype.char in "gG":
         raise ValueError(f"labels must be a 1-D bool, number or str array, got {a.ndim}-D {a.dtype}")
+    if a.dtype.kind == "U":
+        width = int(numpy.char.str_len(a).max(initial=1))
+        a = a.astype(f"<U{width}")
     return frozen_array(a)
 
 
@@ -264,7 +378,8 @@ NonNegativeNs = Annotated[Nanoseconds, Field(ge=0)]
 
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
 
-FiniteFloat = Annotated[float, AfterValidator(_finite)]
+FiniteFloat = Annotated[float, Strict(), AfterValidator(_finite)]
+"""A finite float; an int is accepted, bools and strings are not."""
 
 Rate = Annotated[float, Strict(), Field(gt=0, allow_inf_nan=False)]
 """A sampling rate in Hz: a positive finite number; bools, strings and non-finite values are refused."""

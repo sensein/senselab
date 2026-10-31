@@ -18,6 +18,13 @@ Contracts per type:
 - `copy_revalidates`: each registered invalid update raises `ValidationError` through `model_copy`.
 - `construct_refused`: `model_construct` raises `TypeError`.
 - `copy_refuses_unknown_fields`: `model_copy(update=)` naming a field the type lacks raises `ValueError`.
+- `built_from_mappings_only`: validating an object that carries the fields as attributes, with
+  `from_attributes=True`, raises `ValidationError`, so no input form skips a validator.
+- `read_only`: setting or deleting any field or private attribute, writing `__dict__`, calling
+  `__setstate__` on a built value, re-initialising a reachable `FrozenMapping`, and changing or
+  rebinding the class's `model_config` all raise, and leave the value's digest unchanged.
+- `setstate_revalidates`: `__setstate__` on a blank instance builds the value from valid fields and
+  raises `ValidationError` on each registered invalid update.
 - `identity_derived` (types with an `identity` field not in `ATTESTED_IDENTITIES`): a forged
   identity is refused by validation.
 - `identity_form` (types in `ATTESTED_IDENTITIES`): an identity in the form of another source (a
@@ -28,9 +35,11 @@ import copy
 import functools
 import importlib
 import io
+import operator
 import pickle
 import pkgutil
 import tempfile
+import types
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -42,7 +51,7 @@ from senselab_worker.canonical import canonical_npy_bytes
 
 import senselab_core.kernel
 import senselab_core.runtime
-from senselab_core.kernel._base import Frozen, digest_of
+from senselab_core.kernel._base import Frozen, FrozenMapping, digest_of
 from senselab_core.kernel.declare import BackendSpec, TaskParams, TaskSpec
 from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ModelRef, ResolvedModel
@@ -122,6 +131,9 @@ def value_cases() -> list[tuple[str, Case]]:
             "copy_revalidates": functools.partial(_copy_revalidates, factory, invalid),
             "construct_refused": functools.partial(_construct_refused, cls),
             "copy_refuses_unknown_fields": functools.partial(_copy_refuses_unknown_fields, factory),
+            "built_from_mappings_only": functools.partial(_built_from_mappings_only, factory),
+            "read_only": functools.partial(_read_only, factory),
+            "setstate_revalidates": functools.partial(_setstate_revalidates, factory, invalid),
         }
         if cls in ATTESTED_IDENTITIES:
             contracts["identity_form"] = functools.partial(_identity_form, factory)
@@ -286,6 +298,71 @@ def _copy_refuses_unknown_fields(factory: Factory) -> None:
         except ValueError:
             continue
         raise AssertionError(f"{type(v).__qualname__}.model_copy accepted an unknown field")
+
+
+def _built_from_mappings_only(factory: Factory) -> None:
+    for v in _samples(factory):
+        held = types.SimpleNamespace(**{name: getattr(v, name) for name in type(v).model_fields})
+        try:
+            type(v).model_validate(held, from_attributes=True)
+        except ValidationError:
+            continue
+        raise AssertionError(f"{type(v).__qualname__} was built from an object's attributes")
+
+
+def _reachable_mappings(v: object) -> Iterator[FrozenMapping[Any, Any]]:
+    if isinstance(v, FrozenMapping):
+        yield v
+    if isinstance(v, Frozen):
+        for name in type(v).model_fields:
+            yield from _reachable_mappings(getattr(v, name))
+    elif isinstance(v, Mapping):
+        for x in v.values():
+            yield from _reachable_mappings(x)
+    elif isinstance(v, (list, tuple)):
+        for x in v:
+            yield from _reachable_mappings(x)
+
+
+def _writes(v: Frozen) -> Iterator[tuple[str, Callable[[], object]]]:
+    cls = type(v)
+    for name in [*cls.model_fields, "_canonical", "__class__"]:
+        yield f"setattr {name}", functools.partial(setattr, v, name, None)
+        yield f"delattr {name}", functools.partial(delattr, v, name)
+    first = next(iter(cls.model_fields))
+    yield "__dict__ item", functools.partial(operator.setitem, v.__dict__, first, None)
+    yield "__dict__ update", functools.partial(v.__dict__.update, {first: None})
+    yield "private item", functools.partial(operator.setitem, v.__pydantic_private__, "_canonical", "f" * 64)
+    yield "__setstate__", functools.partial(v.__setstate__, {"__dict__": dict(v.__dict__)})
+    yield "model_config item", functools.partial(operator.setitem, cls.model_config, "frozen", False)
+    yield "model_config rebind", functools.partial(setattr, cls, "model_config", {})
+    for m in _reachable_mappings(v):
+        yield "FrozenMapping.__init__", functools.partial(FrozenMapping.__init__, m, {})
+
+
+def _read_only(factory: Factory) -> None:
+    for v in _samples(factory):
+        digest = digest_of(v)
+        for how, write in _writes(v):
+            try:
+                write()
+            except (TypeError, AttributeError, ValidationError):
+                continue
+            raise AssertionError(f"{type(v).__qualname__}: {how} succeeded on a built value")
+        assert digest_of(v) == digest == v.canonical_digest(), f"{type(v).__qualname__}: a refused write changed it"
+
+
+def _setstate_revalidates(factory: Factory, invalid: Sequence[Mapping[str, object]]) -> None:
+    for v in _samples(factory):
+        blank = object.__new__(type(v))
+        blank.__setstate__({"__dict__": v.model_dump()})
+        assert blank == v, f"{type(v).__qualname__}: __setstate__ on a blank instance built another value"
+        for update in invalid:
+            try:
+                object.__new__(type(v)).__setstate__({"__dict__": {**v.model_dump(), **update}})
+            except ValidationError:
+                continue
+            raise AssertionError(f"{type(v).__qualname__}: __setstate__ accepted {update!r}")
 
 
 def _source_of(v: Frozen) -> str:

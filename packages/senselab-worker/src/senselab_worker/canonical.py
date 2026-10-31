@@ -582,7 +582,8 @@ class Tokeniser:
         Raises:
             NoCanonicalForm: (`error`) naming the path and type, for a value of no family, a non-`str`
                 key, a key holding a lone surrogate, two keys with one canonical form, a container that contains itself,
-                nesting deeper than `MAX_DEPTH`, or set elements over `MAX_CANONICAL_CHARS`.
+                nesting deeper than `MAX_DEPTH`, set elements over `MAX_CANONICAL_CHARS`, or an integer with more
+                digits than the interpreter writes as text.
         """
         return _Tokens(self, Walk()).value(value, path)
 
@@ -621,7 +622,10 @@ class _Tokens:
         if in_json_domain(scalar):
             return scalar
         if type(scalar) is int:
-            return {INT_TOKEN: str(scalar)}
+            try:
+                return {INT_TOKEN: str(scalar)}
+            except ValueError as err:
+                raise self.spec.error(path, value, str(err)) from err
         number = cast(float, scalar)
         return {FLOAT_TOKEN: "NaN" if math.isnan(number) else ("Infinity" if number > 0 else "-Infinity")}
 

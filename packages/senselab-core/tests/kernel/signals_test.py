@@ -510,9 +510,8 @@ def test_memo_stays_at_its_bound_and_evicts_the_least_recently_used() -> None:
 
 @pytest.mark.logic
 def test_source_memos_are_bounded_and_rederive_evicted_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """With room for one file, opening a second evicts the first; a copy of the first re-derives its identity."""
+    """With room for one file, opening a second evicts the first; a copy of the first re-stamps its file."""
     monkeypatch.setattr(signals, "_VERIFIED", signals.Memo(1))
-    monkeypatch.setattr(signals, "_ROOTS", signals.Memo(1))
     hashed: list[object] = []
     original = signals.content_identity
 
@@ -525,10 +524,10 @@ def test_source_memos_are_bounded_and_rederive_evicted_entries(tmp_path: Path, m
     (tmp_path / "b").mkdir()
     first = Audio.from_path(write_wav(tmp_path / "a"))
     second = Audio.from_path(write_wav(tmp_path / "b", frames=RATE // 2))
-    assert len(signals._VERIFIED) == len(signals._ROOTS) == 1 and len(hashed) == 2
+    assert len(signals._VERIFIED) == 1 and len(hashed) == 2
     again = copy.copy(first)
     assert again == first and again.identity == first.identity != second.identity
-    assert len(hashed) == 3 and len(signals._VERIFIED) == len(signals._ROOTS) == 1
+    assert len(hashed) == 3 and len(signals._VERIFIED) == 1
 
 
 @pytest.mark.logic

@@ -5,7 +5,16 @@ from typing import Annotated
 
 from pydantic import Field, model_validator
 
-from senselab_core.kernel._base import FiniteFloat, Frozen, Nanoseconds, NonEmptyStr, NonNegativeNs, require_ns
+from senselab_core.kernel._base import (
+    INT64_MAX,
+    INT64_MIN,
+    FiniteFloat,
+    Frozen,
+    Nanoseconds,
+    NonEmptyStr,
+    NonNegativeNs,
+    require_ns,
+)
 from senselab_core.kernel.formats import FormatTag, Formatted
 
 
@@ -32,9 +41,18 @@ class TimeMap(Formatted):
     uncertainty_ns: NonNegativeNs = 0
 
     def map(self, t_ns: int) -> int:
-        """Return `t_ns` on the target clock, with the drift term computed exactly and rounded half to even."""
+        """Return `t_ns` on the target clock, with the drift term computed exactly and rounded half to even.
+
+        Raises:
+            TypeError: if `t_ns` is not an integer.
+            OverflowError: if `t_ns` or the mapped time is outside the int64 nanosecond range.
+        """
         t_ns = require_ns(t_ns, "t_ns")
-        return t_ns + self.offset_ns + round(Fraction(self.drift_ppm) * t_ns / 1_000_000)
+        mapped = t_ns + self.offset_ns + round(Fraction(self.drift_ppm) * t_ns / 1_000_000)
+        for name, value in (("t_ns", t_ns), ("the mapped time", mapped)):
+            if not INT64_MIN <= value <= INT64_MAX:
+                raise OverflowError(f"{name} {value} is outside the int64 nanosecond range")
+        return mapped
 
 
 class Span(Frozen):

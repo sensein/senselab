@@ -3,7 +3,7 @@
 import re
 from typing import Annotated
 
-from pydantic import StringConstraints, model_validator
+from pydantic import ConfigDict, StringConstraints, model_validator
 
 from senselab_core.kernel._base import Frozen
 
@@ -22,8 +22,11 @@ class Formatted(Frozen):
     """A model carrying `format: "<name>@<major>.<minor>"`.
 
     A subclass declares the tag it writes as the default, `format: FormatTag = "<name>@<major>.<minor>"`,
-    and then reads only tags with that name and major version; unknown fields are ignored.
+    and then reads only tags with that name and major version; unknown fields are ignored. A type that
+    is not `Formatted` refuses unknown fields.
     """
+
+    model_config = ConfigDict(extra="ignore")
 
     format: FormatTag
 

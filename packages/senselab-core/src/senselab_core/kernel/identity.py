@@ -11,12 +11,11 @@ from pydantic import (
     BeforeValidator,
     Field,
     PlainSerializer,
-    PrivateAttr,
     Strict,
     StringConstraints,
     model_validator,
 )
-from senselab_worker.canonical import jcs_dumps, jcs_loads
+from senselab_worker.canonical import Walk, jcs_dumps, jcs_loads
 from senselab_worker.digest import identity_digest
 
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap
@@ -52,6 +51,19 @@ def _pinned_identity_error(source: str, identity: str) -> str | None:
     return f"a pinned {source} model's identity is {form}, got {identity!r}"
 
 
+def _text_fields(text: str) -> tuple[Literal["hf", "url", "local"], str, str]:
+    """Return the `(source, id, ref)` a reference's text form names; raise `ValueError` if it names none."""
+    if text.startswith("local:"):
+        return "local", text[len("local:") :], ""
+    if text.startswith("url:"):
+        url, sep, digest = text[len("url:") :].partition(_URL_HASH)
+        return "url", url, digest if sep else ""
+    model_id, sep, ref = text.partition("@")
+    if not sep:
+        raise ValueError(f"{text!r} needs an explicit revision: '{text}@<ref>', or a 'url:' or 'local:' prefix")
+    return "hf", model_id, ref
+
+
 class ModelRef(Frozen):
     """A model reference: hub id and revision, a URL, or a local path.
 
@@ -64,6 +76,8 @@ class ModelRef(Frozen):
       declared hash, which `resolve` refuses.
     - `local:<path>`: source `local`. The rest of the string is the id verbatim, any non-empty path;
       `ref` is empty.
+
+    Every reference has a text form: one whose `str` does not parse back to it is refused.
     """
 
     source: Literal["hf", "url", "local"]
@@ -72,6 +86,12 @@ class ModelRef(Frozen):
 
     @model_validator(mode="after")
     def _check_form(self) -> "ModelRef":
+        self._check_source_form()
+        if _text_fields(str(self)) != (self.source, self.id, self.ref):
+            raise ValueError(f"{self.source} reference {self.id!r} has no text form that parses back to it")
+        return self
+
+    def _check_source_form(self) -> None:
         if self.source == "hf":
             if not _HF_ID.fullmatch(self.id):
                 raise ValueError(f"hub id must be 'name' or 'org/name', got {self.id!r}")
@@ -79,7 +99,7 @@ class ModelRef(Frozen):
                 raise ValueError(
                     f"hub reference {self.id!r} needs a revision without whitespace or '@', got {self.ref!r}"
                 )
-            return self
+            return
         if self.source == "local" and self.ref:
             raise ValueError(f"local references carry no revision, got {self.ref!r}")
         if self.source == "url":
@@ -88,20 +108,12 @@ class ModelRef(Frozen):
             parts = urlsplit(self.id)
             if not parts.scheme or not parts.netloc or re.search(r"\s", self.id):
                 raise ValueError(f"url reference must be an absolute URL with a host, got {self.id!r}")
-        return self
 
     @classmethod
     def parse(cls, text: str) -> "ModelRef":
         """Parse `org/name@rev`, `url:<url>` or `local:<path>`; raise `ValueError` on anything else."""
-        if text.startswith("local:"):
-            return cls(source="local", id=text[len("local:") :], ref="")
-        if text.startswith("url:"):
-            url, sep, digest = text[len("url:") :].partition(_URL_HASH)
-            return cls(source="url", id=url, ref=digest if sep else "")
-        model_id, sep, ref = text.partition("@")
-        if not sep:
-            raise ValueError(f"{text!r} needs an explicit revision: '{text}@<ref>', or a 'url:' or 'local:' prefix")
-        return cls(source="hf", id=model_id, ref=ref)
+        source, model_id, ref = _text_fields(text)
+        return cls(source=source, id=model_id, ref=ref)
 
     def __str__(self) -> str:
         """Return the text form that `parse` reads."""
@@ -166,11 +178,19 @@ class ModelIdentity(Frozen):
         return self
 
 
-def _thaw(v: object) -> object:
+def _thaw(v: object, walk: Walk | None = None) -> object:
+    """Return `v` with every mapping as a `dict` and every sequence as a `list`, through the shared guard.
+
+    Raises:
+        ValueError: if a container contains itself or nests deeper than `MAX_DEPTH`.
+    """
+    walk = Walk() if walk is None else walk
     if isinstance(v, Mapping):
-        return {k: _thaw(x) for k, x in v.items()}
+        items = v
+        return walk.enter(v, lambda: {k: _thaw(x, walk) for k, x in items.items()})
     if isinstance(v, (list, tuple)):
-        return [_thaw(x) for x in v]
+        elements = v
+        return walk.enter(v, lambda: [_thaw(x, walk) for x in elements])
     return v
 
 
@@ -224,16 +244,12 @@ class LogicalKey(Frozen):
     batch_formation: NonEmptyStr | None = None
     chunk_grid: NonEmptyStr | None = None
 
-    _digest: str = PrivateAttr()
-
-    @model_validator(mode="after")
-    def _compute_digest(self) -> "LogicalKey":
-        self._digest = identity_digest("logical-key@3", self.model_dump())
-        return self
+    def _derived(self) -> Mapping[str, object]:
+        return {**super()._derived(), "_digest": identity_digest("logical-key@3", self.model_dump())}
 
     def digest(self) -> str:
         """Return `identity_digest("logical-key@3", fields)`, computed at construction."""
-        return self._digest
+        return str(self.__pydantic_private__["_digest"])  # type: ignore[index]
 
 
 class ExecutionContext(Frozen):
@@ -266,8 +282,11 @@ class ReusePolicy(str, Enum):
 
 DEFAULT_REUSE_POLICY = ReusePolicy.EQUIVALENT
 
-EQUIVALENCE: Mapping[str, Mapping[str, frozenset[str]]] = {}
-"""Measured equivalence classes per backend: backend name to class name to the context fingerprints in it."""
+EQUIVALENCE: Mapping[str, Mapping[str, frozenset[str]]] = FrozenMapping({})
+"""Measured equivalence classes per backend: backend name to class name to the context fingerprints in it.
+
+Read-only: a class is added by editing this declaration, never at run time.
+"""
 
 
 def acceptable(stored: ExecutionContext, current: ExecutionContext, policy: ReusePolicy | str, *, backend: str) -> bool:

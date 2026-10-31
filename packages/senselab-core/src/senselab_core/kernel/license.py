@@ -1,6 +1,7 @@
 """Machine-readable license records (P-23)."""
 
 import datetime
+import re
 from collections.abc import Mapping
 from typing import Annotated, Literal
 
@@ -16,7 +17,7 @@ class MissingLicense(LookupError):
 def _check_verified(v: Mapping[str, str]) -> Mapping[str, str]:
     if not {"date", "how"} <= set(v):
         raise ValueError(f"verified needs 'date' and 'how', got {sorted(v)}")
-    if len(v["date"]) != 10:
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", v["date"]):
         raise ValueError(f"verified date must be YYYY-MM-DD, got {v['date']!r}")
     datetime.date.fromisoformat(v["date"])
     if not v["how"]:

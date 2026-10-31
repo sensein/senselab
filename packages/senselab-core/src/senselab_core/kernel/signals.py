@@ -19,6 +19,7 @@ from pydantic import (
     Field,
     ModelWrapValidatorHandler,
     PlainSerializer,
+    StringConstraints,
     TypeAdapter,
     model_validator,
 )
@@ -101,16 +102,20 @@ class Memo:
 _VERIFIED = Memo(SOURCE_MEMO_ENTRIES)
 """(path, stamp) pairs this process stamped from the file and kept; a copy with one is checked by `os.stat` alone."""
 
-_ROOTS = Memo(SOURCE_MEMO_ENTRIES)
-"""Content identity roots this process hashed, by (path, stamp)."""
-
 
 def _remember(path: str | os.PathLike[str], stamp: "SourceStamp") -> None:
     _VERIFIED.put((os.fspath(path), stamp.canonical_digest()), True)
 
 
-SignalArray = Annotated[numpy.ndarray, BeforeValidator(lambda v: as_numeric_array(v, 2))]
-"""A frozen integer or float array of shape `(channels, samples)`."""
+def _finite_signal(v: object) -> numpy.ndarray:
+    a = as_numeric_array(v, 2)
+    if a.dtype.kind == "f" and not numpy.isfinite(a).all():
+        raise ValueError("signal samples must be finite; NaN and infinite samples are refused")
+    return a
+
+
+SignalArray = Annotated[numpy.ndarray, BeforeValidator(_finite_signal)]
+"""A frozen integer or float array of shape `(channels, samples)` whose samples are all finite."""
 
 
 class StaleSource(RuntimeError):
@@ -118,10 +123,12 @@ class StaleSource(RuntimeError):
 
 
 class SourceStamp(Frozen):
-    """What a source file was when it was opened: its stat fields and a digest of its sound header.
+    """What a source file was when it was opened: its stat fields, a digest of its sound header, and its content.
 
     `header` is `value_digest("soundfile.info", {frames, channels, samplerate, format, subtype})`;
     `frames`, `channels` and `sampling_rate` repeat the header fields a group's layout is checked against.
+    `content` is the root of the file's content identity (`content_identity`), taken over every byte
+    when the stamp is taken; it is the identity root of a recording of that file.
     """
 
     size: int = Field(ge=0)
@@ -132,19 +139,24 @@ class SourceStamp(Frozen):
     channels: int = Field(ge=1)
     sampling_rate: Rate
     header: NonEmptyStr
+    content: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
     @classmethod
     def of(cls, path: str | os.PathLike[str]) -> "SourceStamp":
-        """Open the file at `path` and return its current stamp."""
+        """Open the file at `path`, read every byte, and return its current stamp.
+
+        Raises:
+            StaleSource: if the file changed while it was read.
+        """
         with _opened(path) as (_, stamp):
             return stamp
 
     def checked(self, path: str | os.PathLike[str]) -> None:
         """Check that the file at `path` still has this stamp.
 
-        A stamp this process took from the file is checked by `os.stat` alone, without reading the
-        file; any other stamp is checked by opening the file and stamping it again. An in-place
-        rewrite that keeps size, mtime, inode and device is not detected.
+        A stamp this process took from the file at `path` is checked by `os.stat` alone; any other
+        stamp is checked by stamping the file again, which reads every byte. Samples are never
+        decoded from the file without checking its content (`RegularGroup.read`).
 
         Raises:
             StaleSource: if the file differs from the stamp.
@@ -164,9 +176,17 @@ class SourceStamp(Frozen):
 
 @contextmanager
 def _opened(path: str | os.PathLike[str]) -> Iterator[tuple[soundfile.SoundFile, SourceStamp]]:
-    """Open `path` once and yield the sound file with the stamp of that open file."""
+    """Open `path` once and yield the sound file with the stamp of that open file, its content read in full.
+
+    Raises:
+        StaleSource: if the file's stat fields changed while its content was read.
+    """
     with open(path, "rb") as raw:
         st = os.fstat(raw.fileno())
+        content = content_identity(path)["root"]
+        after = os.fstat(raw.fileno())
+        if (after.st_size, after.st_mtime_ns) != (st.st_size, st.st_mtime_ns):
+            raise StaleSource(f"{path} changed while it was read")
         with soundfile.SoundFile(raw) as f:
             header = {
                 "frames": f.frames,
@@ -184,6 +204,7 @@ def _opened(path: str | os.PathLike[str]) -> Iterator[tuple[soundfile.SoundFile,
                 channels=f.channels,
                 sampling_rate=f.samplerate,
                 header=value_digest("soundfile.info", header),
+                content=content,
             )
             yield f, stamp
 
@@ -222,8 +243,9 @@ class RegularGroup(Frozen):
     Exactly one of `data` and `source` is given. A source group carries `source_stamp`, the stamp of
     the file when it was opened: recorded at validation when not supplied, and checked against the
     file when supplied (`SourceStamp.checked`, raising `StaleSource` if it differs), so a copy made
-    in this process does not read the file. The header must match the declared
-    channel count and rate; samples are decoded only by `read`, which checks the stamp again.
+    in this process does not read the file. The header must match the declared channel count and
+    rate; samples are decoded only by `read`, which stamps the file again, content included, and
+    refuses a file that no longer matches.
     """
 
     channels: tuple[ChannelInfo, ...] = Field(min_length=1)
@@ -342,7 +364,6 @@ class Recording(Frozen):
     content identity root of the file. Otherwise it is `content:` and `value_digest(IDENTITY_TYPE,
     {"groups": ...})`, each source group standing as its channels, rate and content identity root.
     `IDENTITY_TYPE` is a declared token, so moving, renaming or subclassing the class keeps identities.
-    A file's root is hashed once per process and file state (path and stamp) and reused by copies.
     """
 
     IDENTITY_TYPE: ClassVar[str] = "recording"
@@ -390,21 +411,9 @@ class Recording(Frozen):
 
 
 def _source_root(group: RegularGroup) -> str:
-    """Return the content identity root of a source group's file, hashed once per path and stamp.
-
-    Raises:
-        StaleSource: if the file changed while it was hashed.
-    """
+    """Return the content identity root of a source group's file, as its checked stamp holds it."""
     assert group.source is not None and group.source_stamp is not None
-    key = (os.fspath(group.source), group.source_stamp.canonical_digest())
-    held = _ROOTS.get(key)
-    if isinstance(held, str):
-        return held
-    root = content_identity(group.source)["root"]
-    if not group.source_stamp.same_file(group.source):
-        raise StaleSource(f"{group.source} changed since it was opened")
-    _ROOTS.put(key, root)
-    return root
+    return group.source_stamp.content
 
 
 def _group_content(group: RegularGroup | IrregularGroup) -> object:
@@ -477,9 +486,9 @@ class Audio(Recording):
 
     @classmethod
     def from_path(cls, path: str | os.PathLike[str]) -> "Audio":
-        """Open a sound file lazily: only its header is read, and its identity is its content identity.
+        """Open a sound file lazily: its bytes are hashed once and its header read; no sample is decoded.
 
-        The recording's clock is named by its identity.
+        Its identity is its content identity, and the recording's clock is named by its identity.
         """
         stamp = SourceStamp.of(path)
         _remember(path, stamp)
@@ -503,8 +512,9 @@ class Audio(Recording):
         is named by its identity.
 
         Raises:
-            ValueError: if `a` is neither 1-D nor 2-D, is empty, or its dtype is not in `SIGNAL_DTYPES`
-                (complex, boolean, object, datetime and other integer widths are refused).
+            ValueError: if `a` is neither 1-D nor 2-D, is empty, holds a NaN or infinite sample or one
+                that overflows float32, or its dtype is not in `SIGNAL_DTYPES` (complex, boolean, object,
+                datetime and other integer widths are refused).
             pydantic.ValidationError: if `sampling_rate` is not a `Rate`.
         """
         if isinstance(a, numpy.ndarray) and type(a) is not numpy.ndarray:
@@ -519,6 +529,11 @@ class Audio(Recording):
         if x.dtype.name not in SIGNAL_DTYPES:
             raise ValueError(f"audio samples must be one of {sorted(SIGNAL_DTYPES)}, got {x.dtype}")
         scale = SIGNAL_DTYPES[x.dtype.name]
-        held = x.astype(AUDIO_DTYPE) if scale is None else x.astype(AUDIO_DTYPE) / AUDIO_DTYPE.type(scale)
+        if scale is None and not numpy.isfinite(x).all():
+            raise ValueError("audio samples must be finite; NaN and infinite samples are refused")
+        with numpy.errstate(over="ignore"):
+            held = x.astype(AUDIO_DTYPE) if scale is None else x.astype(AUDIO_DTYPE) / AUDIO_DTYPE.type(scale)
+        if not numpy.isfinite(held).all():
+            raise ValueError("audio samples must lie within float32 full scale; a sample overflows float32")
         group = RegularGroup(channels=cls._channels(x.shape[0]), sampling_rate=sampling_rate, data=held)
         return cls._of(group)
