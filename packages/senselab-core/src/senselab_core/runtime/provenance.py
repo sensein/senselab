@@ -38,7 +38,7 @@ from senselab_worker.canonical import (
 )
 from senselab_worker.digest import identity_digest
 
-from senselab_core.kernel._base import FrozenDict, thawed
+from senselab_core.kernel._base import FrozenDict, FrozenList, frozen_array, thawed
 from senselab_core.runtime.storage import write_atomically
 
 PROV_TYPE = Literal[
@@ -228,20 +228,40 @@ class UnrecordableValue(NoCanonicalForm):
     refusal = "is not a provenance value"
 
 
+@dataclass(frozen=True, eq=False)
+class EnumMember:
+    """An enum member as a record holds it: the qualified name of its type and its value, read back."""
+
+    type_name: str
+    value: Any
+
+
+def _held_family(v: object) -> tuple[str | None, object] | None:
+    t = type(v)
+    if t is FrozenDict:
+        return None, dict(cast("FrozenDict", v))
+    if t is FrozenList:
+        return None, list(cast("FrozenList", v))
+    if t is EnumMember:
+        member = cast(EnumMember, v)
+        return "$enum", [member.type_name, member.value]
+    return None
+
+
 def _nd_token(a: numpy.ndarray, recurse: Recurse, path: str) -> object:
     return {"$nd": base64.b64encode(canonical_npy_bytes(a)).decode("ascii")}
 
 
-_TOKENISER = Tokeniser(array=_nd_token, error=UnrecordableValue, verbatim=FrozenDict)
+_TOKENISER = Tokeniser(array=_nd_token, extra=_held_family, error=UnrecordableValue)
 
 
 def normalised(value: object, path: str = "value") -> object:
     """Return `value` as JSON the shared encoder accepts, every value outside the JSON domain as a tagged token.
 
     The provenance value type is what the shared `canonical.Tokeniser` writes, with a `numpy.ndarray`
-    written as `{"$nd": <base64 of its canonical .npy bytes>}`. A `FrozenDict` is a form a record
-    holds, already normalised, and is written as it is, so a value read back from a record records
-    the same value again.
+    written as `{"$nd": <base64 of its canonical .npy bytes>}`. A value read back from a record
+    (`FrozenDict`, `FrozenList`, `EnumMember`) is written as the value it stands for, so recording a
+    read-back records the same tokens again.
 
     Raises:
         UnrecordableValue: naming `path` and the type, for a value of no family, an array of a dtype
@@ -255,169 +275,144 @@ def _refuse(path: str, value: object, reason: str) -> NoReturn:
     raise UnrecordableValue(path, value, reason)
 
 
-def _check_token(key: str, payload: object, path: str, check: Callable[[object, str], None]) -> None:
+def _token_value(key: str, payload: object, path: str, walk: Walk) -> object:
     where = f"{path}.{key}"
     if key == "$f":
         if payload not in _FLOAT_NAMES:
             _refuse(where, payload, f"is not one of {sorted(_FLOAT_NAMES)}")
-    elif key == "$int":
+        return float(cast(str, payload))
+    if key == "$int":
         if not (isinstance(payload, str) and _INT_TOKEN_TEXT.fullmatch(payload)):
             _refuse(where, payload, "is not a decimal integer")
         try:
-            number = int(payload)
+            return int(payload)
         except ValueError as err:
             _refuse(where, payload, str(err))
-        if abs(number) <= MAX_SAFE_INT:
-            _refuse(where, payload, "is an integer JSON writes as a number")
-    elif key in ("$path", "$dec", "$bytes", "$nd"):
-        if not isinstance(payload, str):
-            _refuse(where, payload, "is not text")
-        if key == "$dec":
-            try:
-                same = str(Decimal(payload)) == payload
-            except InvalidOperation:
-                same = False
-            if not same:
-                _refuse(where, payload, "is not a decimal in its own text form")
-        elif key == "$bytes" and not re.fullmatch(r"(?:[0-9a-f]{2})*", payload):
-            _refuse(where, payload, "is not lowercase hex of whole bytes")
-        elif key == "$nd":
-            _check_npy(payload, where)
-    elif key == "$enum":
-        if not (isinstance(payload, (list, tuple)) and len(payload) == 2 and isinstance(payload[0], str)):
+    if key == "$enum":
+        if not (isinstance(payload, list) and len(payload) == 2 and isinstance(payload[0], str)):
             _refuse(where, payload, "is not [<type name>, <value>]")
-        check(payload[1], f"{where}.value")
-    else:
-        if not isinstance(payload, (list, tuple)):
+        return EnumMember(payload[0], _decoded(payload[1], f"{where}.value", walk, hashable=True))
+    if key == "$set":
+        if not isinstance(payload, list):
             _refuse(where, payload, "is not a list of elements")
-        forms = []
-        for i, item in enumerate(payload):
-            check(item, f"{where}[{i}]")
-            forms.append(jcs_dumps(thawed(item)))
-        if any(a >= b for a, b in zip(forms, forms[1:])):
-            _refuse(where, payload, "is not its elements, one per JCS form, sorted by their JCS bytes")
-
-
-_CHECKED_NPY: dict[str, None] = {}
-_CHECKED_NPY_ENTRIES = 64
-
-
-def _check_npy(text: str, where: str) -> None:
-    if text in _CHECKED_NPY:
-        return
-    try:
-        data = base64.b64decode(text, validate=True)
-    except binascii.Error as err:
-        _refuse(where, text, f"is not base64: {err}")
-    if base64.b64encode(data).decode("ascii") != text:
-        _refuse(where, text, "is not base64 in its canonical form")
-    try:
-        array = numpy.load(io.BytesIO(data), allow_pickle=False)
-        canonical = canonical_npy_bytes(array)
-    except (ValueError, TypeError, OSError) as err:
-        _refuse(where, text, f"is not a .npy array: {err}")
-    if canonical != data:
-        _refuse(where, text, "is not an array's canonical .npy bytes")
-    _CHECKED_NPY[text] = None
-    while len(_CHECKED_NPY) > _CHECKED_NPY_ENTRIES:
-        del _CHECKED_NPY[next(iter(_CHECKED_NPY))]
-
-
-def check_normal(value: object, path: str = "value") -> None:
-    """Check that a JSON value is a provenance normal form: what `normalised` can write, after JCS.
-
-    Every object whose one key starts with a single `$` is a token of a provenance family with a
-    well-formed payload (`$set` elements sorted by their JCS bytes, one per form; `$nd` the base64 of
-    canonical `.npy` bytes); every other key that starts with `$` starts with `$$`. A container shared
-    by several parents is checked once per depth.
-
-    Raises:
-        UnrecordableValue: naming the path, for anything else, a cycle, or nesting deeper than `MAX_DEPTH`.
-    """
-    walk = Walk()
-
-    def check(v: object, p: str) -> None:
+        return frozenset(_decoded(item, f"{where}[{i}]", walk, hashable=True) for i, item in enumerate(payload))
+    if not isinstance(payload, str):
+        _refuse(where, payload, "is not text")
+    if key == "$path":
+        return Path(payload)
+    if key == "$dec":
         try:
-            if isinstance(v, dict):
-                walk.enter(v, lambda: check_object(cast("dict[str, object]", v), p))
-            elif isinstance(v, (list, tuple)):
-                walk.enter(v, lambda: check_items(cast("Sequence[object]", v), p))
-        except UnrecordableValue:
-            raise
+            return Decimal(payload)
+        except InvalidOperation as err:
+            _refuse(where, payload, f"is not a decimal: {err}")
+    if key == "$bytes":
+        try:
+            return bytes.fromhex(payload)
         except ValueError as err:
-            _refuse(p, v, str(err))
-
-    def check_items(v: Sequence[object], p: str) -> None:
-        for i, item in enumerate(v):
-            check(item, f"{p}[{i}]")
-
-    def check_object(v: dict[str, object], p: str) -> None:
-        if len(v) == 1:
-            (key,) = v
-            if key.startswith("$") and not key.startswith("$$"):
-                if key not in _PROV_TOKENS:
-                    _refuse(f"{p}.{key}", v, "is not a provenance token")
-                _check_token(key, v[key], p, check)
-                return
-        for key, item in v.items():
-            if key.startswith("$") and not key.startswith("$$"):
-                _refuse(f"{p}.{key}", v, "is a token key inside an object of several keys")
-            check(item, f"{p}.{key}")
-
-    check(value, path)
+            _refuse(where, payload, f"is not hex: {err}")
+    try:
+        return frozen_array(numpy.load(io.BytesIO(base64.b64decode(payload, validate=True)), allow_pickle=False))
+    except (ValueError, TypeError, OSError, binascii.Error) as err:
+        _refuse(where, payload, f"is not a .npy array in base64: {err}")
 
 
-def _canonical(value: object, path: str) -> Any:  # noqa: ANN401
-    """Return the read-only canonical form of a normalised value: the value JCS writes and reads back.
+def _decoded(value: object, path: str, walk: Walk, *, hashable: bool = False) -> Any:  # noqa: ANN401
+    """Return the value a token form stands for: objects as `FrozenDict` (keys unescaped), arrays as `FrozenList`.
 
-    Objects become `FrozenDict` and arrays tuples, text is in canonical form, and an integral float
-    JSON writes as an integer is that integer; a container shared by several parents is built once.
+    With `hashable`, an array is a `tuple` (an element of a set or an enum's value).
 
     Raises:
-        UnrecordableValue: if the value is not JSON (a non-`str` key, two keys with one canonical
-            form, a number outside the JSON domain, any other type, a cycle, nesting deeper than
-            `MAX_DEPTH`) or not a normal form (`check_normal`).
+        UnrecordableValue: naming the path, for a malformed token, a cycle, or nesting deeper than `MAX_DEPTH`.
     """
-    walk = Walk()
-
-    def canon(v: object, p: str) -> object:
-        t = type(v)
-        if t is dict or t is FrozenDict:
-            return walk.enter(v, lambda: canon_object(cast("dict[object, object]", v), p))
-        if t is list or t is tuple:
-            elements = cast("Sequence[object]", v)
-            return walk.enter(v, lambda: tuple(canon(x, f"{p}[{i}]") for i, x in enumerate(elements)))
-        try:
-            scalar = canonical_scalar(v)
-        except TypeError:
-            _refuse(p, v, "is not JSON")
-        if not in_json_domain(scalar):
-            _refuse(p, v, "is a number outside the JSON domain")
-        if type(scalar) is str:
-            return canonical_text(scalar)
-        if type(scalar) is float and scalar.is_integer() and abs(scalar) <= MAX_SAFE_INT:
-            return int(scalar)
-        return scalar
-
-    def canon_object(v: dict[object, object], p: str) -> FrozenDict:
-        out: dict[str, object] = {}
-        for key, item in v.items():
-            if type(key) is not str:
-                _refuse(f"{p}[{key!r}]", key, "is not a str object key")
-            text = canonical_text(key)
-            if text in out:
-                _refuse(f"{p}.{key}", key, "is a key equal after NFC to another key of its object")
-            out[text] = canon(item, f"{p}.{key}")
-        return FrozenDict(out)
-
     try:
-        result = canon(value, path)
+        if isinstance(value, dict):
+            items = cast("dict[str, object]", value)
+            if len(items) == 1:
+                ((key, payload),) = items.items()
+                if key in _PROV_TOKENS:
+                    return walk.enter(value, lambda: _token_value(key, payload, path, walk))
+            return walk.enter(
+                value,
+                lambda: FrozenDict(
+                    {(k[1:] if k.startswith("$$") else k): _decoded(v, f"{path}.{k}", walk) for k, v in items.items()}
+                ),
+            )
+        if isinstance(value, (list, tuple)):
+            elements = cast("Sequence[object]", value)
+            kind: Callable[[Any], Any] = tuple if hashable else FrozenList
+            return walk.enter(
+                value,
+                lambda: kind(_decoded(v, f"{path}[{i}]", walk, hashable=hashable) for i, v in enumerate(elements)),
+            )
     except UnrecordableValue:
         raise
     except ValueError as err:
-        raise UnrecordableValue(path, value, str(err)) from err
-    check_normal(result, path)
-    return result
+        _refuse(path, value, str(err))
+    return value
+
+
+def _frozen_json(value: object, walk: Walk) -> Any:  # noqa: ANN401
+    if isinstance(value, dict):
+        items = cast("dict[str, object]", value)
+        return walk.enter(value, lambda: FrozenDict({k: _frozen_json(v, walk) for k, v in items.items()}))
+    if isinstance(value, list):
+        elements = cast("list[object]", value)
+        return walk.enter(value, lambda: FrozenList(_frozen_json(v, walk) for v in elements))
+    return value
+
+
+def _line(record: Mapping[str, Any]) -> bytes:
+    """Return the line a store file holds for a record: JSON with sorted keys, every number as Python writes it."""
+    return json.dumps(thawed(record), sort_keys=True, allow_nan=False).encode("utf-8")
+
+
+def recorded(value: object) -> Any:  # noqa: ANN401
+    """Return what a caller reads back from a record that recorded `value`: every token decoded.
+
+    Objects are `FrozenDict`, arrays `FrozenList` (equal to a `dict` and a `list` of the same items), a
+    non-finite float or a large integer is itself, a path is a `Path`, an array a read-only `numpy.ndarray`,
+    a set a `frozenset`, bytes `bytes`, a decimal a `Decimal`, and an enum member an `EnumMember`.
+
+    Raises:
+        UnrecordableValue: if `value` is outside the provenance value type.
+    """
+    return _decoded(normalised(value, "value"), "value", Walk())
+
+
+def plain_values(value: object) -> Any:  # noqa: ANN401
+    """Return a store file's JSON value as a caller reads it back: every token decoded, as `recorded` returns.
+
+    For readers that parse a store file as JSON rather than through `ProvStore.read_jsonl`. A
+    `provenance@1` value holds no tokens and is returned with its containers read-only.
+
+    Raises:
+        UnrecordableValue: for a malformed token.
+    """
+    return _decoded(value, "value", Walk())
+
+
+def _held_value(value: object, name: str) -> tuple[Any, Any]:
+    """Return a record field's tokens, read-only, and the decoded value a caller reads back.
+
+    Raises:
+        UnrecordableValue: if `value` is not a mapping of provenance values.
+    """
+    tokens = normalised(value, name)
+    if not isinstance(tokens, dict):
+        _refuse(name, value, "is not a mapping")
+    return _frozen_json(tokens, Walk()), _decoded(tokens, name, Walk())
+
+
+def _check_normal_form(tokens: object, name: str) -> Any:  # noqa: ANN401
+    """Return the decoded value of a field read from a `provenance@2` file, refusing a form the writer cannot write.
+
+    Raises:
+        UnrecordableValue: if decoding and normalising again does not give the same JSON.
+    """
+    value = _decoded(tokens, name, Walk())
+    if _line({"v": normalised(value, name)}) != _line({"v": tokens}):
+        _refuse(name, tokens, "is not a form the store writes: decoding and recording it again differs")
+    return value
 
 
 def _text(value: object, name: str, *, optional: bool = False) -> None:
@@ -443,19 +438,21 @@ def _extent(value: object) -> tuple[float, float] | None:
 
 
 class _Record:
-    """What every provenance record shares: it is canonical, read-only, and bound to its id.
+    """What every provenance record shares: it is read-only and bound to its id.
 
-    `_DIGESTED` names the fields the id covers, after `run_id`; `_CANONICAL` the fields held in
-    canonical form. A record with a `run_id` is verified: its id is checked against its content when it
-    is built. A record whose `run_id` is `None` is unverified: one read from a `provenance@1` file, which
-    keeps the id that file gave it, or a copy `revised` returns; a store holds an unverified record only
-    when it read it from a file that may carry one.
+    `_DIGESTED` names the fields the id covers, after `run_id`; `_VALUES` the fields of provenance values
+    (attributes, parameters, dependencies). A value field holds what a caller reads back, every token
+    decoded; the record also keeps the tokens it was identified by, which the file holds. A record with a
+    `run_id` is verified: its id is checked against its content when it is built. A record whose `run_id`
+    is `None` is unverified: one read from a `provenance@1` file, which keeps the id that file gave it, or
+    a copy `revised` returns; a store holds an unverified record only when it read it from a file that may
+    carry one. Two records are equal when their files' lines identify the same content (JCS).
     """
 
     _DIGESTED: ClassVar[tuple[str, ...]]
-    _CANONICAL: ClassVar[tuple[str, ...]]
-    _RAW: ClassVar[tuple[str, ...]] = ()
+    _VALUES: ClassVar[tuple[str, ...]] = ()
     _KIND: ClassVar[str]
+    __hash__ = None  # type: ignore[assignment]
     id: str
     run_id: str | None
 
@@ -466,19 +463,25 @@ class _Record:
         raise NotImplementedError
 
     def __post_init__(self) -> None:
-        """Check the fields, hold them in canonical form, and check the id against them."""
+        """Check the fields, hold each value field decoded beside its tokens, and check the id against them."""
         _text(self.id, "id")
         _text(self.run_id, "run_id", optional=True)
+        tokens: dict[str, Any] = {}
+        for name in self._VALUES:
+            tokens[name], held = _held_value(getattr(self, name), name)
+            object.__setattr__(self, name, held)
+        object.__setattr__(self, "_tokens", FrozenDict(tokens))
         self._check()
-        for name in self._CANONICAL:
-            object.__setattr__(self, name, _canonical(getattr(self, name), name))
         if self.run_id is not None and self.id != self.minted_id():
             raise ValueError(f"{self._KIND} id {self.id!r} is not the id of its content, {self.minted_id()!r}")
+
+    def _field(self, name: str) -> Any:  # noqa: ANN401
+        return self._tokens[name] if name in self._VALUES else getattr(self, name)  # type: ignore[attr-defined]
 
     def minted_id(self, run_id: str | None = None) -> str:
         """Return the id of this content in `run_id` (by default the record's own): `<prefix>-` and 16 hex.
 
-        The hex is `identity_digest("provenance-id@4", [run_id, *<the digested fields, canonical>])`.
+        The hex is `identity_digest("provenance-id@4", [run_id, *<the digested fields, value fields as tokens>])`.
 
         Raises:
             ValueError: if neither `run_id` nor the record's has a value.
@@ -488,7 +491,7 @@ class _Record:
         run = self.run_id if run_id is None else run_id
         if run is None:
             raise ValueError(f"{self._KIND} {self.id!r} was read from provenance@1 and has no run_id to mint from")
-        parts = [run, *(thawed(getattr(self, name)) for name in self._DIGESTED)]
+        parts = [run, *(thawed(self._field(name)) for name in self._DIGESTED)]
         try:
             digest = identity_digest(_ID_TAG, parts)
         except ValueError as err:
@@ -501,11 +504,17 @@ class _Record:
         return self.run_id is not None
 
     def as_record(self) -> dict[str, Any]:
-        """Return the JSON object a file holds for this record."""
-        return {"record": self._KIND, **{f.name: thawed(getattr(self, f.name)) for f in fields(cast(Any, self))}}
+        """Return the JSON object a file holds for this record: value fields as their tokens."""
+        return {"record": self._KIND, **{f.name: thawed(self._field(f.name)) for f in fields(cast(Any, self))}}
+
+    def __eq__(self, other: object) -> bool:
+        """Return whether `other` is a record of the same kind whose file line identifies the same content."""
+        if not isinstance(other, _Record):
+            return NotImplemented
+        return type(self) is type(other) and jcs_dumps(self.as_record()) == jcs_dumps(other.as_record())
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Entity(_Record):
     """Something the graph believes exists.
 
@@ -518,8 +527,7 @@ class Entity(_Record):
     """
 
     _DIGESTED: ClassVar[tuple[str, ...]] = ("prov_type", "extent", "attributes")
-    _CANONICAL: ClassVar[tuple[str, ...]] = ("attributes",)
-    _RAW: ClassVar[tuple[str, ...]] = ("attributes",)
+    _VALUES: ClassVar[tuple[str, ...]] = ("attributes",)
     _KIND: ClassVar[str] = "entity"
 
     id: str
@@ -535,12 +543,10 @@ class Entity(_Record):
         if self.prov_type not in _PROV_TYPES:
             raise ValueError(f"unknown prov_type {self.prov_type!r}; known: {sorted(_PROV_TYPES)}")
         object.__setattr__(self, "extent", _extent(self.extent))
-        if not isinstance(self.attributes, Mapping):
-            raise UnrecordableValue("attributes", self.attributes, "is not a mapping")
         _check_entity_attributes(self.prov_type, self.attributes)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Activity(_Record):
     """One node execution, or one step of one.
 
@@ -555,8 +561,7 @@ class Activity(_Record):
     """
 
     _DIGESTED: ClassVar[tuple[str, ...]] = ("node", "step", "parameters")
-    _CANONICAL: ClassVar[tuple[str, ...]] = ("node", "step", "started", "ended", "parameters")
-    _RAW: ClassVar[tuple[str, ...]] = ("parameters",)
+    _VALUES: ClassVar[tuple[str, ...]] = ("parameters",)
     _KIND: ClassVar[str] = "activity"
 
     id: str
@@ -574,11 +579,9 @@ class Activity(_Record):
         _text(self.node, "node")
         for name in ("step", "started", "ended"):
             _text(getattr(self, name), name, optional=True)
-        if not isinstance(self.parameters, Mapping):
-            raise UnrecordableValue("parameters", self.parameters, "is not a mapping")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Agent(_Record):
     """What acted: a model at a resolved commit, or the software itself.
 
@@ -594,7 +597,6 @@ class Agent(_Record):
     """
 
     _DIGESTED: ClassVar[tuple[str, ...]] = ("agent_type", "model_id", "commit_sha", "unresolved_reason", "version")
-    _CANONICAL: ClassVar[tuple[str, ...]] = _DIGESTED
     _KIND: ClassVar[str] = "agent"
 
     id: str
@@ -616,7 +618,7 @@ class Agent(_Record):
         _check_agent_fields(self.agent_type, self.model_id, self.commit_sha, self.unresolved_reason)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Environment(_Record):
     """The runtime a run actually executed in: the host interpreter, or one subprocess venv.
 
@@ -644,7 +646,7 @@ class Environment(_Record):
         "dependencies_digest",
         "senselab_version",
     )
-    _CANONICAL: ClassVar[tuple[str, ...]] = _DIGESTED
+    _VALUES: ClassVar[tuple[str, ...]] = ("dependencies",)
     _KIND: ClassVar[str] = "environment"
 
     id: str
@@ -667,9 +669,7 @@ class Environment(_Record):
         _text(self.python_version, "python_version")
         for name in ("operating_system", "dependencies_digest", "senselab_version"):
             _text(getattr(self, name), name, optional=True)
-        if not isinstance(self.dependencies, Mapping) or not all(
-            isinstance(k, str) and isinstance(v, str) for k, v in self.dependencies.items()
-        ):
+        if not all(isinstance(v, str) for v in self.dependencies.values()):
             raise ValueError("dependencies must map package names to version text")
 
 
@@ -683,7 +683,6 @@ _RECORD_KEYS: dict[str, frozenset[str]] = {
     **{kind: frozenset(f.name for f in fields(cast(Any, t))) for kind, t in _RECORD_TYPES.items()},
     "relation": frozenset({"relation", "source", "target"}),
 }
-_LEGACY_NORMALISED = {"entity": ("attributes",), "activity": ("parameters",), "environment": ("dependencies",)}
 
 
 _R = TypeVar("_R", bound=_Record)
@@ -691,49 +690,14 @@ _UNTIMED: dict[str, Any] = {"started": None, "ended": None}
 
 
 def _mint(cls: type[_R], run_id: str, raw: Mapping[str, object], **plain: object) -> _R:
-    """Build a record of `cls` in `run_id`, `raw` fields normalised first and the id minted from the content.
+    """Build a record of `cls` in `run_id` with the id minted from its content.
 
     Raises:
         UnrecordableValue: if a field holds a value outside the provenance value type.
         ValueError: if the record's fields are refused.
     """
-    normal = {name: normalised(value, name) for name, value in raw.items()}
-    draft = cls(id="", run_id=None, **normal, **plain)  # type: ignore[call-arg]
+    draft = cls(id="", run_id=None, **raw, **plain)  # type: ignore[call-arg]
     return cast(_R, replace(cast(Any, draft), id=draft.minted_id(run_id), run_id=run_id))
-
-
-def recorded(value: object) -> Any:  # noqa: ANN401
-    """Return the form a record holds for `value`: normalised, through JCS, read-only.
-
-    Compare a read-back with what was recorded through this (`entity.attributes == recorded(attributes)`),
-    since a record holds objects as `FrozenDict`, arrays as tuples and integral floats as integers.
-
-    Raises:
-        UnrecordableValue: if `value` is outside the provenance value type.
-    """
-    return _canonical(normalised(value, "value"), "value")
-
-
-def plain_values(value: object) -> Any:  # noqa: ANN401
-    """Return a store file's JSON value with each number and path token as the value it stands for.
-
-    `{"$f": ...}` becomes the float, `{"$int": ...}` the integer and `{"$path": ...}` the posix text;
-    every other token, and every other value, is returned as it is (objects as `dict`, arrays as `list`).
-    For readers that parse a store file as JSON rather than through `ProvStore.read_jsonl`.
-    """
-    if isinstance(value, dict):
-        if len(value) == 1:
-            ((key, payload),) = value.items()
-            if key == "$f" and payload in _FLOAT_NAMES:
-                return float(payload)
-            if key == "$int" and isinstance(payload, str) and _INT_TOKEN_TEXT.fullmatch(payload):
-                return int(payload)
-            if key == "$path" and isinstance(payload, str):
-                return payload
-        return {k: plain_values(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [plain_values(v) for v in value]
-    return value
 
 
 @overload
@@ -743,11 +707,10 @@ def revised(target: Mapping[str, Any], /, **changes: object) -> FrozenDict: ...
 def revised(target: _Record | Mapping[str, Any], /, **changes: object) -> _Record | FrozenDict:
     """Return a copy of a record, or of a mapping a record holds, with `changes`; the original is untouched.
 
-    For a mapping (attributes, parameters, an object inside them): a `FrozenDict` of its items with each
-    change normalised and its key escaped as the store escapes keys, so recording it through a store
-    method records exactly these values. For a record: a copy with the changed fields (attributes and
-    parameters given as raw values are normalised) that keeps the record's id; the copy is unverified
-    (`run_id` None), so a store refuses to hold it. It is a view, such as a word with a bounded extent.
+    For a mapping a record holds (attributes, parameters, an object inside them): what a caller reads back
+    from a record of its items with `changes` (`recorded`). For a record: a copy with the changed fields
+    that keeps the record's id; the copy is unverified (`run_id` None), so a store refuses to hold it. It
+    is a view, such as a word with a bounded extent.
 
     Raises:
         UnrecordableValue: if a change holds a value outside the provenance value type.
@@ -758,12 +721,10 @@ def revised(target: _Record | Mapping[str, Any], /, **changes: object) -> _Recor
         unknown = sorted(set(changes) - names)
         if unknown:
             raise ValueError(f"{type(target).__name__} has no fields {unknown}")
-        normal = {k: normalised(v, k) if k in target._RAW else v for k, v in changes.items()}
-        return cast(_Record, replace(cast(Any, target), run_id=None, **normal))
+        return cast(_Record, replace(cast(Any, target), run_id=None, **changes))
     if not isinstance(target, Mapping):
         raise TypeError(f"revised takes a record or a mapping a record holds, not {type(target).__name__}")
-    merged = {**target, **{escaped_key(k): normalised(v, k) for k, v in changes.items()}}
-    return cast(FrozenDict, _canonical(merged, "revised"))
+    return cast(FrozenDict, recorded({**target, **changes}))
 
 
 def _timing(record: _Record) -> tuple[str, str]:
@@ -1095,34 +1056,35 @@ class ProvStore:
         _put(tables[record._KIND], record, where)
 
     def write_jsonl(self, path: str | Path) -> None:
-        """Write the store as one canonical JSON (RFC 8785) record per line, atomically.
+        """Write the store as one JSON record per line, keys sorted and numbers as Python writes them, atomically.
 
         The first line is the format record: `provenance@2.0` when every record is verified, and
         `provenance@1.1` when the store holds records read from `provenance@1`, which are written with
-        `run_id` null. Each entity, activity, agent and environment line holds every field of the record
-        as the store holds it, so `read_jsonl` rebuilds the same records and checks each verified id
-        against its content. The records go to a temporary file in
+        `run_id` null. Each entity, activity, agent and environment line holds every field of the record,
+        value fields as the tokens the record was identified by, so `read_jsonl` rebuilds the same records
+        (a float stays a float) and checks each verified id against its content. The records go to a
+        temporary file in
         the target's directory, which is flushed, fsynced and renamed onto the target, so the file at
         ``path`` is always either the previous store or the new one whole. An existing target's
         permission bits are kept.
         """
         written = PROVENANCE_FORMAT if self.verified else UNVERIFIED_FORMAT
-        lines = [jcs_dumps({"format": written, "record": "format"})]
-        lines += [jcs_dumps(record.as_record()) for record in self.records()]
-        lines += [
-            jcs_dumps({"record": "relation", "relation": r, "source": s, "target": t}) for r, s, t in self._relations
-        ]
+        lines = [_line({"format": written, "record": "format"})]
+        lines += [_line(record.as_record()) for record in self.records()]
+        lines += [_line({"record": "relation", "relation": r, "source": s, "target": t}) for r, s, t in self._relations]
         write_atomically(Path(path), b"".join(line + b"\n" for line in lines))
 
     @classmethod
     def read_jsonl(cls, path: str | Path, run_id: str = "read") -> "ProvStore":
         """Read a store back through the same record validation the store's own methods use.
 
-        A `provenance@2.0` file is read line by line as canonical JSON; every record is rebuilt as its
-        type, which checks its fields and that its id is the id of its content, and a record without a
-        `run_id` is refused. A `provenance@1.1` file is read the same way, its records without a `run_id`
-        held unverified. A file without a format line is `provenance@1`: its values are normalised as
-        the writer normalises them, and its records keep the ids that file gave them, unverified.
+        A `provenance@2.0` file is read line by line as JSON; each value field must be a form the writer
+        writes (decoding and recording it again gives the same JSON), every record is rebuilt as its type,
+        which checks its fields and that its id is the id of its content, and a record without a `run_id`
+        is refused. Callers read every value decoded, as `recorded` returns it. A `provenance@1.1` file is
+        read the same way, its records without a `run_id` held unverified. A file without a format line
+        is `provenance@1`: its values are recorded as the store's methods record them, and its records keep
+        the ids that file gave them, unverified.
         Relations pass through the same membership check as the relation methods, so a relation line
         repeated reads back as one triple; a record repeated is held once, and two different records
         with one id are refused.
@@ -1174,10 +1136,10 @@ class ProvStore:
                     raise ValueError(f"{where}: a relation joins two ids, got {rec!r}")
                 store._relate(cast(RELATION, rec["relation"]), rec["source"], rec["target"])
                 continue
-            if legacy:
-                for name in _LEGACY_NORMALISED.get(cast(str, kind), ()):
-                    rec[name] = normalised(rec[name], name)
             try:
+                if not legacy:
+                    for name in _RECORD_TYPES[cast(str, kind)]._VALUES:
+                        rec[name] = _check_normal_form(rec[name], name)
                 record = _RECORD_TYPES[cast(str, kind)](**rec)
             except (ValueError, TypeError) as err:
                 raise ValueError(f"{where}: {kind} {rec.get('id')!r}: {err}") from err
@@ -1217,12 +1179,16 @@ class ProvStore:
         return identity_digest(_ID_TAG, [listing])[:16]
 
 
+def _refuse_constant(text: str) -> NoReturn:
+    raise ValueError(f"non-finite number {text} is written as a token in this format")
+
+
 def _parse(line: bytes, where: str, *, legacy: bool) -> dict[str, Any]:
-    """Parse a line: canonical JSON for `provenance@2.0`; any JSON, bare non-finite literals too, for `provenance@1`."""
+    """Parse a line: JSON without bare non-finite literals, which `provenance@1` alone may hold."""
     try:
-        value = json.loads(line) if legacy else jcs_loads(line)
+        value = json.loads(line) if legacy else json.loads(line, parse_constant=_refuse_constant)
     except ValueError as err:
-        raise ValueError(f"{where}: not {'JSON' if legacy else 'canonical JSON'}: {err}") from err
+        raise ValueError(f"{where}: not JSON: {err}") from err
     if not isinstance(value, dict) or "record" not in value:
         raise ValueError(f"{where}: not an object carrying a 'record' key: {line[:200]!r}")
     return value

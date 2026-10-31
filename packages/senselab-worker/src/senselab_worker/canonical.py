@@ -576,10 +576,7 @@ class Tokeniser:
     - a `PurePath`: `{"$path": <posix string>}`;
     - a `Decimal`: `{"$dec": <str>}`; `bytes` or `bytearray`: `{"$bytes": <hex>}`;
     - a value `extra` maps to `(token, payload)`: `{token: <payload>}`, entered like a container, or
-      the payload itself when `token` is `None`;
-    - an instance of exactly `verbatim`, a mapping already in this form: written as it is, its keys
-      not escaped again, every mapping in it written as an object, every list or tuple as an array,
-      and every scalar in the JSON domain.
+      the payload itself when `token` is `None`.
 
     Each call is one `Walk`: containers, arrays and `extra` tokens are entered through the shared
     guard, and one shared by many parents is written once per depth.
@@ -591,13 +588,11 @@ class Tokeniser:
         array: ArrayToken = array_token,
         extra: Extra | None = None,
         error: type[NoCanonicalForm] = NoCanonicalForm,
-        verbatim: type | None = None,
     ) -> None:
-        """Write arrays with `array`, values of no shared family with `extra`, and `verbatim` mappings as they are."""
+        """Write arrays with `array` and values of no shared family with `extra`; refuse with `error`."""
         self.array = array
         self.extra = extra
         self.error = error
-        self.verbatim = verbatim
 
     def __call__(self, value: object, path: str = "value") -> object:
         """Return `value` in tokens.
@@ -618,13 +613,6 @@ class _Tokens:
 
     def value(self, value: object, path: str) -> object:
         t = type(value)
-        if self.spec.verbatim is not None and t is self.spec.verbatim:
-            try:
-                return self.held(value, path)
-            except NoCanonicalForm:
-                raise
-            except (ValueError, TypeError) as err:
-                raise self.spec.error(path, value, str(err)) from err
         if t is dict or t is list or t is tuple or t is set or t is frozenset or t is numpy.ndarray:
             try:
                 return self.walk.enter(value, lambda: self.container(value, path))
@@ -658,19 +646,6 @@ class _Tokens:
                 raise self.spec.error(path, value, str(err)) from err
         number = cast(float, scalar)
         return {FLOAT_TOKEN: "NaN" if math.isnan(number) else ("Infinity" if number > 0 else "-Infinity")}
-
-    def held(self, value: object, path: str) -> object:
-        if isinstance(value, (dict, list, tuple)):
-            return self.walk.enter(value, lambda: self.held_container(value, path))
-        scalar = canonical_scalar(value)
-        if not in_json_domain(scalar):
-            raise self.spec.error(path, value, "is a number outside the JSON domain inside a held form")
-        return scalar
-
-    def held_container(self, value: "dict[str, object] | list[object] | tuple[object, ...]", path: str) -> object:
-        if isinstance(value, dict):
-            return {key: self.held(item, f"{path}.{key}") for key, item in value.items()}
-        return [self.held(item, f"{path}[{i}]") for i, item in enumerate(value)]
 
     def extra(self, value: object, token: str | None, payload: object, path: str) -> object:
         try:

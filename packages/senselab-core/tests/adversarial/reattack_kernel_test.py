@@ -123,7 +123,7 @@ def test_xk5_recorded_content_cannot_drift_from_its_id(tmp_path: Path) -> None:
     attributes["ev"]["n"].append(4)  # type: ignore[index]
     extent[1] = 99.0
     entity = store.get_entity(eid)
-    assert entity.attributes == {"ev": {"n": (1, 2, 3)}} and entity.extent == (0.0, 1.0)
+    assert entity.attributes == {"ev": {"n": [1, 2, 3]}} and entity.extent == (0.0, 1.0)
     for write in (
         lambda: entity.attributes.__setitem__("x", 1),  # type: ignore[index]
         lambda: entity.attributes["ev"].__setitem__("x", 1),
@@ -208,7 +208,7 @@ def test_xk6_unverified_records_never_pass_as_verified(tmp_path: Path) -> None:
     back.entity(prov_type="span", extent=None, attributes={"new": True})
     written = tmp_path / "written.jsonl"
     back.write_jsonl(written)
-    assert written.read_text().splitlines()[0] == '{"format":"provenance@1.1","record":"format"}'
+    assert written.read_text().splitlines()[0] == '{"format": "provenance@1.1", "record": "format"}'
     again = ProvStore.read_jsonl(written)
     assert again.records() == back.records() and not again.verified
     for bad in ("[NaN, 1.0]", "[0, 1e400]"):

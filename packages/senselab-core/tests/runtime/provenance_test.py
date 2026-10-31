@@ -807,7 +807,7 @@ def test_a_provenance_1_file_reads_with_its_ids_kept(tmp_path: Path) -> None:
     back = ProvStore.read_jsonl(path)
     entity = back.get_entity("span-0123456789abcdef")
     assert entity.run_id is None and entity.extent == (0.0, 1.5)
-    assert entity.attributes == {"level": {"$f": "-Infinity"}, "$$k": 1}
+    assert entity.attributes == {"level": -math.inf, "$k": 1}
     assert back.generated_by(entity.id) == "act-0123456789abcdef"
     written = tmp_path / "new.jsonl"
     back.write_jsonl(written)
@@ -832,7 +832,8 @@ def test_the_store_records_again_every_form_it_returns(
     held = cast(dict[str, object], back.get_entity(eid).attributes)
     assert back.entity(prov_type="measurement", extent=(0.0, 1.0), attributes=held) == eid
     nested = back.entity(prov_type="measurement", extent=None, attributes={"inner": held, "list": [held]})
-    assert back.get_entity(nested).attributes == {"inner": held, "list": (held,)}
+    tokens = provenance.normalised(back.get_entity(nested).attributes)
+    assert tokens == provenance.normalised({"inner": attributes, "list": [attributes]})
     with_extra = provenance.revised(held, added=extra)
     direct = back.entity(prov_type="measurement", extent=None, attributes={**dict(attributes), "added": extra})
     assert back.entity(prov_type="measurement", extent=None, attributes=with_extra) == direct
@@ -856,8 +857,79 @@ def test_a_hand_edited_store_keeps_order_ids_and_relations_and_marks_the_edit_un
     edited = hand_edited(store, first, signal="plain")
     assert [e.id for e in edited.entities()] == [first, second] and edited.relations() == store.relations()
     held = edited.get_entity(first)
-    assert held.attributes == {"signal": "plain", "n": (1,)} and not held.verified and not edited.verified
+    assert held.attributes == {"signal": "plain", "n": [1]} and not held.verified and not edited.verified
     assert (
         edited.get_entity(second) == store.get_entity(second)
         and store.get_entity(first).attributes["signal"] == "enhanced"
     )
+
+
+def _decoded_type(value: object) -> type | None:
+    """The type a caller reads back for a value of a token family, or None for a JSON value."""
+    if isinstance(value, enum.Enum):
+        return provenance.EnumMember
+    if isinstance(value, PurePath):
+        return Path
+    if isinstance(value, numpy.ndarray):
+        return numpy.ndarray
+    if isinstance(value, (set, frozenset)):
+        return frozenset
+    if isinstance(value, (bytes, bytearray)):
+        return bytes
+    if isinstance(value, Decimal):
+        return Decimal
+    if isinstance(value, float) and not math.isfinite(value):
+        return float
+    if isinstance(value, int) and not isinstance(value, bool) and abs(value) > 2**53 - 1:
+        return int
+    return None
+
+
+def _read_as_decoded(read: object, value: object) -> bool:
+    """Whether `read` is `value` decoded: the same containers, and each family as its decoded type, never a token."""
+    family = _decoded_type(value)
+    if family is not None:
+        return isinstance(read, family)
+    if isinstance(value, dict):
+        return (
+            isinstance(read, dict)
+            and set(read) == set(value)
+            and all(_read_as_decoded(read[k], v) for k, v in value.items())
+        )
+    if isinstance(value, (list, tuple)):
+        return (
+            isinstance(read, list)
+            and len(read) == len(value)
+            and all(_read_as_decoded(r, v) for r, v in zip(read, value))
+        )
+    return not isinstance(read, (dict, list))
+
+
+@settings(max_examples=300, deadline=None)
+@given(value=_PAYLOADS, key=_KEYS)
+def test_every_read_path_hands_back_the_decoded_value_never_a_token(
+    tmp_path_factory: pytest.TempPathFactory, value: object, key: str
+) -> None:
+    """On every read path a caller reads each family decoded, as its decoded type, and records it again losslessly."""
+    store = ProvStore(run_id="run")
+    eid = store.entity(prov_type="measurement", extent=None, attributes={key: value})
+    aid = store.activity(node="N", step=None, parameters={key: value})
+    path = tmp_path_factory.mktemp("prov") / "prov.jsonl"
+    store.write_jsonl(path)
+    back = ProvStore.read_jsonl(path, run_id="run")
+    raw = [json.loads(line) for line in path.read_text().splitlines()]
+    (line,) = [r for r in raw if r.get("id") == eid]
+    reads = {
+        "get_entity": store.get_entity(eid).attributes[key],
+        "entities": store.entities("measurement")[0].attributes[key],
+        "get_activity": store.get_activity(aid).parameters[key],
+        "read_jsonl": back.get_entity(eid).attributes[key],
+        "read_jsonl activities": back.activities()[0].parameters[key],
+        "recorded": provenance.recorded({key: value})[key],
+        "plain_values": provenance.plain_values(line["attributes"])[key],
+        "revised": provenance.revised(store.get_entity(eid).attributes)[key],
+    }
+    expected = provenance.normalised(value)
+    for how, read in reads.items():
+        assert _read_as_decoded(read, value), f"{how}: {read!r} for {value!r}"
+        assert provenance.normalised(read) == expected, how

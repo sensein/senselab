@@ -211,6 +211,34 @@ class FrozenDict(dict[str, Any]):
         return self
 
 
+class FrozenList(list[Any]):
+    """A read-only `list`: every mutating method raises `TypeError`; copies are the object itself.
+
+    It is the array form of a provenance record's values: equal to a `list` of the same items, as JSON
+    writes it, and never changed after it is built.
+    """
+
+    __slots__ = ()
+
+    def _refuse(self, *args: object, **kwargs: object) -> NoReturn:
+        raise TypeError("a FrozenList is read-only")
+
+    __setitem__ = __delitem__ = __iadd__ = __imul__ = _refuse  # type: ignore[assignment]
+    append = clear = extend = insert = pop = remove = reverse = sort = _refuse  # type: ignore[assignment]
+
+    def __reduce__(self) -> tuple[type["FrozenList"], tuple[list[Any]]]:
+        """Pickle as a new read-only list of the same items."""
+        return type(self), (list(self),)
+
+    def __copy__(self) -> "FrozenList":
+        """Return `self`, which cannot change."""
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "FrozenList":
+        """Return `self`; a deep copy is only as deep as what it holds, which the holder keeps read-only."""
+        return self
+
+
 def thawed(value: object, walk: Walk | None = None) -> Any:  # noqa: ANN401
     """Return `value` with every `Mapping` as a `dict` and every `list` or `tuple` as a `list`.
 
