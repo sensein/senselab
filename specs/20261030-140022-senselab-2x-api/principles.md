@@ -431,3 +431,8 @@ amending its origin.
   roster in `engineering.md`.
 - 2026-10-30: added P-41 (docs for three audiences, PR previews showing progress, toy fixtures in
   the repo versus pulled versioned data); see `docs.md`.
+- 2026-11-01: owner decisions D-1..D-7 on the full review, recorded in
+  [`decisions-2026-11-01.md`](decisions-2026-11-01.md). No principle's statement changes. P-31 and
+  P-35 checks (text in `engineering.md`) cut the guard layer back to the design and add an advisory
+  agent prose review (D-1). Design is decided in #617 and amends an ADR by a dated section (D-7,
+  ADR-000).
