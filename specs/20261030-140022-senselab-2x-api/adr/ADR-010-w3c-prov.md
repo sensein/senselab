@@ -1,6 +1,6 @@
 # ADR-010: Provenance is W3C PROV
 
-**Status:** accepted 2026-11-01 (owner: "use w3c prov, add ADR-010"); amended 2026-11-01.
+**Status:** accepted 2026-11-01 (owner: "use w3c prov, add ADR-010"); amended 2026-11-01 (twice).
 
 ## Context
 
@@ -80,3 +80,40 @@ Ru C-1 ([`rulings-audit.md`](../reviews/full-review-2026-11-01/rulings-audit.md)
     `$dec`, `$bytes`, `$set`, `EnumMember`, `FrozenDict`, `revised`, `recorded`, `plain_values`).
     `$enum` hashes a Python qualified name into durable ids, which ADR-006 forbids;
   - the export redaction ADR-007 requires; today's BEP028 exporter writes file names and paths.
+
+## Amendment 2026-11-01: the vocabulary check is staged (P2-40)
+
+Ruling P2-40 ([`plans/phase-2.md`](../plans/phase-2.md)); implemented in Phase 2 Task 3a.
+
+- **Replaces** "the release gate checks it" under *Consequences*. Until the first 2.x release the vocabulary is
+  checked by a contract test: the packaged `@context` and `senselab:` vocabulary (`senselab-vocab@1.0`) expand
+  under pyld through an offline document loader serving the packaged context; every expanded term is a `prov:` or
+  `senselab:` IRI, no term is dropped and no relative IRI survives (P2-58). From the first 2.x release the release
+  gate runs that check; it joins D-5's deferred list (design §5).
+- **Identifiers as built.** An activity's `@id` is `activity:` + `identity_digest("prov-activity@1", <compact node
+  without @id>)` (P2-6). An agent's is `agent:` and an environment's `environment:` +
+  `identity_digest("prov-node@1", <compact node without @id>)`: they are addressed over their recorded fields, and
+  `prov-node@1` is a separate tag because ADR-006 gives each kind of identity its own. An entity's is its content
+  address, and an array value is a `senselab:File` entity addressed by its canonical `.npy` digest (P2-5).
+- **Entities carry no relation.** An output's address depends on its content alone, so two executions may generate one
+  entity. Every relation is written on the activity: `prov:used`, `prov:generated` and `prov:wasAssociatedWith`, with
+  `prov:qualifiedUsage` and `prov:qualifiedAssociation`, and the entity's `prov:qualifiedGeneration` written inside the
+  activity's node through JSON-LD `@reverse`. An entity node is then the same in every writer's document.
+- **Core terms.** Classes `senselab:Run`, `senselab:SoftwareAgent`, `senselab:Environment`, `senselab:File`,
+  `senselab:Plan`; properties `senselab:logicalKey` (on an activity, `rdf:JSON`), `senselab:modelSource` (on an
+  agent, P2-74), and `senselab:nodeId` and `senselab:port` (on a `prov:Role`: the association's node id, and the port a
+  usage or generation was on).
+- **Numbers follow their range.** A numeric literal takes the form its property's declared range gives it, not its
+  Python type: `xsd:decimal` is always the typed decimal string, `xsd:double` a JSON number (non-finite as the
+  typed `INF`, `-INF`, `NaN`), `xsd:integer` a JSON integer, or the typed string beyond +/-(2**53 - 1). A value the
+  range cannot hold exactly is refused. Equal numbers then give one node, and one `@id`, whatever type a writer held.
+- **Ids are checked addresses.** A record is built only by the builders, and a document refuses any node whose `@id`
+  is not a `content:`, `output:`, `activity:`, `agent:` or `environment:` address; an error names the argument,
+  never the refused id.
+- **Times are inside the activity's address.** `prov:startedAtTime`, `prov:endedAtTime` and `prov:atTime` are part of
+  the hashed node, so two writers give one activity only with identical times. The executing side builds the
+  activity once (Task 3b), and every other writer copies its bytes rather than rebuilding it.
+- **The namespace** is `https://w3id.org/senselab/ns#` and the context `https://w3id.org/senselab/ns/context.jsonld`.
+  It retires `https://senselab.sensein.group/prov#` (`SENSELAB_VOCABULARY` in `runtime/bep028.py`, and the triage
+  BEP028 design), which is deleted with that exporter in Task 4. The w3id redirect is an external registration the
+  owner confirms before it is filed, before the first 2.x release; no test dereferences either IRI.

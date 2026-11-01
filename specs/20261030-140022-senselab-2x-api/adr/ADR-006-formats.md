@@ -89,8 +89,10 @@ findings are in [`reviews/phase1-reattack/canon.md`](../reviews/phase1-reattack/
 
   **Registered identity tags:** `logical-key@5`, `output@3`, `context@3`, `content-root@2`, `audio@3`,
   `weights@3`, `value@2`, `provenance-id@4`, `data-manifest@3`, `worker-runtime@1`, `fake-output@1`,
-  `contract-probe@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a `format:` line in a packaged YAML file or in
-  a store entry): `equivalence@1`, `retry-policy@1.0`, and `execution-context@2.0` in a store entry's `context.json`.
+  `contract-probe@1`, `prov-activity@1`, `prov-node@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a
+  `format:` line in a packaged YAML file or in a store entry): `equivalence@1`, `retry-policy@1.0`, and
+  `execution-context@2.0` in a store entry's `context.json`; `senselab-vocab@1.0`, a vocabulary document's
+  `owl:versionInfo` (ADR-010).
 - **The store is `store@4` and an entry's `result.json` is `result@2.0`,** which adds the fingerprint of the
   context it was written in (R-101, ADR-003). A `result@1.0` entry cannot show which context it belongs to,
   so none is read: `store@4` is a new key space.
@@ -160,3 +162,6 @@ H-R2, H-R43, H-R47, H-R48 and H-R50 ([`rulings.md`](../rulings.md)).
 - 2026-11-01: `execution-context@1.0` → `@2.0`: `model_source` is recorded and not fingerprinted (F3, H-R56).
 - 2026-11-01: new data formats `equivalence@1` (`runtime/data/equivalence.yaml`) and `retry-policy@1.0`
   (`runtime/data/retry_policy.yaml`), each entry carrying its derivation (F1, F4).
+- 2026-11-01: identity tags `prov-activity@1` (an activity's compact PROV-O node without `@id`) and `prov-node@1` (an
+  agent's or environment's), and the data format `senselab-vocab@1.0` (`runtime/data/prov/senselab.jsonld`), for
+  ADR-010 (Phase 2 Task 3a; rulings P2-5, P2-6, P2-7).

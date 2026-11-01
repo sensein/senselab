@@ -659,7 +659,8 @@ checks, over `dist/` before upload:
 - that each distribution builds and installs from `dist/`.
 
 Member-set completeness, sdist rebuild identity, strict `WHEEL`/`METADATA` parsing, per-floor installs,
-cache isolation and import-every-module are specified at the first 2.x release.
+cache isolation, import-every-module and the provenance vocabulary check (ADR-010; a contract test until then) are
+specified at the first 2.x release.
 
 **Fixture budget** (docs.md): at most 256 KB per committed file and 2 MB in total over `packages/`, checked
 in pre-commit over the git index. A symlink or submodule fails.
