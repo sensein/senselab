@@ -3,45 +3,46 @@
 import io
 import json
 from pathlib import Path
-from typing import Callable, NoReturn
+from typing import Any, Callable, NoReturn
 
 import numpy
 import pytest
 from senselab_worker import WIRE_VERSION, runtime_identity
-from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_DEPTH, MAX_LINE_BYTES, to_wire, validate_message
+from senselab_worker.canonical import MAX_DEPTH
+from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_LINE_BYTES, to_wire, validate_message
 from senselab_worker.faults import ContentFault
 from senselab_worker.serve import EXIT_FATAL, serve
 
-Handle = Callable[[object, list[dict], dict], list[dict]]
+Handle = Callable[[object, list[dict[str, Any]], dict[str, Any]], list[dict[str, Any]]]
 
 
-def _echo(state: object, items: list[dict], params: dict) -> list[dict]:
+def _echo(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
     return [{"outputs": {"seen": sorted(item["inputs"]), "state": state}} for item in items]
 
 
-def _load(init: dict) -> object:
+def _load(init: dict[str, Any]) -> object:
     return init.get("tag", "loaded")
 
 
 def _session(
     array_dir: Path,
-    messages: list[dict | bytes],
+    messages: list[dict[str, Any] | bytes],
     *,
-    load: Callable[[dict], object] = _load,
+    load: Callable[[dict[str, Any]], object] = _load,
     handle: Handle = _echo,
-) -> tuple[int, list[dict]]:
+) -> tuple[int, list[dict[str, Any]]]:
     rx = io.BytesIO(b"".join(m if isinstance(m, bytes) else _line(m, array_dir) for m in messages))
     tx = io.BytesIO()
     code = serve(load, handle, rx, tx)
     return code, [json.loads(line) for line in tx.getvalue().splitlines()]
 
 
-def _line(msg: dict, array_dir: Path) -> bytes:
+def _line(msg: dict[str, Any], array_dir: Path) -> bytes:
     """Frame `msg` without validating it, so tests can send what a host never would."""
     return json.dumps(to_wire(msg, array_dir=array_dir, at="line")).encode() + b"\n"
 
 
-def _replies(out: list[dict], request_id: str = "req-1") -> list[dict]:
+def _replies(out: list[dict[str, Any]], request_id: str = "req-1") -> list[dict[str, Any]]:
     """The lines answering one request: one per item, then `done`, each valid for its kind."""
     start = next(i for i, m in enumerate(out) if m.get("id") == request_id)
     end = next(i for i in range(start, len(out)) if "done" in out[i])
@@ -52,11 +53,13 @@ def _replies(out: list[dict], request_id: str = "req-1") -> list[dict]:
     return out[start:end]
 
 
-def _init(array_dir: Path, **extra: object) -> dict:
+def _init(array_dir: Path, **extra: object) -> dict[str, Any]:
     return {"init": {"array_dir": str(array_dir), **extra}}
 
 
-def _request(*item_ids: str, params: dict | None = None, inputs: dict | None = None) -> dict:
+def _request(
+    *item_ids: str, params: dict[str, Any] | None = None, inputs: dict[str, Any] | None = None
+) -> dict[str, Any]:
     items = [{"id": i, "inputs": dict(inputs or {"k": 1})} for i in item_ids]
     return {"id": "req-1", "items": items, "params": params or {}}
 
@@ -80,7 +83,7 @@ def test_session_hello_ready_response_stop(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 @pytest.mark.parametrize("ending", [[], [{"stop": True}]])
-def test_stop_or_eof_before_init_exits_zero_without_reply(tmp_path: Path, ending: list[dict]) -> None:
+def test_stop_or_eof_before_init_exits_zero_without_reply(tmp_path: Path, ending: list[dict[str, Any]]) -> None:
     """Stop or EOF before init exits 0 after the hello alone."""
     code, out = _session(tmp_path, list(ending))
     assert code == 0 and [next(iter(m)) for m in out] == ["hello"]
@@ -101,13 +104,14 @@ def test_unknown_keys_in_known_messages_are_ignored(tmp_path: Path) -> None:
     assert code == 0 and _replies(out)[0]["outputs"]["state"] == "t"
 
 
-def _fatal(out: list[dict]) -> dict:
+def _fatal(out: list[dict[str, Any]]) -> dict[str, Any]:
     last = out[-1]
     validate_message(last, "fatal")
-    return last["error"]
+    error: dict[str, Any] = last["error"]
+    return error
 
 
-def _raise_load(init: dict) -> object:
+def _raise_load(init: dict[str, Any]) -> object:
     raise KeyError("model")
 
 
@@ -174,7 +178,7 @@ def test_load_failure_is_fatal(tmp_path: Path) -> None:
 def test_handle_raising_fails_every_item(tmp_path: Path) -> None:
     """If `handle` raises, every item gets that error."""
 
-    def handle(state: object, items: list[dict], params: dict) -> list[dict]:
+    def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
         raise MemoryError("full")
 
     _, out = _session(tmp_path, [_init(tmp_path), _request("a", "b")], handle=handle)
@@ -193,7 +197,7 @@ def test_handle_raising_a_base_exception_fails_every_item_and_serving_continues(
 ) -> None:
     """A `BaseException` from `handle`, other than `KeyboardInterrupt` and `SystemExit`, is every item's error."""
 
-    def handle(state: object, items: list[dict], params: dict) -> list[dict]:
+    def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
         if params.get("raise"):
             raise raised
         return _echo(state, items, params)
@@ -211,20 +215,20 @@ def test_handle_raising_a_base_exception_fails_every_item_and_serving_continues(
 def test_keyboard_interrupt_and_system_exit_from_handle_end_serving(tmp_path: Path, raised: BaseException) -> None:
     """`KeyboardInterrupt` and `SystemExit` are not item errors: they leave `serve`."""
 
-    def handle(state: object, items: list[dict], params: dict) -> list[dict]:
+    def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
         raise raised
 
     with pytest.raises(type(raised)):
         _session(tmp_path, [_init(tmp_path), _request("a")], handle=handle)
 
 
-class _List(list):
+class _List(list[Any]):
     def __len__(self) -> int:
         raise RuntimeError("hostile len")
 
 
-class _Dict(dict):
-    def keys(self) -> NoReturn:  # type: ignore[override]
+class _Dict(dict[str, Any]):
+    def keys(self) -> NoReturn:
         raise RuntimeError("hostile keys")
 
 
@@ -246,7 +250,7 @@ class _Dict(dict):
     ],
 )
 def test_malformed_handle_result_is_protocol_error_for_every_item(
-    tmp_path: Path, bad: Callable[[list[dict]], object]
+    tmp_path: Path, bad: Callable[[list[dict[str, Any]]], object]
 ) -> None:
     """A result that is not a list of one entry per item, or whose every entry is malformed, fails every item.
 
@@ -261,8 +265,8 @@ def test_malformed_handle_result_is_protocol_error_for_every_item(
 def test_per_item_errors_and_output_encoding_failures_stay_with_their_item(tmp_path: Path) -> None:
     """An item's own error, or outputs with no wire form, fail only that item."""
 
-    def handle(state: object, items: list[dict], params: dict) -> list[dict]:
-        by_id: dict[str, dict] = {
+    def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+        by_id: dict[str, dict[str, Any]] = {
             "ok": {"outputs": {"x": numpy.arange(3, dtype="<i2")}},
             "err": {"error": TypeError("bad input")},
             "typed": {"error": ContentFault("bad input")},
@@ -286,8 +290,8 @@ def test_per_item_errors_and_output_encoding_failures_stay_with_their_item(tmp_p
     ]
 
 
-def _damaged_ref(tmp_path: Path) -> dict:
-    wire = to_wire(numpy.zeros(2), array_dir=tmp_path, at="line")
+def _damaged_ref(tmp_path: Path) -> dict[str, Any]:
+    wire: dict[str, Any] = to_wire(numpy.zeros(2), array_dir=tmp_path, at="line")
     wire["__array__"]["sha256"] = "f" * 64
     return wire
 
@@ -297,7 +301,7 @@ def test_bad_array_in_an_item_fails_only_that_item_before_handle(tmp_path: Path)
     """An item whose array fails integrity checks is not passed to `handle`."""
     seen: list[str] = []
 
-    def handle(state: object, items: list[dict], params: dict) -> list[dict]:
+    def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
         seen.extend(item["id"] for item in items)
         return [{"outputs": {"sum": float(item["inputs"]["x"].sum())}} for item in items]
 
@@ -337,7 +341,7 @@ def test_empty_request_gets_only_done(tmp_path: Path) -> None:
     assert out[2:] == [{"id": "r", "done": 0}]
 
 
-def _sized(n_bytes: int) -> dict:
+def _sized(n_bytes: int) -> dict[str, Any]:
     return {"outputs": {"blob": "x" * n_bytes}}
 
 
@@ -346,7 +350,7 @@ def test_one_oversize_item_does_not_fail_batch_mates(tmp_path: Path) -> None:
     """The line budget is per item: an item over it is that item's resource error, and its batch-mates keep outputs."""
     sizes = {f"i{n}": 2**20 for n in range(20)} | {"big": MAX_LINE_BYTES, "edge": MAX_LINE_BYTES - 200}
 
-    def handle(state: object, items: list[dict], params: dict) -> list[dict]:
+    def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
         return [_sized(sizes[item["id"]]) for item in items]
 
     ids = list(sizes)
@@ -370,7 +374,7 @@ def test_one_oversize_item_does_not_fail_batch_mates(tmp_path: Path) -> None:
 def test_aggregate_reply_over_the_budget_fails_no_item(tmp_path: Path) -> None:
     """Twenty items of 1 MB each (20 MB in all) do not kill the worker; every item gets its outputs."""
 
-    def handle(state: object, items: list[dict], params: dict) -> list[dict]:
+    def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
         return [_sized(10**6) for _ in items]
 
     code, out = _session(tmp_path, [_init(tmp_path), _request(*map(str, range(20))), {"stop": True}], handle=handle)
@@ -389,7 +393,7 @@ class _Unprintable(Exception):
 def test_unprintable_or_surrogate_error_fails_only_its_item(tmp_path: Path) -> None:
     """An error whose `__str__` raises, or whose message holds a lone surrogate, fails only its item."""
 
-    def handle(state: object, items: list[dict], params: dict) -> list[dict]:
+    def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
         errors = {"str": _Unprintable(), "surrogate": OSError("cannot open /data/\udcff.wav")}
         return [{"error": errors[i["id"]]} if i["id"] in errors else {"outputs": {"ok": 1}} for i in items]
 
@@ -409,7 +413,7 @@ def test_unprintable_or_surrogate_error_fails_only_its_item(tmp_path: Path) -> N
 def test_one_malformed_entry_fails_only_its_item(tmp_path: Path, malformed: object) -> None:
     """In a list of the right length, a malformed entry is that item's `ProtocolError`; its batch-mates keep theirs."""
 
-    def handle(state: object, items: list[dict], params: dict) -> list[object]:
+    def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[object]:
         return [malformed if item["id"] == "b" else {"outputs": {"id": item["id"]}} for item in items]
 
     _, out = _session(tmp_path, [_init(tmp_path), _request("a", "b", "c")], handle=handle)  # type: ignore[arg-type]
@@ -435,7 +439,7 @@ def test_output_depth_band_is_outputs_or_a_content_fault(tmp_path: Path, leaf: s
     leaf_value, leaf_height = {"scalar": (0, 0), "empty": ({}, 1), "array": (numpy.zeros(2), ARRAY_REF_HEIGHT)}[leaf]
     band = range(MAX_DEPTH - ENVELOPE["outputs"] - 4, MAX_DEPTH - ENVELOPE["outputs"] + 2)
 
-    def handle(state: object, items: list[dict], params: dict) -> list[dict]:
+    def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
         heights = {f"h{h}": h for h in band}
         return [
             {"outputs": {"k": _chain(heights[i["id"]] - 1 - leaf_height, leaf_value)}}
@@ -459,7 +463,7 @@ def test_output_depth_band_is_outputs_or_a_content_fault(tmp_path: Path, leaf: s
 def test_exponentially_shared_output_fails_only_its_item(tmp_path: Path) -> None:
     """An output `l = [l, l]` sixty times is that item's `ResponseTooLarge`."""
 
-    def handle(state: object, items: list[dict], params: dict) -> list[dict]:
+    def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
         value: object = 0
         for _ in range(60):
             value = [value, value]

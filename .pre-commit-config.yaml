@@ -27,21 +27,22 @@ repos:
     require_serial: true
     exclude: ^specs/
 
+- repo: local
+  hooks:
+  # Strict on every module under packages/, run by the locked mypy so the hook and `uv run mypy` are one version
+  # and see the same numpy, hypothesis and huggingface_hub stubs. `--platform linux` makes the result the same on
+  # a macOS checkout and on CI. `packages/conftest.py` and `packages/senselab-core/tests/runtime/conftest.py` are
+  # both top-level `conftest` modules to mypy, which refuses a duplicate module name.
+  - id: mypy-strict
+    name: mypy --strict (packages, locked)
+    entry: uv run --frozen --no-sync mypy --strict --platform linux --ignore-missing-imports --extra-checks
+    language: system
+    files: ^packages/.*\.py$
+    exclude: ^packages/conftest\.py$
+    require_serial: true
 - repo: https://github.com/pre-commit/mirrors-mypy
   rev: v1.18.2
   hooks:
-  - id: mypy
-    args: [--ignore-missing-imports, --extra-checks]
-    # `packages/conftest.py` and `packages/senselab-core/tests/runtime/conftest.py` are both top-level `conftest`
-    # modules to mypy, which refuses a duplicate module name.
-    exclude: ^(scripts|specs)/|^packages/conftest\.py$
-    additional_dependencies:
-    - pydantic>=1.10.4
-    - types-requests
-    # `run_config.py` reads the packaged YAML, and this hook's mypy runs in an isolated env —
-    # so the stubs the dev group provides are not visible to it. Without this the hook fails
-    # with `Library stubs not installed for "yaml"` while a local `uv run mypy .` passes.
-    - types-PyYAML
   - id: mypy
     name: mypy (linux)
     alias: mypy-linux

@@ -14,8 +14,8 @@ import httpx
 import pytest
 import senselab_core.runtime.retry as retry_module
 import yaml
+from huggingface_hub import utils as hub_utils
 from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
-from huggingface_hub.utils import hf_raise_for_status
 from senselab_core.runtime.faults import is_transient
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import storage_fault
@@ -61,7 +61,7 @@ def test_each_clients_own_error_carries_its_status(hub_client: ModuleType, statu
     client = hub_client
     url = "https://huggingface.co/api/models/org/m/revision/main"
     with pytest.raises(HfHubHTTPError) as hub:
-        hf_raise_for_status(client.Response(status, request=client.Request("GET", url)))
+        vars(hub_utils)["hf_raise_for_status"](client.Response(status, request=client.Request("GET", url)))
     with pytest.raises(httpx.HTTPStatusError) as plain:
         httpx.Response(status, request=httpx.Request("GET", url)).raise_for_status()
     assert is_transient(hub.value) is transient

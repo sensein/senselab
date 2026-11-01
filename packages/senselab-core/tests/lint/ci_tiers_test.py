@@ -66,12 +66,22 @@ def pytest_paths_outside_packages(workflow: str) -> list[tuple[str, str]]:
     return found
 
 
+class _Names:
+    """A marker-expression matcher that is true for the one tier name it holds."""
+
+    def __init__(self, tier: str) -> None:
+        self.tier = tier
+
+    def __call__(self, name: str, /, **_: str | int | bool | None) -> bool:
+        return name == self.tier
+
+
 def tiers_of(marker: str | None) -> set[str]:
     """The tiers a ``-m`` expression selects; no expression selects them all."""
     if marker is None:
         return set(TIERS)
     expression = Expression.compile(marker)
-    return {t for t in TIERS if expression.evaluate(lambda name, tier=t, **_: name == tier)}
+    return {t for t in TIERS if expression.evaluate(_Names(t))}
 
 
 def cadence(workflow: str) -> dict[str, set[str]]:

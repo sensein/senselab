@@ -421,7 +421,7 @@ def _object(obj: dict[str, Any], key: str, kind: str) -> dict[str, Any]:
     value = _get(obj, key, kind)
     if type(value) is not dict:
         raise _fail(kind, f"{key!r} is a {type(value).__name__}, not an object")
-    return value  # type: ignore[no-any-return]
+    return value
 
 
 def _typed(obj: dict[str, Any], key: str, kind: str, types: tuple[type, ...]) -> Any:  # noqa: ANN401
@@ -539,4 +539,4 @@ def validate_message(msg: object, kind: Kind) -> dict[str, Any]:
     if type(msg) is not dict:
         raise _fail(kind, f"it is a {type(msg).__name__}, not an object")
     _VALIDATORS[kind](msg)
-    return msg  # type: ignore[return-value]
+    return msg

@@ -474,7 +474,7 @@ def test_output_identity_differs_from_key_digest_of_same_tree() -> None:
     [
         numpy.datetime64("NaT"),
         numpy.timedelta64(1, "ns"),
-        numpy.ma.array([1, 2, 3], mask=[0, 0, 1]),
+        numpy.ma.array([1, 2, 3], mask=[False, False, True]),
         numpy.zeros(1, dtype=[("a", "<i4")])[0],
         ReusePolicy.EXACT,
     ],
@@ -516,7 +516,7 @@ def test_get_coerces_policy(tmp_path: Path, policy: object) -> None:
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     s.put(k, {"y": 1}, c)
     if policy in {p.value for p in ReusePolicy}:
-        hit = s.get(k, c, policy)  # type: ignore[arg-type]
+        hit = s.get(k, c, policy)
         assert hit is not None and hit.policy_used is ReusePolicy.EXACT
         return
     with pytest.raises(ValueError):
@@ -690,7 +690,7 @@ def test_transient_error_never_quarantines(
 ) -> None:
     """An I/O error opening or reading any member raises StoreUnavailable and leaves the entry in place, servable."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
-    outputs = {"y": numpy.ones(3, "<f4")}
+    outputs: dict[str, object] = {"y": numpy.ones(3, "<f4")}
     s.put(k, outputs, c)
     entry = _entry_dir(tmp_path, k, c)
     name = _only_npy_name(entry).name if member == "npy" else member
@@ -702,7 +702,7 @@ def test_transient_error_never_quarantines(
     assert entry.is_dir() and not any((tmp_path / QUARANTINE_DIR).glob("*"))
     got = s.get(k, c, ReusePolicy.EXACT)
     assert got is not None
-    numpy.testing.assert_array_equal(got.outputs["y"], outputs["y"])  # type: ignore[arg-type]
+    numpy.testing.assert_array_equal(got.outputs["y"], outputs["y"])
 
 
 @pytest.mark.logic

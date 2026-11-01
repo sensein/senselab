@@ -24,7 +24,7 @@ from senselab_core.runtime.hardware import (
 )
 
 
-def _fake_run(returncode: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
+def _fake_run(returncode: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
@@ -49,7 +49,7 @@ def test_detect_host_cuda_falls_through_to_nvcc_when_nvidia_smi_missing() -> Non
     """When nvidia-smi raises FileNotFoundError, nvcc must be tried next."""
     nvcc_stdout = "nvcc: NVIDIA (R) Cuda compiler driver\nrelease 12.4, V12.4.131\n"
 
-    def _runner(args: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+    def _runner(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         argv = args
         if argv and argv[0] == "nvidia-smi":
             raise FileNotFoundError("no nvidia-smi")
@@ -74,7 +74,7 @@ def test_detect_host_cuda_returns_none_when_both_probes_missing() -> None:
 def test_detect_host_cuda_returns_none_when_nvidia_smi_succeeds_without_cuda_line() -> None:
     """Defensive: a future nvidia-smi that drops the header line falls through to nvcc, then none."""
 
-    def _runner(args: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+    def _runner(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         argv = args
         if argv and argv[0] == "nvidia-smi":
             return _fake_run(0, stdout="some other output without the cuda line")

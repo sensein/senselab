@@ -8,16 +8,15 @@ import sys
 import time
 import types
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Literal
 
 import numpy
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from senselab_worker import _raw_digest, runtime_identity
-from senselab_worker.canonical import npy_bytes
+from senselab_worker.canonical import MAX_DEPTH, npy_bytes
 from senselab_worker.codec import (
-    MAX_DEPTH,
     MAX_LINE_BYTES,
     Deadline,
     LineTooLarge,
@@ -120,8 +119,9 @@ def test_numpy_scalars_travel_as_items(tmp_path: Path) -> None:
     assert [type(v) for v in wire.values()] == [float, int, bool]
 
 
-def _ref(tmp_path: Path, a: numpy.ndarray) -> dict:
-    return to_wire(a, array_dir=tmp_path, at="line")
+def _ref(tmp_path: Path, a: numpy.ndarray) -> dict[str, Any]:
+    wire: dict[str, Any] = to_wire(a, array_dir=tmp_path, at="line")
+    return wire
 
 
 @pytest.mark.logic
@@ -261,7 +261,7 @@ def test_writer_leaves_no_temporary_after_a_failed_write(tmp_path: Path, monkeyp
 
 
 _ERROR = {"type": "ValueError", "message": "m", "fault": "content", "traceback": "", "gap": True}
-VALID: dict[str, dict] = {
+VALID: dict[str, dict[str, Any]] = {
     "hello": {"hello": {"wire": 2, "runtime": "a" * 64, "python": "3.12.0", "numpy": "2.0.0", "pid": 7}},
     "init": {"init": {"array_dir": "/tmp/x", "backend_key": 1}},
     "ready": {"ready": {"load_s": 0.5}},
@@ -280,7 +280,7 @@ INT, NUMBER, STR, DICT, LIST, BOOL, TRUE = (
     {bool},
     {"true"},
 )
-FIELDS: dict[str, list[tuple[tuple[object, ...], set]]] = {
+FIELDS: dict[str, list[tuple[tuple[object, ...], set[Any]]]] = {
     "hello": [
         (("hello",), DICT),
         (("hello", "wire"), INT),
@@ -307,24 +307,24 @@ FIELDS: dict[str, list[tuple[tuple[object, ...], set]]] = {
 WRONG: list[object] = [True, False, 1, 1.0, "1", "true", None, [], {}]
 
 
-def _accepts(ok: set, value: object) -> bool:
+def _accepts(ok: set[Any], value: object) -> bool:
     if ok == TRUE:
         return value is True
     return type(value) in ok
 
 
-def _set(msg: dict, path: tuple[object, ...], value: object) -> dict:
-    out = json.loads(json.dumps(msg))
-    target = out
+def _set(msg: dict[str, Any], path: tuple[object, ...], value: object) -> dict[str, Any]:
+    out: dict[str, Any] = json.loads(json.dumps(msg))
+    target: Any = out
     for key in path[:-1]:
-        target = target[key]  # type: ignore[index]
-    target[path[-1]] = value  # type: ignore[index]
+        target = target[key]
+    target[path[-1]] = value
     return out
 
 
-def _delete(msg: dict, path: tuple[object, ...]) -> dict:
-    out = json.loads(json.dumps(msg))
-    target = out
+def _delete(msg: dict[str, Any], path: tuple[object, ...]) -> dict[str, Any]:
+    out: dict[str, Any] = json.loads(json.dumps(msg))
+    target: Any = out
     for key in path[:-1]:
         target = target[key]
     if isinstance(path[-1], int):
@@ -348,7 +348,9 @@ def test_validate_message_accepts_each_valid_kind_and_ignores_unknown_keys(kind:
 
 @pytest.mark.logic
 @pytest.mark.parametrize(("kind", "path", "ok"), [(k, p, ok) for k, fields in FIELDS.items() for p, ok in fields])
-def test_validate_message_refuses_every_wrong_type_and_missing_field(kind: str, path: tuple, ok: set) -> None:
+def test_validate_message_refuses_every_wrong_type_and_missing_field(
+    kind: str, path: tuple[Any, ...], ok: set[Any]
+) -> None:
     """Every required field, missing or of any other JSON type, is a `ProtocolError`; ints are exactly `int`."""
     from senselab_worker.codec import validate_message
 
@@ -374,7 +376,7 @@ def test_validate_message_refuses_every_wrong_type_and_missing_field(kind: str, 
         {"id": "r", "item": "x" * 1025, "outputs": {}},
     ],
 )
-def test_validate_message_refuses_malformed_results(msg: dict) -> None:
+def test_validate_message_refuses_malformed_results(msg: dict[str, Any]) -> None:
     """A result has exactly one of outputs and a complete error record, and ids that are short valid text."""
     from senselab_worker.codec import validate_message
 
@@ -391,7 +393,7 @@ def test_validate_message_refuses_malformed_results(msg: dict) -> None:
         [{"id": "x" * 1025, "inputs": {}}],
     ],
 )
-def test_validate_message_refuses_malformed_requests(items: list) -> None:
+def test_validate_message_refuses_malformed_requests(items: list[Any]) -> None:
     """Item ids are unique, valid Unicode and at most `MAX_ID_CHARS` long."""
     from senselab_worker.codec import validate_message
 
@@ -461,8 +463,7 @@ def _nested(depth: int) -> object:
 @pytest.mark.logic
 def test_nesting_bound_is_the_same_for_reader_writer_encoder_and_jcs(tmp_path: Path) -> None:
     """`d` nested containers pass `parse_line`, `dump_line`, `to_wire` and `jcs_dumps` exactly when d <= MAX_DEPTH."""
-    from senselab_worker.canonical import jcs_dumps
-    from senselab_worker.codec import MAX_DEPTH
+    from senselab_worker.canonical import MAX_DEPTH, jcs_dumps
 
     assert MAX_DEPTH == 64
     for depth in range(1, MAX_DEPTH + 8):
@@ -470,7 +471,7 @@ def test_nesting_bound_is_the_same_for_reader_writer_encoder_and_jcs(tmp_path: P
         value = _nested(depth)
         line = json.dumps({"k": _nested(depth - 1)} if depth > 1 else {}).encode() + b"\n"
         result = {"id": "r", "item": "a", "outputs": {"k": _nested(depth - 2)}} if depth > 2 else None
-        checks = [
+        checks: list[tuple[Callable[[], object], type[Exception]]] = [
             (lambda: parse_line(line), ProtocolError),
             (lambda: to_wire(value, array_dir=tmp_path, at="line"), WireValueError),
             (lambda: jcs_dumps(value), ValueError),
@@ -497,9 +498,9 @@ def test_very_deep_lines_are_protocol_errors_not_recursion_errors(depth: int) ->
 @pytest.mark.logic
 def test_to_wire_cycle_is_a_content_error(tmp_path: Path) -> None:
     """A container that contains itself is a typed content error, not a `RecursionError`; a shared child is fine."""
-    cyclic_list: list = [1]
+    cyclic_list: list[Any] = [1]
     cyclic_list.append(cyclic_list)
-    cyclic_dict: dict = {}
+    cyclic_dict: dict[str, Any] = {}
     cyclic_dict["self"] = {"inner": cyclic_dict}
     for value in (cyclic_list, cyclic_dict, {"x": [cyclic_list]}):
         with pytest.raises(WireValueError, match="contains itself"):
@@ -512,7 +513,7 @@ def test_to_wire_cycle_is_a_content_error(tmp_path: Path) -> None:
 
 
 def _numpy_scalars() -> list[object]:
-    out = []
+    out: list[object] = []
     for t in sorted(set(numpy.sctypeDict.values()), key=lambda t: t.__name__):
         try:
             out.append(t(0) if t is not numpy.datetime64 else t(0, "s"))
@@ -545,7 +546,7 @@ class _Str(str):
     pass
 
 
-class _Dict(dict):
+class _Dict(dict[str, Any]):
     pass
 
 
@@ -564,7 +565,7 @@ def _chain(height: int, leaf: object) -> object:
     return value
 
 
-def _line_for(slot: str, wire: dict) -> tuple[dict, str]:
+def _line_for(slot: str, wire: dict[str, Any]) -> tuple[dict[str, Any], str]:
     if slot == "outputs":
         return {"id": "r", "item": "a", "outputs": wire}, "result"
     if slot == "inputs":
@@ -587,7 +588,8 @@ def test_depth_band_composes_to_wire_and_the_line(tmp_path: Path, slot: str, off
     The band runs below and past `MAX_DEPTH`. A refusal is a `WireValueError`, never a `ProtocolError`
     from `dump_line` or `parse_line`.
     """
-    from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_DEPTH
+    from senselab_worker.canonical import MAX_DEPTH
+    from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE
 
     leaf_value, leaf_height = {"scalar": (0, 0), "empty": ({}, 1), "array": (numpy.zeros(2), ARRAY_REF_HEIGHT)}[leaf]
     height = MAX_DEPTH - ENVELOPE[slot] + offset
@@ -688,12 +690,12 @@ def test_depth_check_of_a_shared_dag_matches_the_tree_and_enters_each_container_
 
     msg, height, distinct = case
     entries = 0
-    real = codec.entered
+    real = vars(codec)["entered"]
 
     def counting(*args: object) -> object:
         nonlocal entries
         entries += 1
-        return real(*args)  # type: ignore[arg-type]
+        return real(*args)
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(codec, "entered", counting)
@@ -758,7 +760,8 @@ def test_reader_refuses_a_sha_consistent_non_canonical_npy(tmp_path: Path, varia
 MARK = "@@mark@@"
 
 
-_clean = st.text(st.characters(blacklist_categories=("Cs",), blacklist_characters="@x"), max_size=6)
+_SURROGATE: tuple[Literal["Cs"]] = ("Cs",)
+_clean = st.text(st.characters(exclude_categories=_SURROGATE, exclude_characters="@x"), max_size=6)
 
 
 _trees = st.recursive(

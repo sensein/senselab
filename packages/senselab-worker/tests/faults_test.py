@@ -2,6 +2,7 @@
 
 import builtins
 import json
+from typing import Any
 
 import pytest
 from hypothesis import given, settings
@@ -87,7 +88,7 @@ def _instance(t: type[BaseException]) -> BaseException:
     if issubclass(t, (UnicodeEncodeError, UnicodeDecodeError)):
         return t("utf-8", "x" if issubclass(t, UnicodeEncodeError) else b"x", 0, 1, "r")  # type: ignore[arg-type]
     if _GROUP is not None and issubclass(t, _GROUP):
-        return t("g", [ValueError("x")])  # type: ignore[call-arg]
+        return t("g", [ValueError("x")])
     return t("x")
 
 
@@ -166,7 +167,7 @@ class _NotStr(Exception):
         return 42  # type: ignore[return-value]
 
 
-def _check_record(record: dict) -> None:
+def _check_record(record: dict[str, Any]) -> None:
     assert set(record) == {"type", "message", "fault", "traceback", "gap"}
     for key in ("type", "message", "traceback"):
         assert type(record[key]) is str
@@ -184,7 +185,7 @@ _FAILURES = st.sampled_from([None, ValueError("v"), RuntimeError("r"), Generator
 @given(
     raise_str=_FAILURES,
     raise_repr=_FAILURES,
-    message=st.text(alphabet=st.characters(blacklist_categories=()), max_size=50)
+    message=st.text(alphabet=st.characters(exclude_categories=()), max_size=50)
     | st.sampled_from(["\ud800", "a\udcffb", "x" * (MAX_TEXT_CHARS * 3)]),
     raised=st.booleans(),
 )

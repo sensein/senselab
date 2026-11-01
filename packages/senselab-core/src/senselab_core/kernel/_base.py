@@ -195,8 +195,8 @@ class FrozenDict(dict[str, Any]):
     def _refuse(self, *args: object, **kwargs: object) -> NoReturn:
         raise TypeError("a FrozenDict is read-only")
 
-    __setitem__ = __delitem__ = __ior__ = _refuse  # type: ignore[assignment]
-    clear = pop = popitem = setdefault = update = _refuse  # type: ignore[assignment]
+    __setitem__ = __delitem__ = __ior__ = _refuse
+    clear = pop = popitem = setdefault = update = _refuse
 
     def __reduce__(self) -> tuple[type["FrozenDict"], tuple[dict[str, Any]]]:
         """Pickle as a new read-only mapping of the same items."""
@@ -223,8 +223,8 @@ class FrozenList(list[Any]):
     def _refuse(self, *args: object, **kwargs: object) -> NoReturn:
         raise TypeError("a FrozenList is read-only")
 
-    __setitem__ = __delitem__ = __iadd__ = __imul__ = _refuse  # type: ignore[assignment]
-    append = clear = extend = insert = pop = remove = reverse = sort = _refuse  # type: ignore[assignment]
+    __setitem__ = __delitem__ = __iadd__ = __imul__ = _refuse
+    append = clear = extend = insert = pop = remove = reverse = sort = _refuse
 
     def __reduce__(self) -> tuple[type["FrozenList"], tuple[list[Any]]]:
         """Pickle as a new read-only list of the same items."""
@@ -277,7 +277,7 @@ def _held_fields(cls: type["Frozen"], data: object) -> object:
     Raises:
         ValueError: for anything that is neither a mapping nor a pydantic model.
     """
-    if type(data) is cls and _is_sealed(data):  # type: ignore[arg-type]
+    if type(data) is cls and _is_sealed(data):
         return data
     if isinstance(data, BaseModel):
         held = object.__getattribute__(data, "__dict__")

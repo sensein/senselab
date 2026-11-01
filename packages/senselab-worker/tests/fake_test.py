@@ -1,6 +1,7 @@
 """The fake backend and its declared fault model."""
 
 import hashlib
+from typing import Any
 
 import numpy
 import pytest
@@ -17,7 +18,7 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _values(results: list[dict]) -> list[str | None]:
+def _values(results: list[dict[str, Any]]) -> list[str | None]:
     return [r["outputs"]["value"] if "outputs" in r else None for r in results]
 
 
@@ -102,7 +103,7 @@ def test_init_faults_are_the_default_and_params_replace_them() -> None:
 
 @pytest.mark.logic
 @pytest.mark.parametrize("init", [{"model": "x"}, {"faults": {"bogus": 1}}, {"faults": []}])
-def test_unknown_init_is_refused(init: dict) -> None:
+def test_unknown_init_is_refused(init: dict[str, Any]) -> None:
     """`load` accepts only `array_dir` and `faults`, with known fault fields."""
     with pytest.raises((ValueError, TypeError)):
         load(init)

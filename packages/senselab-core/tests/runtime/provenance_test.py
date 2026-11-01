@@ -13,7 +13,7 @@ from collections.abc import Callable
 from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path, PurePath, PurePosixPath
-from typing import cast, get_args
+from typing import Any, cast, get_args
 
 import numpy
 import pytest
@@ -719,7 +719,9 @@ class _Opaque:
         ({"\u00e9": 1, "e\u0301": 2}, "attributes.e\u0301", "builtins.str"),
     ],
 )
-def test_an_undeclared_value_raises_a_typed_error_at_the_boundary(attributes: dict, path: str, type_name: str) -> None:
+def test_an_undeclared_value_raises_a_typed_error_at_the_boundary(
+    attributes: dict[str, Any], path: str, type_name: str
+) -> None:
     """`ProvStore.entity` refuses a value outside the declared type with `UnrecordableValue` naming path and type."""
     with pytest.raises(provenance.UnrecordableValue) as caught:
         ProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=attributes)
@@ -1049,7 +1051,7 @@ def test_recorded_content_cannot_drift_from_its_id(tmp_path: Path) -> None:
     entity = store.get_entity(eid)
     assert entity.attributes == {"ev": {"n": [1, 2, 3]}} and entity.extent == (0.0, 1.0)
     for write in (
-        lambda: entity.attributes.__setitem__("x", 1),  # type: ignore[index]
+        lambda: entity.attributes.__setitem__("x", 1),
         lambda: entity.attributes["ev"].__setitem__("x", 1),
         lambda: entity.attributes["ev"]["n"].append(4),
     ):

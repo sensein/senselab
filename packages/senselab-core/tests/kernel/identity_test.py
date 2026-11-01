@@ -165,7 +165,7 @@ def test_key_is_deeply_immutable_and_pickles() -> None:
     with pytest.raises(ValidationError):
         k.task = "u"  # type: ignore[misc]
     with pytest.raises(TypeError):
-        k.params["opts"]["n"] = 3  # type: ignore[index]
+        k.params["opts"]["n"] = 3
     with pytest.raises(TypeError):
         k.inputs["b"] = CONTENT  # type: ignore[index]
     assert isinstance(k.params["opts"]["n"], tuple)
@@ -205,7 +205,7 @@ def test_model_copy_revalidates_and_redigests() -> None:
 def test_key_refuses_untyped_identities(bad: dict[str, object]) -> None:
     """A ref as the model, and a path or bare hex as an input, are refused; every identity field is typed."""
     with pytest.raises(ValidationError):
-        LogicalKey(**{**BASE, **bad})  # type: ignore[arg-type]
+        LogicalKey(**{**BASE, **bad})
 
 
 @pytest.mark.logic
@@ -429,7 +429,7 @@ def test_equivalence_data_reads_each_class_with_its_derivation() -> None:
     assert table == {"b": {"cpu-fp32": frozenset({c1, c2})}}
     assert acceptable(_ctx(platform="linux"), _ctx(platform="macos"), "equivalent", backend="b", equivalence=table)
     with pytest.raises(TypeError):
-        table["b"] = {}  # type: ignore[index]
+        table["b"] = {}
 
 
 @pytest.mark.logic

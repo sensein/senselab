@@ -7,12 +7,13 @@ import struct
 import time
 import warnings
 from enum import Enum
-from typing import Any
+from typing import Any, Literal, cast
 
 import numpy
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from numpy.typing import DTypeLike
 from senselab_worker.canonical import (
     canonical_npy_bytes,
     canonical_scalar,
@@ -212,7 +213,7 @@ def test_canonical_npy_edge_shapes(shape: tuple[int, ...]) -> None:
 
 @pytest.mark.logic
 @pytest.mark.parametrize("dtype", [object, [("a", "<f4"), ("b", "<i2")]])
-def test_canonical_npy_refuses_object_and_structured(dtype: object) -> None:
+def test_canonical_npy_refuses_object_and_structured(dtype: DTypeLike) -> None:
     """Object and structured dtypes are refused."""
     with pytest.raises(ValueError):
         canonical_npy_bytes(numpy.zeros(2, dtype=dtype))
@@ -335,7 +336,7 @@ _LOSSY = [
     numpy.datetime64("2020-01-01"),
     numpy.timedelta64(1, "ns"),
     numpy.timedelta64(1, "ps"),
-    numpy.ma.array([1, 2], mask=[0, 1]),
+    numpy.ma.array([1, 2], mask=[False, True]),
     _IntEnum.A,
     _StrEnum.A,
     _Int(1),
@@ -399,7 +400,7 @@ def test_jcs_refuses_cycles() -> None:
 @pytest.mark.parametrize(
     "array",
     [
-        numpy.ma.array([1, 2, 3], mask=[0, 0, 1]),
+        numpy.ma.array([1, 2, 3], mask=[False, False, True]),
         numpy.arange(3).view(numpy.matrix),
         numpy.zeros(2, dtype="<c16"),
         numpy.zeros(2, dtype="<M8[ns]"),
@@ -571,9 +572,10 @@ def test_text_with_post_13_code_points_is_kept_raw_and_never_collides(
     assert jcs_dumps(text) != jcs_dumps(canonical_text(head))
 
 
-def _inf_minus_inf() -> numpy.ndarray:
+def _inf_minus_inf() -> numpy.ndarray[Any, Any]:
     with numpy.errstate(invalid="ignore"):
-        return numpy.array([numpy.inf]) - numpy.array([numpy.inf])
+        diff: numpy.ndarray[Any, Any] = numpy.array([numpy.inf]) - numpy.array([numpy.inf])
+        return diff
 
 
 def _bits(dtype: str, words: list[int]) -> numpy.ndarray:
@@ -751,7 +753,7 @@ def test_canonical_npy_is_the_reference_form_for_every_shape_and_dtype(
 
     from senselab_worker.canonical import canonical_npy_bytes, npy_bytes
 
-    dtype = numpy.dtype(code).newbyteorder(order)
+    dtype = numpy.dtype(code).newbyteorder(cast(Literal["<", ">"], order))
     size = dtype.itemsize
     count = math.prod(shape)
     words = data.draw(

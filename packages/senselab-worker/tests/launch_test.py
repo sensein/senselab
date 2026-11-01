@@ -7,6 +7,7 @@ import resource
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 from senselab_worker.codec import Kind, encode
@@ -14,7 +15,7 @@ from senselab_worker.codec import Kind, encode
 TESTS = Path(__file__).parent
 
 
-def _launch(tmp_path: Path, backend: str, *messages: dict) -> subprocess.CompletedProcess[bytes]:
+def _launch(tmp_path: Path, backend: str, *messages: dict[str, Any]) -> subprocess.CompletedProcess[bytes]:
     kinds: tuple[Kind, ...] = ("init", "stop")
     default: Kind = "request"
     stdin = b"".join(encode(m, next((k for k in kinds if k in m), default), array_dir=tmp_path) for m in messages)
@@ -32,7 +33,7 @@ def _keys(stdout: bytes) -> list[str]:
     return [next(iter(json.loads(line))) for line in stdout.splitlines()]
 
 
-def _session(tmp_path: Path) -> list[dict]:
+def _session(tmp_path: Path) -> list[dict[str, Any]]:
     init = {"init": {"array_dir": str(tmp_path)}}
     return [init, {"id": "r", "items": [{"id": "a", "inputs": {}}], "params": {}}, {"stop": True}]
 

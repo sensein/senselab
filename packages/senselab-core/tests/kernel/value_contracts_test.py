@@ -62,7 +62,7 @@ def test_value_contract(case_id: str, case: Callable[[], None]) -> None:
 
 
 _SIGNAL: TypeAdapter[numpy.ndarray] = TypeAdapter(SignalArray, config=ConfigDict(arbitrary_types_allowed=True))
-_VALIDATORS: dict[str, Callable[[object], numpy.ndarray]] = {
+_VALIDATORS: dict[str, Callable[[Any], numpy.ndarray]] = {
     "ns": as_ns_array,
     "numeric": lambda v: as_numeric_array(v, 1),
     "label": as_label_array,
@@ -209,7 +209,7 @@ def test_frozenmapping_has_no_mutable_reach() -> None:
     with pytest.raises(TypeError):
         m._items["k"] = 1  # type: ignore[index]
     with pytest.raises(AttributeError):
-        m._items = {"k": 1}  # type: ignore[misc, assignment]
+        m._items = {"k": 1}  # type: ignore[assignment]
     assert m["k"] == 0 and pickle.loads(pickle.dumps(m)) == m and copy.deepcopy(m) == m
 
 
@@ -548,11 +548,11 @@ def test_config_private_state_and_dict_cannot_change_a_value() -> None:
     span = Span(start_ns=0, end_ns=10, clock_id="c")
     other = Span(start_ns=0, end_ns=20, clock_id="c")
     with pytest.raises(TypeError):
-        Span.model_config["frozen"] = False  # type: ignore[index]
+        Span.model_config["frozen"] = False
     with pytest.raises(ValidationError):
         span.end_ns = -100  # type: ignore[misc]
     with pytest.raises(ValidationError):
-        span._canonical = other.canonical_digest()  # type: ignore[attr-defined]
+        span._canonical = other.canonical_digest()
     with pytest.raises(TypeError):
         span.__pydantic_private__["_canonical"] = other.canonical_digest()  # type: ignore[index]
     with pytest.raises(TypeError):
@@ -603,7 +603,7 @@ def test_small_loosenesses_are_refused() -> None:
             Audio.from_array(numpy.asarray(samples), RATE)
     for drift in ("5", True):
         with pytest.raises(ValidationError):
-            TimeMap(source="a", target="b", offset_ns=0, drift_ppm=drift)  # type: ignore[arg-type]
+            TimeMap(source="a", target="b", offset_ns=0, drift_ppm=drift)
     with pytest.raises(ValidationError):
         Span.model_validate({"start_ns": 0, "end_ns": 1, "clock_id": "c", "extra": 1})
     with pytest.raises(OverflowError):
@@ -662,7 +662,7 @@ def test_a_nested_unsealed_or_subclass_instance_is_validated_again(tmp_path: Pat
 
     class EvilAudio(Audio):
         @classmethod
-        def identity_of(cls, groups: object) -> str:  # type: ignore[override]
+        def identity_of(cls, groups: object) -> str:
             return "content:" + "0" * 64
 
     evil = EvilAudio(groups=dict(real.groups), anchor=real.anchor)  # type: ignore[call-arg]

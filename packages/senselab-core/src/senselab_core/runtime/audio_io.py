@@ -174,7 +174,8 @@ class SoundFileReader:
                 return numpy.zeros((stamp.channels, 0), dtype=AUDIO_DTYPE)
             f.seek(first)
             samples = f.read(count, dtype="float32", always_2d=True)
-        return samples.T
+        decoded: numpy.ndarray = samples.T
+        return decoded
 
 
 READER = SoundFileReader()

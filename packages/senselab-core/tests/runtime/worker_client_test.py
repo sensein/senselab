@@ -33,8 +33,8 @@ from senselab_core.runtime.worker_client import (
     WorkerLost,
 )
 from senselab_worker import codec, runtime_identity
-from senselab_worker.canonical import canonical_npy_bytes
-from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_DEPTH, to_wire
+from senselab_worker.canonical import MAX_DEPTH, canonical_npy_bytes
+from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, to_wire
 from senselab_worker.digest import identity_digest
 from senselab_worker.fake import EXIT_CRASH
 from senselab_worker.faults import FaultClass, ProtocolError, ValueTooLarge, classify
@@ -57,7 +57,7 @@ def no_leaked_processes(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[subpro
 
     class _Recording(real):  # type: ignore[valid-type, misc]
         def __init__(self, *args: object, **kwargs: object) -> None:
-            super().__init__(*args, **kwargs)  # type: ignore[call-overload]
+            super().__init__(*args, **kwargs)
             spawned.append(self)
 
     monkeypatch.setattr(subprocess, "Popen", _Recording)
@@ -108,13 +108,13 @@ def small_line_worker(array_parent: Path) -> Iterator[WorkerClient]:
     assert not client.alive
 
 
-def _lines(reply: dict | list) -> list[str]:
+def _lines(reply: dict[str, Any] | list[Any]) -> list[str]:
     return [
         part if isinstance(part, str) else json.dumps(part) for part in (reply if isinstance(reply, list) else [reply])
     ]
 
 
-def _scripted(array_parent: Path, *replies: dict | list, **init: object) -> WorkerClient:
+def _scripted(array_parent: Path, *replies: dict[str, Any] | list[Any], **init: object) -> WorkerClient:
     """A client over the scripted worker; each reply is one line (a dict) or a list of lines."""
     python = interpreter(array_parent.parent, f'exec "{sys.executable}" "{SCRIPTED}"')
     return WorkerClient(
@@ -122,7 +122,7 @@ def _scripted(array_parent: Path, *replies: dict | list, **init: object) -> Work
     )
 
 
-def _value(inputs: dict, params: dict) -> str:
+def _value(inputs: dict[str, Any], params: dict[str, Any]) -> str:
     return identity_digest("fake-output@1", {"inputs": inputs, "params": params})
 
 
@@ -179,7 +179,7 @@ def test_unencodable_params_refuse_the_request(worker: WorkerClient) -> None:
         ([{"id": "a", "inputs": {}}], []),
     ],
 )
-def test_malformed_requests_are_refused_on_the_host(worker: WorkerClient, items: list, params: object) -> None:
+def test_malformed_requests_are_refused_on_the_host(worker: WorkerClient, items: list[Any], params: object) -> None:
     """Item ids must be unique strings, inputs and params dicts."""
     with pytest.raises((ValueError, TypeError)):
         worker.run(items, params)  # type: ignore[arg-type]
@@ -244,7 +244,7 @@ def test_no_array_file_remains_when_params_fail_to_encode(worker: WorkerClient) 
 
 @pytest.mark.logic
 @pytest.mark.parametrize("init", [{"model": "x"}, {"faults": {"crash_after": "soon", "bogus": 1}}])
-def test_load_failure_is_worker_fatal(array_parent: Path, init: dict) -> None:
+def test_load_failure_is_worker_fatal(array_parent: Path, init: dict[str, Any]) -> None:
     """A `fatal` during load raises `WorkerFatal`, an infrastructure fault carrying the error."""
     with pytest.raises(WorkerFatal) as info:
         WorkerClient(sys.executable, FAKE, init=init, array_parent=array_parent)
@@ -292,11 +292,11 @@ def test_close_is_idempotent_and_context_managed(array_parent: Path) -> None:
     assert not client.alive
 
 
-def _ok(item: str, request: str = "$ID") -> dict:
+def _ok(item: str, request: str = "$ID") -> dict[str, Any]:
     return {"id": request, "item": item, "outputs": {}}
 
 
-def _done(n: int, request: str = "$ID") -> dict:
+def _done(n: int, request: str = "$ID") -> dict[str, Any]:
     return {"id": request, "done": n}
 
 
@@ -327,7 +327,7 @@ _ERROR = {"type": "ValueError", "message": "m", "fault": "content", "traceback":
         [{"id": "$ID", "results": [_ok("a"), _ok("b")]}],
     ],
 )
-def test_malformed_responses_are_protocol_errors(array_parent: Path, reply: list) -> None:
+def test_malformed_responses_are_protocol_errors(array_parent: Path, reply: list[Any]) -> None:
     """A reply line with the wrong id, item, order, count or shape raises `ProtocolError`."""
     client = _scripted(array_parent, reply)
     with pytest.raises(ProtocolError):
@@ -361,7 +361,7 @@ def test_fatal_during_a_request_is_worker_fatal(array_parent: Path) -> None:
         (None, (None, None)),
     ],
 )
-def test_unknown_fatal_keeps_message(array_parent: Path, error: object, kept: tuple) -> None:
+def test_unknown_fatal_keeps_message(array_parent: Path, error: object, kept: tuple[Any, ...]) -> None:
     """A `fatal` whose fault is unknown or whose `gap` is missing is `infrastructure` with a gap, and keeps its text."""
     client = _scripted(array_parent, {"error": error, "fatal": True})
     with pytest.raises(WorkerFatal) as info:
@@ -416,7 +416,7 @@ def test_fatal_decode_is_total(error: object) -> None:
         ([_ok("b"), "$EXIT:0"], 0),
     ],
 )
-def test_crash_mid_reply_is_worker_lost_with_returncode(array_parent: Path, tail: list, code: int) -> None:
+def test_crash_mid_reply_is_worker_lost_with_returncode(array_parent: Path, tail: list[Any], code: int) -> None:
     """A worker that exits after some of a reply's lines raises `WorkerLost` carrying its exit code."""
     client = _scripted(array_parent, [_ok("a"), *tail])
     with pytest.raises(WorkerLost) as info:
@@ -465,7 +465,7 @@ def test_output_arrays_decode_per_item_and_init_files_survive(array_parent: Path
     good_ref, bad_ref = to_wire(good, array_dir=staging, at="line"), to_wire(bad, array_dir=staging, at="line")
     bad_ref["__array__"]["sha256"] = "e" * 64
 
-    def placed(ref: dict) -> dict:
+    def placed(ref: dict[str, Any]) -> dict[str, Any]:
         moved = dict(ref["__array__"], path="$DIR/" + Path(ref["__array__"]["path"]).name)
         return {"__array__": moved}
 
@@ -972,7 +972,7 @@ def test_items_that_fit_alone_but_not_together_raise_value_too_large(worker: Wor
     assert worker.alive and worker.run(items[:2], {})[0]["outputs"]
 
 
-def _fits(items: list[dict], params: dict, limit: int) -> bool:
+def _fits(items: list[dict[str, Any]], params: dict[str, Any], limit: int) -> bool:
     request = {"id": "0" * 36, "items": items, "params": params}
     try:
         codec.dump_line(request, "request", limit=limit)

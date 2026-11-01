@@ -269,7 +269,7 @@ def _token_value(key: str, payload: object, path: str, walk: Walk) -> object:
     if key == "$f":
         if payload not in _FLOAT_NAMES:
             _refuse(where, payload, f"is not one of {sorted(_FLOAT_NAMES)}")
-        return float(cast(str, payload))
+        return float(payload)
     if key == "$int":
         if not (isinstance(payload, str) and _INT_TOKEN_TEXT.fullmatch(payload)):
             _refuse(where, payload, "is not a decimal integer")

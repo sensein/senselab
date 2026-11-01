@@ -13,7 +13,7 @@ from huggingface_hub.errors import HfHubHTTPError
 
 def _hub_client() -> ModuleType:
     """Return the HTTP client module `huggingface_hub` builds its errors on (`httpx` in 1.x, `httpx2` in 2.x)."""
-    return importlib.import_module(errors.HTTPError.__module__.partition(".")[0])
+    return importlib.import_module(vars(errors)["HTTPError"].__module__.partition(".")[0])
 
 
 @pytest.fixture
@@ -29,7 +29,8 @@ def hub_error() -> Callable[..., Exception]:
     def _make(status: int, cls: type = HfHubHTTPError) -> Exception:
         client = _hub_client()
         response = client.Response(status, request=client.Request("GET", "https://huggingface.co/org/model"))
-        return cls(f"{status} from the Hub", response=response)  # type: ignore[call-arg]
+        error: Exception = cls(f"{status} from the Hub", response=response)
+        return error
 
     return _make
 

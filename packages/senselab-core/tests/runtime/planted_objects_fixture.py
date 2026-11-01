@@ -98,7 +98,8 @@ def _entry(root: Path, platform: str = "linux") -> Path:
     from senselab_core.runtime.store import STORE_DIR
 
     d = _key().digest()
-    return root / STORE_DIR / d[:2] / d / _ctx(platform).fingerprint()
+    entry: Path = root / STORE_DIR / d[:2] / d / _ctx(platform).fingerprint()
+    return entry
 
 
 def _unseal(path: Path) -> None:
@@ -662,11 +663,11 @@ def _recording() -> list[Path]:
 
         return moved
 
-    os.open = opened  # type: ignore[assignment]
-    os.link = linked  # type: ignore[assignment]
-    os.symlink = symlinked  # type: ignore[assignment]
-    os.rename = moving(real_rename)  # type: ignore[assignment]
-    os.replace = moving(real_replace)  # type: ignore[assignment]
+    os.open = opened
+    os.link = linked
+    os.symlink = symlinked
+    os.rename = moving(real_rename)
+    os.replace = moving(real_replace)
     return written
 
 
@@ -830,10 +831,10 @@ def probe_swap_after_link(scratch: str) -> dict[str, Any]:
 
         return commit
 
-    os.link = committing(real_link)  # type: ignore[assignment]
-    os.replace = committing(real_replace)  # type: ignore[assignment]
+    os.link = committing(real_link)
+    os.replace = committing(real_replace)
     fetch_module.fetch(_manifest(["a/voice.wav"]), cache_root=cache, opener=_opener)
-    os.link, os.replace = real_link, real_replace  # type: ignore[assignment]
+    os.link, os.replace = real_link, real_replace
     marker = json_module.loads((cache / "datasets" / "demo@1" / ".complete").read_bytes())
     paths = fetch_module.fetch(_manifest(["a/voice.wav"]), cache_root=cache, opener=_opener, verify="size")
     return {

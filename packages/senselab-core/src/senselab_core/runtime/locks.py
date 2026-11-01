@@ -32,7 +32,7 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from senselab_worker.ownership import UUID_HEX
 
@@ -167,7 +167,7 @@ class Lease:
             os.close(fd)
             directory.remove_owned(temporary, pattern=TEMPORARY_NAME)
 
-    def _record_at(self, name: str) -> Optional[dict]:
+    def _record_at(self, name: str) -> Optional[dict[str, Any]]:
         """Return the identity recorded in the regular file `name`, None if none is legible there."""
         try:
             data = self._directory().read_regular(name, limit=IDENTITY_LIMIT)
@@ -261,7 +261,7 @@ class Lease:
                 f"{owner_remedy(self._lease_path)}",
             ) from err
 
-    def holder(self) -> Optional[dict]:
+    def holder(self) -> Optional[dict[str, Any]]:
         """Return the identity recorded in the lease file, None if none is legible there."""
         return self._record_at(self._name)
 

@@ -6,15 +6,18 @@ import json
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, NoReturn
+from typing import Any, Callable, Literal, NoReturn
 
 import numpy
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from senselab_worker.codec import ENVELOPE, MAX_DEPTH, MAX_LINE_BYTES, validate_message
+from senselab_worker.canonical import MAX_DEPTH
+from senselab_worker.codec import ENVELOPE, MAX_LINE_BYTES, validate_message
 from senselab_worker.faults import ContentFault, ResourceFault
 from senselab_worker.serve import serve
+
+_SURROGATE: tuple[Literal["Cs"]] = ("Cs",)
 
 REQ = "req-fuzz"
 GOOD = "req-good"
@@ -47,7 +50,7 @@ class _Colour(enum.IntEnum):
     RED = 1
 
 
-class _HostileList(list):
+class _HostileList(list[Any]):
     def __len__(self) -> int:
         raise _Escape("len")
 
@@ -83,13 +86,13 @@ def _shared_expectation(levels: int) -> tuple[str, str | None]:
 
 
 def _cyclic_list() -> object:
-    a: list = [1]
+    a: list[Any] = [1]
     a.append([a])
     return a
 
 
 def _cyclic_dict() -> object:
-    d: dict = {}
+    d: dict[str, Any] = {}
     d["self"] = d
     return d
 
@@ -99,11 +102,11 @@ _JSON = st.recursive(
     | st.booleans()
     | st.integers(-(2**63), 2**63)
     | st.floats(allow_nan=False, allow_infinity=False)
-    | st.text(alphabet=st.characters(blacklist_categories=("Cs",)), max_size=20),
+    | st.text(alphabet=st.characters(exclude_categories=_SURROGATE), max_size=20),
     lambda children: (
         st.lists(children, max_size=4)
         | st.dictionaries(
-            st.text(alphabet=st.characters(blacklist_categories=("Cs",)), max_size=5), children, max_size=4
+            st.text(alphabet=st.characters(exclude_categories=_SURROGATE), max_size=5), children, max_size=4
         )
     ),
     max_leaves=20,
@@ -159,7 +162,7 @@ _SIZES = [MAX_LINE_BYTES - 200, MAX_LINE_BYTES, MAX_LINE_BYTES + 1, 3 * MAX_LINE
 class Item:
     """How `handle` answers one item, and what the answer must be when the batch is well formed."""
 
-    make: Callable[[], dict]
+    make: Callable[[], dict[str, Any]]
     expect: tuple[str, str | None]
 
 
@@ -213,7 +216,7 @@ class Behaviour:
         """The number of items in the request."""
         return len(self.item_ids)
 
-    def handle(self, state: object, items: list[dict], params: dict) -> object:
+    def handle(self, state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> object:
         """Answer the hostile request as this behaviour says; answer any other well."""
         if params.get("good"):
             return [{"outputs": {"ok": True}} for _ in items]
@@ -247,7 +250,7 @@ def handle_behaviours(draw: st.DrawFn) -> Behaviour:
     """A `handle` whose outputs and errors are drawn from the hostile kinds above."""
     ids = draw(
         st.lists(
-            st.text(alphabet=st.characters(blacklist_categories=("Cs",)), min_size=1, max_size=8),
+            st.text(alphabet=st.characters(exclude_categories=_SURROGATE), min_size=1, max_size=8),
             max_size=6,
             unique=True,
         )
@@ -262,15 +265,15 @@ def handle_behaviours(draw: st.DrawFn) -> Behaviour:
     return Behaviour(items, ids, batch, draw(st.sampled_from(_MALFORMED_ENTRIES)))
 
 
-def _frame(msg: dict) -> bytes:
+def _frame(msg: dict[str, Any]) -> bytes:
     return json.dumps(msg).encode() + b"\n"
 
 
-def _serve_in_process(behaviour: Behaviour, array_dir: Path) -> tuple[int, list[dict]]:
+def _serve_in_process(behaviour: Behaviour, array_dir: Path) -> tuple[int, list[dict[str, Any]]]:
     """Run the real `serve` over in-memory streams: init, the hostile request, a good request, stop."""
     hostile = {"id": REQ, "items": [{"id": i, "inputs": {}} for i in behaviour.item_ids], "params": {}}
     good = {"id": GOOD, "items": [{"id": "g", "inputs": {}}], "params": {"good": True}}
-    stream: list[dict] = [{"init": {"array_dir": str(array_dir)}}, hostile, good, {"stop": True}]
+    stream: list[dict[str, Any]] = [{"init": {"array_dir": str(array_dir)}}, hostile, good, {"stop": True}]
     rx = io.BytesIO(b"".join(map(_frame, stream)))
     tx = io.BytesIO()
     code = serve(lambda init: None, behaviour.handle, rx, tx)  # type: ignore[arg-type]

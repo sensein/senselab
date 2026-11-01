@@ -108,7 +108,7 @@ def test_open_audio_reads_the_header_once(tmp_path: Path, monkeypatch: pytest.Mo
 
     def spy(self: soundfile.SoundFile, file: object, *args: object, **kwargs: object) -> None:
         calls.append(file)
-        original(self, file, *args, **kwargs)  # type: ignore[arg-type]
+        original(self, file, *args, **kwargs)
 
     monkeypatch.setattr(soundfile.SoundFile, "__init__", spy)
     open_audio(p)
@@ -218,7 +218,7 @@ def open_spy(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
 
     def spy_sound(self: soundfile.SoundFile, file: object, *args: object, **kwargs: object) -> None:
         calls.append("sound")
-        original_sound(self, file, *args, **kwargs)  # type: ignore[arg-type]
+        original_sound(self, file, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "open", spy_open)
     monkeypatch.setattr(soundfile.SoundFile, "__init__", spy_sound)

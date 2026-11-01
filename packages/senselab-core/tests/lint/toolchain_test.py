@@ -3,6 +3,7 @@
 import re
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -12,13 +13,13 @@ RUFF_HOOKS = {"ruff", "ruff-check", "ruff-format"}
 LOCKED_ENTRY = "uv run --frozen --no-sync ruff "
 
 
-def locked_version(lock: dict, name: str) -> str | None:
+def locked_version(lock: dict[str, Any], name: str) -> str | None:
     """Return the version of `name` that a parsed uv.lock pins, or None if it pins none."""
     versions = {p["version"] for p in lock.get("package", []) if p.get("name") == name}
     return versions.pop() if len(versions) == 1 else None
 
 
-def toolchain_divergences(pyproject: dict, lock: dict, precommit: dict) -> list[str]:
+def toolchain_divergences(pyproject: dict[str, Any], lock: dict[str, Any], precommit: dict[str, Any]) -> list[str]:
     """Return every way the ruff of pyproject, uv.lock and pre-commit can differ; empty when they are one."""
     found = []
     version = locked_version(lock, "ruff")
@@ -41,7 +42,7 @@ def toolchain_divergences(pyproject: dict, lock: dict, precommit: dict) -> list[
     return found
 
 
-def _repo_files() -> tuple[dict, dict, dict]:
+def _repo_files() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     return (
         tomllib.loads((REPO / "pyproject.toml").read_text()),
         tomllib.loads((REPO / "uv.lock").read_text()),
@@ -55,7 +56,7 @@ def test_pre_commit_and_the_workspace_run_one_ruff() -> None:
     assert toolchain_divergences(*_repo_files()) == []
 
 
-def _remote(rev: str) -> dict:
+def _remote(rev: str) -> dict[str, Any]:
     return {"repo": "https://github.com/astral-sh/ruff-pre-commit", "rev": rev, "hooks": [{"id": "ruff-format"}]}
 
 
@@ -101,7 +102,7 @@ PLATFORM_CHECKED = "packages/senselab-core/src/senselab_core/runtime/worker_clie
 PLATFORMS = ("linux", "darwin")
 
 
-def platform_checked(precommit: dict, path: str) -> set[str]:
+def platform_checked(precommit: dict[str, Any], path: str) -> set[str]:
     """The `--platform` values of the mypy hooks whose `files` pattern selects `path`."""
     found = set()
     for repo in precommit.get("repos", []):
@@ -131,7 +132,7 @@ FORMATTER_LIBRARIES = {"pretty-format-yaml": {"ruamel.yaml"}, "pretty-format-tom
 """The libraries whose version decides each formatter hook's output, which the hook repository leaves unpinned."""
 
 
-def unpinned_formatter_libraries(precommit: dict) -> list[str]:
+def unpinned_formatter_libraries(precommit: dict[str, Any]) -> list[str]:
     """Each formatter hook whose output-deciding library is not pinned `==` in its `additional_dependencies`."""
     found = []
     for repo in precommit.get("repos", []):
@@ -162,7 +163,7 @@ def test_an_unpinned_formatter_library_is_found() -> None:
         "pretty-format-toml": ["toml-sort==0.25.0", "tomlrt==2.2.13"],
     }
 
-    def config(**override: list[str]) -> dict:
+    def config(**override: list[str]) -> dict[str, Any]:
         merged = {**deps, **override}
         hooks = [{"id": k, "additional_dependencies": v} for k, v in merged.items()]
         return {"repos": [{"repo": FORMATTER_REPO, "hooks": hooks}]}
