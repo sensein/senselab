@@ -2,6 +2,8 @@
 
 Status: draft. Principles: P-30 (tiers; benchmarks separate), P-21 (no rationale in code), P-29
 (local plus cluster within shared limits), P-28 (no identifiers), P-22 (Python range).
+The 3.10 tree walk (`ownership.py`) is exercised only by `worker-floor (3.10)` in CI; a developer on the
+pinned `.python-version` (3.12) does not run that path locally.
 
 ## 1. What the 1.x suite tells us
 
@@ -44,12 +46,12 @@ on. The default run is `-m logic`; contract, limits, use case and env are desele
 
 | Tier | Marker | Exercises | Inputs | Runs where | Gate |
 |---|---|---|---|---|---|
-| **Logic** | `logic` (default) | Behaviour of code: data types, identity and keys, params validation, planner decisions, graph semantics, decision rules, codecs | small synthetic signals; the `fake` stack | every PR on the min and max Python plus a core-only install; full Python matrix nightly; worker-runtime tests on every env Python from the built wheel | blocking |
-| **Contract** | `contract` | Every declared task, backend, env and profile meets the framework contract | declarations | every PR (`-m "logic or contract"`) | blocking |
+| **Logic** | `logic` (default) | Behaviour of code: data types, identity and keys, params validation, planner decisions, graph semantics, decision rules, codecs | small synthetic signals; the `fake` stack | every PR on Python 3.11 and 3.14 from a core-only install (`core-only` job); worker tests on the 3.10 floor from the built wheel (`worker-floor`); a wider Python matrix is not yet in CI | blocking |
+| **Contract** | `contract` | Every declared task, backend, env and profile meets the framework contract | declarations | every PR (`-m "logic or contract"`, `core-only` on 3.11 and 3.14; worker contract on 3.10) | blocking |
 | **Limits** | `limits` | Parameter boundaries and edge inputs against real backends | synthetic edge signals + 3–4 shared fixtures | nightly, or on a PR carrying the `limits` label (which runs limits only); GPU subset on ORCD | blocking for touched backends |
 | **Use case** | `usecase` | One realistic end-to-end pipeline per use case | small public or synthetic recordings with licenses recorded | nightly and ORCD only, never on a PR or a label (H-R54); ORCD before release | blocking for release |
-| **Env** | `env` | Each locked env builds, imports the worker runtime and round-trips every data type | lock files | changed locks on the PR; full builds weekly on ORCD | blocking for that env |
-| **Benchmark** | not pytest | Accuracy and speed on public data, tracked over releases | public benchmark subsets and full sets | CPU smoke (<15 min) on PRs touching a task and nightly; GPU smoke weekly on ORCD; full per release on ORCD | tracked, not pass/fail; regressions beyond a band open an issue |
+| **Env** | `env` | Each locked env builds, imports the worker runtime and round-trips every data type | lock files | the release-gate build on every PR (`core-env`, `-m "env and not slow"`); per-lock builds for changed locks are not yet in CI; full builds weekly on ORCD | blocking for that env |
+| **Benchmark** | not pytest | Accuracy and speed on public data, tracked over releases | public benchmark subsets and full sets | CPU smoke (<15 min) on PRs touching a task and nightly (not yet in CI); GPU smoke weekly on ORCD; full per release on ORCD | tracked, not pass/fail; regressions beyond a band open an issue |
 
 Within limits and use cases, sub-markers `gpu`, `network` and `slow` select hardware and runtime.
 Both tiers are deselected by default, as are contract and env: the PR command is `-m "logic or contract"`.
@@ -102,8 +104,18 @@ module over the registry, with ids equal to the task, backend or profile name.
   (`execution.md` §3), not only the happy path.
 - It replaces the monkeypatch stacks: logic tests of pipelines, the planner and executors run on
   the fake stack through the same registry users use.
-- `no_hub` and `fake_env` fixtures cover model resolution and env building.
-- Monkeypatching senselab internals is forbidden in 2.x tests.
+- Model resolution is a seam, not a fixture: tests construct `Resolver(cache_dir=, hub=, cache_root=)` and
+  `ResultStore(equivalence=)` with the stand-ins they need. There are no `no_hub` or `fake_env` fixtures.
+- Patching senselab internals is forbidden in 2.x tests, except the interruption fault model below.
+  - **Faults are injected at the `os` boundary** through the helpers in `syscall_faults_fixture`, so the
+    code under test runs unchanged and meets the error at the call real storage fails at.
+  - **Interruption fault model (child process only).** Shutdown tests substitute the `to_wire` and
+    `_wait_exit` steps, in a spawned child and never in the pytest process, to deliver `SystemExit`,
+    `KeyboardInterrupt`, a late exit notification or a concurrent `close()` at that step. The boundaries
+    are a declared list, `shutdown_schedule_fixture.BOUNDARIES`.
+  - **An AST guard enforces it:** `tests/lint/internal_patches_test.py` sweeps `packages/*/tests` and fails on
+    `monkeypatch.set*`/`delattr`, `setattr`/`delattr` or an attribute assignment reached from a `senselab*`
+    name, and checks that every `BOUNDARIES` name resolves and that an undeclared one is refused.
 - **Every probe bounds itself, whatever the code under test does** (H-R37). A source standing in for an
   endless one is finite: `bounded_probe_fixture.FiniteSource` serves the declared size plus 1 MiB and then
   raises. A probe that writes through code under test runs in a child (`run_bounded`) under
@@ -178,13 +190,16 @@ module over the registry, with ids equal to the task, backend or profile name.
 
 | When | What |
 |---|---|
-| every PR | logic + contract on min and max Python; core-only install; env builds for changed locks; CPU smoke benchmarks (<15 min) when a task is touched |
-| label on a PR (`limits`) | limits only, for the touched backends |
-| nightly | full Python matrix; limits; use cases; scale ladder (`benchmarks/scale`, P-33); CPU smoke benchmarks |
+| every PR | `pre-commit`; logic + contract on 3.11 and 3.14 from a core-only install, with import contracts and per-distribution sdist-to-wheel builds (`core-only`); the release-gate env tests (`core-env`); worker logic, env and contract tests on 3.10 (`worker-floor`). Not yet in CI: per-lock env builds, CPU smoke benchmarks (<15 min) when a task is touched |
+| label on a PR (`limits`) | limits only, on 3.12 (`core-limits`); never use cases (H-R54) |
+| nightly (`schedule`, `workflow_dispatch`) | every PR job, and limits and use cases on 3.12 (`core-nightly`). A schedule runs the default branch's copy of the workflow, so this takes effect once 2.x is merged there. Not yet in CI: a wider Python matrix, the scale ladder (`benchmarks/scale`, P-33), CPU smoke benchmarks |
 | weekly (ORCD) | GPU smoke benchmarks; core CPU benchmark suite; full env builds; use cases on ORCD |
 | per release (ORCD) | full benchmarks; GPU limits |
 
-**Forbidden in 2.x tests** (to be enforced by a lint over `packages/*/tests`, `scripts/check_*.py`, which does not exist yet; unenforced today):
+**Forbidden in 2.x tests.** Enforced today: patching senselab internals (`tests/lint/internal_patches_test.py`),
+a missing or doubled tier marker (`packages/conftest.py`, `tier_hook_test.py`), the CI cadence
+(`ci_tiers_test.py`), real participant identifiers (`scripts/check_participant_ids.py`, P-28) and the fixture
+budget (`scripts/check_fixture_budget.py`). The rest of the list is not yet enforced by a lint:
 - spec, register or round ids in names, files or headers;
 - history narratives ("used to", "originally");
 - exact model-output floats in logic tests;

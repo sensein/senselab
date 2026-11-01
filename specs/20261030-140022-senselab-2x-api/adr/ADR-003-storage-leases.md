@@ -127,8 +127,15 @@ run manifest. Owner decision D-2 ([`decisions-2026-11-01.md`](../decisions-2026-
 - **Stale and broken.** A lease is stale when its age passes `stale_after`. Age is read on the storage
   clock (`fs_now()` against the lease's mtime) once per distinct lease, and then grows by local monotonic
   elapsed time. Anything but a regular file at the name is quarantined, not judged.
-- **Broken or released by rename.** Both rename the name to a fresh uuid and compare the moved inode with
-  the one expected, removing it only on a match; a regular file moved by mistake is linked back. The stale
+- **Identity of a lease.** A holder owns its lease while the file at the name carries the uuid token it
+  wrote into the identity record; `owns()` and release match by that token, never by inode. A breaker
+  identifies the lease it judged stale by device, inode and mtime, which rename keeps. Inode numbers alone
+  are not identity: ext4 reuses a freed inode number at once, so a new lease can carry the number of the one
+  just broken, while its mtime is fresh and a judged-stale lease is older than `stale_after`.
+  (`runtime/locks.py`: `_carries`, `_is`.)
+- **Broken or released by rename.** Both rename the name to a fresh uuid and compare the moved file with
+  the expected one (by token for a holder, by device, inode and mtime for a breaker), removing it only on a
+  match; a regular file moved by mistake is linked back. The stale
   lease itself is therefore removed exactly once. POSIX has no conditional rename, so a narrow window
   remains: a late breaker that judged an old lease can rename a newer lease aside before it can link it
   back, and another taker may take the empty name. The displaced holder sees `owns()` false and its
