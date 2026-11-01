@@ -1,4 +1,4 @@
-"""No untagged digest API exists: the import contract and the digest module's surface (ADR-006)."""
+"""No untagged digest API exists (ADR-006), and the kernel imports no I/O module (ADR-009): the import contracts."""
 
 import ast
 import configparser
@@ -23,6 +23,7 @@ REPO = Path(__file__).resolve().parents[4]
 IMPORTLINTER = REPO / ".importlinter"
 CONTRACT = "importlinter:contract:digests-are-tagged"
 RAW_CONTRACT = "importlinter:contract:raw-digest-owners"
+KERNEL_IO_CONTRACT = "importlinter:contract:kernel-does-no-io"
 
 
 def _contract() -> configparser.SectionProxy:
@@ -44,13 +45,19 @@ def _write(base: Path, rel: str, text: str) -> None:
     path.write_text(textwrap.dedent(text))
 
 
-def _lint_imports(base: Path, *, extra_ignore: str = "", alerting: str = "none") -> subprocess.CompletedProcess[str]:
-    """Run the repository's two digest contracts, alone, over the stub packages planted in `base`."""
+def _lint_imports(
+    base: Path,
+    *,
+    extra_ignore: str = "",
+    alerting: str = "none",
+    contracts: tuple[str, ...] = (CONTRACT, RAW_CONTRACT),
+) -> subprocess.CompletedProcess[str]:
+    """Run the repository's `contracts` (the two digest contracts by default), alone, over the stubs in `base`."""
     parser = configparser.ConfigParser()
     parser.read(IMPORTLINTER)
     config = configparser.ConfigParser()
     config["importlinter"] = dict(parser["importlinter"])
-    for name in (CONTRACT, RAW_CONTRACT):
+    for name in contracts:
         config[name] = {**parser[name], "unmatched_ignore_imports_alerting": alerting}
     if extra_ignore:
         config[CONTRACT]["ignore_imports"] += f"\n{extra_ignore}"
@@ -168,6 +175,43 @@ def test_an_allowance_that_matches_no_import_fails_the_contract(tmp_path: Path) 
     result = _lint_imports(tmp_path, extra_ignore="senselab_core.zz.gone -> hashlib", alerting="error")
     assert result.returncode != 0
     assert "senselab_core.zz.gone -> hashlib" in result.stdout + result.stderr
+
+
+def _kernel_stubs(base: Path) -> None:
+    _stubs(base)
+    _write(base, "senselab_core/kernel/__init__.py", "")
+    _write(base, "senselab_core/kernel/signals.py", "from pathlib import Path\n")
+    _write(base, "senselab_core/kernel/identity.py", "from urllib.parse import urlsplit\n")
+
+
+@pytest.mark.contract
+def test_every_io_module_planted_in_the_kernel_breaks_its_contract(tmp_path: Path) -> None:
+    """Each forbidden module imported by a kernel module is reported; the two type-only allowances stay narrow."""
+    _kernel_stubs(tmp_path)
+    parser = configparser.ConfigParser()
+    parser.read(IMPORTLINTER)
+    forbidden = _lines(parser[KERNEL_IO_CONTRACT]["forbidden_modules"])
+    assert {"pathlib", "subprocess", "socket", "urllib", "mmap", "senselab_worker.hashing"} <= set(forbidden)
+    expected = set()
+    for i, module in enumerate(forbidden):
+        _write(tmp_path, f"senselab_core/kernel/io_{i}.py", f"import {module}\n")
+        expected.add(f"senselab_core.kernel.io_{i} -> {module}")
+    result = _lint_imports(tmp_path, contracts=(KERNEL_IO_CONTRACT,))
+    assert result.returncode != 0, result.stdout
+    assert _broken(result.stdout) == expected, result.stdout
+
+
+@pytest.mark.contract
+def test_the_kernel_contract_passes_a_kernel_with_no_io_import(tmp_path: Path) -> None:
+    """The kernel stubs alone, with their type-only pathlib and urllib.parse imports, keep the contract."""
+    _kernel_stubs(tmp_path)
+    _write(
+        tmp_path,
+        "senselab_core/kernel/clean.py",
+        "import json, re\nfrom senselab_worker.digest import identity_digest\n",
+    )
+    result = _lint_imports(tmp_path, contracts=(KERNEL_IO_CONTRACT,))
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def _modules(package: types.ModuleType) -> list[types.ModuleType]:

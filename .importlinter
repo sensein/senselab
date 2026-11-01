@@ -44,8 +44,36 @@ forbidden_modules =
     shutil
     tempfile
     importlib
+    pathlib
+    glob
+    fileinput
+    mmap
+    fcntl
+    select
+    selectors
+    subprocess
+    socket
+    ssl
+    http
+    urllib
+    ftplib
+    smtplib
+    sqlite3
+    dbm
+    shelve
+    zipfile
+    tarfile
+    gzip
+    bz2
+    lzma
+    ctypes
+    multiprocessing
+    asyncio
     senselab_worker.hashing
 allow_indirect_imports = True
+ignore_imports =
+    senselab_core.kernel.signals -> pathlib
+    senselab_core.kernel.identity -> urllib
 
 [importlinter:contract:core-is-framework-free]
 name = senselab_core imports no model framework
