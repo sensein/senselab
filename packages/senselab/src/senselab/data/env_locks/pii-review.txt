@@ -1,15 +1,14 @@
-# senselab subprocess-venv lock: pii-redaction-review
-# requirements-sha256: 0d21702acc972fd724380ad878f551e41dec52dc6ade5b96eb9d4d19f8251cb3
+# senselab env lock: pii-review
+# identity-digest: env-lock@1 f5219e1f0e59e97ec8925fa2f313665a10d5fd30897e0bbae7b5e4696a8a16be
 # python: 3.12
 # torch: torch==2.8.0
 # torch-index: cu128
 # exclude-newer: 2026-10-02T00:00:00Z
-# uv: uv 0.11.3 (Homebrew 2026-04-01 aarch64-apple-darwin)
-# Regenerate: uv run python scripts/lock_subprocess_venvs.py pii-redaction-review
+# uv: uv 0.12.2 (x86_64-unknown-linux-gnu)
 accelerate==1.15.0 \
     --hash=sha256:5654f8c5eaa0d4fa68b33e287a97765da6849bf6d51dcac874e73fbbddfb6134 \
     --hash=sha256:97eacca0b73e45cb867dbf8c5d5d4dc32219544300e0c8992c7334dc2ef33cec
-    # via -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/venv-lock-pii-redaction-review-9u57ffsi/requirements.in
+    # via -r /tmp/env-lock-pii-review-hc0sx3_9/requirements.in
 annotated-doc==0.0.5 \
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \
     --hash=sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb
@@ -42,7 +41,7 @@ colorama==0.4.6 ; sys_platform == 'win32' \
 compressed-tensors==0.15.0.1 \
     --hash=sha256:a8e93054e8a5ec49c980b09ed36c4c1249b4a8ee167920a8e461c4da26e78d99 \
     --hash=sha256:e1b1f322e82e475715e242bad46925a304ea8e5c98b5055a15b8eb22fb6bfea9
-    # via -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/venv-lock-pii-redaction-review-9u57ffsi/requirements.in
+    # via -r /tmp/env-lock-pii-review-hc0sx3_9/requirements.in
 filelock==4.0.9 \
     --hash=sha256:635e7d67fa92654eed444e75e9ca18426d34e77ad9c469bf4373f75a932f7b22 \
     --hash=sha256:9287fd61b99a806e5202be29a83034c0808a1b9830e820537c2f5773981f7eeb
@@ -282,7 +281,7 @@ numpy==2.5.3 \
     --hash=sha256:fc36dc566135b5eceec4cf89758fcb719266a019ef07dae1754ae7c9f617ef3e \
     --hash=sha256:ffdc76bfcae6b255dff75202c5e7feaf95b40246bc0a17944facc1fecf9f79ab
     # via
-    #   -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/venv-lock-pii-redaction-review-9u57ffsi/requirements.in
+    #   -r /tmp/env-lock-pii-review-hc0sx3_9/requirements.in
     #   accelerate
     #   transformers
 packaging==26.3 \
@@ -678,7 +677,6 @@ safetensors==0.8.0 \
     --hash=sha256:fcdd41ec4628fee5799f807c73c353629130fbd942aa23d83c623dd6c9d52d78 \
     --hash=sha256:fd6f3f93c9a0a7cc2788ee63fb763353d4bd2e89b0751bc78fcf7dda00bea774
     # via
-    #   -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/venv-lock-pii-redaction-review-9u57ffsi/requirements.in
     #   accelerate
     #   transformers
 setuptools==84.0.0 \
@@ -724,7 +722,7 @@ transformers==5.18.0 \
     --hash=sha256:d79e5a515a572ee3deb33eb0d578be47d91e70c75d54cf21bf6eede6edef14a9 \
     --hash=sha256:d89c206e42e841af7cd314b3d2b21c03e977d819cdb4aef65ada048769a644df
     # via
-    #   -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/venv-lock-pii-redaction-review-9u57ffsi/requirements.in
+    #   -r /tmp/env-lock-pii-review-hc0sx3_9/requirements.in
     #   compressed-tensors
 typer==0.27.2 \
     --hash=sha256:269b7eb9d3c202ca84b4bc9618cb04ebb43d3d4d1e567e4c768607232c05f945 \

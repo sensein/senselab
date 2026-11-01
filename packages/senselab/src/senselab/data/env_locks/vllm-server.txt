@@ -1,11 +1,10 @@
-# senselab subprocess-venv lock: vllm-server
-# requirements-sha256: 5b1a68e3ee131fe292b35bb8d2cfe206ac7708056b9a33e8f94c21dbd01fd8a4
+# senselab env lock: vllm-server
+# identity-digest: env-lock@1 9296c196b476e25d0867ea9b3c9d0679bb2e67cfbd6b52709b4edd674d545284
 # python: 3.12
 # torch: torch==2.13.0 torchaudio==2.11.0
 # torch-index: cu130
 # exclude-newer: 2026-10-10T00:00:00Z
 # uv: uv 0.12.2 (x86_64-unknown-linux-gnu)
-# Regenerate: uv run python scripts/lock_subprocess_venvs.py vllm-server
 agent-detector==2.0.0 \
     --hash=sha256:19c8ae185dbdca23c24abdcd8ac2cf58b8e84dc284c6f6db536656601f9ffc3f \
     --hash=sha256:22c6a1c9c23894a12f55aea625f060b8d3330fba774de72d02d5442bb580417f
@@ -2514,7 +2513,7 @@ numpy==2.3.5 ; python_full_version < '3.13' \
     --hash=sha256:ffe22d2b05504f786c867c8395de703937f934272eb67586817b46188b4ded6d \
     --hash=sha256:fffe29a1ef00883599d1dc2c51aa2e5d80afe49523c261a74933df395c15c520
     # via
-    #   -r requirements.in
+    #   -r /tmp/env-lock-vllm-server-6ok3j5kh/requirements.in
     #   cuda-core
     #   flashinfer-python
     #   humming-kernels
@@ -2607,7 +2606,7 @@ numpy==2.4.6 ; python_full_version >= '3.13' \
     --hash=sha256:f407cb6b8e9d6d8c626bc73c945db1706035af8fd632295547bf1c9e46d092d6 \
     --hash=sha256:f74a575920ab21fe304421a3fc28793d82e299cae9eccb37084e9fc7f3617c20
     # via
-    #   -r requirements.in
+    #   -r /tmp/env-lock-vllm-server-6ok3j5kh/requirements.in
     #   cuda-core
     #   flashinfer-python
     #   humming-kernels
@@ -4370,7 +4369,6 @@ safetensors==0.8.0 \
     --hash=sha256:fcdd41ec4628fee5799f807c73c353629130fbd942aa23d83c623dd6c9d52d78 \
     --hash=sha256:fd6f3f93c9a0a7cc2788ee63fb763353d4bd2e89b0751bc78fcf7dda00bea774
     # via
-    #   -r requirements.in
     #   humming-kernels
     #   transformers
     #   vllm
@@ -4939,7 +4937,7 @@ vllm==0.31.0 \
     --hash=sha256:39132b433967f0962d03d8a5f633b9bee6b32708f566c7d5637b79f8d0ef3433 \
     --hash=sha256:56edd19c798510b6da5ae4dd38b3bdf55ea7ae261b339a906df006dc3faf751d \
     --hash=sha256:dde46f1efbe846e5bd0c5c4ec6ec71842c42254c7ff3d9bebb2a57028715d380
-    # via -r requirements.in
+    # via -r /tmp/env-lock-vllm-server-6ok3j5kh/requirements.in
 watchfiles==1.3.0 \
     --hash=sha256:000b9688fc8133037a8b075c8ebf98f32844ff8964dda61e85c1db547dafc441 \
     --hash=sha256:025b108f2d5cc2799cb941f79380df3e8b22bfb589c218e801767fe78d598c95 \
