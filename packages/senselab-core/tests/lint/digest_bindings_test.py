@@ -12,12 +12,11 @@ from pathlib import Path
 
 import pytest
 
-REPO = Path(__file__).resolve().parents[3]
+REPO = Path(__file__).resolve().parents[4]
 CONTRACTS = ("importlinter:contract:digests-are-tagged", "importlinter:contract:raw-digest-owners")
 PINNED = {
     "packages/senselab-worker/scripts/unicode_table.py": frozenset({"hashlib"}),
     "packages/senselab-core/hatch_pin_loader.py": frozenset(),
-    "src/senselab/utils/data/network_guard/sitecustomize.py": frozenset(),
     "hatch_build_pins.py": frozenset(),
 }
 """Production files outside every import-linter root, with the digest modules each may reach."""
@@ -74,12 +73,12 @@ def _module(rel: str, path: Path) -> str:
 def production_files() -> list[str]:
     """Every production source.
 
-    That is each `.py`/`.pyi` under `packages/`, `src/` and `scripts/` outside test trees, each at the root, and each
-    tracked notebook, read through its code cells.
+    That is each `.py`/`.pyi` under `packages/` and `scripts/` outside test trees, each at the root, and each tracked
+    notebook, read through its code cells.
     """
     found = {
         p.relative_to(REPO).as_posix()
-        for root in ("packages", "src", "scripts")
+        for root in ("packages", "scripts")
         for p in (REPO / root).rglob("*")
         if p.suffix in (".py", ".pyi")
         and "tests" not in p.relative_to(REPO).parts
@@ -141,14 +140,16 @@ PLANTED = {
     "xxhash": "import xxhash",
     "blake3": "import blake3",
 }
-"""Each spelling of the H9e review (I-1, I-2), planted in a 1.x module no allowance names."""
+"""Each spelling of the H9e review (I-1, I-2), planted in a module no allowance names."""
 
 
 @pytest.mark.logic
 @pytest.mark.parametrize("spelling", sorted(PLANTED))
-@pytest.mark.parametrize("rel", ["src/senselab/zz/probe.py", "scripts/zz_probe.py", "hatch_build_pins.py"])
+@pytest.mark.parametrize(
+    "rel", ["packages/senselab-core/src/senselab_core/zz_probe.py", "scripts/zz_probe.py", "hatch_build_pins.py"]
+)
 def test_i2_every_planted_spelling_is_reported(tmp_path: Path, spelling: str, rel: str) -> None:
-    """A planted spelling in 1.x, a script or an out-of-graph root file is a violation."""
+    """A planted spelling in a package module, a script or an out-of-graph root file is a violation."""
     forbidden, allowed = contract()
     path = tmp_path / Path(rel).name
     path.write_text(f"import json\n{PLANTED[spelling]}\n")
@@ -184,8 +185,7 @@ def test_m4_a_new_digest_import_in_an_out_of_graph_file_is_reported(tmp_path: Pa
 @pytest.mark.logic
 def test_every_tracked_notebook_is_a_production_file() -> None:
     """The code cells of each tracked notebook are scanned like a module that no allowance names."""
-    notebooks = tracked_notebooks()
-    assert notebooks and set(notebooks) <= set(production_files())
+    assert set(tracked_notebooks()) <= set(production_files())
 
 
 def _notebook(path: Path, *cells: str) -> Path:

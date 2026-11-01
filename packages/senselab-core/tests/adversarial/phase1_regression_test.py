@@ -34,7 +34,8 @@ REPO = Path(__file__).resolve().parents[4]
 PACKAGES = REPO / "packages"
 REPORT = REPO / "specs" / "20261030-140022-senselab-2x-api" / "reviews" / "phase1-adversarial.md"
 BUDGET = REPO / "scripts" / "check_fixture_budget.py"
-GUARD = REPO / "src" / "tests" / "utils" / "moved_modules_test.py"
+GUARD_REL = "packages/senselab-core/tests/lint/moved_modules_test.py"
+GUARD = REPO / GUARD_REL
 RESOLVER = GUARD.with_name("import_resolver_fixture.py")
 DEFERRED = frozenset({15, 30})
 OWNER_ACTION = frozenset({39})
@@ -79,8 +80,8 @@ def _pytest(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
 def _guard_tree(base: Path, plant: dict[str, str]) -> Path:
     """A miniature repository holding the moved-module guard, the files it loads that exist, and ``plant``."""
     for rel, source in {
-        "src/tests/utils/moved_modules_test.py": GUARD,
-        "src/tests/utils/import_resolver_fixture.py": RESOLVER,
+        GUARD_REL: GUARD,
+        GUARD_REL.replace("moved_modules_test.py", "import_resolver_fixture.py"): RESOLVER,
         "scripts/check_fixture_budget.py": BUDGET,
     }.items():
         if not source.exists():
@@ -88,50 +89,55 @@ def _guard_tree(base: Path, plant: dict[str, str]) -> Path:
         (base / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(source, base / rel)
     for pkg in ("senselab", "senselab/utils", "senselab/audio"):
-        (base / "src" / pkg).mkdir(parents=True, exist_ok=True)
-        (base / "src" / pkg / "__init__.py").write_text("")
+        (base / _PLANTED / pkg).mkdir(parents=True, exist_ok=True)
+        (base / _PLANTED / pkg / "__init__.py").write_text("")
     for rel, text in plant.items():
         (base / rel).parent.mkdir(parents=True, exist_ok=True)
         (base / rel).write_text(text)
     subprocess.run(["git", "init", "-q"], cwd=base, check=True)
     subprocess.run(["git", "add", "-A"], cwd=base, check=True)
-    return base / "src" / "tests" / "utils" / "moved_modules_test.py"
+    return base / GUARD_REL
 
 
-GUARD_SELECTION = "test_no_moved_module_paths_remain or test_no_file_imports_a_moved_module or test_tombstones_hold"
+GUARD_SELECTION = (
+    "test_no_moved_module_paths_remain or test_no_file_imports_a_moved_module or test_no_module_lives_at_a_moved_path"
+)
 
+_PLANTED = "packages/zz/src"
 _UTILS = "senselab" + ".utils"
 _FILE_LOCK = "file" + "_lock"
 _MODEL_REVISION = "model" + "_revision"
 
 BYPASSES = {
-    "relative-import": {"src/senselab/audio/bypass.py": "from ..utils import file_lock\n"},
+    "relative-import": {f"{_PLANTED}/senselab/audio/bypass.py": "from ..utils import file_lock\n"},
     "importlib-concat": {
-        "src/senselab/audio/bypass.py": (
+        f"{_PLANTED}/senselab/audio/bypass.py": (
             "import importlib\nimportlib.import_module('senselab.utils.' + 'file_' + 'lock')\n"
         )
     },
-    "shim-at-old-path": {f"src/senselab/utils/{_FILE_LOCK}.py": "from senselab_core.runtime.locks import *\n"},
+    "shim-at-old-path": {f"{_PLANTED}/senselab/utils/{_FILE_LOCK}.py": "from senselab_core.runtime.locks import *\n"},
     "notebook-cell": {
-        "src/senselab/audio/bypass.ipynb": json.dumps(
+        f"{_PLANTED}/senselab/audio/bypass.ipynb": json.dumps(
             {"cells": [{"cell_type": "code", "source": [f"from {_UTILS} import {_FILE_LOCK}\n"]}]}
         )
     },
-    "stub-file": {"src/senselab/audio/bypass.pyi": f"from {_UTILS}.{_MODEL_REVISION} import X\n"},
-    "relative-star-import": {"src/senselab/utils/bypass.py": "from .file_lock import *\n"},
+    "stub-file": {f"{_PLANTED}/senselab/audio/bypass.pyi": f"from {_UTILS}.{_MODEL_REVISION} import X\n"},
+    "relative-star-import": {f"{_PLANTED}/senselab/utils/bypass.py": "from .file_lock import *\n"},
     "attribute-chain-off-an-alias": {
-        "src/senselab/audio/bypass.py": "from senselab import utils as u\nu.prov_bep028.run()\n"
+        f"{_PLANTED}/senselab/audio/bypass.py": "from senselab import utils as u\nu.prov_bep028.run()\n"
     },
     "xg12-relative-name-with-package": {
-        "src/senselab/audio/bypass.py": f"import importlib\nimportlib.import_module('.{_FILE_LOCK}', '{_UTILS}')\n"
+        f"{_PLANTED}/senselab/audio/bypass.py": (
+            f"import importlib\nimportlib.import_module('.{_FILE_LOCK}', '{_UTILS}')\n"
+        )
     },
     "xg12-keyword-name-and-package": {
-        "src/senselab/audio/bypass.py": (
+        f"{_PLANTED}/senselab/audio/bypass.py": (
             f"from importlib import import_module\nimport_module(name='.{_MODEL_REVISION}', package='{_UTILS}')\n"
         )
     },
     "xg12-getattr": {
-        "src/senselab/audio/bypass.py": "import senselab.utils\ngetattr(senselab.utils, 'prov_' + 'store')\n"
+        f"{_PLANTED}/senselab/audio/bypass.py": "import senselab.utils\ngetattr(senselab.utils, 'prov_' + 'store')\n"
     },
     "xg12-shell-python-m": {"scripts/bypass.sh": f"python -m {_UTILS}.cuda" + "_probe\n"},
     "xg12-yaml": {".github/workflows/bypass.yaml": f"run: python -m {_UTILS}.cuda" + "_probe\n"},

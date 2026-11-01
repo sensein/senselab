@@ -13,7 +13,7 @@ from hypothesis import strategies as st
 
 pytestmark = pytest.mark.logic
 
-_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "check_fixture_budget.py"
+_SCRIPT = Path(__file__).resolve().parents[4] / "scripts" / "check_fixture_budget.py"
 _spec = importlib.util.spec_from_file_location("check_fixture_budget", _SCRIPT)
 assert _spec and _spec.loader
 budget = importlib.util.module_from_spec(_spec)
@@ -310,8 +310,10 @@ def test_xg10_an_exemption_must_be_a_frozen_lock(
     ],
 )
 def test_xg10_lock_kinds_are_parsed_not_spelled(kind: str, content: str, ok: bool) -> None:
-    """A venv lock parses line by line (header, pinned requirements, hashes, `via` names it locks); a uv lock holds
-    only uv's tables and keys."""
+    """A venv lock parses line by line; a uv lock holds only uv's tables and keys.
+
+    A venv lock is its header, pinned requirements, hashes and the `via` names it locks.
+    """
     assert budget.is_lock(content.encode(), kind) is ok
 
 

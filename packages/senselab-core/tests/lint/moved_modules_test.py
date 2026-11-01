@@ -12,9 +12,8 @@ from pathlib import Path
 
 import pytest
 
-REPO = Path(__file__).resolve().parents[3]
-SCAN_ROOTS = ("src", "scripts", "packages")
-IMPORT_SCAN_ROOTS = (*SCAN_ROOTS, "tutorials")
+REPO = Path(__file__).resolve().parents[4]
+SCAN_ROOTS = ("packages", "scripts")
 
 
 def _fixture_budget_suffixes() -> tuple[str, ...]:
@@ -41,29 +40,12 @@ MOVED = {
     "senselab/utils/cuda_probe",
 }
 
-TOMBSTONES = {
-    "senselab.utils.file_lock": "src/senselab/utils/file_lock.py",
-    "senselab.utils.model_revision": "src/senselab/utils/model_revision.py",
-    "senselab.utils.prov_store": "src/senselab/utils/prov_store.py",
-    "senselab.utils.prov_bep028": "src/senselab/utils/prov_bep028.py",
-    "senselab.utils.cuda_probe": "src/senselab/utils/cuda_probe.py",
-}
-"""Each moved module and the file it lived in; neither the file nor an importable module may exist there."""
-
 DYNAMIC_ALLOWED: dict[str, dict[str, int]] = {
-    "src/senselab/utils/venv_lock.py": {"<dynamic:module_name>": 1},
-    "src/senselab/audio/workflows/audio_analysis/__init__.py": {"<dynamic:f'{__name__}.{submodule}'>": 1},
     "packages/senselab-core/src/senselab_core/testing/values.py": {"<dynamic:module.name>": 1},
     "packages/senselab-core/src/senselab_core/testing/contracts.py": {"<dynamic:module>": 1},
     "packages/senselab-core/tests/lint/destructive_ops_test.py": {"<dynamic:module>": 1},
     "packages/senselab-core/tests/lint/digest_contract_test.py": {"<dynamic:n>": 1},
     "packages/senselab-worker/src/senselab_worker/launch.py": {"<dynamic:argv[1]>": 1},
-    "src/tests/conftest.py": {"<dynamic:module>": 2},
-    "src/tests/audio/tasks/audio_understanding_test.py": {"<dynamic:name>": 1},
-    "src/tests/audio/workflows/audio_analysis/run_config_test.py": {
-        "<dynamic:f'senselab.audio.workflows.audio_analysis.{module_name}'>": 1
-    },
-    "src/tests/audio/workflows/audio_analysis/adaptive/evidence_weight_test.py": {"<dynamic:module_path>": 1},
 }
 """Call sites of ``importlib.import_module`` / ``__import__`` whose argument cannot be folded, counted per argument."""
 
@@ -134,21 +116,6 @@ def test_xg12_files_of_every_suffix_are_text_scanned(tmp_path: Path) -> None:
         assert _text_hits(planted) == ["senselab.utils.cuda_probe"]
 
 
-_SHA_LITERAL = re.compile(r"\b\w*SHA256\s*=\s*[\"'][0-9a-f]{64}[\"']")
-
-
-@pytest.mark.logic
-def test_no_weight_sha256_literals_remain() -> None:
-    """Weight digests live in `weights.yaml`; no `*_SHA256 = "<64 hex>"` literal is left outside `reproduce/`."""
-    hits = [
-        str(path.relative_to(REPO))
-        for path in (REPO / "src" / "senselab").rglob("*.py")
-        if "reproduce" not in path.relative_to(REPO / "src" / "senselab").parts
-        and _SHA_LITERAL.search(path.read_text())
-    ]
-    assert hits == []
-
-
 # --- import resolution: the shared resolver ------------------------------------------------------
 
 
@@ -177,7 +144,7 @@ def _hits(names: set[str]) -> list[str]:
 
 def _import_scanned_files() -> list[Path]:
     files: list[Path] = []
-    for root in IMPORT_SCAN_ROOTS:
+    for root in SCAN_ROOTS:
         base = REPO / root
         if base.is_dir():
             files.extend(p for p in base.rglob("*") if p.suffix in CODE_SUFFIXES and p.resolve() != SELF)
@@ -227,10 +194,10 @@ def test_every_dynamic_allowance_still_matches_a_site() -> None:
 @pytest.mark.parametrize(
     "planted",
     [
-        {"src/senselab/utils/venv_lock.py": {"<dynamic:other_name>": 1}},
-        {"src/senselab/utils/no_such_module.py": {"<dynamic:x>": 1}},
-        {"src/senselab/__init__.py": {"<dynamic:module>": 1}},
-        {"src/senselab/utils/venv_lock.py": {"<dynamic:module_name>": 2}},
+        {"packages/senselab-worker/src/senselab_worker/launch.py": {"<dynamic:other_name>": 1}},
+        {"packages/senselab-core/src/senselab_core/no_such_module.py": {"<dynamic:x>": 1}},
+        {"packages/senselab-core/src/senselab_core/__init__.py": {"<dynamic:module>": 1}},
+        {"packages/senselab-worker/src/senselab_worker/launch.py": {"<dynamic:argv[1]>": 2}},
     ],
 )
 def test_a_dead_dynamic_allowance_is_reported(planted: dict[str, dict[str, int]]) -> None:
@@ -240,18 +207,33 @@ def test_a_dead_dynamic_allowance_is_reported(planted: dict[str, dict[str, int]]
     assert dead_dynamic_entries({**DYNAMIC_ALLOWED, **planted}) == expected
 
 
+def modules_at_moved_paths(paths: list[Path]) -> list[str]:
+    """Each of ``paths`` whose dotted module name, or a package it is inside, is a moved module's old name."""
+    return sorted(
+        f"{path.relative_to(REPO).as_posix() if path.is_relative_to(REPO) else path}: {name}"
+        for path in paths
+        for name in [_module_name(path)[0]]
+        if _hits({name})
+    )
+
+
 @pytest.mark.logic
-@pytest.mark.parametrize("module", sorted(TOMBSTONES))
-def test_tombstones_hold(module: str) -> None:
-    """A moved module has no file at its old path and no importable spec."""
-    old = REPO / TOMBSTONES[module]
-    assert not old.exists()
-    assert not old.with_suffix("").exists()
-    try:
-        spec = importlib.util.find_spec(module)
-    except ModuleNotFoundError:
-        spec = None
-    assert spec is None
+def test_no_module_lives_at_a_moved_path() -> None:
+    """No source under the scanned roots is, or sits inside, a module at a moved module's old dotted name."""
+    assert modules_at_moved_paths(_import_scanned_files()) == []
+
+
+@pytest.mark.logic
+def test_a_module_planted_at_a_moved_path_is_found(tmp_path: Path) -> None:
+    """A shim at the old path is found by its package markers; the same file outside a ``senselab`` package is not."""
+    _tree(tmp_path)
+    shim = _write(tmp_path, "senselab/utils/file_lock.py", "from senselab_core.runtime.locks import *\n")
+    inner = _write(tmp_path, "senselab/utils/cuda_probe/__init__.py", "")
+    loose = _write(tmp_path, "elsewhere/file_lock.py", "")
+    assert [h.rpartition(": ")[2] for h in modules_at_moved_paths([shim, inner, loose])] == [
+        "senselab.utils.cuda_probe",
+        "senselab.utils.file_lock",
+    ]
 
 
 def _write(base: Path, rel: str, text: str) -> Path:

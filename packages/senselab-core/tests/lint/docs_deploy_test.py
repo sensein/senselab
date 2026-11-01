@@ -7,9 +7,12 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[3] / ".github" / "scripts" / "docs-deploy.sh"
+SCRIPT = Path(__file__).resolve().parents[4] / ".github" / "scripts" / "docs-deploy.sh"
 
-pytestmark = pytest.mark.skipif(shutil.which("git") is None or shutil.which("bash") is None, reason="needs git and bash")
+pytestmark = [
+    pytest.mark.logic,
+    pytest.mark.skipif(shutil.which("git") is None or shutil.which("bash") is None, reason="needs git and bash"),
+]
 
 
 def _git(cwd: Path, *args: str) -> str:

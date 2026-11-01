@@ -67,8 +67,8 @@ def undeclared_imports(graph: grimp.ImportGraph, roots: set[str], allowed: set[s
     return externals - allowed - set(sys.stdlib_module_names)
 
 
-REPOSITORY_ROOTS = {"senselab", "scripts"}
-"""Root packages outside ``packages/``: the 1.x tree and the repository scripts, which the digest contract covers."""
+REPOSITORY_ROOTS = {"scripts"}
+"""Root packages outside ``packages/``: the repository scripts, which the digest contract covers."""
 
 
 @pytest.mark.logic

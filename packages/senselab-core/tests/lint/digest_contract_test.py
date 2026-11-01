@@ -30,9 +30,8 @@ MEMBER_RULES = ("TID251", "B009", "S102", "S307", "F403")
 OUT_OF_GRAPH = {
     "packages/senselab-core/hatch_pin_loader.py",
     "packages/senselab-worker/scripts/unicode_table.py",
-    "src/senselab/utils/data/network_guard/sitecustomize.py",
 }
-"""Production files no import-linter root reaches: a build hook, the floor-interpreter table generator, a data file."""
+"""Production files no import-linter root reaches: a build hook and the floor-interpreter table generator."""
 
 
 def _contract() -> configparser.SectionProxy:
@@ -85,13 +84,13 @@ def _broken(output: str) -> set[str]:
 
 
 def _stubs(base: Path) -> None:
-    for pkg in ("senselab", "senselab/zz", "senselab_core", "senselab_core/runtime"):
+    for pkg in ("senselab_core", "senselab_core/zz", "senselab_core/runtime"):
         _write(base, f"{pkg}/__init__.py", "")
     _write(base, "scripts/zz_clean.py", "import json\n")
 
 
 XG1_IMPORTS = {
-    "senselab/zz/probe_a.py": (
+    "senselab_core/zz/probe_a.py": (
         """
         import hashlib, json
         def record_id(x):
@@ -100,7 +99,7 @@ XG1_IMPORTS = {
         "hashlib",
     ),
     "scripts/zz_probe.py": ("import hmac\nhmac.new(b'k', b'm', 'sha256')\n", "hmac"),
-    "senselab/zz/raw.py": (
+    "senselab_core/zz/raw.py": (
         "import json\nfrom senselab_worker import _raw_digest\n"
         "_raw_digest.bytes_digest('npy@1', json.dumps(1).encode())\n",
         "senselab_worker._raw_digest",
@@ -138,17 +137,17 @@ XG2_SPELLINGS = {
 
 @pytest.mark.contract
 def test_xg1_xg2_every_planted_digest_import_breaks_the_contract(tmp_path: Path) -> None:
-    """Each XG-1 and XG-2 spelling, planted in 1.x, in a former 2.x owner or in a script, is reported by import."""
+    """Each XG-1 and XG-2 spelling, planted in a package module, a former owner or a script, is reported."""
     _stubs(tmp_path)
     expected = set()
     for rel, (source, module) in XG1_IMPORTS.items():
         _write(tmp_path, rel, source)
         expected.add(f"{rel.removesuffix('.py').replace('/', '.')} -> {module}")
     for name, body in XG2_SPELLINGS.items():
-        _write(tmp_path, f"senselab/zz/xg2_{name}.py", f"import json\nx = m = None\n{body}\n")
+        _write(tmp_path, f"senselab_core/zz/xg2_{name}.py", f"import json\nx = m = None\n{body}\n")
         imported = re.match(r"(?:from |import )(\w+)", body)
         assert imported
-        expected.add(f"senselab.zz.xg2_{name} -> {imported.group(1)}")
+        expected.add(f"senselab_core.zz.xg2_{name} -> {imported.group(1)}")
     _write(tmp_path, "senselab_core/runtime/provenance.py", "import hashlib\nhashlib.sha256(b'')\n")
     expected.add("senselab_core.runtime.provenance -> hashlib")
     result = _lint_imports(tmp_path)
@@ -160,7 +159,7 @@ def test_xg1_xg2_every_planted_digest_import_breaks_the_contract(tmp_path: Path)
 def test_the_contract_passes_a_tree_with_no_digest_import(tmp_path: Path) -> None:
     """The planted tree without a digest import keeps the contract, so the reports above are the plants."""
     _stubs(tmp_path)
-    _write(tmp_path, "senselab/zz/clean.py", "import json\nfrom senselab_worker.digest import identity_digest\n")
+    _write(tmp_path, "senselab_core/zz/clean.py", "import json\nfrom senselab_worker.digest import identity_digest\n")
     result = _lint_imports(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -169,9 +168,9 @@ def test_the_contract_passes_a_tree_with_no_digest_import(tmp_path: Path) -> Non
 def test_an_allowance_that_matches_no_import_fails_the_contract(tmp_path: Path) -> None:
     """An `ignore_imports` entry naming an import that does not exist is an error, so no allowance is dead."""
     _stubs(tmp_path)
-    result = _lint_imports(tmp_path, extra_ignore="senselab.zz.gone -> hashlib", alerting="error")
+    result = _lint_imports(tmp_path, extra_ignore="senselab_core.zz.gone -> hashlib", alerting="error")
     assert result.returncode != 0
-    assert "senselab.zz.gone -> hashlib" in result.stdout + result.stderr
+    assert "senselab_core.zz.gone -> hashlib" in result.stdout + result.stderr
 
 
 def _ruff() -> str:
@@ -242,10 +241,12 @@ XG1_MEMBERS = {
 
 
 @pytest.mark.contract
-@pytest.mark.parametrize("filename", ["src/senselab/zz/probe.py", "packages/senselab-core/src/senselab_core/zz.py"])
+@pytest.mark.parametrize(
+    "filename", ["packages/senselab-worker/src/senselab_worker/zz.py", "packages/senselab-core/src/senselab_core/zz.py"]
+)
 @pytest.mark.parametrize("spelling", sorted({**XG3_SPELLINGS, **XG1_MEMBERS}))
 def test_xg1_xg3_every_planted_member_spelling_is_banned(spelling: str, filename: str) -> None:
-    """Each dynamic-import, name-based UUID or third-party hash spelling is reported in 1.x and 2.x code alike."""
+    """Each dynamic-import, name-based UUID or third-party hash spelling is reported in either package."""
     source = {**XG3_SPELLINGS, **XG1_MEMBERS}[spelling]
     assert _ruff_codes(f"import json\n{source}\n", filename), source
 
@@ -278,7 +279,6 @@ def test_every_marked_member_site_still_needs_its_mark() -> None:
             "--output-format",
             "json",
             "packages",
-            "src",
             "scripts",
         ],
         capture_output=True,
@@ -315,7 +315,7 @@ def _graph_files() -> set[str]:
         print(json.dumps(files))
         """
     )
-    source_roots = (REPO, REPO / "src", *sorted((REPO / "packages").glob("*/src")))
+    source_roots = (REPO, *sorted((REPO / "packages").glob("*/src")))
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(str(p) for p in source_roots)}
     result = subprocess.run(
         [sys.executable, "-c", code, *roots], cwd=REPO, env=env, capture_output=True, text=True, timeout=300
@@ -328,10 +328,10 @@ def _graph_files() -> set[str]:
 
 @pytest.mark.contract
 def test_every_production_file_is_in_the_contract_graph() -> None:
-    """Every production `.py` under `packages/`, `src/` and `scripts/` is a module the contract sees, or listed."""
+    """Every production `.py` under `packages/` and `scripts/` is a module the contract sees, or listed."""
     production = {
         p.relative_to(REPO).as_posix()
-        for root in ("packages", "src", "scripts")
+        for root in ("packages", "scripts")
         for p in (REPO / root).rglob("*.py")
         if "tests" not in p.relative_to(REPO).parts
         and not p.name.endswith("_test.py")

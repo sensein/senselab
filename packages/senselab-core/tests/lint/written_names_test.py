@@ -1,7 +1,7 @@
 """Every file written under a storage root is named by a listed grammar, and nothing writes by another API.
 
 The modules that write under a storage root are `SCANNED`: the store, fetch cache, locks, storage, provenance, BEP-028
-and run-manifest modules, and 1.x `reproduce.build` and `reproduce.cache`. The runtime modules' `WRITTEN_NAMES`
+and run-manifest modules. The runtime modules' `WRITTEN_NAMES`
 (with `storage.WRITTEN_NAMES`) are the list of grammars. In every scanned module, each call to a `StorageDir` write
 method passes `grammar=` naming one of those grammars, and no other call writes, renames, links, removes, makes
 directories, changes modes or times, or opens a file for writing (`os`, `io`, `shutil`, `tempfile`, builtin `open`
@@ -20,9 +20,8 @@ import pytest
 from senselab_core.runtime import fetch, locks, revision, storage, store
 
 REPO = Path(__file__).resolve().parents[4]
-RESOLVER_PATH = REPO / "src" / "tests" / "utils" / "import_resolver_fixture.py"
+RESOLVER_PATH = Path(__file__).with_name("import_resolver_fixture.py")
 RUNTIME = REPO / "packages" / "senselab-core" / "src" / "senselab_core" / "runtime"
-REPRODUCE = REPO / "src" / "senselab" / "utils" / "reproduce"
 GRAMMAR_MODULES: dict[str, ModuleType] = {
     "storage": storage,
     "store": store,
@@ -34,8 +33,6 @@ SCANNED: dict[str, Path] = {
     **{name: RUNTIME / f"{name}.py" for name in GRAMMAR_MODULES},
     "provenance": RUNTIME / "provenance.py",
     "bep028": RUNTIME / "bep028.py",
-    "reproduce.build": REPRODUCE / "build.py",
-    "reproduce.cache": REPRODUCE / "cache.py",
 }
 WRITE_METHODS = frozenset({"open_new", "write_new", "write_atomically", "symlink", "link", "rename", "open_or_create"})
 RAW_FUNCTIONS = frozenset(
@@ -78,38 +75,12 @@ ALLOWED_RAW: dict[tuple[str, str], dict[str, int]] = {
     ("storage", "set_mode"): {"os.fchmod": 1},
     ("bep028", "write_bep028_files"): {".mkdir": 1},
     ("fetch", "_urlopen"): {".open": 1},
-    ("reproduce.build", "_copy_verified"): {".mkdir": 1, "shutil.copyfile": 1},
-    ("reproduce.build", "_place"): {
-        "os.chmod": 1,
-        "os.link": 1,
-        "os.replace": 1,
-        "os.unlink": 1,
-        "tempfile.mkstemp": 1,
-    },
-    ("reproduce.build", "_store"): {".mkdir": 1},
-    ("reproduce.build", "_unpack"): {".chmod": 1, ".mkdir": 1},
-    ("reproduce.build", "_write_atomic"): {"os.chmod": 1, "os.replace": 1, "os.unlink": 1, "tempfile.mkstemp": 1},
-    ("reproduce.build", "base_environment"): {".mkdir": 2},
-    ("reproduce.build", "build_wheel"): {".mkdir": 1, "tempfile.TemporaryDirectory": 1},
-    ("reproduce.build", "fetch_sdist"): {".mkdir": 1, "os.replace": 1, "os.unlink": 1, "tempfile.mkstemp": 1},
-    ("reproduce.build", "safe_extract"): {".mkdir": 1},
-    ("reproduce.build", "stage_wheel"): {".mkdir": 1, ".write_bytes": 1},
-    ("reproduce.cache", "_fsync_dir"): {"os.open": 1},
-    ("reproduce.cache", "_remove"): {"os.unlink": 1, "shutil.rmtree": 1},
-    ("reproduce.cache", "_wipe_keeping"): {".mkdir": 1, "os.rename": 2},
-    ("reproduce.cache", "claim"): {".mkdir": 1},
-    ("reproduce.cache", "link_run"): {".mkdir": 1, ".unlink": 1, "os.replace": 1, "os.symlink": 1},
-    ("reproduce.cache", "reset_result_dir"): {".mkdir": 1, "shutil.rmtree": 1},
-    ("reproduce.cache", "write_summary"): {".unlink": 1, "os.open": 1, "os.replace": 1},
 }
 """Raw calls allowed outside `StorageDir`, by module and function, each with how many sites it may have.
 
 - `storage.set_mode` changes a mode through the descriptor it is given.
 - `fetch._urlopen`: `.open` is the HTTPS opener's request, not a file.
 - `bep028.write_bep028_files` creates the caller's `prov/` directory; its files go through `write_atomically`.
-- `reproduce.build.*` and `reproduce.cache.*`: 1.x writes by path in the reproduce trees (sdist and wheel caches,
-  venv bases, results roots and run links); moving them onto `StorageDir` is the same 1.x cleanup. Their locks
-  already go through `SharedFileLock` (`build.file_lock`, `cache.claim`).
 
 A new raw write anywhere in `SCANNED`, or one more site of a listed call, fails the check.
 """
