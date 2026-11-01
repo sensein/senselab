@@ -119,10 +119,31 @@ run manifest. Owner decision D-2 ([`decisions-2026-11-01.md`](../decisions-2026-
   ([`rulings.md`](../rulings.md)) introduced during Phase 1 hardening, and the negative-timeout
   (unbounded) and shared modes that only 1.x callers used. Those were a change of lock semantics that no
   amendment recorded; the Decision chose rename and `O_EXCL` only and rejected fencing.
-- **A lock is a lease.** It is taken by an `O_EXCL` create or link of the lease file relative to the
-  directory's descriptor, released by removing it, and judged stale from its timestamp on the storage
-  clock. A stale lease is broken by renaming it aside, which is atomic, so two breakers cannot both win.
-  Every wait is bounded. Correctness still rests on idempotence, not on the lock.
+- **A lock is a lease.** The lease is the file `<name>.lease`. It is taken by writing the holder's
+  identity to a private temporary, fsyncing it, and linking it at the name with an `O_EXCL` link relative
+  to the directory's descriptor; the link fails if anything is at the name. A link error is judged by the
+  temporary's link count, so a lost NFS reply does not lose a lease that was taken. The lease is never
+  rewritten, so its identity is whole whenever it exists.
+- **Stale and broken.** A lease is stale when its age passes `stale_after`. Age is read on the storage
+  clock (`fs_now()` against the lease's mtime) once per distinct lease, and then grows by local monotonic
+  elapsed time. Anything but a regular file at the name is quarantined, not judged.
+- **Identity of a lease.** A holder owns its lease while the file at the name carries the uuid token it
+  wrote into the identity record; `owns()` and release match by that token, never by inode. A breaker
+  identifies the lease it judged stale by device, inode and mtime, which rename keeps. Inode numbers alone
+  are not identity: ext4 reuses a freed inode number at once, so a new lease can carry the number of the one
+  just broken, while its mtime is fresh and a judged-stale lease is older than `stale_after`.
+  (`runtime/locks.py`: `_carries`, `_is`.)
+- **Broken or released by rename.** Both rename the name to a fresh uuid and compare the moved file with
+  the expected one (by token for a holder, by device, inode and mtime for a breaker), removing it only on a
+  match; a regular file moved by mistake is linked back. The stale
+  lease itself is therefore removed exactly once. POSIX has no conditional rename, so a narrow window
+  remains: a late breaker that judged an old lease can rename a newer lease aside before it can link it
+  back, and another taker may take the empty name. The displaced holder sees `owns()` false and its
+  release logs it. The overlap is duplicate work, which is within "correctness by idempotence".
+- **Bounded.** `timeout` and `stale_after` are at least 0. A wait polls and ends in `LeaseTimeout`
+  naming the holder; a directory that refuses the temporary, or a lease that cannot be judged or moved,
+  raises `LeaseUnavailable` naming the path and its owner's remedy. Correctness still rests on
+  idempotence, not on the lock.
 - **Kept from the 2026-10-31 amendment**, because they are path safety and not lock semantics: the
   descriptor walk with `O_NOFOLLOW`, no modification in place, quarantine of wrong kinds, and private
   staging.

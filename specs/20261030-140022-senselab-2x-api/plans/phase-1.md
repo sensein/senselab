@@ -85,7 +85,7 @@ All 1.x behaviour stays unchanged.
    `test_mirror_hash_mismatch_refused`).
 5. **Incomplete rewires.** No import of a moved 1.x module path may remain. That includes strings
    inside worker scripts executed in isolated envs and AST-guard allowlists. Pinned in Tasks 7 and 9
-   (`test_no_moved_module_paths_remain`).
+   (`test_no_moved_module_paths_remain`; cut by D-1, 2026-11-01).
 
 ## File Structure
 
@@ -519,7 +519,7 @@ tests) plus the 1.x suite for the callers.
 
 **Interfaces:**
 - Produces:
-  - `senselab_core.runtime.locks.SharedFileLock` and `lock_holder`;
+  - `senselab_core.runtime.locks.Lease`, `LeaseTimeout` and `LeaseUnavailable`;
   - `senselab_core.runtime.revision.resolve_revision`, `RevisionResolutionError`, `run_id`,
     `record_resolution`;
   - all signatures unchanged.

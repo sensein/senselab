@@ -379,8 +379,7 @@ H6 and H7 can run at any time. H8 is last.
   `packages/senselab-core/src/senselab_core/runtime/data/store_policy.yaml`.
 - Modify: `packages/senselab-core/src/senselab_core/runtime/{store,fetch}.py`.
 - Test: `packages/senselab-core/tests/runtime/{store,fetch}_test.py`,
-  `packages/senselab-core/tests/runtime/addressed_formats_test.py` (generated),
-  `packages/senselab-core/tests/lint/destructive_ops_test.py`.
+  `packages/senselab-core/tests/runtime/addressed_formats_test.py` (generated).
 
 **Interfaces:**
 - `storage.py`:
@@ -498,14 +497,12 @@ H6 and H7 can run at any time. H8 is last.
   @pytest.mark.logic
   def test_redirect_to_non_https_refused(): ...
   ```
-  Lint (`destructive_ops_test.py`, logic tier): parse every module under `packages/*/src`. For each
-  `except` handler whose type is `OSError`, a subclass of it, `Exception`, `BaseException` or bare,
-  fail if its body, or a same-module function it calls (followed transitively), calls `os.rename`,
-  `os.replace`, `os.unlink`, `os.remove`, `os.rmdir`, `Path.unlink`, `Path.rename`, `Path.rmdir`,
-  `shutil.rmtree`, `shutil.move`, `remove_owned` or a method named `_quarantine`.
+  No lint enforces this: `destructive_ops_test.py` was deleted (D-1, H-R53), since it only enumerated
+  call sites. The behaviour is covered by the store and fetch tests above.
 - [ ] **Step 2:** `uv run pytest packages/senselab-core/tests/runtime/store_test.py packages/senselab-core/tests/runtime/fetch_test.py packages/senselab-core/tests/runtime/addressed_formats_test.py packages/senselab-core/tests/lint -v` fails.
-- [ ] **Step 3: Implement.** Probe the R-98 lock and clock items while in these files: `SharedFileLock`'s
-  non-atomic holder write, and staleness judged by mtime against the local clock. Add a failing test
+- [ ] **Step 3: Implement.** Probe the R-98 lock and clock items while in these files: the old
+  `SharedFileLock`'s non-atomic holder write, and staleness judged by mtime against the local clock
+  (the class is gone; `Lease` replaced it under D-2). Add a failing test
   for each that reproduces. Fix a reproduced one by the same invariant (atomic write; staleness from
   the store's own clock via a touched sentinel). Record each outcome in R-98.
 - [ ] **Step 4:** The scoped tests pass; then `uv run pytest packages -m "logic or contract" -q`.
@@ -526,8 +523,7 @@ H6 and H7 can run at any time. H8 is last.
   ownership).
 - Test: `packages/senselab-worker/tests/{launch,codec}_test.py`;
   `packages/senselab-core/tests/runtime/worker_client_test.py`;
-  `packages/senselab-core/tests/runtime/worker_lifecycle_contract_test.py` (new);
-  `packages/senselab-core/tests/lint/owned_deletion_test.py` (new).
+  `packages/senselab-core/tests/runtime/worker_lifecycle_contract_test.py` (new).
 - Fixtures (new backends under `packages/senselab-core/tests/runtime/backends/`): `forking_backend.py`,
   `stdin_reading_backend.py`, `subdir_backend.py`, `slow_reader_backend.py`.
 
@@ -617,9 +613,9 @@ H6 and H7 can run at any time. H8 is last.
   × {normal close, timeout, crash, `close()` from another thread}. For each, after `close()`: no
   process of the group remains, the call returned within its bound, and the client's parent
   directory holds exactly the files it held before.
-  The lint (`owned_deletion_test.py`, logic tier) fails on any call to `os.unlink`, `os.remove`,
-  `Path.unlink`, `shutil.rmtree` or `os.rmdir` in `packages/*/src` outside `ownership.remove_owned`.
-  `os.rmdir` is also allowed in `worker_client._shutdown`, on the directory the client created.
+  `owned_deletion_test.py` was deleted (D-1, H-R53): it only enumerated call sites. The behavioural
+  check is `tests/runtime/owned_names_test.py`, which calls the runtime and checks that it refuses
+  foreign names. `os.rmdir` is allowed in `worker_client._shutdown`, on the directory the client created.
 - [ ] **Step 2:** `uv run pytest packages/senselab-worker/tests packages/senselab-core/tests/runtime/worker_client_test.py packages/senselab-core/tests/runtime/worker_lifecycle_contract_test.py packages/senselab-core/tests/lint -v` fails.
 - [ ] **Step 3: Implement.** Move every existing deletion call in `packages/*/src` to `remove_owned`,
   so the lint passes: store and fetch staging cleanup, and the locks module. Probe the R-98 item "a `.pth`/sitecustomize print before
@@ -745,10 +741,11 @@ H6 and H7 can run at any time. H8 is last.
   `scripts/fixture_budget_allowlist.txt` (gains sha256 and size columns), `.importlinter`,
   `.github/workflows/tests.yaml`.
 - Create: `packages/conftest.py`, `packages/senselab-core/tests/lint/{dependencies,ci_tiers}_test.py`,
-  `scripts/data/fixture_budget.yaml` (code-file byte cap, with derivation).
+  `scripts/data/fixture_budget.yaml` (the two docs.md data-policy limits, each with its derivation).
 
 **Interfaces:**
-- Moved-module guard. `_imports(path: Path) -> set[str]` returns absolute module names:
+- Moved-module guard. **Superseded 2026-11-01 by D-1:** `moved_modules_test.py` and its tests were deleted in `f7026f54`; no successor.
+  `_imports(path: Path) -> set[str]` returned absolute module names:
   - sources are `.py` and `.pyi` files, and the code cells of `.ipynb` files;
   - it resolves relative imports against the file's package;
   - it covers `import a.b`, `from a import b` (as `a.b` and `a`) and `from a import *`;
@@ -758,7 +755,8 @@ H6 and H7 can run at any time. H8 is last.
   - it covers attribute chains rooted at an imported moved package (`senselab.utils.file_lock.X`).
   `TOMBSTONES` maps each moved module to its old file path. The test asserts the file does not exist
   and `importlib.util.find_spec(old)` is `None`.
-- Fixture budget:
+- Fixture budget. **Superseded 2026-11-01 by D-1 and H-R53:** there is no allowlist and no comparison with the freeze tag. `scripts/check_fixture_budget.py`
+  reads two limits (256 KB per file, 2 MB of data under `packages/`, each with its derivation) from `scripts/data/fixture_budget.yaml` and refuses a tracked symlink or submodule. Tests: `check_fixture_budget_test.py`. As planned:
   - the allowlist line format is `<path>\t<sha256>\t<bytes>`;
   - every entry must exist in `git ls-tree -r freeze-1x-2026-10-30` with the same path, and its
     current size must be ≤ the frozen size, with matching sha256;
@@ -768,10 +766,10 @@ H6 and H7 can run at any time. H8 is last.
 - Tier hook (`packages/conftest.py`). `pytest_collection_modifyitems` collects, for each item under
   `packages/`, the set of its marks in `{"logic", "contract", "limits", "usecase", "env"}`. If a set
   does not have exactly one member, it raises `pytest.UsageError` listing the offending node ids.
-- `ci_tiers_test.py`: parses `.github/workflows/tests.yaml` and asserts that the union of the `-m`
+- `ci_tiers_test.py`: parses `.github/workflows/2x-tests.yaml` (the 2.x workflow since #620/#621) and asserts that the union of the `-m`
   expressions of jobs running on `packages` selects every tier.
 - `dependencies_test.py`:
-  - `test_every_package_is_a_root_package`: the import names under `packages/*/src/*` equal
+  - `test_every_package_is_a_root_package`: the import names under `packages/*/src/*` plus `scripts` equal
     `root_packages` in `.importlinter`;
   - `test_packages_import_only_declared_dependencies`: for each package, the external modules in its
     grimp graph are a subset of its `[project.dependencies]` import names, `sys.stdlib_module_names`
@@ -779,9 +777,9 @@ H6 and H7 can run at any time. H8 is last.
 - `.importlinter` adds a `layers` contract: `senselab_core.cli | senselab_core.testing`,
   `senselab_core.runtime`, `senselab_core.kernel`, `senselab_worker`.
 - `tests.yaml`: adds `push: branches: [alpha, main, "2x/**"]`. The core job's selection covers
-  `logic or contract or limits`; `env` stays in `worker-floor`.
+  `logic or contract or limits`; `env` stays in `worker-floor`. **Superseded 2026-11-01 by H-R49 and #620/#621:** the 2.x jobs live in `2x-tests.yaml`; a PR runs `logic or contract`, limits run on the `limits` label and nightly, use cases nightly only (H-R54), and `env` runs in `core-env` and `worker-floor` (`testing.md` section 5).
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **Step 1: Write failing tests** (superseded 2026-11-01: the moved-module tests were cut by D-1, the fixture-budget tests were replaced by `check_fixture_budget_test.py` (D-1, H-R53), and `test_ci_selects_every_tier` became the `ci_tiers_test.py` cadence tests; the names below are the plan, not the code)
   - `test_relative_import_of_moved_module_is_found`, `test_importlib_concat_is_found`,
     `test_notebook_cell_import_is_found`, `test_star_import_is_found`, `test_pyi_is_scanned`,
     `test_tombstones_hold`. Each builds a temporary tree with one bypass from the report and asserts
@@ -878,8 +876,8 @@ reviews. The re-attack is an opus lead (effort higher) with sonnet subagents, ve
 
 The probe scripts were kept outside the repository in the adversarial round's scratch directory. The
 tests are rebuilt from the break column of `reviews/phase1-adversarial.md`, which gives each probe's
-inputs and wrong outcome. Each test is named `test_a<n>_<slug>` and asserts that the outcome no
-longer occurs. These pin the found cases. The invariants are pinned by H1–H7's contracts.
+inputs and wrong outcome. Each test was to be named `test_a<n>_<slug>` and to assert that the outcome no
+longer occurs. **Superseded 2026-11-01 by H-R49:** regressions are named by invariant and folded into the component test files; no test carries a review id. These pin the found cases. The invariants are pinned by H1–H7's contracts.
 
 | Report row | Regression test (asserts) | In-repo? |
 |---|---|---|

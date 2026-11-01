@@ -189,6 +189,7 @@ contradicts an earlier decision, or an owner correction did not land everywhere 
   files, drop the name-enforcing test (keep the A-row coverage as register rows naming tests), add
   `-m logic` as the default, rewrite `ci_tiers_test.py` to enforce testing.md's cadence, move policy checks to
   `scripts/check_*.py`, replace internal monkeypatches with injected seams. Record H-R49 in a tracked file.
+- **Status 2026-11-01: resolved by H11a (`fb1e774d`, `117a8641`, `621ad187`, `d574fe8e`) and H11b (`80b3aef4..5db856fa`).** Tests are named by invariant, the default run is `logic`, `ci_tiers_test.py` enforces the cadence, internal patches are replaced by seams and faults at the `os` boundary, and `tests/lint/internal_patches_test.py` guards the two declared child-only substitutions (`testing.md` section 3). H-R49 is recorded in `rulings.md`. Not resolved: further policy checks as `scripts/check_*.py`, cut back by D-1.
 
 ### F5 (Important, omitted) P-31's two checks are absent, and ids appear outside `specs/`
 

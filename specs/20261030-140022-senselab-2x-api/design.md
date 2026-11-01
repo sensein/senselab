@@ -661,15 +661,16 @@ checks, over `dist/` before upload:
 Member-set completeness, sdist rebuild identity, strict `WHEEL`/`METADATA` parsing, per-floor installs,
 cache isolation and import-every-module are specified at the first 2.x release.
 
-**Fixture budget** (docs.md): at most 256 KB per committed file and 2 MB in total, checked in
-pre-commit over the git index. A symlink or submodule fails.
+**Fixture budget** (docs.md): at most 256 KB per committed file and 2 MB in total over `packages/`, checked
+in pre-commit over the git index. A symlink or submodule fails.
 
 **Workflow expressions.** A guard parses every `${{ }}` in the workflows and composite actions and
 refuses one whose value an outsider could choose (`env.*`, pull-request text, an unknown function).
 Only literals, trusted contexts and functions over them pass.
 
 **Guards are the design's, not a list of past bypasses** (amended 2026-11-01, D-1). CI keeps the
-import-linter contracts (layers, worker independence, `packages-not-1x`, `digests-are-tagged`), the
+import-linter contracts (layers, worker independence, `packages-not-1x`, `digests-are-tagged`; the digest
+contracts cover the packages and the 2.x scripts only, and ruff excludes the 1.x scripts), the
 identifier check (P-28), the fixture budget and the workflow-expression guard. It has no spelling-based
 lint that chases in-repo bypasses, and no test whose only job is to make another test exist.
 

@@ -59,7 +59,7 @@ Boundary rule: a feature goes to pydra when it means something for a task that i
   Items are plan fragments (job, input refs, env, tunables), never pickled objects.
 - **Workers:** `senselab execute --pool <dir> --classes <list>` runs inside the env the queue
   needs. A worker claims a batch from one queue, runs it, commits per-item results by atomic
-  rename, and renews its lease.
+  rename, and renews its lease (design item for Phase 3: `Lease` has no renewal, so a holder past `stale_after` can be broken).
 - **Batches return a result per item.** A failing batch is bisected so one item cannot fail its
   batch-mates.
 

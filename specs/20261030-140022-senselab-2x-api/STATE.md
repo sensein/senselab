@@ -19,7 +19,7 @@ task or decision changes state. Newest log entries go first.
 - **Owner's words:** [`owner-requests.md`](owner-requests.md), verbatim, items 1..38. The authority.
 - **Owner decisions:** [`decisions-2026-11-01.md`](decisions-2026-11-01.md), D-1..D-7 and the items that
   follow from them without a further choice.
-- **Controller rulings:** [`rulings.md`](rulings.md), R1..R42 and H-R1..H-R52 with their status. They are
+- **Controller rulings:** [`rulings.md`](rulings.md), R1..R42 and H-R1..H-R54 with their status. They are
   not design authority; a ruling that changes a decision is in force only through an ADR amendment
   (ADR-000).
 - **Reviews:** [`reviews/full-review-2026-11-01/`](reviews/full-review-2026-11-01/) (five reviews and
@@ -61,37 +61,46 @@ PR - clarify the decisions"):
 |---|---|
 | Design | accepted 2026-10-30; amended 2026-10-31 and 2026-11-01 in #617 |
 | 0: freeze marker | done |
-| 1: kernel, worker runtime, identity, store, data fetch | T0–T15a done. Hardening done: H1–H8 (H8a–c), the H9 series (H9a–f, H9-compat, H9-collect, H9-cleanup, H9-ci) and H10. 2.x CI first fully green at `97b617c5`. Full review done 2026-11-01; its decisions are being applied (next actions). |
+| 1: kernel, worker runtime, identity, store, data fetch | T0–T15a done. Hardening done: H1–H8 (H8a–c), the H9 series (H9a–f, H9-compat, H9-collect, H9-cleanup, H9-ci), H10, **H11a** and **H11b** (including fix round 1). 2.x CI first fully green at `97b617c5`; Linux CI green after D-2 fix round 1 (`b76681a9`). Full review done 2026-11-01; its decisions are applied. Remaining: the "follows" items and the Phase 1 exit (next actions). |
 | 2–5 | not started |
 | pydra PRs (A0…K1) | proposed in #891; none implemented |
 
 ## Next actions, in order
 
-1. Merge `senselab-2x-api` into `2x/phase-1`, so the code PR carries the amended specs. From then on, no
-   spec edits on `2x/phase-1`.
-2. **D-6:** restore `src/` to `19834fdd` (`git checkout 19834fdd -- src`, one commit), then merge
-   `origin/alpha`. Check `git diff origin/alpha -- src` is empty.
-3. **D-1:** cut the guard layer: delete the digest-binding and strict-mode checks, the written-names lint,
-   the dynamic-import allowance machinery, `moved_modules_test.py` and every test that requires
-   finding-id names. Keep the import contracts, the identifier check, the fixture budget at docs.md's
-   numbers and the workflow-expression guard. Add the advisory agent prose review job.
-4. **D-2:** revert the lock to ADR-003's lease (rename and `O_EXCL`, bounded waits, stale lease renamed
-   aside); remove `flock`, heartbeat, holder takeover, negative timeout and shared mode. Keep the
-   descriptor walk, no in-place modification, quarantine and private staging.
-5. **D-5:** trim `scripts/release_gate.py` and its tests to version grammar, exact sibling pins and
-   build-and-install from `dist/`.
-6. **H-R49:** test conformance: regressions renamed by invariant and folded into component test files, no
-   round ids in tests, default tier and CI cadence per `testing.md`, wall-clock checks into `limits`,
-   internal monkeypatches replaced by seams, policy checks as `scripts/check_*.py`.
-7. **The "follows" items** of the decision record: portable model identity (A I-1), read
+Done on 2026-11-01: specs merged into `2x/phase-1` (`d90b5057`); **D-6** `src/` = `alpha` (`ffdf06e6`,
+merge `a2be7b27`); **D-1** guard layer cut and advisory prose review added (`f7026f54`, `b2db96be`;
+needs the `ANTHROPIC_API_KEY` repository secret); **D-5** release gate trimmed (`a3ea1894`); **D-2** locks are leases by rename and `O_EXCL` (`5a325c29..12853f8b`; ADR-003 amended to
+match what was built), plus **fix round 1** (`b76681a9`): a holder is identified by its uuid token and a judged lease by device, inode and mtime, because ext4 reuses inode numbers at once; Linux CI green; the D-1 fixture budget numbers (256 KB per file, 2 MB total) now live in
+`scripts/data/fixture_budget.yaml` with their derivations.
+
+1. **H-R49, done:** **H11a** (`fb1e774d`, `117a8641`, `621ad187`, `d574fe8e`, `7157ba7e`): regressions renamed by
+   invariant and folded into component test files, no review ids in tests, default tier `logic`, PRs run
+   logic + contract, limits on the `limits` label or nightly, use cases nightly only (H-R54), wall-clock
+   checks in `limits`. **H11b** (`80b3aef4..e47860c2`, `05369e68`, `c21d424f`, `7bf9f7e9`, `a0d6b949`) and its
+   **fix round 1** (`5db856fa`): internal monkeypatches replaced by seams (`Resolver`, `ResultStore(equivalence=)`,
+   `WorkerClient` constructor arguments) and faults injected at the `os` boundary; the only substitutions of
+   senselab internals are `to_wire` and `_wait_exit` in a spawned child, and an AST guard
+   (`tests/lint/internal_patches_test.py`) enforces it (`testing.md` section 3). Policy checks as
+   `scripts/check_*.py` remain for the rest of the forbidden list.
+2. **Next: the "follows" items** of the decision record: portable model identity (A I-1), read
    `DEFAULT_REUSE_POLICY` (Ru I-1), equivalence classes as data (A I-8), owners for the clock re-binding
    (A I-9) and the source-digest CI check (A I-10); audio decoding out of the kernel and whole-file
    hashing against ADR-005 (Ar F-3, A I-5, R-109); the pydra corrections (Ar F-5, F-6) and owners for the
    pydra PRs; one transient classifier (Ar F-7); the engineering and license gates (T F5–F7); the P-40
-   roster and worktree isolation; parked items moved into tracked registers (Ru I-11, I-12).
-8. **Phase 1 exit** (`plans/phase-1.md` Task 15, as amended): 2.x CI green; `src/` equals `alpha`; no 1.x
-   tests on the 2.x line; P-39 re-scan; `STATE.md` updated. Then merge #617 into `2.x` and retarget #619.
-9. **Phase 2:** ADR-010 (PROV-O JSON-LD store, `senselab:` vocabulary, token-family removal, export
+   roster and worktree isolation; a scheduled workflow on `alpha` (the default branch) that checks out `2.x` for nightly limits and use cases, landed as a `skip-release` PR (GitHub runs `schedule` only from the default branch); parked items moved into tracked registers (Ru I-11, I-12); lease renewal not yet implemented, owner:
+   execution phase (Phase 3), since `Lease` has no renewal and `execution.md` 3.2 says workers renew.
+3. **Then the Phase 1 exit** (`plans/phase-1.md` Task 15, as amended): 2.x CI green; `src/` equals `alpha`; no 1.x
+   tests on the 2.x line; P-39 re-scan; `STATE.md` updated. The ORCD full runs are **pending owner sign-in**. Run these on ORCD shared NFS scratch from a pinned checkout, in a submitted job
+   (never on login or claude-rc nodes), together with the full local-tier runs H11b did not make (the env tier and the later-boundary sweep): (a) `SENSELAB_WORK_POOL_NFS_DIR=<dir>` run of
+   `packages/senselab-core/tests/runtime/locks_test.py`, whose two `[nfs]` cases cover one taker and
+   concurrent breakers; (b) cross-node exclusion: processes on 2-4 nodes calling `record_resolution` with
+   distinct SHAs against one `SENSELAB_CACHE`, expecting one SHA, one manifest entry and no lease litter;
+   (c) lost-reply path: `link` EEXIST with `st_nlink == 2` under load; (d) clock skew: a lease planted on
+   one node is aged by `fs_now()` on another, within `acregmin`/`acregmax`, and the lstat pre-check is not
+   defeated by attribute caching; (e) stale-break race across nodes: one break log, and any "displaced"
+   warning matches a holder whose release logs it; (f) an unreadable 0o000 stale lease left by another
+   user in a group-writable run directory is still broken. Then merge #617 into `2.x` and retarget #619.
+4. **Phase 2:** ADR-010 (PROV-O JSON-LD store, `senselab:` vocabulary, token-family removal, export
    redaction) and the benchmark harness with its data manifest and smoke suite, alongside the tasks and
    backends of design §6.2.
 
@@ -107,6 +116,10 @@ PR - clarify the decisions"):
 
 ## Log
 
+- **2026-11-01 (D-2, H11a, H11b done):** locks are leases (D-2) with fix round 1 (`b76681a9`, Linux CI green);
+  H11a renamed and re-tiered the tests; H11b replaced internal patches with seams and guarded the rest
+  (fix round 1 `5db856fa`). Docs pass: ADR-003 identity wording, `testing.md` fault model and cadence,
+  register citations checked against `origin/2x/phase-1`, H-R53 wording. ORCD full runs await owner sign-in.
 - **2026-11-01 (decisions applied to specs):** owner decisions D-1..D-7 recorded. Specs moved from
   `2x/phase-1` into #617. ADR-003, ADR-006, ADR-009, design.md and docs.md restored to decisions, with
   dated amendments and amendment logs; ADR-007 and ADR-010 amended; ADR-000 gains the amendment rule;

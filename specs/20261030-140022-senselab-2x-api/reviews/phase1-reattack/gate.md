@@ -68,6 +68,7 @@ PyPI rejects tag/filename mismatches and duplicate Version headers; `uv publish 
 
 ## XG-12 (medium) moved-module guard: red at HEAD, and bypassable
 - At b42d3cf0 `src/tests/utils/moved_modules_test.py::test_no_moved_module_paths_remain` FAILS (run with --noconftest, no planted files): `packages/senselab-core/tests/adversarial/phase1_regression_test.py: senselab/utils/file_lock` (line 91, added by b42d3cf0). The guard excludes only its own file. Regression of the guard by the A-row tests.
+  - **Status 2026-11-01: resolved by D-1.** The guard (`moved_modules_test.py`) was deleted in `f7026f54`; there is no successor test.
 - Bypasses (p14.py): `importlib.import_module(".file_lock", "senselab.utils")`, `import_module(name=".model_revision", package="senselab.utils")`, `getattr(senselab.utils, "prov_store")` -> no hit. Non-`.py`/`.md` files (`.sh`, `.yaml`, pyproject entry points: `python -m senselab.utils.cuda_probe`) are never text-scanned.
 
 ## What held
