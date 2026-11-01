@@ -138,6 +138,10 @@ at the handshake.
   then `{"id": <request>, "done": <n>}` with `n` the number of items. A request with no items is
   answered by `done` alone. The host reads exactly that sequence; a line with the wrong `id`,
   `item`, kind or count is a protocol violation.
+- **Host line limit.** A client may take a `max_line_bytes` below `MAX_LINE_BYTES`. It bounds the
+  lines the client sends and, after the hello, the reply lines it accepts: a longer reply is
+  `LineTooLarge`, a `ProtocolError`, and the worker is discarded, since the worker budgets its
+  items against its own limit and cannot fail that item alone (R-123).
 - **Per-item budget.** An item whose result line would exceed `MAX_LINE_BYTES` is sent as that
   item's error, `{"type": "ResponseTooLarge", "fault": "resource", "gap": false, ...}`. Its
   batch-mates are unaffected. Large data travels as arrays.
@@ -191,6 +195,9 @@ at the handshake.
   for that item; on the host, before the request is sent.
 - The writer writes to a temporary name `.<uuid4 hex>.tmp` in `array_dir` and renames, so a
   reader never sees a partial file and equal arrays share one file.
+- A reference has exactly the four keys `path`, `sha256`, `dtype` and `shape`, and `shape` is a
+  list of `int`: before W-7, `shape: [4.0]` or `[true]` read as `[4]` or `[1]` by Python `==`, and
+  extra keys were ignored.
 - The reader rejects a path that is not `<sha256>.npy` directly in `array_dir`. It opens the file
   with `O_NOFOLLOW | O_NONBLOCK` and requires a regular file, so a symlink or a FIFO is an
   `ArrayIntegrityError` and never blocks. It reads in chunks against the request deadline,
@@ -264,7 +271,12 @@ at the handshake.
   and the group is the unit of kill. The host notices the worker's exit without reaping it
   (`waitid(WNOWAIT)` on Linux, a kqueue `NOTE_EXIT` on macOS) and reaps it only after the group has
   been signalled, so the group id cannot be reused by another process while the host may still
-  signal it. A worker whose exit has not been observed is held; after its exit, whether it is still
+  signal it. One wait does both: a reaper thread blocks in it, and every shutdown step asks the
+  same wait without blocking before trusting the thread's record. The asking covers a reaper
+  thread that cannot run, as during interpreter finalisation: at the Phase 1 exit (W-3) a client
+  leaked to interpreter exit waited out its stop, term and kill graces, about 15 s, for an exit the
+  thread never recorded, and logged the zombie group's EPERM as a survivor. A worker whose exit has
+  not been observed is held; after its exit, whether it is still
   unreaped is asked of `waitid(WNOHANG|WNOWAIT)` (Linux) or `ps -o ppid=` within 2 s (macOS). If it
   was reaped by someone else, or that cannot be told, the group is not signalled, which is logged,
   and every wait stays bounded. Signal errors other than "no such process" (and, on macOS, EPERM
