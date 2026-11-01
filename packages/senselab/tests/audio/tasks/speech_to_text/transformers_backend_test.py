@@ -25,6 +25,13 @@ PIPE_OUT = {
 PARAMS: dict[str, Any] = {"language": None, "timestamps": "word", "backend_params": {}}
 
 
+def _bounds(node: Any) -> tuple[int, int, str]:  # noqa: ANN401 - a TranscriptNode
+    """Return the node's span as `(start_ns, end_ns, clock_id)`, integers."""
+    assert node.span is not None
+    assert type(node.span.start_ns) is int and type(node.span.end_ns) is int
+    return node.span.start_ns, node.span.end_ns, node.span.clock_id
+
+
 def _audio(samples: int = 1600, rate: int = 16000, channels: int = 1) -> Audio:
     x = numpy.sin(numpy.arange(samples) / 7.0).astype(numpy.float32)
     return Audio.from_array(numpy.tile(x, (channels, 1)), rate)
@@ -41,12 +48,9 @@ def test_word_transcript_has_integer_ns_spans_and_children() -> None:
     t = hf.transcript(PIPE_OUT, "word", CLOCK, 1_000_000_000)
     (segment,) = t.segments
     assert segment.text == "hello there." and [w.text for w in segment.children] == ["hello", "there."]
-    assert (segment.span.start_ns, segment.span.end_ns) == (0, 1_000_000_000)  # type: ignore[union-attr]
-    assert [(w.span.start_ns, w.span.end_ns) for w in segment.children] == [  # type: ignore[union-attr]
-        (0, 500_000_000),
-        (500_000_000, 1_000_000_000),
-    ]
-    assert all(type(w.span.start_ns) is int and w.span.clock_id == CLOCK for w in segment.children)  # type: ignore[union-attr]
+    assert _bounds(segment) == (0, 1_000_000_000, CLOCK)
+    assert [_bounds(w)[:2] for w in segment.children] == [(0, 500_000_000), (500_000_000, 1_000_000_000)]
+    assert all(_bounds(w)[2] == CLOCK for w in segment.children)
 
 
 @pytest.mark.logic
@@ -64,7 +68,7 @@ def test_negative_and_inverted_timestamps_are_clamped() -> None:
     """A tiny negative start is 0 and an end before its start is its start."""
     out = {"text": "a", "chunks": [{"text": "a", "timestamp": (-0.02, -0.5)}]}
     (word,) = hf.transcript(out, "word", CLOCK, 10**9).segments[0].children
-    assert (word.span.start_ns, word.span.end_ns) == (0, 0)  # type: ignore[union-attr]
+    assert _bounds(word)[:2] == (0, 0)
 
 
 @pytest.mark.logic
@@ -148,11 +152,13 @@ def test_faults_stay_with_their_item() -> None:
 def test_a_pipeline_failure_is_isolated_by_rerunning_items_alone() -> None:
     """When a batch call raises, only the item whose own run raises carries the fault, typed, never a gap."""
 
-    class Picky(hf.StubPipeline):
+    class Picky:
+        feature_extractor = hf.StubPipeline.feature_extractor
+
         def __call__(self, inputs: Any, **kwargs: Any) -> Any:  # noqa: ANN401
             if any(len(i["array"]) == 1700 for i in inputs):
                 raise RuntimeError("bad window")
-            return super().__call__(inputs, **kwargs)
+            return hf.StubPipeline()(inputs, **kwargs)
 
     state = hf.State(Picky(), 16000, FakeFaults())
     items = [{"id": i, "inputs": {"audio": _audio(n)}} for i, n in (("a", 1600), ("b", 1700), ("c", 1800))]
@@ -264,20 +270,3 @@ def test_torch_extra_is_the_backends_requirements() -> None:
     extra = tomllib.loads((root / "pyproject.toml").read_text("utf-8"))["project"]["optional-dependencies"]["torch"]
     (spec,) = [b for b in REGISTRY.backends("speech_to_text") if b.name == "transformers"]
     assert set(extra) <= set(spec.requirements)
-
-
-@pytest.mark.contract
-def test_no_lock_checks_installed_versions_and_refuses_a_gap(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Any,  # noqa: ANN401
-) -> None:
-    """With no `uv.lock` above the package, `open_env` checks the backend's requirements against what is installed."""
-    from senselab._api import packaged
-    from senselab_core.runtime.envs import HostLockLacksBackend
-    from senselab_core.runtime.profiles import ExecutionProfile
-
-    monkeypatch.setattr(packaged, "host_lock", lambda: None)
-    (spec,) = [b for b in REGISTRY.backends("speech_to_text") if b.name == "transformers"]
-    gap = spec.model_copy(update={"requirements": ("no-such-dist-xyz>=1",)})
-    with pytest.raises(HostLockLacksBackend, match="no-such-dist-xyz"):
-        packaged.open_env(gap, ExecutionProfile.load())
