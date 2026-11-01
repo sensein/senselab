@@ -1,100 +1,128 @@
 # senselab 2.x: working state
 
 Read this first when resuming. Update it at the end of every work session, and whenever a phase,
-task or decision changes state. Newest entries go first in the log.
+task or decision changes state. Newest log entries go first.
 
-## Where things are
+## Branches and PRs
 
 | What | Where |
 |---|---|
-| Design branch (specs only) | `senselab-2x-api` → draft PR sensein/senselab#617 to `alpha` |
-| Durable worktree | `~/software/sensein/senselab-2x` (branch `senselab-2x-api`) |
-| 1.x freeze marker (Phase 0) | branch `freeze-1x-2026-10-30` → `19834fdd` (= `1.4.0-alpha.11`) |
-| pydra proposal | branch `enh/execution-extensions` → draft PR nipype/pydra#891; worktree `~/software/nipype/pydra-ext` |
-| Implementation branch | `2x/phase-1` (worktree `~/software/sensein/senselab-2x-impl`), stacked on `senselab-2x-api`; one reviewed commit series per task; all spec edits during Phase 1 go here too (SDD ruling R2) |
-| SDD ledger | `.superpowers/sdd/phase-1/progress.md` in the impl worktree (git-ignored; task completion lines and rulings) |
-| Phase plans | `plans/phase-1.md`, `plans/phase-1-hardening.md` (this directory) |
+| Integration branch | `2.x`. All 2.x work merges here, never into `alpha` (owner item 30). It carries the 2.x workflows (`2x-tests.yaml`, `2x-docs-preview.yaml`). |
+| Design (docs PR) | `senselab-2x-api` → `2.x`, draft PR sensein/senselab#617. Every spec change is made here: ADRs, principles, design, plans, registers, rulings, reviews and this file (D-7). Worktree `~/software/sensein/senselab-2x`. |
+| Code (code PR) | `2x/phase-1` → `senselab-2x-api` today, draft PR sensein/senselab#619. Code and tests only; it merges `senselab-2x-api` to stay current and is retargeted to `2.x` once #617 merges (D-7). Worktree `~/software/sensein/senselab-2x-impl`. |
+| 2.x workflows | merged: #620 (on `alpha`, 1.x and 2.x workflows separated) and #621 (on `2.x`). Previews are at `sensein.group/senselab/2x/pr-<N>/`. |
+| 1.x | developed on `alpha`; freeze branch `freeze-1x-2026-10-30` → `19834fdd` (= `1.4.0-alpha.11`). |
+| pydra proposal | branch `enh/execution-extensions` → draft PR nipype/pydra#891; worktree `~/software/nipype/pydra-ext`. |
 
-## Document map (this directory)
+## Where the records are (this directory)
 
-- **Rules:**
-  - `principles.md`: P-1..P-41; the register.
-  - `engineering.md`: the standards, the per-commit checklist, the agent and model roster (P-40),
-    and P-27..P-35, P-39, P-40.
-- **What to build:**
-  - `design.md`;
-  - `adr/` (ADR-001..009);
-  - `execution.md`;
-  - `testing.md`;
-  - `docs.md`.
-- **Why:**
-  - `review-register.md` (R-1..R-98; open: R-55..R-58, the ADV rows R-59..R-98 and the rows they re-open);
-  - `reviews/phase1-adversarial.md` (the Phase 1 adversarial report, A-1..A-39);
-  - `architect-review.md`;
-  - `engine-choice.md`;
-  - `workflow-engines.md`;
-  - `use-cases.md`;
-  - `benchmarks.md`;
-  - `roadmap.md` (the flywheel).
-- **Migration:** `migration-ledger.md`, with a mark per 1.x area (P-39).
+- **Owner's words:** [`owner-requests.md`](owner-requests.md), verbatim, items 1..38. The authority.
+- **Owner decisions:** [`decisions-2026-11-01.md`](decisions-2026-11-01.md), D-1..D-7 and the items that
+  follow from them without a further choice.
+- **Controller rulings:** [`rulings.md`](rulings.md), R1..R42 and H-R1..H-R52 with their status. They are
+  not design authority; a ruling that changes a decision is in force only through an ADR amendment
+  (ADR-000).
+- **Reviews:** [`reviews/full-review-2026-11-01/`](reviews/full-review-2026-11-01/) (five reviews and
+  `consolidated.md`), [`reviews/phase1-adversarial.md`](reviews/phase1-adversarial.md) (A-1..A-39),
+  [`reviews/phase1-reattack/`](reviews/phase1-reattack/) (X*-n). Register rows R-n are in
+  [`review-register.md`](review-register.md).
+- **Rules:** `principles.md` (P-1..P-41), `engineering.md` (standards, checklist, roster, P-27..P-35,
+  P-39, P-40).
+- **What to build:** `design.md`, `adr/` (ADR-001..010), `execution.md`, `testing.md`, `docs.md`,
+  `wire-protocol.md`.
+- **Plans:** `plans/phase-1.md`, `plans/phase-1-hardening.md`.
+- **Migration:** `migration-ledger.md`, a mark per 1.x area (P-39) and the triage classification.
+- The controller's working notes under `.superpowers/` in the code worktree are git-excluded scratch.
+  Nothing here cites them; anything a later session needs is in the files above.
+
+## Decisions (2026-11-01)
+
+The owner accepted the full review's recommendations ("accept recommendations and move specs to the docs
+PR - clarify the decisions"):
+
+- **D-1** Guards and gates cut back to the design: keep the import-linter contracts, the identifier check,
+  the fixture budget (256 KB per file, 2 MB total) and the workflow-expression guard; delete the
+  spelling-based bypass lints, `moved_modules_test.py` and tests that only make other tests exist; add the
+  advisory agent prose review.
+- **D-2** Locks are leases by rename and `O_EXCL` (ADR-003); revert the `flock`/heartbeat/takeover protocol
+  and the 1.x-only lock modes; keep H9b's path safety.
+- **D-3** Canonical text is NFC except text with code points unassigned in Unicode 13.0, for portability
+  across interpreters (ADR-006).
+- **D-4** ADR-010: an activity's `@id` is the execution; the plan link waits for Phase 3; Phase 2
+  implements ADR-010, including the removal of the 1.x token families and export redaction.
+- **D-5** The release gate checks version grammar, exact sibling pins and build-and-install from `dist/`
+  until the first 2.x release.
+- **D-6** `src/` is restored to the freeze commit and then merged with `alpha`; 2.x never edits `src/`.
+- **D-7** Design in #617, code in #619; ADRs change only by dated amendments; no spec cites the ledger.
 
 ## Status
 
 | Phase | State |
 |---|---|
-| Design | done; owner approved 2026-10-30 ("go ahead") |
-| 0: freeze marker | done (branch `freeze-1x-2026-10-30`) |
-| 1: kernel, worker runtime, identity, store, data fetch | T0–T15a done; adversarial round found 11 high / 19 medium / 9 low (R-59…R-97, plus R-98 unverified); hardening plan `plans/phase-1-hardening.md` (H1–H8) before Phase 1 exit |
+| Design | accepted 2026-10-30; amended 2026-10-31 and 2026-11-01 in #617 |
+| 0: freeze marker | done |
+| 1: kernel, worker runtime, identity, store, data fetch | T0–T15a done. Hardening done: H1–H8 (H8a–c), the H9 series (H9a–f, H9-compat, H9-collect, H9-cleanup, H9-ci) and H10. 2.x CI first fully green at `97b617c5`. Full review done 2026-11-01; its decisions are being applied (next actions). |
 | 2–5 | not started |
 | pydra PRs (A0…K1) | proposed in #891; none implemented |
 
-## Next actions
+## Next actions, in order
 
-1. Finish `plans/phase-1.md` and execute it task by task with subagents (roster in
-   `engineering.md`), one PR per task to `alpha`.
-2. Run the P-39 reconciliation scan before Phase 1 starts (`migration-ledger.md`).
-3. Start pydra PR A0 (Slurm `--error` fix) and D1 (`ResultStore` interface) in parallel. Neither
-   blocks Phase 1.
-
-## Open owner decisions
-
-None open. Owner calls from 2026-10-30 are folded into the docs: reuse default `equivalent`,
-vLLM-omni kept, license taint kept and combinators deferred, prose review by model and agents.
+1. Merge `senselab-2x-api` into `2x/phase-1`, so the code PR carries the amended specs. From then on, no
+   spec edits on `2x/phase-1`.
+2. **D-6:** restore `src/` to `19834fdd` (`git checkout 19834fdd -- src`, one commit), then merge
+   `origin/alpha`. Check `git diff origin/alpha -- src` is empty.
+3. **D-1:** cut the guard layer: delete the digest-binding and strict-mode checks, the written-names lint,
+   the dynamic-import allowance machinery, `moved_modules_test.py` and every test that requires
+   finding-id names. Keep the import contracts, the identifier check, the fixture budget at docs.md's
+   numbers and the workflow-expression guard. Add the advisory agent prose review job.
+4. **D-2:** revert the lock to ADR-003's lease (rename and `O_EXCL`, bounded waits, stale lease renamed
+   aside); remove `flock`, heartbeat, holder takeover, negative timeout and shared mode. Keep the
+   descriptor walk, no in-place modification, quarantine and private staging.
+5. **D-5:** trim `scripts/release_gate.py` and its tests to version grammar, exact sibling pins and
+   build-and-install from `dist/`.
+6. **H-R49:** test conformance: regressions renamed by invariant and folded into component test files, no
+   round ids in tests, default tier and CI cadence per `testing.md`, wall-clock checks into `limits`,
+   internal monkeypatches replaced by seams, policy checks as `scripts/check_*.py`.
+7. **The "follows" items** of the decision record: portable model identity (A I-1), read
+   `DEFAULT_REUSE_POLICY` (Ru I-1), equivalence classes as data (A I-8), owners for the clock re-binding
+   (A I-9) and the source-digest CI check (A I-10); audio decoding out of the kernel and whole-file
+   hashing against ADR-005 (Ar F-3, A I-5, R-109); the pydra corrections (Ar F-5, F-6) and owners for the
+   pydra PRs; one transient classifier (Ar F-7); the engineering and license gates (T F5–F7); the P-40
+   roster and worktree isolation; parked items moved into tracked registers (Ru I-11, I-12).
+8. **Phase 1 exit** (`plans/phase-1.md` Task 15, as amended): 2.x CI green; `src/` equals `alpha`; no 1.x
+   tests on the 2.x line; P-39 re-scan; `STATE.md` updated. Then merge #617 into `2.x` and retarget #619.
+9. **Phase 2:** ADR-010 (PROV-O JSON-LD store, `senselab:` vocabulary, token-family removal, export
+   redaction) and the benchmark harness with its data manifest and smoke suite, alongside the tasks and
+   backends of design §6.2.
 
 ## How to resume
 
-1. `cd ~/software/sensein/senselab-2x && git pull`. Read this file, then `principles.md`, then
-   `engineering.md` (the roster and checklist).
-2. Check drift: `git fetch origin alpha && git log <ledger mark>..origin/alpha --oneline`.
-3. Open the current phase plan and continue from the first unchecked task. Its PR state is on
-   GitHub (`gh pr list --base alpha --head '2x/'`).
-4. Brief every delegated task as `engineering.md` requires.
+1. `cd ~/software/sensein/senselab-2x && git pull`. Read this file, then `decisions-2026-11-01.md`, then
+   `principles.md` and `engineering.md` (roster and checklist).
+2. Code work happens in `~/software/sensein/senselab-2x-impl` on `2x/phase-1`. Spec changes happen here,
+   on `senselab-2x-api`, and reach the code branch by merge.
+3. Check 1.x drift: `git fetch origin alpha && git log 19834fdd..origin/alpha --oneline -- src scripts tutorials`.
+4. PR state: `gh pr view 617`, `gh pr view 619`; 2.x CI runs on both.
+5. Brief every delegated task as `engineering.md` requires; file-modifying agents use worktree isolation.
 
 ## Log
 
-- **2026-11-01 (H10, H-R48, H-R50..H-R52):** `src/` stays on the 2.x line as the 1.x source pool: frozen,
-  not packaged, not tested or linted, and imported by nothing in `packages/`. Use cases move from it by
-  merging `alpha`, a rename-only `git mv` and a modify commit (ADR-009, `migration-ledger.md`). The root
-  `senselab` distribution is the metadata-only 2.x umbrella. Core provenance has only the generic `artifact`
-  entity type, `run_id` is required on every record, and run manifests live under `$SENSELAB_CACHE/2x/`.
-
-- **2026-10-30 (Phase 1 adversarial round):** the round against `94e81479` found 11 high, 19 medium
-  and 9 low findings (A-1..A-39), plus 9 unverified suspicions. They are recorded as R-59..R-97 and
-  R-98, and they re-open R-5, R-10, R-30, R-33, R-44 and R-52. The report is in
-  `reviews/phase1-adversarial.md`. The hardening plan `plans/phase-1-hardening.md` has 8 tasks
-  (H1–H8), which must merge before Phase 1 exit. A-15 is deferred to Phase 3 and A-30 to Phase 2.
-  Branch protection for A-39 is an owner action.
-
-- **2026-10-30 (Phase 1 start):** P-39 scan found no drift (`origin/alpha` = `19834fdd` = every
-  ledger mark). Execution began on `2x/phase-1`.
-
-- **2026-10-30:**
-  - Design completed through five reviews and an architect review.
-  - ADR-001..009 written.
-  - Phase 0 tag pushed.
-  - Worktrees moved to durable paths.
-  - Phase 1 planning started.
-  - Phase 1 delivered (T0–T14): workspace and three distributions; worker runtime and wire protocol v1;
-    canonical serialisation and identity v2; kernel signal types; model resolution and weights manifest;
-    locks/revision/provenance/hardware moved into core; result store; declaration registry, fake stack and
-    generated contracts; data fetch; synthetic generators and fixture budget.
+- **2026-11-01 (decisions applied to specs):** owner decisions D-1..D-7 recorded. Specs moved from
+  `2x/phase-1` into #617. ADR-003, ADR-006, ADR-009, design.md and docs.md restored to decisions, with
+  dated amendments and amendment logs; ADR-007 and ADR-010 amended; ADR-000 gains the amendment rule;
+  P-27, P-31 and P-35 amended in `engineering.md`; rulings' statuses set; `2.x` merged into
+  `senselab-2x-api`.
+- **2026-11-01 (full review):** five reviews and a consolidation at `3a468aff`
+  (`reviews/full-review-2026-11-01/`). Implementation had rewritten the design under unchanged headers;
+  the guard layer had grown to about 76% of package source.
+- **2026-11-01 (H10, H-R48, H-R50..H-R52):** `src/` stays on the 2.x line as the 1.x source pool, imported
+  by nothing in `packages/`. The root `senselab` distribution is the 2.x umbrella. Core provenance has only
+  the generic `artifact` type, `run_id` is required, and run manifests live under `$SENSELAB_CACHE/2x/`.
+- **2026-11-01 (2.x workflows):** #620 and #621 merged; the `2.x` branch runs its own workflows.
+- **2026-10-31 (H9 series):** path safety under storage roots (H9b), values and source stamps (H9c),
+  portable canonical text (H9d), typed digests (H9e), release gate round (H9f).
+- **2026-10-30 (Phase 1 adversarial round):** A-1..A-39 against `94e81479`, recorded as R-59..R-98;
+  hardening plan H1–H8.
+- **2026-10-30 (Phase 1 start):** P-39 scan found no drift (`origin/alpha` = `19834fdd`).
+- **2026-10-30:** design completed through five reviews and an architect review; ADR-001..009; Phase 0
+  freeze branch; Phase 1 delivered T0–T14.
