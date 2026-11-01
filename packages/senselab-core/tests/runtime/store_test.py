@@ -26,7 +26,7 @@ from planted_objects_fixture import ARRAY_CORRUPTIONS, bounded, swap_subsets
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ReusePolicy
 from senselab_core.runtime import store as store_module
 from senselab_core.runtime.equivalence import EQUIVALENCE
-from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
+from senselab_core.runtime.provenance import CHECKSUM_KEY, JsonlProvStore
 from senselab_core.runtime.revision import MANIFEST_NAME, NAMESPACE, record_resolution
 from senselab_core.runtime.storage import StorageFull, StorePolicy, StoreUnavailable
 from senselab_core.runtime.store import (
@@ -446,7 +446,7 @@ def test_relaxed_reuse_is_recorded_in_provenance(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_put_records_provenance(tmp_path: Path) -> None:
     """Put appends one activity: the key's inputs used, the output identity generated, the context recorded."""
-    prov = ProvStore(run_id="r")
+    prov = JsonlProvStore(run_id="r")
     s, k, c = ResultStore(tmp_path, provenance=prov), _key(audio="a" * 64), _ctx()
     ident = s.put(k, {"y": 1}, c)
     (act,) = prov.activities(node="asr")

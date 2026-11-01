@@ -16,7 +16,7 @@ from senselab_core.runtime.bep028 import (
     to_bep028_graph,
     write_bep028_files,
 )
-from senselab_core.runtime.provenance import CHECKSUM_KEY, CHECKSUM_UNRESOLVED_KEY, ProvStore
+from senselab_core.runtime.provenance import CHECKSUM_KEY, CHECKSUM_UNRESOLVED_KEY, JsonlProvStore
 
 pytestmark = pytest.mark.logic
 
@@ -24,9 +24,9 @@ DIGEST = "b" * 64
 
 
 @pytest.fixture
-def store() -> ProvStore:
+def store() -> JsonlProvStore:
     """A store exercising every record kind, both checksum outcomes and every relation."""
-    store = ProvStore(run_id="run-1")
+    store = JsonlProvStore(run_id="run-1")
     software = store.agent(agent_type="software", version="senselab 1.3.1a45.dev542")
     model = store.agent(agent_type="model", model_id="MIT/ast", commit_sha="f" * 40)
     unpinned = store.agent(
@@ -57,7 +57,7 @@ def store() -> ProvStore:
     return store
 
 
-def test_identity_round_trips(store: ProvStore) -> None:
+def test_identity_round_trips(store: JsonlProvStore) -> None:
     """Every id in the graph reverses to the store id it came from."""
     graph = to_bep028_graph(store, label="run")
     seen = {store_id(node["Id"]) for nodes in graph["Records"].values() for node in nodes}
@@ -80,33 +80,33 @@ def test_store_id_refuses_a_foreign_uri() -> None:
         store_id("https://example.org/thing")
 
 
-def test_graph_passes_its_own_checks(store: ProvStore) -> None:
+def test_graph_passes_its_own_checks(store: JsonlProvStore) -> None:
     """The serializer's output is JSON-LD whose context resolves every term it uses."""
     assert check_graph(to_bep028_graph(store, label="run")) == []
 
 
-def test_graph_survives_a_json_round_trip(store: ProvStore) -> None:
+def test_graph_survives_a_json_round_trip(store: JsonlProvStore) -> None:
     """The document is plain JSON; nothing in it needs a custom encoder."""
     graph = json.loads(json.dumps(to_bep028_graph(store, label="run")))
     assert graph["@context"][0] == BEP028_CONTEXT
     assert check_graph(graph) == []
 
 
-def test_files_and_other_entities_are_separated(store: ProvStore) -> None:
+def test_files_and_other_entities_are_separated(store: JsonlProvStore) -> None:
     """An entity with a path is a BEP028 ``Files`` object; one without is a ``prov:Entity``."""
     records = to_bep028_graph(store, label="run")["Records"]
     assert {node["AtLocation"] for node in records["Files"]} == {"a.wav", "derivatives/gone.npz"}
     assert all("AtLocation" not in node for node in records["prov:Entity"])
 
 
-def test_a_digest_becomes_an_spdx_checksum(store: ProvStore) -> None:
+def test_a_digest_becomes_an_spdx_checksum(store: JsonlProvStore) -> None:
     """The SHA-256 is emitted as BEP028 requires it."""
     records = to_bep028_graph(store, label="run")["Records"]
     [recording] = [node for node in records["Files"] if node["AtLocation"] == "a.wav"]
     assert recording["Checksum"] == [{"ChecksumAlgorithm": SHA256_ALGORITHM, "ChecksumValue": DIGEST}]
 
 
-def test_a_missing_digest_states_the_reason_and_emits_no_checksum(store: ProvStore) -> None:
+def test_a_missing_digest_states_the_reason_and_emits_no_checksum(store: JsonlProvStore) -> None:
     """BEP028's Checksum cannot say "unknown", so nothing is put there and the reason is carried."""
     records = to_bep028_graph(store, label="run")["Records"]
     [lost] = [node for node in records["Files"] if node["AtLocation"] == "derivatives/gone.npz"]
@@ -114,7 +114,7 @@ def test_a_missing_digest_states_the_reason_and_emits_no_checksum(store: ProvSto
     assert lost["ChecksumUnresolvedReason"] == "file not found"
 
 
-def test_an_unresolved_model_commit_omits_the_version(store: ProvStore) -> None:
+def test_an_unresolved_model_commit_omits_the_version(store: JsonlProvStore) -> None:
     """A required BEP028 field is left out rather than filled with something untrue."""
     software = to_bep028_graph(store, label="run")["Records"]["Software"]
     [unpinned] = [node for node in software if node["Label"].startswith("https://tfhub.dev")]
@@ -122,28 +122,28 @@ def test_an_unresolved_model_commit_omits_the_version(store: ProvStore) -> None:
     assert unpinned["VersionUnresolvedReason"] == "TF-Hub URL pin"
 
 
-def test_a_resolved_model_commit_is_the_version(store: ProvStore) -> None:
+def test_a_resolved_model_commit_is_the_version(store: JsonlProvStore) -> None:
     """A model agent's version is its resolved commit, never a ref."""
     software = to_bep028_graph(store, label="run")["Records"]["Software"]
     [model] = [node for node in software if node["Label"] == "MIT/ast"]
     assert model["Version"] == "f" * 40
 
 
-def test_the_software_agent_splits_into_a_name_and_a_version(store: ProvStore) -> None:
+def test_the_software_agent_splits_into_a_name_and_a_version(store: JsonlProvStore) -> None:
     """``senselab <version>`` becomes BEP028's separate Label and Version."""
     software = to_bep028_graph(store, label="run")["Records"]["Software"]
     [senselab] = [node for node in software if node["Label"] == "senselab"]
     assert senselab["Version"] == "1.3.1a45.dev542"
 
 
-def test_every_relation_is_emitted(store: ProvStore) -> None:
+def test_every_relation_is_emitted(store: JsonlProvStore) -> None:
     """All six store relations reach the graph, ``wasInvalidatedBy`` included."""
     records = to_bep028_graph(store, label="run")["Records"]
     terms = {term for nodes in records.values() for node in nodes for term in node}
     assert {"GeneratedBy", "Used", "AssociatedWith", "AttributedTo", "DerivedFrom", "InvalidatedBy"} <= terms
 
 
-def test_the_activity_description_is_the_callers(store: ProvStore, tmp_path: Path) -> None:
+def test_the_activity_description_is_the_callers(store: JsonlProvStore, tmp_path: Path) -> None:
     """A caller describes its own activities; ``{label}`` names the activity."""
     graph = to_bep028_graph(store, label="run", description="driver step, command withheld: {label}")
     [step] = [node for node in graph["Records"]["Activities"] if node["Label"].endswith("gammatone")]
@@ -154,7 +154,7 @@ def test_the_activity_description_is_the_callers(store: ProvStore, tmp_path: Pat
     assert {node["Description"] for node in converted["Records"]["Activities"]} == {"fixed text"}
 
 
-def test_the_default_description_names_an_in_process_step(store: ProvStore) -> None:
+def test_the_default_description_names_an_in_process_step(store: JsonlProvStore) -> None:
     """Triage's graphs read as before."""
     [step] = [
         node
@@ -164,7 +164,7 @@ def test_the_default_description_names_an_in_process_step(store: ProvStore) -> N
     assert step["Description"] == "in-process senselab step, not a shell command: PREPROCESS / gammatone"
 
 
-def test_an_activity_is_not_claimed_to_be_a_command(store: ProvStore) -> None:
+def test_an_activity_is_not_claimed_to_be_a_command(store: JsonlProvStore) -> None:
     """``Command`` is REQUIRED and we have none, so it is null and a Description says why."""
     [step] = [
         node
@@ -177,12 +177,12 @@ def test_an_activity_is_not_claimed_to_be_a_command(store: ProvStore) -> None:
     assert step["StartedAtTime"] == "2026-09-08T00:00:00"
 
 
-def test_no_environment_is_invented(store: ProvStore) -> None:
+def test_no_environment_is_invented(store: JsonlProvStore) -> None:
     """The store records no environment, so the graph claims none."""
     assert "Environments" not in to_bep028_graph(store, label="run")["Records"]
 
 
-def test_a_recorded_environment_reaches_the_graph(store: ProvStore) -> None:
+def test_a_recorded_environment_reaches_the_graph(store: JsonlProvStore) -> None:
     """A store that did record one is not a case check_graph or the mapping table forgot."""
     store.environment(
         kind="host",
@@ -214,7 +214,7 @@ def test_a_recorded_environment_reaches_the_graph(store: ProvStore) -> None:
     assert check_graph(graph) == []
 
 
-def test_write_bep028_files_emits_the_env_suffix(store: ProvStore, tmp_path: Path) -> None:
+def test_write_bep028_files_emits_the_env_suffix(store: JsonlProvStore, tmp_path: Path) -> None:
     """An ``_env`` file is written only when the store actually carries an environment."""
     store.environment(kind="host", label="host", python_version="3.12.11")
     graph = to_bep028_graph(store, label="run")
@@ -225,49 +225,49 @@ def test_write_bep028_files_emits_the_env_suffix(store: ProvStore, tmp_path: Pat
     assert body["Environments"][0]["Label"] == "host"
 
 
-def test_check_graph_catches_a_dangling_reference(store: ProvStore) -> None:
+def test_check_graph_catches_a_dangling_reference(store: JsonlProvStore) -> None:
     """A relation naming an id no node declares is a problem, not a silent broken edge."""
     graph = to_bep028_graph(store, label="run")
     graph["Records"]["Files"][0]["GeneratedBy"] = ["bids::prov#act-nothere"]
     assert any("is not a node in the graph" in problem for problem in check_graph(graph))
 
 
-def test_check_graph_catches_a_term_that_would_be_dropped(store: ProvStore) -> None:
+def test_check_graph_catches_a_term_that_would_be_dropped(store: JsonlProvStore) -> None:
     """An undeclared prefix expands to nothing, so JSON-LD would drop the key silently."""
     graph = to_bep028_graph(store, label="run")
     graph["Records"]["Files"][0]["nope:Thing"] = 1
     assert any("would be dropped" in problem for problem in check_graph(graph))
 
 
-def test_check_graph_requires_a_vocabulary(store: ProvStore) -> None:
+def test_check_graph_requires_a_vocabulary(store: JsonlProvStore) -> None:
     """Without @vocab, every store attribute would vanish from the graph."""
     graph = to_bep028_graph(store, label="run")
     graph["@context"] = [BEP028_CONTEXT, {}]
     assert any("@vocab" in problem for problem in check_graph(graph))
 
 
-def test_check_graph_catches_a_duplicate_id(store: ProvStore) -> None:
+def test_check_graph_catches_a_duplicate_id(store: JsonlProvStore) -> None:
     """Two nodes sharing an Id would merge into one on load."""
     graph = to_bep028_graph(store, label="run")
     graph["Records"]["Files"].append(dict(graph["Records"]["Files"][0]))
     assert any("declared twice" in problem for problem in check_graph(graph))
 
 
-def test_check_graph_catches_a_malformed_checksum(store: ProvStore) -> None:
+def test_check_graph_catches_a_malformed_checksum(store: JsonlProvStore) -> None:
     """A digest that is not 64 lowercase hex characters is not a SHA-256."""
     graph = to_bep028_graph(store, label="run")
     graph["Records"]["Files"][0]["Checksum"] = [{"ChecksumAlgorithm": SHA256_ALGORITHM, "ChecksumValue": "nope"}]
     assert any("64 lowercase hex" in problem for problem in check_graph(graph))
 
 
-def test_a_written_store_converts_without_the_pipeline(store: ProvStore, tmp_path: Path) -> None:
+def test_a_written_store_converts_without_the_pipeline(store: JsonlProvStore, tmp_path: Path) -> None:
     """An existing run directory converts from its store.jsonl alone."""
     path = tmp_path / "store.jsonl"
     store.write_jsonl(path)
     assert convert_store_file(path, label="run") == to_bep028_graph(store, label="run")
 
 
-def test_the_split_files_partition_the_graph(store: ProvStore, tmp_path: Path) -> None:
+def test_the_split_files_partition_the_graph(store: JsonlProvStore, tmp_path: Path) -> None:
     """The BEP028-named files hold each record kind once, under the same context."""
     graph = to_bep028_graph(store, label="run")
     written = write_bep028_files(graph, tmp_path / "prov", label="run")
@@ -278,7 +278,7 @@ def test_the_split_files_partition_the_graph(store: ProvStore, tmp_path: Path) -
     assert sorted(keys) == ["Activities", "Files", "Software", "prov:Entity"]
 
 
-def test_a_symlink_at_a_sidecar_name_is_replaced_not_written_through(store: ProvStore, tmp_path: Path) -> None:
+def test_a_symlink_at_a_sidecar_name_is_replaced_not_written_through(store: JsonlProvStore, tmp_path: Path) -> None:
     """A planted symlink at a BEP028 file name leaves its target unchanged and becomes the written file."""
     victim = tmp_path / "victim.txt"
     victim.write_text("keep")

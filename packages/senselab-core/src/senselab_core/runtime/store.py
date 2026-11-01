@@ -68,7 +68,7 @@ from senselab_core.kernel.identity import (
     acceptable,
 )
 from senselab_core.runtime.equivalence import EQUIVALENCE
-from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
+from senselab_core.runtime.provenance import CHECKSUM_KEY, JsonlProvStore
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
     STAGING_DIR_MODE,
@@ -535,14 +535,14 @@ class ResultStore:
     def __init__(
         self,
         root: Path,
-        provenance: ProvStore | None = None,
+        provenance: JsonlProvStore | None = None,
         *,
         policy: StorePolicy | None = None,
         equivalence: Equivalence = EQUIVALENCE,
     ) -> None:
         """Open a store at `root`; nothing is created until the first `put`."""
         self.root = Path(root)
-        self.provenance = provenance if provenance is not None else ProvStore(run_id=f"store-{uuid.uuid4().hex}")
+        self.provenance = provenance if provenance is not None else JsonlProvStore(run_id=f"store-{uuid.uuid4().hex}")
         self.policy = policy if policy is not None else StorePolicy.load_default()
         self._equivalence = equivalence
         self._last_collect: float | None = None

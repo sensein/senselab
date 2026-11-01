@@ -1,4 +1,4 @@
-"""A PROV-O JSON-LD serializer for :class:`~senselab_core.runtime.provenance.ProvStore`, following BIDS BEP028.
+"""A PROV-O JSON-LD serializer for :class:`~senselab_core.runtime.provenance.JsonlProvStore`, following BIDS BEP028.
 
 The store is the single source of truth; this module only reads it, so a run directory written before
 this module existed converts without re-running the pipeline. The design, the mapping table and every
@@ -24,7 +24,7 @@ from senselab_core.runtime.provenance import (
     Agent,
     Entity,
     Environment,
-    ProvStore,
+    JsonlProvStore,
 )
 from senselab_core.runtime.storage import write_atomically
 
@@ -236,7 +236,7 @@ def _environment_record(environment: Environment, *, dataset: str) -> dict[str, 
 
 
 def to_bep028_graph(
-    store: ProvStore, *, label: str, dataset: str = "", description: str = STEP_DESCRIPTION
+    store: JsonlProvStore, *, label: str, dataset: str = "", description: str = STEP_DESCRIPTION
 ) -> dict[str, Any]:
     """Serialize a store as one aggregated BEP028 provenance graph.
 
@@ -302,7 +302,7 @@ def convert_store_file(
     Returns:
         The JSON-LD document.
     """
-    return to_bep028_graph(ProvStore.read_jsonl(store_path), dataset=dataset, label=label, description=description)
+    return to_bep028_graph(JsonlProvStore.read_jsonl(store_path), dataset=dataset, label=label, description=description)
 
 
 def write_bep028_files(graph: dict[str, Any], prov_dir: str | Path, *, label: str) -> list[Path]:

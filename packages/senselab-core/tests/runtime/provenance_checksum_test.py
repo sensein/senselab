@@ -10,7 +10,7 @@ from senselab_core.runtime.provenance import (
     CHECKSUM_UNRESOLVED_KEY,
     MTIME_KEY,
     SIZE_KEY,
-    ProvStore,
+    JsonlProvStore,
     file_attributes,
     file_digest,
 )
@@ -78,7 +78,7 @@ def test_attributes_refuse_a_digest_and_a_reason_together(tmp_path: Path) -> Non
 )
 def test_entity_refuses_a_dishonest_checksum(attributes: dict[str, object], match: str) -> None:
     """The store refuses at write time what it would refuse at read-back."""
-    store = ProvStore(run_id="r")
+    store = JsonlProvStore(run_id="r")
     with pytest.raises(ValueError, match=match):
         store.entity(prov_type="artifact", extent=None, attributes=attributes)
 
@@ -88,38 +88,38 @@ def test_entity_refuses_a_dishonest_checksum(attributes: dict[str, object], matc
 )
 def test_an_artifact_checksum_needs_no_path(tmp_path: Path, attributes: dict[str, object]) -> None:
     """An artifact is named by its content alone, and reads back unchanged."""
-    store = ProvStore(run_id="r")
+    store = JsonlProvStore(run_id="r")
     eid = store.entity(prov_type="artifact", extent=None, attributes={"role": "input", **attributes})
     path = tmp_path / "store.jsonl"
     store.write_jsonl(path)
-    assert ProvStore.read_jsonl(path).get_entity(eid).attributes == {"role": "input", **attributes}
+    assert JsonlProvStore.read_jsonl(path).get_entity(eid).attributes == {"role": "input", **attributes}
 
 
 def test_read_back_holds_a_written_store_to_the_same_checksum_invariants(tmp_path: Path) -> None:
     """A hand-edited store.jsonl carrying a malformed digest is refused, naming the entity."""
-    store = ProvStore(run_id="r")
+    store = JsonlProvStore(run_id="r")
     store.entity(prov_type="artifact", extent=None, attributes={"path": "a", CHECKSUM_KEY: "0" * 64})
     path = tmp_path / "store.jsonl"
     store.write_jsonl(path)
     path.write_text(path.read_text().replace("0" * 64, "0" * 63))
     with pytest.raises(ValueError, match="64 lowercase hex"):
-        ProvStore.read_jsonl(path)
+        JsonlProvStore.read_jsonl(path)
 
 
 def test_a_store_written_without_checksums_still_reads_back(tmp_path: Path) -> None:
     """An entity without a checksum reads back with none: no digest is invented for it."""
-    store = ProvStore(run_id="r")
+    store = JsonlProvStore(run_id="r")
     store.entity(prov_type="artifact", extent=None, attributes={"path": "streams/plain.flac"})
     path = tmp_path / "store.jsonl"
     store.write_jsonl(path)
-    [entity] = ProvStore.read_jsonl(path).entities()
+    [entity] = JsonlProvStore.read_jsonl(path).entities()
     assert CHECKSUM_KEY not in entity.attributes
     assert CHECKSUM_UNRESOLVED_KEY not in entity.attributes
 
 
 def test_entity_identity_follows_content(tmp_path: Path) -> None:
     """Two files at the same path with different bytes are different entities."""
-    store = ProvStore(run_id="r")
+    store = JsonlProvStore(run_id="r")
     target = tmp_path / "a.bin"
     target.write_bytes(b"one")
     first = store.entity(prov_type="artifact", extent=None, attributes={"path": "a.bin", **file_attributes(target)})

@@ -6,10 +6,10 @@ from pathlib import Path
 
 from senselab_worker.canonical import jcs_dumps
 
-from senselab_core.runtime.provenance import ProvStore, revised
+from senselab_core.runtime.provenance import JsonlProvStore, revised
 
 
-def with_entity_attributes(store: ProvStore, record_id: str, **attributes: object) -> ProvStore:
+def with_entity_attributes(store: JsonlProvStore, record_id: str, **attributes: object) -> JsonlProvStore:
     """Return a copy of `store` in which one entity's attributes carry `attributes`.
 
     The entity is minted again under the store's run id with the changed attributes, so its id changes; its
@@ -21,7 +21,7 @@ def with_entity_attributes(store: ProvStore, record_id: str, **attributes: objec
         KeyError: if the store holds no entity `record_id`.
     """
     entity = store.get_entity(record_id)
-    minter = ProvStore(run_id=store.run_id)
+    minter = JsonlProvStore(run_id=store.run_id)
     new_id = minter.entity(
         prov_type=entity.prov_type, extent=entity.extent, attributes=revised(entity.attributes, **attributes)
     )
@@ -38,4 +38,4 @@ def with_entity_attributes(store: ProvStore, record_id: str, **attributes: objec
                 line = jcs_dumps(held)
             lines.append(replacement if held.get("id") == record_id else line)
         path.write_bytes(b"".join(line + b"\n" for line in lines))
-        return ProvStore.read_jsonl(path, run_id=store.run_id)
+        return JsonlProvStore.read_jsonl(path, run_id=store.run_id)

@@ -399,7 +399,7 @@ def recorded(value: object) -> Any:  # noqa: ANN401
 def plain_values(value: object) -> Any:  # noqa: ANN401
     """Return a store file's JSON value as a caller reads it back: every token decoded, as `recorded` returns.
 
-    For readers that parse a store file as JSON rather than through `ProvStore.read_jsonl`.
+    For readers that parse a store file as JSON rather than through `JsonlProvStore.read_jsonl`.
 
     Raises:
         UnrecordableValue: for a malformed token.
@@ -760,7 +760,7 @@ def _put(table: dict[str, _R], record: _R, where: str = "") -> None:
     table[record.id] = record
 
 
-class ProvStore:
+class JsonlProvStore:
     """An append-only PROV document.
 
     Args:
@@ -1075,7 +1075,7 @@ class ProvStore:
         write_atomically(Path(path), b"".join(line + b"\n" for line in lines))
 
     @classmethod
-    def read_jsonl(cls, path: str | Path, run_id: str = "read") -> "ProvStore":
+    def read_jsonl(cls, path: str | Path, run_id: str = "read") -> "JsonlProvStore":
         """Read a store back through the same record validation the store's own methods use.
 
         The file's first line must be the `provenance@2.0` format record. Each further line is read as JSON;
@@ -1134,7 +1134,7 @@ class ProvStore:
         return store
 
     @classmethod
-    def merge(cls, stores: Sequence["ProvStore"]) -> "ProvStore":
+    def merge(cls, stores: Sequence["JsonlProvStore"]) -> "JsonlProvStore":
         """Union several stores; order-independent, since one id holds one record and two timings of an activity one.
 
         Raises:

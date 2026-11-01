@@ -35,7 +35,7 @@ from senselab_core.kernel.signals import Audio, ChannelInfo, Recording, RegularG
 from senselab_core.kernel.time import Span, TimeAnchor, TimeMap
 from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER, open_audio, source_group
-from senselab_core.runtime.provenance import ProvStore, normalised
+from senselab_core.runtime.provenance import JsonlProvStore, normalised
 from senselab_core.testing.values import frozen_types, registered_types, value_cases
 from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
 
@@ -321,7 +321,7 @@ def test_every_value_family_has_its_own_encoding() -> None:
 def test_text_with_post_13_code_points_is_recorded_and_is_its_own_family(head: str, mark: str) -> None:
     """Provenance records it; its value digest differs from its NFC and from every token family."""
     text = head + mark
-    ProvStore(run_id="t").entity(prov_type="artifact", extent=None, attributes={text: [text]})
+    JsonlProvStore(run_id="t").entity(prov_type="artifact", extent=None, attributes={text: [text]})
     digest = Holder(x=text).canonical_digest()
     others = {Holder(x=v).canonical_digest() for v, _ in _family_samples().values()}
     others.add(Holder(x=unicodedata.normalize("NFC", head)).canonical_digest())
@@ -411,7 +411,7 @@ def _refuse_dag(where: str) -> None:
     dag = _dag(60)
     with pytest.raises(ValueError, match="exceeds"):
         if where == "provenance":
-            ProvStore(run_id="t").entity(prov_type="artifact", extent=None, attributes={"x": dag})
+            JsonlProvStore(run_id="t").entity(prov_type="artifact", extent=None, attributes={"x": dag})
         elif where == "store":
             output_identity({"x": dag})
         else:
@@ -420,7 +420,7 @@ def _refuse_dag(where: str) -> None:
 
 def _record_dag(levels: int) -> None:
 
-    ProvStore(run_id="t").entity(prov_type="artifact", extent=None, attributes={"x": _dag(levels)})
+    JsonlProvStore(run_id="t").entity(prov_type="artifact", extent=None, attributes={"x": _dag(levels)})
 
 
 @pytest.mark.logic

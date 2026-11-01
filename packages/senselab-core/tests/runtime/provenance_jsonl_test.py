@@ -25,7 +25,7 @@ from senselab_core.runtime.provenance import (
     Activity,
     Agent,
     Entity,
-    ProvStore,
+    JsonlProvStore,
     UnrecordableValue,
     normalised,
     recorded,
@@ -38,8 +38,8 @@ pytestmark = pytest.mark.logic
 FORMAT_LINE = '{"format": "provenance@2.0", "record": "format"}'
 
 
-def _store() -> ProvStore:
-    return ProvStore(run_id="run-1")
+def _store() -> JsonlProvStore:
+    return JsonlProvStore(run_id="run-1")
 
 
 def _rewrite_records(path: Path, kind: str, mutate: Callable[[dict[str, object]], object]) -> None:
@@ -263,7 +263,7 @@ class TestEnvironments:
         )
         path = tmp_path / "prov.jsonl"
         s.write_jsonl(path)
-        back = ProvStore.read_jsonl(path)
+        back = JsonlProvStore.read_jsonl(path)
         assert back._environments == s._environments
         assert back.fingerprint() == s.fingerprint()
 
@@ -274,7 +274,7 @@ class TestEnvironments:
         path = tmp_path / "prov.jsonl"
         s.write_jsonl(path)
         assert "environment" not in {json.loads(ln)["record"] for ln in path.read_text().splitlines()}
-        back = ProvStore.read_jsonl(path)
+        back = JsonlProvStore.read_jsonl(path)
         assert back.environments() == []
 
     def test_an_unknown_kind_is_refused_on_read(self, tmp_path: Path) -> None:
@@ -285,7 +285,7 @@ class TestEnvironments:
         s.write_jsonl(path)
         _rewrite_records(path, "environment", lambda rec: rec.update(kind="container"))
         with pytest.raises(ValueError, match="container"):
-            ProvStore.read_jsonl(path)
+            JsonlProvStore.read_jsonl(path)
 
     def test_merge_unions_environments(self) -> None:
         """merge() carries environments across, the same as entities/activities/agents."""
@@ -293,7 +293,7 @@ class TestEnvironments:
         a.environment(kind="host", label="host", python_version="3.12.11")
         b = _store()
         b.environment(kind="venv", label="yamnet", python_version="3.12.0")
-        merged = ProvStore.merge([a, b])
+        merged = JsonlProvStore.merge([a, b])
         assert len(merged.environments()) == 2
 
 
@@ -324,7 +324,7 @@ class TestOrderIndependence:
         a, b = _store(), _store()
         a.entity(prov_type="artifact", extent=(1.0, 2.0), attributes={})
         b.entity(prov_type="artifact", extent=(1.1, 1.4), attributes={"word": "hello"})
-        assert ProvStore.merge([a, b]).fingerprint() == ProvStore.merge([b, a]).fingerprint()
+        assert JsonlProvStore.merge([a, b]).fingerprint() == JsonlProvStore.merge([b, a]).fingerprint()
 
     def test_repeating_a_relation_does_not_change_the_fingerprint(self) -> None:
         """A re-run node recording the same relation twice is a no-op."""
@@ -342,7 +342,7 @@ class TestOrderIndependence:
         act = s.activity(node="PREPROCESS", step=None, parameters={})
         ent = s.entity(prov_type="artifact", extent=(1.0, 2.0), attributes={})
         s.was_generated_by(ent, act)
-        assert ProvStore.merge([s]).fingerprint() == s.fingerprint()
+        assert JsonlProvStore.merge([s]).fingerprint() == s.fingerprint()
 
 
 class TestRoundTrip:
@@ -373,7 +373,7 @@ class TestRoundTrip:
         s.was_invalidated_by(span, act)
         path = tmp_path / "prov.jsonl"
         s.write_jsonl(path)
-        back = ProvStore.read_jsonl(path)
+        back = JsonlProvStore.read_jsonl(path)
         assert back.fingerprint() == s.fingerprint()
         assert back._entities == s._entities
         assert back._activities == s._activities
@@ -385,7 +385,7 @@ class TestRoundTrip:
         path = tmp_path / "prov.jsonl"
         path.write_text(f'{FORMAT_LINE}\n{{"record": "banana"}}\n')
         with pytest.raises(ValueError, match="banana"):
-            ProvStore.read_jsonl(path)
+            JsonlProvStore.read_jsonl(path)
 
     @pytest.mark.parametrize("prov_type", sorted(get_args(PROV_TYPE)))
     def test_every_entity_type_round_trips(self, prov_type: str, tmp_path: Path) -> None:
@@ -394,7 +394,7 @@ class TestRoundTrip:
         entity = s.entity(prov_type=cast(PROV_TYPE, prov_type), extent=None, attributes={"state": "uncertain"})
         path = tmp_path / "prov.jsonl"
         s.write_jsonl(path)
-        back = ProvStore.read_jsonl(path)
+        back = JsonlProvStore.read_jsonl(path)
         assert back.get_entity(entity).prov_type == prov_type
         assert back._entities == s._entities
 
@@ -412,30 +412,30 @@ class TestReadBackValidation:
         s.write_jsonl(path)
         relation_line = next(ln for ln in path.read_text().splitlines() if json.loads(ln)["record"] == "relation")
         path.write_text(path.read_text() + relation_line + "\n")
-        back = ProvStore.read_jsonl(path)
+        back = JsonlProvStore.read_jsonl(path)
         assert back.relations() == s.relations()
-        assert ProvStore.merge([back]).fingerprint() == back.fingerprint()
+        assert JsonlProvStore.merge([back]).fingerprint() == back.fingerprint()
 
     def test_a_ref_in_commit_sha_is_refused_on_read(self, tmp_path: Path) -> None:
         """A hand-edited ref in commit_sha fails the read, naming the record."""
         path = _written_model_agent(tmp_path)
         _rewrite_records(path, "agent", lambda rec: rec.update(commit_sha="main"))
         with pytest.raises(ValueError, match="agent-.*40-hex"):
-            ProvStore.read_jsonl(path)
+            JsonlProvStore.read_jsonl(path)
 
     def test_a_newline_suffixed_sha_is_refused_on_read(self, tmp_path: Path) -> None:
         """A newline-suffixed SHA fails the read exactly as it fails the write."""
         path = _written_model_agent(tmp_path)
         _rewrite_records(path, "agent", lambda rec: rec.update(commit_sha="9b2eb2853c426676255cc6ac5804b7f1fe8e563f\n"))
         with pytest.raises(ValueError, match="40-hex"):
-            ProvStore.read_jsonl(path)
+            JsonlProvStore.read_jsonl(path)
 
     def test_a_model_agent_with_neither_commit_nor_reason_is_refused_on_read(self, tmp_path: Path) -> None:
         """Silence about the commit is refused on read, as agent() refuses it on write."""
         path = _written_model_agent(tmp_path)
         _rewrite_records(path, "agent", lambda rec: rec.update(commit_sha=None))
         with pytest.raises(ValueError, match="commit_sha or unresolved_reason"):
-            ProvStore.read_jsonl(path)
+            JsonlProvStore.read_jsonl(path)
 
     def test_a_record_missing_required_keys_names_them(self, tmp_path: Path) -> None:
         """A record missing a key fails naming the key and the line, not with a bare TypeError."""
@@ -445,14 +445,14 @@ class TestReadBackValidation:
         s.write_jsonl(path)
         _rewrite_records(path, "activity", lambda rec: rec.pop("node"))
         with pytest.raises(ValueError, match=r"missing keys \['node'\]"):
-            ProvStore.read_jsonl(path)
+            JsonlProvStore.read_jsonl(path)
 
     def test_a_line_without_a_record_key_is_a_legible_error(self, tmp_path: Path) -> None:
         """A line that is not a record object fails legibly, not with a KeyError."""
         path = tmp_path / "prov.jsonl"
         path.write_text(f'{FORMAT_LINE}\n{{"id": "span-abc"}}\n')
         with pytest.raises(ValueError, match="'record' key"):
-            ProvStore.read_jsonl(path)
+            JsonlProvStore.read_jsonl(path)
 
     def test_an_unknown_relation_is_refused_on_read(self, tmp_path: Path) -> None:
         """A relation outside PROV's own six fails the read instead of loading quietly."""
@@ -464,7 +464,7 @@ class TestReadBackValidation:
         s.write_jsonl(path)
         _rewrite_records(path, "relation", lambda rec: rec.update(relation="causedBy"))
         with pytest.raises(ValueError, match="causedBy"):
-            ProvStore.read_jsonl(path)
+            JsonlProvStore.read_jsonl(path)
 
 
 class TestActivityTimestamps:
@@ -482,7 +482,7 @@ class TestActivityTimestamps:
         )
         path = tmp_path / "prov.jsonl"
         s.write_jsonl(path)
-        back = ProvStore.read_jsonl(path)
+        back = JsonlProvStore.read_jsonl(path)
         assert back._activities[act].started == "2026-08-21T10:00:00+00:00"
         assert back._activities[act].ended == "2026-08-21T10:00:07+00:00"
 
@@ -506,7 +506,7 @@ class TestSpeechStoreAdditions:
 
     def test_get_activity_returns_what_activity_recorded(self) -> None:
         """An entity's author node is reachable: generated_by -> get_activity -> .node."""
-        store = ProvStore(run_id="t")
+        store = JsonlProvStore(run_id="t")
         act = store.activity(node="SPEECH", step="diarize", parameters={})
         eid = store.entity(prov_type="artifact", extent=(1.0, 2.0), attributes={})
         store.was_generated_by(eid, act)
@@ -532,7 +532,7 @@ class TestActivityReads:
 class TestAtomicWrite:
     """``write_jsonl`` leaves the previous store or the new one whole, never a truncated file."""
 
-    def _two_versions(self, tmp_path: Path) -> tuple[ProvStore, Path, bytes]:
+    def _two_versions(self, tmp_path: Path) -> tuple[JsonlProvStore, Path, bytes]:
         s = _store()
         s.entity(prov_type="artifact", extent=None, attributes={"name": "first"})
         target = tmp_path / "store.jsonl"
@@ -559,7 +559,7 @@ class TestAtomicWrite:
         """The new store reads back whole; no temporary file stays in the directory."""
         s, target, _ = self._two_versions(tmp_path)
         s.write_jsonl(target)
-        names = {e.attributes["name"] for e in ProvStore.read_jsonl(target).entities("artifact")}
+        names = {e.attributes["name"] for e in JsonlProvStore.read_jsonl(target).entities("artifact")}
         assert names == {"first", "second"}
         assert [p.name for p in tmp_path.iterdir()] == ["store.jsonl"]
 
@@ -658,7 +658,7 @@ def _oracle(value: object) -> object:  # noqa: C901, PLR0911 - the reference dec
 
 
 def _id(value: object) -> str:
-    return ProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes={"value": value})
+    return JsonlProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes={"value": value})
 
 
 @settings(max_examples=500, deadline=None)
@@ -723,9 +723,9 @@ class _Opaque:
 def test_an_undeclared_value_raises_a_typed_error_at_the_boundary(
     attributes: dict[str, Any], path: str, type_name: str
 ) -> None:
-    """`ProvStore.entity` refuses a value outside the declared type with `UnrecordableValue` naming path and type."""
+    """`JsonlProvStore.entity` refuses a value outside the declared type, naming path and type."""
     with pytest.raises(provenance.UnrecordableValue) as caught:
-        ProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=attributes)
+        JsonlProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=attributes)
     assert caught.value.path == path and caught.value.type_name.endswith(type_name)
     assert path in str(caught.value) and type_name in str(caught.value)
 
@@ -742,14 +742,16 @@ def test_cycles_and_depth_raise_the_typed_error_through_the_shared_guard() -> No
         edge = [edge]
     for attributes in ({"loop": loop}, {"deep": deep}, {"edge": edge}):
         with pytest.raises(provenance.UnrecordableValue, match="contains itself|deeper"):
-            ProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=attributes)
+            JsonlProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=attributes)
 
 
 def test_a_level_measurement_of_silence_gets_an_id() -> None:
     """The regression: a measurement entity carrying `-inf` dB (digital silence) is recorded with an id."""
-    store = ProvStore(run_id="r")
+    store = JsonlProvStore(run_id="r")
     first = store.entity(prov_type="artifact", extent=(0.0, 1.0), attributes={"level_dbfs": float("-inf")})
-    again = ProvStore(run_id="r").entity(prov_type="artifact", extent=(0.0, 1.0), attributes={"level_dbfs": -math.inf})
+    again = JsonlProvStore(run_id="r").entity(
+        prov_type="artifact", extent=(0.0, 1.0), attributes={"level_dbfs": -math.inf}
+    )
     other = store.entity(prov_type="artifact", extent=(0.0, 1.0), attributes={"level_dbfs": -120.0})
     assert first == again != other
 
@@ -760,7 +762,7 @@ def test_a_real_file_entity_gets_an_id(tmp_path: Path) -> None:
     target.write_bytes(b"x")
     attributes = {"path": str(target), **provenance.file_attributes(target)}
     assert attributes[provenance.MTIME_KEY] == target.stat().st_mtime_ns > 2**53
-    ProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=attributes)
+    JsonlProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=attributes)
 
 
 @settings(max_examples=300, deadline=None)
@@ -774,7 +776,7 @@ def test_write_and_read_are_inverse_and_ids_recompute_from_the_file(
 
     Every record the writer accepts the reader accepts: they build records through one validator.
     """
-    store = ProvStore(run_id="run")
+    store = JsonlProvStore(run_id="run")
     eid = store.entity(prov_type="artifact", extent=(0.0, 1.5), attributes=attributes)
     aid = store.activity(node="N", step=None, parameters=parameters, started="t0")
     store.agent(agent_type="software", version="1")
@@ -782,7 +784,7 @@ def test_write_and_read_are_inverse_and_ids_recompute_from_the_file(
     store.was_generated_by(eid, aid)
     path = tmp_path_factory.mktemp("prov") / "prov.jsonl"
     store.write_jsonl(path)
-    back = ProvStore.read_jsonl(path)
+    back = JsonlProvStore.read_jsonl(path)
     assert back.records() == store.records() and back.relations() == store.relations()
     assert all(record.minted_id() == record.id for record in back.records())
     again = path.with_name("again.jsonl")
@@ -813,7 +815,7 @@ def test_a_file_without_the_provenance_2_format_record_is_refused_typed(
     path = tmp_path / "old.jsonl"
     path.write_text("\n".join([*([first] if first else []), *_PROVENANCE_1_LINES]) + "\n")
     with pytest.raises(provenance.ProvenanceFormatRefused) as refused:
-        ProvStore.read_jsonl(path)
+        JsonlProvStore.read_jsonl(path)
     assert refused.value.found == found and refused.value.path == str(path)
     assert "migration-ledger.md" in str(refused.value) and "re-run" in str(refused.value)
     if first is None:
@@ -825,7 +827,7 @@ def test_an_empty_file_is_refused_typed(tmp_path: Path) -> None:
     path = tmp_path / "empty.jsonl"
     path.write_text("")
     with pytest.raises(provenance.ProvenanceFormatRefused):
-        ProvStore.read_jsonl(path)
+        JsonlProvStore.read_jsonl(path)
 
 
 def test_a_kind_entity_is_refused_by_the_writer_and_the_reader(tmp_path: Path) -> None:
@@ -839,7 +841,7 @@ def test_a_kind_entity_is_refused_by_the_writer_and_the_reader(tmp_path: Path) -
     store.write_jsonl(path)
     _rewrite_records(path, "entity", lambda rec: rec.update(prov_type="kind"))
     with pytest.raises(ValueError, match="unknown prov_type 'kind'"):
-        ProvStore.read_jsonl(path)
+        JsonlProvStore.read_jsonl(path)
 
 
 def test_every_store_the_writer_writes_is_provenance_2_and_every_record_carries_its_run_id(
@@ -851,7 +853,7 @@ def test_every_store_the_writer_writes_is_provenance_2_and_every_record_carries_
     path = tmp_path / "prov.jsonl"
     store.write_jsonl(path)
     assert path.read_text().splitlines()[0] == FORMAT_LINE
-    assert all(record.run_id == "run-1" for record in ProvStore.read_jsonl(path).records())
+    assert all(record.run_id == "run-1" for record in JsonlProvStore.read_jsonl(path).records())
 
 
 _RECORD_FIELDS: dict[type, dict[str, object]] = {
@@ -882,7 +884,7 @@ def test_revised_keeps_the_run_and_mints_the_id_of_the_new_content(record_type: 
     value = {"extent": (0.0, 1.0), "step": "s", "version": "2", "label": "other"}[name]
     changed = provenance.revised(record, **{name: value})
     assert changed.run_id == "r" and changed.id == changed.minted_id() and changed.id != record.id
-    ProvStore.merge([])._hold(changed)
+    JsonlProvStore.merge([])._hold(changed)
     for frozen in ("id", "run_id"):
         with pytest.raises(ValueError, match="cannot revise"):
             provenance.revised(record, **{frozen: "x"})
@@ -898,11 +900,11 @@ def test_the_store_records_again_every_form_it_returns(
     Recording `get_entity(x).attributes` mints `x` again; a new mapping holding read-back objects records them as
     they are; `revised` adds a value as the store would record it; write, read and write give identical lines.
     """
-    store = ProvStore(run_id="run")
+    store = JsonlProvStore(run_id="run")
     eid = store.entity(prov_type="artifact", extent=(0.0, 1.0), attributes=attributes)
     path = tmp_path_factory.mktemp("prov") / "prov.jsonl"
     store.write_jsonl(path)
-    back = ProvStore.read_jsonl(path, run_id="run")
+    back = JsonlProvStore.read_jsonl(path, run_id="run")
     held = cast(dict[str, object], back.get_entity(eid).attributes)
     assert back.entity(prov_type="artifact", extent=(0.0, 1.0), attributes=held) == eid
     nested = back.entity(prov_type="artifact", extent=None, attributes={"inner": held, "list": [held]})
@@ -914,9 +916,9 @@ def test_the_store_records_again_every_form_it_returns(
     again = path.with_name("again.jsonl")
     back.write_jsonl(again)
     third = path.with_name("third.jsonl")
-    ProvStore.read_jsonl(again, run_id="run").write_jsonl(third)
+    JsonlProvStore.read_jsonl(again, run_id="run").write_jsonl(third)
     assert again.read_bytes() == third.read_bytes()
-    assert all(record.minted_id() == record.id for record in ProvStore.read_jsonl(third).records())
+    assert all(record.minted_id() == record.id for record in JsonlProvStore.read_jsonl(third).records())
 
 
 def test_with_entity_attributes_keeps_order_and_relations_and_remints_the_edited_entity() -> None:
@@ -983,12 +985,12 @@ def test_every_read_path_hands_back_the_decoded_value_never_a_token(
     tmp_path_factory: pytest.TempPathFactory, value: object, key: str
 ) -> None:
     """On every read path a caller reads each family decoded, as its decoded type, and records it again losslessly."""
-    store = ProvStore(run_id="run")
+    store = JsonlProvStore(run_id="run")
     eid = store.entity(prov_type="artifact", extent=None, attributes={key: value})
     aid = store.activity(node="N", step=None, parameters={key: value})
     path = tmp_path_factory.mktemp("prov") / "prov.jsonl"
     store.write_jsonl(path)
-    back = ProvStore.read_jsonl(path, run_id="run")
+    back = JsonlProvStore.read_jsonl(path, run_id="run")
     raw = [json.loads(line) for line in path.read_text().splitlines()]
     (line,) = [r for r in raw if r.get("id") == eid]
     reads = {
@@ -1043,7 +1045,7 @@ def test_every_read_back_equals_another_read_back_of_the_same_value(value: objec
 @pytest.mark.logic
 def test_recorded_content_cannot_drift_from_its_id(tmp_path: Path) -> None:
     """Mutating what was passed in, or what `get_entity` returns, cannot change a recorded entity."""
-    store = ProvStore(run_id="r")
+    store = JsonlProvStore(run_id="r")
     attributes: dict[str, object] = {"ev": {"n": [1, 2, 3]}}
     extent = [0.0, 1.0]
     eid = store.entity(prov_type="artifact", extent=extent, attributes=attributes)  # type: ignore[arg-type]
@@ -1062,9 +1064,9 @@ def test_recorded_content_cannot_drift_from_its_id(tmp_path: Path) -> None:
     act = store.get_activity(store.activity(node="N", step=None, parameters={"p": [1]}))
     with pytest.raises(TypeError):
         act.parameters["p"] = 2  # type: ignore[index]
-    timed = ProvStore(run_id="r")
+    timed = JsonlProvStore(run_id="r")
     timed.activity(node="N", step=None, parameters={"p": [1]}, started="2026-01-01T00:00:00Z")
-    one, other = ProvStore.merge([store, timed]), ProvStore.merge([timed, store])
+    one, other = JsonlProvStore.merge([store, timed]), JsonlProvStore.merge([timed, store])
     assert one.records() == other.records() and one.get_activity(act.id).started == "2026-01-01T00:00:00Z"
 
 
@@ -1078,7 +1080,7 @@ def test_jsonl_is_lossless_and_ids_recompute(tmp_path: Path) -> None:
 
     one, two = numpy.arange(2000), numpy.arange(2000)
     two[1000] = -1
-    store = ProvStore(run_id="r")
+    store = JsonlProvStore(run_id="r")
     for array in (one, two):
         store.entity(
             prov_type="artifact",
@@ -1097,7 +1099,7 @@ def test_jsonl_is_lossless_and_ids_recompute(tmp_path: Path) -> None:
     store.write_jsonl(path)
     lines = path.read_bytes().splitlines()
     assert all(json.loads(line) is not None for line in lines) and b"NaN" not in b"".join(lines).replace(b'"NaN"', b"")
-    back = ProvStore.read_jsonl(path)
+    back = JsonlProvStore.read_jsonl(path)
     assert back.records() == store.records() and len(back.entities()) == 2
     assert all(record.minted_id() == record.id for record in back.records())
     again = tmp_path / "again.jsonl"
@@ -1108,7 +1110,7 @@ def test_jsonl_is_lossless_and_ids_recompute(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_a_line_without_a_run_id_is_refused(tmp_path: Path) -> None:
     """A 2.0 line whose `run_id` is null is refused; `revised` keeps the run and re-mints the id."""
-    store = ProvStore(run_id="r")
+    store = JsonlProvStore(run_id="r")
     eid = store.entity(prov_type="artifact", extent=(0.0, 1.0), attributes={"a": 1})
     edited = revised(store.get_entity(eid), attributes={"a": 2})
     assert edited.run_id == "r" and edited.id != eid and edited.id == edited.minted_id()
@@ -1118,19 +1120,19 @@ def test_a_line_without_a_run_id_is_refused(tmp_path: Path) -> None:
         b"".join(jcs_dumps(row) + b"\n" for row in [{"format": "provenance@2.0", "record": "format"}, line])
     )
     with pytest.raises(ValueError, match="run_id must be text"):
-        ProvStore.read_jsonl(path)
+        JsonlProvStore.read_jsonl(path)
     store.write_jsonl(path)
     written = path.read_text()
     for bad, refusal in (("[NaN, 1.0]", "non-finite"), ("[0, 1e400]", "finite")):
         path.write_text(written.replace('"extent": [0.0, 1.0]', f'"extent": {bad}'))
         with pytest.raises(ValueError, match=refusal):
-            ProvStore.read_jsonl(path)
+            JsonlProvStore.read_jsonl(path)
 
 
 @pytest.mark.logic
 def test_write_refuses_what_read_refuses() -> None:
     """Unknown types and kinds, non-mapping attributes and malformed extents are refused when written."""
-    store = ProvStore(run_id="r")
+    store = JsonlProvStore(run_id="r")
     with pytest.raises(ValueError):
         store.entity(prov_type="bogus", extent=None, attributes={})  # type: ignore[arg-type]
     with pytest.raises(ValueError):
