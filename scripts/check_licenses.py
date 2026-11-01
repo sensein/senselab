@@ -4,7 +4,7 @@ The packages are the runtime dependencies of ``senselab``, ``senselab-core`` and
 transitive ones included. Each package's license is read from the metadata installed in the environment, in this
 order: the PEP 639 ``License-Expression``, a one-line ``License`` field that parses, a trove classifier, a dated
 manual record. A package not installed here (a platform-only dependency) has only the manual record. The native
-libraries a wheel bundles are found in its ``RECORD`` and each needs a record of its own. The policy, with the
+libraries a wheel bundles are found in its ``RECORD`` and each needs a record of its own, declared under that package. The policy, with the
 named license sets, the set each distribution allows and ``on_missing``, is ``scripts/data/license_policy.yaml``.
 
 Usage::
@@ -28,7 +28,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = Path(__file__).resolve().parent / "data" / "license_policy.yaml"
 LOCK = ROOT / "uv.lock"
-POLICY_FORMAT = "license-policy@1.1"
+POLICY_FORMAT = "license-policy@1.2"
 DISTRIBUTIONS = ("senselab", "senselab-core", "senselab-worker")
 ON_MISSING = ("raise", "warn")
 
@@ -55,7 +55,7 @@ class Policy(NamedTuple):
     aliases: dict[str, str]
     classifiers: dict[str, str]
     manual: dict[str, Record]
-    bundled: dict[str, Record]
+    bundled: dict[str, dict[str, Record]]
 
 
 def _norm(name: str) -> str:
@@ -91,7 +91,10 @@ def load_policy(path: Path = POLICY) -> Policy:
         distributions[name] = frozenset().union(*(sets[s] for s in entry["allow"]))
         bundled_allow[name] = frozenset().union(*(sets[s] for s in entry.get("allow_bundled", entry["allow"])))
     manual = {_norm(m["package"]): _record(m, f"manual {m['package']}") for m in raw.get("manual") or []}
-    bundled = {name: _record(entry, f"bundled {name}") for name, entry in (raw.get("bundled_libraries") or {}).items()}
+    bundled = {
+        _norm(package): {lib: _record(entry, f"bundled {package} {lib}") for lib, entry in libraries.items()}
+        for package, libraries in (raw.get("bundled_libraries") or {}).items()
+    }
     return Policy(
         raw["on_missing"], sets, distributions, bundled_allow, raw["aliases"], raw["classifiers"], manual, bundled
     )
@@ -257,9 +260,8 @@ def check(closure: dict[str, set[str]], policy: Policy, installed: dict[str, met
         record = record or policy.manual.get(_norm(name))
         out.append(_judge(name, record, closure[name], policy, dist.version if dist else "not installed"))
         for lib, file in sorted(bundled_libraries(dist).items() if dist else []):
-            out.append(
-                _judge(f"{name} bundles {lib} ({file})", policy.bundled.get(lib), closure[name], policy, bundled=True)
-            )
+            record = policy.bundled.get(_norm(name), {}).get(lib)
+            out.append(_judge(f"{name} bundles {lib} ({file})", record, closure[name], policy, bundled=True))
     return out
 
 

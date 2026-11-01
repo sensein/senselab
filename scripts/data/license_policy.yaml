@@ -1,4 +1,4 @@
-format: license-policy@1.1
+format: license-policy@1.2
 # The license policy for the locked packages the 2.x distributions ship, read by scripts/check_licenses.py.
 # A package is allowed when its license expression, and the license of each native library its wheel bundles,
 # lies in the union of the named sets its distributions allow. A package that two distributions need must be
@@ -85,38 +85,42 @@ manual:
   reason: Installed on Windows only (a tqdm dependency), so the CI environment has no metadata for it.
 
 # Native libraries a wheel bundles, found from the wheel's RECORD (a shared library that is not a Python extension
-# module), keyed by the library's name without `lib`, version, hash and architecture. A bundled library with no
-# entry here is a missing record.
+# module), keyed by the package that bundles it and then by the library's name without `lib`, version, hash and
+# architecture. A record holds only for the package it sits under: another package shipping a file of that name has
+# no record. A bundled library with no entry under its package is a missing record.
 bundled_libraries:
-  sndfile:
-    expression: LGPL-2.1-or-later
-    source: https://github.com/libsndfile/libsndfile/blob/master/COPYING
-    verified: {date: '2026-11-01', how: manual}
-  scipy_openblas64:
-    expression: BSD-3-Clause
-    source: https://github.com/MacPython/openblas-libs/blob/main/LICENSE
-    verified: {date: '2026-11-01', how: manual}
-  scipy_openblas:
-    expression: BSD-3-Clause
-    source: https://github.com/MacPython/openblas-libs/blob/main/LICENSE
-    verified: {date: '2026-11-01', how: manual}
-  openblas:
-    expression: BSD-3-Clause
-    source: https://github.com/OpenMathLib/OpenBLAS/blob/develop/LICENSE
-    verified: {date: '2026-11-01', how: manual}
-  gfortran:
-    expression: GPL-3.0-or-later WITH GCC-exception-3.1
-    source: https://gcc.gnu.org/onlinedocs/libstdc++/manual/license.html
-    verified: {date: '2026-11-01', how: manual}
-  gcc_s:
-    expression: GPL-3.0-or-later WITH GCC-exception-3.1
-    source: https://gcc.gnu.org/onlinedocs/libstdc++/manual/license.html
-    verified: {date: '2026-11-01', how: manual}
-  quadmath:
-    expression: LGPL-2.1-or-later
-    source: https://gcc.gnu.org/onlinedocs/libquadmath/
-    verified: {date: '2026-11-01', how: manual}
-  ffi:
-    expression: MIT
-    source: https://github.com/libffi/libffi/blob/master/LICENSE
-    verified: {date: '2026-11-01', how: manual}
+  cffi:
+    ffi:
+      expression: MIT
+      source: https://github.com/libffi/libffi/blob/master/LICENSE
+      verified: {date: '2026-11-01', how: manual}
+  numpy:
+    scipy_openblas64:
+      expression: BSD-3-Clause
+      source: https://github.com/MacPython/openblas-libs/blob/main/LICENSE
+      verified: {date: '2026-11-01', how: manual}
+    scipy_openblas:
+      expression: BSD-3-Clause
+      source: https://github.com/MacPython/openblas-libs/blob/main/LICENSE
+      verified: {date: '2026-11-01', how: manual}
+    openblas:
+      expression: BSD-3-Clause
+      source: https://github.com/OpenMathLib/OpenBLAS/blob/develop/LICENSE
+      verified: {date: '2026-11-01', how: manual}
+    gfortran:
+      expression: GPL-3.0-or-later WITH GCC-exception-3.1
+      source: https://gcc.gnu.org/onlinedocs/libstdc++/manual/license.html
+      verified: {date: '2026-11-01', how: manual}
+    gcc_s:
+      expression: GPL-3.0-or-later WITH GCC-exception-3.1
+      source: https://gcc.gnu.org/onlinedocs/libstdc++/manual/license.html
+      verified: {date: '2026-11-01', how: manual}
+    quadmath:
+      expression: LGPL-2.1-or-later
+      source: https://gcc.gnu.org/onlinedocs/libquadmath/
+      verified: {date: '2026-11-01', how: manual}
+  soundfile:
+    sndfile:
+      expression: LGPL-2.1-or-later
+      source: https://github.com/libsndfile/libsndfile/blob/master/COPYING
+      verified: {date: '2026-11-01', how: manual}

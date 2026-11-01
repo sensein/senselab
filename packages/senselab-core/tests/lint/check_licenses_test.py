@@ -74,7 +74,7 @@ def _broken(tmp_path: Path, name: str, mutate: Callable[[dict[str, Any]], object
         ("unknown_set", lambda raw: raw["distributions"]["senselab"].update(allow=["nonesuch"])),
         ("on_missing", lambda raw: raw.update(on_missing="ignore")),
         ("date", lambda raw: raw["manual"][0]["verified"].pop("date")),
-        ("bundled_source", lambda raw: raw["bundled_libraries"]["sndfile"].pop("source")),
+        ("bundled_source", lambda raw: raw["bundled_libraries"]["soundfile"]["sndfile"].pop("source")),
         ("format", lambda raw: raw.update(format="license-policy@0")),
     ],
 )
@@ -170,13 +170,14 @@ def test_a_manual_record_is_the_fallback_and_never_overrides_metadata() -> None:
         ("numpy.libs/libgfortran-040039e1-0352e75f.so.5.0.0", "gfortran"),
         ("numpy.libs/libquadmath-96973f99-934c22de.so.0.0.0", "quadmath"),
         ("cffi.libs/libffi-3a37023a.so.8.1.0", "ffi"),
-        ("pkg.libs/libgcc_s-a3a07e5c.so.1", "gcc_s"),
+        ("numpy.libs/libgcc_s-a3a07e5c.so.1", "gcc_s"),
     ],
 )
 def test_a_bundled_library_is_named_without_prefix_version_hash_or_architecture(path: str, name: str) -> None:
     """The names the policy keys on come from the wheel's file names, on Linux and macOS."""
     assert lic.library_name(path) == name
-    assert name in POLICY.bundled
+    package = {"_soundfile_data": "soundfile", "numpy.libs": "numpy", "cffi.libs": "cffi"}[path.partition("/")[0]]
+    assert name in POLICY.bundled[package]
 
 
 def test_bundled_libraries_exclude_python_extension_modules() -> None:
@@ -198,13 +199,28 @@ def test_a_bundled_library_with_no_record_is_a_finding_and_a_copyleft_one_follow
     unlisted = FakeDist("x", {"License-Expression": "MIT"}, ["x.libs/libmystery-0a1b2c3d.so"])
     found = lic.check({"x": {"senselab-core"}}, POLICY, {"x": unlisted})
     assert [f.problem for f in found] == ["", "no license record"]
-    sndfile = FakeDist("x", {"License-Expression": "MIT"}, ["_soundfile_data/libsndfile_arm64.dylib"])
-    assert [f.problem for f in lic.check({"x": {"senselab-core"}}, POLICY, {"x": sndfile})] == ["", ""]
-    assert lic.check({"x": {"senselab-worker"}}, POLICY, {"x": sndfile})[1].problem == ""
+    sndfile = FakeDist("soundfile", {"License-Expression": "MIT"}, ["_soundfile_data/libsndfile_arm64.dylib"])
+    assert [f.problem for f in lic.check({"soundfile": {"senselab-core"}}, POLICY, {"soundfile": sndfile})] == ["", ""]
+    assert lic.check({"soundfile": {"senselab-worker"}}, POLICY, {"soundfile": sndfile})[1].problem == ""
     strict = POLICY._replace(
         bundled_allow={**POLICY.bundled_allow, "senselab-worker": POLICY.distributions["senselab-worker"]}
     )
-    assert lic.check({"x": {"senselab-worker"}}, strict, {"x": sndfile})[1].problem == "not allowed for senselab-worker"
+    found = lic.check({"soundfile": {"senselab-worker"}}, strict, {"soundfile": sndfile})
+    assert found[1].problem == "not allowed for senselab-worker"
+
+
+_DECLARED = [(package, lib) for package, libraries in sorted(POLICY.bundled.items()) for lib in sorted(libraries)]
+
+
+@pytest.mark.parametrize(("package", "lib"), _DECLARED)
+@pytest.mark.parametrize("impostor", ["x", "mystery-wheel"])
+def test_a_bundled_record_holds_only_for_the_package_that_declares_it(package: str, lib: str, impostor: str) -> None:
+    """Each declared library passes under its own package and is a missing record under any other, whatever its name."""
+    file = f"{package}.libs/lib{lib}-0a1b2c3d.so.1"
+    for owner, expected in [(package, ""), (impostor, "no license record")]:
+        dist = FakeDist(owner, {"License-Expression": "MIT"}, [file.replace(package, owner, 1)])
+        found = lic.check({owner: {"senselab-core"}}, POLICY, {owner: dist})
+        assert [f.problem for f in found] == ["", expected], (owner, found)
 
 
 def test_lgpl_fails_as_a_package_under_the_worker_and_passes_as_a_bundled_library() -> None:
@@ -212,8 +228,11 @@ def test_lgpl_fails_as_a_package_under_the_worker_and_passes_as_a_bundled_librar
     lgpl_package = _dist(License_Expression="LGPL-3.0-or-later")
     found = lic.check({"x": {"senselab-worker"}}, POLICY, {"x": lgpl_package})
     assert [f.problem for f in found] == ["not allowed for senselab-worker"]
-    bundles = FakeDist("x", {"License-Expression": "MIT"}, ["_soundfile_data/libsndfile_arm64.dylib"])
-    assert [f.problem for f in lic.check({"x": {"senselab-worker"}}, POLICY, {"x": bundles})] == ["", ""]
+    bundles = FakeDist("soundfile", {"License-Expression": "MIT"}, ["_soundfile_data/libsndfile_arm64.dylib"])
+    assert [f.problem for f in lic.check({"soundfile": {"senselab-worker"}}, POLICY, {"soundfile": bundles})] == [
+        "",
+        "",
+    ]
 
 
 def test_the_locked_closure_is_transitive_and_records_who_needs_each_package(tmp_path: Path) -> None:
