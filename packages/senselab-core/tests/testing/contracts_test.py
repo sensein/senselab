@@ -4,6 +4,7 @@ import hashlib
 import os
 import subprocess
 import sys
+import unittest
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -15,8 +16,10 @@ from pydantic import BaseModel, ConfigDict
 from senselab_core.kernel import declare
 from senselab_core.kernel.declare import REGISTRY, BackendParams, BackendSpec, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey
+from senselab_core.kernel.license import License, MissingLicense
 from senselab_core.runtime.fake_backend import FAKE
 from senselab_core.runtime.keys import Call, Placement, build_key
+from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.worker_client import WorkerFatal
 from senselab_core.testing.contracts import PLACEMENT_ONLY, contract_cases
 
@@ -78,7 +81,7 @@ def _case(registry: Registry, name: str, **kwargs: Any) -> Callable[[], None]:  
 def test_a_good_declaration_passes_every_offline_case() -> None:
     """The fixture declaration is valid, so the failures below come from the one defect each introduces."""
     for name, case in contract_cases(_registry({})):
-        if name.endswith(("content_fault_isolated", "key_independent_of_hash_seed")):
+        if name.endswith(("content_fault_isolated", "key_independent_of_hash_seed", "backend_license")):
             continue
         case()
 
@@ -219,6 +222,32 @@ def test_worker_backend_gets_contract_cases() -> None:
     """A backend on any stack gets `content_fault_isolated`, which runs its worker; no stack is refused."""
     registry = _registry({}, {"stack": "torch", "env": {"kind": "isolated", "name": "torch-env"}})
     _case(registry, "fake::content_fault_isolated")()
+
+
+def _lic(expression: str, **overrides: object) -> License:
+    return license_record(
+        expression,
+        source="a lock",
+        verified={"date": "2026-11-01", "how": "pep639"},
+        gated=False,
+        **overrides,  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.logic
+def test_backend_license_case_derives_from_supplied_lock_records() -> None:
+    """The case passes on consistent lock records, fails on a record whose flags contradict it or is absent."""
+    case = _case(
+        _registry({}), "fake::backend_license", lock_records=lambda b: {"a": _lic("MIT"), "b": _lic("MPL-2.0")}
+    )
+    case()
+    contradiction = License.model_validate({**_lic("GPL-3.0-only").model_dump(), "copyleft": "none"})
+    with pytest.raises(ValueError, match="contradict"):
+        _case(_registry({}), "fake::backend_license", lock_records=lambda b: {"a": contradiction})()
+    with pytest.raises(MissingLicense, match="package a"):
+        _case(_registry({}), "fake::backend_license", lock_records=lambda b: {"a": None})()
+    with pytest.raises(unittest.SkipTest):
+        _case(_registry({}), "fake::backend_license")()
 
 
 @pytest.fixture

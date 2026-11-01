@@ -70,6 +70,7 @@ from senselab_core.kernel.signals import (
 from senselab_core.kernel.time import Span, TimeAnchor, TimeMap
 from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER
+from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.fetch import DataFile, DataManifest
 from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.storage import StorePolicy
@@ -520,6 +521,18 @@ def _manifest(version: str = "1") -> DataManifest:
     )
 
 
+def _catalogue_entry(model_id: str = "org/m", revision: str = _COMMIT) -> CatalogueEntry:
+    return CatalogueEntry(
+        id=model_id,
+        revision=revision,
+        tasks=("t",),
+        backends=("b",),
+        stacks=("s",),
+        license=_license(),
+        default_for=("t",),
+    )
+
+
 def _register_kernel_samples() -> None:
     ns = numpy.array([0, 10, 20])
     labels = numpy.array(["a", "b", "c"])
@@ -735,6 +748,16 @@ def _register_runtime_samples() -> None:
             {"files": (_data_file("a"), _data_file("a/b"))},
             {"name": "a/b"},
         ],
+    )
+    register_samples(
+        CatalogueEntry,
+        lambda: [_catalogue_entry(), _catalogue_entry("org/n", _SHA)],
+        invalid_updates=[{"revision": "main"}, {"resources": {"a": 1}}, {"default_for": ("other",)}],
+    )
+    register_samples(
+        Catalogue,
+        lambda: [Catalogue(entries=(_catalogue_entry(),)), Catalogue(entries=(_catalogue_entry("org/n"),))],
+        invalid_updates=[{"entries": (_catalogue_entry(), _catalogue_entry())}, {"format": "catalogue@2.0"}],
     )
     register_samples(
         StorePolicy,

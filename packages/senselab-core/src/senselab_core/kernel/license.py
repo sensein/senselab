@@ -9,6 +9,9 @@ from pydantic import AfterValidator, StrictBool
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr, StrMap
 
+VERIFIED_HOW: tuple[str, ...] = ("hf-card", "pep639", "manual")
+"""The methods a license record may name in `verified["how"]`."""
+
 
 class MissingLicense(LookupError):
     """A license record is required and absent."""
@@ -20,8 +23,8 @@ def _check_verified(v: Mapping[str, str]) -> Mapping[str, str]:
     if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", v["date"]):
         raise ValueError(f"verified date must be YYYY-MM-DD, got {v['date']!r}")
     datetime.date.fromisoformat(v["date"])
-    if not v["how"]:
-        raise ValueError("verified 'how' must name the method, such as hf-card, pep639 or manual")
+    if v["how"] not in VERIFIED_HOW:
+        raise ValueError(f"verified 'how' must be one of {list(VERIFIED_HOW)}, got {v['how']!r}")
     return v
 
 
@@ -32,8 +35,7 @@ Verified = Annotated[StrMap, AfterValidator(_check_verified)]
 class License(Frozen):
     """A license record: an SPDX `expression`, its derived flags, where it was read and how it was verified.
 
-    `verified` holds at least `date` (ISO `YYYY-MM-DD`) and `how` (for example `hf-card`, `pep639`,
-    `manual`); it is read-only.
+    `verified` holds at least `date` (ISO `YYYY-MM-DD`) and `how` (one of `VERIFIED_HOW`); it is read-only.
     """
 
     expression: NonEmptyStr

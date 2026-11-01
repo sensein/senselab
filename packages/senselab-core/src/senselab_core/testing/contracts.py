@@ -12,6 +12,9 @@ with `key_builder` (default `build_key`): `key_deterministic`; `key_changes_with
 `ExecutionContext` field; `key_independent_of_hash_seed`; and `content_fault_isolated`, which runs
 the backend's worker on its load stub.
 
+`backend_license` derives the backend's code license from `lock_records(backend)` and checks every package record
+and the result against the license table; it is skipped when no `lock_records` is given.
+
 `key_independent_of_hash_seed` builds the base call's key in two interpreters started with
 `PYTHONHASHSEED=1` and `PYTHONHASHSEED=2`. Each imports the params models and the key builder by
 `__module__` and `__qualname__`, so they must be defined at module level.
@@ -39,13 +42,17 @@ from senselab_worker.faults import FaultClass
 from senselab_core.kernel._base import thawed
 from senselab_core.kernel.declare import OUTPUT_AFFECTING, BackendSpec, Registry, TaskSpec
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelRef, ResolvedModel
+from senselab_core.kernel.license import License
 from senselab_core.runtime.keys import Call, Placement, build_key
+from senselab_core.runtime.licenses import backend_license, check_license
 from senselab_core.runtime.worker_client import WorkerClient
 
 Case = Callable[[], None]
 P = TypeVar("P", bound=BaseModel)
 KeyBuilder = Callable[[Call, Placement, ExecutionContext], LogicalKey]
 """`build_key`'s call shape."""
+LockRecords = Callable[[BackendSpec], Mapping[str, License | None]]
+"""A backend's env-lock package records, `package name -> license record` (`None` for a package without one)."""
 
 HASH_SEEDS: tuple[str, str] = ("1", "2")
 """The `PYTHONHASHSEED` values `key_independent_of_hash_seed` builds a key under."""
@@ -92,7 +99,11 @@ BASE_CONTEXT: Mapping[str, Any] = {
 
 
 def contract_cases(
-    registry: Registry, *, key_builder: KeyBuilder = build_key, hash_seed_timeout_s: float = HASH_SEED_TIMEOUT_S
+    registry: Registry,
+    *,
+    key_builder: KeyBuilder = build_key,
+    hash_seed_timeout_s: float = HASH_SEED_TIMEOUT_S,
+    lock_records: LockRecords | None = None,
 ) -> list[tuple[str, Case]]:
     """Return the contract cases of every task and backend in `registry`, with their ids.
 
@@ -106,7 +117,7 @@ def contract_cases(
             label = backend.name if names[backend.name] == 1 else f"{task.name}/{backend.name}"
             cases += [
                 (f"{label}::{case}", functools.partial(fn, task, backend))
-                for case, fn in _backend_cases(backend, key_builder, hash_seed_timeout_s)
+                for case, fn in _backend_cases(backend, key_builder, hash_seed_timeout_s, lock_records)
             ]
     return cases
 
@@ -116,7 +127,7 @@ def _task_cases(task: TaskSpec) -> list[tuple[str, Callable[[TaskSpec], None]]]:
 
 
 def _backend_cases(
-    backend: BackendSpec, build: KeyBuilder, hash_seed_timeout_s: float
+    backend: BackendSpec, build: KeyBuilder, hash_seed_timeout_s: float, lock_records: LockRecords | None
 ) -> list[tuple[str, Callable[[TaskSpec, BackendSpec], None]]]:
     cases: list[tuple[str, Callable[[TaskSpec, BackendSpec], None]]] = [
         ("key_deterministic", functools.partial(_key_deterministic, build)),
@@ -134,7 +145,19 @@ def _backend_cases(
         ("key_independent_of_hash_seed", functools.partial(_key_independent_of_hash_seed, build, hash_seed_timeout_s))
     )
     cases.append(("content_fault_isolated", _content_fault_isolated))
+    cases.append(("backend_license", functools.partial(_backend_license, lock_records)))
     return cases
+
+
+def _backend_license(lock_records: LockRecords | None, task: TaskSpec, backend: BackendSpec) -> None:
+    if lock_records is None:
+        raise unittest.SkipTest("no lock records supplied; nothing to derive a license from")
+    records = lock_records(backend)
+    for name, record in records.items():
+        if record is not None:
+            check_license(record)
+    derived = backend_license(backend, records)
+    assert check_license(derived) == derived, "the derived license does not match its expression"
 
 
 def _params_round_trip(task: TaskSpec) -> None:

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import yaml
+from senselab_core.runtime.licenses import allows, ids_of, parse_expression
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = Path(__file__).resolve().parent / "data" / "license_policy.yaml"
@@ -34,7 +35,6 @@ ON_MISSING = ("raise", "warn")
 
 _SHARED = re.compile(r"\.(?:so(?:\.\d+)*|dylib|dll)$")
 _EXTENSION = re.compile(r"\.(?:cpython-\d+\w*-[\w-]+|abi3|pypy\d+-\w+)\.(?:so|dylib)$|\.pyd$")
-_TOKEN = re.compile(r"\(|\)|[^\s()]+")
 
 
 class Record(NamedTuple):
@@ -113,70 +113,6 @@ def locked_closure(lock: Path = LOCK, roots: tuple[str, ...] = DISTRIBUTIONS) ->
             needed_by.setdefault(name, set()).add(root)
             stack += [d["name"] for d in packages[name].get("dependencies", [])]
     return needed_by
-
-
-def parse_expression(text: str) -> Any:
-    """Parse an SPDX expression into nested tuples: ``("or", a, b)``, ``("and", a, b)`` or an id string."""
-    tokens = _TOKEN.findall(text)
-    pos = 0
-
-    def peek() -> str | None:
-        return tokens[pos] if pos < len(tokens) else None
-
-    def take() -> str:
-        nonlocal pos
-        if pos >= len(tokens):
-            raise ValueError(f"expression ends early: {text!r}")
-        pos += 1
-        return tokens[pos - 1]
-
-    def atom() -> Any:
-        if peek() == "(":
-            take()
-            inner = either()
-            if peek() != ")":
-                raise ValueError(f"unbalanced parentheses in {text!r}")
-            take()
-            return inner
-        if peek() is None or peek() in (")", "AND", "OR", "WITH"):
-            raise ValueError(f"expected a license id in {text!r}")
-        name = take()
-        if peek() == "WITH":
-            take()
-            name = f"{name} WITH {take()}"
-        return name
-
-    def both() -> Any:
-        node = atom()
-        while peek() == "AND":
-            take()
-            node = ("and", node, atom())
-        return node
-
-    def either() -> Any:
-        node = both()
-        while peek() == "OR":
-            take()
-            node = ("or", node, both())
-        return node
-
-    tree = either()
-    if peek() is not None:
-        raise ValueError(f"trailing text in {text!r}")
-    return tree
-
-
-def ids_of(tree: Any) -> list[str]:
-    """Every license id in a parsed expression."""
-    return [tree] if isinstance(tree, str) else [i for part in tree[1:] for i in ids_of(part)]
-
-
-def allows(tree: Any, allowed: frozenset[str]) -> bool:
-    """Whether the expression is satisfied by the `allowed` ids: ``AND`` needs both sides, ``OR`` either."""
-    if isinstance(tree, str):
-        return tree.lower() in allowed
-    left, right = allows(tree[1], allowed), allows(tree[2], allowed)
-    return (left and right) if tree[0] == "and" else (left or right)
 
 
 def _known(policy: Policy) -> frozenset[str]:

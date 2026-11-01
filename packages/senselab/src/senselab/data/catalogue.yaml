@@ -1,0 +1,77 @@
+format: catalogue@1.0
+# Every Phase 2 model, pinned by the commit its hub metadata query returned on 2026-11-01 (no weights read).
+# `license` is the hub card's license field; flags are derived from the expression. `default_for` names the task
+# the model is the default of. Resource tables stay empty until the scale ladder.
+entries:
+- id: openai/whisper-large-v3-turbo
+  revision: 41f01f3fe87f28c78e2fbf8b568835947dd65ed9
+  tasks: [speech_to_text]
+  backends: [whisper-transformers]
+  stacks: [transformers]
+  default_for: [speech_to_text]
+  license:
+    expression: MIT
+    source: openai/whisper-large-v3-turbo README.md at 41f01f3fe87f28c78e2fbf8b568835947dd65ed9
+    verified: {date: 2026-11-01, how: hf-card}
+    gated: false
+  resources: {}
+- id: nyralabs/CrisperWhisper2.0_turbo
+  revision: de0369c8a68025b7f6e86387b6eb5a3b369787c8
+  tasks: [speech_to_text]
+  backends: [crisperwhisper-ct2, crisperwhisper-transformers]
+  stacks: [ct2, transformers]
+  default_for: []
+  license:
+    expression: LicenseRef-nyra-health-non-commercial-research
+    source: nyralabs/CrisperWhisper2.0_turbo README.md at de0369c8a68025b7f6e86387b6eb5a3b369787c8 (license_name nyra-health-non-commercial-research)
+    verified: {date: 2026-11-01, how: hf-card}
+    gated: false
+  resources: {}
+- id: pyannote/speaker-diarization-community-1
+  revision: 3533c8cf8e369892e6b79ff1bf80f7b0286a54ee
+  tasks: [diarize]
+  backends: [pyannote-diarization]
+  stacks: [pyannote]
+  default_for: [diarize]
+  license:
+    expression: CC-BY-4.0
+    source: pyannote/speaker-diarization-community-1 README.md at 3533c8cf8e369892e6b79ff1bf80f7b0286a54ee
+    verified: {date: 2026-11-01, how: hf-card}
+    gated: true
+  resources: {}
+- id: pyannote/segmentation-3.0
+  revision: e66f3d3b9eb0873085418a7b813d3b369bf160bb
+  tasks: [diarize]
+  backends: [pyannote-diarization]
+  stacks: [pyannote]
+  default_for: []
+  license:
+    expression: MIT
+    source: pyannote/segmentation-3.0 README.md at e66f3d3b9eb0873085418a7b813d3b369bf160bb
+    verified: {date: 2026-11-01, how: hf-card}
+    gated: true
+  resources: {}
+- id: speechbrain/spkrec-ecapa-voxceleb
+  revision: 0f99f2d0ebe89ac095bcc5903c4dd8f72b367286
+  tasks: [speaker_embeddings]
+  backends: [speechbrain-ecapa]
+  stacks: [speechbrain]
+  default_for: [speaker_embeddings]
+  license:
+    expression: Apache-2.0
+    source: speechbrain/spkrec-ecapa-voxceleb README.md at 0f99f2d0ebe89ac095bcc5903c4dd8f72b367286
+    verified: {date: 2026-11-01, how: hf-card}
+    gated: false
+  resources: {}
+- id: google/gemma-4-31B-it-qat-w4a16-ct
+  revision: 52f3f65bc7a02d555763bc923bd1d9094898219d
+  tasks: [pii_review]
+  backends: [pii-review-transformers, pii-review-vllm]
+  stacks: [transformers, vllm]
+  default_for: [pii_review]
+  license:
+    expression: Apache-2.0
+    source: google/gemma-4-31B-it-qat-w4a16-ct README.md at 52f3f65bc7a02d555763bc923bd1d9094898219d
+    verified: {date: 2026-11-01, how: hf-card}
+    gated: false
+  resources: {}
