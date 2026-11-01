@@ -303,7 +303,7 @@ def _leader_held(pid: int, exited: threading.Event, timeout: float) -> bool | No
     """
     if not _exit_seen(pid, exited):
         return True
-    if sys.platform == "linux":
+    if sys.platform == "linux" and hasattr(os, "waitid"):
         try:
             _wait_exit(pid, block=False)
         except ChildProcessError:
