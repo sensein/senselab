@@ -443,6 +443,7 @@ def _verified_stamp(blobs: StorageDir, sha256: str, recorded: Mapping[str, BlobS
         stamp = _stamp(os.fstat(fd))
         if verify == "size" and recorded.get(sha256) == stamp:
             return stamp
+        logger.debug("verifying cached blob %s by its sha256", blobs.path / sha256)
         return stamp if _hashed(fd) == sha256 else None
     finally:
         os.close(fd)

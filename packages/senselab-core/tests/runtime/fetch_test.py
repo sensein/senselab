@@ -35,6 +35,7 @@ from senselab_core.runtime.fetch import (
 from senselab_core.runtime.storage import StorageDir, StorageFull, StorePolicy, StoreUnavailable
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import identity_digest
+from syscall_faults_fixture import fail_fsync, fail_open, regular_of_size
 
 STALE_SECONDS = StorePolicy.load_default().staging_stale_s
 
@@ -75,6 +76,11 @@ def _dataset(root: Path, name: str = "demo", version: str = "1") -> Path:
 def _unseal(path: Path) -> Path:
     path.chmod(0o660)
     return path
+
+
+def _rehashed(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """The messages in which fetch re-hashed a cached blob."""
+    return [r.getMessage() for r in caplog.records if r.getMessage().startswith("verifying cached blob")]
 
 
 def _opener(routes: dict[str, bytes], calls: list[str] | None = None) -> Callable[[str], BinaryIO]:
@@ -166,11 +172,7 @@ def test_corrupt_blob_is_refetched(tmp_path: Path) -> None:
 def test_transient_read_error_does_not_discard_blob(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Transient read error does not discard blob."""
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-
-    def flaky(tag: str, path: object) -> str:
-        raise OSError(5, "Input/output error")
-
-    monkeypatch.setattr(fetch_module, "file_digest", flaky)
+    fail_open(monkeypatch, SHA, OSError(errno.EIO, "Input/output error"))
     with pytest.raises(StoreUnavailable):
         fetch(_manifest(), cache_root=tmp_path, opener=_opener({}), verify="full")
     assert (tmp_path / "blobs" / SHA).read_bytes() == PAYLOAD
@@ -306,24 +308,21 @@ def test_default_cache_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
 
 
 @pytest.mark.logic
-def test_cli_prints_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_prints_paths(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Cli prints paths."""
     manifest_path = tmp_path / "m.yaml"
     manifest_path.write_text(MANIFEST_YAML % SHA)
-    monkeypatch.setattr(fetch_module, "_urlopen", _opener({"https://x/a.wav": PAYLOAD}))
+    fetch(DataManifest.load(manifest_path), cache_root=tmp_path / "cache", opener=_opener({"https://x/a.wav": PAYLOAD}))
     code = cli_main(["data", "fetch", str(manifest_path), "--cache", str(tmp_path / "cache")])
     assert code == 0
     assert str(_dataset(tmp_path / "cache") / "files" / "a.wav") in capsys.readouterr().out
 
 
 @pytest.mark.logic
-def test_cli_error_is_one_line_nonzero(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_error_is_one_line_nonzero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Cli error is one line nonzero."""
     manifest_path = tmp_path / "m.yaml"
-    manifest_path.write_text(MANIFEST_YAML % SHA)
-    monkeypatch.setattr(fetch_module, "_urlopen", _opener({}))
+    manifest_path.write_text((MANIFEST_YAML % SHA).replace("https://x/a.wav", "http://x/a.wav"))
     assert cli_main(["data", "fetch", str(manifest_path), "--cache", str(tmp_path / "c")]) != 0
     err = capsys.readouterr().err.strip()
     assert len(err.splitlines()) == 1 and "a.wav" in err
@@ -351,24 +350,18 @@ def test_nested_dirs_are_group_writable_under_restrictive_umask(tmp_path: Path) 
 
 @pytest.mark.logic
 def test_size_mode_skips_rehash_and_full_mode_catches_same_size_corruption(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A cache hit checks size only by default; verify='full' re-hashes."""
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    hashed: list[object] = []
-    real = fetch_module.file_digest
-
-    def spy(tag: str, path: Path) -> str:
-        hashed.append(path)
-        return real(tag, path)
-
-    monkeypatch.setattr(fetch_module, "file_digest", spy)
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
-    assert hashed == []
+    with caplog.at_level("DEBUG", logger="senselab"):
+        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+    assert _rehashed(caplog) == []
     _unseal(tmp_path / "blobs" / SHA).write_bytes(b"x" * len(PAYLOAD))
-    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}), verify="full")
+    with caplog.at_level("DEBUG", logger="senselab"):
+        paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}), verify="full")
     assert paths["a/voice.wav"].read_bytes() == PAYLOAD
-    assert hashed
+    assert _rehashed(caplog)
 
 
 @pytest.mark.contract
@@ -435,18 +428,6 @@ def test_same_name_version_different_manifest_raises(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_disk_full_is_storage_error_not_network(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """ENOSPC while staging is reported as StorageFull."""
-
-    def full(tag: str, path: object) -> str:
-        raise OSError(errno.ENOSPC, "No space left on device")
-
-    monkeypatch.setattr(fetch_module, "file_digest", full)
-    with pytest.raises(StorageFull) as err:
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    assert "network" not in str(err.value) and "space" in str(err.value)
-
-
 @pytest.mark.logic
 @pytest.mark.skipif(os.geteuid() == 0, reason="root removes a directory whatever its mode")
 def test_stale_cleanup_tolerates_unremovable_entries(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -478,20 +459,19 @@ def test_cli_oserror_names_cause_and_fix(tmp_path: Path, capsys: pytest.CaptureF
 
 
 @pytest.mark.logic
-def test_cli_verify_maps_to_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_verify_maps_to_full(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """--verify passes verify='full' to fetch."""
     manifest_path = tmp_path / "m.yaml"
     manifest_path.write_text(MANIFEST_YAML % SHA)
-    seen: list[str] = []
-
-    def spy(manifest: DataManifest, *, cache_root: Path, verify: str) -> dict[str, Path]:
-        seen.append(verify)
-        return {}
-
-    monkeypatch.setattr("senselab_core.cli.fetch", spy)
-    cli_main(["data", "fetch", str(manifest_path), "--cache", str(tmp_path)])
-    cli_main(["data", "fetch", str(manifest_path), "--cache", str(tmp_path), "--verify"])
-    assert seen == ["size", "full"]
+    cache = tmp_path / "cache"
+    fetch(DataManifest.load(manifest_path), cache_root=cache, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    seen: list[bool] = []
+    for extra in ([], ["--verify"]):
+        caplog.clear()
+        with caplog.at_level("DEBUG", logger="senselab"):
+            assert cli_main(["data", "fetch", str(manifest_path), "--cache", str(cache), *extra]) == 0
+        seen.append(bool(_rehashed(caplog)))
+    assert seen == [False, True]
 
 
 def _repair_fetch(root: str, started: "mp.synchronize.Event", release: "mp.synchronize.Event") -> None:
@@ -900,16 +880,13 @@ def test_redirect_to_non_https_refused(target: str) -> None:
 @pytest.mark.logic
 @pytest.mark.parametrize("err", [errno.ENOSPC, errno.EDQUOT])
 def test_enospc_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int) -> None:
-    """Out of space while writing a download is StorageFull, with no staged file left behind."""
-
-    def full(url: str, opener: object, out: BinaryIO, *, size: int) -> None:
-        out.write(b"partial")
-        raise OSError(err, os.strerror(err))
-
-    monkeypatch.setattr(fetch_module, "_download", full)
+    """Out of space while writing a download is StorageFull, not a network error, with no staged file left behind."""
+    failed = fail_fsync(monkeypatch, regular_of_size(len(PAYLOAD)), OSError(err, os.strerror(err)))
     with pytest.raises(StorageFull) as caught:
         fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    assert failed
     assert caught.value.errno == err
+    assert "network" not in str(caught.value) and "space" in str(caught.value)
     assert list((tmp_path / "tmp").iterdir()) == []
 
 
@@ -1004,21 +981,14 @@ def test_endless_source_is_cut_at_declared_size(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_repaired_blob_is_trusted_again_by_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_repaired_blob_is_trusted_again_by_size(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """After a blob is repaired its new stamp is recorded, so the next size-verified fetch reads nothing."""
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     _unseal(tmp_path / "blobs" / SHA).write_bytes(b"x" * len(PAYLOAD))
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    hashed: list[object] = []
-    real = fetch_module.file_digest
-
-    def spy(tag: str, path: Path) -> str:
-        hashed.append(path)
-        return real(tag, path)
-
-    monkeypatch.setattr(fetch_module, "file_digest", spy)
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
-    assert hashed == []
+    with caplog.at_level("DEBUG", logger="senselab"):
+        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+    assert _rehashed(caplog) == []
 
 
 @pytest.mark.logic
