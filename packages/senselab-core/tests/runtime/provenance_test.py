@@ -19,7 +19,17 @@ import pytest
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from senselab_core.runtime import provenance
-from senselab_core.runtime.provenance import PROV_TYPE, Activity, Agent, Entity, ProvStore, recorded
+from senselab_core.runtime.provenance import (
+    PROV_TYPE,
+    Activity,
+    Agent,
+    Entity,
+    ProvStore,
+    UnrecordableValue,
+    normalised,
+    recorded,
+    revised,
+)
 from senselab_worker.canonical import jcs_dumps
 
 pytestmark = pytest.mark.logic
@@ -1024,3 +1034,133 @@ def test_every_read_back_equals_another_read_back_of_the_same_value(value: objec
     """Two read-backs of one value are equal for every family; arrays and NaN compare as numpy and IEEE do."""
     assume(_compares_by_value(value))
     assert recorded(value) == recorded(copy.deepcopy(value))
+
+
+@pytest.mark.logic
+def test_xk5_recorded_content_cannot_drift_from_its_id(tmp_path: Path) -> None:
+    """Mutating what was passed in, or what `get_entity` returns, cannot change a recorded entity."""
+    store = ProvStore(run_id="r")
+    attributes: dict[str, object] = {"ev": {"n": [1, 2, 3]}}
+    extent = [0.0, 1.0]
+    eid = store.entity(prov_type="artifact", extent=extent, attributes=attributes)  # type: ignore[arg-type]
+    attributes["ev"]["n"].append(4)  # type: ignore[index]
+    extent[1] = 99.0
+    entity = store.get_entity(eid)
+    assert entity.attributes == {"ev": {"n": [1, 2, 3]}} and entity.extent == (0.0, 1.0)
+    for write in (
+        lambda: entity.attributes.__setitem__("x", 1),  # type: ignore[index]
+        lambda: entity.attributes["ev"].__setitem__("x", 1),
+        lambda: entity.attributes["ev"]["n"].append(4),
+    ):
+        with pytest.raises((TypeError, AttributeError)):
+            write()
+    assert entity.minted_id() == eid
+    act = store.get_activity(store.activity(node="N", step=None, parameters={"p": [1]}))
+    with pytest.raises(TypeError):
+        act.parameters["p"] = 2  # type: ignore[index]
+    timed = ProvStore(run_id="r")
+    timed.activity(node="N", step=None, parameters={"p": [1]}, started="2026-01-01T00:00:00Z")
+    one, other = ProvStore.merge([store, timed]), ProvStore.merge([timed, store])
+    assert one.records() == other.records() and one.get_activity(act.id).started == "2026-01-01T00:00:00Z"
+
+
+@pytest.mark.logic
+def test_xk6_jsonl_is_lossless_and_ids_recompute(tmp_path: Path) -> None:
+    """Arrays, paths, non-finite floats, enums, sets and bytes survive a write and read; ids recompute."""
+    import enum
+
+    class E(enum.Enum):
+        A = 1
+
+    one, two = numpy.arange(2000), numpy.arange(2000)
+    two[1000] = -1
+    store = ProvStore(run_id="r")
+    for array in (one, two):
+        store.entity(
+            prov_type="artifact",
+            extent=None,
+            attributes={
+                "a": array,
+                "p": PurePosixPath("x/y"),
+                "t": (1, 2),
+                "f": [float("nan"), float("-inf")],
+                "e": E.A,
+                "s": {1, 2},
+                "b": b"ab",
+            },
+        )
+    path = tmp_path / "prov.jsonl"
+    store.write_jsonl(path)
+    lines = path.read_bytes().splitlines()
+    assert all(json.loads(line) is not None for line in lines) and b"NaN" not in b"".join(lines).replace(b'"NaN"', b"")
+    back = ProvStore.read_jsonl(path)
+    assert back.records() == store.records() and len(back.entities()) == 2
+    assert all(record.minted_id() == record.id for record in back.records())
+    again = tmp_path / "again.jsonl"
+    back.write_jsonl(again)
+    assert again.read_bytes() == path.read_bytes()
+
+
+@pytest.mark.logic
+def test_xk6_a_line_without_a_run_id_is_refused(tmp_path: Path) -> None:
+    """A 2.0 line whose `run_id` is null is refused; `revised` keeps the run and re-mints the id."""
+    store = ProvStore(run_id="r")
+    eid = store.entity(prov_type="artifact", extent=(0.0, 1.0), attributes={"a": 1})
+    edited = revised(store.get_entity(eid), attributes={"a": 2})
+    assert edited.run_id == "r" and edited.id != eid and edited.id == edited.minted_id()
+    path = tmp_path / "edited.jsonl"
+    line = {**store.get_entity(eid).as_record(), "run_id": None}
+    path.write_bytes(
+        b"".join(jcs_dumps(row) + b"\n" for row in [{"format": "provenance@2.0", "record": "format"}, line])
+    )
+    with pytest.raises(ValueError, match="run_id must be text"):
+        ProvStore.read_jsonl(path)
+    store.write_jsonl(path)
+    written = path.read_text()
+    for bad, refusal in (("[NaN, 1.0]", "non-finite"), ("[0, 1e400]", "finite")):
+        path.write_text(written.replace('"extent": [0.0, 1.0]', f'"extent": {bad}'))
+        with pytest.raises(ValueError, match=refusal):
+            ProvStore.read_jsonl(path)
+
+
+@pytest.mark.logic
+def test_xk7_write_refuses_what_read_refuses() -> None:
+    """Unknown types and kinds, non-mapping attributes and malformed extents are refused when written."""
+    store = ProvStore(run_id="r")
+    with pytest.raises(ValueError):
+        store.entity(prov_type="bogus", extent=None, attributes={})  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        store.agent(agent_type="bogus", version="1")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        store.environment(kind="bogus", label="l", python_version="3")  # type: ignore[arg-type]
+    with pytest.raises(UnrecordableValue):
+        store.entity(prov_type="artifact", extent=None, attributes=[1])  # type: ignore[arg-type]
+    for extent in (("a", 1.0), (0.0, float("nan")), (2.0, 1.0), (0.0,)):
+        with pytest.raises(ValueError):
+            store.entity(prov_type="artifact", extent=extent, attributes={})  # type: ignore[arg-type]
+
+
+@pytest.mark.logic
+def test_xk8_a_ten_million_element_array_normalises_as_bytes_not_elements() -> None:
+    """Arrays normalise as canonical `.npy` bytes, so memory stays a small multiple of the data, not of its elements."""
+    import tracemalloc
+
+    a = numpy.arange(10_000_000, dtype=numpy.float64)
+    tracemalloc.start()
+    try:
+        token = normalised(a)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert isinstance(token, dict) and list(token) == ["$nd"]
+    assert peak < 4 * a.nbytes
+
+
+@pytest.mark.logic
+def test_xk9_normalisation_is_total_and_typed() -> None:
+    """An integer too long to write, and empty arrays of refused dtypes, raise `UnrecordableValue`."""
+    with pytest.raises(UnrecordableValue):
+        normalised(10**5000)
+    for dtype in ("c16", "M8[ns]", "S3", "O", [("a", "i4"), ("b", "i4")]):
+        with pytest.raises(UnrecordableValue):
+            normalised(numpy.zeros(0, dtype=dtype))

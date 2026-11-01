@@ -20,6 +20,7 @@ import pytest
 from bounded_probe_fixture import MIB, FiniteSource, run_bounded
 from hypothesis import event, given, settings
 from hypothesis import strategies as st
+from planted_objects_fixture import bounded
 from senselab_core.cli import main as cli_main
 from senselab_core.runtime import fetch as fetch_module
 from senselab_core.runtime.fetch import (
@@ -869,6 +870,7 @@ def test_a20_file_url_is_not_read(tmp_path: Path) -> None:
     manifest = _manifest([_file("a", f"file://{secret}")])
     with pytest.raises(FetchError, match="refusing file URL"):
         fetch(manifest, cache_root=tmp_path / "c")
+    assert not (tmp_path / "c" / "blobs").exists() or not any((tmp_path / "c" / "blobs").iterdir())
 
 
 @pytest.mark.logic
@@ -1066,3 +1068,44 @@ def test_path_key_keeps_a_part_with_post_13_code_points_as_given() -> None:
     """A part holding a code point unassigned in Unicode 13.0 is its own key, on every interpreter; others fold."""
     raw = "é\U0001e08f̣.wav"
     assert fetch_module.path_key(f"Data/{raw}") == ("data", raw)
+
+
+@pytest.mark.logic
+def test_xs1_fetch_does_not_write_through_a_symlinked_directory_under_files(tmp_path: Path) -> None:
+    """A symlink to a directory outside the cache, planted under `files/`, is refused; nothing outside is written."""
+    report = bounded("probe_xs1", str(tmp_path))
+    assert report == {"error": "ManifestConflictError", "victim_unchanged": True}
+
+
+@pytest.mark.logic
+def test_xs2_a_directory_at_a_blob_is_set_aside_and_the_blob_fetched(tmp_path: Path) -> None:
+    """A directory where a blob belongs is moved aside, never a retryable error that wedges the dataset."""
+    report = bounded("probe_xs2", str(tmp_path), "open")
+    assert [o["error"] for o in report["outcomes"]] == ["", ""]
+    assert [o["served"] for o in report["outcomes"]] == [True, True]
+    assert report["blob_is_file"] is True
+
+
+@pytest.mark.logic
+@pytest.mark.skipif(os.geteuid() == 0, reason="root renames out of a read-only directory")
+def test_xs2_an_unmovable_directory_at_a_blob_is_a_typed_error_naming_it(tmp_path: Path) -> None:
+    """When the directory cannot be moved, the error is not retryable and names the blob path and its owner."""
+    report = bounded("probe_xs2", str(tmp_path), "sealed")
+    first = report["outcomes"][0]
+    assert first["error"] == "WrongKindError"
+    assert report["blob_path"] in first["message"] and "owned by" in first["message"]
+
+
+@pytest.mark.logic
+def test_i4_a_blob_swapped_after_its_link_is_never_trusted_by_size(tmp_path: Path) -> None:
+    """Fetch stages in a private 0700 directory, and stamps only the inode it hashed, so a swap is re-hashed."""
+    report = bounded("probe_i4_swap_after_link", str(tmp_path))
+    assert report["stamped"] == [] and report["served"] is True, report
+    assert report["staging_modes"] == [0o700], report
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("op", ["collect", "fetch"])
+def test_i1_a_hard_link_at_a_store_or_cache_clock_leaves_its_target_alone(tmp_path: Path, op: str) -> None:
+    """A hard link at the store's or the cache's `.clock`: the file it shares is not chmodded or re-stamped."""
+    assert bounded("probe_clock_hard_link", str(tmp_path), op) == {"error": "", "victim_unchanged": True}

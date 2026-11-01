@@ -1,33 +1,24 @@
-"""H8c re-attack findings on the store, fetch, leases and run manifests (XS-1..XS-7).
+"""Planted-object probes for the storage root, run in a child under `bounded_probe_fixture.run_bounded`.
 
-The findings and their probes are in reviews/phase1-reattack/store.md.
-
-Each `test_xs<n>_*` rebuilds its probe; the generated tests are contracts over the class the finding belongs to.
-Every probe runs in a child under `bounded_probe_fixture.run_bounded` (file-size limit, address-space limit
-where the platform takes one, timeout) with finite in-memory sources, so it is bounded at any commit. Planted
-symlinks point only at a victim directory inside the probe's own scratch directory.
+Each `probe_*` plants a symlink, hard link, file, directory or corrupt member where a store, fetch, lease or run
+manifest writes, runs the operation, and returns a JSON report of the outcome and of what outside the root changed.
+The probes use finite in-memory sources and plant symlinks only at a victim directory inside their own scratch
+directory, so they are bounded at any commit.
 """
 
-import errno
 import functools
 import hashlib
-import importlib
 import io
 import json
 import os
 import re
 import stat
-import sys
-import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 HERE = Path(__file__).resolve().parent
-RUNTIME_TESTS = HERE.parent / "runtime"
 PAYLOAD = b"hello senselab data" * 1000
 SHA = hashlib.sha256(PAYLOAD).hexdigest()
 VICTIM_BYTES = b"belongs to someone else"
@@ -43,15 +34,11 @@ LICENCE = {
 }
 
 
-@pytest.fixture(autouse=True)
-def _limiter(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.syspath_prepend(str(RUNTIME_TESTS))
-
-
-def _bounded(probe: str, *args: str) -> Any:  # noqa: ANN401 - the probe's JSON report
+def bounded(probe: str, *args: str) -> Any:  # noqa: ANN401 - the probe's JSON report
+    """Run `probe` in a bounded child and return its JSON report."""
     from bounded_probe_fixture import MIB, run_bounded
 
-    return run_bounded(f"reattack_store_test:{probe}", *args, where=HERE, fsize=16 * MIB, timeout=120)
+    return run_bounded(f"planted_objects_fixture:{probe}", *args, where=HERE, fsize=16 * MIB, timeout=120)
 
 
 # -- helpers the probes share (run in the child) --
@@ -176,13 +163,6 @@ def probe_xs1(scratch: str) -> dict[str, Any]:
     return {"error": error, "victim_unchanged": _snapshot(victim) == before}
 
 
-@pytest.mark.logic
-def test_xs1_fetch_does_not_write_through_a_symlinked_directory_under_files(tmp_path: Path) -> None:
-    """A symlink to a directory outside the cache, planted under `files/`, is refused; nothing outside is written."""
-    report = _bounded("probe_xs1", str(tmp_path))
-    assert report == {"error": "ManifestConflictError", "victim_unchanged": True}
-
-
 # -- XS-2: a directory at blobs/<sha256> wedges the dataset --
 
 
@@ -213,25 +193,6 @@ def probe_xs2(scratch: str, sealed: str) -> dict[str, Any]:
     os.chmod(cache / "blobs", 0o770)
     blob = os.lstat(cache / "blobs" / SHA)
     return {"outcomes": outcomes, "blob_is_file": stat.S_ISREG(blob.st_mode), "blob_path": str(cache / "blobs" / SHA)}
-
-
-@pytest.mark.logic
-def test_xs2_a_directory_at_a_blob_is_set_aside_and_the_blob_fetched(tmp_path: Path) -> None:
-    """A directory where a blob belongs is moved aside, never a retryable error that wedges the dataset."""
-    report = _bounded("probe_xs2", str(tmp_path), "open")
-    assert [o["error"] for o in report["outcomes"]] == ["", ""]
-    assert [o["served"] for o in report["outcomes"]] == [True, True]
-    assert report["blob_is_file"] is True
-
-
-@pytest.mark.logic
-@pytest.mark.skipif(os.geteuid() == 0, reason="root renames out of a read-only directory")
-def test_xs2_an_unmovable_directory_at_a_blob_is_a_typed_error_naming_it(tmp_path: Path) -> None:
-    """When the directory cannot be moved, the error is not retryable and names the blob path and its owner."""
-    report = _bounded("probe_xs2", str(tmp_path), "sealed")
-    first = report["outcomes"][0]
-    assert first["error"] == "WrongKindError"
-    assert report["blob_path"] in first["message"] and "owned by" in first["message"]
 
 
 # -- XS-3: a file at a store directory wedges put --
@@ -275,25 +236,6 @@ def probe_xs3(scratch: str, level: str, sealed: str) -> dict[str, Any]:
         "target": str(target),
         "after": None if again is None else again.outputs,
     }
-
-
-@pytest.mark.logic
-@pytest.mark.parametrize("level", ["store", "prefix", "digest"])
-def test_xs3_a_file_at_a_store_directory_is_set_aside_and_put_commits(tmp_path: Path, level: str) -> None:
-    """A regular file where a store directory belongs is quarantined; put commits and get serves the new entry."""
-    report = _bounded("probe_xs3", str(tmp_path), level, "open")
-    assert (report["get_error"], report["got"], report["put_error"]) == ("", None, "")
-    assert report["after"] == {"y": 2}
-
-
-@pytest.mark.logic
-@pytest.mark.skipif(os.geteuid() == 0, reason="root renames out of a read-only directory")
-@pytest.mark.parametrize("level", ["prefix", "digest"])
-def test_xs3_an_unmovable_file_at_a_store_directory_is_a_typed_error_naming_it(tmp_path: Path, level: str) -> None:
-    """When the file cannot be moved, put raises a non-retryable error naming the path and its owner."""
-    report = _bounded("probe_xs3", str(tmp_path), level, "sealed")
-    assert report["put_error"] == "WrongKindError"
-    assert report["target"] in report["message"] and "owned by" in report["message"]
 
 
 # -- XS-4: result.json is not bound to context.json --
@@ -347,28 +289,10 @@ def probe_xs4(scratch: str, swapped: str, policy: str) -> dict[str, Any]:
     return {"served": served, "expected": {p: _plain(_outputs_of(p)) for p in ("linux", "macos")}}
 
 
-@pytest.mark.logic
-def test_xs4_swapped_result_files_are_not_served_under_the_other_context(tmp_path: Path) -> None:
-    """Swapping two contexts' result.json files and arrays makes both entries misfiled; neither is served."""
-    report = _bounded("probe_xs4", str(tmp_path), "result.json+arrays", "exact")
-    assert report["served"] == {"linux": None, "macos": None}
-
-
-def _subsets() -> Iterator[str]:
+def swap_subsets() -> Iterator[str]:
+    """Every non-empty set of swappable entry members, as `+`-joined names."""
     for mask in range(1, 1 << len(SWAPPABLE)):
         yield "+".join(name for i, name in enumerate(SWAPPABLE) if mask >> i & 1)
-
-
-@pytest.mark.contract
-@pytest.mark.parametrize("policy", ["exact", "tolerant"])
-@pytest.mark.parametrize("swapped", list(_subsets()))
-def test_an_entry_serves_only_the_outputs_its_context_wrote_whatever_members_are_swapped(
-    tmp_path: Path, swapped: str, policy: str
-) -> None:
-    """For every set of members swapped between two contexts' entries, a hit's outputs are its own context's."""
-    report = _bounded("probe_xs4", str(tmp_path), swapped, policy)
-    for hit in report["served"].values():
-        assert hit is None or hit[1] == report["expected"][hit[0]], report
 
 
 # -- XS-5: put trusts an entry whose array is corrupt --
@@ -405,21 +329,6 @@ def probe_xs5(scratch: str, corruption: str) -> dict[str, Any]:
     return {"same_identity": again == identity, "served": None if hit is None else _plain(hit.outputs)}
 
 
-@pytest.mark.logic
-def test_xs5_put_over_an_entry_with_a_corrupt_array_rewrites_it(tmp_path: Path) -> None:
-    """A put over an entry whose array no longer hashes replaces it, so the get right after it is served."""
-    report = _bounded("probe_xs5", str(tmp_path), "npy_bytes")
-    assert report == {"same_identity": True, "served": {"a": [0.0, 1.0, 2.0, 3.0]}}
-
-
-@pytest.mark.contract
-@pytest.mark.parametrize("corruption", ARRAY_CORRUPTIONS)
-def test_a_put_that_reports_success_is_served_by_the_next_get(tmp_path: Path, corruption: str) -> None:
-    """For every way an entry's array can be damaged, the put after it leaves an entry that get serves."""
-    report = _bounded("probe_xs5", str(tmp_path), corruption)
-    assert report == {"same_identity": True, "served": {"a": [0.0, 1.0, 2.0, 3.0]}}
-
-
 # -- XS-7: run manifests: umask, run id, leftover temporaries --
 
 BAD_RUN_IDS = ("../../escaped", "..", ".", "", "a/b", "a\\b", "a\x00b", "/abs")
@@ -442,19 +351,6 @@ def probe_xs7_run_id(scratch: str, run: str) -> dict[str, Any]:
     return {"error": error, "outside": outside}
 
 
-@pytest.mark.logic
-def test_xs7_a_run_id_with_a_parent_component_is_refused(tmp_path: Path) -> None:
-    """`../../escaped` is not a run id: nothing is written outside `runs/`."""
-    assert _bounded("probe_xs7_run_id", str(tmp_path), "../../escaped") == {"error": "ValueError", "outside": []}
-
-
-@pytest.mark.logic
-@pytest.mark.parametrize("run", BAD_RUN_IDS, ids=repr)
-def test_every_run_id_that_is_not_one_component_is_refused(tmp_path: Path, run: str) -> None:
-    """Each run id that is not a single path component is refused before anything is written."""
-    assert _bounded("probe_xs7_run_id", str(tmp_path), run) == {"error": "ValueError", "outside": []}
-
-
 def probe_xs7_env_run_id(scratch: str, run: str) -> str:
     """Return the error `run_id()` raises when SENSELAB_RUN_ID is `run`."""
     from senselab_core.runtime import revision
@@ -462,13 +358,6 @@ def probe_xs7_env_run_id(scratch: str, run: str) -> str:
     os.environ["SENSELAB_CACHE"] = str(Path(scratch) / "cache")
     os.environ["SENSELAB_RUN_ID"] = run
     return _outcome(revision.run_id)[0]
-
-
-@pytest.mark.logic
-def test_xs7_a_run_id_from_the_environment_is_one_component(tmp_path: Path) -> None:
-    """SENSELAB_RUN_ID naming a parent directory is refused."""
-    assert _bounded("probe_xs7_env_run_id", str(tmp_path), "../../escaped") == "ValueError"
-    assert _bounded("probe_xs7_env_run_id", str(tmp_path), "job-123") == ""
 
 
 def probe_xs7_modes(scratch: str, umask: str) -> dict[str, Any]:
@@ -505,22 +394,6 @@ def probe_xs7_modes(scratch: str, umask: str) -> dict[str, Any]:
         "leftover_removed": not leftover.exists(),
         "entries": sorted(json.loads((run_dir / revision.MANIFEST_NAME).read_text())),
     }
-
-
-@pytest.mark.logic
-def test_xs7_run_manifests_take_the_policy_modes_under_umask_0(tmp_path: Path) -> None:
-    """Under umask 0, `runs/`, the run directory and the manifest have the policy's modes, not world-writable ones."""
-    report = _bounded("probe_xs7_modes", str(tmp_path), "0")
-    assert report["modes"] == report["expected"]
-    assert report["leftover_removed"] is True and len(report["entries"]) == 2
-
-
-@pytest.mark.contract
-@pytest.mark.parametrize("umask", ["0", "022", "077", "007"])
-def test_run_manifest_modes_do_not_depend_on_the_umask(tmp_path: Path, umask: str) -> None:
-    """For every umask, the run manifest and its directories carry exactly the policy's modes."""
-    report = _bounded("probe_xs7_modes", str(tmp_path), umask)
-    assert report["modes"] == report["expected"]
 
 
 # -- XS-1..XS-3 class: every directory an operation reaches, planted with a symlink outside or a file --
@@ -614,26 +487,6 @@ def probe_planted(scratch: str, op: str, plant: str) -> list[dict[str, Any]]:
         error, right = _outcome(functools.partial(_run, op, root))
         reports.append({"at": rel, "error": error, "right": right, "victim_unchanged": _snapshot(victim) == before})
     return reports
-
-
-@pytest.mark.contract
-@pytest.mark.parametrize("plant", ["symlink", "file"])
-@pytest.mark.parametrize("op", OPERATIONS)
-def test_no_operation_writes_through_or_wedges_on_a_planted_object_at_any_directory(
-    tmp_path: Path, op: str, plant: str
-) -> None:
-    """At every directory an operation reaches, a planted symlink or file is never written or deleted through.
-
-    The operation either completes correctly or raises a typed, non-retryable error.
-    """
-    reports = _bounded("probe_planted", str(tmp_path), op, plant)
-    assert reports, "the operation reached no directory"
-    for report in reports:
-        assert report["victim_unchanged"], report
-        assert report["error"] in TYPED, report
-        assert report["error"] or report["right"], report
-    if op != "fetch" and plant == "symlink":
-        assert all(r["error"] == "" for r in reports), reports
 
 
 # -- the primitive: one planted test per operation --
@@ -741,23 +594,6 @@ PRIMITIVE = {
     "remove_owned_temporary": "",
     "set_aside": "",
 }
-
-
-@pytest.mark.contract
-@pytest.mark.parametrize("operation", sorted(PRIMITIVE))
-def test_every_storage_operation_on_a_planted_symlink_leaves_its_target_alone(tmp_path: Path, operation: str) -> None:
-    """Every `StorageDir` operation given a symlink refuses it or acts on the symlink itself.
-
-    The symlink is a directory on the way, the name operated on, or the target; what it points at is never
-    written, moved or removed.
-    """
-    report = _bounded("probe_primitive", str(tmp_path), operation)
-    assert report["victim_unchanged"], report
-    assert report["error"] == PRIMITIVE[operation], report
-    if operation in ("write_atomically", "rename_onto", "write_atomically_hard_link", "fs_now_symlink"):
-        assert report["value"] == "file"
-    if operation == "link_source":
-        assert report["value"] == "symlink"
 
 
 # -- H-R40: every name a writer writes, planted with a symlink, a hard link, a directory or corrupt content --
@@ -884,25 +720,6 @@ def probe_planted_names(scratch: str, op: str, plant: str) -> dict[str, Any]:
     return {"reports": reports}
 
 
-@pytest.mark.contract
-@pytest.mark.parametrize("plant", PLANTS)
-@pytest.mark.parametrize("op", NAME_OPERATIONS)
-def test_no_written_name_is_written_through_or_wedged_by_a_planted_object(tmp_path: Path, op: str, plant: str) -> None:
-    """At every name the store, fetch, a lease or a run manifest writes, a planted object changes no victim.
-
-    No victim's bytes, mode or mtime change, nothing is made outside the root, and each outcome is a completed
-    operation or a typed error within the bound.
-    """
-    result = _bounded("probe_planted_names", str(tmp_path), op, plant)
-    assert result["reports"], "the operation wrote no name"
-    for report in result["reports"]:
-        assert report["victim_unchanged"], report
-        assert report["outside"] == ["root", "victim"], report
-        assert report["error"] in NAME_TYPED, report
-        assert report["error"] or report["right"], report
-        assert report["seconds"] < NAME_BOUND_S, report
-
-
 # -- the H9b review's C-1 and I-1..I-4, on the run manifests, the lease and fetch --
 
 LEASE = "resolutions@2.json.lease"
@@ -960,41 +777,6 @@ def probe_record_with_plant(scratch: str, name: str, plant: str) -> dict[str, An
     }
 
 
-@pytest.mark.logic
-@pytest.mark.parametrize("plant", ["symlink", "dangling"])
-@pytest.mark.parametrize("name", [LEASE, ".clock"])
-def test_c1_the_lease_of_a_run_manifest_never_follows_a_planted_symlink(tmp_path: Path, name: str, plant: str) -> None:
-    """A symlink at a run manifest's lease or clock is neither chmodded nor created through."""
-    report = _bounded("probe_record_with_plant", str(tmp_path), name, plant)
-    assert report["error"] == "" and report["recorded"]
-    assert report["victim_unchanged"] and report["victim"] == ["f"], report
-
-
-@pytest.mark.logic
-@pytest.mark.parametrize("name", [LEASE, ".clock"])
-def test_i1_a_hard_link_at_a_lease_or_clock_leaves_its_target_alone(tmp_path: Path, name: str) -> None:
-    """A hard link at a lease or clock: the file it shares is not chmodded, truncated or re-stamped."""
-    report = _bounded("probe_record_with_plant", str(tmp_path), name, "hardlink")
-    assert report["error"] == "" and report["recorded"]
-    assert report["victim_unchanged"], report
-
-
-@pytest.mark.logic
-@pytest.mark.parametrize("content", ["{}", "garbage", " ", '{"user": "u", "host": "h", "pid": 1}'])
-def test_i2_a_stale_lease_whatever_its_content_never_hangs_record_resolution(tmp_path: Path, content: str) -> None:
-    """A stale lease is broken whatever it holds, and the resolution is recorded within the bound."""
-    report = _bounded("probe_record_with_plant", str(tmp_path), LEASE, content)
-    assert report["error"] == "" and report["recorded"] and report["seconds"] < NAME_BOUND_S, report
-
-
-@pytest.mark.logic
-@pytest.mark.parametrize("plant", ["directory", "fifo", "symlink"])
-def test_i3_a_wrong_kind_at_the_lease_name_is_set_aside(tmp_path: Path, plant: str) -> None:
-    """A directory, fifo or symlink at the lease is moved aside; the resolution is recorded, no OSError."""
-    report = _bounded("probe_record_with_plant", str(tmp_path), LEASE, plant)
-    assert report["error"] == "" and report["recorded"], report
-
-
 def probe_i4_swap_after_link(scratch: str) -> dict[str, Any]:
     """Swap `blobs/<sha>` for other bytes right after fetch links it; report the marker's stamps and a re-fetch."""
     import json as json_module
@@ -1026,14 +808,6 @@ def probe_i4_swap_after_link(scratch: str) -> dict[str, Any]:
     }
 
 
-@pytest.mark.logic
-def test_i4_a_blob_swapped_after_its_link_is_never_trusted_by_size(tmp_path: Path) -> None:
-    """Fetch stages in a private 0700 directory, and stamps only the inode it hashed, so a swap is re-hashed."""
-    report = _bounded("probe_i4_swap_after_link", str(tmp_path))
-    assert report["stamped"] == [] and report["served"] is True, report
-    assert report["staging_modes"] == [0o700], report
-
-
 def probe_clock_hard_link(scratch: str, op: str) -> dict[str, Any]:
     """Hard-link a victim at the root's `.clock`, then collect on the store clock, or fetch; report the victim."""
     base = Path(scratch)
@@ -1057,31 +831,4 @@ def probe_clock_hard_link(scratch: str, op: str) -> dict[str, Any]:
     return {"error": error, "victim_unchanged": _snapshot(victim) == before}
 
 
-@pytest.mark.logic
-@pytest.mark.parametrize("op", ["collect", "fetch"])
-def test_i1_a_hard_link_at_a_store_or_cache_clock_leaves_its_target_alone(tmp_path: Path, op: str) -> None:
-    """A hard link at the store's or the cache's `.clock`: the file it shares is not chmodded or re-stamped."""
-    assert _bounded("probe_clock_hard_link", str(tmp_path), op) == {"error": "", "victim_unchanged": True}
-
-
 UNOPENABLE_NAMES = (LEASE, "resolutions@2.json")
-
-
-@pytest.mark.logic
-@pytest.mark.skipif(os.geteuid() == 0, reason="root opens a 0o000 file")
-@pytest.mark.parametrize("name", UNOPENABLE_NAMES)
-def test_n1_an_unopenable_file_at_a_lease_or_manifest_name_never_wedges_record_resolution(
-    tmp_path: Path, name: str
-) -> None:
-    """A regular file this user cannot open, as another user's 0o600 file is, is moved aside or replaced."""
-    report = _bounded("probe_record_with_plant", str(tmp_path), name, "unopenable")
-    assert report["error"] == "" and report["recorded"] and report["seconds"] < NAME_BOUND_S, report
-
-
-@pytest.mark.logic
-@pytest.mark.skipif(os.geteuid() == 0, reason="root renames in a read-only directory")
-def test_n1_an_unopenable_lease_that_cannot_be_moved_is_a_typed_error_naming_its_remedy(tmp_path: Path) -> None:
-    """When the run directory refuses the move too, the error is `LeaseUnavailable` naming the lease and its owner."""
-    report = _bounded("probe_record_with_plant", str(tmp_path), LEASE, "unmovable")
-    assert report["error"] == "LeaseUnavailable", report
-    assert LEASE in report["message"] and "owned by" in report["message"], report

@@ -1,15 +1,27 @@
 """Generated value contracts over every `Frozen` type, and the regressions of the findings they close."""
 
 import copy
+import hashlib
+import os
 import pickle
+import time
+import types
+import unicodedata
 from collections.abc import Callable
+from decimal import Decimal
+from enum import Enum
+from pathlib import Path, PurePosixPath
+from typing import Any
 
 import numpy
 import pytest
+import soundfile
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import ConfigDict, TypeAdapter, ValidationError
+from senselab_core.kernel import signals
 from senselab_core.kernel._base import (
+    Frozen,
     FrozenMapping,
     as_label_array,
     as_ns_array,
@@ -17,11 +29,14 @@ from senselab_core.kernel._base import (
     frozen_array,
     value_digest,
 )
-from senselab_core.kernel.results import Embedding, Intervals
-from senselab_core.kernel.signals import Audio, ChannelInfo, RegularGroup, SignalArray
-from senselab_core.kernel.time import Span, TimeAnchor
+from senselab_core.kernel.identity import EQUIVALENCE, ExecutionContext, LogicalKey, ModelRef, acceptable
+from senselab_core.kernel.license import License
+from senselab_core.kernel.results import Embedding, Events, Intervals
+from senselab_core.kernel.signals import Audio, ChannelInfo, Recording, RegularGroup, SignalArray, StaleSource
+from senselab_core.kernel.time import Span, TimeAnchor, TimeMap
+from senselab_core.runtime.provenance import ProvStore, normalised
 from senselab_core.testing.values import frozen_types, registered_types, value_cases
-from senselab_worker.canonical import canonical_npy_bytes
+from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
 
 
 @pytest.mark.contract
@@ -214,3 +229,471 @@ def test_int_marker_cannot_be_forged_by_a_mapping() -> None:
     assert value_digest("t", {"x": {"$int": str(big)}}) != value_digest("t", {"x": big})
     assert value_digest("t", {"$x": 1}) != value_digest("t", {"x": 1})
     assert value_digest("t", {"$x": 1}) != value_digest("t", {"$$x": 1})
+
+
+class Holder(Frozen):
+    """A value with one field typed `Any`, where field types no longer fix the family."""
+
+    x: Any
+
+
+class Inner(Frozen):
+    """A value held inside another."""
+
+    a: int
+
+
+class Colour(Enum):
+    """An enum whose value is a string."""
+
+    RED = "red"
+
+
+def _dag(levels: int) -> list[object]:
+    x: list[object] = []
+    for _ in range(levels):
+        x = [x, x]
+    return x
+
+
+def _nested(depth: int) -> list[object]:
+    x: list[object] = []
+    for _ in range(depth - 1):
+        x = [x]
+    return x
+
+
+@pytest.mark.logic
+def test_xc2_an_array_and_its_sha256_hex_string_differ() -> None:
+    """`Holder(x=a)` and `Holder(x=<sha256 of a's canonical .npy>)` neither compare equal nor share a digest."""
+    from senselab_worker.canonical import canonical_npy_bytes
+
+    a = numpy.arange(4, dtype="<f8")
+    sha = hashlib.sha256(canonical_npy_bytes(a)).hexdigest()
+    assert Holder(x=a) != Holder(x=sha)
+    assert Holder(x=a).canonical_digest() != Holder(x=sha).canonical_digest()
+
+
+def _family_samples() -> dict[str, tuple[object, list[object]]]:
+    """Per token, a value of that family and the values a merged encoding would equate with it."""
+    from senselab_worker.canonical import canonical_npy_bytes
+
+    a = numpy.arange(4, dtype="<f8")
+    sha = hashlib.sha256(canonical_npy_bytes(a)).hexdigest()
+    inner = f"{Inner.__module__}.{Inner.__qualname__}"
+    colour = f"{Colour.__module__}.{Colour.__qualname__}"
+    big = 2**60
+    return {
+        "$array": (a, [sha, {"$array": sha}, a.tolist()]),
+        "$set": (frozenset({1, 2}), [[1, 2], (1, 2), {"$set": [1, 2]}]),
+        "$path": (PurePosixPath("a/b"), ["a/b", {"$path": "a/b"}]),
+        "$enum": (Colour.RED, ["red", {"$enum": [colour, "red"]}]),
+        "$type": (int, ["builtins.int", {"$type": "builtins.int"}]),
+        "$value": (Inner(a=1), [{"a": 1}, {"$value": {"type": inner, "fields": {"a": 1}}}]),
+        "$int": (big, [str(big), float(big), {"$int": str(big)}]),
+        "$f": (float("nan"), ["NaN", {"$f": "NaN"}]),
+        "$bytes": (b"\x01", ["01", {"$bytes": "01"}]),
+        "$dec": (Decimal("1.5"), ["1.5", 1.5, {"$dec": "1.5"}]),
+    }
+
+
+@pytest.mark.contract
+def test_every_value_family_has_its_own_encoding() -> None:
+    """For every token family, a value of it differs from its payload and from a mapping spelling its token."""
+    from senselab_worker.canonical import TOKENS
+
+    samples = _family_samples()
+    assert set(samples) | {"$nd"} == set(TOKENS), "a token family has no sample here"
+    digests = {token: Holder(x=value).canonical_digest() for token, (value, _) in samples.items()}
+    assert len(set(digests.values())) == len(digests)
+    for token, (value, lookalikes) in samples.items():
+        for other in lookalikes:
+            assert Holder(x=value) != Holder(x=other), f"{token}: {other!r}"
+            assert digests[token] != Holder(x=other).canonical_digest(), f"{token}: {other!r}"
+
+
+@pytest.mark.contract
+@given(
+    st.text(alphabet="ae\u0301\u00e9\u0323 ", max_size=4),
+    st.sampled_from(["\U0001fae0", "\U0001fae8", "\U0001e08f", "\u0c5d", "\U000e0080"]),
+)
+def test_text_with_post_13_code_points_is_recorded_and_is_its_own_family(head: str, mark: str) -> None:
+    """Provenance records it (H-R29, H-R30); its value digest differs from its NFC and from every token family."""
+    text = head + mark
+    ProvStore(run_id="t").entity(prov_type="artifact", extent=None, attributes={text: [text]})
+    digest = Holder(x=text).canonical_digest()
+    others = {Holder(x=v).canonical_digest() for v, _ in _family_samples().values()}
+    others.add(Holder(x=unicodedata.normalize("NFC", head)).canonical_digest())
+    if unicodedata.normalize("NFC", text) != text:
+        others.add(Holder(x=unicodedata.normalize("NFC", text)).canonical_digest())
+    assert digest not in others
+
+
+@pytest.mark.contract
+def test_provenance_tokens_are_the_shared_families() -> None:
+    """Provenance writes each family with the shared tokeniser, arrays by value as `$nd`, base64 canonical `.npy`."""
+    import base64
+
+    from senselab_worker.canonical import canonical_npy_bytes
+
+    a = numpy.array([1, 2], dtype=">i2")
+    assert normalised(a) == {"$nd": base64.b64encode(canonical_npy_bytes(a)).decode("ascii")}
+    assert normalised({"$nd": 1}) == {"$$nd": 1}
+    for token, (value, _) in _family_samples().items():
+        if token in ("$array", "$type", "$value"):
+            continue
+        assert list(normalised(value)) == [token]  # type: ignore[call-overload]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("make", ["cycle", "dict-cycle", "deep"])
+def test_xc3_a_value_that_contains_itself_or_nests_deeply_raises_the_shared_error(make: str) -> None:
+    """A cycle or 5000-deep nesting gives the shared guard's `ValueError` when the value is built, which digests it."""
+    value: object
+    if make == "cycle":
+        cyc: list[object] = []
+        cyc.append(cyc)
+        value = cyc
+    elif make == "dict-cycle":
+        d: dict[str, object] = {}
+        d["self"] = [d]
+        value = d
+    else:
+        value = _nested(5000)
+    with pytest.raises(ValueError, match="contains itself|deeper than"):
+        Holder(x=value)
+
+
+@pytest.mark.contract
+@given(st.lists(st.sampled_from(["list", "tuple", "dict", "frozenset"]), min_size=1, max_size=120))
+def test_any_nesting_digests_or_raises_value_error(kinds: list[str]) -> None:
+    """Every nesting of every container kind either digests or raises `ValueError`; none overflows the stack."""
+    value: object = 1
+    for kind in reversed(kinds):
+        if kind == "list":
+            value = [value]
+        elif kind == "dict":
+            value = {"k": value}
+        elif kind == "tuple":
+            value = (value,)
+        else:
+            try:
+                value = frozenset({value})
+            except TypeError:
+                value = (value,)
+    try:
+        Holder(x=value)
+    except ValueError as err:
+        assert "deeper than" in str(err) or "has no canonical form" in str(err)
+
+
+@pytest.mark.logic
+def test_xc4_audio_identity_is_one_per_value() -> None:
+    """Audio whose samples differ only by `-0.0` has one `content:` identity; NaNs of any sign have one `.npy` digest.
+
+    Audio refuses NaN samples, so the NaN half is checked on the array digest audio identity is made of.
+    """
+    from senselab_core.kernel.signals import Audio
+    from senselab_worker.digest import npy_digest
+
+    zero = numpy.array([0.0, 1.0], dtype=numpy.float32)
+    negative = numpy.array([-0.0, 1.0], dtype=numpy.float32)
+    nan = numpy.array([0x7FC00000, 0], dtype="<u4").view("<f4")
+    negative_nan = numpy.array([0xFFC00001, 0], dtype="<u4").view("<f4")
+    assert Audio.from_array(zero, 16_000).identity == Audio.from_array(negative, 16_000).identity
+    assert npy_digest("npy@1", nan) == npy_digest("npy@1", negative_nan)
+
+
+def _refuse_dag(where: str) -> None:
+    from senselab_core.runtime.store import output_identity
+
+    dag = _dag(60)
+    with pytest.raises(ValueError, match="exceeds"):
+        if where == "provenance":
+            ProvStore(run_id="t").entity(prov_type="artifact", extent=None, attributes={"x": dag})
+        elif where == "store":
+            output_identity({"x": dag})
+        else:
+            Holder(x=dag).canonical_digest()
+
+
+def _record_dag(levels: int) -> None:
+
+    ProvStore(run_id="t").entity(prov_type="artifact", extent=None, attributes={"x": _dag(levels)})
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("where", ["provenance", "store", "value"])
+def test_a_shared_dag_is_refused_on_every_canonical_path(where: str) -> None:
+    """Sixty levels of `x = [x, x]` are refused by provenance, the store and `value@2`."""
+    _refuse_dag(where)
+
+
+@pytest.mark.logic
+def test_a_shared_dag_under_the_budget_is_walked_once_per_node() -> None:
+    """Twenty-two levels (4M leaves expanded) normalise and digest."""
+    _record_dag(22)
+
+
+@pytest.mark.limits
+@pytest.mark.parametrize("where", ["provenance", "store", "value"])
+def test_a_shared_dag_is_refused_in_bounded_time(where: str) -> None:
+    """Sixty levels of `x = [x, x]` are refused in under 5 s on every canonical path."""
+    started = time.monotonic()
+    _refuse_dag(where)
+    assert time.monotonic() - started < 5.0
+
+
+@pytest.mark.limits
+def test_a_shared_dag_under_the_budget_is_walked_in_bounded_time() -> None:
+    """Twenty-two levels (4M leaves expanded) normalise and digest in under 5 s."""
+    started = time.monotonic()
+    _record_dag(22)
+    assert time.monotonic() - started < 5.0
+
+
+@pytest.mark.logic
+def test_xc7_set_elements_of_one_canonical_form_are_one_element() -> None:
+    """NFC-equal strings, and distinct NaN objects, are one element of a set in provenance and `value@2`."""
+    composed, decomposed = "\u00e9", "e\u0301"
+    assert jcs_dumps(normalised({composed, decomposed})) == jcs_dumps(normalised({composed}))
+    nan_a, nan_b = float("nan"), float("nan")
+    assert jcs_dumps(normalised({nan_a, nan_b})) == jcs_dumps(normalised({nan_a}))
+    assert Holder(x={composed, decomposed}) == Holder(x={composed})
+
+
+@pytest.mark.contract
+@given(st.frozensets(st.text(alphabet="ae\u0301\u00e9\u0323\u1ea1", max_size=3), max_size=6))
+def test_a_set_is_its_elements_canonical_forms(strings: frozenset[str]) -> None:
+    """A set of strings encodes as the set of their NFC forms, in provenance and `value@2`."""
+    forms = frozenset(unicodedata.normalize("NFC", s) for s in strings)
+    assert jcs_dumps(normalised(strings)) == jcs_dumps(normalised(forms))
+    assert Holder(x=strings) == Holder(x=forms)
+
+
+RATE = 8_000
+
+
+def _wav(path: Path, seed: int = 0, frames: int = RATE) -> Path:
+    samples = numpy.random.default_rng(seed).integers(-2000, 2000, size=frames, dtype=numpy.int16)
+    soundfile.write(path, samples, RATE, subtype="PCM_16")
+    return path
+
+
+def _key(**params: object) -> LogicalKey:
+    return LogicalKey(
+        task="t", task_version="1", backend="b", backend_version="1", model=None, params=params, inputs={}
+    )
+
+
+@pytest.mark.logic
+def test_xk1_attributes_cannot_forge_an_identity_or_a_stamp(tmp_path: Path) -> None:
+    """`from_attributes=True` is refused, so neither a forged identity nor a forged stamp is accepted."""
+    audio = Audio.from_array(numpy.zeros(16, dtype=numpy.float32), RATE)
+    forged = types.SimpleNamespace(groups=dict(audio.groups), anchor=audio.anchor, identity="content:" + "0" * 64)
+    for cls in (Audio, Recording):
+        with pytest.raises(ValidationError):
+            cls.model_validate(forged, from_attributes=True)
+    path = _wav(tmp_path / "a.wav")
+    group = Audio.from_path(path).groups["audio"]
+    assert isinstance(group, RegularGroup) and group.source_stamp is not None
+    stamp = group.source_stamp.model_copy(update={"frames": 10**9})
+    held = types.SimpleNamespace(
+        channels=group.channels, sampling_rate=RATE, data=None, source=path, source_stamp=stamp
+    )
+    with pytest.raises(ValidationError):
+        RegularGroup.model_validate(held, from_attributes=True)
+
+
+@pytest.mark.logic
+def test_xk2_a_same_size_same_mtime_rewrite_is_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A rewrite keeping size, mtime, inode and device is refused on read and on a copy in a fresh process."""
+    path = _wav(tmp_path / "a.wav")
+    audio = Audio.from_path(path)
+    group = audio.groups["audio"]
+    assert isinstance(group, RegularGroup)
+    st = os.stat(path)
+    with soundfile.SoundFile(path, "r+") as f:
+        f.seek(10)
+        f.write(numpy.full(100, 0.25, dtype=numpy.float32))
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+    after = os.stat(path)
+    assert (after.st_size, after.st_mtime_ns, after.st_ino) == (st.st_size, st.st_mtime_ns, st.st_ino)
+    with pytest.raises(StaleSource):
+        group.read()
+    monkeypatch.setattr(signals, "_VERIFIED", signals.Memo(1))
+    with pytest.raises(StaleSource):
+        copy.deepcopy(audio)
+
+
+@pytest.mark.logic
+def test_xk3_a_frozen_mapping_is_initialised_once() -> None:
+    """Re-calling `__init__` on a held mapping raises and leaves the value and its digest as they were."""
+    key = _key(a=1)
+    before = key.digest()
+    for mapping in (key.params, key.inputs):
+        assert isinstance(mapping, FrozenMapping)
+        with pytest.raises(TypeError):
+            mapping.__init__({"a": 5})  # type: ignore[misc]
+    assert key.params == {"a": 1} and key.digest() == before == LogicalKey.model_validate(key.model_dump()).digest()
+
+
+@pytest.mark.logic
+def test_xk4_config_private_state_and_dict_cannot_change_a_value() -> None:
+    """Flipping `model_config`, writing a private attribute, `__setstate__` and `__dict__` all raise."""
+    span = Span(start_ns=0, end_ns=10, clock_id="c")
+    other = Span(start_ns=0, end_ns=20, clock_id="c")
+    with pytest.raises(TypeError):
+        Span.model_config["frozen"] = False  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        span.end_ns = -100  # type: ignore[misc]
+    with pytest.raises(ValidationError):
+        span._canonical = other.canonical_digest()  # type: ignore[attr-defined]
+    with pytest.raises(TypeError):
+        span.__pydantic_private__["_canonical"] = other.canonical_digest()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        span.__setstate__({"__dict__": {"start_ns": 0, "end_ns": -1, "clock_id": "c"}})
+    with pytest.raises(TypeError):
+        span.__dict__["end_ns"] = -1
+    assert span.end_ns == 10 and span != other and hash(span) != hash(other)
+    key = _key()
+    with pytest.raises(TypeError):
+        key.__pydantic_private__["_digest"] = "f" * 64  # type: ignore[index]
+    blank = object.__new__(Span)
+    with pytest.raises(ValidationError):
+        blank.__setstate__({"__dict__": {"start_ns": 5, "end_ns": 1, "clock_id": "c"}})
+
+
+@pytest.mark.logic
+def test_xk10_deep_or_cyclic_params_raise_a_validation_error() -> None:
+    """Params nested 5000 deep, or holding themselves, raise `ValidationError`, not `RecursionError`."""
+    deep: object = 1
+    for _ in range(5000):
+        deep = [deep]
+    loop: dict[str, object] = {}
+    loop["self"] = loop
+    for params in ({"a": deep}, loop):
+        with pytest.raises(ValidationError):
+            _key(**params)
+
+
+@pytest.mark.logic
+def test_xk11_labels_equal_by_value_are_one_value() -> None:
+    """Label arrays of one set of strings are equal whatever width they were built at."""
+    ns = numpy.array([0])
+    by_width = [
+        Intervals(start_ns=ns, end_ns=ns + 1, label=numpy.array(["a"], dtype=dtype), clock_id="c")
+        for dtype in ("U1", "U3", "U9")
+    ]
+    assert by_width[0] == by_width[1] == by_width[2]
+    assert Events(time_ns=ns, label=numpy.array(["a\x00"]), value=None, clock_id="c") == Events(
+        time_ns=ns, label=numpy.array(["a"]), value=None, clock_id="c"
+    )
+
+
+@pytest.mark.logic
+def test_xk12_small_loosenesses_are_refused() -> None:
+    """Non-finite audio, lax floats, unknown fields, int64 overflow, unparseable refs, week dates, open classes."""
+    for samples in ([0.0, float("nan")], [0.0, float("inf")], numpy.array([0.0, 1e300])):
+        with pytest.raises(ValueError):
+            Audio.from_array(numpy.asarray(samples), RATE)
+    for drift in ("5", True):
+        with pytest.raises(ValidationError):
+            TimeMap(source="a", target="b", offset_ns=0, drift_ppm=drift)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        Span.model_validate({"start_ns": 0, "end_ns": 1, "clock_id": "c", "extra": 1})
+    with pytest.raises(OverflowError):
+        TimeMap(source="a", target="b", offset_ns=2**63 - 1).map(10)
+    with pytest.raises(ValidationError):
+        ModelRef(source="url", id="http://h/x#sha256=", ref="")
+    with pytest.raises(ValidationError):
+        License(
+            expression="MIT",
+            commercial_use="yes",
+            copyleft="none",
+            attribution=True,
+            gated=False,
+            source="s",
+            verified={"date": "2026-W01-1", "how": "manual"},
+        )
+    with pytest.raises(TypeError):
+        EQUIVALENCE["b"] = {"c": frozenset()}  # type: ignore[index]
+    context = ExecutionContext(
+        env_lock="l", platform="p", wheel_set="w", numerics={}, decoder=None, driver={}, host="h", protocol="1"
+    )
+    assert acceptable(context, context, "equivalent", backend="b")
+
+
+@pytest.mark.logic
+def test_xk1_a_nested_unsealed_or_subclass_instance_is_validated_again(tmp_path: Path) -> None:
+    """An instance built without validation, or of a subclass with other validators, cannot carry a forged identity."""
+    from pydantic import BaseModel
+
+    path = _wav(tmp_path / "a.wav")
+    real = Audio.from_path(path)
+    group = real.groups["audio"]
+    assert isinstance(group, RegularGroup) and group.source_stamp is not None
+    forged_stamp = BaseModel.model_construct.__func__(  # type: ignore[attr-defined]
+        type(group.source_stamp), **{**dict(group.source_stamp.__dict__), "content": "0" * 64}
+    )
+    planted = BaseModel.model_construct.__func__(  # type: ignore[attr-defined]
+        RegularGroup, **{**dict(group.__dict__), "source_stamp": forged_stamp}
+    )
+    with pytest.raises((ValidationError, StaleSource)):
+        Audio(groups={"audio": planted}, anchor=real.anchor)
+
+    class EvilAudio(Audio):
+        @classmethod
+        def identity_of(cls, groups: object) -> str:  # type: ignore[override]
+            return "content:" + "0" * 64
+
+    evil = EvilAudio(groups=dict(real.groups), anchor=real.anchor)  # type: ignore[call-arg]
+    assert evil.identity == "content:" + "0" * 64
+    with pytest.raises(ValidationError):
+        Audio.model_validate(evil)
+    unsealed = BaseModel.model_construct.__func__(Span, start_ns=5, end_ns=1, clock_id="c")  # type: ignore[attr-defined]
+    with pytest.raises(ValidationError):
+        Span.model_validate(unsealed)
+
+
+@pytest.mark.logic
+def test_audio_refuses_nan_of_either_sign_and_events_hold_one_nan() -> None:
+    """Audio refuses NaN whatever its sign or payload; an event value holding NaN has one digest across them."""
+    nan = numpy.array([0x7FC00000, 0], dtype="<u4").view("<f4")
+    negative_nan = numpy.array([0xFFC00001, 0], dtype="<u4").view("<f4")
+    for samples in (nan, negative_nan):
+        with pytest.raises(ValueError, match="NaN"):
+            Audio.from_array(samples, RATE)
+    ns = numpy.array([0, 1])
+    a, b = (Events(time_ns=ns, label=numpy.array(["a", "b"]), value=v, clock_id="c") for v in (nan, negative_nan))
+    assert a == b and a.canonical_digest() == b.canonical_digest()
+
+
+@pytest.mark.logic
+def test_a_float_wav_holding_nan_is_refused_on_decode(tmp_path: Path) -> None:
+    """A file-backed audio's samples are checked as decoded, as held samples are when built."""
+    path = tmp_path / "nan.wav"
+    samples = numpy.zeros(64, dtype=numpy.float32)
+    samples[10] = numpy.nan
+    soundfile.write(path, samples, RATE, subtype="FLOAT")
+    group = Audio.from_path(path).groups["audio"]
+    assert isinstance(group, RegularGroup)
+    with pytest.raises(ValueError, match="NaN"):
+        group.read()
+    assert group.read(0, 10 * 10**9 // RATE).shape == (1, 10)
+
+
+@pytest.mark.logic
+def test_an_irregular_group_holds_nan_as_the_one_missing_marker() -> None:
+    """NaN of any sign or payload in an irregular group is held as the quiet NaN without payload; inf is refused."""
+    from senselab_core.kernel.signals import ChannelInfo, IrregularGroup
+
+    channel = (ChannelInfo(name="x", type="pose", units="px"),)
+    nans = numpy.array([[1.0, 0.0, 0.0]], dtype=numpy.float64)
+    nans.view("<u8")[0, 1] = 0xFFF8000000000001
+    nans.view("<u8")[0, 2] = 0x7FF8000000000000
+    group = IrregularGroup(channels=channel, timestamps_ns=numpy.array([0, 5, 9]), data=nans)
+    bits = group.data.view("<u8")[0]
+    assert bits[1] == bits[2] == 0x7FF8000000000000
+    with pytest.raises(ValidationError):
+        IrregularGroup(channels=channel, timestamps_ns=numpy.array([0, 5]), data=numpy.array([[1.0, numpy.inf]]))

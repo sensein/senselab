@@ -167,3 +167,21 @@ def test_a31_content_root_covers_chunk_size(tmp_path: Path) -> None:
 def test_hashing_uses_registered_tags() -> None:
     """The tags `hashing` digests under are registered."""
     assert {"content-root@2", "weights@3"} <= IDENTITY_TAGS
+
+
+@pytest.mark.logic
+def test_xc1_weights_paths_with_post_13_code_points_are_named_raw(tmp_path: object) -> None:
+    """A weight file whose relative path holds a code point unassigned in 13.0 has an identity over its raw name."""
+    import hashlib
+    import json
+    from pathlib import Path
+
+    from senselab_worker.hashing import weights_identity
+
+    root = Path(str(tmp_path))
+    name = "e\u0301a\U0001e08f\u0323.bin"
+    f = root / name
+    f.write_bytes(b"x")
+    pairs = json.dumps([[name, hashlib.sha256(b"x").hexdigest()]], ensure_ascii=False, separators=(",", ":"))
+    expected = hashlib.sha256(b"weights@3\x00" + pairs.encode("utf-8")).hexdigest()
+    assert weights_identity([f], root=root) == expected

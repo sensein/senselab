@@ -10,6 +10,7 @@ import pytest
 from huggingface_hub.errors import RepositoryNotFoundError
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from planted_objects_fixture import BAD_RUN_IDS, LEASE, NAME_BOUND_S, UNOPENABLE_NAMES, bounded
 from senselab_core.runtime.revision import (
     MANIFEST_NAME,
     NAMESPACE,
@@ -431,3 +432,94 @@ def test_a_newline_suffixed_sha_is_not_passed_through(tmp_path: Path, monkeypatc
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
     with pytest.raises(RevisionResolutionError):
         get_cached_commit_hash("org/model", "e" * 40 + "\n")
+
+
+@pytest.mark.logic
+def test_xs7_a_run_id_with_a_parent_component_is_refused(tmp_path: Path) -> None:
+    """`../../escaped` is not a run id: nothing is written outside `runs/`."""
+    assert bounded("probe_xs7_run_id", str(tmp_path), "../../escaped") == {"error": "ValueError", "outside": []}
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("run", BAD_RUN_IDS, ids=repr)
+def test_every_run_id_that_is_not_one_component_is_refused(tmp_path: Path, run: str) -> None:
+    """Each run id that is not a single path component is refused before anything is written."""
+    assert bounded("probe_xs7_run_id", str(tmp_path), run) == {"error": "ValueError", "outside": []}
+
+
+@pytest.mark.logic
+def test_xs7_a_run_id_from_the_environment_is_one_component(tmp_path: Path) -> None:
+    """SENSELAB_RUN_ID naming a parent directory is refused."""
+    assert bounded("probe_xs7_env_run_id", str(tmp_path), "../../escaped") == "ValueError"
+    assert bounded("probe_xs7_env_run_id", str(tmp_path), "job-123") == ""
+
+
+@pytest.mark.logic
+def test_xs7_run_manifests_take_the_policy_modes_under_umask_0(tmp_path: Path) -> None:
+    """Under umask 0, `runs/`, the run directory and the manifest have the policy's modes, not world-writable ones."""
+    report = bounded("probe_xs7_modes", str(tmp_path), "0")
+    assert report["modes"] == report["expected"]
+    assert report["leftover_removed"] is True and len(report["entries"]) == 2
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("umask", ["0", "022", "077", "007"])
+def test_run_manifest_modes_do_not_depend_on_the_umask(tmp_path: Path, umask: str) -> None:
+    """For every umask, the run manifest and its directories carry exactly the policy's modes."""
+    report = bounded("probe_xs7_modes", str(tmp_path), umask)
+    assert report["modes"] == report["expected"]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("plant", ["symlink", "dangling"])
+@pytest.mark.parametrize("name", [LEASE, ".clock"])
+def test_c1_the_lease_of_a_run_manifest_never_follows_a_planted_symlink(tmp_path: Path, name: str, plant: str) -> None:
+    """A symlink at a run manifest's lease or clock is neither chmodded nor created through."""
+    report = bounded("probe_record_with_plant", str(tmp_path), name, plant)
+    assert report["error"] == "" and report["recorded"]
+    assert report["victim_unchanged"] and report["victim"] == ["f"], report
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("name", [LEASE, ".clock"])
+def test_i1_a_hard_link_at_a_lease_or_clock_leaves_its_target_alone(tmp_path: Path, name: str) -> None:
+    """A hard link at a lease or clock: the file it shares is not chmodded, truncated or re-stamped."""
+    report = bounded("probe_record_with_plant", str(tmp_path), name, "hardlink")
+    assert report["error"] == "" and report["recorded"]
+    assert report["victim_unchanged"], report
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("content", ["{}", "garbage", " ", '{"user": "u", "host": "h", "pid": 1}'])
+def test_i2_a_stale_lease_whatever_its_content_never_hangs_record_resolution(tmp_path: Path, content: str) -> None:
+    """A stale lease is broken whatever it holds, and the resolution is recorded within the bound."""
+    report = bounded("probe_record_with_plant", str(tmp_path), LEASE, content)
+    assert report["error"] == "" and report["recorded"] and report["seconds"] < NAME_BOUND_S, report
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("plant", ["directory", "fifo", "symlink"])
+def test_i3_a_wrong_kind_at_the_lease_name_is_set_aside(tmp_path: Path, plant: str) -> None:
+    """A directory, fifo or symlink at the lease is moved aside; the resolution is recorded, no OSError."""
+    report = bounded("probe_record_with_plant", str(tmp_path), LEASE, plant)
+    assert report["error"] == "" and report["recorded"], report
+
+
+@pytest.mark.logic
+@pytest.mark.skipif(os.geteuid() == 0, reason="root opens a 0o000 file")
+@pytest.mark.parametrize("name", UNOPENABLE_NAMES)
+def test_n1_an_unopenable_file_at_a_lease_or_manifest_name_never_wedges_record_resolution(
+    tmp_path: Path, name: str
+) -> None:
+    """A regular file this user cannot open, as another user's 0o600 file is, is moved aside or replaced."""
+    report = bounded("probe_record_with_plant", str(tmp_path), name, "unopenable")
+    assert report["error"] == "" and report["recorded"] and report["seconds"] < NAME_BOUND_S, report
+
+
+@pytest.mark.logic
+@pytest.mark.skipif(os.geteuid() == 0, reason="root renames in a read-only directory")
+def test_n1_an_unopenable_lease_that_cannot_be_moved_is_a_typed_error_naming_its_remedy(tmp_path: Path) -> None:
+    """When the run directory refuses the move too, the error is `LeaseUnavailable` naming the lease and its owner."""
+    report = bounded("probe_record_with_plant", str(tmp_path), LEASE, "unmovable")
+    assert report["error"] == "LeaseUnavailable", report
+    assert LEASE in report["message"] and "owned by" in report["message"], report

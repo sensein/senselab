@@ -1,3 +1,4 @@
+# ruff: noqa: ANN401
 """The content-addressed result store: layout, reuse policy, concurrent writers and provenance."""
 
 import errno
@@ -21,6 +22,7 @@ import numpy
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from planted_objects_fixture import ARRAY_CORRUPTIONS, bounded, swap_subsets
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ReusePolicy
 from senselab_core.runtime import storage as storage_module
 from senselab_core.runtime import store as store_module
@@ -713,6 +715,7 @@ def test_a3_transient_error_in_put_never_quarantines(tmp_path: Path, monkeypatch
     )
     with pytest.raises(StoreUnavailable):
         s.put(k, {"y": "healthy"}, c)
+    assert _entry_dir(tmp_path, k, c).is_dir()
     assert not any((tmp_path / QUARANTINE_DIR).glob("*"))
     assert s.put(k, {"y": "other"}, c) == ident
 
@@ -831,6 +834,28 @@ def test_collect_removes_only_aged_quarantine(tmp_path: Path) -> None:
     assert s.collect(now=now) == 2
     assert {p.name for p in (tmp_path / QUARANTINE_DIR).iterdir()} == {young_q.name, "keep-me"}
     assert not stale.exists() and live.exists()
+
+
+@pytest.mark.logic
+def test_an_entry_reported_corrupt_once_is_still_served_afterwards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A healthy entry whose first context read reports corruption is not quarantined and is served next time."""
+    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    s.put(k, {"y": "healthy"}, c)
+    real = store_module._read_context
+    state = {"raised": False}
+
+    def once(*args: Any, **kwargs: Any) -> Any:
+        if not state["raised"]:
+            state["raised"] = True
+            raise CorruptEntryError("claimed corrupt while it was being healed")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(store_module, "_read_context", once)
+    s.get(k, c, ReusePolicy.EXACT)
+    got = s.get(k, c, ReusePolicy.EXACT)
+    assert got is not None and got.outputs == {"y": "healthy"}
 
 
 @pytest.mark.logic
@@ -1177,3 +1202,56 @@ def test_stored_bool_arrays_keep_their_shape_and_truth(tmp_path: Path, shape: tu
     assert y.view(numpy.uint8).max(initial=0) <= 1
     if shape == ():
         assert output_identity({"y": a}) != output_identity({"y": a.reshape(1)})
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("level", ["store", "prefix", "digest"])
+def test_xs3_a_file_at_a_store_directory_is_set_aside_and_put_commits(tmp_path: Path, level: str) -> None:
+    """A regular file where a store directory belongs is quarantined; put commits and get serves the new entry."""
+    report = bounded("probe_xs3", str(tmp_path), level, "open")
+    assert (report["get_error"], report["got"], report["put_error"]) == ("", None, "")
+    assert report["after"] == {"y": 2}
+
+
+@pytest.mark.logic
+@pytest.mark.skipif(os.geteuid() == 0, reason="root renames out of a read-only directory")
+@pytest.mark.parametrize("level", ["prefix", "digest"])
+def test_xs3_an_unmovable_file_at_a_store_directory_is_a_typed_error_naming_it(tmp_path: Path, level: str) -> None:
+    """When the file cannot be moved, put raises a non-retryable error naming the path and its owner."""
+    report = bounded("probe_xs3", str(tmp_path), level, "sealed")
+    assert report["put_error"] == "WrongKindError"
+    assert report["target"] in report["message"] and "owned by" in report["message"]
+
+
+@pytest.mark.logic
+def test_xs4_swapped_result_files_are_not_served_under_the_other_context(tmp_path: Path) -> None:
+    """Swapping two contexts' result.json files and arrays makes both entries misfiled; neither is served."""
+    report = bounded("probe_xs4", str(tmp_path), "result.json+arrays", "exact")
+    assert report["served"] == {"linux": None, "macos": None}
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("policy", ["exact", "tolerant"])
+@pytest.mark.parametrize("swapped", list(swap_subsets()))
+def test_an_entry_serves_only_the_outputs_its_context_wrote_whatever_members_are_swapped(
+    tmp_path: Path, swapped: str, policy: str
+) -> None:
+    """For every set of members swapped between two contexts' entries, a hit's outputs are its own context's."""
+    report = bounded("probe_xs4", str(tmp_path), swapped, policy)
+    for hit in report["served"].values():
+        assert hit is None or hit[1] == report["expected"][hit[0]], report
+
+
+@pytest.mark.logic
+def test_xs5_put_over_an_entry_with_a_corrupt_array_rewrites_it(tmp_path: Path) -> None:
+    """A put over an entry whose array no longer hashes replaces it, so the get right after it is served."""
+    report = bounded("probe_xs5", str(tmp_path), "npy_bytes")
+    assert report == {"same_identity": True, "served": {"a": [0.0, 1.0, 2.0, 3.0]}}
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("corruption", ARRAY_CORRUPTIONS)
+def test_a_put_that_reports_success_is_served_by_the_next_get(tmp_path: Path, corruption: str) -> None:
+    """For every way an entry's array can be damaged, the put after it leaves an entry that get serves."""
+    report = bounded("probe_xs5", str(tmp_path), corruption)
+    assert report == {"same_identity": True, "served": {"a": [0.0, 1.0, 2.0, 3.0]}}
