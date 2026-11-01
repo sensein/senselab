@@ -4,10 +4,12 @@ import copy
 import math
 import pickle
 import unicodedata
+from importlib import resources
 
 import numpy
 import pytest
 import senselab_core.kernel.identity as identity
+import yaml
 from hypothesis import given
 from hypothesis import strategies as st
 from pydantic import ValidationError
@@ -407,8 +409,48 @@ def test_equivalence_is_scoped_to_its_backend() -> None:
 
 @pytest.mark.logic
 def test_phase_1_has_no_measured_equivalence() -> None:
-    """The packaged equivalence table is empty in Phase 1."""
+    """The packaged equivalence table, read from `kernel/data/equivalence.yaml`, is empty in Phase 1."""
+    text = resources.files("senselab_core.kernel").joinpath("data", "equivalence.yaml").read_text("utf-8")
+    assert identity.parse_equivalence(text) == {}
     assert dict(identity.EQUIVALENCE) == {}
+
+
+def _class(*fingerprints: str, derivation: object = "measured: agreement on 200 verify samples") -> dict[str, object]:
+    return {"fingerprints": list(fingerprints), "derivation": derivation}
+
+
+@pytest.mark.logic
+def test_equivalence_data_reads_each_class_with_its_derivation() -> None:
+    """A class names its context fingerprints and carries a derivation; the table is read-only."""
+    c1, c2 = _ctx(platform="linux").fingerprint(), _ctx(platform="macos").fingerprint()
+    text = yaml.safe_dump({"format": "equivalence@1", "backends": {"b": {"cpu-fp32": _class(c1, c2)}}})
+    table = identity.parse_equivalence(text)
+    assert table == {"b": {"cpu-fp32": frozenset({c1, c2})}}
+    assert acceptable(_ctx(platform="linux"), _ctx(platform="macos"), "equivalent", backend="b", equivalence=table)
+    with pytest.raises(TypeError):
+        table["b"] = {}  # type: ignore[index]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"format": "equivalence@2", "backends": {}},
+        {"backends": {}},
+        {"format": "equivalence@1"},
+        {"format": "equivalence@1", "backends": {"b": {"c": _class("a" * 64, "b" * 64, derivation="")}}},
+        {"format": "equivalence@1", "backends": {"b": {"c": _class("a" * 64, "b" * 64, derivation=None)}}},
+        {"format": "equivalence@1", "backends": {"b": {"c": {"fingerprints": ["a" * 64, "b" * 64]}}}},
+        {"format": "equivalence@1", "backends": {"b": {"c": _class("a" * 64)}}},
+        {"format": "equivalence@1", "backends": {"b": {"c": _class("a" * 64, "linux")}}},
+        {"format": "equivalence@1", "backends": {"b": {"c": {**_class("a" * 64, "b" * 64), "k": 1}}}},
+        {"format": "equivalence@1", "backends": {"b": []}},
+    ],
+)
+def test_equivalence_data_refuses_a_class_without_derivation_or_fingerprints(document: dict[str, object]) -> None:
+    """A wrong format, a class with no derivation, fewer than two fingerprints or a non-fingerprint is refused."""
+    with pytest.raises(ValueError, match="equivalence"):
+        identity.parse_equivalence(yaml.safe_dump(document))
 
 
 # Model references

@@ -2,10 +2,12 @@
 
 import re
 from collections.abc import Mapping
+from importlib import resources
 from enum import Enum
 from typing import Annotated, Any, Literal, Self, assert_never
 from urllib.parse import urlsplit
 
+import yaml
 from pydantic import (
     AfterValidator,
     BeforeValidator,
@@ -270,14 +272,59 @@ class ReusePolicy(str, Enum):
 
 DEFAULT_REUSE_POLICY = ReusePolicy.EQUIVALENT
 
-EQUIVALENCE: Mapping[str, Mapping[str, frozenset[str]]] = FrozenMapping({})
-"""The packaged measured equivalence classes per backend: backend name to class name to the context fingerprints in it.
-
-Read-only; a caller holding another measured table passes it as `equivalence`.
-"""
-
 Equivalence = Mapping[str, Mapping[str, frozenset[str]]]
 """Measured equivalence classes: backend name to class name to the context fingerprints in it."""
+
+EQUIVALENCE_FORMAT = "equivalence@1"
+
+
+def _equivalence_class(where: str, raw: object) -> frozenset[str]:
+    if not isinstance(raw, Mapping) or set(raw) != {"fingerprints", "derivation"}:
+        raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} must be a mapping of exactly 'fingerprints' and 'derivation'")
+    derivation, fingerprints = raw["derivation"], raw["fingerprints"]
+    if not isinstance(derivation, str) or not derivation.strip():
+        raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} needs a non-empty derivation")
+    if not isinstance(fingerprints, list) or not all(isinstance(f, str) and _SHA256.fullmatch(f) for f in fingerprints):
+        raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} must list context fingerprints, 64 lowercase hex each")
+    members = frozenset(fingerprints)
+    if len(members) < 2:
+        raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} needs at least two distinct fingerprints")
+    return members
+
+
+def parse_equivalence(text: str) -> Equivalence:
+    """Return the read-only equivalence table an `equivalence@1` YAML document declares.
+
+    The document holds `format: equivalence@1` and `backends`, a mapping of backend name to class name
+    to `{fingerprints: [...], derivation: ...}`; a class lists at least two distinct context
+    fingerprints and a non-empty derivation.
+
+    Raises:
+        ValueError: if the document does not have that form.
+    """
+    raw = yaml.safe_load(text)
+    if not isinstance(raw, dict) or set(raw) != {"format", "backends"} or raw["format"] != EQUIVALENCE_FORMAT:
+        raise ValueError(f"an equivalence table is a mapping of exactly format {EQUIVALENCE_FORMAT!r} and 'backends'")
+    backends = raw["backends"]
+    if not isinstance(backends, dict) or not all(isinstance(classes, dict) for classes in backends.values()):
+        raise ValueError(f"{EQUIVALENCE_FORMAT} backends must map each backend to a mapping of classes")
+    return FrozenMapping(
+        {
+            str(backend): FrozenMapping(
+                {str(name): _equivalence_class(f"{backend}/{name}", cls) for name, cls in classes.items()}
+            )
+            for backend, classes in backends.items()
+        }
+    )
+
+
+EQUIVALENCE: Equivalence = parse_equivalence(
+    resources.files("senselab_core.kernel").joinpath("data", "equivalence.yaml").read_text("utf-8")
+)
+"""The packaged measured equivalence classes, read from `data/equivalence.yaml`; read-only.
+
+A caller holding another measured table passes it as `equivalence`.
+"""
 
 
 def acceptable(
