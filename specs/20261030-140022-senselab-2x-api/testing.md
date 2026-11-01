@@ -73,7 +73,6 @@ For each declared task, backend, env and profile, one generic suite checks:
   as `exact`, and `tolerant` accepts and labels the result;
 - graph documents round-trip and validate; a list wired to an item port without `map` is a type
   error (ADR-001);
-- a `measure` task's output schema carries no verdict fields (P-20);
 - provenance is emitted with the required fields;
 - a license record exists, and a missing one raises under the default policy;
 - `Absent` and failure are distinguished, and only content-caused `Absent` is read back from the

@@ -360,7 +360,8 @@ amending its origin.
   reason about survivors. **Source**: `CLAUDE.md`. **Check**: the logical key in ADR-002 (`design.md` §4.8).
 
 ### P-20 Measurements and decisions are separate layers
-- **Status**: active. **Statement**: measuring nodes emit measurements; decisions are separate,
+- **Status**: retired 2026-11-01 (owner: "verdict/decision seems very specific to triage"); core holds no verdict type,
+  decision marker or verdict contract (H-R48). Any measure/decide layering belongs to the flywheel roadmap. Was: active. **Statement**: measuring nodes emit measurements; decisions are separate,
   declared nodes. **Source**: `audio_analysis/doc.md`. **Check**: the generated contract suite
   asserts that `measure` outputs carry no verdict fields.
 
@@ -439,3 +440,6 @@ amending its origin.
     happen during development, not in CI (owner item 39, which replaced the advisory CI prose review).
   - ADR-000 gains the amendment rule: a change to an ADR's decision is a dated amendment section
     (D-7).
+
+- 2026-11-01: P-20 retired (owner: "verdict/decision seems very specific to triage"). Core drops `VERDICT_TYPES`,
+  the `DECISION` format marker and the measure-has-no-verdict contract case; task kinds stay plain declarations.

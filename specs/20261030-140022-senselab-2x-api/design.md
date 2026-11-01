@@ -204,7 +204,6 @@ class SpeechToText:
 ```
 
 - **Kinds:**
-  - `measure`: no verdict fields (P-20);
   - `transform`;
   - `decide`: consumes measurements plus a profile;
   - `fit`: learns state, see section 4.14.
