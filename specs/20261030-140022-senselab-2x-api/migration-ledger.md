@@ -35,6 +35,7 @@ modify commit.
 |---|---|---|
 | `src/senselab/utils/subprocess_venv.py`, `uv_tools.py`, `venv_lock.py`, `cuda_probe.py` | folded into `packages/senselab-core/src/senselab_core/runtime/envs.py` | 9a1 |
 | `src/senselab/utils/vllm_server.py` | `packages/senselab-core/src/senselab_core/runtime/vllm_server.py` | 9b |
+| `src/senselab/audio/tasks/preprocessing/` `resample_audios` (torch, speechbrain) | rewritten, not ported: `packages/senselab/src/senselab/signal/resample.py` (numpy Kaiser-windowed sinc, task `signal.resample`, ruling P2-59) | 12 |
 
 Unported in Task 9a1 (ruling P2-3), each at its `alpha` source `36aa9615:src/senselab/utils/<module>`:
 
