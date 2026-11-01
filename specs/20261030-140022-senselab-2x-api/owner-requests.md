@@ -45,3 +45,4 @@ The authority for the full review. Quoted as the owner wrote them; nothing parap
 36. "should src stay or go, or relevant files git moved and modified?"
 37. "remember what i said about triage?"
 38. "it seems many components deviated from original discussion and decisions. run a full review after subagent is back."
+39. "i thought 22 was specifically about lists of words, not code sharpening. code review should happen during development not CI, so change it to be reviewed and compacted during development."

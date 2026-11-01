@@ -42,8 +42,8 @@ PR - clarify the decisions"):
 
 - **D-1** Guards and gates cut back to the design: keep the import-linter contracts, the identifier check,
   the fixture budget (256 KB per file, 2 MB total) and the workflow-expression guard; delete the
-  spelling-based bypass lints, `moved_modules_test.py` and tests that only make other tests exist; add the
-  advisory agent prose review.
+  spelling-based bypass lints, `moved_modules_test.py` and tests that only make other tests exist; review and
+  compact during development, no model in CI (owner item 39).
 - **D-2** Locks are leases by rename and `O_EXCL` (ADR-003); revert the `flock`/heartbeat/takeover protocol
   and the 1.x-only lock modes; keep H9b's path safety.
 - **D-3** Canonical text is NFC except text with code points unassigned in Unicode 13.0, for portability
@@ -68,8 +68,7 @@ PR - clarify the decisions"):
 ## Next actions, in order
 
 Done on 2026-11-01: specs merged into `2x/phase-1` (`d90b5057`); **D-6** `src/` = `alpha` (`ffdf06e6`,
-merge `a2be7b27`); **D-1** guard layer cut and advisory prose review added (`f7026f54`, `b2db96be`;
-needs the `ANTHROPIC_API_KEY` repository secret); **D-5** release gate trimmed (`a3ea1894`); **D-2** locks are leases by rename and `O_EXCL` (`5a325c29..12853f8b`; ADR-003 amended to
+merge `a2be7b27`); **D-1** guard layer cut (`f7026f54`; the CI prose review of `b2db96be` was removed per owner item 39); **D-5** release gate trimmed (`a3ea1894`); **D-2** locks are leases by rename and `O_EXCL` (`5a325c29..12853f8b`; ADR-003 amended to
 match what was built), plus **fix round 1** (`b76681a9`): a holder is identified by its uuid token and a judged lease by device, inode and mtime, because ext4 reuses inode numbers at once; Linux CI green; the D-1 fixture budget numbers (256 KB per file, 2 MB total) now live in
 `scripts/data/fixture_budget.yaml` with their derivations.
 
@@ -105,9 +104,9 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
    Parked items: all in review-register.md (R-110..R-134); none live only in the ledger.
 3. **Phase 1 exit**, remaining steps in order (`plans/phase-1.md` Task 15, as amended; final review of
    `82a986e1`):
-   1. X1 code fixes (in progress).
-   2. CI green at the final head.
-   3. These docs fixes (done by this commit).
+   1. X1 code fixes: done.
+   2. CI green at the final head: done, `195406b7` (2026-11-01).
+   3. Docs fixes: done.
    4. The ORCD jobs (a)-(f) plus the env tier, pending owner sign-in. Run them on ORCD shared NFS scratch from
       a pinned checkout, in a submitted job (never on login or claude-rc nodes), together with the local-tier
       runs H11b did not make (the env tier and the later-boundary sweep): (a) `SENSELAB_WORK_POOL_NFS_DIR=<dir>` run of
@@ -119,8 +118,10 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
    defeated by attribute caching; (e) stale-break race across nodes: one break log, and any "displaced"
    warning matches a holder whose release logs it; (f) an unreadable 0o000 stale lease left by another
    user in a group-writable run directory is still broken.
-   5. The Task 15 adversarial round with a duplicate-finding pass (P-37).
-   6. Resolve or schedule every register finding.
+   5. The Task 15 adversarial round with a duplicate-finding pass (P-37): done against `c54e9712`
+      (`reviews/exit-adversarial-2026-11-01/`, R-135..R-159); 11 high/medium findings fixed and reviewed
+      (`c294151c..195406b7`).
+   6. Resolve or schedule every register finding: done; every open row names an owner.
    7. Mark Phase 1 done, merge #617 into `2.x`, and retarget #619.
 4. **Phase 2:** ADR-010 (PROV-O JSON-LD store, `senselab:` vocabulary, token-family removal, export
    redaction) and the benchmark harness with its data manifest and smoke suite, alongside the tasks and

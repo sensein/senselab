@@ -435,7 +435,7 @@ amending its origin.
   [`decisions-2026-11-01.md`](decisions-2026-11-01.md). Text in `engineering.md`:
   - P-27 amended (meaning change, owner item 30 and D-7): 2.x is built on the `2.x` branch, not in
     place on `alpha`; design is decided in #617 and code goes in #619.
-  - P-31 and P-35 checks amended (D-1): the guard layer is cut back to the design, and an advisory
-    agent prose review is added.
+  - P-31 and P-35 checks amended (D-1): the guard layer is cut back to the design. Review and compaction
+    happen during development, not in CI (owner item 39, which replaced the advisory CI prose review).
   - ADR-000 gains the amendment rule: a change to an ADR's decision is a dated amendment section
     (D-7).

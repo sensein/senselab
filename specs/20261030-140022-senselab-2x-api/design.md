@@ -674,8 +674,8 @@ contracts cover the packages and the 2.x scripts only, and ruff excludes the 1.x
 identifier check (P-28), the fixture budget and the workflow-expression guard. It has no spelling-based
 lint that chases in-repo bypasses, and no test whose only job is to make another test exist.
 
-**Agent prose review** (D-1, P-31, `engineering.md`). A small pinned model reviews each PR's diff against
-the principles and the engineering checklist and comments. It does not block.
+**Review during development** (D-1 as amended, P-31, `engineering.md`). Each change is reviewed against the
+principles and the engineering checklist and compacted before it is committed. No model runs in CI.
 
 ## 6. Migration
 
@@ -863,7 +863,7 @@ Each cut keeps its interface or hook, and is added when a measurement or a use c
 | `sl.eeg`, `sl.eyetrack`, `sl.motion` namespaces | `sl.signal` generic tasks only | the first task exists in that modality |
 | `sl.sklearn` adapter | `ResultSet.to_frame()` | users ask for it |
 | Route B (pydra runner/executor split) | Route A | pydra RFC 3.10 lands |
-| Word-list prose lint | model- and agent-based prose review, advisory (`engineering.md`, P-31) | — (replaced, not deferred) |
+| Word-list prose lint | review and compaction during development (`engineering.md`, P-31) | — (replaced, not deferred) |
 
 **Kept for 2.0:**
 - the kernel and runtime;
@@ -937,7 +937,7 @@ R-n in [`review-register.md`](review-register.md).
   signal NaN rules (H-R38); sealed-entry limits and caseless fetch paths (R-77, R-100); provenance values
   total by declared type (H-R29, H-R30); core drops `filelock`.
 - 2026-11-01: release gate minimal until the first 2.x release (D-5, §5).
-- 2026-11-01: guards cut back to the design; agent prose review added (D-1, §5).
+- 2026-11-01: guards cut back to the design (D-1, §5); review and compaction during development, not CI (owner item 39).
 - 2026-11-01: provenance is W3C PROV, implemented in Phase 2 with the benchmark harness (D-4, H-R49, §4.8,
   §6.2).
 - 2026-11-01: 2.x lives on `2.x`; `src/` is 1.x as on `alpha`, never edited by 2.x; Phase 1 exit has no

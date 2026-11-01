@@ -26,6 +26,9 @@ amendment says what replaces it.
   "sharpen with agents, not lists" route.
 - **Carried by:** engineering.md (P-31, P-35) and design §5.
 - **Resolves:** Ar F-1, Ru I-2, Ru I-10.
+- **Amended 2026-11-01** (owner item 39: "i thought 22 was specifically about lists of words, not code sharpening. code review should happen during development not CI, so change it to be reviewed and compacted during development."):
+  the "Add" bullet is replaced. Item 22 rejected word lists; it did not ask for a model in CI. There is no CI prose
+  review: review and compaction happen during development: every change is reviewed against the principles and the engineering checklist, and compacted (duplicates folded, verbosity cut), before it is committed to a PR. No model runs in CI. The per-PR review role in engineering.md carries it; the `2x-prose-review` workflow is removed.
 
 ## D-2. Locks are leases by rename and O_EXCL, as ADR-003 decided
 

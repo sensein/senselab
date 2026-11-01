@@ -89,7 +89,6 @@ without trading away P-31..P-39.
 | End-of-phase adversarial round (P-35) | general-purpose lead with up to 5 subagents | opus, higher; subagents sonnet | read-only |
 | Phase-gate architecture review | general-purpose lead with subagents | opus; verification subagents haiku, lower | read-only |
 | Verifying a reviewer's claims before acting on them | Explore | haiku or sonnet, lower | read-only |
-| Prose review in CI (P-31) | pinned small model | — | CI |
 | ORCD jobs (benchmarks, GPU limits, env builds) | an agent submits; the main thread holds the wait | sonnet, lower | pinned checkout per job |
 
 **Rules**
@@ -180,9 +179,9 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
 - **Statement**: Code, docstrings, comments, logs, errors and agent-facing text say each thing
   once, in the fewest exact words. Reasons and history live in `specs/`.
 - **Source**: owner, 2026-10-30: "we want to make verbosity minimal for the human and any agent".
-- **Check**: advisory prose review in CI by a small pinned model, sharpened by agents; the exact-pattern id check blocks. No word lists.
-  Amended 2026-11-01 (D-1): the agent prose review covers each PR's diff against the principles and
-  the per-commit checklist, and comments without blocking.
+- **Check**: the development-time review (per-PR review role above) reads each change for verbosity and
+  compacts it before commit; the exact-pattern id check blocks. No word lists, no model in CI.
+  Amended 2026-11-01 (D-1, owner item 39): replaces the advisory CI prose review.
 
 <a id="p-32"></a>
 ### P-32 Clean, robust, reusable, efficient code
