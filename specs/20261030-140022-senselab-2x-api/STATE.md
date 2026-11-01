@@ -95,20 +95,22 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
      equivalence table loads in the runtime (`runtime/data/equivalence.yaml`); `importlib` is forbidden in
      the kernel; `huggingface-hub` bounded `>=1.3,<3`.
 
-   **Next actions, in this order:**
-   1. The engineering and license gates (T F5-F7), including the **locked Python 3.10 floor**: a locked 3.10
-      constraints file so `worker-floor` can install from a lock; today it is the one unlocked job.
-   2. Parked items moved into tracked registers (Ru I-11, I-12): done, see below.
-   3. The Phase 1 exit (below), which needs the ORCD runs once the owner signs in.
+   **Gates and parked items, done:** the engineering and license gates, including the locked 3.10 floor
+   (`73931a6d..ab402590`), F1 to F4, and the parked items (all in `review-register.md`).
 
    **Follows still open** are rows in `review-register.md`, not text here: `model_source` R-110, lease renewal R-111,
    verify sampling R-112, the nightly workflow on `alpha` R-113, the clock re-binding R-114, the source-digest CI
    check R-115, per-task licences and taint R-116, the P-40 roster and worktree isolation R-117, whole-file
-   hashing R-109. `worker-floor` installs unlocked until item 1 above is done.
-   Parked items: all in review-register.md (R-110..R-131); none live only in the ledger.
-3. **Then the Phase 1 exit** (`plans/phase-1.md` Task 15, as amended): 2.x CI green; `src/` equals `alpha`; no 1.x
-   tests on the 2.x line; P-39 re-scan; `STATE.md` updated. The ORCD full runs are **pending owner sign-in**. Run these on ORCD shared NFS scratch from a pinned checkout, in a submitted job
-   (never on login or claude-rc nodes), together with the full local-tier runs H11b did not make (the env tier and the later-boundary sweep): (a) `SENSELAB_WORK_POOL_NFS_DIR=<dir>` run of
+   hashing R-109.
+   Parked items: all in review-register.md (R-110..R-134); none live only in the ledger.
+3. **Phase 1 exit**, remaining steps in order (`plans/phase-1.md` Task 15, as amended; final review of
+   `82a986e1`):
+   1. X1 code fixes (in progress).
+   2. CI green at the final head.
+   3. These docs fixes (done by this commit).
+   4. The ORCD jobs (a)-(f) plus the env tier, pending owner sign-in. Run them on ORCD shared NFS scratch from
+      a pinned checkout, in a submitted job (never on login or claude-rc nodes), together with the local-tier
+      runs H11b did not make (the env tier and the later-boundary sweep): (a) `SENSELAB_WORK_POOL_NFS_DIR=<dir>` run of
    `packages/senselab-core/tests/runtime/locks_test.py`, whose two `[nfs]` cases cover one taker and
    concurrent breakers; (b) cross-node exclusion: processes on 2-4 nodes calling `record_resolution` with
    distinct SHAs against one `SENSELAB_CACHE`, expecting one SHA, one manifest entry and no lease litter;
@@ -116,7 +118,10 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
    one node is aged by `fs_now()` on another, within `acregmin`/`acregmax`, and the lstat pre-check is not
    defeated by attribute caching; (e) stale-break race across nodes: one break log, and any "displaced"
    warning matches a holder whose release logs it; (f) an unreadable 0o000 stale lease left by another
-   user in a group-writable run directory is still broken. Then merge #617 into `2.x` and retarget #619.
+   user in a group-writable run directory is still broken.
+   5. The Task 15 adversarial round with a duplicate-finding pass (P-37).
+   6. Resolve or schedule every register finding.
+   7. Mark Phase 1 done, merge #617 into `2.x`, and retarget #619.
 4. **Phase 2:** ADR-010 (PROV-O JSON-LD store, `senselab:` vocabulary, token-family removal, export
    redaction) and the benchmark harness with its data manifest and smoke suite, alongside the tasks and
    backends of design §6.2.
@@ -133,6 +138,9 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
 
 ## Log
 
+- **2026-11-01 (final review, docs fixes):** the pydra environment fold corrected to ADR-002; as-built detail
+  removed from ADR-003 and ADR-009; register rows R-132..R-134 added (prose review inert, config-guard tests,
+  size budgets); stale plan text fixed.
 - **2026-11-01 (F1, F3, F4 done):** model key is the weights digest and the source is context (`logical-key@5`,
   `execution-context@2.0`; H-R56); decoding and stamping out of the kernel; one transient classifier and a data
   retry policy; equivalence classes as data; CI locked except `worker-floor` (H-R57). ADR-002, 003, 005, 006 and

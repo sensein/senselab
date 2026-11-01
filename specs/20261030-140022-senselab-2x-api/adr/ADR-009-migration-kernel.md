@@ -90,14 +90,9 @@ and owner decision D-6 ([`decisions-2026-11-01.md`](../decisions-2026-11-01.md))
 
 Ruling H-R57 and the F3 and F4 tasks ([`rulings.md`](../rulings.md)).
 
-- **The kernel does no I/O.** The import-linter contract `kernel-does-no-io` forbids `senselab_core.kernel`
-  from importing `soundfile`, `os`, `io`, `shutil`, `tempfile` and `importlib` (and `senselab_worker.hashing`).
-  `kernel-below-runtime` still forbids the runtime.
-- **Audio decoding, stamping and the stamp memo live in `runtime/audio_io.py`.** The kernel keeps the value
-  types and the `SourceReader` protocol; a file-backed group is read with `reader=audio_io.READER`. The file
-  entry point is `audio_io.open_audio(path)`, which replaces `Audio.from_path`.
-- **The equivalence table is loaded by the runtime** (`runtime/equivalence.py`); the kernel parses a table
-  (`parse_equivalence`) and loads none.
+- **The kernel does no I/O.** An import-linter contract forbids `senselab_core.kernel` from importing the
+  file, OS and import machinery; the kernel keeps the value types and the `SourceReader` protocol, and the
+  runtime supplies the reader and loads the equivalence table.
 
 ## Amendment log
 

@@ -931,7 +931,7 @@ longer occurs. **Superseded 2026-11-01 by H-R49:** regressions are named by inva
 - [ ] **Step 3: Scoped re-attack.** Brief an opus lead with the hardened surfaces and the invariants
   of H1–H7. The goal is to break an invariant, not to re-find a pinned case. New findings become rows
   R-99 onward with architectural resolutions. Append the outcome to `reviews/phase1-adversarial.md` §7.
-- [ ] **Step 4:** Run `plans/phase-1.md` Task 15 Steps 1–2 again (CI green, the 1.x suite on ORCD
+- [ ] **Step 4:** Run `plans/phase-1.md` Task 15 Steps 1–2 again (CI green, the ORCD runs
   from a pinned checkout). Update `STATE.md` to "Phase 1 done" with the log line.
 - [ ] **Step 5:** Commit `test(2x): Phase 1 adversarial findings as regression tests; re-attack`.
 

@@ -109,7 +109,7 @@ per item but still hit MaxSubmitPU, which is exactly the r18d problem `slice_poo
 - Since 2025-10-30, 95 of about 135 human commits are by one author (tclose). The bus factor is
   one active developer plus reviewers.
 - 94 open issues and PRs. Several are directly relevant:
-  - environment not in checksum, #826;
+  - environment not in checksum, #826 (senselab records it and decides reuse by policy, ADR-002);
   - cache dirs versioned with pydra rather than independently, #825;
   - Python tasks cannot run in environments, #840;
   - per-task Slurm resources, #227 and #830;
