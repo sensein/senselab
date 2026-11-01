@@ -3209,6 +3209,7 @@ profiling = [
 test = [
     { name = "grimp" },
     { name = "import-linter" },
+    { name = "jsonschema" },
     { name = "pytest" },
     { name = "pytest-timeout" },
 ]
@@ -3250,6 +3251,7 @@ profiling = [
 test = [
     { name = "grimp" },
     { name = "import-linter", specifier = "~=2.0" },
+    { name = "jsonschema" },
     { name = "pytest" },
     { name = "pytest-timeout", specifier = "~=2.4" },
 ]
