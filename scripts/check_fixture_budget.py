@@ -1,7 +1,8 @@
 """Fail when a file tracked under ``packages/`` breaks the fixture budget.
 
-The budget is read from the git index: no tracked file under ``packages/`` exceeds 256 KB, the data files (every
-file that is not ``.py``, ``.pyi`` or ``.ipynb``) total at most 2 MB, and no tracked entry is a symlink or submodule.
+The budget is read from the git index: no tracked file under ``packages/`` exceeds the per-file limit, the data
+files (every file that is not ``.py``, ``.pyi`` or ``.ipynb``) stay within the total, and no tracked entry is a
+symlink or submodule. The two limits, with their derivations, are in ``scripts/data/fixture_budget.yaml``.
 
 Usage::
 
@@ -16,15 +17,38 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
+BUDGET = Path(__file__).resolve().parent / "data" / "fixture_budget.yaml"
+BUDGET_FORMAT = "fixture-budget@1.0"
 BUDGETED = "packages/"
-FILE_MAX_BYTES = 256 * 1000
-DATA_TOTAL_MAX_BYTES = 2 * 1000 * 1000
 CODE_SUFFIXES = (".py", ".pyi", ".ipynb")
 REGULAR_MODES = frozenset({"100644", "100755"})
 SYMLINK_MODE = "120000"
 GITLINK_MODE = "160000"
 _FIX = "generate it with senselab_core.testing.synth, or pull it through a data manifest"
+
+
+def load_budget(path: Path = BUDGET) -> dict[str, int]:
+    """Return each limit in the budget file at ``path``; an entry without a derivation is refused."""
+    raw = yaml.safe_load(path.read_text())
+    if raw.get("format") != BUDGET_FORMAT:
+        raise ValueError(f"{path}: format is {raw.get('format')!r}, not {BUDGET_FORMAT!r}")
+    limits = {}
+    for name in ("file_max_bytes", "data_total_max_bytes"):
+        entry = raw.get(name)
+        if not isinstance(entry, dict) or not str(entry.get("derivation", "")).strip():
+            raise ValueError(f"{path}: {name} needs a value and a derivation")
+        if not isinstance(entry.get("value"), int) or isinstance(entry["value"], bool) or entry["value"] <= 0:
+            raise ValueError(f"{path}: {name} is not a positive integer")
+        limits[name] = entry["value"]
+    return limits
+
+
+_LIMITS = load_budget()
+FILE_MAX_BYTES = _LIMITS["file_max_bytes"]
+DATA_TOTAL_MAX_BYTES = _LIMITS["data_total_max_bytes"]
 
 
 class TrackedObject(NamedTuple):

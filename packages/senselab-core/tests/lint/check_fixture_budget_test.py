@@ -58,3 +58,18 @@ def test_budget_passes_on_current_tree() -> None:
     """The script exits 0 on the committed index."""
     done = subprocess.run([sys.executable, str(_SCRIPT)], capture_output=True, text=True)
     assert done.returncode == 0, done.stdout
+
+
+@pytest.mark.parametrize(
+    "entry",
+    ["  value: 256000\n", "  value: 0\n  derivation: d\n", "  value: true\n  derivation: d\n"],
+)
+def test_a_limit_without_a_derivation_or_a_positive_value_is_refused(tmp_path: Path, entry: str) -> None:
+    """The budget file is read only when each limit is a positive integer with a derivation."""
+    good = "  value: 2000000\n  derivation: d\n"
+    path = tmp_path / "budget.yaml"
+    path.write_text(f"format: {budget.BUDGET_FORMAT}\nfile_max_bytes:\n{entry}data_total_max_bytes:\n{good}")
+    with pytest.raises(ValueError, match="file_max_bytes"):
+        budget.load_budget(path)
+    path.write_text(f"format: {budget.BUDGET_FORMAT}\nfile_max_bytes:\n{good}data_total_max_bytes:\n{good}")
+    assert budget.load_budget(path) == {"file_max_bytes": 2000000, "data_total_max_bytes": 2000000}
