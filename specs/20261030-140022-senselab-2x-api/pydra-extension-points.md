@@ -97,13 +97,14 @@ The implementations:
 4. **Optional persistence.** A one-shot subprocess per job is simple. A resident process is
    section 6.
 
-**Environment identity in the checksum (#826).**
+**Environment identity (#826).**
 - `Job.checksum` is `task._checksum` only (`engine/job.py:213-222`, `compose/base/task.py:476`).
   The environment is not part of it, and neither is a Docker image tag.
-- Insertion point: add `Environment.checksum() -> str` (default `""` for `Native`; image digest
-  for containers; lock sha for a venv). Fold it in at `Job.checksum` as
-  `f"{task._checksum}-{env.checksum()}"` or into the hash input. This changes no task hashes for
-  `Native` users if the empty case is skipped.
+- senselab keeps it that way (ADR-002): the environment is recorded in the context beside the result,
+  not keyed. Whether a result computed in another environment is reused is decided by the reuse policy
+  through `lookup(checksum, context)` (section 5; D1, K2).
+- Insertion point: add `Environment.checksum() -> str` (default `""` for `Native`; image digest for
+  containers; lock sha for a venv) and record it in the context.
 - *Upstream:* `execute_python`, `Environment.checksum`, and a `Venv` environment given a python
   path and a lock sha. *senselab:* how venvs are built (`ensure_venv`, CUDA index routing, lock
   grouping) and the worker-runtime wire codec. pydra could accept a runner as a parameter.

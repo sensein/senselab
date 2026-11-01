@@ -845,11 +845,11 @@ for one live fetch.
   empty. No 1.x suite runs on the 2.x line; 1.x is tested on `alpha`.
 - [ ] **Step 3: Adversarial round brief.**
   - Give the opus lead the Phase 1 surfaces: the worker protocol, canonical serialisation, identity
-    types, the store, the fetch cache, the import layering and the rewires.
+    types, the store, the fetch cache, the import layering and the moved 1.x modules.
   - Its goal: find inputs, races or misuse that break ADR-002, ADR-003 or ADR-006 or the Phase 1
     exit criteria.
   - Every finding needs an architectural resolution (P-35).
-  - Findings become `review-register.md` rows `R-55…`.
+  - Findings become `review-register.md` rows from `R-132` on.
 - [ ] **Step 4:** Resolve or schedule each finding. Run Task 0's reconciliation again. Update
   `STATE.md` to "Phase 1 done" and add the log line.
 - [ ] **Step 5:** Commit `docs(2x): Phase 1 exit` and push.
