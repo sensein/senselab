@@ -1,5 +1,6 @@
 """The `crisperwhisper` backend of `speech_to_text`: its engines, model, faults and the isolated worker's imports."""
 
+import importlib
 import json
 from typing import Any
 
@@ -58,13 +59,13 @@ def test_two_engines_one_output_schema() -> None:
 def test_engine_param_selects_the_engine_that_decodes() -> None:
     """The engine named in backend params is the one asked, and only that one."""
 
-    class Engine(cw.StubModel):
+    class Engine:
         def __init__(self, name: str, log: list[str]) -> None:
-            self.name, self.log = name, log
+            self.name, self.log, self.stub = name, log, cw.StubModel()
 
         def transcribe(self, samples: numpy.ndarray, language: str, max_new_tokens: int) -> cw.Decoded:
             self.log.append(f"{self.name}:{language}:{max_new_tokens}")
-            return super().transcribe(samples, language, max_new_tokens)
+            return self.stub.transcribe(samples, language, max_new_tokens)
 
     log: list[str] = []
     state = cw.State(None, "cpu", FakeFaults(), {e: Engine(e, log) for e in cw.ENGINES})
@@ -161,7 +162,7 @@ def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract c
 
 
 def _real_state(faults: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
-    import torch
+    torch = importlib.import_module("torch")
 
     entry = CATALOGUE.entry(cw.MODEL_ID)
     model = {"source": "hf", "id": entry.id, "identity": entry.revision}
