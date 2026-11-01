@@ -25,7 +25,6 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from planted_objects_fixture import ARRAY_CORRUPTIONS, bounded, swap_subsets
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ReusePolicy
-from senselab_core.runtime import storage as storage_module
 from senselab_core.runtime import store as store_module
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
 from senselab_core.runtime.storage import StorageFull, StorePolicy, StoreUnavailable

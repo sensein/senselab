@@ -12,7 +12,6 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from senselab_core.runtime import storage as storage_module
 from senselab_core.runtime.locks import Lease, LeaseTimeout, LeaseUnavailable
 
 pytestmark = pytest.mark.logic
@@ -199,7 +198,7 @@ def test_a_fresh_lease_is_broken_after_the_stale_bound_and_not_before(tmp_path: 
 def test_staleness_is_read_on_the_storage_clock_not_the_local_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A local clock an hour ahead does not age a fresh lease; a storage clock an hour ahead does."""
+    """A local clock an hour ahead does not age a fresh lease; an hour on the storage clock does."""
     resource = tmp_path / "thing"
     real_time = time.time
     with Lease(resource, timeout=0):
@@ -208,8 +207,8 @@ def test_staleness_is_read_on_the_storage_clock_not_the_local_one(
             with Lease(resource, timeout=0.2, stale_after=60):
                 pass
         monkeypatch.setattr(time, "time", real_time)
-        real_now = storage_module.StorageDir.fs_now
-        monkeypatch.setattr(storage_module.StorageDir, "fs_now", lambda self: real_now(self) + 3600)
+        stamped = os.lstat(_lease_file(resource)).st_mtime - 3600
+        os.utime(_lease_file(resource), (stamped, stamped), follow_symlinks=False)
         with Lease(resource, timeout=1, stale_after=60) as breaker:
             assert breaker.broke == [_lease_file(resource)]
 
