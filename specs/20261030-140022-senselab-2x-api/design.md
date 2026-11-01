@@ -1,6 +1,7 @@
 # senselab 2.x API: design
 
-Status: draft for owner review, revised after five reviews ([`review-register.md`](review-register.md)).
+Status: accepted 2026-10-30 (owner: "go ahead"), after five reviews ([`review-register.md`](review-register.md));
+amended 2026-10-31, 2026-11-01 (§9).
 Principles are cited as `P-n` ([`principles.md`](principles.md)). Surveyed against `origin/alpha`
 `19834fdd` (2026-10-30). Companion documents:
 - [`execution.md`](execution.md): pools, GPUs, substrates, the pydra boundary;
@@ -154,54 +155,24 @@ The summary below follows that model.
 - **Identity** of source data is the hash of its raw content bytes, chunked for long recordings
   ([ADR-002](adr/ADR-002-identity-v2.md)). The decoder is recorded as execution context. Data
   objects are immutable, and a transform records its parent (`wasDerivedFrom`).
-- **One construction path for values** (H9c, R-102). A kernel value (`Frozen`) is built only by
-  validating a mapping of its fields; any other input object, `from_attributes` included, is refused by
-  a wrapper around the type's whole schema, outside every model validator, so no identity derivation or
-  stamp check is skipped by the input's form. A sealed instance of exactly the type passes as itself; any
-  other model (unsealed, made by `BaseModel.model_construct`, or a subclass with validators of its own) is
-  validated again from its fields as the type (H9c round 1). Passing a sealed instance is safe
-  because a built value cannot change: attribute writes and deletions raise a `frozen_instance` `ValidationError` whatever the config says,
-  `__dict__` is a read-only dict, private values (the canonical digest, a key's digest) are computed when
-  the value is built and held in a read-only mapping, `__setstate__` on a built value raises and on a blank
-  one validates, `FrozenMapping.__init__` runs once, and a class's `model_config` is a read-only mapping
-  the public init-subclass hook installs (round 1 dropped a metaclass on pydantic's private API; rebinding the
-  attribute changes nothing a built value consults). What stays reachable is the interpreter's own bypasses
-  (`object.__setattr__`, `dict.__setitem__` on the unbound type). Computing the digest at construction
-  means a value that validates can be digested: a cycle or a form past the work budget is refused when
-  built, not when first compared. Validation errors do not repeat their input (`hide_input_in_errors`),
-  since the repr of a shared DAG or a long array is itself unbounded. A frozen array (its buffer an immutable
-  `bytes`) is reused by every copy rather than copied, and its `.npy` digest is computed once per array
-  object, so a value's digest and an audio identity share one hash. Measured on 10 minutes of 16 kHz float32
-  (38 MB, 2026-10-31, M-series laptop, `canonical_npy_bytes` calls counted): `Audio.from_array` 4 hashes,
-  0.105 s before; 1 hash, 0.041 s after. `model_copy` and `deepcopy` 3 hashes, 0.07 s before; none, under
-  0.01 s after. A pickle round trip 3 hashes before, 1 after (it carries bytes, so the copy is new).
-  A type that is not `Formatted` refuses unknown fields, so `model_validate` and `model_copy(update=)`
-  agree; `Formatted` ignores them, for minor-version readers.
-- **A source stamp binds the file's content** (H9c, R-103). `SourceStamp.content` is the file's
-  content-identity root (`content-root@2`, the root a recording of the file is identified by), taken
-  over every byte, through the same open file the header is read and samples are decoded from, when the
-  stamp is taken. A stamp this process took is re-checked by `os.stat` when a
-  copy is validated; any other stamp (a fresh process, an unpickled copy, an evicted memo entry) is
-  checked by stamping the file again. Every decoded `read` stamps the file again, content included, so a
-  rewrite that keeps size, mtime, inode and device (`cp -p`, `rsync -t`, a tar restore) raises
-  `StaleSource` instead of returning other samples. Measured on a one-hour 16 kHz mono PCM-16 WAV
-  (115 MB, 2026-10-31, M-series laptop, local SSD): taking a stamp 0.060 s, `Audio.from_path` 0.062 s
-  (one hash, which is also the identity), a 30 s window `read` 0.063 s, a whole-file `read` 0.19 s. A
-  read therefore costs one full hash of the file whatever its window, about 0.5 s per GB; a chunked
-  reader of a long file that needs less verifies the chunks a window decodes against the stamp's
-  per-chunk digests, which is not built in Phase 1.
-- **A recording's anchor is not its identity.** `Audio.from_path` and `from_array` name the clock by
-  the identity, but a recording placed on a session clock carries that clock's name, so validation does
-  not tie `anchor.clock_id` to `identity` (XK-12, ruled not a defect); the anchor is part of the value's
-  canonical digest, not of its content identity.
+- **Values are immutable and validated once** (R-102). A kernel value is built only by validating
+  its fields; any other input form is refused or validated again. A built value cannot change, and its
+  canonical digest is computed when it is built, so a value that validates can be digested and a cycle
+  or a form past the work budget is refused at construction.
+- **A source stamp binds the file's content** (R-103). The stamp is the file's content root, taken over
+  every byte, so a rewrite that keeps size, mtime, inode and device (`cp -p`, `rsync -t`) raises
+  `StaleSource` instead of returning other samples. Measured on a one-hour 16 kHz WAV (115 MB, local
+  SSD, 2026-10-31): one full hash per read, about 0.5 s per GB, whatever the window. This conflicts with
+  ADR-005's "never hashed whole" (A I-5, R-109) and is decided with moving audio decoding out of the
+  kernel ([`decisions-2026-11-01.md`](decisions-2026-11-01.md), "Follows").
+- **A recording's anchor is not its identity.** A recording placed on a session clock carries that
+  clock's name, so validation does not tie `anchor.clock_id` to `identity`; the anchor is part of the
+  value's canonical digest, not of its content identity.
 - **Signals and NaN** (H-R38). No signal holds an infinite sample. A regular group, audio included,
-  refuses NaN when it is built and when a file-backed group's samples are decoded: a NaN in audio is a
-  producer defect (0/0 on silence) and fails at the boundary. An irregular group holds NaN as its
-  missing-sample marker (pose and physiological dropouts), held as the one quiet NaN without payload of
-  ADR-006 whatever the producer's sign or payload. `Events.value` admits NaN, one digest whatever its sign or
-  payload. Label arrays of
-  strings are held at the width of their longest string, so two label columns holding the same strings are
-  one value.
+  refuses NaN when built and when decoded: a NaN in audio is a producer defect (0/0 on silence). An
+  irregular group holds NaN as its missing-sample marker (pose and physiological dropouts), as the one
+  quiet NaN of ADR-006. `Events.value` admits NaN. Label arrays of strings are held at the width of
+  their longest string, so two label columns holding the same strings are one value.
 - **One timeline.** Every timed result is a `Span{start_ns, end_ns, clock_id}`. A `TimeMap`
   (offset plus drift, with uncertainty) relates clocks. It comes from metadata or a synchronisation
   task, and is a declared input.
@@ -431,43 +402,20 @@ them to a principle.
   ([ADR-006](adr/ADR-006-formats.md)). A new key space is created only by an identity change.
 - **Fetch-store paths fold fully.** Manifest paths compare by Unicode canonical caseless match, so `ß` and `ss`
   are one path and a manifest naming both is refused, even where NTFS would keep them apart.
-- **Who can change a sealed entry.** A committed entry is read-only (files 0440, its directory
-  2550), but the key directory that holds it is 2770 with no sticky bit, so any member of the
-  store's group can rename or remove a sealed entry (not rewrite its files). Read-only modes stop an
-  accidental write by the owner; they are not a boundary between group members. A reader still
-  binds every entry to its address, so a renamed or replaced entry is refused or recomputed, never
-  served under the wrong key. A corrupt entry that cannot be moved into `quarantine/` (it belongs
-  to another user) is renamed to `<uuid>` beside it; `collect` removes such names, like quarantined
-  entries, once past `quarantine_retention_s`, after making the directory writable, which only its
-  owner can do.
+- **Who can change a sealed entry.** A committed entry is read-only (files 0440, directory 2550), but
+  its key directory is group-writable, so any member of the store's group can rename or remove a sealed
+  entry, not rewrite its files. Read-only modes stop accidental writes; they are not a boundary between
+  group members. A reader binds every entry to its address, so a moved entry is refused or recomputed,
+  never served under the wrong key.
 
 **One provenance store** (`ProvStore`, append-only, content-derived ids) is written around every
 node with the attested identities. BEP028 export is how runs are published. `reproduce` becomes a
-consumer of this store.
-Its ids are `identity_digest("provenance-id@4", [run_id, ...])[:16]` over each part of an entity, activity,
-agent or environment, its values as the tokens `normalised` writes. `normalised` is the shared
-`canonical.Tokeniser` (the one `value@2` uses), with arrays written by value as the base64 of their canonical
-`.npy` bytes. A record keeps those tokens, which its file line holds, and hands callers the values they stand
-for, decoded and read-only (`FrozenDict`, `FrozenList`, read-only arrays): what the caller passed is not
-referenced, and its id is checked against its content whenever it is built, so a record cannot come to
-disagree with its id (H9c, R-102). A caller never reads a token (H9c round 2): the 1.x consumers compare
-read-backs with lists and dicts and with the floats and large integers they wrote, so the decoded form, not
-the token form, is what keeps them unchanged; and a read-back recorded again mints the same id. The file
-format, the read paths and the read-write contract are in ADR-006 (`provenance@2.0`, R-104). The attributes and parameters have a
-declared provenance value type: JSON values plus tagged families, each a one-key token: non-finite floats
-(`$f`), integers beyond ±(2^53−1) (`$int`), `Path` (`$path`, posix text), `Enum`
-(`$enum`, qualified name and value), `ndarray` (`$nd`, base64 of canonical `.npy`), `Decimal` (`$dec`),
-`bytes` (`$bytes`, hex), `set`/`frozenset` (`$set`, one element per JCS form, sorted by JCS bytes), and numpy
-scalars as their value.
-The digest is total over that type by construction. Pipelines record `-inf` dB for silence and nanosecond
-`mtime_ns` stamps, and branch evidence (`**finding.evidence`) is typed `Any`, so totality cannot rest on the
-suites that happen to run. A held key starting with `$` gains one more (`canonical.escaped_key`), so no
-recorded object reads as a token; escaping rather than refusal keeps the digest total.
-Anything else (another type, a non-`str` key, a lone surrogate, two keys
-with one canonical text form, a cycle, nesting past `MAX_DEPTH` once tokens are counted, a form past `MAX_CANONICAL_CHARS`)
-raises `UnrecordableValue` at the `ProvStore` boundary, naming the attribute path and the type. Cycles, depth
-and work go through one `canonical.Walk`. JCS numeric equality (`1` = `1.0`) and the
-other ADR-006 equivalences are accepted (H-R29, H-R30).
+consumer of this store. Its model and format are W3C PROV, PROV-O in JSON-LD
+([ADR-010](adr/ADR-010-w3c-prov.md)), implemented in Phase 2; until then the format is
+`provenance@2.0` (ADR-006). Recorded values have a declared type, and the digest is total over it by
+construction: pipelines record `-inf` dB for silence and nanosecond `mtime_ns` stamps, and evidence is
+often typed `Any`, so totality cannot rest on the suites that happen to run. Any other value raises a
+typed error at the boundary naming the attribute path and the type (H-R29, H-R30).
 
 ### 4.9 Execution (P-2, P-5, P-6, P-7)
 
@@ -704,143 +652,46 @@ isolated; senselab as a whole is not torch-free.
 **Python floors.** The uv workspace locks one `requires-python`, so the worker's floor is tested
 from the built wheel in a separate env.
 
-**Release gate (H7, H9f).** `scripts/release_gate.py` runs after `uv build --all-packages` and validates the
-whole of `dist/` before the upload step runs. One listing of `dist/` feeds every check.
-- **Names.** Every file is named exactly `<name>-<version>-py3-none-any.whl` or `<name>-<version>.tar.gz`,
-  with the name escaped and the version normalised. A build tag, another tag (`py2.py3`, `cp39-cp39-win32`), a
-  rename or two files swapped is refused. Member names must be normalised relative names: no absolute, `..`,
-  `.`, empty or backslash component, and no case-duplicate. Each sdist holds everything under its one top
-  directory `<name>-<version>/`.
-- **Versions.** The version string must be `X.Y.Z` or `X.Y.Z(a|b|rc)N`, written canonically, in every
-  metadata file and file name. The tag (`github.ref_name`) is either that canonical string or the
-  repository's pre-release spelling `X.Y.Z-(alpha|beta|rc).N` (`2.0.0-alpha.3`), both in ASCII digits with no
-  leading zero in any number, and `Version(tag)` must
-  equal the built version exactly. An epoch (`1!1.0.0` outranks every 2.x release on PyPI), a local, post or
-  dev segment, a `v` prefix and any other spelling are refused, in tag and version alike. The version is at
-  or above `RELEASE_FLOOR` (`2.0.0a0`, read once from the root pyproject) and matches
-  `github.event.release.prerelease`. `git describe` picks one tag when several sit on a commit, so a
-  release for the other tag is refused by the tag check.
-- **Metadata.** Core metadata (METADATA and PKG-INFO) is parsed with `packaging.metadata`, and a repeated
-  single-use field is refused. Name, `Requires-Python`, `Requires-Dist`, `Provides-Extra` and `License-File`
-  must equal the pyproject's declaration: the pin hook's dependencies plus the exact sibling pin, and each
-  extra with self-references expanded as hatch expands them. An extra requirement, extra or Python range is
-  refused, in sdists as in wheels. The dependency graph is declared once (root pins core, core pins worker,
-  worker pins nothing), and the gate requires each edge as exactly `==version`, with no marker, extra or URL.
-  `WHEEL` must state version 1.0, a pure-Python root and the file name's one tag.
-- **Members.** Each artifact's members must equal exactly the set derived from the hatch config. For a wheel
-  that is the tracked regular files under each `packages` entry, the declared `shared-scripts` and
-  `force-include`, the generated `METADATA`, `WHEEL` and `RECORD`, `entry_points.txt` when entry points are
-  declared, and `licenses/` for the declared license files. For an sdist it is the tracked files under the
-  root or its `only-include` entries, its `force-include`, `PKG-INFO`, and the `.gitignore` hatchling copies
-  in, the first one found in the work tree walking up from the distribution root, which must itself be a
-  tracked file (an untracked one there is what hatchling ships, so it is refused). A missing member and an extra one are both refused, and each sourced member must be a byte copy of its
-  tracked file. A hatch setting the derivation does not model refuses the release by name, so a config change
-  cannot ship underived members. A tracked symlink or submodule under a selected path is refused.
-- **RECORD and entry points.** Each wheel's RECORD lists exactly its members, each once, with the sha256 and
-  size of its bytes (RECORD itself with neither). Its `entry_points.txt` equals what the pyproject declares,
-  and a `.data/scripts/<name>` member ships only where `shared-scripts` declares it.
-- **Installs.** Each distribution is installed alone, with no extra, into a fresh venv at its floor Python
-  (worker 3.10, core 3.11, root 3.11). Its siblings are reached only through its exact pin, and
-  the files of the siblings in the venv must hash to those of the `dist/` wheels.
-  - Requirement markers are evaluated against the venv interpreter's environment.
-  - For core and the worker, every module is imported by that interpreter in isolated mode (`-I`) from a
-    scratch directory. A module is every `.py` whose directories all hold an `__init__.py`; a `__main__`
-    module is compiled, not run. For the root distribution, each top-level package and its direct
-    subpackages are imported: the member check already proves no module is missing, and a broken deep 1.x
-    import is caught by the `cpu-tests` CI job, not by the gate.
-  - Every first-party module loaded must come from the venv.
-  - One shared venv would hide a dependency that only a sibling declares, and a top-level import would hide
-    a dropped or broken submodule.
-- **Rebuild.** Each sdist, unpacked alone, builds a wheel whose members are byte-identical to the wheel in
-  `dist/`. Every pyproject pins its build backends exactly (`hatchling==`, `hatch-vcs==`, one version across the
-  three), and with them the transitive build requirements that compute or normalise the version text
-  (`setuptools-scm`, `vcs-versioning`, which holds setuptools-scm's version logic from 10.x, and `packaging`),
-  so the direct build and the rebuild run one backend and write one version. The other transitive build
-  requirements (`pathspec`, `pluggy`, `trove-classifiers`, `tomlkit`, `setuptools`) are not pinned: what they
-  decide, which files ship, is checked member by member.
-- **Environment.** Every subprocess (git, uv, the venv interpreters) runs with an allowlisted environment
-  (`ENV_KEPT`): where tools and temporaries are, the locale, uv's own directories and how to reach the
-  network. `PYTHONPATH`, `PYTHONHOME`, `GIT_INDEX_FILE`, `GIT_DIR`, `VIRTUAL_ENV`, `PIP_*` and every other
-  variable are dropped whatever the caller exports. Git also runs without system or global configuration, with
-  `safe.directory` set to the repository alone, so a checkout owned by another uid is still read. The kept
-  variables are the caller's own machine and can still choose things: `PATH` picks the `uv` and `git` binaries
-  and the interpreter `uv venv --python` finds, `UV_PYTHON_INSTALL_DIR`/`UV_PYTHON_BIN_DIR` the managed
-  interpreters, `SSL_CERT_FILE`/`SSL_CERT_DIR` the trust roots of the third-party install, and `HOME` exposes
-  `~/.netrc` to uv.
-  Every `uv` call has `--no-config`. The first-party install runs with `--no-index --no-cache`, so a
-  caller's index, find-links, config file or cache cannot replace a `dist/` wheel. Third-party requirements
-  come only from the index the gate's `--index-url` names (default PyPI).
-- **Dirty trees.** A tracked file modified but not committed passes the member check, which compares
-  artifact bytes with the working tree. The version check refuses it instead: the `--dirty` describe makes
-  hatch-vcs write the next `.dev0` version for a dirty tree even on the tag (measured: tag `2.0.0` plus one
-  modified file builds `2.0.1.dev0`). Tagged CI is not exposed either way, because the publish job builds
-  from a fresh checkout of the tag.
-- **Editable installs.** `senselab_core` compares its own version with the worker's at import only when
-  both are non-editable installs (PEP 610 `direct_url.json`). In a workspace the editable versions drift on
-  every commit, and the lock pins them instead.
-- **Dispatch.** `workflow_dispatch` runs the gate and cannot upload: the upload step carries
-  `if: github.event_name == 'release'`.
-- **On every PR.** `package_data_test.py` builds this tree and runs every static check except the version
-  check, so a member derivation that disagrees with hatch fails CI before a release.
+**Release gate** (amended 2026-11-01, D-5). Until the first 2.x release, `scripts/release_gate.py`
+checks, over `dist/` before upload:
+- the version and tag grammar (ADR-006);
+- that each distribution pins its siblings exactly (`==version`);
+- that each distribution builds and installs from `dist/`.
 
-**Fixture budget (H6, H9f).** `scripts/check_fixture_budget.py` runs in pre-commit on every commit.
-- **Objects.** Every entry of the git index is counted, read from the index, not the work tree. A symlink
-  (mode 120000) or submodule (160000) fails without exception, whether or not the checkout holds it, and so
-  does any other non-regular mode.
-- **Kinds.** A code file (`.py`, `.pyi`, `.ipynb`) is capped per file and in total across the whole tree.
-  Every other suffix is data (`.mjs` and `.json` included): it is capped per file, in total across the whole
-  tree, and in total under the test trees.
-- **Allowlist.** Allowlisted files are spared and left out of the data totals. Each allowlist entry is bound
-  to the freeze branch by content hash and size.
-- **Generated files.** The exemptions from the data per-file cap are exact paths, never globs. Each must
-  exist in the freeze and parse as the lock kind the policy names. A subprocess-venv lock parses line by line:
-  its header, pinned or direct PEP 508 requirements, their hashes, `via` comments naming requirements of the
-  file, and uv's excluded-packages trailer. A uv lock holds only uv's tables and keys, each package named and its
-  files sha256-hashed. It still counts in the data total.
-- **Freeze.** The freeze is the commit `freeze_commit` records in `scripts/data/fixture_budget.yaml`, not
-  the branch: a freeze branch resolving to another commit fails the check.
-- **Caps.** Each cap in `scripts/data/fixture_budget.yaml` is a recorded freeze measurement times a
-  headroom. The script recomputes the measurement on the freeze branch and fails when the record differs,
-  so a cap moves only when its headroom does, and the derivation beside it says why.
+Member-set completeness, sdist rebuild identity, strict `WHEEL`/`METADATA` parsing, per-floor installs,
+cache isolation and import-every-module are specified at the first 2.x release.
 
-**Workflow expressions (H7, H9f).** `packages/senselab-core/tests/lint/workflow_expressions_test.py` parses
-every `${{ }}` in every string value of every workflow and composite action. The one exception is the values
-of the `env` maps GitHub defines: workflow, job, step, job container, service and composite-action step. A
-matrix variable or a `with:` input named `env` is inspected like any other string.
-- **Clean values.** An expression passes only when its value cannot carry text an outsider chose:
-  - a literal or a trusted context, exactly: `github.token`, `github.workflow`, `github.event_name`,
-    `github.ref`, `github.repository`, `github.run_id`, `github.sha`, `github.event.pull_request.number`,
-    `github.event.pull_request.draft`, `github.event.issue.number`, `github.event.release.prerelease`,
-    `runner.os`, `runner.arch`, `runner.temp`, `job.status`, `secrets.<name>`, `vars.<name>`,
-    `steps.<id>.outputs.<name>`, `steps.<id>.outcome`, `steps.<id>.conclusion`, `needs.<id>.outputs.<name>`,
-    `needs.<id>.result`, and `matrix.<name>` under the matrix rule below;
-  - a boolean: a comparison, `!`, `contains`/`startsWith`/`endsWith` or a status function;
-  - `hashFiles`;
-  - `fromJSON`, `toJSON`, `format`, `join`, `&&` or `||` over clean operands.
-- **Refused.** `env.*` is untrusted: reading an `env:` value back into a script would undo the channel. So
-  are a dynamic index, an unknown function and an unparseable expression. `shell`, `with` values,
-  `working-directory`, `uses`, names, `runs-on` and outputs are inspected like `run`.
-- **Matrix.** `matrix.*` is trusted in a job only when every expression in that job's matrix definition is
-  clean. A literal matrix has none. A label-driven `contains(...) && fromJSON('[...]') || fromJSON('[...]')`
-  is clean. A matrix built from a pull-request title is not.
-- **Accepted limit.** Outputs of the repository's own steps and jobs (`steps.*.outputs.*`,
-  `needs.*.outputs.*`) are trusted. The guard checks the producing step's interpolation, not what its shell
-  writes to `$GITHUB_OUTPUT`; a step that copies an untrusted value into an output must be caught in review.
+**Fixture budget** (docs.md): at most 256 KB per committed file and 2 MB in total, checked in
+pre-commit over the git index. A symlink or submodule fails.
+
+**Workflow expressions.** A guard parses every `${{ }}` in the workflows and composite actions and
+refuses one whose value an outsider could choose (`env.*`, pull-request text, an unknown function).
+Only literals, trusted contexts and functions over them pass.
+
+**Guards are the design's, not a list of past bypasses** (amended 2026-11-01, D-1). CI keeps the
+import-linter contracts (layers, worker independence, `packages-not-1x`, `digests-are-tagged`), the
+identifier check (P-28), the fixture budget and the workflow-expression guard. It has no spelling-based
+lint that chases in-repo bypasses, and no test whose only job is to make another test exist.
+
+**Agent prose review** (D-1, P-31, `engineering.md`). A small pinned model reviews each PR's diff against
+the principles and the engineering checklist and comments. It does not block.
 
 ## 6. Migration
 
-### 6.1 Strategy (in place on `alpha`, P-14, P-27)
+### 6.1 Strategy (on the `2.x` line, P-14, P-27)
 
 - **Phase 0:** tag a frozen 1.x commit. Running campaigns use it from a pinned checkout until
   their pipeline is ported.
-- **One-way imports:** 1.x code may import core, and core never imports 1.x. import-linter
-  enforces this.
-- **Moves are rewires.** When a module moves into core (`prov_store`, `file_lock`,
-  `model_revision`), every caller is rewired in the same PR. There are no re-exports and no aliases.
+- **Where the work happens** (amended 2026-11-01, D-6, D-7). 1.x is developed on `alpha`; 2.x on the
+  `2.x` branch, with design decided in the docs PR (#617) and code in the code PR (#619). On the 2.x
+  line `src/` is 1.x as it stands on `alpha`: 2.x never edits it.
+- **One-way imports:** nothing in `packages/` imports 1.x (`packages-not-1x`). import-linter enforces
+  this.
+- **Moves are by use case, not rewires** (amended 2026-11-01, D-6). A module leaves `src/` only by a
+  rename-only `git mv` commit into `packages/`, followed by a modify commit. 1.x callers are not
+  rewired. There are no re-exports and no aliases.
 - **Separate store.** New types live in `senselab_core`, and the 2.x result store uses a new
   schema directory. The full recompute is announced in advance.
-- **Ported backends.** When a backend is ported, triage's call to it is rewired in the same PR,
-  so no second protocol survives.
 - **1.x import side effects** stay until Phase 5.
 - **Migrate by use case** ([ADR-009](adr/ADR-009-migration-kernel.md)).
   - Each use case moves end to end, with a dated coexistence budget.
@@ -895,7 +746,7 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
   - the worker runtime: codec, handshake per I-2, wire-protocol spec, and a floor test from the
     wheel;
   - `Signal` (with `Audio` as a Signal), the timeline, annotation and embedding types;
-  - `Model`/`ResolvedModel`, rewiring `model_revision` and the sha constants;
+  - `Model`/`ResolvedModel`, core's replacement for `model_revision` and the sha constants;
   - the result store with the ADR-002 logical-key fields fixed, and the ProvStore writer;
   - the torch-free hardware probe;
   - the `License` record type, with no backfill yet;
@@ -904,7 +755,8 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
   - the core-only job is green on Python 3.11 and 3.14 (P-13, P-22);
   - the identity, store and provenance tests pass without torch (P-3, P-4, P-19);
   - the worker floor test passes;
-  - 1.x tests pass after the rewiring, and triage outputs are unchanged.
+  - no 1.x rewire and no 1.x tests in 2.x: `src/` equals 1.x on `alpha`, and 2.x CI runs only
+    `packages/` tests (amended 2026-11-01, D-6).
 
 **Phase 2: tasks and backends.**
 - Build:
@@ -919,6 +771,10 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
   - `speaker_embeddings` (speechbrain);
   - text PII review on vLLM and transformers;
   - one DSP primitive.
+- Build provenance as W3C PROV ([ADR-010](adr/ADR-010-w3c-prov.md), amended 2026-11-01, D-4): the
+  PROV-O JSON-LD store, the `senselab:` vocabulary, removal of the 1.x token families and helpers, and
+  the export redaction ADR-007 requires.
+- Build the benchmark harness, its data manifest and its smoke suite (H-R49).
 - Backfill licenses for the ported backends. Run the env-grouping tool and record its proposal.
 - Exit:
   - each two-stack call switches by execution profile alone (P-8);
@@ -950,12 +806,12 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
   - adoption of the env grouping (P-24).
 - Port audio_analysis, explore_conversation and health_measurements. Add one cross-modal
   pipeline.
-- **Triage is not ported as a pipeline** (design call, from the owner's flywheel direction;
-  [`roadmap.md`](roadmap.md)).
-  - Its reusable measurements become generic tasks: task events, phonation, extents, quality,
-    PII. All B2AI coupling moves into a `b2ai-voice` dataset profile and task protocol.
-  - Its decision layer and orchestration stay on the frozen 1.x tag (Phase 0) for running
-    campaigns. After 2.x they are replaced by the flywheel (P-36).
+- **Triage is not ported as a workflow** (H-R52, ADR-009; [`roadmap.md`](roadmap.md)).
+  - Its measurement tasks and its pipelines port like any use case: task events, phonation, extents,
+    quality, PII. All B2AI coupling moves into a `b2ai-voice` dataset profile and task protocol.
+  - Its decision layer (routing, branches, verdicts, dataset-fitted thresholds) stays on 1.x for
+    running campaigns and is superseded by the flywheel (P-36); `migration-ledger.md` classifies each
+    module.
 - Exit:
   - a **protocol screening pipeline** composed from the ported measurement tasks runs on B2AI and
     on a constructed synthetic dataset by changing only the dataset profile (P-12):
@@ -1040,6 +896,7 @@ Each cut keeps its interface or hook, and is added when a measurement or a use c
 
 - **Graph runtime:** pydra, extended, with a fallback (section 4.9; `engine-choice.md`).
 - **Where the work happens:** in place on `alpha`. Core is its own distribution (section 5).
+  Amended 2026-11-01 (owner item 30, D-7): 2.x merges to the `2.x` branch, not `alpha` (§6.1).
 - **Second dataset:** none exists, so genericity is shown by design (Phase 4 exit).
 - **The keep, port and drop list** is accepted:
   - port `adaptive_loop` (as `p.loop`), and the tutorials;
@@ -1064,3 +921,20 @@ Each cut keeps its interface or hook, and is added when a measurement or a use c
     sharpening (P-31).
 - **Docs and example data** (P-41): audiences, PR previews with a 2.x status page, and the
   fixture-versus-pulled-data policy are in [`docs.md`](docs.md).
+
+## 9. Amendment log
+
+Each change to a decision above after acceptance, one line each. Decisions D-n are in
+[`decisions-2026-11-01.md`](decisions-2026-11-01.md); rulings H-R-n in [`rulings.md`](rulings.md);
+R-n in [`review-register.md`](review-register.md).
+
+- 2026-10-31: values immutable and digested at construction (R-102); source stamps bind content (R-103);
+  signal NaN rules (H-R38); sealed-entry limits and caseless fetch paths (R-77, R-100); provenance values
+  total by declared type (H-R29, H-R30); core drops `filelock`.
+- 2026-11-01: release gate minimal until the first 2.x release (D-5, §5).
+- 2026-11-01: guards cut back to the design; agent prose review added (D-1, §5).
+- 2026-11-01: provenance is W3C PROV, implemented in Phase 2 with the benchmark harness (D-4, H-R49, §4.8,
+  §6.2).
+- 2026-11-01: 2.x lives on `2.x`; `src/` is 1.x as on `alpha`, never edited by 2.x; Phase 1 exit has no
+  1.x rewire or 1.x tests (D-6, D-7, §6.1, §6.2, §8).
+- 2026-11-01: triage's tasks and pipelines port; its decision layer is superseded (H-R52, §6.2).
