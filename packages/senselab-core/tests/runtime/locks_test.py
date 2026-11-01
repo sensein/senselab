@@ -3,9 +3,12 @@
 import errno
 import json
 import os
+import shutil
 import stat
 import threading
 import time
+import uuid
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -16,6 +19,24 @@ pytestmark = pytest.mark.logic
 
 JOIN_S = 10.0
 OLD = 10**9
+NFS_ENV = "SENSELAB_WORK_POOL_NFS_DIR"
+
+
+@pytest.fixture(params=["local", "nfs"])
+def lease_dir(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Path]:
+    """A scratch directory: `tmp_path`, or a fresh one under `SENSELAB_WORK_POOL_NFS_DIR` (skipped when unset)."""
+    if request.param == "local":
+        yield tmp_path
+        return
+    base = os.environ.get(NFS_ENV, "")
+    if not base:
+        pytest.skip(f"{NFS_ENV} is not set")
+    root = Path(base) / f"lease-{uuid.uuid4().hex[:12]}"
+    root.mkdir(parents=True)
+    try:
+        yield root
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def _lease_file(resource: Path) -> Path:
@@ -43,9 +64,9 @@ def _snapshot(path: Path) -> tuple[bytes, int, int]:
 # -- taken by an O_EXCL link: one taker wins --
 
 
-def test_of_concurrent_takers_exactly_one_holds_the_lease(tmp_path: Path) -> None:
+def test_of_concurrent_takers_exactly_one_holds_the_lease(lease_dir: Path) -> None:
     """Eight takers start together with no wait; exactly one holds the lease and the rest time out."""
-    resource = tmp_path / "thing"
+    resource = lease_dir / "thing"
     takers = 8
     barrier, attempted = threading.Barrier(takers), threading.Barrier(takers)
     outcomes: list[str] = []
@@ -215,13 +236,13 @@ def test_a_breaker_that_judged_an_old_lease_never_removes_the_new_one(tmp_path: 
     assert [p.name for p in tmp_path.iterdir() if p.name != ".clock"] == []
 
 
-def test_concurrent_breakers_remove_one_stale_lease_once_and_a_displaced_holder_knows(tmp_path: Path) -> None:
+def test_concurrent_breakers_remove_one_stale_lease_once_and_a_displaced_holder_knows(lease_dir: Path) -> None:
     """Eight takers break one stale lease together: it is removed once, and holders overlap only when one was displaced.
 
     A late breaker can move a newer lease before linking it back (ADR-003 guarantees no exactly-once); the
     holder it displaced then sees `owns()` false, so the overlap is never silent.
     """
-    resource = tmp_path / "thing"
+    resource = lease_dir / "thing"
     _plant_lease(resource)
     takers = 8
     barrier = threading.Barrier(takers)
@@ -246,7 +267,7 @@ def test_concurrent_breakers_remove_one_stale_lease_once_and_a_displaced_holder_
     _join(threads)
     assert broke[0] == 1
     assert most[0] == 1 or displaced[0] >= 1, (most, displaced)
-    assert [p.name for p in tmp_path.iterdir() if p.name != ".clock"] == []
+    assert [p.name for p in lease_dir.iterdir() if p.name != ".clock"] == []
 
 
 # -- every wait is bounded --
