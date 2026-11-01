@@ -35,8 +35,6 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 MANIFEST_NAME = "resolutions@2.json"
 """The run manifest's file name; its `@<major>` is the format of its keys (`manifest_key`)."""
 MANIFEST = re.compile(re.escape(MANIFEST_NAME))
-LEGACY_TEMPORARY = re.compile(re.escape(MANIFEST_NAME) + r"\.tmp\.[0-9]+")
-"""A temporary the manifest writer named before H9b: `resolutions@2.json.tmp.<pid>`."""
 WRITTEN_NAMES = frozenset({MANIFEST})
 """The grammars of the file names this module writes (besides `storage` and `locks`)."""
 MANIFEST_LIMIT = 1 << 24
@@ -219,15 +217,13 @@ def _record_in(run_dir: StorageDir, key: str, sha: str, policy: StorePolicy) -> 
 def _remove_leftovers(run_dir: StorageDir, policy: StorePolicy) -> None:
     """Remove dead writers' leftovers under the manifest's lock.
 
-    That is the manifest's temporaries in `run_dir` (any there under the lock is a dead writer's), the
-    temporaries writers before H9b left, and objects moved aside under `runs/` past the quarantine age.
+    That is the manifest's temporaries in `run_dir` (any there under the lock is a dead writer's) and objects
+    moved aside under `runs/` past the quarantine age.
     """
     prefix = f".{MANIFEST_NAME}."
     for name in run_dir.listdir():
         if name.startswith(prefix) and TEMPORARY_NAME.fullmatch(name):
             run_dir.remove_owned(name, pattern=TEMPORARY_NAME)
-        elif LEGACY_TEMPORARY.fullmatch(name):
-            run_dir.remove_owned(name, pattern=LEGACY_TEMPORARY)
     try:
         with StorageDir.open_root(_cache_root()) as root, root.walk("runs") as runs:
             runs.remove_older(run_dir.fs_now() - policy.quarantine_retention_s)
