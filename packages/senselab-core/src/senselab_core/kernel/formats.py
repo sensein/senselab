@@ -9,6 +9,13 @@ from senselab_core.kernel._base import Frozen
 
 FORMAT_PATTERN = r"^[a-z0-9_.-]+@\d+\.\d+$"
 
+SENSELAB_VOCAB_FORMAT = "senselab-vocab@1.0"
+"""The format of a `senselab:` vocabulary document, carried as its ontology node's `owl:versionInfo` (ADR-010)."""
+PROV_ACTIVITY_TAG = "prov-activity@1"
+"""The identity tag of a PROV activity: its compact JSON-LD node without `@id`."""
+PROV_NODE_TAG = "prov-node@1"
+"""The identity tag of a PROV agent or environment: its compact JSON-LD node without `@id`."""
+
 FormatTag = Annotated[str, StringConstraints(pattern=FORMAT_PATTERN)]
 """`<name>@<major>.<minor>`."""
 

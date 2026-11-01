@@ -1,0 +1,94 @@
+{
+    "@context": "https://w3id.org/senselab/ns/context.jsonld",
+    "@graph": [
+        {
+            "@id": "senselab:",
+            "@type": "owl:Ontology",
+            "owl:versionInfo": "senselab-vocab@1.0"
+        },
+        {
+            "@id": "senselab:Run",
+            "@type": "rdfs:Class",
+            "rdfs:subClassOf": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:comment": "One run of a pipeline."
+        },
+        {
+            "@id": "senselab:SoftwareAgent",
+            "@type": "rdfs:Class",
+            "rdfs:subClassOf": {
+                "@id": "prov:SoftwareAgent"
+            },
+            "rdfs:comment": "A backend, or the model it loads, that executed an activity."
+        },
+        {
+            "@id": "senselab:Environment",
+            "@type": "rdfs:Class",
+            "rdfs:subClassOf": {
+                "@id": "prov:Entity"
+            },
+            "rdfs:comment": "The locked environment an activity ran in."
+        },
+        {
+            "@id": "senselab:File",
+            "@type": "rdfs:Class",
+            "rdfs:subClassOf": {
+                "@id": "prov:Entity"
+            },
+            "rdfs:comment": "Bytes named by their content address; an array is its canonical .npy."
+        },
+        {
+            "@id": "senselab:Plan",
+            "@type": "rdfs:Class",
+            "rdfs:subClassOf": {
+                "@id": "prov:Plan"
+            },
+            "rdfs:comment": "A pipeline graph document, named by its plan hash."
+        },
+        {
+            "@id": "senselab:logicalKey",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "rdf:JSON"
+            },
+            "rdfs:comment": "The logical key of the call the activity executed."
+        },
+        {
+            "@id": "senselab:nodeId",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Role"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The pipeline node an association's agent acted for."
+        },
+        {
+            "@id": "senselab:port",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Role"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The task port an entity was used or generated on."
+        },
+        {
+            "@id": "senselab:modelSource",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Agent"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "Where the agent's model weights came from: hf, url or local."
+        }
+    ]
+}

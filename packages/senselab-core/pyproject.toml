@@ -18,6 +18,7 @@ test = [
   "packaging",
   "grimp",
   "import-linter",
+  "pyld",
   "ruff==0.15.11"
 ]
 
