@@ -372,25 +372,25 @@ def test_another_protocol_is_the_same_context() -> None:
 
 
 @pytest.mark.logic
-def test_equivalent_reuses_within_a_measured_class(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_equivalent_reuses_within_a_measured_class() -> None:
     """Two contexts in one of the backend's measured classes are equivalent; `exact` still refuses them."""
     c1, c2, c3 = _ctx(platform="linux"), _ctx(platform="macos"), _ctx(platform="windows")
-    classes = {"cpu-fp32": frozenset({c1.fingerprint(), c2.fingerprint()})}
-    monkeypatch.setattr(identity, "EQUIVALENCE", {"b": classes})
-    assert acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="b") and acceptable(
-        c2, c1, ReusePolicy.EQUIVALENT, backend="b"
+    table = {"b": {"cpu-fp32": frozenset({c1.fingerprint(), c2.fingerprint()})}}
+    assert acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="b", equivalence=table) and acceptable(
+        c2, c1, ReusePolicy.EQUIVALENT, backend="b", equivalence=table
     )
-    assert not acceptable(c1, c3, ReusePolicy.EQUIVALENT, backend="b")
-    assert not acceptable(c1, c2, ReusePolicy.EXACT, backend="b")
+    assert not acceptable(c1, c3, ReusePolicy.EQUIVALENT, backend="b", equivalence=table)
+    assert not acceptable(c1, c2, ReusePolicy.EXACT, backend="b", equivalence=table)
+    assert not acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="b")
 
 
 @pytest.mark.logic
-def test_equivalence_is_scoped_to_its_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_equivalence_is_scoped_to_its_backend() -> None:
     """A class measured for backend A does not make the same contexts equivalent for backend B."""
     c1, c2 = _ctx(platform="linux"), _ctx(platform="macos")
-    monkeypatch.setattr(identity, "EQUIVALENCE", {"A": {"cpu-fp32": frozenset({c1.fingerprint(), c2.fingerprint()})}})
-    assert acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="A")
-    assert not acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="B")
+    table = {"A": {"cpu-fp32": frozenset({c1.fingerprint(), c2.fingerprint()})}}
+    assert acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="A", equivalence=table)
+    assert not acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="B", equivalence=table)
 
 
 @pytest.mark.logic

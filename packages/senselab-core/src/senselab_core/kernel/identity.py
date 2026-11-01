@@ -267,17 +267,27 @@ class ReusePolicy(str, Enum):
 DEFAULT_REUSE_POLICY = ReusePolicy.EQUIVALENT
 
 EQUIVALENCE: Mapping[str, Mapping[str, frozenset[str]]] = FrozenMapping({})
-"""Measured equivalence classes per backend: backend name to class name to the context fingerprints in it.
+"""The packaged measured equivalence classes per backend: backend name to class name to the context fingerprints in it.
 
-Read-only: a class is added by editing this declaration, never at run time.
+Read-only; a caller holding another measured table passes it as `equivalence`.
 """
 
+Equivalence = Mapping[str, Mapping[str, frozenset[str]]]
+"""Measured equivalence classes: backend name to class name to the context fingerprints in it."""
 
-def acceptable(stored: ExecutionContext, current: ExecutionContext, policy: ReusePolicy | str, *, backend: str) -> bool:
+
+def acceptable(
+    stored: ExecutionContext,
+    current: ExecutionContext,
+    policy: ReusePolicy | str,
+    *,
+    backend: str,
+    equivalence: Equivalence = EQUIVALENCE,
+) -> bool:
     """Return whether a result `backend` computed in `stored` may be reused in `current` under `policy`.
 
     `policy` is coerced with `ReusePolicy(policy)`. `exact` needs equal fingerprints; `equivalent`
-    also accepts two fingerprints in one of the backend's classes in `EQUIVALENCE`; `tolerant`
+    also accepts two fingerprints in one of the backend's classes in `equivalence`; `tolerant`
     accepts any context.
 
     Raises:
@@ -291,6 +301,6 @@ def acceptable(stored: ExecutionContext, current: ExecutionContext, policy: Reus
         case ReusePolicy.EXACT:
             return a == b
         case ReusePolicy.EQUIVALENT:
-            return a == b or any(a in members and b in members for members in EQUIVALENCE.get(backend, {}).values())
+            return a == b or any(a in members and b in members for members in equivalence.get(backend, {}).values())
         case _:
             assert_never(policy)

@@ -10,11 +10,14 @@ import logging
 import os
 import re
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from senselab_worker.canonical import jcs_dumps
 
+from senselab_core.runtime.clock import SYSTEM_CLOCK, Clock
 from senselab_core.runtime.locks import Lease
 from senselab_core.runtime.retry import retry_on_transient_error
 from senselab_core.runtime.storage import (
@@ -224,9 +227,10 @@ def _remove_leftovers(run_dir: StorageDir, policy: StorePolicy) -> None:
         logger.warning("cannot collect what was set aside under 2x/runs/: %s", err)
 
 
-def get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:
+def get_cached_commit_hash(repo_id: str, revision: str = "main", *, cache_dir: Optional[Path] = None) -> str:
     """Resolve the immutable commit SHA of a locally cached model — no network.
 
+    `cache_dir` is the HF hub cache to read, `huggingface_hub.constants.HF_HUB_CACHE` when None.
     Resolution order (all filesystem-only):
       1. ``revision`` is already a full 40-hex commit SHA -> return it unchanged;
       2. the authoritative ``refs/<revision>`` pointer file -> its SHA (works
@@ -238,14 +242,15 @@ def get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:
         RevisionResolutionError: If none of the above resolves ``revision`` to a
             SHA. Callers needing an immutable identity cannot be handed the
             mutable ``revision`` back as if it were one; the caller can retry
-            against the Hub instead (see ``revision._resolve_uncached``).
+            against the Hub instead (see `Resolver`).
     """
     if _SHA_RE.fullmatch(revision):
         return revision
 
     from huggingface_hub import constants, try_to_load_from_cache
 
-    ref_file = Path(constants.HF_HUB_CACHE) / f"models--{repo_id.replace('/', '--')}" / "refs" / revision
+    hub_cache = Path(cache_dir) if cache_dir is not None else Path(constants.HF_HUB_CACHE)
+    ref_file = hub_cache / f"models--{repo_id.replace('/', '--')}" / "refs" / revision
     try:
         if ref_file.is_file():
             sha = ref_file.read_text().strip()
@@ -256,54 +261,76 @@ def get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:
 
     for filename in ("config.json", "hyperparams.yaml", "preprocessor_config.json", "model.safetensors"):
         try:
-            result = try_to_load_from_cache(repo_id=repo_id, filename=filename, revision=revision)
+            result = try_to_load_from_cache(repo_id=repo_id, filename=filename, revision=revision, cache_dir=hub_cache)
             if isinstance(result, str):
                 # Path looks like: .../snapshots/<commit_hash>/<filename>
                 return Path(result).parent.name
         except Exception:
             continue
 
-    # Returning `revision` here would hand a mutable ref to callers that will
-    # record it as a commit -- provenance that is confidently wrong, which is
-    # worse than none. Refuse instead; the caller can go to the Hub.
     raise RevisionResolutionError(
         f"{repo_id}@{revision} is not resolvable from the local cache "
         f"(no refs/{revision} pointer and no snapshot directory)."
     )
 
 
-def _resolve_uncached(repo_id: str, ref: str, token: Optional[str] = None) -> str:
-    """Resolve a ref to a SHA without consulting the manifest or the memo.
+def hub_commit(repo_id: str, ref: str, token: Optional[str]) -> object:
+    """Return the commit SHA the Hub's `model_info` reports for `repo_id@ref`."""
+    from huggingface_hub import HfApi
 
-    The local cache first, the Hub only on a miss, through `retry_on_transient_error`.
-    """
-    try:
-        local = get_cached_commit_hash(repo_id, ref)
-    except Exception as exc:  # noqa: BLE001 — any local-read failure just means "ask the Hub"
-        logger.debug("Local cache lookup failed for %s@%s: %s", repo_id, ref, exc)
-        local = None
-    if local and _SHA_RE.fullmatch(local):
-        return local
-
-    try:
-        from huggingface_hub import HfApi
-
-        sha = retry_on_transient_error(lambda: HfApi(token=token).model_info(repo_id=repo_id, revision=ref).sha)
-    except Exception as exc:
-        raise RevisionResolutionError(
-            f"Cannot resolve {repo_id}@{ref} to a commit SHA: {exc}. "
-            "Refusing to load through a mutable ref — the result's provenance would name no commit."
-        ) from exc
-    if not sha or not _SHA_RE.fullmatch(str(sha)):
-        raise RevisionResolutionError(f"Hub returned no usable commit SHA for {repo_id}@{ref} (got {sha!r})")
-    return str(sha)
+    return HfApi(token=token).model_info(repo_id=repo_id, revision=ref).sha
 
 
-def resolve_revision(repo_id: str, ref: str = "main", *, token: Optional[str] = None) -> str:
+@dataclass(frozen=True)
+class Resolver:
+    """Resolves a ref that the run manifest does not hold: from the local HF cache, else from the Hub."""
+
+    cache_dir: Optional[Path] = None
+    """The HF hub cache to read (`get_cached_commit_hash`); `HF_HUB_CACHE` when None."""
+    hub: Callable[[str, str, Optional[str]], object] = hub_commit
+    """Asked for the commit of `(repo_id, ref, token)` when the local cache has none."""
+    clock: Clock = SYSTEM_CLOCK
+    """The clock the Hub retry's backoff waits on."""
+
+    def __call__(self, repo_id: str, ref: str, token: Optional[str] = None) -> str:
+        """Resolve `ref` to a SHA without consulting the manifest or the memo.
+
+        The local cache first, the Hub only on a miss, through `retry_on_transient_error`.
+
+        Raises:
+            RevisionResolutionError: neither answers with a 40-hex commit SHA.
+        """
+        try:
+            local: Optional[str] = get_cached_commit_hash(repo_id, ref, cache_dir=self.cache_dir)
+        except Exception as exc:  # noqa: BLE001 — any local-read failure just means "ask the Hub"
+            logger.debug("Local cache lookup failed for %s@%s: %s", repo_id, ref, exc)
+            local = None
+        if local and _SHA_RE.fullmatch(local):
+            return local
+
+        try:
+            sha = retry_on_transient_error(lambda: self.hub(repo_id, ref, token), clock=self.clock)
+        except Exception as exc:
+            raise RevisionResolutionError(
+                f"Cannot resolve {repo_id}@{ref} to a commit SHA: {exc}. "
+                "Refusing to load through a mutable ref — the result's provenance would name no commit."
+            ) from exc
+        if not sha or not _SHA_RE.fullmatch(str(sha)):
+            raise RevisionResolutionError(f"Hub returned no usable commit SHA for {repo_id}@{ref} (got {sha!r})")
+        return str(sha)
+
+
+HUB = Resolver()
+"""The default resolver: the default HF hub cache, then the Hub."""
+
+
+def resolve_revision(
+    repo_id: str, ref: str = "main", *, token: Optional[str] = None, resolver: Resolver = HUB
+) -> str:
     """Return the immutable commit SHA this run uses for ``(repo_id, ref)``.
 
     Order: a ref that is already a full SHA short-circuits with no I/O; then this
-    process's memo; then the run manifest; then local cache and Hub. A freshly
+    process's memo; then the run manifest; then `resolver` (local cache and Hub). A freshly
     resolved SHA is recorded so the rest of the run follows it.
 
     Raises:
@@ -326,7 +353,7 @@ def resolve_revision(repo_id: str, ref: str = "main", *, token: Optional[str] = 
             "Run manifest entry for %s is not a commit SHA (%r); re-resolving and ignoring it", key, recorded
         )
 
-    sha = _resolve_uncached(repo_id, ref, token)
+    sha = resolver(repo_id, ref, token)
     binding = record_resolution(repo_id, ref, sha)
     _MEMO[key] = binding
     return binding

@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 from senselab_core.kernel.identity import ModelRef
-from senselab_core.runtime import models
 from senselab_core.runtime.models import (
     WEIGHTS,
     WEIGHTS_FORMAT,
@@ -17,6 +16,7 @@ from senselab_core.runtime.models import (
     verify_model,
     verify_weights,
 )
+from senselab_core.runtime.revision import Resolver
 from senselab_worker.hashing import weights_identity
 
 
@@ -32,18 +32,16 @@ def test_weights_manifest_holds_the_former_constants() -> None:
 
 
 @pytest.mark.logic
-def test_verify_weights_accepts_matching_and_rejects_other_bytes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_verify_weights_accepts_matching_and_rejects_other_bytes(tmp_path: Path) -> None:
     """A file matching its entry passes; any other bytes raise a typed error naming both digests."""
     good = tmp_path / "good.bin"
     good.write_bytes(b"detector")
-    monkeypatch.setattr(models, "WEIGHTS", {"t": hashlib.sha256(b"detector").hexdigest()})
-    verify_weights("t", good)
+    weights = parse_weights(f"format: weights@1.0\nweights:\n  t: {hashlib.sha256(b'detector').hexdigest()}\n")
+    verify_weights("t", good, weights=weights)
     bad = tmp_path / "bad.bin"
     bad.write_bytes(b"other")
     with pytest.raises(WeightsMismatch) as exc:
-        verify_weights("t", bad)
+        verify_weights("t", bad, weights=weights)
     assert exc.value.name == "t"
     assert exc.value.expected == hashlib.sha256(b"detector").hexdigest()
     assert exc.value.actual == hashlib.sha256(b"other").hexdigest()
@@ -142,16 +140,17 @@ def test_malformed_manifest_raises_one_typed_error(text: str) -> None:
 
 
 @pytest.mark.logic
-def test_resolve_hf_delegates_to_resolve_revision(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An hf ref's identity is whatever resolve_revision returns, with the token passed through."""
+def test_resolve_hf_binds_the_commit_its_resolver_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An hf ref's identity is the commit its resolver returns, with the token passed through."""
+    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "senselab"))
+    monkeypatch.setenv("SENSELAB_RUN_ID", "models-test")
     seen: dict[str, object] = {}
 
-    def fake(repo: str, ref: str, *, token: str | None = None) -> str:
+    def hub(repo: str, ref: str, token: str | None) -> str:
         seen.update(repo=repo, ref=ref, token=token)
         return "a" * 40
 
-    monkeypatch.setattr("senselab_core.runtime.models.resolve_revision", fake)
-    r = resolve(ModelRef.parse("org/m@main"), token="t")
+    r = resolve(ModelRef.parse("org/m@main"), token="t", resolver=Resolver(cache_dir=tmp_path / "hf-hub", hub=hub))
     assert r.identity == "a" * 40 and seen == {"repo": "org/m", "ref": "main", "token": "t"}
 
 

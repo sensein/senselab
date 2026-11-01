@@ -37,7 +37,6 @@ import logging
 import os
 import re
 import stat
-import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -58,7 +57,16 @@ from senselab_worker.canonical import (
 from senselab_worker.digest import identity_digest
 from senselab_worker.ownership import UUID_HEX
 
-from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputIdentity, ReusePolicy, acceptable
+from senselab_core.kernel.identity import (
+    EQUIVALENCE,
+    Equivalence,
+    ExecutionContext,
+    LogicalKey,
+    OutputIdentity,
+    ReusePolicy,
+    acceptable,
+)
+from senselab_core.runtime.clock import SYSTEM_CLOCK, Clock
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
@@ -467,13 +475,25 @@ class ResultStore:
         provenance: Where `put`, quarantines and relaxed-policy `get` hits record activities; the
             store owns a fresh one when None.
         policy: Modes and retention ages; `StorePolicy.load_default()` when None.
+        equivalence: The measured equivalence classes `equivalent` reuse admits (`acceptable`).
+        clock: The clock `collect_interval_s` is measured on.
     """
 
-    def __init__(self, root: Path, provenance: ProvStore | None = None, *, policy: StorePolicy | None = None) -> None:
+    def __init__(
+        self,
+        root: Path,
+        provenance: ProvStore | None = None,
+        *,
+        policy: StorePolicy | None = None,
+        equivalence: Equivalence = EQUIVALENCE,
+        clock: Clock = SYSTEM_CLOCK,
+    ) -> None:
         """Open a store at `root`; nothing is created until the first `put`."""
         self.root = Path(root)
         self.provenance = provenance if provenance is not None else ProvStore(run_id=f"store-{uuid.uuid4().hex}")
         self.policy = policy if policy is not None else StorePolicy.load_default()
+        self.equivalence = equivalence
+        self.clock = clock
         self._last_collect: float | None = None
 
     def _entry(self, key: LogicalKey) -> Path:
@@ -650,7 +670,7 @@ class ResultStore:
 
     def _collect_due(self) -> None:
         """Run `collect` if this store has not collected within `policy.collect_interval_s` (monotonic)."""
-        now = time.monotonic()
+        now = self.clock.monotonic()
         if self._last_collect is None or now - self._last_collect >= self.policy.collect_interval_s:
             self._last_collect = now
             self.collect()
@@ -866,7 +886,7 @@ class ResultStore:
                 self._set_aside(base / name, digest=d, fingerprint=name)
                 continue
             rank = next(
-                (i for i, p in enumerate(allowed) if acceptable(stored, context, p, backend=key.backend)),
+                (i for i, p in enumerate(allowed) if acceptable(stored, context, p, backend=key.backend, equivalence=self.equivalence)),
                 None,
             )
             if rank is not None:

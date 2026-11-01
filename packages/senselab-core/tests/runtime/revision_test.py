@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from fake_clock_fixture import FakeClock
 from huggingface_hub.errors import RepositoryNotFoundError
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
@@ -14,6 +15,7 @@ from planted_objects_fixture import BAD_RUN_IDS, LEASE, NAME_BOUND_S, UNOPENABLE
 from senselab_core.runtime.revision import (
     MANIFEST_NAME,
     NAMESPACE,
+    Resolver,
     RevisionResolutionError,
     get_cached_commit_hash,
     manifest_key,
@@ -26,6 +28,22 @@ from senselab_core.runtime.revision import (
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
+
+HubLookup = Callable[[str, str, "str | None"], object]
+
+
+@pytest.fixture
+def offline(tmp_path: Path, fake_clock: FakeClock) -> Callable[[HubLookup], Resolver]:
+    """Build a `Resolver` over an empty local HF cache, asking `hub` on a miss, on a clock that never waits."""
+
+    def make(hub: HubLookup) -> Resolver:
+        return Resolver(cache_dir=tmp_path / "hf-hub", hub=hub, clock=fake_clock)
+
+    return make
+
+
+def _answers(sha: str) -> HubLookup:
+    return lambda repo_id, ref, token: sha
 
 
 @pytest.fixture(autouse=True)
@@ -158,31 +176,34 @@ def test_manifest_entries_are_immutable_for_the_run() -> None:
 
 
 @pytest.mark.logic
-def test_the_manifest_pins_across_an_upstream_move(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_manifest_pins_across_an_upstream_move(offline: Callable[[HubLookup], Resolver]) -> None:
     """Once recorded, a run keeps its SHA even after upstream moves the ref."""
     record_resolution("org/model", "main", SHA_A)
+    asked: list[str] = []
 
     def _moved(repo_id: str, ref: str, token: object = None) -> str:
-        raise AssertionError("resolution must not be attempted when the manifest already has an answer")
+        asked.append(ref)
+        return SHA_B
 
-    monkeypatch.setattr("senselab_core.runtime.revision._resolve_uncached", _moved)
-    assert resolve_revision("org/model", "main") == SHA_A
+    assert resolve_revision("org/model", "main", resolver=offline(_moved)) == SHA_A
+    assert asked == [], "resolution must not be attempted when the manifest already has an answer"
 
 
 @pytest.mark.logic
-def test_an_unresolvable_ref_raises_rather_than_falling_back(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_unresolvable_ref_raises_rather_than_falling_back(offline: Callable[[HubLookup], Resolver]) -> None:
     """A ref that cannot be resolved raises instead of silently returning the ref itself."""
 
     def _fails(repo_id: str, ref: str, token: object = None) -> str:
-        raise RevisionResolutionError("cold cache, hub unreachable")
+        raise ValueError("cold cache, hub unreachable")
 
-    monkeypatch.setattr("senselab_core.runtime.revision._resolve_uncached", _fails)
     with pytest.raises(RevisionResolutionError):
-        resolve_revision("org/model", "main")
+        resolve_revision("org/model", "main", resolver=offline(_fails))
 
 
 @pytest.mark.logic
-def test_a_resolved_ref_is_recorded_so_the_rest_of_the_run_follows(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_resolved_ref_is_recorded_so_the_rest_of_the_run_follows(
+    offline: Callable[[HubLookup], Resolver],
+) -> None:
     """A freshly resolved SHA is written to the manifest so later calls skip resolution."""
     calls = []
 
@@ -190,22 +211,21 @@ def test_a_resolved_ref_is_recorded_so_the_rest_of_the_run_follows(monkeypatch: 
         calls.append((repo_id, ref))
         return SHA_A
 
-    monkeypatch.setattr("senselab_core.runtime.revision._resolve_uncached", _once)
-    assert resolve_revision("org/model", "main") == SHA_A
+    resolver = offline(_once)
+    assert resolve_revision("org/model", "main", resolver=resolver) == SHA_A
     import senselab_core.runtime.revision as mr
 
     mr._MEMO.clear()  # force the manifest, not the memo, to answer the second call
-    assert resolve_revision("org/model", "main") == SHA_A
+    assert resolve_revision("org/model", "main", resolver=resolver) == SHA_A
     assert len(calls) == 1, "the manifest must answer after the first resolution"
 
 
 @pytest.mark.logic
-def test_a_corrupt_manifest_does_not_crash_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_corrupt_manifest_does_not_crash_resolution(offline: Callable[[HubLookup], Resolver]) -> None:
     """An unparsable manifest file degrades to 'resolve again' rather than raising."""
     manifest_path().parent.mkdir(parents=True, exist_ok=True)
     manifest_path().write_text("{not json")
-    monkeypatch.setattr("senselab_core.runtime.revision._resolve_uncached", lambda *a, **k: SHA_A)
-    assert resolve_revision("org/model", "main") == SHA_A
+    assert resolve_revision("org/model", "main", resolver=offline(_answers(SHA_A))) == SHA_A
 
 
 def _record_resolution_worker(sha: str, cache_dir: str, out: "mp.Queue[str]") -> None:
@@ -246,12 +266,11 @@ def test_concurrent_first_resolution_agrees_on_one_sha(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a_corrupt_manifest_entry_is_ignored_rather_than_trusted(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_corrupt_manifest_entry_is_ignored_rather_than_trusted(offline: Callable[[HubLookup], Resolver]) -> None:
     """A non-SHA entry must be re-resolved, not propagated into keys and provenance."""
     manifest_path().parent.mkdir(parents=True, exist_ok=True)
     manifest_path().write_text(json.dumps({manifest_key("org/model", "main"): "main"}))
-    monkeypatch.setattr("senselab_core.runtime.revision._resolve_uncached", lambda *a, **k: SHA_A)
-    assert resolve_revision("org/model", "main") == SHA_A
+    assert resolve_revision("org/model", "main", resolver=offline(_answers(SHA_A))) == SHA_A
 
 
 @pytest.mark.logic
@@ -269,23 +288,21 @@ def test_recording_a_newline_suffixed_sha_is_refused() -> None:
 
 
 @pytest.mark.logic
-def test_a_newline_suffixed_sha_does_not_short_circuit_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_newline_suffixed_sha_does_not_short_circuit_resolution(offline: Callable[[HubLookup], Resolver]) -> None:
     """A newline-suffixed full SHA — unstripped ``git rev-parse`` output — is not returned unchanged.
 
     It is not a commit, so it goes through resolution like any other ref instead of riding the
     already-a-SHA short-circuit into provenance.
     """
-    monkeypatch.setattr("senselab_core.runtime.revision._resolve_uncached", lambda *a, **k: SHA_A)
-    assert resolve_revision("org/model", SHA_A + "\n") == SHA_A
+    assert resolve_revision("org/model", SHA_A + "\n", resolver=offline(_answers(SHA_A))) == SHA_A
 
 
 @pytest.mark.logic
-def test_a_newline_suffixed_manifest_entry_is_re_resolved(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_newline_suffixed_manifest_entry_is_re_resolved(offline: Callable[[HubLookup], Resolver]) -> None:
     """A manifest entry carrying a trailing newline reads as absent, not as the run's answer."""
     manifest_path().parent.mkdir(parents=True, exist_ok=True)
     manifest_path().write_text(json.dumps({manifest_key("org/model", "main"): SHA_A + "\n"}))
-    monkeypatch.setattr("senselab_core.runtime.revision._resolve_uncached", lambda *a, **k: SHA_B)
-    assert resolve_revision("org/model", "main") == SHA_B
+    assert resolve_revision("org/model", "main", resolver=offline(_answers(SHA_B))) == SHA_B
 
 
 @pytest.mark.logic
@@ -298,61 +315,48 @@ def test_a_newline_suffixed_winner_is_overwritten_not_adopted() -> None:
 
 
 @pytest.mark.logic
-def test_a_newline_suffixed_local_cache_answer_falls_through_to_the_hub(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_newline_suffixed_local_cache_answer_falls_through_to_the_hub(
+    tmp_path: Path, offline: Callable[[HubLookup], Resolver]
+) -> None:
     """A malformed local-cache answer degrades to a Hub lookup instead of becoming the resolved commit."""
-    import senselab_core.runtime.revision as mr
-
-    class _Info:
-        sha = SHA_B
-
-    monkeypatch.setattr("senselab_core.runtime.revision.get_cached_commit_hash", lambda *a, **k: SHA_A + "\n")
-    monkeypatch.setattr("huggingface_hub.HfApi.model_info", lambda _self, *, repo_id, revision: _Info())
-    assert mr._resolve_uncached("org/model", "main") == SHA_B
+    resolver = offline(_answers(SHA_B))
+    assert resolver.cache_dir is not None
+    snapshot = resolver.cache_dir / "models--org--model" / "snapshots" / (SHA_A + "\n")
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}")
+    assert get_cached_commit_hash("org/model", SHA_A + "\n", cache_dir=resolver.cache_dir) == SHA_A + "\n"
+    assert resolver("org/model", SHA_A + "\n") == SHA_B
 
 
 @pytest.mark.logic
-def test_a_newline_suffixed_hub_sha_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A Hub answer carrying a trailing newline raises rather than leaving ``_resolve_uncached`` as a commit."""
-    import senselab_core.runtime.revision as mr
-
-    class _Info:
-        sha = SHA_A + "\n"
-
-    monkeypatch.setattr("senselab_core.runtime.revision.get_cached_commit_hash", lambda *a, **k: None)
-    monkeypatch.setattr("huggingface_hub.HfApi.model_info", lambda _self, *, repo_id, revision: _Info())
+def test_a_newline_suffixed_hub_sha_is_refused(offline: Callable[[HubLookup], Resolver]) -> None:
+    """A Hub answer carrying a trailing newline raises rather than leaving the resolver as a commit."""
     with pytest.raises(RevisionResolutionError, match="no usable commit SHA"):
-        mr._resolve_uncached("org/model", "main")
+        offline(_answers(SHA_A + "\n"))("org/model", "main")
 
 
 @pytest.mark.logic
 def test_resolution_retries_a_transient_hub_error(
-    monkeypatch: pytest.MonkeyPatch, hub_error: Callable[..., Exception]
+    offline: Callable[[HubLookup], Resolver], hub_error: Callable[..., Exception]
 ) -> None:
     """The mandatory model_info round-trip is retried on a transient error, not fatal."""
     calls = {"n": 0}
 
-    class _Info:
-        sha = SHA_A
-
-    def _flaky(_self: object, *, repo_id: str, revision: str) -> object:
+    def _flaky(repo_id: str, ref: str, token: object) -> object:
         calls["n"] += 1
         if calls["n"] == 1:
-            # A real 429 rather than a stand-in: ``_is_transient`` reads the status off ``.response``.
             raise hub_error(429)
-        return _Info()
+        return SHA_A
 
-    # Force the network path (no local cache hit) and make the retry backoff instant.
-    monkeypatch.setattr("senselab_core.runtime.revision.get_cached_commit_hash", lambda *a, **k: None)
-    monkeypatch.setattr("huggingface_hub.HfApi.model_info", _flaky)
-    monkeypatch.setattr("senselab_core.runtime.retry.time.sleep", lambda *_a, **_k: None)
-
-    assert resolve_revision("org/model", "main") == SHA_A
+    resolver = offline(_flaky)
+    assert resolve_revision("org/model", "main", resolver=resolver) == SHA_A
     assert calls["n"] == 2, "the transient error must have been retried once"
+    assert isinstance(resolver.clock, FakeClock) and resolver.clock.slept == [1]
 
 
 @pytest.mark.logic
 def test_a_missing_repo_fails_without_being_retried(
-    monkeypatch: pytest.MonkeyPatch, hub_error: Callable[..., Exception]
+    offline: Callable[[HubLookup], Resolver], hub_error: Callable[..., Exception]
 ) -> None:
     """A genuine 404 surfaces as RevisionResolutionError on the first attempt.
 
@@ -365,24 +369,17 @@ def test_a_missing_repo_fails_without_being_retried(
     """
     calls = {"n": 0}
 
-    def _always(_self: object, *, repo_id: str, revision: str) -> object:
+    def _always(repo_id: str, ref: str, token: object) -> object:
         calls["n"] += 1
         raise hub_error(404, RepositoryNotFoundError)
 
-    monkeypatch.setattr("senselab_core.runtime.revision.get_cached_commit_hash", lambda *a, **k: None)
-    monkeypatch.setattr("huggingface_hub.HfApi.model_info", _always)
-    monkeypatch.setattr("senselab_core.runtime.retry.time.sleep", lambda *_a, **_k: None)
-
     with pytest.raises(RevisionResolutionError):
-        resolve_revision("org/model", "main")
+        resolve_revision("org/model", "main", resolver=offline(_always))
     assert calls["n"] == 1, "a 404 is a verdict, not a blip -- it must not be retried"
 
 
-def _fake_cache(monkeypatch: pytest.MonkeyPatch, root: Path, repo_id: str, revision: str, sha: str) -> Path:
+def _fake_cache(root: Path, repo_id: str, revision: str, sha: str) -> Path:
     """Fabricate an HF cache with ``refs/<revision> -> <sha>`` and a snapshot dir."""
-    import huggingface_hub.constants as hf_constants
-
-    monkeypatch.setattr(hf_constants, "HF_HUB_CACHE", str(root))
     repo_dir = root / f"models--{repo_id.replace('/', '--')}"
     (repo_dir / "refs").mkdir(parents=True)
     (repo_dir / "refs" / revision).write_text(sha)
@@ -393,35 +390,33 @@ def _fake_cache(monkeypatch: pytest.MonkeyPatch, root: Path, repo_id: str, revis
 
 
 @pytest.mark.logic
-def test_get_cached_commit_hash_resolves_real_sha_from_refs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_cached_commit_hash_resolves_real_sha_from_refs(tmp_path: Path) -> None:
     """get_cached_commit_hash returns the commit SHA from refs/<ref>, not the mutable branch name."""
     sha = "a" * 40
-    _fake_cache(monkeypatch, tmp_path, "org/model", "main", sha)
-    assert get_cached_commit_hash("org/model", "main") == sha
+    _fake_cache(tmp_path, "org/model", "main", sha)
+    assert get_cached_commit_hash("org/model", "main", cache_dir=tmp_path) == sha
 
 
 @pytest.mark.logic
-def test_sha_revision_is_passed_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sha_revision_is_passed_through(tmp_path: Path) -> None:
     """A full-SHA revision is returned as-is (already immutable)."""
     sha = "e" * 40
-    _fake_cache(monkeypatch, tmp_path, "org/model", "main", "f" * 40)
-    assert get_cached_commit_hash("org/model", sha) == sha
+    _fake_cache(tmp_path, "org/model", "main", "f" * 40)
+    assert get_cached_commit_hash("org/model", sha, cache_dir=tmp_path) == sha
 
 
 @pytest.mark.logic
-def test_cached_commit_hash_raises_rather_than_returning_a_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cached_commit_hash_raises_rather_than_returning_a_ref(tmp_path: Path) -> None:
     """A cold cache must raise, not hand back the mutable ref as if it were a SHA."""
-    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
     with pytest.raises(RevisionResolutionError):
-        get_cached_commit_hash("org/never-downloaded", "main")
+        get_cached_commit_hash("org/never-downloaded", "main", cache_dir=tmp_path / "hub")
 
 
 @pytest.mark.logic
-def test_a_newline_suffixed_sha_is_not_passed_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_newline_suffixed_sha_is_not_passed_through(tmp_path: Path) -> None:
     """Unstripped subprocess stdout must not ride the full-SHA shortcut into provenance."""
-    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
     with pytest.raises(RevisionResolutionError):
-        get_cached_commit_hash("org/model", "e" * 40 + "\n")
+        get_cached_commit_hash("org/model", "e" * 40 + "\n", cache_dir=tmp_path / "hub")
 
 
 @pytest.mark.logic

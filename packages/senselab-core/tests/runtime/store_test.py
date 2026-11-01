@@ -20,6 +20,7 @@ from typing import Any
 
 import numpy
 import pytest
+from fake_clock_fixture import FakeClock
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from planted_objects_fixture import ARRAY_CORRUPTIONS, bounded, swap_subsets
@@ -119,15 +120,13 @@ def test_cross_context_follows_policy(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_equivalence_class_admits_under_equivalent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_equivalence_class_admits_under_equivalent(tmp_path: Path) -> None:
     """A measured equivalence class admits a cross-context result under `equivalent`, not `exact`."""
-    s, k = ResultStore(tmp_path), _key()
     linux, mac = _ctx(platform="linux"), _ctx(platform="macos")
+    table = {"hf": {"cpu-fp32": frozenset({linux.fingerprint(), mac.fingerprint()})}}
+    s, k = ResultStore(tmp_path, equivalence=table), _key()
     s.put(k, {"y": 1}, linux)
-    monkeypatch.setattr(
-        "senselab_core.kernel.identity.EQUIVALENCE",
-        {"hf": {"cpu-fp32": frozenset({linux.fingerprint(), mac.fingerprint()})}},
-    )
+    assert ResultStore(tmp_path).get(k, mac, ReusePolicy.EQUIVALENT) is None
     got = s.get(k, mac, ReusePolicy.EQUIVALENT)
     assert got is not None and got.policy_used is ReusePolicy.EQUIVALENT
     assert s.get(k, mac, ReusePolicy.EXACT) is None
@@ -1104,24 +1103,25 @@ def test_writable_committed_entry_is_resealed(tmp_path: Path, reader: str) -> No
 
 
 @pytest.mark.logic
-def test_put_collects_at_most_once_per_interval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_put_collects_at_most_once_per_interval(tmp_path: Path, fake_clock: FakeClock) -> None:
     """Puts within `collect_interval_s` of each other run one collection, not one each."""
-    s, c = ResultStore(tmp_path), _ctx()
-    calls: list[object] = []
-    real = ResultStore.collect
+    s, c = ResultStore(tmp_path, clock=fake_clock), _ctx()
+    stale = tmp_path / "tmp" / ("5" * 32)
 
-    def spy(self: ResultStore, now: float | None = None) -> int:
-        calls.append(now)
-        return real(self, now)
+    def plant() -> None:
+        stale.mkdir(parents=True)
+        os.utime(stale, (0, 0))
 
-    monkeypatch.setattr(ResultStore, "collect", spy)
-    for i in range(5):
+    plant()
+    s.put(_key(audio=f"{0:064x}"), {"y": 0}, c)
+    assert not stale.exists(), "the first put collects"
+    plant()
+    for i in range(1, 5):
         s.put(_key(audio=f"{i:064x}"), {"y": i}, c)
-    assert len(calls) == 1
-    clock = time.monotonic() + s.policy.collect_interval_s
-    monkeypatch.setattr(time, "monotonic", lambda: clock)
+    assert stale.exists(), "puts within the interval do not collect again"
+    fake_clock.advance(s.policy.collect_interval_s)
     s.put(_key(task="other"), {"y": 1}, c)
-    assert len(calls) == 2
+    assert not stale.exists(), "a put once the interval has passed collects"
 
 
 @pytest.mark.logic

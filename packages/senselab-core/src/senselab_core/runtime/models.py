@@ -12,7 +12,7 @@ from senselab_worker.digest import file_digest
 from senselab_worker.hashing import weights_identity
 
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
-from senselab_core.runtime.revision import resolve_revision
+from senselab_core.runtime.revision import HUB, Resolver, resolve_revision
 
 WEIGHTS_FORMAT = "weights@1.0"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -66,17 +66,17 @@ WEIGHTS: Mapping[str, str] = _load_weights()
 """Weight name to the sha256 of that single weight file, loaded once from `weights.yaml` (read-only)."""
 
 
-def verify_weights(name: str, path: Path) -> None:
-    """Check that the file at `path` has the sha256 the manifest records for `name`.
+def verify_weights(name: str, path: Path, *, weights: Mapping[str, str] = WEIGHTS) -> None:
+    """Check that the file at `path` has the sha256 the manifest `weights` records for `name`.
 
     This is a single-file integrity check: the file's own sha256, streamed in chunks (never read
     whole). It is not the `weights_identity` of a weight set.
 
     Raises:
-        KeyError: if `name` is not in `WEIGHTS`.
+        KeyError: if `name` is not in `weights`.
         WeightsMismatch: if the sha256 differs.
     """
-    expected = WEIGHTS[name]
+    expected = weights[name]
     actual = file_digest("file@1", path)
     if actual != expected:
         raise WeightsMismatch(name, expected, actual, Path(path))
@@ -115,10 +115,10 @@ def _local_identity(path: Path) -> str:
     raise ModelResolutionError(f"local model path {path} does not exist")
 
 
-def resolve(ref: ModelRef, *, token: str | None = None) -> ResolvedModel:
+def resolve(ref: ModelRef, *, token: str | None = None, resolver: Resolver = HUB) -> ResolvedModel:
     """Bind `ref` to the identity of its weights.
 
-    - hf: the 40-hex commit from `resolve_revision` (its errors propagate).
+    - hf: the 40-hex commit from `resolve_revision` through `resolver` (its errors propagate).
     - local: `weights_identity` of the file, or of every file under the directory, rooted at it.
     - url: the hash declared in the reference (`url:<url>#sha256=<hex>`); nothing is downloaded.
       `verify_model` checks the downloaded bytes against it at load.
@@ -128,7 +128,7 @@ def resolve(ref: ModelRef, *, token: str | None = None) -> ResolvedModel:
         ModelResolutionError: for a missing local path or an empty directory.
     """
     if ref.source == "hf":
-        return ResolvedModel(ref=ref, identity=resolve_revision(ref.id, ref.ref, token=token))
+        return ResolvedModel(ref=ref, identity=resolve_revision(ref.id, ref.ref, token=token, resolver=resolver))
     if ref.source == "local":
         return ResolvedModel(ref=ref, identity=_local_identity(Path(ref.id)))
     if not ref.ref:

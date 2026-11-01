@@ -4,8 +4,8 @@ from collections.abc import Callable
 
 import httpx
 import pytest
+from fake_clock_fixture import FakeClock
 from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
-from senselab_core.runtime import retry
 from senselab_core.runtime.retry import _is_transient, retry_on_transient_error
 
 
@@ -66,11 +66,9 @@ def test_a_non_network_error_is_never_retried() -> None:
 
 @pytest.mark.logic
 def test_retry_stops_on_a_404_and_backs_off_on_a_429(
-    monkeypatch: pytest.MonkeyPatch, hub_error: Callable[..., Exception]
+    fake_clock: FakeClock, hub_error: Callable[..., Exception]
 ) -> None:
     """The classification is only worth anything if ``retry_on_transient_error`` acts on it."""
-    monkeypatch.setattr(retry.time, "sleep", lambda *_a, **_k: None)
-
     calls = {"n": 0}
 
     def _not_found() -> str:
@@ -78,7 +76,7 @@ def test_retry_stops_on_a_404_and_backs_off_on_a_429(
         raise hub_error(404, RepositoryNotFoundError)
 
     with pytest.raises(RepositoryNotFoundError):
-        retry_on_transient_error(_not_found)
+        retry_on_transient_error(_not_found, clock=fake_clock)
     assert calls["n"] == 1, "a 404 must fail on the first attempt"
 
     calls["n"] = 0
@@ -89,5 +87,6 @@ def test_retry_stops_on_a_404_and_backs_off_on_a_429(
             raise hub_error(429)
         return "ok"
 
-    assert retry_on_transient_error(_throttled_once) == "ok"
+    assert retry_on_transient_error(_throttled_once, clock=fake_clock) == "ok"
     assert calls["n"] == 2, "a 429 must be retried"
+    assert fake_clock.slept == [1]
