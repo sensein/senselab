@@ -4,14 +4,11 @@ import ast
 import configparser
 import importlib
 import inspect
-import json
 import os
 import pkgutil
 import re
-import shutil
 import subprocess
 import sys
-import sysconfig
 import textwrap
 import types
 from pathlib import Path
@@ -255,9 +252,11 @@ def test_the_digest_module_defines_only_tagged_digests() -> None:
     """`digest` defines exactly the three typed digests and `_raw_digest` the owners' raw form, each tag-checked."""
     assert digest.__all__ == [
         "BLOB_TAGS",
+        "COMMIT_HEX",
         "FILE_TAGS",
         "IDENTITY_TAGS",
         "NPY_TAGS",
+        "SHA256_HEX",
         "file_digest",
         "identity_digest",
         "npy_digest",

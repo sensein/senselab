@@ -42,6 +42,8 @@ logger = logging.getLogger("senselab")
 POLICY_FORMAT = "store-policy@1.0"
 STAGING_FILE_MODE = 0o660
 STAGING_DIR_MODE = 0o2770
+PRIVATE_DIR_MODE = 0o700
+"""The mode of a `Staging` directory that only this process's user can write."""
 CLOCK_NAME = ".clock"
 """The sentinel `StorageDir.fs_now` replaces in a directory."""
 CLOCK = re.compile(re.escape(CLOCK_NAME))
@@ -89,7 +91,7 @@ def storage_fault(err: OSError, path: Path, *, hint: str | None = None) -> Store
 
 
 def load_policy_values(package: str, file_name: str, policy_format: str) -> dict[str, object]:
-    """Return `{name: value}` from the packaged `data/<file_name>` of `package`, a policy whose entries carry derivations.
+    """Return `{name: value}` from the packaged `data/<file_name>` of `package`; each policy entry carries a derivation.
 
     Raises:
         ValueError: if the file lacks `format: <policy_format>`, or an entry is not exactly a `value` and a
@@ -689,13 +691,53 @@ class AddressedFormat(Protocol):
         ...
 
 
+class Staging:
+    """`root/<uuid4 hex>/`, made with `mode` and removed with everything in it on exit.
+
+    `__enter__` returns the directory and `name` is its name under `root`. With `PRIVATE_DIR_MODE` the
+    directory must then be owned by this process's user with exactly that mode, so a file staged there
+    keeps the bytes written through its descriptor until it is linked or renamed out. A directory that
+    cannot be removed on exit is logged, not raised.
+
+    Raises:
+        WrongKindError: on enter, a private directory that is not owned by this user with mode `0o700`.
+    """
+
+    def __init__(self, root: StorageDir, *, mode: int) -> None:
+        """Name a fresh staging directory under `root`, made with `mode` on enter."""
+        self.root = root
+        self.mode = mode
+        self.name = uuid.uuid4().hex
+        self._dir: StorageDir | None = None
+
+    def __enter__(self) -> StorageDir:
+        """Create the directory and return it open."""
+        made = self.root.child(self.name, create=True, mode=self.mode)
+        if self.mode == PRIVATE_DIR_MODE:
+            st = os.fstat(made.fd)
+            if st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) != PRIVATE_DIR_MODE:
+                made.close()
+                raise WrongKindError(made.path, "directory", f"{made.path} is not a private staging directory")
+        self._dir = made
+        return made
+
+    def __exit__(self, *exc: object) -> None:
+        """Close the directory and remove it with everything left in it."""
+        if self._dir is not None:
+            self._dir.close()
+        try:
+            self.root.remove_owned(self.name, pattern=UUID_HEX)
+        except OSError as err:
+            logger.warning("cannot remove staging directory %s: %s", self.root.path / self.name, err)
+
+
 if TYPE_CHECKING:
     ADDRESSED_FORMATS: tuple[AddressedFormat, ...]
 
 
 def __getattr__(name: str) -> object:
     if name == "ADDRESSED_FORMATS":
-        from senselab_core.runtime import fetch, store
+        from senselab_core.runtime import fetch, store  # noqa: PLC0415 - both import this module
 
         return (store.STORE_ENTRY, fetch.BLOB, fetch.DATASET_MARKER)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -713,6 +755,8 @@ __all__ = [
     "TEMPORARY_NAME",
     "STAGING_DIR_MODE",
     "STAGING_FILE_MODE",
+    "PRIVATE_DIR_MODE",
+    "Staging",
     "AddressedFormat",
     "StorageFull",
     "StorePolicy",

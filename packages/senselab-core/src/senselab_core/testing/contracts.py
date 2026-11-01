@@ -352,7 +352,7 @@ def _run_seed_probe(spec: dict[str, Any], seed: str, timeout: float) -> "subproc
 
 
 def _content_fault_isolated(task: TaskSpec, backend: BackendSpec) -> None:
-    from senselab_core.runtime.fake_backend import run_fake
+    from senselab_core.runtime.fake_backend import run_fake  # noqa: PLC0415 - importing it registers the fake tasks
 
     items = [{"id": i, "inputs": {port: f"{i}:{port}" for port in task.inputs}} for i in ("a", "b", "c")]
     params = task.params().model_dump(mode="json")

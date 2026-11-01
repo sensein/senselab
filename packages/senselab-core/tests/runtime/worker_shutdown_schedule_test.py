@@ -9,7 +9,6 @@ import resource
 import signal
 import subprocess
 import sys
-import threading
 import time
 import warnings
 from collections.abc import Callable, Iterator
@@ -18,7 +17,6 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import lifecycle_probes_fixture
-import numpy
 import pytest
 import shutdown_schedule_fixture
 from senselab_core.runtime.worker_client import (

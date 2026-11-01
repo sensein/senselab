@@ -381,7 +381,7 @@ class Audio(Recording):
         x = numpy.asarray(a)
         if x.ndim == 1:
             x = x.reshape(1, -1)
-        if x.ndim != 2:
+        if x.ndim != 2:  # noqa: PLR2004 - the (channels, samples) layout has two axes
             raise ValueError(f"audio samples must be 1-D or (channels, samples), got shape {x.shape}")
         if x.size == 0:
             raise ValueError(f"audio samples must not be empty, got shape {x.shape}")

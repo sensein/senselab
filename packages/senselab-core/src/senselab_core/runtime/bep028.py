@@ -12,6 +12,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from senselab_worker.digest import SHA256_HEX
+
 from senselab_core.runtime.provenance import (
     CHECKSUM_KEY,
     CHECKSUM_UNRESOLVED_KEY,
@@ -363,6 +365,39 @@ def _walk(node: object, prefixes: set[str], problems: list[str], where: str) -> 
             _walk(value, prefixes, problems, f"{where}[{index}]")
 
 
+def _check_node(node: dict[str, Any], where: str, declared: set[str], problems: list[str]) -> None:
+    """Append the problems of one node's ``Id`` and checksums, and add its ``Id`` to ``declared``."""
+    identifier = node.get("Id")
+    if not identifier:
+        problems.append(f"{where}: no Id")
+        return
+    if identifier in declared:
+        problems.append(f"{where}: Id {identifier!r} is declared twice")
+    declared.add(identifier)
+    try:
+        store_id(identifier)
+    except ValueError as err:
+        problems.append(f"{where}: {err}")
+    for entry in node.get("Checksum") or []:
+        if entry.get("ChecksumAlgorithm") != SHA256_ALGORITHM:
+            problems.append(f"{where}: unexpected ChecksumAlgorithm {entry.get('ChecksumAlgorithm')!r}")
+        value = entry.get("ChecksumValue", "")
+        if not (isinstance(value, str) and SHA256_HEX.fullmatch(value)):
+            problems.append(f"{where}: ChecksumValue is not 64 lowercase hex characters")
+
+
+def _dangling_references(records: dict[str, Any], declared: set[str]) -> list[str]:
+    """Each relation in ``records`` that names an ``Id`` outside ``declared``."""
+    return [
+        f"Records.{kind}[{index}].{term}: {reference!r} is not a node in the graph"
+        for kind, nodes in records.items()
+        for index, node in enumerate(nodes)
+        for term in RELATION_TERMS.values()
+        for reference in node.get(term) or []
+        if reference not in declared
+    ]
+
+
 def check_graph(graph: dict[str, Any]) -> list[str]:
     """Check a graph is JSON-LD its own context resolves, and that it refers only to itself.
 
@@ -396,30 +431,7 @@ def check_graph(graph: dict[str, Any]) -> list[str]:
     declared: set[str] = set()
     for kind, nodes in records.items():
         for index, node in enumerate(nodes):
-            where = f"Records.{kind}[{index}]"
-            identifier = node.get("Id")
-            if not identifier:
-                problems.append(f"{where}: no Id")
-                continue
-            if identifier in declared:
-                problems.append(f"{where}: Id {identifier!r} is declared twice")
-            declared.add(identifier)
-            try:
-                store_id(identifier)
-            except ValueError as err:
-                problems.append(f"{where}: {err}")
-            for entry in node.get("Checksum") or []:
-                value = entry.get("ChecksumValue", "")
-                if entry.get("ChecksumAlgorithm") != SHA256_ALGORITHM:
-                    problems.append(f"{where}: unexpected ChecksumAlgorithm {entry.get('ChecksumAlgorithm')!r}")
-                if len(value) != 64 or value != value.lower() or not all(c in "0123456789abcdef" for c in value):
-                    problems.append(f"{where}: ChecksumValue is not 64 lowercase hex characters")
-
-    for kind, nodes in records.items():
-        for index, node in enumerate(nodes):
-            for term in RELATION_TERMS.values():
-                for reference in node.get(term) or []:
-                    if reference not in declared:
-                        problems.append(f"Records.{kind}[{index}].{term}: {reference!r} is not a node in the graph")
+            _check_node(node, f"Records.{kind}[{index}]", declared, problems)
+    problems += _dangling_references(records, declared)
     _walk({key: value for key, value in graph.items() if key != "@context"}, prefixes, problems, "graph")
     return problems

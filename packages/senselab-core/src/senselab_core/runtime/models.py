@@ -1,21 +1,19 @@
 """Model resolution and the weights manifest (design 4.3, P-4, P-16, P-37)."""
 
 import os
-import re
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
 from types import MappingProxyType
 
 import yaml
-from senselab_worker.digest import file_digest
+from senselab_worker.digest import SHA256_HEX, file_digest
 from senselab_worker.hashing import weights_identity
 
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
 from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver, resolve_revision
 
 WEIGHTS_FORMAT = "weights@1.0"
-_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class WeightsMismatch(RuntimeError):
@@ -52,7 +50,7 @@ def parse_weights(text: str) -> Mapping[str, str]:
     if not isinstance(weights, dict):
         raise WeightsManifestError("weights.yaml needs a 'weights' mapping of name to sha256")
     for name, digest in weights.items():
-        if not (isinstance(name, str) and isinstance(digest, str) and _SHA256.fullmatch(digest)):
+        if not (isinstance(name, str) and isinstance(digest, str) and SHA256_HEX.fullmatch(digest)):
             raise WeightsManifestError(f"weights.yaml entry {name!r} must map a name to a 64-hex sha256 string")
     return MappingProxyType(dict(weights))
 

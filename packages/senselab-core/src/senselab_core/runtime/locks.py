@@ -158,7 +158,7 @@ class Lease:
             try:
                 directory.link(temporary, directory, self._name, grammar=LEASE_NAME)
             except OSError as err:
-                if os.fstat(fd).st_nlink < 2:
+                if os.fstat(fd).st_nlink < 2:  # noqa: PLR2004 - linked means two names: the temporary and the lease
                     if err.errno == errno.EEXIST:
                         return None
                     raise

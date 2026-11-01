@@ -13,7 +13,7 @@ def bytes_digest(tag: str, data: bytes | bytearray | memoryview) -> str:
         ValueError: if `tag` is not in `BLOB_TAGS`.
         TypeError: if `data` is not bytes-like.
     """
-    import hashlib
+    import hashlib  # noqa: PLC0415 - binds hashlib in no namespace another module could import it from
 
     if tag not in BLOB_TAGS:
         raise ValueError(f"unregistered blob tag {tag!r}; registered: {sorted(BLOB_TAGS)}")

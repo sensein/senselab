@@ -35,13 +35,13 @@ from typing import IO, Annotated, Any, BinaryIO, Literal, NamedTuple
 import yaml
 from pydantic import Field, ValidationError, field_validator, model_validator
 from senselab_worker.canonical import is_portable, jcs_dumps
-from senselab_worker.digest import file_digest, identity_digest
-from senselab_worker.ownership import UUID_HEX, remove_owned
+from senselab_worker.digest import SHA256_HEX, file_digest, identity_digest
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.license import License
 from senselab_core.runtime.storage import (
-    CLOCK_NAME,
+    PRIVATE_DIR_MODE,
+    Staging,
     StorageDir,
     StorePolicy,
     StoreUnavailable,
@@ -74,7 +74,6 @@ COMMITTED_NAME = re.compile(r"[0-9a-f]{64}|\.complete")
 MARKER_LIMIT = 1 << 24
 """The most bytes a completion marker is read to."""
 _NO_HARDLINK_ERRNOS = frozenset({errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV})
-_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class ManifestError(ValueError):
@@ -121,7 +120,7 @@ class DataFile(Frozen):
     @field_validator("sha256")
     @classmethod
     def _hex(cls, v: str) -> str:
-        if not _SHA256.fullmatch(v):
+        if not SHA256_HEX.fullmatch(v):
             raise ValueError(f"sha256 must be 64 lowercase hex digits, got {v!r}")
         return v
 
@@ -222,7 +221,7 @@ def _require_https(url: str) -> None:
 class _HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
     """Follows a redirect only to an `https` URL."""
 
-    def redirect_request(
+    def redirect_request(  # noqa: PLR0913 - the signature urllib.request.HTTPRedirectHandler defines
         self, req: urllib.request.Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage, newurl: str
     ) -> urllib.request.Request | None:
         _require_https(newurl)
@@ -291,34 +290,7 @@ def _download(url: str, opener: Callable[[str], BinaryIO], out: BinaryIO, *, siz
         os.fsync(out.fileno())
 
 
-class _PrivateStaging:
-    """`tmp/<uuid4 hex>/`, made `0o700` by this process and removed with everything in it on exit.
-
-    Only this process's user can create, rename or replace a file in it, so a file staged there keeps
-    the bytes written and hashed through its descriptor until it is linked or renamed out.
-    """
-
-    def __init__(self, tmp: StorageDir) -> None:
-        self.tmp = tmp
-        self.name = uuid.uuid4().hex
-        self.dir: StorageDir | None = None
-
-    def __enter__(self) -> StorageDir:
-        made = self.tmp.child(self.name, create=True, mode=0o700)
-        st = os.fstat(made.fd)
-        if st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) != 0o700:
-            made.close()
-            raise WrongKindError(made.path, "directory", f"{made.path} is not a private staging directory")
-        self.dir = made
-        return made
-
-    def __exit__(self, *exc: object) -> None:
-        if self.dir is not None:
-            self.dir.close()
-        self.tmp.remove_owned(self.name, pattern=UUID_HEX)
-
-
-def _commit(
+def _commit(  # noqa: PLR0913 - source and target are each a directory and a name
     source: StorageDir,
     name: str,
     target: StorageDir,
@@ -449,7 +421,7 @@ def _verified_stamp(blobs: StorageDir, sha256: str, recorded: Mapping[str, BlobS
         os.close(fd)
 
 
-def _ensure_blob(
+def _ensure_blob(  # noqa: PLR0913 - the per-file step of _fetch_into, passed the state it holds
     file: DataFile,
     blobs: StorageDir,
     tmp: StorageDir,
@@ -470,7 +442,7 @@ def _ensure_blob(
     tried: list[str] = []
     for url in (file.url, *file.mirrors):
         try:
-            with _PrivateStaging(tmp) as private:
+            with Staging(tmp, mode=PRIVATE_DIR_MODE) as private:
                 with os.fdopen(private.open_new(STAGED_BLOB, file_mode, grammar=STAGED_NAME), "w+b") as out:
                     _download(url, opener, out, size=file.size)
                     actual = _hashed(out.fileno())
@@ -684,7 +656,6 @@ def fetch(
         WrongKindError: an object of the wrong kind in the cache could not be moved aside.
     """
     policy = policy if policy is not None else StorePolicy.load_default()
-    file_mode, _ = committed_modes(policy)
     dir_mode = shared_dir_mode(policy)
     open_url = opener if opener is not None else _urlopen
     root = Path(cache_root)
@@ -696,7 +667,7 @@ def fetch(
         raise storage_fault(err, root) from err
 
 
-def _fetch_into(
+def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories it opened
     manifest: DataManifest,
     top: StorageDir,
     tmp: StorageDir,
@@ -745,7 +716,7 @@ def _fetch_into(
                     for sha, st in stamps.items()
                 },
             }
-            with _PrivateStaging(tmp) as private:
+            with Staging(tmp, mode=PRIVATE_DIR_MODE) as private:
                 private.write_new(STAGED_MARKER, jcs_dumps(record), file_mode, grammar=STAGED_NAME)
                 _commit(
                     private,

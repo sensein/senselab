@@ -1,7 +1,6 @@
 """The store's file checksums: what they record, and what they say when they cannot."""
 
 import hashlib
-import json
 import os
 from pathlib import Path
 
@@ -15,7 +14,6 @@ from senselab_core.runtime.provenance import (
     file_attributes,
     file_digest,
 )
-from senselab_worker.canonical import jcs_dumps
 
 pytestmark = pytest.mark.logic
 

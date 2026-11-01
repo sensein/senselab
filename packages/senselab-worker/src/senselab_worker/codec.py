@@ -9,7 +9,6 @@ import io
 import json
 import math
 import os
-import re
 import stat
 import time
 import uuid
@@ -23,11 +22,15 @@ from senselab_worker.canonical import (
     MAX_DEPTH,
     canonical_scalar,
     entered,
+    finite_float,
     npy_bytes,
     npy_header,
+    refuse_constant,
     require_depth,
     require_unicode,
+    unique_object,
 )
+from senselab_worker.digest import SHA256_HEX
 from senselab_worker.faults import ArrayIntegrityError, FaultClass, ProtocolError, ValueTooLarge, WireValueError
 from senselab_worker.ownership import ARRAY_TEMP_NAME, remove_owned
 
@@ -42,7 +45,6 @@ ARRAY_KEY = "__array__"
 ARRAY_REF_HEIGHT = 3
 """Containers in an array reference: the `__array__` object, the reference object, its `shape` list."""
 READ_CHUNK_BYTES = 2**20
-_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 class Deadline:
@@ -130,26 +132,6 @@ def _json_bytes(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
-def _refuse_constant(name: str) -> object:
-    raise ValueError(f"{name} is not JSON")
-
-
-def _finite_float(text: str) -> float:
-    value = float(text)
-    if not math.isfinite(value):
-        raise ValueError(f"number {text[:40]} is not finite")
-    return value
-
-
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    seen: set[str] = set()
-    for key, _ in pairs:
-        if key in seen:
-            raise ValueError(f"duplicate key {key[:40]!r} in one object")
-        seen.add(key)
-    return dict(pairs)
-
-
 def _check_message(msg: object) -> None:
     try:
         _height(msg, set(), {})
@@ -199,9 +181,9 @@ def parse_line(line: bytes) -> dict[str, Any]:
     try:
         msg = json.loads(
             line.decode("utf-8"),
-            object_pairs_hook=_unique_object,
-            parse_float=_finite_float,
-            parse_constant=_refuse_constant,
+            object_pairs_hook=unique_object,
+            parse_float=finite_float,
+            parse_constant=refuse_constant,
         )
     except RecursionError as exc:
         raise ProtocolError(f"wire line nests deeper than {MAX_DEPTH} containers") from exc
@@ -374,7 +356,7 @@ def _read_array(ref: object, root: Path, deadline: Deadline) -> numpy.ndarray:
         if not isinstance(ref, dict):
             raise TypeError(f"array reference is a {type(ref).__name__}, not an object")
         sha = ref["sha256"]
-        if not (isinstance(sha, str) and _SHA256_HEX.fullmatch(sha)):
+        if not (isinstance(sha, str) and SHA256_HEX.fullmatch(sha)):
             raise ValueError(f"sha256 is not 64 lowercase hex digits: {sha!r}")
         named = Path(ref["path"])
         if named.name != f"{sha}.npy" or named.parent.resolve() != root:

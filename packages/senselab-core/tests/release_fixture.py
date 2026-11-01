@@ -8,7 +8,6 @@ import io
 import os
 import subprocess
 import tarfile
-import tomllib
 import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path

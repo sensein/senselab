@@ -183,7 +183,6 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["ANN", "D", "E", "F", "I", "B009", "S102", "S307"]
-ignore = ["F401"]
 fixable = ["ALL"]
 unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
@@ -196,7 +195,7 @@ convention = "google"
 "**/conftest.py" = ["B009", "S102", "S307"]
 "**/scripts/**" = ["ANN", "D", "E", "I", "F541"]
 # Notebooks: cells share state but ruff lints per-cell, causing false positives
-"tutorials/**/*.ipynb" = ["F821", "E402", "I001", "F811", "ANN001", "ANN201", "D103"]
+"tutorials/**/*.ipynb" = ["F401", "F821", "E402", "I001", "F811", "ANN001", "ANN201", "D103"]
 
 [tool.ruff.format]
 exclude = ["scripts/**"]

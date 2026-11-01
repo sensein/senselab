@@ -16,9 +16,9 @@ def runtime_identity() -> str:
     `files` is `[[relpath, file_digest("file@1", path)], ...]` over the package's `*.py` files, each named by its
     POSIX path relative to the package root and sorted by it.
     """
-    from pathlib import Path
+    from pathlib import Path  # noqa: PLC0415 - the package's own import loads nothing
 
-    from senselab_worker.digest import file_digest, identity_digest
+    from senselab_worker.digest import file_digest, identity_digest  # noqa: PLC0415 - as above
 
     root = Path(__file__).parent
     files = sorted((p.relative_to(root).as_posix(), p) for p in root.rglob("*.py"))

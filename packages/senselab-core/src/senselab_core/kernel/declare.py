@@ -89,30 +89,39 @@ def _check_model(model: type[BaseModel], where: str, seen: set[type[BaseModel]])
 
 
 def _check_type(t: object, where: str, seen: set[type[BaseModel]]) -> None:
-    origin, args = typing.get_origin(t), typing.get_args(t)
+    origin = typing.get_origin(t)
+    if origin is None:
+        _check_plain(t, where, seen)
+    else:
+        _check_generic(origin, typing.get_args(t), t, where, seen)
+
+
+def _check_generic(origin: object, args: tuple[object, ...], t: object, where: str, seen: set[type[BaseModel]]) -> None:
     if origin is Annotated:
         _check_type(args[0], where, seen)
     elif origin is Literal:
         bad = [a for a in args if type(a) not in _SCALARS]
         if bad:
             raise NonCanonicalParams(f"{where}: Literal values must be JSON scalars, got {bad!r}")
-    elif origin in _UNIONS:
-        for arg in args:
-            _check_type(arg, where, seen)
-    elif origin in _SEQUENCES and args:
+    elif origin in _UNIONS or (origin in _SEQUENCES and args):
         for arg in args:
             if arg is not Ellipsis:
                 _check_type(arg, where, seen)
-    elif origin in _MAPPINGS and len(args) == 2:
+    elif origin in _MAPPINGS and len(args) == 2:  # noqa: PLR2004 - a mapping type has a key and a value parameter
         if args[0] is not str:
             raise NonCanonicalParams(f"{where}: mapping keys must be str, got {args[0]!r}")
         _check_type(args[1], where, seen)
-    elif origin is None and t in _SCALARS:
+    else:
+        raise NonCanonicalParams(f"{where}: {t!r} has no canonical JSON form; declare a canonical type")
+
+
+def _check_plain(t: object, where: str, seen: set[type[BaseModel]]) -> None:
+    if t in _SCALARS:
         return
-    elif origin is None and isinstance(t, type) and issubclass(t, Enum):
+    if isinstance(t, type) and issubclass(t, Enum):
         if not all(type(m.value) is str for m in t):
             raise NonCanonicalParams(f"{where}: an Enum param must have str values, {t.__qualname__} does not")
-    elif origin is None and isinstance(t, type) and issubclass(t, TaskParams):
+    elif isinstance(t, type) and issubclass(t, TaskParams):
         _check_model(t, where, seen)
     else:
         raise NonCanonicalParams(f"{where}: {t!r} has no canonical JSON form; declare a canonical type")
@@ -225,7 +234,7 @@ REGISTRY = Registry()
 """The process-wide registry; modules declaring tasks and backends add to it on import."""
 
 
-def key_for(
+def key_for(  # noqa: PLR0913 - keyword-only, one argument per key component
     task: TaskSpec,
     backend: BackendSpec,
     *,

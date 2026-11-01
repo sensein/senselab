@@ -11,6 +11,7 @@ import json
 import math
 import re
 import struct
+import sys
 import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -18,7 +19,7 @@ from decimal import Decimal
 from enum import Enum
 from importlib import resources
 from pathlib import PurePath
-from typing import Any, Callable, TypeVar, cast
+from typing import Any, Callable, NoReturn, TypeVar, cast
 
 import numpy
 
@@ -61,7 +62,7 @@ def _unassigned_pattern() -> "re.Pattern[str]":
         following = end + 1
     if header.get("unicode_version") != UNICODE_VERSION:
         raise RuntimeError(f"{UNICODE_TABLE} is for Unicode {header.get('unicode_version')}, not {UNICODE_VERSION}")
-    if following <= 0x10FFFF:
+    if following <= sys.maxunicode:
         gaps.append(f"\\U{following:08x}-\\U0010ffff")
     return re.compile("[" + "".join(gaps) + "]")
 
@@ -349,9 +350,9 @@ def jcs_loads(data: bytes | str) -> object:
         value = json.loads(
             raw.decode("utf-8"),
             parse_int=_parse_int,
-            parse_float=_parse_float,
-            parse_constant=_refuse_constant,
-            object_pairs_hook=_unique_object,
+            parse_float=finite_float,
+            parse_constant=refuse_constant,
+            object_pairs_hook=unique_object,
         )
     except RecursionError as err:
         raise NotCanonicalJSON(f"JSON nests deeper than {MAX_DEPTH} containers") from err
@@ -370,21 +371,24 @@ def jcs_loads(data: bytes | str) -> object:
 
 def _parse_int(text: str) -> int | float:
     value = int(text)
-    return value if abs(value) <= MAX_SAFE_INT else _parse_float(text)
+    return value if abs(value) <= MAX_SAFE_INT else finite_float(text)
 
 
-def _parse_float(text: str) -> float:
+def finite_float(text: str) -> float:
+    """A `json.loads` `parse_float` hook: the float of `text`, or `NotCanonicalJSON` if it overflows to infinity."""
     value = float(text)
     if not math.isfinite(value):
         raise NotCanonicalJSON(f"number {text[:40]} overflows to infinity")
     return value
 
 
-def _refuse_constant(text: str) -> object:
+def refuse_constant(text: str) -> NoReturn:
+    """A `json.loads` `parse_constant` hook: raise `NotCanonicalJSON` for `NaN`, `Infinity` and `-Infinity`."""
     raise NotCanonicalJSON(f"non-finite number is not JSON: {text}")
 
 
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """A `json.loads` `object_pairs_hook`: the dict of `pairs`, or `NotCanonicalJSON` if a key repeats."""
     out: dict[str, Any] = {}
     for key, value in pairs:
         if key in out:
@@ -408,6 +412,11 @@ def _json_string(text: str) -> str:
     return json.dumps(text, ensure_ascii=False)
 
 
+_ECMA_MAX_POINT = 21
+_ECMA_MIN_POINT = -6
+"""The decimal-point bounds of ECMA-262 Number::toString: outside (-6, 21] a number is written with an exponent."""
+
+
 def _float_text(value: float) -> str:
     """Format a finite float as ECMAScript Number.prototype.toString does."""
     if not in_json_domain(value):
@@ -423,11 +432,11 @@ def _float_text(value: float) -> str:
     point -= len(digits) - len(stripped)
     digits = stripped.rstrip("0")
     k = len(digits)
-    if k <= point <= 21:
+    if k <= point <= _ECMA_MAX_POINT:
         return sign + digits + "0" * (point - k)
-    if 0 < point <= 21:
+    if 0 < point <= _ECMA_MAX_POINT:
         return sign + digits[:point] + "." + digits[point:]
-    if -6 < point <= 0:
+    if _ECMA_MIN_POINT < point <= 0:
         return sign + "0." + "0" * -point + digits
     exponent = point - 1
     exp_sign = "+" if exponent >= 0 else "-"
@@ -554,7 +563,7 @@ Extra = Callable[[object], "tuple[str | None, object] | None"]
 
 def array_token(a: numpy.ndarray, recurse: Recurse, path: str) -> object:
     """Return `{"$array": npy_digest("npy@1", a)}`."""
-    from senselab_worker.digest import npy_digest
+    from senselab_worker.digest import npy_digest  # noqa: PLC0415 - digest imports this module
 
     return {ARRAY_TOKEN: npy_digest("npy@1", a)}
 
@@ -620,6 +629,18 @@ class _Tokens:
                 raise
             except (ValueError, TypeError) as err:
                 raise self.spec.error(path, value, str(err)) from err
+        shared = self.shared(value, path)
+        if shared is not None:
+            return shared
+        if self.spec.extra is not None:
+            found = self.spec.extra(value)
+            if found is not None:
+                return self.extra(value, found[0], found[1], path)
+        return self.scalar(value, path)
+
+    def shared(self, value: object, path: str) -> dict[str, object] | None:
+        """The token of an `Enum`, a path, bytes or a `Decimal`; None for a value of none of these families."""
+        t = type(value)
         if isinstance(value, Enum):
             qualname = f"{t.__module__}.{t.__qualname__}"
             return {"$enum": [qualname, self.value(value.value, f"{path}.value")]}
@@ -629,10 +650,10 @@ class _Tokens:
             return {"$bytes": cast("bytes | bytearray", value).hex()}
         if t is Decimal:
             return {"$dec": str(value)}
-        if self.spec.extra is not None:
-            found = self.spec.extra(value)
-            if found is not None:
-                return self.extra(value, found[0], found[1], path)
+        return None
+
+    def scalar(self, value: object, path: str) -> object:
+        """A scalar in the JSON domain as itself, an integer too large for it or a non-finite float as a token."""
         try:
             scalar = canonical_scalar(value)
         except TypeError as err:

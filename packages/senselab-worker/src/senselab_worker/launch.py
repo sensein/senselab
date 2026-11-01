@@ -49,9 +49,9 @@ def main(argv: list[str]) -> int:
     """Serve the backend named by `argv[1]` on the original stdin and stdout; return the exit code."""
     claim_standard_fds()
     rx, tx = _claim_channel()
-    from senselab_worker.serve import serve
+    from senselab_worker.serve import serve  # noqa: PLC0415 - imported only once the fds are claimed
 
-    if len(argv) != 2:
+    if len(argv) != 2:  # noqa: PLR2004 - the program name and one backend module
         print("usage: python -m senselab_worker.launch <backend_module>", file=sys.stderr)
         return 2
     backend: dict[str, Any] = {}

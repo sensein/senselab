@@ -5,6 +5,7 @@ and every participant binds to that answer; entries are append-if-absent. `2x/` 
 reads and writes no manifest outside it. Rationale: `specs/20261030-140022-senselab-2x-api/adr/ADR-006-formats.md`.
 """
 
+import functools
 import json
 import logging
 import os
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from senselab_worker.canonical import jcs_dumps
+from senselab_worker.digest import COMMIT_HEX
 
 from senselab_core.runtime.locks import Lease
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
@@ -32,7 +34,6 @@ from senselab_core.runtime.storage import (
 
 logger = logging.getLogger("senselab")
 
-_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 NAMESPACE = "2x"
 """The directory under the cache root that holds every run manifest 2.x writes and reads."""
@@ -43,8 +44,6 @@ _MANIFEST_TEMPORARY = re.compile(re.escape(f".{MANIFEST_NAME}.") + r"[0-9]+\.[0-
 """The manifest's own temporaries, and not its lease's, which a live taker may be writing."""
 MANIFEST_LIMIT = 1 << 24
 """The most bytes a run manifest is read to."""
-
-_RUN_ID: Optional[str] = None
 
 
 class RevisionResolutionError(RuntimeError):
@@ -79,6 +78,7 @@ def choose_run_id(environ: Mapping[str, str]) -> str:
         raise ValueError(f"run id {chosen!r} (from SENSELAB_RUN_ID or Slurm) must be one path component") from None
 
 
+@functools.cache
 def run_id() -> str:
     """Return this process's run id (`choose_run_id` of the environment), chosen once and exported.
 
@@ -87,11 +87,9 @@ def run_id() -> str:
     Raises:
         ValueError: the chosen id is not one path component.
     """
-    global _RUN_ID
-    if _RUN_ID is None:
-        _RUN_ID = choose_run_id(os.environ)
-        os.environ["SENSELAB_RUN_ID"] = _RUN_ID
-    return _RUN_ID
+    chosen = choose_run_id(os.environ)
+    os.environ["SENSELAB_RUN_ID"] = chosen
+    return chosen
 
 
 def cache_root() -> Path:
@@ -194,7 +192,7 @@ def record_resolution(
         WrongKindError: an object of the wrong kind at ``2x/``, ``2x/runs/`` or the run's directory cannot be
             moved aside.
     """
-    if not _SHA_RE.fullmatch(sha):
+    if not COMMIT_HEX.fullmatch(sha):
         raise RevisionResolutionError(
             f"Refusing to record {sha!r} as the commit for {manifest_key(repo_id, ref)}: "
             "a run manifest entry must be a 40-hex commit SHA."
@@ -211,7 +209,7 @@ def _record_in(run_dir: StorageDir, key: str, sha: str, policy: StorePolicy) -> 
         _remove_leftovers(run_dir, policy)
         current = _read_in(run_dir)
         winner = current.get(key)
-        if winner is not None and _SHA_RE.fullmatch(winner):
+        if winner is not None and COMMIT_HEX.fullmatch(winner):
             return winner
         current[key] = sha
         run_dir.write_atomically(
@@ -256,17 +254,17 @@ def get_cached_commit_hash(repo_id: str, revision: str = "main", *, cache_dir: O
             mutable ``revision`` back as if it were one; the caller can retry
             against the Hub instead (see `Resolver`).
     """
-    if _SHA_RE.fullmatch(revision):
+    if COMMIT_HEX.fullmatch(revision):
         return revision
 
-    from huggingface_hub import constants, try_to_load_from_cache
+    from huggingface_hub import constants, try_to_load_from_cache  # noqa: PLC0415 - keeps the Hub client out of import
 
     hub_cache = Path(cache_dir) if cache_dir is not None else Path(constants.HF_HUB_CACHE)
     ref_file = hub_cache / f"models--{repo_id.replace('/', '--')}" / "refs" / revision
     try:
         if ref_file.is_file():
             sha = ref_file.read_text().strip()
-            if _SHA_RE.fullmatch(sha):
+            if COMMIT_HEX.fullmatch(sha):
                 return sha
     except Exception:
         pass
@@ -288,7 +286,7 @@ def get_cached_commit_hash(repo_id: str, revision: str = "main", *, cache_dir: O
 
 def hub_commit(repo_id: str, ref: str, token: Optional[str]) -> object:
     """Return the commit SHA the Hub's `model_info` reports for `repo_id@ref`."""
-    from huggingface_hub import HfApi
+    from huggingface_hub import HfApi  # noqa: PLC0415 - keeps the Hub client out of import
 
     return HfApi(token=token).model_info(repo_id=repo_id, revision=ref).sha
 
@@ -322,14 +320,14 @@ class Resolver:
         Raises:
             RevisionResolutionError: no 40-hex commit SHA can be obtained.
         """
-        if _SHA_RE.fullmatch(ref):
+        if COMMIT_HEX.fullmatch(ref):
             return ref
         key = manifest_key(repo_id, ref)
         memoized = self.memo.get(key)
         if memoized is not None:
             return memoized
         recorded = read_manifest(root=self.cache_root).get(key)
-        if recorded is not None and _SHA_RE.fullmatch(recorded):
+        if recorded is not None and COMMIT_HEX.fullmatch(recorded):
             self.memo[key] = recorded
             return recorded
         if recorded is not None:
@@ -351,7 +349,7 @@ class Resolver:
         except Exception as exc:  # noqa: BLE001 — any local-read failure just means "ask the Hub"
             logger.debug("Local cache lookup failed for %s@%s: %s", repo_id, ref, exc)
             local = None
-        if local and _SHA_RE.fullmatch(local):
+        if local and COMMIT_HEX.fullmatch(local):
             return local
 
         try:
@@ -361,7 +359,7 @@ class Resolver:
                 f"Cannot resolve {repo_id}@{ref} to a commit SHA: {exc}. "
                 "Refusing to load through a mutable ref — the result's provenance would name no commit."
             ) from exc
-        if not sha or not _SHA_RE.fullmatch(str(sha)):
+        if not sha or not COMMIT_HEX.fullmatch(str(sha)):
             raise RevisionResolutionError(f"Hub returned no usable commit SHA for {repo_id}@{ref} (got {sha!r})")
         return str(sha)
 

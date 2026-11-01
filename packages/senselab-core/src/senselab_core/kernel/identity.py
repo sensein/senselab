@@ -3,7 +3,7 @@
 import re
 from collections.abc import Mapping
 from enum import Enum
-from typing import Annotated, Any, Literal, Self, assert_never
+from typing import Annotated, Any, Literal, assert_never
 from urllib.parse import urlsplit
 
 import yaml
@@ -17,15 +17,13 @@ from pydantic import (
     model_validator,
 )
 from senselab_worker.canonical import jcs_dumps, jcs_loads
-from senselab_worker.digest import identity_digest
+from senselab_worker.digest import COMMIT_HEX, SHA256_HEX, identity_digest
 
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap, thawed
 from senselab_core.kernel.license import License
 
 _HF_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?")
 _HF_REF = re.compile(r"[^\s@]+")
-_COMMIT = re.compile(r"[0-9a-f]{40}")
-_SHA256 = re.compile(r"[0-9a-f]{64}")
 _URL_HASH = "#sha256="
 
 ContentIdentity = Annotated[str, StringConstraints(pattern=r"^content:[0-9a-f]{64}$")]
@@ -46,7 +44,7 @@ class UnpinnedModel(ValueError):
 
 
 def _pinned_identity_error(source: str, identity: str) -> str | None:
-    pattern, form = (_COMMIT, "a 40-hex commit") if source == "hf" else (_SHA256, "a sha256")
+    pattern, form = (COMMIT_HEX, "a 40-hex commit") if source == "hf" else (SHA256_HEX, "a sha256")
     if pattern.fullmatch(identity):
         return None
     return f"a pinned {source} model's identity is {form}, got {identity!r}"
@@ -104,7 +102,7 @@ class ModelRef(Frozen):
         if self.source == "local" and self.ref:
             raise ValueError(f"local references carry no revision, got {self.ref!r}")
         if self.source == "url":
-            if self.ref and not _SHA256.fullmatch(self.ref):
+            if self.ref and not SHA256_HEX.fullmatch(self.ref):
                 raise ValueError(f"a url reference's declared hash is 64 lowercase hex, got {self.ref!r}")
             parts = urlsplit(self.id)
             if not parts.scheme or not parts.netloc or re.search(r"\s", self.id):
@@ -285,7 +283,9 @@ def _equivalence_class(where: str, raw: object) -> frozenset[str]:
     derivation, fingerprints = raw["derivation"], raw["fingerprints"]
     if not isinstance(derivation, str) or not derivation.strip():
         raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} needs a non-empty derivation")
-    if not isinstance(fingerprints, list) or not all(isinstance(f, str) and _SHA256.fullmatch(f) for f in fingerprints):
+    if not isinstance(fingerprints, list) or not all(
+        isinstance(f, str) and SHA256_HEX.fullmatch(f) for f in fingerprints
+    ):
         raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} must list context fingerprints, 64 lowercase hex each")
     members = frozenset(fingerprints)
     if len(members) < 2:  # noqa: PLR2004 - a class is two or more members by definition, not a tunable

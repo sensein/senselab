@@ -12,7 +12,6 @@ from typing import Any
 
 import numpy
 
-from senselab_worker.canonical import canonical_npy_bytes
 from senselab_worker.codec import MAX_LINE_BYTES
 from senselab_worker.digest import identity_digest, npy_digest
 from senselab_worker.faults import ContentFault, ResourceFault

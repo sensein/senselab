@@ -13,7 +13,6 @@ import io
 import json
 import math
 import re
-import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields, replace
 from decimal import Decimal, InvalidOperation
@@ -23,20 +22,15 @@ from typing import Any, ClassVar, Literal, NoReturn, Sequence, TypeVar, cast, ge
 import numpy
 from senselab_worker import digest as worker_digest
 from senselab_worker.canonical import (
-    MAX_SAFE_INT,
     NoCanonicalForm,
     Recurse,
     Tokeniser,
     Walk,
     canonical_npy_bytes,
-    canonical_scalar,
-    canonical_text,
-    escaped_key,
-    in_json_domain,
     jcs_dumps,
-    jcs_loads,
+    refuse_constant,
 )
-from senselab_worker.digest import identity_digest
+from senselab_worker.digest import COMMIT_HEX, SHA256_HEX, identity_digest
 
 from senselab_core.kernel._base import FrozenDict, FrozenList, frozen_array, thawed
 from senselab_core.runtime.storage import write_atomically
@@ -53,8 +47,6 @@ RELATION = Literal[
     "wasGeneratedBy", "used", "wasAssociatedWith", "wasAttributedTo", "wasDerivedFrom", "wasInvalidatedBy"
 ]
 
-_SHA = re.compile(r"^[0-9a-f]{40}$")
-_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 CHECKSUM_ALGORITHM = "sha256"
 CHECKSUM_KEY = "checksum_sha256"
 CHECKSUM_UNRESOLVED_KEY = "checksum_unresolved_reason"
@@ -135,7 +127,7 @@ def _check_entity_attributes(attributes: Mapping[str, Any]) -> None:
     digest, reason = attributes.get(CHECKSUM_KEY), attributes.get(CHECKSUM_UNRESOLVED_KEY)
     if digest is not None and reason is not None:
         raise ValueError(f"{CHECKSUM_KEY} and {CHECKSUM_UNRESOLVED_KEY} contradict each other; supply exactly one")
-    if digest is not None and not (isinstance(digest, str) and _DIGEST.fullmatch(digest)):
+    if digest is not None and not (isinstance(digest, str) and SHA256_HEX.fullmatch(digest)):
         raise ValueError(f"{CHECKSUM_KEY} must be 64 lowercase hex characters, got {digest!r}")
     if reason is not None and not (isinstance(reason, str) and reason.strip()):
         raise ValueError(f"{CHECKSUM_UNRESOLVED_KEY} must not be empty; an empty reason says nothing")
@@ -152,7 +144,7 @@ def _check_agent_fields(
             model agent is missing ``model_id`` or supplies neither a commit nor a reason it is
             missing.
     """
-    if commit_sha is not None and not _SHA.fullmatch(commit_sha):
+    if commit_sha is not None and not COMMIT_HEX.fullmatch(commit_sha):
         raise ValueError(
             f"commit_sha must be a resolved 40-hex commit, got {commit_sha!r}. A ref recorded as a "
             "commit makes the provenance confidently wrong."
@@ -265,44 +257,80 @@ def _refuse(path: str, value: object, reason: str) -> NoReturn:
 
 
 def _token_value(key: str, payload: object, path: str, walk: Walk) -> object:
-    where = f"{path}.{key}"
-    if key == "$f":
-        if payload not in _FLOAT_NAMES:
-            _refuse(where, payload, f"is not one of {sorted(_FLOAT_NAMES)}")
-        return float(payload)
-    if key == "$int":
-        if not (isinstance(payload, str) and _INT_TOKEN_TEXT.fullmatch(payload)):
-            _refuse(where, payload, "is not a decimal integer")
-        try:
-            return int(payload)
-        except ValueError as err:
-            _refuse(where, payload, str(err))
-    if key == "$enum":
-        if not (isinstance(payload, list) and len(payload) == 2 and isinstance(payload[0], str)):
-            _refuse(where, payload, "is not [<type name>, <value>]")
-        return EnumMember(payload[0], _decoded(payload[1], f"{where}.value", walk, hashable=True))
-    if key == "$set":
-        if not isinstance(payload, list):
-            _refuse(where, payload, "is not a list of elements")
-        return frozenset(_decoded(item, f"{where}[{i}]", walk, hashable=True) for i, item in enumerate(payload))
+    return _TOKEN_DECODERS[key](payload, f"{path}.{key}", walk)
+
+
+def _float_token(payload: object, where: str, walk: Walk) -> object:
+    if payload not in _FLOAT_NAMES:
+        _refuse(where, payload, f"is not one of {sorted(_FLOAT_NAMES)}")
+    return float(payload)
+
+
+def _int_token(payload: object, where: str, walk: Walk) -> object:
+    if not (isinstance(payload, str) and _INT_TOKEN_TEXT.fullmatch(payload)):
+        _refuse(where, payload, "is not a decimal integer")
+    try:
+        return int(payload)
+    except ValueError as err:
+        _refuse(where, payload, str(err))
+
+
+def _enum_token(payload: object, where: str, walk: Walk) -> object:
+    match payload:
+        case [str(name), value]:
+            return EnumMember(name, _decoded(value, f"{where}.value", walk, hashable=True))
+    _refuse(where, payload, "is not [<type name>, <value>]")
+
+
+def _set_token(payload: object, where: str, walk: Walk) -> object:
+    if not isinstance(payload, list):
+        _refuse(where, payload, "is not a list of elements")
+    return frozenset(_decoded(item, f"{where}[{i}]", walk, hashable=True) for i, item in enumerate(payload))
+
+
+def _text_token(payload: object, where: str) -> str:
     if not isinstance(payload, str):
         _refuse(where, payload, "is not text")
-    if key == "$path":
-        return Path(payload)
-    if key == "$dec":
-        try:
-            return Decimal(payload)
-        except InvalidOperation as err:
-            _refuse(where, payload, f"is not a decimal: {err}")
-    if key == "$bytes":
-        try:
-            return bytes.fromhex(payload)
-        except ValueError as err:
-            _refuse(where, payload, f"is not hex: {err}")
+    return payload
+
+
+def _path_token(payload: object, where: str, walk: Walk) -> object:
+    return Path(_text_token(payload, where))
+
+
+def _decimal_token(payload: object, where: str, walk: Walk) -> object:
     try:
-        return frozen_array(numpy.load(io.BytesIO(base64.b64decode(payload, validate=True)), allow_pickle=False))
+        return Decimal(_text_token(payload, where))
+    except InvalidOperation as err:
+        _refuse(where, payload, f"is not a decimal: {err}")
+
+
+def _bytes_token(payload: object, where: str, walk: Walk) -> object:
+    try:
+        return bytes.fromhex(_text_token(payload, where))
+    except ValueError as err:
+        _refuse(where, payload, f"is not hex: {err}")
+
+
+def _npy_token(payload: object, where: str, walk: Walk) -> object:
+    text = _text_token(payload, where)
+    try:
+        return frozen_array(numpy.load(io.BytesIO(base64.b64decode(text, validate=True)), allow_pickle=False))
     except (ValueError, TypeError, OSError, binascii.Error) as err:
         _refuse(where, payload, f"is not a .npy array in base64: {err}")
+
+
+_TOKEN_DECODERS: dict[str, Callable[[object, str, Walk], object]] = {
+    "$f": _float_token,
+    "$int": _int_token,
+    "$enum": _enum_token,
+    "$set": _set_token,
+    "$path": _path_token,
+    "$dec": _decimal_token,
+    "$bytes": _bytes_token,
+    "$nd": _npy_token,
+}
+"""The decoder of each key in `_PROV_TOKENS`."""
 
 
 def _decoded(value: object, path: str, walk: Walk, *, hashable: bool = False) -> Any:  # noqa: ANN401
@@ -413,7 +441,7 @@ def _text(value: object, name: str, *, optional: bool = False) -> None:
 def _extent(value: object) -> tuple[float, float] | None:
     if value is None:
         return None
-    if not (isinstance(value, (list, tuple)) and len(value) == 2):
+    if not (isinstance(value, (list, tuple)) and len(value) == 2):  # noqa: PLR2004 - (start, end)
         raise ValueError(f"extent must be (start, end) or None, got {value!r}")
     if any(isinstance(x, bool) or not isinstance(x, (int, float)) for x in value):
         raise ValueError(f"extent must hold two finite numbers of seconds, got {value!r}")
@@ -838,7 +866,7 @@ class ProvStore:
         _put(self._agents, record)
         return record.id
 
-    def environment(
+    def environment(  # noqa: PLR0913 - keyword-only, one argument per field of the environment record
         self,
         *,
         kind: ENVIRONMENT_KIND,
@@ -1132,10 +1160,6 @@ class ProvStore:
         return identity_digest(_ID_TAG, [listing])[:16]
 
 
-def _refuse_constant(text: str) -> NoReturn:
-    raise ValueError(f"non-finite number {text} is written as a token in this format")
-
-
 def _check_format_record(path: str | Path, first: bytes | None) -> None:
     """Refuse a file whose first line is not exactly the `provenance@2.0` format record.
 
@@ -1155,7 +1179,7 @@ def _check_format_record(path: str | Path, first: bytes | None) -> None:
 def _parse(line: bytes, where: str) -> dict[str, Any]:
     """Parse a line: JSON without bare non-finite literals, which the writer writes as tokens."""
     try:
-        value = json.loads(line, parse_constant=_refuse_constant)
+        value = json.loads(line, parse_constant=refuse_constant)
     except ValueError as err:
         raise ValueError(f"{where}: not JSON: {err}") from err
     if not isinstance(value, dict) or "record" not in value:

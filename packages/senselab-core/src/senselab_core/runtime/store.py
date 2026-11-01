@@ -55,8 +55,7 @@ from senselab_worker.canonical import (
     jcs_dumps,
     jcs_loads,
 )
-from senselab_worker.digest import identity_digest
-from senselab_worker.ownership import UUID_HEX
+from senselab_worker.digest import SHA256_HEX, identity_digest
 
 from senselab_core.kernel._base import value_digest
 from senselab_core.kernel.identity import (
@@ -73,6 +72,7 @@ from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
     STAGING_DIR_MODE,
+    Staging,
     StorageDir,
     StorePolicy,
     StoreUnavailable,
@@ -95,11 +95,10 @@ COMMIT_ATTEMPTS = 3
 """How many times `put` stages and renames before giving up on a target that keeps turning out corrupt."""
 
 _POLICY_ORDER = (ReusePolicy.EXACT, ReusePolicy.EQUIVALENT, ReusePolicy.TOLERANT)
-_SHA256 = re.compile(r"[0-9a-f]{64}")
 _PREFIX = re.compile(r"[0-9a-f]{2}")
 MEMBER_NAME = re.compile(r"result\.json|context\.json|[0-9a-f]{64}\.npy")
 """A file of an entry, written in its staging directory."""
-FINGERPRINT_NAME = _SHA256
+FINGERPRINT_NAME = SHA256_HEX
 """An entry, renamed from its staging directory onto `<key digest>/<context fingerprint>`."""
 T = TypeVar("T")
 
@@ -211,7 +210,7 @@ def _decode(value: object, entry: Path) -> object:
     if isinstance(value, dict):
         if set(value) == {ARRAY_TAG}:
             sha = value[ARRAY_TAG]
-            if not isinstance(sha, str) or not _SHA256.fullmatch(sha):
+            if not isinstance(sha, str) or not SHA256_HEX.fullmatch(sha):
                 raise CorruptEntryError(f"corrupt store entry {entry}: array reference {sha!r} is not a sha256")
             data = _read_member(entry, f"{sha}.npy")
             if _raw_digest.bytes_digest("npy@1", data) != sha:
@@ -335,7 +334,7 @@ def _read_result(entry: Path, *, digest: str, fingerprint: str) -> tuple[str, di
 
 
 def _is_fingerprint(name: str) -> bool:
-    return _SHA256.fullmatch(name) is not None
+    return SHA256_HEX.fullmatch(name) is not None
 
 
 class _StoreEntryFormat:
@@ -376,7 +375,7 @@ def _committed_identity(entry: Path, *, digest: str, fingerprint: str) -> str | 
     return _read_result(entry, digest=digest, fingerprint=fingerprint)[0]
 
 
-def _commit(
+def _commit(  # noqa: PLR0913 - what the entry holds, where it is staged and placed, and the policy
     key: LogicalKey,
     context: ExecutionContext,
     parent: StorageDir,
@@ -394,9 +393,9 @@ def _commit(
     """
     tree, arrays, identity = payload
     file_mode, dir_mode = committed_modes(policy)
-    staging_name = uuid.uuid4().hex
+    stage = Staging(staging_root, mode=STAGING_DIR_MODE)
     try:
-        with staging_root.child(staging_name, create=True, mode=STAGING_DIR_MODE) as staging:
+        with stage as staging:
             for sha, data in arrays.items():
                 _write_synced(staging, f"{sha}.npy", data, file_mode)
             _write_synced(
@@ -415,19 +414,17 @@ def _commit(
             }
             _write_synced(staging, "result.json", jcs_dumps(result), file_mode)
             staging.fsync()
-        try:
-            staging_root.rename(staging_name, parent, name, grammar=FINGERPRINT_NAME)
-        except OSError:
-            if parent.kind(name) is not None:
-                return False
-            raise
+            try:
+                staging_root.rename(stage.name, parent, name, grammar=FINGERPRINT_NAME)
+            except OSError:
+                if parent.kind(name) is not None:
+                    return False
+                raise
         _seal(parent, name, dir_mode)
         parent.fsync()
         return True
     except OSError as err:
         raise storage_fault(err, parent.path / name) from err
-    finally:
-        _discard_staging(staging_root, staging_name)
 
 
 def _seal(parent: StorageDir, name: str, dir_mode: int) -> None:
@@ -438,11 +435,24 @@ def _seal(parent: StorageDir, name: str, dir_mode: int) -> None:
         logger.warning("cannot make store entry %s read-only: %s", parent.path / name, err)
 
 
-def _discard_staging(staging_root: StorageDir, name: str) -> None:
-    try:
-        staging_root.remove_owned(name, pattern=UUID_HEX)
-    except OSError as err:
-        logger.warning("cannot remove staging directory %s: %s", staging_root.path / name, err)
+def _collect_below(
+    parent: StorageDir, names: tuple[str, ...], levels: tuple[re.Pattern[str], ...], cutoff: float
+) -> int:
+    """Remove what is older than `cutoff` in `parent/<names>` and in each child below it named by `levels`, in turn.
+
+    Return how many were removed; a directory that cannot be opened is skipped.
+    """
+    removed = 0
+    for name in names:
+        directory = _opened(parent, name)
+        if directory is None:
+            continue
+        with directory:
+            removed += directory.remove_older(cutoff)
+            if levels:
+                children = [child for child in _listed(directory) if levels[0].fullmatch(child)]
+                removed += _collect_below(directory, tuple(children), levels[1:], cutoff)
+    return removed
 
 
 def _listed(directory: StorageDir) -> list[str]:
@@ -579,6 +589,24 @@ class ResultStore:
             with parent:
                 self._quarantine_in(root, parent, entry.name, digest=digest, fingerprint=fingerprint)
 
+    def _move_aside(self, parent: StorageDir, name: str, target: StorageDir, *, reseal: bool) -> str | None:
+        """Rename `parent/name` to a fresh uuid name in `target` and return that name; None if it is gone.
+
+        Raises:
+            StoreUnavailable: the rename failed; with `reseal`, the entry is made read-only again first.
+        """
+        moved_name = uuid.uuid4().hex
+        try:
+            parent.rename(name, target, moved_name, grammar=ASIDE_NAME)
+        except FileNotFoundError:
+            return None
+        except OSError as err:
+            if reseal:
+                _seal(parent, name, committed_modes(self.policy)[1])
+            entry = parent.path / name
+            raise storage_fault(err, entry, hint=owner_remedy(entry)) from err
+        return moved_name
+
     def _quarantine_in(self, root: StorageDir, parent: StorageDir, name: str, *, digest: str, fingerprint: str) -> None:
         entry = parent.path / name
         try:
@@ -589,20 +617,11 @@ class ResultStore:
             return
         is_dir = stat.S_ISDIR(info.st_mode)
         into = self._aside(root, parent, name, is_dir)
-        moved_name = uuid.uuid4().hex
         target = into if into is not None else parent
         try:
-            failure: OSError | None = None
-            try:
-                parent.rename(name, target, moved_name, grammar=ASIDE_NAME)
-            except FileNotFoundError:
+            moved_name = self._move_aside(parent, name, target, reseal=is_dir and into is not None)
+            if moved_name is None:
                 return
-            except OSError as err:
-                failure = err
-            if failure is not None:
-                if is_dir and into is not None:
-                    _seal(parent, name, committed_modes(self.policy)[1])
-                raise storage_fault(failure, entry, hint=owner_remedy(entry)) from failure
             moved = target.path / moved_name
             try:
                 target.stamp(moved_name)
@@ -725,23 +744,7 @@ class ResultStore:
                 if directory is not None:
                     with directory:
                         removed += directory.remove_older(cutoff)
-            store = _opened(root, STORE_DIR)
-            if store is None:
-                return removed
-            with store:
-                removed += store.remove_older(aside)
-                for prefix in _listed(store):
-                    prefix_dir = _opened(store, prefix) if _PREFIX.fullmatch(prefix) else None
-                    if prefix_dir is None:
-                        continue
-                    with prefix_dir:
-                        removed += prefix_dir.remove_older(aside)
-                        for digest in _listed(prefix_dir):
-                            key_dir = _opened(prefix_dir, digest) if _SHA256.fullmatch(digest) else None
-                            if key_dir is not None:
-                                with key_dir:
-                                    removed += key_dir.remove_older(aside)
-            return removed
+            return removed + _collect_below(root, (STORE_DIR,), (_PREFIX, SHA256_HEX), aside)
 
     def put(self, key: LogicalKey, outputs: dict[str, object], context: ExecutionContext) -> OutputIdentity:
         """Store `outputs` under `key` and `context`, and return the committed output identity.

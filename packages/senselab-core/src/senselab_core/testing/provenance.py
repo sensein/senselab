@@ -30,8 +30,9 @@ def with_entity_attributes(store: ProvStore, record_id: str, **attributes: objec
         path = Path(directory) / "store.jsonl"
         store.write_jsonl(path)
         lines = []
-        for line in path.read_bytes().splitlines():
-            held = json.loads(line)
+        for read in path.read_bytes().splitlines():
+            held = json.loads(read)
+            line = read
             if held.get("record") == "relation" and record_id in (held["source"], held["target"]):
                 held.update({k: new_id for k in ("source", "target") if held[k] == record_id})
                 line = jcs_dumps(held)

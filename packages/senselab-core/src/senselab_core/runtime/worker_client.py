@@ -252,7 +252,9 @@ def _leader_held(pid: int, exited: threading.Event, timeout: float) -> bool | No
             return False
         return True
     try:
-        out = subprocess.run([_PS, "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True, timeout=timeout)
+        out = subprocess.run(
+            [_PS, "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True, timeout=timeout, check=False
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("cannot tell whether worker %d is still this process's child: %s", pid, exc)
         return None
@@ -270,6 +272,11 @@ def _signal_group(pgid: int, sig: signal.Signals, *, leader_exited: bool) -> Non
             logger.warning("signal %s to worker process group %d failed: %s", sig.name, pgid, exc)
 
 
+_STAT_STATE = 0
+_STAT_PGRP = 2
+"""Field indices in `/proc/<pid>/stat` after the parenthesised command name: the state and the process group."""
+
+
 def _live_members(pgid: int) -> bool:
     """Whether group `pgid` has a member that is neither a zombie nor exiting: by `/proc`, else by `killpg(pgid, 0)`."""
     if os.path.isdir("/proc/self/task"):
@@ -282,7 +289,7 @@ def _live_members(pgid: int) -> bool:
             except OSError:
                 continue
             fields = data[data.rfind(b")") + 2 :].split()
-            if len(fields) > 2 and int(fields[2]) == pgid and fields[0] not in (b"Z", b"X"):
+            if len(fields) > _STAT_PGRP and int(fields[_STAT_PGRP]) == pgid and fields[_STAT_STATE] not in (b"Z", b"X"):
                 return True
         return False
     try:
@@ -345,13 +352,18 @@ def _signals_deferred(*, escalate: bool) -> Iterator[None]:
                 previous[sig] = signal.signal(sig, hold)
         yield
     finally:
-        for number, handler in previous.items():
-            signal.signal(number, handler)
-        wakeup = signal.set_wakeup_fd(-1)
-        signal.set_wakeup_fd(wakeup)
-        if wakeup == -1:
-            for number in dict.fromkeys(held):
-                signal.raise_signal(number)
+        _restore_signals(previous, held)
+
+
+def _restore_signals(previous: dict[int, Any], held: list[int]) -> None:
+    """Restore each handler in `previous`, then raise each signal in `held` once, unless a wakeup fd is set."""
+    for number, handler in previous.items():
+        signal.signal(number, handler)
+    wakeup = signal.set_wakeup_fd(-1)
+    signal.set_wakeup_fd(wakeup)
+    if wakeup == -1:
+        for number in dict.fromkeys(held):
+            signal.raise_signal(number)
 
 
 def _code_text(returncode: int | None) -> str:
@@ -381,7 +393,7 @@ class WorkerClient:
     _max_line_bytes: ClassVar[int] = MAX_LINE_BYTES
     """The longest request line this client sends, the worker's own line limit."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913, PLR0915 - keyword-only options; starting a process and rolling it back on failure
         self,
         python: str | os.PathLike[str],
         module: str,
@@ -919,6 +931,26 @@ class WorkerClient:
             if not _members_gone(pgid, exited, Deadline(self.graces.kill)):
                 logger.error("worker process group %d still has members after SIGKILL", pgid)
 
+    def _stop_group(self, proc: subprocess.Popen[bytes], stop: Deadline) -> None:
+        """Signal the unreaped leader's group until it is gone within `stop`, then reap the leader if it exited."""
+        pgid = proc.pid
+        held = _leader_held(pgid, self._exited, min(LEADER_PROBE_TIMEOUT_S, stop.remaining() or 0.0))
+        if held:
+            try:
+                self._signal_group_until_gone(pgid, stop)
+            except Exception:
+                logger.exception("stopping worker process group %d failed; sending SIGKILL", pgid)
+                _signal_group(pgid, signal.SIGKILL, leader_exited=self._exited.is_set())
+                self._exited.wait(self.graces.kill)
+        elif held is None:
+            logger.warning(
+                "worker %d: cannot tell whether it is still unreaped; its process group is not signalled", pgid
+            )
+        else:
+            logger.warning("worker %d was reaped outside this client; its process group is not signalled", pgid)
+        if self._exited.is_set() and proc.returncode is None:
+            proc.wait()
+
     def _terminate(self, *, graceful: bool) -> None:
         """Stop the group and reap its leader, then stop the pipe readers; each part may be run again."""
         proc = self._proc
@@ -933,22 +965,7 @@ class WorkerClient:
         if graceful:
             self._exited.wait(max((stop.remaining() or 0.0) - self.graces.term, 0.0))
         if proc.returncode is None:
-            held = _leader_held(pgid, self._exited, min(LEADER_PROBE_TIMEOUT_S, stop.remaining() or 0.0))
-            if held:
-                try:
-                    self._signal_group_until_gone(pgid, stop)
-                except Exception:
-                    logger.exception("stopping worker process group %d failed; sending SIGKILL", pgid)
-                    _signal_group(pgid, signal.SIGKILL, leader_exited=self._exited.is_set())
-                    self._exited.wait(self.graces.kill)
-            elif held is None:
-                logger.warning(
-                    "worker %d: cannot tell whether it is still unreaped; its process group is not signalled", pgid
-                )
-            else:
-                logger.warning("worker %d was reaped outside this client; its process group is not signalled", pgid)
-            if self._exited.is_set() and proc.returncode is None:
-                proc.wait()
+            self._stop_group(proc, stop)
         join = Deadline(self.graces.join)
         for pump in self._pumps:
             pump.finish()

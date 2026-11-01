@@ -6,11 +6,24 @@ a file on disk and `npy_digest(tag, array)` an array's canonical `.npy`. No publ
 
 import io
 import os
+import re
 from typing import BinaryIO
 
 import numpy
 
-__all__ = ["BLOB_TAGS", "FILE_TAGS", "IDENTITY_TAGS", "NPY_TAGS", "file_digest", "identity_digest", "npy_digest"]
+from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
+
+__all__ = [
+    "BLOB_TAGS",
+    "COMMIT_HEX",
+    "FILE_TAGS",
+    "IDENTITY_TAGS",
+    "NPY_TAGS",
+    "SHA256_HEX",
+    "file_digest",
+    "identity_digest",
+    "npy_digest",
+]
 
 IDENTITY_TAGS: frozenset[str] = frozenset(
     {
@@ -37,6 +50,11 @@ NPY_TAGS: frozenset[str] = frozenset({"npy@1"})
 BLOB_TAGS: frozenset[str] = FILE_TAGS | NPY_TAGS
 """Every tag whose digest is the plain sha256 of content."""
 
+SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+"""A sha256 digest as every digest function returns it, 64 lowercase hex; match it with `fullmatch`."""
+COMMIT_HEX = re.compile(r"[0-9a-f]{40}")
+"""A git commit id, 40 lowercase hex; match it with `fullmatch`."""
+
 _CHUNK_SIZE = 2**20
 _FILE_STREAMS = (io.BufferedReader, io.BufferedRandom, io.FileIO)
 
@@ -48,9 +66,7 @@ def identity_digest(tag: str, value: object) -> str:
         ValueError: if `tag` is not in `IDENTITY_TAGS`, or `jcs_dumps` refuses `value`.
         TypeError: if `jcs_dumps` refuses `value`.
     """
-    import hashlib
-
-    from senselab_worker.canonical import jcs_dumps
+    import hashlib  # noqa: PLC0415 - binds hashlib in no namespace another module could import it from
 
     if tag not in IDENTITY_TAGS:
         raise ValueError(f"unregistered identity tag {tag!r}; registered: {sorted(IDENTITY_TAGS)}")
@@ -67,7 +83,7 @@ def file_digest(tag: str, source: str | os.PathLike[str] | BinaryIO) -> str:
         TypeError: if `source` is neither a path nor a binary file opened on disk (in-memory streams are refused).
         OSError: if the file cannot be read.
     """
-    import hashlib
+    import hashlib  # noqa: PLC0415 - binds hashlib in no namespace another module could import it from
 
     if tag not in FILE_TAGS:
         raise ValueError(f"unregistered file tag {tag!r}; registered: {sorted(FILE_TAGS)}")
@@ -89,9 +105,7 @@ def npy_digest(tag: str, array: numpy.ndarray) -> str:
         ValueError: if `tag` is not in `NPY_TAGS`, or the array has no canonical form.
         TypeError: if `array` is not a numpy array.
     """
-    import hashlib
-
-    from senselab_worker.canonical import canonical_npy_bytes
+    import hashlib  # noqa: PLC0415 - binds hashlib in no namespace another module could import it from
 
     if tag not in NPY_TAGS:
         raise ValueError(f"unregistered npy tag {tag!r}; registered: {sorted(NPY_TAGS)}")

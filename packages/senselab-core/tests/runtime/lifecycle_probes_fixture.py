@@ -1,7 +1,6 @@
 """Probes the worker lifecycle tests share: process liveness, process groups and a gate backends block on."""
 
 import json
-import os
 import socket
 import subprocess
 from collections.abc import Iterator

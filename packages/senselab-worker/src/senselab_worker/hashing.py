@@ -72,7 +72,7 @@ def weights_identity(paths: Sequence[str | os.PathLike[str]], *, root: str | os.
     pairs: dict[str, str] = {}
     for path in paths:
         rel = os.path.relpath(os.path.abspath(path), root_abs)
-        if rel == os.curdir or rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        if rel in (os.curdir, os.pardir) or rel.startswith(os.pardir + os.sep):
             raise ValueError(f"weight file is not under {root_abs}: {path}")
         posix = canonical_text(PurePath(rel).as_posix())
         if posix in pairs:
