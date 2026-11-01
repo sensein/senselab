@@ -12,5 +12,6 @@ the controller's rulings ([`../../rulings.md`](../../rulings.md)) are under revi
 | Architecture as built vs design and the pydra plan | `architecture.md` |
 | Audit of the controller's rulings | `rulings-audit.md` |
 | CI, docs, release, branches, state | `delivery.md` |
+| Parked and deferred ledger items, closed or registered (I-12) | `parked-items.md` |
 
 The consolidated, severity-ordered list of corrections is added here once all five report.
