@@ -101,7 +101,7 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
    **Follows still open** are rows in `review-register.md`, not text here: `model_source` R-110, lease renewal R-111,
    verify sampling R-112, the nightly workflow on `alpha` R-113, the clock re-binding R-114, the source-digest CI
    check R-115, per-task licences and taint R-116, the P-40 roster and worktree isolation R-117, whole-file
-   hashing R-109. `worker-floor` installs unlocked until item 1 above is done.
+   hashing R-109.
    Parked items: all in review-register.md (R-110..R-134); none live only in the ledger.
 3. **Phase 1 exit**, remaining steps in order (`plans/phase-1.md` Task 15, as amended; final review of
    `82a986e1`):
