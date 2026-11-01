@@ -477,7 +477,7 @@ def probe_xs7_run_id(scratch: str, run: str) -> dict[str, Any]:
     cache = Path(scratch) / "cache"
     os.environ["SENSELAB_CACHE"] = str(cache)
     error, _ = _outcome(lambda: revision.record_resolution("org/m", "main", "a" * 40, run=run))
-    runs = cache / "runs"
+    runs = cache / revision.NAMESPACE / "runs"
     outside = sorted(
         str(Path(current, name).relative_to(scratch))
         for current, _, files in os.walk(scratch)
@@ -524,7 +524,7 @@ def probe_xs7_modes(scratch: str, umask: str) -> dict[str, Any]:
     cache = Path(scratch) / "cache"
     os.environ["SENSELAB_CACHE"] = str(cache)
     os.umask(int(umask, 8))
-    run_dir = cache / "runs" / "r1"
+    run_dir = cache / revision.NAMESPACE / "runs" / "r1"
     leftover = run_dir / f".{revision.MANIFEST_NAME}.12.34.{'0' * 32}.tmp"
     revision.record_resolution("org/m", "main", "a" * 40, run="r1")
     leftover.write_bytes(b"{")
@@ -536,11 +536,13 @@ def probe_xs7_modes(scratch: str, umask: str) -> dict[str, Any]:
 
     return {
         "modes": {
-            "runs": mode(cache / "runs"),
+            "namespace": mode(cache / revision.NAMESPACE),
+            "runs": mode(cache / revision.NAMESPACE / "runs"),
             "run": mode(run_dir),
             "manifest": mode(run_dir / revision.MANIFEST_NAME),
         },
         "expected": {
+            "namespace": shared_dir_mode(policy) & 0o777,
             "runs": shared_dir_mode(policy) & 0o777,
             "run": shared_dir_mode(policy) & 0o777,
             "manifest": committed_modes(policy)[0] & 0o777,
@@ -966,7 +968,7 @@ def probe_record_with_plant(scratch: str, name: str, plant: str) -> dict[str, An
     (victim / "f").write_bytes(VICTIM_BYTES)
     os.chmod(victim / "f", 0o600)
     os.utime(victim / "f", (OLD, OLD))
-    target = cache / "runs" / "r1" / name
+    target = cache / revision.NAMESPACE / "runs" / "r1" / name
     target.parent.mkdir(parents=True)
     if plant == "symlink":
         os.symlink(victim / "f", target)

@@ -1,8 +1,8 @@
 """Run-scoped resolution of HuggingFace refs to immutable commit SHAs.
 
-A run resolves each `(repo_id, ref)` once, in `runs/<run id>/resolutions@2.json` under the cache root,
-and every participant binds to that answer; entries are append-if-absent. This module imports nothing from
-`senselab.utils.data_structures`. Rationale: `specs/20260809-200421-hf-revision-pinning/design.md`.
+A run resolves each `(repo_id, ref)` once, in `2x/runs/<run id>/resolutions@2.json` under the cache root,
+and every participant binds to that answer; entries are append-if-absent. `2x/` is the 2.x namespace: 2.x
+reads and writes no manifest outside it. Rationale: `specs/20261030-140022-senselab-2x-api/adr/ADR-006-formats.md`.
 """
 
 import json
@@ -32,6 +32,8 @@ logger = logging.getLogger("senselab")
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
+NAMESPACE = "2x"
+"""The directory under the cache root that holds every run manifest 2.x writes and reads."""
 MANIFEST_NAME = "resolutions@2.json"
 """The run manifest's file name; its `@<major>` is the format of its keys (`manifest_key`)."""
 MANIFEST = re.compile(re.escape(MANIFEST_NAME))
@@ -85,21 +87,12 @@ def run_id() -> str:
     return _RUN_ID
 
 
-def _cache_root() -> Path:
-    """Return senselab's cache root, honouring ``SENSELAB_CACHE``.
-
-    Duplicated from ``dependencies._senselab_cache_dir`` rather than imported:
-    ``dependencies`` imports *this* module, and importing back would close a cycle.
-    """
+def cache_root() -> Path:
+    """Return senselab's cache root: ``SENSELAB_CACHE``, else ``~/.cache/senselab/hf``."""
     override = os.environ.get("SENSELAB_CACHE")
     if override:
         return Path(override)
     return Path.home() / ".cache" / "senselab" / "hf"
-
-
-def cache_root() -> Path:
-    """Return senselab's cache root, honouring ``SENSELAB_CACHE``."""
-    return _cache_root()
 
 
 def manifest_path(run: Optional[str] = None) -> Path:
@@ -108,21 +101,21 @@ def manifest_path(run: Optional[str] = None) -> Path:
     Raises:
         ValueError: `run` is not one path component.
     """
-    return _cache_root() / "runs" / path_component(run_id() if run is None else run) / MANIFEST_NAME
+    return cache_root() / NAMESPACE / "runs" / path_component(run_id() if run is None else run) / MANIFEST_NAME
 
 
 def _run_dir(run: Optional[str], *, create: bool, policy: Optional[StorePolicy] = None) -> StorageDir:
-    """Open `runs/<run>/` under the cache root (this run's when `run` is None), without following any symlink.
+    """Open `2x/runs/<run>/` under the cache root (this run's when `run` is None), without following any symlink.
 
     With `create`, missing directories get the policy's `shared_dir_mode`, and an object of the wrong kind at
-    `runs/` or the run's directory is moved aside beside itself.
+    `2x/`, `runs/` or the run's directory is moved aside beside itself.
     """
     name = manifest_path(run).parent.name
     mode = shared_dir_mode(policy) if policy is not None else None
-    with StorageDir.open_root(_cache_root(), create=create, mode=mode) as root:
+    with StorageDir.open_root(cache_root(), create=create, mode=mode) as root:
         if not create:
-            return root.walk("runs", name)
-        return root.walk("runs", name, create=True, mode=mode, aside=lambda: None)
+            return root.walk(NAMESPACE, "runs", name)
+        return root.walk(NAMESPACE, "runs", name, create=True, mode=mode, aside=lambda: None)
 
 
 def _parse_manifest(data: Optional[bytes], where: Path) -> dict[str, str]:
@@ -150,7 +143,7 @@ def _read_in(run_dir: StorageDir) -> dict[str, str]:
 def read_manifest(run: Optional[str] = None) -> dict[str, str]:
     """Return a run's recorded resolutions, or an empty mapping.
 
-    The manifest is read through `runs/<run>/`'s descriptor without following or blocking. A missing,
+    The manifest is read through `2x/runs/<run>/`'s descriptor without following or blocking. A missing,
     empty, unreadable or unparsable manifest, or anything but a regular file at its name, reads as empty;
     a non-empty one that fails to parse is logged at warning.
 
@@ -172,16 +165,16 @@ def record_resolution(repo_id: str, ref: str, sha: str, run: Optional[str] = Non
     """Record ``(repo_id, ref) -> sha`` for this run and return the binding SHA.
 
     Append-if-absent under a `SharedFileLock` on the manifest: a concurrent writer's entries are kept,
-    and an existing commit SHA for the key wins over ``sha``. ``runs/<run>/`` is reached through
+    and an existing commit SHA for the key wins over ``sha``. ``2x/runs/<run>/`` is reached through
     `StorageDir` and made with the `StorePolicy`'s `shared_dir_mode`; the manifest and the lock's files
     get the policy's file modes, whatever the umask. Under the lock, a dead writer's temporaries beside the
-    manifest are removed, as are objects moved aside under ``runs/`` past the quarantine age.
+    manifest are removed, as are objects moved aside under ``2x/runs/`` past the quarantine age.
 
     Raises:
         RevisionResolutionError: ``sha`` is not a 40-hex commit SHA.
         ValueError: ``run`` (or this run's id) is not one path component.
         LockTimeout: the manifest's lock could not be taken within its timeout.
-        WrongKindError: an object of the wrong kind at ``runs/``, the run's directory or a lock name
+        WrongKindError: an object of the wrong kind at ``2x/``, ``2x/runs/``, the run's directory or a lock name
             cannot be moved aside.
     """
     if not _SHA_RE.fullmatch(sha):
@@ -218,17 +211,17 @@ def _remove_leftovers(run_dir: StorageDir, policy: StorePolicy) -> None:
     """Remove dead writers' leftovers under the manifest's lock.
 
     That is the manifest's temporaries in `run_dir` (any there under the lock is a dead writer's) and objects
-    moved aside under `runs/` past the quarantine age.
+    moved aside under `2x/runs/` past the quarantine age.
     """
     prefix = f".{MANIFEST_NAME}."
     for name in run_dir.listdir():
         if name.startswith(prefix) and TEMPORARY_NAME.fullmatch(name):
             run_dir.remove_owned(name, pattern=TEMPORARY_NAME)
     try:
-        with StorageDir.open_root(_cache_root()) as root, root.walk("runs") as runs:
+        with StorageDir.open_root(cache_root()) as root, root.walk(NAMESPACE, "runs") as runs:
             runs.remove_older(run_dir.fs_now() - policy.quarantine_retention_s)
     except (OSError, WrongKindError) as err:
-        logger.warning("cannot collect what was set aside under runs/: %s", err)
+        logger.warning("cannot collect what was set aside under 2x/runs/: %s", err)
 
 
 def get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:

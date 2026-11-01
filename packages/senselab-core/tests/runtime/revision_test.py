@@ -12,6 +12,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from senselab_core.runtime.revision import (
     MANIFEST_NAME,
+    NAMESPACE,
     RevisionResolutionError,
     get_cached_commit_hash,
     manifest_key,
@@ -133,6 +134,21 @@ def test_manifest_key_is_injective_over_pairs(x: tuple[str, str], y: tuple[str, 
 def test_manifest_file_carries_its_key_format() -> None:
     """The manifest's name carries the format of its keys, so manifests keyed the old way are not read."""
     assert manifest_path().name == MANIFEST_NAME == "resolutions@2.json"
+
+
+@pytest.mark.logic
+def test_hr50_a_1x_manifest_under_the_cache_root_is_neither_read_nor_written(tmp_path: Path) -> None:
+    """2.x manifests live under `2x/runs/`: a 1.x manifest at `runs/<run>/` is never read or touched."""
+    cache = tmp_path / "senselab"
+    alpha = cache / "runs" / "shared" / MANIFEST_NAME
+    alpha.parent.mkdir(parents=True)
+    alpha.write_text(json.dumps({manifest_key("org/model", "main"): SHA_B}))
+    before = alpha.read_bytes()
+    assert manifest_path("shared") == cache / NAMESPACE / "runs" / "shared" / MANIFEST_NAME
+    assert read_manifest("shared") == {}
+    assert record_resolution("org/model", "main", SHA_A, run="shared") == SHA_A
+    assert read_manifest("shared") == {manifest_key("org/model", "main"): SHA_A}
+    assert alpha.read_bytes() == before and sorted(p.name for p in alpha.parent.iterdir()) == [MANIFEST_NAME]
 
 
 @pytest.mark.logic
