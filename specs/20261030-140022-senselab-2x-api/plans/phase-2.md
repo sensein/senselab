@@ -40,6 +40,13 @@ D-7). pydra: `~/software/nipype/pydra-ext`, per-PR branches merged into `enh/exe
 
 ## Global Constraints
 
+- **Interpreters are uv-managed only** (owner, 2026-11-01, relayed: "no environments should use system python,
+  always uv"). Every interpreter-selecting `uv venv` passes `--python-preference only-managed` and names a version
+  (`uv python install <ver>` where needed); with no managed interpreter it fails with a clear error, never falling
+  back to a system Python. New envs target the newest Python their dependencies support, including free-threaded
+  3.14t where every native wheel is published for it. Inheriting `sys.executable` is allowed only for a managed
+  interpreter, and naming the version is preferred.
+
 - **No backwards compatibility** (P-14): no shims, aliases, re-exports or readers of retired formats. A retired
   format is refused with a typed error that names the migration statement. Before the first 2.x release a major
   format bump has no previous-major reader (ADR-006 amendment, ruling P2-44).
@@ -496,6 +503,12 @@ fails with the node named; no silent CPU fallback.
 - [ ] **Step 4:** Review and compact, commit `feat(2x): minimal execution-profile resolver`; push; CI green.
 
 ### Task 9a1: Env builder (`Env.host`, `Env.isolated`) and CUDA routing
+
+**Interpreter rule (Global Constraints):** `Env.isolated` builds with `--python-preference only-managed` and a named
+version; the env record carries the version (and `t` for free-threaded); a missing managed interpreter is a typed
+error naming `uv python install <ver>`. Test: with no managed interpreter available (faked at the `uv` boundary)
+the build refuses, and a recorded env names its managed version. The `src/` sites (subprocess_venv, reproduce)
+arrive through the P-39 alpha merge once alpha PR #624 lands; 2.x does not edit `src/`.
 
 **Model:** opus implements (concurrency, leases); fresh sonnet reviews. **Tier:** logic, contract. **Implements:**
 design §4.4, P-6, P-25, ADR-003 (D-2 leases), the subprocess-venv CUDA routing; rulings P2-35, P2-42, P2-70, P2-76.
