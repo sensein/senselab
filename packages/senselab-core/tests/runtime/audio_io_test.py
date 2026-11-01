@@ -6,6 +6,8 @@ import multiprocessing as mp
 import os
 import pickle
 import subprocess
+import sys
+import textwrap
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -347,21 +349,27 @@ def test_rewrite_in_touched_chunk_is_stale(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_check_of_another_process_stamp_reads_the_header_chunks_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`check` of a stamp this process holds no memo of verifies chunks by `os.pread`, never the whole file."""
+def test_check_of_another_process_stamp_reads_the_header_chunks_only(tmp_path: Path) -> None:
+    """`check` in a process that holds no memo of the stamp verifies chunks by `os.pread`, never the whole file."""
     p, group = _window_group(tmp_path)
     assert group.source_stamp is not None
-    monkeypatch.setattr(audio_io, "VERIFIED", audio_io.Memo(audio_io.SOURCE_MEMO_ENTRIES))
-    offsets: list[int] = []
-    original = os.pread
-
-    def spy(fd: int, n: int, offset: int) -> bytes:
-        offsets.append(offset)
-        return original(fd, n, offset)
-
-    monkeypatch.setattr(os, "pread", spy)
-    monkeypatch.setattr(builtins, "open", lambda *a, **_: pytest.fail(f"opened {a[0]} by path"))
-    audio_io.check(group.source_stamp, p)
-    assert offsets and len(offsets) * CHUNK < p.stat().st_size // 8 and len(audio_io.VERIFIED) == 1
+    stamp = tmp_path / "stamp.json"
+    stamp.write_text(group.source_stamp.model_dump_json())
+    child = textwrap.dedent(
+        f"""
+        import builtins, os, sys
+        from pathlib import Path
+        from senselab_core.runtime import audio_io
+        from senselab_core.kernel.signals import SourceStamp
+        s = SourceStamp.model_validate_json(Path({str(stamp)!r}).read_text())
+        offsets = []
+        real = os.pread
+        os.pread = lambda fd, n, off: (offsets.append(off), real(fd, n, off))[1]
+        builtins.open = lambda *a, **k: sys.exit("opened by path")
+        audio_io.check(s, Path({str(p)!r}))
+        print(len(offsets))
+        """
+    )
+    out = subprocess.run([sys.executable, "-c", child], capture_output=True, text=True, timeout=60, check=True)
+    reads = int(out.stdout.strip())
+    assert 0 < reads and reads * CHUNK < p.stat().st_size // 8
