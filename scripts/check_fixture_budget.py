@@ -46,7 +46,16 @@ def load_budget(path: Path = BUDGET) -> dict[str, int]:
     return limits
 
 
+def load_exempt_prefix(path: Path = BUDGET) -> str:
+    """Return the path prefix whose files the budget does not count; an entry without a derivation is refused."""
+    entry = yaml.safe_load(path.read_text()).get("exempt_prefix")
+    if not isinstance(entry, dict) or not str(entry.get("derivation", "")).strip() or not entry.get("value"):
+        raise ValueError(f"{path}: exempt_prefix needs a value and a derivation")
+    return str(entry["value"])
+
+
 _LIMITS = load_budget()
+EXEMPT_PREFIX = load_exempt_prefix()
 FILE_MAX_BYTES = _LIMITS["file_max_bytes"]
 DATA_TOTAL_MAX_BYTES = _LIMITS["data_total_max_bytes"]
 
@@ -88,7 +97,7 @@ def check(objects: Sequence[TrackedObject]) -> list[str]:
             out.append(f"{o.path}: tracked submodule; pull its data through a manifest")
         elif o.mode not in REGULAR_MODES:
             out.append(f"{o.path}: tracked object of mode {o.mode}; only regular files may be committed")
-        elif o.path.startswith(BUDGETED):
+        elif o.path.startswith(BUDGETED) and not o.path.startswith(EXEMPT_PREFIX):
             if o.size > FILE_MAX_BYTES:
                 out.append(f"{o.path}: {o.size} bytes exceeds the {FILE_MAX_BYTES} byte per-file limit; {_FIX}")
             if not o.path.endswith(CODE_SUFFIXES):
