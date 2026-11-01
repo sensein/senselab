@@ -181,6 +181,44 @@ def test_an_oversized_int_in_one_items_inputs_fails_only_that_item(worker: Worke
     assert worker.run([{"id": "a", "inputs": {}}], {})[0]["outputs"]
 
 
+_GRACE_FIELDS = ("stop", "term", "kill", "join", "exit_code_wait")
+_BAD_GRACES = [float("nan"), float("inf"), float("-inf"), -1.0, -1e-9, 1e20, threading.TIMEOUT_MAX * 2, True, "1", None]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("field", _GRACE_FIELDS)
+@pytest.mark.parametrize("bad", _BAD_GRACES, ids=repr)
+def test_every_grace_outside_its_range_is_refused_at_construction(field: str, bad: object) -> None:
+    """A non-finite, negative, oversize or non-numeric grace raises `ValueError` before any client uses it."""
+    with pytest.raises(ValueError, match=f"grace {field}"):
+        ShutdownGraces(**{field: bad})  # type: ignore[arg-type]
+
+
+@pytest.mark.logic
+def test_grace_ranges_at_their_edges() -> None:
+    """`term` may be 0 or all of `stop`; a zero grace elsewhere, `term` past `stop` or an oversize bound is refused."""
+    assert ShutdownGraces(stop=1.0, term=0.0).term == 0.0
+    assert ShutdownGraces(stop=1.0, term=1.0).term == 1.0
+    for field in ("stop", "kill", "join", "exit_code_wait"):
+        with pytest.raises(ValueError, match=field):
+            ShutdownGraces(**{field: 0.0, **({"term": 0.0} if field == "stop" else {})})
+    with pytest.raises(ValueError, match="term"):
+        ShutdownGraces(stop=1.0, term=1.5)
+    third = threading.TIMEOUT_MAX / 2
+    with pytest.raises(ValueError, match="bound"):
+        ShutdownGraces(stop=third, term=0.0, kill=third, join=third)
+
+
+@pytest.mark.logic
+def test_a_clients_graces_cannot_be_replaced(worker: WorkerClient) -> None:
+    """`graces` is read-only on a live client, and the graces themselves are frozen."""
+    with pytest.raises(AttributeError):
+        worker.graces = ShutdownGraces(stop=1.0, term=0.5)  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        worker.graces.stop = 1e20  # type: ignore[misc]
+    assert worker.graces == DEFAULT_GRACES
+
+
 @pytest.mark.logic
 def test_unencodable_params_refuse_the_request(worker: WorkerClient) -> None:
     """Params with no wire form raise before sending, and the worker stays usable."""
@@ -736,6 +774,34 @@ def test_fifo_named_like_an_array_fails_its_item_within_a_second(array_parent: P
     """A response naming a FIFO at `<sha>.npy` fails its item in under 1 s."""
     _, elapsed = _run_over_a_fifo_named_like_an_array(array_parent)
     assert elapsed < 1
+
+
+_LEFT_AT_EXIT = """
+import logging, sys
+from pathlib import Path
+from senselab_core.runtime.worker_client import WorkerClient
+logging.basicConfig(level=logging.WARNING, format="LOG %(levelname)s %(message)s")
+c = WorkerClient(sys.executable, "senselab_worker.fake", init={{}}, array_parent=Path(sys.argv[1]))
+{body}
+print(c._proc.pid, flush=True)
+"""
+
+
+@pytest.mark.limits
+@pytest.mark.parametrize("body", ["pass", "c.run([{'id': 'a', 'inputs': {}}], {})", "holder = [c]"])
+def test_a_client_left_open_at_interpreter_exit_finalises_at_once_and_quietly(array_parent: Path, body: str) -> None:
+    """A client still open at exit is finalised well inside one grace, logs nothing, and leaves no file or process."""
+    script = array_parent.parent / "left_open.py"
+    script.write_text(_LEFT_AT_EXIT.format(body=body))
+    start = time.monotonic()
+    proc = subprocess.run(
+        [sys.executable, str(script), str(array_parent)], capture_output=True, text=True, timeout=60, check=False
+    )
+    elapsed = time.monotonic() - start
+    assert proc.returncode == 0, proc.stderr
+    assert elapsed < DEFAULT_GRACES.term, (elapsed, proc.stderr)
+    assert [line for line in proc.stderr.splitlines() if line.startswith("LOG")] == []
+    assert not alive(int(proc.stdout.split()[-1]))
 
 
 @pytest.mark.logic

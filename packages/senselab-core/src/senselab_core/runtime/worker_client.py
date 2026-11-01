@@ -4,6 +4,7 @@ import collections
 import contextlib
 import json
 import logging
+import math
 import os
 import queue
 import select
@@ -17,7 +18,7 @@ import time
 import uuid
 import warnings
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from types import TracebackType
 from typing import Any, ClassVar
@@ -62,7 +63,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ShutdownGraces:
-    """How long each step of stopping a worker may take, in seconds."""
+    """How long each step of stopping a worker may take, in seconds.
+
+    Every grace is a finite real number: `term` lies in `[0, stop]`, the others are positive, and `bound`
+    is at most `threading.TIMEOUT_MAX`.
+
+    Raises:
+        ValueError: on construction with a grace outside those ranges, or one that is not a real number.
+    """
 
     stop: float = 10.0
     """The graceful stop window, from the stop line to SIGKILL."""
@@ -74,6 +82,20 @@ class ShutdownGraces:
     """For the pipe readers to stop."""
     exit_code_wait: float = 1.0
     """After the worker's output closes, for its exit code."""
+
+    def __post_init__(self) -> None:
+        """Refuse graces outside their ranges."""
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if type(value) not in (int, float) or not math.isfinite(value):
+                raise ValueError(f"grace {f.name} must be a finite number of seconds, got {value!r}")
+            least = "at least 0" if f.name == "term" else "positive"
+            if value < 0 or (value == 0 and f.name != "term") or value > threading.TIMEOUT_MAX:
+                raise ValueError(f"grace {f.name} must be {least} and at most {threading.TIMEOUT_MAX} s, got {value}")
+        if self.term > self.stop:
+            raise ValueError(f"grace term ({self.term}) is the last part of stop ({self.stop}) and cannot exceed it")
+        if self.bound > threading.TIMEOUT_MAX:
+            raise ValueError(f"graces bound {self.bound} s exceeds threading.TIMEOUT_MAX ({threading.TIMEOUT_MAX})")
 
     @property
     def bound(self) -> float:
@@ -226,6 +248,49 @@ def _wait_exit(pid: int) -> None:
     raise NotImplementedError(f"no exit notification for platform {sys.platform!r}")
 
 
+def _has_exited(pid: int) -> bool:
+    """Whether child `pid` has exited, asked without blocking and without reaping it; False where it cannot be told."""
+    try:
+        if sys.platform == "linux":
+            return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+        if sys.platform == "darwin":
+            kq = select.kqueue()
+            try:
+                flags = select.KQ_EV_ADD | select.KQ_EV_ONESHOT
+                event = select.kevent(pid, filter=select.KQ_FILTER_PROC, flags=flags, fflags=select.KQ_NOTE_EXIT)
+                return bool(kq.control([event], 1, 0))
+            finally:
+                kq.close()
+    except ChildProcessError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _exit_seen(pid: int, exited: threading.Event) -> bool:
+    """Whether the leader's exit is observed: by the reaper thread, else by asking now (and then recorded in `exited`).
+
+    Asking covers a reaper thread that cannot run, as during interpreter finalisation.
+    """
+    if not exited.is_set() and _has_exited(pid):
+        exited.set()
+    return exited.is_set()
+
+
+def _wait_for_exit(pid: int, exited: threading.Event, timeout: float) -> bool:
+    """Wait up to `timeout` seconds for `_exit_seen`; return whether the exit was observed."""
+    deadline = Deadline(timeout)
+    delay = 0.001
+    while not _exit_seen(pid, exited):
+        remaining = deadline.remaining() or 0.0
+        if remaining <= 0:
+            return False
+        exited.wait(min(delay, remaining))
+        delay = min(delay * 2, _GROUP_POLL_MAX_S)
+    return True
+
+
 def _reap(pid: int, exited: threading.Event, stdout: _Pump) -> None:
     """Wait for the leader to exit without reaping it, so its pid and process group id stay reserved."""
     try:
@@ -244,7 +309,7 @@ def _leader_held(pid: int, exited: threading.Event, timeout: float) -> bool | No
     from `waitid(WNOHANG|WNOWAIT)` where the platform has it, else from `ps -o ppid=` run within
     `timeout` seconds.
     """
-    if not exited.is_set():
+    if not _exit_seen(pid, exited):
         return True
     if sys.platform == "linux" and hasattr(os, "waitid"):
         try:
@@ -304,13 +369,14 @@ def _members_gone(pgid: int, exited: threading.Event, deadline: Deadline) -> boo
     """Wait until the leader has exited and group `pgid` has no live member; return whether that happened."""
     delay = 0.001
     while True:
-        if exited.is_set() and not _live_members(pgid):
+        seen = _exit_seen(pgid, exited)
+        if seen and not _live_members(pgid):
             return True
         remaining = deadline.remaining()
         if remaining is not None and remaining <= 0:
             return False
         pause = delay if remaining is None else min(delay, remaining)
-        if not exited.is_set():
+        if not seen:
             exited.wait(pause)
         else:
             time.sleep(pause)
@@ -410,6 +476,7 @@ class WorkerClient:
 
         Raises:
             ValueError: if `init` uses the reserved key `array_dir` or has no wire form.
+            TypeError: if `graces` is not a `ShutdownGraces`.
             ProtocolMismatch: if the worker's first message is not a hello, its wire or runtime differ
                 from the host's (`expect_runtime` overrides the host's runtime identity), or no hello
                 arrives within `HELLO_TIMEOUT_S`.
@@ -421,8 +488,10 @@ class WorkerClient:
         self._owner_pid = os.getpid()
         if "array_dir" in init:
             raise ValueError("init key 'array_dir' is reserved")
+        if type(graces) is not ShutdownGraces:
+            raise TypeError(f"graces must be a ShutdownGraces, got {type(graces).__name__}")
         self._request_timeout = request_timeout
-        self.graces = graces
+        self._graces = graces
         self._stderr: collections.deque[str] = collections.deque(maxlen=STDERR_TAIL_LINES)
         self._lines: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
         self._proc: subprocess.Popen[bytes] | None = None
@@ -480,6 +549,11 @@ class WorkerClient:
     def array_dir(self) -> Path:
         """The directory this client created for array files."""
         return self._array_dir
+
+    @property
+    def graces(self) -> ShutdownGraces:
+        """The graces this client stops its worker within, fixed at construction."""
+        return self._graces
 
     @property
     def alive(self) -> bool:
@@ -827,7 +901,7 @@ class WorkerClient:
         """Stop the worker for the host fault `exc`, then give `exc` the exit code and the stderr tail."""
         self._closed = True
         if isinstance(exc, WorkerLost) and not self._closed_by_caller:
-            self._exited.wait(self.graces.exit_code_wait)
+            self._exited.wait(self._graces.exit_code_wait)
         self._shutdown(graceful=isinstance(exc, ProtocolMismatch))
         if isinstance(exc, WorkerLost) and exc.returncode is None:
             exc.returncode = self.returncode
@@ -867,7 +941,7 @@ class WorkerClient:
             self._shutting_down.discard(me)
 
     def _steps(self, *, graceful: bool, me: int) -> None:
-        bound = Deadline(self.graces.bound)
+        bound = Deadline(self._graces.bound)
         if self._acquire_shutdown(bound):
             try:
                 if not self._stopped:
@@ -886,7 +960,7 @@ class WorkerClient:
     def _acquire_shutdown(self, bound: Deadline) -> bool:
         if self._shutdown_lock.acquire(timeout=max(bound.remaining() or 0.0, 0.0)):
             return True
-        logger.error("another thread's shutdown of this client did not finish within %s s", self.graces.bound)
+        logger.error("another thread's shutdown of this client did not finish within %s s", self._graces.bound)
         return False
 
     def _stop(self, *, graceful: bool) -> None:
@@ -903,7 +977,7 @@ class WorkerClient:
         proc = self._proc
         if proc is None or proc.returncode is not None:
             return
-        exited = self._exited.is_set()
+        exited = _exit_seen(proc.pid, self._exited)
         if not exited or _leader_held(proc.pid, self._exited, LEADER_PROBE_TIMEOUT_S):
             _signal_group(proc.pid, signal.SIGKILL, leader_exited=exited)
 
@@ -928,11 +1002,11 @@ class WorkerClient:
 
     def _signal_group_until_gone(self, pgid: int, stop: Deadline) -> None:
         exited = self._exited
-        _signal_group(pgid, signal.SIGTERM, leader_exited=exited.is_set())
-        _signal_group(pgid, signal.SIGCONT, leader_exited=exited.is_set())
+        _signal_group(pgid, signal.SIGTERM, leader_exited=_exit_seen(pgid, exited))
+        _signal_group(pgid, signal.SIGCONT, leader_exited=_exit_seen(pgid, exited))
         if not _members_gone(pgid, exited, stop):
-            _signal_group(pgid, signal.SIGKILL, leader_exited=exited.is_set())
-            if not _members_gone(pgid, exited, Deadline(self.graces.kill)):
+            _signal_group(pgid, signal.SIGKILL, leader_exited=_exit_seen(pgid, exited))
+            if not _members_gone(pgid, exited, Deadline(self._graces.kill)):
                 logger.error("worker process group %d still has members after SIGKILL", pgid)
 
     def _stop_group(self, proc: subprocess.Popen[bytes], stop: Deadline) -> None:
@@ -944,8 +1018,8 @@ class WorkerClient:
                 self._signal_group_until_gone(pgid, stop)
             except Exception:
                 logger.exception("stopping worker process group %d failed; sending SIGKILL", pgid)
-                _signal_group(pgid, signal.SIGKILL, leader_exited=self._exited.is_set())
-                self._exited.wait(self.graces.kill)
+                _signal_group(pgid, signal.SIGKILL, leader_exited=_exit_seen(pgid, self._exited))
+                _wait_for_exit(pgid, self._exited, self._graces.kill)
         elif held is None:
             logger.warning(
                 "worker %d: cannot tell whether it is still unreaped; its process group is not signalled", pgid
@@ -962,15 +1036,15 @@ class WorkerClient:
             return
         assert proc.stdout is not None and proc.stderr is not None
         pgid = proc.pid
-        stop = Deadline(self.graces.stop)
+        stop = Deadline(self._graces.stop)
         if graceful and not self._exited.is_set():
             self._write_stop()
         self._retire_channel()
         if graceful:
-            self._exited.wait(max((stop.remaining() or 0.0) - self.graces.term, 0.0))
+            _wait_for_exit(pgid, self._exited, max((stop.remaining() or 0.0) - self._graces.term, 0.0))
         if proc.returncode is None:
             self._stop_group(proc, stop)
-        join = Deadline(self.graces.join)
+        join = Deadline(0.0 if sys.is_finalizing() else self._graces.join)
         for pump in self._pumps:
             pump.finish()
         threads = [pump.thread for pump in self._pumps] + ([self._reaper] if self._reaper is not None else [])
@@ -978,9 +1052,10 @@ class WorkerClient:
             thread.join(join.remaining())
         self._lines.put(None)
         if any(thread.is_alive() for thread in threads):
-            logger.warning(
-                "worker %d: pipe readers did not stop within %s s; its pipes stay open", pgid, self.graces.join
-            )
+            if not sys.is_finalizing():
+                logger.warning(
+                    "worker %d: pipe readers did not stop within %s s; its pipes stay open", pgid, self._graces.join
+                )
             return
         for pump in self._pumps:
             pump.close()
