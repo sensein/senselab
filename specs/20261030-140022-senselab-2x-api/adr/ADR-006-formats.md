@@ -89,9 +89,9 @@ findings are in [`reviews/phase1-reattack/canon.md`](../reviews/phase1-reattack/
 
   **Registered identity tags:** `logical-key@6`, `output@3`, `context@3`, `content-root@2`, `audio@3`,
   `weights@3`, `value@2`, `provenance-id@4`, `data-manifest@3`, `worker-runtime@1`, `fake-output@1`,
-  `contract-probe@1`, `prov-activity@1`, `prov-node@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a
+  `contract-probe@1`, `prov-activity@1`, `prov-node@1`, `wheel-set@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a
   `format:` line in a packaged YAML file or in a store entry): `equivalence@1`, `retry-policy@1.0`, `catalogue@1.0`, `spdx-licenses@1.0`, and
-  `execution-context@2.0` in a store entry's `context.json`; `senselab-vocab@1.0`, a vocabulary document's
+  `execution-context@2.0` in a store entry's `context.json`; `env-record@1.0`, an env root's `<name>[-<tag>].json`; `senselab-vocab@1.0`, a vocabulary document's
   `owl:versionInfo` (ADR-010).
 - **The store is `store@4` and an entry's `result.json` is `result@2.0`,** which adds the fingerprint of the
   context it was written in (R-101, ADR-003). A `result@1.0` entry cannot show which context it belongs to,
@@ -210,3 +210,11 @@ Ruling P2-44 ([`plans/phase-2.md`](../plans/phase-2.md)) and ADR-010 as amended;
 ## Amendment 2026-11-01: backend params in the logical key
 
 - 2026-11-01: `logical-key@5` → `@6`: the key gains `backend_params` (ADR-002 amendment, Phase 2 Task 5b).
+
+## Amendment 2026-11-01: env builds
+
+- 2026-11-01: identity tag `wheel-set@1`, the sorted `[name, version]` pairs of an env's `*.dist-info` names
+  (`EnvHandle.wheel_set`, the context's `wheel_set`); replaces 1.x `venv_environment`'s untagged
+  `dependencies_digest` (H-R20). Data format `env-record@1.0`: the current build of one env under its root,
+  `{directory, lock_sha, torch_index, python_version, wheel_set}`, replaced by rename under the env's lease
+  (Phase 2 Task 9a1).

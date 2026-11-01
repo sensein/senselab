@@ -29,6 +29,29 @@ them, not moves, and the 1.x copies leave `src/` only when their last use case m
 edits `src/`:** a file leaves it only by a rename-only `git mv` commit into `packages/`, followed by a
 modify commit.
 
+## Moved in Phase 2
+
+| 1.x module (alpha `36aa9615`) | Moved to | Task |
+|---|---|---|
+| `src/senselab/utils/subprocess_venv.py`, `uv_tools.py`, `venv_lock.py`, `cuda_probe.py` | folded into `packages/senselab-core/src/senselab_core/runtime/envs.py` | 9a1 |
+
+Unported in Task 9a1 (ruling P2-3), each at its `alpha` source `36aa9615:src/senselab/utils/<module>`:
+
+- `subprocess_venv.py`: `FileRef`, `call_in_venv`, `_SHIM`, `_pack_value`, `_unpack_value`, `parse_subprocess_result`,
+  `stage_portable_audio_io`, `_clean_subprocess_env` (the worker protocol replaces the one-shot IPC);
+  `provisioned_venv_dirs`, `record_venv_use`, `_note_venv_use`, `venv_environment` (the env record and
+  `EnvHandle.context_fields` replace them); `_resolve_lock` with `compile_lock=True`, `_VenvLockLost` and its retry,
+  `SENSELAB_VENV_CACHE`, `SENSELAB_VENV_LOCK_TIMEOUT` (the profile's `env_roots` and `Lease` replace them).
+- `venv_lock.py`: `requirements_sha256`, `load_lock`, `lock_path`, `LOCK_DIR`, `Backend`, `discover_backends`,
+  `compile_lock`, `_compile`, `resolved_packages`, `torch_only_cuda_packages`, `top_cuda_tag`, `wheel_on_index`,
+  `torch_targets`, `IPC_REQUIREMENTS`, `QUARANTINED` (lock checking and compiling; `EnvLock.read` keeps header parsing).
+- `uv_tools.py`: `requirements_sha256`, `normalize_name`, `is_torch_family`, `TORCH_NAMES`,
+  `TORCH_VARIANT_PREFIXES`, and `find_uv(install=True)`'s `pip install uv` (`Uv.find` never installs).
+- `cuda_probe.py`: `SENSELAB_TORCH_INDEX_URL` (the profile's `envs.torch_index` replaces it, P-14, P-18).
+
+1.x importers left under `src/` and `scripts/` (`lock_subprocess_venvs.py`, `extend_*.py`) are 1.x and outside the
+2.x checks (D-6).
+
 ## Moving a use case
 
 1. Merge `alpha` into the 2.x line, so the source pool carries every 1.x change (P-39). Set the
@@ -204,10 +227,10 @@ An earlier count of 32 included four `dict.update` calls fed by `str()` (`cohort
 | `src/senselab/utils/reproduce/run.py:2219` | `_record` | `argv_sha` of a step's argument vector in provenance | `identity_digest` under the run tag |
 | `src/senselab/utils/reproduce/sandbox.py:413` | `_sha` | sha of a sandbox environment mapping | `identity_digest` under the run-env tag |
 | `src/senselab/utils/reproduce/source.py:345` | `patch_set_sha256` | digest of a patch set | `identity_digest` under a registered patch-set tag |
-| `src/senselab/utils/subprocess_venv.py:262` | `venv_environment` | `dependencies_digest` over a venv's full distribution listing | `identity_digest` under a registered environment tag; `Environment.dependencies_digest` in `ProvStore` |
+| `src/senselab/utils/subprocess_venv.py:262` | `venv_environment` | `dependencies_digest` over a venv's full distribution listing | done (Task 9a1): `identity_digest("wheel-set@1", …)` as `EnvHandle.wheel_set` in `runtime/envs.py` |
 | `src/senselab/utils/tasks/cached_inference.py:353` | `audio_signature` | audio identity: `str(sampling_rate)` into a hash update | `ContentIdentity` of the audio (`audio@3` over the canonical `.npy`) |
 | `src/senselab/utils/tasks/cached_inference.py:355` | `audio_signature` | audio identity: `str(shape)` into the same hash | as the row above: one `audio@3` identity |
-| `src/senselab/utils/uv_tools.py:88` | `requirements_sha256` | digest of a requirements set with its header fields | `identity_digest` under the environment tag |
+| `src/senselab/utils/uv_tools.py:88` | `requirements_sha256` | digest of a requirements set with its header fields | not ported in Task 9a1 (moved and removed); the lock header's tagged digest is Task 9a2's |
 | `src/senselab/utils/venv_worker.py:116` | `_digest` | short digest of a worker call payload (`default=str`) | the worker wire's canonical form: `identity_digest("value@2", …)` with non-JSON values refused |
 | `src/senselab/utils/vllm_server.py:476` | `_path_label` | path digest shown in an error message instead of the name, a label only | a label, not a key: `identity_digest` under a registered label tag, or `sha256_bytes` of the path's UTF-8 |
 | `src/senselab/utils/vllm_server.py:527` | `content_part` | digest of the media directory shown in an error message, a label only | as the row above |
