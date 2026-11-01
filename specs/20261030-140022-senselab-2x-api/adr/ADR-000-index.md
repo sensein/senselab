@@ -17,6 +17,7 @@ record that is superseded keeps its number and names its successor.
 | [007](ADR-007-trust-privacy.md) | Trust and privacy | R-48 |
 | [008](ADR-008-observability.md) | Observability | R-47 |
 | [009](ADR-009-migration-kernel.md) | Migration by use case; the kernel boundary; faults typed at the source | R-49, R-46, R-52 |
+| [010](ADR-010-w3c-prov.md) | Provenance is W3C PROV (PROV-O JSON-LD, BEP028 profile, pipeline graph as plan) | owner, 2026-11-01 |
 
 The 2.0 cut list (R-53) is in [design.md §6.4](../design.md). R-54 was a set of factual corrections,
 which are applied in design §2.
