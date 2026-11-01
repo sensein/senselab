@@ -147,6 +147,31 @@ exclude = [
   "venv",
   # The 1.x source pool, frozen and not checked on the 2.x line.
   "src",
+  # The 1.x scripts under scripts/, not checked on the 2.x line. The 2.x scripts are release_gate,
+  # check_fixture_budget, check_participant_ids, lock_subprocess_venvs and profile_*.
+  "scripts/adaptive_loop.py",
+  "scripts/analyze_audio.py",
+  "scripts/analyze_routing_evidence.py",
+  "scripts/bench_facial_analysis.py",
+  "scripts/benchmark_*.py",
+  "scripts/build_classifier_ontology_map.py",
+  "scripts/calibrate_*.py",
+  "scripts/check_layering.py",
+  "scripts/evaluate_task_events.py",
+  "scripts/extend_*.py",
+  "scripts/free_speech_review_page.py",
+  "scripts/gate_family_matrix.py",
+  "scripts/generate-compat-matrix.py",
+  "scripts/generate_model_registry.py",
+  "scripts/make_degradation_suite.py",
+  "scripts/measure_session_background.py",
+  "scripts/probe_*.py",
+  "scripts/run_diarization_backends.py",
+  "scripts/score_taxonomy_ruleset.py",
+  "scripts/select_replay_manifest.py",
+  "scripts/speaker_ceiling",
+  "scripts/triage_*.py",
+  "scripts/verify_*.py",
   # One-off reproduction scripts for the analyze_audio audit's findings, kept beside the register
   # entry each reproduces. They are evidence, not source: each is meant to read as the code under
   # audit reads, and re-styling one would change what it demonstrates.
@@ -157,7 +182,7 @@ indent-width = 4
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["ANN", "D", "E", "F", "I", "TID251", "B009", "S102", "S307"]
+select = ["ANN", "D", "E", "F", "I", "B009", "S102", "S307"]
 ignore = ["F401"]
 fixable = ["ALL"]
 unfixable = []
@@ -166,29 +191,9 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
-[tool.ruff.lint.flake8-tidy-imports.banned-api]
-"importlib.import_module".msg = "a dynamic import is outside the digest import contract (ADR-006); import statically or mark the site"
-"importlib.__import__".msg = "a dynamic import is outside the digest import contract (ADR-006); import statically or mark the site"
-"importlib.util".msg = "a dynamic import is outside the digest import contract (ADR-006); import statically or mark the site"
-"importlib.machinery".msg = "a dynamic import is outside the digest import contract (ADR-006); import statically or mark the site"
-"sys.modules".msg = "a dynamic import is outside the digest import contract (ADR-006); import statically or mark the site"
-"builtins.__import__".msg = "a dynamic import is outside the digest import contract (ADR-006); import statically or mark the site"
-"operator.attrgetter".msg = "a dynamic import is outside the digest import contract (ADR-006); import statically or mark the site"
-"operator.methodcaller".msg = "a dynamic import is outside the digest import contract (ADR-006); import statically or mark the site"
-"uuid.uuid3".msg = "an untagged digest; use senselab_worker.digest (ADR-006)"
-"uuid.uuid5".msg = "an untagged digest; use senselab_worker.digest (ADR-006)"
-"zlib.crc32".msg = "an untagged digest; use senselab_worker.digest (ADR-006)"
-"zlib.adler32".msg = "an untagged digest; use senselab_worker.digest (ADR-006)"
-"binascii.crc32".msg = "an untagged digest; use senselab_worker.digest (ADR-006)"
-"binascii.crc_hqx".msg = "an untagged digest; use senselab_worker.digest (ADR-006)"
-"joblib.hash".msg = "an untagged digest; use senselab_worker.digest (ADR-006)"
-"dask.base.tokenize".msg = "an untagged digest; use senselab_worker.digest (ADR-006)"
-"dask.tokenize".msg = "an untagged digest; use senselab_worker.digest (ADR-006)"
-"sklearn.utils.murmurhash3_32".msg = "an untagged digest; use senselab_worker.digest (ADR-006)"
-
 [tool.ruff.lint.per-file-ignores]
-"**/tests/**" = ["TID251", "B009", "S102", "S307"]
-"**/conftest.py" = ["TID251", "B009", "S102", "S307"]
+"**/tests/**" = ["B009", "S102", "S307"]
+"**/conftest.py" = ["B009", "S102", "S307"]
 "**/scripts/**" = ["ANN", "D", "E", "I", "F541"]
 # Notebooks: cells share state but ruff lints per-cell, causing false positives
 "tutorials/**/*.ipynb" = ["F821", "E402", "I001", "F811", "ANN001", "ANN201", "D103"]

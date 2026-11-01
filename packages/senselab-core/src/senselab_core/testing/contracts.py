@@ -289,7 +289,7 @@ print(import_qualified(*spec["builder"])(task, backend, **base_call(task)).diges
 
 def import_qualified(module: str, qualname: str) -> Any:  # noqa: ANN401
     """Return the object named `qualname` in `module`, importing the module."""
-    obj: Any = importlib.import_module(module)  # noqa: TID251
+    obj: Any = importlib.import_module(module)
     for part in qualname.split("."):
         obj = getattr(obj, part)
     return obj

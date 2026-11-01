@@ -77,10 +77,15 @@ def _broken(output: str) -> set[str]:
     return {m.group(1) for m in re.finditer(r"^-\s+(\S+ -> \S+) \(l\.\d+\)", output, re.M)}
 
 
+SCRIPTS = [m for m in _lines(_contract()["source_modules"]) if m.startswith("scripts.")]
+"""The 2.x scripts the contract covers."""
+
+
 def _stubs(base: Path) -> None:
     for pkg in ("senselab_core", "senselab_core/zz", "senselab_core/runtime"):
         _write(base, f"{pkg}/__init__.py", "")
-    _write(base, "scripts/zz_clean.py", "import json\n")
+    for module in SCRIPTS:
+        _write(base, module.replace(".", "/") + ".py", "import json\n")
 
 
 XG1_IMPORTS = {
@@ -92,7 +97,7 @@ XG1_IMPORTS = {
         """,
         "hashlib",
     ),
-    "scripts/zz_probe.py": ("import hmac\nhmac.new(b'k', b'm', 'sha256')\n", "hmac"),
+    "scripts/release_gate.py": ("import hmac\nhmac.new(b'k', b'm', 'sha256')\n", "hmac"),
     "senselab_core/zz/raw.py": (
         "import json\nfrom senselab_worker import _raw_digest\n"
         "_raw_digest.bytes_digest('npy@1', json.dumps(1).encode())\n",

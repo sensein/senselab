@@ -109,7 +109,7 @@ def frozen_types() -> list[type[Frozen]]:
     """Return every `Frozen` subclass defined under `SCANNED_PACKAGES`, after importing all their modules."""
     for package in (senselab_core.kernel, senselab_core.runtime):
         for module in pkgutil.walk_packages(package.__path__, package.__name__ + "."):
-            importlib.import_module(module.name)  # noqa: TID251
+            importlib.import_module(module.name)
     found: list[type[Frozen]] = []
     pending = list(Frozen.__subclasses__())
     while pending:
