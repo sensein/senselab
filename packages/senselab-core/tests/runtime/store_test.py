@@ -137,6 +137,20 @@ def test_equivalence_class_admits_under_equivalent(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
+def test_get_without_a_policy_applies_the_default_equivalent(tmp_path: Path) -> None:
+    """A `get` naming no policy reuses under `equivalent`: a measured class admits, an unmeasured context not."""
+    linux, mac, gpu = _ctx(platform="linux"), _ctx(platform="macos"), _ctx(platform="linux-cuda")
+    s, k = (
+        ResultStore(tmp_path, equivalence={"hf": {"cpu-fp32": frozenset({linux.fingerprint(), mac.fingerprint()})}}),
+        _key(),
+    )
+    s.put(k, {"y": 1}, linux)
+    got = s.get(k, mac)
+    assert got is not None and got.policy_used is ReusePolicy.EQUIVALENT
+    assert s.get(k, gpu) is None
+
+
+@pytest.mark.logic
 def test_exact_match_preferred_over_other_contexts(tmp_path: Path) -> None:
     """The current context's own entry wins over any other the policy admits."""
     s, k = ResultStore(tmp_path), _key()

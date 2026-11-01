@@ -60,6 +60,7 @@ from senselab_worker.ownership import UUID_HEX
 
 from senselab_core.kernel._base import value_digest
 from senselab_core.kernel.identity import (
+    DEFAULT_REUSE_POLICY,
     EQUIVALENCE,
     Equivalence,
     ExecutionContext,
@@ -847,8 +848,12 @@ class ResultStore:
         )
         self.provenance.used(activity, self._result_entity(hit.output_identity, digest))
 
-    def get(self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy | str) -> StoredResult | None:
+    def get(
+        self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy | str = DEFAULT_REUSE_POLICY
+    ) -> StoredResult | None:
         """Return a committed result for `key` whose context `policy` admits for `context`, or None.
+
+        `policy` is `DEFAULT_REUSE_POLICY` when the caller names none.
 
         Candidates are tried narrowest admitting policy first, the current fingerprint first among
         `exact`, then by fingerprint. A candidate that fails verification is quarantined (or, if the
