@@ -24,6 +24,8 @@ from senselab_worker.canonical import jcs_dumps
 
 pytestmark = pytest.mark.logic
 
+FORMAT_LINE = '{"format": "provenance@2.0", "record": "format"}'
+
 
 def _store() -> ProvStore:
     return ProvStore(run_id="run-1")
@@ -254,7 +256,7 @@ class TestEnvironments:
         assert back.fingerprint() == s.fingerprint()
 
     def test_a_store_with_no_environment_lines_still_reads(self, tmp_path: Path) -> None:
-        """A store written before environment capture existed reads back with none, not an error."""
+        """A store that recorded no environment reads back with none, not an error."""
         s = _store()
         s.agent(agent_type="software", version="senselab 1.3.1")
         path = tmp_path / "prov.jsonl"
@@ -369,20 +371,13 @@ class TestRoundTrip:
     def test_an_unrecognised_record_kind_is_a_legible_error(self, tmp_path: Path) -> None:
         """A corrupt line names its kind instead of dying on a raw KeyError."""
         path = tmp_path / "prov.jsonl"
-        path.write_text('{"record": "banana"}\n')
+        path.write_text(f'{FORMAT_LINE}\n{{"record": "banana"}}\n')
         with pytest.raises(ValueError, match="banana"):
             ProvStore.read_jsonl(path)
 
     @pytest.mark.parametrize("prov_type", sorted(get_args(PROV_TYPE)))
-    def test_every_readable_entity_type_round_trips(self, prov_type: str, tmp_path: Path) -> None:
-        """The reader's vocabulary is what makes a finished run openable, so none of it may be dropped.
-
-        Parametrised over the whole :data:`PROV_TYPE` literal rather than over a hand-picked list:
-        a type retired from the writer must stay retired from the writer alone. ``kind`` is the case
-        this guards — TAXONOMY's evidence fold wrote it into every store of the 62,578-recording
-        corpus until 2026-09-13, nothing writes it now, and dropping it from the literal made
-        ``read_jsonl`` refuse every one of those stores.
-        """
+    def test_every_entity_type_round_trips(self, prov_type: str, tmp_path: Path) -> None:
+        """Every type in :data:`PROV_TYPE` that the writer writes, the reader reads back."""
         s = _store()
         entity = s.entity(prov_type=cast(PROV_TYPE, prov_type), extent=None, attributes={"state": "uncertain"})
         path = tmp_path / "prov.jsonl"
@@ -443,7 +438,7 @@ class TestReadBackValidation:
     def test_a_line_without_a_record_key_is_a_legible_error(self, tmp_path: Path) -> None:
         """A line that is not a record object fails legibly, not with a KeyError."""
         path = tmp_path / "prov.jsonl"
-        path.write_text('{"id": "span-abc"}\n')
+        path.write_text(f'{FORMAT_LINE}\n{{"id": "span-abc"}}\n')
         with pytest.raises(ValueError, match="'record' key"):
             ProvStore.read_jsonl(path)
 
@@ -792,26 +787,72 @@ def test_write_and_read_are_inverse_and_ids_recompute_from_the_file(
     assert again.read_bytes() == path.read_bytes()
 
 
-def test_a_provenance_1_file_reads_with_its_ids_kept(tmp_path: Path) -> None:
-    """A file without a format line is the previous major: its values are normalised, its ids kept, no run_id."""
+_PROVENANCE_1_LINES = [
+    '{"record": "entity", "id": "span-0123456789abcdef", "prov_type": "span", "extent": [0, 1.5], "attributes": {}}',
+    '{"record": "relation", "relation": "wasGeneratedBy", "source": "span-0123456789abcdef", '
+    '"target": "act-0123456789abcdef"}',
+]
+
+
+@pytest.mark.parametrize(
+    ("first", "found"),
+    [
+        (None, None),
+        ('{"format": "provenance@1.1", "record": "format"}', "provenance@1.1"),
+        ('{"format": "provenance@2.1", "record": "format"}', "provenance@2.1"),
+        ('{"format": "provenance@2.0", "record": "format", "extra": 1}', "provenance@2.0"),
+    ],
+)
+def test_hr47_a_file_without_the_provenance_2_format_record_is_refused_typed(
+    tmp_path: Path, first: str | None, found: str | None
+) -> None:
+    """A `provenance@1` file, a `provenance@1.1` file, or any other first line is refused, naming the migration."""
     path = tmp_path / "old.jsonl"
-    lines = [
-        '{"record": "entity", "id": "span-0123456789abcdef", "prov_type": "span", "extent": [0, 1.5], '
-        '"attributes": {"level": -Infinity, "$k": 1}}',
-        '{"record": "activity", "id": "act-0123456789abcdef", "node": "N", "step": null, "started": null, '
-        '"ended": null, "parameters": {}}',
-        '{"record": "relation", "relation": "wasGeneratedBy", "source": "span-0123456789abcdef", '
-        '"target": "act-0123456789abcdef"}',
-    ]
-    path.write_text("\n".join(lines) + "\n")
-    back = ProvStore.read_jsonl(path)
-    entity = back.get_entity("span-0123456789abcdef")
-    assert entity.run_id is None and entity.extent == (0.0, 1.5)
-    assert entity.attributes == {"level": -math.inf, "$k": 1}
-    assert back.generated_by(entity.id) == "act-0123456789abcdef"
-    written = tmp_path / "new.jsonl"
-    back.write_jsonl(written)
-    assert ProvStore.read_jsonl(written).records() == back.records()
+    path.write_text("\n".join([*([first] if first else []), *_PROVENANCE_1_LINES]) + "\n")
+    with pytest.raises(provenance.ProvenanceFormatRefused) as refused:
+        ProvStore.read_jsonl(path)
+    assert refused.value.found == found and refused.value.path == str(path)
+    assert "migration-ledger.md" in str(refused.value) and "re-run" in str(refused.value)
+    if first is None:
+        assert "1.x provenance store (provenance@1)" in str(refused.value)
+
+
+def test_hr47_an_empty_file_is_refused_typed(tmp_path: Path) -> None:
+    """An empty file carries no format record and is not read as an empty store."""
+    path = tmp_path / "empty.jsonl"
+    path.write_text("")
+    with pytest.raises(provenance.ProvenanceFormatRefused):
+        ProvStore.read_jsonl(path)
+
+
+def test_hr47_a_kind_entity_is_refused_by_the_writer_and_the_reader(tmp_path: Path) -> None:
+    """`kind` is not in `PROV_TYPE`: `entity()` refuses it, and so does `read_jsonl` on a 2.0 line carrying it."""
+    assert "kind" not in get_args(PROV_TYPE)
+    with pytest.raises(ValueError, match="unknown prov_type 'kind'"):
+        _store().entity(prov_type=cast(PROV_TYPE, "kind"), extent=None, attributes={"state": "uncertain"})
+    store = _store()
+    store.entity(prov_type="measurement", extent=None, attributes={"state": "uncertain"})
+    path = tmp_path / "prov.jsonl"
+    store.write_jsonl(path)
+    _rewrite_records(path, "entity", lambda rec: rec.update(prov_type="kind"))
+    with pytest.raises(ValueError, match="unknown prov_type 'kind'"):
+        ProvStore.read_jsonl(path)
+
+
+def test_hr47_every_store_the_writer_writes_is_provenance_2_and_holds_no_record_without_a_run_id(
+    tmp_path: Path,
+) -> None:
+    """The writer has one format, and a store refuses a `revised` view (no `run_id`) on merge as on write."""
+    store = _store()
+    eid = store.entity(prov_type="span", extent=(0.0, 1.0), attributes={"a": 1})
+    path = tmp_path / "prov.jsonl"
+    store.write_jsonl(path)
+    assert path.read_text().splitlines()[0] == FORMAT_LINE
+    assert all(record.run_id == "run-1" for record in ProvStore.read_jsonl(path).records())
+    forged = ProvStore(run_id="run-1")
+    forged._entities[eid] = provenance.revised(store.get_entity(eid), attributes={"a": 2})
+    with pytest.raises(ValueError, match="no run_id"):
+        ProvStore.merge([store, forged])
 
 
 @settings(max_examples=300, deadline=None)
@@ -845,23 +886,21 @@ def test_the_store_records_again_every_form_it_returns(
     assert all(record.minted_id() == record.id for record in ProvStore.read_jsonl(third).records())
 
 
-def test_a_hand_edited_store_keeps_order_ids_and_relations_and_marks_the_edit_unverified() -> None:
-    """`testing.provenance.hand_edited` changes one entity's attributes and nothing else a reader can see."""
-    from senselab_core.testing.provenance import hand_edited
+def test_with_entity_attributes_keeps_order_and_relations_and_remints_the_edited_entity() -> None:
+    """`testing.provenance.with_entity_attributes` changes one entity's attributes; the copy is a 2.0 store."""
+    from senselab_core.testing.provenance import with_entity_attributes
 
     store = _store()
     first = store.entity(prov_type="span", extent=(0.0, 1.0), attributes={"signal": "enhanced", "n": [1]})
     second = store.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
     act = store.activity(node="N", step=None, parameters={})
     store.was_generated_by(first, act)
-    edited = hand_edited(store, first, signal="plain")
-    assert [e.id for e in edited.entities()] == [first, second] and edited.relations() == store.relations()
-    held = edited.get_entity(first)
-    assert held.attributes == {"signal": "plain", "n": [1]} and not held.verified and not edited.verified
-    assert (
-        edited.get_entity(second) == store.get_entity(second)
-        and store.get_entity(first).attributes["signal"] == "enhanced"
-    )
+    edited = with_entity_attributes(store, first, signal="plain")
+    new_first, held_second = edited.entities()
+    assert held_second == store.get_entity(second) and new_first.id != first
+    assert new_first.attributes == {"signal": "plain", "n": [1]} and new_first.minted_id() == new_first.id
+    assert edited.relations() == [("wasGeneratedBy", new_first.id, act)]
+    assert store.get_entity(first).attributes["signal"] == "enhanced"
 
 
 def _decoded_type(value: object) -> type | None:

@@ -47,7 +47,6 @@ PROV_TYPE = Literal[
     "speaker",
     "interval",
     "measurement",
-    "kind",
     "stream",
     "pii",
     "verdict",
@@ -58,20 +57,11 @@ PROV_TYPE = Literal[
     "enrollment",
     "artifact",
 ]
-"""Every entity type the store understands.
+"""Every entity type the store writes and reads; the writer and the reader share this one vocabulary.
 
-``artifact`` is a file set identified by its content alone: it may carry a checksum without a
-``path``, for callers whose file names must not be recorded. See
-``specs/20261007-reproduce-driver/design.md``.
-
-``branch_report`` is what a node that reports rather than decides writes: the four triage branches
-and QUALITY. It carries task conformance and deviations and no outcome, which is why it is not a
-``verdict``: a reader folding verdicts must not pick up a decision no branch made.
-
-``kind`` is **historical**: TAXONOMY's evidence fold wrote it until 2026-09-13 and nothing writes it
-now. It stays here because this vocabulary is the *reader's*, and the store is append-only: a reader
-that refuses a record it previously wrote makes finished runs unopenable. The writer's vocabulary may
-shrink; this one may not. See ``specs/20260912-ruleset-in-pipeline/design.md``.
+``artifact`` is a file set identified by its content alone: it may carry a checksum without a ``path``.
+``branch_report`` is what a node that reports rather than decides writes: task conformance and
+deviations, and no outcome.
 """
 AGENT_TYPE = Literal["model", "software"]
 ENVIRONMENT_KIND = Literal["host", "venv"]
@@ -198,17 +188,36 @@ def _check_agent_fields(
 
 
 PROVENANCE_FORMAT = "provenance@2.0"
-"""The format `write_jsonl` writes a store whose every record is verified: its first line is the format record.
+"""The one format `write_jsonl` writes and `read_jsonl` reads: its first line is the format record.
 
 Every record in it carries a `run_id`, and its id is checked against its content when it is read.
 """
 
-UNVERIFIED_FORMAT = "provenance@1.1"
-"""The format `write_jsonl` writes a store holding records read from `provenance@1`.
+MIGRATION_STATEMENT = "specs/20261030-140022-senselab-2x-api/migration-ledger.md#1x-provenance-stores"
+"""Where the statement on 1.x provenance stores is: 2.x does not read them; re-running under 2.x migrates."""
 
-The lines are canonical like `provenance@2.0`'s; a record with `run_id` null is unverified and keeps the
-id the `provenance@1` file gave it. A file whose first line is not a format record is `provenance@1`.
-"""
+
+class ProvenanceFormatRefused(ValueError):
+    """A file `read_jsonl` refuses because its first line is not the `provenance@2.0` format record.
+
+    Attributes:
+        path: The file.
+        found: The format its first line declares, or None when it carries no format record, which is a
+            1.x (`provenance@1`) store.
+    """
+
+    def __init__(self, path: str | Path, found: object) -> None:
+        """Name the file, what it declares, and the migration statement."""
+        self.path, self.found = str(path), found
+        if found is None:
+            what = "carries no format record: it is a 1.x provenance store (provenance@1)"
+        else:
+            what = f"declares format {found!r}, not {PROVENANCE_FORMAT}"
+        super().__init__(
+            f"{path} {what}. 2.x reads only {PROVENANCE_FORMAT}; a 1.x store stays readable by 1.x, and migrating"
+            f" it is re-running the pipeline under 2.x. See {MIGRATION_STATEMENT}"
+        )
+
 
 _ID_TAG = "provenance-id@4"
 _ID_PATTERN = re.compile(r"^[0-9a-f]{16}$")
@@ -382,8 +391,7 @@ def recorded(value: object) -> Any:  # noqa: ANN401
 def plain_values(value: object) -> Any:  # noqa: ANN401
     """Return a store file's JSON value as a caller reads it back: every token decoded, as `recorded` returns.
 
-    For readers that parse a store file as JSON rather than through `ProvStore.read_jsonl`. A
-    `provenance@1` value holds no tokens and is returned with its containers read-only.
+    For readers that parse a store file as JSON rather than through `ProvStore.read_jsonl`.
 
     Raises:
         UnrecordableValue: for a malformed token.
@@ -443,10 +451,10 @@ class _Record:
     `_DIGESTED` names the fields the id covers, after `run_id`; `_VALUES` the fields of provenance values
     (attributes, parameters, dependencies). A value field holds what a caller reads back, every token
     decoded; the record also keeps the tokens it was identified by, which the file holds. A record with a
-    `run_id` is verified: its id is checked against its content when it is built. A record whose `run_id`
-    is `None` is unverified: one read from a `provenance@1` file, which keeps the id that file gave it, or
-    a copy `revised` returns; a store holds an unverified record only when it read it from a file that may
-    carry one. Two records are equal when their files' lines identify the same content (JCS).
+    `run_id` has its id checked against its content when it is built; a store holds only such records and
+    a file holds only such lines. A record whose `run_id` is `None` is a view `revised` returns, which keeps
+    the id of the record it copies and which no store holds. Two records are equal when their files' lines
+    identify the same content (JCS).
     """
 
     _DIGESTED: ClassVar[tuple[str, ...]]
@@ -490,18 +498,13 @@ class _Record:
         """
         run = self.run_id if run_id is None else run_id
         if run is None:
-            raise ValueError(f"{self._KIND} {self.id!r} was read from provenance@1 and has no run_id to mint from")
+            raise ValueError(f"{self._KIND} {self.id!r} is a revised view and has no run_id to mint from")
         parts = [run, *(thawed(self._field(name)) for name in self._DIGESTED)]
         try:
             digest = identity_digest(_ID_TAG, parts)
         except ValueError as err:
             raise UnrecordableValue(".".join(("run_id", *self._DIGESTED)), parts, str(err)) from err
         return f"{self._prefix()}-{digest[:16]}"
-
-    @property
-    def verified(self) -> bool:
-        """Whether this record's id was checked against its content: it has a `run_id`."""
-        return self.run_id is not None
 
     def as_record(self) -> dict[str, Any]:
         """Return the JSON object a file holds for this record: value fields as their tokens."""
@@ -523,7 +526,7 @@ class Entity(_Record):
         prov_type: One of `PROV_TYPE`.
         extent: `(start, end)` in seconds, finite, `start <= end`, or None.
         attributes: The normalised, read-only attributes.
-        run_id: The run the id was minted in, or None for a record read from `provenance@1`.
+        run_id: The run the id was minted in, or None for a view `revised` returns.
     """
 
     _DIGESTED: ClassVar[tuple[str, ...]] = ("prov_type", "extent", "attributes")
@@ -557,7 +560,7 @@ class Activity(_Record):
         started: When it began, ISO 8601, or None when unrecorded.
         ended: When it finished, ISO 8601, or None when unrecorded.
         parameters: The normalised, read-only values it ran with.
-        run_id: The run the id was minted in, or None for a record read from `provenance@1`.
+        run_id: The run the id was minted in, or None for a view `revised` returns.
     """
 
     _DIGESTED: ClassVar[tuple[str, ...]] = ("node", "step", "parameters")
@@ -593,7 +596,7 @@ class Agent(_Record):
         unresolved_reason: Why the commit is unknown, when it is. A provenance model that cannot say
             "I could not resolve this" forces either a lie or a crash.
         version: Software version, for a software agent.
-        run_id: The run the id was minted in, or None for a record read from `provenance@1`.
+        run_id: The run the id was minted in, or None for a view `revised` returns.
     """
 
     _DIGESTED: ClassVar[tuple[str, ...]] = ("agent_type", "model_id", "commit_sha", "unresolved_reason", "version")
@@ -634,7 +637,7 @@ class Environment(_Record):
         dependencies_digest: SHA-256 over the venv's full installed-distribution listing, when
             ``dependencies`` holds a declared subset rather than that full listing.
         senselab_version: senselab's own installed version, for the host.
-        run_id: The run the id was minted in, or None for a record read from `provenance@1`.
+        run_id: The run the id was minted in, or None for a view `revised` returns.
     """
 
     _DIGESTED: ClassVar[tuple[str, ...]] = (
@@ -709,8 +712,8 @@ def revised(target: _Record | Mapping[str, Any], /, **changes: object) -> _Recor
 
     For a mapping a record holds (attributes, parameters, an object inside them): what a caller reads back
     from a record of its items with `changes` (`recorded`). For a record: a copy with the changed fields
-    that keeps the record's id; the copy is unverified (`run_id` None), so a store refuses to hold it. It
-    is a view, such as a word with a bounded extent.
+    that keeps the record's id, with `run_id` None, so a store refuses to hold it. It is a view, such as a word
+    with a bounded extent.
 
     Raises:
         UnrecordableValue: if a change holds a value outside the provenance value type.
@@ -1039,14 +1042,9 @@ class ProvStore:
             *self._environments.values(),
         ]
 
-    @property
-    def verified(self) -> bool:
-        """Whether every record's id was checked against its content; False once it holds a `provenance@1` record."""
-        return all(record.verified for record in self.records())
-
-    def _hold(self, record: _Record, where: str = "", *, unverified: bool = False) -> None:
-        if not (record.verified or unverified):
-            raise ValueError(f"{where}{record._KIND} {record.id!r} has no run_id; a store holds it only from a file")
+    def _hold(self, record: _Record, where: str = "") -> None:
+        if record.run_id is None:
+            raise ValueError(f"{where}{record._KIND} {record.id!r} has no run_id; a store holds no revised view")
         tables: dict[str, dict[str, Any]] = {
             "entity": self._entities,
             "activity": self._activities,
@@ -1058,18 +1056,14 @@ class ProvStore:
     def write_jsonl(self, path: str | Path) -> None:
         """Write the store as one JSON record per line, keys sorted and numbers as Python writes them, atomically.
 
-        The first line is the format record: `provenance@2.0` when every record is verified, and
-        `provenance@1.1` when the store holds records read from `provenance@1`, which are written with
-        `run_id` null. Each entity, activity, agent and environment line holds every field of the record,
-        value fields as the tokens the record was identified by, so `read_jsonl` rebuilds the same records
-        (a float stays a float) and checks each verified id against its content. The records go to a
-        temporary file in
-        the target's directory, which is flushed, fsynced and renamed onto the target, so the file at
-        ``path`` is always either the previous store or the new one whole. An existing target's
-        permission bits are kept.
+        The first line is the `provenance@2.0` format record. Each entity, activity, agent and environment
+        line holds every field of the record, `run_id` included, value fields as the tokens the record was
+        identified by, so `read_jsonl` rebuilds the same records (a float stays a float) and checks each id
+        against its content. The records go to a temporary file in the target's directory, which is flushed,
+        fsynced and renamed onto the target, so the file at ``path`` is always either the previous store or
+        the new one whole. An existing target's permission bits are kept.
         """
-        written = PROVENANCE_FORMAT if self.verified else UNVERIFIED_FORMAT
-        lines = [_line({"format": written, "record": "format"})]
+        lines = [_line({"format": PROVENANCE_FORMAT, "record": "format"})]
         lines += [_line(record.as_record()) for record in self.records()]
         lines += [_line({"record": "relation", "relation": r, "source": s, "target": t}) for r, s, t in self._relations]
         write_atomically(Path(path), b"".join(line + b"\n" for line in lines))
@@ -1078,13 +1072,11 @@ class ProvStore:
     def read_jsonl(cls, path: str | Path, run_id: str = "read") -> "ProvStore":
         """Read a store back through the same record validation the store's own methods use.
 
-        A `provenance@2.0` file is read line by line as JSON; each value field must be a form the writer
-        writes (decoding and recording it again gives the same JSON), every record is rebuilt as its type,
-        which checks its fields and that its id is the id of its content, and a record without a `run_id`
-        is refused. Callers read every value decoded, as `recorded` returns it. A `provenance@1.1` file is
-        read the same way, its records without a `run_id` held unverified. A file without a format line
-        is `provenance@1`: its values are recorded as the store's methods record them, and its records keep
-        the ids that file gave them, unverified.
+        The file's first line must be the `provenance@2.0` format record. Each further line is read as JSON;
+        each value field must be a form the writer writes (decoding and recording it again gives the same
+        JSON), every record is rebuilt as its type, which checks its fields and that its id is the id of its
+        content, and a record without a `run_id` is refused. Callers read every value decoded, as `recorded`
+        returns it.
         Relations pass through the same membership check as the relation methods, so a relation line
         repeated reads back as one triple; a record repeated is held once, and two different records
         with one id are refused.
@@ -1097,33 +1089,23 @@ class ProvStore:
             The reconstructed store; for a file `write_jsonl` wrote, records equal to the written store's.
 
         Raises:
-            ValueError: If a line is not a record object, a `provenance@2.0` line is not canonical JSON,
+            ProvenanceFormatRefused: If the first line is not the `provenance@2.0` format record, an empty
+                file included.
+            ValueError: If a line is not a record object, a line is not canonical JSON,
                 a record has an unrecognised kind, missing or unexpected keys, a field its type refuses,
-                or an id that is not the id of its content, two records share an id, or the format
-                is not one this reader reads. The error names the file, the line and the record.
+                or an id that is not the id of its content, or two records share an id. The error names the
+                file, the line and the record.
         """
         store = cls(run_id=run_id)
         lines = [(n, line) for n, line in enumerate(Path(path).read_bytes().split(b"\n"), start=1) if line.strip()]
-        legacy, unverified = True, True
-        if lines:
-            first = _parse(lines[0][1], f"{path}, line {lines[0][0]}", legacy=True)
-            if first.get("record") == "format":
-                readable = {PROVENANCE_FORMAT, UNVERIFIED_FORMAT}
-                if set(first) != {"format", "record"} or first["format"] not in readable:
-                    raise ValueError(
-                        f"{path}, line {lines[0][0]}: reads {sorted(readable)} and provenance@1, got {first!r}"
-                    )
-                legacy, unverified = False, first["format"] == UNVERIFIED_FORMAT
-                lines = lines[1:]
-        for line_no, line in lines:
+        _check_format_record(path, lines[0][1] if lines else None)
+        for line_no, line in lines[1:]:
             where = f"{path}, line {line_no}"
-            rec = _parse(line, where, legacy=legacy)
+            rec = _parse(line, where)
             kind = rec.pop("record", None)
             expected = _RECORD_KEYS.get(cast(str, kind))
             if expected is None:
                 raise ValueError(f"{where}: unrecognised record kind {kind!r}")
-            if legacy and kind != "relation":
-                expected = expected - {"run_id"}
             missing, unexpected = sorted(expected - rec.keys()), sorted(rec.keys() - expected)
             if missing or unexpected:
                 raise ValueError(
@@ -1137,20 +1119,17 @@ class ProvStore:
                 store._relate(cast(RELATION, rec["relation"]), rec["source"], rec["target"])
                 continue
             try:
-                if not legacy:
-                    for name in _RECORD_TYPES[cast(str, kind)]._VALUES:
-                        rec[name] = _check_normal_form(rec[name], name)
+                for name in _RECORD_TYPES[cast(str, kind)]._VALUES:
+                    rec[name] = _check_normal_form(rec[name], name)
                 record = _RECORD_TYPES[cast(str, kind)](**rec)
             except (ValueError, TypeError) as err:
                 raise ValueError(f"{where}: {kind} {rec.get('id')!r}: {err}") from err
-            store._hold(record, f"{where}: ", unverified=unverified)
+            store._hold(record, f"{where}: ")
         return store
 
     @classmethod
     def merge(cls, stores: Sequence["ProvStore"]) -> "ProvStore":
         """Union several stores; order-independent, since one id holds one record and two timings of an activity one.
-
-        A record a store holds unverified is held unverified by the union.
 
         Raises:
             ValueError: If two stores hold different records under one id.
@@ -1158,7 +1137,7 @@ class ProvStore:
         out = cls(run_id="merged")
         for s in stores:
             for record in s.records():
-                out._hold(record, unverified=True)
+                out._hold(record)
         seen: set[tuple[RELATION, str, str]] = set()
         for s in stores:
             for rel in s._relations:
@@ -1183,10 +1162,26 @@ def _refuse_constant(text: str) -> NoReturn:
     raise ValueError(f"non-finite number {text} is written as a token in this format")
 
 
-def _parse(line: bytes, where: str, *, legacy: bool) -> dict[str, Any]:
-    """Parse a line: JSON without bare non-finite literals, which `provenance@1` alone may hold."""
+def _check_format_record(path: str | Path, first: bytes | None) -> None:
+    """Refuse a file whose first line is not exactly the `provenance@2.0` format record.
+
+    Raises:
+        ProvenanceFormatRefused: naming what the first line declares, or None when it declares nothing.
+    """
     try:
-        value = json.loads(line) if legacy else json.loads(line, parse_constant=_refuse_constant)
+        value = json.loads(first) if first is not None else None
+    except ValueError:
+        value = None
+    if not (isinstance(value, dict) and value.get("record") == "format"):
+        raise ProvenanceFormatRefused(path, None)
+    if value != {"format": PROVENANCE_FORMAT, "record": "format"}:
+        raise ProvenanceFormatRefused(path, value.get("format"))
+
+
+def _parse(line: bytes, where: str) -> dict[str, Any]:
+    """Parse a line: JSON without bare non-finite literals, which the writer writes as tokens."""
+    try:
+        value = json.loads(line, parse_constant=_refuse_constant)
     except ValueError as err:
         raise ValueError(f"{where}: not JSON: {err}") from err
     if not isinstance(value, dict) or "record" not in value:

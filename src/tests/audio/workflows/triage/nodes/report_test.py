@@ -14,7 +14,7 @@ import pytest
 import soundfile as sf
 import torch
 from senselab_core.runtime.provenance import ProvStore
-from senselab_core.testing.provenance import hand_edited
+from senselab_core.testing.provenance import with_entity_attributes
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -1160,7 +1160,7 @@ class TestTheSummaryLayers:
         ]
         assert hear_windows
         raw_scores = {"Cough": 0.12, "Breathe": 0.31, "Speech": 0.44}
-        store = hand_edited(store, hear_windows[0].id, labels=[], scores={}, raw_scores=raw_scores)
+        store = with_entity_attributes(store, hear_windows[0].id, labels=[], scores={}, raw_scores=raw_scores)
 
         payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
 

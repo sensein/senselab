@@ -250,17 +250,29 @@ Architect review §5 (R-42) found:
   held mapping, the decoded mapping with the changes; of a record, a copy keeping its id with `run_id` null,
   which a store refuses to hold. `recorded(value)` is what a caller reads back for a value; `plain_values`
   decodes a value of a store file parsed as JSON.
-- **The previous major and unverified records.** A file without a format line is `provenance@1`, still read:
-  its values are recorded as the store's methods record them and its records keep the ids it gave them,
-  unverified (`run_id` null). A store holding an unverified record is written as `provenance@1.1`, the same lines
-  under a format line that says some ids are not recomputable; it is never written as `provenance@2.0`, which
-  would need every such record re-minted under a run id and every reference to its old id rewritten. Extents
-  are finite on read as on write.
+- **A provenance reader reads exactly what the writer writes** (H-R47, P-14; withdraws the `provenance@1` read
+  path H-R38 accepted). `read_jsonl` reads a file whose first line is exactly the `provenance@2.0` format
+  record and nothing else; any other file, an empty one included, is refused with `ProvenanceFormatRefused`,
+  which names a file without a format record as a 1.x (`provenance@1`) store and points to the migration
+  ledger's statement on 1.x provenance stores. There is no `provenance@1.1`, no unverified record and no
+  record without a `run_id` in a file or a store; a `revised` copy of a record (`run_id` null) is a view that
+  no store holds. 1.x reads its own stores (alpha and the freeze branch); migration is re-running the pipeline
+  under 2.x, and no converter exists. Extents are finite on read as on write.
+- **One entity vocabulary for the writer and the reader** (H-R47). `PROV_TYPE` is what the writer writes and
+  all the reader reads. 1.x kept a type in the reader's vocabulary after the writer stopped writing it, on the
+  rule that a reader refusing a record it once wrote makes finished runs unopenable: `kind`, which TAXONOMY's
+  evidence fold wrote until 2026-09-13 (`specs/20260912-ruleset-in-pipeline/design.md`). Under P-14 that rule
+  does not hold across the major: finished 1.x runs stay openable by 1.x, and 2.x refuses `kind` on write and
+  on read. `branch_report` is a type of its own rather than a `verdict` because it carries conformance and
+  deviations and no outcome, and a reader folding verdicts must not pick up a decision no branch made.
+  `artifact` may carry a checksum without a `path` for callers whose file names must not be recorded
+  (`specs/20261007-reproduce-driver/design.md`).
 - **Every artifact carries `format: <name>@<major>.<minor>`.** That covers results, logical plans,
   placements, profiles, provenance records, fitted artifacts, store indexes and graph documents.
   - A minor change is additive, and readers ignore unknown fields.
   - A major change requires a migration.
-- **Readers** support the current and the previous major version.
+- **Readers** support the current and the previous major version, within 2.x. A 1.x format is not a previous
+  major of a 2.x one: 2.x reads no 1.x artifact (P-14), and the provenance reader reads `provenance@2.0` alone.
 - **Migrations are declared tasks** (`migrate:<name>@<from>→<to>`). They are run lazily on read, or
   in bulk as a pipeline, and recorded in provenance.
 - **A schema bump no longer implies a wipe.** The store keeps entries whose format is readable. A

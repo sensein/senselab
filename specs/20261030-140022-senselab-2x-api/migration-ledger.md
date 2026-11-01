@@ -16,6 +16,13 @@ since then as of 2026-10-30.
 | `src/senselab/utils/` | `19834fdd` | — |
 | `scripts/`, `tutorials/` | `19834fdd` | — |
 
+## 1.x provenance stores
+
+1.x provenance stores (`provenance@1`, including historical `kind` records) are not readable by 2.x; they remain
+readable by 1.x (alpha and the freeze branch); migration is re-running the pipeline under 2.x. (H-R47, P-14; no
+converter exists. `ProvStore.read_jsonl` refuses such a file with `ProvenanceFormatRefused`, whose message points
+here.)
+
 ## Untagged digests in 1.x (H-R20)
 
 The strict form of the tagged-digest data-flow lint (`untagged_digests(..., strict=True)`, deleted in H9e with

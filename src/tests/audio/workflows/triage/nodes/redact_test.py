@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 from senselab_core.runtime.provenance import Entity, ProvStore
-from senselab_core.testing.provenance import hand_edited
+from senselab_core.testing.provenance import with_entity_attributes
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.data_structures.audio_hints import AudioHints, ExpectedSpeech
@@ -1245,7 +1245,7 @@ class TestTheStoresScanIsEvidenceOrItIsNot:
         """A detector's failure message may quote the scanned input, so only its name is recorded."""
         _seed_redact_store(store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
         scan = next(e for e in store.entities("measurement") if e.attributes.get("name") == "pii_scan")
-        store = hand_edited(store, scan.id, failed={"gliner": "ValueError on 'jane doe'"})
+        store = with_entity_attributes(store, scan.id, failed={"gliner": "ValueError on 'jane doe'"})
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.FAIL
         assert _verdict_entity(store, "REDACT").attributes["scan_failed"] == ["gliner"]

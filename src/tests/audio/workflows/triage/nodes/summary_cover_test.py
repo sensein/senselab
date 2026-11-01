@@ -6,7 +6,7 @@ from typing import Any, Iterator
 
 import pytest
 from senselab_core.runtime.provenance import ProvStore
-from senselab_core.testing.provenance import hand_edited
+from senselab_core.testing.provenance import with_entity_attributes
 
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.figure import (
@@ -209,7 +209,7 @@ class TestTheCoverAndTheDecisionPageShareNoBlock:
         decisions = _route_decisions(cover_store)
         assert decisions, "the fixture wrote no route decision to attach an unavailable gate to"
         gates = {"voice.glide": "no f0 track in the store"}
-        cover_store = hand_edited(cover_store, decisions[0].id, unavailable_gates=gates)
+        cover_store = with_entity_attributes(cover_store, decisions[0].id, unavailable_gates=gates)
 
         _, cover = _rendered_pages(cover_store, pdf_config, tmp_path, monkeypatch)
         block = "\n".join(cover)

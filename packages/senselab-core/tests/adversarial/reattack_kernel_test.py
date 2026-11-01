@@ -139,12 +139,6 @@ def test_xk5_recorded_content_cannot_drift_from_its_id(tmp_path: Path) -> None:
     timed.activity(node="N", step=None, parameters={"p": [1]}, started="2026-01-01T00:00:00Z")
     one, other = ProvStore.merge([store, timed]), ProvStore.merge([timed, store])
     assert one.records() == other.records() and one.get_activity(act.id).started == "2026-01-01T00:00:00Z"
-    path = tmp_path / "rival.jsonl"
-    rival = revised(entity, attributes={"ev": {"n": [9]}})
-    lines = [{"format": "provenance@1.1", "record": "format"}, rival.as_record()]
-    path.write_bytes(b"".join(jcs_dumps(line) + b"\n" for line in lines))
-    with pytest.raises(ValueError, match="two different records"):
-        ProvStore.merge([store, ProvStore.read_jsonl(path)])
 
 
 @pytest.mark.logic
@@ -185,12 +179,12 @@ def test_xk6_jsonl_is_lossless_and_ids_recompute(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_xk6_unverified_records_never_pass_as_verified(tmp_path: Path) -> None:
-    """A 2.0 line without a run_id is refused; a provenance@1 store is written back as 1.1, never as 2.0."""
+def test_xk6_a_line_without_a_run_id_is_refused(tmp_path: Path) -> None:
+    """A `revised` view written as a 2.0 line (its `run_id` null) is refused; a store holds no such record."""
     store = ProvStore(run_id="r")
     eid = store.entity(prov_type="span", extent=(0.0, 1.0), attributes={"a": 1})
     edited = revised(store.get_entity(eid), attributes={"a": 2})
-    assert edited.id == eid and not edited.verified
+    assert edited.id == eid and edited.run_id is None
     path = tmp_path / "edited.jsonl"
     path.write_bytes(
         b"".join(
@@ -199,25 +193,12 @@ def test_xk6_unverified_records_never_pass_as_verified(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="no run_id"):
         ProvStore.read_jsonl(path)
-    legacy = tmp_path / "old.jsonl"
-    legacy.write_text(
-        '{"record": "entity", "id": "span-0123456789abcdef", "prov_type": "span", "extent": [0, 1], "attributes": {}}\n'
-    )
-    back = ProvStore.read_jsonl(legacy)
-    assert not back.verified
-    back.entity(prov_type="span", extent=None, attributes={"new": True})
-    written = tmp_path / "written.jsonl"
-    back.write_jsonl(written)
-    assert written.read_text().splitlines()[0] == '{"format": "provenance@1.1", "record": "format"}'
-    again = ProvStore.read_jsonl(written)
-    assert again.records() == back.records() and not again.verified
-    for bad in ("[NaN, 1.0]", "[0, 1e400]"):
-        legacy.write_text(
-            f'{{"record": "entity", "id": "span-0123456789abcdef", "prov_type": "span", "extent": {bad}, '
-            '"attributes": {}}\n'
-        )
-        with pytest.raises(ValueError, match="finite"):
-            ProvStore.read_jsonl(legacy)
+    store.write_jsonl(path)
+    written = path.read_text()
+    for bad, refusal in (("[NaN, 1.0]", "non-finite"), ("[0, 1e400]", "finite")):
+        path.write_text(written.replace('"extent": [0.0, 1.0]', f'"extent": {bad}'))
+        with pytest.raises(ValueError, match=refusal):
+            ProvStore.read_jsonl(path)
 
 
 @pytest.mark.logic
