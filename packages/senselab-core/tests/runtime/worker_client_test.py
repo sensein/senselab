@@ -13,6 +13,7 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import numpy
 import pytest
@@ -655,18 +656,31 @@ def test_send_to_wedged_worker_respects_deadline(array_parent: Path, backends_im
     client.close()
 
 
-@pytest.mark.logic
-def test_fifo_named_like_an_array_does_not_hang_the_host(array_parent: Path) -> None:
-    """A response naming a FIFO at `<sha>.npy` fails its item at once instead of blocking."""
+def _run_over_a_fifo_named_like_an_array(array_parent: Path) -> tuple[dict[str, Any], float]:
+    """Run a request whose response names a FIFO at `<sha>.npy`; return the item's record and the time it took."""
     sha = "a" * 64
     ref = {"__array__": {"path": f"$DIR/{sha}.npy", "sha256": sha, "dtype": "<f4", "shape": [1]}}
     client = _scripted(array_parent, [{"id": "$ID", "item": "a", "outputs": {"y": ref}}, _done(1)])
     os.mkfifo(client.array_dir / f"{sha}.npy")
     t0 = time.monotonic()
     [out] = client.run([{"id": "a", "inputs": {}}], {})
-    assert time.monotonic() - t0 < 1
-    assert out["error"]["type"] == "ArrayIntegrityError"
+    elapsed = time.monotonic() - t0
     client.close()
+    return out, elapsed
+
+
+@pytest.mark.logic
+def test_fifo_named_like_an_array_does_not_hang_the_host(array_parent: Path) -> None:
+    """A response naming a FIFO at `<sha>.npy` fails its item instead of blocking."""
+    out, _ = _run_over_a_fifo_named_like_an_array(array_parent)
+    assert out["error"]["type"] == "ArrayIntegrityError"
+
+
+@pytest.mark.limits
+def test_fifo_named_like_an_array_fails_its_item_within_a_second(array_parent: Path) -> None:
+    """A response naming a FIFO at `<sha>.npy` fails its item in under 1 s."""
+    _, elapsed = _run_over_a_fifo_named_like_an_array(array_parent)
+    assert elapsed < 1
 
 
 @pytest.mark.logic
@@ -775,12 +789,8 @@ def _probe_fails(monkeypatch: pytest.MonkeyPatch, how: str) -> list[float]:
     return calls
 
 
-@pytest.mark.logic
-@pytest.mark.parametrize("how", ["missing", "timeout"])
-def test_unknown_leader_state_is_bounded_and_never_read_as_reaped(
-    array_parent: Path, monkeypatch: pytest.MonkeyPatch, how: str
-) -> None:
-    """With `ps` missing or timing out after an idle crash, `close()` returns within the bound and signals nothing."""
+def _close_after_an_idle_crash_with_failing_ps(array_parent: Path, monkeypatch: pytest.MonkeyPatch, how: str) -> float:
+    """Crash an idle worker, make `ps` fail as `how`, close; assert nothing was signalled; return `close()`'s time."""
     client = WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent)
     pid = client.hello["pid"]
     os.kill(pid, signal.SIGKILL)
@@ -791,17 +801,32 @@ def test_unknown_leader_state_is_bounded_and_never_read_as_reaped(
     sent = _record_killpg(monkeypatch)
     t0 = time.monotonic()
     client.close()
-    assert time.monotonic() - t0 < SHUTDOWN_BOUND_S
+    elapsed = time.monotonic() - t0
     assert calls and [s for s in sent if s[2] != 0] == []
     assert client.returncode == -signal.SIGKILL and not alive(pid)
+    return elapsed
 
 
 @pytest.mark.logic
 @pytest.mark.parametrize("how", ["missing", "timeout"])
-def test_running_leader_is_stopped_without_asking_ps(
-    tmp_path: Path, array_parent: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch, how: str
+def test_unknown_leader_state_is_never_read_as_reaped(
+    array_parent: Path, monkeypatch: pytest.MonkeyPatch, how: str
 ) -> None:
-    """A leader whose exit has not been observed is held: a timed-out worker's group is stopped without `ps`."""
+    """With `ps` missing or timing out after an idle crash, `close()` returns and signals nothing."""
+    _close_after_an_idle_crash_with_failing_ps(array_parent, monkeypatch, how)
+
+
+@pytest.mark.limits
+@pytest.mark.parametrize("how", ["missing", "timeout"])
+def test_unknown_leader_state_is_bounded(array_parent: Path, monkeypatch: pytest.MonkeyPatch, how: str) -> None:
+    """With `ps` missing or timing out after an idle crash, `close()` returns within `SHUTDOWN_BOUND_S`."""
+    assert _close_after_an_idle_crash_with_failing_ps(array_parent, monkeypatch, how) < SHUTDOWN_BOUND_S
+
+
+def _time_out_a_forking_worker_with_failing_ps(
+    tmp_path: Path, array_parent: Path, monkeypatch: pytest.MonkeyPatch, how: str
+) -> float:
+    """Time out a hung forking worker with `ps` failing as `how`; assert `ps` was not asked; return `run`'s time."""
     pid_file = tmp_path / "pids"
     client = WorkerClient(
         sys.executable,
@@ -815,9 +840,29 @@ def test_running_leader_is_stopped_without_asking_ps(
     t0 = time.monotonic()
     with pytest.raises(TimeoutError):
         client.run([{"id": "a", "inputs": {}}], {"mode": "hang"})
-    assert time.monotonic() - t0 < 1 + SHUTDOWN_BOUND_S
+    elapsed = time.monotonic() - t0
     client.close()
     assert calls == [] and not group_alive(pgid) and not any(map(alive, recorded_pids(pid_file)))
+    return elapsed
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("how", ["missing", "timeout"])
+def test_running_leader_is_stopped_without_asking_ps(
+    tmp_path: Path, array_parent: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch, how: str
+) -> None:
+    """A leader whose exit has not been observed is held: a timed-out worker's group is stopped without `ps`."""
+    _time_out_a_forking_worker_with_failing_ps(tmp_path, array_parent, monkeypatch, how)
+
+
+@pytest.mark.limits
+@pytest.mark.parametrize("how", ["missing", "timeout"])
+def test_a_timed_out_worker_is_stopped_within_the_bound_without_asking_ps(
+    tmp_path: Path, array_parent: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch, how: str
+) -> None:
+    """A timed-out worker's group is stopped within `1 s + SHUTDOWN_BOUND_S` though `ps` fails."""
+    elapsed = _time_out_a_forking_worker_with_failing_ps(tmp_path, array_parent, monkeypatch, how)
+    assert elapsed < 1 + SHUTDOWN_BOUND_S
 
 
 @pytest.mark.logic

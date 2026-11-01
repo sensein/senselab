@@ -63,18 +63,10 @@ def _signals_only_while_the_leader_is_held(monkeypatch: pytest.MonkeyPatch) -> l
     return late
 
 
-@pytest.mark.contract
-@pytest.mark.parametrize("path", PATHS)
-@pytest.mark.parametrize("backend", BACKENDS)
-def test_shutdown_leaves_no_process_and_no_file(
-    backend: str, path: str, tmp_path: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """After `close()`: no process remains, the call met its bound and the parent is unchanged.
-
-    The group was signalled only while its leader was unreaped. The one exception is a directory the
-    backend made in the array directory: it is not the client's, so it stays there, and nothing else
-    does.
-    """
+def _shutdown_leaves_nothing(
+    backend: str, path: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[float, float]:
+    """Run `path` against `backend`, assert nothing is left behind, and return `close()`'s elapsed time and bound."""
     parent = tmp_path / "parent"
     parent.mkdir()
     (parent / "theirs.txt").write_text("t")
@@ -105,7 +97,6 @@ def test_shutdown_leaves_no_process_and_no_file(
             assert [type(e) for e in errors] == [WorkerLost]
         client.close()
         elapsed = time.monotonic() - t0
-    assert elapsed < bound
     assert not group_alive(pgid)
     assert late == [], "a signal went to the group after its leader was reaped"
     assert not any(map(alive, recorded_pids(pid_file)))
@@ -113,3 +104,30 @@ def test_shutdown_leaves_no_process_and_no_file(
     name = client.array_dir.name
     left = {name, f"{name}/{ARRAY_LIKE}", f"{name}/{ARRAY_LIKE}/scratch.bin"} if made else set()
     assert listing(parent) == before | left
+    return elapsed, bound
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("path", PATHS)
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_shutdown_leaves_no_process_and_no_file(
+    backend: str, path: str, tmp_path: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After `close()`: no process remains and the parent is unchanged.
+
+    The group was signalled only while its leader was unreaped. The one exception is a directory the
+    backend made in the array directory: it is not the client's, so it stays there, and nothing else
+    does.
+    """
+    _shutdown_leaves_nothing(backend, path, tmp_path, monkeypatch)
+
+
+@pytest.mark.limits
+@pytest.mark.parametrize("path", PATHS)
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_shutdown_meets_its_bound(
+    backend: str, path: str, tmp_path: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`close()` on every path ends within `SHUTDOWN_BOUND_S`, plus the request timeout when one was hit."""
+    elapsed, bound = _shutdown_leaves_nothing(backend, path, tmp_path, monkeypatch)
+    assert elapsed < bound

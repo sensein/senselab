@@ -210,6 +210,16 @@ def test_fifo_array_ref_is_refused_without_blocking(tmp_path: Path) -> None:
     sha = "b" * 64
     os.mkfifo(tmp_path / f"{sha}.npy")
     ref = {"__array__": {"path": str(tmp_path / f"{sha}.npy"), "sha256": sha, "dtype": "<f4", "shape": [1]}}
+    with pytest.raises(ArrayIntegrityError, match="regular file"):
+        from_wire(ref, array_dir=tmp_path)
+
+
+@pytest.mark.limits
+def test_fifo_array_ref_is_refused_within_a_second(tmp_path: Path) -> None:
+    """A FIFO at `<sha>.npy` is refused in under 1 s."""
+    sha = "b" * 64
+    os.mkfifo(tmp_path / f"{sha}.npy")
+    ref = {"__array__": {"path": str(tmp_path / f"{sha}.npy"), "sha256": sha, "dtype": "<f4", "shape": [1]}}
     t0 = time.monotonic()
     with pytest.raises(ArrayIntegrityError, match="regular file"):
         from_wire(ref, array_dir=tmp_path)

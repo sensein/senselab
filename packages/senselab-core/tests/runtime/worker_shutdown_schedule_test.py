@@ -49,17 +49,33 @@ def _check(tmp_path: Path, kind: str, occurrences: range) -> list[dict[str, Any]
     return reports
 
 
+RAISING_KINDS = ("sigint", "handler_raises_base", "handler_raises_exception")
+FIRST_CALL_KINDS = tuple(k for k in KINDS if k != "sigint")
+
+
+def _check_first_calls(tmp_path: Path, kind: str) -> None:
+    reports = _check(tmp_path, kind, range(1, 2))
+    if kind in RAISING_KINDS:
+        assert any(r["calls"]["client:_kill_group_now"] for r in reports)
+        assert any(r["calls"]["client:_steps"] >= 2 and r["path"] == "close" for r in reports)
+
+
 @pytest.mark.contract
-@pytest.mark.parametrize("kind", KINDS)
-def test_every_injection_at_every_boundary_ends_typed_bounded_and_clean(tmp_path: Path, kind: str) -> None:
-    """Each injection at the first call of each boundary, on construction, a timed-out run, an idle close.
+def test_a_sigint_at_every_boundary_ends_typed_bounded_and_clean(tmp_path: Path) -> None:
+    """A SIGINT at the first call of each boundary, on construction, a timed-out run and an idle close.
 
     An injection that raises inside the shutdown runs the SIGKILL fallback and a second pass of the steps.
     """
-    reports = _check(tmp_path, kind, range(1, 2))
-    if kind in ("sigint", "handler_raises_base", "handler_raises_exception"):
-        assert any(r["calls"]["client:_kill_group_now"] for r in reports)
-        assert any(r["calls"]["client:_steps"] >= 2 and r["path"] == "close" for r in reports)
+    _check_first_calls(tmp_path, "sigint")
+
+
+@pytest.mark.limits
+@pytest.mark.parametrize("kind", FIRST_CALL_KINDS)
+def test_every_injection_at_the_first_call_of_every_boundary_ends_typed_bounded_and_clean(
+    tmp_path: Path, kind: str
+) -> None:
+    """Each other kind of injection at the first call of each boundary, as the SIGINT case is checked."""
+    _check_first_calls(tmp_path, kind)
 
 
 @pytest.mark.limits
