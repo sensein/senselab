@@ -126,7 +126,10 @@ at the handshake.
    closes its output before its hello is `WorkerLost` with its exit code, like a loss at any later
    point: `ProtocolMismatch` is only for a worker that answered wrongly or stayed silent. Nothing
    else is decoded.
-3. The host sends `init`. `array_dir` is reserved; every other key is the backend's.
+3. The host sends `init`. `array_dir` is reserved; every other key is the backend's. `run_call` sends
+   `device` (the placement's device kind) and, for a call with a model, `model: {source, id, identity}`, the
+   pinned identity the backend loads by; a request's `params` are the task params with the backend params under
+   `backend_params`.
 4. The worker calls `load(init)` and answers `ready` with the load time in seconds, or `fatal`
    and exits non-zero.
 

@@ -161,6 +161,12 @@ Rulings P2-44, P2-57; implemented in Phase 2 Task 3c.
     execution activity uses the same term.
   - `senselab:storedContext` (`rdf:JSON`), `senselab:reusePolicy` (`xsd:string`) and `senselab:equivalence`
     (`xsd:string`, the table's `value@2` digest) are on `senselab:Reuse`.
+  - `senselab:executionProfile` is on `prov:Activity`, with range `xsd:string`: the `canonical_digest` of the
+    execution profile an execution ran under (Phase 2 Task 10b).
+  - `run_call`'s execution activity is associated with a `senselab:SoftwareAgent` whose `senselab:modelSource` is
+    `hf:<org>/<name>@<commit>` for a hub model and the bare source kind (`url`, `local`) otherwise, so no path or
+    URL enters it; a model-less call's agent carries none. The activity uses each input's `content:` entity and
+    generated the result entity the store adds.
 - **The document's format is `provenance@3.0`**, its top-level `format`: `{"@context": ..., "format":
   "provenance@3.0", "@graph": [...]}`. The published context maps `format` to null, so a JSON-LD processor
   ignores the key by declaration, not by dropping an unknown term.

@@ -128,3 +128,7 @@ Rulings H-R56 and H-R57 ([`rulings.md`](../rulings.md)); tags in ADR-006.
 - 2026-11-01: backend params enter the key; batch formation and chunk grid enter only when the backend
   declares them output-affecting; one key builder, `runtime/keys.build_key(call, placement, context)`, with
   `kernel.declare.key_for` its kernel half (`logical-key@6`; P2-47, P2-48; Phase 2 Task 5b).
+- 2026-11-01: Phase 2's `runtime/call.run_call` builds the `ExecutionContext` and sets `model_source` from
+  `ResolvedModel.ref.source` (None for a model-less call); Phase 3 executors keep this when `InProcess` replaces
+  `run_call`. The execution profile's `canonical_digest` is recorded on each execution activity
+  (`senselab:executionProfile`), never in the key or the context fingerprint (P2-17, P2-37; Phase 2 Task 10b).
