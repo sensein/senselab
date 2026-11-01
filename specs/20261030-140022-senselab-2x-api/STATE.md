@@ -72,6 +72,12 @@ vLLM-omni kept, license taint kept and combinators deferred, prose review by mod
 
 ## Log
 
+- **2026-11-01 (H10, H-R48, H-R50..H-R52):** `src/` stays on the 2.x line as the 1.x source pool: frozen,
+  not packaged, not tested or linted, and imported by nothing in `packages/`. Use cases move from it by
+  merging `alpha`, a rename-only `git mv` and a modify commit (ADR-009, `migration-ledger.md`). The root
+  `senselab` distribution is the metadata-only 2.x umbrella. Core provenance has only the generic `artifact`
+  entity type, `run_id` is required on every record, and run manifests live under `$SENSELAB_CACHE/2x/`.
+
 - **2026-10-30 (Phase 1 adversarial round):** the round against `94e81479` found 11 high, 19 medium
   and 9 low findings (A-1..A-39), plus 9 unverified suspicions. They are recorded as R-59..R-97 and
   R-98, and they re-open R-5, R-10, R-30, R-33, R-44 and R-52. The report is in

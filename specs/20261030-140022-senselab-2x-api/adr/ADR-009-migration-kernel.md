@@ -16,8 +16,18 @@
 - Each use case has a **coexistence budget**: the dates by which its 1.x path is deleted.
 - **A 1.x module is deleted when its last use case moves.** No 1.x module is kept for a use case
   that has already moved (P-14).
-- **The triage decision layer** stays on the frozen 1.x tag, with a dated review against the
-  flywheel roadmap at the end of Phase 4 (P-36).
+- **Where 1.x lives** (amended 2026-11-01, H-R48, H-R51, H-R52). 1.x is developed on `alpha` and
+  kept on the freeze branch; 2.x is developed on `2.x`. On the 2.x line, `src/` is the 1.x source
+  pool: frozen, not packaged (the root `senselab` distribution is the 2.x umbrella), not tested and
+  not linted. Nothing in `packages/` imports it (import-linter `packages-not-1x`). 1.x code that
+  breaks because core changed is not fixed there.
+- **How a use case moves.** Merge `alpha` into the 2.x line first, so the module carries every 1.x
+  change (P-39); then a rename-only `git mv` commit from `src/` into `packages/`; then a modify
+  commit that ports it. The rename-only commit keeps `git log --follow` and blame across the move.
+- **Triage.** Its tasks and pipelines port like any other use case; its decision layer (routing,
+  branches, verdicts, and the dataset-fitted thresholds and policies) is superseded by the flywheel
+  (`roadmap.md`) and is deleted when its last use case moves. `migration-ledger.md` classifies each
+  triage module.
 
 **Kernel and runtime.**
 - `senselab_core` is split into:

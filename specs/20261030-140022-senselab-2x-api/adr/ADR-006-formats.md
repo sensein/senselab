@@ -247,26 +247,35 @@ Architect review §5 (R-42) found:
   `ValueError`. A comparison that must hold for those compares the tokens, `jcs_dumps(normalised(a)) ==
   jcs_dumps(normalised(b))`, as record equality does; `recorded(a) != recorded(b)` is exact only for values
   without a NaN or an array. `revised(target, **changes)` is the one copy-with-changes: of a
-  held mapping, the decoded mapping with the changes; of a record, a copy keeping its id with `run_id` null,
-  which a store refuses to hold. `recorded(value)` is what a caller reads back for a value; `plain_values`
+  held mapping, the decoded mapping with the changes; of a record, the record of the changed content in the
+  same run, its id minted again from that content (`id` and `run_id` cannot be changed). `recorded(value)` is what a caller reads back for a value; `plain_values`
   decodes a value of a store file parsed as JSON.
 - **A provenance reader reads exactly what the writer writes** (H-R47, P-14; withdraws the `provenance@1` read
   path H-R38 accepted). `read_jsonl` reads a file whose first line is exactly the `provenance@2.0` format
   record and nothing else; any other file, an empty one included, is refused with `ProvenanceFormatRefused`,
   which names a file without a format record as a 1.x (`provenance@1`) store and points to the migration
   ledger's statement on 1.x provenance stores. There is no `provenance@1.1`, no unverified record and no
-  record without a `run_id` in a file or a store; a `revised` copy of a record (`run_id` null) is a view that
-  no store holds. 1.x reads its own stores (alpha and the freeze branch); migration is re-running the pipeline
+  record without a `run_id`: `run_id` is a required field of every record type, so no record can be built
+  without one (H-R50). 1.x reads its own stores (alpha and the freeze branch); migration is re-running the pipeline
   under 2.x, and no converter exists. Extents are finite on read as on write.
 - **One entity vocabulary for the writer and the reader** (H-R47). `PROV_TYPE` is what the writer writes and
   all the reader reads. 1.x kept a type in the reader's vocabulary after the writer stopped writing it, on the
   rule that a reader refusing a record it once wrote makes finished runs unopenable: `kind`, which TAXONOMY's
   evidence fold wrote until 2026-09-13 (`specs/20260912-ruleset-in-pipeline/design.md`). Under P-14 that rule
   does not hold across the major: finished 1.x runs stay openable by 1.x, and 2.x refuses `kind` on write and
-  on read. `branch_report` is a type of its own rather than a `verdict` because it carries conformance and
-  deviations and no outcome, and a reader folding verdicts must not pick up a decision no branch made.
-  `artifact` may carry a checksum without a `path` for callers whose file names must not be recorded
-  (`specs/20261007-reproduce-driver/design.md`).
+  on read. The vocabulary is generic (H-R48): `artifact` alone. The thirteen 1.x types (`span`, `word`,
+  `speaker`, `interval`, `measurement`, `stream`, `pii`, `verdict`, `branch_report`, `assertion`,
+  `target_match`, `branch_decision`, `enrollment`) were triage's and no 2.x code wrote them; a use case that
+  needs a type adds it when it ports. `artifact` may carry a checksum without a `path` for callers whose file
+  names must not be recorded (`specs/20261007-reproduce-driver/design.md`); with it the only type, the rule
+  that other types needed a `path` beside a checksum went with them. The BEP-028 serializer takes the
+  `prov-<label>` label from its caller, with no default.
+- **2.x shares no mutable state with 1.x** (H-R50). Run manifests live in the 2.x namespace under the cache
+  root, `$SENSELAB_CACHE/2x/runs/<run>/resolutions@2.json` (`revision.NAMESPACE`). 1.x writes
+  `$SENSELAB_CACHE/runs/<run>/resolutions@2.json`; 2.x neither reads nor writes it, so one cache root can serve
+  both. The manifest's format is unchanged, so its tag stays `resolutions@2`; the namespace is a location, not
+  a format. The result store and the data cache take their root from the caller or from 2.x-only settings, and
+  hold 2.x formats only.
 - **Every artifact carries `format: <name>@<major>.<minor>`.** That covers results, logical plans,
   placements, profiles, provenance records, fitted artifacts, store indexes and graph documents.
   - A minor change is additive, and readers ignore unknown fields.
