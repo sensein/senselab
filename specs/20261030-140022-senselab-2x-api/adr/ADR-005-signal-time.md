@@ -39,3 +39,14 @@ variable-frame-rate video or long recordings.
 Stamping a file on read hashes every byte, and that now lives in the runtime (`runtime/audio_io.py`), not the
 kernel. It still conflicts with "never hashed whole" above; that conflict remains R-109 and is decided in
 Phase 2.
+
+## Amendment 2026-11-01: chunked stamps resolve the whole-file conflict
+
+- A source stamp records the per-chunk sha256 digests of the file on the `content_identity` grid (64 MiB) beside
+  their root, which stays the recording's identity. Taking a stamp hashes the file once, to take its identity; a
+  windowed read then verifies only the chunks the decoder reads, each read whole, hashed and compared before any of
+  its bytes is decoded, and `check` of a stamp taken elsewhere verifies the same way, reading only the chunks the
+  sound header lies in. A `cp -p` rewrite inside a chunk a read touches still raises `StaleSource`; one in a chunk it
+  does not touch is caught by the next read that touches it, or by `check` of a stamp this process took (its ctime).
+  The stamp change bumps the signal wire formats to `recording@2.0`, `audio@2.0` and `regular-group@2.0` (ADR-006).
+  This closes the note above (R-109, P2-21; Phase 2 Task 11b).

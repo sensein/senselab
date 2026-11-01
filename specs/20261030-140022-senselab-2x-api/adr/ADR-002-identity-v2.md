@@ -132,3 +132,9 @@ Rulings H-R56 and H-R57 ([`rulings.md`](../rulings.md)); tags in ADR-006.
   `ResolvedModel.ref.source` (None for a model-less call); Phase 3 executors keep this when `InProcess` replaces
   `run_call`. The execution profile's `canonical_digest` is recorded on each execution activity
   (`senselab:executionProfile`), never in the key or the context fingerprint (P2-17, P2-37; Phase 2 Task 10b).
+- 2026-11-01: clock re-binding is `kernel.time.rebind(output, stored_anchor, reader_anchor, timemap)`; `run_call`
+  stores outputs on the clocks their recording inputs' identities name and re-binds them to the caller's anchors on
+  every serve, so no key carries an anchor and one computation serves one content under every anchor; two recording
+  inputs of one content on different anchors are refused (`AmbiguousClock`) (R-114, H-R59, P2-66). Chunked identity
+  is verified per chunk on read and on `check` (ADR-005 amendment; R-109, P2-21). A local model's identity leaves out
+  `.git`, `.hg` and `.svn` directories at any depth; every other file counts (R-118, P2-22) (Phase 2 Task 11b).

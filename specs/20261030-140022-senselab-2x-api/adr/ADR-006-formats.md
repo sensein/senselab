@@ -251,3 +251,7 @@ Ruling P2-44 ([`plans/phase-2.md`](../plans/phase-2.md)) and ADR-010 as amended;
   host backend's kernel value is converted) and returned to the caller, fresh or from the store, as the declared
   type read by `from_wire_form`; an output whose tag reads as another type is refused (`OutputTypeMismatch`) before
   it is stored. A `str` passed for a `Text` port is held as `PlainText` (Phase 2 Task 11a).
+- 2026-11-01: a source stamp carries `chunk_size` and `chunks`, the per-chunk digests its `content` root is taken
+  over (ADR-005 amendment); the signal wire formats become `recording@2.0`, `audio@2.0` and `regular-group@2.0`; an
+  `@1` form is refused with `WireFormatRetired`, naming its format and the migration statement (P2-44) (Phase 2 Task
+  11b).

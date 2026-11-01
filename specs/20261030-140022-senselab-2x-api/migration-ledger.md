@@ -266,3 +266,10 @@ mark, since 2.x does not lint `src/`.
 | `src/senselab/audio/data_structures/audio.py:187` | `uuid.uuid3` | `Audio.generate_id`, a name-based UUID of `str(self.waveform)` (a truncated tensor repr) and the rate | `identity_digest` over the content identity (`audio@3`) |
 | `src/senselab/video/data_structures/video.py:201-202` | `uuid.uuid3` | `Video.generate_id`, a name-based UUID of `str(self.frames)`, the frame rate and the audio id | a registered identity over the frames' `npy_digest` |
 | `src/senselab/utils/constants.py:5` | `uuid.uuid3` | `SENSELAB_NAMESPACE`, the namespace of the two ids above | removed with them |
+
+## Retired wire formats
+
+2.x reads the signal wire formats `recording@2.0`, `audio@2.0` and `regular-group@2.0` (ADR-006). Their `@1`
+forms, whose source stamps carry no chunk digests, are retired with no converter (P2-44): `from_wire_form` refuses
+them with `WireFormatRetired`. Migrating a value is re-reading its source file (`open_audio`) or recomputing it; a
+stored output in an `@1` form is recomputed after its store entry is removed (Phase 2 Task 11b).
