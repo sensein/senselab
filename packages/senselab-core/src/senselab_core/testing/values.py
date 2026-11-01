@@ -58,11 +58,22 @@ from senselab_core.kernel.declare import BackendSpec, Env, TaskParams, TaskSpec
 from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ModelRef, ResolvedModel
 from senselab_core.kernel.license import License
-from senselab_core.kernel.results import Annotation, Embedding, Events, Intervals
+from senselab_core.kernel.results import (
+    Annotation,
+    Embedding,
+    Events,
+    Intervals,
+    Metric,
+    TextSpans,
+    Transcript,
+    TranscriptNode,
+    Trials,
+)
 from senselab_core.kernel.signals import (
     Audio,
     ChannelInfo,
     IrregularGroup,
+    PlainText,
     Recording,
     RegularGroup,
     SourceStamp,
@@ -104,6 +115,15 @@ def register_samples(
     `eq_hash_consistent`, at least two values with different digests.
     """
     _SAMPLES[cls] = (factory, tuple(invalid_updates))
+
+
+def samples_of(cls: type[Frozen]) -> Sequence[Frozen]:
+    """Return fresh samples of `cls`.
+
+    Raises:
+        KeyError: if `cls` has no registered samples.
+    """
+    return _SAMPLES[cls][0]()
 
 
 def registered_types() -> set[type[Frozen]]:
@@ -641,6 +661,7 @@ def _register_kernel_samples() -> None:
         ],
         invalid_updates=[{"label": numpy.array(["a"])}, {"value": numpy.array([True, False, True])}],
     )
+    _register_text_and_scoring_samples(span)
     register_samples(
         Formatted,
         lambda: [Formatted(format="thing@1.0"), Formatted(format="thing@2.1")],
@@ -733,6 +754,52 @@ def _register_kernel_samples() -> None:
             {"tunables": {"d": ()}},
             {"batch_invariant": True, "output_affecting": ("batch_formation",)},
         ],
+    )
+
+
+def _register_text_and_scoring_samples(span: Span) -> None:
+    text = PlainText(content="call 555 0100")
+    register_samples(
+        PlainText,
+        lambda: [text, PlainText(content="cafe\u0301")],
+        invalid_updates=[{"content": 1}, {"identity": "content:" + "f" * 64}, {"format": "text@2.0"}],
+    )
+    word = TranscriptNode(text="call", span=span, confidence=0.5)
+    register_samples(
+        TranscriptNode,
+        lambda: [TranscriptNode(text="call 555", span=span, children=(word,)), TranscriptNode(text="untimed")],
+        invalid_updates=[{"confidence": 1.5}, {"span": {"start_ns": 0.5, "end_ns": 1, "clock_id": "c"}}],
+    )
+    other_clock = TranscriptNode(text="x", span=Span(start_ns=0, end_ns=1, clock_id="d"))
+    register_samples(
+        Transcript,
+        lambda: [
+            Transcript(segments=(TranscriptNode(text="call", span=span, children=(word,)),)),
+            Transcript(segments=[]),
+        ],
+        invalid_updates=[{"segments": (word, other_clock)}, {"segments": [1]}],
+    )
+    register_samples(
+        TextSpans,
+        lambda: [
+            TextSpans.over(text, start=[0, 5], end=[4, 13], label=["verb", "phone"], score=[0.5, 0.9]),
+            TextSpans.over(text, start=[5], end=[13], label=["phone"]),
+        ],
+        invalid_updates=[{"end": numpy.array([4, 14])}, {"score": numpy.array([numpy.nan, 1.0])}, {"length": -1}],
+    )
+    rows = numpy.array([[1.0, 0.0], [0.0, 1.0]])
+    register_samples(
+        Trials,
+        lambda: [
+            Trials(first=rows, second=rows[::-1], same=[True, False], space="s"),
+            Trials(first=rows, second=rows, same=[True, True], space="s"),
+        ],
+        invalid_updates=[{"same": numpy.array([1, 0])}, {"second": rows[:1]}, {"first": numpy.zeros((2, 0))}],
+    )
+    register_samples(
+        Metric,
+        lambda: [Metric(name="wer", value=0.25, unit="1", items=4), Metric(name="der", value=0.1, unit="1", items=2)],
+        invalid_updates=[{"items": 0}, {"value": float("nan")}, {"name": ""}],
     )
 
 

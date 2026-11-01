@@ -25,12 +25,13 @@ from senselab_core.kernel.declare import (
     backend,
     check_canonical_params,
     json_schema,
+    kernel_types,
     key_for,
     task,
 )
 from senselab_core.kernel.identity import LogicalKey, ModelIdentity, ModelRef, ResolvedModel, UnpinnedModel
-from senselab_core.kernel.results import Annotation, Embedding
-from senselab_core.kernel.signals import Audio
+from senselab_core.kernel.results import Annotation, Embedding, Metric, TextSpans
+from senselab_core.kernel.signals import Audio, RegularSeries, Text
 
 COMMIT = "41f01f3fe87f28c78e2fbf8b568835947dd65ed9"
 AUDIO = "content:" + "a" * 64
@@ -306,6 +307,20 @@ def test_task_decorator_declares_its_spec() -> None:
     assert registry.tasks() == [_Embed.spec, _Label.spec]  # type: ignore[attr-defined]
     assert _Embed.spec.signature() == ("transform", {("audio", "Audio")}, {("embedding", "Embedding")})  # type: ignore[attr-defined]
     assert (_Embed.spec.params, _Label.spec.params) == (_Params, TaskParams)  # type: ignore[attr-defined]
+
+
+@pytest.mark.logic
+def test_task_ports_may_name_protocols() -> None:
+    """A port may name a port protocol, which `kernel_types` lists by name."""
+    registry = Registry()
+
+    @task(name="t.pii", version="1", kind="transform", registry=registry)
+    class _Pii:
+        inputs = {"text": Text, "series": RegularSeries}
+        outputs = {"spans": TextSpans, "metric": Metric}
+
+    assert _Pii.spec.inputs == {"text": "Text", "series": "RegularSeries"}  # type: ignore[attr-defined]
+    assert {"Text", "RegularSeries"} <= kernel_types().keys()
 
 
 @pytest.mark.logic

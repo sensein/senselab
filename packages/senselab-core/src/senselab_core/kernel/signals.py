@@ -4,7 +4,7 @@ import math
 from collections.abc import Mapping
 from fractions import Fraction
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING, Annotated, ClassVar, Protocol, Self
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Protocol, Self, runtime_checkable
 
 import numpy
 from pydantic import (
@@ -18,6 +18,7 @@ from pydantic import (
     TypeAdapter,
     model_validator,
 )
+from senselab_worker.canonical import canonical_text
 from senselab_worker.digest import identity_digest
 
 from senselab_core.kernel._base import (
@@ -32,6 +33,7 @@ from senselab_core.kernel._base import (
     require_ns,
     value_digest,
 )
+from senselab_core.kernel.formats import FormatTag, Formatted
 from senselab_core.kernel.identity import ContentIdentity
 from senselab_core.kernel.time import TimeAnchor
 
@@ -203,6 +205,35 @@ class RegularGroup(Frozen):
         return require_finite(samples, f"samples decoded from {self.source}")
 
 
+@runtime_checkable
+class RegularSeries(Protocol):
+    """Channels sampled together at one rate: what a task over regularly sampled channels reads.
+
+    `RegularGroup` and `Audio` implement it.
+    """
+
+    @property
+    def channels(self) -> tuple[ChannelInfo, ...]:
+        """The channels, one per row of what `read` returns."""
+        ...
+
+    @property
+    def sampling_rate(self) -> float:
+        """The sampling rate in Hz."""
+        ...
+
+    @property
+    def frames(self) -> int:
+        """The number of samples per channel."""
+        ...
+
+    def read(
+        self, start_ns: int | None = None, end_ns: int | None = None, reader: SourceReader | None = None
+    ) -> numpy.ndarray:
+        """Return the `(channels, samples)` samples in `[start_ns, end_ns)`, as `RegularGroup.read`."""
+        ...
+
+
 class IrregularGroup(Frozen):
     """Channels sampled together at the strictly increasing times `timestamps_ns`, one per `data` column.
 
@@ -353,6 +384,34 @@ class Audio(Recording):
         npy = held_npy_digest(group.data)
         return "content:" + identity_digest("audio@3", {"npy": npy, "sampling_rate": group.sampling_rate})
 
+    @property
+    def group(self) -> RegularGroup:
+        """The one `audio` group."""
+        group = self.groups[AUDIO_GROUP]
+        assert isinstance(group, RegularGroup)
+        return group
+
+    @property
+    def channels(self) -> tuple[ChannelInfo, ...]:
+        """The audio channels."""
+        return self.group.channels
+
+    @property
+    def sampling_rate(self) -> float:
+        """The sampling rate in Hz."""
+        return self.group.sampling_rate
+
+    @property
+    def frames(self) -> int:
+        """The number of samples per channel."""
+        return self.group.frames
+
+    def read(
+        self, start_ns: int | None = None, end_ns: int | None = None, reader: SourceReader | None = None
+    ) -> numpy.ndarray:
+        """Return the audio group's samples in `[start_ns, end_ns)`, as `RegularGroup.read`."""
+        return self.group.read(start_ns, end_ns, reader)
+
     @classmethod
     def from_group(cls, group: RegularGroup) -> "Audio":
         """Return the audio of one regular group of audio channels, its clock named by its identity.
@@ -396,3 +455,52 @@ class Audio(Recording):
         held = require_finite(held, "audio samples, as float32")
         group = RegularGroup(channels=audio_channels(x.shape[0]), sampling_rate=sampling_rate, data=held)
         return cls.from_group(group)
+
+
+@runtime_checkable
+class Text(Protocol):
+    """Text a task reads: its content in canonical form (`canonical_text`) and that content's identity.
+
+    `PlainText` implements it.
+    """
+
+    @property
+    def content(self) -> str:
+        """The text, in canonical form; character offsets into it count code points."""
+        ...
+
+    @property
+    def identity(self) -> str:
+        """The content identity of `content`."""
+        ...
+
+
+class PlainText(Formatted):
+    """Text held in canonical form (`canonical_text`), identified by its content.
+
+    `identity` is `"content:" + value_digest(IDENTITY_TYPE, {"content": content})`, derived by validation:
+    omitted, it is filled in; supplied, it must equal the derived one.
+    """
+
+    IDENTITY_TYPE: ClassVar[str] = "text"
+
+    format: FormatTag = "text@1.0"
+    content: str
+    identity: ContentIdentity
+
+    if TYPE_CHECKING:
+
+        def __init__(self, *, content: str, identity: str | None = None, format: str = "text@1.0") -> None:
+            """Hold `content` in canonical form, deriving `identity` or checking the one supplied."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_identity(cls, data: Any) -> Any:  # noqa: ANN401 - pydantic's hook signature
+        if isinstance(data, Mapping) and isinstance(data.get("content"), str):
+            content = canonical_text(data["content"])
+            derived = "content:" + value_digest(cls.IDENTITY_TYPE, {"content": content})
+            supplied = data.get("identity")
+            if supplied is not None and supplied != derived:
+                raise ValueError(f"identity {supplied!r} is not the content identity {derived!r}")
+            data = {**data, "content": content, "identity": derived}
+        return data

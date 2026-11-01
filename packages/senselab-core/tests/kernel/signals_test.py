@@ -11,9 +11,12 @@ from senselab_core.kernel.signals import (
     Audio,
     ChannelInfo,
     IrregularGroup,
+    PlainText,
     Recording,
     RegularGroup,
+    RegularSeries,
     SourceStamp,
+    Text,
     audio_channels,
 )
 from senselab_core.kernel.time import TimeAnchor
@@ -334,3 +337,27 @@ def test_a_source_group_is_read_only_through_a_reader(tmp_path: Path) -> None:
     for wrong in (numpy.ones((1, 3), dtype=numpy.float32), numpy.ones((2, 3)), numpy.full((2, 3), numpy.nan, "f4")):
         with pytest.raises(ValueError):
             group.read(10**9 // RATE, 4 * 10**9 // RATE, reader=_Reader(wrong))
+
+
+@pytest.mark.logic
+def test_regular_group_satisfies_regular_series() -> None:
+    """A regular group and audio both read as a `RegularSeries`: channels, rate, frames and `read`."""
+    audio = Audio.from_array(numpy.array([[0.25, -0.5, 0.75], [0.0, 0.5, -1.0]], dtype=numpy.float32), RATE)
+    group = audio.groups["audio"]
+    series: list[RegularSeries] = [group, audio] if isinstance(group, RegularGroup) else []
+    assert len(series) == 2 and all(isinstance(s, RegularSeries) for s in series)
+    for s in series:
+        assert (s.channels, s.sampling_rate, s.frames) == (audio_channels(2), RATE, 3)
+        assert s.read(0, 2 * 10**9 // RATE).tolist() == [[0.25, -0.5], [0.0, 0.5]]
+    assert not isinstance(IrregularGroup(channels=audio_channels(1), timestamps_ns=[0], data=[[0.0]]), RegularSeries)
+
+
+@pytest.mark.logic
+def test_plain_text_is_canonical_and_content_identified() -> None:
+    """Plain text is held in canonical form, its identity derived from it; a forged identity is refused."""
+    composed, decomposed = PlainText(content="caf\u00e9"), PlainText(content="cafe\u0301")
+    assert isinstance(composed, Text) and composed.content == decomposed.content == "caf\u00e9"
+    assert composed.identity == decomposed.identity == "content:" + value_digest("text", {"content": "caf\u00e9"})
+    assert composed.identity != PlainText(content="cafe").identity and composed.format == "text@1.0"
+    with pytest.raises(ValidationError, match="identity"):
+        PlainText(content="cafe", identity=composed.identity)

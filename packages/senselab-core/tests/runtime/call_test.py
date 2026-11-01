@@ -16,6 +16,7 @@ import soundfile
 from senselab_core.kernel import prov
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskSpec
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputIdentity, ReusePolicy
+from senselab_core.kernel.signals import Audio
 from senselab_core.runtime.audio_io import DECODER
 from senselab_core.runtime.call import (
     CallFailed,
@@ -74,6 +75,7 @@ TEST_REGISTRY.add_backend(_backend("fake-beta", "beta", Env.host()))
 TEST_REGISTRY.add_backend(_backend("fake-isolated", "isolated", Env.isolated("fake")))
 TEST_REGISTRY.add_backend(fake.FAKE)
 TEST_REGISTRY.add_backend(_backend("identity", "dsp", Env.host(), AUDIO_TASK, "backends.identity_backend_fixture"))
+TEST_REGISTRY.add_backend(_backend("fake-audio", "isolated", Env.isolated("fake"), AUDIO_TASK))
 
 CATALOGUE = Catalogue.load(
     f"""
@@ -233,6 +235,22 @@ def test_isolated_worker_equals_host(store: ResultStore) -> None:
     again = run_call(_call("other"), execution=_profile("isolated"), store=store)
     assert isolated.outputs == host.outputs and isolated.key != host.key
     assert again.reused is None and again.outputs != isolated.outputs
+
+
+@pytest.mark.contract
+def test_isolated_worker_reads_audio_by_its_wire_form(store: ResultStore, tmp_path: Path) -> None:
+    """An isolated backend is sent audio, in memory or read from a path, as its wire form."""
+    path = tmp_path / "tone.wav"
+    soundfile.write(path, numpy.array([0.25, -0.5], dtype=numpy.float32), 16000, subtype="FLOAT")
+    profile = _profile(stack_preferences={AUDIO_TASK.name: ["isolated"]})
+    calls = [
+        TaskCall.model_validate({"task": AUDIO_TASK.name, "inputs": {"audio": a}})
+        for a in (str(path), Audio.from_array(numpy.array([0.25, -0.5], dtype=numpy.float32), 16000))
+    ]
+    results = [run_call(c, execution=profile, store=store) for c in calls]
+    call_module._close_workers()
+    assert all(r.placement.backend.name == "fake-audio" and r.reused is None for r in results)
+    assert results[0].outputs != results[1].outputs
 
 
 @pytest.mark.logic

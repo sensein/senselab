@@ -27,7 +27,7 @@ import senselab_core.kernel.time  # noqa: F401 - importing it defines the time t
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap
 from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import InputIdentity, LogicalKey, Params, ProfileSliceIdentity, ResolvedModel
-from senselab_core.kernel.signals import Recording
+from senselab_core.kernel.signals import Recording, RegularSeries, Text
 
 TaskKind = Literal["transform", "fit"]
 
@@ -329,9 +329,16 @@ REGISTRY = Registry()
 """The process-wide registry; modules declaring tasks and backends add to it on import."""
 
 
+PORT_PROTOCOLS: tuple[type, ...] = (RegularSeries, Text)
+"""The protocols a port may name (ADR-005); a value of any type implementing one is accepted."""
+
+
 def kernel_types() -> dict[str, type]:
-    """Return the kernel value types a port may name, by name: every `Recording` and `Formatted` subclass."""
-    found: dict[str, type] = {Recording.__name__: Recording}
+    """Return the kernel value types a port may name, by name: every `Recording` and `Formatted` subclass and protocol.
+
+    The protocols are `PORT_PROTOCOLS`.
+    """
+    found: dict[str, type] = {Recording.__name__: Recording} | {p.__name__: p for p in PORT_PROTOCOLS}
     pending: list[type] = [Recording, Formatted]
     while pending:
         for sub in pending.pop().__subclasses__():
@@ -346,9 +353,8 @@ C = TypeVar("C", bound=type)
 def task(*, name: str, version: str, kind: TaskKind, registry: Registry = REGISTRY) -> Callable[[C], C]:
     """Declare the decorated class as a task in `registry` and set its `spec` to the `TaskSpec`.
 
-    The class holds `inputs` and `outputs`, each mapping port names to kernel value types (a `Recording` or a
-    `Formatted` result), and may hold
-    `Params`, a `TaskParams` subclass (`TaskParams` when absent).
+    The class holds `inputs` and `outputs`, each mapping port names to kernel value types (a port protocol, a
+    `Recording` or a `Formatted` result), and may hold `Params`, a `TaskParams` subclass (`TaskParams` when absent).
 
     Raises:
         TypeError: if `inputs` or `outputs` is missing or maps a port to anything but a kernel value type.
@@ -374,7 +380,11 @@ def _port_types(cls: type, ports: str) -> dict[str, str]:
     declared = getattr(cls, ports, None)
     if not isinstance(declared, Mapping):
         raise TypeError(f"task class {cls.__qualname__} must map {ports} port names to kernel value types")
-    bad = {p: t for p, t in declared.items() if not (isinstance(t, type) and issubclass(t, (Recording, Formatted)))}
+    bad = {
+        p: t
+        for p, t in declared.items()
+        if not (isinstance(t, type) and (t in PORT_PROTOCOLS or issubclass(t, (Recording, Formatted))))
+    }
     if bad:
         raise TypeError(f"{cls.__qualname__}.{ports}: ports {sorted(bad)} are not kernel value types")
     return {p: t.__name__ for p, t in declared.items()}

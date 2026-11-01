@@ -35,7 +35,8 @@ from senselab_core.kernel.identity import (
     ReusePolicy,
 )
 from senselab_core.kernel.signals import Recording
-from senselab_core.runtime.audio_io import DECODER, open_audio
+from senselab_core.kernel.wire import wire_form
+from senselab_core.runtime.audio_io import DECODER, READER, open_audio
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.hardware import HardwareInfo, numerics_class, probe_hardware
@@ -52,7 +53,10 @@ from senselab_core.runtime.worker_client import WorkerClient
 PRECISION = "default"
 """The precision a call records: the backend's own; no backend declares another yet."""
 ITEM_ID = "call"
-_READERS: Mapping[str, tuple[Callable[[str | PathLike[str]], Recording], str]] = {"Audio": (open_audio, DECODER)}
+_READERS: Mapping[str, tuple[Callable[[str | PathLike[str]], Recording], str]] = {
+    "Audio": (open_audio, DECODER),
+    "RegularSeries": (open_audio, DECODER),
+}
 
 
 Inputs = Annotated[Mapping[str, Any], AfterValidator(FrozenMapping), PlainSerializer(dict)]
@@ -195,7 +199,8 @@ def run_call(
         UnknownTask: the call's task is not declared.
         UnlistedSource, NoBackend, NoDevice: as `resolve_execution`.
         NotImplementedError: the backend runs in an `Env.server` env.
-        ValueError: an input has no reader for its port's type, or the backend params do not validate.
+        ValueError: an input has no reader for its port's type or, for an isolated backend, no wire form; or the
+            backend params do not validate.
         CallFailed: the backend failed the item.
         WorkerFatal, WorkerLost, ProtocolError: as the worker reports them.
     """
@@ -294,13 +299,18 @@ def _execute(  # noqa: PLR0913 - the call and everything placing it
     inputs: dict[str, object],
     profile: ExecutionProfile,
 ) -> dict[str, object]:
-    """Run the call's one item on the backend's worker with the task params and `backend_params` beside them."""
+    """Run the call's one item on the backend's worker with the task params and `backend_params` beside them.
+
+    A host worker is handed kernel values as they are; an isolated one, their wire forms (`wire_form`).
+    """
     backend = placement.backend
     init: dict[str, Any] = {"device": placement.device}
     if model is not None:
         init["model"] = {"source": model.ref.source, "id": model.ref.id, "identity": model.identity}
     params = {**call.params.model_dump(mode="json"), "backend_params": placement.backend_params.model_dump(mode="json")}
     worker = _worker(backend, env, init, model, profile.model_cache_budget_bytes)
+    if isinstance(worker, WorkerClient):
+        inputs = {port: wire_form(v, READER) if isinstance(v, Frozen) else v for port, v in inputs.items()}
     [result] = worker.run([{"id": ITEM_ID, "inputs": inputs}], params)
     if "error" in result:
         raise CallFailed(result["error"])

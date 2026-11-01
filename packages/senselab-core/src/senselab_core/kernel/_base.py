@@ -410,14 +410,19 @@ LABEL_KINDS = "biufU"
 """Dtype kinds a label array may hold: those `canonical_npy_bytes` stores."""
 
 
-def as_ns_array(v: object) -> numpy.ndarray:
-    """Validate a 1-D signed or unsigned integer array and return it as a frozen int64 copy."""
+def as_int64_array(v: object, what: str = "nanosecond times") -> numpy.ndarray:
+    """Validate a 1-D signed or unsigned integer array of `what` and return it as a frozen int64 copy."""
     a = _plain_array(v)
     if a.ndim != 1 or a.dtype.kind not in "iu":
-        raise ValueError(f"nanosecond times must be a 1-D integer array, got {a.ndim}-D {a.dtype}")
+        raise ValueError(f"{what} must be a 1-D integer array, got {a.ndim}-D {a.dtype}")
     if not numpy.can_cast(a.dtype, numpy.int64, casting="safe"):
-        raise ValueError(f"nanosecond times must fit int64, got {a.dtype}")
+        raise ValueError(f"{what} must fit int64, got {a.dtype}")
     return frozen_array(a.astype(numpy.int64, copy=False))
+
+
+def as_ns_array(v: object) -> numpy.ndarray:
+    """Validate a 1-D signed or unsigned integer array and return it as a frozen int64 copy."""
+    return as_int64_array(v)
 
 
 def as_numeric_array(v: object, ndim: int) -> numpy.ndarray:
