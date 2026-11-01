@@ -24,9 +24,10 @@ from hypothesis import strategies as st
 from lifecycle_probes_fixture import alive, gate, group_alive, interpreter, listing, recorded_pids, state
 from senselab_core.runtime import worker_client
 from senselab_core.runtime.worker_client import (
-    SHUTDOWN_BOUND_S,
+    DEFAULT_GRACES,
     ConcurrentUse,
     ProtocolMismatch,
+    ShutdownGraces,
     WorkerClient,
     WorkerFatal,
     WorkerLost,
@@ -92,10 +93,16 @@ SMALL_LINE_BYTES = 2048
 """The request-line limit of `small_line_worker`."""
 
 
+class _SmallLines(WorkerClient):
+    """A client whose request lines are limited to `SMALL_LINE_BYTES`, below the worker's own limit."""
+
+    _max_line_bytes = SMALL_LINE_BYTES
+
+
 @pytest.fixture
 def small_line_worker(array_parent: Path) -> Iterator[WorkerClient]:
     """A client over the fake worker whose request lines are limited to `SMALL_LINE_BYTES`."""
-    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent, max_line_bytes=SMALL_LINE_BYTES)
+    client = _SmallLines(sys.executable, FAKE, init={}, array_parent=array_parent)
     yield client
     client.close()
     assert not client.alive
@@ -516,7 +523,7 @@ def test_forking_backend_leaves_no_survivor(tmp_path: Path, backends_importable:
     with pytest.raises(TimeoutError):
         client.run([{"id": "a", "inputs": {}}], {"mode": "hang"})
     client.close()
-    assert time.monotonic() - t0 < 2 + SHUTDOWN_BOUND_S
+    assert time.monotonic() - t0 < 2 + DEFAULT_GRACES.bound
     pids = recorded_pids(pid_file)
     assert len(pids) == 2 and not any(map(alive, pids))
     assert not group_alive(pgid)
@@ -535,7 +542,7 @@ def test_timeout_returns_though_a_grandchild_holds_stderr(tmp_path: Path, backen
     t0 = time.monotonic()
     with pytest.raises(TimeoutError):
         client.run([{"id": "a", "inputs": {}}], {"mode": "hang"})
-    assert time.monotonic() - t0 < 2 + SHUTDOWN_BOUND_S
+    assert time.monotonic() - t0 < 2 + DEFAULT_GRACES.bound
     assert not client.alive and not any(map(alive, recorded_pids(pid_file)))
     client.close()
 
@@ -664,7 +671,7 @@ def test_send_to_wedged_worker_respects_deadline(array_parent: Path, backends_im
     t0 = time.monotonic()
     with pytest.raises(TimeoutError):
         client.run([{"id": "a", "inputs": {}}], {"blob": "x" * 8 * 2**20})
-    assert time.monotonic() - t0 < 2 + SHUTDOWN_BOUND_S
+    assert time.monotonic() - t0 < 2 + DEFAULT_GRACES.bound
     assert not group_alive(client.hello["pid"])
     client.close()
 
@@ -770,14 +777,13 @@ def test_idle_crash_keeps_the_leader_unreaped_until_close(array_parent: Path) ->
 def test_graceful_close_leaves_sigterm_its_own_grace(
     array_parent: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A worker that ignores the stop line gets SIGTERM with `TERM_GRACE_S` of the stop window left."""
+    """A worker that ignores the stop line gets SIGTERM with `graces.term` of the stop window left."""
     client = WorkerClient(
         sys.executable,
         "backends.slow_reader_backend_fixture",
         init={},
         array_parent=array_parent,
-        stop_grace_s=2.0,
-        term_grace_s=1.0,
+        graces=ShutdownGraces(stop=2.0, term=1.0),
     )
     client.run([{"id": "a", "inputs": {}}], {"mode": "stop_reading"})
     _wait_stopped(client.hello["pid"])
@@ -840,8 +846,8 @@ def test_unknown_leader_state_is_never_read_as_reaped(
 @pytest.mark.limits
 @pytest.mark.parametrize("how", ["missing", "timeout"])
 def test_unknown_leader_state_is_bounded(array_parent: Path, monkeypatch: pytest.MonkeyPatch, how: str) -> None:
-    """With `ps` missing or timing out after an idle crash, `close()` returns within `SHUTDOWN_BOUND_S`."""
-    assert _close_after_an_idle_crash_with_failing_ps(array_parent, monkeypatch, how) < SHUTDOWN_BOUND_S
+    """With `ps` missing or timing out after an idle crash, `close()` returns within `DEFAULT_GRACES.bound`."""
+    assert _close_after_an_idle_crash_with_failing_ps(array_parent, monkeypatch, how) < DEFAULT_GRACES.bound
 
 
 def _time_out_a_forking_worker_with_failing_ps(
@@ -881,9 +887,9 @@ def test_running_leader_is_stopped_without_asking_ps(
 def test_a_timed_out_worker_is_stopped_within_the_bound_without_asking_ps(
     tmp_path: Path, array_parent: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch, how: str
 ) -> None:
-    """A timed-out worker's group is stopped within `1 s + SHUTDOWN_BOUND_S` though `ps` fails."""
+    """A timed-out worker's group is stopped within `1 s + DEFAULT_GRACES.bound` though `ps` fails."""
     elapsed = _time_out_a_forking_worker_with_failing_ps(tmp_path, array_parent, monkeypatch, how)
-    assert elapsed < 1 + SHUTDOWN_BOUND_S
+    assert elapsed < 1 + DEFAULT_GRACES.bound
 
 
 @pytest.mark.logic

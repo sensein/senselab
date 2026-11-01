@@ -3,6 +3,7 @@
 
 import gc
 import logging
+import multiprocessing as mp
 import os
 import resource
 import signal
@@ -11,18 +12,18 @@ import sys
 import threading
 import time
 import warnings
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import lifecycle_probes_fixture
 import numpy
 import pytest
 import shutdown_schedule_fixture
-from senselab_core.runtime import worker_client
 from senselab_core.runtime.worker_client import (
+    DEFAULT_GRACES,
     ESCALATE_HINT,
-    SHUTDOWN_BOUND_S,
     WorkerClient,
     WorkerLost,
 )
@@ -94,14 +95,17 @@ def test_every_case_bound_carries_load_slack_yet_fails_a_real_hang(path: str, re
     `CASE_BOUND_S`; both must exceed the bound, so the load allowance never hides either.
     """
     bound = case_bound({"path": path, "real_graces": real_graces})
-    assert bound < (CASE_BOUND_S if real_graces else REAL_GRACES["STOP_GRACE_S"])
-    assert ctrl_c_bound() < REAL_GRACES["STOP_GRACE_S"]
+    assert bound < (CASE_BOUND_S if real_graces else REAL_GRACES.stop)
+    assert ctrl_c_bound() < REAL_GRACES.stop
 
 
 RUNTIME_TESTS = Path(__file__).resolve().parents[1] / "runtime"
 
 
 FAKE = "senselab_worker.fake"
+
+
+T = TypeVar("T")
 
 
 EXIT_CRASH = 70
@@ -140,43 +144,23 @@ def test_close_from_a_signal_handler_inside_close_returns(tmp_path: Path) -> Non
 
 @pytest.mark.limits
 def test_close_from_a_signal_handler_inside_close_returns_within_the_shutdown_bound(tmp_path: Path) -> None:
-    """The nested `close()` returns within `SHUTDOWN_BOUND_S`."""
+    """The nested `close()` returns within the shrunk graces' bound."""
     case = {"path": "close", "boundary": "module:_members_gone", "kind": "handler_close", "occurrence": 1}
     [report] = shutdown_schedule_fixture.run_schedule(tmp_path, [case])
     assert report["fired"] and report["outcome"] is None
-    assert report["elapsed"] < SHUTDOWN_BOUND_S
+    assert report["elapsed"] < shutdown_schedule_fixture.GRACES.bound
+
+
+def _in_a_child(fn: Callable[..., T], *args: object) -> T:
+    """Run the shutdown fixture's `fn(*args)` in a spawned child, where it may substitute a declared boundary."""
+    with ProcessPoolExecutor(1, mp_context=mp.get_context("spawn")) as pool:
+        return pool.submit(fn, *args).result(timeout=WAIT_S + 4 * DEFAULT_GRACES.bound)
 
 
 @pytest.mark.logic
-def test_close_from_another_thread_while_encoding_is_worker_lost(parent: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_close_from_another_thread_while_encoding_is_worker_lost(parent: Path) -> None:
     """`close()` from another thread while `run` encodes makes `run` raise `WorkerLost`, not a content fault."""
-    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=parent)
-    real = worker_client.to_wire
-    closer = threading.Thread(target=client.close, daemon=True)
-
-    def encode_while_closing(*args: Any, **kwargs: Any) -> Any:
-        if not closer.is_alive() and closer.ident is None:
-            closer.start()
-            end = time.monotonic() + WAIT_S
-            while client.returncode is None and time.monotonic() < end:
-                time.sleep(0.01)
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(worker_client, "to_wire", encode_while_closing)
-    outcome: list[BaseException] = []
-
-    def call() -> None:
-        try:
-            client.run([{"id": "a", "inputs": {"x": numpy.arange(4.0)}}], {})
-        except BaseException as exc:  # noqa: BLE001 - the test inspects whatever surfaced
-            outcome.append(exc)
-
-    runner = threading.Thread(target=call, daemon=True)
-    runner.start()
-    runner.join(WAIT_S + SHUTDOWN_BOUND_S)
-    closer.join(SHUTDOWN_BOUND_S)
-    assert not runner.is_alive() and not closer.is_alive()
-    assert [type(e) for e in outcome] == [WorkerLost], outcome
+    assert _in_a_child(shutdown_schedule_fixture.close_while_encoding, str(parent), WAIT_S) == ["WorkerLost"]
 
 
 def _await_exit(client: WorkerClient) -> None:
@@ -186,19 +170,9 @@ def _await_exit(client: WorkerClient) -> None:
         time.sleep(0.01)
 
 
-def _late_notification(monkeypatch: pytest.MonkeyPatch) -> None:
-    real = worker_client._wait_exit
-
-    def late(pid: int) -> Any:
-        time.sleep(0.3)
-        return real(pid)
-
-    monkeypatch.setattr(worker_client, "_wait_exit", late)
-
-
 @pytest.mark.logic
 @pytest.mark.parametrize("how", ["idle_sigkill", "crash_mid_request", "late_exit_notification", "exit_before_hello"])
-def test_every_death_carries_its_exit_code(parent: Path, monkeypatch: pytest.MonkeyPatch, how: str) -> None:
+def test_every_death_carries_its_exit_code(parent: Path, how: str) -> None:
     """A worker that dies idle, mid-request, before its hello or before the exit watch registers raises `WorkerLost`.
 
     The fault names the code the worker exited with.
@@ -211,7 +185,12 @@ def test_every_death_carries_its_exit_code(parent: Path, monkeypatch: pytest.Mon
         assert before.value.returncode == 7
         return
     if how == "late_exit_notification":
-        _late_notification(monkeypatch)
+        code, message, client_code = _in_a_child(
+            shutdown_schedule_fixture.crash_with_a_late_exit_notification, str(parent)
+        )
+        assert code == EXIT_CRASH and f"exit code {EXIT_CRASH}" in message
+        assert client_code == EXIT_CRASH
+        return
     init = {} if how == "idle_sigkill" else {"faults": {"crash_after": 0}}
     client = WorkerClient(sys.executable, FAKE, init=init, array_parent=parent)
     try:
@@ -284,17 +263,30 @@ def test_a_forked_child_never_touches_the_parents_worker(parent: Path, how: str)
 
 
 def _interrupting(monkeypatch: pytest.MonkeyPatch, *, times: int) -> None:
-    """Make the first `times` calls of `_members_gone` raise `SystemExit`, as a signal handler might."""
-    real = worker_client._members_gone
+    """Make the first `times` probes of whether the group has live members raise `SystemExit`, as a handler might.
+
+    The probe is `os.listdir("/proc")` where `/proc` exists, else `os.killpg(pgid, 0)`.
+    """
+    real_killpg, real_listdir = os.killpg, os.listdir
     calls = [0]
 
-    def interrupted(*args: Any) -> bool:
+    def interrupt() -> None:
         calls[0] += 1
         if calls[0] <= times:
             raise SystemExit(1)
-        return bool(real(*args))
 
-    monkeypatch.setattr(worker_client, "_members_gone", interrupted)
+    def killpg(pgid: int, sig: int) -> None:
+        if sig == 0:
+            interrupt()
+        real_killpg(pgid, sig)
+
+    def listdir(path: Any = ".") -> list[str]:  # noqa: ANN401
+        if path == "/proc":
+            interrupt()
+        return real_listdir(path)
+
+    monkeypatch.setattr(os, "killpg", killpg)
+    monkeypatch.setattr(os, "listdir", listdir)
 
 
 @pytest.mark.logic

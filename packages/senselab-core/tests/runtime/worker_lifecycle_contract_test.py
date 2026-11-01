@@ -11,7 +11,7 @@ import pytest
 from backends.subdir_backend_fixture import ARRAY_LIKE
 from lifecycle_probes_fixture import alive, gate, group_alive, listing, recorded_pids
 from senselab_core.runtime import worker_client
-from senselab_core.runtime.worker_client import SHUTDOWN_BOUND_S, WorkerClient, WorkerLost
+from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerClient, WorkerLost
 
 BACKENDS = [
     "backends.forking_backend_fixture",
@@ -37,7 +37,7 @@ def _close_during_run(client: WorkerClient, g: object) -> list[BaseException]:
     thread.start()
     g.entered()  # type: ignore[attr-defined]
     client.close()
-    thread.join(SHUTDOWN_BOUND_S)
+    thread.join(DEFAULT_GRACES.bound)
     assert not thread.is_alive(), "the run outlived close() from another thread"
     return errors
 
@@ -83,7 +83,7 @@ def _shutdown_leaves_nothing(
         )
         pgid = client.hello["pid"]
         assert all("outputs" in r for r in client.run(ITEMS, {}))
-        bound = SHUTDOWN_BOUND_S
+        bound = DEFAULT_GRACES.bound
         t0 = time.monotonic()
         if path == "timeout":
             bound += TIMEOUT_S
@@ -128,6 +128,6 @@ def test_shutdown_leaves_no_process_and_no_file(
 def test_shutdown_meets_its_bound(
     backend: str, path: str, tmp_path: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`close()` on every path ends within `SHUTDOWN_BOUND_S`, plus the request timeout when one was hit."""
+    """`close()` on every path ends within `DEFAULT_GRACES.bound`, plus the request timeout when one was hit."""
     elapsed, bound = _shutdown_leaves_nothing(backend, path, tmp_path, monkeypatch)
     assert elapsed < bound

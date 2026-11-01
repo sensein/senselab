@@ -17,9 +17,10 @@ import time
 import uuid
 import warnings
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import Any, ClassVar
 
 from senselab_worker import WIRE_VERSION, runtime_identity
 from senselab_worker.codec import (
@@ -48,12 +49,6 @@ from senselab_worker.ownership import ARRAY_NAME, ARRAY_TEMP_NAME, remove_owned
 
 LAUNCHER = "senselab_worker.launch"
 HELLO_TIMEOUT_S = 60.0
-STOP_GRACE_S = 10.0
-TERM_GRACE_S = 3.0
-KILL_GRACE_S = 5.0
-JOIN_GRACE_S = 2.0
-SHUTDOWN_BOUND_S = STOP_GRACE_S + KILL_GRACE_S + JOIN_GRACE_S
-EXIT_CODE_WAIT_S = 1.0
 DEFERRED_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 STDERR_TAIL_LINES = 100
 _STDERR_LINE_BYTES = 64 * 2**10
@@ -62,6 +57,31 @@ _GROUP_POLL_MAX_S = 0.05
 _LOGGED_LINE_BYTES = 200
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ShutdownGraces:
+    """How long each step of stopping a worker may take, in seconds."""
+
+    stop: float = 10.0
+    """The graceful stop window, from the stop line to SIGKILL."""
+    term: float = 3.0
+    """The last part of `stop` left to SIGTERM."""
+    kill: float = 5.0
+    """After SIGKILL, for the group to be gone."""
+    join: float = 2.0
+    """For the pipe readers to stop."""
+    exit_code_wait: float = 1.0
+    """After the worker's output closes, for its exit code."""
+
+    @property
+    def bound(self) -> float:
+        """The longest `close` and every host fault take to stop the group and release the client."""
+        return self.stop + self.kill + self.join
+
+
+DEFAULT_GRACES = ShutdownGraces()
+"""The graces a `WorkerClient` uses unless given others."""
 
 
 class ProtocolMismatch(InfrastructureFault):
@@ -345,7 +365,7 @@ class WorkerClient:
     `array_dir` under `array_parent` (the system temporary directory if `None`) and deletes only the
     array files in it, never other names: after each request every array file except those `init`
     references, and on close all of them and then the directory if it is empty. The worker runs in
-    its own process group, which `close` and every host fault stop within `SHUTDOWN_BOUND_S`; a
+    its own process group, which `close` and every host fault stop within its graces' `bound`; a
     descendant that calls `setsid` leaves the group and is not reached. One `run` may be in flight at
     a time. Host faults (`ProtocolMismatch`, `ProtocolError`, `WorkerLost`, `WorkerFatal`,
     `TimeoutError`) discard the worker and carry its exit code and last stderr lines as a note.
@@ -358,6 +378,9 @@ class WorkerClient:
     a forked child is foreign: closing or collecting it closes only the child's descriptors.
     """
 
+    _max_line_bytes: ClassVar[int] = MAX_LINE_BYTES
+    """The longest request line this client sends, the worker's own line limit."""
+
     def __init__(
         self,
         python: str | os.PathLike[str],
@@ -368,14 +391,9 @@ class WorkerClient:
         expect_runtime: str | None = None,
         load_timeout: float | None = None,
         request_timeout: float | None = None,
-        stop_grace_s: float = STOP_GRACE_S,
-        term_grace_s: float = TERM_GRACE_S,
-        max_line_bytes: int = MAX_LINE_BYTES,
+        graces: ShutdownGraces = DEFAULT_GRACES,
     ) -> None:
-        """Start the worker, check its hello and wait until it has loaded `init`.
-
-        A graceful stop waits `stop_grace_s` in all and leaves SIGTERM the last `term_grace_s` of it.
-        Request lines, and the values encoded into them, are refused past `max_line_bytes`.
+        """Start the worker, check its hello and wait until it has loaded `init`; stop it within `graces`.
 
         Raises:
             ValueError: if `init` uses the reserved key `array_dir` or has no wire form.
@@ -391,9 +409,7 @@ class WorkerClient:
         if "array_dir" in init:
             raise ValueError("init key 'array_dir' is reserved")
         self._request_timeout = request_timeout
-        self._stop_grace_s = stop_grace_s
-        self._term_grace_s = term_grace_s
-        self._max_line_bytes = max_line_bytes
+        self.graces = graces
         self._stderr: collections.deque[str] = collections.deque(maxlen=STDERR_TAIL_LINES)
         self._lines: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
         self._proc: subprocess.Popen[bytes] | None = None
@@ -507,7 +523,7 @@ class WorkerClient:
                     self._run_lock.release()
 
     def close(self) -> None:
-        """Stop the worker's process group and remove this client's files, within `SHUTDOWN_BOUND_S`.
+        """Stop the worker's process group and remove this client's files, within `graces.bound`.
 
         Safe to call twice and from another thread; a `run` in flight then raises `WorkerLost`.
         Called again on a thread already closing this client, as from a signal handler, it returns at
@@ -795,7 +811,7 @@ class WorkerClient:
         """Stop the worker for the host fault `exc`, then give `exc` the exit code and the stderr tail."""
         self._closed = True
         if isinstance(exc, WorkerLost) and not self._closed_by_caller:
-            self._exited.wait(EXIT_CODE_WAIT_S)
+            self._exited.wait(self.graces.exit_code_wait)
         self._shutdown(graceful=isinstance(exc, ProtocolMismatch))
         if isinstance(exc, WorkerLost) and exc.returncode is None:
             exc.returncode = self.returncode
@@ -835,7 +851,7 @@ class WorkerClient:
             self._shutting_down.discard(me)
 
     def _steps(self, *, graceful: bool, me: int) -> None:
-        bound = Deadline(SHUTDOWN_BOUND_S)
+        bound = Deadline(self.graces.bound)
         if self._acquire_shutdown(bound):
             try:
                 if not self._stopped:
@@ -854,7 +870,7 @@ class WorkerClient:
     def _acquire_shutdown(self, bound: Deadline) -> bool:
         if self._shutdown_lock.acquire(timeout=max(bound.remaining() or 0.0, 0.0)):
             return True
-        logger.error("another thread's shutdown of this client did not finish within %s s", SHUTDOWN_BOUND_S)
+        logger.error("another thread's shutdown of this client did not finish within %s s", self.graces.bound)
         return False
 
     def _stop(self, *, graceful: bool) -> None:
@@ -900,7 +916,7 @@ class WorkerClient:
         _signal_group(pgid, signal.SIGCONT, leader_exited=exited.is_set())
         if not _members_gone(pgid, exited, stop):
             _signal_group(pgid, signal.SIGKILL, leader_exited=exited.is_set())
-            if not _members_gone(pgid, exited, Deadline(KILL_GRACE_S)):
+            if not _members_gone(pgid, exited, Deadline(self.graces.kill)):
                 logger.error("worker process group %d still has members after SIGKILL", pgid)
 
     def _terminate(self, *, graceful: bool) -> None:
@@ -910,12 +926,12 @@ class WorkerClient:
             return
         assert proc.stdout is not None and proc.stderr is not None
         pgid = proc.pid
-        stop = Deadline(self._stop_grace_s)
+        stop = Deadline(self.graces.stop)
         if graceful and not self._exited.is_set():
             self._write_stop()
         self._retire_channel()
         if graceful:
-            self._exited.wait(max((stop.remaining() or 0.0) - self._term_grace_s, 0.0))
+            self._exited.wait(max((stop.remaining() or 0.0) - self.graces.term, 0.0))
         if proc.returncode is None:
             held = _leader_held(pgid, self._exited, min(LEADER_PROBE_TIMEOUT_S, stop.remaining() or 0.0))
             if held:
@@ -924,7 +940,7 @@ class WorkerClient:
                 except Exception:
                     logger.exception("stopping worker process group %d failed; sending SIGKILL", pgid)
                     _signal_group(pgid, signal.SIGKILL, leader_exited=self._exited.is_set())
-                    self._exited.wait(KILL_GRACE_S)
+                    self._exited.wait(self.graces.kill)
             elif held is None:
                 logger.warning(
                     "worker %d: cannot tell whether it is still unreaped; its process group is not signalled", pgid
@@ -933,7 +949,7 @@ class WorkerClient:
                 logger.warning("worker %d was reaped outside this client; its process group is not signalled", pgid)
             if self._exited.is_set() and proc.returncode is None:
                 proc.wait()
-        join = Deadline(JOIN_GRACE_S)
+        join = Deadline(self.graces.join)
         for pump in self._pumps:
             pump.finish()
         threads = [pump.thread for pump in self._pumps] + ([self._reaper] if self._reaper is not None else [])
@@ -941,7 +957,9 @@ class WorkerClient:
             thread.join(join.remaining())
         self._lines.put(None)
         if any(thread.is_alive() for thread in threads):
-            logger.warning("worker %d: pipe readers did not stop within %s s; its pipes stay open", pgid, JOIN_GRACE_S)
+            logger.warning(
+                "worker %d: pipe readers did not stop within %s s; its pipes stay open", pgid, self.graces.join
+            )
             return
         for pump in self._pumps:
             pump.close()

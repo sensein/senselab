@@ -12,6 +12,7 @@ moment and after a final `close()`. `faulthandler` ends the process with a trace
 `CASE_BOUND_S`, so a deadlock fails the case instead of hanging the test.
 """
 
+import contextlib
 import faulthandler
 import json
 import os
@@ -22,17 +23,19 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
+import numpy
 from lifecycle_probes_fixture import alive, group_alive, recorded_pids
 from senselab_core.runtime import worker_client
-from senselab_core.runtime.worker_client import WorkerClient, _Pump
+from senselab_core.runtime.worker_client import DEFAULT_GRACES, ShutdownGraces, WorkerClient, WorkerLost, _Pump
 
 RUNTIME_TESTS = Path(__file__).parent
 BACKEND = "backends.forking_backend_fixture"
+FAKE = "senselab_worker.fake"
 REQUEST_TIMEOUT_S = 0.2
-GRACES = {"STOP_GRACE_S": 0.3, "TERM_GRACE_S": 0.1, "KILL_GRACE_S": 0.5, "JOIN_GRACE_S": 0.5, "EXIT_CODE_WAIT_S": 0.2}
-REAL_GRACES = {name: getattr(worker_client, name) for name in GRACES}
+GRACES = ShutdownGraces(stop=0.3, term=0.1, kill=0.5, join=0.5, exit_code_wait=0.2)
+REAL_GRACES = DEFAULT_GRACES
 CASE_BOUND_S = 60.0
 LOAD_ALLOWANCE_S = 5.0
 """Added to every derived case bound for interpreter spawn, imports and hello on a loaded host."""
@@ -58,6 +61,7 @@ BOUNDARIES = (
     "module:_leader_held",
     "module:_signal_group",
     "module:_members_gone",
+    "module:_wait_exit",
     "client:_start",
     "client:_handshake",
     "client:_send",
@@ -88,25 +92,26 @@ TYPED: dict[str, set[str | None]] = {
 CLEAN = {"group_alive": False, "grandchild_alive": False, "reaped": True, "array_dir_gone": True}
 
 
-CONSTRUCTOR_GRACES = frozenset({"STOP_GRACE_S", "TERM_GRACE_S"})
-"""The graces a `WorkerClient` takes as constructor arguments, by the name of their default."""
+class _Capturing(WorkerClient):
+    """A client that hands itself to `sink` before it starts, so a case reaches one whose constructor raises."""
+
+    def __init__(self, sink: list[WorkerClient], *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+        sink.append(self)
+        super().__init__(*args, **kwargs)
 
 
 def _owner(boundary: str) -> tuple[Any, str]:
+    if boundary not in BOUNDARIES:
+        raise ValueError(f"{boundary!r} is not a declared shutdown boundary")
     where, name = boundary.split(":")
     return {"module": worker_client, "client": WorkerClient, "pump": _Pump, "popen": subprocess.Popen}[where], name
-
-
-def shutdown_bound(graces: dict[str, float]) -> float:
-    """`SHUTDOWN_BOUND_S` under `graces`."""
-    return graces["STOP_GRACE_S"] + graces["KILL_GRACE_S"] + graces["JOIN_GRACE_S"]
 
 
 def case_bound(case: dict[str, Any]) -> float:
     """How long a case may take: request timeout, exit-code wait, two shutdown passes and `LOAD_ALLOWANCE_S`."""
     graces = REAL_GRACES if case.get("real_graces") else GRACES
     timeout = REQUEST_TIMEOUT_S if case["path"] == "timeout" else 0.0
-    return timeout + graces["EXIT_CODE_WAIT_S"] + 2 * shutdown_bound(graces) + LOAD_ALLOWANCE_S
+    return timeout + graces.exit_code_wait + 2 * graces.bound + LOAD_ALLOWANCE_S
 
 
 def ctrl_c_bound() -> float:
@@ -188,29 +193,20 @@ def _state(client: WorkerClient, pid_file: Path) -> dict[str, Any]:
 def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
     """Run one case and return its report."""
     graces = REAL_GRACES if case.get("real_graces") else GRACES
-    for name, value in graces.items():
-        if name not in CONSTRUCTOR_GRACES:
-            setattr(worker_client, name, value)
-    worker_client.SHUTDOWN_BOUND_S = shutdown_bound(graces)
     pid_file = parent / f"pids-{index}"
     injector = _Injector(case)
-    real_init = WorkerClient.__init__
-
-    def capture(self: WorkerClient, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
-        injector.clients.append(self)
-        real_init(self, *args, **kwargs)
 
     def build() -> None:
         timeout = REQUEST_TIMEOUT_S if case["path"] == "timeout" else None
         init = {"pid_file": str(pid_file), "exit_at_load": case["path"] == "init_lost"}
-        WorkerClient(
+        _Capturing(
+            injector.clients,
             sys.executable,
             BACKEND,
             init=init,
             array_parent=parent,
             request_timeout=timeout,
-            stop_grace_s=graces["STOP_GRACE_S"],
-            term_grace_s=graces["TERM_GRACE_S"],
+            graces=graces,
         )
 
     _handlers(case["kind"], injector.clients)
@@ -219,7 +215,6 @@ def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
     built = False
     started = time.monotonic()
     try:
-        WorkerClient.__init__ = capture  # type: ignore[method-assign]
         constructing = case["path"].startswith("init")
         if not constructing:
             build()
@@ -236,7 +231,6 @@ def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
     except BaseException as exc:  # noqa: BLE001 - the case reports whatever surfaced
         outcome = type(exc).__name__
     finally:
-        WorkerClient.__init__ = real_init  # type: ignore[method-assign]
         for boundary, real in reals.items():
             setattr(*_owner(boundary), real)
     elapsed = time.monotonic() - started
@@ -334,6 +328,76 @@ def violations(report: dict[str, Any]) -> list[str]:
     if report["after_close"] != CLEAN:
         found.append(f"after close: {report['after_close']}")
     return found
+
+
+@contextlib.contextmanager
+def _substituted(boundary: str, wrapper: Callable[[Callable[..., Any]], Callable[..., Any]]) -> Iterator[None]:
+    """Replace the declared `boundary` with `wrapper(real)` for the block; only ever called in a child process."""
+    owner, name = _owner(boundary)
+    real = getattr(owner, name)
+    setattr(owner, name, wrapper(real))
+    try:
+        yield
+    finally:
+        setattr(owner, name, real)
+
+
+def close_while_encoding(parent: str, wait_s: float) -> list[str]:
+    """In this child: `close()` on another thread while `run` encodes its inputs; return what `run` raised."""
+    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=Path(parent))
+    closer = threading.Thread(target=client.close, daemon=True)
+
+    def encoding(real: Callable[..., Any]) -> Callable[..., Any]:
+        def encode(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            if closer.ident is None:
+                closer.start()
+                end = time.monotonic() + wait_s
+                while client.returncode is None and time.monotonic() < end:
+                    time.sleep(0.01)
+            return real(*args, **kwargs)
+
+        return encode
+
+    outcome: list[str] = []
+
+    def call() -> None:
+        try:
+            client.run([{"id": "a", "inputs": {"x": numpy.arange(4.0)}}], {})
+        except BaseException as exc:  # noqa: BLE001 - the caller inspects whatever surfaced
+            outcome.append(type(exc).__name__)
+
+    with _substituted("module:to_wire", encoding):
+        runner = threading.Thread(target=call, daemon=True)
+        runner.start()
+        runner.join(wait_s + client.graces.bound)
+        closer.join(client.graces.bound)
+    assert not runner.is_alive() and not closer.is_alive()
+    return outcome
+
+
+def crash_with_a_late_exit_notification(parent: str) -> tuple[int | None, str, int | None]:
+    """In this child: a worker that crashes mid-request while its exit notification is 0.3 s late.
+
+    Returns the `WorkerLost` exit code and message and the client's exit code.
+    """
+
+    def late(real: Callable[..., Any]) -> Callable[..., Any]:
+        def wait(pid: int) -> Any:  # noqa: ANN401
+            time.sleep(0.3)
+            return real(pid)
+
+        return wait
+
+    with _substituted("module:_wait_exit", late):
+        client = WorkerClient(sys.executable, FAKE, init={"faults": {"crash_after": 0}}, array_parent=Path(parent))
+        try:
+            try:
+                client.run([{"id": "a", "inputs": {}}], {})
+            except WorkerLost as lost:
+                return lost.returncode, str(lost), client.returncode
+            raise AssertionError("the crash did not surface as WorkerLost")
+        finally:
+            client.close()
 
 
 def main(argv: list[str]) -> None:
