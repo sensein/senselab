@@ -220,17 +220,6 @@ def _time_problems(name: str, node: Mapping[str, object]) -> list[str]:
     return []
 
 
-def _needles(paths: Iterable[str]) -> set[str]:
-    """Return every segment of each path, and each basename's stem: what identifies a file or a participant."""
-    out: set[str] = set()
-    for path in paths:
-        segments = [t for t in _TOKENS.split(path) if t not in ("", ".", "..")]
-        out.update(segments)
-        if segments:
-            out.add(Path(segments[-1]).stem)
-    return out - {""}
-
-
 def _strings(value: object) -> Iterable[str]:
     """Yield every string of a parsed JSON value: its values and its object keys."""
     if isinstance(value, str):
@@ -244,12 +233,29 @@ def _strings(value: object) -> Iterable[str]:
             yield from _strings(item)
 
 
+def _spelling(text: str) -> str:
+    """Return `text` with backslashes as `/` and empty and `.` segments dropped."""
+    return "/".join(t for t in text.replace("\\", "/").split("/") if t not in ("", "."))
+
+
 def _leaks(documents: Iterable[bytes], paths: set[str]) -> bool:
-    """Whether a string of a document names a segment or stem of `paths` however spelt, or a BIDS subject."""
-    needles = _needles(paths)
+    """Whether a string of a document holds a recorded path, its basename, or a BIDS subject label.
+
+    A path is held whole, however spelt; its basename is held as a whole token or as the stem of one
+    (`clip.json` for `clip.wav`). A directory segment alone is not: a port `audio` is not the path `audio/clip.wav`.
+    """
+    whole = {_spelling(p) for p in paths} - {""}
+    names = {Path(w).name for w in whole}
+    stems = {Path(n).stem + "." for n in names}
     for data in documents:
         for text in _strings(json.loads(data)):
-            if _SUBJECT.search(text) or needles.intersection(_TOKENS.split(text)):
+            tokens = [t for t in _TOKENS.split(text) if t]
+            if (
+                _SUBJECT.search(text)
+                or any(w in _spelling(text) for w in whole)
+                or names.intersection(tokens)
+                or any(t.startswith(stem) for t in tokens for stem in stems)
+            ):
                 return True
     return False
 
@@ -258,8 +264,8 @@ def export(run: str | Path, dest: str | Path, vocabulary: kprov.Vocabulary | Non
     """Copy a run's provenance documents to `<dest>/prov/prov-<writer>_all.jsonld` and return the copies.
 
     The documents are read once; the bytes validated, profile-checked and scanned are the bytes copied. The run's
-    private directory is never copied. A document may not name any segment or stem of a path in the run's label
-    map, however spelt (`./`, `//`, backslashes), nor a BIDS `sub-`/`ses-` label.
+    private directory is never copied. A document may not hold a path of the run's label map or its basename, however
+    spelt (`./`, `//`, backslashes), nor a BIDS `sub-`/`ses-` label.
 
     Raises:
         ProfileViolation: a profile violation or a leak; nothing is copied.

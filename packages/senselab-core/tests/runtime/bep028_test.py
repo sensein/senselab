@@ -199,7 +199,7 @@ def test_one_label_names_one_node(tmp_path: Path) -> None:
         "ds/sub-01_task-x.wav",
         "/data/ds/sub-01_task-x.wav",
         "sub-01_task-x.wav",
-        "sub-01_task-x",
+        "sub-01_task-x.json",
         "./ds//sub-01_task-x.wav",
         "ds\\sub-01_task-x.wav",
         "read from sub-01_task-x.wav",
@@ -215,6 +215,13 @@ def test_export_refuses_a_recorded_path_and_copies_nothing(tmp_path: Path, leak:
     assert not (tmp_path / "out").exists()
 
 
+@pytest.mark.parametrize(("path", "key", "port"), [("audio/clip.wav", "k", "audio"), ("k.wav", "k", "audio")])
+def test_a_directory_segment_or_a_short_name_alone_is_exported(tmp_path: Path, path: str, key: str, port: str) -> None:
+    """A port or key equal to a directory segment or a stem of a recorded path is not that path."""
+    run, _ = _run(tmp_path, path, key={port: key})
+    assert len(export(run, tmp_path / "out")) == 1
+
+
 def test_export_refuses_a_bids_subject_that_was_never_recorded(tmp_path: Path) -> None:
     """A `sub-` label is a participant identifier wherever it appears, recorded or not."""
     run, _ = _run(tmp_path, "ds/a.wav", key="/data/sub-07/ses-1/x.wav")
@@ -222,12 +229,18 @@ def test_export_refuses_a_bids_subject_that_was_never_recorded(tmp_path: Path) -
         export(run, tmp_path / "out")
 
 
-@pytest.mark.parametrize("source", ["/home/u/models/m", "~/m", "./m", "../m", "C:\\m", "a\\b"])
+@pytest.mark.parametrize("source", ["/home/u/models/m", "~/m", "./m", "../m", "C:\\m", "a\\b", "org/model", "hf:../m"])
 def test_a_local_path_is_not_a_model_source(source: str) -> None:
     """`senselab:modelSource` is a source kind and an identity; a local path is refused at the store boundary."""
     with pytest.raises(ValueError, match="never a local path"):
         ProvStore([prov.agent(VOCAB, types=["senselab:SoftwareAgent"], attributes={"senselab:modelSource": source})])
-    ProvStore([prov.agent(VOCAB, types=["senselab:SoftwareAgent"], attributes={"senselab:modelSource": "org/model"})])
+    ProvStore(
+        [
+            prov.agent(
+                VOCAB, types=["senselab:SoftwareAgent"], attributes={"senselab:modelSource": "org/model@" + "a" * 40}
+            )
+        ]
+    )
 
 
 def test_a_path_is_not_a_file_label(tmp_path: Path) -> None:

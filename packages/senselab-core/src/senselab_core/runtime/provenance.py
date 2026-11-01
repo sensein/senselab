@@ -324,16 +324,20 @@ class ProvStore:
         return cls(_Rebuild(nodes, vocabulary or core_vocabulary()).all())
 
 
-_LOCAL_PATH = re.compile(r"^(/|~|\.\.?/|[A-Za-z]:[\\/])|\\")
+_NAME = r"[A-Za-z0-9][A-Za-z0-9._-]*"
+MODEL_SOURCE = re.compile(
+    rf"[a-z][a-z0-9_-]*(:{_NAME}(/{_NAME})?(@[0-9a-f]{{40,64}})?)?|{_NAME}/{_NAME}@[0-9a-f]{{40,64}}"
+)
+"""A `senselab:modelSource`: a source kind, a kind with an identity (`hf:org/model@<sha>`), or a repo at a commit."""
 
 
 def _boundary_problem(record: kprov.Record) -> str | None:
-    """Name what in `record` could carry a path: a bad `senselab:fileLabel` or a local `senselab:modelSource`."""
+    """Name what in `record` could carry a path: a bad `senselab:fileLabel` or `senselab:modelSource`."""
     node = record.node()
     label, source = node.get("senselab:fileLabel"), node.get("senselab:modelSource")
     if label is not None and not (isinstance(label, str) and FILE_LABEL.fullmatch(label)):
         return "a senselab:fileLabel is file-<n>"
-    if isinstance(source, str) and _LOCAL_PATH.search(source):
+    if isinstance(source, str) and not MODEL_SOURCE.fullmatch(source):
         return "a senselab:modelSource is a source kind and an identity, never a local path"
     return None
 
