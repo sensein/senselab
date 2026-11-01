@@ -35,7 +35,7 @@ Repository = "https://github.com/sensein/senselab"
 Documentation = "https://sensein.group/senselab"
 
 [project.optional-dependencies]
-torch = []
+torch = ["torch>=2.4", "transformers>=5.8"]
 
 [project.scripts]
 senselab = "senselab.cli:main"

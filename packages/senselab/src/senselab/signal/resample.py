@@ -57,6 +57,7 @@ class Resample:
     batch_invariant=True,
     devices=("cpu",),
     env=Env.host(),
+    requirements=("numpy", "pyyaml"),
     registry=REGISTRY,
 )
 class NumpySinc:

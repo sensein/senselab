@@ -14,18 +14,30 @@ CATALOGUE = Catalogue.load(_DATA.joinpath("catalogue.yaml").read_text("utf-8"))
 """The packaged catalogue, `senselab/data/catalogue.yaml`."""
 
 
-def open_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:
-    """Open the env `backend` declares from its packaged lock, `data/env_locks/<name>.txt`, under the profile's root.
+def host_lock() -> Path:
+    """Return the senselab lock, the `uv.lock` beside the `pyproject.toml` of the checkout this package runs from.
 
     Raises:
-        EnvLockError: a host backend, which declares no requirements to check against the senselab lock.
-        As `ensure_env` otherwise.
+        EnvLockError: no `uv.lock` lies above this package.
+    """
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "pyproject.toml").is_file() and (parent / "uv.lock").is_file():
+            return parent / "uv.lock"
+    raise EnvLockError("no uv.lock lies above senselab, so a host backend cannot be checked against the senselab lock")
+
+
+def open_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:
+    """Open the env `backend` declares: a host backend against the senselab lock, any other from `data/env_locks/`.
+
+    Raises:
+        As `ensure_env` and `host_lock`.
     """
     env = backend.env
     if env.kind == "host":
-        raise EnvLockError(f"host backend {backend.name!r} declares no requirements to check against the senselab lock")
-    lock = Path(str(_DATA.joinpath("env_locks", f"{env.name}.txt")))
-    return ensure_env(env, lock, profile.env_root(env.kind), settings=profile.envs)
+        lock = host_lock()
+        return ensure_env(env, lock, lock.parent, settings=profile.envs, requirements=backend.requirements)
+    env_lock = Path(str(_DATA.joinpath("env_locks", f"{env.name}.txt")))
+    return ensure_env(env, env_lock, profile.env_root(env.kind), settings=profile.envs)
 
 
 PACKAGED = Packaged(CATALOGUE, open_env)

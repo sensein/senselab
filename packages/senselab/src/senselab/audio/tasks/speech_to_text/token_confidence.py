@@ -1,65 +1,47 @@
-"""Per-token ASR confidence extraction (feature 20260722-175022, FR-017).
+"""Per-token ASR confidence: entropy, log-probability and no-speech probability read off the decoder's own logits.
 
-Whisper's decoder knows more about its own uncertainty than the transcript text
-reveals: the per-step distribution over the vocabulary is peaked when the model is
-sure and flat when it is guessing. That signal is what the asr axis needs —
-pairwise transcript disagreement only fires when two backends actually differ,
-while token entropy registers a single model's private doubt.
-
-Why a capture seam rather than ``generate_kwargs``:
-    Transformers' ``AutomaticSpeechRecognitionPipeline._forward`` keeps only
-    ``sequences`` and ``token_timestamps`` from the generate output and drops the
-    scores/logits before ``postprocess`` ever sees them. Passing
-    ``output_scores=True`` through ``pipe(...)`` therefore has no observable
-    effect. :func:`capture_token_confidence` instead wraps ``pipe.model.generate``
-    for the duration of one call, reads the logits off the returned
-    ``ModelOutput``, and restores the original method afterwards. The pipeline's
-    own behavior is untouched — we only observe.
-
-We request ``output_logits`` (raw, pre-processor) rather than ``output_scores``
-(post-processor) on purpose: Whisper's logits processors suppress
-``<|nospeech|>`` to ``-inf``, which would drive the no-speech probability to a
-constant 0, and they distort the entropy of the remaining distribution.
+`capture_token_confidence` wraps `pipe.model.generate` for one call and scores its raw logits;
+`word_confidences` turns the scored tokens into one probability per word. `torch` is imported only where logits
+are scored, so importing this module loads no framework.
 """
 
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterator, Sequence
-from typing import Any, Optional
+import math
+import re
+from collections.abc import Callable, Iterator, Sequence
+from typing import TYPE_CHECKING, Any, Optional
 
-import torch
+if TYPE_CHECKING:
+    import torch
 
 __all__ = [
     "capture_token_confidence",
     "merge_confidence_blocks",
     "token_confidence_from_logits",
     "whisper_token_ids",
+    "word_confidences",
 ]
 
 _NO_SPEECH_TOKEN_SPELLINGS = ("<|nospeech|>", "<|nocaptions|>")
-"""Vocabulary spellings of Whisper's no-speech marker, in preference order.
-
-The spelling is not stable across releases: ``openai/whisper-tiny`` ships
-``<|nocaptions|>`` (id 50362) and maps ``<|nospeech|>`` to the *unk* id, while other
-checkpoints do the reverse. Both are tried, and any hit equal to ``unk_token_id`` is
-rejected — otherwise we'd read the probability of an unrelated token.
-"""
+"""Vocabulary spellings of Whisper's no-speech marker, in preference order; a hit equal to the unk id is rejected."""
+_CONTROL_TOKEN = re.compile(r"<\|.*\|>")
+"""A control token's text: language, task and timestamp markers, which no word contains."""
+_LOGIT_DIMS = 2
+_BLOCK_KEYS = ("token_entropy", "avg_logprob", "no_speech_prob", "tokens", "token_logprob")
 
 
-def whisper_token_ids(pipe: Any) -> tuple[Optional[int], Optional[set]]:  # noqa: ANN401 — a transformers pipeline
-    """Resolve ``(no_speech_token_id, special_token_ids)`` for a pipeline's tokenizer.
+def whisper_token_ids(pipe: Any) -> tuple[Optional[int], Optional[set[int]]]:  # noqa: ANN401 - a transformers pipeline
+    """Return `(no_speech_token_id, special_token_ids)` of a pipeline's tokenizer.
 
-    Returns ``(None, None)`` for backends without a tokenizer (e.g. raw CTC models),
-    which is what makes the confidence fields degrade gracefully (FR-017).
+    Both are `None` for a backend without a tokenizer, which leaves the confidence fields empty.
 
     Args:
-        pipe: A transformers pipeline, or any object exposing ``tokenizer`` and
-            ``model.generation_config``.
+        pipe: A transformers pipeline, or any object exposing `tokenizer` and `model.generation_config`.
 
     Returns:
-        The ``<|nospeech|>`` vocabulary id (or ``None`` if this backend has none) and
-        the set of special-token ids to exclude from ``avg_logprob`` (or ``None``).
+        The no-speech vocabulary id and the set of special-token ids to exclude from `avg_logprob`.
     """
     tokenizer = getattr(pipe, "tokenizer", None)
     if tokenizer is None:
@@ -84,10 +66,7 @@ def whisper_token_ids(pipe: Any) -> tuple[Optional[int], Optional[set]]:  # noqa
                 no_speech_id = candidate
                 break
 
-    # Guard the conversion: a stand-in/Mock tokenizer returns a non-iterable
-    # attribute here, and blowing up would fail the whole transcription over a
-    # purely additive signal.
-    special_ids: Optional[set] = None
+    special_ids: Optional[set[int]] = None
     raw_special = getattr(tokenizer, "all_special_ids", None)
     if raw_special is not None:
         try:
@@ -99,23 +78,22 @@ def whisper_token_ids(pipe: Any) -> tuple[Optional[int], Optional[set]]:  # noqa
 
 
 def merge_confidence_blocks(blocks: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    """Fold several confidence blocks for the *same* transcript into one.
+    """Fold the blocks of one transcript's windows into one block.
 
-    Used for Whisper long-form, where one transcript is produced by several
-    ``generate`` calls (one per 30 s window) and each window yields its own block.
-    Entropies concatenate (they're a per-token sequence), log-probabilities average,
-    and the no-speech probability takes the maximum so the most silence-like window
-    dominates rather than being averaged away.
+    Entropies, token ids and token log-probabilities concatenate in window order, `avg_logprob` averages, and
+    `no_speech_prob` takes the maximum.
 
     Args:
-        blocks: Confidence blocks as returned by :func:`token_confidence_from_logits`.
+        blocks: Blocks as returned by `token_confidence_from_logits`.
 
     Returns:
-        A single merged block with the same three keys.
+        One block with the same keys.
     """
     entropies: list[float] = []
     logprobs: list[float] = []
     no_speech: list[float] = []
+    tokens: list[int] = []
+    token_logprob: list[float] = []
     for block in blocks:
         raw_entropy = block.get("token_entropy")
         if isinstance(raw_entropy, (list, tuple)):
@@ -126,11 +104,54 @@ def merge_confidence_blocks(blocks: Sequence[dict[str, Any]]) -> dict[str, Any]:
             logprobs.append(float(block["avg_logprob"]))
         if block.get("no_speech_prob") is not None:
             no_speech.append(float(block["no_speech_prob"]))
+        tokens.extend(int(t) for t in block.get("tokens") or [])
+        token_logprob.extend(float(p) for p in block.get("token_logprob") or [])
     return {
         "token_entropy": entropies or None,
         "avg_logprob": (sum(logprobs) / len(logprobs)) if logprobs else None,
         "no_speech_prob": max(no_speech) if no_speech else None,
+        "tokens": tokens or None,
+        "token_logprob": token_logprob or None,
     }
+
+
+def word_confidences(
+    tokens: Sequence[int],
+    token_logprob: Sequence[float],
+    decode: Callable[[int], str],
+    special_token_ids: Optional[set[int]] = None,
+) -> list[float]:
+    """Return one probability per word: the joint probability of the word's tokens, each given its decoded prefix.
+
+    Control tokens and `special_token_ids` belong to no word. A token whose decoded text begins with a space starts
+    a word; any other token continues the current one, so punctuation attaches to the word before it.
+
+    Args:
+        tokens: The scored token ids of one transcript, in order.
+        token_logprob: The log-probability of each of `tokens`.
+        decode: The text of one token id.
+        special_token_ids: Ids that belong to no word.
+
+    Returns:
+        One value in `[0, 1]` per word, in order.
+
+    Raises:
+        ValueError: if `tokens` and `token_logprob` differ in length.
+    """
+    if len(tokens) != len(token_logprob):
+        raise ValueError(f"{len(tokens)} tokens but {len(token_logprob)} log-probabilities")
+    excluded = special_token_ids or set()
+    sums: list[float] = []
+    for token, logprob in zip(tokens, token_logprob):
+        if token in excluded:
+            continue
+        text = decode(token)
+        if _CONTROL_TOKEN.fullmatch(text.strip()):
+            continue
+        if text.startswith(" ") or not sums:
+            sums.append(0.0)
+        sums[-1] += logprob
+    return [min(1.0, math.exp(total)) for total in sums]
 
 
 def token_confidence_from_logits(
@@ -140,37 +161,20 @@ def token_confidence_from_logits(
     no_speech_token_id: Optional[int] = None,
     special_token_ids: Optional[set[int]] = None,
 ) -> list[dict[str, Any]]:
-    """Derive per-token entropy, ``avg_logprob`` and ``no_speech_prob`` from logits.
+    """Derive per-token entropy, log-probability and no-speech probability from raw logits.
 
     Args:
-        logits: One tensor per decoding step, each shaped ``(batch, vocab)``, as
-            returned by ``generate(..., output_logits=True)``. Raw (unprocessed)
-            logits are expected.
-        sequences: Generated token ids, shaped ``(batch, seq_len)``. For
-            encoder-decoder models ``seq_len`` exceeds ``len(logits)`` because it
-            carries the forced decoder prefix; the trailing ``len(logits)`` ids are
-            the scored ones, matching HF's transition-score alignment.
-        no_speech_token_id: Vocabulary id of Whisper's ``<|nospeech|>`` token. When
-            given, ``no_speech_prob`` is read from the first step's distribution —
-            Whisper's own definition. ``None`` for backends without the token.
-        special_token_ids: Ids excluded from ``avg_logprob`` (forced language /
-            task / timestamp markers). Entropy is still reported for every step.
+        logits: One tensor per decoding step, each `(batch, vocab)`, from `generate(..., output_logits=True)`.
+        sequences: Generated token ids `(batch, seq_len)`; the trailing `len(logits)` ids are the scored ones.
+        no_speech_token_id: Id of the no-speech token; `no_speech_prob` is read from the first step's distribution.
+        special_token_ids: Ids excluded from `avg_logprob`; entropy and `token_logprob` cover every step.
 
     Returns:
-        One dict per batch row with keys ``token_entropy`` (list of nats, or
-        ``None``), ``avg_logprob`` (float or ``None``) and ``no_speech_prob``
-        (float or ``None``).
-
-    Example:
-        >>> import torch
-        >>> flat = torch.zeros(1, 4)  # uniform over 4 tokens
-        >>> out = token_confidence_from_logits(logits=[flat], sequences=torch.tensor([[2]]))
-        >>> round(out[0]["token_entropy"][0], 4) == round(float(torch.log(torch.tensor(4.0))), 4)
-        True
+        One dict per batch row: `token_entropy` (nats), `avg_logprob`, `no_speech_prob`, `tokens` (the scored ids)
+        and `token_logprob` (each id's log-probability), each `None` when not available.
     """
-    # Whisper's long-form path hands back unbatched per-segment tensors —
-    # logits ``(vocab,)`` and sequences ``(seq_len,)``. Normalize to the batched
-    # shapes so one code path serves both. Verified against transformers 5.5.4.
+    import torch  # noqa: PLC0415 - torch loads only where logits are scored
+
     if sequences.ndim == 1:
         sequences = sequences.unsqueeze(0)
     logits = [step.unsqueeze(0) if step.ndim == 1 else step for step in logits]
@@ -178,48 +182,46 @@ def token_confidence_from_logits(
     batch_size = int(sequences.shape[0]) if sequences.ndim >= 1 else 1
     steps = len(logits)
     if steps == 0:
-        return [{"token_entropy": None, "avg_logprob": None, "no_speech_prob": None} for _ in range(batch_size)]
+        return [dict.fromkeys(_BLOCK_KEYS) for _ in range(batch_size)]
 
     excluded = special_token_ids or set()
-
-    # Whisper reads the no-speech probability off the first generated position.
     no_speech: list[Optional[float]] = [None] * batch_size
     if no_speech_token_id is not None:
         first = logits[0].detach().float()
-        if first.ndim == 2 and 0 <= no_speech_token_id < first.shape[-1]:
+        if first.ndim == _LOGIT_DIMS and 0 <= no_speech_token_id < first.shape[-1]:
             probs = torch.softmax(first, dim=-1)[:, no_speech_token_id]
             no_speech = [float(p) for p in probs[:batch_size]]
 
-    # Align the scored ids to the recorded steps (drop any forced prefix).
-    scored_ids = sequences[:, -steps:] if sequences.ndim == 2 and sequences.shape[1] >= steps else None
+    scored_ids = sequences[:, -steps:] if sequences.ndim == _LOGIT_DIMS and sequences.shape[1] >= steps else None
 
     entropies: list[list[float]] = [[] for _ in range(batch_size)]
-    chosen_logprobs: list[list[float]] = [[] for _ in range(batch_size)]
+    scored: list[list[int]] = [[] for _ in range(batch_size)]
+    chosen: list[list[float]] = [[] for _ in range(batch_size)]
 
     for step, step_logits in enumerate(logits):
         lg = step_logits.detach().float()
-        if lg.ndim != 2:
+        if lg.ndim != _LOGIT_DIMS:
             continue
         logprobs = torch.log_softmax(lg, dim=-1)
-        # -Σ p·log p, computed from logprobs to avoid a second softmax.
         step_entropy = -(logprobs.exp() * logprobs).sum(dim=-1)
         for row in range(min(batch_size, lg.shape[0])):
             entropies[row].append(float(step_entropy[row]))
             if scored_ids is None:
                 continue
             token_id = int(scored_ids[row, step])
-            if token_id in excluded:
-                continue
-            chosen_logprobs[row].append(float(logprobs[row, token_id]))
+            scored[row].append(token_id)
+            chosen[row].append(float(logprobs[row, token_id]))
 
     out: list[dict[str, Any]] = []
     for row in range(batch_size):
-        row_logprobs = chosen_logprobs[row]
+        content = [p for t, p in zip(scored[row], chosen[row]) if t not in excluded]
         out.append(
             {
                 "token_entropy": entropies[row] or None,
-                "avg_logprob": (sum(row_logprobs) / len(row_logprobs)) if row_logprobs else None,
+                "avg_logprob": (sum(content) / len(content)) if content else None,
                 "no_speech_prob": no_speech[row],
+                "tokens": scored[row] or None,
+                "token_logprob": chosen[row] or None,
             }
         )
     return out
@@ -227,26 +229,25 @@ def token_confidence_from_logits(
 
 @contextlib.contextmanager
 def capture_token_confidence(
-    pipe: Any,  # noqa: ANN401 — a transformers pipeline; typed loosely to avoid a hard import
+    pipe: Any,  # noqa: ANN401 - a transformers pipeline
     *,
     no_speech_token_id: Optional[int] = None,
     special_token_ids: Optional[set[int]] = None,
 ) -> Iterator[list[dict[str, Any]]]:
-    """Temporarily wrap ``pipe.model.generate`` to harvest per-token confidence.
+    """Wrap `pipe.model.generate` for the duration of the block to harvest per-token confidence.
 
-    Yields a list that accumulates one confidence dict per generated sequence, in
-    call order. The wrapper adds ``output_logits`` / ``return_dict_in_generate``
-    to every generate call and is removed on exit, leaving the pipeline exactly as
-    it was found. Backends that ignore those flags (returning a bare tensor)
-    simply contribute nothing — the caller degrades to ``None`` fields.
+    Yields a list that accumulates one block per generated sequence (one per transcript for a long-form call), in
+    call order. The wrapper adds `output_logits` and `return_dict_in_generate` to every generate call, returns what
+    the caller would have received without them, and is removed on exit. A backend that ignores those flags
+    contributes nothing.
 
     Args:
-        pipe: A transformers ASR pipeline exposing ``.model.generate``.
-        no_speech_token_id: Passed through to :func:`token_confidence_from_logits`.
-        special_token_ids: Passed through to :func:`token_confidence_from_logits`.
+        pipe: A transformers ASR pipeline exposing `.model.generate`.
+        no_speech_token_id: Passed to `token_confidence_from_logits`.
+        special_token_ids: Passed to `token_confidence_from_logits`.
 
     Yields:
-        The accumulating list of per-sequence confidence dicts.
+        The accumulating list of blocks.
     """
     captured: list[dict[str, Any]] = []
     model = getattr(pipe, "model", None)
@@ -257,7 +258,7 @@ def capture_token_confidence(
     original = model.generate
     had_own_attr = "generate" in vars(model)
 
-    def _score(step_logits: Any, sequences: Any) -> list[dict[str, Any]]:  # noqa: ANN401 — tensors
+    def _score(step_logits: Any, sequences: Any) -> list[dict[str, Any]]:  # noqa: ANN401 - tensors
         return token_confidence_from_logits(
             logits=list(step_logits),
             sequences=sequences,
@@ -265,12 +266,7 @@ def capture_token_confidence(
             special_token_ids=special_token_ids,
         )
 
-    def _wrapped(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — passthrough
-        # Whether the *caller* wanted a dict back. Whisper's word-timestamp path
-        # does (the pipeline sets return_token_timestamps / return_segments);
-        # plain greedy decoding does not, and handing those callers a ModelOutput
-        # where they expect a tensor breaks them downstream
-        # ("'ModelOutput' object has no attribute 'dtype'").
+    def _wrapped(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 - passthrough
         caller_wants_dict = bool(
             kwargs.get("return_dict_in_generate")
             or kwargs.get("return_token_timestamps")
@@ -279,58 +275,51 @@ def capture_token_confidence(
         try:
             result = original(*args, **{**kwargs, "output_logits": True, "return_dict_in_generate": True})
         except TypeError:
-            # Backend's generate doesn't accept these kwargs — run it untouched.
             return original(*args, **kwargs)
         try:
-            step_logits = _get(result, "logits")
-            sequences = _get(result, "sequences")
-            if step_logits is not None and sequences is not None:
-                captured.extend(_score(step_logits, sequences))
-            else:
-                # Whisper long-form (the `return_timestamps="word"` default) reports
-                # nothing at the top level; each window's generate output lives at
-                # segments[batch][window]["result"]. Merge a batch item's windows into
-                # one block so the count still matches one-per-transcript.
-                segments = _get(result, "segments")
-                for item in segments or []:
-                    blocks: list[dict[str, Any]] = []
-                    for window in item or []:
-                        inner = window.get("result") if isinstance(window, dict) else None
-                        if inner is None:
-                            continue
-                        inner_logits = _get(inner, "logits")
-                        inner_sequences = _get(inner, "sequences")
-                        if inner_logits is None or inner_sequences is None:
-                            continue
-                        blocks.extend(_score(inner_logits, inner_sequences))
-                    if blocks:
-                        captured.append(merge_confidence_blocks(blocks))
+            captured.extend(_harvest(result, _score))
         except (RuntimeError, ValueError, IndexError, TypeError, AttributeError, KeyError):
-            # Confidence is strictly additive — never fail a transcription because
-            # the logits came back in an unexpected shape.
             pass
+        return result if caller_wants_dict else _sequences_of(result)
 
-        # Restore the return type the caller would have seen without our flags, so
-        # observing the decoder stays invisible to the pipeline.
-        if not caller_wants_dict:
-            sequences = _get(result, "sequences")
-            if isinstance(sequences, torch.Tensor):
-                return sequences
-        return result
-
-    model.generate = _wrapped  # type: ignore[method-assign]
+    model.generate = _wrapped
     try:
         yield captured
     finally:
         if had_own_attr:
-            model.generate = original  # type: ignore[method-assign]
+            model.generate = original
         else:
             with contextlib.suppress(AttributeError):
                 del model.generate
 
 
-def _get(obj: Any, key: str) -> Any:  # noqa: ANN401 — ModelOutput is dict-like *and* attr-like
-    """Read ``key`` off a transformers ``ModelOutput`` (attribute or mapping)."""
+def _harvest(result: Any, score: Callable[[Any, Any], list[dict[str, Any]]]) -> list[dict[str, Any]]:  # noqa: ANN401
+    """Return the blocks of a generate output: its own, or one per batch item merged over that item's windows."""
+    step_logits, sequences = _get(result, "logits"), _get(result, "sequences")
+    if step_logits is not None and sequences is not None:
+        return score(step_logits, sequences)
+    merged: list[dict[str, Any]] = []
+    for item in _get(result, "segments") or []:
+        blocks: list[dict[str, Any]] = []
+        for window in item or []:
+            inner = window.get("result") if isinstance(window, dict) else None
+            if inner is not None and _get(inner, "logits") is not None and _get(inner, "sequences") is not None:
+                blocks.extend(score(_get(inner, "logits"), _get(inner, "sequences")))
+        if blocks:
+            merged.append(merge_confidence_blocks(blocks))
+    return merged
+
+
+def _sequences_of(result: Any) -> Any:  # noqa: ANN401 - a ModelOutput
+    """Return the bare token tensor the caller would have seen without the added flags, else `result`."""
+    import torch  # noqa: PLC0415 - torch loads only where logits are scored
+
+    sequences = _get(result, "sequences")
+    return sequences if isinstance(sequences, torch.Tensor) else result
+
+
+def _get(obj: Any, key: str) -> Any:  # noqa: ANN401 - ModelOutput is dict-like and attr-like
+    """Return `key` of a transformers `ModelOutput`, as an attribute or a mapping entry."""
     value = getattr(obj, key, None)
     if value is None and isinstance(obj, dict):
         value = obj.get(key)

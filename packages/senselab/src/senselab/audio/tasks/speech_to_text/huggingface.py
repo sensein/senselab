@@ -1,351 +1,295 @@
-"""This module provides a factory for managing Hugging Face ASR pipelines.
+"""Backend `transformers` of `speech_to_text`: the transformers ASR pipeline over a Whisper-family model, in-process.
 
-To ensure correct functionality, call `transcribe_audios_with_transformers` serially or,
-if you need to process multiple audios in parallel, pass the entire list of audios to the
-function at once, rather than calling the function with one audio at a time.
+`load` builds the pipeline from the pinned model in `init["model"]`, or the stub pipeline under `init["stub"]`;
+`handle` transcribes a batch of mono 16 kHz audio and answers one `Transcript` wire form, or one typed fault, per item.
+`transformers` and `torch` are imported only inside `load` and the confidence engine's scoring.
 """
 
-import time
-from typing import Any, Dict, List, Optional, Union, cast
+import hashlib
+import math
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
 
-from transformers import Pipeline, pipeline
+import numpy
+from pydantic import Field
+from senselab_core.kernel.declare import REGISTRY, BackendParams, Env, backend
+from senselab_core.kernel.results import Transcript, TranscriptNode
+from senselab_core.kernel.time import Span
+from senselab_core.kernel.wire import wire_form
+from senselab_core.runtime.audio_io import READER
+from senselab_worker.digest import COMMIT_HEX
+from senselab_worker.fake import FakeFaults
+from senselab_worker.faults import ContentFault, FaultClass, InfrastructureFault, ResourceFault, classify
 
-from senselab.audio.data_structures import Audio
+from senselab._api.declarations import SpeechToTextParams
 from senselab.audio.tasks.speech_to_text.token_confidence import (
     capture_token_confidence,
     merge_confidence_blocks,
     whisper_token_ids,
+    word_confidences,
 )
-from senselab.utils.data_structures import (
-    DeviceType,
-    HFModel,
-    Language,
-    ScriptLine,
-    _select_device_and_dtype,
+
+WORKER_MODULE = "senselab.audio.tasks.speech_to_text.huggingface"
+EXPECTED_RATE = 16_000
+_INIT_KEYS = frozenset({"stub", "model", "device", "faults", "array_dir"})
+_NS_PER_S = 1_000_000_000
+
+
+class TransformersParams(BackendParams):
+    """Backend params of `transformers`: tokens per window, window length in seconds, windows per batch."""
+
+    max_new_tokens: int = Field(default=128, ge=1)
+    chunk_length_s: int = Field(default=30, ge=1)
+    batch_size: int = Field(default=1, ge=1)
+
+
+@backend(
+    task="speech_to_text",
+    name="transformers",
+    version="1",
+    stack="transformers",
+    worker=WORKER_MODULE,
+    load_stub={"stub": True, "device": "cpu"},
+    batch_invariant=False,
+    devices=("cuda", "cpu"),
+    env=Env.host(),
+    requirements=("transformers>=5.8", "torch>=2.4", "numpy"),
+    params=TransformersParams,
+    registry=REGISTRY,
 )
-from senselab.utils.data_structures.logging import logger
-from senselab.utils.data_structures.model import get_huggingface_token
-from senselab.utils.dependencies import load_hf_resilient
+class Transformers:
+    """The transformers ASR pipeline over the pinned catalogue model it is called with, one model per process."""
 
 
-def _attach_token_confidence(script_lines: List[ScriptLine], confidences: List[Dict[str, Any]]) -> None:
-    """Attach captured per-token confidence onto the emitted `ScriptLine`s, in place.
+@dataclass(frozen=True)
+class State:
+    """A loaded backend: the pipeline, the sampling rate it takes and the faults to inject."""
 
-    Alignment rules, in order:
+    pipe: Any
+    sampling_rate: int
+    faults: FakeFaults
 
-    1. **One block per line** — the batch case; assign 1:1.
-    2. **Single line, many blocks** — Whisper long-form calls ``generate`` once per
-       30 s window, so one transcript accumulates several blocks. Merge them:
-       concatenate the entropies, average the log-probabilities, and keep the
-       maximum no-speech probability (the most silence-like window dominates).
-    3. **Anything else** — counts we can't map confidently; leave the fields
-       ``None`` rather than risk attributing one audio's confidence to another.
+
+class StubPipeline:
+    """The fake stack's model: deterministic words, evenly spaced over the audio, derived from its samples."""
+
+    class _Extractor:
+        sampling_rate = EXPECTED_RATE
+
+    feature_extractor = _Extractor()
+
+    def __call__(self, inputs: Sequence[Mapping[str, Any]], **kwargs: Any) -> list[dict[str, Any]]:  # noqa: ANN401
+        """Return one `{"text", "chunks"}` per input, as the transformers ASR pipeline does."""
+        words = kwargs.get("return_timestamps") == "word"
+        return [self._one(numpy.asarray(i["array"]), words) for i in inputs]
+
+    @staticmethod
+    def _one(samples: numpy.ndarray, words: bool) -> dict[str, Any]:
+        digest = hashlib.sha256(samples.astype(numpy.float32).tobytes()).hexdigest()
+        seconds = samples.size / EXPECTED_RATE
+        texts = [f" w{digest[4 * i : 4 * i + 4]}" for i in range(3)]
+        step = seconds / len(texts)
+        chunks = [{"text": t, "timestamp": (i * step, (i + 1) * step)} for i, t in enumerate(texts)]
+        return {"text": "".join(texts), "chunks": chunks}
+
+
+def state_bytes(state: State) -> int:
+    """Return the bytes of the loaded model's parameters, 0 for the stub."""
+    model = getattr(state.pipe, "model", None)
+    if model is None:
+        return 0
+    return int(sum(p.numel() * p.element_size() for p in model.parameters()))
+
+
+def load(init: dict[str, Any]) -> State:
+    """Return the worker's state from `init`.
+
+    `init` holds `model` (`{"source": "hf", "id", "identity"}`, `identity` a 40-hex commit) and `device`, or
+    `"stub": True` for the stub pipeline; it may hold `faults`, the fields of `FakeFaults`, and `array_dir`.
+
+    Raises:
+        ValueError: on an unknown key, a model that is not a pinned hub commit, or both `stub` and `model`.
     """
-    if not confidences:
-        return
+    unknown = sorted(init.keys() - _INIT_KEYS)
+    if unknown:
+        raise ValueError(f"transformers init takes only {sorted(_INIT_KEYS)}, got {unknown}")
+    faults = FakeFaults.from_json(init.get("faults", {}))
+    model = init.get("model")
+    if init.get("stub"):
+        if model is not None:
+            raise ValueError("transformers init takes `stub` or `model`, not both")
+        return State(StubPipeline(), EXPECTED_RATE, faults)
+    if not isinstance(model, dict) or model.get("source") != "hf":
+        raise ValueError(f"transformers loads a hub model, got {model!r}")
+    identity = str(model.get("identity"))
+    if not COMMIT_HEX.fullmatch(identity):
+        raise ValueError(f"a model is loaded by its 40-hex commit, never a ref: {identity!r}")
+    from transformers import pipeline  # noqa: PLC0415 - the framework loads in `load` only
 
-    if len(confidences) == len(script_lines):
-        for line, block in zip(script_lines, confidences):
-            _set_confidence(line, block)
-        return
-
-    if len(script_lines) == 1:
-        _set_confidence(script_lines[0], merge_confidence_blocks(confidences))
-        return
-
-    logger.debug(
-        f"Token confidence not attached: {len(confidences)} generate call(s) for "
-        f"{len(script_lines)} transcript(s) — no unambiguous mapping."
+    pipe = pipeline(
+        "automatic-speech-recognition", model=str(model["id"]), revision=identity, device=init.get("device", "cpu")
     )
+    return State(pipe, int(pipe.feature_extractor.sampling_rate), faults)  # type: ignore[union-attr]
 
 
-def _set_confidence(line: ScriptLine, block: Dict[str, Any]) -> None:
-    """Copy one confidence block onto a `ScriptLine`."""
-    line.avg_logprob = block.get("avg_logprob")
-    line.no_speech_prob = block.get("no_speech_prob")
-    line.token_entropy = block.get("token_entropy")
+def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return one `{"outputs": {"transcript": <transcript@1.0 wire form>}}` per item, or its typed fault.
 
-
-class HuggingFaceASR:
-    """Factory for creating and caching Hugging Face ASR pipelines.
-
-    Pipelines are cached per *(model, revision, timestamps level, generation limits,
-    chunk length, batch size, device)* so repeated calls with the same settings reuse
-    the initialized pipeline.
+    Items that pass the checks run in one pipeline call; if it raises, each runs alone so a fault stays with its item.
     """
+    task = SpeechToTextParams.model_validate({k: v for k, v in params.items() if k != "backend_params"})
+    tuning = TransformersParams.model_validate(params.get("backend_params", {}))
+    results: list[dict[str, Any] | None] = [None] * len(items)
+    ready: list[tuple[int, _Prepared]] = []
+    for index, item in enumerate(items):
+        try:
+            ready.append((index, _prepare(state, item)))
+        except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
+            results[index] = {"error": _typed(exc)}
+    try:
+        for (index, _), transcript in zip(ready, _transcribe(state, [p for _, p in ready], task, tuning)):
+            results[index] = {"outputs": {"transcript": transcript}}
+    except Exception:  # noqa: BLE001 - re-run each item alone to find the one at fault
+        for index, prepared in ready:
+            try:
+                results[index] = {"outputs": {"transcript": _transcribe(state, [prepared], task, tuning)[0]}}
+            except Exception as exc:  # noqa: BLE001 - as above
+                results[index] = {"error": _typed(exc)}
+    return [r for r in results if r is not None]
 
-    _pipelines: Dict[str, Pipeline] = {}
 
-    @classmethod
-    def _get_hf_asr_pipeline(
-        cls,
-        model: HFModel,
-        return_timestamps: Union[str, bool, None],
-        max_new_tokens: int,
-        chunk_length_s: int,
-        batch_size: int,
-        device: Optional[DeviceType] = None,
-    ) -> Pipeline:
-        """Get or create a Hugging Face ASR pipeline.
+@dataclass(frozen=True)
+class _Prepared:
+    samples: numpy.ndarray
+    clock_id: str
+    duration_ns: int
 
-        Args:
-            model (HFModel): The Hugging Face model.
-            return_timestamps (Optional[str]): The level of timestamp details.
-            max_new_tokens (int): The maximum number of new tokens.
-            chunk_length_s (int): The length of audio chunks in seconds.
-            batch_size (int): The batch size for processing.
-            device (Optional[DeviceType]): The device to run the model on.
 
-        Returns:
-            Pipeline: The ASR pipeline.
-        """
-        device, _ = _select_device_and_dtype(
-            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
-        )
-        key = (
-            f"{model.path_or_uri}-{model.revision}-{return_timestamps}-"
-            f"{max_new_tokens}-{chunk_length_s}-{batch_size}-{device.value}"
-        )
-        if key not in cls._pipelines:
-            # `return_timestamps` is handled differently per model family in
-            # transformers' AutomaticSpeechRecognitionPipeline:
-            #   * CTC models accept only "char" or "word" (False raises).
-            #   * Whisper accepts True / False / "word" / "segment".
-            #   * Other generative seq2seq (e.g., IBM Granite Speech 3.3)
-            #     accept None/False but raise on any timestamp request.
-            # When the caller asked for return_timestamps=False, the safest
-            # path across all three is to OMIT the kwarg and let each
-            # pipeline class default to its no-timestamps mode.
-            # NOTE: ``revision`` is deliberately NOT passed here. ``load_hf_resilient``
-            # resolves the requested ref to an immutable commit SHA once and injects
-            # ``revision=<sha>`` (no ``local_files_only`` — it would leak into
-            # ``pipeline``'s generate kwargs), so huggingface_hub's commit-hash
-            # shortcut loads from cache with no per-call Hub version check (the 429
-            # source). ``token`` here is used for resolution and forwarded to ``pipeline``.
-            pipeline_kwargs: Dict[str, Any] = {
-                "task": "automatic-speech-recognition",
-                "model": model.path_or_uri,
-                "max_new_tokens": max_new_tokens,
-                "chunk_length_s": chunk_length_s,
-                "batch_size": batch_size,
-                "device": device.value,
-                "token": get_huggingface_token(),
-            }
-            if return_timestamps is not False:
-                pipeline_kwargs["return_timestamps"] = return_timestamps
-            cls._pipelines[key] = cast(
-                Pipeline,
-                load_hf_resilient(
-                    pipeline,
-                    repo_id=str(model.path_or_uri),
-                    revision=model.revision or "main",
-                    **pipeline_kwargs,  # type: ignore[arg-type]
-                ),
+def _typed(exc: Exception) -> Exception:
+    """Return `exc` as a typed fault: resource when it says so, else the item's own (content)."""
+    if isinstance(exc, (ContentFault, ResourceFault, InfrastructureFault)):
+        return exc
+    if classify(exc) is FaultClass.RESOURCE:
+        return ResourceFault(f"{type(exc).__name__}: {exc}")
+    return ContentFault(f"{type(exc).__name__}: {exc}")
+
+
+def _prepare(state: State, item: dict[str, Any]) -> _Prepared:
+    if item["id"] in state.faults.fail_items:
+        raise ContentFault(f"injected failure for item {item['id']}")
+    if item["id"] in state.faults.oom_items:
+        raise ResourceFault(f"injected out of memory for item {item['id']}")
+    samples, rate, clock_id = _audio(item["inputs"]["audio"])
+    if samples.shape[0] != 1:
+        raise ContentFault(f"whisper takes mono audio, got {samples.shape[0]} channels")
+    if rate != state.sampling_rate:
+        raise ContentFault(f"whisper takes {state.sampling_rate} Hz audio, got {rate} Hz; resample it first")
+    return _Prepared(samples[0].astype(numpy.float32), clock_id, round(samples.shape[1] / rate * _NS_PER_S))
+
+
+def _audio(value: object) -> tuple[numpy.ndarray, float, str]:
+    """Return `(samples (channels, n), sampling_rate, clock_id)` of an `Audio` or its wire form."""
+    if isinstance(value, dict):
+        group = value["groups"]["audio"]
+        return numpy.asarray(group["data"]), float(group["sampling_rate"]), str(value["anchor"]["clock_id"])
+    return value.read(reader=READER), float(value.sampling_rate), str(value.anchor.clock_id)  # type: ignore[attr-defined]
+
+
+def _transcribe(
+    state: State, prepared: list[_Prepared], task: SpeechToTextParams, tuning: TransformersParams
+) -> list[dict[str, Any]]:
+    if not prepared:
+        return []
+    kwargs: dict[str, Any] = {
+        "chunk_length_s": tuning.chunk_length_s,
+        "batch_size": tuning.batch_size,
+        "generate_kwargs": {"max_new_tokens": tuning.max_new_tokens, "num_beams": 1}
+        | ({"language": task.language.lower()} if task.language else {}),
+    }
+    if task.timestamps != "none":
+        kwargs["return_timestamps"] = "word" if task.timestamps == "word" else True
+    inputs = [{"array": p.samples, "sampling_rate": state.sampling_rate} for p in prepared]
+    no_speech_id, special_ids = whisper_token_ids(state.pipe)
+    with capture_token_confidence(state.pipe, no_speech_token_id=no_speech_id, special_token_ids=special_ids) as blocks:
+        outputs = state.pipe(inputs, **kwargs)
+    tokenizer = getattr(state.pipe, "tokenizer", None)
+    decode = None if tokenizer is None else (lambda token: str(tokenizer.decode([token])))
+    return [
+        wire_form(
+            transcript(
+                out, task.timestamps, p.clock_id, p.duration_ns, _block(blocks, len(prepared), i), decode, special_ids
             )
-        return cls._pipelines[key]
-
-    @classmethod
-    def transcribe_audios_with_transformers(
-        cls,
-        audios: List[Audio],
-        model: Optional[HFModel] = None,
-        language: Optional[Language] = None,
-        return_timestamps: Union[str, bool, None] = "word",
-        max_new_tokens: int = 128,
-        chunk_length_s: int = 30,
-        batch_size: int = 1,
-        device: Optional[DeviceType] = None,
-    ) -> List[ScriptLine]:
-        """Transcribe a list of `Audio` objects with a cached HF ASR pipeline.
-
-        Initializes (or reuses) a Transformers ASR pipeline and decodes all inputs
-        in one call. Output keys are normalized (``"timestamp"`` → ``"timestamps"``)
-        before converting to `ScriptLine`.
-
-        Requirements:
-            - **Mono** input (shape `[1, T]`). Stereo is rejected.
-            - Sampling rate must match the model’s **expected sampling rate**
-              (read from the pipeline’s `feature_extractor.sampling_rate`).
-
-        Args:
-            audios (list[Audio]):
-                Audio objects to transcribe (mono, correct sampling rate).
-            model (HFModel, optional):
-                HF model to use. Defaults to ``HFModel("openai/whisper-tiny")``.
-            language (Language, optional):
-                Language hint (lowercased and passed via `generate_kwargs` when supported).
-            return_timestamps (str | bool | None, optional):
-                Timestamp granularity. Defaults to ``"word"``. Pass ``False``
-                to skip timestamp output entirely (required for HF ASR models
-                that don't natively produce timestamps, e.g., IBM Granite
-                Speech 3.3 — the underlying pipeline raises if you ask for
-                timestamps it cannot produce).
-            max_new_tokens (int, optional):
-                Decoder limit per chunk. Defaults to ``128``.
-            chunk_length_s (int, optional):
-                Chunk length (seconds). Defaults to ``30``.
-            batch_size (int, optional):
-                Pipeline batch size. Defaults to ``1``.
-                Note: large values can degrade timestamp quality for long audios
-                (see HF issue discussions).
-            device (DeviceType, optional):
-                Inference device; supports ``CPU`` and ``CUDA`` here. If ``None``,
-                the backend will choose ``CUDA`` if available, otherwise ``CPU``.
-
-        Returns:
-            list[ScriptLine]: One transcript per input audio (order-preserving).
-
-        Raises:
-            ValueError:
-                If inputs are not mono or their sampling rate mismatches the model.
-            RuntimeError | OSError:
-                Any underlying HF/Transformers loading or runtime error.
-
-        Example (default model, CPU):
-            >>> from pathlib import Path
-            >>> from senselab.audio.data_structures import Audio
-            >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
-            >>> lines = HuggingFaceASR.transcribe_audios_with_transformers([a1])
-            >>> lines[0].text
-
-        Example (small Whisper, CUDA, word timestamps):
-            >>> from pathlib import Path
-            >>> from senselab.audio.data_structures import Audio
-            >>> from senselab.utils.data_structures import HFModel, DeviceType, Language
-            >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
-            >>> mdl = HFModel(path_or_uri="openai/whisper-small", revision="main")
-            >>> lines = HuggingFaceASR.transcribe_audios_with_transformers(
-            ...     [a1],
-            ...     model=mdl,
-            ...     language=Language.EN,
-            ...     return_timestamps="word",
-            ...     chunk_length_s=30,
-            ...     batch_size=1,
-            ...     device=DeviceType.CUDA,
-            ... )
-            >>> lines[0].timestamps
-        """
-        if model is None:
-            model = HFModel(path_or_uri="openai/whisper-tiny")
-
-        def _audio_to_huggingface_dict(audio: Audio) -> Dict:
-            """Convert an Audio object to a dictionary that can be used by the transformers pipeline.
-
-            Args:
-                audio (Audio): The audio object.
-
-            Returns:
-                Dict: The dictionary representation of the audio object.
-            """
-            return {
-                "array": audio.waveform.squeeze().numpy(),
-                "sampling_rate": audio.sampling_rate,
-            }
-
-        def _rename_key_recursive(
-            obj: Union[Dict, List, object], old_key: str, new_key: str
-        ) -> Union[Dict, List, object]:
-            """Recursively rename keys in a dictionary."""
-            if isinstance(obj, dict):
-                for key in list(obj.keys()):
-                    if key == old_key:
-                        obj[new_key] = obj.pop(old_key)
-                    elif isinstance(obj[key], (dict, list)):
-                        obj[key] = _rename_key_recursive(obj[key], old_key, new_key)
-            elif isinstance(obj, list):
-                obj = [_rename_key_recursive(item, old_key, new_key) for item in obj]
-            return obj
-
-        def _sanitize_timestamps_recursive(obj: Union[Dict, List, object]) -> Union[Dict, List, object]:
-            """Clamp backend timestamp artifacts to a valid non-negative range."""
-            if isinstance(obj, dict):
-                if "timestamps" in obj and isinstance(obj["timestamps"], (list, tuple)) and len(obj["timestamps"]) == 2:
-                    start, end = obj["timestamps"]
-                    if start is not None:
-                        start = max(0.0, float(start))
-                    if end is not None:
-                        end = max(0.0, float(end))
-                    if start is not None and end is not None and end < start:
-                        end = start
-                    obj["timestamps"] = [start, end]
-                for key, value in list(obj.items()):
-                    if isinstance(value, (dict, list)):
-                        obj[key] = _sanitize_timestamps_recursive(value)
-            elif isinstance(obj, list):
-                obj = [_sanitize_timestamps_recursive(item) for item in obj]
-            return obj
-
-        # Take the start time of the pipeline initialization
-        start_time_pipeline = time.time()
-        # Get the Hugging Face pipeline
-        pipe = HuggingFaceASR._get_hf_asr_pipeline(
-            model=model,
-            return_timestamps=return_timestamps,
-            max_new_tokens=max_new_tokens,
-            chunk_length_s=chunk_length_s,
-            batch_size=batch_size,
-            device=device,
         )
+        for i, (p, out) in enumerate(zip(prepared, outputs))
+    ]
 
-        # Take the end time of the pipeline initialization
-        end_time_pipeline = time.time()
-        # Print the time taken for initialize the hugging face ASR pipeline
-        elapsed_time_pipeline = end_time_pipeline - start_time_pipeline
-        logger.info(f"Time taken to initialize the hugging face ASR pipeline: {elapsed_time_pipeline:.2f} seconds")
 
-        feature_extractor = getattr(pipe, "feature_extractor", None)
-        if feature_extractor is None:
-            raise ValueError("Internal error: The Hugging Face pipeline does not have a feature extractor.")
+def _block(blocks: list[dict[str, Any]], count: int, index: int) -> dict[str, Any] | None:
+    """Return the confidence block of item `index`: one per item, or all merged for a lone item, else none."""
+    if len(blocks) == count:
+        return blocks[index]
+    if count == 1 and blocks:
+        return merge_confidence_blocks(blocks)
+    return None
 
-        # Retrieve the expected sampling rate from the Hugging Face model
-        expected_sampling_rate = cast(int, getattr(feature_extractor, "sampling_rate", None))
-        if expected_sampling_rate is None:
-            raise ValueError("Internal error: The Hugging Face model does not specify an expected sampling rate.")
 
-        # Check that all audio objects are mono
-        for audio in audios:
-            if audio.waveform.shape[0] != 1:
-                raise ValueError(f"Stereo audio is not supported. Got {audio.waveform.shape[0]} channels")
-            if audio.sampling_rate != expected_sampling_rate:
-                raise ValueError(
-                    f"Incorrect sampling rate. Expected {expected_sampling_rate}, got {audio.sampling_rate}"
-                )
+def _ns(seconds: float) -> int:
+    return max(0, round(seconds * _NS_PER_S))
 
-        # Convert the audio objects to dictionaries that can be used by the pipeline
-        formatted_audios = [_audio_to_huggingface_dict(audio) for audio in audios]
 
-        # Take the start time of the transcription
-        start_time_transcription = time.time()
-        # Run the pipeline, observing the decoder's own per-token confidence as it
-        # goes (FR-017). The pipeline discards generate's scores before postprocess,
-        # so the seam wraps `model.generate` rather than passing `output_scores`
-        # through `generate_kwargs` — see token_confidence.py for why.
-        no_speech_token_id, special_token_ids = whisper_token_ids(pipe)
-        with capture_token_confidence(
-            pipe,
-            no_speech_token_id=no_speech_token_id,
-            special_token_ids=special_token_ids,
-        ) as token_confidences:
-            transcriptions = pipe(
-                formatted_audios,
-                generate_kwargs=(
-                    {"language": f"{language.name.lower()}", "num_beams": 1} if language else {"num_beams": 1}
-                ),
-            )
+def _span(stamp: Sequence[float | None], clock_id: str, floor_ns: int, duration_ns: int) -> Span:
+    """Return the span of a pipeline `(start, end)` in seconds; a missing start is `floor_ns`, an end the audio end."""
+    start = floor_ns if stamp[0] is None else _ns(stamp[0])
+    end = duration_ns if stamp[1] is None else _ns(stamp[1])
+    return Span(start_ns=start, end_ns=max(start, end), clock_id=clock_id)
 
-        # Take the end time of the transcription
-        end_time_transcription = time.time()
-        # Print the time taken for transcribing the audios
-        elapsed_time_transcription = end_time_transcription - start_time_transcription
-        logger.info(f"Time taken for transcribing the audios: {elapsed_time_transcription:.2f} seconds")
 
-        # Rename the "timestamp" key to "timestamps"
-        transcriptions = _rename_key_recursive(transcriptions, "timestamp", "timestamps")
-        # Whisper can emit tiny negative timestamps (for example -0.02s) on short clips.
-        # Clamp them here so ScriptLine keeps enforcing non-negative times.
-        transcriptions = _sanitize_timestamps_recursive(transcriptions)
+def transcript(  # noqa: PLR0913 - the pipeline output, its level, the audio's clock and length, and the confidence
+    output: Mapping[str, Any],
+    timestamps: str,
+    clock_id: str,
+    duration_ns: int,
+    block: dict[str, Any] | None = None,
+    decode: Callable[[int], str] | None = None,
+    special_token_ids: set[int] | None = None,
+) -> Transcript:
+    """Return the `Transcript` of one pipeline output at the `timestamps` level.
 
-        # Convert the pipeline output to ScriptLine objects
-        script_lines = [ScriptLine.from_dict(cast(Dict[str, Any], t)) for t in cast(List, transcriptions)]
-        _attach_token_confidence(script_lines, token_confidences)
-        return script_lines
+    `word` gives one segment dividing into words, `segment` one node per timed chunk, `none` one untimed segment; an
+    empty text gives no segment. Spans are in integer ns on `clock_id`. A segment alone in the transcript carries
+    `exp(avg_logprob)` as its confidence; each word carries its tokens' joint probability when the captured tokens
+    divide into exactly the pipeline's words, and none otherwise.
+    """
+    text = str(output.get("text", "")).strip()
+    if not text:
+        return Transcript(segments=())
+    chunks = [c for c in output.get("chunks") or [] if str(c["text"]).strip()]
+    mean = None if block is None or block.get("avg_logprob") is None else min(1.0, math.exp(block["avg_logprob"]))
+    if timestamps == "none" or not chunks:
+        return Transcript(segments=(TranscriptNode(text=text, confidence=mean),))
+    timed: list[tuple[str, Span]] = []
+    floor = 0
+    for chunk in chunks:
+        span = _span(chunk["timestamp"], clock_id, floor, duration_ns)
+        timed.append((str(chunk["text"]).strip(), span))
+        floor = span.end_ns
+    if timestamps == "segment":
+        segments = tuple(TranscriptNode(text=t, span=s, confidence=mean if len(timed) == 1 else None) for t, s in timed)
+        return Transcript(segments=segments)
+    scores = _word_scores(block, decode, special_token_ids, len(timed))
+    words = tuple(TranscriptNode(text=t, span=s, confidence=c) for (t, s), c in zip(timed, scores))
+    whole = Span(start_ns=timed[0][1].start_ns, end_ns=timed[-1][1].end_ns, clock_id=clock_id)
+    return Transcript(segments=(TranscriptNode(text=text, span=whole, confidence=mean, children=words),))
+
+
+def _word_scores(
+    block: dict[str, Any] | None,
+    decode: Callable[[int], str] | None,
+    special_token_ids: set[int] | None,
+    count: int,
+) -> list[float | None]:
+    if block is None or decode is None or not block.get("tokens"):
+        return [None] * count
+    scores = word_confidences(block["tokens"], block["token_logprob"], decode, special_token_ids)
+    return list(scores) if len(scores) == count else [None] * count

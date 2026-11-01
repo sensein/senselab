@@ -8,7 +8,13 @@ import pytest
 
 PACKAGES = Path(__file__).resolve().parents[2]
 FRAMEWORKS = ("torch", "transformers", "speechbrain", "pyannote", "ctranslate2", "vllm")
-MODULES = ("senselab", "senselab.cli", "senselab_core.runtime.fake_backend")
+MODULES = (
+    "senselab",
+    "senselab.cli",
+    "senselab_core.runtime.fake_backend",
+    "senselab.audio.tasks.speech_to_text.huggingface",
+    "senselab.audio.tasks.speech_to_text.token_confidence",
+)
 
 
 @pytest.mark.logic

@@ -225,8 +225,10 @@ class BackendSpec(Frozen):
     tunable; `worker` the module serving `load(init)` and `handle(state, items, params)`;
     `load_stub` the `init` under which `load` builds the fake stack's model in place of weights,
     taking `faults` (the fields of `senselab_worker.fake.FakeFaults`) beside it; `params` its
-    `BackendParams` model. `output_affecting` names the components of `OUTPUT_AFFECTING` that change this backend's
-    outputs and so enter its logical key, held sorted and once each.
+    `BackendParams` model; `requirements` the requirement strings a host backend needs from the senselab lock
+    (`ensure_env` refuses an `Env.host()` backend unless that lock covers each). `output_affecting` names the
+    components of `OUTPUT_AFFECTING` that change this backend's outputs and so enter its logical key, held sorted
+    and once each.
     """
 
     task: NonEmptyStr
@@ -242,6 +244,7 @@ class BackendSpec(Frozen):
     worker: ModuleName
     load_stub: Params
     params: type[BackendParams] = BackendParams
+    requirements: tuple[NonEmptyStr, ...] = ()
 
     @field_validator("output_affecting")
     @classmethod

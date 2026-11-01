@@ -6,7 +6,7 @@ entries:
 - id: openai/whisper-large-v3-turbo
   revision: 41f01f3fe87f28c78e2fbf8b568835947dd65ed9
   tasks: [speech_to_text]
-  backends: [whisper-transformers]
+  backends: [transformers]
   stacks: [transformers]
   default_for: [speech_to_text]
   license:

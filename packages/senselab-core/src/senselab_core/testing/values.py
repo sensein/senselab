@@ -744,7 +744,9 @@ def _register_kernel_samples() -> None:
     register_samples(
         BackendSpec,
         lambda: [
-            BackendSpec(**backend, name="b", env=Env.host(), devices=("cpu",), batch_invariant=True),
+            BackendSpec(
+                **backend, name="b", env=Env.host(), devices=("cpu",), batch_invariant=True, requirements=("numpy",)
+            ),
             BackendSpec(
                 **backend,
                 name="c",
@@ -760,6 +762,7 @@ def _register_kernel_samples() -> None:
             {"output_affecting": ("bogus",)},
             {"env": "host"},
             {"tunables": {"d": ()}},
+            {"requirements": ("",)},
             {"batch_invariant": True, "output_affecting": ("batch_formation",)},
         ],
     )
