@@ -8,6 +8,7 @@ builds the engine `backend_params["engine"]` names (`ct2` or `transformers`) on 
 
 import contextlib
 import hashlib
+import importlib.metadata
 import math
 import os
 import shutil
@@ -260,11 +261,16 @@ class Library:
 
 
 def _converted(snapshot: str, identity: str, compute: str) -> str:
-    """Return the CT2 conversion of `snapshot`, converted into a private directory and published by one rename."""
+    """Return `snapshot` if it is already CT2, else its conversion, made privately and published by one rename.
+
+    The cache entry is named by the model commit, compute type and converter version.
+    """
     from crisperwhisper.converter import ensure_ct2_model  # noqa: PLC0415 - the library loads in the engine only
 
+    if (Path(snapshot) / "model.bin").exists():
+        return snapshot
     root = Path(os.environ.get("SENSELAB_CACHE") or Path.home() / ".cache" / "senselab") / "crisperwhisper-ct2"
-    entry = root / f"{identity}-{compute}"
+    entry = root / f"{identity}-{compute}-{importlib.metadata.version('crisperwhisper')}"
     if (entry / "model.bin").exists():
         return str(entry)
     root.mkdir(parents=True, exist_ok=True)

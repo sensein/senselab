@@ -27,14 +27,29 @@ def _lock_libraries(env: str) -> set[str]:
     return {n.lower().replace("-", "_").replace(".", "_") for n in names}
 
 
-def _imports(path: Path) -> set[str]:
+def outside_imports(source: str, module: str, siblings: set[str], allowed: set[str]) -> set[str]:
+    """Return the absolute names `source` (module `module`) imports that are neither allowed nor placed siblings.
+
+    A relative import resolves against `module`'s package; `senselab_core` is never allowed.
+    """
+    package = module.rpartition(".")[0].split(".")
     found: set[str] = set()
-    for node in ast.walk(ast.parse(path.read_text("utf-8"))):
+    for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
             found |= {a.name for a in node.names}
-        elif isinstance(node, ast.ImportFrom) and node.level == 0:
-            found.add(node.module or "")
-    return found
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0:
+                found.add(node.module or "")
+                continue
+            base = ".".join(package[: len(package) - (node.level - 1)] or ["<above-root>"])
+            targets = [f"{base}.{node.module}"] if node.module else [f"{base}.{a.name}" for a in node.names]
+            found |= set(targets)
+    stdlib = sys.stdlib_module_names
+    return {
+        m
+        for m in found
+        if m not in siblings and (m.split(".")[0] == "senselab_core" or m.split(".")[0] not in stdlib | allowed)
+    }
 
 
 _PLACED = [(b, b.worker_sources) for t in REGISTRY.tasks() for b in REGISTRY.backends(t.name) if b.worker_sources]
@@ -56,10 +71,47 @@ def test_worker_modules_import_only_stdlib_numpy_the_runtime_their_env_and_each_
     allowed = ALWAYS | _lock_libraries(env)
     for module, source in sources.items():
         assert Path(source).is_file(), (module, source)
-        outside = {
-            m
-            for m in _imports(Path(source))
-            if m not in sources and m.split(".")[0] not in sys.stdlib_module_names | allowed
-        }
+        outside = outside_imports(Path(source).read_text("utf-8"), module, set(sources), allowed)
         assert not outside, (module, sorted(outside))
-        assert not {m for m in _imports(Path(source)) if m.split(".")[0] == "senselab_core"}
+
+
+MODULE = "pkg.sub.worker"
+SIBLINGS = {"pkg.sub.worker", "pkg.sub.helper"}
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize(
+    "line",
+    [
+        "from .. import x",
+        "from ... import x",
+        "from ...kernel import y",
+        "from ..other import z",
+        "from . import missing",
+        "import senselab_core",
+        "from senselab_core.kernel import y",
+        "def f():\n    import senselab_core.runtime",
+        "def f():\n    from senselab_core import y",
+        "import senselab.other",
+        "import scipy",
+    ],
+)
+def test_import_rule_refuses(line: str) -> None:
+    """A relative import that leaves the placed siblings, any `senselab_core` import and an undeclared library fail."""
+    assert outside_imports(line, MODULE, SIBLINGS, ALWAYS)
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize(
+    "line",
+    [
+        "from . import helper",
+        "from .helper import f",
+        "import os",
+        "import numpy",
+        "from senselab_worker.faults import X",
+    ],
+)
+def test_import_rule_accepts(line: str) -> None:
+    """A sibling (absolute or relative), stdlib, numpy and the runtime pass."""
+    assert not outside_imports(line, MODULE, SIBLINGS, ALWAYS)
