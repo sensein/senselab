@@ -20,7 +20,7 @@ from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 from senselab_core.kernel.declare import REGISTRY, Registry, TaskSpec
 
-from senselab._api.call import kernel_types
+from senselab._api.call import callable_names, kernel_types
 from senselab._api.declarations import DECLARATION_MODULES
 
 OUTPUT = Path(__file__).resolve().parents[1] / "packages" / "senselab" / "src" / "senselab" / "_api" / "generated.py"
@@ -96,11 +96,6 @@ def _port_annotation(type_name: str, imports: _Imports) -> str:
     return f"{_named(kernel, imports)} | str | PathLike[str]"
 
 
-def _names(spec: TaskSpec) -> tuple[str, str]:
-    segment = spec.name.rsplit(".", 1)[-1]
-    return "".join(w.capitalize() for w in segment.split("_")), segment
-
-
 def _signature(defs: str, head: list[str], keyword: list[str], returns: str, indent: str = "") -> list[str]:
     items = [*head, *(["*"] if keyword else []), *keyword]
     return [f"{indent}{defs}(", *(f"{indent}    {i}," for i in items), f"{indent}) -> {returns}:"]
@@ -116,7 +111,7 @@ def _mapping(names: list[str]) -> list[str]:
 
 
 def _render_task(spec: TaskSpec, imports: _Imports) -> tuple[str, str, str]:
-    cls, func = _names(spec)
+    cls, func = callable_names(spec)
     ports = list(spec.inputs)
     fields = spec.params.model_fields
     clash = RESERVED & (set(fields) | set(ports))
@@ -208,20 +203,25 @@ def render(registry: Registry = REGISTRY) -> str:
     return "\n\n".join(parts) + "\n\n" + all_ + "".join(f"\n\n\n{b}" for b in bodies) + "\n"
 
 
+def is_current(registry: Registry, output: Path) -> bool:
+    """Whether `output` holds exactly the module generated from `registry`."""
+    return output.exists() and output.read_text() == render(registry)
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Write the module, or with `--check` compare it with the committed one."""
+    """Write the module of the declared tasks, or with `--check` compare it with the committed one."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--check", action="store_true", help="exit 1 if the committed module differs")
+    parser.add_argument("--check", action="store_true", help="exit 1 if the module differs")
+    parser.add_argument("--output", type=Path, default=OUTPUT, help="the module to write or check")
     args = parser.parse_args(argv)
     for module in DECLARATION_MODULES:
         importlib.import_module(module)
-    source = render()
     if args.check:
-        if not OUTPUT.exists() or OUTPUT.read_text() != source:
-            print(f"{OUTPUT} is out of date; run scripts/generate_task_api.py", file=sys.stderr)
+        if not is_current(REGISTRY, args.output):
+            print(f"{args.output} is out of date; run scripts/generate_task_api.py", file=sys.stderr)
             return 1
         return 0
-    OUTPUT.write_text(source)
+    args.output.write_text(render(REGISTRY))
     return 0
 
 

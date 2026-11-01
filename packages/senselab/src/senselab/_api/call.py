@@ -73,6 +73,12 @@ def kernel_types() -> dict[str, type]:
     return found
 
 
+def callable_names(spec: TaskSpec) -> tuple[str, str]:
+    """Return the generated class name and function name of `spec`: its last dotted segment, in CamelCase and as is."""
+    segment = spec.name.rsplit(".", 1)[-1]
+    return "".join(w.capitalize() for w in segment.split("_")), segment
+
+
 def task_spec(name: str, registry: Registry = REGISTRY) -> TaskSpec:
     """Return the declared task `name`.
 

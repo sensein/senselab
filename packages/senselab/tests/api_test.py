@@ -105,10 +105,38 @@ def generated(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
     return module
 
 
+def _check(output: Path) -> int:
+    """Run `--check` over `output` in a fresh interpreter, whose registry holds only the declared tasks."""
+    done = subprocess.run(
+        [sys.executable, str(_SCRIPT), "--check", "--output", str(output)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    return done.returncode
+
+
 @pytest.mark.contract
-def test_generated_api_has_no_drift() -> None:
-    """The committed module is what the generator writes from the declarations now."""
-    assert generator.main(["--check"]) == 0
+def test_generated_api_has_no_drift(tmp_path: Path) -> None:
+    """The committed module is what the generator writes now; an edit to it is drift."""
+    assert _check(generator.OUTPUT) == 0
+    edited = tmp_path / "generated.py"
+    edited.write_text(generator.OUTPUT.read_text() + "\nEXTRA = 1\n")
+    assert _check(edited) == 1
+    assert _check(tmp_path / "missing.py") == 1
+
+
+@pytest.mark.contract
+def test_generated_module_of_a_task_is_current(tmp_path: Path) -> None:
+    """A module rendered from a registry with tasks is accepted for that registry, and refused once edited."""
+    registry = _registry()
+    output = tmp_path / "generated.py"
+    output.write_text(generator.render(registry))
+    assert generator.is_current(registry, output)
+    output.write_text(output.read_text().replace('name = "speech.embed"', 'name = "speech.other"'))
+    assert not generator.is_current(registry, output)
+    assert not generator.is_current(Registry(), output)
 
 
 @pytest.mark.contract
@@ -165,9 +193,22 @@ def test_signatures_are_real(generated: ModuleType) -> None:
     assert init["window"].default == 3 and init["required"].default is inspect.Parameter.empty
     assert init["colour"].default is Colour.RED and init["pair"].default == (1, "a")
     assert init["required"].kind is inspect.Parameter.KEYWORD_ONLY
+    with pytest.raises(TypeError, match="windw"):
+        generated.Embed(required=1, windw=3)
     assert list(inspect.signature(generated.Embed.call).parameters) == ["self", "audio"]
     assert list(inspect.signature(generated.FitSpace.call).parameters) == ["self", "first", "second"]
     assert list(inspect.signature(generated.embed).parameters)[0] == "audio"
+
+
+@pytest.mark.logic
+def test_non_kernel_ports_take_a_path_or_uri() -> None:
+    """A port whose type is not a kernel type is described as a path or URI, and is not linked."""
+    import senselab_core.runtime.fake_backend as fake  # noqa: PLC0415
+
+    registry = Registry()
+    registry.add_task(fake.ECHO)
+    port = describe("fake.echo", registry)["inputs"]["properties"]["payload"]
+    assert "$ref" not in port and port["description"] == "a path or URI"
 
 
 @pytest.mark.logic
@@ -182,6 +223,8 @@ def test_describe_is_valid_schema() -> None:
     assert "groups" in document["inputs"]["$defs"]["Audio"]["properties"]
     embedding = document["outputs"]["$defs"]["Embedding"]
     assert embedding["x-senselab-format"] == "embedding@1.0" and embedding["properties"]["vector"]["type"] == "array"
+    assert document["callable"] == {"class": "Embed", "function": "embed"}
+    assert describe("speech.fit_space", _registry())["callable"] == {"class": "FitSpace", "function": "fit_space"}
     assert [b["name"] for b in document["backends"]] == ["a", "b"]
     assert document["stacks"] == ["ct2", "onnx"] and document["devices"] == ["cpu", "cuda"]
     params = jsonschema.Draft202012Validator(document["params"])
@@ -236,8 +279,9 @@ def test_error_envelope_shape(generated: ModuleType) -> None:
 
 
 @pytest.mark.logic
-def test_facade_exposes_discovery_and_no_generated_task_yet() -> None:
-    """`sl.tasks` and `sl.describe` are the discovery functions; a name not generated is an `AttributeError`."""
+def test_facade_exposes_discovery_and_the_generated_names() -> None:
+    """`sl.tasks` and `sl.describe` are the discovery functions; `__all__` is those and the generated names."""
+    from senselab._api import generated  # noqa: PLC0415
+
     assert senselab.tasks is tasks and senselab.describe is describe
-    with pytest.raises(AttributeError):
-        senselab.NoSuchTask  # noqa: B018
+    assert senselab.__all__ == ["describe", "tasks", *generated.__all__]

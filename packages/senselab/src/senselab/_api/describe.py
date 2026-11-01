@@ -1,5 +1,6 @@
 """`tasks` and `describe`: discovery over the declarations."""
 
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel
@@ -7,7 +8,7 @@ from pydantic.json_schema import GenerateJsonSchema
 from senselab_core.kernel.declare import REGISTRY, Registry, TaskSpec, json_schema
 from senselab_core.kernel.formats import Formatted
 
-from senselab._api.call import ApiError, closest, kernel_types, task_spec
+from senselab._api.call import ApiError, callable_names, closest, kernel_types, task_spec
 
 
 class _KernelSchema(GenerateJsonSchema):
@@ -24,15 +25,18 @@ def _format_schema(kernel_type: type[BaseModel]) -> dict[str, Any]:
     return schema
 
 
-def _link_ports(ports: dict[str, Any]) -> dict[str, Any]:
-    """Return `ports` with each port of a kernel type linked to that type's format schema under `$defs`."""
+def _link_ports(ports: dict[str, Any], declared: Mapping[str, str]) -> dict[str, Any]:
+    """Return `ports` with each port of a kernel type linked to that type's format schema under `$defs`.
+
+    A port of another type takes a path or URI.
+    """
     types = kernel_types()
     defs: dict[str, Any] = {}
     properties = {}
     for port, prop in ports["properties"].items():
-        kernel_type = types.get(prop["title"])
+        kernel_type = types.get(declared[port])
         if kernel_type is None:
-            properties[port] = prop
+            properties[port] = {**prop, "description": "a path or URI"}
             continue
         schema = _format_schema(kernel_type)
         defs.update(schema.pop("$defs", {}))
@@ -79,7 +83,13 @@ def describe(name: str, registry: Registry = REGISTRY) -> dict[str, Any]:
 
     The result holds `task`, `version`, `kind`, the schemas `inputs`, `params`, `backend_params` and `outputs`
     (each port of a kernel type links to that type's format schema in its `$defs`), `backends` as
-    `{name, version, stack, devices}`, and the sorted `stacks` and `devices` they cover.
+    `{name, version, stack, devices}`, the sorted `stacks` and `devices` they cover, and `callable`, the generated
+    `{class, function}` names.
+
+    The function and the class take the inputs as positional data: an object, a path or a URI (a port whose type
+    is not a kernel type takes a path or URI). The one call shape of the CLI and JSON,
+    `{task, inputs, params, model}`, configures the class with `<class>.from_mapping(model, params, backend_params)`
+    and builds the call with `.call(**inputs)`.
 
     Raises:
         ApiError: `unknown_task`, with the closest declared names.
@@ -92,11 +102,12 @@ def describe(name: str, registry: Registry = REGISTRY) -> dict[str, Any]:
         "version": spec.version,
         "kind": spec.kind,
         **schema,
-        "inputs": _link_ports(schema["inputs"]),
-        "outputs": _link_ports(schema["outputs"]),
+        "inputs": _link_ports(schema["inputs"], spec.inputs),
+        "outputs": _link_ports(schema["outputs"], spec.outputs),
         "backends": [
             {"name": b.name, "version": b.version, "stack": b.stack, "devices": list(b.devices)} for b in backends
         ],
+        "callable": dict(zip(("class", "function"), callable_names(spec), strict=True)),
         "stacks": sorted({b.stack for b in backends}),
         "devices": sorted({d for b in backends for d in b.devices}),
     }
