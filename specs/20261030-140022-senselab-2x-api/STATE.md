@@ -98,19 +98,14 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
    **Next actions, in this order:**
    1. The engineering and license gates (T F5-F7), including the **locked Python 3.10 floor**: a locked 3.10
       constraints file so `worker-floor` can install from a lock; today it is the one unlocked job.
-   2. Parked items moved into tracked registers (Ru I-11, I-12).
+   2. Parked items moved into tracked registers (Ru I-11, I-12): done, see below.
    3. The Phase 1 exit (below), which needs the ORCD runs once the owner signs in.
 
-   **Follows still open:**
-   - `model_source` is set by Phase 3 executors where they build the `ExecutionContext`; nothing sets it yet.
-   - Lease renewal is not implemented; owner: execution phase (Phase 3), since `Lease` has no renewal and
-     `execution.md` 3.2 says workers renew.
-   - Verify sampling (ADR-002 section 4) has no owner: no phase builds it, so equivalence classes get no
-     evidence added.
-   - `worker-floor` (3.10) installs unlocked until the locked 3.10 constraints file exists (item 1).
-   - Not yet recorded as done: owners for the clock re-binding (A I-9) and the source-digest CI check (A I-10),
-     the P-40 roster and worktree isolation, the scheduled workflow on `alpha` for nightly limits and use cases
-     (a `skip-release` PR), and whole-file hashing against ADR-005 (R-109, Phase 2).
+   **Follows still open** are rows in `review-register.md`, not text here: `model_source` R-110, lease renewal R-111,
+   verify sampling R-112, the nightly workflow on `alpha` R-113, the clock re-binding R-114, the source-digest CI
+   check R-115, per-task licences and taint R-116, the P-40 roster and worktree isolation R-117, whole-file
+   hashing R-109. `worker-floor` installs unlocked until item 1 above is done.
+   Parked items: all in review-register.md (R-110..R-131); none live only in the ledger.
 3. **Then the Phase 1 exit** (`plans/phase-1.md` Task 15, as amended): 2.x CI green; `src/` equals `alpha`; no 1.x
    tests on the 2.x line; P-39 re-scan; `STATE.md` updated. The ORCD full runs are **pending owner sign-in**. Run these on ORCD shared NFS scratch from a pinned checkout, in a submitted job
    (never on login or claude-rc nodes), together with the full local-tier runs H11b did not make (the env tier and the later-boundary sweep): (a) `SENSELAB_WORK_POOL_NFS_DIR=<dir>` run of
