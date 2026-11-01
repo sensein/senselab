@@ -83,8 +83,12 @@ BASE_CONTEXT: Mapping[str, Any] = {
 """An execution context whose fields the context cases vary one at a time."""
 
 
-def contract_cases(registry: Registry, *, key_builder: KeyBuilder = key_for) -> list[tuple[str, Case]]:
+def contract_cases(
+    registry: Registry, *, key_builder: KeyBuilder = key_for, hash_seed_timeout_s: float = HASH_SEED_TIMEOUT_S
+) -> list[tuple[str, Case]]:
     """Return the contract cases of every task and backend in `registry`, with their ids.
+
+    Each `key_independent_of_hash_seed` interpreter may take `hash_seed_timeout_s` seconds.
 
     Raises:
         NoContractRunner: if a backend's stack has no entry in `FAULT_RUNNERS`.
@@ -104,7 +108,7 @@ def contract_cases(registry: Registry, *, key_builder: KeyBuilder = key_for) -> 
             label = backend.name if names[backend.name] == 1 else f"{task.name}/{backend.name}"
             cases += [
                 (f"{label}::{case}", functools.partial(fn, task, backend))
-                for case, fn in _backend_cases(backend, key_builder)
+                for case, fn in _backend_cases(backend, key_builder, hash_seed_timeout_s)
             ]
     return cases
 
@@ -120,7 +124,7 @@ def _task_cases(task: TaskSpec) -> list[tuple[str, Callable[[TaskSpec], None]]]:
 
 
 def _backend_cases(
-    backend: BackendSpec, build: KeyBuilder
+    backend: BackendSpec, build: KeyBuilder, hash_seed_timeout_s: float
 ) -> list[tuple[str, Callable[[TaskSpec, BackendSpec], None]]]:
     cases: list[tuple[str, Callable[[TaskSpec, BackendSpec], None]]] = [
         ("license_present", _license_present),
@@ -130,7 +134,7 @@ def _backend_cases(
         (f"key_changes_with_{f}", functools.partial(_key_changes_with, build, f)) for f in LogicalKey.model_fields
     ]
     cases += [(f"key_ignores_{f}", functools.partial(_key_ignores, build, f)) for f in ExecutionContext.model_fields]
-    cases.append(("key_independent_of_hash_seed", functools.partial(_key_independent_of_hash_seed, build)))
+    cases.append(("key_independent_of_hash_seed", functools.partial(_key_independent_of_hash_seed, build, hash_seed_timeout_s)))
     cases.append(("content_fault_isolated", FAULT_RUNNERS[backend.stack]))
     return cases
 
@@ -302,7 +306,7 @@ def _qualified(obj: Any, what: str) -> list[str]:  # noqa: ANN401
     return [module, qualname]
 
 
-def _key_independent_of_hash_seed(build: KeyBuilder, task: TaskSpec, backend: BackendSpec) -> None:
+def _key_independent_of_hash_seed(build: KeyBuilder, timeout: float, task: TaskSpec, backend: BackendSpec) -> None:
     spec = {
         "path": sys.path,
         "task": task.model_dump(mode="json", exclude={"params"}),
@@ -313,17 +317,15 @@ def _key_independent_of_hash_seed(build: KeyBuilder, task: TaskSpec, backend: Ba
     digests = {}
     for seed in HASH_SEEDS:
         try:
-            proc = _run_seed_probe(spec, seed)
+            proc = _run_seed_probe(spec, seed, timeout)
         except subprocess.TimeoutExpired as err:
-            raise AssertionError(
-                f"building the key under PYTHONHASHSEED={seed} took over {HASH_SEED_TIMEOUT_S} s"
-            ) from err
+            raise AssertionError(f"building the key under PYTHONHASHSEED={seed} took over {timeout} s") from err
         assert proc.returncode == 0, f"building the key under PYTHONHASHSEED={seed} failed:\n{proc.stderr}"
         digests[seed] = proc.stdout.strip()
     assert len(set(digests.values())) == 1, f"the key depends on the hash seed: {digests}"
 
 
-def _run_seed_probe(spec: dict[str, Any], seed: str) -> "subprocess.CompletedProcess[str]":
+def _run_seed_probe(spec: dict[str, Any], seed: str, timeout: float) -> "subprocess.CompletedProcess[str]":
     return subprocess.run(
         [sys.executable, "-c", _SEED_PROBE],
         input=json.dumps(spec),
@@ -331,7 +333,7 @@ def _run_seed_probe(spec: dict[str, Any], seed: str) -> "subprocess.CompletedPro
         capture_output=True,
         text=True,
         check=False,
-        timeout=HASH_SEED_TIMEOUT_S,
+        timeout=timeout,
     )
 
 

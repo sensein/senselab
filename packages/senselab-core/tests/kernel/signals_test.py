@@ -3,9 +3,11 @@
 import builtins
 import copy
 import hashlib
+import multiprocessing as mp
 import os
 import pickle
 from collections.abc import Iterator
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy
@@ -508,26 +510,25 @@ def test_memo_stays_at_its_bound_and_evicts_the_least_recently_used() -> None:
         signals.Memo(0)
 
 
+def _restamped_in_a_fresh_process(pickled: bytes) -> tuple[int, Audio]:
+    """Load `pickled` in this (fresh) process; return how many sources it stamped and a copy of the value."""
+    loaded = pickle.loads(pickled)
+    stamped = len(signals._VERIFIED)
+    return stamped, copy.copy(loaded)
+
+
 @pytest.mark.logic
-def test_source_memos_are_bounded_and_rederive_evicted_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """With room for one file, opening a second evicts the first; a copy of the first re-stamps its file."""
-    monkeypatch.setattr(signals, "_VERIFIED", signals.Memo(1))
-    hashed: list[object] = []
-    original = signals.content_identity
-
-    def spy(path: object, **kwargs: object) -> object:
-        hashed.append(path)
-        return original(path)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(signals, "content_identity", spy)
+def test_source_memos_are_bounded_and_rederive_missing_entries(tmp_path: Path) -> None:
+    """The per-process memo is bounded; a process holding no entry for a value's file re-stamps the file."""
+    assert signals._VERIFIED.maxsize == signals.SOURCE_MEMO_ENTRIES
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
     first = Audio.from_path(write_wav(tmp_path / "a"))
     second = Audio.from_path(write_wav(tmp_path / "b", frames=RATE // 2))
-    assert len(signals._VERIFIED) == 1 and len(hashed) == 2
-    again = copy.copy(first)
+    with ProcessPoolExecutor(1, mp_context=mp.get_context("spawn")) as pool:
+        stamped, again = pool.submit(_restamped_in_a_fresh_process, pickle.dumps(first)).result(timeout=120)
+    assert stamped == 1
     assert again == first and again.identity == first.identity != second.identity
-    assert len(hashed) == 3 and len(signals._VERIFIED) == 1
 
 
 @pytest.mark.logic

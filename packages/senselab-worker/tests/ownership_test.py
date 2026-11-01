@@ -58,6 +58,21 @@ def test_removes_exactly_a_matching_direct_child(
 
 
 @pytest.mark.logic
+def test_a_link_nested_in_a_removed_tree_is_unlinked_not_followed(tmp_path: Path) -> None:
+    """A uuid-named tree with a symlink two levels down is removed; the link's target keeps its contents."""
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.bin").write_bytes(b"k")
+    root = tmp_path / "root"
+    tree = root / ("a" * 32)
+    (tree / "inner").mkdir(parents=True)
+    (tree / "inner" / "f").write_bytes(b"x")
+    os.symlink(victim, tree / "inner" / "out")
+    assert remove_owned(root, tree, pattern=UUID_HEX) is True
+    assert list(root.iterdir()) == [] and (victim / "keep.bin").read_bytes() == b"k"
+
+
+@pytest.mark.logic
 def test_absence_is_not_an_error(tmp_path: Path) -> None:
     """A missing path, or a missing root, returns False."""
     assert remove_owned(tmp_path, tmp_path / "owned-1", pattern=PATTERN) is False

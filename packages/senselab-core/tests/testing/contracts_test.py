@@ -218,16 +218,10 @@ def test_hash_seed_case_catches_a_seed_dependent_model_identity() -> None:
 
 
 @pytest.mark.logic
-def test_hash_seed_case_reports_a_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hash_seed_case_reports_a_timeout() -> None:
     """An interpreter that does not finish within the bound fails the case instead of stalling the suite."""
-    from senselab_core.testing import contracts
-
-    def hang(spec: Any, seed: str) -> Any:  # noqa: ANN401
-        raise subprocess.TimeoutExpired(cmd="probe", timeout=contracts.HASH_SEED_TIMEOUT_S)
-
-    monkeypatch.setattr(contracts, "_run_seed_probe", hang)
-    with pytest.raises(AssertionError, match="took over"):
-        _case(_registry({}), "fake::key_independent_of_hash_seed")()
+    with pytest.raises(AssertionError, match="took over 0.001 s"):
+        _case(_registry({}), "fake::key_independent_of_hash_seed", hash_seed_timeout_s=0.001)()
 
 
 @pytest.mark.contract
@@ -244,16 +238,33 @@ def test_hash_seed_case_catches_a_seed_dependent_builder() -> None:
         case()
 
 
+class _Unchecked(Registry):
+    """One task and backend, held as a registry that skipped the canonical-params check would hold them."""
+
+    def __init__(self, task: TaskSpec, backend: BackendSpec) -> None:
+        super().__init__()
+        self._task, self._backend = task, backend
+
+    def tasks(self) -> list[TaskSpec]:
+        return [self._task]
+
+    def backends(self, task: str) -> list[BackendSpec]:
+        return [self._backend]
+
+
 @pytest.mark.contract
-def test_set_params_are_refused_and_caught_if_declared_anyway(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_set_params_are_refused_and_caught_if_declared_anyway() -> None:
     """A `set[str]` param is keyed differently under each hash seed.
 
     The registry refuses the type; a registry that skipped that check would still fail the generated case.
     """
     with pytest.raises(declare.NonCanonicalParams, match="tags"):
         _registry({"params": _Tagged})
-    monkeypatch.setattr(declare, "check_canonical_params", lambda model: None)
-    case = _case(_registry({"params": _Tagged}), "fake::key_independent_of_hash_seed")
+    good = _registry({})
+    (task,) = good.tasks()
+    (backend,) = good.backends(task.name)
+    unchecked = _Unchecked(task.model_copy(update={"params": _Tagged}), backend)
+    case = _case(unchecked, "fake::key_independent_of_hash_seed")
     with pytest.raises(AssertionError, match="hash seed"):
         case()
 

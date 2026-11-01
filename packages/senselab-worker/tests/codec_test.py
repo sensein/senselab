@@ -4,7 +4,9 @@ import hashlib
 import io
 import json
 import os
+import sys
 import time
+import types
 from pathlib import Path
 from typing import Any
 
@@ -610,27 +612,29 @@ def _doubling(levels: int) -> object:
 
 
 @pytest.mark.logic
-def test_exponentially_shared_value_is_refused_after_linear_work(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_exponentially_shared_value_is_refused_after_linear_work(tmp_path: Path) -> None:
     """`l = [l, l]` sixty times stops in `to_wire` at the line budget.
 
     It is small in memory but 2**60 nodes as a tree. Each container is encoded once and charged per use.
     """
-    import senselab_worker.codec as codec
+    from senselab_worker import canonical
 
-    entries = 0
-    real = codec.entered
+    entering = canonical.entered.__wrapped__.__code__  # type: ignore[attr-defined]
+    resumed = 0
 
-    def counting(*args: object) -> object:
-        nonlocal entries
-        entries += 1
-        return real(*args)  # type: ignore[arg-type]
+    def profile(frame: types.FrameType, event: str, arg: object) -> None:
+        nonlocal resumed
+        if event == "call" and frame.f_code is entering:
+            resumed += 1
 
-    monkeypatch.setattr(codec, "entered", counting)
-    with pytest.raises(ValueTooLarge):
-        to_wire({"s": _doubling(60)}, array_dir=tmp_path, at="outputs")
-    assert entries <= 61
+    sys.setprofile(profile)
+    try:
+        with pytest.raises(ValueTooLarge):
+            to_wire({"s": _doubling(60)}, array_dir=tmp_path, at="outputs")
+    finally:
+        sys.setprofile(None)
+    entries = resumed // 2
+    assert 0 < entries <= 61
     assert error_record(ValueTooLarge("x"))["fault"] == "resource"
     small = to_wire({"s": _doubling(4)}, array_dir=tmp_path, at="outputs")
     assert json.dumps(small) == json.dumps({"s": json.loads(json.dumps(_doubling(4)))})
