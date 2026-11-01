@@ -77,7 +77,16 @@ def test_resolve_local_uses_weights_identity(tmp_path: Path) -> None:
 
 def _model_key(text: str) -> LogicalKey:
     model = resolve(ModelRef.parse(text)).key_identity()
-    return LogicalKey(task="t", task_version="1", backend="b", backend_version="1", model=model, params={}, inputs={})
+    return LogicalKey(
+        task="t",
+        task_version="1",
+        backend="b",
+        backend_version="1",
+        model=model,
+        params={},
+        backend_params={},
+        inputs={},
+    )
 
 
 @pytest.mark.contract

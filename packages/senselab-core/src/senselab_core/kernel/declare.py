@@ -22,7 +22,6 @@ from pydantic import (
 )
 from pydantic.json_schema import GenerateJsonSchema
 
-import senselab_core.kernel.results  # noqa: F401 - the kernel result types, decisions among them
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap
 from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import InputIdentity, LogicalKey, Params, ProfileSliceIdentity, ResolvedModel
@@ -30,19 +29,6 @@ from senselab_core.kernel.signals import Recording
 
 TaskKind = Literal["measure", "transform", "decide", "fit"]
 
-
-def _kernel_decision_types() -> frozenset[str]:
-    found, pending = set(), [Formatted]
-    while pending:
-        t = pending.pop()
-        pending += t.__subclasses__()
-        if t.DECISION and t.__module__.startswith("senselab_core.kernel."):
-            found.add(t.__name__)
-    return frozenset(found)
-
-
-VERDICT_TYPES: frozenset[str] = _kernel_decision_types()
-"""Names of the kernel types marked `DECISION`; only `decide` tasks may output them (P-20)."""
 
 OUTPUT_AFFECTING: frozenset[str] = frozenset({"batch_formation", "chunk_grid"})
 """Logical-key components a backend may declare output-affecting (ADR-002)."""

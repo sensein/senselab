@@ -448,7 +448,14 @@ def _wav(path: Path, seed: int = 0, frames: int = RATE) -> Path:
 
 def _key(**params: object) -> LogicalKey:
     return LogicalKey(
-        task="t", task_version="1", backend="b", backend_version="1", model=None, params=params, inputs={}
+        task="t",
+        task_version="1",
+        backend="b",
+        backend_version="1",
+        model=None,
+        params=params,
+        backend_params={},
+        inputs={},
     )
 
 

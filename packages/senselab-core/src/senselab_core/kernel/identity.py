@@ -224,7 +224,7 @@ class LogicalKey(Frozen):
     backend_version: NonEmptyStr
     model: ModelIdentity | None
     params: Params
-    backend_params: Params = FrozenMapping({})
+    backend_params: Params
     inputs: Annotated[Mapping[str, InputIdentity], AfterValidator(FrozenMapping), PlainSerializer(dict)]
     profile_slices: Annotated[
         Mapping[str, ProfileSliceIdentity], AfterValidator(FrozenMapping), PlainSerializer(dict)

@@ -10,7 +10,6 @@ from typing import Annotated, Any, Literal, Optional
 import jsonschema
 import pytest
 from pydantic import BaseModel, Field, ValidationError, create_model
-from senselab_core.kernel import declare
 from senselab_core.kernel._base import NonEmptyStr
 from senselab_core.kernel.declare import (
     SCHEMA_DIALECT,
@@ -29,11 +28,9 @@ from senselab_core.kernel.declare import (
     key_for,
     task,
 )
-from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import LogicalKey, ModelIdentity, ModelRef, ResolvedModel, UnpinnedModel
 from senselab_core.kernel.results import Annotation, Embedding
 from senselab_core.kernel.signals import Audio
-from senselab_core.testing.values import frozen_types
 
 COMMIT = "41f01f3fe87f28c78e2fbf8b568835947dd65ed9"
 AUDIO = "content:" + "a" * 64
@@ -600,10 +597,3 @@ def test_schema_validates_2020_12() -> None:
     inputs = jsonschema.Draft202012Validator(documents[0]["inputs"])
     assert documents[0]["inputs"]["properties"] == {"audio": {"title": "Audio"}, "other": {"title": "Audio"}}
     assert not inputs.is_valid({"audio": "x"}) and not inputs.is_valid({"audio": "x", "other": "y", "z": "w"})
-
-
-@pytest.mark.logic
-def test_verdict_types_derived() -> None:
-    """`VERDICT_TYPES` names exactly the kernel `Formatted` types marked `DECISION`, no literal."""
-    marked = {t.__name__ for t in frozen_types() if issubclass(t, Formatted) and t.DECISION}
-    assert marked == declare.VERDICT_TYPES

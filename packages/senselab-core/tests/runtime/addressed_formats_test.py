@@ -32,6 +32,7 @@ def _key(audio: str) -> LogicalKey:
         backend_version="1",
         model=ModelIdentity(id="org/asr", identity="0" * 40),
         params={"beam": 1},
+        backend_params={},
         inputs={"audio": "content:" + audio * 64},
     )
 

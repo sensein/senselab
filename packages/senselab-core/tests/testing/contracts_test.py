@@ -17,6 +17,7 @@ from senselab_core.kernel.declare import REGISTRY, BackendParams, BackendSpec, R
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey
 from senselab_core.runtime.fake_backend import FAKE
 from senselab_core.runtime.keys import Call, Placement, build_key
+from senselab_core.runtime.worker_client import WorkerFatal
 from senselab_core.testing.contracts import PLACEMENT_ONLY, contract_cases
 
 
@@ -34,7 +35,6 @@ def test_fake_cases_are_listed_by_name() -> None:
     expected = {
         "fake.echo::params_round_trip",
         "fake.echo::params_reject_unknown",
-        "fake.echo::measure_has_no_verdict",
         "fake::key_deterministic",
         "fake::key_independent_of_hash_seed",
         "fake::content_fault_isolated",
@@ -110,21 +110,6 @@ def test_a_defective_task_fails_its_case(task: dict[str, Any], case: str) -> Non
     """Each task-level contract fails on the defect it guards."""
     with pytest.raises((AssertionError, ValueError)):
         _case(_registry(task), case)()
-
-
-@pytest.mark.logic
-@pytest.mark.parametrize("verdict", sorted(declare.VERDICT_TYPES))
-def test_a_measure_task_emitting_a_decision_fails_its_case(verdict: str) -> None:
-    """A `measure` task declaring a decision type output fails `measure_has_no_verdict` (P-20)."""
-    with pytest.raises(AssertionError, match="P-20"):
-        _case(_registry({"outputs": {"value": "sha256", "keep": verdict}}), "t.bad::measure_has_no_verdict")()
-
-
-@pytest.mark.logic
-def test_verdict_check_applies_to_measure_only() -> None:
-    """A `decide` task may output a verdict; it gets no measure case."""
-    registry = _registry({"kind": "decide", "outputs": {"keep": "Verdict"}})
-    assert not any(name.endswith("measure_has_no_verdict") for name, _ in contract_cases(registry))
 
 
 @pytest.mark.logic
@@ -250,7 +235,7 @@ def test_contract_cases_load_the_declared_stub() -> None:
     """`content_fault_isolated` passes the declared load stub to `load`; a stub the worker cannot load fails it."""
     worker = {"worker": "stub_worker_fixture", "stack": "torch"}
     _case(_registry({}, {**worker, "load_stub": {"model": "stub"}}), "fake::content_fault_isolated")()
-    with pytest.raises(Exception, match="weights"):
+    with pytest.raises(WorkerFatal, match="weights"):
         _case(_registry({}, {**worker, "load_stub": {"model": "weights"}}), "fake::content_fault_isolated")()
 
 

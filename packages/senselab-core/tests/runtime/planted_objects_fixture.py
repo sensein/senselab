@@ -64,17 +64,19 @@ def _opener(url: str) -> io.BytesIO:
     return io.BytesIO(PAYLOAD)
 
 
-def _key() -> Any:  # noqa: ANN401
+def store_key(task: str = "asr", **inputs: str) -> Any:  # noqa: ANN401
+    """Return the store tests' key of `task` over `inputs`, port to 64-hex content digest (`audio` by default)."""
     from senselab_core.kernel.identity import LogicalKey, ModelIdentity
 
     return LogicalKey(
-        task="asr",
+        task=task,
         task_version="1",
         backend="hf",
         backend_version="1",
         model=ModelIdentity(id="org/asr", identity="0" * 40),
         params={"beam": 1},
-        inputs={"audio": "content:" + "a" * 64},
+        backend_params={},
+        inputs={port: "content:" + digest for port, digest in (inputs or {"audio": "a" * 64}).items()},
     )
 
 
@@ -97,7 +99,7 @@ def _ctx(platform: str = "linux") -> Any:  # noqa: ANN401
 def _entry(root: Path, platform: str = "linux") -> Path:
     from senselab_core.runtime.store import STORE_DIR
 
-    d = _key().digest()
+    d = store_key().digest()
     entry: Path = root / STORE_DIR / d[:2] / d / _ctx(platform).fingerprint()
     return entry
 
@@ -206,7 +208,7 @@ def probe_file_at_a_store_directory(scratch: str, level: str, sealed: str) -> di
     from senselab_core.runtime.store import ResultStore
 
     root = Path(scratch) / "root"
-    store, k, c = ResultStore(root), _key(), _ctx()
+    store, k, c = ResultStore(root), store_key(), _ctx()
     store.put(k, {"y": 1}, c)
     entry = _entry(root)
     target = {"store": entry.parents[2], "prefix": entry.parents[1], "digest": entry.parent}[level]
@@ -262,7 +264,7 @@ def probe_swapped_entry_members(scratch: str, swapped: str, policy: str) -> dict
     from senselab_core.runtime.store import ResultStore
 
     root = Path(scratch) / "root"
-    store, k = ResultStore(root), _key()
+    store, k = ResultStore(root), store_key()
     for platform in ("linux", "macos"):
         store.put(k, _outputs_of(platform), _ctx(platform))
     linux, macos = _entry(root, "linux"), _entry(root, "macos")
@@ -309,7 +311,7 @@ def probe_corrupt_array(scratch: str, corruption: str) -> dict[str, Any]:
     from senselab_core.runtime.store import ResultStore
 
     root = Path(scratch) / "root"
-    store, k, c = ResultStore(root), _key(), _ctx()
+    store, k, c = ResultStore(root), store_key(), _ctx()
     outputs: dict[str, object] = {"a": numpy.arange(4, dtype="<f8")}
     identity = store.put(k, outputs, c)
     entry = _entry(root)
@@ -412,9 +414,9 @@ def _setup(op: str, root: Path) -> None:
     from senselab_core.runtime.store import ResultStore
 
     if op in ("get", "collect"):
-        ResultStore(root).put(_key(), _outputs_of("linux"), _ctx())
+        ResultStore(root).put(store_key(), _outputs_of("linux"), _ctx())
     if op == "get":
-        ResultStore(root).put(_key(), _outputs_of("macos"), _ctx("macos"))
+        ResultStore(root).put(store_key(), _outputs_of("macos"), _ctx("macos"))
         damaged = _entry(root, "macos")
         _unseal(damaged)
         (damaged / "context.json").write_bytes(b"{}")
@@ -434,11 +436,11 @@ def _run(op: str, root: Path) -> bool:
 
     if op == "put":
         store = ResultStore(root)
-        store.put(_key(), _outputs_of("linux"), _ctx())
-        hit = store.get(_key(), _ctx(), ReusePolicy.EXACT)
+        store.put(store_key(), _outputs_of("linux"), _ctx())
+        hit = store.get(store_key(), _ctx(), ReusePolicy.EXACT)
         return hit is not None and _plain(hit.outputs) == _plain(_outputs_of("linux"))
     if op == "get":
-        hit = ResultStore(root).get(_key(), _ctx(), ReusePolicy.EXACT)
+        hit = ResultStore(root).get(store_key(), _ctx(), ReusePolicy.EXACT)
         return hit is None or _plain(hit.outputs) == _plain(_outputs_of("linux"))
     if op == "collect":
         ResultStore(root).collect(now=time.time() + 10**9)

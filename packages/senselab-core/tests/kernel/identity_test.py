@@ -40,6 +40,7 @@ BASE: dict[str, object] = {
     "backend_version": "1",
     "model": None,
     "params": {"x": 1},
+    "backend_params": {},
     "inputs": {},
 }
 
@@ -576,3 +577,10 @@ def test_resolved_model_carries_license_and_pickles() -> None:
     m = ResolvedModel(ref=ModelRef.parse("org/name@main"), identity=COMMIT, license=lic)
     assert pickle.loads(pickle.dumps(m)) == m
     assert ResolvedModel.model_validate_json(m.model_dump_json()) == m
+
+
+@pytest.mark.logic
+def test_a_key_without_backend_params_is_refused() -> None:
+    """A `logical-key@5` record, which has no `backend_params`, does not parse."""
+    with pytest.raises(ValidationError, match="backend_params"):
+        LogicalKey.model_validate({k: v for k, v in BASE.items() if k != "backend_params"})

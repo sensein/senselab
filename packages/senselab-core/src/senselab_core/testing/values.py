@@ -498,6 +498,7 @@ def _key(task: str = "t") -> LogicalKey:
         backend_version="1",
         model=ModelIdentity(id="org/m", identity=_COMMIT),
         params={"n": [1, 2], "s": "x"},
+        backend_params={},
         inputs={"audio": "content:" + _SHA},
     )
 

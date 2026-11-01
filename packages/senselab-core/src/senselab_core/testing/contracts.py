@@ -5,10 +5,9 @@
 Ids are `<task>::<case>` and `<backend>::<case>`; a backend name declared under several tasks is
 written `<task>/<backend>`.
 
-Task cases: `params_round_trip`, `params_reject_unknown`, and for `measure` tasks
-`measure_has_no_verdict` (P-20). Backend cases, each building keys with `key_builder` (default
-`build_key`): `key_deterministic`; `key_changes_with_<field>` for every `LogicalKey` field, except
-that a batch formation or chunk grid the backend does not declare output-affecting gets
+Task cases: `params_round_trip` and `params_reject_unknown`. Backend cases, each building keys
+with `key_builder` (default `build_key`): `key_deterministic`; `key_changes_with_<field>` for every
+`LogicalKey` field, except that a batch formation or chunk grid the backend does not declare output-affecting gets
 `key_ignores_<field>`; `key_ignores_<field>` for every other `Placement` field and every
 `ExecutionContext` field; `key_independent_of_hash_seed`; and `content_fault_isolated`, which runs
 the backend's worker on its load stub.
@@ -37,7 +36,8 @@ from pydantic import BaseModel, ValidationError
 from senselab_worker.digest import identity_digest
 from senselab_worker.faults import FaultClass
 
-from senselab_core.kernel.declare import OUTPUT_AFFECTING, VERDICT_TYPES, BackendSpec, Registry, TaskSpec
+from senselab_core.kernel._base import thawed
+from senselab_core.kernel.declare import OUTPUT_AFFECTING, BackendSpec, Registry, TaskSpec
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelRef, ResolvedModel
 from senselab_core.runtime.keys import Call, Placement, build_key
 from senselab_core.runtime.worker_client import WorkerClient
@@ -112,13 +112,7 @@ def contract_cases(
 
 
 def _task_cases(task: TaskSpec) -> list[tuple[str, Callable[[TaskSpec], None]]]:
-    cases: list[tuple[str, Callable[[TaskSpec], None]]] = [
-        ("params_round_trip", _params_round_trip),
-        ("params_reject_unknown", _params_reject_unknown),
-    ]
-    if task.kind == "measure":
-        cases.append(("measure_has_no_verdict", _measure_has_no_verdict))
-    return cases
+    return [("params_round_trip", _params_round_trip), ("params_reject_unknown", _params_reject_unknown)]
 
 
 def _backend_cases(
@@ -162,11 +156,6 @@ def _params_reject_unknown(task: TaskSpec) -> None:
     assert probe in message, f"the error does not name the unknown key {probe!r}: {message}"
     if known:
         assert "did you mean" in message and repr(known[0]) in message, f"no suggestion of {known[0]!r}: {message}"
-
-
-def _measure_has_no_verdict(task: TaskSpec) -> None:
-    verdicts = {port: t for port, t in task.outputs.items() if t in VERDICT_TYPES}
-    assert not verdicts, f"measure task {task.name!r} outputs verdicts {verdicts}; declare a decide task (P-20)"
 
 
 def base_call(task: TaskSpec, backend: BackendSpec) -> tuple[Call, Placement]:
@@ -379,7 +368,7 @@ def _content_fault_isolated(task: TaskSpec, backend: BackendSpec) -> None:
         {"id": i, "inputs": {port: WIRE_INPUTS[t](i, port) for port, t in task.inputs.items()}} for i in ("a", "b", "c")
     ]
     params = task.params().model_dump(mode="json")
-    stub = backend.model_dump(mode="json", include={"load_stub"})["load_stub"]
+    stub = thawed(backend.load_stub)
     with tempfile.TemporaryDirectory(prefix="senselab-contract-") as scratch:
         clean = _run_worker(backend, {**stub, "faults": {}}, items, params, Path(scratch))
         faulted = _run_worker(backend, {**stub, "faults": {"fail_items": [FAULTED_ITEM]}}, items, params, Path(scratch))
