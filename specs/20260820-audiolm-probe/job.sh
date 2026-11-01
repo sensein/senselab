@@ -37,7 +37,7 @@ echo "== commit: $(git rev-parse --short HEAD)"
 # Its own venv: Qwen3-Omni needs a transformers new enough to carry Qwen3OmniMoe, which the
 # repo's pinned transformers is not obliged to be.
 if [ ! -x "$VENV/bin/python" ]; then
-  uv venv --python 3.12 "$VENV"
+  uv venv --python-preference only-managed --python 3.12 "$VENV"
 fi
 uv pip install --python "$VENV/bin/python" -q \
   torch torchaudio --index-url https://download.pytorch.org/whl/cu128
