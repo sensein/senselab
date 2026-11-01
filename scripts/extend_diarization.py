@@ -47,8 +47,6 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
-from senselab_core.runtime.provenance import ProvStore
-
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.extend import (
     ABSENT,
@@ -81,6 +79,7 @@ from senselab.audio.workflows.triage.nodes.preprocess import (
     diarization_streams,
 )
 from senselab.utils.data_structures import DeviceType
+from senselab.utils.prov_store import ProvStore
 from senselab.utils.subprocess_venv import record_venv_use
 
 DEFAULT_BATCH_SIZE = 200
