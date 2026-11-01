@@ -239,7 +239,7 @@ def _wait_exit(pid: int, *, block: bool = True) -> bool:
         ChildProcessError: if `pid` is not an unreaped child (waitid only).
         NotImplementedError: on a platform that is neither Linux nor macOS.
     """
-    if sys.platform == "linux":
+    if sys.platform == "linux" and hasattr(os, "waitid"):
         return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | (0 if block else os.WNOHANG)) is not None
     if sys.platform == "darwin":
         kq = select.kqueue()
