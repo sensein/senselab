@@ -8,7 +8,7 @@
   and `STAGING_DIR_MODE`, and directories that hold objects are `shared_dir_mode`.
 - `StorageDir` is the one way to reach and write below a storage root (ADR-003): no symlink below the root
   is followed, a mutable file is only ever replaced whole by a fresh file renamed over its name, every file
-  name written matches a grammar its module lists in `WRITTEN_NAMES`, and modes are set only through a
+  name written matches a grammar the caller passes, and modes are set only through a
   descriptor (`set_mode`).
 - `StorageDir.fs_now` reads the current time from the filesystem itself, from a fresh sentinel file.
 - `write_atomically` replaces a caller's file so a reader sees the old or the new bytes, never a mix.
@@ -161,8 +161,6 @@ TEMPORARY_NAME = re.compile(r"^\..+\.[0-9]+\.[0-9]+\.[0-9a-f]{32}\.tmp$")
 """A file being written atomically: `.<name>.<pid>.<thread id>.<uuid4 hex>.tmp`."""
 ASIDE_NAME = UUID_HEX
 """An object moved aside: a uuid4 hex."""
-WRITTEN_NAMES = frozenset({CLOCK, TEMPORARY_NAME, ASIDE_NAME})
-"""The grammars of the file names this module writes under a storage root."""
 _CALLER_FILE = re.compile(r".+")
 """A file a caller names, outside any storage root (`write_atomically`)."""
 
@@ -716,7 +714,6 @@ __all__ = [
     "ADDRESSED_FORMATS",
     "ASIDE_NAME",
     "CLOCK",
-    "WRITTEN_NAMES",
     "StorageDir",
     "WrongKindError",
     "owner_remedy",

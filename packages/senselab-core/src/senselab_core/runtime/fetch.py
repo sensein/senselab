@@ -71,8 +71,6 @@ STAGED_NAME = re.compile(r"blob|marker")
 """A download or a marker, written in a private staging directory `tmp/<uuid>/`."""
 COMMITTED_NAME = re.compile(r"[0-9a-f]{64}|\.complete")
 """A blob `blobs/<sha256>` or a dataset's completion marker, linked or renamed from private staging."""
-WRITTEN_NAMES = frozenset({LINK_STAGING_NAME, MANIFEST_PART, STAGED_NAME, COMMITTED_NAME})
-"""The grammars of the file names this module writes (besides `storage.WRITTEN_NAMES`)."""
 MARKER_LIMIT = 1 << 24
 """The most bytes a completion marker is read to."""
 _NO_HARDLINK_ERRNOS = frozenset({errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV})

@@ -40,8 +40,6 @@ LOCK_NAME = re.compile(r"^.+\.lock$")
 """The file a lock `flock`s: `<name>.lock`."""
 SIDECAR_NAME = re.compile(r"^.+\.(heartbeat|holder|clock)$")
 """The heartbeat, holder and clock files a lock writes beside the guarded path."""
-WRITTEN_NAMES = frozenset({LOCK_NAME, SIDECAR_NAME})
-"""The grammars of the file names this module writes (besides `storage.WRITTEN_NAMES`)."""
 LOCK_FILE_MODE = 0o664
 """The default mode of the lock file and its sidecars."""
 LOCK_DIR_MODE = 0o2775
@@ -513,7 +511,6 @@ __all__ = [
     "LOCK_FILE_MODE",
     "LOCK_NAME",
     "SIDECAR_NAME",
-    "WRITTEN_NAMES",
     "HEARTBEAT_JOIN_S",
     "LockTimeout",
     "LockUnavailable",

@@ -91,8 +91,6 @@ MEMBER_NAME = re.compile(r"result\.json|context\.json|[0-9a-f]{64}\.npy")
 """A file of an entry, written in its staging directory."""
 FINGERPRINT_NAME = _SHA256
 """An entry, renamed from its staging directory onto `<key digest>/<context fingerprint>`."""
-WRITTEN_NAMES = frozenset({MEMBER_NAME, FINGERPRINT_NAME, ASIDE_NAME})
-"""The grammars of the names this module writes (besides `storage.WRITTEN_NAMES`)."""
 T = TypeVar("T")
 
 

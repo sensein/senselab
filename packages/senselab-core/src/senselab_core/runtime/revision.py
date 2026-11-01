@@ -37,8 +37,6 @@ NAMESPACE = "2x"
 MANIFEST_NAME = "resolutions@2.json"
 """The run manifest's file name; its `@<major>` is the format of its keys (`manifest_key`)."""
 MANIFEST = re.compile(re.escape(MANIFEST_NAME))
-WRITTEN_NAMES = frozenset({MANIFEST})
-"""The grammars of the file names this module writes (besides `storage` and `locks`)."""
 MANIFEST_LIMIT = 1 << 24
 """The most bytes a run manifest is read to."""
 
