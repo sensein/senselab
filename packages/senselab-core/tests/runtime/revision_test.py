@@ -5,6 +5,8 @@ import multiprocessing as mp
 import os
 import subprocess
 import sys
+import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -471,6 +473,37 @@ def test_a_run_id_with_a_parent_component_is_refused(tmp_path: Path) -> None:
 def test_every_run_id_that_is_not_one_component_is_refused(tmp_path: Path, run: str) -> None:
     """Each run id that is not a single path component is refused before anything is written."""
     assert bounded("probe_run_id", str(tmp_path), run) == {"error": "ValueError", "outside": []}
+
+
+SET_ASIDE_FORMS = ["0123456789abcdef0123456789abcdef", "0" * 32, "f" * 32, uuid.UUID(int=7).hex]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("run", SET_ASIDE_FORMS)
+def test_a_run_id_of_the_set_aside_form_is_refused(tmp_path: Path, run: str) -> None:
+    """A run id that a collector would read as a set-aside object is refused before anything is read or written."""
+    with pytest.raises(ValueError, match="set-aside"):
+        choose_run_id({"SENSELAB_RUN_ID": run})
+    for call in (
+        lambda: record_resolution("org/m", "main", SHA_A, run=run, root=tmp_path),
+        lambda: read_manifest(run, root=tmp_path),
+        lambda: manifest_path(run, root=tmp_path),
+    ):
+        with pytest.raises(ValueError, match="set-aside"):
+            call()
+    assert not (tmp_path / NAMESPACE).exists()
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("run", ["job-123", "4242", str(uuid.UUID(int=7)), "0123456789abcdef0123456789abcdeF"])
+def test_an_aged_run_survives_another_runs_collection(tmp_path: Path, run: str) -> None:
+    """Every accepted run id's manifest outlives the quarantine age when another run collects what was set aside."""
+    record_resolution("org/m", "main", SHA_A, run=run, root=tmp_path)
+    old = time.time() - 30 * 24 * 3600
+    for path in (manifest_path(run, root=tmp_path), manifest_path(run, root=tmp_path).parent):
+        os.utime(path, (old, old))
+    record_resolution("org/m", "main", SHA_B, run="otherrun", root=tmp_path)
+    assert read_manifest(run, root=tmp_path) == {manifest_key("org/m", "main"): SHA_A}
 
 
 @pytest.mark.logic

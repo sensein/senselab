@@ -22,6 +22,7 @@ from senselab_worker.digest import COMMIT_HEX
 from senselab_core.runtime.locks import Lease
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import (
+    ASIDE_NAME,
     STAGING_FILE_MODE,
     TEMPORARY_NAME,
     StorageDir,
@@ -60,11 +61,22 @@ def manifest_key(repo_id: str, ref: str) -> str:
     return jcs_dumps([repo_id, ref]).decode()
 
 
+def run_component(run: str) -> str:
+    """Return `run` if it can name a run directory: one path component that is not a set-aside name (`ASIDE_NAME`).
+
+    Raises:
+        ValueError: otherwise.
+    """
+    if ASIDE_NAME.fullmatch(path_component(run)):
+        raise ValueError(f"run id {run!r} has the form of a set-aside name (32 lowercase hex); use a dashed uuid")
+    return run
+
+
 def choose_run_id(environ: Mapping[str, str]) -> str:
     """Return the run id `environ` names: `SENSELAB_RUN_ID`, else `SLURM_ARRAY_JOB_ID`, `SLURM_JOB_ID` or a UUID4.
 
     Raises:
-        ValueError: the chosen id is not one path component.
+        ValueError: the chosen id is refused by `run_component`.
     """
     chosen = (
         environ.get("SENSELAB_RUN_ID")
@@ -73,9 +85,9 @@ def choose_run_id(environ: Mapping[str, str]) -> str:
         or str(uuid.uuid4())
     )
     try:
-        return path_component(chosen)
-    except ValueError:
-        raise ValueError(f"run id {chosen!r} (from SENSELAB_RUN_ID or Slurm) must be one path component") from None
+        return run_component(chosen)
+    except ValueError as err:
+        raise ValueError(f"run id from SENSELAB_RUN_ID or Slurm: {err}") from None
 
 
 @functools.cache
@@ -85,7 +97,7 @@ def run_id() -> str:
     It is exported as `SENSELAB_RUN_ID` so subprocesses inherit it.
 
     Raises:
-        ValueError: the chosen id is not one path component.
+        ValueError: the chosen id is refused by `run_component`.
     """
     chosen = choose_run_id(os.environ)
     os.environ["SENSELAB_RUN_ID"] = chosen
@@ -106,10 +118,10 @@ def manifest_path(run: Optional[str] = None, *, root: Optional[Path] = None) -> 
     `root` is the cache root holding it, `cache_root()` when None.
 
     Raises:
-        ValueError: `run` is not one path component.
+        ValueError: `run` is refused by `run_component`.
     """
     base = cache_root() if root is None else Path(root)
-    return base / NAMESPACE / "runs" / path_component(run_id() if run is None else run) / MANIFEST_NAME
+    return base / NAMESPACE / "runs" / run_component(run_id() if run is None else run) / MANIFEST_NAME
 
 
 def _run_dir(
@@ -159,7 +171,7 @@ def read_manifest(run: Optional[str] = None, *, root: Optional[Path] = None) -> 
     a non-empty one that fails to parse is logged at warning.
 
     Raises:
-        ValueError: `run` (or this run's id) is not one path component.
+        ValueError: `run` (or this run's id) is refused by `run_component`.
     """
     try:
         run_dir = _run_dir(run, root, create=False)
@@ -185,7 +197,7 @@ def record_resolution(
 
     Raises:
         RevisionResolutionError: ``sha`` is not a 40-hex commit SHA.
-        ValueError: ``run`` (or this run's id) is not one path component.
+        ValueError: ``run`` (or this run's id) is refused by `run_component`.
         LeaseTimeout: the manifest's lease could not be taken within its timeout.
         LeaseUnavailable: the manifest's lease cannot be taken in the run's directory, or what is at its name
             cannot be moved aside.
