@@ -519,7 +519,7 @@ tests) plus the 1.x suite for the callers.
 
 **Interfaces:**
 - Produces:
-  - `senselab_core.runtime.locks.SharedFileLock` and `lock_holder`;
+  - `senselab_core.runtime.locks.Lease`, `LeaseTimeout` and `LeaseUnavailable`;
   - `senselab_core.runtime.revision.resolve_revision`, `RevisionResolutionError`, `run_id`,
     `record_resolution`;
   - all signatures unchanged.

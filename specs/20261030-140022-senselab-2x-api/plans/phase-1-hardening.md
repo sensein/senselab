@@ -379,8 +379,7 @@ H6 and H7 can run at any time. H8 is last.
   `packages/senselab-core/src/senselab_core/runtime/data/store_policy.yaml`.
 - Modify: `packages/senselab-core/src/senselab_core/runtime/{store,fetch}.py`.
 - Test: `packages/senselab-core/tests/runtime/{store,fetch}_test.py`,
-  `packages/senselab-core/tests/runtime/addressed_formats_test.py` (generated),
-  `packages/senselab-core/tests/lint/destructive_ops_test.py`.
+  `packages/senselab-core/tests/runtime/addressed_formats_test.py` (generated).
 
 **Interfaces:**
 - `storage.py`:
@@ -498,14 +497,12 @@ H6 and H7 can run at any time. H8 is last.
   @pytest.mark.logic
   def test_redirect_to_non_https_refused(): ...
   ```
-  Lint (`destructive_ops_test.py`, logic tier): parse every module under `packages/*/src`. For each
-  `except` handler whose type is `OSError`, a subclass of it, `Exception`, `BaseException` or bare,
-  fail if its body, or a same-module function it calls (followed transitively), calls `os.rename`,
-  `os.replace`, `os.unlink`, `os.remove`, `os.rmdir`, `Path.unlink`, `Path.rename`, `Path.rmdir`,
-  `shutil.rmtree`, `shutil.move`, `remove_owned` or a method named `_quarantine`.
+  No lint enforces this: `destructive_ops_test.py` was deleted (D-1, H-R53), since it only enumerated
+  call sites. The behaviour is covered by the store and fetch tests above.
 - [ ] **Step 2:** `uv run pytest packages/senselab-core/tests/runtime/store_test.py packages/senselab-core/tests/runtime/fetch_test.py packages/senselab-core/tests/runtime/addressed_formats_test.py packages/senselab-core/tests/lint -v` fails.
-- [ ] **Step 3: Implement.** Probe the R-98 lock and clock items while in these files: `SharedFileLock`'s
-  non-atomic holder write, and staleness judged by mtime against the local clock. Add a failing test
+- [ ] **Step 3: Implement.** Probe the R-98 lock and clock items while in these files: the old
+  `SharedFileLock`'s non-atomic holder write, and staleness judged by mtime against the local clock
+  (the class is gone; `Lease` replaced it under D-2). Add a failing test
   for each that reproduces. Fix a reproduced one by the same invariant (atomic write; staleness from
   the store's own clock via a touched sentinel). Record each outcome in R-98.
 - [ ] **Step 4:** The scoped tests pass; then `uv run pytest packages -m "logic or contract" -q`.
@@ -526,8 +523,7 @@ H6 and H7 can run at any time. H8 is last.
   ownership).
 - Test: `packages/senselab-worker/tests/{launch,codec}_test.py`;
   `packages/senselab-core/tests/runtime/worker_client_test.py`;
-  `packages/senselab-core/tests/runtime/worker_lifecycle_contract_test.py` (new);
-  `packages/senselab-core/tests/lint/owned_deletion_test.py` (new).
+  `packages/senselab-core/tests/runtime/worker_lifecycle_contract_test.py` (new).
 - Fixtures (new backends under `packages/senselab-core/tests/runtime/backends/`): `forking_backend.py`,
   `stdin_reading_backend.py`, `subdir_backend.py`, `slow_reader_backend.py`.
 
@@ -617,9 +613,9 @@ H6 and H7 can run at any time. H8 is last.
   × {normal close, timeout, crash, `close()` from another thread}. For each, after `close()`: no
   process of the group remains, the call returned within its bound, and the client's parent
   directory holds exactly the files it held before.
-  The lint (`owned_deletion_test.py`, logic tier) fails on any call to `os.unlink`, `os.remove`,
-  `Path.unlink`, `shutil.rmtree` or `os.rmdir` in `packages/*/src` outside `ownership.remove_owned`.
-  `os.rmdir` is also allowed in `worker_client._shutdown`, on the directory the client created.
+  `owned_deletion_test.py` was deleted (D-1, H-R53): it only enumerated call sites. The behavioural
+  check is `tests/runtime/owned_names_test.py`, which calls the runtime and checks that it refuses
+  foreign names. `os.rmdir` is allowed in `worker_client._shutdown`, on the directory the client created.
 - [ ] **Step 2:** `uv run pytest packages/senselab-worker/tests packages/senselab-core/tests/runtime/worker_client_test.py packages/senselab-core/tests/runtime/worker_lifecycle_contract_test.py packages/senselab-core/tests/lint -v` fails.
 - [ ] **Step 3: Implement.** Move every existing deletion call in `packages/*/src` to `remove_owned`,
   so the lint passes: store and fetch staging cleanup, and the locks module. Probe the R-98 item "a `.pth`/sitecustomize print before
@@ -745,7 +741,7 @@ H6 and H7 can run at any time. H8 is last.
   `scripts/fixture_budget_allowlist.txt` (gains sha256 and size columns), `.importlinter`,
   `.github/workflows/tests.yaml`.
 - Create: `packages/conftest.py`, `packages/senselab-core/tests/lint/{dependencies,ci_tiers}_test.py`,
-  `scripts/data/fixture_budget.yaml` (code-file byte cap, with derivation).
+  `scripts/data/fixture_budget.yaml` (the two docs.md data-policy limits, each with its derivation).
 
 **Interfaces:**
 - Moved-module guard. `_imports(path: Path) -> set[str]` returns absolute module names:

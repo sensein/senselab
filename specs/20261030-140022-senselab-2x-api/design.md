@@ -669,7 +669,8 @@ refuses one whose value an outsider could choose (`env.*`, pull-request text, an
 Only literals, trusted contexts and functions over them pass.
 
 **Guards are the design's, not a list of past bypasses** (amended 2026-11-01, D-1). CI keeps the
-import-linter contracts (layers, worker independence, `packages-not-1x`, `digests-are-tagged`), the
+import-linter contracts (layers, worker independence, `packages-not-1x`, `digests-are-tagged`; the digest
+contracts cover the packages and the 2.x scripts only, and ruff excludes the 1.x scripts), the
 identifier check (P-28), the fixture budget and the workflow-expression guard. It has no spelling-based
 lint that chases in-repo bypasses, and no test whose only job is to make another test exist.
 

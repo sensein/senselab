@@ -69,23 +69,32 @@ PR - clarify the decisions"):
 
 Done on 2026-11-01: specs merged into `2x/phase-1` (`d90b5057`); **D-6** `src/` = `alpha` (`ffdf06e6`,
 merge `a2be7b27`); **D-1** guard layer cut and advisory prose review added (`f7026f54`, `b2db96be`;
-needs the `ANTHROPIC_API_KEY` repository secret); **D-5** release gate trimmed (`a3ea1894`).
+needs the `ANTHROPIC_API_KEY` repository secret); **D-5** release gate trimmed (`a3ea1894`); **D-2** locks are leases by rename and `O_EXCL` (`5a325c29..12853f8b`; ADR-003 amended to
+match what was built); the D-1 fixture budget numbers (256 KB per file, 2 MB total) now live in
+`scripts/data/fixture_budget.yaml` with their derivations.
 
-1. **D-2:** revert the lock to ADR-003's lease (rename and `O_EXCL`, bounded waits, stale lease renamed
-   aside); remove `flock`, heartbeat, holder takeover, negative timeout and shared mode. Keep the
-   descriptor walk, no in-place modification, quarantine and private staging.
-2. **H-R49:** test conformance: regressions renamed by invariant and folded into component test files, no
+1. **H-R49:** test conformance: regressions renamed by invariant and folded into component test files, no
    round ids in tests, default tier and CI cadence per `testing.md`, wall-clock checks into `limits`,
    internal monkeypatches replaced by seams, policy checks as `scripts/check_*.py`.
-3. **The "follows" items** of the decision record: portable model identity (A I-1), read
+2. **The "follows" items** of the decision record: portable model identity (A I-1), read
    `DEFAULT_REUSE_POLICY` (Ru I-1), equivalence classes as data (A I-8), owners for the clock re-binding
    (A I-9) and the source-digest CI check (A I-10); audio decoding out of the kernel and whole-file
    hashing against ADR-005 (Ar F-3, A I-5, R-109); the pydra corrections (Ar F-5, F-6) and owners for the
    pydra PRs; one transient classifier (Ar F-7); the engineering and license gates (T F5–F7); the P-40
-   roster and worktree isolation; parked items moved into tracked registers (Ru I-11, I-12).
-4. **Phase 1 exit** (`plans/phase-1.md` Task 15, as amended): 2.x CI green; `src/` equals `alpha`; no 1.x
-   tests on the 2.x line; P-39 re-scan; `STATE.md` updated. Then merge #617 into `2.x` and retarget #619.
-5. **Phase 2:** ADR-010 (PROV-O JSON-LD store, `senselab:` vocabulary, token-family removal, export
+   roster and worktree isolation; parked items moved into tracked registers (Ru I-11, I-12); lease renewal not yet implemented, owner:
+   execution phase (Phase 3), since `Lease` has no renewal and `execution.md` 3.2 says workers renew.
+3. **Phase 1 exit** (`plans/phase-1.md` Task 15, as amended): 2.x CI green; `src/` equals `alpha`; no 1.x
+   tests on the 2.x line; P-39 re-scan; `STATE.md` updated. Run these on ORCD shared NFS scratch from a pinned checkout, in a submitted job
+   (never on login or claude-rc nodes): (a) `SENSELAB_WORK_POOL_NFS_DIR=<dir>` run of
+   `packages/senselab-core/tests/runtime/locks_test.py`, whose two `[nfs]` cases cover one taker and
+   concurrent breakers; (b) cross-node exclusion: processes on 2-4 nodes calling `record_resolution` with
+   distinct SHAs against one `SENSELAB_CACHE`, expecting one SHA, one manifest entry and no lease litter;
+   (c) lost-reply path: `link` EEXIST with `st_nlink == 2` under load; (d) clock skew: a lease planted on
+   one node is aged by `fs_now()` on another, within `acregmin`/`acregmax`, and the lstat pre-check is not
+   defeated by attribute caching; (e) stale-break race across nodes: one break log, and any "displaced"
+   warning matches a holder whose release logs it; (f) an unreadable 0o000 stale lease left by another
+   user in a group-writable run directory is still broken. Then merge #617 into `2.x` and retarget #619.
+4. **Phase 2:** ADR-010 (PROV-O JSON-LD store, `senselab:` vocabulary, token-family removal, export
    redaction) and the benchmark harness with its data manifest and smoke suite, alongside the tasks and
    backends of design §6.2.
 

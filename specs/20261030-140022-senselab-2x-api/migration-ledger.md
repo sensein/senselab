@@ -212,20 +212,12 @@ An earlier count of 32 included four `dict.update` calls fed by `str()` (`cohort
 
 ## Modules allowed to import a digest module (H-R19, H9e)
 
-The import contract `digests-are-tagged` (`.importlinter`, ADR-006) forbids every root package to import
-`hashlib`, `hmac` and the other digest modules. Its allowances outside `senselab_worker.digest` are these
-scripts; each leaves the list when it is ported to `identity_digest`, `file_digest` or `npy_digest`, and an
-allowance that no longer matches an import fails the contract. The 1.x modules under `src/` are outside the
-import contracts (ADR-009); a 1.x module that imports a digest module fails the contract when its modify
-commit lands in `packages/`, and the H-R20 table above names its replacement.
-
-| Module | Imports |
-|---|---|
-| `scripts.analyze_audio` | `hashlib` |
-| `scripts.build_classifier_ontology_map` | `hashlib` |
-| `scripts.extend_cohort` | `hashlib` |
-| `scripts.free_speech_review_page` | `hashlib` |
-| `scripts.verify_grid_unification` | `hashlib` |
+The import contract `digests-are-tagged` (`.importlinter`, ADR-006) forbids `senselab_worker`,
+`senselab_core` and the seven 2.x scripts to import `hashlib`, `hmac` and the other digest modules,
+outside `senselab_worker.digest`. There are no script allowances: the 1.x scripts are outside the
+contracts and excluded from ruff (H-R53), as are the 1.x modules under `src/` (ADR-009). A 1.x module
+that imports a digest module fails the contract when its modify commit lands in `packages/`, and the
+H-R20 table above names its replacement.
 
 ## Name-based digests in 1.x (H9e, H-R36)
 
