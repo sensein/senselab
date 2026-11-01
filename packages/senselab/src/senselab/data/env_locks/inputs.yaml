@@ -1,0 +1,23 @@
+format: env-lock-inputs@1.0
+# What each lock beside this file is compiled from: the backend's requirement specs, its Python, its CUDA index
+# ceiling `max_cuda` (omitted: the default). scripts/lock_envs.py reads this file.
+crisperwhisper:
+  python: '3.12'
+  requirements:
+  - crisperwhisper[transformers]==2.0.1
+  - crisperwhisper[ct2]==2.0.1; sys_platform == 'linux' and platform_machine == 'x86_64'
+  - ctranslate2>=4.0; sys_platform != 'linux' or platform_machine != 'x86_64'
+  - torch>=2.4
+  - torchaudio>=2.4
+vllm-server:
+  python: '3.12'
+  max_cuda: [13, 0]
+  requirements:
+  - vllm==0.31.0
+pii-review:
+  python: '3.12'
+  requirements:
+  - transformers>=5.8
+  - torch>=2.8,<2.9
+  - accelerate>=1.0
+  - compressed-tensors>=0.15

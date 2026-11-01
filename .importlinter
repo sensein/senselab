@@ -108,7 +108,7 @@ source_modules =
     scripts.check_participant_ids
     scripts.check_size_budgets
     scripts.check_spec_ids
-    scripts.lock_subprocess_venvs
+    scripts.lock_envs
     scripts.profile_imports
     scripts.profile_model_tiers
     scripts.profile_with_scalene
@@ -146,7 +146,7 @@ source_modules =
     scripts.check_participant_ids
     scripts.check_size_budgets
     scripts.check_spec_ids
-    scripts.lock_subprocess_venvs
+    scripts.lock_envs
     scripts.profile_imports
     scripts.profile_model_tiers
     scripts.profile_with_scalene

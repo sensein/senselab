@@ -42,6 +42,7 @@ IDENTITY_TAGS: frozenset[str] = frozenset(
         "prov-activity@1",
         "prov-node@1",
         "wheel-set@1",
+        "env-lock@1",
     }
 )
 """The registered tags of `identity_digest`; no tag is a prefix of another."""

@@ -1,5 +1,5 @@
-# senselab subprocess-venv lock: crisperwhisper
-# requirements-sha256: e0ffebc3a6c7944a8e5ca3ef627801460c0f99cccf4c7e700599f1c1ecfc29a6
+# senselab env lock: crisperwhisper
+# identity-digest: env-lock@1 5518856d7ad3c1f00afbefe315d5d8fa5f7c16a9085991444bc510ed177f02ae
 # python: 3.12
 # torch: torch==2.11.0 torchaudio==2.11.0
 # torch-index: cu128
@@ -10,7 +10,6 @@
 # note: torch 2.13.0 skipped: not served as torch==2.13.0 on cu128/('linux', 'x86_64')
 # note: torch 2.12.1 skipped: not served as torch==2.12.1 on cu128/('linux', 'x86_64')
 # note: torch 2.12.0 skipped: not served as torch==2.12.0 on cu128/('linux', 'x86_64')
-# Regenerate: uv run python scripts/lock_subprocess_venvs.py crisperwhisper
 accelerate==1.15.0 \
     --hash=sha256:5654f8c5eaa0d4fa68b33e287a97765da6849bf6d51dcac874e73fbbddfb6134 \
     --hash=sha256:97eacca0b73e45cb867dbf8c5d5d4dc32219544300e0c8992c7334dc2ef33cec

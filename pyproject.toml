@@ -160,7 +160,7 @@ exclude = [
   "./src",
   # The 1.x scripts under scripts/, not checked on the 2.x line. The 2.x scripts are release_gate,
   # check_fixture_budget, check_licenses, check_participant_ids, check_size_budgets, check_spec_ids,
-  # lock_subprocess_venvs and profile_*.
+  # lock_envs and profile_*.
   "scripts/adaptive_loop.py",
   "scripts/analyze_audio.py",
   "scripts/analyze_routing_evidence.py",

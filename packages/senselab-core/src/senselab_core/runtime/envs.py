@@ -19,8 +19,11 @@ import stat
 import subprocess
 import sys
 import sysconfig
+import tempfile
+import tomllib
+import urllib.request
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -63,10 +66,27 @@ _NO_WHEEL = re.compile(
 )
 _NO_INTERPRETER = re.compile(r"no interpreter found|no download found", re.IGNORECASE)
 _OVERLAY_STAMP = "senselab_worker.runtime"
+LOCK_DIGEST_TAG = "env-lock@1"
+"""The `identity_digest` tag of a lock's inputs, recorded in its `# identity-digest:` header line."""
+BASE_REQUIREMENTS = ("safetensors", "numpy")
+"""Resolved into every lock beside the backend's requirements."""
+QUARANTINED = ("lightning!=2.6.2,!=2.6.3", "pytorch-lightning!=2.6.2,!=2.6.3")
+"""Constraints on every resolution: releases withdrawn from PyPI as malicious."""
+TORCH_PACKAGES = frozenset({"torch", "torchaudio"})
+_TORCH_VARIANTS = ("nvidia-", "triton", "pytorch-triton", "cuda-")
+_LOCK_LINE = re.compile(r"^([A-Za-z0-9._-]+)(\[[^\]]*\])?\s*(==|@)\s*([^\s;#\\]+)")
+_VIA = re.compile(r"#\s*via\s+(.*)$")
+_REQUIREMENT = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*(?:==\s*([^\s;,]+))?")
+_LINUX_X86_64 = ("linux", "x86_64")
+_MACOS_ARM64 = ("macosx", "arm64")
 
 
 class EnvLockError(ValueError):
     """A lock file without the header fields an env is built from."""
+
+
+class HostLockLacksBackend(EnvLockError):
+    """The senselab lock does not cover a backend declared `Env.host()`; the message names the requirements."""
 
 
 class ManagedPythonMissing(RuntimeError):
@@ -247,6 +267,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
     root: Path,
     *,
     settings: Envs,
+    requirements: Sequence[str] = (),
     uv: Uv | None = None,
     host_cuda: HostCuda | None = None,
 ) -> EnvHandle:
@@ -260,6 +281,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
         root: The directory the profile's `env_roots` gives for `env.kind`; unused for a host env.
         settings: The profile's `envs`: `torch_index` replaces the probed index when set, and a build's lease is
             broken once older than `lease_stale_after_s`; a waiter waits that long plus `locks.TIMEOUT_S`.
+        requirements: The backend's requirements; a host env is refused unless `lock` covers each.
         uv: The `uv` command; `Uv.find()` when None.
         host_cuda: The host's CUDA; probed with `detect_host_cuda` when None and the lock pins torch.
 
@@ -267,11 +289,15 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
         ManagedPythonMissing: no uv-managed interpreter of the needed version, or the host's is not uv-managed.
         CudaCompatibilityError: the routed index has no wheel for the lock's torch pins.
         EnvLockError: the lock's header lacks what a build needs.
+        HostLockLacksBackend: a host env whose `lock` does not pin every one of `requirements`.
         RuntimeError: another `uv` step failed; the message carries uv's stderr.
         LeaseTimeout, LeaseUnavailable: as `Lease`.
     """
     uv = uv or Uv.find()
     if env.kind == "host":
+        lacking = host_lock_gaps(lock, requirements)
+        if lacking:
+            raise HostLockLacksBackend(f"{lock} does not cover {lacking}; declare the backend Env.isolated instead")
         return _host_env(lock, uv)
     parsed = EnvLock.read(lock)
     index = None
@@ -470,3 +496,219 @@ __all__ = [
     "ensure_env",
     "pick_torch_index",
 ]
+
+
+def host_lock_gaps(lock: Path, requirements: Sequence[str]) -> list[str]:
+    """Return the `requirements` the `uv.lock` at `lock` does not cover.
+
+    A requirement is covered when its distribution is a locked package and, for an `==` pin, at that version.
+    """
+    locked = {
+        re.sub(r"[-_.]+", "-", str(p["name"]).lower()): p.get("version")
+        for p in tomllib.loads(Path(lock).read_text("utf-8")).get("package", [])
+    }
+    gaps = []
+    for text in requirements:
+        match = _REQUIREMENT.match(text)
+        name = re.sub(r"[-_.]+", "-", match[1].lower()) if match else None
+        if name not in locked or (match and match[2] and locked[name] != match[2]):
+            gaps.append(text)
+    return gaps
+
+
+def lock_digest(
+    requirements: Sequence[str],
+    python: str,
+    max_cuda: tuple[int, int] | None = None,
+    excluded: Sequence[str] = (),
+) -> str:
+    """Return the digest of everything a lock is compiled from, tagged `LOCK_DIGEST_TAG`."""
+    return identity_digest(
+        LOCK_DIGEST_TAG,
+        {
+            "requirements": list(requirements),
+            "base": list(BASE_REQUIREMENTS),
+            "python": python,
+            "max_cuda": list(max_cuda) if max_cuda else None,
+            "exclude": sorted(_normalize(n) for n in excluded),
+        },
+    )
+
+
+def retag_lock(text: str, digest: str) -> str:
+    """Return the lock `text` with its header's digest line replaced by `# identity-digest: <tag> <digest>`.
+
+    Nothing is resolved or installed; the body and every other header line are unchanged.
+
+    Raises:
+        EnvLockError: `text` has neither an `identity-digest` nor a `requirements-sha256` header line.
+    """
+    lines = text.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if not line.startswith("#"):
+            break
+        if line.startswith(("# requirements-sha256:", "# identity-digest:")):
+            lines[i] = f"# identity-digest: {LOCK_DIGEST_TAG} {digest}\n"
+            return "".join(lines)
+    raise EnvLockError("lock has no digest header line to replace")
+
+
+def lock_identity_digest(path: Path) -> tuple[str, str]:
+    """Return `(tag, digest)` from the `# identity-digest:` header of the lock at `path`.
+
+    Raises:
+        EnvLockError: the lock has no such line, or it is not `<tag> <64 hex>`.
+    """
+    for line in Path(path).read_text("utf-8").splitlines():
+        if not line.startswith("#"):
+            break
+        if line.startswith("# identity-digest:"):
+            found = re.fullmatch(r"\s*(\S+) ([0-9a-f]{64})\s*", line.partition(":")[2])
+            if found:
+                return found[1], found[2]
+            break
+    raise EnvLockError(f"lock {path} has no `# identity-digest: <tag> <sha256>` header line")
+
+
+def _normalize(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _torch_family(name: str) -> bool:
+    return name in TORCH_PACKAGES or name.startswith(_TORCH_VARIANTS)
+
+
+def _pip_compile(uv: Uv, in_file: Path, python: str, flags: Sequence[str]) -> str:
+    args = [
+        "pip", "compile", str(in_file), "--universal", "--python-version", python,
+        "--python-preference", PYTHON_PREFERENCE, "--no-header", "--quiet", "--color", "never", "--no-sources",
+        *flags,
+    ]  # fmt: skip
+    return _check(uv(*args), f"compile {in_file.name}").stdout
+
+
+def _resolved(annotated: str) -> dict[str, tuple[str, set[str]]]:
+    out: dict[str, tuple[str, set[str]]] = {}
+    for line in annotated.splitlines():
+        match = _LOCK_LINE.match(line)
+        if not match:
+            continue
+        name = _normalize(match[1])
+        via = _VIA.search(line)
+        parents = {_normalize(p.strip()) for p in via[1].split(",")} if via else set()
+        out[name] = (out[name][0], out[name][1] | parents) if name in out else (match[4], parents)
+    return out
+
+
+def _torch_only(packages: dict[str, tuple[str, set[str]]]) -> list[str]:
+    """Names left out of a lock body: torch, torchaudio, what only they pull in, and triton under torch."""
+    family = {n for n in packages if n in TORCH_PACKAGES}
+    grew = True
+    while grew:
+        grew = False
+        for name, (_, parents) in packages.items():
+            if name not in family and parents and parents <= family:
+                family.add(name)
+                grew = True
+    triton = {
+        n
+        for n, (_, parents) in packages.items()
+        if n.startswith(("triton", "pytorch-triton")) and parents & TORCH_PACKAGES
+    }
+    return sorted({n for n in family if _torch_family(n)} | triton)
+
+
+def _top_cuda_tag(max_cuda: tuple[int, int] | None) -> str:
+    ceiling = max_cuda or DEFAULT_MAX_CUDA
+    return next((tag for tag, version in CUDA_INDEXES.items() if version <= ceiling), "cpu")
+
+
+def _wheel_on_index(package: str, version: str, tag: str, python: str, platform_parts: tuple[str, ...]) -> bool:
+    url = f"{PYTORCH_INDEX_BASE}/{tag}/{package}/"
+    with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 - fixed https URL
+        wheels = re.findall(r">([^<>]+\.whl)<", response.read().decode())
+    cp = "cp" + python.replace(".", "")
+    prefixes = (f"{package}-{version}-", f"{package}-{version}%2B", f"{package}-{version}+")
+    return any(w.startswith(prefixes) and f"-{cp}-" in w and all(p in w for p in platform_parts) for w in wheels)
+
+
+def compile_lock(  # noqa: PLR0913 - a lock's inputs and its two environment-facing switches
+    name: str,
+    requirements: Sequence[str],
+    python: str,
+    max_cuda: tuple[int, int] | None = None,
+    *,
+    exclude_newer: str | None = None,
+    excluded: Sequence[str] = (),
+    check_torch_index: bool = True,
+    max_steps: int = 12,
+    uv: Uv | None = None,
+) -> str:
+    """Return a lock's full text: `uv pip compile --universal --generate-hashes` under a header.
+
+    Needs network. When the resolution pins `torch`, its and `torchaudio`'s versions must be served by the top CUDA
+    index and the CPU index on Linux x86_64 and by the CPU index on macOS arm64; otherwise `torch` is bounded below
+    the rejected version and the resolution repeated, up to `max_steps` times. `torch`, `torchaudio`, the CUDA
+    packages only they pull in and `excluded` are left out of the body; the builder installs the header's pins from
+    the PyTorch index.
+
+    Args:
+        name: The env name, written to the header.
+        requirements: The backend's requirement specs.
+        python: `major.minor`, passed to uv with `--python-preference only-managed`.
+        max_cuda: The backend's CUDA index ceiling.
+        exclude_newer: An RFC 3339 timestamp; later uploads are ignored.
+        excluded: Distributions resolved but left out of the body.
+        check_torch_index: Whether to check the PyTorch indexes (needs network).
+        max_steps: How many times `torch` may be bounded down.
+        uv: The `uv` command; `Uv.find()` when None.
+
+    Raises:
+        EnvLockError: no torch within the requirements is served on every index.
+        RuntimeError: `uv pip compile` failed; the message carries uv's stderr.
+    """
+    uv = uv or Uv.find()
+    tag = _top_cuda_tag(max_cuda)
+    targets = [(tag, _LINUX_X86_64), ("cpu", _LINUX_X86_64), ("cpu", _MACOS_ARM64)]
+    with tempfile.TemporaryDirectory(prefix=f"env-lock-{name}-") as tmp:
+        work = Path(tmp)
+        in_file, constraints = work / "requirements.in", work / "constraints.txt"
+        in_file.write_text("\n".join([*requirements, *BASE_REQUIREMENTS]) + "\n")
+        extra: list[str] = []
+        notes: list[str] = []
+        for _ in range(max_steps):
+            constraints.write_text("\n".join([*QUARANTINED, *extra]) + "\n")
+            flags = ["--constraint", str(constraints), *(["--exclude-newer", exclude_newer] if exclude_newer else [])]
+            packages = _resolved(_pip_compile(uv, in_file, python, [*flags, "--annotation-style", "line"]))
+            pins = tuple(f"{p}=={packages[p][0]}" for p in sorted(TORCH_PACKAGES) if p in packages)
+            if not pins or not check_torch_index:
+                break
+            missing = [
+                f"{pin} on {t}/{plat}"
+                for pin in pins
+                for t, plat in targets
+                if not _wheel_on_index(pin.partition("==")[0], pin.partition("==")[2], t, python, plat)
+            ]
+            if not missing:
+                break
+            if "torch" not in packages:
+                raise EnvLockError(f"{name!r}: torchaudio without torch is not served: {missing}")
+            notes.append(f"torch {packages['torch'][0]} skipped: not served as " + "; ".join(missing))
+            extra.append(f"torch<{packages['torch'][0]}")
+        else:
+            raise EnvLockError(f"{name!r}: no torch within the requirements is served on every index: {notes}")
+        no_emit = [*(_torch_only(packages) if pins else ()), *sorted(_normalize(n) for n in excluded)]
+        skip = [a for n in no_emit for a in ("--no-emit-package", n)]
+        body = _pip_compile(uv, in_file, python, [*flags, "--generate-hashes", *skip])
+    header = [
+        f"# senselab env lock: {name}",
+        f"# identity-digest: {LOCK_DIGEST_TAG} {lock_digest(requirements, python, max_cuda, excluded)}",
+        f"# python: {python}",
+        f"# torch: {' '.join(pins) if pins else 'none'}",
+        f"# torch-index: {tag if pins else 'none'}",
+        f"# exclude-newer: {exclude_newer or 'none'}",
+        f"# uv: {_check(uv('--version'), 'report its version').stdout.strip()}",
+        *([f"# exclude: {' '.join(sorted(_normalize(n) for n in excluded))}"] if excluded else []),
+        *(f"# note: {note}" for note in notes),
+    ]
+    return "\n".join(header) + "\n" + body

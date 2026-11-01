@@ -12,15 +12,21 @@ from senselab_core.kernel.declare import Env
 from senselab_core.kernel.identity import ExecutionContext
 from senselab_core.runtime.envs import (
     CPU_INDEX,
+    LOCK_DIGEST_TAG,
     CudaCompatibilityError,
     EnvHandle,
     HostCuda,
+    HostLockLacksBackend,
     ManagedPythonMissing,
     TorchIndex,
     Uv,
+    compile_lock,
     detect_host_cuda,
     ensure_env,
+    lock_digest,
+    lock_identity_digest,
     pick_torch_index,
+    retag_lock,
 )
 from senselab_core.runtime.profiles import Envs, ExecutionProfile
 
@@ -248,3 +254,54 @@ def test_profile_lease_bound_breaks_an_expired_build_lease(tmp_path: Path, uv_lo
     _ensure(tmp_path, _lock(tmp_path, body="scipy==1.14.0\n"), Envs(lease_stale_after_s=1.0))
     assert time.monotonic() - started >= 0.9  # noqa: PLR2004 - the young lease was held until it aged past 1 s
     assert not lease.exists()
+
+
+def _uv_lock(tmp_path: Path, *packages: tuple[str, str]) -> Path:
+    path = tmp_path / "uv.lock"
+    path.write_text("version = 1\n" + "".join(f'[[package]]\nname = "{n}"\nversion = "{v}"\n' for n, v in packages))
+    return path
+
+
+def test_host_refused_when_lock_lacks_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A host env is refused unless the root lock pins every requirement of its backend."""
+    monkeypatch.setenv("FAKE_UV_PYTHON_DIR", str(Path(sys.base_prefix).resolve().parent))
+    lock = _uv_lock(tmp_path, ("numpy", "2.1.0"), ("Some_Pkg", "1.0"))
+    ok = ensure_env(
+        Env.host(), lock, tmp_path, settings=SETTINGS, uv=FAKE_UV, requirements=["numpy>=2", "some-pkg==1.0"]
+    )
+    assert ok.python == sys.executable
+    for requirements in (["numpy", "absent-pkg>=1"], ["some-pkg==2.0"]):
+        with pytest.raises(HostLockLacksBackend, match="Env.isolated") as info:
+            ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, uv=FAKE_UV, requirements=requirements)
+        assert requirements[-1] in str(info.value)
+
+
+def test_lock_header_is_tagged_digest(tmp_path: Path, uv_log: Path) -> None:
+    """A compiled lock carries `# identity-digest: <registered tag> <digest of its inputs>`, not a bare sha256."""
+    from senselab_worker.digest import IDENTITY_TAGS
+
+    text = compile_lock(
+        "demo", ["numpy>=2", "torch>=2"], "3.12", (13, 0), exclude_newer="2026-10-02T00:00:00Z", uv=FAKE_UV,
+        check_torch_index=False,
+    )  # fmt: skip
+    path = tmp_path / "demo.txt"
+    path.write_text(text)
+    tag, digest = lock_identity_digest(path)
+    assert tag == LOCK_DIGEST_TAG and tag in IDENTITY_TAGS
+    assert digest == lock_digest(["numpy>=2", "torch>=2"], "3.12", (13, 0))
+    assert lock_digest(["numpy>=2", "torch>=2"], "3.12", (12, 8)) != digest
+    assert "requirements-sha256" not in text and "# torch-index: cu130" in text
+    assert "numpy==1.0.0" in text and "\ntorch==" not in text.split("# note")[-1]
+    compiles = [c for c in _calls(uv_log) if c[:2] == ["pip", "compile"]]
+    assert compiles and all(c[c.index("--python-preference") + 1] == "only-managed" for c in compiles)
+
+
+def test_retag_replaces_only_the_digest_line() -> None:
+    """Re-tagging an old lock rewrites its digest line and leaves the body and other headers as they were."""
+    old = "# senselab env lock: x\n# requirements-sha256: " + "a" * 64 + "\n# python: 3.12\nnumpy==2.1.0\n"
+    new = retag_lock(old, "b" * 64)
+    assert (
+        new
+        == f"# senselab env lock: x\n# identity-digest: {LOCK_DIGEST_TAG} {'b' * 64}\n# python: 3.12\nnumpy==2.1.0\n"
+    )
+    assert retag_lock(new, "c" * 64).count("identity-digest") == 1

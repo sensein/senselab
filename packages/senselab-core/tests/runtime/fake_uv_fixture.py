@@ -58,8 +58,18 @@ def _pip_install(args: list[str]) -> int:
     return 0
 
 
+def _pip_compile(args: list[str]) -> int:
+    hashes = "--generate-hashes" in args
+    for line in Path(args[2]).read_text().splitlines():
+        name = line.split(";")[0].split("[")[0].split("=")[0].split(">")[0].split("<")[0].strip()
+        if name in args[args.index("--no-emit-package") + 1 :: 2] if "--no-emit-package" in args else False:
+            continue
+        print(f"{name}==1.0.0 \\\n    --hash=sha256:{'0' * 64}" if hashes else f"{name}==1.0.0  # via demo")
+    return 0
+
+
 def main(args: list[str]) -> int:
-    """Act as `uv <args>` for the three commands the env builder runs."""
+    """Act as `uv <args>` for the commands the env builder and lock compiler run."""
     log = os.environ.get("FAKE_UV_LOG")
     if log:
         with open(log, "a") as out:
@@ -68,6 +78,11 @@ def main(args: list[str]) -> int:
         return _venv(args)
     if args[:2] == ["pip", "install"]:
         return _pip_install(args)
+    if args[:2] == ["pip", "compile"]:
+        return _pip_compile(args)
+    if args == ["--version"]:
+        print("uv 0.0.0-fake")
+        return 0
     if args[:2] == ["python", "dir"]:
         print(os.environ["FAKE_UV_PYTHON_DIR"])
         return 0
