@@ -185,8 +185,11 @@ class Lease:
         """Rename the lease name aside and remove it if it is the inode `expected`; else link it back.
 
         Returns whether `expected` was removed. Rename is atomic, so of two callers expecting one inode only
-        one moves it; a caller that moved another inode puts it back unless a new lease already took the name.
+        one moves it. A caller that moved another inode links it back; if a new lease took the name in
+        between, the moved lease is removed and its holder finds it no longer owns it (`owns`).
         """
+        if self._current() != expected:
+            return False
         directory = self._directory()
         aside = uuid.uuid4().hex
         try:
@@ -197,12 +200,13 @@ class Lease:
         if moved is not None and (moved.st_dev, moved.st_ino) == expected:
             directory.remove_owned(aside, pattern=UUID_HEX)
             return True
+        if moved is None or not stat.S_ISREG(moved.st_mode):
+            self.set_aside.append(directory.path / aside)
+            return False
         try:
             directory.link(aside, directory, self._name, grammar=LEASE_NAME)
-        except OSError:
-            self.set_aside.append(directory.path / aside)
-            logger.warning("lease %s: a newer lease moved by mistake is left at %s", self._lease_path, aside)
-            return False
+        except FileExistsError:
+            logger.warning("lease %s: displaced a newer lease that another taker replaced", self._lease_path)
         directory.remove_owned(aside, pattern=UUID_HEX)
         return False
 
