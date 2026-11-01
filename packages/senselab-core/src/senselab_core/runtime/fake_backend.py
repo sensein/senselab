@@ -13,8 +13,7 @@ from typing import Any
 
 from senselab_worker.fake import FakeFaults
 
-from senselab_core.kernel.declare import REGISTRY, BackendSpec, TaskParams, TaskSpec
-from senselab_core.kernel.license import License
+from senselab_core.kernel.declare import REGISTRY, BackendSpec, Env, TaskParams, TaskSpec
 from senselab_core.runtime.worker_client import WorkerClient
 
 WORKER_MODULE = "senselab_worker.fake"
@@ -40,17 +39,11 @@ FAKE = BackendSpec(
     name="fake",
     version="1",
     stack="fake",
-    env="host",
+    env=Env.host(),
     devices=("cpu",),
-    license=License(
-        expression="Apache-2.0",
-        commercial_use="yes",
-        copyleft="none",
-        attribution=True,
-        gated=False,
-        source="senselab-worker pyproject.toml license",
-        verified={"date": "2026-10-30", "how": "pep639"},
-    ),
+    batch_invariant=True,
+    worker=WORKER_MODULE,
+    load_stub={},
 )
 
 REGISTRY.add_task(ECHO)

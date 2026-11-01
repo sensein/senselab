@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from senselab_core.kernel.declare import REGISTRY
+from senselab_core.kernel.declare import REGISTRY, Env
 from senselab_core.runtime.fake_backend import ECHO, FAKE, EchoParams, fake_worker, run_fake
 from senselab_worker.digest import identity_digest
 from senselab_worker.fake import FakeFaults
@@ -15,7 +15,8 @@ def test_import_registers_echo_and_its_backend() -> None:
     """Importing the module declares `fake.echo` and its `fake` backend in the global registry."""
     assert ECHO in REGISTRY.tasks()
     assert REGISTRY.backends("fake.echo") == [FAKE]
-    assert (FAKE.stack, FAKE.env, FAKE.license.expression) == ("fake", "host", "Apache-2.0")
+    assert (FAKE.name, FAKE.version, FAKE.stack, FAKE.env) == ("fake", "1", "fake", Env.host())
+    assert (FAKE.worker, dict(FAKE.load_stub)) == ("senselab_worker.fake", {})
 
 
 @pytest.mark.logic

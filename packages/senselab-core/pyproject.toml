@@ -18,6 +18,7 @@ test = [
   "packaging",
   "grimp",
   "import-linter",
+  "jsonschema",
   "pyld",
   "ruff==0.15.11"
 ]

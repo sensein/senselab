@@ -54,7 +54,7 @@ from senselab_worker.canonical import canonical_npy_bytes
 import senselab_core.kernel
 import senselab_core.runtime
 from senselab_core.kernel._base import Frozen, FrozenMapping, digest_of
-from senselab_core.kernel.declare import BackendSpec, TaskParams, TaskSpec
+from senselab_core.kernel.declare import BackendSpec, Env, TaskParams, TaskSpec
 from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ModelRef, ResolvedModel
 from senselab_core.kernel.license import License
@@ -691,21 +691,32 @@ def _register_kernel_samples() -> None:
         invalid_updates=[{"kind": "other"}, {"name": ""}],
     )
     register_samples(
+        Env,
+        lambda: [Env.host(), Env.isolated("e"), Env.server("e")],
+        invalid_updates=[{"kind": "other"}, {"name": "../e"}, {"name": ""}],
+    )
+    backend = {"task": "t", "version": "1", "stack": "fake", "worker": "w", "load_stub": {}}
+    register_samples(
         BackendSpec,
         lambda: [
-            BackendSpec(task="t", name="b", version="1", stack="fake", env="e", devices=("cpu",), license=_license()),
+            BackendSpec(**backend, name="b", env=Env.host(), devices=("cpu",), batch_invariant=True),
             BackendSpec(
-                task="t",
+                **backend,
                 name="c",
-                version="1",
-                stack="fake",
-                env="e",
+                env=Env.isolated("e"),
                 devices=("cpu", "cuda"),
-                license=_license(),
+                batch_invariant=False,
+                tunables={"dtype": ("float16", "int8")},
                 output_affecting=("batch_formation", "chunk_grid"),
             ),
         ],
-        invalid_updates=[{"devices": ()}, {"output_affecting": ("bogus",)}],
+        invalid_updates=[
+            {"devices": ()},
+            {"output_affecting": ("bogus",)},
+            {"env": "host"},
+            {"tunables": {"d": ()}},
+            {"batch_invariant": True, "output_affecting": ("batch_formation",)},
+        ],
     )
 
 

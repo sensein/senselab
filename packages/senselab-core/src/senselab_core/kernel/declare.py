@@ -1,4 +1,4 @@
-"""Task and backend declarations, the registry that holds them, and the logical key of a declared call.
+"""Task and backend declarations, the registry that holds them, their JSON Schema, and the logical key of a call.
 
 Declarations only: no graph, planner or execution (ADR-001).
 """
@@ -6,15 +6,24 @@ Declarations only: no graph, planner or execution (ADR-001).
 import difflib
 import types
 import typing
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import Enum
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, TypeVar, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
+from pydantic.json_schema import GenerateJsonSchema
 
-from senselab_core.kernel._base import Frozen, NonEmptyStr, StrMap
-from senselab_core.kernel.identity import InputIdentity, LogicalKey, ProfileSliceIdentity, ResolvedModel
-from senselab_core.kernel.license import License
+from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap
+from senselab_core.kernel.identity import InputIdentity, LogicalKey, Params, ProfileSliceIdentity, ResolvedModel
 
 TaskKind = Literal["measure", "transform", "decide", "fit"]
 
@@ -38,8 +47,8 @@ class UnknownTask(LookupError):
     """A task name that no declaration in the registry carries."""
 
 
-class TaskParams(BaseModel):
-    """Base for a task's params: immutable, unknown keys refused with the closest known key suggested."""
+class DeclaredParams(BaseModel):
+    """Base for declared params: immutable, unknown keys refused with the closest known key suggested."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -53,6 +62,14 @@ class TaskParams(BaseModel):
                 hint = f"; did you mean {close[0]!r}?" if close else f"; known params: {known}"
                 raise ValueError(f"unknown param {key!r} for {cls.__name__}{hint}")
         return data
+
+
+class TaskParams(DeclaredParams):
+    """Base for a task's params."""
+
+
+class BackendParams(DeclaredParams):
+    """Base for a backend's params, validated against the chosen backend only."""
 
 
 class NonCanonicalParams(TypeError):
@@ -70,7 +87,7 @@ def check_canonical_params(model: type[BaseModel]) -> None:
 
     Allowed, recursively: `None`, `bool`, `int`, `float`, `str`; `Literal` of those; an `Enum` whose
     values are all `str`; `list[X]`, `tuple[X, ...]` and `tuple[X, Y, ...]`; `dict[str, X]` and
-    `Mapping[str, X]`; `Optional` and unions of allowed types; a nested `TaskParams`; and
+    `Mapping[str, X]`; `Optional` and unions of allowed types; nested `DeclaredParams`; and
     `Annotated` constraints over any of these.
 
     Raises:
@@ -121,7 +138,7 @@ def _check_plain(t: object, where: str, seen: set[type[BaseModel]]) -> None:
     if isinstance(t, type) and issubclass(t, Enum):
         if not all(type(m.value) is str for m in t):
             raise NonCanonicalParams(f"{where}: an Enum param must have str values, {t.__qualname__} does not")
-    elif isinstance(t, type) and issubclass(t, TaskParams):
+    elif isinstance(t, type) and issubclass(t, DeclaredParams):
         _check_model(t, where, seen)
     else:
         raise NonCanonicalParams(f"{where}: {t!r} has no canonical JSON form; declare a canonical type")
@@ -130,7 +147,7 @@ def _check_plain(t: object, where: str, seen: set[type[BaseModel]]) -> None:
 class TaskSpec(Frozen):
     """A declared task: its name and version, kind, typed ports and params model.
 
-    `inputs` and `outputs` map port names to type names.
+    `inputs` and `outputs` map port names to kernel type names.
     """
 
     name: NonEmptyStr
@@ -138,28 +155,90 @@ class TaskSpec(Frozen):
     kind: TaskKind
     inputs: StrMap
     outputs: StrMap
-    params: type[BaseModel]
+    params: type[TaskParams]
 
     def signature(self) -> tuple[str, frozenset[tuple[str, str]], frozenset[tuple[str, str]]]:
         """Return the declared operation: kind, input ports and output ports with their types."""
         return self.kind, frozenset(self.inputs.items()), frozenset(self.outputs.items())
 
 
-class BackendSpec(Frozen):
-    """A declared implementation of a task: its stack, environment, devices and license record.
+EnvName = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]*$")]
+"""The name of an env and its lock: lower-case letters, digits and hyphens."""
 
-    `output_affecting` names the components of `OUTPUT_AFFECTING` that change this backend's outputs
-    and so enter its logical key, held sorted and once each.
+
+class Env(Frozen):
+    """Where a backend runs: `host` in the senselab venv, `isolated` in its own locked env, `server` in an engine's env.
+
+    Build with `Env.host()`, `Env.isolated(name)` or `Env.server(name)`; `name` names the env's lock.
+    """
+
+    kind: Literal["host", "isolated", "server"]
+    name: EnvName | None = None
+
+    @model_validator(mode="after")
+    def _check_name(self) -> "Env":
+        if (self.kind == "host") != (self.name is None):
+            raise ValueError(f"an {self.kind} env {'takes no' if self.kind == 'host' else 'needs a'} name")
+        return self
+
+    @classmethod
+    def host(cls) -> "Env":
+        """Return the in-process env, the locked senselab venv."""
+        return cls(kind="host")
+
+    @classmethod
+    def isolated(cls, name: str) -> "Env":
+        """Return the locked env `name` that a worker subprocess runs in."""
+        return cls(kind="isolated", name=name)
+
+    @classmethod
+    def server(cls, name: str) -> "Env":
+        """Return the env `name` of a long-lived engine process."""
+        return cls(kind="server", name=name)
+
+
+TunableValue = bool | int | float | str
+Tunables = Annotated[
+    Mapping[str, tuple[TunableValue, ...]],
+    AfterValidator(lambda v: FrozenMapping({k: _non_empty(k, x) for k, x in v.items()})),
+    PlainSerializer(dict),
+]
+"""A read-only mapping of tunable name to its declared values, at least one each."""
+
+
+def _non_empty(name: str, values: tuple[TunableValue, ...]) -> tuple[TunableValue, ...]:
+    if not values:
+        raise ValueError(f"tunable {name!r} declares no values")
+    return values
+
+
+ModuleName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$")]
+
+
+class BackendSpec(Frozen):
+    """A declared implementation of a task.
+
+    `models` are the catalogue models it serves; `env` where it runs; `batch_invariant` whether an
+    item's outputs are independent of its batch-mates; `tunables` the declared values of each
+    tunable; `worker` the module serving `load(init)` and `handle(state, items, params)`;
+    `load_stub` the `init` that loads a model state with no weights; `params` its `BackendParams`
+    model. `output_affecting` names the components of `OUTPUT_AFFECTING` that change this backend's
+    outputs and so enter its logical key, held sorted and once each.
     """
 
     task: NonEmptyStr
     name: NonEmptyStr
     version: NonEmptyStr
     stack: NonEmptyStr
-    env: NonEmptyStr
+    models: tuple[NonEmptyStr, ...] = ()
+    env: Env
     devices: tuple[NonEmptyStr, ...] = Field(min_length=1)
-    license: License
+    batch_invariant: bool
+    tunables: Tunables = FrozenMapping({})
     output_affecting: tuple[str, ...] = ()
+    worker: ModuleName
+    load_stub: Params
+    params: type[BackendParams] = BackendParams
 
     @field_validator("output_affecting")
     @classmethod
@@ -167,6 +246,12 @@ class BackendSpec(Frozen):
         if not set(v) <= OUTPUT_AFFECTING:
             raise ValueError(f"output_affecting may name only {sorted(OUTPUT_AFFECTING)}, got {sorted(v)}")
         return tuple(sorted(set(v)))
+
+    @model_validator(mode="after")
+    def _check_batching(self) -> "BackendSpec":
+        if self.batch_invariant and "batch_formation" in self.output_affecting:
+            raise ValueError("a batch-invariant backend cannot declare batch_formation output-affecting")
+        return self
 
 
 class Registry:
@@ -205,9 +290,11 @@ class Registry:
         """Declare `spec` for its task.
 
         Raises:
+            NonCanonicalParams: if its params model has a field with no canonical JSON form.
             UnknownTask: if its task is not declared.
             DuplicateDeclaration: if the task already has a backend of that name.
         """
+        check_canonical_params(spec.params)
         backends = self._task_backends(spec.task)
         if spec.name in backends:
             raise DuplicateDeclaration(
@@ -232,6 +319,100 @@ class Registry:
 
 REGISTRY = Registry()
 """The process-wide registry; modules declaring tasks and backends add to it on import."""
+
+C = TypeVar("C", bound=type)
+
+
+def task(*, name: str, version: str, kind: TaskKind, registry: Registry = REGISTRY) -> Callable[[C], C]:
+    """Declare the decorated class as a task in `registry` and set its `spec` to the `TaskSpec`.
+
+    The class holds `inputs` and `outputs`, each mapping port names to kernel types, and may hold
+    `Params`, a `TaskParams` subclass (`TaskParams` when absent).
+
+    Raises:
+        TypeError: if `inputs` or `outputs` is missing or maps a port to anything but a kernel type.
+    """
+
+    def declare(cls: C) -> C:
+        spec = TaskSpec(
+            name=name,
+            version=version,
+            kind=kind,
+            inputs=_port_types(cls, "inputs"),
+            outputs=_port_types(cls, "outputs"),
+            params=getattr(cls, "Params", TaskParams),
+        )
+        registry.add_task(spec)
+        cls.spec = spec  # type: ignore[attr-defined]
+        return cls
+
+    return declare
+
+
+def _port_types(cls: type, ports: str) -> dict[str, str]:
+    declared = getattr(cls, ports, None)
+    if not isinstance(declared, Mapping):
+        raise TypeError(f"task class {cls.__qualname__} must map {ports} port names to kernel types")
+    bad = {p: t for p, t in declared.items() if not (isinstance(t, type) and issubclass(t, Frozen))}
+    if bad:
+        raise TypeError(f"{cls.__qualname__}.{ports}: ports {sorted(bad)} are not kernel types")
+    return {p: t.__name__ for p, t in declared.items()}
+
+
+def backend(*, name: str, version: str, registry: Registry = REGISTRY, **fields: Any) -> Callable[[C], C]:  # noqa: ANN401
+    """Declare the decorated class as backend `name` of its task in `registry`; set its `spec` to the `BackendSpec`.
+
+    `fields` are the other `BackendSpec` fields.
+
+    Raises:
+        pydantic.ValidationError: if a field is missing or not of its declared form.
+        NonCanonicalParams, UnknownTask, DuplicateDeclaration: as `Registry.add_backend`.
+    """
+    spec = BackendSpec(name=name, version=version, **fields)
+
+    def declare(cls: C) -> C:
+        registry.add_backend(spec)
+        cls.spec = spec  # type: ignore[attr-defined]
+        return cls
+
+    return declare
+
+
+SCHEMA_DIALECT: str = GenerateJsonSchema.schema_dialect
+"""The JSON Schema dialect of every generated schema: 2020-12."""
+
+
+def json_schema(spec: TaskSpec, registry: Registry = REGISTRY) -> dict[str, Any]:
+    """Return the JSON Schemas of `spec`'s inputs, params, outputs and each of its backends' params in `registry`.
+
+    The result maps `inputs`, `params` and `outputs` to a schema each, and `backend_params` to a
+    mapping of backend name to schema. Every schema names `SCHEMA_DIALECT` in `$schema`. A port's
+    schema is titled by its kernel type name; its value's encoding is that type's format.
+
+    Raises:
+        UnknownTask: if `spec` is not declared in `registry`.
+    """
+    return {
+        "inputs": _ports_schema(f"{spec.name} inputs", spec.inputs),
+        "params": _model_schema(spec.params),
+        "backend_params": {b.name: _model_schema(b.params) for b in registry.backends(spec.name)},
+        "outputs": _ports_schema(f"{spec.name} outputs", spec.outputs),
+    }
+
+
+def _model_schema(model: type[BaseModel]) -> dict[str, Any]:
+    return {"$schema": SCHEMA_DIALECT, **model.model_json_schema()}
+
+
+def _ports_schema(title: str, ports: Mapping[str, str]) -> dict[str, Any]:
+    return {
+        "$schema": SCHEMA_DIALECT,
+        "title": title,
+        "type": "object",
+        "properties": {port: {"title": t} for port, t in ports.items()},
+        "required": sorted(ports),
+        "additionalProperties": False,
+    }
 
 
 def key_for(  # noqa: PLR0913 - keyword-only, one argument per key component

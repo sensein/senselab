@@ -32,7 +32,6 @@ def test_fake_cases_are_listed_by_name() -> None:
         "fake.echo::params_round_trip",
         "fake.echo::params_reject_unknown",
         "fake.echo::measure_has_no_verdict",
-        "fake::license_present",
         "fake::key_deterministic",
         "fake::key_independent_of_hash_seed",
         "fake::content_fault_isolated",
@@ -122,8 +121,8 @@ def test_a_backend_shared_by_name_across_tasks_is_qualified() -> None:
     registry.add_task(TaskSpec(**{**registry.tasks()[0].model_dump(), "name": "t.two", "kind": "transform"}))
     registry.add_backend(BackendSpec(**{**FAKE.model_dump(), "task": "t.two"}))
     ids = {name for name, _ in contract_cases(registry)}
-    assert {"t.bad/fake::license_present", "t.two/fake::license_present"} <= ids
-    assert "fake::license_present" not in ids
+    assert {"t.bad/fake::key_deterministic", "t.two/fake::key_deterministic"} <= ids
+    assert "fake::key_deterministic" not in ids
 
 
 def _drops_params(task: TaskSpec, backend: BackendSpec, *, params: BaseModel, **call: Any) -> LogicalKey:  # noqa: ANN401

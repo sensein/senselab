@@ -7,7 +7,7 @@ Ids are `<task>::<case>` and `<backend>::<case>`; a backend name declared under 
 written `<task>/<backend>`.
 
 Task cases: `params_round_trip`, `params_reject_unknown`, and for `measure` tasks
-`measure_has_no_verdict` (P-20). Backend cases: `license_present`, `key_deterministic`,
+`measure_has_no_verdict` (P-20). Backend cases: `key_deterministic`,
 `key_changes_with_<field>` for every `LogicalKey` field, `key_ignores_<field>` for every
 `ExecutionContext` field, `key_independent_of_hash_seed`, and `content_fault_isolated` by the
 stack's runner in `FAULT_RUNNERS`. The key cases build keys with `key_builder` (default `key_for`).
@@ -39,7 +39,6 @@ from senselab_worker.faults import FaultClass
 
 from senselab_core.kernel.declare import VERDICT_TYPES, BackendSpec, Registry, TaskSpec, key_for
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelRef, ResolvedModel
-from senselab_core.kernel.license import License, require_license
 
 Case = Callable[[], None]
 KeyBuilder = Callable[..., LogicalKey]
@@ -129,7 +128,6 @@ def _backend_cases(
     backend: BackendSpec, build: KeyBuilder, hash_seed_timeout_s: float
 ) -> list[tuple[str, Callable[[TaskSpec, BackendSpec], None]]]:
     cases: list[tuple[str, Callable[[TaskSpec, BackendSpec], None]]] = [
-        ("license_present", _license_present),
         ("key_deterministic", functools.partial(_key_deterministic, build)),
     ]
     cases += [
@@ -167,10 +165,6 @@ def _params_reject_unknown(task: TaskSpec) -> None:
 def _measure_has_no_verdict(task: TaskSpec) -> None:
     verdicts = {port: t for port, t in task.outputs.items() if t in VERDICT_TYPES}
     assert not verdicts, f"measure task {task.name!r} outputs verdicts {verdicts}; declare a decide task (P-20)"
-
-
-def _license_present(task: TaskSpec, backend: BackendSpec) -> None:
-    assert isinstance(require_license(backend.license, f"backend {backend.name!r}"), License)
 
 
 def base_call(task: TaskSpec) -> dict[str, Any]:
@@ -300,7 +294,7 @@ sys.path[:] = spec["path"]
 from senselab_core.kernel.declare import BackendSpec, TaskSpec
 from senselab_core.testing.contracts import base_call, import_qualified
 task = TaskSpec(**spec["task"], params=import_qualified(*spec["params"]))
-backend = BackendSpec.model_validate(spec["backend"])
+backend = BackendSpec(**spec["backend"], params=import_qualified(*spec["backend_params"]))
 print(import_qualified(*spec["builder"])(task, backend, **base_call(task)).digest())
 """
 
@@ -325,7 +319,8 @@ def _key_independent_of_hash_seed(build: KeyBuilder, timeout: float, task: TaskS
         "path": sys.path,
         "task": task.model_dump(mode="json", exclude={"params"}),
         "params": _qualified(task.params, "params model"),
-        "backend": backend.model_dump(mode="json"),
+        "backend": backend.model_dump(mode="json", exclude={"params"}),
+        "backend_params": _qualified(backend.params, "backend params model"),
         "builder": _qualified(build, "key builder"),
     }
     digests = {}

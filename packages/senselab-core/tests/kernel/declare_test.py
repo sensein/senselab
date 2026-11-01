@@ -7,36 +7,35 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Literal, Optional
 
+import jsonschema
 import pytest
 from pydantic import BaseModel, Field, ValidationError, create_model
 from senselab_core.kernel._base import NonEmptyStr
 from senselab_core.kernel.declare import (
+    REGISTRY,
+    SCHEMA_DIALECT,
+    BackendParams,
     BackendSpec,
     DuplicateDeclaration,
+    Env,
     NonCanonicalParams,
     Registry,
     TaskParams,
     TaskSpec,
     UnknownTask,
+    backend,
     check_canonical_params,
+    json_schema,
     key_for,
+    task,
 )
 from senselab_core.kernel.identity import ModelIdentity, ModelRef, ResolvedModel, UnpinnedModel
-from senselab_core.kernel.license import License
+from senselab_core.kernel.results import Annotation, Embedding
+from senselab_core.kernel.signals import Audio
 
 COMMIT = "41f01f3fe87f28c78e2fbf8b568835947dd65ed9"
 AUDIO = "content:" + "a" * 64
 SLICE = "profile:" + "b" * 64
-
-LICENSE = License(
-    expression="Apache-2.0",
-    commercial_use="yes",
-    copyleft="none",
-    attribution=True,
-    gated=False,
-    source="test",
-    verified={"date": "2026-10-30", "how": "manual"},
-)
 
 
 class _Params(TaskParams):
@@ -62,9 +61,11 @@ def _backend(**overrides: object) -> BackendSpec:
         "name": "b",
         "version": "1",
         "stack": "fake",
-        "env": "host",
+        "env": Env.host(),
         "devices": ("cpu",),
-        "license": LICENSE,
+        "batch_invariant": True,
+        "worker": "senselab_worker.fake",
+        "load_stub": {},
     }
     fields.update(overrides)
     return BackendSpec(**fields)
@@ -141,20 +142,186 @@ def test_registries_are_independent() -> None:
 
 
 @pytest.mark.logic
-def test_params_refuse_unknown_keys_with_a_suggestion() -> None:
-    """`TaskParams` forbids unknown keys and names the close match."""
+@pytest.mark.parametrize("model", [_Params, create_model("_Beam", __base__=BackendParams, window=(int, 3))])
+def test_unknown_param_suggests(model: type[BaseModel]) -> None:
+    """Task and backend params forbid unknown keys and name the close match, or list the known keys."""
     with pytest.raises(ValidationError, match="'windw'.*did you mean 'window'"):
-        _Params.model_validate({"windw": 4})
-    with pytest.raises(ValidationError, match="'zzz'"):
-        _Params.model_validate({"zzz": 4})
-    assert _Params.model_validate({"window": 4}).window == 4
+        model.model_validate({"windw": 4})
+    with pytest.raises(ValidationError, match=r"'zzz'.*known params: \['window'\]"):
+        model.model_validate({"zzz": 4})
+    assert model.model_validate({"window": 4}).window == 4  # type: ignore[attr-defined]
 
 
 @pytest.mark.logic
-def test_task_params_must_be_a_model() -> None:
-    """`params` is a pydantic model class."""
+@pytest.mark.parametrize("params", [dict, BaseModel, BackendParams])
+def test_task_params_must_be_task_params(params: type) -> None:
+    """A task's `params` is a `TaskParams` subclass."""
     with pytest.raises(ValidationError):
-        _task(params=dict)
+        _task(params=params)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("params", [dict, BaseModel, TaskParams])
+def test_backend_params_must_be_backend_params(params: type) -> None:
+    """A backend's `params` is a `BackendParams` subclass; it defaults to `BackendParams` itself."""
+    assert _backend().params is BackendParams
+    with pytest.raises(ValidationError):
+        _backend(params=params)
+
+
+class _Beam(BackendParams):
+    beam: int = 1
+
+
+class _Chunk(BackendParams):
+    chunk_s: float = 30.0
+
+
+@pytest.mark.logic
+def test_backend_params_validated_per_backend() -> None:
+    """Each backend validates its own params; a knob of another backend of the task is refused."""
+    registry = Registry()
+    registry.add_task(_task())
+    registry.add_backend(_backend(name="beam", params=_Beam))
+    registry.add_backend(_backend(name="chunk", params=_Chunk))
+    beam, chunk = registry.backends("t.measure")
+    assert beam.params.model_validate({"beam": 4}) == _Beam(beam=4)
+    with pytest.raises(ValidationError, match="'beam'.*known params: \\['chunk_s'\\]"):
+        chunk.params.model_validate({"beam": 4})
+    with pytest.raises(NonCanonicalParams, match="_Generated.field"):
+        registry.add_backend(
+            _backend(name="bad", params=create_model("_Generated", __base__=BackendParams, field=(set[str], ...)))
+        )
+    assert [b.name for b in registry.backends("t.measure")] == ["beam", "chunk"]
+
+
+@pytest.mark.logic
+def test_env_kinds_replace_free_string() -> None:
+    """`env` is an `Env` of kind host, isolated or server; a free string is refused."""
+    assert (Env.host().kind, Env.host().name) == ("host", None)
+    assert (Env.isolated("crisperwhisper").kind, Env.isolated("crisperwhisper").name) == ("isolated", "crisperwhisper")
+    assert (Env.server("vllm").kind, Env.server("vllm").name) == ("server", "vllm")
+    assert _backend(env=Env.isolated("e")).env == Env.isolated("e")
+    for free in ("host", "isolated", "e"):
+        with pytest.raises(ValidationError):
+            _backend(env=free)
+    for bad in (
+        {"kind": "host", "name": "e"},
+        {"kind": "isolated"},
+        {"kind": "server", "name": None},
+        {"kind": "venv", "name": "e"},
+    ):
+        with pytest.raises(ValidationError):
+            Env.model_validate(bad)
+    for name in ("", "../e", "a/b", "E", "-e"):
+        with pytest.raises(ValidationError):
+            Env.isolated(name)
+
+
+def _declare_backend(registry: Registry, **overrides: object) -> type:
+    fields: dict[str, Any] = {
+        "name": "b",
+        "version": "1",
+        "task": "t.measure",
+        "stack": "fake",
+        "env": Env.host(),
+        "devices": ["cpu"],
+        "batch_invariant": True,
+        "worker": "senselab_worker.fake",
+        "load_stub": {},
+        "registry": registry,
+    }
+    fields.update(overrides)
+    fields = {k: v for k, v in fields.items() if v is not _ABSENT}
+
+    @backend(**fields)
+    class _B:
+        pass
+
+    return _B
+
+
+_ABSENT = object()
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("missing", ["name", "version"])
+def test_backend_requires_name_and_version(missing: str) -> None:
+    """`@backend` and `BackendSpec` have no default name or version."""
+    registry = Registry()
+    registry.add_task(_task())
+    with pytest.raises(TypeError, match=missing):
+        _declare_backend(registry, **{missing: _ABSENT})
+    with pytest.raises(ValidationError, match=missing):
+        BackendSpec(**{k: v for k, v in _backend().model_dump().items() if k != missing})
+    assert registry.backends("t.measure") == []
+
+
+@pytest.mark.logic
+def test_backend_decorator_declares_its_spec() -> None:
+    """`@backend` registers the spec it builds and sets it on the class."""
+    registry = Registry()
+    registry.add_task(_task())
+    cls = _declare_backend(registry, models=["org/m"], tunables={"dtype": ["float16", "int8"]}, params=_Beam)
+    assert registry.backends("t.measure") == [cls.spec]  # type: ignore[attr-defined]
+    assert cls.spec.models == ("org/m",)  # type: ignore[attr-defined]
+    assert dict(cls.spec.tunables) == {"dtype": ("float16", "int8")}  # type: ignore[attr-defined]
+    assert cls.spec.params is _Beam  # type: ignore[attr-defined]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "change,match",
+    [
+        ({"tunables": {"dtype": []}}, "dtype"),
+        ({"worker": "senselab_worker/fake"}, "worker"),
+        ({"output_affecting": ["batch_formation"]}, "batch-invariant"),
+    ],
+    ids=["empty_tunable", "worker_not_a_module", "invariant_yet_batch_affecting"],
+)
+def test_backend_declaration_refused(change: dict[str, Any], match: str) -> None:
+    """A tunable with no values, a worker that is not a module name, and contradictory batching are refused."""
+    registry = Registry()
+    registry.add_task(_task())
+    with pytest.raises(ValidationError, match=match):
+        _declare_backend(registry, **change)
+    assert registry.backends("t.measure") == []
+
+
+@pytest.mark.logic
+def test_task_decorator_declares_its_spec() -> None:
+    """`@task` reads `Params`, `inputs` and `outputs` from the class, registers the spec and sets it on the class."""
+    registry = Registry()
+
+    @task(name="t.embed", version="2", kind="measure", registry=registry)
+    class _Embed:
+        Params = _Params
+        inputs = {"audio": Audio}
+        outputs = {"embedding": Embedding}
+
+    @task(name="t.label", version="1", kind="transform", registry=registry)
+    class _Label:
+        inputs = {"audio": Audio}
+        outputs = {"label": Annotation}
+
+    assert registry.tasks() == [_Embed.spec, _Label.spec]  # type: ignore[attr-defined]
+    assert _Embed.spec.signature() == ("measure", {("audio", "Audio")}, {("embedding", "Embedding")})  # type: ignore[attr-defined]
+    assert (_Embed.spec.params, _Label.spec.params) == (_Params, TaskParams)  # type: ignore[attr-defined]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "ports",
+    [{"inputs": {"audio": "Audio"}}, {"inputs": {"audio": int}}, {"inputs": None}],
+    ids=["name", "plain", "missing"],
+)
+def test_task_ports_are_kernel_types(ports: dict[str, Any]) -> None:
+    """Ports map to kernel types; a type name, a plain type or a missing mapping is refused."""
+    registry = Registry()
+    body = {"outputs": {"e": Embedding}, **{k: v for k, v in ports.items() if v is not None}}
+    with pytest.raises(TypeError, match="inputs"):
+        task(name="t", version="1", kind="measure", registry=registry)(type("_T", (), body))
+    assert registry.tasks() == []
 
 
 @pytest.mark.logic
@@ -162,7 +329,7 @@ def test_output_affecting_names_only_key_components() -> None:
     """A backend may declare only batch formation and chunk grid output-affecting (ADR-002)."""
     assert _backend(output_affecting=frozenset({"chunk_grid"})).output_affecting == ("chunk_grid",)
     both = ("chunk_grid", "batch_formation", "chunk_grid")
-    assert _backend(output_affecting=both).output_affecting == ("batch_formation", "chunk_grid")
+    assert _backend(output_affecting=both, batch_invariant=False).output_affecting == ("batch_formation", "chunk_grid")
     with pytest.raises(ValidationError, match="batch_size"):
         _backend(output_affecting=frozenset({"batch_size"}))
 
@@ -332,3 +499,43 @@ def test_registry_refuses_non_canonical_param_types(annotation: object, wrap: Ca
         registry.add_task(_task(params=_params_with(wrap(annotation))))
     assert registry.tasks() == []
     assert issubclass(NonCanonicalParams, TypeError)
+
+
+class _Rich(TaskParams):
+    language: str | None = None
+    timestamps: Literal["word", "segment", "none"] = "word"
+    colour: _Colour = _Colour.RED
+    window: Annotated[int, Field(ge=1)] = 3
+    pair: tuple[int, str] = (1, "a")
+    weights: dict[str, float] = {}
+    inner: _Inner = _Inner()
+
+
+def _schemas(document: dict[str, Any]) -> list[dict[str, Any]]:
+    return [document["inputs"], document["params"], document["outputs"], *document["backend_params"].values()]
+
+
+@pytest.mark.contract
+def test_schema_validates_2020_12() -> None:
+    """Every generated schema names and validates under the 2020-12 metaschema, and checks instances as declared."""
+    import senselab_core.runtime.fake_backend  # noqa: F401, PLC0415 - registers fake.echo
+
+    registry = Registry()
+    spec = _task(name="t.rich", params=_Rich, inputs={"audio": "Audio", "other": "Audio"})
+    registry.add_task(spec)
+    registry.add_backend(_backend(task="t.rich", name="beam", params=_Beam))
+    registry.add_backend(_backend(task="t.rich", name="plain"))
+    documents = [json_schema(spec, registry), json_schema(REGISTRY.tasks()[0])]
+    assert set(documents[0]["backend_params"]) == {"beam", "plain"}
+    for schema in [s for d in documents for s in _schemas(d)]:
+        assert schema["$schema"] == SCHEMA_DIALECT == "https://json-schema.org/draft/2020-12/schema"
+        jsonschema.Draft202012Validator.check_schema(schema)
+    params = jsonschema.Draft202012Validator(documents[0]["params"])
+    assert params.is_valid(_Rich().model_dump(mode="json"))
+    assert not params.is_valid({"timestamps": "char"})
+    assert not params.is_valid({"windw": 3})
+    beam = jsonschema.Draft202012Validator(documents[0]["backend_params"]["beam"])
+    assert beam.is_valid({"beam": 2}) and not beam.is_valid({"chunk_s": 1.0})
+    inputs = jsonschema.Draft202012Validator(documents[0]["inputs"])
+    assert documents[0]["inputs"]["properties"] == {"audio": {"title": "Audio"}, "other": {"title": "Audio"}}
+    assert not inputs.is_valid({"audio": "x"}) and not inputs.is_valid({"audio": "x", "other": "y", "z": "w"})
