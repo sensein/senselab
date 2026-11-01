@@ -371,6 +371,18 @@ at the handshake.
 - **Stop.** On `{"stop": true}` (exactly `true`), or EOF on stdin, the worker exits 0 without
   replying.
 
+## Declaration schemas
+
+- **Dialect.** Every schema generated from a declaration is JSON Schema 2020-12 and names
+  `https://json-schema.org/draft/2020-12/schema` in `$schema` (`kernel.declare.SCHEMA_DIALECT`, the
+  dialect pydantic v2 emits; ruling P2-9, R-55, R-131).
+- **Shape.** `json_schema(task)` returns `{"inputs", "params", "outputs"}`, a schema each, and
+  `"backend_params"`, a schema per backend name. Params schemas forbid unknown keys
+  (`additionalProperties: false`). A port's schema is `{"title": "<kernel type name>"}` with every
+  port required and no other key; the value's encoding is that type's format (ADR-006), not JSON Schema.
+- **Contract.** `test_schema_validates_2020_12` checks every generated schema against the 2020-12
+  metaschema (`jsonschema.Draft202012Validator.check_schema`) and validates params instances with it.
+
 ## Example
 
 ```text
