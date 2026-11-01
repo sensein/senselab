@@ -100,7 +100,7 @@ git_describe_command = "git describe --dirty --tags --long --match '[0-9]*.[0-9]
 testpaths = [
   "packages"
 ]
-addopts = "--strict-markers -p pytester"
+addopts = "--strict-markers -p pytester -m logic"
 markers = [
   "logic: pure logic, no I/O beyond tmp files",
   "contract: a boundary contract between components",

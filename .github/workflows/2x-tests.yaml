@@ -9,6 +9,11 @@ on:
     # `ready_for_review` matters because every job below is gated on `pull_request.draft == false`:
     # without it a draft PR marked ready never re-triggers this workflow.
     types: [opened, synchronize, reopened, labeled, ready_for_review]
+  # Nightly: every job below, and the limits and use-case tiers. A schedule runs the default branch's copy of
+  # this file, so it takes effect once the 2.x line is merged there.
+  schedule:
+  - cron: 17 3 * * *
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -75,7 +80,7 @@ jobs:
         uv venv -p "$PYTHON_VERSION" .core
         uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core --group packages/senselab-core/pyproject.toml:test
     - name: Run core tests
-      run: .core/bin/pytest packages -m "logic or contract or limits or usecase" -p no:cacheprovider
+      run: .core/bin/pytest packages -m "logic or contract" -p no:cacheprovider
     - name: Check import contracts
       run: .core/bin/lint-imports
     - name: Build each sdist into a wheel on its own
@@ -87,6 +92,30 @@ jobs:
           tar -xzf "$out"/dist/*.tar.gz -C "$out/unpacked"
           uv build --wheel --out-dir "$out/wheel" "$out"/unpacked/*
         done
+
+  # The limits and use-case tiers: nightly, on demand, and on a PR carrying the `limits` label.
+  core-limits:
+    needs: detect
+    name: core-limits
+    if: >-
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || contains(github.event.pull_request.labels.*.name, 'limits')
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0   # hatch-vcs derives the version from tags
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        version: 0.13.6
+    - name: Install the core distributions alone
+      run: |
+        uv venv -p 3.12 .core
+        uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core --group packages/senselab-core/pyproject.toml:test
+    - name: Run the limits and use-case tiers
+      run: .core/bin/pytest packages -m "limits or usecase" -p no:cacheprovider
 
   core-env:
     needs: detect
