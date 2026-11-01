@@ -34,6 +34,7 @@ modify commit.
 | 1.x module (alpha `36aa9615`) | Moved to | Task |
 |---|---|---|
 | `src/senselab/utils/subprocess_venv.py`, `uv_tools.py`, `venv_lock.py`, `cuda_probe.py` | folded into `packages/senselab-core/src/senselab_core/runtime/envs.py` | 9a1 |
+| `src/senselab/utils/vllm_server.py` | `packages/senselab-core/src/senselab_core/runtime/vllm_server.py` | 9b |
 
 Unported in Task 9a1 (ruling P2-3), each at its `alpha` source `36aa9615:src/senselab/utils/<module>`:
 
@@ -48,6 +49,14 @@ Unported in Task 9a1 (ruling P2-3), each at its `alpha` source `36aa9615:src/sen
 - `uv_tools.py`: `requirements_sha256`, `normalize_name`, `is_torch_family`, `TORCH_NAMES`,
   `TORCH_VARIANT_PREFIXES`, and `find_uv(install=True)`'s `pip install uv` (`Uv.find` never installs).
 - `cuda_probe.py`: `SENSELAB_TORCH_INDEX_URL` (the profile's `envs.torch_index` replaces it, P-14, P-18).
+
+Unported in Task 9b, at `36aa9615:src/senselab/utils/vllm_server.py`: `ensure_vllm_venv`, `VLLM_VENV`, `VLLM_VERSION`,
+`VLLM_PYTHON`, `VLLM_REQUIREMENTS`, `VLLM_MAX_CUDA` (`ensure_env` over `Env.server("vllm-server")` and
+`env_locks/inputs.yaml` replace them, P2-78); `engine_identity` (the attestation replaces it); `utilisation`;
+`transcribe` and its multipart helpers; `option_name`, `refused_arg`, `CONTENT_LOGGING_PREFIXES`,
+`CONTENT_LOGGING_FLAGS`, `REFUSED_FLAGS` (a server takes only the known settings, each bound as `--flag=value`);
+`expected_version` (the reported version is attested, not compared). The start `fcntl.flock` is replaced by `Lease`
+(P-37). The 1.x tests `src/tests/utils/vllm_server_test.py` and `reproduce/engine_test.py` stay with 1.x.
 
 1.x importers left under `src/` and `scripts/` (`lock_subprocess_venvs.py`, `extend_*.py`) are 1.x and outside the
 2.x checks (D-6).

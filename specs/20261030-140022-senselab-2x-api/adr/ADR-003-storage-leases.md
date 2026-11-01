@@ -141,9 +141,38 @@ F1 and F3 ([`rulings.md`](../rulings.md), H-R57).
 - Retry takes an explicit policy loaded from data, not an environment variable. The values are the 1.x
   defaults and are not measured (R-127).
 
+## Amendment 2026-11-01: services are staged
+
+Phase 2 Task 9b; rulings P2-14, P2-38.
+
+- **Phase 2: a service is process-scoped.** The calling process starts it (`VllmServer`, an `Env.server` env),
+  owns it and stops it: on leaving its context, or through a watchdog when the owner dies. No registry entry,
+  no consumer lease and no idle timeout exist; two processes that need one engine start two servers.
+- **Why staged:** a lease has no renewal (R-111), and a server outlives any stale bound, so a registry lease
+  would be broken under a live service. Only the start is leased: servers sharing a host's devices start one
+  at a time, under a `Lease` (bound below).
+- **Phase 3:** the leased registry `{identity, endpoint, heartbeat}`, consumer leases, and the `svc` pool worker
+  of design §4.4 and `execution.md` §3.5 arrive with lease renewal.
+- **Unchanged:** every reply carries the server's attestation (I-8), and the execution context records it.
+- **Start lease bound:** the lease is taken before the server is launched and before its health deadline starts,
+  so its stale bound is the start-up timeout plus the profile's `envs.server_start_margin_s`; otherwise a holder
+  still inside its own deadline could be broken.
+- **Owner death:** the server runs in its own process group. A watchdog, a child of the owner in a session of its
+  own (so a signal to the owner's group does not reach it), kills that group once the owner is gone: on the
+  SIGTERM `PR_SET_PDEATHSIG` sends when the owner dies (Linux), or when its parent is no longer the owner (every
+  platform, polled each second). A SIGTERM while the owner lives is ignored.
+- **Start failure kinds:** `exited` covers a KV cache that cannot hold `max_model_len` and a port taken between
+  the free-port probe releasing it and the server binding it (a process outside the start lease can take it);
+  `version` covers an HTTP error or a wrongly shaped body from `/version` or `/v1/models`; `model` is a served
+  root other than the requested model.
+- **Per-reply check is by model name:** a reply is refused when its server has exited or it names another model.
+  A dead server's port reused by another server of the same model would pass; the window is narrow and the
+  version and root are not re-probed per reply.
+
 ## Amendment log
 
 - 2026-10-31: paths, kinds and entry binding under a storage root (R-100, R-101; H9b).
 - 2026-10-31: lock files `flock`ed with heartbeat and takeover (H-R40..H-R42). Reverted 2026-11-01 (D-2).
 - 2026-11-01: locks are leases by rename and `O_EXCL` (D-2).
 - 2026-11-01: one transient classifier (`faults.is_transient`); retry takes a `RetryPolicy` from data; no ambient retry knob (F1, F3).
+- 2026-11-01: services are process-scoped in Phase 2; the leased registry and `svc` pool worker arrive with lease renewal in Phase 3 (P2-14, P2-38; Task 9b).
