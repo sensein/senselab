@@ -83,6 +83,11 @@ manual:
   source: https://github.com/tartley/colorama/blob/master/LICENSE.txt
   verified: {date: '2026-11-01', how: manual}
   reason: Installed on Windows only (a tqdm dependency), so the CI environment has no metadata for it.
+- package: httpx2-jsfetch
+  expression: BSD-3-Clause
+  source: https://pypi.org/pypi/httpx2-jsfetch/1.0/json (license_expression BSD-3-Clause)
+  verified: {date: '2026-11-01', how: manual}
+  reason: Installed on Emscripten only (an httpx2 dependency), so the CI environment has no metadata for it.
 
 # Native libraries a wheel bundles, found from the wheel's RECORD (a shared library that is not a Python extension
 # module), keyed by the package that bundles it and then by the library's name without `lib`, version, hash and

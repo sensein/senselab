@@ -1,5 +1,6 @@
 """The `transformers` backend of `speech_to_text`: transcript construction, typed faults and batch isolation."""
 
+import importlib
 from typing import Any
 
 import numpy
@@ -204,8 +205,9 @@ def test_backend_is_a_host_backend_the_senselab_lock_covers() -> None:
 
 def _real_state(faults: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
     """Load the catalogue's default `speech_to_text` model by its pinned commit, on CUDA when present."""
-    import torch
     from senselab._api.packaged import CATALOGUE
+
+    torch = importlib.import_module("torch")
 
     entry = CATALOGUE.default("speech_to_text")
     model = {"source": "hf", "id": entry.id, "identity": entry.revision}

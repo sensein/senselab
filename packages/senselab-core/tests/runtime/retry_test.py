@@ -16,8 +16,7 @@ import httpx
 import numpy
 import pytest
 import senselab_core.runtime.retry as retry_module
-from huggingface_hub import utils as hub_utils
-from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
+from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
 from senselab_core.runtime.faults import is_transient
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import storage_fault
@@ -60,15 +59,14 @@ def test_an_http_status_decides_for_every_client(
 
 @pytest.mark.logic
 @pytest.mark.parametrize(("status", "transient"), [(429, True), (500, True), (503, True), (404, False), (401, False)])
-def test_each_clients_own_error_carries_its_status(hub_client: ModuleType, status: int, transient: bool) -> None:
-    """The Hub's error as `hf_raise_for_status` and httpx's as `raise_for_status` raise them, classify alike."""
-    client = hub_client
+def test_each_clients_own_error_carries_its_status(
+    hub_client: ModuleType, hub_error: Callable[..., Exception], status: int, transient: bool
+) -> None:
+    """The Hub's error and its HTTP client's own `raise_for_status` error classify alike, by status alone."""
     url = "https://huggingface.co/api/models/org/m/revision/main"
-    with pytest.raises(HfHubHTTPError) as hub:
-        vars(hub_utils)["hf_raise_for_status"](client.Response(status, request=client.Request("GET", url)))
-    with pytest.raises(httpx.HTTPStatusError) as plain:
-        httpx.Response(status, request=httpx.Request("GET", url)).raise_for_status()
-    assert is_transient(hub.value) is transient
+    with pytest.raises(hub_client.HTTPStatusError) as plain:
+        hub_client.Response(status, request=hub_client.Request("GET", url)).raise_for_status()
+    assert is_transient(hub_error(status)) is transient
     assert is_transient(plain.value) is transient
 
 
