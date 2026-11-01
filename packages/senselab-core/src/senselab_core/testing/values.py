@@ -675,7 +675,7 @@ def _register_kernel_samples() -> None:
             TaskSpec(
                 name="t",
                 version="1",
-                kind="measure",
+                kind="transform",
                 inputs={"a": "Audio"},
                 outputs={"e": "Embedding"},
                 params=SampleParams,

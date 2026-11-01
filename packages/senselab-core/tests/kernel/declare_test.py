@@ -45,7 +45,7 @@ def _task(**overrides: object) -> TaskSpec:
     fields: dict[str, Any] = {
         "name": "t.measure",
         "version": "1",
-        "kind": "measure",
+        "kind": "transform",
         "inputs": {"audio": "Audio"},
         "outputs": {"pitch": "Track"},
         "params": _Params,
@@ -85,7 +85,7 @@ def test_duplicate_signature_refused() -> None:
 @pytest.mark.logic
 @pytest.mark.parametrize(
     "change",
-    [{"kind": "transform"}, {"inputs": {"audio": "Video"}}, {"outputs": {"pitch": "Track", "voicing": "Track"}}],
+    [{"kind": "fit"}, {"inputs": {"audio": "Video"}}, {"outputs": {"pitch": "Track", "voicing": "Track"}}],
     ids=["other_kind", "other_input_type", "extra_output"],
 )
 def test_a_different_signature_is_admitted(change: dict[str, Any]) -> None:
@@ -292,7 +292,7 @@ def test_task_decorator_declares_its_spec() -> None:
     """`@task` reads `Params`, `inputs` and `outputs` from the class, registers the spec and sets it on the class."""
     registry = Registry()
 
-    @task(name="t.embed", version="2", kind="measure", registry=registry)
+    @task(name="t.embed", version="2", kind="transform", registry=registry)
     class _Embed:
         Params = _Params
         inputs = {"audio": Audio}
@@ -304,7 +304,7 @@ def test_task_decorator_declares_its_spec() -> None:
         outputs = {"label": Annotation}
 
     assert registry.tasks() == [_Embed.spec, _Label.spec]  # type: ignore[attr-defined]
-    assert _Embed.spec.signature() == ("measure", {("audio", "Audio")}, {("embedding", "Embedding")})  # type: ignore[attr-defined]
+    assert _Embed.spec.signature() == ("transform", {("audio", "Audio")}, {("embedding", "Embedding")})  # type: ignore[attr-defined]
     assert (_Embed.spec.params, _Label.spec.params) == (_Params, TaskParams)  # type: ignore[attr-defined]
 
 
@@ -327,7 +327,7 @@ def test_task_ports_are_kernel_value_types(ports: dict[str, Any]) -> None:
     registry = Registry()
     body = {"outputs": {"e": Embedding}, **{k: v for k, v in ports.items() if v is not None}}
     with pytest.raises(TypeError, match="inputs"):
-        task(name="t", version="1", kind="measure", registry=registry)(type("_T", (), body))
+        task(name="t", version="1", kind="transform", registry=registry)(type("_T", (), body))
     assert registry.tasks() == []
 
 

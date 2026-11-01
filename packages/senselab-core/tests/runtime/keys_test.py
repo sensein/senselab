@@ -8,7 +8,7 @@ from senselab_core.kernel.identity import ExecutionContext
 from senselab_core.runtime.keys import Call, Placement, build_key
 from senselab_core.testing.contracts import BASE_CONTEXT
 
-TASK = TaskSpec(name="t", version="1", kind="measure", inputs={"audio": "Audio"}, outputs={}, params=TaskParams)
+TASK = TaskSpec(name="t", version="1", kind="transform", inputs={"audio": "Audio"}, outputs={}, params=TaskParams)
 CALL = Call(task=TASK, params=TaskParams(), inputs={"audio": "content:" + "a" * 64})
 CONTEXT = ExecutionContext.model_validate(BASE_CONTEXT)
 

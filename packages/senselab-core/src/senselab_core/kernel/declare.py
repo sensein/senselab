@@ -27,7 +27,7 @@ from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import InputIdentity, LogicalKey, Params, ProfileSliceIdentity, ResolvedModel
 from senselab_core.kernel.signals import Recording
 
-TaskKind = Literal["measure", "transform", "decide", "fit"]
+TaskKind = Literal["transform", "fit"]
 
 
 OUTPUT_AFFECTING: frozenset[str] = frozenset({"batch_formation", "chunk_grid"})

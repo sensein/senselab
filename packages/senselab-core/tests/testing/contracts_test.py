@@ -58,7 +58,7 @@ def _registry(task: dict[str, Any], backend: dict[str, Any] | None = None) -> Re
     fields: dict[str, Any] = {
         "name": "t.bad",
         "version": "1",
-        "kind": "measure",
+        "kind": "transform",
         "inputs": {"payload": "json"},
         "outputs": {"value": "sha256"},
         "params": _Echo,

@@ -28,7 +28,7 @@ class EchoParams(TaskParams):
 ECHO = TaskSpec(
     name="fake.echo",
     version="1",
-    kind="measure",
+    kind="transform",
     inputs={"payload": "json"},
     outputs={"value": "sha256"},
     params=EchoParams,
