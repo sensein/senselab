@@ -41,3 +41,27 @@ Owner decision D-4 ([`decisions-2026-11-01.md`](../decisions-2026-11-01.md)); fi
 stands. The Phase 1 BEP028 exporter writes file names and paths and does not meet it, so no Phase 1
 export is publishable. The redaction is built in Phase 2, with the PROV-O store of ADR-010, and the
 exporter's tests require it.
+
+## Amendment 2026-11-01: redaction as built (P2-8; Phase 2 Task 4)
+
+- **Scope.** Paths may appear in local operator logs and in storage-infrastructure errors (`StorageDir`,
+  `storage_fault`, `WrongKindError`, the store's corrupt-entry errors). They never appear in a PROV document, in an
+  export, or in an error raised by the provenance read, merge and write APIs or the export API.
+- **A file is named by its content address and a label.** A `senselab:File` entity carries `senselab:fileLabel`,
+  `file-<n>`, allocated per run, one per content address; a second path of the same bytes is added to that label's
+  paths. The grammar is checked where a record enters a store (`ProvStore.add`) and where one is read back.
+- **The map is private.** `<run>/private/labels@1.json` (`labels@1.0`, mode 0600, in a 0700 directory) holds
+  `{label: {address, paths}}`, written under a lease. No document holds it, and `export` never copies it.
+- **`senselab:modelSource` is a source kind and an identity, never a local path** (ADR-002); a path-shaped value
+  (absolute, `~`, `./`, `../`, a drive letter, a backslash) is refused at the same boundary.
+- **`export(run, dest)`** reads the run's documents once, validates, profile-checks and scans those bytes, and
+  copies exactly them to `<dest>/prov/prov-<writer>_all.jsonld`. The scan refuses a document with any string, key
+  included, equal to a segment or stem of a path in the label map however it is spelt (`./`, `//`, backslashes), or
+  holding a BIDS `sub-`/`ses-` label. Nothing is copied on a refusal (`ProfileViolation`).
+- **Errors.** `ProvStore.write` and the label map raise `RunIOError`: the errno text, no filename, cause or context.
+  The original error is logged for the operator. An unreadable `prov/` raises `MalformedDocument` naming an error
+  class.
+- **Limits.** A path never recorded in the map and carrying no `sub-`/`ses-` label, such as an operator's model
+  directory in a free-text attribute, is not detected. It belongs to the writer; `modelSource` is the one such
+  attribute core refuses a path in. A per-run `senselab:fileLabel` sits inside a content-addressed node, so the same
+  `content:` entity labelled differently in two runs conflicts in a cross-run union; export stays per run.

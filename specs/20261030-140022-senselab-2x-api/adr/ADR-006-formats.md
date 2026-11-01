@@ -199,3 +199,8 @@ Ruling P2-44 ([`plans/phase-2.md`](../plans/phase-2.md)) and ADR-010 as amended;
 - 2026-11-01: retired formats refused before the first 2.x release (P2-44); data format `provenance@3.0`;
   `provenance@2.0` and `provenance-id@4` retired; `value@2` loses the set, enum, path, bytes and `Decimal`
   families (Phase 2 Task 3c).
+
+## Amendment 2026-11-01: the label map's format
+
+- 2026-11-01: new data format `labels@1.0`, the run's private label map `<run>/private/labels@1.json`
+  (ADR-007 amendment, Phase 2 Task 4); a reader reads any minor of `labels@1`.

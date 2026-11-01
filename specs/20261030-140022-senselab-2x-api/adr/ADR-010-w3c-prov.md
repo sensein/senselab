@@ -177,3 +177,23 @@ Rulings P2-44, P2-57; implemented in Phase 2 Task 3c.
     checksum, path, size and mtime keys.
 - **One frozen mapping type.** A built `Frozen` value's `__dict__` is a plain `dict`. Attribute writes are
   refused, and its digest is computed when it is built; a write through `__dict__` itself is not refused.
+
+## Amendment 2026-11-01: the BEP028 profile (ruling P2-8; Phase 2 Task 4)
+
+Source: bids-standard/BEP028_BIDSprov, `bep028spec.md` at master 162bea57 (2026-10-07), licence CC-BY-4.0.
+
+- **What the draft states.**
+  - Records go in `prov/` below the dataset root as `prov-<label>_<suffix>.<json|jsonld>`, suffix one of `act`,
+    `ent`, `agt`, `soft`, `env`, `base`, `all`; `all` is `.jsonld` (3.1.3, 3.2.1).
+  - A document has `@context`, `BIDSProvVersion` and `Records` (1.4); `.jsonld` content is JSON-LD.
+  - Provenance SHOULD be anonymised (1.3).
+- **What senselab does.** `export` copies the run's PROV-O documents, unchanged, as `prov/prov-<writer>_all.jsonld`
+  (the writer's uuid4 hex is the label). It meets the naming rule, `@context`, JSON-LD and anonymisation (ADR-007).
+  The draft's own record vocabulary (`Records`, `Activities`, `Id`, `Label`, `Used`) is not PROV-O and is not
+  produced: that would be the translation this ADR rejects. `format` stands where `BIDSProvVersion` does. A BIDS
+  validator reading the draft's vocabulary will not read these documents until the context is aligned (open).
+- **`check_profile(doc)`** adds nothing to what `ProvStore.from_documents` already validates, except an activity's
+  end needs a start and is not before it, and a `senselab:fileLabel` names one node.
+- **Core term added:** `senselab:fileLabel`, on `senselab:File`, `xsd:string`.
+- **`senselab:File` from an array has no label.** It names no path; only a path-sourced file
+  (`DataManifest.file_entities`) gets one.
