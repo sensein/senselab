@@ -44,7 +44,6 @@ dependencies = [
   "pydantic>=2,<3",
   "pyyaml",
   "huggingface-hub>=1.3",
-  "httpx",
   "soundfile>=0.12"
 ]
 

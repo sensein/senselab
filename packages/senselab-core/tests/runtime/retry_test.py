@@ -8,12 +8,14 @@ import urllib.error
 from collections.abc import Callable
 from email.message import Message
 from pathlib import Path
+from types import ModuleType
 
 import httpx
 import pytest
 import senselab_core.runtime.retry as retry_module
 import yaml
-from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
+from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
+from huggingface_hub.utils import hf_raise_for_status
 from senselab_core.runtime.faults import is_transient
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import storage_fault
@@ -50,6 +52,41 @@ def test_an_http_status_decides_for_every_client(
     assert is_transient(hub_error(status)) is transient
     assert is_transient(httpx.HTTPStatusError("s", request=request, response=response)) is transient
     assert is_transient(_http_error(status)) is transient
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(("status", "transient"), [(429, True), (500, True), (503, True), (404, False), (401, False)])
+def test_each_clients_own_error_carries_its_status(hub_client: ModuleType, status: int, transient: bool) -> None:
+    """The Hub's error as `hf_raise_for_status` and httpx's as `raise_for_status` raise them, classify alike."""
+    client = hub_client
+    url = "https://huggingface.co/api/models/org/m/revision/main"
+    with pytest.raises(HfHubHTTPError) as hub:
+        hf_raise_for_status(client.Response(status, request=client.Request("GET", url)))
+    with pytest.raises(httpx.HTTPStatusError) as plain:
+        httpx.Response(status, request=httpx.Request("GET", url)).raise_for_status()
+    assert is_transient(hub.value) is transient
+    assert is_transient(plain.value) is transient
+
+
+@pytest.mark.logic
+def test_the_status_is_read_from_any_response_not_one_client_class() -> None:
+    """An error of a client the classifier does not import is classified by its `response.status_code`."""
+
+    class OtherClientError(Exception):
+        def __init__(self, status: int) -> None:
+            super().__init__(status)
+            self.response = type("Response", (), {"status_code": status})()
+
+    assert is_transient(OtherClientError(503)) is True
+    assert is_transient(OtherClientError(404)) is False
+
+
+@pytest.mark.logic
+def test_the_hub_clients_transport_errors_are_retried(hub_client: ModuleType) -> None:
+    """A connect error or timeout of the Hub's own HTTP client, and of httpx, is transient."""
+    for client in (hub_client, httpx):
+        assert is_transient(client.ConnectError("connection refused")) is True
+        assert is_transient(client.ReadTimeout("timed out")) is True
 
 
 @pytest.mark.logic

@@ -4,8 +4,6 @@ import errno
 import socket
 import urllib.error
 
-import httpx
-
 TRANSIENT_ERRNOS: frozenset[int] = frozenset(
     {
         errno.EAGAIN,
@@ -30,22 +28,33 @@ TRANSIENT_ERRNOS: frozenset[int] = frozenset(
 )
 """The errnos of an `OSError` that is transient."""
 
+HTTP_CLIENTS: frozenset[str] = frozenset({"httpx", "httpx2"})
+"""The HTTP client packages whose `TransportError` subclasses are transient: those `huggingface_hub` 1.x and 2.x use."""
+
 
 def http_status(exc: BaseException) -> int | None:
-    """Return the HTTP status a `urllib.error.HTTPError` or an `httpx.HTTPError` with a response carries, else None."""
+    """Return the HTTP status an exception carries, else None.
+
+    The status is `code` of a `urllib.error.HTTPError`, and otherwise `response.status_code`, which
+    httpx, httpx2, requests and `huggingface_hub` errors all carry.
+    """
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code
-    if isinstance(exc, httpx.HTTPError):
-        status = getattr(getattr(exc, "response", None), "status_code", None)
-        return status if isinstance(status, int) and not isinstance(status, bool) else None
-    return None
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status if isinstance(status, int) and not isinstance(status, bool) else None
+
+
+def _is_transport_error(exc: BaseException) -> bool:
+    return any(
+        cls.__name__ == "TransportError" and cls.__module__.partition(".")[0] in HTTP_CLIENTS for cls in type(exc).__mro__
+    )
 
 
 def is_transient(exc: BaseException) -> bool:
     """Return whether retrying the operation that raised `exc` may succeed.
 
     - An HTTP error with a status (`http_status`): transient for 429 and for 500 and above.
-    - `httpx.TransportError`, `ConnectionError` and `TimeoutError`: transient.
+    - A `TransportError` of an HTTP client in `HTTP_CLIENTS`, `ConnectionError` and `TimeoutError`: transient.
     - `urllib.error.URLError` without a status: its `reason` when that is an exception, else permanent.
     - `socket.gaierror`: transient only for `EAI_AGAIN`.
     - Any other `OSError`: transient when its errno is in `TRANSIENT_ERRNOS`; with no errno, its
@@ -55,7 +64,7 @@ def is_transient(exc: BaseException) -> bool:
     status = http_status(exc)
     if status is not None:
         return status == 429 or status >= 500
-    if isinstance(exc, (httpx.TransportError, ConnectionError, TimeoutError)):
+    if _is_transport_error(exc) or isinstance(exc, (ConnectionError, TimeoutError)):
         return True
     if isinstance(exc, urllib.error.URLError):
         return isinstance(exc.reason, BaseException) and is_transient(exc.reason)
