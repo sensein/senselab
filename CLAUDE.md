@@ -40,6 +40,8 @@ Guidance for work on **senselab 2.x** in this branch. 1.x guidance lives on `alp
 - **No backwards compatibility (P-14).** No shims, aliases, legacy readers or "historical" vocabulary in
   `packages/`. Migration is documented, not coded.
 - **One implementation per behaviour (P-37).**
+- **Review and compact before committing.** Read each change against `principles.md` and the `engineering.md`
+  checklist, fold duplicates and cut verbosity during development. No model reviews in CI.
 - **README states 2.x's current status;** update it in the same PR as any change to what 2.x delivers.
 - **Rationale belongs in `specs/`.** Docstrings say what a thing is and how to call it.
 - **Thresholds live in `data/`** with a written derivation, never as literals.
