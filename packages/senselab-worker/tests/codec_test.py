@@ -611,12 +611,8 @@ def _doubling(levels: int) -> object:
     return value
 
 
-@pytest.mark.logic
-def test_exponentially_shared_value_is_refused_after_linear_work(tmp_path: Path) -> None:
-    """`l = [l, l]` sixty times stops in `to_wire` at the line budget.
-
-    It is small in memory but 2**60 nodes as a tree. Each container is encoded once and charged per use.
-    """
+def _entries_walked(value: object, array_dir: Path) -> int:
+    """How many containers `to_wire(value)` enters, counted as starts of the `entered` generator; it may refuse."""
     from senselab_worker import canonical
 
     entering = canonical.entered.__wrapped__.__code__  # type: ignore[attr-defined]
@@ -629,12 +625,24 @@ def test_exponentially_shared_value_is_refused_after_linear_work(tmp_path: Path)
 
     sys.setprofile(profile)
     try:
-        with pytest.raises(ValueTooLarge):
-            to_wire({"s": _doubling(60)}, array_dir=tmp_path, at="outputs")
+        to_wire(value, array_dir=array_dir, at="outputs")
+    except ValueTooLarge:
+        pass
     finally:
         sys.setprofile(None)
-    entries = resumed // 2
-    assert 0 < entries <= 61
+    return resumed // 2
+
+
+@pytest.mark.logic
+def test_exponentially_shared_value_is_refused_after_linear_work(tmp_path: Path) -> None:
+    """`l = [l, l]` sixty times stops in `to_wire` at the line budget.
+
+    It is small in memory but 2**60 nodes as a tree. Each container is encoded once and charged per use.
+    """
+    assert _entries_walked({"s": _doubling(1)}, tmp_path) == 2, "one dict and one list: the counter is calibrated"
+    assert 0 < _entries_walked({"s": _doubling(60)}, tmp_path) <= 61
+    with pytest.raises(ValueTooLarge):
+        to_wire({"s": _doubling(60)}, array_dir=tmp_path, at="outputs")
     assert error_record(ValueTooLarge("x"))["fault"] == "resource"
     small = to_wire({"s": _doubling(4)}, array_dir=tmp_path, at="outputs")
     assert json.dumps(small) == json.dumps({"s": json.loads(json.dumps(_doubling(4)))})

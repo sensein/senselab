@@ -5,41 +5,98 @@ meets the error at the call that real storage fails at.
 """
 
 import errno
+import io
 import os
-import stat
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
+Step = Literal["open", "read", "write", "fsync"]
+"""Where `fail_at` makes a file's I/O fail."""
 
-def fail_open(
+
+def fail_at(
     monkeypatch: pytest.MonkeyPatch,
     name: str,
+    at: Step,
     err: OSError,
     *,
     times: int = 1,
     creating: bool | None = None,
 ) -> list[str]:
-    """Make the next `times` `os.open` calls whose last path component is `name` raise `err`.
+    """Make the next `times` `at` steps on a file whose last path component is `name` raise `err`.
 
-    With `creating` True only opens that pass `O_CREAT` count, with False only those that do not.
-    Returns the list the failed names are appended to.
+    `open` fails the `os.open` itself. `read` and `write` fail the first read or write that reaches the
+    descriptor, through a file object `os.fdopen` returns over it (duplicates included). `fsync` fails
+    `os.fsync` on it. With `creating` True only opens that pass `O_CREAT` count, with False only those
+    that do not. Returns the list each failure appends `name` to.
     """
-    real = os.open
+    real_open, real_fdopen, real_fsync = os.open, os.fdopen, os.fsync
+    inodes: set[tuple[int, int]] = set()
     failed: list[str] = []
+
+    def due() -> bool:
+        return len(failed) < times
+
+    def fail() -> None:
+        failed.append(name)
+        raise err
+
+    def ours(fd: int) -> bool:
+        st = os.fstat(fd)
+        return (st.st_dev, st.st_ino) in inodes
 
     def opened(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:  # noqa: ANN401
         matches = os.path.basename(os.fsdecode(path)) == name
         if creating is not None:
             matches = matches and bool(flags & os.O_CREAT) == creating
-        if matches and len(failed) < times:
-            failed.append(name)
-            raise err
-        return real(path, flags, *args, **kwargs)
+        if matches and at == "open" and due():
+            fail()
+        fd = real_open(path, flags, *args, **kwargs)
+        if matches:
+            st = os.fstat(fd)
+            inodes.add((st.st_dev, st.st_ino))
+        return fd
+
+    class FaultyIO(io.FileIO):
+        def readinto(self, buffer: Any) -> int | None:  # noqa: ANN401
+            if at == "read" and due():
+                fail()
+            return super().readinto(buffer)
+
+        def readall(self) -> bytes:
+            if at == "read" and due():
+                fail()
+            return super().readall()
+
+        def read(self, size: int | None = -1) -> bytes:
+            if at == "read" and due():
+                fail()
+            return super().read(size)
+
+        def write(self, data: Any) -> int:  # noqa: ANN401
+            if at == "write" and due():
+                fail()
+            return super().write(data)
+
+    def fdopen(fd: int, mode: str = "r", *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        if at not in ("read", "write") or "b" not in mode or not ours(fd):
+            return real_fdopen(fd, mode, *args, **kwargs)
+        raw = FaultyIO(fd, mode.replace("b", ""), closefd=True)
+        if "+" in mode:
+            return io.BufferedRandom(raw)
+        return io.BufferedReader(raw) if "r" in mode else io.BufferedWriter(raw)
+
+    def fsync(fd: int) -> None:
+        if at == "fsync" and due() and ours(fd):
+            fail()
+        real_fsync(fd)
 
     monkeypatch.setattr(os, "open", opened)
+    monkeypatch.setattr(os, "fdopen", fdopen)
+    monkeypatch.setattr(os, "fsync", fsync)
     return failed
 
 
@@ -98,26 +155,6 @@ def on_rename(
 
     monkeypatch.setattr(os, "rename", rename)
     return results
-
-
-def fail_fsync(monkeypatch: pytest.MonkeyPatch, when: Callable[[os.stat_result], bool], err: OSError) -> list[int]:
-    """Make `os.fsync` raise `err` on every descriptor whose `fstat` satisfies `when`; return the fds it failed."""
-    real = os.fsync
-    failed: list[int] = []
-
-    def fsync(fd: int) -> None:
-        if when(os.fstat(fd)):
-            failed.append(fd)
-            raise err
-        real(fd)
-
-    monkeypatch.setattr(os, "fsync", fsync)
-    return failed
-
-
-def regular_of_size(size: int) -> Callable[[os.stat_result], bool]:
-    """A `fail_fsync` condition: a regular file holding exactly `size` bytes."""
-    return lambda st: stat.S_ISREG(st.st_mode) and st.st_size == size
 
 
 def refuse_fchmod(monkeypatch: pytest.MonkeyPatch, inode: int) -> None:

@@ -35,7 +35,7 @@ from senselab_core.runtime.fetch import (
 from senselab_core.runtime.storage import StorageDir, StorageFull, StorePolicy, StoreUnavailable
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import identity_digest
-from syscall_faults_fixture import fail_fsync, fail_open, regular_of_size
+from syscall_faults_fixture import Step, fail_at
 
 STALE_SECONDS = StorePolicy.load_default().staging_stale_s
 
@@ -80,7 +80,11 @@ def _unseal(path: Path) -> Path:
 
 def _rehashed(caplog: pytest.LogCaptureFixture) -> list[str]:
     """The messages in which fetch re-hashed a cached blob."""
-    return [r.getMessage() for r in caplog.records if r.getMessage().startswith("verifying cached blob")]
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "senselab" and r.levelname == "DEBUG" and r.getMessage().startswith("verifying cached blob")
+    ]
 
 
 def _opener(routes: dict[str, bytes], calls: list[str] | None = None) -> Callable[[str], BinaryIO]:
@@ -169,12 +173,17 @@ def test_corrupt_blob_is_refetched(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_transient_read_error_does_not_discard_blob(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("err", [errno.EIO, errno.ESTALE])
+@pytest.mark.parametrize("at", ["open", "read"])
+def test_transient_read_error_does_not_discard_blob(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int, at: Step
+) -> None:
     """Transient read error does not discard blob."""
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    fail_open(monkeypatch, SHA, OSError(errno.EIO, "Input/output error"))
+    failed = fail_at(monkeypatch, SHA, at, OSError(err, os.strerror(err)))
     with pytest.raises(StoreUnavailable):
         fetch(_manifest(), cache_root=tmp_path, opener=_opener({}), verify="full")
+    assert failed == [SHA]
     assert (tmp_path / "blobs" / SHA).read_bytes() == PAYLOAD
 
 
@@ -328,6 +337,16 @@ def test_cli_error_is_one_line_nonzero(tmp_path: Path, capsys: pytest.CaptureFix
     assert len(err.splitlines()) == 1 and "a.wav" in err
     assert cli_main(["data", "fetch", str(tmp_path / "missing.yaml")]) != 0
     assert len(capsys.readouterr().err.strip().splitlines()) == 1
+
+
+@pytest.mark.logic
+def test_cli_transport_failure_is_one_line_nonzero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A source whose connection is refused (a closed local port) fails the CLI with one line naming the file."""
+    manifest_path = tmp_path / "m.yaml"
+    manifest_path.write_text((MANIFEST_YAML % SHA).replace("https://x/a.wav", "https://127.0.0.1:1/a.wav"))
+    assert cli_main(["data", "fetch", str(manifest_path), "--cache", str(tmp_path / "c")]) != 0
+    err = capsys.readouterr().err.strip()
+    assert len(err.splitlines()) == 1 and "a.wav" in err and "127.0.0.1:1" in err
 
 
 @pytest.mark.logic
@@ -879,9 +898,10 @@ def test_redirect_to_non_https_refused(target: str) -> None:
 
 @pytest.mark.logic
 @pytest.mark.parametrize("err", [errno.ENOSPC, errno.EDQUOT])
-def test_enospc_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int) -> None:
+@pytest.mark.parametrize("at", ["open", "write", "fsync"])
+def test_enospc_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int, at: Step) -> None:
     """Out of space while writing a download is StorageFull, not a network error, with no staged file left behind."""
-    failed = fail_fsync(monkeypatch, regular_of_size(len(PAYLOAD)), OSError(err, os.strerror(err)))
+    failed = fail_at(monkeypatch, "blob", at, OSError(err, os.strerror(err)), creating=True)
     with pytest.raises(StorageFull) as caught:
         fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     assert failed
@@ -989,6 +1009,9 @@ def test_repaired_blob_is_trusted_again_by_size(tmp_path: Path, caplog: pytest.L
     with caplog.at_level("DEBUG", logger="senselab"):
         fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
     assert _rehashed(caplog) == []
+    with caplog.at_level("DEBUG", logger="senselab"):
+        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}), verify="full")
+    assert _rehashed(caplog) == [f"verifying cached blob {tmp_path / 'blobs' / SHA} by its sha256"]
 
 
 @pytest.mark.logic

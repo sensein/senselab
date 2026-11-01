@@ -323,15 +323,13 @@ def test_collecting_a_client_whose_shutdown_was_cut_short_finishes_it(
     pgid = box[0].hello["pid"]
     array_dir = box[0].array_dir
     _interrupting(monkeypatch, times=2)
-    logging.disable(logging.CRITICAL)
+    monkeypatch.setattr(logging.getLogger("senselab_core.runtime.worker_client"), "disabled", True)
     try:
         box[0].close()
     except SystemExit:
         pass
     else:
         raise AssertionError("close() was not interrupted")
-    finally:
-        logging.disable(logging.NOTSET)
     assert array_dir.exists()
     monkeypatch.undo()
     box.clear()

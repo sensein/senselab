@@ -95,6 +95,11 @@ class Memo:
             while len(self._items) > self.maxsize:
                 self._items.popitem(last=False)
 
+    def clear(self) -> None:
+        """Drop every entry; callers recompute on their next miss."""
+        with self._lock:
+            self._items.clear()
+
     def __len__(self) -> int:
         """Return the number of entries held."""
         with self._lock:

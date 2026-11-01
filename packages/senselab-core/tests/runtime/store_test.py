@@ -39,7 +39,7 @@ from senselab_core.runtime.store import (
 from senselab_worker.canonical import canonical_npy_bytes, canonical_scalar, jcs_dumps
 from senselab_worker.digest import identity_digest
 from senselab_worker.ownership import UUID_HEX
-from syscall_faults_fixture import fail_open, on_rename, refuse_fchmod, spy_open, substitute_once
+from syscall_faults_fixture import Step, fail_at, on_rename, refuse_fchmod, spy_open, substitute_once
 
 
 def _sha(data: bytes) -> str:
@@ -200,12 +200,12 @@ def test_four_writers_agree_on_every_key(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_losing_rename_returns_winner_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A writer whose rename meets a committed entry discards its staging and returns the winner's identity."""
-    s, k, c = ResultStore(tmp_path), _key(), _ctx()
+    s, other, k, c = ResultStore(tmp_path), ResultStore(tmp_path), _key(), _ctx()
     committed: list[str] = []
 
     def commit_first() -> str:
-        committed.append(s.put(k, {"y": 1}, c))
-        assert [a.parameters["outcome"] for a in s.provenance.activities()] == ["committed"]
+        committed.append(other.put(k, {"y": 1}, c))
+        assert [a.parameters["outcome"] for a in other.provenance.activities()] == ["committed"]
         return committed[0]
 
     fired = on_rename(monkeypatch, lambda old, new: new == c.fingerprint(), commit_first, after=False)
@@ -214,7 +214,7 @@ def test_losing_rename_returns_winner_identity(tmp_path: Path, monkeypatch: pyte
     assert len(fired) == 1, "the loser reached its rename after the winner committed"
     (winner,) = committed
     assert loser == winner
-    assert [a.parameters["outcome"] for a in s.provenance.activities()] == ["committed", "existing"]
+    assert [a.parameters["outcome"] for a in s.provenance.activities()] == ["existing"]
     assert len(_entries(tmp_path)) == 1
     got = s.get(k, c, ReusePolicy.EXACT)
     assert got is not None and got.outputs == {"y": 1}
@@ -668,18 +668,20 @@ def _jcs_value(key: LogicalKey) -> object:
 @pytest.mark.logic
 @pytest.mark.parametrize("member", ["context.json", "result.json", "npy"])
 @pytest.mark.parametrize("err", [errno.EACCES, errno.ESTALE, errno.EIO, errno.EMFILE])
+@pytest.mark.parametrize("at", ["open", "read"])
 def test_transient_error_never_quarantines(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int, member: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int, member: str, at: Step
 ) -> None:
-    """An I/O error while reading any member raises StoreUnavailable and leaves the entry in place, servable."""
+    """An I/O error opening or reading any member raises StoreUnavailable and leaves the entry in place, servable."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     outputs = {"y": numpy.ones(3, "<f4")}
     s.put(k, outputs, c)
     entry = _entry_dir(tmp_path, k, c)
     name = _only_npy_name(entry).name if member == "npy" else member
-    fail_open(monkeypatch, name, OSError(err, os.strerror(err)))
+    failed = fail_at(monkeypatch, name, at, OSError(err, os.strerror(err)))
     with pytest.raises(StoreUnavailable) as caught:
         s.get(k, c, ReusePolicy.EXACT)
+    assert failed == [name]
     assert caught.value.errno == err
     assert entry.is_dir() and not any((tmp_path / QUARANTINE_DIR).glob("*"))
     got = s.get(k, c, ReusePolicy.EXACT)
@@ -689,13 +691,17 @@ def test_transient_error_never_quarantines(
 
 @pytest.mark.logic
 @pytest.mark.parametrize("err", [errno.ESTALE, errno.EIO])
-def test_transient_error_in_put_never_quarantines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int) -> None:
+@pytest.mark.parametrize("at", ["open", "read"])
+def test_transient_error_in_put_never_quarantines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int, at: Step
+) -> None:
     """One transient read error leaves a healthy entry in place; a put that cannot read raises `StoreUnavailable`."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     ident = s.put(k, {"y": "healthy"}, c)
-    fail_open(monkeypatch, "result.json", OSError(err, os.strerror(err)))
+    failed = fail_at(monkeypatch, "result.json", at, OSError(err, os.strerror(err)), creating=False)
     with pytest.raises(StoreUnavailable):
         s.put(k, {"y": "healthy"}, c)
+    assert failed == ["result.json"]
     assert _entry_dir(tmp_path, k, c).is_dir()
     assert not any((tmp_path / QUARANTINE_DIR).glob("*"))
     assert s.put(k, {"y": "other"}, c) == ident
@@ -881,12 +887,14 @@ def test_stray_file_at_entry_is_corrupt_not_fatal(tmp_path: Path, stray: str) ->
 
 @pytest.mark.logic
 @pytest.mark.parametrize("err", [errno.ENOSPC, errno.EDQUOT])
-def test_enospc_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int) -> None:
+@pytest.mark.parametrize("at", ["open", "write", "fsync"])
+def test_enospc_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int, at: Step) -> None:
     """Running out of space while staging is StorageFull; no entry and no staging directory remain."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
-    fail_open(monkeypatch, "context.json", OSError(err, os.strerror(err)), creating=True)
+    failed = fail_at(monkeypatch, "context.json", at, OSError(err, os.strerror(err)), creating=True)
     with pytest.raises(StorageFull) as caught:
         s.put(k, {"y": numpy.ones(3, "<f4")}, c)
+    assert failed == ["context.json"]
     assert caught.value.errno == err and "space" in str(caught.value)
     assert _entries(tmp_path) == []
     assert list((tmp_path / "tmp").iterdir()) == []
@@ -1119,12 +1127,14 @@ def test_stray_file_at_entry_does_not_block_put(tmp_path: Path, stray: str) -> N
 
 
 @pytest.mark.logic
-def test_enospc_mid_entry_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("at", ["open", "write", "fsync"])
+def test_enospc_mid_entry_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, at: Step) -> None:
     """ENOSPC on the second staged file is `StorageFull`, with nothing left behind."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
-    fail_open(monkeypatch, "result.json", OSError(errno.ENOSPC, "No space left on device"), creating=True)
+    failed = fail_at(monkeypatch, "result.json", at, OSError(errno.ENOSPC, "No space left on device"), creating=True)
     with pytest.raises(StorageFull):
         s.put(k, {"a": "x"}, c)
+    assert failed == ["result.json"]
     assert _entries(tmp_path) == [] and list((tmp_path / "tmp").iterdir()) == []
 
 

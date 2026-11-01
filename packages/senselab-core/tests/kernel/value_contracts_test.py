@@ -2,14 +2,12 @@
 
 import copy
 import hashlib
-import multiprocessing as mp
 import os
 import pickle
 import time
 import types
 import unicodedata
 from collections.abc import Callable
-from concurrent.futures import ProcessPoolExecutor
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -21,6 +19,7 @@ import soundfile
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import ConfigDict, TypeAdapter, ValidationError
+from senselab_core.kernel import signals
 from senselab_core.kernel._base import (
     Frozen,
     FrozenMapping,
@@ -506,18 +505,9 @@ def test_attributes_cannot_forge_an_identity_or_a_stamp(tmp_path: Path) -> None:
         RegularGroup.model_validate(held, from_attributes=True)
 
 
-def _copied_in_a_fresh_process(pickled: bytes) -> str:
-    """Load `pickled` and deep-copy it in this (fresh) process; return the error's type name, or ''."""
-    try:
-        copy.deepcopy(pickle.loads(pickled))
-    except Exception as exc:  # noqa: BLE001 - the caller asserts which error surfaced
-        return type(exc).__name__
-    return ""
-
-
 @pytest.mark.logic
 def test_a_same_size_same_mtime_rewrite_is_stale(tmp_path: Path) -> None:
-    """A rewrite keeping size, mtime, inode and device is refused on read and on a copy in a fresh process."""
+    """A same-size, same-mtime, same-inode rewrite is refused on read, and by a deep copy with no memo entry."""
     path = _wav(tmp_path / "a.wav")
     audio = Audio.from_path(path)
     group = audio.groups["audio"]
@@ -531,8 +521,10 @@ def test_a_same_size_same_mtime_rewrite_is_stale(tmp_path: Path) -> None:
     assert (after.st_size, after.st_mtime_ns, after.st_ino) == (st.st_size, st.st_mtime_ns, st.st_ino)
     with pytest.raises(StaleSource):
         group.read()
-    with ProcessPoolExecutor(1, mp_context=mp.get_context("spawn")) as pool:
-        assert pool.submit(_copied_in_a_fresh_process, pickle.dumps(audio)).result(timeout=120) == "StaleSource"
+    copy.deepcopy(audio)
+    signals._VERIFIED.clear()
+    with pytest.raises(StaleSource):
+        copy.deepcopy(audio)
 
 
 @pytest.mark.logic

@@ -226,7 +226,10 @@ def test_a_fresh_lease_is_broken_after_the_stale_bound_and_not_before(tmp_path: 
 def test_staleness_is_read_on_the_storage_clock_not_the_local_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A local clock an hour ahead does not age a fresh lease; an hour on the storage clock does."""
+    """A local clock an hour ahead does not age a fresh lease; an hour on the storage clock does.
+
+    The second half alone would pass for a local-clock judge too; the first half is what rules that out.
+    """
     resource = tmp_path / "thing"
     real_time = time.time
     with Lease(resource, timeout=0):
