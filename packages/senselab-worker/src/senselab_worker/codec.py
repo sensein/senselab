@@ -335,20 +335,37 @@ def from_wire(value: object, *, array_dir: Path, deadline: Deadline | None = Non
     return _map_refs(value, lambda ref: _read_array(ref, root, deadline or Deadline(None)))
 
 
-def _read_file(path: Path, deadline: Deadline) -> bytes:
+_NOT_NPY_BYTES = "array file is not npy_bytes of its array: version 1.0, C order, little-endian"
+_NPY_HEAD_MAX = 10 + 0xFFFF
+"""The longest a version 1.0 `.npy` preamble can be: magic, version and length (10 bytes) and a 16-bit header."""
+
+
+def _read_file(path: Path, deadline: Deadline) -> bytearray:
     fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ValueError(f"array file is not a regular file: {path}")
-        chunks: list[bytes] = []
+        data = bytearray()
         while True:
             deadline.check(f"reading array file {path}")
             chunk = os.read(fd, READ_CHUNK_BYTES)
             if not chunk:
-                return b"".join(chunks)
-            chunks.append(chunk)
+                return data
+            data += chunk
     finally:
         os.close(fd)
+
+
+def _npy_view(data: bytearray) -> numpy.ndarray:
+    """Return the array a version 1.0 `.npy` in `data` holds, as a writable view of `data`, not a copy."""
+    head = io.BytesIO(bytes(memoryview(data)[:_NPY_HEAD_MAX]))
+    if numpy.lib.format.read_magic(head) != (1, 0):
+        raise ValueError(_NOT_NPY_BYTES)
+    shape, fortran_order, dtype = numpy.lib.format.read_array_header_1_0(head)
+    if fortran_order or dtype.itemsize == 0:
+        loaded: numpy.ndarray = numpy.load(io.BytesIO(data), allow_pickle=False)
+        return loaded
+    return numpy.frombuffer(data, dtype=dtype, count=math.prod(shape), offset=head.tell()).reshape(shape)
 
 
 def _read_array(ref: object, root: Path, deadline: Deadline) -> numpy.ndarray:
@@ -364,10 +381,10 @@ def _read_array(ref: object, root: Path, deadline: Deadline) -> numpy.ndarray:
         data = _read_file(root / f"{sha}.npy", deadline)
         if _raw_digest.bytes_digest("npy@1", data) != sha:
             raise ValueError(f"array file bytes do not match sha256 {sha}")
-        a: numpy.ndarray = numpy.load(io.BytesIO(data), allow_pickle=False)
+        a = _npy_view(data)
         header = npy_header(a)
         if not (data.startswith(header) and len(data) == len(header) + a.nbytes):
-            raise ValueError("array file is not npy_bytes of its array: version 1.0, C order, little-endian")
+            raise ValueError(_NOT_NPY_BYTES)
         if a.dtype.str != ref["dtype"] or list(a.shape) != ref["shape"]:
             raise ValueError(f"array is {a.dtype.str} {list(a.shape)}, reference says {ref['dtype']} {ref['shape']}")
     except TimeoutError:

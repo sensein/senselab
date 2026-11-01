@@ -378,7 +378,7 @@ class TestRoundTrip:
         assert back._entities == s._entities
         assert back._activities == s._activities
         assert back._agents == s._agents
-        assert back._relations == s._relations
+        assert back.relations() == s.relations()
 
     def test_an_unrecognised_record_kind_is_a_legible_error(self, tmp_path: Path) -> None:
         """A corrupt line names its kind instead of dying on a raw KeyError."""
@@ -413,7 +413,7 @@ class TestReadBackValidation:
         relation_line = next(ln for ln in path.read_text().splitlines() if json.loads(ln)["record"] == "relation")
         path.write_text(path.read_text() + relation_line + "\n")
         back = ProvStore.read_jsonl(path)
-        assert back._relations == s._relations
+        assert back.relations() == s.relations()
         assert ProvStore.merge([back]).fingerprint() == back.fingerprint()
 
     def test_a_ref_in_commit_sha_is_refused_on_read(self, tmp_path: Path) -> None:

@@ -206,7 +206,8 @@ def _read_member(entry: Path, name: str) -> bytes:
     return data
 
 
-def _decode(value: object, entry: Path) -> object:
+def _decode(value: object, entry: Path, *, load: bool = True) -> object:
+    """Return `value` with each array reference verified against its file and, with `load`, read as that array."""
     if isinstance(value, dict):
         if set(value) == {ARRAY_TAG}:
             sha = value[ARRAY_TAG]
@@ -215,13 +216,15 @@ def _decode(value: object, entry: Path) -> object:
             data = _read_member(entry, f"{sha}.npy")
             if _raw_digest.bytes_digest("npy@1", data) != sha:
                 raise CorruptEntryError(f"corrupt store entry {entry}: {sha}.npy does not hash to its name")
+            if not load:
+                return value
             try:
                 return numpy.load(io.BytesIO(data), allow_pickle=False)
             except OSError as err:
                 raise CorruptEntryError(f"corrupt store entry {entry}: {sha}.npy is not an array: {err}") from err
-        return {k: _decode(v, entry) for k, v in value.items()}
+        return {k: _decode(v, entry, load=load) for k, v in value.items()}
     if isinstance(value, list):
-        return [_decode(v, entry) for v in value]
+        return [_decode(v, entry, load=load) for v in value]
     return value
 
 
@@ -262,13 +265,17 @@ def _stored_context(entry: Path) -> ExecutionContext:
     return ExecutionContext.model_validate(_read_object(entry, "context.json", CONTEXT_FORMAT))
 
 
-def _stored_address(entry: Path) -> tuple[str, str, dict[str, Any], ExecutionContext]:
+def _stored_address(
+    entry: Path, context: ExecutionContext | None = None
+) -> tuple[str, str, dict[str, Any], ExecutionContext]:
     """Return `(key digest, context fingerprint, result record, context)` as the entry's files state them.
 
     The key in `result.json` must digest to its recorded `key_digest`, and the context in `context.json`
-    must fingerprint to the `context_fingerprint` recorded in `result.json`.
+    (or `context`, when the caller has already read it from this entry) must fingerprint to the
+    `context_fingerprint` recorded in `result.json`.
     """
-    context = _stored_context(entry)
+    if context is None:
+        context = _stored_context(entry)
     record = _read_object(entry, "result.json", RESULT_FORMAT)
     digest = LogicalKey.model_validate(record["key"]).digest()
     if record["key_digest"] != digest:
@@ -307,11 +314,20 @@ def _read_context(entry: Path, fingerprint: str) -> ExecutionContext:
     return _guarded(entry, read)
 
 
-def _read_result(entry: Path, *, digest: str, fingerprint: str) -> tuple[str, dict[str, object], ExecutionContext]:
+def _read_result(
+    entry: Path,
+    *,
+    digest: str,
+    fingerprint: str,
+    context: ExecutionContext | None = None,
+    load: bool = True,
+) -> tuple[str, dict[str, object], ExecutionContext]:
     """Return the output identity, decoded outputs and context of the entry at `entry`.
 
     The entry must be bound (`_stored_address`) to key digest `digest` and context fingerprint
     `fingerprint`, its outputs must hash to their output identity, and every array file must hash to its name.
+    `context` is the entry's context when the caller has already read it. Without `load`, array references
+    are verified and returned as references, not read as arrays.
 
     Raises:
         CorruptEntryError: the entry is gone or fails verification; `MisfiledEntryError` when it
@@ -320,15 +336,15 @@ def _read_result(entry: Path, *, digest: str, fingerprint: str) -> tuple[str, di
     """
 
     def read() -> tuple[str, dict[str, object], ExecutionContext]:
-        stored_digest, stored_fingerprint, record, context = _stored_address(entry)
+        stored_digest, stored_fingerprint, record, stored = _stored_address(entry, context)
         _bound(entry, digest, fingerprint, stored_digest, stored_fingerprint)
         tree, identity = record["outputs"], record["output_identity"]
         if not isinstance(identity, str) or _tree_identity(tree) != identity:
             raise CorruptEntryError(f"corrupt store entry {entry}: outputs do not hash to their output identity")
-        outputs = _decode(tree, entry)
+        outputs = _decode(tree, entry, load=load)
         if not isinstance(outputs, dict):
             raise CorruptEntryError(f"corrupt store entry {entry}: outputs are not an object")
-        return identity, outputs, context
+        return identity, outputs, stored
 
     return _guarded(entry, read)
 
@@ -372,7 +388,7 @@ def _committed_identity(entry: Path, *, digest: str, fingerprint: str) -> str | 
         return None
     except OSError as err:
         raise storage_fault(err, entry) from err
-    return _read_result(entry, digest=digest, fingerprint=fingerprint)[0]
+    return _read_result(entry, digest=digest, fingerprint=fingerprint, load=False)[0]
 
 
 def _commit(  # noqa: PLR0913 - what the entry holds, where it is staged and placed, and the policy
@@ -918,9 +934,9 @@ class ResultStore:
             )
             if rank is not None:
                 candidates.append((rank, name != current, name, stored))
-        for rank, _, name, _stored in sorted(candidates, key=lambda c: c[:3]):
+        for rank, _, name, read_context in sorted(candidates, key=lambda c: c[:3]):
             try:
-                identity, outputs, stored = _read_result(base / name, digest=d, fingerprint=name)
+                identity, outputs, stored = _read_result(base / name, digest=d, fingerprint=name, context=read_context)
             except CorruptEntryError:
                 self._set_aside(base / name, digest=d, fingerprint=name)
                 continue

@@ -774,7 +774,9 @@ class ProvStore:
         self._activities: dict[str, Activity] = {}
         self._agents: dict[str, Agent] = {}
         self._environments: dict[str, Environment] = {}
-        self._relations: list[tuple[RELATION, str, str]] = []
+        self._relations: dict[tuple[RELATION, str, str], None] = {}
+        self._targets_of: dict[tuple[RELATION, str], list[str]] = {}
+        self._sources_of: dict[tuple[RELATION, str], list[str]] = {}
 
     def entity(self, *, prov_type: PROV_TYPE, extent: tuple[float, float] | None, attributes: dict[str, Any]) -> str:
         """Add an entity holding the normalised, read-only form of `attributes`.
@@ -912,7 +914,9 @@ class ProvStore:
     def _relate(self, relation: RELATION, source: str, target: str) -> None:
         triple = (relation, source, target)
         if triple not in self._relations:
-            self._relations.append(triple)
+            self._relations[triple] = None
+            self._targets_of.setdefault((relation, source), []).append(target)
+            self._sources_of.setdefault((relation, target), []).append(source)
 
     def was_generated_by(self, entity_id: str, activity_id: str) -> None:
         """Record that an activity produced an entity."""
@@ -1000,10 +1004,10 @@ class ProvStore:
         Returns:
             The activity ids, in the order the relations were recorded.
         """
-        return [s for r, s, t in self._relations if r == "wasAssociatedWith" and t == agent_id]
+        return list(self._sources_of.get(("wasAssociatedWith", agent_id), ()))
 
     def _targets(self, relation: RELATION, source: str) -> list[str]:
-        return [t for r, s, t in self._relations if r == relation and s == source]
+        return list(self._targets_of.get((relation, source), ()))
 
     def generated_by(self, entity_id: str) -> str | None:
         """Return the activity that generated an entity, or None."""
@@ -1140,12 +1144,9 @@ class ProvStore:
         for s in stores:
             for record in s.records():
                 out._hold(record)
-        seen: set[tuple[RELATION, str, str]] = set()
         for s in stores:
             for rel in s._relations:
-                if rel not in seen:
-                    seen.add(rel)
-                    out._relations.append(rel)
+                out._relate(*rel)
         return out
 
     def fingerprint(self) -> str:
