@@ -67,7 +67,8 @@ _RANGES_OF: Mapping[type, str] = {bool: "xsd:boolean", str: "xsd:string", dateti
 _NUMERIC_RANGES = frozenset({"xsd:integer", "xsd:double", "xsd:decimal"})
 _ENTITY_ID = re.compile(r"(content|output):[0-9a-f]{64}")
 _AGENT_ID = re.compile(r"agent:[0-9a-f]{64}")
-_NODE_ID = re.compile(r"(content|output|activity|agent|environment):[0-9a-f]{64}")
+NODE_ID = re.compile(r"(content|output|activity|agent|environment):[0-9a-f]{64}")
+"""The grammar of every node `@id` a document holds."""
 _TERM = re.compile(r"senselab:[A-Za-z][A-Za-z0-9_]*")
 _VOCAB_NODE_KEYS = frozenset({"@id", "@type", "rdfs:subClassOf", "rdfs:domain", "rdfs:range", "rdfs:comment"})
 _XSD_DOUBLE = {math.inf: "INF", -math.inf: "-INF"}
@@ -640,6 +641,6 @@ def document(records: Iterable[Record]) -> dict[str, object]:
     nodes: dict[str, bytes] = {}
     for record in records:
         for r in (record, *record.files):
-            if nodes.setdefault(_checked(_NODE_ID, r.id, "a node"), r.jcs) != r.jcs:
+            if nodes.setdefault(_checked(NODE_ID, r.id, "a node"), r.jcs) != r.jcs:
                 raise ValueError(f"two different nodes have the @id {r.id}")
     return {"@context": CONTEXT_URL, "@graph": [jcs_loads(nodes[k]) for k in sorted(nodes)]}
