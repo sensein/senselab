@@ -122,11 +122,12 @@ def test_a_pull_request_runs_logic_and_contract_and_nothing_slower() -> None:
 
 
 @pytest.mark.logic
-def test_limits_and_use_cases_run_nightly_and_on_the_limits_label() -> None:
-    """Some job gated on the schedule and some gated on the `limits` label select both slower tiers."""
+def test_limits_run_nightly_and_on_the_limits_label_and_use_cases_only_nightly() -> None:
+    """A job gated on the schedule selects limits and use cases; one gated on the `limits` label, limits only."""
     when = cadence(WORKFLOW.read_text())
     assert {"limits", "usecase"} <= when[NIGHTLY]
-    assert {"limits", "usecase"} <= when[ON_LABEL]
+    assert "limits" in when[ON_LABEL]
+    assert "usecase" not in when[ON_LABEL]
 
 
 @pytest.mark.logic
