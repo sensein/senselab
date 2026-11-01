@@ -1,251 +1,148 @@
-"""This module implements the Pyannote Diarization task."""
+"""Worker of backend `pyannote` of `diarize`: the pyannote.audio diarization pipeline, one turn table per item.
 
-import time
-from typing import Dict, List, Optional, Union
+`load` takes the pinned model in `init["model"]` (or `"stub": True` for the stub model); `handle` answers one
+`intervals@1.0` wire form of speaker turns, or one typed fault, per item. Imports are stdlib, numpy and
+`senselab_worker`; `torch` and the library load when the pipeline is built. A gated model reads `HF_TOKEN` from the
+environment.
+"""
 
-import torch
+import hashlib
+import os
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
 
-from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.speaker_diarization.capabilities import DiarizationCapabilities
-from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine, _select_device_and_dtype
-from senselab.utils.data_structures.logging import logger
-from senselab.utils.data_structures.model import get_huggingface_token
-from senselab.utils.dependencies import resolve_model, retry_on_transient_error
+import numpy
+from senselab_worker.digest import COMMIT_HEX
+from senselab_worker.fake import FakeFaults
 
-try:
-    from pyannote.audio import Pipeline
-    from pyannote.core import Annotation
+from senselab.audio.tasks.speech_to_text.item_faults import mono_samples, typed
 
-    PYANNOTEAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    PYANNOTEAUDIO_AVAILABLE = False
+WORKER_MODULE = "senselab.audio.tasks.speaker_diarization.pyannote"
+MODEL_ID = "pyannote/speaker-diarization-community-1"
+EXPECTED_RATE = 16_000
+_INIT_KEYS = frozenset({"stub", "model", "device", "faults", "array_dir"})
+_HINTS = ("num_speakers", "min_speakers", "max_speakers")
+_BACKEND_PARAMS = ("exclusive",)
+_NS_PER_S = 1_000_000_000
 
-CAPABILITIES = DiarizationCapabilities(
-    populates_text=False,
-    speaker_label_kind="index",  # SPEAKER_00, SPEAKER_01, ...
-    labels_stable_across_files=False,  # not measured; False is the conservative default
-    # Seed-17 speaker-ceiling probe (TTS corpus, k=1..8, 20 sessions/k): predicted counts at
-    # k=8 spanned {5,6,7,8}, never collapsing to one value, so no structural ceiling was
-    # observed. That is a separate fact from counting accuracy, where Pyannote is actually the
-    # strongest of the six backends at low k (see model_registry.yaml's recommended_for) but
-    # falls off sharply above k=2 — a performance limit, not this structural one.
-    max_speakers=None,
-    max_speakers_evidence="measured: no saturation, emits up to 8 (probe seed-17)",
-    honors_speaker_hints=True,  # the only backend that acts on num_speakers
-)
+Turns = list[tuple[str, float, float]]
 
 
-class PyannoteDiarization:
-    """Factory for creating and caching **Pyannote** diarization pipelines.
+class StubModel:
+    """The fake stack's model: one speaker per equal share of the audio, derived from its samples."""
 
-    Pipelines are cached per *(model.path_or_uri, revision, device)*, so repeated calls
-    with the same configuration reuse the initialized pipeline.
+    def diarize(self, samples: numpy.ndarray, hints: Mapping[str, int | None], exclusive: bool) -> Turns:  # noqa: ARG002
+        """Return `hints["num_speakers"]` (default 2) consecutive turns over `samples`, none for empty audio."""
+        count = hints["num_speakers"] or 2
+        seconds = samples.size / EXPECTED_RATE
+        offset = hashlib.sha256(samples.astype(numpy.float32).tobytes()).digest()[0] % count
+        step = seconds / count
+        return [(f"SPEAKER_{(i + offset) % count:02d}", i * step, (i + 1) * step) for i in range(count) if step > 0]
 
-    Guidance:
-        - Pyannote models typically expect **mono, 16 kHz** audio.
-        - If you know the number of speakers, set `num_speakers`; otherwise use
-          `min_speakers`/`max_speakers` bounds to help estimation.
-        - Supported devices: ``DeviceType.CPU``, ``DeviceType.CUDA`` and ``DeviceType.MPS``.
-    """
 
-    _pipelines: Dict[str, "Pipeline"] = {}
+class Pipeline:
+    """The pyannote.audio pipeline, loaded from the pinned commit of the model onto one device."""
 
-    @classmethod
-    def _get_pyannote_diarization_pipeline(
-        cls,
-        model: PyannoteAudioModel,
-        device: Union[DeviceType, None],
-    ) -> "Pipeline":
-        """Get or create a Pyannote Diarization pipeline.
+    def __init__(self, model: Mapping[str, Any], device: str) -> None:
+        """Build the pipeline; the token for a gated model is `HF_TOKEN`.
 
-        Args:
-            model (PyannoteAudioModel): The Pyannote model.
-            device (DeviceType): The device to run the model on.
-
-        Returns:
-            Pipeline: The diarization pipeline.
+        Raises:
+            ValueError: when the hub returns no pipeline for the model.
         """
-        if not PYANNOTEAUDIO_AVAILABLE:
-            raise ModuleNotFoundError(
-                "`pyannote-audio` is not installed. "
-                "Please install senselab audio dependencies using `pip install senselab`."
-            )
+        import torch  # noqa: PLC0415 - loads when the pipeline is built
+        from pyannote.audio import Pipeline as Loaded  # noqa: PLC0415 - as above
 
-        device, _ = _select_device_and_dtype(
-            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU]
+        pipeline = Loaded.from_pretrained(
+            str(model["id"]), revision=str(model["identity"]), token=os.environ.get("HF_TOKEN")
         )
-        key = f"{model.path_or_uri}-{model.revision}-{device}"
-        if key not in cls._pipelines:
-            # Resolve the ref to an immutable SHA once (download-once via the
-            # cross-process heartbeat lock), then pin the pipeline load to it so a
-            # cached model makes no per-call Hub HEAD — the 429 source under
-            # parallel batch load. ``resolve_model`` takes the token for the gated
-            # pyannote repo; the SHA also fixes the latent ``revision=f"{None}"``
-            # ("None" string) when ``model.revision`` is unset.
-            token = get_huggingface_token()
-            sha, _ = resolve_model(str(model.path_or_uri), model.revision or "main", token=token)
-            pipeline = retry_on_transient_error(
-                Pipeline.from_pretrained,
-                checkpoint=f"{model.path_or_uri}",
-                revision=sha,
-                token=token,
-            )
-            if not pipeline:
-                raise ValueError(f"Pyannote model {model.path_or_uri} not found.")
-            pipeline = pipeline.to(torch.device(device.value))
-            cls._pipelines[key] = pipeline
-        return cls._pipelines[key]
+        if pipeline is None:
+            raise ValueError(f"no pipeline for model {model['id']}")
+        self.pipeline = pipeline.to(torch.device(device))
+
+    def diarize(self, samples: numpy.ndarray, hints: Mapping[str, int | None], exclusive: bool) -> Turns:
+        """Return the turns of `samples`: the exclusive partition, or the overlapping view when `exclusive` is false."""
+        import torch  # noqa: PLC0415 - loads when the pipeline is built
+
+        given: dict[str, Any] = {key: value for key, value in hints.items() if value is not None}
+        output = self.pipeline({"waveform": torch.from_numpy(samples[None, :]), "sample_rate": EXPECTED_RATE}, **given)
+        annotation = output.exclusive_speaker_diarization if exclusive else output.speaker_diarization
+        return [(str(label), float(s.start), float(s.end)) for s, _, label in annotation.itertracks(yield_label=True)]
 
 
-def diarize_audios_with_pyannote(
-    audios: List[Audio],
-    model: Optional[PyannoteAudioModel] = None,
-    device: Optional[DeviceType] = None,
-    num_speakers: Optional[int] = None,
-    min_speakers: Optional[int] = None,
-    max_speakers: Optional[int] = None,
-    exclusive: bool = True,
-) -> List[List[ScriptLine]]:
-    """Diarize audios with **Pyannote**; returns per-speaker segments per audio.
+@dataclass(frozen=True)
+class State:
+    """A loaded backend: the model (a stub or the pipeline) and the faults to inject."""
 
-    Requirements:
-        - Input must be **mono** (`[1, T]`); stereo/multi-channel is rejected.
-        - Sampling rate must be **16 kHz** (per model card for `3.1`).
+    model: Any  # noqa: ANN401 - a StubModel or a Pipeline
+    faults: FakeFaults
 
-    Args:
-        audios (list[Audio]):
-            Audio clips to diarize (mono, 16 kHz).
-        model (PyannoteAudioModel | None):
-            Pyannote model. Defaults to ``pyannote/speaker-diarization-community-1@main``.
-        device (DeviceType | None):
-            Inference device (``CPU``, ``CUDA`` or ``MPS``); the fastest available when omitted.
-        num_speakers (int | None):
-            If known, fix the number of speakers.
-        min_speakers (int | None):
-            Minimum speakers when estimating (ignored if `num_speakers` is set).
-        max_speakers (int | None):
-            Maximum speakers when estimating (ignored if `num_speakers` is set).
 
-        exclusive (bool):
-            Which view of the pipeline's output to return. ``True`` (default) returns
-            ``exclusive_speaker_diarization``: a **partition**, where every instant belongs to at
-            most one speaker and concurrent speech has been resolved away. ``False`` returns the
-            pipeline's overlapping view, where two speakers talking at once produce two segments
-            covering the same instant.
+def load(init: dict[str, Any]) -> State:
+    """Return the worker's state from `init`.
 
-            This matters more than it looks. With the exclusive view, *no downstream consumer can
-            detect overlap at all* — a per-instant speaker count derived from these segments is
-            capped at 1 by construction, so it reports "no overlap" as a confident measurement
-            rather than as something the input could not express. `community-1` computes overlap
-            internally (its local segmentation model is `segmentation-3.0`); the exclusive view
-            discards it.
-
-    Returns:
-        list[list[ScriptLine]]: One list per input audio with `(speaker, start, end)`. Segments may
-        overlap when ``exclusive=False``.
+    `init` holds `model` (`{"source": "hf", "id", "identity"}`, `identity` a 40-hex commit) and `device`, or
+    `"stub": True`; it may hold `faults`, the fields of `FakeFaults`, and `array_dir`.
 
     Raises:
-        ModuleNotFoundError:
-            If `pyannote-audio` is not installed.
-        ValueError:
-            If audio is not mono or sampling rate ≠ 16 kHz.
-
-    Example (estimate speakers within bounds):
-        >>> from pathlib import Path
-        >>> from senselab.audio.data_structures import Audio
-        >>> from senselab.utils.data_structures import DeviceType, PyannoteAudioModel
-        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
-        >>> mdl = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1", revision="main")
-        >>> diar = diarize_audios_with_pyannote(
-        ...     [a1],
-        ...     model=mdl,
-        ...     device=DeviceType.CPU,
-        ...     min_speakers=1,
-        ...     max_speakers=3,
-        ... )
-        >>> len(diar[0]) >= 0
-        True
-
-    Example (known number of speakers):
-        >>> from pathlib import Path
-        >>> from senselab.audio.data_structures import Audio
-        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
-        >>> diar = diarize_audios_with_pyannote([a1], num_speakers=2)
-        >>> len(diar[0]) >= 0
-        True
+        ValueError: on an unknown key, a model that is not a pinned hub commit, or both `stub` and `model`.
     """
+    unknown = sorted(init.keys() - _INIT_KEYS)
+    if unknown:
+        raise ValueError(f"pyannote init takes only {sorted(_INIT_KEYS)}, got {unknown}")
+    faults = FakeFaults.from_json(init.get("faults", {}))
+    model = init.get("model")
+    if init.get("stub"):
+        if model is not None:
+            raise ValueError("pyannote init takes `stub` or `model`, not both")
+        return State(StubModel(), faults)
+    if not isinstance(model, dict) or model.get("source") != "hf":
+        raise ValueError(f"pyannote loads a hub model, got {model!r}")
+    if not COMMIT_HEX.fullmatch(str(model.get("identity"))):
+        raise ValueError(f"a model is loaded by its 40-hex commit, never a ref: {model.get('identity')!r}")
+    return State(Pipeline(model, str(init.get("device", "cpu"))), faults)
 
-    def _annotation_to_script_lines(annotation: "Annotation") -> List[ScriptLine]:
-        """Convert a Pyannote annotation to a list of script lines.
 
-        Args:
-            annotation (Annotation): The Pyannote annotation object.
+def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return one `{"outputs": {"turns": <intervals@1.0 wire form>}}` per item, or its typed fault.
 
-        Returns:
-            List[ScriptLine]: A list of script lines.
-        """
-        diarization_list: List[ScriptLine] = []
-        for segment, label in annotation:
-            diarization_list.append(ScriptLine(speaker=label, start=segment.start, end=segment.end))
-        return diarization_list
+    `params` holds the task's `num_speakers`, `min_speakers` and `max_speakers` and `backend_params` (`exclusive`).
 
-    if not PYANNOTEAUDIO_AVAILABLE:
-        raise ModuleNotFoundError(
-            "`pyannote-audio` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab`."
-        )
-
-    if model is None:
-        model = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1", revision="main")
-
-    # 16khz comes from the model cards of pyannote/speaker-diarization-community-1
-    expected_sample_rate = 16000
-
-    # Check that all audio objects have the correct sampling rate
-    for audio in audios:
-        if audio.waveform.shape[0] != 1:
-            raise ValueError(f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels")
-        if audio.sampling_rate != expected_sample_rate:
-            raise ValueError(
-                "Audio sampling rate "
-                + str(audio.sampling_rate)
-                + " does not match expected "
-                + str(expected_sample_rate)
+    Raises:
+        ValueError: on an unknown backend param.
+    """
+    unknown = sorted(set(params.get("backend_params", {})) - set(_BACKEND_PARAMS))
+    if unknown:
+        raise ValueError(f"unknown backend params {unknown}; known: {list(_BACKEND_PARAMS)}")
+    exclusive = bool(params.get("backend_params", {}).get("exclusive", True))
+    hints = {key: params.get(key) for key in _HINTS}
+    results: list[dict[str, Any]] = []
+    for item in items:
+        try:
+            samples, clock_id = _prepare(item, state.faults)
+            turns = state.model.diarize(samples, hints, exclusive)
+            results.append(
+                {"outputs": {"turns": intervals(turns, clock_id, round(samples.size / EXPECTED_RATE * _NS_PER_S))}}
             )
-
-    # Take the start time of the model initialization
-    start_time_model = time.time()
-    pipeline = PyannoteDiarization._get_pyannote_diarization_pipeline(model=model, device=device)
-    end_time_model = time.time()
-    elapsed_time_model = end_time_model - start_time_model
-    logger.info(f"Time taken to initialize the pyannote model: {elapsed_time_model:.2f} seconds")
-
-    # Perform diarization
-    start_time_diarization = time.time()
-    results: List[List[ScriptLine]] = []
-    for audio in audios:
-        diarization = pipeline(
-            {"waveform": audio.waveform, "sample_rate": audio.sampling_rate},
-            num_speakers=num_speakers,
-            min_speakers=min_speakers,
-            max_speakers=max_speakers,
-        )
-        # ``getattr`` with an explicit failure rather than a silent fallback to the exclusive view:
-        # returning a partition when the caller asked for overlap would be the absent-vs-zero
-        # failure again — a structurally-impossible overlap reading as a measured absence of one.
-        if exclusive:
-            annotation = diarization.exclusive_speaker_diarization
-        else:
-            annotation = getattr(diarization, "speaker_diarization", None)
-            if annotation is None:
-                raise AttributeError(
-                    "the pipeline output exposes no overlapping speaker_diarization view; "
-                    "exclusive=False cannot be honoured, and silently returning the exclusive "
-                    "partition would report structural non-overlap as a measurement"
-                )
-        results.append(_annotation_to_script_lines(annotation))
-    end_time_diarization = time.time()
-    elapsed_time_diarization = end_time_diarization - start_time_diarization
-    logger.info(f"Time taken to perform diarization: {elapsed_time_diarization:.2f} seconds")
-
+        except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
+            results.append({"error": typed(exc)})
     return results
+
+
+def _prepare(item: dict[str, Any], faults: FakeFaults) -> tuple[numpy.ndarray, str]:
+    """Return the item's mono samples and its clock id, or raise its content or resource fault."""
+    return mono_samples(item, faults, EXPECTED_RATE, "pyannote")
+
+
+def intervals(turns: Turns, clock_id: str, duration_ns: int) -> dict[str, Any]:
+    """Return the `intervals@1.0` wire form of `turns`, by start; times are integer ns clamped to `duration_ns`."""
+    ordered = sorted(turns, key=lambda turn: (turn[1], turn[2], turn[0]))
+    start = [min(duration_ns, max(0, round(s * _NS_PER_S))) for _, s, _ in ordered]
+    end = [min(duration_ns, max(b, round(e * _NS_PER_S))) for b, (_, _, e) in zip(start, ordered)]
+    return {
+        "format": "intervals@1.0",
+        "start_ns": numpy.array(start, dtype=numpy.int64),
+        "end_ns": numpy.array(end, dtype=numpy.int64),
+        "label": numpy.array([label for label, _, _ in ordered], dtype=str),
+        "clock_id": clock_id,
+    }

@@ -38,3 +38,10 @@ envs:
     - torch>=2.8,<2.9
     - accelerate>=1.0
     - compressed-tensors>=0.15
+  pyannote:
+    python: '3.12'
+    exclude_newer: '2026-10-02T00:00:00Z'
+    requirements:
+    - pyannote.audio>=4.0,<5
+    - torch>=2.8
+    - torchaudio>=2.8

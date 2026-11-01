@@ -22,9 +22,8 @@ from typing import Any, Literal, get_args
 import numpy
 from senselab_worker.digest import COMMIT_HEX
 from senselab_worker.fake import FakeFaults
-from senselab_worker.faults import ContentFault
 
-from senselab.audio.tasks.speech_to_text.item_faults import raise_injected, typed
+from senselab.audio.tasks.speech_to_text.item_faults import mono_samples, typed
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.crisperwhisper"
 MODEL_ID = "nyralabs/CrisperWhisper2.0_turbo"
@@ -134,17 +133,7 @@ def _backend_params(given: Mapping[str, Any]) -> dict[str, Any]:
 
 def _prepare(item: dict[str, Any], faults: FakeFaults) -> tuple[numpy.ndarray, str]:
     """Return the item's mono samples and its clock id, or raise its content or resource fault."""
-    raise_injected(item["id"], faults)
-    wire = item["inputs"]["audio"]
-    group = wire["groups"]["audio"]
-    samples = numpy.asarray(group["data"])
-    if samples.shape[0] != 1:
-        raise ContentFault(f"crisperwhisper takes mono audio, got {samples.shape[0]} channels")
-    if float(group["sampling_rate"]) != EXPECTED_RATE:
-        raise ContentFault(
-            f"crisperwhisper takes {EXPECTED_RATE} Hz audio, got {group['sampling_rate']} Hz; resample it first"
-        )
-    return samples[0].astype(numpy.float32), str(wire["anchor"]["clock_id"])
+    return mono_samples(item, faults, EXPECTED_RATE, "crisperwhisper")
 
 
 def transcript(decoded: Decoded, timestamps: str, clock_id: str, duration_ns: int) -> dict[str, Any]:

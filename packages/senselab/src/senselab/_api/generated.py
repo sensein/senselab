@@ -9,6 +9,7 @@ import senselab._api.declarations
 import senselab.signal.resample
 import senselab.audio.tasks.speech_to_text.huggingface
 import senselab.audio.tasks.speech_to_text.crisperwhisper_backend
+import senselab.audio.tasks.speaker_diarization.pyannote_backend
 
 from collections.abc import Mapping
 from os import PathLike
@@ -19,8 +20,10 @@ from senselab_core.runtime.call import Result, TaskCall
 from typing import Any, Literal
 
 __all__ = [
+    "Diarize",
     "Resample",
     "SpeechToText",
+    "diarize",
     "resample",
     "speech_to_text",
 ]
@@ -99,6 +102,89 @@ def speech_to_text(
         model,
         language=language,
         timestamps=timestamps,
+        backend_params=backend_params,
+    )(audio)
+
+
+class Diarize(ConfiguredTask):
+    """The configured, immutable task diarize v1 (transform): audio -> turns."""
+
+    name = "diarize"
+
+    def __init__(
+        self,
+        model: ModelRef | str | None = None,
+        *,
+        num_speakers: int | None = None,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
+        backend_params: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Configure the task; params are validated now."""
+        super().__init__(
+            model,
+            {
+                "num_speakers": num_speakers,
+                "min_speakers": min_speakers,
+                "max_speakers": max_speakers,
+            },
+            backend_params,
+        )
+
+    def with_params(
+        self,
+        *,
+        num_speakers: int | None = UNSET,
+        min_speakers: int | None = UNSET,
+        max_speakers: int | None = UNSET,
+    ) -> "Diarize":
+        """Return a new task with these params changed; this one is unchanged."""
+        return self._replace(
+            {
+                "num_speakers": num_speakers,
+                "min_speakers": min_speakers,
+                "max_speakers": max_speakers,
+            },
+        )
+
+    def call(
+        self,
+        audio: Audio | str | PathLike[str],
+    ) -> TaskCall:
+        """Return the validated call of this task on the inputs."""
+        return self._call(
+            {
+                "audio": audio,
+            },
+        )
+
+    def __call__(
+        self,
+        audio: Audio | str | PathLike[str],
+    ) -> Result:
+        """Run this task on the inputs through `run_call` and return its one result."""
+        return self._run(
+            {
+                "audio": audio,
+            },
+        )
+
+
+def diarize(
+    audio: Audio | str | PathLike[str],
+    *,
+    model: ModelRef | str | None = None,
+    num_speakers: int | None = None,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
+    backend_params: Mapping[str, Any] | None = None,
+) -> Result:
+    """Run `Diarize` on the inputs: exactly `Diarize(model, **params)(...)`."""
+    return Diarize(
+        model,
+        num_speakers=num_speakers,
+        min_speakers=min_speakers,
+        max_speakers=max_speakers,
         backend_params=backend_params,
     )(audio)
 

@@ -16,6 +16,8 @@ for _module in DECLARATION_MODULES:
 
 LOCKS = Path(__file__).parents[1] / "src" / "senselab" / "data" / "env_locks"
 ALWAYS = {"numpy", "senselab_worker"}
+IMPORT_NAMES = {"pyannote_audio": "pyannote"}
+"""Import names that differ from their distribution's name."""
 
 
 def _lock_libraries(env: str) -> set[str]:
@@ -24,7 +26,8 @@ def _lock_libraries(env: str) -> set[str]:
     pins = re.search(r"^# torch: (.*)$", text, re.MULTILINE)
     names = re.findall(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==", text, re.MULTILINE)
     names += re.findall(r"([A-Za-z0-9._-]+)==", pins.group(1)) if pins else []
-    return {n.lower().replace("-", "_").replace(".", "_") for n in names}
+    libraries = {n.lower().replace("-", "_").replace(".", "_") for n in names}
+    return libraries | {IMPORT_NAMES[n] for n in libraries & IMPORT_NAMES.keys()}
 
 
 def outside_imports(source: str, module: str, siblings: set[str], allowed: set[str]) -> set[str]:

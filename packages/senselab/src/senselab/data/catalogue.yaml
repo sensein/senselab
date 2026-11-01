@@ -30,7 +30,7 @@ entries:
 - id: pyannote/speaker-diarization-community-1
   revision: 3533c8cf8e369892e6b79ff1bf80f7b0286a54ee
   tasks: [diarize]
-  backends: [pyannote-diarization]
+  backends: [pyannote]
   stacks: [pyannote]
   default_for: [diarize]
   license:
@@ -42,7 +42,7 @@ entries:
 - id: pyannote/segmentation-3.0
   revision: e66f3d3b9eb0873085418a7b813d3b369bf160bb
   tasks: [diarize]
-  backends: [pyannote-diarization]
+  backends: [pyannote]
   stacks: [pyannote]
   default_for: []
   license:

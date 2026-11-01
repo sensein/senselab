@@ -415,7 +415,7 @@ def test_lock_inputs_file_is_read(tmp_path: Path) -> None:
     """`read_lock_inputs` reads the packaged inputs and refuses another format."""
     root = Path(__file__).parents[4] / "packages/senselab/src/senselab/data/env_locks/inputs.yaml"
     inputs = read_lock_inputs(root)
-    assert set(inputs) == {"crisperwhisper", "vllm-server", "pii-review"}
+    assert set(inputs) == {"crisperwhisper", "vllm-server", "pii-review", "pyannote"}
     assert inputs["vllm-server"].max_cuda == (13, 0) and inputs["pii-review"].quarantined
     bad = tmp_path / "inputs.yaml"
     bad.write_text("format: other@1.0\n")

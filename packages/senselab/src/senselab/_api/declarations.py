@@ -2,8 +2,9 @@
 
 from typing import Literal
 
+from pydantic import Field
 from senselab_core.kernel.declare import REGISTRY, TaskParams, task
-from senselab_core.kernel.results import Transcript
+from senselab_core.kernel.results import Intervals, Transcript
 from senselab_core.kernel.signals import Audio
 
 DECLARATION_MODULES: tuple[str, ...] = (
@@ -11,6 +12,7 @@ DECLARATION_MODULES: tuple[str, ...] = (
     "senselab.signal.resample",
     "senselab.audio.tasks.speech_to_text.huggingface",
     "senselab.audio.tasks.speech_to_text.crisperwhisper_backend",
+    "senselab.audio.tasks.speaker_diarization.pyannote_backend",
 )
 """Importable modules declaring tasks and backends in `senselab_core.kernel.declare.REGISTRY`, in declaration order."""
 
@@ -29,3 +31,20 @@ class SpeechToText:
     inputs = {"audio": Audio}
     outputs = {"transcript": Transcript}
     Params = SpeechToTextParams
+
+
+class DiarizeParams(TaskParams):
+    """Params of `diarize`: the speaker count when known (`num_speakers`) or its bounds, each at least 1."""
+
+    num_speakers: int | None = Field(default=None, ge=1)
+    min_speakers: int | None = Field(default=None, ge=1)
+    max_speakers: int | None = Field(default=None, ge=1)
+
+
+@task(name="diarize", version="1", kind="transform", registry=REGISTRY)
+class Diarize:
+    """Find who speaks when in mono speech: speaker turns as `Intervals`, labelled by speaker, ordered by start."""
+
+    inputs = {"audio": Audio}
+    outputs = {"turns": Intervals}
+    Params = DiarizeParams
