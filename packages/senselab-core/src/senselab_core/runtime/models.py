@@ -1,6 +1,7 @@
 """Model resolution and the weights manifest (design 4.3, P-4, P-16, P-37)."""
 
 import os
+import stat
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
@@ -33,7 +34,7 @@ class WeightsManifestError(ValueError):
 
 
 class ModelResolutionError(RuntimeError):
-    """A model reference cannot be bound to an identity: a missing or empty local path."""
+    """A model reference cannot be bound to an identity: a missing, empty or unhashable local path."""
 
 
 def parse_weights(text: str) -> Mapping[str, str]:
@@ -89,6 +90,7 @@ def verify_model(model: ResolvedModel, path: Path) -> None:
     Raises:
         ValueError: if `model` is not a url model.
         WeightsMismatch: if the bytes do not hash to the declared value.
+        ModelResolutionError: for a directory entry `_files_under` refuses.
     """
     if model.ref.source != "url":
         raise ValueError(f"verify_model checks url models, got {model.ref.source}")
@@ -99,31 +101,64 @@ def verify_model(model: ResolvedModel, path: Path) -> None:
 
 
 def _files_under(path: Path) -> list[Path]:
-    return sorted(Path(d) / f for d, _, names in os.walk(path) for f in names)
+    """Return every regular file reachable under the directory `path`, sorted, named by where it sits.
+
+    Symlinks to files and to directories are followed; a file is named by its path under `path`, links unresolved.
+
+    Raises:
+        ModelResolutionError: for an entry that is neither a regular file nor a directory (FIFO, socket,
+            device), a dangling symlink, or a directory symlink that leads back to a directory holding it.
+    """
+    files: list[Path] = []
+
+    def walk(directory: Path, holding: frozenset[tuple[int, int]]) -> None:
+        for entry in sorted(os.scandir(directory), key=lambda e: e.name):
+            here = Path(entry.path)
+            try:
+                st = entry.stat(follow_symlinks=True)
+            except FileNotFoundError:
+                raise ModelResolutionError(f"local model entry {here} is a dangling symlink") from None
+            if stat.S_ISREG(st.st_mode):
+                files.append(here)
+            elif stat.S_ISDIR(st.st_mode):
+                if (st.st_dev, st.st_ino) in holding:
+                    raise ModelResolutionError(f"local model entry {here} links back to a directory holding it")
+                walk(here, holding | {(st.st_dev, st.st_ino)})
+            else:
+                raise ModelResolutionError(f"local model entry {here} is not a regular file or a directory")
+
+    top = path.stat()
+    walk(path, frozenset({(top.st_dev, top.st_ino)}))
+    return sorted(files)
 
 
 def _local_identity(path: Path) -> str:
-    if path.is_file():
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        raise ModelResolutionError(f"local model path {path} does not exist") from None
+    if stat.S_ISREG(st.st_mode):
         return file_digest("file@1", path)
-    if path.is_dir():
-        files = _files_under(path)
-        if files:
-            return weights_identity(files, root=path)
-        raise ModelResolutionError(f"local model directory {path} holds no files")
-    raise ModelResolutionError(f"local model path {path} does not exist")
+    if not stat.S_ISDIR(st.st_mode):
+        raise ModelResolutionError(f"local model path {path} is not a regular file or a directory")
+    files = _files_under(path)
+    if files:
+        return weights_identity(files, root=path)
+    raise ModelResolutionError(f"local model directory {path} holds no files")
 
 
 def resolve(ref: ModelRef, *, token: str | None = None, resolver: Resolver = PROCESS_RESOLVER) -> ResolvedModel:
     """Bind `ref` to the identity of its weights.
 
     - hf: the 40-hex commit from `resolve_revision` through `resolver` (its errors propagate).
-    - local: the file's `file_digest`, or `weights_identity` of every file under the directory, rooted at it.
+    - local: the file's `file_digest`, or `weights_identity` of every regular file reachable under the directory
+      (symlinks followed), rooted at it. Every file counts, including editor and download metadata.
     - url: the hash declared in the reference (`url:<url>#sha256=<hex>`); nothing is downloaded.
       `verify_model` checks the downloaded bytes against it at load.
 
     Raises:
         ValueError: for a url reference with no declared hash.
-        ModelResolutionError: for a missing local path or an empty directory.
+        ModelResolutionError: for a missing local path, an empty directory, or an entry `_files_under` refuses.
     """
     if ref.source == "hf":
         return ResolvedModel(ref=ref, identity=resolve_revision(ref.id, ref.ref, token=token, resolver=resolver))

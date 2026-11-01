@@ -1,6 +1,10 @@
 """Tests for model resolution and the weights manifest."""
 
 import hashlib
+import itertools
+import os
+import signal
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -121,6 +125,70 @@ def test_resolve_local_errors_are_typed(tmp_path: Path) -> None:
         resolve(ModelRef.parse(f"local:{tmp_path / 'missing'}"))
     with pytest.raises(ModelResolutionError):
         resolve(ModelRef.parse(f"local:{tmp_path}"))
+
+
+def _plant_tree(root: Path, weights: bytes, linked: bool) -> None:
+    (root / "real").mkdir(parents=True)
+    (root / "real" / "w.bin").write_bytes(weights)
+    (root / "top.bin").write_bytes(b"T")
+    (root / "sub").symlink_to(root / "real") if linked else (root / "sub").mkdir()
+    if not linked:
+        (root / "sub" / "w.bin").write_bytes(weights)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(("linked_a", "linked_b"), list(itertools.product([False, True], repeat=2)))
+def test_local_identity_covers_files_under_directory_links(tmp_path: Path, linked_a: bool, linked_b: bool) -> None:
+    """Files reached through a directory symlink are hashed: two weight sets differing only there differ in identity."""
+    keys = {}
+    for name, weights, linked in [("a", b"A", linked_a), ("b", b"B", linked_b), ("c", b"A", linked_b)]:
+        _plant_tree(tmp_path / name, weights, linked)
+        keys[name] = resolve(ModelRef.parse(f"local:{tmp_path / name / 'sub'}")).identity
+        whole = resolve(ModelRef.parse(f"local:{tmp_path / name}")).identity
+        root = tmp_path / name
+        assert whole == weights_identity([root / "real" / "w.bin", root / "sub" / "w.bin", root / "top.bin"], root=root)
+    assert keys["a"] != keys["b"]
+    assert keys["a"] == keys["c"]
+
+
+def _plant_fifo(at: Path) -> None:
+    os.mkfifo(at)
+
+
+def _plant_device(at: Path) -> None:
+    at.symlink_to(os.devnull)
+
+
+def _plant_dangling(at: Path) -> None:
+    at.symlink_to(at.parent / "nowhere")
+
+
+def _plant_loop(at: Path) -> None:
+    at.symlink_to(at.parent)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("plant", [_plant_fifo, _plant_device, _plant_dangling, _plant_loop])
+@pytest.mark.parametrize("depth", [0, 1])
+@pytest.mark.parametrize("whole", [False, True])
+def test_local_identity_refuses_entries_that_are_not_regular_files(
+    tmp_path: Path, plant: Callable[[Path], None], depth: int, whole: bool
+) -> None:
+    """A FIFO, device, dangling link or looping directory link raises ModelResolutionError and never opens."""
+    model = tmp_path / "m"
+    where = model / "d" if depth else model
+    where.mkdir(parents=True)
+    (model / "w.bin").write_bytes(b"w")
+    plant(where / "odd")
+    target = where / "odd" if whole else model
+    previous = signal.signal(signal.SIGALRM, lambda *_: pytest.fail("resolve blocked opening a non-regular file"))
+    signal.alarm(5)
+    try:
+        with pytest.raises(ModelResolutionError):
+            resolve(ModelRef.parse(f"local:{target}"))
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 @pytest.mark.logic
