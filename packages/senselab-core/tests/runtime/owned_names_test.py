@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import pytest
 from senselab_core.runtime import fetch as fetch_module
 from senselab_core.runtime import storage as storage_module
-from senselab_core.runtime.locks import SharedFileLock
 
 
 def _foreign_uuid(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -20,18 +19,6 @@ def _failing_replace(monkeypatch: pytest.MonkeyPatch) -> None:
         raise OSError("replace refused")
 
     monkeypatch.setattr(os, "replace", refuse)
-
-
-@pytest.mark.logic
-def test_lock_release_refuses_a_name_that_is_not_a_sidecar(tmp_path: Path) -> None:
-    """A holder path that is not `<name>.heartbeat` or `<name>.holder` survives the lock's release."""
-    foreign = tmp_path / "notes.md"
-    lock = SharedFileLock(tmp_path / "resource")
-    with lock:
-        foreign.write_text("mine")
-        lock._holder_path = foreign
-    assert foreign.read_text() == "mine"
-    assert not (tmp_path / "resource.heartbeat").exists()
 
 
 @pytest.mark.logic

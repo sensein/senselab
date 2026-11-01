@@ -1,637 +1,329 @@
-"""A file lock that several users can share on one directory."""
+"""A lease by `O_EXCL` link and rename, one planted contract per invariant ADR-003 states."""
 
-import getpass
+import errno
 import json
 import os
 import stat
-from multiprocessing.synchronize import Barrier as MpBarrier
-from multiprocessing.synchronize import Event as MpEvent
+import threading
+import time
 from pathlib import Path
 
 import pytest
-from senselab_core.runtime.locks import LOCK_DIR_MODE, LOCK_FILE_MODE, SharedFileLock, lock_holder
+from senselab_core.runtime import storage as storage_module
+from senselab_core.runtime.locks import Lease, LeaseTimeout, LeaseUnavailable
+
+pytestmark = pytest.mark.logic
+
+JOIN_S = 10.0
+OLD = 10**9
 
 
-def _lock_file(resource: Path) -> Path:
-    """Mirror SharedFileLock's own derivation: append, not `Path.with_suffix`.
-
-    Kept as a named helper (rather than inlined `Path(str(resource) + ".lock")` at each
-    call site) so a future change to that derivation shows up as one helper edit, not a
-    dozen silently-stale call sites.
-    """
-    return Path(str(resource) + ".lock")
+def _lease_file(resource: Path) -> Path:
+    return Path(str(resource) + ".lease")
 
 
-def _heartbeat_file(resource: Path) -> Path:
-    """Mirror SharedFileLock's own derivation: append, not `Path.with_suffix`."""
-    return Path(str(resource) + ".heartbeat")
+def _plant_lease(resource: Path, *, at: float = OLD) -> Path:
+    lease = _lease_file(resource)
+    lease.write_text(json.dumps({"user": "u", "host": "h", "pid": 1}))
+    os.utime(lease, (at, at))
+    return lease
 
 
-def _holder_file(resource: Path) -> Path:
-    """Mirror SharedFileLock's own derivation: append, not `Path.with_suffix`.
-
-    Holder identity (user/host/pid/token) lives here, never in `.lock` itself.
-    """
-    return Path(str(resource) + ".holder")
+def _join(threads: list[threading.Thread]) -> None:
+    for thread in threads:
+        thread.join(JOIN_S)
+    assert not any(t.is_alive() for t in threads), "a thread outlived its bound"
 
 
-@pytest.mark.logic
-def test_lock_and_heartbeat_files_are_group_writable(tmp_path: Path) -> None:
-    """A second user must be able to refresh the heartbeat and break a stale lock.
+def _snapshot(path: Path) -> tuple[bytes, int, int]:
+    st = os.lstat(path)
+    return path.read_bytes(), stat.S_IMODE(st.st_mode), st.st_mtime_ns
 
-    Created under the default umask these land at 0644, so user B's heartbeat
-    touch fails — and because both old implementations swallowed that error, B's
-    heartbeat silently stopped refreshing and a third user read it as stale and
-    broke a live lock.
-    """
+
+# -- taken by an O_EXCL link: one taker wins --
+
+
+def test_of_concurrent_takers_exactly_one_holds_the_lease(tmp_path: Path) -> None:
+    """Eight takers start together with no wait; exactly one holds the lease and the rest time out."""
     resource = tmp_path / "thing"
-    with SharedFileLock(resource):
-        lock_file = _lock_file(resource)
-        heartbeat = _heartbeat_file(resource)
-        holder = _holder_file(resource)
-        assert stat.S_IMODE(lock_file.stat().st_mode) & 0o060 == 0o060
-        assert stat.S_IMODE(heartbeat.stat().st_mode) & 0o060 == 0o060
-        assert stat.S_IMODE(holder.stat().st_mode) & 0o060 == 0o060
+    takers = 8
+    barrier, attempted = threading.Barrier(takers), threading.Barrier(takers)
+    outcomes: list[str] = []
+
+    def take() -> None:
+        barrier.wait(JOIN_S)
+        try:
+            with Lease(resource, timeout=0):
+                outcomes.append("held")
+                attempted.wait(JOIN_S)
+                return
+        except LeaseTimeout:
+            outcomes.append("timeout")
+        attempted.wait(JOIN_S)
+
+    threads = [threading.Thread(target=take) for _ in range(takers)]
+    for thread in threads:
+        thread.start()
+    _join(threads)
+    assert sorted(outcomes) == ["held"] + ["timeout"] * (takers - 1)
 
 
-@pytest.mark.logic
-def test_lock_directory_is_setgid_and_group_writable(tmp_path: Path) -> None:
-    """Group ownership must propagate to files the next user creates."""
-    resource = tmp_path / "nested" / "thing"
-    with SharedFileLock(resource):
-        mode = stat.S_IMODE(resource.parent.stat().st_mode)
-        assert mode & stat.S_ISGID, "directory should be setgid"
-        assert mode & 0o070 == 0o070, "directory should be group rwx"
-
-
-@pytest.mark.logic
-def test_a_caller_directory_is_not_chmodded_when_unmanaged(tmp_path: Path) -> None:
-    """A lock over a caller-supplied path must not touch that directory's permissions.
-
-    Finding #8 of the #550 review: locking a FileRef in a caller's own private directory
-    chmodded that directory from 0700 to 0o2775 -- setgid and group-write, and also
-    other-read and other-execute, so a directory its owner deliberately made private became
-    world-traversable as a side effect of dropping a ``.lock`` in it. (A directory owned by
-    someone *else* was never at risk: chmod returns EPERM there and ``_ensure_dir`` swallows
-    it. The victim is the invoking user.) With ``manage_dir_mode=False`` the directory is
-    left exactly as found.
-    """
-    data_dir = tmp_path / "restricted"
-    data_dir.mkdir()
-    os.chmod(data_dir, 0o700)  # pin an exact, non-shared mode regardless of umask
-    resource = data_dir / "input.wav"
-    resource.write_bytes(b"x")
-
-    before = stat.S_IMODE(data_dir.stat().st_mode)
-    with SharedFileLock(resource, manage_dir_mode=False):
-        pass
-    after = stat.S_IMODE(data_dir.stat().st_mode)
-
-    assert after == before == 0o700, f"caller dir mode changed: {oct(before)} -> {oct(after)}"
-    assert not (after & stat.S_ISGID), "setgid must not be set on a caller-owned directory"
-
-
-@pytest.mark.logic
-def test_holder_identity_is_recorded_while_held(tmp_path: Path) -> None:
-    """A takeover must be able to name who it displaced.
-
-    On a cluster the holder is often on another node, so 'stale lock detected'
-    without a user, host and pid gives nobody enough to check whether that job
-    actually died.
-    """
+def test_a_waiter_takes_the_lease_once_it_is_released_and_breaks_nothing(tmp_path: Path) -> None:
+    """A waiter blocks while a live lease is held, takes it after the release, and records no broken lease."""
     resource = tmp_path / "thing"
-    with SharedFileLock(resource):
-        holder = lock_holder(_holder_file(resource))
-        assert holder is not None
-        assert holder["pid"] == os.getpid()
-        assert holder["user"] and holder["host"]
-        assert isinstance(holder["taken_at"], (int, float))
+    held, release = threading.Event(), threading.Event()
 
+    def hold() -> None:
+        with Lease(resource, timeout=1):
+            held.set()
+            release.wait(JOIN_S)
 
-@pytest.mark.logic
-def test_holder_is_cleared_on_release(tmp_path: Path) -> None:
-    """After release, lock_holder must read as unheld."""
-    resource = tmp_path / "thing"
-    with SharedFileLock(resource):
-        pass
-    assert lock_holder(_holder_file(resource)) is None
-
-
-@pytest.mark.logic
-def test_a_stale_heartbeat_is_taken_over(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """A holder that died must not block waiters until timeout.
-
-    This is what subprocess_venv's plain FileLock lacked: a crashed install held
-    the lock for the full 600s and then raised, rather than being detected as
-    dead and taken over.
-    """
-    import logging
-
-    resource = tmp_path / "thing"
-    holder_file = _holder_file(resource)
-    heartbeat = _heartbeat_file(resource)
-    resource.parent.mkdir(parents=True, exist_ok=True)
-    holder_file.write_text(json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": 0}))
-    heartbeat.touch()
-    os.utime(heartbeat, (0, 0))  # aged, not slept
-
-    with caplog.at_level(logging.WARNING):
-        with SharedFileLock(resource, timeout=1.0, stale_after=60.0):
-            holder = lock_holder(holder_file)
-            assert holder is not None
-            assert holder["pid"] == os.getpid()
-    message = " ".join(r.message for r in caplog.records)
-    assert "alice" in message and "node1234" in message and "4211" in message
-
-
-@pytest.mark.logic
-def test_a_fresh_heartbeat_is_not_taken_over(tmp_path: Path) -> None:
-    """A live holder must be waited for, not displaced.
-
-    The mirror of the test above, and the one that matters more: breaking a live
-    lock produces exactly the concurrent clobber the lock exists to prevent.
-    """
-    resource = tmp_path / "thing"
-    heartbeat = _heartbeat_file(resource)
-    resource.parent.mkdir(parents=True, exist_ok=True)
-
-    with SharedFileLock(resource):
-        # Held by us; a second acquisition with a short timeout must fail rather
-        # than break in, because the heartbeat is current.
-        with pytest.raises(TimeoutError):
-            with SharedFileLock(resource, timeout=0.5, stale_after=3600.0):
-                pass
-    assert heartbeat.exists() is False
-
-
-@pytest.mark.logic
-def test_a_live_holder_with_a_stale_heartbeat_is_not_displaced(tmp_path: Path) -> None:
-    """A wait that times out against a held flock never breaks the lock.
-
-    Timing out proves the OS-level flock was held
-    continuously for the entire wait, which a crashed process cannot do (the
-    kernel drops its flock the instant it exits). This forces exactly that
-    branch against a holder whose heartbeat has gone stale independently of
-    its still-live flock -- e.g. its heartbeat thread died or was starved of
-    scheduling, which is exactly what ``_heartbeat_loop``'s bare
-    ``except OSError`` cannot see. A second acquirer must still raise
-    ``TimeoutError`` naming the holder rather than unlinking and taking over:
-    doing so would hand it a lock on a fresh inode while the first holder
-    still holds the ``flock`` on the orphaned one, so both would believe they
-    hold the lock -- the exact clobber this class exists to prevent.
-    """
-    resource = tmp_path / "thing"
-    heartbeat = _heartbeat_file(resource)
-
-    with SharedFileLock(resource):
-        # The flock is genuinely held (by us, in this process) for the whole
-        # test below, but age the heartbeat file to simulate its refresh
-        # thread having stalled or died independently of the work it guards.
-        os.utime(heartbeat, (0, 0))
-        with pytest.raises(TimeoutError) as excinfo:
-            with SharedFileLock(resource, timeout=0.5, stale_after=1.0):
-                pass  # pragma: no cover - must not be reached
-        message = str(excinfo.value)
-        assert str(os.getpid()) in message
-        assert getpass.getuser() in message
-
-
-@pytest.mark.logic
-def test_chmod_failure_does_not_break_the_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """On a shared tree the file may belong to someone else.
-
-    Its mode is already correct in that case, so a failed chmod must be ignored —
-    raising would break precisely the multi-user scenario this class exists for.
-    """
-
-    def _boom(*_args: object, **_kwargs: object) -> None:
-        raise PermissionError("not the owner")
-
-    monkeypatch.setattr(os, "chmod", _boom)
-    with SharedFileLock(tmp_path / "thing"):
-        pass  # must not raise
-
-
-@pytest.mark.logic
-def test_dotted_resource_names_get_distinct_lock_files(tmp_path: Path) -> None:
-    """Two resources differing only after a dot must never share a lock file.
-
-    `Path.with_suffix(".lock")` replaces everything from the *last* dot onward, so two
-    distinct resources like two revisions of the same model --
-    "org--model--v1.5--main" and "org--model--v1.6--main" -- both reduced to the
-    identical "org--model--v1.lock" under that derivation, silently merging their
-    locks. This forces exactly that case: nesting locks on both resources must succeed
-    immediately (append-based derivation makes them different files, so there is no
-    contention), which fails against the old `with_suffix` derivation because the
-    second, mistakenly-identical acquire blocks until its own short timeout and then
-    raises.
-    """
-    a = tmp_path / "org--model--v1.5--main"
-    b = tmp_path / "org--model--v1.6--main"
-    with SharedFileLock(a):
-        with SharedFileLock(b, timeout=0.5):
-            locks_while_both_held = sorted(p.name for p in tmp_path.glob("*.lock"))
-    assert locks_while_both_held == [
-        "org--model--v1.5--main.lock",
-        "org--model--v1.6--main.lock",
-    ]
-
-
-@pytest.mark.logic
-def test_lock_holder_returns_none_for_a_missing_or_junk_file(tmp_path: Path) -> None:
-    """A partially written or corrupt lock file must read as unheld, not crash."""
-    assert lock_holder(tmp_path / "nope.lock") is None
-    junk = tmp_path / "junk.lock"
-    junk.write_text("not json")
-    assert lock_holder(junk) is None
-
-
-def _hold(path: str, seconds: float, acquired: MpEvent) -> None:
-    """Acquire the lock on ``path``, signal readiness, then hold it for ``seconds``.
-
-    Module-scoped so ``multiprocessing``'s ``spawn`` context can pickle it.
-    ``spawn`` re-imports the interpreter and this module from scratch, which
-    under load can itself take longer than a fixed sleep would assume — hence
-    the explicit ``acquired`` handshake instead of a timed guess by the parent.
-
-    Args:
-        path: String form of the resource path (Path is not always picklable
-            across the spawn boundary depending on platform).
-        seconds: How long to sleep while holding the lock, after signaling.
-        acquired: Set once the lock is actually held, so the parent can wait
-            on a real event instead of guessing how long spawn + import takes.
-    """
-    from senselab_core.runtime.locks import SharedFileLock
-
-    with SharedFileLock(Path(path)):
-        acquired.set()
-        import time
-
-        time.sleep(seconds)
-
-
-@pytest.mark.logic
-def test_a_second_process_waits_rather_than_proceeding(tmp_path: Path) -> None:
-    """Two live processes must serialise, not interleave.
-
-    Every other test here is single-process and could pass against a lock that
-    does nothing. This is the one that cannot.
-
-    The child signals an ``Event`` right after it acquires, so the parent times
-    its own acquire attempt from a real handshake rather than a fixed sleep —
-    under load, a ``spawn``-started child re-importing the interpreter and this
-    module can take much longer than any fixed guess to reach the acquire.
-    """
-    import multiprocessing as mp
-    import time
-
-    resource = tmp_path / "thing"
-    ctx = mp.get_context("spawn")
-    acquired = ctx.Event()
-
-    proc = ctx.Process(target=_hold, args=(str(resource), 2.0, acquired))
-    proc.start()
-    signaled = acquired.wait(timeout=30)
-    assert signaled, "child never acquired the lock within 30s"
+    holder = threading.Thread(target=hold)
+    holder.start()
+    assert held.wait(JOIN_S)
+    threading.Timer(0.3, release.set).start()
     started = time.monotonic()
-    with SharedFileLock(resource, timeout=10.0):
+    with Lease(resource, timeout=5) as waiter:
         waited = time.monotonic() - started
-    proc.join(timeout=10)
-    assert waited > 0.5, f"second acquirer did not wait (waited {waited:.2f}s)"
+        assert waiter.owns() and waiter.broke == [] and waiter.set_aside == []
+    _join([holder])
+    assert waited >= 0.2
 
 
-@pytest.mark.logic
-def test_a_normal_handoff_after_waiting_is_not_logged_as_a_stale_takeover(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A second acquirer that waited for a holder which then exited cleanly must not treat that as stale.
+def test_a_link_whose_reply_is_lost_still_takes_the_lease(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A link made but reported as failed (a lost NFS reply) is judged by the link count: the lease is held."""
+    real_link = os.link
 
-    Reproduces the ORCD collision in
-    specs/20260817-triage-workflow-dag/benchmarks/orcd-scheduling-2026-09-08.md: the holder
-    identity a waiter reads is captured *before* its (possibly long) blocking acquire, so
-    once the wait resolves via a normal ``__exit__`` -- which clears the heartbeat and lock
-    content before releasing the flock -- the old snapshot's heartbeat looks gone. Before the
-    fix, that made every ordinary contended-then-succeeded handoff log and perform a "stale
-    lock" takeover, even though the previous holder had just finished normally.
-    """
-    import logging
-    import multiprocessing as mp
-    import time
+    def link(*args: object, **kwargs: object) -> None:
+        real_link(*args, **kwargs)  # type: ignore[arg-type]
+        raise OSError(errno.EIO, "reply lost")
 
-    resource = tmp_path / "thing"
-    ctx = mp.get_context("spawn")
-    acquired = ctx.Event()
-    proc = ctx.Process(target=_hold, args=(str(resource), 2.0, acquired))
-    proc.start()
-    try:
-        assert acquired.wait(timeout=30), "child never acquired the lock within 30s"
-        started = time.monotonic()
-        with caplog.at_level(logging.WARNING):
-            with SharedFileLock(resource, timeout=10.0):
-                pass
-        waited = time.monotonic() - started
-        assert waited > 0.5, f"parent did not actually wait for the child (waited {waited:.2f}s)"
-    finally:
-        proc.join(timeout=10)
-    assert not any("Stale lock" in r.message for r in caplog.records), caplog.text
+    monkeypatch.setattr(os, "link", link)
+    with Lease(tmp_path / "thing", timeout=0) as lease:
+        assert lease.owns()
+    assert list(tmp_path.iterdir()) == []
 
 
-@pytest.mark.logic
-def test_took_over_names_an_uncontended_acquire_over_a_leftover_identity(tmp_path: Path) -> None:
-    """``took_over`` is true only after an uncontended acquire over a holder identity left on disk."""
-    import multiprocessing as mp
+def test_the_holder_identity_is_whole_whenever_the_lease_exists(tmp_path: Path) -> None:
+    """The identity is written before the link, so a reader racing repeated takes never sees a partial one."""
+    resource, lease_file = tmp_path / "thing", _lease_file(tmp_path / "thing")
+    done = threading.Event()
 
-    resource = tmp_path / "thing"
-    resource.parent.mkdir(parents=True, exist_ok=True)
-    lock = SharedFileLock(resource, timeout=1.0)
-    assert lock.took_over is False
-    with lock:
-        assert lock.took_over is False
-    _holder_file(resource).write_text(json.dumps({"user": "u", "host": "h", "pid": 1, "taken_at": 0}))
-    heartbeat = _heartbeat_file(resource)
-    heartbeat.touch()
-    now = os.path.getmtime(heartbeat)
-    os.utime(heartbeat, (now - 10, now - 10))
-    with lock:
-        assert lock.took_over is True
-    ctx = mp.get_context("spawn")
-    acquired = ctx.Event()
-    proc = ctx.Process(target=_hold, args=(str(resource), 2.0, acquired))
-    proc.start()
-    try:
-        assert acquired.wait(timeout=30)
-        with SharedFileLock(resource, timeout=10.0) as waiter:
-            assert waiter.took_over is False
-    finally:
-        proc.join(timeout=10)
+    def churn() -> None:
+        try:
+            for _ in range(300):
+                with Lease(resource, timeout=5):
+                    pass
+        finally:
+            done.set()
 
-
-@pytest.mark.logic
-def test_a_holder_without_a_heartbeat_yet_is_not_taken_over(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """A holder that has just acquired and not yet written a heartbeat must not be judged stale.
-
-    Manufactures the exact state a missing heartbeat produces at the instant of acquisition:
-    a legible holder identity with a recent ``taken_at`` and no ``.heartbeat`` file at all.
-    Before the fix, a missing heartbeat read as ``float("inf")``, which is always greater than
-    ``stale_after`` -- so this holder would have been declared stale and taken over instantly.
-    """
-    import logging
-    import time
-
-    resource = tmp_path / "thing"
-    holder_file = _holder_file(resource)
-    heartbeat = _heartbeat_file(resource)
-    resource.parent.mkdir(parents=True, exist_ok=True)
-    holder_file.write_text(json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": time.time()}))
-    assert not heartbeat.exists()
-
-    with caplog.at_level(logging.WARNING):
-        with SharedFileLock(resource, stale_after=120.0, timeout=600.0):
-            pass
-    assert not any("Stale lock" in r.message for r in caplog.records), caplog.text
-
-
-@pytest.mark.logic
-def test_a_holder_mid_long_install_without_a_readable_heartbeat_is_not_taken_over(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A holder hundreds of seconds into a long install must not be judged stale merely for an unreadable heartbeat.
-
-    ``crisperwhisper`` cold builds measured 579.7-794.1s in
-    specs/20260817-triage-workflow-dag/benchmarks/orcd-scheduling-2026-09-08.md, far past the
-    120s ``stale_after``. This holder is 400s into acquiring the lock -- past ``stale_after``
-    but still well inside the 600s ``timeout`` this test configures -- with no heartbeat file
-    readable at all. The fallback must use ``taken_at`` against ``timeout``, not
-    ``stale_after``, or this legitimately-running holder is wrongly evicted.
-    """
-    import logging
-    import time
-
-    resource = tmp_path / "thing"
-    holder_file = _holder_file(resource)
-    heartbeat = _heartbeat_file(resource)
-    resource.parent.mkdir(parents=True, exist_ok=True)
-    holder_file.write_text(
-        json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": time.time() - 400})
-    )
-    assert not heartbeat.exists()
-
-    with caplog.at_level(logging.WARNING):
-        with SharedFileLock(resource, stale_after=120.0, timeout=600.0):
-            pass
-    assert not any("Stale lock" in r.message for r in caplog.records), caplog.text
-
-
-@pytest.mark.logic
-def test_a_holder_with_no_heartbeat_and_an_old_taken_at_is_eventually_taken_over(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """An unreadable heartbeat must not disable staleness detection outright.
-
-    Mirrors the test above but with ``taken_at`` past the ``timeout`` bound: this holder must
-    still be recognised as abandoned and taken over, or the fix would have simply turned off
-    staleness detection for any holder whose heartbeat cannot be read.
-    """
-    import logging
-    import time
-
-    resource = tmp_path / "thing"
-    holder_file = _holder_file(resource)
-    heartbeat = _heartbeat_file(resource)
-    resource.parent.mkdir(parents=True, exist_ok=True)
-    holder_file.write_text(
-        json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": time.time() - 700})
-    )
-    assert not heartbeat.exists()
-
-    with caplog.at_level(logging.WARNING):
-        with SharedFileLock(resource, stale_after=120.0, timeout=600.0):
-            holder = lock_holder(holder_file)
-            assert holder is not None
-            assert holder["pid"] == os.getpid()
-    message = " ".join(r.message for r in caplog.records)
-    assert "Stale lock" in message and "alice" in message and "node1234" in message and "4211" in message
-
-
-@pytest.mark.logic
-def test_heartbeat_is_refreshed_while_held(tmp_path: Path) -> None:
-    """The heartbeat file's mtime must keep advancing for the duration the lock is held.
-
-    Uses a short ``heartbeat_interval`` rather than sleeping through the real 30s default, so
-    this stays fast while still proving the background thread actually ticks more than once.
-    """
-    import time
-
-    resource = tmp_path / "thing"
-    heartbeat = _heartbeat_file(resource)
-    with SharedFileLock(resource, heartbeat_interval=0.05, stale_after=10.0):
-        first = heartbeat.stat().st_mtime
-        time.sleep(0.2)
-        second = heartbeat.stat().st_mtime
-    assert second > first, "heartbeat mtime did not advance while the lock was held"
-
-
-@pytest.mark.logic
-def test_timeout_tolerates_a_holder_without_taken_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A holder file senselab did not write must still raise TimeoutError, not KeyError.
-
-    Finding #7 of the #550 review: the Timeout branch read ``previous_holder["taken_at"]`` as a
-    bare subscript while every neighbour used ``.get()``, so a payload lacking that key made
-    ``__enter__`` raise ``KeyError`` — which no caller expects: the retry loops in
-    ensure_hf_model / ensure_venv / record_resolution catch only ``TimeoutError``, and
-    ``call_in_venv``'s FileRef locks catch nothing at all.
-
-    The reachable source is a hand-edited lock file, or a foreign ``<resource>.lock`` on the
-    FileRef path — *not* an older senselab, which never wrote such a payload (see the comment at
-    the fix). The fabricated holder below is therefore a stand-in for a hand-edited file.
-    """
-    import multiprocessing as mp
-
-    resource = tmp_path / "thing"
-    ctx = mp.get_context("spawn")
-    acquired = ctx.Event()
-    proc = ctx.Process(target=_hold, args=(str(resource), 3.0, acquired))
-    proc.start()
-    try:
-        assert acquired.wait(timeout=30), "child never acquired the lock within 30s"
-        # A hand-edited holder payload: legible JSON, correct shape, no `taken_at`.
-        monkeypatch.setattr(
-            "senselab_core.runtime.locks.lock_holder",
-            lambda *_a, **_k: {"user": "alice", "host": "node1", "pid": 4211},
-        )
-        with pytest.raises(TimeoutError):
-            with SharedFileLock(resource, timeout=0.5):
-                pass
-    finally:
-        proc.join(timeout=10)
-
-
-NFS_ENV = "SENSELAB_WORK_POOL_NFS_DIR"
-
-
-@pytest.mark.parametrize("where", ["local", "nfs"])
-@pytest.mark.logic
-def test_a_waiter_that_locked_the_released_file_does_not_share_the_lock(
-    where: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A waiter that opened a lock file which then left its name never ends up holding that stale inode.
-
-    On NFS a file unlinked while open is silly-renamed (`.nfsXXXX`) and keeps a link, so a waiter can lock an
-    inode no longer at the name while the next caller locks the new file there. `local` moves the lock file
-    away under the waiter between its open and its `flock`; `nfs` runs on the directory named by
-    `SENSELAB_WORK_POOL_NFS_DIR`.
-    """
-    import fcntl
-    import threading
-    import uuid
-
-    from senselab_core.runtime import locks as locks_module
-
-    if where == "nfs":
-        base = os.environ.get(NFS_ENV, "")
-        if not base:
-            pytest.skip(f"{NFS_ENV} is not set")
-        root = Path(base) / f"file-lock-race-{uuid.uuid4().hex[:12]}"
-        root.mkdir(parents=True)
-    else:
-        root = tmp_path
-    resource = root / "resource"
-    opened, released, holding, done = (threading.Event() for _ in range(4))
-    real_flock = fcntl.flock
-    waiter: list[threading.Thread] = []
-
-    def flock(fd: int, operation: int) -> None:
-        # The waiter's first poll: it has the old file open; move that file off the name and let the holder
-        # release before the waiter locks it.
-        if waiter and threading.current_thread() is waiter[0] and not opened.is_set():
-            lock_file = root / "resource.lock"
-            os.rename(lock_file, root / f".nfs{uuid.uuid4().hex[:12]}")
-            opened.set()
-            released.wait(10)
-        real_flock(fd, operation)
-
-    monkeypatch.setattr(locks_module.fcntl, "flock", flock)
-
-    def wait_then_hold() -> None:
-        with SharedFileLock(resource, timeout=10, manage_dir_mode=False):
-            holding.set()
-            done.wait(30)
-
-    try:
-        first = SharedFileLock(resource, timeout=5, manage_dir_mode=False)
-        first.__enter__()
-        waiter.append(threading.Thread(target=wait_then_hold))
-        waiter[0].start()
-        assert opened.wait(10)
-        first.__exit__(None, None, None)
-        released.set()
-        assert holding.wait(10)
-        third = SharedFileLock(resource, timeout=1, manage_dir_mode=False)
-        with pytest.raises(TimeoutError):
-            with third:
-                pytest.fail("a second holder entered while the waiter held the lock")
-    finally:
-        released.set()
-        done.set()
-        if waiter:
-            waiter[0].join(30)
-        if where == "nfs":
-            import shutil
-
-            shutil.rmtree(root, ignore_errors=True)
-
-
-def _rewrite_holder(resource: str, rounds: int, barrier: MpBarrier, done: MpEvent) -> None:
-    """Rewrite the holder identity `rounds` times, as repeated acquires do; module-scoped for spawn."""
-    lock = SharedFileLock(Path(resource), timeout=1.0)
-    barrier.wait(60)
-    for _ in range(rounds):
-        lock._write_holder()
-    done.set()
-
-
-@pytest.mark.logic
-def test_holder_identity_is_never_read_partially_written(tmp_path: Path) -> None:
-    """While another process rewrites the holder identity, a reader always sees a whole identity."""
-    import multiprocessing as mp
-
-    resource = tmp_path / "thing"
-    lock = SharedFileLock(resource, timeout=1.0)
-    lock._write_holder()
-    ctx = mp.get_context("spawn")
-    barrier, done = ctx.Barrier(2), ctx.Event()
-    writer = ctx.Process(target=_rewrite_holder, args=(str(resource), 3000, barrier, done))
+    writer = threading.Thread(target=churn)
     writer.start()
-    barrier.wait(60)
-    reads = torn = 0
+    reads = partial = 0
     while not done.is_set():
+        try:
+            data = lease_file.read_bytes()
+        except FileNotFoundError:
+            continue
         reads += 1
-        torn += lock_holder(_holder_file(resource)) is None
-    writer.join(60)
-    assert writer.exitcode == 0
-    assert reads > 0 and torn == 0, f"{torn} of {reads} reads saw no identity"
+        try:
+            record = json.loads(data)
+        except ValueError:
+            record = None
+        partial += not (isinstance(record, dict) and {"user", "host", "pid"} <= record.keys())
+    _join([writer])
+    assert partial == 0, f"{partial} of {reads} reads saw a partial identity"
 
 
-@pytest.mark.logic
-def test_heartbeat_age_uses_the_storage_clock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A local clock running ahead of the storage clock does not age a fresh heartbeat."""
-    import time
+# -- released by removing it --
 
+
+def test_release_removes_the_lease_and_leaves_nothing_behind(tmp_path: Path) -> None:
+    """After an uncontended take and release the directory is empty: no lease, no temporary, no clock."""
+    with Lease(tmp_path / "thing") as lease:
+        assert _lease_file(tmp_path / "thing").exists() and lease.owns()
+    assert list(tmp_path.iterdir()) == []
+    assert not lease.owns()
+
+
+def test_a_release_never_removes_a_lease_another_holder_took(tmp_path: Path) -> None:
+    """A holder whose lease was broken releases nothing: the new holder's lease stays and it still owns it."""
     resource = tmp_path / "thing"
-    lock = SharedFileLock(resource, timeout=1.0, stale_after=120.0)
-    with lock:
-        real = time.time
-        monkeypatch.setattr(time, "time", lambda: real() + 3600)
-        age = lock._heartbeat_age()
-    assert age is not None and age < 120.0
-    assert not Path(str(resource) + ".clock").exists()
+    first = Lease(resource, timeout=0)
+    first.__enter__()
+    os.utime(_lease_file(resource), (OLD, OLD))
+    with Lease(resource, timeout=1, stale_after=60) as second:
+        assert not first.owns() and second.owns()
+        first.__exit__(None, None, None)
+        assert second.owns()
 
 
-@pytest.mark.logic
-def test_lock_leaves_no_sidecars_after_release(tmp_path: Path) -> None:
-    """After a release, including one that read the heartbeat's age, no heartbeat, holder or clock sidecar remains."""
+# -- judged stale from its timestamp on the storage clock --
+
+
+def test_a_lease_older_than_stale_after_is_broken_and_taken(tmp_path: Path) -> None:
+    """A lease stamped long ago is renamed away and removed, and the taker holds a fresh one."""
     resource = tmp_path / "thing"
-    lock = SharedFileLock(resource, timeout=1.0)
-    with lock:
-        assert lock._heartbeat_age() is not None
-    assert [p.name for p in tmp_path.iterdir() if p.suffix in (".heartbeat", ".holder", ".clock")] == []
+    _plant_lease(resource)
+    with Lease(resource, timeout=1, stale_after=60) as lease:
+        assert lease.owns() and lease.broke == [_lease_file(resource)]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".clock"]
+
+
+def test_a_fresh_lease_is_broken_after_the_stale_bound_and_not_before(tmp_path: Path) -> None:
+    """A lease stamped now is waited on until its age passes `stale_after`, then broken."""
+    resource = tmp_path / "thing"
+    _plant_lease(resource, at=time.time())
+    started = time.monotonic()
+    with Lease(resource, timeout=10, stale_after=0.5) as lease:
+        waited = time.monotonic() - started
+        assert lease.broke == [_lease_file(resource)]
+    assert 0.3 <= waited < 5
+
+
+def test_staleness_is_read_on_the_storage_clock_not_the_local_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A local clock an hour ahead does not age a fresh lease; a storage clock an hour ahead does."""
+    resource = tmp_path / "thing"
+    real_time = time.time
+    with Lease(resource, timeout=0):
+        monkeypatch.setattr(time, "time", lambda: real_time() + 3600)
+        with pytest.raises(LeaseTimeout):
+            with Lease(resource, timeout=0.2, stale_after=60):
+                pass
+        monkeypatch.setattr(time, "time", real_time)
+        real_now = storage_module.StorageDir.fs_now
+        monkeypatch.setattr(storage_module.StorageDir, "fs_now", lambda self: real_now(self) + 3600)
+        with Lease(resource, timeout=1, stale_after=60) as breaker:
+            assert breaker.broke == [_lease_file(resource)]
+
+
+# -- a stale lease is broken by rename, so two breakers cannot both win --
+
+
+def test_a_breaker_that_judged_an_old_lease_never_removes_the_new_one(tmp_path: Path) -> None:
+    """When another breaker took the name between a judgement and its rename, the new lease is put back."""
+    resource = tmp_path / "thing"
+    planted = os.lstat(_plant_lease(resource))
+    late = Lease(resource, timeout=0, stale_after=60)
+    with Lease(resource, timeout=1, stale_after=60) as winner:
+        assert winner.broke
+        assert late._take_aside((planted.st_dev, planted.st_ino)) is False
+        assert winner.owns()
+    late._close()
+    assert [p.name for p in tmp_path.iterdir() if p.name != ".clock"] == []
+
+
+def test_concurrent_breakers_of_one_stale_lease_hold_it_one_at_a_time(tmp_path: Path) -> None:
+    """Eight takers break one stale lease together; the stale lease is broken once and holders never overlap."""
+    resource = tmp_path / "thing"
+    _plant_lease(resource)
+    takers = 8
+    barrier = threading.Barrier(takers)
+    lock = threading.Lock()
+    inside, most, broke = [0], [0], [0]
+
+    def take() -> None:
+        barrier.wait(JOIN_S)
+        with Lease(resource, timeout=5, stale_after=60) as lease:
+            with lock:
+                inside[0] += 1
+                most[0] = max(most[0], inside[0])
+                broke[0] += len(lease.broke)
+            time.sleep(0.02)
+            with lock:
+                inside[0] -= 1
+
+    threads = [threading.Thread(target=take) for _ in range(takers)]
+    for thread in threads:
+        thread.start()
+    _join(threads)
+    assert most[0] == 1 and broke[0] == 1
+
+
+# -- every wait is bounded --
+
+
+def test_a_wait_on_a_live_lease_ends_at_its_timeout(tmp_path: Path) -> None:
+    """A taker with a 0.3 s timeout against a live lease raises `LeaseTimeout` naming the holder, near 0.3 s."""
+    resource = tmp_path / "thing"
+    with Lease(resource, timeout=0) as holder:
+        started = time.monotonic()
+        with pytest.raises(LeaseTimeout, match=r"thing\.lease, held by .*'pid'"):
+            with Lease(resource, timeout=0.3, stale_after=3600):
+                pass
+        assert time.monotonic() - started < 2 and holder.owns()
+
+
+@pytest.mark.parametrize(("timeout", "stale_after"), [(-1.0, 60.0), (1.0, -1.0)])
+def test_a_negative_bound_is_refused(tmp_path: Path, timeout: float, stale_after: float) -> None:
+    """There is no unbounded wait: a negative timeout or stale bound is a `ValueError`."""
+    with pytest.raises(ValueError, match="not negative"):
+        Lease(tmp_path / "thing", timeout=timeout, stale_after=stale_after)
+
+
+# -- path safety under a storage root (2026-10-31 amendment) --
+
+
+@pytest.mark.parametrize("plant", ["symlink", "dangling", "directory", "fifo"])
+def test_a_wrong_kind_at_the_lease_name_is_moved_aside_and_its_target_untouched(tmp_path: Path, plant: str) -> None:
+    """A symlink, directory or fifo at the lease name is quarantined beside it; a symlink's target is not touched."""
+    root, victim = tmp_path / "root", tmp_path / "victim"
+    root.mkdir()
+    victim.mkdir()
+    (victim / "f").write_bytes(b"belongs to someone else")
+    before = _snapshot(victim / "f")
+    lease_file = _lease_file(root / "thing")
+    if plant == "symlink":
+        os.symlink(victim / "f", lease_file)
+    elif plant == "dangling":
+        os.symlink(victim / "created-outside", lease_file)
+    elif plant == "directory":
+        lease_file.mkdir()
+    else:
+        os.mkfifo(lease_file)
+    with Lease(root / "thing", timeout=1) as lease:
+        assert lease.owns() and len(lease.set_aside) == 1 and os.path.lexists(lease.set_aside[0])
+    assert _snapshot(victim / "f") == before and sorted(p.name for p in victim.iterdir()) == ["f"]
+
+
+def test_a_hard_link_at_the_lease_name_is_broken_by_name_and_its_file_untouched(tmp_path: Path) -> None:
+    """An old hard link at the lease name is renamed and unlinked; the file it shares keeps its bytes, mode and time."""
+    root, victim = tmp_path / "root", tmp_path / "victim"
+    root.mkdir()
+    victim.mkdir()
+    (victim / "f").write_bytes(b"belongs to someone else")
+    os.chmod(victim / "f", 0o600)
+    os.utime(victim / "f", (OLD, OLD))
+    before = _snapshot(victim / "f")
+    os.link(victim / "f", _lease_file(root / "thing"))
+    with Lease(root / "thing", timeout=1, stale_after=60) as lease:
+        assert lease.owns()
+    assert _snapshot(victim / "f") == before
+
+
+@pytest.mark.parametrize("umask", [0o000, 0o077])
+def test_the_lease_mode_is_set_through_its_descriptor_whatever_the_umask(tmp_path: Path, umask: int) -> None:
+    """The lease file has the mode the caller asks for under any umask."""
+    previous = os.umask(umask)
+    try:
+        with Lease(tmp_path / "thing", file_mode=0o660):
+            mode = stat.S_IMODE(os.lstat(_lease_file(tmp_path / "thing")).st_mode)
+    finally:
+        os.umask(previous)
+    assert mode == 0o660
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes in a read-only directory")
+def test_a_directory_that_refuses_the_lease_is_a_typed_error_naming_its_owner(tmp_path: Path) -> None:
+    """A lease that cannot be created is `LeaseUnavailable` naming the lease and who can fix the directory."""
+    root = tmp_path / "root"
+    root.mkdir()
+    os.chmod(root, 0o555)
+    try:
+        with pytest.raises(LeaseUnavailable, match=r"thing\.lease.*owned by"):
+            with Lease(root / "thing", timeout=1):
+                pass
+    finally:
+        os.chmod(root, 0o755)

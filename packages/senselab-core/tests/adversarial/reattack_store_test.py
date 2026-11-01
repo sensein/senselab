@@ -1,4 +1,4 @@
-"""H8c re-attack findings on the store, fetch, locks and run manifests (XS-1..XS-7).
+"""H8c re-attack findings on the store, fetch, leases and run manifests (XS-1..XS-7).
 
 The findings and their probes are in reviews/phase1-reattack/store.md.
 
@@ -420,51 +420,6 @@ def test_a_put_that_reports_success_is_served_by_the_next_get(tmp_path: Path, co
     assert report == {"same_identity": True, "served": {"a": [0.0, 1.0, 2.0, 3.0]}}
 
 
-# -- XS-6: took_over after a clean release --
-
-
-def probe_xs6(scratch: str, hold: str) -> dict[str, Any]:
-    """Hold the lock for `hold` seconds in one thread while another waits for it; report the waiter's took_over."""
-    from senselab_core.runtime.locks import SharedFileLock
-
-    resource = Path(scratch) / "thing"
-    acquired, release = threading.Event(), threading.Event()
-
-    def holder() -> None:
-        with SharedFileLock(resource, timeout=30):
-            acquired.set()
-            time.sleep(float(hold))
-        release.set()
-
-    thread = threading.Thread(target=holder)
-    thread.start()
-    assert acquired.wait(30)
-    with SharedFileLock(resource, timeout=30) as waiter:
-        waited = waiter.took_over
-    thread.join(30)
-    leftover = Path(str(resource) + ".holder")
-    leftover.write_text(json.dumps({"user": "u", "host": "h", "pid": 1, "taken_at": time.time()}))
-    Path(str(resource) + ".heartbeat").touch()
-    with SharedFileLock(resource, timeout=30) as taker:
-        crashed = taker.took_over
-    return {"after_clean_release": waited, "after_a_holder_that_never_released": crashed}
-
-
-@pytest.mark.logic
-def test_xs6_took_over_is_false_after_a_clean_release(tmp_path: Path) -> None:
-    """A waiter that gets the lock after a clean 0.3 s hold did not take over; a leftover holder is taken over."""
-    report = _bounded("probe_xs6", str(tmp_path), "0.3")
-    assert report == {"after_clean_release": False, "after_a_holder_that_never_released": True}
-
-
-@pytest.mark.contract
-@pytest.mark.parametrize("hold", ["0", "0.05", "0.3", "0.6", "1.2"])
-def test_took_over_names_only_a_holder_that_never_released_whatever_the_wait(tmp_path: Path, hold: str) -> None:
-    """For every hold time, a clean release is not a takeover and a leftover identity is."""
-    report = _bounded("probe_xs6", str(tmp_path), hold)
-    assert report == {"after_clean_release": False, "after_a_holder_that_never_released": True}
-
-
 # -- XS-7: run manifests: umask, run id, leftover temporaries --
 
 BAD_RUN_IDS = ("../../escaped", "..", ".", "", "a/b", "a\\b", "a\x00b", "/abs")
@@ -807,22 +762,22 @@ def test_every_storage_operation_on_a_planted_symlink_leaves_its_target_alone(tm
 
 # -- H-R40: every name a writer writes, planted with a symlink, a hard link, a directory or corrupt content --
 
-NAME_OPERATIONS = ("put", "get", "collect", "fetch", "record", "lock")
+NAME_OPERATIONS = ("put", "get", "collect", "fetch", "record", "lease")
 PLANTS = ("symlink", "hardlink", "directory", "corrupt")
-NAME_TYPED = {"", "WrongKindError", "ManifestConflictError", "LockTimeout", "LockUnavailable"}
+NAME_TYPED = {"", "WrongKindError", "ManifestConflictError", "LeaseTimeout", "LeaseUnavailable"}
 OLD = 10**9
 NAME_BOUND_S = 30.0
 
 
 def _run_named(op: str, root: Path) -> bool:
-    """Run `op` (the directory contract's operations, plus taking and releasing a lock) against `root`."""
-    if op != "lock":
+    """Run `op` (the directory contract's operations, plus taking and releasing a lease) against `root`."""
+    if op != "lease":
         return _run(op, root)
-    from senselab_core.runtime.locks import SharedFileLock
+    from senselab_core.runtime.locks import Lease
 
-    with SharedFileLock(root / "thing", timeout=5, heartbeat_interval=0.05, stale_after=0.5) as lock:
-        time.sleep(0.2)
-        return lock.owns()
+    root.mkdir(parents=True, exist_ok=True)
+    with Lease(root / "thing", timeout=5, stale_after=0.5) as lease:
+        return lease.owns()
 
 
 def _recording() -> list[Path]:
@@ -841,16 +796,16 @@ def _recording() -> list[Path]:
 
         setattr(StorageDir, method, recorded)
 
-    for method in ("open_new", "write_new", "write_atomically", "open_or_create"):
+    for method in ("open_new", "write_new", "write_atomically"):
         wrap(method, 0)
     wrap("symlink", 1)
     wrap("link", 2, 1)
     wrap("rename", 2, 1)
     real_now = StorageDir.fs_now
 
-    def now(self: StorageDir, name: str = ".clock") -> float:
-        written.append(Path(self.path) / name)
-        return real_now(self, name)
+    def now(self: StorageDir) -> float:
+        written.append(Path(self.path) / ".clock")
+        return real_now(self)
 
     StorageDir.fs_now = now  # type: ignore[method-assign]
     return written
@@ -875,7 +830,7 @@ def _names(op: str, scratch: Path, written: list[Path]) -> list[str]:
     real_root = root.resolve()
     rels = {Path(os.path.realpath(p.parent)).relative_to(real_root) / p.name for p in written}
     final = {Path(c).relative_to(root) / n for c, _, files in os.walk(root) for n in files}
-    clocks = {r.with_name(r.name.removesuffix(".lock") + ".clock") for r in rels if r.name.endswith(".lock")}
+    clocks = {r.with_name(".clock") for r in rels if r.name.endswith(".lease")}
     return sorted(str(r) for r in rels | final | clocks if not _ephemeral(r))
 
 
@@ -933,7 +888,7 @@ def probe_planted_names(scratch: str, op: str, plant: str) -> dict[str, Any]:
 @pytest.mark.parametrize("plant", PLANTS)
 @pytest.mark.parametrize("op", NAME_OPERATIONS)
 def test_no_written_name_is_written_through_or_wedged_by_a_planted_object(tmp_path: Path, op: str, plant: str) -> None:
-    """At every name the store, fetch, a lock or a run manifest writes, a planted object changes no victim.
+    """At every name the store, fetch, a lease or a run manifest writes, a planted object changes no victim.
 
     No victim's bytes, mode or mtime change, nothing is made outside the root, and each outcome is a completed
     operation or a typed error within the bound.
@@ -948,9 +903,9 @@ def test_no_written_name_is_written_through_or_wedged_by_a_planted_object(tmp_pa
         assert report["seconds"] < NAME_BOUND_S, report
 
 
-# -- the H9b review's C-1 and I-1..I-4, on the run manifests, the lock and fetch --
+# -- the H9b review's C-1 and I-1..I-4, on the run manifests, the lease and fetch --
 
-SIDECARS = ("resolutions@2.json.lock", "resolutions@2.json.holder", "resolutions@2.json.heartbeat")
+LEASE = "resolutions@2.json.lease"
 
 
 def probe_record_with_plant(scratch: str, name: str, plant: str) -> dict[str, Any]:
@@ -1007,18 +962,18 @@ def probe_record_with_plant(scratch: str, name: str, plant: str) -> dict[str, An
 
 @pytest.mark.logic
 @pytest.mark.parametrize("plant", ["symlink", "dangling"])
-@pytest.mark.parametrize("name", SIDECARS)
-def test_c1_lock_files_of_a_run_manifest_never_follow_a_planted_symlink(tmp_path: Path, name: str, plant: str) -> None:
-    """A symlink at the lock, holder or heartbeat of a run manifest is neither chmodded nor created through."""
+@pytest.mark.parametrize("name", [LEASE, ".clock"])
+def test_c1_the_lease_of_a_run_manifest_never_follows_a_planted_symlink(tmp_path: Path, name: str, plant: str) -> None:
+    """A symlink at a run manifest's lease or clock is neither chmodded nor created through."""
     report = _bounded("probe_record_with_plant", str(tmp_path), name, plant)
     assert report["error"] == "" and report["recorded"]
     assert report["victim_unchanged"] and report["victim"] == ["f"], report
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("name", [*SIDECARS, ".clock"])
-def test_i1_a_hard_link_at_a_lock_file_or_clock_leaves_its_target_alone(tmp_path: Path, name: str) -> None:
-    """A hard link at a lock file, sidecar or clock: the file it shares is not chmodded, truncated or re-stamped."""
+@pytest.mark.parametrize("name", [LEASE, ".clock"])
+def test_i1_a_hard_link_at_a_lease_or_clock_leaves_its_target_alone(tmp_path: Path, name: str) -> None:
+    """A hard link at a lease or clock: the file it shares is not chmodded, truncated or re-stamped."""
     report = _bounded("probe_record_with_plant", str(tmp_path), name, "hardlink")
     assert report["error"] == "" and report["recorded"]
     assert report["victim_unchanged"], report
@@ -1026,56 +981,18 @@ def test_i1_a_hard_link_at_a_lock_file_or_clock_leaves_its_target_alone(tmp_path
 
 @pytest.mark.logic
 @pytest.mark.parametrize("content", ["{}", "garbage", " ", '{"user": "u", "host": "h", "pid": 1}'])
-def test_i2_a_corrupt_holder_never_hangs_record_resolution(tmp_path: Path, content: str) -> None:
-    """A holder that is not a whole identity is moved aside and, once stale, the resolution is recorded."""
-    report = _bounded("probe_record_with_plant", str(tmp_path), "resolutions@2.json.holder", content)
+def test_i2_a_stale_lease_whatever_its_content_never_hangs_record_resolution(tmp_path: Path, content: str) -> None:
+    """A stale lease is broken whatever it holds, and the resolution is recorded within the bound."""
+    report = _bounded("probe_record_with_plant", str(tmp_path), LEASE, content)
     assert report["error"] == "" and report["recorded"] and report["seconds"] < NAME_BOUND_S, report
 
 
 @pytest.mark.logic
 @pytest.mark.parametrize("plant", ["directory", "fifo", "symlink"])
-@pytest.mark.parametrize("name", ["resolutions@2.json.lock", "resolutions@2.json.holder"])
-def test_i3_a_wrong_kind_at_a_lock_name_is_set_aside(tmp_path: Path, name: str, plant: str) -> None:
-    """A directory, fifo or symlink at the lock or holder is moved aside; the resolution is recorded, no OSError."""
-    report = _bounded("probe_record_with_plant", str(tmp_path), name, plant)
+def test_i3_a_wrong_kind_at_the_lease_name_is_set_aside(tmp_path: Path, plant: str) -> None:
+    """A directory, fifo or symlink at the lease is moved aside; the resolution is recorded, no OSError."""
+    report = _bounded("probe_record_with_plant", str(tmp_path), LEASE, plant)
     assert report["error"] == "" and report["recorded"], report
-
-
-def probe_fresh_corrupt_holder(scratch: str, content: str, stale_after: str, timeout: str) -> dict[str, Any]:
-    """Plant a fresh corrupt holder and take the lock; report how long it took, the outcome and what was set aside."""
-    from senselab_core.runtime.locks import SharedFileLock
-
-    resource = Path(scratch) / "thing"
-    Path(str(resource) + ".holder").write_bytes(content.encode())
-    lock = SharedFileLock(resource, stale_after=float(stale_after), timeout=float(timeout))
-    started = time.monotonic()
-    try:
-        with lock:
-            return {
-                "error": "",
-                "seconds": time.monotonic() - started,
-                "took_over": lock.took_over,
-                "set_aside": len(lock.set_aside),
-                "owns": lock.owns(),
-            }
-    except Exception as err:  # noqa: BLE001
-        return {"error": type(err).__name__, "seconds": time.monotonic() - started, "is_timeout": True}
-
-
-@pytest.mark.logic
-@pytest.mark.parametrize("content", ["{}", "garbage", ""])
-def test_i2_a_fresh_corrupt_holder_is_taken_after_the_stale_bound(tmp_path: Path, content: str) -> None:
-    """A fresh corrupt holder is moved aside and the lock taken once its age passes `stale_after`, not before."""
-    report = _bounded("probe_fresh_corrupt_holder", str(tmp_path), content, "0.5", "10")
-    assert report["error"] == "" and report["took_over"] and report["set_aside"] == 1 and report["owns"], report
-    assert 0.3 <= report["seconds"] < 10, report
-
-
-@pytest.mark.logic
-def test_i2_a_wait_on_a_corrupt_holder_is_bounded_and_typed(tmp_path: Path) -> None:
-    """With `timeout` below the stale bound, the wait ends in `LockTimeout` at the timeout."""
-    report = _bounded("probe_fresh_corrupt_holder", str(tmp_path), "{}", "60", "0.5")
-    assert report["error"] == "LockTimeout" and report["seconds"] < 5, report
 
 
 def probe_i4_swap_after_link(scratch: str) -> dict[str, Any]:
@@ -1147,13 +1064,13 @@ def test_i1_a_hard_link_at_a_store_or_cache_clock_leaves_its_target_alone(tmp_pa
     assert _bounded("probe_clock_hard_link", str(tmp_path), op) == {"error": "", "victim_unchanged": True}
 
 
-UNOPENABLE_NAMES = ("resolutions@2.json.lock", "resolutions@2.json.holder", "resolutions@2.json")
+UNOPENABLE_NAMES = (LEASE, "resolutions@2.json")
 
 
 @pytest.mark.logic
 @pytest.mark.skipif(os.geteuid() == 0, reason="root opens a 0o000 file")
 @pytest.mark.parametrize("name", UNOPENABLE_NAMES)
-def test_n1_an_unopenable_file_at_a_lock_or_manifest_name_never_wedges_record_resolution(
+def test_n1_an_unopenable_file_at_a_lease_or_manifest_name_never_wedges_record_resolution(
     tmp_path: Path, name: str
 ) -> None:
     """A regular file this user cannot open, as another user's 0o600 file is, is moved aside or replaced."""
@@ -1163,91 +1080,8 @@ def test_n1_an_unopenable_file_at_a_lock_or_manifest_name_never_wedges_record_re
 
 @pytest.mark.logic
 @pytest.mark.skipif(os.geteuid() == 0, reason="root renames in a read-only directory")
-def test_n1_an_unopenable_lock_that_cannot_be_moved_is_a_typed_error_naming_its_remedy(tmp_path: Path) -> None:
-    """When the run directory refuses the move too, the error is `LockUnavailable` naming the lock and its owner."""
-    report = _bounded("probe_record_with_plant", str(tmp_path), "resolutions@2.json.lock", "unmovable")
-    assert report["error"] == "LockUnavailable", report
-    assert "resolutions@2.json.lock" in report["message"] and "owned by" in report["message"], report
-
-
-def probe_heartbeat_after_release(scratch: str) -> dict[str, Any]:
-    """Hold a lock with a 10 ms heartbeat, release it, then count heartbeat writes and open descriptors after."""
-    from senselab_core.runtime.locks import SharedFileLock
-    from senselab_core.runtime.storage import StorageDir
-
-    resource = Path(scratch) / "thing"
-    writes: list[str] = []
-    real = StorageDir.write_atomically
-
-    def counted(self: StorageDir, name: str, data: bytes, **kwargs: Any) -> Any:  # noqa: ANN401
-        writes.append(name)
-        return real(self, name, data, **kwargs)
-
-    StorageDir.write_atomically = counted  # type: ignore[method-assign]
-    before = len(os.listdir("/dev/fd"))
-    lock = SharedFileLock(resource, heartbeat_interval=0.01, timeout=5)
-    with lock:
-        time.sleep(0.1)
-    released = len(writes)
-    time.sleep(0.3)
-    return {
-        "beats_while_held": writes.count("thing.heartbeat"),
-        "writes_after_release": len(writes) - released,
-        "heartbeat_left": os.path.lexists(str(resource) + ".heartbeat"),
-        "fds_leaked": len(os.listdir("/dev/fd")) - before,
-        "threads": [t.name for t in threading.enumerate() if t is not threading.main_thread()],
-    }
-
-
-@pytest.mark.logic
-def test_n2_nothing_is_written_and_no_descriptor_is_left_after_release(tmp_path: Path) -> None:
-    """With a 10 ms heartbeat, release stops the thread: no heartbeat after it, no heartbeat file, no leaked fd."""
-    report = _bounded("probe_heartbeat_after_release", str(tmp_path))
-    assert report["beats_while_held"] >= 2, report
-    assert report["writes_after_release"] == 0 and report["heartbeat_left"] is False, report
-    assert report["fds_leaked"] == 0 and report["threads"] == [], report
-
-
-def probe_stalled_heartbeat_at_release(scratch: str) -> dict[str, Any]:
-    """Stall one heartbeat write past the release join, then report what started or stayed open after release."""
-    from senselab_core.runtime import locks as locks_module
-    from senselab_core.runtime.locks import SharedFileLock
-    from senselab_core.runtime.storage import StorageDir
-
-    locks_module.HEARTBEAT_JOIN_S = 0.05  # type: ignore[misc]
-    resource = Path(scratch) / "thing"
-    events: list[tuple[str, float]] = []
-    stall = threading.Event()
-    real_write, real_open = StorageDir.write_atomically, StorageDir.open_root.__func__  # type: ignore[attr-defined]
-
-    def write(self: StorageDir, name: str, data: bytes, **kwargs: Any) -> Any:  # noqa: ANN401
-        events.append(("write", time.monotonic()))
-        if name.endswith(".heartbeat") and stall.is_set():
-            stall.clear()
-            time.sleep(0.5)
-        return real_write(self, name, data, **kwargs)
-
-    def open_root(cls: type, root: Path, **kwargs: Any) -> Any:  # noqa: ANN401
-        events.append(("open", time.monotonic()))
-        return real_open(cls, root, **kwargs)
-
-    StorageDir.write_atomically = write  # type: ignore[method-assign]
-    StorageDir.open_root = classmethod(open_root)  # type: ignore[method-assign,assignment,arg-type]
-    before = len(os.listdir("/dev/fd"))
-    with SharedFileLock(resource, heartbeat_interval=0.01, timeout=5):
-        stall.set()
-        time.sleep(0.05)
-    released = time.monotonic()
-    time.sleep(1.0)
-    return {
-        "started_after_release": [kind for kind, at in events if at > released],
-        "fds_leaked": len(os.listdir("/dev/fd")) - before,
-        "threads": [t.name for t in threading.enumerate() if t is not threading.main_thread()],
-    }
-
-
-@pytest.mark.logic
-def test_n2_a_stalled_heartbeat_starts_nothing_and_leaves_nothing_open_after_release(tmp_path: Path) -> None:
-    """A heartbeat write stalled past the release join neither reopens the directory nor starts another write."""
-    report = _bounded("probe_stalled_heartbeat_at_release", str(tmp_path))
-    assert report == {"started_after_release": [], "fds_leaked": 0, "threads": []}, report
+def test_n1_an_unopenable_lease_that_cannot_be_moved_is_a_typed_error_naming_its_remedy(tmp_path: Path) -> None:
+    """When the run directory refuses the move too, the error is `LeaseUnavailable` naming the lease and its owner."""
+    report = _bounded("probe_record_with_plant", str(tmp_path), LEASE, "unmovable")
+    assert report["error"] == "LeaseUnavailable", report
+    assert LEASE in report["message"] and "owned by" in report["message"], report

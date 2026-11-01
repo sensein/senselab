@@ -42,8 +42,8 @@ STAGING_FILE_MODE = 0o660
 STAGING_DIR_MODE = 0o2770
 CLOCK_NAME = ".clock"
 """The sentinel `StorageDir.fs_now` replaces in a directory."""
-CLOCK = re.compile(r".*\.clock")
-"""A storage clock: `.clock`, or a lock's `<name>.clock`."""
+CLOCK = re.compile(re.escape(CLOCK_NAME))
+"""The grammar of the storage clock's sentinel."""
 
 _FULL_ERRNOS = frozenset({errno.ENOSPC, errno.EDQUOT})
 _WORLD_READ = 0o004
@@ -511,29 +511,6 @@ class StorageDir:
             raise
         return fd
 
-    def open_or_create(self, name: str, mode: int, *, grammar: re.Pattern[str]) -> tuple[int, bool]:
-        """Open `name` read-write without following or blocking, creating it with `mode` if missing.
-
-        Returns `(descriptor, created)`. An existing file is opened as it is; its mode is not changed.
-
-        Raises:
-            ValueError: `name` does not match `grammar`.
-            FileNotFoundError: it vanished between the two attempts.
-            OSError: it is a symlink, a directory or cannot be opened; the caller judges it by `kind`.
-        """
-        _owned(name, grammar)
-        flags = os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
-        with _Naming(self.path / name):
-            try:
-                fd = os.open(name, flags | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=self.fd)
-            except FileExistsError:
-                return os.open(name, flags, dir_fd=self.fd), False
-        try:
-            set_mode(fd, mode)
-        except OSError:
-            pass
-        return fd, True
-
     def stamp(self, name: str) -> None:
         """Set the times of the directory `name` to now, never following it; anything else is left alone."""
         if self.kind(name) == "directory":
@@ -649,12 +626,12 @@ class StorageDir:
             raise
         return written
 
-    def fs_now(self, name: str = CLOCK_NAME) -> float:
-        """Return the current time as the filesystem stamps it: the mtime of a fresh `name` (`write_atomically`).
+    def fs_now(self) -> float:
+        """Return the current time as the filesystem stamps it: the mtime of a fresh `CLOCK_NAME` (`write_atomically`).
 
         On NFS the server sets it, so ages compared with this clock do not depend on the local clock.
         """
-        return self.write_atomically(name, b"", grammar=CLOCK, mode=STAGING_FILE_MODE).st_mtime
+        return self.write_atomically(CLOCK_NAME, b"", grammar=CLOCK, mode=STAGING_FILE_MODE).st_mtime
 
 
 def write_atomically(target: Path, data: bytes, *, mode: int | None = None) -> None:

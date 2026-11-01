@@ -15,7 +15,7 @@ from typing import Optional
 
 from senselab_worker.canonical import jcs_dumps
 
-from senselab_core.runtime.locks import SharedFileLock
+from senselab_core.runtime.locks import Lease
 from senselab_core.runtime.retry import retry_on_transient_error
 from senselab_core.runtime.storage import (
     STAGING_FILE_MODE,
@@ -37,6 +37,8 @@ NAMESPACE = "2x"
 MANIFEST_NAME = "resolutions@2.json"
 """The run manifest's file name; its `@<major>` is the format of its keys (`manifest_key`)."""
 MANIFEST = re.compile(re.escape(MANIFEST_NAME))
+_MANIFEST_TEMPORARY = re.compile(re.escape(f".{MANIFEST_NAME}.") + r"[0-9]+\.[0-9]+\.[0-9a-f]{32}\.tmp")
+"""The manifest's own temporaries, and not its lease's, which a live taker may be writing."""
 MANIFEST_LIMIT = 1 << 24
 """The most bytes a run manifest is read to."""
 
@@ -162,18 +164,20 @@ def read_manifest(run: Optional[str] = None) -> dict[str, str]:
 def record_resolution(repo_id: str, ref: str, sha: str, run: Optional[str] = None) -> str:
     """Record ``(repo_id, ref) -> sha`` for this run and return the binding SHA.
 
-    Append-if-absent under a `SharedFileLock` on the manifest: a concurrent writer's entries are kept,
-    and an existing commit SHA for the key wins over ``sha``. ``2x/runs/<run>/`` is reached through
-    `StorageDir` and made with the `StorePolicy`'s `shared_dir_mode`; the manifest and the lock's files
-    get the policy's file modes, whatever the umask. Under the lock, a dead writer's temporaries beside the
-    manifest are removed, as are objects moved aside under ``2x/runs/`` past the quarantine age.
+    Append-if-absent under a `Lease` on the manifest: a concurrent writer's entries are kept, and an
+    existing commit SHA for the key wins over ``sha``. ``2x/runs/<run>/`` is reached through `StorageDir`
+    and made with the `StorePolicy`'s `shared_dir_mode`; the manifest and its lease get the policy's file
+    modes, whatever the umask. Under the lease, a dead writer's temporaries beside the manifest are removed,
+    as are objects moved aside under ``2x/runs/`` past the quarantine age.
 
     Raises:
         RevisionResolutionError: ``sha`` is not a 40-hex commit SHA.
         ValueError: ``run`` (or this run's id) is not one path component.
-        LockTimeout: the manifest's lock could not be taken within its timeout.
-        WrongKindError: an object of the wrong kind at ``2x/``, ``2x/runs/``, the run's directory or a lock name
+        LeaseTimeout: the manifest's lease could not be taken within its timeout.
+        LeaseUnavailable: the manifest's lease cannot be taken in the run's directory, or what is at its name
             cannot be moved aside.
+        WrongKindError: an object of the wrong kind at ``2x/``, ``2x/runs/`` or the run's directory cannot be
+            moved aside.
     """
     if not _SHA_RE.fullmatch(sha):
         raise RevisionResolutionError(
@@ -186,10 +190,9 @@ def record_resolution(repo_id: str, ref: str, sha: str, run: Optional[str] = Non
 
 
 def _record_in(run_dir: StorageDir, key: str, sha: str, policy: StorePolicy) -> str:
-    """Append-if-absent `key -> sha` to the manifest in `run_dir`, under the manifest's lock."""
-    lock_mode = STAGING_FILE_MODE | (0o004 if policy.world_readable else 0)
-    lock = SharedFileLock(run_dir.path / MANIFEST_NAME, manage_dir_mode=False, file_mode=lock_mode, directory=run_dir)
-    with lock:
+    """Append-if-absent `key -> sha` to the manifest in `run_dir`, under the manifest's lease."""
+    lease_mode = STAGING_FILE_MODE | (0o004 if policy.world_readable else 0)
+    with Lease(run_dir.path / MANIFEST_NAME, file_mode=lease_mode, directory=run_dir):
         _remove_leftovers(run_dir, policy)
         current = _read_in(run_dir)
         winner = current.get(key)
@@ -206,14 +209,13 @@ def _record_in(run_dir: StorageDir, key: str, sha: str, policy: StorePolicy) -> 
 
 
 def _remove_leftovers(run_dir: StorageDir, policy: StorePolicy) -> None:
-    """Remove dead writers' leftovers under the manifest's lock.
+    """Remove dead writers' leftovers under the manifest's lease.
 
-    That is the manifest's temporaries in `run_dir` (any there under the lock is a dead writer's) and objects
+    That is the manifest's temporaries in `run_dir` (any there under the lease is a dead writer's) and objects
     moved aside under `2x/runs/` past the quarantine age.
     """
-    prefix = f".{MANIFEST_NAME}."
     for name in run_dir.listdir():
-        if name.startswith(prefix) and TEMPORARY_NAME.fullmatch(name):
+        if _MANIFEST_TEMPORARY.fullmatch(name):
             run_dir.remove_owned(name, pattern=TEMPORARY_NAME)
     try:
         with StorageDir.open_root(cache_root()) as root, root.walk(NAMESPACE, "runs") as runs:
