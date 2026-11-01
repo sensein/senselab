@@ -24,6 +24,7 @@ from senselab_core.kernel.time import Span, TimeAnchor
 from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime.audio_io import DECODER
 from senselab_core.runtime.call import (
+    AmbiguousClock,
     CallFailed,
     OutputTypeMismatch,
     Packaged,
@@ -74,6 +75,15 @@ TRANSCRIBE_TASK = TaskSpec(
     params=ReturnParams,
 )
 
+PAIR_TASK = TaskSpec(
+    name="call_test.pair_audio",
+    version="1",
+    kind="transform",
+    inputs={"first": "Audio", "second": "Audio"},
+    outputs={"value": "sha256"},
+    params=fake.EchoParams,
+)
+
 CLOCKED_TASK = TaskSpec(
     name="call_test.detect",
     version="1",
@@ -109,7 +119,7 @@ def _backend(name: str, stack: str, env: Env, task: TaskSpec = TASK, worker: str
 
 
 TEST_REGISTRY = Registry()
-for _task in (TASK, AUDIO_TASK, CLOCKED_TASK, TRANSCRIBE_TASK, TRIALS_TASK, fake.ECHO):
+for _task in (TASK, AUDIO_TASK, PAIR_TASK, CLOCKED_TASK, TRANSCRIBE_TASK, TRIALS_TASK, fake.ECHO):
     TEST_REGISTRY.add_task(_task)
 TEST_REGISTRY.add_backend(_backend("fake-alpha", "alpha", Env.host()))
 TEST_REGISTRY.add_backend(_backend("fake-beta", "beta", Env.host()))
@@ -118,6 +128,7 @@ TEST_REGISTRY.add_backend(fake.FAKE)
 TEST_REGISTRY.add_backend(_backend("identity", "dsp", Env.host(), AUDIO_TASK, "backends.identity_backend_fixture"))
 TEST_REGISTRY.add_backend(_backend("fake-audio", "isolated", Env.isolated("fake"), AUDIO_TASK))
 TEST_REGISTRY.add_backend(_backend("fake-transcribe", "isolated", Env.isolated("fake"), TRANSCRIBE_TASK))
+TEST_REGISTRY.add_backend(_backend("pair", "dsp", Env.host(), PAIR_TASK, "backends.identity_backend_fixture"))
 TEST_REGISTRY.add_backend(_backend("clocked", "dsp", Env.host(), CLOCKED_TASK, "backends.clocked_backend_fixture"))
 TEST_REGISTRY.add_backend(_backend("trials", "dsp", Env.host(), TRIALS_TASK, "backends.trials_backend_fixture"))
 
@@ -417,3 +428,14 @@ def test_rebound_equals_reclocked_compute(store: ResultStore, tmp_path: Path) ->
         standalone.identity,
         "session-7",
     ]
+
+
+@pytest.mark.logic
+def test_one_content_under_two_anchors_is_refused(store: ResultStore) -> None:
+    """Two recording inputs of one content on two clocks raise `AmbiguousClock` before anything runs."""
+    audio = Audio.from_array(numpy.zeros(160, dtype=numpy.float32), 16000)
+    session = Audio(groups=audio.groups, anchor=TimeAnchor(clock_id="session-7", absolute_start_ns=None))
+    call = TaskCall.model_validate({"task": PAIR_TASK.name, "inputs": {"first": audio, "second": session}})
+    with pytest.raises(AmbiguousClock, match=audio.identity):
+        run_call(call, execution=_profile(), store=store)
+    assert _activities(store) == []

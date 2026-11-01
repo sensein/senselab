@@ -127,11 +127,6 @@ def _opened(
             yield f, stamp, st.st_ctime_ns
 
 
-def _require_stamp(stamp: SourceStamp, current: SourceStamp, path: object) -> None:
-    if current != stamp:
-        raise StaleSource(f"{path} changed since it was opened: recorded {stamp!r}, now {current!r}")
-
-
 def stamp(path: str | os.PathLike[str], *, chunk_size: int = DEFAULT_CHUNK_SIZE) -> SourceStamp:
     """Open the sound file at `path`, read every byte and its header, and return its current stamp.
 
@@ -152,8 +147,8 @@ def check(recorded: SourceStamp, path: str | os.PathLike[str]) -> None:
     """Check that the file at `path` still has the stamp `recorded`.
 
     A stamp this process took from the file at `path` is checked by `os.stat` alone, its ctime included,
-    so a rewrite that restores size and mtime is caught; any other stamp is checked by stamping the file
-    again, which reads every byte.
+    so a rewrite that restores size and mtime is caught; any other stamp is checked as a decode checks it
+    (`_verified`), reading only the chunks the sound header lies in.
 
     Raises:
         StaleSource: if the file differs from the stamp.
@@ -164,8 +159,8 @@ def check(recorded: SourceStamp, path: str | os.PathLike[str]) -> None:
         if (*_stat_fields(st), st.st_ctime_ns) != (*_stamped_fields(recorded), ctime_ns):
             raise StaleSource(f"{path} changed since it was opened: recorded {recorded!r}")
         return
-    with _opened(path, recorded.chunk_size) as (_, current, ctime_ns):
-        _require_stamp(recorded, current, path)
+    with _verified(path, recorded) as (_, ctime_ns):
+        pass
     _remember(path, recorded, ctime_ns)
 
 
@@ -221,39 +216,52 @@ class _ChunkChecked:
         return self._chunk
 
 
+@contextmanager
+def _verified(path: str | os.PathLike[str], stamp: SourceStamp) -> Iterator[tuple[soundfile.SoundFile, int]]:
+    """Open `path` as sound through `_ChunkChecked`, checked against `stamp`, and yield it with the file's ctime.
+
+    The stat fields and sound header are checked against `stamp` and the stamp's content against the root of its
+    chunk digests; every chunk read, by the header parse or in the body, is verified before it is decoded.
+
+    Raises:
+        StaleSource: if the file differs from `stamp` in its stat fields, its header or a chunk read, or the stamp's
+            content is not the root of its chunks.
+    """
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        st = os.fstat(fd)
+        rooted = content_root(stamp.chunk_size, stamp.chunks) == stamp.content
+        if _stat_fields(st) != _stamped_fields(stamp) or not rooted:
+            raise StaleSource(f"{path} changed since it was opened: recorded {stamp!r}")
+        checked = _ChunkChecked(fd, stamp, path)
+        try:
+            with soundfile.SoundFile(checked) as f:
+                if _header(f) != stamp.header:
+                    raise StaleSource(f"{path} changed since it was opened: its sound header differs")
+                yield f, st.st_ctime_ns
+        except soundfile.LibsndfileError:
+            if checked.stale is None:
+                raise
+        if checked.stale is not None:
+            raise checked.stale
+    finally:
+        os.close(fd)
+
+
 class SoundFileReader:
     """The `SourceReader` over soundfile: a decode verifies only the content chunks it reads."""
 
     def decode(self, source: Path, stamp: SourceStamp, first: int, count: int) -> numpy.ndarray:
         """Return `(channels, count)` float32 samples from frame `first`, after checking the file still has `stamp`.
 
-        The file's stat fields and sound header are checked against `stamp`, the stamp's content against the root of
-        its chunk digests, and every chunk the decoder reads is hashed and compared with its digest before it is
-        decoded.
+        Only the chunks the decoder reads are hashed (`_verified`).
 
         Raises:
-            StaleSource: if the file at `source` differs from `stamp` in its stat fields, its header or a chunk read,
-                or the stamp's content is not the root of its chunks.
+            StaleSource: as `_verified`.
         """
-        fd = os.open(source, os.O_RDONLY)
-        try:
-            rooted = content_root(stamp.chunk_size, stamp.chunks) == stamp.content
-            if _stat_fields(os.fstat(fd)) != _stamped_fields(stamp) or not rooted:
-                raise StaleSource(f"{source} changed since it was opened: recorded {stamp!r}")
-            checked = _ChunkChecked(fd, stamp, source)
-            try:
-                with soundfile.SoundFile(checked) as f:
-                    if _header(f) != stamp.header:
-                        raise StaleSource(f"{source} changed since it was opened: its sound header differs")
-                    f.seek(first)
-                    samples = f.read(count, dtype="float32", always_2d=True)
-            except soundfile.LibsndfileError:
-                if checked.stale is None:
-                    raise
-            if checked.stale is not None:
-                raise checked.stale
-        finally:
-            os.close(fd)
+        with _verified(source, stamp) as (f, _):
+            f.seek(first)
+            samples = f.read(count, dtype="float32", always_2d=True)
         decoded: numpy.ndarray = samples.T
         return decoded
 

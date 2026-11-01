@@ -344,3 +344,24 @@ def test_rewrite_in_touched_chunk_is_stale(tmp_path: Path) -> None:
     assert group.read(0, 10**7, reader=READER).shape == (2, 80)
     with pytest.raises(StaleSource, match="chunk"):
         group.read(4 * 10**9, 5 * 10**9, reader=READER)
+
+
+@pytest.mark.logic
+def test_check_of_another_process_stamp_reads_the_header_chunks_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`check` of a stamp this process holds no memo of verifies chunks by `os.pread`, never the whole file."""
+    p, group = _window_group(tmp_path)
+    assert group.source_stamp is not None
+    monkeypatch.setattr(audio_io, "VERIFIED", audio_io.Memo(audio_io.SOURCE_MEMO_ENTRIES))
+    offsets: list[int] = []
+    original = os.pread
+
+    def spy(fd: int, n: int, offset: int) -> bytes:
+        offsets.append(offset)
+        return original(fd, n, offset)
+
+    monkeypatch.setattr(os, "pread", spy)
+    monkeypatch.setattr(builtins, "open", lambda *a, **_: pytest.fail(f"opened {a[0]} by path"))
+    audio_io.check(group.source_stamp, p)
+    assert offsets and len(offsets) * CHUNK < p.stat().st_size // 8 and len(audio_io.VERIFIED) == 1

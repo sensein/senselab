@@ -36,6 +36,28 @@ _SIGNALS: dict[str, type[Frozen]] = {"recording@2.0": Recording, "audio@2.0": Au
 WIRE_FORMATS: Mapping[str, type[Frozen]] = FrozenMapping(_SIGNALS | {_tag(t): t for t in _FORMATTED})
 """The wire format of every kernel value a port may carry, by tag; a `Formatted` type's tag is its own format."""
 
+RETIRED_WIRE_FORMATS = frozenset({"recording@1", "audio@1", "regular-group@1"})
+"""Wire formats 2.x no longer reads, as `<name>@<major>`."""
+WIRE_MIGRATION_STATEMENT = "specs/20261030-140022-senselab-2x-api/migration-ledger.md#retired-wire-formats"
+"""Where the statement on retired wire formats is: they are not read; re-reading the source migrates."""
+
+
+class WireFormatRetired(ValueError):
+    """A wire form in a retired format (`RETIRED_WIRE_FORMATS`).
+
+    Attributes:
+        found: The format tag the form declares.
+    """
+
+    def __init__(self, found: str) -> None:
+        """Name the declared format and the migration statement."""
+        super().__init__(
+            f"a wire form declares the retired format {found}; it is not read, and migrating a value is re-reading"
+            f" its source or recomputing it under this version. See {WIRE_MIGRATION_STATEMENT}"
+        )
+        self.found = found
+
+
 _TAGS: Mapping[type[Frozen], str] = FrozenMapping({t: tag for tag, t in WIRE_FORMATS.items()})
 
 
@@ -69,10 +91,13 @@ def from_wire_form(form: Mapping[str, Any]) -> Frozen:
     """Return the kernel value a wire form holds, read by the registered type of its tag's name and major version.
 
     Raises:
+        WireFormatRetired: if `form`'s format is retired.
         ValueError: if `form` has no `format` naming a registered wire format of a readable version.
         pydantic.ValidationError: if the fields do not validate as that type.
     """
     found = form.get("format")
+    if isinstance(found, str) and found.split(".")[0] in RETIRED_WIRE_FORMATS:
+        raise WireFormatRetired(found)
     cls = next((t for tag, t in WIRE_FORMATS.items() if readable(tag, found)), None)
     if cls is None:
         raise ValueError(f"no wire format reads {found!r}; registered: {sorted(WIRE_FORMATS)}")

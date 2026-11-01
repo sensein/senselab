@@ -12,7 +12,13 @@ from senselab_core.kernel.declare import kernel_types
 from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.results import Metric, TextSpans, Transcript, Trials
 from senselab_core.kernel.signals import Audio, PlainText, Recording, RegularGroup
-from senselab_core.kernel.wire import WIRE_FORMATS, from_wire_form, wire_form
+from senselab_core.kernel.wire import (
+    WIRE_FORMATS,
+    WIRE_MIGRATION_STATEMENT,
+    WireFormatRetired,
+    from_wire_form,
+    wire_form,
+)
 from senselab_core.runtime import audio_io
 from senselab_core.testing.values import samples_of
 from senselab_worker.codec import from_wire, to_wire
@@ -81,6 +87,16 @@ def test_unknown_or_retired_tags_are_refused() -> None:
     for tag in ("metric@2.0", "nothing@1.0", None):
         with pytest.raises(ValueError, match="format"):
             from_wire_form({**form, "format": tag})
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("tag", ["recording@1.0", "audio@1.0", "regular-group@1.3"])
+def test_retired_signal_forms_name_their_format_and_migration(tag: str) -> None:
+    """A signal wire form of a retired major is refused with a typed error naming it and the migration statement."""
+    form = wire_form(Audio.from_array(numpy.zeros(4, dtype=numpy.float32), 8_000))
+    with pytest.raises(WireFormatRetired, match=WIRE_MIGRATION_STATEMENT) as info:
+        from_wire_form({**form, "format": tag})
+    assert info.value.found == tag and tag in str(info.value)
 
 
 def _file_backed(value: Frozen) -> bool:

@@ -36,7 +36,7 @@ from senselab_core.kernel.identity import (
 )
 from senselab_core.kernel.signals import PlainText, Recording
 from senselab_core.kernel.time import TimeAnchor, TimeMap, rebind
-from senselab_core.kernel.wire import from_wire_form, wire_form
+from senselab_core.kernel.wire import WireFormatRetired, from_wire_form, wire_form
 from senselab_core.runtime.audio_io import DECODER, READER, open_audio
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
 from senselab_core.runtime.envs import EnvHandle
@@ -146,6 +146,10 @@ class CallFailed(RuntimeError):
         self.error = error
 
 
+class AmbiguousClock(ValueError):
+    """Two recording inputs of one content carry different anchors: a stored output has no one clock to re-bind to."""
+
+
 class OutputTypeMismatch(ValueError):
     """A backend's output for a kernel-typed port is not a wire form of the port's declared type."""
 
@@ -205,6 +209,8 @@ def run_call(
 
     Raises:
         UnknownTask: the call's task is not declared.
+        AmbiguousClock: two recording inputs of one content carry different anchors.
+        WireFormatRetired: a stored output is in a retired wire format.
         UnlistedSource, NoBackend, NoDevice: as `resolve_execution`.
         NotImplementedError: the backend runs in an `Env.server` env.
         ValueError: an input has no reader for its port's type or, for an isolated backend, no wire form; or the
@@ -270,11 +276,18 @@ def _anchors(values: Iterable[object]) -> list[tuple[TimeAnchor, TimeAnchor]]:
     """Return, for each recording input not on the clock its identity names, that clock's anchor and its own.
 
     A store holds outputs on the identity clocks of their inputs, so one entry serves every anchor of one content.
+
+    Raises:
+        AmbiguousClock: two recording inputs of one content carry different anchors.
     """
+    readers: dict[str, TimeAnchor] = {}
+    for v in values:
+        if isinstance(v, Recording) and readers.setdefault(v.identity, v.anchor) != v.anchor:
+            raise AmbiguousClock(f"recording inputs of {v.identity} carry anchors on two clocks; pass one anchor")
     return [
-        (TimeAnchor(clock_id=v.identity, absolute_start_ns=None), v.anchor)
-        for v in values
-        if isinstance(v, Recording) and v.anchor.clock_id != v.identity
+        (TimeAnchor(clock_id=identity, absolute_start_ns=None), anchor)
+        for identity, anchor in readers.items()
+        if anchor.clock_id != identity
     ]
 
 
@@ -375,6 +388,8 @@ def _decoded(spec: TaskSpec, outputs: Mapping[str, object]) -> dict[str, object]
         form = outputs[port]
         try:
             value = from_wire_form(form) if isinstance(form, Mapping) else form
+        except WireFormatRetired:
+            raise
         except ValueError as exc:
             raise OutputTypeMismatch(f"output {port!r} of {spec.name!r} is not a wire form: {exc}") from exc
         if not isinstance(value, types[declared]):
