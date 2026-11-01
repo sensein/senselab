@@ -112,14 +112,14 @@ class ExecutionProfile(Formatted):
             raise ValueError(f"env root {raw!r} names a variable that is not set")
         return Path(expanded)
 
-    def check_source(self, model_id: str, catalogue: Catalogue | None = None) -> None:
+    def check_source(self, model_id: str, catalogue: Catalogue) -> None:
         """Raise `UnlistedSource` unless `model_id`'s organisation is allowed.
 
         The allowlist is `model_sources`, or the organisations of `catalogue` when that is None.
         """
-        allowed = self.model_sources if self.model_sources is not None else catalogue.sources() if catalogue else None
+        allowed = self.model_sources if self.model_sources is not None else catalogue.sources()
         organisation = model_id.split("/", maxsplit=1)[0] if "/" in model_id else ""
-        if allowed is not None and organisation not in allowed:
+        if organisation not in allowed:
             raise UnlistedSource(
                 f"model {model_id!r} is from {organisation!r}, not in the allowed sources {list(allowed)}"
             )
@@ -160,12 +160,13 @@ def _backend_device(backend: BackendSpec, profile: ExecutionProfile, hardware: H
     return next((d for d in profile.devices if d in have and d in backend.devices), None)
 
 
-def resolve_execution(
+def resolve_execution(  # noqa: PLR0913 - the brief fixes the signature and the allowlist needs the catalogue
     task: TaskSpec,
     model_entry: CatalogueEntry | None,
     profile: ExecutionProfile,
     hardware: HardwareInfo,
     registry: Registry,
+    catalogue: Catalogue,
 ) -> Placement:
     """Return where `task` runs under `profile` on `hardware`: backend (hence stack and env) and device.
 
@@ -174,12 +175,12 @@ def resolve_execution(
     has and the backend declares.
 
     Raises:
-        UnlistedSource: the model's organisation is not allowed.
+        UnlistedSource: the model's organisation is neither in `model_sources` nor, when that is None, in `catalogue`.
         NoBackend: no backend serves the task and model under the preferences.
         NoDevice: the chosen backend has no device here; names the node, never falls back to another device.
     """
     if model_entry is not None:
-        profile.check_source(model_entry.id)
+        profile.check_source(model_entry.id, catalogue)
     served = [
         b
         for b in registry.backends(task.name)

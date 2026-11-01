@@ -72,6 +72,9 @@ def _entry(model_id: str = "org/m") -> CatalogueEntry:
     )
 
 
+CAT = Catalogue(entries=(_entry(),))
+
+
 def _profile(**override: Any) -> ExecutionProfile:  # noqa: ANN401
     return ExecutionProfile.load("laptop", override)
 
@@ -81,13 +84,13 @@ def test_stack_preference_picks_backend() -> None:
     """The profile's stack order alone decides the backend; the task and its spec are the same."""
     registry = _registry(_backend("b1", "one"), _backend("b2", "two"))
     picks = {
-        order: resolve_execution(TASK, _entry(), _profile(stack_preferences={"t": list(order)}), NO_GPU, registry)
+        order: resolve_execution(TASK, _entry(), _profile(stack_preferences={"t": list(order)}), NO_GPU, registry, CAT)
         for order in (("one", "two"), ("two", "one"))
     }
     assert picks[("one", "two")].backend.name == "b1" and picks[("two", "one")].backend.name == "b2"
     assert "stack 'two'" in picks[("two", "one")].explain() and "device cpu" in picks[("two", "one")].explain()
     with pytest.raises(NoBackend, match="available"):
-        resolve_execution(TASK, _entry(), _profile(stack_preferences={"t": ["three"]}), NO_GPU, registry)
+        resolve_execution(TASK, _entry(), _profile(stack_preferences={"t": ["three"]}), NO_GPU, registry, CAT)
 
 
 @pytest.mark.logic
@@ -95,10 +98,10 @@ def test_profile_digest_not_in_key() -> None:
     """Two profiles that differ give different digests and placements that build the same key."""
     registry = _registry(_backend("b1", "one"))
     plain, other = _profile(), _profile(retry={"attempts": 5}, network="offline")
-    assert plain.canonical_digest != other.canonical_digest
+    assert plain.canonical_digest() != other.canonical_digest()
     keys = []
     for profile in (plain, other):
-        placement = resolve_execution(TASK, _entry(), profile, NO_GPU, registry)
+        placement = resolve_execution(TASK, _entry(), profile, NO_GPU, registry, CAT)
         call, _ = base_call(TASK, placement.backend)
         keys.append(build_key(call, placement, BASE).digest())
     assert keys[0] == keys[1]
@@ -109,16 +112,16 @@ def test_gpu_only_without_gpu_fails() -> None:
     """A CUDA-only backend on a node without a GPU fails naming the node; with a GPU it runs there."""
     registry = _registry(_backend("b1", "one", devices=("cuda",)))
     with pytest.raises(NoDevice, match=platform.node()):
-        resolve_execution(TASK, _entry(), _profile(), NO_GPU, registry)
-    assert resolve_execution(TASK, _entry(), _profile(), GPU, registry).device == "cuda"
+        resolve_execution(TASK, _entry(), _profile(), NO_GPU, registry, CAT)
+    assert resolve_execution(TASK, _entry(), _profile(), GPU, registry, CAT).device == "cuda"
 
 
 @pytest.mark.logic
 def test_device_follows_profile_order() -> None:
     """A backend that runs on CPU and CUDA takes the profile's first listed device the host has."""
     registry = _registry(_backend("b1", "one", devices=("cpu", "cuda")))
-    assert resolve_execution(TASK, _entry(), _profile(), GPU, registry).device == "cuda"
-    assert resolve_execution(TASK, _entry(), _profile(devices=["cpu", "cuda"]), GPU, registry).device == "cpu"
+    assert resolve_execution(TASK, _entry(), _profile(), GPU, registry, CAT).device == "cuda"
+    assert resolve_execution(TASK, _entry(), _profile(devices=["cpu", "cuda"]), GPU, registry, CAT).device == "cpu"
 
 
 @pytest.mark.logic
@@ -139,12 +142,12 @@ def test_unlisted_source_refused() -> None:
     """A model from an organisation outside `model_sources` is refused; the default is the catalogue's."""
     registry = _registry(_backend("b1", "one"))
     with pytest.raises(UnlistedSource, match="'org'"):
-        resolve_execution(TASK, _entry(), _profile(model_sources=["other"]), NO_GPU, registry)
-    assert resolve_execution(TASK, _entry(), _profile(model_sources=["org"]), NO_GPU, registry)
-    text = "format: catalogue@1.0\nentries: []\n"
-    with pytest.raises(UnlistedSource):
-        _profile().check_source("rogue/m", Catalogue.load(text))
-    _profile().check_source("org/m", Catalogue(entries=(_entry(),)))
+        resolve_execution(TASK, _entry(), _profile(model_sources=["other"]), NO_GPU, registry, CAT)
+    assert resolve_execution(TASK, _entry(), _profile(model_sources=["org"]), NO_GPU, registry, CAT)
+    rogue = _entry("rogue/m")
+    with pytest.raises(UnlistedSource, match="'rogue'"):
+        resolve_execution(TASK, rogue, _profile(), NO_GPU, registry, CAT)
+    assert resolve_execution(TASK, _entry("org/n"), _profile(), NO_GPU, registry, CAT)
 
 
 @pytest.mark.logic
@@ -175,5 +178,13 @@ def test_env_root_expands_scratch(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
         ExecutionProfile.load("orcd").env_root("isolated")
     registry = _registry(_backend("b1", "one", env=Env.isolated("x")))
     monkeypatch.setenv("SCRATCH", str(tmp_path))
-    placed = resolve_execution(TASK, _entry(), ExecutionProfile.load("orcd"), NO_GPU, registry)
+    placed = resolve_execution(TASK, _entry(), ExecutionProfile.load("orcd"), NO_GPU, registry, CAT)
     assert placed.env_root == str(tmp_path / "senselab-2x-venvs") and "isolated:x" in placed.explain()
+
+
+@pytest.mark.logic
+def test_retry_block_keeps_its_format_identity() -> None:
+    """The profile's `retry` is a `retry-policy@1.0` value whose digest is fixed."""
+    retry = ExecutionProfile.load().retry
+    assert retry.format == "retry-policy@1.0"
+    assert retry.canonical_digest() == "dbab4021d94897ef0d33b44d2bae468b549f250744218db112bd209ea0850457"

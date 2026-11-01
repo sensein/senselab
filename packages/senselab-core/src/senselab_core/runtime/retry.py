@@ -7,15 +7,17 @@ from typing import Annotated, TypeVar
 
 from pydantic import Field
 
-from senselab_core.kernel._base import Frozen
+from senselab_core.kernel.formats import FormatTag, Formatted
 from senselab_core.runtime.faults import is_transient
 
 logger = logging.getLogger("senselab")
 
+RETRY_POLICY_FORMAT = "retry-policy@1.0"
+
 _T = TypeVar("_T")
 
 
-class RetryPolicy(Frozen):
+class RetryPolicy(Formatted):
     """How often a call that raised a transient fault is tried, and how long to wait first.
 
     Attributes:
@@ -23,6 +25,7 @@ class RetryPolicy(Frozen):
         first_backoff_s: Seconds before the second try; each further wait doubles.
     """
 
+    format: FormatTag = RETRY_POLICY_FORMAT
     attempts: Annotated[int, Field(strict=True, ge=1)]
     first_backoff_s: Annotated[float, Field(ge=0)]
 
