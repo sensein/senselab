@@ -42,7 +42,9 @@ sets:
 # The sets each distribution allows. Its locked runtime dependencies, transitive ones included, are checked against it.
 distributions:
   senselab-worker:
-    allow: [permissive, runtime-exception]
+    # weak-copyleft-ok: numpy, the worker's one runtime dependency, bundles libquadmath (LGPL) in every Linux
+    # wheel, dynamically linked; no other LGPL or MPL dependency is admitted by this set today.
+    allow: [permissive, runtime-exception, weak-copyleft-ok]
   senselab-core:
     allow: [permissive, runtime-exception, weak-copyleft-ok]
   senselab:
