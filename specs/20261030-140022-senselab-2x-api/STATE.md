@@ -19,7 +19,7 @@ task or decision changes state. Newest log entries go first.
 - **Owner's words:** [`owner-requests.md`](owner-requests.md), verbatim, items 1..38. The authority.
 - **Owner decisions:** [`decisions-2026-11-01.md`](decisions-2026-11-01.md), D-1..D-7 and the items that
   follow from them without a further choice.
-- **Controller rulings:** [`rulings.md`](rulings.md), R1..R42 and H-R1..H-R54 with their status. They are
+- **Controller rulings:** [`rulings.md`](rulings.md), R1..R42 and H-R1..H-R57 with their status. They are
   not design authority; a ruling that changes a decision is in force only through an ADR amendment
   (ADR-000).
 - **Reviews:** [`reviews/full-review-2026-11-01/`](reviews/full-review-2026-11-01/) (five reviews and
@@ -82,13 +82,35 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
    senselab internals are `to_wire` and `_wait_exit` in a spawned child, and an AST guard
    (`tests/lint/internal_patches_test.py`) enforces it (`testing.md` section 3). Policy checks as
    `scripts/check_*.py` remain for the rest of the forbidden list.
-2. **Next: the "follows" items** of the decision record: portable model identity (A I-1), read
-   `DEFAULT_REUSE_POLICY` (Ru I-1), equivalence classes as data (A I-8), owners for the clock re-binding
-   (A I-9) and the source-digest CI check (A I-10); audio decoding out of the kernel and whole-file
-   hashing against ADR-005 (Ar F-3, A I-5, R-109); the pydra corrections (Ar F-5, F-6) and owners for the
-   pydra PRs (**F2, done 2026-11-01**: environment is recorded not keyed; K2 added to the proposal; K1/K2 in the Phase 3 gate; owners in design §6.2; benchmark copy removed from `specs/`, kept in pydra `benchmarks/proposal_0001/`); one transient classifier (Ar F-7); the engineering and license gates (T F5–F7); the P-40
-   roster and worktree isolation; a scheduled workflow on `alpha` (the default branch) that checks out `2.x` for nightly limits and use cases, landed as a `skip-release` PR (GitHub runs `schedule` only from the default branch); parked items moved into tracked registers (Ru I-11, I-12); lease renewal not yet implemented, owner:
-   execution phase (Phase 3), since `Lease` has no renewal and `execution.md` 3.2 says workers renew.
+2. **Follows items done 2026-11-01** (commits on `2x/phase-1`, code PR #619):
+   - **F1** `7e179167..e363dc87`: portable model identity (`logical-key@4`), `ResultStore.get` applies
+     `DEFAULT_REUSE_POLICY`, equivalence classes as data with a derivation, one transient classifier
+     (`faults.is_transient`) and `RetryPolicy` from data (`SENSELAB_HF_MAX_RETRIES` gone).
+   - **F2** (senselab `ef205267`, pydra-ext `010bdf98`): environment recorded not keyed; K2 added; owners for
+     the pydra PRs in design section 6.2.
+   - **F3** `56563623..2cd31918`: H-R56 (`logical-key@5`, `execution-context@2.0`, `model_source`); audio
+     decoding, stamping and the memo moved to `runtime/audio_io.py` under the `kernel-does-no-io` contract;
+     the classifier reads `response.status_code` from any HTTP client.
+   - **F4** `409c0789`: every 2.x CI job installs with `uv sync --locked` except `worker-floor`; the
+     equivalence table loads in the runtime (`runtime/data/equivalence.yaml`); `importlib` is forbidden in
+     the kernel; `huggingface-hub` bounded `>=1.3,<3`.
+
+   **Next actions, in this order:**
+   1. The engineering and license gates (T F5-F7), including the **locked Python 3.10 floor**: a locked 3.10
+      constraints file so `worker-floor` can install from a lock; today it is the one unlocked job.
+   2. Parked items moved into tracked registers (Ru I-11, I-12).
+   3. The Phase 1 exit (below), which needs the ORCD runs once the owner signs in.
+
+   **Follows still open:**
+   - `model_source` is set by Phase 3 executors where they build the `ExecutionContext`; nothing sets it yet.
+   - Lease renewal is not implemented; owner: execution phase (Phase 3), since `Lease` has no renewal and
+     `execution.md` 3.2 says workers renew.
+   - Verify sampling (ADR-002 section 4) has no owner: no phase builds it, so equivalence classes get no
+     evidence added.
+   - `worker-floor` (3.10) installs unlocked until the locked 3.10 constraints file exists (item 1).
+   - Not yet recorded as done: owners for the clock re-binding (A I-9) and the source-digest CI check (A I-10),
+     the P-40 roster and worktree isolation, the scheduled workflow on `alpha` for nightly limits and use cases
+     (a `skip-release` PR), and whole-file hashing against ADR-005 (R-109, Phase 2).
 3. **Then the Phase 1 exit** (`plans/phase-1.md` Task 15, as amended): 2.x CI green; `src/` equals `alpha`; no 1.x
    tests on the 2.x line; P-39 re-scan; `STATE.md` updated. The ORCD full runs are **pending owner sign-in**. Run these on ORCD shared NFS scratch from a pinned checkout, in a submitted job
    (never on login or claude-rc nodes), together with the full local-tier runs H11b did not make (the env tier and the later-boundary sweep): (a) `SENSELAB_WORK_POOL_NFS_DIR=<dir>` run of
@@ -116,6 +138,10 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
 
 ## Log
 
+- **2026-11-01 (F1, F3, F4 done):** model key is the weights digest and the source is context (`logical-key@5`,
+  `execution-context@2.0`; H-R56); decoding and stamping out of the kernel; one transient classifier and a data
+  retry policy; equivalence classes as data; CI locked except `worker-floor` (H-R57). ADR-002, 003, 005, 006 and
+  009, `design.md`, `testing.md`, the plans and rulings updated.
 - **2026-11-01 (D-2, H11a, H11b done):** locks are leases (D-2) with fix round 1 (`b76681a9`, Linux CI green);
   H11a renamed and re-tiered the tests; H11b replaced internal patches with seams and guarded the rest
   (fix round 1 `5db856fa`). Docs pass: ADR-003 identity wording, `testing.md` fault model and cadence,

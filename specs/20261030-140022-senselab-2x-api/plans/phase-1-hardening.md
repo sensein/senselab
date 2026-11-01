@@ -205,10 +205,11 @@ H6 and H7 can run at any time. H8 is last.
   - `identity_derived` (types with an `identity` field): `model_validate({**dump, "identity": "f" * 64})`
     raises `ValidationError`.
 - [ ] **Step 2: Unit tests (failing)**
-  - `test_overwritten_source_raises_stale_source(tmp_path)`: write a WAV, `Audio.from_path`, rewrite
+  - `test_overwritten_source_raises_stale_source(tmp_path)`: write a WAV, `audio_io.open_audio` (was `Audio.from_path`; these tests now live in
+    `tests/runtime/audio_io_test.py` and read with `reader=audio_io.READER`), rewrite
     it with other samples (same and different length), assert `read()` raises `StaleSource`.
-  - `test_from_array_matches_from_path(dtype)` parametrized over `int16`, `int32`, `float32`,
-    `float64`: `numpy.testing.assert_allclose(Audio.from_array(x, sr).read(), Audio.from_path(write(x)).read(), atol=<one LSB of dtype>)`.
+  - `test_from_array_matches_open_audio(dtype)` parametrized over `int16`, `int32`, `float32`,
+    `float64`: `numpy.testing.assert_allclose(Audio.from_array(x, sr).read(), open_audio(write(x)).read(), atol=<one LSB of dtype>)`.
   - `test_rate_refuses_bool_str_nonfinite`: `True`, `"16000"`, `inf`, `0`, `-5` each raise.
   - `test_from_array_refuses_complex_bool_empty`.
   - `test_nanoseconds_bounded_to_int64`: `Span(start_ns=0, end_ns=2**200)` raises.
@@ -262,8 +263,9 @@ H6 and H7 can run at any time. H8 is last.
   - `ContentIdentity = Annotated[str, StringConstraints(pattern=r"^content:[0-9a-f]{64}$")]`;
   - `OutputIdentity = Annotated[str, StringConstraints(pattern=r"^output:[0-9a-f]{64}$")]`;
   - `InputIdentity = ContentIdentity | OutputIdentity`;
-  - `class ModelIdentity(Frozen)`: `source: Literal["hf", "url", "local"]`, `id: NonEmptyStr`,
-    `identity: NonEmptyStr`. Built only by `ResolvedModel.key_identity(self) -> ModelIdentity`, which
+  - `class ModelIdentity(Frozen)`: `id: NonEmptyStr | None`,
+    `identity: NonEmptyStr` (amended 2026-11-01, F1 and F3: `id` is the hub repo and null for `url` and `local`;
+    `source` is not part of the identity but `ExecutionContext.model_source`, H-R56). Built only by `ResolvedModel.key_identity(self) -> ModelIdentity`, which
     raises `UnpinnedModel(ValueError)` when `not self.pinned`;
   - `LogicalKey.model: ModelIdentity | None`; `inputs: Mapping[str, InputIdentity]`;
     `profile_slices: Mapping[str, Annotated[str, pattern r"^profile:[0-9a-f]{64}$"]]`;
@@ -383,7 +385,8 @@ H6 and H7 can run at any time. H8 is last.
 
 **Interfaces:**
 - `storage.py`:
-  - `class StoreUnavailable(OSError)`: retryable; carries the original `errno`;
+  - `class StoreUnavailable(OSError)`: carries the original `errno`; whether a retry may succeed is
+    `faults.is_transient` of its cause (amended 2026-11-01, F1);
   - `class StorageFull(StoreUnavailable)`: ENOSPC, EDQUOT;
   - `storage_fault(err: OSError, path: Path) -> StoreUnavailable`: the one mapping from `OSError` to
     a storage fault, used by store and fetch. Fetch's `StorageError` is deleted in favour of
@@ -821,7 +824,7 @@ H6 and H7 can run at any time. H8 is last.
   - `check_closure(wheels: list[Path]) -> None`: every `Requires-Dist` naming `senselab`,
     `senselab-core` or `senselab-worker` is satisfied by a wheel in `dist/`;
   - `check_installs(dist: Path, python: str) -> None`: `uv venv` into a temporary directory, then
-    `uv pip install --no-index --find-links dist senselab`, then
+    `uv pip install --no-index --find-links dist senselab` (an install from a built wheel, not from the lock), then
     `python -c "import senselab_worker, senselab_core, senselab"`.
 - `RELEASE_FLOOR = "2.0.0"` lives in the root `pyproject.toml` under `[tool.senselab.release]`.
 - `hatch_build_pins.py`: refuses (raises) a version with a local segment, so `==X+local` cannot be

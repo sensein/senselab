@@ -190,7 +190,7 @@ module over the registry, with ids equal to the task, backend or profile name.
 
 | When | What |
 |---|---|
-| every PR | `pre-commit`; logic + contract on 3.11 and 3.14 from a core-only install, with import contracts and per-distribution sdist-to-wheel builds (`core-only`); the release-gate env tests (`core-env`); worker logic, env and contract tests on 3.10 (`worker-floor`). Not yet in CI: per-lock env builds, CPU smoke benchmarks (<15 min) when a task is touched |
+| every PR | `pre-commit`; logic + contract on 3.11 and 3.14 from a locked core-only install (`uv sync --locked`), with import contracts and per-distribution sdist-to-wheel builds (`core-only`); the release-gate env tests (`core-env`); worker logic, env and contract tests on 3.10 (`worker-floor`, the one job that does not install from `uv.lock`: the lock requires Python 3.11 or later, so a locked 3.10 constraints file is a follow). A guard test (`ci_tiers_test.py`) refuses any other unlocked install. Not yet in CI: per-lock env builds, CPU smoke benchmarks (<15 min) when a task is touched |
 | label on a PR (`limits`) | limits only, on 3.12 (`core-limits`); never use cases (H-R54) |
 | nightly (`schedule`, `workflow_dispatch`) | every PR job, and limits and use cases on 3.12 (`core-nightly`). A schedule runs the default branch's copy of the workflow, so this takes effect once 2.x is merged there. Not yet in CI: a wider Python matrix, the scale ladder (`benchmarks/scale`, P-33), CPU smoke benchmarks |
 | weekly (ORCD) | GPU smoke benchmarks; core CPU benchmark suite; full env builds; use cases on ORCD |

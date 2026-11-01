@@ -87,9 +87,10 @@ findings are in [`reviews/phase1-reattack/canon.md`](../reviews/phase1-reattack/
   `digests-are-tagged` forbids hash modules everywhere except the digest module, and `raw-digest-owners`
   names the few owners allowed to hash bytes already in memory.
 
-  **Registered identity tags:** `logical-key@3`, `output@3`, `context@3`, `content-root@2`, `audio@3`,
+  **Registered identity tags:** `logical-key@5`, `output@3`, `context@3`, `content-root@2`, `audio@3`,
   `weights@3`, `value@2`, `provenance-id@4`, `data-manifest@3`, `worker-runtime@1`, `fake-output@1`,
-  `contract-probe@1`. **Registered blob tags:** `file@1`, `npy@1`.
+  `contract-probe@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a `format:` line in a packaged YAML file or in
+  a store entry): `equivalence@1`, `retry-policy@1.0`, and `execution-context@2.0` in a store entry's `context.json`.
 - **The store is `store@4` and an entry's `result.json` is `result@2.0`,** which adds the fingerprint of the
   context it was written in (R-101, ADR-003). A `result@1.0` entry cannot show which context it belongs to,
   so none is read: `store@4` is a new key space.
@@ -153,3 +154,9 @@ H-R2, H-R43, H-R47, H-R48 and H-R50 ([`rulings.md`](../rulings.md)).
 - 2026-11-01: readers within 2.x; 2.x namespace under the cache root (H-R50).
 - 2026-11-01: canonical text restated with its portability reason (D-3); version and tag grammar (D-5);
   provenance sections superseded by ADR-010 (D-4).
+- 2026-11-01: `logical-key@3` → `@4`: a `url` or `local` model is keyed by its weights' digest, not its path or
+  URL (F1, A I-1). `@4` → `@5`: the model's source leaves the key and is recorded in the execution context
+  (F3, H-R56). Both bumped rather than folded, so no earlier key addresses an entry.
+- 2026-11-01: `execution-context@1.0` → `@2.0`: `model_source` is recorded and not fingerprinted (F3, H-R56).
+- 2026-11-01: new data formats `equivalence@1` (`runtime/data/equivalence.yaml`) and `retry-policy@1.0`
+  (`runtime/data/retry_policy.yaml`), each entry carrying its derivation (F1, F4).

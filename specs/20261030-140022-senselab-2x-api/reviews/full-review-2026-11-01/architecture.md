@@ -245,6 +245,9 @@ decided but not placed in any plan:
 - **Correction:** classify transient errors only for network types (`httpx.TransportError`,
   `ConnectionError`, `TimeoutError`, `urllib.error.URLError`) and for status 429 or ≥500. Delete the
   `requests` branch and the prose. Pass the retry count from the execution profile, or as a parameter.
+- **Status 2026-11-01:** resolved by F1 (`e363dc87`) and F3 (`2cd31918`): `runtime/faults.py::is_transient` is the one classifier
+  (errno for OS errors, `response.status_code` for HTTP errors from any client), `storage_fault` uses it, and retry takes
+  a `RetryPolicy`.
 
 ## Minor
 
@@ -261,6 +264,8 @@ decided but not placed in any plan:
   - `senselab_core/__init__.py:38`, which runs a metadata check at import.
 - **Correction:** pass these as explicit arguments now, so the execution profile can supply them in
   Phase 2. Return the run id rather than exporting it. Move the version check into the worker handshake or the CLI.
+- **Status 2026-11-01:** `SENSELAB_HF_MAX_RETRIES` is resolved (F1, `e363dc87`): it is no longer read, and retry takes an
+  explicit `RetryPolicy` loaded from `runtime/data/retry_policy.yaml`. The other variables listed are open.
 
 ### F-9. The core runtime carries code that only frozen 1.x uses
 

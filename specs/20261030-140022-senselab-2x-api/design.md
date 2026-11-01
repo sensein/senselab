@@ -150,7 +150,7 @@ The summary below follows that model.
 - **`IrregularSignal`** carries per-sample timestamps. Regularising one is an explicit task. Gaps
   are `Intervals` and are never zero-filled.
 - **`Video`, `Image` and `Text`** follow the same lazy, content-identified pattern.
-- **Loading** is lazy, by path, byte range, stream or time range. Derived data is chunked. Tensors
+- **Loading** is lazy, by path, byte range, stream or time range. A file is opened with `runtime.audio_io.open_audio`; the kernel does no I/O (ADR-009). Derived data is chunked. Tensors
   exist only inside backends.
 - **Identity** of source data is the hash of its raw content bytes, chunked for long recordings
   ([ADR-002](adr/ADR-002-identity-v2.md)). The decoder is recorded as execution context. Data
@@ -160,11 +160,11 @@ The summary below follows that model.
   canonical digest is computed when it is built, so a value that validates can be digested and a cycle
   or a form past the work budget is refused at construction.
 - **A source stamp binds the file's content** (R-103). The stamp is the file's content root, taken over
-  every byte, so a rewrite that keeps size, mtime, inode and device (`cp -p`, `rsync -t`) raises
+  every byte by `runtime/audio_io` (validation alone does not read the file; a read or `audio_io.check` does), so a rewrite that keeps size, mtime, inode and device (`cp -p`, `rsync -t`) raises
   `StaleSource` instead of returning other samples. Measured on a one-hour 16 kHz WAV (115 MB, local
   SSD, 2026-10-31): one full hash per read, about 0.5 s per GB, whatever the window. This conflicts with
-  ADR-005's "never hashed whole" (A I-5, R-109) and is decided with moving audio decoding out of the
-  kernel ([`decisions-2026-11-01.md`](decisions-2026-11-01.md), "Follows").
+  ADR-005's "never hashed whole" (A I-5, R-109). Decoding and stamping moved out of the kernel (F3); the
+  conflict with ADR-005 stays open as R-109, in Phase 2.
 - **A recording's anchor is not its identity.** A recording placed on a session clock carries that
   clock's name, so validation does not tie `anchor.clock_id` to `identity`; the anchor is part of the
   value's canonical digest, not of its content identity.
@@ -943,3 +943,4 @@ R-n in [`review-register.md`](review-register.md).
 - 2026-11-01: 2.x lives on `2.x`; `src/` is 1.x as on `alpha`, never edited by 2.x; Phase 1 exit has no
   1.x rewire or 1.x tests (D-6, D-7, §6.1, §6.2, §8).
 - 2026-11-01: triage's tasks and pipelines port; its decision layer is superseded (H-R52, §6.2).
+- 2026-11-01: a model's key is its weights' digest and its source is context; decoding and stamping live in `runtime/audio_io`; every 2.x CI job except `worker-floor` installs with `uv sync --locked` (H-R56, H-R57; ADR-002, ADR-009).

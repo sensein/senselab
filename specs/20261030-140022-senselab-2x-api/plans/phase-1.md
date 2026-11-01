@@ -197,7 +197,7 @@ Tasks 2–4, 7–9 and 11 can run in parallel once Task 1 has merged. Dependenci
     - `senselab_core.kernel` forbidden from `senselab_core.runtime` and `senselab`;
     - `senselab_core` forbidden from `senselab` and from `torch`, `transformers`, `speechbrain`,
       `pyannote`.
-  - The `core-only` CI job runs `uv venv -p <py> .core && uv pip install ./packages/senselab-worker ./packages/senselab-core pytest hypothesis && pytest packages -m "logic or contract"`, plus `lint-imports`.
+  - The `core-only` CI job runs `UV_PROJECT_ENVIRONMENT=.core uv sync --locked --no-editable --python <py> --package senselab-core --group test && .core/bin/pytest packages -m "logic or contract"`, plus `lint-imports` (amended 2026-11-01, H-R57: was `uv venv` and `uv pip install`, which ignored the lock).
 - [ ] **Step 4:** Run `uv sync --all-extras --group dev`, then
   `uv run pytest packages -m "logic or contract" -v`, which passes, then `uv run lint-imports`,
   which passes. Run `uv run pytest src/tests/utils -q` to confirm 1.x still collects with
@@ -371,7 +371,7 @@ Tasks 2–4, 7–9 and 11 can run in parallel once Task 1 has merged. Dependenci
   - The `worker-floor` CI job:
     1. `uv build packages/senselab-worker`;
     2. `uv venv -p 3.10 .floor`;
-    3. `uv pip install --python .floor dist/senselab_worker-*.whl numpy==1.23.5 pytest`;
+    3. `uv pip install --python .floor dist/senselab_worker-*.whl numpy==1.23.5 pytest`; the one unlocked 2.x job (the lock needs Python 3.11 or later), pending a locked 3.10 constraints file (2026-11-01, H-R57);
     4. `.floor/bin/pytest packages/senselab-worker/tests -m logic`.
 - [ ] **Step 4:** Scoped pytest passes locally. Run the floor sequence locally with Python 3.10,
   and it passes.
@@ -401,7 +401,7 @@ Tasks 2–4, 7–9 and 11 can run in parallel once Task 1 has merged. Dependenci
   - `IrregularGroup(channels, timestamps_ns: numpy.ndarray, data: numpy.ndarray)`;
   - `Recording(groups: dict[str, RegularGroup | IrregularGroup], anchor: TimeAnchor, identity: str)`;
   - `Audio(Recording)`: one regular group named `"audio"`, every channel `type == "audio"`;
-    `Audio.from_path(path) -> Audio` (lazy; `identity = content_identity(path)["root"]`) and
+    `audio_io.open_audio(path) -> Audio` in `runtime/audio_io.py` (lazy; `identity = content_identity(path)["root"]`; was `Audio.from_path`, moved out of the kernel 2026-11-01, F3) and
     `Audio.from_array(a, sampling_rate) -> Audio`;
   - `Annotation(span: Span, label: str | None, value: float | None, score: float | None, producer: str, guideline: str | None = None, uncertainty: float | None = None)`;
   - `Embedding(vector: numpy.ndarray, space: str)`;
@@ -429,7 +429,7 @@ Tasks 2–4, 7–9 and 11 can run in parallel once Task 1 has merged. Dependenci
   @pytest.mark.logic
   def test_audio_identity_is_raw_bytes(tmp_path):
       p = write_wav(tmp_path)  # helper from senselab_core.testing.synth once Task 14 lands; inline here
-      assert Audio.from_path(p).identity == content_identity(p)["root"]
+      assert open_audio(p).identity == content_identity(p)["root"]
 
   @pytest.mark.logic
   def test_audio_time_range_read_is_lazy(tmp_path): ...
@@ -493,7 +493,7 @@ Tasks 2–4, 7–9 and 11 can run in parallel once Task 1 has merged. Dependenci
   ```
 - [ ] **Step 2:** Scoped pytest fails.
 - [ ] **Step 3:** Implement. `acceptable` consults an equivalence-class table that is empty in
-  Phase 1 (`EQUIVALENCE: dict[str, frozenset[str]] = {}`), so `equivalent` behaves as `exact`.
+  Phase 1, so `equivalent` behaves as `exact`. Amended 2026-11-01: the table is data, `runtime/data/equivalence.yaml` (`equivalence@1`), loaded by `runtime/equivalence.py`, with a derivation per class (F1, F4).
 - [ ] **Step 4:** Scoped pytest passes.
 - [ ] **Step 5:** Commit `feat(core): identity v2 types and license record`.
 
