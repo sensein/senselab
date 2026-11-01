@@ -2,7 +2,8 @@
 
 `venv` makes the venv layout, `pip install` writes a `*.dist-info` per pin, `python dir` prints a directory.
 Behaviour comes from the environment: `FAKE_UV_LOG` (each call's argv appended as a JSON line),
-`FAKE_UV_UNMANAGED` (`venv` fails as uv does with no managed interpreter), `FAKE_UV_NO_WHEEL` (an index install
+`FAKE_UV_UNMANAGED` (`venv` fails as uv does with no managed interpreter), `FAKE_UV_VENV_FAIL` (`venv`
+fails for another reason), `FAKE_UV_NO_WHEEL` (an index install
 fails as uv does when no wheel matches), `FAKE_UV_DELAY` (seconds each `pip install` takes) and
 `FAKE_UV_PYTHON_DIR` (what `python dir` prints).
 """
@@ -27,6 +28,9 @@ def _venv(args: list[str]) -> int:
     version = args[args.index("--python") + 1]
     if os.environ.get("FAKE_UV_UNMANAGED"):
         sys.stderr.write(f"error: No interpreter found for Python {version} in managed installations\n")
+        return 2
+    if os.environ.get("FAKE_UV_VENV_FAIL"):
+        sys.stderr.write("error: failed to create directory: Permission denied (os error 13)\n")
         return 2
     target = Path(args[-1])
     (target / "bin").mkdir(parents=True)

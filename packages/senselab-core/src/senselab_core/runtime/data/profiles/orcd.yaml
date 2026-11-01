@@ -6,6 +6,7 @@ env_roots:
   isolated: $SCRATCH/senselab-2x-venvs
   server: $SCRATCH/senselab-2x-venvs/servers
 envs:
+  lease_stale_after_s: 1200
   torch_index:
 model_sources:
 model_cache_budget_bytes:
@@ -24,8 +25,11 @@ derivations:
     Env trees live under the job's scratch directory, never the home directory, which is quota-limited and
     slow for many small files. `$SCRATCH` is expanded where the root is used.
   envs: >-
-    No torch index override: the CUDA index is probed from the host. A site whose probe is wrong sets
-    torch_index.
+    lease_stale_after_s 1200: about twice the slowest measured cold build of the crisperwhisper env on
+    ORCD (362.6 s GPU node, 579.7 s and 590 s CPU node, n=2 per host; specs/20260907-shared-lock-heartbeat-inf/
+    stampede-timeout-and-identity-file.md), padded because two samples bound no population. A lease younger
+    than that is a build in progress and is waited on. No torch index override: the CUDA index is probed
+    from the host. A site whose probe is wrong sets torch_index.
   model_sources: >-
     Null: the hub organisations of the catalogue entries. A site that mirrors or restricts models lists
     organisations here.

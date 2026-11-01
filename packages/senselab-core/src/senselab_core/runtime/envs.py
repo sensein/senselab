@@ -4,9 +4,9 @@ An isolated env is a uv venv on a uv-managed interpreter (`--python-preference o
 version, `t` for free-threaded), installed from its lock: a lock with `torch:` pins installs them from the PyTorch
 wheel index routed to the host's CUDA (`pick_torch_index`), then the lock body with `--no-deps`. Under `root`, env
 `<name>` lives in `<name>[-<tag>]-<uuid>/`, and `<name>[-<tag>].json` (`env-record@1.0`) names the current build;
-both are written under a `Lease` on `<name>[-<tag>]`. A build is never moved, so a broken lease costs a duplicate
-build, never a mixed env. The worker runtime is copied into every env as an overlay that leaves its wheel set
-unchanged.
+both are written under a `Lease` on `<name>[-<tag>]`. A build is never moved or removed here, so a broken lease
+costs a duplicate build, never a mixed env, and a superseded build stays until an explicit clean-up. The worker
+runtime is copied into every env as an overlay that leaves its wheel set unchanged.
 """
 
 import errno
@@ -32,7 +32,8 @@ from senselab_worker.digest import file_digest, identity_digest
 from senselab_core.kernel.declare import Env
 from senselab_core.kernel.formats import FormatTag, Formatted
 from senselab_core.runtime.hardware import _run
-from senselab_core.runtime.locks import Lease
+from senselab_core.runtime.locks import TIMEOUT_S, Lease
+from senselab_core.runtime.profiles import Envs
 from senselab_core.runtime.storage import write_atomically
 
 logger = logging.getLogger("senselab")
@@ -60,6 +61,7 @@ _NO_WHEEL = re.compile(
     r"(?: that satisfies)?(?: the requirement)?)\s+`([^`]+)`",
     re.IGNORECASE,
 )
+_NO_INTERPRETER = re.compile(r"no interpreter found|no download found", re.IGNORECASE)
 _OVERLAY_STAMP = "senselab_worker.runtime"
 
 
@@ -239,12 +241,12 @@ def pick_torch_index(
     return TorchIndex(CPU_INDEX, "cpu", "probe")
 
 
-def ensure_env(  # noqa: PLR0913 - the env, its lock and root, and three injectable boundaries
+def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings, and two injectable boundaries
     env: Env,
     lock: Path,
     root: Path,
     *,
-    torch_index: str | None = None,
+    settings: Envs,
     uv: Uv | None = None,
     host_cuda: HostCuda | None = None,
 ) -> EnvHandle:
@@ -256,7 +258,8 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock and root, and three injecta
         env: The env a backend declares.
         lock: The lock file the env is installed from.
         root: The directory the profile's `env_roots` gives for `env.kind`; unused for a host env.
-        torch_index: The profile's `envs.torch_index`; replaces the probed index when set.
+        settings: The profile's `envs`: `torch_index` replaces the probed index when set, and a build's lease is
+            broken once older than `lease_stale_after_s`; a waiter waits that long plus `locks.TIMEOUT_S`.
         uv: The `uv` command; `Uv.find()` when None.
         host_cuda: The host's CUDA; probed with `detect_host_cuda` when None and the lock pins torch.
 
@@ -274,7 +277,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock and root, and three injecta
     index = None
     if parsed.torch_pins:
         host_cuda = host_cuda or detect_host_cuda()
-        index = pick_torch_index(host_cuda, override=torch_index, max_cuda=parsed.max_cuda)
+        index = pick_torch_index(host_cuda, override=settings.torch_index, max_cuda=parsed.max_cuda)
     stem = f"{env.name}-{index.tag}" if index else str(env.name)
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
@@ -287,14 +290,12 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock and root, and three injecta
         and _overlaid(root / current.directory)
     ):
         return _handle(root, current)
-    with Lease(root / stem):
+    stale_after = settings.lease_stale_after_s
+    with Lease(root / stem, stale_after=stale_after, timeout=stale_after + TIMEOUT_S):
         current = _read_record(root, stem)
         if current is None or (current.lock_sha, current.torch_index) != wanted:
-            previous = current
             current = _build(root, stem, parsed, lock_sha, index, uv, host_cuda)
             write_atomically(root / f"{stem}.json", current.model_dump_json().encode())
-            if previous is not None:
-                shutil.rmtree(root / previous.directory, ignore_errors=True)
         _overlay(root / current.directory)
     return _handle(root, current)
 
@@ -353,12 +354,13 @@ def _build(  # noqa: PLR0913 - one build's inputs
     logger.info("building env %s on Python %s (torch index %s)", stem, lock.python, index.tag if index else "none")
     try:
         created = uv("venv", "--python", lock.python, "--python-preference", PYTHON_PREFERENCE, str(directory))
-        if created.returncode:
+        if created.returncode and _NO_INTERPRETER.search(created.stderr):
             raise ManagedPythonMissing(
                 lock.python,
-                f"uv could not create a venv on a managed Python {lock.python} "
+                f"uv has no managed Python {lock.python} "
                 f"(--python-preference {PYTHON_PREFERENCE}): {created.stderr.strip()}",
             )
+        _check(created, f"create a venv on Python {lock.python}")
         python = str(_python(directory))
         if index is not None:
             torch = uv("pip", "install", "--index-url", index.url, "--python", python, *lock.torch_pins)

@@ -12,9 +12,10 @@ import platform
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import yaml
+from pydantic import Field
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.declare import BackendSpec, Registry, TaskSpec
@@ -46,8 +47,14 @@ class NoDevice(RuntimeError):
 
 
 class Envs(Frozen):
-    """Env settings: `torch_index` replaces the probed CUDA wheel index when set."""
+    """Env settings.
 
+    Attributes:
+        lease_stale_after_s: Seconds after which another process breaks an env build's lease.
+        torch_index: Replaces the probed CUDA wheel index when set.
+    """
+
+    lease_stale_after_s: Annotated[float, Field(gt=0)]
     torch_index: NonEmptyStr | None = None
 
 
