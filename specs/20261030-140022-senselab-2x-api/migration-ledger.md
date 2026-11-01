@@ -36,6 +36,15 @@ modify commit.
 | `src/senselab/utils/subprocess_venv.py`, `uv_tools.py`, `venv_lock.py`, `cuda_probe.py` | folded into `packages/senselab-core/src/senselab_core/runtime/envs.py` | 9a1 |
 | `src/senselab/utils/vllm_server.py` | `packages/senselab-core/src/senselab_core/runtime/vllm_server.py` | 9b |
 | `src/senselab/audio/tasks/preprocessing/` `resample_audios` (torch, speechbrain) | rewritten, not ported: `packages/senselab/src/senselab/signal/resample.py` (numpy Kaiser-windowed sinc, task `signal.resample`, ruling P2-59) | 12 |
+| `src/senselab/audio/tasks/speech_to_text/` `huggingface.py`, `token_confidence.py` | `packages/senselab/src/senselab/audio/tasks/speech_to_text/` (backend `transformers`, host; `token_confidence` is the one word-confidence engine, P2-56) | 13 |
+
+Unported in Task 13, each at its `alpha` source `36aa9615:src/senselab/audio/tasks/speech_to_text/`: `huggingface.py`:
+`HuggingFaceASR` and its class-level pipeline cache (the model cache and `load` replace them), `_attach_token_confidence`
+and `_set_confidence` (word confidence replaces the per-line fields), the `ScriptLine`, `Language`, `DeviceType`, `HFModel`
+and `load_hf_resilient` plumbing (kernel types, the catalogue's pinned commit and `ensure_env` replace them);
+`api.py` `transcribe_audios` dispatch (never moves, P2-36; the generated `speech_to_text` task replaces it).
+`token_confidence.py`: `token_entropy`, `no_speech_prob` and the no-speech token lookup are removed (no 2.x consumer; the 1.x uncertainty loop read them); `torch` is imported lazily and each block gains `tokens` and `token_logprob`.
+Open for Task 22a: a mixed batch whose window count differs from its item count gets no word confidence (`_block` returns none), so batch formation owns its alignment.
 
 Unported in Task 9a1 (ruling P2-3), each at its `alpha` source `36aa9615:src/senselab/utils/<module>`:
 
