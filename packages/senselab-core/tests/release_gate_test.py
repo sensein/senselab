@@ -339,7 +339,10 @@ def test_a_ci_job_selects_the_core_env_tests() -> None:
 @pytest.mark.logic
 def test_every_workspace_member_is_a_published_distribution() -> None:
     """``--all-packages`` builds the workspace members; the gate requires exactly those distributions."""
-    assert PYPROJECT["tool"]["uv"]["workspace"]["members"] == ["packages/*"]
+    members = PYPROJECT["tool"]["uv"]["workspace"]["members"]
+    assert members == ["packages/senselab-*"]
+    assert all((REPO / m).is_dir() for m in (REPO / "packages").glob("senselab-*"))
+    assert (REPO / "packages/senselab/src/senselab/__init__.py").is_file()
     names = {tomllib.loads(p.read_text())["project"]["name"] for p in (REPO / "packages").glob("*/pyproject.toml")}
     assert names | {PYPROJECT["project"]["name"]} == set(gate.DISTRIBUTIONS)
 

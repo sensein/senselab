@@ -23,6 +23,7 @@ REPO = Path(__file__).resolve().parents[4]
 IMPORTLINTER = REPO / ".importlinter"
 CONTRACT = "importlinter:contract:digests-are-tagged"
 RAW_CONTRACT = "importlinter:contract:raw-digest-owners"
+ABOVE_CORE_CONTRACT = "importlinter:contract:packages-not-1x"
 KERNEL_IO_CONTRACT = "importlinter:contract:kernel-does-no-io"
 
 
@@ -52,11 +53,14 @@ def _lint_imports(
     alerting: str = "none",
     contracts: tuple[str, ...] = (CONTRACT, RAW_CONTRACT),
 ) -> subprocess.CompletedProcess[str]:
-    """Run the repository's `contracts` (the two digest contracts by default), alone, over the stubs in `base`."""
+    """Run the repository's `contracts` (the two digest by default), alone, over `base`, without packages above core."""
     parser = configparser.ConfigParser()
     parser.read(IMPORTLINTER)
     config = configparser.ConfigParser()
     config["importlinter"] = dict(parser["importlinter"])
+    above = _lines(parser[ABOVE_CORE_CONTRACT]["forbidden_modules"])
+    roots = [r for r in _lines(parser["importlinter"]["root_packages"]) if r not in above]
+    config["importlinter"]["root_packages"] = "\n".join(roots)
     for name in contracts:
         config[name] = {**parser[name], "unmatched_ignore_imports_alerting": alerting}
     if extra_ignore:
