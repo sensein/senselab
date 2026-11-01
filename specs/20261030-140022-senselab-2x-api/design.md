@@ -189,12 +189,12 @@ The summary below follows that model.
 - **Records.** A `Record` holds named views (`audio`, `video`, `ecg`, `acc@wrist`, `transcript`)
   that share its entities and timeline.
 
-### 4.2 Task (P-1, P-17, P-20)
+### 4.2 Task (P-1, P-17)
 
 A Task is declared once, in core, without importing a backend:
 
 ```python
-@task(name="speech_to_text", version=3, kind="measure")
+@task(name="speech_to_text", version=3, kind="transform")
 class SpeechToText:
     class Params(TaskParams):
         language: Language | None = None
@@ -205,7 +205,6 @@ class SpeechToText:
 
 - **Kinds:**
   - `transform`;
-  - `decide`: consumes measurements plus a profile;
   - `fit`: learns state, see section 4.14.
 - **Configured, immutable objects are the primary form:**
   ```python
@@ -274,8 +273,8 @@ class CrisperWhisperCt2: ...
 p = sl.Pipeline("conversation")
 seg = p.add(sl.audio.Diarize(), audio=p.input("audio"))
 asr = p.add(sl.audio.SpeechToText(language="en"), audio=p.map(seg.out.segments))  # explicit fan-out
-spk = p.add(speaker_identity, audio=p.input("audio"), turns=seg.out.turns)  # nested Pipeline
-p.output(transcript=asr.out.transcript, speakers=spk.out.speakers)
+clean = p.add(denoise_then_asr, audio=p.input("audio"))  # nested Pipeline
+p.output(transcript=asr.out.transcript, clean=clean.out.transcript)
 ```
 
 - **Nesting.** A `Pipeline` satisfies the Task protocol, so it can be used as a node.
@@ -284,7 +283,7 @@ p.output(transcript=asr.out.transcript, speakers=spk.out.speakers)
   ([ADR-001](adr/ADR-001-graph-format.md)). `over=` names only a dataset grouping key (`session`,
   `participant`, `corpus`) taken from the dataset's entities (section 4.6).
 - **Routing and loops.** `p.route(predicate, branches={...})` and
-  `p.loop(body, until=predicate, max_rounds=n)` take a **declared decide task** as the predicate.
+  `p.loop(body, until=predicate, max_rounds=n)` take any declared task with a `bool` output as the predicate.
   Its output is a recorded result, so a resumed run takes the same branch. Unrolled rounds get
   distinct ids.
 - **Absence.** `Absent(cause)` is typed: content-caused or environment-caused (I-6). Downstream
@@ -298,7 +297,7 @@ p.output(transcript=asr.out.transcript, speakers=spk.out.speakers)
 ### 4.6 Dataset and profiles (P-11, P-12, P-18)
 
 ```python
-ds = sl.Dataset.bids("/data/ds", dataset_profile="b2ai-voice:2026-09")
+ds = sl.Dataset.bids("/data/ds", dataset_profile="voice-cohort:2026-09")
 ds = sl.Dataset.from_records([{"audio": "a.wav", "participant": "p1"}])
 ds = ds.filter(task="reading-passage")
 ```
@@ -315,7 +314,7 @@ ds = ds.filter(task="reading-passage")
   | Profile | Holds |
   |---|---|
   | run config | model choices, thresholds, aggregators, `license_policy` |
-  | dataset profile | entities, sidecar→hint mapping, task protocol, lexicons, cohort conditions, references to fitted-profile artifacts |
+  | dataset profile | entities, sidecar field mapping, task protocol, lexicons, cohort conditions, references to fitted-profile artifacts |
   | execution profile | hardware classes, substrate, partitions, roots, stack preferences, caps, policy limits, network policy |
 
 - **Profile slices.** A node reads only the profile slices it declares, and those slices are
@@ -465,7 +464,7 @@ typed error at the boundary naming the attribute path and the type (H-R29, H-R30
 - **MCP server (`senselab mcp`).** The same operations as JSON tools, with schemas generated
   from the declarations. It replaces DeepWiki lookups.
 - **Discovery:** `describe` works on tasks, pipelines, datasets (`describe_dataset`: entities,
-  counts, views, hints), profiles and executors. Port-type queries such as
+  counts, views, fields), profiles and executors. Port-type queries such as
   `tasks(accepts="Transcript")` are supported, and the graph format has a JSON Schema.
 - **Errors:** one envelope, `{code, message, fix, field, suggestions}`.
 - **Results:** inline up to a size cap; above it, a reference `{ref, shape, dtype, summary}`.
@@ -582,7 +581,7 @@ typed error at the boundary naming the attribute path and the type (H-R29, H-R30
   - `labels` are another task's results, or annotations in the dataset.
 - It returns a new fitted object whose state is a **Profile artifact**: content-hashed, with an
   emitted derivation (inputs, labels, code version, config) and provenance.
-- Decide tasks take `profile=<artifact>`. Dataset profiles refer to fitted artifacts by identity,
+- Any task may take `profile=<artifact>`. Dataset profiles refer to fitted artifacts by identity,
   so there is a single path, and the artifacts carry inherited licenses (I-9).
 
 **Interop:**
@@ -612,8 +611,8 @@ The taxonomy and tables are in `use-cases.md` §4.
    (delegating to MNE/YASA), `sl.eyetrack`.
 
 Inputs are typed `Signal[type ∈ {...}, units]`, so `tasks(accepts=...)` works for channels. QC
-tasks emit SQI tracks and gap intervals, while non-wear and unusable-epoch verdicts are `decide`
-tasks with fitted profiles.
+tasks emit SQI tracks and gap intervals, while non-wear and unusable-epoch labels are tasks that
+take fitted profiles.
 
 ## 5. Packaging (P-13, P-22, P-25)
 
@@ -818,10 +817,10 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
     running campaigns and is superseded by the flywheel (P-36); `migration-ledger.md` classifies each
     module.
 - Exit:
-  - a **protocol screening pipeline** composed from the ported measurement tasks runs on B2AI and
-    on a constructed synthetic dataset by changing only the dataset profile (P-12):
+  - one pipeline composed from the ported tasks runs on two dataset profiles (B2AI and a constructed
+    synthetic dataset) by changing only the dataset profile (P-12):
     - the synthetic dataset has a different entity scheme and task protocol;
-    - its thresholds are declared `unfitted`, so they route to review;
+    - its unfitted thresholds yield a typed `Absent`;
     - every node runs or is typed-absent;
     - a static check finds no dataset names, task ids or sidecar fields in pipeline code;
   - pipelines nest unchanged (P-9);
@@ -904,7 +903,7 @@ Each cut keeps its interface or hook, and is added when a measurement or a use c
   Amended 2026-11-01 (owner item 30, D-7): 2.x merges to the `2.x` branch, not `alpha` (§6.1).
 - **Second dataset:** none exists, so genericity is shown by design (Phase 4 exit).
 - **The keep, port and drop list** is accepted:
-  - port `adaptive_loop` (as `p.loop`), and the tutorials;
+  - port the tutorials (`p.loop` only if a use case needs it);
   - replace `agentic_interface` with MCP;
   - keep the review-page and VLM tooling outside the package;
   - move ORCD scripts into site profiles;

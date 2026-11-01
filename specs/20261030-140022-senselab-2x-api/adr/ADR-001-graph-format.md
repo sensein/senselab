@@ -1,7 +1,7 @@
 # ADR-001: senselab owns the graph format; it compiles to pydra
 
 **Status:** accepted, 2026-10-30 (owner: "senselab owns the graph format but make it compatible with
-pydra").
+pydra"). Amended 2026-11-01.
 
 ## Context
 - Architect review §1 (R-38): keys passed through pydra's hashing hooks, and `Executor` was a name
@@ -56,3 +56,14 @@ class Executor(Protocol):
 - **pydra's workflow definition as the format.** It ties senselab identity to pydra hashing, and
   its definitions are Python code, not data.
 - **Inferred fan-out.** A silent per-element run when a list was meant (R-51).
+
+## Amendment 2026-11-01: predicates are any declared task
+
+Replaces "a declared decide task" in the Decision text on routing and loops. A `route` or `loop` predicate
+is any declared task with a `bool` output; there is no `decide` task kind (task kinds are `transform` and
+`fit`). Its output is still a recorded result, so a resumed run takes the same branch. Authority: owner,
+2026-11-01 ("apply all 13", 1.x leakage audit); P-20 retired.
+
+## Amendment log
+
+- 2026-11-01: route and loop predicates are any declared task with a `bool` output; no `decide` kind (owner, leakage audit).

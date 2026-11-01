@@ -407,7 +407,7 @@ model is the load stub), tests.
 **Model:** opus implements (identity); fresh opus reviews. **Tier:** logic, contract. **Implements:** ADR-002 §1;
 R-56, R-57, R-58, R-122; rulings P2-48, P2-62. **Depends on:** Task 5a.
 
-**Files:** Create `runtime/keys.py`. Modify `kernel/declare.py` (`VERDICT_TYPES`), `testing/contracts.py`, tests.
+**Files:** Create `runtime/keys.py`. Modify `testing/contracts.py`, tests.
 
 **Interfaces:**
 - `build_key(call, placement, context) -> LogicalKey` is the one key builder (ruling P2-48): it takes `backend`,
@@ -417,11 +417,10 @@ R-56, R-57, R-58, R-122; rulings P2-48, P2-62. **Depends on:** Task 5a.
 - `contract_cases` runs every backend that names a worker: `load(load_stub)` then `handle`, including
   `content_fault_isolated` (R-57); `FAULT_RUNNERS` keyed by stack and `NOT_YET_WIRED` are gone. A model-less host
   backend has a worker module too (Task 12).
-- `VERDICT_TYPES` is derived from the kernel types marked as decisions, not a literal (R-58).
 
 - [ ] **Step 1: Failing tests (local):** `test_output_affecting_enters_key_only_when_declared`,
   `test_backend_version_enters_key`, `test_key_ignores_context_through_builder` (two execution contexts, one key),
-  `test_worker_backend_gets_contract_cases`, `test_contract_cases_load_the_declared_stub`, `test_verdict_types_derived`.
+  `test_worker_backend_gets_contract_cases`, `test_contract_cases_load_the_declared_stub`.
 - [ ] **Step 2: Implement; Step 3 (local):** `uv run --no-sync pytest packages/senselab-core/tests/kernel packages/senselab-core/tests/testing packages/senselab-core/tests/runtime/keys_test.py -m "logic or contract" -k "not pyld"`.
 - [ ] **Step 4:** Review and compact, commit `feat(2x): one key builder and contract cases for every worker`; push;
   CI green.
@@ -781,8 +780,8 @@ version bump (ruling P2-82, I-3).
 §6.2, P-8, P-12, P-17; rulings P2-19, P2-77. **Depends on:** Tasks 9a2, 10b, 11a.
 
 **Files:** P-39 check. Rename-only commit: `git mv src/senselab/text/tasks/pii_detection/{redaction_review,redaction_policy}.py`
-and its `data/`. Modify commit: task `pii_review` (`measure`; input `Text`; output `TextSpans` with categories and
-scores; no verdict); one prompt-and-parsing engine; backend `stack="transformers"` (`Env.isolated("pii-review")`,
+and its `data/`. Modify commit: task `pii_review` (`transform`; input `Text`; output `TextSpans` with categories and
+scores); one prompt-and-parsing engine; backend `stack="transformers"` (`Env.isolated("pii-review")`,
 lock `pii-review`, name, version, load stub); dataset-specific guidance and policy text become a profile slice with a
 derivation (P-12), keyed as `profile:`. Ledger: unported PII modules (`rules`, `local_llm`, `subprocess_backend`,
 `api`) listed with their `alpha` source.

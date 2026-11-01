@@ -259,8 +259,7 @@ it is amended here.
 - **Statement**: senselab's long-term goal is a flywheel in which machines and humans iteratively
   improve the system. Datasets, pipelines, annotations, reviews, fitting and model fine-tuning
   happen as needed, and are evaluated and promoted by identity. 2.x builds none of it, but its
-  decisions must keep the hooks in `roadmap.md` possible. Triage's decision layer is rebuilt as a
-  flywheel application after 2.x rather than ported.
+  decisions must keep the hooks in `roadmap.md` possible.
 - **Source**: owner, 2026-10-30: "triage should adopt a flywheel approach of a system that allows
   machines and humans to iteratively improve the system ... make this a future roadmap goal that
   should inform not force current decisions".
@@ -348,7 +347,7 @@ amending its origin.
 ### P-17 Thresholds are data with a derivation
 - **Status**: active. **Statement**: decision constants live in versioned data profiles with a
   derivation, and are regenerated rather than hand-edited. **Source**: `CLAUDE.md`. **Check**: a lint
-  flags numeric literals in `decide` tasks that have no profile key.
+  flags numeric literals in any task that have no profile key.
 
 ### P-18 Configuration, not flags
 - **Status**: active. **Statement**: entry points take inputs and configuration, and the merged
@@ -443,3 +442,9 @@ amending its origin.
 
 - 2026-11-01: P-20 retired (owner: "verdict/decision seems very specific to triage"). Core drops `VERDICT_TYPES`,
   the `DECISION` format marker and the measure-has-no-verdict contract case; task kinds stay plain declarations.
+
+- 2026-11-01: owner ("apply all 13") removed triage-derived vocabulary from the 2.x design: no `decide` or `measure` task kind
+  (kinds are `transform` and `fit`); route and loop predicates are any declared bool task (ADR-001 amendment); dataset
+  profiles map sidecar fields, not hints; neutral examples replace b2ai-voice and speaker_identity; Phase 4 exit no longer
+  names screening or review routing; P-17's lint covers every task; P-36's Statement drops the triage clause (kept in
+  `roadmap.md`).
