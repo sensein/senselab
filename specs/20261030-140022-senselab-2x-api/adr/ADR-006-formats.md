@@ -89,7 +89,7 @@ findings are in [`reviews/phase1-reattack/canon.md`](../reviews/phase1-reattack/
 
   **Registered identity tags:** `logical-key@6`, `output@3`, `context@3`, `content-root@2`, `audio@3`,
   `weights@3`, `value@2`, `provenance-id@4`, `data-manifest@3`, `worker-runtime@1`, `fake-output@1`,
-  `contract-probe@1`, `prov-activity@1`, `prov-node@1`, `wheel-set@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a
+  `contract-probe@1`, `prov-activity@1`, `prov-node@1`, `wheel-set@1`, `env-lock@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a
   `format:` line in a packaged YAML file or in a store entry): `equivalence@1`, `retry-policy@1.0`, `catalogue@1.0`, `spdx-licenses@1.0`, and
   `execution-context@2.0` in a store entry's `context.json`; `env-record@1.0`, an env root's `<name>[-<tag>].json`; `senselab-vocab@1.0`, a vocabulary document's
   `owl:versionInfo` (ADR-010).
@@ -218,3 +218,9 @@ Ruling P2-44 ([`plans/phase-2.md`](../plans/phase-2.md)) and ADR-010 as amended;
   `dependencies_digest` (H-R20). Data format `env-record@1.0`: the current build of one env under its root,
   `{directory, lock_sha, torch_index, python_version, wheel_set}`, replaced by rename under the env's lease
   (Phase 2 Task 9a1).
+- 2026-11-01: identity tag `env-lock@1`, the digest of everything a lock is compiled from: the backend's requirement
+  specs, the base requirements, the quarantine constraints, the pinned `exclude_newer`, the Python version, the CUDA
+  ceiling and the excluded distributions. It replaces the untagged `requirements_sha256`; the 1.x format has no
+  reader, and locks are recompiled. A lock's header is `# senselab env lock: <name>`, `# identity-digest: <tag> <64 hex>`,
+  `# python:`, `# torch:`, `# torch-index:`, `# exclude-newer:`, `# uv:`, then an optional `# exclude:` and any `# note:`
+  lines. Data format `env-lock-inputs@1.0`: `data/env_locks/inputs.yaml`, each value with its derivation.
