@@ -76,7 +76,7 @@ from senselab.utils.reproduce.spec import (
     render,
 )
 
-ENV_KEY_SCHEMA = "reproduce-env-1"
+ENV_KEY_SCHEMA = "reproduce-env-2"
 VENVS = "venvs"
 MARKER = ".reproduce-venv.json"
 INSTALLED = "installed.json"
@@ -595,7 +595,10 @@ def _build_or_reuse(
             path.unlink()
         elif path.exists():
             shutil.rmtree(path)
-        _run_ok([uv, "venv", "--no-config", "--python", env.python_exact, str(path)], run_env)
+        _run_ok(
+            [uv, "venv", "--no-config", "--python", env.python_exact, "--python-preference", "only-managed", str(path)],
+            run_env,
+        )
         python = path / "bin" / "python"
         texts = []
         if env.torch is not None:
