@@ -71,6 +71,7 @@ from senselab_core.kernel.time import Span, TimeAnchor, TimeMap
 from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
+from senselab_core.runtime.envs import EnvRecord
 from senselab_core.runtime.fetch import DataFile, DataManifest
 from senselab_core.runtime.profiles import Envs, ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy
@@ -775,8 +776,31 @@ def _register_runtime_samples() -> None:
     )
     register_samples(
         Envs,
-        lambda: [Envs(), Envs(torch_index="https://download.pytorch.org/whl/cpu")],
-        invalid_updates=[{"torch_index": ""}],
+        lambda: [
+            Envs(lease_stale_after_s=120),
+            Envs(lease_stale_after_s=30.5, torch_index="https://download.pytorch.org/whl/cpu"),
+        ],
+        invalid_updates=[{"torch_index": ""}, {"lease_stale_after_s": 0}],
+    )
+    register_samples(
+        EnvRecord,
+        lambda: [
+            EnvRecord(
+                directory=f"demo-{'a' * 32}",
+                lock_sha="b" * 64,
+                torch_index=None,
+                python_version="3.12.4",
+                wheel_set="c" * 64,
+            ),
+            EnvRecord(
+                directory=f"demo-cu128-{'d' * 32}",
+                lock_sha="e" * 64,
+                torch_index="https://x.example/cu128",
+                python_version="3.14.0t",
+                wheel_set="f" * 64,
+            ),
+        ],
+        invalid_updates=[{"format": "env-record@2.0"}, {"lock_sha": 3}],
     )
     register_samples(
         ExecutionProfile,
