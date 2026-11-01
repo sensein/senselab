@@ -322,6 +322,15 @@ def test_the_lease_mode_is_set_through_its_descriptor_whatever_the_umask(tmp_pat
     assert mode == 0o660
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root opens a 0o000 file")
+def test_a_stale_lease_this_user_cannot_open_is_still_broken(tmp_path: Path) -> None:
+    """A stale lease another user left unreadable is judged by its name's metadata and broken."""
+    resource = tmp_path / "thing"
+    os.chmod(_plant_lease(resource), 0o000)
+    with Lease(resource, timeout=1, stale_after=60) as lease:
+        assert lease.owns() and lease.broke == [_lease_file(resource)]
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root writes in a read-only directory")
 def test_a_directory_that_refuses_the_lease_is_a_typed_error_naming_its_owner(tmp_path: Path) -> None:
     """A lease that cannot be created is `LeaseUnavailable` naming the lease and who can fix the directory."""

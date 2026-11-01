@@ -188,9 +188,10 @@ class Lease:
         one moves it. A caller that moved another inode links it back; if a new lease took the name in
         between, the moved lease is removed and its holder finds it no longer owns it (`owns`).
         """
-        if self._current() != expected:
-            return False
         directory = self._directory()
+        now = directory.lstat(self._name)
+        if now is None or (now.st_dev, now.st_ino) != expected:
+            return False
         aside = uuid.uuid4().hex
         try:
             directory.rename(self._name, directory, aside, grammar=UUID_HEX)
