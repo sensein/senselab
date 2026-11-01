@@ -50,7 +50,9 @@ def test_envs_crisperwhisper_lock_builds_and_round_trips_every_wire_type(tmp_pat
     items = _items()
     state = fake.load({})
     expected = fake.handle(state, items, {})
-    client = WorkerClient(handle.python, "senselab_worker.fake", init={}, array_parent=tmp_path / "arrays")
+    arrays = tmp_path / "arrays"
+    arrays.mkdir()
+    client = WorkerClient(handle.python, "senselab_worker.fake", init={}, array_parent=arrays)
     try:
         got = client.run(items, {})
     finally:
