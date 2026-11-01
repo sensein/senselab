@@ -116,7 +116,7 @@ def test_a_defective_task_fails_its_case(task: dict[str, Any], case: str) -> Non
 def test_a_backend_shared_by_name_across_tasks_is_qualified() -> None:
     """Two tasks with a backend of the same name get ids `<task>/<backend>::<case>`, never a number."""
     registry = _registry({})
-    registry.add_task(TaskSpec(**{**registry.tasks()[0].model_dump(), "name": "t.two", "kind": "transform"}))
+    registry.add_task(TaskSpec(**{**registry.tasks()[0].model_dump(), "name": "t.two", "kind": "fit"}))
     registry.add_backend(BackendSpec(**{**FAKE.model_dump(), "task": "t.two"}))
     ids = {name for name, _ in contract_cases(registry)}
     assert {"t.bad/fake::key_deterministic", "t.two/fake::key_deterministic"} <= ids

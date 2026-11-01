@@ -112,7 +112,7 @@ def test_duplicate_backend_refused_per_task() -> None:
     """A backend name is declared once per task; the same name under another task is a different backend."""
     registry = Registry()
     registry.add_task(_task())
-    registry.add_task(_task(name="t.other", kind="transform"))
+    registry.add_task(_task(name="t.other", kind="fit"))
     first = _backend()
     registry.add_backend(first)
     registry.add_backend(_backend(task="t.other"))
