@@ -137,7 +137,7 @@ the bullet "the LogicalPlan holds the reuse policy" open. The only mismatch is t
 | A schema bump no longer implies a wipe | store@1→@2→@3→@4, data-manifest@1.0→@2.0, result@1.0→@2.0 and wire 1→2 were each new key spaces with no migration | deviation (I-4) |
 
 **Every tag in `DIGEST_TAGS`.** The plan's name `DIGEST_TAGS` became `IDENTITY_TAGS` | `BLOB_TAGS`
-(`W/digest.py:15-37`). The ADR list (`ADR-006:175-184`) equals the registry, and `test_xc8` pins it.
+(`W/digest.py:15-37`). The ADR list (`ADR-006:175-184`) equals the registry, and `test_digest_tags_distinct_and_prefix_free` pins it.
 
 | Tag | Site | What it hashes vs ADR | Verdict |
 |---|---|---|---|
@@ -218,7 +218,7 @@ association, and no `senselab:` vocabulary or published `@context`.
   `node`/`step`;
 - `packages/senselab-core/src/senselab_core/testing/provenance.py`;
 - the shared tokeniser's provenance branch (`$nd`, `$enum`) and `K/_base.py` `FrozenDict`/`thawed`;
-- `W/digest.py` (`provenance-id@4` is retired or bumped) and `test_xc8`;
+- `W/digest.py` (`provenance-id@4` is retired or bumped) and `test_digest_tags_distinct_and_prefix_free`;
 - the `.importlinter` `raw-digest-owners` (unchanged);
 - the release gate (`scripts/release_gate.py`), which must check the vocabulary file;
 - the migration-ledger statement `R/provenance.py:176`;

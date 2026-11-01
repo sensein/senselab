@@ -40,19 +40,19 @@ let most tests be generated rather than written.
 ## 2. Tiers
 
 Every test belongs to exactly one tier, by marker. Markers are registered and `--strict-markers` is
-on. The default run is `logic` only.
+on. The default run is `-m logic`; contract, limits, use case and env are deselected unless a run names them.
 
 | Tier | Marker | Exercises | Inputs | Runs where | Gate |
 |---|---|---|---|---|---|
 | **Logic** | `logic` (default) | Behaviour of code: data types, identity and keys, params validation, planner decisions, graph semantics, decision rules, codecs | small synthetic signals; the `fake` stack | every PR on the min and max Python plus a core-only install; full Python matrix nightly; worker-runtime tests on every env Python from the built wheel | blocking |
-| **Contract** | `logic` (generated) | Every declared task, backend, env and profile meets the framework contract | declarations | with logic | blocking |
-| **Limits** | `limits` | Parameter boundaries and edge inputs against real backends | synthetic edge signals + 3–4 shared fixtures | label-triggered on PRs; nightly; GPU subset on ORCD | blocking for touched backends |
-| **Use case** | `usecase` | One realistic end-to-end pipeline per use case | small public or synthetic recordings with licenses recorded | nightly; ORCD before release | blocking for release |
+| **Contract** | `contract` | Every declared task, backend, env and profile meets the framework contract | declarations | every PR (`-m "logic or contract"`) | blocking |
+| **Limits** | `limits` | Parameter boundaries and edge inputs against real backends | synthetic edge signals + 3–4 shared fixtures | nightly, or on a PR carrying the `limits` label (which runs limits only); GPU subset on ORCD | blocking for touched backends |
+| **Use case** | `usecase` | One realistic end-to-end pipeline per use case | small public or synthetic recordings with licenses recorded | nightly and ORCD only, never on a PR or a label (H-R54); ORCD before release | blocking for release |
 | **Env** | `env` | Each locked env builds, imports the worker runtime and round-trips every data type | lock files | changed locks on the PR; full builds weekly on ORCD | blocking for that env |
 | **Benchmark** | not pytest | Accuracy and speed on public data, tracked over releases | public benchmark subsets and full sets | CPU smoke (<15 min) on PRs touching a task and nightly; GPU smoke weekly on ORCD; full per release on ORCD | tracked, not pass/fail; regressions beyond a band open an issue |
 
 Within limits and use cases, sub-markers `gpu`, `network` and `slow` select hardware and runtime.
-Both tiers are deselected by default.
+Both tiers are deselected by default, as are contract and env: the PR command is `-m "logic or contract"`.
 
 ## 3. Logic tests: write less, generate more
 
@@ -161,6 +161,7 @@ module over the registry, with ids equal to the task, backend or profile name.
 - `uv run pytest` runs logic tests in under a few minutes on a laptop, serially, scoped to the
   package changed.
 - `uv run pytest -m limits -k <backend>` runs one backend's limits.
+- The nightly job needs a scheduled workflow on the default branch (`alpha`) that checks out `2.x`: GitHub runs `schedule` workflows only from the default branch.
 - A test that builds a wheel or sdist, creates a venv or installs from an index carries `network`
   beside its tier, so `-m "not network"` runs none of them. The release-gate and packaging ones
   (`packages/senselab-core/tests/release_gate_test.py`) run in the
@@ -178,12 +179,12 @@ module over the registry, with ids equal to the task, backend or profile name.
 | When | What |
 |---|---|
 | every PR | logic + contract on min and max Python; core-only install; env builds for changed locks; CPU smoke benchmarks (<15 min) when a task is touched |
-| label on a PR | limits for the touched backends |
-| nightly | full Python matrix; limits; scale ladder (`benchmarks/scale`, P-33); CPU smoke benchmarks |
-| weekly (ORCD) | GPU smoke benchmarks; core CPU benchmark suite; full env builds; use cases |
+| label on a PR (`limits`) | limits only, for the touched backends |
+| nightly | full Python matrix; limits; use cases; scale ladder (`benchmarks/scale`, P-33); CPU smoke benchmarks |
+| weekly (ORCD) | GPU smoke benchmarks; core CPU benchmark suite; full env builds; use cases on ORCD |
 | per release (ORCD) | full benchmarks; GPU limits |
 
-**Forbidden in 2.x tests** (enforced by a lint over `src/tests`, not by tests):
+**Forbidden in 2.x tests** (to be enforced by a lint over `packages/*/tests`, `scripts/check_*.py`, which does not exist yet; unenforced today):
 - spec, register or round ids in names, files or headers;
 - history narratives ("used to", "originally");
 - exact model-output floats in logic tests;

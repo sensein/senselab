@@ -73,15 +73,17 @@ needs the `ANTHROPIC_API_KEY` repository secret); **D-5** release gate trimmed (
 match what was built); the D-1 fixture budget numbers (256 KB per file, 2 MB total) now live in
 `scripts/data/fixture_budget.yaml` with their derivations.
 
-1. **H-R49:** test conformance: regressions renamed by invariant and folded into component test files, no
-   round ids in tests, default tier and CI cadence per `testing.md`, wall-clock checks into `limits`,
-   internal monkeypatches replaced by seams, policy checks as `scripts/check_*.py`.
+1. **H-R49:** the naming, tier and cadence part is done (`fb1e774d`, `117a8641`, `621ad187`, `d574fe8e`):
+   regressions renamed by invariant and folded into component test files, no review ids in tests, default
+   tier `logic`, PRs run logic + contract, limits on the `limits` label or nightly, wall-clock checks in
+   `limits`. **H11b** (internal monkeypatches replaced by seams) is in progress; policy checks as
+   `scripts/check_*.py` remain.
 2. **The "follows" items** of the decision record: portable model identity (A I-1), read
    `DEFAULT_REUSE_POLICY` (Ru I-1), equivalence classes as data (A I-8), owners for the clock re-binding
    (A I-9) and the source-digest CI check (A I-10); audio decoding out of the kernel and whole-file
    hashing against ADR-005 (Ar F-3, A I-5, R-109); the pydra corrections (Ar F-5, F-6) and owners for the
    pydra PRs; one transient classifier (Ar F-7); the engineering and license gates (T F5–F7); the P-40
-   roster and worktree isolation; parked items moved into tracked registers (Ru I-11, I-12); lease renewal not yet implemented, owner:
+   roster and worktree isolation; a scheduled workflow on `alpha` (the default branch) that checks out `2.x` for nightly limits and use cases, landed as a `skip-release` PR (GitHub runs `schedule` only from the default branch); parked items moved into tracked registers (Ru I-11, I-12); lease renewal not yet implemented, owner:
    execution phase (Phase 3), since `Lease` has no renewal and `execution.md` 3.2 says workers renew.
 3. **Phase 1 exit** (`plans/phase-1.md` Task 15, as amended): 2.x CI green; `src/` equals `alpha`; no 1.x
    tests on the 2.x line; P-39 re-scan; `STATE.md` updated. Run these on ORCD shared NFS scratch from a pinned checkout, in a submitted job
