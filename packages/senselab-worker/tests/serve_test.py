@@ -311,6 +311,24 @@ def test_an_oversized_int_in_an_output_is_that_items_content_fault(tmp_path: Pat
     assert ok["outputs"] == {"n": 1}
 
 
+@pytest.mark.logic
+def test_one_array_shared_by_every_item_and_params_is_read_once(tmp_path: Path) -> None:
+    """Items and params naming one array file all receive the same read-only array."""
+    a = numpy.linspace(0, 1, 1024)
+    seen: list[object] = []
+
+    def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+        seen.extend([params["w"], *(item["inputs"]["w"] for item in items)])
+        return [{"outputs": {}} for _ in items]
+
+    _, out = _session(
+        tmp_path, [_init(tmp_path), _request("a", "b", "c", params={"w": a}, inputs={"w": a})], handle=handle
+    )
+    assert [r["outputs"] for r in _replies(out)] == [{}, {}, {}]
+    assert len(seen) == 4 and all(x is seen[0] for x in seen)
+    assert isinstance(seen[0], numpy.ndarray) and not seen[0].flags.writeable
+
+
 def _damaged_ref(tmp_path: Path) -> dict[str, Any]:
     wire: dict[str, Any] = to_wire(numpy.zeros(2), array_dir=tmp_path, at="line")
     wire["__array__"]["sha256"] = "f" * 64

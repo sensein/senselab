@@ -323,11 +323,20 @@ def _map_refs(value: object, on_ref: Callable[[object], object]) -> Any:  # noqa
     return value
 
 
-def from_wire(value: object, *, array_dir: Path, deadline: Deadline | None = None) -> Any:  # noqa: ANN401
+def from_wire(
+    value: object,
+    *,
+    array_dir: Path,
+    deadline: Deadline | None = None,
+    shared: dict[str, numpy.ndarray] | None = None,
+) -> Any:  # noqa: ANN401
     """Return wire data with each array reference replaced by its array, loaded into memory.
 
     Each file is opened without following a symlink and without blocking, must be a regular file,
-    and is read in chunks of `READ_CHUNK_BYTES`, checking `deadline` between them.
+    and is read in chunks of `READ_CHUNK_BYTES`, checking `deadline` between them. Each distinct sha256
+    is read once per `shared` (one message's decoded arrays by sha256; this call's own when None): every
+    reference to it is the same array, and an array referenced more than once is made read-only, so the
+    references decoded before the repeat see that too. An array referenced once stays writable.
 
     Raises:
         ArrayIntegrityError: if a reference is malformed, points outside `array_dir`, or its file
@@ -335,7 +344,8 @@ def from_wire(value: object, *, array_dir: Path, deadline: Deadline | None = Non
         TimeoutError: if `deadline` passes while reading.
     """
     root = Path(array_dir).resolve()
-    return _map_refs(value, lambda ref: _read_array(ref, root, deadline or Deadline(None)))
+    arrays: dict[str, numpy.ndarray] = {} if shared is None else shared
+    return _map_refs(value, lambda ref: _read_array(ref, root, deadline or Deadline(None), arrays))
 
 
 _NOT_NPY_BYTES = "array file is not npy_bytes of its array: version 1.0, C order, little-endian"
@@ -371,7 +381,17 @@ def _npy_view(data: bytearray) -> numpy.ndarray:
     return numpy.frombuffer(data, dtype=dtype, count=math.prod(shape), offset=head.tell()).reshape(shape)
 
 
-def _read_array(ref: object, root: Path, deadline: Deadline) -> numpy.ndarray:
+def _verified_npy(data: bytearray, sha: str) -> numpy.ndarray:
+    if _raw_digest.bytes_digest("npy@1", data) != sha:
+        raise ValueError(f"array file bytes do not match sha256 {sha}")
+    a = _npy_view(data)
+    header = npy_header(a)
+    if not (data.startswith(header) and len(data) == len(header) + a.nbytes):
+        raise ValueError(_NOT_NPY_BYTES)
+    return a
+
+
+def _read_array(ref: object, root: Path, deadline: Deadline, arrays: dict[str, numpy.ndarray]) -> numpy.ndarray:
     try:
         if not isinstance(ref, dict):
             raise TypeError(f"array reference is a {type(ref).__name__}, not an object")
@@ -381,13 +401,11 @@ def _read_array(ref: object, root: Path, deadline: Deadline) -> numpy.ndarray:
         named = Path(ref["path"])
         if named.name != f"{sha}.npy" or named.parent.resolve() != root:
             raise ValueError(f"array path is not {sha}.npy in {root}: {ref['path']}")
-        data = _read_file(root / f"{sha}.npy", deadline)
-        if _raw_digest.bytes_digest("npy@1", data) != sha:
-            raise ValueError(f"array file bytes do not match sha256 {sha}")
-        a = _npy_view(data)
-        header = npy_header(a)
-        if not (data.startswith(header) and len(data) == len(header) + a.nbytes):
-            raise ValueError(_NOT_NPY_BYTES)
+        a = arrays.get(sha)
+        if a is not None:
+            a.flags.writeable = False
+        else:
+            a = arrays[sha] = _verified_npy(_read_file(root / f"{sha}.npy", deadline), sha)
         if a.dtype.str != ref["dtype"] or list(a.shape) != ref["shape"]:
             raise ValueError(f"array is {a.dtype.str} {list(a.shape)}, reference says {ref['dtype']} {ref['shape']}")
     except TimeoutError:

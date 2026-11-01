@@ -22,6 +22,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, ClassVar
 
+import numpy
 from senselab_worker import WIRE_VERSION, runtime_identity
 from senselab_worker.codec import (
     MAX_LINE_BYTES,
@@ -772,6 +773,7 @@ class WorkerClient:
     def _read_replies(self, request: dict[str, Any], deadline: Deadline) -> list[dict[str, Any]]:
         """Read one result line per item, in request order, then `done`."""
         replies = []
+        shared: dict[str, numpy.ndarray] = {}
         for item in request["items"]:
             reply = self._receive(deadline, "running the request", "result")
             if (reply["id"], reply["item"]) != (request["id"], item["id"]):
@@ -779,7 +781,7 @@ class WorkerClient:
                     f"expected the result of item {item['id']!r} of request {request['id']!r}, "
                     f"got item {reply['item']!r} of request {reply['id']!r}"
                 )
-            replies.append(self._decode_result(reply, deadline))
+            replies.append(self._decode_result(reply, deadline, shared))
         done = self._receive(deadline, "running the request", "done")
         if (done["id"], done["done"]) != (request["id"], len(request["items"])):
             raise ProtocolError(
@@ -787,14 +789,16 @@ class WorkerClient:
             )
         return replies
 
-    def _decode_result(self, result: dict[str, Any], deadline: Deadline) -> dict[str, Any]:
+    def _decode_result(
+        self, result: dict[str, Any], deadline: Deadline, shared: dict[str, numpy.ndarray]
+    ) -> dict[str, Any]:
         if "error" in result:
             error = _mapped(result["error"])
             if error["gap"]:
                 logger.warning("worker fault classification gap: %s: %s", error["type"], error["message"])
             return {"id": result["item"], "error": error}
         try:
-            outputs = from_wire(result["outputs"], array_dir=self._array_dir, deadline=deadline)
+            outputs = from_wire(result["outputs"], array_dir=self._array_dir, deadline=deadline, shared=shared)
         except ArrayIntegrityError as exc:
             return {"id": result["item"], "error": _mapped(error_record(exc))}
         return {"id": result["item"], "outputs": outputs}

@@ -658,6 +658,20 @@ def test_backend_subdir_in_array_dir_does_not_fail_runs(tmp_path: Path, backends
 
 
 @pytest.mark.logic
+@pytest.mark.parametrize("copies", [2, 5])
+def test_one_array_in_every_items_outputs_is_read_once(tmp_path: Path, backends_importable: None, copies: int) -> None:
+    """Results naming one array file are one read-only array; an array in one result alone stays writable."""
+    a = numpy.linspace(0, 1, 2048)
+    items = [{"id": f"i{n}", "inputs": {"w": a, "own": numpy.full(4, n)}} for n in range(copies)]
+    with WorkerClient(sys.executable, "backends.echo_inputs_backend_fixture", init={}, array_parent=tmp_path) as c:
+        out = c.run(items, {})
+    shared = [r["outputs"]["w"] for r in out]
+    assert all(w is shared[0] for w in shared) and not shared[0].flags.writeable
+    assert numpy.array_equal(shared[0], a)
+    assert all(r["outputs"]["own"].flags.writeable for r in out)
+
+
+@pytest.mark.logic
 def test_backend_subdir_leaves_runs_and_the_worker_usable(
     tmp_path: Path, backends_importable: None, caplog: pytest.LogCaptureFixture
 ) -> None:

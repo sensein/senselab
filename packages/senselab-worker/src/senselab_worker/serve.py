@@ -99,15 +99,17 @@ def _init(msg: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
 def _respond(handle: Handle, state: object, msg: dict[str, Any], array_dir: Path, tx: BinaryIO) -> None:
     items: list[dict[str, Any]] = msg["items"]
     entries: list[dict[str, Any]] = [{} for _ in items]
+    shared: dict[str, numpy.ndarray] = {}
     try:
-        params = from_wire(msg["params"], array_dir=array_dir)
+        params = from_wire(msg["params"], array_dir=array_dir, shared=shared)
     except ArrayIntegrityError as exc:
         entries = [{"error": exc} for _ in items]
     else:
         decoded: list[tuple[int, dict[str, Any]]] = []
         for i, item in enumerate(items):
             try:
-                decoded.append((i, {"id": item["id"], "inputs": from_wire(item["inputs"], array_dir=array_dir)}))
+                inputs = from_wire(item["inputs"], array_dir=array_dir, shared=shared)
+                decoded.append((i, {"id": item["id"], "inputs": inputs}))
             except ArrayIntegrityError as exc:
                 entries[i] = {"error": exc}
         if decoded:

@@ -787,3 +787,51 @@ def test_parse_line_refuses_a_lone_surrogate_anywhere(tree: object, surrogate: i
     assert parse_line(line.replace(MARK, "x\\ud83d\\ude00y").encode())
     with pytest.raises(ProtocolError, match="lone surrogate"):
         parse_line(line.replace(MARK, f"x\\u{surrogate:04x}y").encode())
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("copies", [2, 3, 100])
+@pytest.mark.parametrize("layout", ["list", "dict", "nested"])
+def test_repeated_references_decode_to_one_read_only_array(tmp_path: Path, copies: int, layout: str) -> None:
+    """Every reference to one file is the same read-only array; decoded bytes do not grow with the references."""
+    a = numpy.arange(4096, dtype="<f8")
+    once = numpy.arange(8, dtype="<i4")
+    value: object = {
+        "list": [a] * copies,
+        "dict": {f"k{i}": a for i in range(copies)},
+        "nested": [{"x": [a]} for _ in range(copies)],
+    }[layout]
+    wire = to_wire({"v": value, "once": once}, array_dir=tmp_path, at="line")
+    decoded = from_wire(wire, array_dir=tmp_path)
+    leaves: list[numpy.ndarray] = []
+
+    def walk(v: object) -> None:
+        if isinstance(v, numpy.ndarray):
+            leaves.append(v)
+        elif isinstance(v, dict):
+            for item in v.values():
+                walk(item)
+        elif isinstance(v, list):
+            for item in v:
+                walk(item)
+
+    walk(decoded["v"])
+    assert len(leaves) == copies and all(leaf is leaves[0] for leaf in leaves)
+    assert not leaves[0].flags.writeable and numpy.array_equal(leaves[0], a)
+    assert decoded["once"].flags.writeable
+
+
+@pytest.mark.logic
+def test_shared_decoding_spans_calls_and_still_checks_each_reference(tmp_path: Path) -> None:
+    """Calls given one `shared` read a file once; a later reference whose dtype or shape lies is still refused."""
+    a = numpy.zeros(16, dtype="<f4")
+    ref = to_wire(a, array_dir=tmp_path, at="line")
+    shared: dict[str, numpy.ndarray] = {}
+    first = from_wire(ref, array_dir=tmp_path, shared=shared)
+    assert first.flags.writeable
+    second = from_wire(ref, array_dir=tmp_path, shared=shared)
+    assert second is first and not first.flags.writeable
+    for key, lie in [("dtype", "<f8"), ("shape", [4, 4])]:
+        bad = {"__array__": {**ref["__array__"], key: lie}}
+        with pytest.raises(ArrayIntegrityError):
+            from_wire(bad, array_dir=tmp_path, shared=shared)
