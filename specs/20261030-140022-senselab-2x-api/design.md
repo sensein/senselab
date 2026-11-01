@@ -661,8 +661,8 @@ checks, over `dist/` before upload:
 Member-set completeness, sdist rebuild identity, strict `WHEEL`/`METADATA` parsing, per-floor installs,
 cache isolation and import-every-module are specified at the first 2.x release.
 
-**Fixture budget** (docs.md): at most 256 KB per committed file and 2 MB in total, checked in
-pre-commit over the git index. A symlink or submodule fails.
+**Fixture budget** (docs.md): at most 256 KB per committed file and 2 MB in total over `packages/`, checked
+in pre-commit over the git index. A symlink or submodule fails.
 
 **Workflow expressions.** A guard parses every `${{ }}` in the workflows and composite actions and
 refuses one whose value an outsider could choose (`env.*`, pull-request text, an unknown function).

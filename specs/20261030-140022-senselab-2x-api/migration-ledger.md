@@ -223,10 +223,8 @@ commit lands in `packages/`, and the H-R20 table above names its replacement.
 |---|---|
 | `scripts.analyze_audio` | `hashlib` |
 | `scripts.build_classifier_ontology_map` | `hashlib` |
-| `scripts.check_fixture_budget` | `hashlib` |
 | `scripts.extend_cohort` | `hashlib` |
 | `scripts.free_speech_review_page` | `hashlib` |
-| `scripts.release_gate` | `hashlib` |
 | `scripts.verify_grid_unification` | `hashlib` |
 
 ## Name-based digests in 1.x (H9e, H-R36)

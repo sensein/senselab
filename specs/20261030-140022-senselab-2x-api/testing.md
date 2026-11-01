@@ -163,7 +163,7 @@ module over the registry, with ids equal to the task, backend or profile name.
 - `uv run pytest -m limits -k <backend>` runs one backend's limits.
 - A test that builds a wheel or sdist, creates a venv or installs from an index carries `network`
   beside its tier, so `-m "not network"` runs none of them. The release-gate and packaging ones
-  (`packages/senselab-core/tests/release_gate_test.py`, `package_data_test.py`) run in the
+  (`packages/senselab-core/tests/release_gate_test.py`) run in the
   `core-env` CI job with `-m "env and not slow"`; the full gate over a real tagged build
   (`slow`) runs on ORCD.
 

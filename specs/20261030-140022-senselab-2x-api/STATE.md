@@ -67,31 +67,25 @@ PR - clarify the decisions"):
 
 ## Next actions, in order
 
-1. Merge `senselab-2x-api` into `2x/phase-1`, so the code PR carries the amended specs. From then on, no
-   spec edits on `2x/phase-1`.
-2. **D-6:** restore `src/` to `19834fdd` (`git checkout 19834fdd -- src`, one commit), then merge
-   `origin/alpha`. Check `git diff origin/alpha -- src` is empty.
-3. **D-1:** cut the guard layer: delete the digest-binding and strict-mode checks, the written-names lint,
-   the dynamic-import allowance machinery, `moved_modules_test.py` and every test that requires
-   finding-id names. Keep the import contracts, the identifier check, the fixture budget at docs.md's
-   numbers and the workflow-expression guard. Add the advisory agent prose review job.
-4. **D-2:** revert the lock to ADR-003's lease (rename and `O_EXCL`, bounded waits, stale lease renamed
+Done on 2026-11-01: specs merged into `2x/phase-1` (`d90b5057`); **D-6** `src/` = `alpha` (`ffdf06e6`,
+merge `a2be7b27`); **D-1** guard layer cut and advisory prose review added (`f7026f54`, `b2db96be`;
+needs the `ANTHROPIC_API_KEY` repository secret); **D-5** release gate trimmed (`a3ea1894`).
+
+1. **D-2:** revert the lock to ADR-003's lease (rename and `O_EXCL`, bounded waits, stale lease renamed
    aside); remove `flock`, heartbeat, holder takeover, negative timeout and shared mode. Keep the
    descriptor walk, no in-place modification, quarantine and private staging.
-5. **D-5:** trim `scripts/release_gate.py` and its tests to version grammar, exact sibling pins and
-   build-and-install from `dist/`.
-6. **H-R49:** test conformance: regressions renamed by invariant and folded into component test files, no
+2. **H-R49:** test conformance: regressions renamed by invariant and folded into component test files, no
    round ids in tests, default tier and CI cadence per `testing.md`, wall-clock checks into `limits`,
    internal monkeypatches replaced by seams, policy checks as `scripts/check_*.py`.
-7. **The "follows" items** of the decision record: portable model identity (A I-1), read
+3. **The "follows" items** of the decision record: portable model identity (A I-1), read
    `DEFAULT_REUSE_POLICY` (Ru I-1), equivalence classes as data (A I-8), owners for the clock re-binding
    (A I-9) and the source-digest CI check (A I-10); audio decoding out of the kernel and whole-file
    hashing against ADR-005 (Ar F-3, A I-5, R-109); the pydra corrections (Ar F-5, F-6) and owners for the
    pydra PRs; one transient classifier (Ar F-7); the engineering and license gates (T F5–F7); the P-40
    roster and worktree isolation; parked items moved into tracked registers (Ru I-11, I-12).
-8. **Phase 1 exit** (`plans/phase-1.md` Task 15, as amended): 2.x CI green; `src/` equals `alpha`; no 1.x
+4. **Phase 1 exit** (`plans/phase-1.md` Task 15, as amended): 2.x CI green; `src/` equals `alpha`; no 1.x
    tests on the 2.x line; P-39 re-scan; `STATE.md` updated. Then merge #617 into `2.x` and retarget #619.
-9. **Phase 2:** ADR-010 (PROV-O JSON-LD store, `senselab:` vocabulary, token-family removal, export
+5. **Phase 2:** ADR-010 (PROV-O JSON-LD store, `senselab:` vocabulary, token-family removal, export
    redaction) and the benchmark harness with its data manifest and smoke suite, alongside the tasks and
    backends of design §6.2.
 
