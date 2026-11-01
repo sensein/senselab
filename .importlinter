@@ -74,7 +74,10 @@ source_modules =
     senselab_worker
     senselab_core
     scripts.check_fixture_budget
+    scripts.check_licenses
     scripts.check_participant_ids
+    scripts.check_size_budgets
+    scripts.check_spec_ids
     scripts.lock_subprocess_venvs
     scripts.profile_imports
     scripts.profile_model_tiers
@@ -109,7 +112,10 @@ source_modules =
     senselab_worker
     senselab_core
     scripts.check_fixture_budget
+    scripts.check_licenses
     scripts.check_participant_ids
+    scripts.check_size_budgets
+    scripts.check_spec_ids
     scripts.lock_subprocess_venvs
     scripts.profile_imports
     scripts.profile_model_tiers
