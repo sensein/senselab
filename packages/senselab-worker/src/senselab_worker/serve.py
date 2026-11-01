@@ -11,7 +11,6 @@ import numpy
 from senselab_worker import WIRE_VERSION, runtime_identity
 from senselab_worker.codec import (
     MAX_LINE_BYTES,
-    Kind,
     LineTooLarge,
     dump_line,
     from_wire,
@@ -51,7 +50,7 @@ def serve(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO) -> int:
         "numpy": numpy.__version__,
         "pid": os.getpid(),
     }
-    _send(tx, {"hello": hello}, "hello")
+    _write(tx, dump_line({"hello": hello}, "hello"))
     try:
         msg = _receive(rx)
         if msg is None or _is_stop(msg):
@@ -59,17 +58,13 @@ def serve(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO) -> int:
         array_dir, init = _init(msg)
         start = time.perf_counter()
         state = load(init)
-        _send(tx, {"ready": {"load_s": time.perf_counter() - start}}, "ready")
+        _write(tx, dump_line({"ready": {"load_s": time.perf_counter() - start}}, "ready"))
         while (msg := _receive(rx)) is not None and not _is_stop(msg):
             _respond(handle, state, validate_message(msg, "request"), array_dir, tx)
     except Exception as exc:
-        _send(tx, {"error": error_record(exc), "fatal": True}, "fatal")
+        _write(tx, dump_line({"error": error_record(exc), "fatal": True}, "fatal"))
         return EXIT_FATAL
     return 0
-
-
-def _send(tx: BinaryIO, msg: dict[str, Any], kind: Kind) -> None:
-    _write(tx, dump_line(msg, kind))
 
 
 def _write(tx: BinaryIO, line: bytes) -> None:
@@ -84,10 +79,7 @@ def _receive(rx: BinaryIO) -> dict[str, Any] | None:
 
 def _is_stop(msg: dict[str, Any]) -> bool:
     """Whether `msg` is a stop; a `stop` key with any value but `true` is a `ProtocolError`."""
-    if "stop" not in msg:
-        return False
-    validate_message(msg, "stop")
-    return True
+    return "stop" in msg and validate_message(msg, "stop") is msg
 
 
 def _init(msg: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
@@ -117,7 +109,7 @@ def _respond(handle: Handle, state: object, msg: dict[str, Any], array_dir: Path
                 entries[i] = entry
     for item, entry in zip(items, entries):
         _write(tx, _result(msg["id"], item["id"], entry, array_dir))
-    _send(tx, {"id": msg["id"], "done": len(items)}, "done")
+    _write(tx, dump_line({"id": msg["id"], "done": len(items)}, "done"))
 
 
 def _call(handle: Handle, state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:

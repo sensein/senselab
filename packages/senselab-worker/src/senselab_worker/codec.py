@@ -399,10 +399,24 @@ def _verified_npy(data: bytearray, sha: str) -> numpy.ndarray:
     return a
 
 
+_REF_KEYS = frozenset({"path", "sha256", "dtype", "shape"})
+
+
+def _checked_ref(ref: object) -> dict[str, Any]:
+    """Return `ref` if it is an array reference with exactly `_REF_KEYS` and a list of `int` as its shape."""
+    if not isinstance(ref, dict):
+        raise TypeError(f"array reference is a {type(ref).__name__}, not an object")
+    if ref.keys() != _REF_KEYS:
+        raise ValueError(f"array reference keys are {sorted(ref)}, not {sorted(_REF_KEYS)}")
+    shape = ref["shape"]
+    if type(shape) is not list or any(type(n) is not int for n in shape):
+        raise TypeError(f"array reference shape is not a list of int: {shape!r}")
+    return ref
+
+
 def _read_array(ref: object, root: Path, deadline: Deadline, arrays: dict[str, numpy.ndarray]) -> numpy.ndarray:
     try:
-        if not isinstance(ref, dict):
-            raise TypeError(f"array reference is a {type(ref).__name__}, not an object")
+        ref = _checked_ref(ref)
         sha = ref["sha256"]
         if not (isinstance(sha, str) and SHA256_HEX.fullmatch(sha)):
             raise ValueError(f"sha256 is not 64 lowercase hex digits: {sha!r}")
@@ -415,12 +429,13 @@ def _read_array(ref: object, root: Path, deadline: Deadline, arrays: dict[str, n
         else:
             a = arrays[sha] = _verified_npy(_read_file(root / f"{sha}.npy", deadline), sha)
         if a.dtype.str != ref["dtype"] or list(a.shape) != ref["shape"]:
-            raise ValueError(f"array is {a.dtype.str} {list(a.shape)}, reference says {ref['dtype']} {ref['shape']}")
+            raise ValueError(f"array is {a.dtype.str} {list(a.shape)}, reference says {ref['dtype']!r} {ref['shape']}")
     except TimeoutError:
         raise
     except OSError as exc:
         what = exc.strerror or str(exc)
-        raise ArrayReadError(exc.errno, f"bad array reference: {type(exc).__name__}: {what}: {exc.filename}") from exc
+        where = "" if exc.filename is None else f": {exc.filename}"
+        raise ArrayReadError(exc.errno, f"bad array reference: {type(exc).__name__}: {what}{where}") from exc
     except Exception as exc:
         raise ArrayIntegrityError(f"bad array reference: {type(exc).__name__}: {exc}") from exc
     return a
@@ -510,7 +525,8 @@ def _request(msg: dict[str, Any]) -> None:
     _object(msg, "params", "request")
 
 
-_FAULTS = frozenset(f.value for f in FaultClass)
+FAULTS: frozenset[str] = frozenset(f.value for f in FaultClass)
+"""The `fault` values an error record may carry."""
 
 
 def _result(msg: dict[str, Any]) -> None:
@@ -524,7 +540,7 @@ def _result(msg: dict[str, Any]) -> None:
     error = _object(msg, "error", "result")
     for key in ("type", "message", "traceback"):
         _typed(error, key, "result", (str,))
-    if _get(error, "fault", "result") not in _FAULTS:
+    if _get(error, "fault", "result") not in FAULTS:
         raise _fail("result", f"unknown fault class {error['fault']!r}")
     _typed(error, "gap", "result", (bool,))
 

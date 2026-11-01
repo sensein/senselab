@@ -21,11 +21,12 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, fields
 from pathlib import Path
 from types import TracebackType
-from typing import Any, ClassVar
+from typing import Any
 
 import numpy
 from senselab_worker import WIRE_VERSION, runtime_identity
 from senselab_worker.codec import (
+    FAULTS,
     MAX_LINE_BYTES,
     Deadline,
     Kind,
@@ -47,7 +48,7 @@ from senselab_worker.faults import (
     error_record,
     wire_text,
 )
-from senselab_worker.ownership import ARRAY_NAME, ARRAY_TEMP_NAME, remove_owned
+from senselab_worker.ownership import ARRAY_FILE, remove_owned
 
 LAUNCHER = "senselab_worker.launch"
 HELLO_TIMEOUT_S = 60.0
@@ -87,7 +88,11 @@ class ShutdownGraces:
         """Refuse graces outside their ranges."""
         for f in fields(self):
             value = getattr(self, f.name)
-            if type(value) not in (int, float) or not math.isfinite(value):
+            try:
+                finite = type(value) in (int, float) and math.isfinite(value)
+            except OverflowError:
+                finite = False
+            if not finite:
                 raise ValueError(f"grace {f.name} must be a finite number of seconds, got {value!r}")
             least = "at least 0" if f.name == "term" else "positive"
             if value < 0 or (value == 0 and f.name != "term") or value > threading.TIMEOUT_MAX:
@@ -224,8 +229,8 @@ _PS = "/bin/ps"
 LEADER_PROBE_TIMEOUT_S = 2.0
 
 
-def _wait_exit(pid: int) -> None:
-    """Block until child `pid` exits, without reaping it.
+def _wait_exit(pid: int, *, block: bool = True) -> bool:
+    """Wait until child `pid` exits, without reaping it, or with `block=False` only ask; return whether it has exited.
 
     Uses `waitid(WNOWAIT)` on Linux and a kqueue `NOTE_EXIT` on macOS, which also returns for a
     leader that exited before the event was registered. The exit code is read when the client reaps.
@@ -235,46 +240,33 @@ def _wait_exit(pid: int) -> None:
         NotImplementedError: on a platform that is neither Linux nor macOS.
     """
     if sys.platform == "linux":
-        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
-        return
+        return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | (0 if block else os.WNOHANG)) is not None
     if sys.platform == "darwin":
         kq = select.kqueue()
         try:
             flags = select.KQ_EV_ADD | select.KQ_EV_ONESHOT
-            kq.control([select.kevent(pid, filter=select.KQ_FILTER_PROC, flags=flags, fflags=select.KQ_NOTE_EXIT)], 1)
+            event = select.kevent(pid, filter=select.KQ_FILTER_PROC, flags=flags, fflags=select.KQ_NOTE_EXIT)
+            return bool(kq.control([event], 1, None if block else 0))
         finally:
             kq.close()
-        return
     raise NotImplementedError(f"no exit notification for platform {sys.platform!r}")
 
 
-def _has_exited(pid: int) -> bool:
-    """Whether child `pid` has exited, asked without blocking and without reaping it; False where it cannot be told."""
-    try:
-        if sys.platform == "linux" and hasattr(os, "waitid"):
-            return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
-        if sys.platform == "darwin":
-            kq = select.kqueue()
-            try:
-                flags = select.KQ_EV_ADD | select.KQ_EV_ONESHOT
-                event = select.kevent(pid, filter=select.KQ_FILTER_PROC, flags=flags, fflags=select.KQ_NOTE_EXIT)
-                return bool(kq.control([event], 1, 0))
-            finally:
-                kq.close()
-    except ChildProcessError:
-        return True
-    except OSError:
-        return False
-    return False
-
-
 def _exit_seen(pid: int, exited: threading.Event) -> bool:
-    """Whether the leader's exit is observed: by the reaper thread, else by asking now (and then recorded in `exited`).
+    """Whether the leader's exit is observed: by the reaper thread, else by asking `_wait_exit` now.
 
-    Asking covers a reaper thread that cannot run, as during interpreter finalisation.
+    An exit seen by asking is recorded in `exited`. A child no longer unreaped counts as exited; a
+    platform or call that cannot tell counts as running.
     """
-    if not exited.is_set() and _has_exited(pid):
-        exited.set()
+    if not exited.is_set():
+        try:
+            seen = _wait_exit(pid, block=False)
+        except ChildProcessError:
+            seen = True
+        except (OSError, NotImplementedError):
+            seen = False
+        if seen:
+            exited.set()
     return exited.is_set()
 
 
@@ -311,9 +303,9 @@ def _leader_held(pid: int, exited: threading.Event, timeout: float) -> bool | No
     """
     if not _exit_seen(pid, exited):
         return True
-    if sys.platform == "linux" and hasattr(os, "waitid"):
+    if sys.platform == "linux":
         try:
-            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            _wait_exit(pid, block=False)
         except ChildProcessError:
             return False
         return True
@@ -457,9 +449,6 @@ class WorkerClient:
     a forked child is foreign: closing or collecting it closes only the child's descriptors.
     """
 
-    _max_line_bytes: ClassVar[int] = MAX_LINE_BYTES
-    """The longest request line this client sends, the worker's own line limit."""
-
     def __init__(  # noqa: PLR0913, PLR0915 - keyword-only options; starting a process and rolling it back on failure
         self,
         python: str | os.PathLike[str],
@@ -471,11 +460,16 @@ class WorkerClient:
         load_timeout: float | None = None,
         request_timeout: float | None = None,
         graces: ShutdownGraces = DEFAULT_GRACES,
+        max_line_bytes: int = MAX_LINE_BYTES,
     ) -> None:
         """Start the worker, check its hello and wait until it has loaded `init`; stop it within `graces`.
 
+        `max_line_bytes` bounds every line the client sends and every reply line it accepts after the hello;
+        a longer reply is `LineTooLarge`, a `ProtocolError`.
+
         Raises:
-            ValueError: if `init` uses the reserved key `array_dir` or has no wire form.
+            ValueError: if `init` uses the reserved key `array_dir` or has no wire form, or `max_line_bytes` is
+                not an int in `[1, MAX_LINE_BYTES]`.
             TypeError: if `graces` is not a `ShutdownGraces`.
             ProtocolMismatch: if the worker's first message is not a hello, its wire or runtime differ
                 from the host's (`expect_runtime` overrides the host's runtime identity), or no hello
@@ -490,6 +484,9 @@ class WorkerClient:
             raise ValueError("init key 'array_dir' is reserved")
         if type(graces) is not ShutdownGraces:
             raise TypeError(f"graces must be a ShutdownGraces, got {type(graces).__name__}")
+        if type(max_line_bytes) is not int or not 0 < max_line_bytes <= MAX_LINE_BYTES:
+            raise ValueError(f"max_line_bytes must be an int in [1, {MAX_LINE_BYTES}], got {max_line_bytes!r}")
+        self._max_line_bytes = max_line_bytes
         self._request_timeout = request_timeout
         self._graces = graces
         self._stderr: collections.deque[str] = collections.deque(maxlen=STDERR_TAIL_LINES)
@@ -676,6 +673,9 @@ class WorkerClient:
                     pass
         for pump in self._pumps:
             pump.close()
+        self._close_wake()
+
+    def _close_wake(self) -> None:
         for name in ("_wake_r", "_wake_w"):
             fd = getattr(self, name)
             setattr(self, name, -1)
@@ -773,17 +773,21 @@ class WorkerClient:
             )
         return hello
 
-    def _send(self, line: bytes, deadline: Deadline) -> None:
-        """Write `line` by non-blocking writes, each under the channel lock and only while the client is open."""
+    def _send(self, line: bytes, deadline: Deadline, *, stopping: bool = False) -> None:
+        """Write `line` by non-blocking writes, each under the channel lock and only while the client is open.
+
+        With `stopping`, the line is written though the client is closed, for as long as its stdin is open.
+        """
         assert self._proc is not None and self._proc.stdin is not None
         stdin = self._proc.stdin
         view = memoryview(line)
         with selectors.DefaultSelector() as sel:
-            sel.register(self._wake_r, selectors.EVENT_READ)
+            if self._wake_r >= 0:
+                sel.register(self._wake_r, selectors.EVENT_READ)
             watched = False
             while view:
                 with self._channel_lock:
-                    if self._closed or stdin.closed:
+                    if (self._closed and not stopping) or stdin.closed:
                         raise WorkerLost("the client was closed while sending to the worker")
                     fd = stdin.fileno()
                     if not watched:
@@ -801,15 +805,8 @@ class WorkerClient:
 
     def _write_stop(self) -> None:
         """Write the stop line if the pipe takes it at once."""
-        assert self._proc is not None and self._proc.stdin is not None
-        stdin = self._proc.stdin
-        with self._channel_lock:
-            if stdin.closed:
-                return
-            try:
-                os.write(stdin.fileno(), dump_line({"stop": True}, "stop"))
-            except OSError:
-                pass
+        with contextlib.suppress(WorkerLost, TimeoutError):
+            self._send(dump_line({"stop": True}, "stop"), Deadline(0.0), stopping=True)
 
     def _retire_channel(self) -> None:
         """Close the worker's stdin under the channel lock, then wake a `_send` waiting on it."""
@@ -838,6 +835,8 @@ class WorkerClient:
             if self._closed_by_caller:
                 raise WorkerLost(f"the client was closed while {what}")
             raise WorkerLost(f"worker closed its output while {what}")
+        if len(line) > self._max_line_bytes:
+            raise LineTooLarge(len(line), self._max_line_bytes)
         msg = parse_line(line)
         if "fatal" in msg:
             raise WorkerFatal(_fatal_record(validate_message(msg, "fatal")["error"]))
@@ -892,8 +891,7 @@ class WorkerClient:
                 continue
             path = self._array_dir / name
             try:
-                if not remove_owned(self._array_dir, path, pattern=ARRAY_NAME):
-                    remove_owned(self._array_dir, path, pattern=ARRAY_TEMP_NAME)
+                remove_owned(self._array_dir, path, pattern=ARRAY_FILE)
             except Exception as exc:  # noqa: BLE001 - cleanup is total; it never replaces a result
                 logger.warning("cannot remove array file %s: %s", path, exc)
 
@@ -977,9 +975,11 @@ class WorkerClient:
         proc = self._proc
         if proc is None or proc.returncode is not None:
             return
-        exited = _exit_seen(proc.pid, self._exited)
-        if not exited or _leader_held(proc.pid, self._exited, LEADER_PROBE_TIMEOUT_S):
-            _signal_group(proc.pid, signal.SIGKILL, leader_exited=exited)
+        if not _exit_seen(proc.pid, self._exited) or _leader_held(proc.pid, self._exited, LEADER_PROBE_TIMEOUT_S):
+            self._sigkill_group(proc.pid)
+
+    def _sigkill_group(self, pgid: int) -> None:
+        _signal_group(pgid, signal.SIGKILL, leader_exited=_exit_seen(pgid, self._exited))
 
     def _release(self) -> None:
         self._remove_arrays(keep=set())
@@ -993,11 +993,7 @@ class WorkerClient:
             except OSError:
                 left = []
             logger.warning("left %s: it holds names this client did not write: %s", self._array_dir, left)
-        for name in ("_wake_r", "_wake_w"):
-            fd = getattr(self, name)
-            setattr(self, name, -1)
-            if fd >= 0:
-                os.close(fd)
+        self._close_wake()
         self._released = True
 
     def _signal_group_until_gone(self, pgid: int, stop: Deadline) -> None:
@@ -1005,7 +1001,7 @@ class WorkerClient:
         _signal_group(pgid, signal.SIGTERM, leader_exited=_exit_seen(pgid, exited))
         _signal_group(pgid, signal.SIGCONT, leader_exited=_exit_seen(pgid, exited))
         if not _members_gone(pgid, exited, stop):
-            _signal_group(pgid, signal.SIGKILL, leader_exited=_exit_seen(pgid, exited))
+            self._sigkill_group(pgid)
             if not _members_gone(pgid, exited, Deadline(self._graces.kill)):
                 logger.error("worker process group %d still has members after SIGKILL", pgid)
 
@@ -1018,7 +1014,7 @@ class WorkerClient:
                 self._signal_group_until_gone(pgid, stop)
             except Exception:
                 logger.exception("stopping worker process group %d failed; sending SIGKILL", pgid)
-                _signal_group(pgid, signal.SIGKILL, leader_exited=_exit_seen(pgid, self._exited))
+                self._sigkill_group(pgid)
                 _wait_for_exit(pgid, self._exited, self._graces.kill)
         elif held is None:
             logger.warning(
@@ -1133,7 +1129,7 @@ def _fatal_record(error: object) -> dict[str, Any]:
         record["message"] = wire_text(f"<no message; the worker sent {json.dumps(error)[:_LOGGED_LINE_BYTES]}>")
     record["traceback"] = fields["traceback"] if type(fields.get("traceback")) is str else ""
     fault = fields.get("fault")
-    known = type(fault) is str and fault in {f.value for f in FaultClass} and type(fields.get("gap")) is bool
+    known = type(fault) is str and fault in FAULTS and type(fields.get("gap")) is bool
     record["fault"] = FaultClass(fault) if known else FaultClass.INFRASTRUCTURE
     record["gap"] = fields["gap"] if known else True
     return record

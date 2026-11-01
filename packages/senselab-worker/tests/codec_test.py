@@ -152,6 +152,21 @@ def test_bad_array_reference_is_integrity_error(tmp_path: Path, field: str) -> N
 
 @pytest.mark.logic
 @pytest.mark.parametrize(
+    "damage",
+    [{"shape": [3.0]}, {"shape": [True, 3]}, {"shape": (3,)}, {"dtype": None}, {"extra": 1}, {"path": None}],
+    ids=repr,
+)
+def test_array_ref_schema_is_strict(tmp_path: Path, damage: dict[str, Any]) -> None:
+    """A reference is exactly `{path, sha256, dtype, shape}`, with a list of `int` as its shape."""
+    a = numpy.arange(3, dtype="<f4").reshape(1, 3) if damage.get("shape") == [True, 3] else numpy.arange(3, dtype="<f4")
+    ref = _ref(tmp_path, a)
+    ref["__array__"].update(damage)
+    with pytest.raises(ArrayIntegrityError):
+        from_wire({"x": ref}, array_dir=tmp_path)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
     "line",
     [b"[1]\n", b"not json\n", b'{"x": NaN}\n', b'{"x": Infinity}\n', b"\xff\n", b" " * (MAX_LINE_BYTES + 1)],
 )

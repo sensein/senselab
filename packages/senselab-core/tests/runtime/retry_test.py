@@ -5,6 +5,7 @@ import errno
 import inspect
 import os
 import socket
+import ssl
 import urllib.error
 from collections.abc import Callable
 from email.message import Message
@@ -135,6 +136,40 @@ def test_only_a_temporary_name_resolution_failure_is_transient() -> None:
     """`socket.gaierror` carries an `EAI_*` code, not an errno: only `EAI_AGAIN` is transient."""
     assert is_transient(socket.gaierror(socket.EAI_AGAIN, "try again")) is True
     assert is_transient(socket.gaierror(socket.EAI_NONAME, "unknown host")) is False
+
+
+@pytest.mark.logic
+def test_cause_cycle_terminates() -> None:
+    """A cause chain or a `URLError` reason that loops back is walked once and is permanent."""
+    a, b = OSError("a"), OSError("b")
+    a.__cause__, b.__cause__ = b, a
+    assert is_transient(a) is False
+    looped = urllib.error.URLError("x")
+    looped.reason = looped
+    assert is_transient(looped) is False
+    wrapped = OSError("no errno")
+    wrapped.__cause__ = urllib.error.URLError(wrapped)
+    assert is_transient(wrapped) is False
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("exc", "transient"),
+    [
+        (ssl.SSLEOFError(8, "EOF in violation of protocol"), True),
+        (ssl.SSLZeroReturnError(6, "TLS connection closed"), True),
+        (ssl.SSLSyscallError(5, "syscall"), True),
+        (ssl.SSLWantReadError(2, "want read"), True),
+        (ssl.SSLError(errno.EIO, "SSL code that equals EIO"), False),
+        (ssl.SSLError(errno.EINTR, "SSL code that equals EINTR"), False),
+        (ssl.SSLCertVerificationError(1, "certificate verify failed"), False),
+    ],
+    ids=repr,
+)
+def test_ssl_error_classified_by_type(exc: ssl.SSLError, transient: bool) -> None:
+    """An `SSLError` carries an SSL code where an errno would be: its class decides, never the errno table."""
+    assert is_transient(exc) is transient
+    assert is_transient(urllib.error.URLError(exc)) is transient
 
 
 @pytest.mark.logic

@@ -1,6 +1,7 @@
 """Self-bounding probes: a finite stand-in for an endless source, and a subprocess under hard limits.
 
 `FiniteSource` serves at most `expected + slack` bytes and then raises, whatever the reader asks for.
+`limit_file_size` caps a child's file writes, as a `preexec_fn`.
 `run_bounded` runs a probe function in a child interpreter under `RLIMIT_FSIZE`, `RLIMIT_AS` (where the
 platform accepts one below the current mapping; macOS does not) and a timeout, and returns what the probe
 returned. A probe is `<module>:<function>`, the module loaded from `<where>/<module>.py` in the child; it
@@ -60,8 +61,13 @@ class ProbeFailed(AssertionError):
     """The bounded child did not return a report: it was killed, timed out or raised."""
 
 
-def _limits(fsize: int, address_space: int) -> None:
+def limit_file_size(fsize: int = MIB) -> None:
+    """Cap the files this process writes at `fsize` bytes; with the default, a `preexec_fn` for a bounded child."""
     resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))
+
+
+def _limits(fsize: int, address_space: int) -> None:
+    limit_file_size(fsize)
     try:
         resource.setrlimit(resource.RLIMIT_AS, (address_space, address_space))
     except (ValueError, OSError):

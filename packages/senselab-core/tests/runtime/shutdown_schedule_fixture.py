@@ -16,7 +16,6 @@ import contextlib
 import faulthandler
 import json
 import os
-import resource
 import signal
 import subprocess
 import sys
@@ -26,6 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 import numpy
+from bounded_probe_fixture import limit_file_size
 from lifecycle_probes_fixture import alive, group_alive, recorded_pids
 from senselab_core.runtime import worker_client
 from senselab_core.runtime.worker_client import DEFAULT_GRACES, ShutdownGraces, WorkerClient, WorkerLost, _Pump
@@ -272,10 +272,6 @@ def schedule(counts: dict[str, dict[str, int]], occurrences: range) -> list[dict
     ]
 
 
-def _bounded() -> None:
-    resource.setrlimit(resource.RLIMIT_FSIZE, (2**20, 2**20))
-
-
 def run_schedule(tmp_path: Path, todo: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Run `todo` in a driver process bounded per case; return its reports, failing if it died."""
     parent = tmp_path / "parent"
@@ -288,7 +284,7 @@ def run_schedule(tmp_path: Path, todo: list[dict[str, Any]]) -> list[dict[str, A
         text=True,
         env=env,
         timeout=CASE_BOUND_S * len(todo) + 60,
-        preexec_fn=_bounded,
+        preexec_fn=limit_file_size,
         check=False,
     )
     reports = [json.loads(line) for line in proc.stdout.splitlines()]
@@ -383,9 +379,10 @@ def crash_with_a_late_exit_notification(parent: str) -> tuple[int | None, str, i
     """
 
     def late(real: Callable[..., Any]) -> Callable[..., Any]:
-        def wait(pid: int) -> Any:  # noqa: ANN401
-            time.sleep(0.3)
-            return real(pid)
+        def wait(pid: int, *, block: bool = True) -> Any:  # noqa: ANN401
+            if block:
+                time.sleep(0.3)
+            return real(pid, block=block)
 
         return wait
 

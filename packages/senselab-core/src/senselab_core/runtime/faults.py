@@ -2,6 +2,7 @@
 
 import errno
 import socket
+import ssl
 import urllib.error
 from http import HTTPStatus
 
@@ -34,6 +35,15 @@ HTTP_CLIENTS: frozenset[str] = frozenset({"httpx", "httpx2"})
 
 _TRANSIENT_EAI: frozenset[int] = frozenset({socket.EAI_AGAIN})
 
+TRANSIENT_SSL_ERRORS: tuple[type[ssl.SSLError], ...] = (
+    ssl.SSLEOFError,
+    ssl.SSLZeroReturnError,
+    ssl.SSLSyscallError,
+    ssl.SSLWantReadError,
+    ssl.SSLWantWriteError,
+)
+"""The `ssl.SSLError` classes that are transient: a connection cut or closed mid-TLS, or a socket not ready."""
+
 
 def http_status(exc: BaseException) -> int | None:
     """Return the HTTP status an exception carries, else None.
@@ -57,23 +67,37 @@ def _is_transport_error(exc: BaseException) -> bool:
 def is_transient(exc: BaseException) -> bool:
     """Return whether retrying the operation that raised `exc` may succeed.
 
-    - An HTTP error with a status (`http_status`): transient for 429 and for 500 and above.
+    - An HTTP error with a status (`http_status`): transient for 429 and for 500 and above; every other
+      status, 408 and 425 included, is permanent.
     - A `TransportError` of an HTTP client in `HTTP_CLIENTS`, `ConnectionError` and `TimeoutError`: transient.
     - `urllib.error.URLError` without a status: its `reason` when that is an exception, else permanent.
-    - Any `OSError`: transient when its errno is in `TRANSIENT_ERRNOS`, or for a `socket.gaierror`, whose
+    - An `ssl.SSLError`, whose errno is an SSL code: transient when it is one of `TRANSIENT_SSL_ERRORS`.
+    - Any other `OSError`: transient when its errno is in `TRANSIENT_ERRNOS`, or for a `socket.gaierror`, whose
       errno is an `EAI_*` code, when it is `EAI_AGAIN`; with no errno, its `__cause__` decides when it has one.
-    - Anything else: permanent.
+    - Anything else: permanent, as is a chain of reasons and causes that returns to an exception already seen.
     """
+    decided: bool | BaseException = exc
+    seen: set[int] = set()
+    while isinstance(decided, BaseException):
+        if id(decided) in seen:
+            return False
+        seen.add(id(decided))
+        decided = _verdict(decided)
+    return decided
+
+
+def _verdict(exc: BaseException) -> bool | BaseException:
+    """Return whether `exc` is transient, or the exception that decides for it."""
     status = http_status(exc)
     if status is not None:
         return status == HTTPStatus.TOO_MANY_REQUESTS or status >= HTTPStatus.INTERNAL_SERVER_ERROR
     if _is_transport_error(exc) or isinstance(exc, (ConnectionError, TimeoutError)):
         return True
     if isinstance(exc, urllib.error.URLError):
-        return isinstance(exc.reason, BaseException) and is_transient(exc.reason)
+        return exc.reason if isinstance(exc.reason, BaseException) else False
     if not isinstance(exc, OSError):
         return False
+    if isinstance(exc, ssl.SSLError):
+        return isinstance(exc, TRANSIENT_SSL_ERRORS)
     transient = _TRANSIENT_EAI if isinstance(exc, socket.gaierror) else TRANSIENT_ERRNOS
-    if exc.errno is not None:
-        return exc.errno in transient
-    return exc.__cause__ is not None and is_transient(exc.__cause__)
+    return exc.errno in transient if exc.errno is not None else (exc.__cause__ or False)

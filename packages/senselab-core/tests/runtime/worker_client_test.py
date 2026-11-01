@@ -34,7 +34,7 @@ from senselab_core.runtime.worker_client import (
 )
 from senselab_worker import codec, runtime_identity
 from senselab_worker.canonical import MAX_DEPTH, canonical_npy_bytes
-from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, to_wire
+from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_LINE_BYTES, LineTooLarge, to_wire
 from senselab_worker.digest import identity_digest
 from senselab_worker.fake import EXIT_CRASH
 from senselab_worker.faults import FaultClass, ProtocolError, ValueTooLarge, classify
@@ -90,19 +90,13 @@ def worker(array_parent: Path) -> Iterator[WorkerClient]:
 
 
 SMALL_LINE_BYTES = 2048
-"""The request-line limit of `small_line_worker`."""
-
-
-class _SmallLines(WorkerClient):
-    """A client whose request lines are limited to `SMALL_LINE_BYTES`, below the worker's own limit."""
-
-    _max_line_bytes = SMALL_LINE_BYTES
+"""The line limit of `small_line_worker`, below the worker's own."""
 
 
 @pytest.fixture
 def small_line_worker(array_parent: Path) -> Iterator[WorkerClient]:
-    """A client over the fake worker whose request lines are limited to `SMALL_LINE_BYTES`."""
-    client = _SmallLines(sys.executable, FAKE, init={}, array_parent=array_parent)
+    """A client over the fake worker whose lines are limited to `SMALL_LINE_BYTES`."""
+    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent, max_line_bytes=SMALL_LINE_BYTES)
     yield client
     client.close()
     assert not client.alive
@@ -114,11 +108,17 @@ def _lines(reply: dict[str, Any] | list[Any]) -> list[str]:
     ]
 
 
-def _scripted(array_parent: Path, *replies: dict[str, Any] | list[Any], **init: object) -> WorkerClient:
+def _scripted(
+    array_parent: Path, *replies: dict[str, Any] | list[Any], max_line_bytes: int = MAX_LINE_BYTES, **init: object
+) -> WorkerClient:
     """A client over the scripted worker; each reply is one line (a dict) or a list of lines."""
     python = interpreter(array_parent.parent, f'exec "{sys.executable}" "{SCRIPTED}"')
     return WorkerClient(
-        python, "unused", init={"replies": [_lines(r) for r in replies], **init}, array_parent=array_parent
+        python,
+        "unused",
+        init={"replies": [_lines(r) for r in replies], **init},
+        array_parent=array_parent,
+        max_line_bytes=max_line_bytes,
     )
 
 
@@ -207,6 +207,60 @@ def test_grace_ranges_at_their_edges() -> None:
     third = threading.TIMEOUT_MAX / 2
     with pytest.raises(ValueError, match="bound"):
         ShutdownGraces(stop=third, term=0.0, kill=third, join=third)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("field", _GRACE_FIELDS)
+def test_graces_overflow_is_value_error(field: str) -> None:
+    """An int too large for a float is refused as `ValueError`, as every other grace out of range is."""
+    with pytest.raises(ValueError, match=f"grace {field}"):
+        ShutdownGraces(**{field: 10**400})
+
+
+@pytest.mark.logic
+def test_exit_observed_by_one_wait() -> None:
+    """One `_wait_exit` blocks for an exit or, unblocked, asks; neither reaps, and no second probe exists."""
+    proc = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+    assert proc.stdin is not None
+    try:
+        assert worker_client._wait_exit(proc.pid, block=False) is False
+        proc.stdin.close()
+        assert worker_client._wait_exit(proc.pid) is True
+        assert worker_client._wait_exit(proc.pid, block=False) is True
+        assert proc.returncode is None
+    finally:
+        proc.stdin.close()
+        proc.wait(timeout=30)
+    assert not hasattr(worker_client, "_has_exited")
+
+
+@pytest.mark.logic
+def test_max_line_bytes_out_of_range_is_refused(array_parent: Path) -> None:
+    """A line limit must be a positive int no larger than the worker's own."""
+    for bad in (0, MAX_LINE_BYTES + 1, 2048.0, True):
+        with pytest.raises(ValueError, match="max_line_bytes"):
+            WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent, max_line_bytes=bad)  # type: ignore[arg-type]
+
+
+@pytest.mark.logic
+def test_response_line_bounded(array_parent: Path) -> None:
+    """A response line longer than the client's `max_line_bytes` is `LineTooLarge`, and the worker is discarded."""
+    long = {"id": "$ID", "item": "a", "outputs": {"x": "$PAD"}}
+    client = _scripted(array_parent, [long, _done(1)], max_line_bytes=SMALL_LINE_BYTES, pad=2 * SMALL_LINE_BYTES)
+    with pytest.raises(LineTooLarge, match=str(SMALL_LINE_BYTES)):
+        client.run([{"id": "a", "inputs": {}}], {})
+    assert not client.alive
+    client.close()
+
+
+@pytest.mark.logic
+def test_scripted_fixture_exhausted_raises_typed(array_parent: Path) -> None:
+    """A request past the scripted worker's last reply ends it with `RepliesExhausted`, never `StopIteration`."""
+    client = _scripted(array_parent)
+    with pytest.raises(WorkerLost) as lost:
+        client.run([{"id": "a", "inputs": {}}], {})
+    assert "RepliesExhausted" in "\n".join(lost.value.__notes__)
+    client.close()
 
 
 @pytest.mark.logic

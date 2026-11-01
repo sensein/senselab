@@ -5,7 +5,6 @@ import gc
 import logging
 import multiprocessing as mp
 import os
-import resource
 import signal
 import subprocess
 import sys
@@ -19,6 +18,7 @@ from typing import Any, TypeVar
 import lifecycle_probes_fixture
 import pytest
 import shutdown_schedule_fixture
+from bounded_probe_fixture import limit_file_size
 from senselab_core.runtime.worker_client import (
     DEFAULT_GRACES,
     ESCALATE_HINT,
@@ -327,10 +327,6 @@ def test_collecting_a_client_whose_shutdown_was_cut_short_finishes_it(
     assert not array_dir.exists() and not lifecycle_probes_fixture.group_alive(pgid)
 
 
-def _bounded() -> None:
-    resource.setrlimit(resource.RLIMIT_FSIZE, (2**20, 2**20))
-
-
 _HELD_THEN_ESCALATED = """
 import logging, signal
 from senselab_core.runtime.worker_client import ESCALATE_HINT, _signals_deferred
@@ -359,7 +355,7 @@ def test_ctrl_c_held_once_with_a_hint_and_escalated_by_a_second() -> None:
         capture_output=True,
         text=True,
         timeout=WAIT_S,
-        preexec_fn=_bounded,
+        preexec_fn=limit_file_size,
         check=False,
     )
     assert proc.returncode == 0, proc.stderr[-2000:]
@@ -387,7 +383,7 @@ def test_the_escalation_hint_is_logged_once_per_process() -> None:
         capture_output=True,
         text=True,
         timeout=WAIT_S,
-        preexec_fn=_bounded,
+        preexec_fn=limit_file_size,
         check=False,
     )
     assert proc.returncode == 0, proc.stderr[-2000:]
