@@ -17,9 +17,17 @@ since then as of 2026-10-30.
 | `scripts/` (1.x scripts), `tutorials/` | on alpha | `19834fdd` | — |
 
 "On alpha": the module is developed on `alpha`, and its copy under `src/` on the 2.x line is the
-source pool it ports from (ADR-009). No 1.x module has moved into `packages/` yet; the modules core
-replaced before H10 (`file_lock`, `model_revision`, `prov_store`, `prov_bep028`, `cuda_probe`) were
-moved, not ported, and have no copy under `src/`.
+source pool it ports from (ADR-009). No 1.x module has moved into `packages/` yet.
+
+**`src/` is 1.x as it stands on `alpha`** (owner decision D-6,
+[`decisions-2026-11-01.md`](decisions-2026-11-01.md); ADR-009). Phase 1 rounds edited 97 files under
+`src/` (the Task 7 and Task 9 rewires, H9c, H-R42). Those edits are undone by restoring `src/` to the
+freeze commit `19834fdd`, and `alpha` is then merged, so each mark above becomes the merged `alpha`
+commit. The restore brings back the 1.x modules core replaced before H10 (`file_lock`,
+`model_revision`, `prov_store`, `prov_bep028`, `cuda_probe`): core's versions are 2.x code beside
+them, not moves, and the 1.x copies leave `src/` only when their last use case moves. **2.x never
+edits `src/`:** a file leaves it only by a rename-only `git mv` commit into `packages/`, followed by a
+modify commit.
 
 ## Moving a use case
 
@@ -221,10 +229,11 @@ commit lands in `packages/`, and the H-R20 table above names its replacement.
 | `scripts.release_gate` | `hashlib` |
 | `scripts.verify_grid_unification` | `hashlib` |
 
-## Suppressed banned-name sites (H9e, H-R36)
+## Name-based digests in 1.x (H9e, H-R36)
 
-These production sites call a name ruff's banned-api forbids (ADR-006) and carry a per-site `# noqa`. The
-digests among them are migration debt like the rows above; the dynamic imports are reviewed loaders.
+These 1.x sites compute a name-based digest outside the digest module. They are migration debt like the
+rows above and are replaced when their module moves. Once `src/` is restored (D-6) they carry no `# noqa`
+mark, since 2.x does not lint `src/`.
 
 | Site | Name | What it is | 2.x replacement |
 |---|---|---|---|

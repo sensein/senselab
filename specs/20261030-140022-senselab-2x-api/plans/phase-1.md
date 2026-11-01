@@ -2,7 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Land the torch-free foundations of senselab 2.x on `alpha`:
+> **Amended 2026-11-01** ([`decisions-2026-11-01.md`](../decisions-2026-11-01.md)). 2.x merges to the
+> `2.x` branch, not `alpha` (owner item 30); design is decided in #617 and code goes in #619 (D-7). The
+> 1.x rewires of Tasks 7 and 9 and the 1.x test runs that checked them are undone: `src/` is 1.x as it
+> stands on `alpha`, and 2.x neither edits nor tests it (D-6). Steps below that name `alpha` as the
+> merge target or run 1.x tests record the plan as executed, not what follows.
+
+**Goal:** Land the torch-free foundations of senselab 2.x on the `2.x` branch:
 - the uv workspace with `senselab_worker` and `senselab_core`;
 - the worker runtime and its wire protocol;
 - kernel data and identity types;
@@ -60,7 +66,7 @@ All 1.x behaviour stays unchanged.
   one tier marker (`logic`, `contract`, `limits`, `usecase` or `env`) (P-30). No identifiers in
   fixtures (P-28).
 - Prose: docstrings say what and how; no history, no register ids outside `specs/` (P-31).
-- Each task is one PR from `2x/p1-<slug>` to `alpha`, merged with a green CI. The PR records the
+- Each task is one reviewed commit series in the code PR (#619, `2x/phase-1` → `2.x`), with a green CI. It records the
   implementer and reviewer models (P-40) and runs the `engineering.md` checklist.
 
 ## Review Focus
@@ -196,8 +202,8 @@ Tasks 2–4, 7–9 and 11 can run in parallel once Task 1 has merged. Dependenci
   `uv run pytest packages -m "logic or contract" -v`, which passes, then `uv run lint-imports`,
   which passes. Run `uv run pytest src/tests/utils -q` to confirm 1.x still collects with
   `--strict-markers`.
-- [ ] **Step 5:** Commit `build(2x): uv workspace with senselab-worker and senselab-core` and open
-  the PR to `alpha`.
+- [ ] **Step 5:** Commit `build(2x): uv workspace with senselab-worker and senselab-core` and push
+  it to the code PR (#619).
 
 ### Task 2: Wire protocol spec (R-37)
 
@@ -833,11 +839,10 @@ for one live fetch.
 **Tier:** all of the above.
 **Depends on:** Tasks 0–14.
 
-- [ ] **Step 1:** Confirm on `alpha` CI that `core-only` is green on Python 3.11 and 3.14,
+- [ ] **Step 1:** Confirm on the 2.x CI (`2x-tests.yaml`) that `core-only` is green on Python 3.11 and 3.14,
   `worker-floor` is green on 3.10 with numpy 1.23.5, `lint-imports` passes, and pre-commit passes.
-- [ ] **Step 2:** Run the full 1.x suite serially on ORCD from a pinned checkout of `alpha`. Use a
-  CPU partition named in the job and respect the QOS cap (P-29). It passes with the pass and skip
-  counts of branch `freeze-1x-2026-10-30` plus the moved tests.
+- [ ] **Step 2:** Confirm `src/` equals 1.x on `alpha` (D-6): `git diff <merged alpha> -- src` is
+  empty. No 1.x suite runs on the 2.x line; 1.x is tested on `alpha`.
 - [ ] **Step 3: Adversarial round brief.**
   - Give the opus lead the Phase 1 surfaces: the worker protocol, canonical serialisation, identity
     types, the store, the fetch cache, the import layering and the rewires.

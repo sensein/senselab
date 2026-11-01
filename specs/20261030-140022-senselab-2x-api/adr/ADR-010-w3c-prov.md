@@ -1,6 +1,6 @@
 # ADR-010: Provenance is W3C PROV
 
-**Status:** accepted, 2026-11-01 (owner: "use w3c prov, add ADR-010").
+**Status:** accepted 2026-11-01 (owner: "use w3c prov, add ADR-010"); amended 2026-11-01.
 
 ## Context
 
@@ -59,3 +59,24 @@
   and it has no namespacing for a domain vocabulary.
 - **A closed enum of senselab types in core.** It recreates the triage-vocabulary problem: every new
   task edits core.
+
+## Amendment 2026-11-01: activity identity, a staged plan link, Phase 2 (D-4)
+
+Owner decision D-4 ([`decisions-2026-11-01.md`](../decisions-2026-11-01.md)). Resolves A I-3, A I-2,
+A I-6 ([`reviews/full-review-2026-11-01/adrs.md`](../reviews/full-review-2026-11-01/adrs.md)) and
+Ru C-1 ([`rulings-audit.md`](../reviews/full-review-2026-11-01/rulings-audit.md)).
+
+- **An activity's `@id` identifies the execution.** Replaces "and an activity's is its logical key" under
+  *Identity stays as decided*. The `@id` is the content address of the execution record. The logical key
+  (ADR-002) is a `senselab:` property of the activity. One key can carry several executions, one per
+  execution context, plus reuse activities; an `@id` equal to the key would merge them.
+- **The plan link is staged.** Replaces the timing of *The pipeline graph is the plan*, whose decision
+  stands. `prov:hadPlan` is recorded once ADR-001's graph document exists (Phase 3). Until then an
+  activity carries its node id and its logical key, and no `prov:hadPlan`.
+- **Phase 2 implements this ADR** (design §6.2):
+  - the PROV-O JSON-LD store;
+  - the `senselab:` vocabulary;
+  - removal of the token families and helpers carried over from 1.x provenance (`$path`, `$enum`,
+    `$dec`, `$bytes`, `$set`, `EnumMember`, `FrozenDict`, `revised`, `recorded`, `plain_values`).
+    `$enum` hashes a Python qualified name into durable ids, which ADR-006 forbids;
+  - the export redaction ADR-007 requires; today's BEP028 exporter writes file names and paths.
