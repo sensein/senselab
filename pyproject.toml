@@ -67,7 +67,8 @@ test = [
   "pytest-timeout~=2.4",
   "import-linter~=2.0",
   "grimp",
-  "jsonschema"
+  "jsonschema",
+  "hypothesis"
 ]
 docs = [
   "pdoc~=16.0"

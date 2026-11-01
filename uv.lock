@@ -3208,6 +3208,7 @@ profiling = [
 ]
 test = [
     { name = "grimp" },
+    { name = "hypothesis" },
     { name = "import-linter" },
     { name = "jsonschema" },
     { name = "pytest" },
@@ -3250,6 +3251,7 @@ profiling = [
 ]
 test = [
     { name = "grimp" },
+    { name = "hypothesis" },
     { name = "import-linter", specifier = "~=2.0" },
     { name = "jsonschema" },
     { name = "pytest" },
