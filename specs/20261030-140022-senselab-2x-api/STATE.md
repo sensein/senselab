@@ -105,9 +105,9 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
    Parked items: all in review-register.md (R-110..R-134); none live only in the ledger.
 3. **Phase 1 exit**, remaining steps in order (`plans/phase-1.md` Task 15, as amended; final review of
    `82a986e1`):
-   1. X1 code fixes (in progress).
-   2. CI green at the final head.
-   3. These docs fixes (done by this commit).
+   1. X1 code fixes: done.
+   2. CI green at the final head: done, `195406b7` (2026-11-01).
+   3. Docs fixes: done.
    4. The ORCD jobs (a)-(f) plus the env tier, pending owner sign-in. Run them on ORCD shared NFS scratch from
       a pinned checkout, in a submitted job (never on login or claude-rc nodes), together with the local-tier
       runs H11b did not make (the env tier and the later-boundary sweep): (a) `SENSELAB_WORK_POOL_NFS_DIR=<dir>` run of
@@ -119,8 +119,10 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
    defeated by attribute caching; (e) stale-break race across nodes: one break log, and any "displaced"
    warning matches a holder whose release logs it; (f) an unreadable 0o000 stale lease left by another
    user in a group-writable run directory is still broken.
-   5. The Task 15 adversarial round with a duplicate-finding pass (P-37).
-   6. Resolve or schedule every register finding.
+   5. The Task 15 adversarial round with a duplicate-finding pass (P-37): done against `c54e9712`
+      (`reviews/exit-adversarial-2026-11-01/`, R-135..R-159); 11 high/medium findings fixed and reviewed
+      (`c294151c..195406b7`).
+   6. Resolve or schedule every register finding: done; every open row names an owner.
    7. Mark Phase 1 done, merge #617 into `2.x`, and retarget #619.
 4. **Phase 2:** ADR-010 (PROV-O JSON-LD store, `senselab:` vocabulary, token-family removal, export
    redaction) and the benchmark harness with its data manifest and smoke suite, alongside the tasks and
