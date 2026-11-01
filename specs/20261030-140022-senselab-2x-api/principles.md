@@ -431,3 +431,11 @@ amending its origin.
   roster in `engineering.md`.
 - 2026-10-30: added P-41 (docs for three audiences, PR previews showing progress, toy fixtures in
   the repo versus pulled versioned data); see `docs.md`.
+- 2026-11-01: owner decisions D-1..D-7 on the full review, recorded in
+  [`decisions-2026-11-01.md`](decisions-2026-11-01.md). Text in `engineering.md`:
+  - P-27 amended (meaning change, owner item 30 and D-7): 2.x is built on the `2.x` branch, not in
+    place on `alpha`; design is decided in #617 and code goes in #619.
+  - P-31 and P-35 checks amended (D-1): the guard layer is cut back to the design, and an advisory
+    agent prose review is added.
+  - ADR-000 gains the amendment rule: a change to an ADR's decision is a dated amendment section
+    (D-7).

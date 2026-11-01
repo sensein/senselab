@@ -44,8 +44,9 @@ three audience paths that share the same pages:
 
 ## Showing implementation progress
 
-- **Every PR gets a preview** at `sensein.group/senselab/pr-<N>/`, which the existing
-  `docs-preview.yaml` provides. 2.x extends it from the pdoc API reference to the full site.
+- **Every PR gets a preview.** A 2.x PR's preview is at `sensein.group/senselab/2x/pr-<N>/`, from
+  `2x-docs-preview.yaml`, kept separate from the 1.x previews. 2.x extends it from the pdoc API
+  reference to the full site.
 - **A generated "2.x status" page** shows:
   - each task's state, read from the registry: declared, implemented, ported, or benchmarked;
   - phase exits met;
@@ -73,7 +74,11 @@ three audience paths that share the same pages:
   `senselab data fetch <manifest>`.
   - It downloads into a content-addressed cache outside the repo and verifies every hash.
   - It refuses a mismatch and accepts a mirror only on a matching hash.
-  - A cache hit trusts a blob, without reading it, only if `lstat` shows a regular file (not a symlink) whose size, mtime, inode and ctime equal the `BlobStamp` recorded when the dataset was completed; any other blob is re-hashed and refetched on a mismatch. A full re-hash of every blob is opt-in (`--verify`), so a cached fetch of a large dataset does not re-read it. Blobs and markers are read-only, and manifest paths are compared by Unicode canonical caseless match (NFD, full case folding with `str.casefold`, NFC), so two paths that a case-insensitive filesystem (APFS, NTFS) may store as one file are refused. Full folding is wider than NTFS's simple upcase table (it joins `ß` and `ss`); refusing such a pair is the safe side. If two writers commit one blob and the first `os.link` loses to a file that appeared meanwhile, that file is kept only if its bytes hash to the blob's name; otherwise the verified staged copy replaces it.
+  - A cache hit trusts a blob without reading it only if it is a regular file whose recorded stamp
+    (size, mtime, inode, ctime) still matches; any other blob is re-hashed. A full re-hash is opt-in
+    (`--verify`), so a cached fetch of a large dataset does not re-read it.
+  - Manifest paths compare by Unicode canonical caseless match, so two paths a case-insensitive
+    filesystem may store as one file are refused.
   - A dataset adapter (P-11) reads the result.
 - **Identity:** a pulled file's identity is its content hash, so results computed on it key
   correctly (ADR-002). CI caches by manifest hash.
@@ -83,11 +88,19 @@ three audience paths that share the same pages:
 ## Phasing
 
 - **Phase 1:**
-  - the data manifest and fetch, used first by the benchmark smoke suite;
+  - the data manifest and fetch;
   - the fixture budget check;
   - the generators that replace the committed fixtures.
 - **Phase 2:** reference generated from declarations; the status page and badges in the PR
-  preview.
+  preview; the benchmark harness and its smoke suite, the first consumer of the fetch (H-R49,
+  [`decisions-2026-11-01.md`](decisions-2026-11-01.md)).
 - **Phase 3 onwards:** each use-case pipeline ported in a phase lands with its docs page and a
   public-data example in the same phase.
 - **Phase 5:** the 1.x notebooks are retired once their pages exist.
+
+## Amendment log
+
+- 2026-10-31: cached fetches trust a blob by its recorded stamp; manifest paths compare caseless
+  (R-77).
+- 2026-11-01: the benchmark harness and smoke suite move to Phase 2 (H-R49, owner decisions of
+  2026-11-01); the 2.x preview path is `2x/pr-<N>/`.

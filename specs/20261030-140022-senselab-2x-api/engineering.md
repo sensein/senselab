@@ -124,8 +124,12 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
 ### P-27 Commit and push early and often
 - **Status**: active
 - **Statement**: Each unit of work is committed when done and pushed promptly. Work in progress
-  stays visible on a branch with a PR to `alpha`. 2.x is built in place on `alpha`.
-- **Source**: owner, 2026-10-30: "commit+push early often"; "in place on alpha".
+  stays visible on a branch with a PR. 2.x is built on the `2.x` branch: design is decided in the docs
+  PR (#617, `senselab-2x-api`), code and tests go in the code PR (#619, `2x/phase-1`), which merges
+  `senselab-2x-api` to stay current. A change to an ADR's decision is a dated amendment (ADR-000).
+- **Source**: owner, 2026-10-30: "commit+push early often"; "in place on alpha". Amended by the
+  owner, 2026-11-01: "are PRs being merged into a 2.x branch or to alpha? should be the former"; and
+  decision D-7, "move specs to the docs PR" ([`decisions-2026-11-01.md`](decisions-2026-11-01.md)).
 - **Check**: no local-only work older than a session.
 
 <a id="p-28"></a>
@@ -177,6 +181,8 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   once, in the fewest exact words. Reasons and history live in `specs/`.
 - **Source**: owner, 2026-10-30: "we want to make verbosity minimal for the human and any agent".
 - **Check**: advisory prose review in CI by a small pinned model, sharpened by agents; the exact-pattern id check blocks. No word lists.
+  Amended 2026-11-01 (D-1): the agent prose review covers each PR's diff against the principles and
+  the per-commit checklist, and comments without blocking.
 
 <a id="p-32"></a>
 ### P-32 Clean, robust, reusable, efficient code
@@ -224,6 +230,10 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   standards not more brittleness".
 - **Check**: each phase ends with an adversarial round. Findings are recorded with their
   architectural resolution, and case-only fixes are rejected.
+  Amended 2026-11-01 (D-1): a resolution is a design rule, not a guard that chases one bypass. Guards
+  are the design's (import-linter contracts, the identifier check, the fixture budget, the
+  workflow-expression guard); spelling-based lints over in-repo bypasses and tests whose only job is
+  to make another test exist are not added.
 
 <a id="p-39"></a>
 ### P-39 Concurrent 1.x work is reconciled, never lost

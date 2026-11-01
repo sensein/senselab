@@ -1,6 +1,6 @@
 # ADR-007: Trust and privacy
 
-**Status:** accepted, 2026-10-30.
+**Status:** accepted 2026-10-30; amended 2026-11-01.
 
 ## Context
 Architect review §12 (R-48):
@@ -33,3 +33,11 @@ Architect review §12 (R-48):
 ## Alternatives rejected
 - **Trusting `trust_remote_code` per call.** Unauditable.
 - **Redacting at publish time only.** Too easy to forget.
+
+## Amendment 2026-11-01: export redaction is built with ADR-010 (D-4)
+
+Owner decision D-4 ([`decisions-2026-11-01.md`](../decisions-2026-11-01.md)); finding A I-2
+([`reviews/full-review-2026-11-01/adrs.md`](../reviews/full-review-2026-11-01/adrs.md)). The decision
+stands. The Phase 1 BEP028 exporter writes file names and paths and does not meet it, so no Phase 1
+export is publishable. The redaction is built in Phase 2, with the PROV-O store of ADR-010, and the
+exporter's tests require it.

@@ -2,6 +2,12 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Amended 2026-11-01** ([`decisions-2026-11-01.md`](../decisions-2026-11-01.md)). 2.x merges to the
+> `2.x` branch, not `alpha`; design is decided in #617 and code goes in #619 (D-7). The guards and the
+> release gate of H6 and H7 are cut back to the design (D-1, D-5); the lock protocol returns to ADR-003's
+> leases, keeping H9b's path safety (D-2); `src/` is restored to 1.x as on `alpha` (D-6). The tasks
+> below record the plan as executed.
+
 **Goal:** Close the Phase 1 adversarial findings ([`reviews/phase1-adversarial.md`](../reviews/phase1-adversarial.md),
 register rows R-59…R-98) by landing the invariants they violate, each with a contract test that covers
 every type, format or call site the invariant governs. Phase 1 exits only after H1–H8 merge.
@@ -64,7 +70,7 @@ pytest + hypothesis; import-linter + grimp; hatchling + hatch-vcs.
   a `derivation:` block, not as code literals.
 - Tests: `uv run pytest <scoped path>`, serial, never `-n auto` (P-29). Each new test carries exactly
   one tier marker (P-30; H6 makes this a collection error). Test files are named `*_test.py`.
-- Each task is one PR from `2x/p1h-<slug>` to `alpha`. It records implementer and reviewer models,
+- Each task is one reviewed commit series in the code PR (#619, `2x/phase-1` → `2.x`). It records implementer and reviewer models,
   which differ (P-40), and runs the `engineering.md` checklist.
 - Rationale stays in `specs/`: docstrings say what and how. Register ids never appear in code (P-31).
 
@@ -793,7 +799,7 @@ H6 and H7 can run at any time. H8 is last.
 - [ ] **Step 4:** Commit `fix(guards): resolve imports, bind the fixture allowlist to the freeze tag, enforce tiers and layers`.
 - [ ] **Step 5:** Mark R-84, R-85, R-86, R-91 "resolved (H6)". Set R-97 to "workflow resolved (H6);
   protection: owner".
-- [ ] **Step 6: Owner action (A-39).** Protect `alpha` and `main`. Require the `core-only`,
+- [ ] **Step 6: Owner action (A-39).** Protect `2.x` (with `alpha` and `main` as today). Require the `core-only`,
   `worker-floor`, `lint-imports` and pre-commit checks, and require PRs (admins may bypass on `main`
   as today). Record the date in `STATE.md`.
 
