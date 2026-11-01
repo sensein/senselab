@@ -63,16 +63,11 @@ LITERAL_RANGES = frozenset(
 )
 """The literal ranges a vocabulary property may declare; any other range is a class, whose values are records."""
 
-_RANGES_OF: Mapping[type, frozenset[str]] = {
-    bool: frozenset({"xsd:boolean"}),
-    int: frozenset({"xsd:integer", "xsd:double", "xsd:decimal"}),
-    float: frozenset({"xsd:double"}),
-    str: frozenset({"xsd:string"}),
-    Decimal: frozenset({"xsd:decimal"}),
-    datetime: frozenset({"xsd:dateTime"}),
-}
+_RANGES_OF: Mapping[type, str] = {bool: "xsd:boolean", str: "xsd:string", datetime: "xsd:dateTime"}
+_NUMERIC_RANGES = frozenset({"xsd:integer", "xsd:double", "xsd:decimal"})
 _ENTITY_ID = re.compile(r"(content|output):[0-9a-f]{64}")
 _AGENT_ID = re.compile(r"agent:[0-9a-f]{64}")
+_NODE_ID = re.compile(r"(content|output|activity|agent|environment):[0-9a-f]{64}")
 _TERM = re.compile(r"senselab:[A-Za-z][A-Za-z0-9_]*")
 _VOCAB_NODE_KEYS = frozenset({"@id", "@type", "rdfs:subClassOf", "rdfs:domain", "rdfs:range", "rdfs:comment"})
 _XSD_DOUBLE = {math.inf: "INF", -math.inf: "-INF"}
@@ -232,15 +227,52 @@ def _add_term(node: object, classes: dict[str, str | None], properties: dict[str
         )
 
 
-@dataclass(frozen=True)
+_SEAL = object()
+
+
 class Record:
     """One compact JSON-LD node and the `senselab:File` entities its attribute values name.
 
-    `node()` returns a fresh copy; the record itself holds the node's JCS bytes.
+    Built only by `entity`, `agent`, `environment` and `activity`. It holds the node's JCS bytes (`jcs`); `node()`
+    returns a fresh copy. Records compare and hash by those bytes and their files.
     """
 
-    jcs: bytes
-    files: tuple["Record", ...] = ()
+    __slots__ = ("_files", "_jcs")
+    _jcs: bytes
+    _files: tuple["Record", ...]
+
+    def __init__(self, jcs: bytes, files: tuple["Record", ...], *, seal: object = None) -> None:
+        """Hold a node the builders made; any other caller is refused with `TypeError`."""
+        if seal is not _SEAL:
+            raise TypeError("a Record is built by entity, agent, environment or activity")
+        object.__setattr__(self, "_jcs", jcs)
+        object.__setattr__(self, "_files", files)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        """Refuse every assignment."""
+        raise AttributeError(f"a Record is read-only; cannot set {name!r}")
+
+    def __eq__(self, other: object) -> bool:
+        """Equal when the nodes and files are byte-identical."""
+        return isinstance(other, Record) and (self._jcs, self._files) == (other._jcs, other._files)
+
+    def __hash__(self) -> int:
+        """Hash of the node and files bytes."""
+        return hash((self._jcs, self._files))
+
+    def __repr__(self) -> str:
+        """The node's JCS text."""
+        return f"Record({self._jcs.decode()})"
+
+    @property
+    def jcs(self) -> bytes:
+        """The node's JCS bytes."""
+        return self._jcs
+
+    @property
+    def files(self) -> tuple["Record", ...]:
+        """The `senselab:File` entities the node's attribute values name, in `@id` order."""
+        return self._files
 
     @property
     def id(self) -> str:
@@ -325,9 +357,13 @@ class _Builder:
             if type(value.value) is not str:
                 raise UnrecordableValue(path, f"an enum is recorded by its str value; {value!r} has none")
             value = value.value
-        if isinstance(value, (Decimal, datetime)):
+        if rng in _NUMERIC_RANGES:
+            return _number(value if isinstance(value, Decimal) else _plain(value, path), rng, path)
+        if isinstance(value, Decimal):
+            raise ValueOutOfRange(path, f"a Decimal is outside the range {rng}")
+        if isinstance(value, datetime):
             _check_range(type(value), rng, path)
-            return _decimal(value, path) if isinstance(value, Decimal) else _datetime(value, path)
+            return _datetime(value, path)
         return _json_scalar(value, rng, path)
 
     def reference(self, value: object, rng: str, path: str) -> object:
@@ -351,36 +387,65 @@ class _Builder:
         return _sealed(node, tuple(self.files[k] for k in sorted(self.files)))
 
 
-def _json_scalar(value: object, rng: str, path: str) -> object:
+def _plain(value: object, path: str) -> object:
     try:
         scalar = canonical_scalar(value)
     except TypeError:
         raise UnrecordableValue(path, f"{type(value).__qualname__} has no JSON-LD literal form") from None
     if scalar is None:
         raise UnrecordableValue(path, "JSON-LD drops null; leave the attribute out")
+    return scalar
+
+
+def _json_scalar(value: object, rng: str, path: str) -> object:
+    scalar = _plain(value, path)
     _check_range(type(scalar), rng, path)
     if type(scalar) is str:
         try:
             return canonical_text(scalar)
         except InvalidText as err:
             raise UnrecordableValue(path, str(err)) from None
-    if type(scalar) is float and not math.isfinite(scalar):
-        return {"@value": _XSD_DOUBLE.get(scalar, "NaN"), "@type": "xsd:double"}
-    if type(scalar) is int and abs(scalar) > MAX_SAFE_INT:
-        return {"@value": str(scalar), "@type": "xsd:integer"}
     return scalar
 
 
 def _check_range(kind: type, rng: str, path: str) -> None:
-    if rng not in _RANGES_OF.get(kind, frozenset()):
+    if _RANGES_OF.get(kind) != rng:
         raise ValueOutOfRange(path, f"a {kind.__qualname__} is outside the range {rng}")
 
 
-def _decimal(value: Decimal, path: str) -> object:
-    if not value.is_finite():
-        raise UnrecordableValue(path, f"xsd:decimal has no form for {value}")
-    text = format(value.normalize(), "f")
-    return {"@value": "0" if text in {"-0", "0"} else text, "@type": "xsd:decimal"}
+def _number(value: object, rng: str, path: str) -> object:
+    """Write a number in the form its range gives it, whatever its Python type; refuse one the range cannot hold."""
+    if type(value) not in (int, float, Decimal):
+        raise ValueOutOfRange(path, f"a {type(value).__qualname__} is outside the range {rng}")
+    if isinstance(value, Decimal) and not value.is_finite():
+        raise UnrecordableValue(path, f"a Decimal {value} has no {rng} form")
+    if rng == "xsd:double":
+        return _double(value, path)  # type: ignore[arg-type]
+    if type(value) is float and (rng == "xsd:decimal" or not value.is_integer()):
+        raise ValueOutOfRange(path, f"the float {value} is not exactly an {rng}; pass an int or a Decimal")
+    exact = Decimal(value)  # type: ignore[arg-type]
+    if rng == "xsd:decimal":
+        text = format(exact.normalize(), "f")
+        return {"@value": "0" if text in {"-0", "0"} else text, "@type": "xsd:decimal"}
+    if exact != exact.to_integral_value():
+        raise ValueOutOfRange(path, f"{exact} is not an xsd:integer")
+    n = int(exact)
+    return n if abs(n) <= MAX_SAFE_INT else {"@value": str(n), "@type": "xsd:integer"}
+
+
+def _double(value: float | Decimal, path: str) -> object:
+    if type(value) is float:
+        f = value
+    else:
+        try:
+            f = float(value)
+        except OverflowError:
+            raise ValueOutOfRange(path, "the number is outside xsd:double") from None
+        if Decimal(f) != Decimal(value):
+            raise ValueOutOfRange(path, "the number is not exactly an xsd:double")
+    if not math.isfinite(f):
+        return {"@value": _XSD_DOUBLE.get(f, "NaN"), "@type": "xsd:double"}
+    return f
 
 
 def _datetime(value: datetime, path: str) -> object:
@@ -398,7 +463,7 @@ def _json_literal(value: object, path: str) -> object:
 
 
 def _sealed(node: Mapping[str, object], files: tuple[Record, ...] = ()) -> Record:
-    return Record(jcs=jcs_dumps(dict(node)), files=files)
+    return Record(jcs_dumps(dict(node)), files, seal=_SEAL)
 
 
 def _addressed(prefix: str, tag: str, node: dict[str, object]) -> dict[str, object]:
@@ -425,7 +490,7 @@ def entity(
     """
     b = _Builder(vocabulary)
     t = b.types("prov:Entity", types)
-    return b.record({"@id": _checked(_ENTITY_ID, address), "@type": t, **b.attributes(t, attributes or {})})
+    return b.record({"@id": _checked(_ENTITY_ID, address, "address"), "@type": t, **b.attributes(t, attributes or {})})
 
 
 def environment(vocabulary: Vocabulary, attributes: Mapping[str, object]) -> Record:
@@ -480,13 +545,13 @@ def activity(  # noqa: PLR0913 - keyword-only, one argument per PROV relation
     times = {"prov:startedAtTime": started, "prov:endedAtTime": ended}
     node.update({k: b.scalar(v, "xsd:dateTime", k) for k, v in times.items() if v is not None})
     usages, generations, assocs = list(used), list(generated), list(associations)
-    _put(node, "prov:used", [{"@id": _checked(_ENTITY_ID, u.entity)} for u in usages])
+    _put(node, "prov:used", [{"@id": _checked(_ENTITY_ID, u.entity, "used")} for u in usages])
     _put(node, "prov:qualifiedUsage", [_qualified(b, "prov:Usage", u) for u in usages if u.port or u.time])
-    _put(node, "prov:generated", [{"@id": _checked(_ENTITY_ID, g.entity)} for g in generations])
+    _put(node, "prov:generated", [{"@id": _checked(_ENTITY_ID, g.entity, "generated")} for g in generations])
     reverse = [_qualified(b, "prov:Generation", g) for g in generations if g.port or g.time]
     if reverse:
         node["@reverse"] = {"prov:activity": _sorted_unique(reverse)}
-    _put(node, "prov:wasAssociatedWith", [{"@id": _checked(_AGENT_ID, a.agent)} for a in assocs])
+    _put(node, "prov:wasAssociatedWith", [{"@id": _checked(_AGENT_ID, a.agent, "associations")} for a in assocs])
     _put(node, "prov:qualifiedAssociation", [_association(b, a) for a in assocs])
     return b.record(_addressed("activity:", PROV_ACTIVITY_TAG, node))
 
@@ -496,9 +561,9 @@ def _put(node: dict[str, object], key: str, values: list[object]) -> None:
         node[key] = _sorted_unique(values)
 
 
-def _checked(pattern: "re.Pattern[str]", node_id: str) -> str:
+def _checked(pattern: "re.Pattern[str]", node_id: str, what: str) -> str:
     if not pattern.fullmatch(node_id):
-        raise ValueError(f"an @id of the form {pattern.pattern}, got {node_id!r}")
+        raise ValueError(f"{what} must be an @id of the form {pattern.pattern}")
     return node_id
 
 
@@ -513,9 +578,9 @@ def _qualified(b: _Builder, kind: str, rel: Usage | Generation) -> dict[str, obj
     if rel.time is not None:
         q["prov:atTime"] = b.scalar(rel.time, "xsd:dateTime", "prov:atTime")
     if kind == "prov:Usage":
-        q["prov:entity"] = {"@id": _checked(_ENTITY_ID, rel.entity)}
+        q["prov:entity"] = {"@id": rel.entity}
     else:
-        q["@reverse"] = {"prov:qualifiedGeneration": {"@id": _checked(_ENTITY_ID, rel.entity)}}
+        q["@reverse"] = {"prov:qualifiedGeneration": {"@id": rel.entity}}
     return q
 
 
@@ -569,11 +634,12 @@ _READERS: Mapping[str, Callable[[str], object]] = {
 def document(records: Iterable[Record]) -> dict[str, object]:
     """Return the JSON-LD document of `records` and the files they name: `{"@context": CONTEXT_URL, "@graph": [...]}`.
 
-    Nodes are in `@id` order; one `@id` held by two different nodes is refused with `ValueError`.
+    Nodes are in `@id` order. A node whose `@id` is not an address, or one `@id` held by two different nodes, is
+    refused with `ValueError`.
     """
     nodes: dict[str, bytes] = {}
     for record in records:
         for r in (record, *record.files):
-            if nodes.setdefault(r.id, r.jcs) != r.jcs:
+            if nodes.setdefault(_checked(_NODE_ID, r.id, "a node"), r.jcs) != r.jcs:
                 raise ValueError(f"two different nodes have the @id {r.id}")
     return {"@context": CONTEXT_URL, "@graph": [jcs_loads(nodes[k]) for k in sorted(nodes)]}

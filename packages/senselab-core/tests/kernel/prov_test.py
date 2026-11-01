@@ -114,6 +114,12 @@ def test_value_out_of_range_refused(term: str, value: object, path: str) -> None
     ("attributes", "path"),
     [
         ({"count": 1.5}, "senselab:count"),
+        ({"count": Decimal("1.5")}, "senselab:count"),
+        ({"count": True}, "senselab:count"),
+        ({"amount": 1.5}, "senselab:amount"),
+        ({"level": 2**53 + 1}, "senselab:level"),
+        ({"level": Decimal("0.1")}, "senselab:level"),
+        ({"level": 10**400}, "senselab:level"),
         ({"level": "loud"}, "senselab:level"),
         ({"label": Decimal("1.5")}, "senselab:label"),
         ({"recordedAt": "2026-11-01"}, "senselab:recordedAt"),
@@ -143,7 +149,9 @@ def test_minus_inf_round_trips_as_xsd_double() -> None:
     [
         ({"level": math.inf}, {"@value": "INF", "@type": "xsd:double"}, math.inf),
         ({"level": numpy.float32(0.5)}, 0.5, 0.5),
-        ({"level": 3}, 3, 3),
+        ({"level": 3}, 3.0, 3.0),
+        ({"count": 3.0}, 3, 3),
+        ({"amount": 2}, {"@value": "2", "@type": "xsd:decimal"}, Decimal(2)),
         ({"count": 2**60}, {"@value": str(2**60), "@type": "xsd:integer"}, 2**60),
         ({"count": numpy.int64(-7)}, -7, -7),
         ({"amount": Decimal("1.50")}, {"@value": "1.5", "@type": "xsd:decimal"}, Decimal("1.5")),
@@ -165,6 +173,22 @@ def test_values_are_json_ld_literals(attributes: dict[str, object], literal: obj
     (term,) = attributes
     assert node[f"senselab:{term}"] == literal
     assert literal_value(node[f"senselab:{term}"]) == value
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("term", "values"),
+    [
+        ("amount", [1, Decimal(1), Decimal("1.000"), numpy.int8(1)]),
+        ("level", [2**60, float(2**60), Decimal(2**60), numpy.float64(2**60)]),
+        ("count", [2**60, float(2**60), Decimal(2**60)]),
+        ("count", [7, 7.0, numpy.uint16(7)]),
+    ],
+)
+def test_a_number_is_written_by_its_range_not_its_type(term: str, values: list[object]) -> None:
+    """Equal numbers of different Python types give one node under one declared range."""
+    nodes = {prov.entity(E1, EXTENDED, attributes={f"senselab:{term}": v}).jcs for v in values}
+    assert len(nodes) == 1
 
 
 @pytest.mark.logic
@@ -253,14 +277,14 @@ def test_activity_id_is_the_digest_of_its_node_without_id() -> None:
 
 
 @pytest.mark.logic
-def test_one_key_two_executions_two_activities() -> None:
-    """Two executions of one logical key (another context, another time) are two activities."""
+def test_one_key_two_records_two_activities() -> None:
+    """Two activity records of one logical key (another end time, another type) are two activities."""
     first = _execution()
     assert _execution(ended=T0 + timedelta(seconds=2)).id != first.id
     key = {"task": "t", "inputs": {"x": E1}}
-    other_context = _execution(attributes={"senselab:logicalKey": key}, types=["senselab:Run"])
-    assert other_context.id != first.id
-    assert other_context.node()["senselab:logicalKey"] == first.node()["senselab:logicalKey"]
+    other_type = _execution(attributes={"senselab:logicalKey": key}, types=["senselab:Run"])
+    assert other_type.id != first.id
+    assert other_type.node()["senselab:logicalKey"] == first.node()["senselab:logicalKey"]
 
 
 @pytest.mark.logic
@@ -322,16 +346,28 @@ def test_agents_and_environments_are_content_addressed() -> None:
 @pytest.mark.parametrize(
     "build",
     [
-        lambda: prov.entity("sub-01.wav", CORE),
+        lambda: prov.entity("/data/sub-01.wav", CORE),
         lambda: prov.entity("activity:" + "0" * 64, CORE),
-        lambda: prov.activity(CORE, used=[Usage("/data/x.wav")]),
-        lambda: prov.activity(CORE, associations=[Association("someone", node_id="n")]),
+        lambda: prov.activity(CORE, used=[Usage("/data/sub-01.wav")]),
+        lambda: prov.activity(CORE, generated=[Generation("/data/sub-01.wav", port="y")]),
+        lambda: prov.activity(CORE, associations=[Association("/data/sub-01.wav", node_id="n")]),
     ],
 )
 def test_ids_are_addresses(build: Callable[[], object]) -> None:
-    """An entity is named by its content address and an association by an agent's address, never a name."""
-    with pytest.raises(ValueError, match="@id"):
+    """An entity is named by its content address and an association by an agent's address; the error names neither."""
+    with pytest.raises(ValueError, match="@id") as err:
         build()
+    assert "sub-01" not in str(err.value)
+
+
+@pytest.mark.logic
+def test_a_record_is_built_only_by_the_builders() -> None:
+    """A Record cannot be constructed or changed outside the builders, so no unchecked @id reaches a document."""
+    with pytest.raises(TypeError):
+        prov.Record(b'{"@id":"/tmp/sub-01.wav","@type":["prov:Entity"]}', ())
+    record = prov.entity(E1, CORE)
+    with pytest.raises(AttributeError):
+        record._jcs = b"{}"
 
 
 @pytest.mark.logic
