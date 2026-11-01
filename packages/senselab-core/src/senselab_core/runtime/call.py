@@ -35,7 +35,7 @@ from senselab_core.kernel.identity import (
     ReusePolicy,
 )
 from senselab_core.kernel.signals import Recording
-from senselab_core.kernel.wire import wire_form
+from senselab_core.kernel.wire import from_wire_form, wire_form
 from senselab_core.runtime.audio_io import DECODER, READER, open_audio
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
 from senselab_core.runtime.envs import EnvHandle
@@ -145,6 +145,10 @@ class CallFailed(RuntimeError):
         self.error = error
 
 
+class OutputTypeMismatch(ValueError):
+    """A backend's output for a kernel-typed port is not a wire form of the port's declared type."""
+
+
 EnvOpener = Callable[[BackendSpec, ExecutionProfile], EnvHandle]
 """Open the env a backend declares under a profile, building it if needed."""
 
@@ -192,8 +196,9 @@ def run_call(
     backends share one `ModelCache` per budget). An execution writes one activity, associated with an agent carrying
     `senselab:modelSource`, recording the key, the context and the profile's digest; a store hit writes none (the
     store records its reuse). An execution whose `put` finds different outputs another writer committed first is
-    served those, as a reuse, and writes no execution activity. `None` means the packaged default: the `laptop`
-    profile, `RunConfig()` and the store under `cache_root()/results`.
+    served those, as a reuse, and writes no execution activity. An output on a port declared as a kernel type is
+    stored as its wire form and returned as the kernel value, read by `from_wire_form`. `None` means the packaged
+    default: the `laptop` profile, `RunConfig()` and the store under `cache_root()/results`.
 
     Raises:
         UnknownTask: the call's task is not declared.
@@ -202,6 +207,7 @@ def run_call(
         ValueError: an input has no reader for its port's type or, for an isolated backend, no wire form; or the
             backend params do not validate.
         CallFailed: the backend failed the item.
+        OutputTypeMismatch: an output of a kernel-typed port is not a wire form of its declared type.
         WorkerFatal, WorkerLost, ProtocolError: as the worker reports them.
     """
     profile = execution if execution is not None else ExecutionProfile.load()
@@ -232,20 +238,22 @@ def run_call(
     key = build_key(Call(task=spec, params=call.params, inputs=identities, model=model), placement, context)
     hit = store.get(key, context, run.reuse)
     if hit is not None:
-        return Result(hit.outputs, hit.output_identity, key, hit.context, placement, hit.policy_used)
+        return Result(_decoded(spec, hit.outputs), hit.output_identity, key, hit.context, placement, hit.policy_used)
     started = datetime.now(timezone.utc)
     outputs = _execute(call, placement, env, model, {port: value for port, (_, value, _) in bound.items()}, profile)
+    decoded = _decoded(spec, outputs)
     output_identity = store.put(key, outputs, context)
     if output_identity != store_output_identity(outputs):
         stored = store.get(key, context, ReusePolicy.EXACT)
         if stored is None:
             raise RuntimeError(f"the entry another writer committed for {key.task!r} could not be read back")
-        return Result(stored.outputs, stored.output_identity, key, stored.context, placement, stored.policy_used)
+        stored_outputs = _decoded(spec, stored.outputs)
+        return Result(stored_outputs, stored.output_identity, key, stored.context, placement, stored.policy_used)
     store.provenance.add(
         *(kprov.entity(i, core_vocabulary()) for i in identities.values()),
         *_execution(key, context, profile, identities, output_identity, model, started),
     )
-    return Result(outputs, output_identity, key, context, placement, None)
+    return Result(decoded, output_identity, key, context, placement, None)
 
 
 def _resolve_model(
@@ -301,7 +309,8 @@ def _execute(  # noqa: PLR0913 - the call and everything placing it
 ) -> dict[str, object]:
     """Run the call's one item on the backend's worker with the task params and `backend_params` beside them.
 
-    A host worker is handed kernel values as they are; an isolated one, their wire forms (`wire_form`).
+    A host worker is handed kernel values as they are; an isolated one, their wire forms (`wire_form`). The outputs
+    are returned as the store holds them: a kernel value a host backend returns, as its wire form.
     """
     backend = placement.backend
     init: dict[str, Any] = {"device": placement.device}
@@ -314,7 +323,30 @@ def _execute(  # noqa: PLR0913 - the call and everything placing it
     [result] = worker.run([{"id": ITEM_ID, "inputs": inputs}], params)
     if "error" in result:
         raise CallFailed(result["error"])
-    return dict(result["outputs"])
+    return {port: wire_form(v, READER) if isinstance(v, Frozen) else v for port, v in result["outputs"].items()}
+
+
+def _decoded(spec: TaskSpec, outputs: Mapping[str, object]) -> dict[str, object]:
+    """Return `outputs` with each port declared as a kernel type read from its wire form (`from_wire_form`).
+
+    Raises:
+        OutputTypeMismatch: an output of a kernel-typed port is not a wire form of its declared type.
+    """
+    types = kernel_types()
+    decoded = dict(outputs)
+    for port, declared in spec.outputs.items():
+        if declared not in types or port not in outputs:
+            continue
+        form = outputs[port]
+        try:
+            value = from_wire_form(form) if isinstance(form, Mapping) else form
+        except ValueError as exc:
+            raise OutputTypeMismatch(f"output {port!r} of {spec.name!r} is not a wire form: {exc}") from exc
+        if not isinstance(value, types[declared]):
+            found = form.get("format") if isinstance(form, Mapping) else type(form).__name__
+            raise OutputTypeMismatch(f"output {port!r} of {spec.name!r} is declared {declared}, got {found}")
+        decoded[port] = value
+    return decoded
 
 
 def _worker(

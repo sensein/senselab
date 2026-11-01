@@ -1,5 +1,6 @@
 """`run_call`: placement by profile, store reuse, one activity per call, model source and profile digest recorded."""
 
+import json
 import os
 import platform
 import signal
@@ -14,13 +15,19 @@ import senselab_core.runtime.call as call_module
 import senselab_core.runtime.fake_backend as fake
 import soundfile
 from senselab_core.kernel import prov
-from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskSpec
+from senselab_core.kernel._base import Frozen
+from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputIdentity, ReusePolicy
+from senselab_core.kernel.results import Metric, Transcript, TranscriptNode
 from senselab_core.kernel.signals import Audio
+from senselab_core.kernel.time import Span
+from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime.audio_io import DECODER
 from senselab_core.runtime.call import (
     CallFailed,
+    OutputTypeMismatch,
     Packaged,
+    Result,
     RunConfig,
     TaskCall,
     run_call,
@@ -52,6 +59,22 @@ AUDIO_TASK = TaskSpec(
 )
 
 
+class ReturnParams(TaskParams):
+    """Params of the transcribe test task: the outputs the fake returns, as JSON text."""
+
+    outputs_json: str = ""
+
+
+TRANSCRIBE_TASK = TaskSpec(
+    name="call_test.transcribe",
+    version="1",
+    kind="transform",
+    inputs={"text": "json"},
+    outputs={"transcript": "Transcript"},
+    params=ReturnParams,
+)
+
+
 def _backend(name: str, stack: str, env: Env, task: TaskSpec = TASK, worker: str = fake.WORKER_MODULE) -> BackendSpec:
     return BackendSpec(
         task=task.name,
@@ -68,7 +91,7 @@ def _backend(name: str, stack: str, env: Env, task: TaskSpec = TASK, worker: str
 
 
 TEST_REGISTRY = Registry()
-for _task in (TASK, AUDIO_TASK, fake.ECHO):
+for _task in (TASK, AUDIO_TASK, TRANSCRIBE_TASK, fake.ECHO):
     TEST_REGISTRY.add_task(_task)
 TEST_REGISTRY.add_backend(_backend("fake-alpha", "alpha", Env.host()))
 TEST_REGISTRY.add_backend(_backend("fake-beta", "beta", Env.host()))
@@ -76,6 +99,7 @@ TEST_REGISTRY.add_backend(_backend("fake-isolated", "isolated", Env.isolated("fa
 TEST_REGISTRY.add_backend(fake.FAKE)
 TEST_REGISTRY.add_backend(_backend("identity", "dsp", Env.host(), AUDIO_TASK, "backends.identity_backend_fixture"))
 TEST_REGISTRY.add_backend(_backend("fake-audio", "isolated", Env.isolated("fake"), AUDIO_TASK))
+TEST_REGISTRY.add_backend(_backend("fake-transcribe", "isolated", Env.isolated("fake"), TRANSCRIBE_TASK))
 
 CATALOGUE = Catalogue.load(
     f"""
@@ -251,6 +275,30 @@ def test_isolated_worker_reads_audio_by_its_wire_form(store: ResultStore, tmp_pa
     call_module._close_workers()
     assert all(r.placement.backend.name == "fake-audio" and r.reused is None for r in results)
     assert results[0].outputs != results[1].outputs
+
+
+@pytest.mark.contract
+def test_isolated_outputs_are_read_as_their_declared_types(store: ResultStore) -> None:
+    """An isolated backend's wire-form output comes back as its declared type, also from the store; another is refused.
+
+    A refused output is not stored.
+    """
+    span = Span(start_ns=0, end_ns=400_000_000, clock_id="c")
+    transcript = Transcript(segments=(TranscriptNode(text="hi", span=span, confidence=0.5),))
+    profile = _profile(stack_preferences={TRANSCRIBE_TASK.name: ["isolated"]})
+
+    def transcribe(output: Frozen, text: str) -> Result:
+        outputs_json = json.dumps({"transcript": wire_form(output)})
+        params = {"outputs_json": outputs_json}
+        call = TaskCall.model_validate({"task": TRANSCRIBE_TASK.name, "inputs": {"text": text}, "params": params})
+        return run_call(call, execution=profile, store=store)
+
+    fresh, hit = transcribe(transcript, "a"), transcribe(transcript, "a")
+    assert fresh.outputs == hit.outputs == {"transcript": transcript} and hit.reused is not None
+    with pytest.raises(OutputTypeMismatch, match="metric@1.0"):
+        transcribe(Metric(name="wer", value=0.1, unit="1", items=1), "b")
+    call_module._close_workers()
+    assert len(_executions(store)) == 1
 
 
 @pytest.mark.logic

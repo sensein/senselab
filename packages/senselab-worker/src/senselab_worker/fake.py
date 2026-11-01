@@ -4,6 +4,7 @@ Run as `python -m senselab_worker.launch senselab_worker.fake`. Faults come from
 request, by `params["faults"]`; both take the fields of `FakeFaults`.
 """
 
+import json
 import os
 import sys
 import time
@@ -99,10 +100,13 @@ def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -
     """Return `{"outputs": {"value": identity_digest("fake-output@1", {"inputs", "params"})}}` per item.
 
     `params["faults"]` is excluded from the digest; a batch adds `"batch"` and `nondeterministic` a random `"nonce"`.
-    Arrays enter it as `npy_digest("npy@1", array)`.
+    Arrays enter it as `npy_digest("npy@1", array)`. A non-empty `params["outputs_json"]` is instead returned, parsed,
+    as every item's outputs.
     """
     if not isinstance(state, _State):
         raise TypeError("state must come from load")
+    if params.get("outputs_json"):
+        return [{"outputs": json.loads(params["outputs_json"])} for _ in items]
     faults = FakeFaults.from_json(params["faults"]) if "faults" in params else state.faults
     rest = _identity_view({k: v for k, v in params.items() if k != "faults"})
     batch = [_identity_view(item["inputs"]) for item in items] if faults.batch_coupled else None
