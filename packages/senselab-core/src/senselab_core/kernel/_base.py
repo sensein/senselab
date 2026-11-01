@@ -160,11 +160,11 @@ def value_digest(type_name: str, fields: Mapping[str, object]) -> str:
     """Return `identity_digest("value@2", {"type": type_name, "fields": <fields in tokens>})`.
 
     `fields` is written by the shared `canonical.Tokeniser`, which gives each family outside JSON its
-    own token: an array is `{"$array": <sha256 of its canonical .npy>}`, a set `{"$set": [...]}`, an
-    enum `{"$enum": [<type>, <value>]}`, a path `{"$path": <posix text>}`, an integer outside the
+    own token: an array is `{"$array": <sha256 of its canonical .npy>}`, an integer outside the
     I-JSON range `{"$int": "<decimal>"}`, a non-finite float `{"$f": ...}`, a type
     `{"$type": "<module>.<qualname>"}` and a `Frozen` value `{"$value": {"type": ..., "fields": ...}}`;
-    any other mapping is an object, and a key that starts with `$` gains one more `$`.
+    any other mapping is an object, and a key that starts with `$` gains one more `$`. A set, an enum, a path,
+    bytes and a `Decimal` have no canonical form.
 
     Raises:
         NoCanonicalForm: on a value of no family, a lone surrogate, nesting deeper than `MAX_DEPTH`, or a
@@ -182,61 +182,6 @@ def digest_of(v: "Frozen") -> str:
 
 def _rebuild(cls: type[F], fields: dict[str, Any]) -> F:
     return cls.model_validate(fields)
-
-
-class FrozenDict(dict[str, Any]):
-    """A read-only `dict`: every mutating method raises `TypeError`; copies are the object itself.
-
-    It is the `__dict__` of a built `Frozen` value and the object form of a provenance record.
-    """
-
-    __slots__ = ()
-
-    def _refuse(self, *args: object, **kwargs: object) -> NoReturn:
-        raise TypeError("a FrozenDict is read-only")
-
-    __setitem__ = __delitem__ = __ior__ = _refuse
-    clear = pop = popitem = setdefault = update = _refuse
-
-    def __reduce__(self) -> tuple[type["FrozenDict"], tuple[dict[str, Any]]]:
-        """Pickle as a new read-only mapping of the same items."""
-        return type(self), (dict(self),)
-
-    def __copy__(self) -> "FrozenDict":
-        """Return `self`, which cannot change."""
-        return self
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> "FrozenDict":
-        """Return `self`; a deep copy is only as deep as what it holds, which the holder keeps read-only."""
-        return self
-
-
-class FrozenList(list[Any]):
-    """A read-only `list`: every mutating method raises `TypeError`; copies are the object itself.
-
-    It is the array form of a provenance record's values: equal to a `list` of the same items, as JSON
-    writes it, and never changed after it is built.
-    """
-
-    __slots__ = ()
-
-    def _refuse(self, *args: object, **kwargs: object) -> NoReturn:
-        raise TypeError("a FrozenList is read-only")
-
-    __setitem__ = __delitem__ = __iadd__ = __imul__ = _refuse
-    append = clear = extend = insert = pop = remove = reverse = sort = _refuse
-
-    def __reduce__(self) -> tuple[type["FrozenList"], tuple[list[Any]]]:
-        """Pickle as a new read-only list of the same items."""
-        return type(self), (list(self),)
-
-    def __copy__(self) -> "FrozenList":
-        """Return `self`, which cannot change."""
-        return self
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> "FrozenList":
-        """Return `self`; a deep copy is only as deep as what it holds, which the holder keeps read-only."""
-        return self
 
 
 def thawed(value: object, walk: Walk | None = None) -> Any:  # noqa: ANN401
@@ -258,17 +203,16 @@ def thawed(value: object, walk: Walk | None = None) -> Any:  # noqa: ANN401
 
 
 def _is_sealed(v: "Frozen") -> bool:
-    return type(object.__getattribute__(v, "__dict__")) is FrozenDict
+    return type(getattr(v, "__pydantic_private__", None)) is MappingProxyType
 
 
 def _seal(v: "Frozen") -> None:
-    """Make a freshly validated value read-only: its fields, its fields-set and its derived private values."""
+    """Make a freshly validated value read-only: its fields-set and its derived private values."""
     if _is_sealed(v):
         return
     private = MappingProxyType(dict(v._derived()))
-    object.__setattr__(v, "__pydantic_private__", private)
     object.__setattr__(v, "__pydantic_fields_set__", frozenset(object.__getattribute__(v, "__pydantic_fields_set__")))
-    object.__setattr__(v, "__dict__", FrozenDict(object.__getattribute__(v, "__dict__")))
+    object.__setattr__(v, "__pydantic_private__", private)
 
 
 def _held_fields(cls: type["Frozen"], data: object) -> object:
@@ -299,9 +243,9 @@ class Frozen(BaseModel):
     `__setstate__` on a blank instance) is rebuilt through `model_validate`, so it runs every
     validator. `model_construct` is refused. Validation errors do not repeat their input.
 
-    A built value is read-only: attribute assignment and deletion raise `ValidationError`, its
-    `__dict__` is a `FrozenDict`, its private values a read-only mapping, `__setstate__` on it raises
-    `TypeError`, and the class's `model_config` is a read-only mapping.
+    A built value is read-only: attribute assignment and deletion raise `ValidationError`, its private
+    values are a read-only mapping, `__setstate__` on it raises `TypeError`, and the class's `model_config`
+    is a read-only mapping.
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True, extra="forbid", hide_input_in_errors=True)

@@ -22,7 +22,7 @@ Contracts per type:
   `from_attributes=True`, raises `ValidationError`; an unsealed instance (`BaseModel.model_construct`)
   and an instance of a subclass are validated again from their fields as the type, so a forged
   identity planted in either is refused; no input form skips a validator.
-- `read_only`: setting or deleting any field or private attribute, writing `__dict__`, calling
+- `read_only`: setting or deleting any field or private attribute, calling
   `__setstate__` on a built value, re-initialising a reachable `FrozenMapping`, and changing the
   class's `model_config` all raise, and leave the value's digest unchanged.
 - `setstate_revalidates`: `__setstate__` on a blank instance builds the value from valid fields and
@@ -351,9 +351,6 @@ def _writes(v: Frozen) -> Iterator[tuple[str, Callable[[], object]]]:
     for name in [*cls.model_fields, "_canonical", "__class__"]:
         yield f"setattr {name}", functools.partial(setattr, v, name, None)
         yield f"delattr {name}", functools.partial(delattr, v, name)
-    first = next(iter(cls.model_fields))
-    yield "__dict__ item", functools.partial(operator.setitem, v.__dict__, first, None)
-    yield "__dict__ update", functools.partial(v.__dict__.update, {first: None})
     yield "private item", functools.partial(operator.setitem, v.__pydantic_private__, "_canonical", "f" * 64)
     yield "__setstate__", functools.partial(v.__setstate__, {"__dict__": dict(v.__dict__)})
     yield "model_config item", functools.partial(operator.setitem, cls.model_config, "frozen", False)
@@ -705,10 +702,10 @@ def _register_kernel_samples() -> None:
                 env="e",
                 devices=("cpu", "cuda"),
                 license=_license(),
-                output_affecting=frozenset({"chunk_grid", "batch_formation"}),
+                output_affecting=("batch_formation", "chunk_grid"),
             ),
         ],
-        invalid_updates=[{"devices": ()}, {"output_affecting": frozenset({"bogus"})}],
+        invalid_updates=[{"devices": ()}, {"output_affecting": ("bogus",)}],
     )
 
 

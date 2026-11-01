@@ -15,10 +15,7 @@ import sys
 import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
-from decimal import Decimal
-from enum import Enum
 from importlib import resources
-from pathlib import PurePath
 from typing import Any, Callable, NoReturn, TypeVar, cast
 
 import numpy
@@ -140,7 +137,7 @@ FLOAT_TOKEN = "$f"
 """The one key of the token that stands for a non-finite float."""
 ARRAY_TOKEN = "$array"
 """The one key of the token that stands for an array by the sha256 of its canonical `.npy`."""
-TOKENS = (FLOAT_TOKEN, INT_TOKEN, "$path", "$enum", "$nd", ARRAY_TOKEN, "$dec", "$bytes", "$set", "$type", "$value")
+TOKENS = (FLOAT_TOKEN, INT_TOKEN, ARRAY_TOKEN, "$type", "$value")
 """The keys of the tokens canonical forms use, one per family of values outside the JSON domain."""
 
 
@@ -579,11 +576,7 @@ class Tokeniser:
     - an integer outside +/-`MAX_SAFE_INT`: `{"$int": "<decimal>"}`;
     - `dict` with `str` keys: an object, a key starting with `$` gaining one more `$`;
     - `list` and `tuple`: an array;
-    - `set` and `frozenset`: `{"$set": [<elements, one per JCS form, sorted by their JCS bytes>]}`;
     - `numpy.ndarray`: what `array` returns for it;
-    - an `Enum` member: `{"$enum": ["<module>.<qualname>", <its value>]}`;
-    - a `PurePath`: `{"$path": <posix string>}`;
-    - a `Decimal`: `{"$dec": <str>}`; `bytes` or `bytearray`: `{"$bytes": <hex>}`;
     - a value `extra` maps to `(token, payload)`: `{token: <payload>}`, entered like a container, or
       the payload itself when `token` is `None`.
 
@@ -609,8 +602,7 @@ class Tokeniser:
         Raises:
             NoCanonicalForm: (`error`) naming the path and type, for a value of no family, a non-`str`
                 key, a key holding a lone surrogate, two keys with one canonical form, a container that contains itself,
-                nesting deeper than `MAX_DEPTH`, set elements over `MAX_CANONICAL_CHARS`, or an integer with more
-                digits than the interpreter writes as text.
+                nesting deeper than `MAX_DEPTH`, or an integer with more digits than the interpreter writes as text.
         """
         return _Tokens(self, Walk()).value(value, path)
 
@@ -622,35 +614,18 @@ class _Tokens:
 
     def value(self, value: object, path: str) -> object:
         t = type(value)
-        if t is dict or t is list or t is tuple or t is set or t is frozenset or t is numpy.ndarray:
+        if t is dict or t is list or t is tuple or t is numpy.ndarray:
             try:
                 return self.walk.enter(value, lambda: self.container(value, path))
             except NoCanonicalForm:
                 raise
             except (ValueError, TypeError) as err:
                 raise self.spec.error(path, value, str(err)) from err
-        shared = self.shared(value, path)
-        if shared is not None:
-            return shared
         if self.spec.extra is not None:
             found = self.spec.extra(value)
             if found is not None:
                 return self.extra(value, found[0], found[1], path)
         return self.scalar(value, path)
-
-    def shared(self, value: object, path: str) -> dict[str, object] | None:
-        """The token of an `Enum`, a path, bytes or a `Decimal`; None for a value of none of these families."""
-        t = type(value)
-        if isinstance(value, Enum):
-            qualname = f"{t.__module__}.{t.__qualname__}"
-            return {"$enum": [qualname, self.value(value.value, f"{path}.value")]}
-        if isinstance(value, PurePath):
-            return {"$path": value.as_posix()}
-        if t is bytes or t is bytearray:
-            return {"$bytes": cast("bytes | bytearray", value).hex()}
-        if t is Decimal:
-            return {"$dec": str(value)}
-        return None
 
     def scalar(self, value: object, path: str) -> object:
         """A scalar in the JSON domain as itself, an integer too large for it or a non-finite float as a token."""
@@ -697,12 +672,4 @@ class _Tokens:
             return out
         if t is list or t is tuple:
             return [self.value(item, f"{path}[{i}]") for i, item in enumerate(value)]
-        if t is set or t is frozenset:
-            forms: dict[bytes, object] = {}
-            for item in value:
-                token = self.value(item, f"{path}{{}}")
-                form = jcs_dumps(token)
-                self.walk.charge(len(form))
-                forms.setdefault(form, token)
-            return {"$set": [forms[form] for form in sorted(forms)]}
         return self.spec.array(value, self.value, path)

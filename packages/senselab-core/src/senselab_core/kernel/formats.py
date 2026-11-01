@@ -15,6 +15,8 @@ PROV_ACTIVITY_TAG = "prov-activity@1"
 """The identity tag of a PROV activity: its compact JSON-LD node without `@id`."""
 PROV_NODE_TAG = "prov-node@1"
 """The identity tag of a PROV agent or environment: its compact JSON-LD node without `@id`."""
+PROVENANCE_FORMAT = "provenance@3.0"
+"""The format of a PROV-O JSON-LD provenance document, carried as its top-level `format` (ADR-010)."""
 
 FormatTag = Annotated[str, StringConstraints(pattern=FORMAT_PATTERN)]
 """`<name>@<major>.<minor>`."""
@@ -23,6 +25,15 @@ FormatTag = Annotated[str, StringConstraints(pattern=FORMAT_PATTERN)]
 def _name_and_major(tag: str) -> tuple[str, str]:
     name, version = tag.split("@")
     return name, version.split(".")[0]
+
+
+def readable(written: str, found: object) -> bool:
+    """Whether `found` is a format tag of `written`'s name and major version: one a reader of `written` reads."""
+    return (
+        isinstance(found, str)
+        and re.fullmatch(FORMAT_PATTERN, found) is not None
+        and _name_and_major(found) == _name_and_major(written)
+    )
 
 
 class Formatted(Frozen):
@@ -48,6 +59,6 @@ class Formatted(Frozen):
     @model_validator(mode="after")
     def _check_readable(self) -> "Formatted":
         written = type(self).model_fields["format"].default
-        if isinstance(written, str) and _name_and_major(self.format) != _name_and_major(written):
+        if isinstance(written, str) and not readable(written, self.format):
             raise ValueError(f"{type(self).__name__} reads {written} and its minor versions, got {self.format}")
         return self

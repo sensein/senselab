@@ -47,6 +47,14 @@
             "rdfs:comment": "A pipeline graph document, named by its plan hash."
         },
         {
+            "@id": "senselab:Reuse",
+            "@type": "rdfs:Class",
+            "rdfs:subClassOf": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:comment": "An activity that served a stored result in place of executing."
+        },
+        {
             "@id": "senselab:logicalKey",
             "@type": "rdf:Property",
             "rdfs:domain": {
@@ -89,6 +97,50 @@
                 "@id": "xsd:string"
             },
             "rdfs:comment": "Where the agent's model weights came from: hf, url or local."
+        },
+        {
+            "@id": "senselab:context",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "rdf:JSON"
+            },
+            "rdfs:comment": "The execution context the activity ran in, as an execution-context@2.0 record."
+        },
+        {
+            "@id": "senselab:storedContext",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "senselab:Reuse"
+            },
+            "rdfs:range": {
+                "@id": "rdf:JSON"
+            },
+            "rdfs:comment": "The execution context the served result was computed in, as an execution-context@2.0 record."
+        },
+        {
+            "@id": "senselab:reusePolicy",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "senselab:Reuse"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The reuse policy that admitted the stored result: exact, equivalent or tolerant."
+        },
+        {
+            "@id": "senselab:equivalence",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "senselab:Reuse"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The value digest of the equivalence table that admitted the stored result under the equivalent policy."
         }
     ]
 }

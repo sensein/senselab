@@ -30,7 +30,13 @@ from senselab_worker.canonical import (
 )
 from senselab_worker.digest import identity_digest, npy_digest
 
-from senselab_core.kernel.formats import PROV_ACTIVITY_TAG, PROV_NODE_TAG, SENSELAB_VOCAB_FORMAT
+from senselab_core.kernel.formats import (
+    PROV_ACTIVITY_TAG,
+    PROV_NODE_TAG,
+    PROVENANCE_FORMAT,
+    SENSELAB_VOCAB_FORMAT,
+    readable,
+)
 
 SENSELAB_NS = "https://w3id.org/senselab/ns#"
 """The IRI the `senselab:` prefix stands for."""
@@ -185,13 +191,7 @@ class Vocabulary:
 
 
 def _readable_format(node: Mapping[str, object]) -> bool:
-    version = node.get("owl:versionInfo")
-    name, _, major = SENSELAB_VOCAB_FORMAT.partition(".")[0].partition("@")
-    return (
-        node.get("@id") == "senselab:"
-        and isinstance(version, str)
-        and re.fullmatch(rf"{re.escape(name)}@{major}\.\d+", version) is not None
-    )
+    return node.get("@id") == "senselab:" and readable(SENSELAB_VOCAB_FORMAT, node.get("owl:versionInfo"))
 
 
 def _ref(node: Mapping[str, object], key: str) -> str:
@@ -636,14 +636,19 @@ _READERS: Mapping[str, Callable[[str], object]] = {
 
 
 def document(records: Iterable[Record]) -> dict[str, object]:
-    """Return the JSON-LD document of `records` and the files they name: `{"@context": CONTEXT_URL, "@graph": [...]}`.
+    """Return the `provenance@3.0` document of `records` and the files they name.
 
-    Nodes are in `@id` order. A node whose `@id` is not an address, or one `@id` held by two different nodes, is
-    refused with `ValueError`.
+    It is `{"@context": CONTEXT_URL, "format": PROVENANCE_FORMAT, "@graph": [...]}`; the published context maps
+    `format` to null, so JSON-LD processors ignore it. Nodes are in `@id` order. A node whose `@id` is not an
+    address, or one `@id` held by two different nodes, is refused with `ValueError`.
     """
     nodes: dict[str, bytes] = {}
     for record in records:
         for r in (record, *record.files):
             if nodes.setdefault(_checked(NODE_ID, r.id, "a node"), r.jcs) != r.jcs:
                 raise ValueError(f"two different nodes have the @id {r.id}")
-    return {"@context": CONTEXT_URL, "@graph": [jcs_loads(nodes[k]) for k in sorted(nodes)]}
+    return {
+        "@context": CONTEXT_URL,
+        "format": PROVENANCE_FORMAT,
+        "@graph": [jcs_loads(nodes[k]) for k in sorted(nodes)],
+    }

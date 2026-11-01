@@ -160,7 +160,9 @@ def test_task_params_must_be_a_model() -> None:
 @pytest.mark.logic
 def test_output_affecting_names_only_key_components() -> None:
     """A backend may declare only batch formation and chunk grid output-affecting (ADR-002)."""
-    assert _backend(output_affecting=frozenset({"chunk_grid"})).output_affecting == {"chunk_grid"}
+    assert _backend(output_affecting=frozenset({"chunk_grid"})).output_affecting == ("chunk_grid",)
+    both = ("chunk_grid", "batch_formation", "chunk_grid")
+    assert _backend(output_affecting=both).output_affecting == ("batch_formation", "chunk_grid")
     with pytest.raises(ValidationError, match="batch_size"):
         _backend(output_affecting=frozenset({"batch_size"}))
 

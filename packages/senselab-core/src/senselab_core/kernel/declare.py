@@ -149,7 +149,7 @@ class BackendSpec(Frozen):
     """A declared implementation of a task: its stack, environment, devices and license record.
 
     `output_affecting` names the components of `OUTPUT_AFFECTING` that change this backend's outputs
-    and so enter its logical key.
+    and so enter its logical key, held sorted and once each.
     """
 
     task: NonEmptyStr
@@ -159,14 +159,14 @@ class BackendSpec(Frozen):
     env: NonEmptyStr
     devices: tuple[NonEmptyStr, ...] = Field(min_length=1)
     license: License
-    output_affecting: frozenset[str] = frozenset()
+    output_affecting: tuple[str, ...] = ()
 
     @field_validator("output_affecting")
     @classmethod
-    def _check_output_affecting(cls, v: frozenset[str]) -> frozenset[str]:
-        if not v <= OUTPUT_AFFECTING:
+    def _check_output_affecting(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        if not set(v) <= OUTPUT_AFFECTING:
             raise ValueError(f"output_affecting may name only {sorted(OUTPUT_AFFECTING)}, got {sorted(v)}")
-        return v
+        return tuple(sorted(set(v)))
 
 
 class Registry:

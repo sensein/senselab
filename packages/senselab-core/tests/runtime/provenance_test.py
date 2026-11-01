@@ -9,12 +9,14 @@ from typing import Any
 import numpy
 import pytest
 from senselab_core.kernel import prov
+from senselab_core.kernel.formats import PROVENANCE_FORMAT
 from senselab_core.kernel.prov import CONTEXT_URL, Association, Generation, Usage, Vocabulary
 from senselab_core.runtime.provenance import (
     PROV_DIR,
     ConflictingNode,
     DanglingReference,
     MalformedDocument,
+    ProvenanceFormatRefused,
     ProvStore,
 )
 from senselab_core.runtime.vocabulary import core_vocabulary
@@ -37,7 +39,6 @@ VOCAB = Vocabulary.from_document(
         "@context": CONTEXT_URL,
         "@graph": [
             {"@id": "senselab:", "@type": "owl:Ontology", "owl:versionInfo": "senselab-vocab@1.0"},
-            _prop("senselab:context", "prov:Activity", "rdf:JSON"),
             _prop("senselab:label", "prov:Entity", "xsd:string"),
             _prop("senselab:waveform", "prov:Entity", "senselab:File"),
             _prop("senselab:loudness", "prov:Entity", "xsd:double"),
@@ -100,6 +101,7 @@ def test_reuse_is_an_activity(tmp_path: Path) -> None:
     execution = _execution({"device": "cpu"})
     reuse = prov.activity(
         VOCAB,
+        types=["senselab:Reuse"],
         attributes={"senselab:logicalKey": KEY},
         used=[Usage(OUTPUT, port="transcript", time=T0 + timedelta(hours=1))],
         started=T0 + timedelta(hours=1),
@@ -303,16 +305,49 @@ def test_files_that_are_not_writer_documents(tmp_path: Path) -> None:
 
 
 def test_a_document_that_is_not_canonical_is_refused(tmp_path: Path) -> None:
-    """A writer's document is the JCS text of `{"@context": CONTEXT_URL, "@graph": [...]}`."""
+    """A writer's document is the JCS text of `{"@context": CONTEXT_URL, "format": <provenance@3>, "@graph": [...]}`."""
     store = ProvStore(_entities())
     run = _run(tmp_path, store)
     path = _document_path(run, store)
+    assert jcs_loads(path.read_bytes())["format"] == PROVENANCE_FORMAT == "provenance@3.0"  # type: ignore[index]
     path.write_bytes(path.read_bytes() + b"\n")
     with pytest.raises(MalformedDocument, match="canonical"):
         ProvStore.read(run, VOCAB)
-    path.write_bytes(jcs_dumps({"@context": "https://example.org/other", "@graph": []}))
-    with pytest.raises(MalformedDocument, match="@context"):
+    for document, refusal in [
+        ({"@context": "https://example.org/other", "format": PROVENANCE_FORMAT, "@graph": []}, "@context"),
+        ({"@context": CONTEXT_URL, "@graph": []}, "format"),
+        ({"@context": CONTEXT_URL, "format": ["provenance@3.0"], "@graph": []}, "format is"),
+    ]:
+        path.write_bytes(jcs_dumps(document))
+        with pytest.raises(MalformedDocument, match=refusal):
+            ProvStore.read(run, VOCAB)
+
+
+def test_a_later_minor_is_read(tmp_path: Path) -> None:
+    """A document of a later minor of `provenance@3` is read."""
+    store = ProvStore(_entities())
+    run = _run(tmp_path, store)
+    _rewrite(_document_path(run, store), lambda doc: doc.update(format="provenance@3.7"))
+    assert ProvStore.read(run, VOCAB).records() == store.records()
+
+
+@pytest.mark.parametrize(
+    ("name", "lines", "found"),
+    [
+        ("store.jsonl", [{"format": "provenance@2.0", "record": "format"}, {"record": "entity"}], "provenance@2.0"),
+        (f"{'a' * 32}.jsonld", [{"format": "provenance@2.0", "record": "format"}], "provenance@2.0"),
+        (f"{'b' * 32}.jsonld", [{"@context": CONTEXT_URL, "format": "provenance@4.0", "@graph": []}], "provenance@4.0"),
+    ],
+)
+def test_provenance2_refused(tmp_path: Path, name: str, lines: list[dict[str, object]], found: str) -> None:
+    """A `provenance@2.0` store, or any provenance file but `provenance@3`, is refused naming its format."""
+    run = _run(tmp_path, ProvStore(_entities()))
+    (run / PROV_DIR / name).write_bytes(b"".join(jcs_dumps(line) + b"\n" for line in lines))
+    with pytest.raises(ProvenanceFormatRefused) as caught:
         ProvStore.read(run, VOCAB)
+    assert caught.value.found == found
+    assert found in str(caught.value) and "migration-ledger.md#retired-provenance-formats" in str(caught.value)
+    assert str(tmp_path) not in str(caught.value) and name not in str(caught.value)
 
 
 def test_add_is_all_or_nothing() -> None:

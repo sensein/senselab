@@ -1,12 +1,14 @@
 """A run's provenance in PROV-O JSON-LD (ADR-010): one document per writer, read back as their union by `@id`.
 
-Each writer holds the records it adds (`senselab_core.kernel.prov`) and replaces its own document,
+Each writer holds the records it adds (`senselab_core.kernel.prov`) and replaces its own `provenance@3.0` document,
 `<run>/prov/<writer uuid4 hex>.jsonld`, atomically. A reader takes the union of every writer's document; two
-different nodes under one `@id` are refused, and every node read is rebuilt through the record builders.
+different nodes under one `@id` are refused, every node read is rebuilt through the record builders, and a file of
+another provenance format is refused (`ProvenanceFormatRefused`).
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import uuid
@@ -18,6 +20,7 @@ from typing import Any, cast
 from senselab_worker.canonical import jcs_dumps, jcs_loads, require_depth
 
 from senselab_core.kernel import prov as kprov
+from senselab_core.kernel.formats import FORMAT_PATTERN, PROVENANCE_FORMAT, readable
 from senselab_core.runtime.storage import TEMPORARY_NAME, write_atomically
 from senselab_core.runtime.vocabulary import core_vocabulary
 
@@ -25,6 +28,9 @@ WRITER_DOCUMENT = re.compile(r"[0-9a-f]{32}\.jsonld")
 """A writer's document in `<run>/prov/`: its writer uuid4 hex, `.jsonld`."""
 PROV_DIR = "prov"
 """The run subdirectory that holds the writers' documents."""
+MIGRATION_STATEMENT = "specs/20261030-140022-senselab-2x-api/migration-ledger.md#retired-provenance-formats"
+"""Where the statement on retired provenance formats is: 2.x does not read them; re-running under 2.x migrates."""
+_DOCUMENT_KEYS = frozenset({"@context", "format", "@graph"})
 _ACTIVITY_KEYS = frozenset(
     {
         "@id",
@@ -83,6 +89,22 @@ class MalformedDocument(ValueError):
         """Name the writer; the message never echoes a refused id or value."""
         super().__init__(f"writer {writer}: {message}" if writer else message)
         self.writer = writer
+
+
+class ProvenanceFormatRefused(ValueError):
+    """A file in `prov/` that declares a format other than `provenance@3`, such as the retired `provenance@2.0`.
+
+    Attributes:
+        found: The format tag the file declares.
+    """
+
+    def __init__(self, found: str) -> None:
+        """Name the declared format and the migration statement."""
+        super().__init__(
+            f"a provenance file declares {found}; 2.x reads only {PROVENANCE_FORMAT}, and migrating a run is"
+            f" re-running it under 2.x. See {MIGRATION_STATEMENT}"
+        )
+        self.found = found
 
 
 class ProvStore:
@@ -196,6 +218,7 @@ class ProvStore:
         write are skipped.
 
         Raises:
+            ProvenanceFormatRefused: on a file in `prov/` whose first line declares a format other than `provenance@3`.
             MalformedDocument: on a file in `prov/` that is not a writer's document or cannot be read, a document
                 of another shape, a node that differs from its rebuild, or attribute references nested deeper than
                 `MAX_DEPTH`.
@@ -211,17 +234,32 @@ class ProvStore:
         for path in listing:
             if TEMPORARY_NAME.fullmatch(path.name):
                 continue
-            if not (WRITER_DOCUMENT.fullmatch(path.name) and path.is_file() and not path.is_symlink()):
-                raise MalformedDocument(None, f"{PROV_DIR}/ holds a file that is not a writer's document")
-            writer = path.name.removesuffix(".jsonld")
+            if not path.is_file() or path.is_symlink():
+                raise MalformedDocument(None, f"{PROV_DIR}/ holds an entry that is not a regular file")
+            writer = path.name.removesuffix(".jsonld") if WRITER_DOCUMENT.fullmatch(path.name) else None
             try:
                 data = path.read_bytes()
             except OSError as err:
                 raise MalformedDocument(writer, f"the document cannot be read ({type(err).__name__})") from None
+            found = _declared_format(data)
+            if found is not None and not readable(PROVENANCE_FORMAT, found):
+                raise ProvenanceFormatRefused(found)
+            if writer is None:
+                raise MalformedDocument(None, f"{PROV_DIR}/ holds a file that is not a writer's document")
             for node_id, raw in _writer_nodes(writer, data):
                 if nodes.setdefault(node_id, (raw, writer))[0] != raw:
                     raise ConflictingNode(node_id)
         return cls(_Rebuild(nodes, vocabulary or core_vocabulary()).all())
+
+
+def _declared_format(data: bytes) -> str | None:
+    """Return the format tag a file's first line declares as a JSON object's `format`, None if it declares none."""
+    try:
+        first = json.loads(data.partition(b"\n")[0])
+    except (ValueError, RecursionError):
+        return None
+    found = first.get("format") if isinstance(first, dict) else None
+    return found if isinstance(found, str) and re.fullmatch(FORMAT_PATTERN, found) else None
 
 
 def _writer_nodes(writer: str, data: bytes) -> list[tuple[str, bytes]]:
@@ -230,8 +268,12 @@ def _writer_nodes(writer: str, data: bytes) -> list[tuple[str, bytes]]:
     except ValueError:
         raise MalformedDocument(writer, "the document is not canonical JSON") from None
     graph = doc.get("@graph") if isinstance(doc, dict) else None
-    if not (isinstance(doc, dict) and doc.keys() == {"@context", "@graph"} and isinstance(graph, list)):
-        raise MalformedDocument(writer, f"a document is {{'@context': {kprov.CONTEXT_URL!r}, '@graph': [...]}}")
+    if not (isinstance(doc, dict) and doc.keys() == _DOCUMENT_KEYS and isinstance(graph, list)):
+        raise MalformedDocument(
+            writer, f"a document is {{'@context': {kprov.CONTEXT_URL!r}, 'format': ..., '@graph': [...]}}"
+        )
+    if not readable(PROVENANCE_FORMAT, doc["format"]):
+        raise MalformedDocument(writer, f"a document's format is {PROVENANCE_FORMAT}")
     if doc["@context"] != kprov.CONTEXT_URL:
         raise MalformedDocument(writer, f"a document's @context is {kprov.CONTEXT_URL}")
     out = []

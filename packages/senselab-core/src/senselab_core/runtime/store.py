@@ -41,6 +41,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
@@ -57,6 +58,7 @@ from senselab_worker.canonical import (
 )
 from senselab_worker.digest import SHA256_HEX, identity_digest
 
+from senselab_core.kernel import prov as kprov
 from senselab_core.kernel._base import value_digest
 from senselab_core.kernel.identity import (
     DEFAULT_REUSE_POLICY,
@@ -68,7 +70,7 @@ from senselab_core.kernel.identity import (
     acceptable,
 )
 from senselab_core.runtime.equivalence import EQUIVALENCE
-from senselab_core.runtime.provenance_jsonl import CHECKSUM_KEY, JsonlProvStore
+from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
     STAGING_DIR_MODE,
@@ -82,6 +84,7 @@ from senselab_core.runtime.storage import (
     shared_dir_mode,
     storage_fault,
 )
+from senselab_core.runtime.vocabulary import core_vocabulary
 
 logger = logging.getLogger("senselab")
 
@@ -248,9 +251,24 @@ def _decode(value: object, entry: Path, sizes: Mapping[str, int] | None = None) 
 
 
 def _equivalence_digest(table: Equivalence) -> str:
-    """Return the `value_digest` of an equivalence table, its classes as sets."""
-    fields = {backend: {name: set(members) for name, members in classes.items()} for backend, classes in table.items()}
+    """Return the `value_digest` of an equivalence table, each class as its sorted fingerprints."""
+    fields = {backend: {name: sorted(members) for name, members in cls.items()} for backend, cls in table.items()}
     return value_digest("equivalence", {"classes": fields})
+
+
+def _key_record(key: LogicalKey) -> object:
+    """Return `key`'s fields as the JSON value a store entry and a reuse activity record."""
+    return jcs_loads(jcs_dumps(key.model_dump()))
+
+
+def _context_record(context: ExecutionContext) -> dict[str, object]:
+    """Return `context` as an `execution-context@2.0` record: its format tag and its fields."""
+    return {"format": CONTEXT_FORMAT, **context.model_dump(mode="json")}
+
+
+def _result_entity(identity: OutputIdentity) -> kprov.Record:
+    """Return the PROV entity of a stored result, addressed by its output identity."""
+    return kprov.entity(identity, core_vocabulary())
 
 
 def _read_object(entry: Path, name: str, fmt: str) -> dict[str, Any]:
@@ -435,13 +453,13 @@ def _commit(  # noqa: PLR0913 - what the entry holds, where it is staged and pla
                 staging.write_new(f"{sha}.npy", data, file_mode, grammar=MEMBER_NAME)
             staging.write_new(
                 "context.json",
-                jcs_dumps({"format": CONTEXT_FORMAT, **context.model_dump(mode="json")}),
+                jcs_dumps(_context_record(context)),
                 file_mode,
                 grammar=MEMBER_NAME,
             )
             result = {
                 "format": RESULT_FORMAT,
-                "key": jcs_loads(jcs_dumps(key.model_dump())),
+                "key": _key_record(key),
                 "key_digest": key.digest(),
                 "context_fingerprint": context.fingerprint(),
                 "output_identity": identity,
@@ -523,26 +541,28 @@ class ResultStore:
     which `put` runs at most once per `policy.collect_interval_s`, removes quarantined entries and
     staging directories older than the policy's ages. An entry found valid but writable is re-sealed.
 
+    Provenance: a `put` adds the result entity, `output:<hex>`; a `get` hit adds a `senselab:Reuse` activity that
+    used it, carrying the key, the current and stored contexts, the admitting policy and, under `equivalent`, the
+    equivalence table's `value_digest`. The store writes no execution activity.
+
     Args:
         root: The store root.
-        provenance: Where `put`, quarantines and relaxed-policy `get` hits record activities; the
-            store owns a fresh one when None.
+        provenance: Where the store adds its records; the store owns a fresh one when None.
         policy: Modes and retention ages; `StorePolicy.load_default()` when None.
-        equivalence: The measured equivalence classes `equivalent` reuse admits (`acceptable`); a hit it
-            admits records the table's `value_digest` as `equivalence` in its `store.reuse` activity.
+        equivalence: The measured equivalence classes `equivalent` reuse admits (`acceptable`).
     """
 
     def __init__(
         self,
         root: Path,
-        provenance: JsonlProvStore | None = None,
+        provenance: ProvStore | None = None,
         *,
         policy: StorePolicy | None = None,
         equivalence: Equivalence = EQUIVALENCE,
     ) -> None:
         """Open a store at `root`; nothing is created until the first `put`."""
         self.root = Path(root)
-        self.provenance = provenance if provenance is not None else JsonlProvStore(run_id=f"store-{uuid.uuid4().hex}")
+        self.provenance = provenance if provenance is not None else ProvStore()
         self.policy = policy if policy is not None else StorePolicy.load_default()
         self._equivalence = equivalence
         self._last_collect: float | None = None
@@ -604,8 +624,8 @@ class ResultStore:
         a fingerprint, so `get` ignores it, and its owner must remove it. The re-verification uses
         the address the entry was read at (`digest`, `fingerprint`). A copy that verifies, or cannot
         be read, is renamed back without replacing anything: if a new entry took the address
-        meanwhile the copy stays aside. Nothing is done if `entry` is already gone. A provenance
-        activity records where it went, the outcome and the reason.
+        meanwhile the copy stays aside. Nothing is done if `entry` is already gone. A warning logs where it
+        went, the outcome, the verdict and the reason.
 
         Raises:
             StoreUnavailable: `entry` cannot be moved at all; the message names its owner and the remedy.
@@ -672,18 +692,6 @@ class ResultStore:
             if into is not None:
                 into.close()
         logger.warning("store entry %s %s (%s): %s", entry, outcome, verdict, reason)
-        self.provenance.activity(
-            node="store.quarantine",
-            step=None,
-            parameters={
-                "key": digest,
-                "context": fingerprint,
-                "moved_to": str(moved.relative_to(self.root)),
-                "verdict": verdict,
-                "outcome": outcome,
-                "reason": reason,
-            },
-        )
 
     def _aside(self, root: StorageDir, parent: StorageDir, name: str, is_dir: bool) -> StorageDir | None:
         """Return the quarantine if `name` can be moved there, None to set it aside beside itself."""
@@ -792,7 +800,7 @@ class ResultStore:
         size of this put's array of that digest if there is one; arrays are not read (a `get` reads and
         hashes them). Anything else at the entry's path is quarantined and replaced, as is anything of the
         wrong kind at a directory of the store on the way to it.
-        Either way one provenance activity is appended.
+        Either way the result entity is added to provenance.
 
         Raises:
             TypeError: on an output that is neither a JSON value nor a numpy array.
@@ -832,61 +840,31 @@ class ResultStore:
                 existing = None
             if existing is not None:
                 self._reseal(parent, f)
-                self._record_put(key, context, existing, outcome="existing")
+                self.provenance.add(_result_entity(existing))
                 return existing
             if _commit(key, context, parent, f, staging_root, payload, self.policy):
-                self._record_put(key, context, payload[2], outcome="committed")
+                self.provenance.add(_result_entity(payload[2]))
                 return payload[2]
         raise RuntimeError(f"{entry} was still corrupt after {COMMIT_ATTEMPTS} commits")
 
-    def _record_put(self, key: LogicalKey, context: ExecutionContext, identity: str, *, outcome: str) -> None:
-        digest = key.digest()
-        prov = self.provenance
-        activity = prov.activity(
-            node=key.task,
-            step=key.backend,
-            parameters={
-                "key": digest,
-                "logical_key": jcs_loads(jcs_dumps(key.model_dump())),
-                "context": {**context.model_dump(mode="json"), "fingerprint": context.fingerprint()},
-                "outcome": outcome,
-            },
+    def _record_reuse(self, key: LogicalKey, current: ExecutionContext, hit: StoredResult, started: datetime) -> None:
+        attributes: dict[str, object] = {
+            "senselab:logicalKey": _key_record(key),
+            "senselab:context": _context_record(current),
+            "senselab:storedContext": _context_record(hit.context),
+            "senselab:reusePolicy": hit.policy_used.value,
+        }
+        if hit.policy_used is ReusePolicy.EQUIVALENT:
+            attributes["senselab:equivalence"] = _equivalence_digest(self._equivalence)
+        reuse = kprov.activity(
+            core_vocabulary(),
+            types=["senselab:Reuse"],
+            attributes=attributes,
+            used=[kprov.Usage(hit.output_identity)],
+            started=started,
+            ended=datetime.now(timezone.utc),
         )
-        for name, input_identity in sorted(key.inputs.items()):
-            prov.used(
-                activity,
-                prov.entity(prov_type="artifact", extent=None, attributes={"input": name, "identity": input_identity}),
-            )
-        prov.was_generated_by(self._result_entity(identity, digest), activity)
-
-    def _result_entity(self, identity: OutputIdentity, digest: str) -> str:
-        """Record a result: `checksum_sha256` is the hex of its tagged `output@3` digest, not a file hash."""
-        return self.provenance.entity(
-            prov_type="artifact",
-            extent=None,
-            attributes={CHECKSUM_KEY: identity.removeprefix("output:"), "output_identity": identity, "key": digest},
-        )
-
-    def _record_reuse(
-        self, key: LogicalKey, stored: ExecutionContext, current: ExecutionContext, hit: StoredResult
-    ) -> None:
-        digest = key.digest()
-        activity = self.provenance.activity(
-            node="store.reuse",
-            step=key.task,
-            parameters={
-                "key": digest,
-                "stored_context": stored.fingerprint(),
-                "current_context": current.fingerprint(),
-                "policy_used": hit.policy_used.value,
-                **(
-                    {"equivalence": _equivalence_digest(self._equivalence)}
-                    if hit.policy_used is ReusePolicy.EQUIVALENT
-                    else {}
-                ),
-            },
-        )
-        self.provenance.used(activity, self._result_entity(hit.output_identity, digest))
+        self.provenance.add(_result_entity(hit.output_identity), reuse)
 
     def get(
         self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy | str = DEFAULT_REUSE_POLICY
@@ -897,8 +875,7 @@ class ResultStore:
 
         Candidates are tried narrowest admitting policy first, the current fingerprint first among
         `exact`, then by fingerprint. A candidate that fails verification is quarantined (or, if the
-        store cannot be written, skipped) and the next one tried. A hit admitted under a policy other
-        than `exact` appends a reuse activity to provenance.
+        store cannot be written, skipped) and the next one tried. Every hit adds a reuse activity to provenance.
 
         Raises:
             ValueError: if `policy` is not a `ReusePolicy` value.
@@ -908,6 +885,7 @@ class ResultStore:
         key reads as absent.
         """
         policy = ReusePolicy(policy)
+        started = datetime.now(timezone.utc)
         d = key.digest()
         try:
             root = self._open_root(create=False)
@@ -926,7 +904,10 @@ class ResultStore:
             except OSError as err:
                 raise storage_fault(err, self._entry(key)) from err
             with base:
-                return self._get_in(key, context, policy, base)
+                hit = self._get_in(key, context, policy, base)
+        if hit is not None:
+            self._record_reuse(key, context, hit, started)
+        return hit
 
     def _get_in(
         self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy, base_dir: StorageDir
@@ -962,8 +943,5 @@ class ResultStore:
                 self._set_aside(base / name, digest=d, fingerprint=name)
                 continue
             self._reseal(base_dir, name)
-            hit = StoredResult(outputs=outputs, output_identity=identity, context=stored, policy_used=allowed[rank])
-            if hit.policy_used is not ReusePolicy.EXACT:
-                self._record_reuse(key, stored, context, hit)
-            return hit
+            return StoredResult(outputs=outputs, output_identity=identity, context=stored, policy_used=allowed[rank])
         return None

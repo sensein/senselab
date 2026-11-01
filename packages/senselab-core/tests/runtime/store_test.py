@@ -4,6 +4,7 @@
 import errno
 import hashlib
 import json
+import logging
 import multiprocessing as mp
 import os
 import pwd
@@ -23,10 +24,11 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from planted_objects_fixture import ARRAY_CORRUPTIONS, bounded, swap_subsets
+from senselab_core.kernel import prov
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ReusePolicy
 from senselab_core.runtime import store as store_module
 from senselab_core.runtime.equivalence import EQUIVALENCE
-from senselab_core.runtime.provenance_jsonl import CHECKSUM_KEY, JsonlProvStore
+from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import MANIFEST_NAME, NAMESPACE, record_resolution
 from senselab_core.runtime.storage import StorageFull, StorePolicy, StoreUnavailable
 from senselab_core.runtime.store import (
@@ -76,6 +78,27 @@ def _ctx(platform: str = "linux", host: str = "node1") -> ExecutionContext:
 
 def _entries(root: Path) -> list[Path]:
     return sorted((root / STORE_DIR).rglob("result.json"))
+
+
+QUARANTINE_LOG = "store entry %s %s (%s): %s"
+
+
+def _quarantines(records: list[logging.LogRecord]) -> list[dict[str, str]]:
+    """Return each quarantine the store logged, as its outcome, verdict and reason."""
+    return [
+        {"outcome": str(args[1]), "verdict": str(args[2]), "reason": str(args[3])}
+        for r in records
+        if r.msg == QUARANTINE_LOG and isinstance(args := r.args, tuple)
+    ]
+
+
+def _reuses(store: ResultStore) -> list[dict[str, object]]:
+    """Return the attributes of each reuse activity in the store's provenance, literals read back."""
+    return [
+        {k: prov.literal_value(v) for k, v in r.node().items() if k.startswith("senselab:")}
+        for r in store.provenance.activities()
+        if "senselab:Reuse" in r.types()
+    ]
 
 
 @pytest.mark.logic
@@ -131,9 +154,9 @@ def test_equivalence_class_admits_under_equivalent(tmp_path: Path) -> None:
     assert ResultStore(tmp_path).get(k, mac, ReusePolicy.EQUIVALENT) is None
     got = s.get(k, mac, ReusePolicy.EQUIVALENT)
     assert got is not None and got.policy_used is ReusePolicy.EQUIVALENT
-    (reuse,) = s.provenance.activities(node="store.reuse")
-    assert reuse.parameters["equivalence"] == store_module._equivalence_digest(table)
-    assert reuse.parameters["equivalence"] != store_module._equivalence_digest(EQUIVALENCE)
+    (reuse,) = _reuses(s)
+    assert reuse["senselab:equivalence"] == store_module._equivalence_digest(table)
+    assert reuse["senselab:equivalence"] != store_module._equivalence_digest(EQUIVALENCE)
     with pytest.raises(AttributeError):
         s.equivalence = {}  # type: ignore[misc]
     assert s.get(k, mac, ReusePolicy.EXACT) is None
@@ -222,7 +245,7 @@ def test_losing_rename_returns_winner_identity(tmp_path: Path, monkeypatch: pyte
 
     def commit_first() -> str:
         committed.append(other.put(k, {"y": 1}, c))
-        assert [a.parameters["outcome"] for a in other.provenance.activities()] == ["committed"]
+        assert [r.id for r in other.provenance.records()] == committed
         return committed[0]
 
     fired = on_rename(monkeypatch, lambda old, new: new == c.fingerprint(), commit_first, after=False)
@@ -231,7 +254,7 @@ def test_losing_rename_returns_winner_identity(tmp_path: Path, monkeypatch: pyte
     assert len(fired) == 1, "the loser reached its rename after the winner committed"
     (winner,) = committed
     assert loser == winner
-    assert [a.parameters["outcome"] for a in s.provenance.activities()] == ["existing"]
+    assert [r.id for r in s.provenance.records()] == [winner]
     assert len(_entries(tmp_path)) == 1
     got = s.get(k, c, ReusePolicy.EXACT)
     assert got is not None and got.outputs == {"y": 1}
@@ -375,16 +398,16 @@ def test_corrupt_entry_is_quarantined_not_served(tmp_path: Path, kind: str) -> N
 
 
 @pytest.mark.logic
-def test_put_replaces_corrupt_entry(tmp_path: Path) -> None:
+def test_put_replaces_corrupt_entry(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """A put whose target entry is corrupt quarantines it and commits its own outputs."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
-    s.put(k, {"y": numpy.ones(3, "<f4")}, c)
+    first = s.put(k, {"y": numpy.ones(3, "<f4")}, c)
     _only_npy(_entry_dir(tmp_path, k, c)).unlink()
-    ident = s.put(k, {"y": numpy.zeros(3, "<f4")}, c)
+    with caplog.at_level(logging.WARNING, logger="senselab"):
+        ident = s.put(k, {"y": numpy.zeros(3, "<f4")}, c)
     assert ident == output_identity({"y": numpy.zeros(3, "<f4")})
-    assert {a.parameters["outcome"] for a in s.provenance.activities(node="asr")} == {"committed"}
-    assert [a.parameters["outcome"] for a in s.provenance.activities(node="store.quarantine")] == ["quarantined"]
-    assert ident in {e.attributes.get("output_identity") for e in s.provenance.entities("artifact")}
+    assert [q["outcome"] for q in _quarantines(caplog.records)] == ["quarantined"]
+    assert [r.id for r in s.provenance.records()] == sorted([first, ident])
     got = s.get(k, c, ReusePolicy.EXACT)
     assert got is not None and got.output_identity == ident
     assert len(list((tmp_path / QUARANTINE_DIR).iterdir())) == 1
@@ -410,7 +433,7 @@ def test_quarantine_tolerates_concurrent_quarantine(tmp_path: Path) -> None:
     s = ResultStore(tmp_path)
     s._quarantine(tmp_path / STORE_DIR / "ab" / ("ab" * 32) / ("0" * 64), digest="ab" * 32, fingerprint="0" * 64)
     assert not (tmp_path / QUARANTINE_DIR).exists() or list((tmp_path / QUARANTINE_DIR).iterdir()) == []
-    assert s.provenance.activities(node="store.quarantine") == []
+    assert s.provenance.records() == []
 
 
 @pytest.fixture
@@ -424,40 +447,38 @@ def restrictive_umask() -> Iterator[None]:
 
 
 @pytest.mark.logic
-def test_relaxed_reuse_is_recorded_in_provenance(tmp_path: Path) -> None:
-    """A hit admitted under a policy other than exact appends a reuse activity; an exact hit does not."""
-    s, k = ResultStore(tmp_path), _key()
-    linux, mac = _ctx(platform="linux"), _ctx(platform="macos")
+def test_store_writes_entity_and_reuse_only(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A put adds the result entity, every hit a reuse activity that used it; no execution activity, no quarantine."""
+    provenance = ProvStore()
+    s, k = ResultStore(tmp_path, provenance=provenance), _key()
+    linux, mac = _ctx(platform="linux"), _ctx(platform="macos", host="node2")
     ident = s.put(k, {"y": 1}, linux)
-    assert s.get(k, linux, ReusePolicy.TOLERANT) is not None
-    assert s.provenance.activities(node="store.reuse") == []
+    assert [(r.id, r.types()) for r in provenance.records()] == [(ident, ("prov:Entity",))]
+    assert s.get(k, linux, ReusePolicy.EXACT) is not None
     assert s.get(k, mac, ReusePolicy.TOLERANT) is not None
-    (act,) = s.provenance.activities(node="store.reuse")
-    assert act.parameters == {
-        "key": k.digest(),
-        "stored_context": linux.fingerprint(),
-        "current_context": mac.fingerprint(),
-        "policy_used": "tolerant",
-    }
-    (used,) = [s.provenance.get_entity(e) for e in s.provenance.uses_of(act.id)]
-    assert used.attributes[CHECKSUM_KEY] == ident.removeprefix("output:")
-
-
-@pytest.mark.logic
-def test_put_records_provenance(tmp_path: Path) -> None:
-    """Put appends one activity: the key's inputs used, the output identity generated, the context recorded."""
-    prov = JsonlProvStore(run_id="r")
-    s, k, c = ResultStore(tmp_path, provenance=prov), _key(audio="a" * 64), _ctx()
-    ident = s.put(k, {"y": 1}, c)
-    (act,) = prov.activities(node="asr")
-    assert act.parameters["key"] == k.digest()
-    assert act.parameters["context"]["fingerprint"] == c.fingerprint()
-    assert act.parameters["context"]["host"] == "node1"
-    used = [prov.get_entity(e) for e in prov.uses_of(act.id)]
-    assert [(e.attributes["input"], e.attributes["identity"]) for e in used] == [("audio", "content:" + "a" * 64)]
-    (generated,) = [e for e in prov.entities("artifact") if prov.generated_by(e.id) == act.id]
-    assert generated.attributes[CHECKSUM_KEY] == ident.removeprefix("output:")
-    assert ResultStore(tmp_path).provenance.activities() == []
+    other = _key(task="other")
+    s.put(other, {"y": 2}, linux)
+    CORRUPTIONS["result_garbled"](_entry_dir(tmp_path, other, linux))
+    with caplog.at_level(logging.WARNING, logger="senselab"):
+        assert s.get(other, linux, ReusePolicy.EXACT) is None
+    assert [q["outcome"] for q in _quarantines(caplog.records)] == ["quarantined"]
+    reuses = provenance.activities(store_module._key_record(k))
+    assert len(reuses) == 2 and provenance.activities() == reuses
+    assert all(r.types() == ("prov:Activity", "senselab:Reuse") for r in reuses)
+    assert all(r.node()["prov:used"] == [{"@id": ident}] for r in reuses)
+    assert {r.id for r in provenance.entities()} == {ident, output_identity({"y": 2})}
+    assert sorted(_reuses(s), key=lambda a: str(a["senselab:reusePolicy"])) == [
+        {
+            "senselab:logicalKey": store_module._key_record(k),
+            "senselab:context": {"format": "execution-context@2.0", **current.model_dump(mode="json")},
+            "senselab:storedContext": {"format": "execution-context@2.0", **linux.model_dump(mode="json")},
+            "senselab:reusePolicy": policy,
+        }
+        for current, policy in [(linux, "exact"), (mac, "tolerant")]
+    ]
+    provenance.write(tmp_path)
+    assert ProvStore.read(tmp_path).records() == provenance.records()
+    assert ResultStore(tmp_path).provenance.records() == []
 
 
 @pytest.mark.logic
@@ -735,6 +756,17 @@ def test_reput_verifies_recorded_digests(tmp_path: Path, monkeypatch: pytest.Mon
     assert sorted(read) == ["context.json", "result.json"]
 
 
+class _Held(logging.Handler):
+    """A handler holding every record it is given."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
 def _heal_during_quarantine(root: str, detected: MpEvent, go: MpEvent, out: "MpQueue[Any]") -> None:
     """Find the corrupt entry, then pause before moving it until the parent has healed the address."""
     real = os.lstat
@@ -747,9 +779,10 @@ def _heal_during_quarantine(root: str, detected: MpEvent, go: MpEvent, out: "MpQ
         return real(name, **kwargs)
 
     os.lstat = paused  # type: ignore[assignment]
-    s = ResultStore(Path(root))
-    s.get(_key(), _ctx(), ReusePolicy.EXACT)
-    out.put([a.parameters for a in s.provenance.activities(node="store.quarantine")])
+    handler = _Held()
+    logging.getLogger("senselab").addHandler(handler)
+    ResultStore(Path(root)).get(_key(), _ctx(), ReusePolicy.EXACT)
+    out.put(_quarantines(handler.records))
 
 
 @pytest.mark.logic
@@ -768,10 +801,10 @@ def test_quarantine_restores_an_entry_healed_in_between(tmp_path: Path) -> None:
         healed = s.put(k, {"v": "v2"}, c)
     finally:
         go.set()
-    (activity,) = out.get(timeout=120)
+    (quarantine,) = out.get(timeout=120)
     reader.join(60)
     assert reader.exitcode == 0
-    assert activity["verdict"] == "verified" and activity["outcome"] == "restored"
+    assert quarantine["verdict"] == "verified" and quarantine["outcome"] == "restored"
     got = s.get(k, c, ReusePolicy.EXACT)
     assert got is not None and got.output_identity == healed and got.outputs == {"v": "v2"}
     assert stat.S_IMODE(entry.stat().st_mode) & 0o222 == 0
@@ -779,7 +812,7 @@ def test_quarantine_restores_an_entry_healed_in_between(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_quarantine_keeps_the_copy_when_the_address_was_retaken(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A verified copy is not renamed over an entry committed after it was moved; it stays in quarantine."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
@@ -791,24 +824,26 @@ def test_quarantine_keeps_the_copy_when_the_address_was_retaken(
         lambda: ResultStore(tmp_path).put(k, {"v": "v2"}, c),
         after=True,
     )
-    s._quarantine(entry, digest=k.digest(), fingerprint=c.fingerprint())
-    (activity,) = s.provenance.activities(node="store.quarantine")
-    assert activity.parameters["outcome"] == "superseded"
+    with caplog.at_level(logging.WARNING, logger="senselab"):
+        s._quarantine(entry, digest=k.digest(), fingerprint=c.fingerprint())
+    (quarantine,) = _quarantines(caplog.records)
+    assert quarantine["outcome"] == "superseded"
     got = ResultStore(tmp_path).get(k, c, ReusePolicy.EXACT)
     assert got is not None and got.outputs == {"v": "v2"}
     assert len(list((tmp_path / QUARANTINE_DIR).iterdir())) == 1
 
 
 @pytest.mark.logic
-def test_quarantine_records_reason(tmp_path: Path) -> None:
-    """Quarantining a corrupt entry records the verification failure in provenance."""
+def test_quarantine_logs_reason(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Quarantining a corrupt entry logs the verification failure."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     s.put(k, {"y": 1}, c)
     CORRUPTIONS["result_garbled"](_entry_dir(tmp_path, k, c))
-    assert s.get(k, c, ReusePolicy.EXACT) is None
-    (activity,) = s.provenance.activities(node="store.quarantine")
-    assert activity.parameters["outcome"] == "quarantined" and activity.parameters["verdict"] == "corrupt"
-    assert "result.json" in activity.parameters["reason"] or "JSON" in activity.parameters["reason"]
+    with caplog.at_level(logging.WARNING, logger="senselab"):
+        assert s.get(k, c, ReusePolicy.EXACT) is None
+    (quarantine,) = _quarantines(caplog.records)
+    assert quarantine["outcome"] == "quarantined" and quarantine["verdict"] == "corrupt"
+    assert "result.json" in quarantine["reason"] or "JSON" in quarantine["reason"]
 
 
 @pytest.mark.logic
@@ -962,7 +997,9 @@ def _refuse_chmod_on(monkeypatch: pytest.MonkeyPatch, target: Path) -> None:
 
 
 @pytest.mark.logic
-def test_corrupt_entry_of_another_user_does_not_wedge_the_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_corrupt_entry_of_another_user_does_not_wedge_the_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """A corrupt entry that cannot be chmod-ed is renamed aside within its parent; put then commits the key."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     s.put(k, {"y": 1}, c)
@@ -970,13 +1007,13 @@ def test_corrupt_entry_of_another_user_does_not_wedge_the_key(tmp_path: Path, mo
     CORRUPTIONS["result_garbled"](entry)
     _seal_entry(entry)
     _refuse_chmod_on(monkeypatch, entry)
-    assert s.put(k, {"y": 2}, c) == output_identity({"y": 2})
+    with caplog.at_level(logging.WARNING, logger="senselab"):
+        assert s.put(k, {"y": 2}, c) == output_identity({"y": 2})
     got = s.get(k, c, ReusePolicy.EXACT)
     assert got is not None and got.outputs == {"y": 2}
-    (activity,) = s.provenance.activities(node="store.quarantine")
-    assert activity.parameters["outcome"] == "set aside in place"
-    aside = tmp_path / activity.parameters["moved_to"]
-    assert aside.parent == entry.parent and UUID_HEX.fullmatch(aside.name)
+    (quarantine,) = _quarantines(caplog.records)
+    assert quarantine["outcome"] == "set aside in place"
+    (aside,) = [p for p in entry.parent.iterdir() if UUID_HEX.fullmatch(p.name)]
     assert stat.S_IMODE(aside.stat().st_mode) & 0o222 == 0
     assert not (tmp_path / QUARANTINE_DIR).exists() or list((tmp_path / QUARANTINE_DIR).iterdir()) == []
 

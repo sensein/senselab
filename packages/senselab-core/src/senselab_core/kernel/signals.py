@@ -3,7 +3,7 @@
 import math
 from collections.abc import Mapping
 from fractions import Fraction
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Annotated, ClassVar, Protocol, Self
 
 import numpy
@@ -59,6 +59,9 @@ SignalArray = Annotated[
 
 A NaN is held as the one quiet NaN without payload. A regular group refuses NaN; an irregular group holds it.
 """
+
+SourcePath = Annotated[NonEmptyStr, BeforeValidator(lambda v: v.as_posix() if isinstance(v, PurePath) else v)]
+"""A sound file's path as posix text; a `PurePath` is accepted and held as its `as_posix()`."""
 
 
 class StaleSource(RuntimeError):
@@ -133,7 +136,7 @@ class RegularGroup(Frozen):
     channels: tuple[ChannelInfo, ...] = Field(min_length=1)
     sampling_rate: Rate
     data: SignalArray | None = None
-    source: Path | None = None
+    source: SourcePath | None = None
     source_stamp: SourceStamp | None = None
 
     @model_validator(mode="after")
@@ -193,7 +196,7 @@ class RegularGroup(Frozen):
         assert self.source is not None and self.source_stamp is not None
         if reader is None:
             raise ValueError(f"{self.source} is a source group; read it through a SourceReader")
-        samples = reader.decode(self.source, self.source_stamp, first, stop - first)
+        samples = reader.decode(Path(self.source), self.source_stamp, first, stop - first)
         expected = (len(self.channels), stop - first)
         if samples.shape != expected or samples.dtype != AUDIO_DTYPE:
             raise ValueError(f"decoded {samples.dtype} {samples.shape} from {self.source}, expected float32 {expected}")

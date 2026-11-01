@@ -176,6 +176,14 @@ def test_values_are_json_ld_literals(attributes: dict[str, object], literal: obj
 
 
 @pytest.mark.logic
+def test_set_elements_of_one_canonical_form_are_one_element() -> None:
+    """NFC-equal strings, and distinct NaN objects, are one element of a recorded set."""
+    composed, decomposed = "\u00e9", "e\u0301"
+    assert _entity(label={composed, decomposed}) == _entity(label={composed})
+    assert _entity(level={float("nan"), float("nan")}) == _entity(level={float("nan")})
+
+
+@pytest.mark.logic
 @pytest.mark.parametrize(
     ("term", "values"),
     [
@@ -372,12 +380,12 @@ def test_a_record_is_built_only_by_the_builders() -> None:
 
 @pytest.mark.logic
 def test_document_holds_each_node_once_in_id_order() -> None:
-    """A document lists records and the files they name by @id; two different nodes under one @id are refused."""
+    """A `provenance@3.0` document lists records and the files they name by @id; one @id held twice is refused."""
     a = numpy.arange(3)
     first = prov.entity(E1, EXTENDED, attributes={"senselab:waveform": a})
     doc = prov.document([first, prov.entity(E2, EXTENDED, attributes={"senselab:waveform": a}), first])
     ids = [n["@id"] for n in doc["@graph"]]  # type: ignore[attr-defined]
-    assert doc["@context"] == CONTEXT_URL
+    assert (doc["@context"], doc["format"]) == (CONTEXT_URL, "provenance@3.0")
     assert ids == sorted({E1, E2, "content:" + npy_digest("npy@1", a)})
     with pytest.raises(ValueError, match="two different nodes"):
         prov.document([first, prov.entity(E1, EXTENDED)])
@@ -424,20 +432,28 @@ def test_vocabulary_reads_a_later_minor() -> None:
 
 @pytest.mark.contract
 def test_core_vocabulary_holds_the_core_terms() -> None:
-    """The packaged vocabulary defines exactly the core terms, and the packaged context exactly the prefixes."""
+    """The packaged vocabulary defines the core terms; the packaged context the prefixes and a null `format`."""
     for term, parent in {
         "senselab:Run": "prov:Activity",
+        "senselab:Reuse": "prov:Activity",
         "senselab:SoftwareAgent": "prov:SoftwareAgent",
         "senselab:Environment": "prov:Entity",
         "senselab:File": "prov:Entity",
         "senselab:Plan": "prov:Plan",
     }.items():
         assert CORE.has_class(term) and CORE.is_a(term, parent)
-    assert CORE.property("senselab:modelSource") == prov.Property(domain="prov:Agent", range="xsd:string")
-    assert CORE.property("senselab:logicalKey") == prov.Property(domain="prov:Activity", range="rdf:JSON")
+    for term, domain, rng in [
+        ("senselab:modelSource", "prov:Agent", "xsd:string"),
+        ("senselab:logicalKey", "prov:Activity", "rdf:JSON"),
+        ("senselab:context", "prov:Activity", "rdf:JSON"),
+        ("senselab:storedContext", "senselab:Reuse", "rdf:JSON"),
+        ("senselab:reusePolicy", "senselab:Reuse", "xsd:string"),
+        ("senselab:equivalence", "senselab:Reuse", "xsd:string"),
+    ]:
+        assert CORE.property(term) == prov.Property(domain=domain, range=rng)
     context = context_document()
     assert isinstance(context, dict)
-    assert {k: v for k, v in context["@context"].items() if k != "@version"} == dict(PREFIXES)
+    assert {k: v for k, v in context["@context"].items() if k != "@version"} == {**PREFIXES, "format": None}
 
 
 def _offline_loader(url: str, options: object = None) -> dict[str, object]:
