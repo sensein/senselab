@@ -1,0 +1,193 @@
+"""Tests for `senselab_core.runtime.vllm_server`: lifecycle and attestation against `fake_vllm_fixture.py`."""
+
+import json
+import os
+import signal
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import pytest
+from senselab_core.kernel.identity import ExecutionContext, ModelRef, ResolvedModel
+from senselab_core.runtime import vllm_server as vs
+from senselab_core.runtime.envs import EnvHandle
+from senselab_worker.digest import identity_digest
+
+pytestmark = pytest.mark.logic
+
+SHA = "a" * 40
+MODEL = ResolvedModel(ref=ModelRef.parse(f"org/model@{SHA}"), identity=SHA)
+SETTINGS: dict[str, Any] = {
+    "max_model_len": 4096,
+    "max_num_seqs": 4,
+    "gpu_memory_utilization": 0.9,
+    "kv_cache_dtype": "auto",
+    "generation_config": "vllm",
+    "limit_mm_per_prompt": {"image": 0},
+    "enable_prefix_caching": False,
+}
+FAKE = Path(__file__).with_name("fake_vllm_fixture.py")
+
+_HOLDER = r"""
+import sys, time
+from pathlib import Path
+from senselab_core.runtime.envs import EnvHandle
+from senselab_worker.digest import identity_digest
+from senselab_core.runtime.vllm_server import VllmServer
+from senselab_core.kernel.identity import ModelRef, ResolvedModel
+
+python, locks, sha, settings = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+env = EnvHandle(python=python, python_version="3.12", lock_sha="l", wheel_set="w", torch_index=None)
+model = ResolvedModel(ref=ModelRef.parse(f"org/model@{sha}"), identity=sha)
+with VllmServer(env, model, __import__("json").loads(settings), start_lock_dir=Path(locks), startup_timeout_s=30):
+    print("up", flush=True)
+    time.sleep(600)
+"""
+
+
+@pytest.fixture
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> EnvHandle:
+    """A server env whose `bin/vllm` is the fake; the fake's records go to `<tmp>/fake`."""
+    out = tmp_path / "fake"
+    out.mkdir()
+    exe = tmp_path / "env" / "bin" / "vllm"
+    exe.parent.mkdir(parents=True)
+    exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE}" "$@"\n')
+    exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("FAKE_VLLM_DIR", str(out))
+    return EnvHandle(
+        python=str(exe.with_name("python")),
+        python_version="3.12",
+        lock_sha="l" * 8,
+        wheel_set="w" * 8,
+        torch_index=None,
+    )
+
+
+def _server(env: EnvHandle, tmp_path: Path, settings: dict[str, Any] = SETTINGS) -> vs.VllmServer:
+    return vs.VllmServer(env, MODEL, settings, start_lock_dir=tmp_path / "locks", startup_timeout_s=30)
+
+
+def _records(tmp_path: Path) -> list[dict[str, Any]]:
+    return [json.loads(p.read_text()) for p in sorted((tmp_path / "fake").glob("*.json"))]
+
+
+def _context(fields: dict[str, Any]) -> ExecutionContext:
+    return ExecutionContext(
+        **fields, platform="linux-x86_64", numerics={}, decoder=None, host="h", protocol="p", model_source="hf"
+    )
+
+
+def _group_gone(pgid: int, timeout_s: float = 30.0) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def test_attestation_enters_context(env: EnvHandle, tmp_path: Path) -> None:
+    """The served version, the model commit and the config digest reach the context and every reply."""
+    with _server(env, tmp_path) as server:
+        attestation = server.attestation
+        assert attestation == vs.Attestation("0.31.0", SHA, identity_digest(vs.CONFIG_TAG, server.args))
+        driver = _context(server.context_fields()).driver
+        assert {k: driver[k] for k in attestation.driver()} == attestation.driver()
+        assert server.chat([{"role": "user", "content": "hi"}], sampling={}).attestation == attestation
+    (record,) = _records(tmp_path)
+    assert record["argv"][1] == "org/model"
+    assert {f"--revision={SHA}", f"--tokenizer-revision={SHA}", "--max-num-seqs=4"} <= set(record["argv"])
+
+
+def test_restart_with_new_config_changes_attestation(env: EnvHandle, tmp_path: Path) -> None:
+    """A restart with another config attests another digest and context; the same config attests the same."""
+    contexts = []
+    for settings in (SETTINGS, {**SETTINGS, "max_num_seqs": 8}, SETTINGS):
+        with _server(env, tmp_path, settings) as server:
+            contexts.append(_context(server.context_fields()).fingerprint())
+    assert contexts[0] != contexts[1] and contexts[0] == contexts[2]
+
+
+def test_server_stops_with_owner(env: EnvHandle, tmp_path: Path) -> None:
+    """Killing the owning process with SIGKILL takes the server's whole process group with it."""
+    holder = subprocess.Popen(  # noqa: S603 - this interpreter
+        [sys.executable, "-c", _HOLDER, env.python, str(tmp_path / "locks"), SHA, json.dumps(SETTINGS)],
+        stdout=subprocess.PIPE,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+    )
+    try:
+        assert holder.stdout is not None and holder.stdout.readline() == b"up\n"
+        (record,) = _records(tmp_path)
+        holder.send_signal(signal.SIGKILL)
+        holder.wait()
+        assert _group_gone(record["pgid"])
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+def test_server_stops_on_exit(env: EnvHandle, tmp_path: Path) -> None:
+    """Leaving the context stops the group and ends the attestation."""
+    with _server(env, tmp_path) as server:
+        pass
+    (record,) = _records(tmp_path)
+    assert _group_gone(record["pgid"], 5)
+    assert server.attestation is None
+    with pytest.raises(vs.StaleAttestation):
+        server.context_fields()
+
+
+def test_reply_from_another_model_is_stale(env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A reply naming another model does not carry the attestation."""
+    monkeypatch.setenv("FAKE_VLLM_REPLY_MODEL", "org/other")
+    with _server(env, tmp_path) as server, pytest.raises(vs.StaleAttestation, match="org/other"):
+        server.chat([{"role": "user", "content": "hi"}], sampling={})
+
+
+@pytest.mark.parametrize(
+    ("variable", "kind"), [("FAKE_VLLM_EXIT", "exited"), ("FAKE_VLLM_ROOT", "model"), ("FAKE_VLLM_VERSION", "version")]
+)
+def test_start_failure_is_typed_and_stops(
+    env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str, kind: str
+) -> None:
+    """A server that exits, serves another model or reports no version raises its kind and leaves nothing."""
+    monkeypatch.setenv(variable, {"FAKE_VLLM_EXIT": "1", "FAKE_VLLM_ROOT": "org/other"}.get(variable, ""))
+    server = _server(env, tmp_path)
+    with pytest.raises(vs.VllmStartError) as raised:
+        server.__enter__()
+    assert raised.value.kind == kind and server.url is None
+    for record in _records(tmp_path):
+        assert _group_gone(record["pgid"], 5)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        ResolvedModel(ref=ModelRef.parse("url:https://h/m.bin#sha256=" + "b" * 64), identity="b" * 64),
+        ResolvedModel(ref=ModelRef.parse("org/model@main"), identity="main", unresolved_reason="a ref"),
+    ],
+)
+def test_url_or_unpinned_model_refused(env: EnvHandle, tmp_path: Path, model: ResolvedModel) -> None:
+    """Only a pinned hub or local model is served."""
+    with pytest.raises(ValueError, match="pinned|url"):
+        vs.VllmServer(env, model, SETTINGS, start_lock_dir=tmp_path, startup_timeout_s=1)
+
+
+@pytest.mark.parametrize("settings", [{k: v for k, v in SETTINGS.items() if k != "max_num_seqs"}, {**SETTINGS, "x": 1}])
+def test_settings_must_be_the_known_keys(settings: dict[str, Any]) -> None:
+    """A missing or an unknown setting is refused, never dropped."""
+    with pytest.raises(ValueError, match="vLLM settings"):
+        vs.server_args(settings)
+
+
+def test_server_args_bind_values_to_flags() -> None:
+    """Each value is joined to its flag, so no value is read as another flag."""
+    args = vs.server_args({**SETTINGS, "kv_cache_dtype": "--enable-log-requests"})
+    assert "--kv-cache-dtype=--enable-log-requests" in args
+    assert args[-2:] == ['--limit-mm-per-prompt={"image":0}', "--no-enable-prefix-caching"]

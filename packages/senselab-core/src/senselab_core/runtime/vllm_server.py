@@ -1,27 +1,16 @@
-"""A ``vllm serve`` process on loopback, held by a context manager.
+"""A ``vllm serve`` process in an `Env.server` env, owned by the calling process, and its HTTP clients.
 
-:class:`VllmServer` starts the server under a start lock named by the host and the devices, so servers that
-share a card start one at a time and each sizes its KV cache after its neighbours. It waits for ``/health``,
-then checks the served version and the served snapshot commit. The server runs in its own process group; a
-watchdog kills that group if the owner dies, and leaving the context stops it (SIGTERM, then SIGKILL).
+`VllmServer` starts ``<env>/bin/vllm serve`` on a pinned model under a `Lease` named by the host and the devices,
+so servers that share a card start one at a time. It waits for ``/health``, reads the served version and model,
+and holds an `Attestation` (engine version, model identity, config digest) that every reply it returns carries
+and that its `context_fields` put in the execution context. The server runs in its own process group; a watchdog
+kills that group if the owner dies, and leaving the context stops it (SIGTERM, then SIGKILL).
 
-:func:`server_args` builds the ordered server arguments, :func:`engine_identity` the engine's identity for a
-cache key and provenance, and :func:`utilisation` the per-server memory share of a card.
-
-The clients :func:`chat` (with :func:`content_part` for text, image, video and audio parts), :func:`transcribe`
-and :func:`complete` call a running server's OpenAI-compatible endpoints over loopback and return the parsed JSON;
-they log nothing. :func:`ensure_vllm_venv` builds the server's venv from its committed lock.
-
-Ported and generalised from the server half of ``sensein/senselab@feat/task-events`` (f2a806af),
-``src/senselab/text/tasks/pii_detection/redaction_review_vllm.py``. Standard library only, so the module imports
-in a lean environment.
+The clients `chat` (with `content_part` for text, image, video and audio parts) and `complete` call a running
+server's OpenAI-compatible endpoints over loopback and return the parsed JSON; they log nothing.
 """
 
-from __future__ import annotations
-
 import base64
-import fcntl
-import hashlib
 import http.client
 import json
 import mimetypes
@@ -34,21 +23,25 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import uuid
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from http import HTTPStatus
 from pathlib import Path
 from types import TracebackType
-from typing import IO, Any, Mapping, Optional, Sequence, Union
+from typing import IO, Any
+
+from senselab_worker.digest import identity_digest
+
+from senselab_core.kernel.identity import ResolvedModel
+from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.locks import TIMEOUT_S, Lease
 
 HOST = "127.0.0.1"
 """The only address a server listens on."""
 
-VLLM_VENV = "vllm-server"
-VLLM_VERSION = "0.31.0"
-VLLM_PYTHON = "3.12"
-VLLM_REQUIREMENTS = [f"vllm=={VLLM_VERSION}"]
-VLLM_MAX_CUDA = (13, 0)
-"""The server's venv: its name, the one requirement, its Python and its CUDA index ceiling (vLLM 0.31 needs
-CUDA 13). The committed lock ``data/venv_locks/vllm-server.txt`` is compiled from these."""
+ENGINE = "vllm"
+CONFIG_TAG = "vllm-config@1"
+"""The `identity_digest` tag of a server's configuration: its ordered server arguments."""
 
 REQUEST_TIMEOUT_S = 600.0
 """Default seconds a client waits for a reply."""
@@ -56,26 +49,14 @@ REQUEST_TIMEOUT_S = 600.0
 URL_SCHEMES = ("http", "https", "data", "file")
 """Schemes an image or video part may name directly; anything else is read as a local path."""
 
-START_ERROR_KINDS = ("exited", "timeout", "version", "snapshot")
+START_ERROR_KINDS = ("exited", "timeout", "version", "model")
 """Why a server failed to start.
 
-- ``exited``: it exited before it was healthy. This covers a KV cache that cannot hold ``max_model_len``, and
-  also a port taken between :func:`_free_port` releasing it and the server binding it (a process outside the
-  start lock can take it in that window).
+- ``exited``: it exited before it was healthy (a KV cache that cannot hold ``max_model_len``, or a port taken
+  between `_free_port` releasing it and the server binding it).
 - ``timeout``: it was not healthy in time.
-- ``version``: it reports another version, or its ``/version`` or ``/v1/models`` probe failed (an HTTP error, a
-  body that is not JSON, or JSON of the wrong shape).
-- ``snapshot``: it serves another snapshot."""
-
-CONTENT_LOGGING_PREFIXES = ("--enable-log-req", "--enable-log-out")
-"""Prefixes of the server flags, and of their abbreviations, that would write request or output content to the
-log; any argument starting with one is refused."""
-
-CONTENT_LOGGING_FLAGS = ("--enable-log-requests", "--enable-log-outputs")
-"""The content-logging flags in full; an abbreviation of one is refused too."""
-
-REFUSED_FLAGS = ("--config",)
-"""Server flags (bare or ``flag=value``) refused because they could turn content logging on from a file."""
+- ``version``: its ``/version`` or ``/v1/models`` probe failed (an HTTP error, or a body of the wrong shape).
+- ``model``: it serves another model."""
 
 ERROR_DETAIL_CHARS = 300
 """The most characters of a server's error message a raised error keeps."""
@@ -101,10 +82,9 @@ STOP_TIMEOUT_S = 60.0
 
 _NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-# Runs as ``python -c _WATCHDOG <owner pid> <server group>``, a child of the owner in a session of its own, so a
-# signal to the owner's whole group does not reach it. It kills
-# the server group once the owner is gone: on the SIGTERM PR_SET_PDEATHSIG sends when the owner dies, or when its
-# parent is no longer the owner. A SIGTERM while the owner lives (the owning thread ended) is ignored.
+# Runs as ``python -c _WATCHDOG <owner pid> <server group>`` in a session of its own, so a signal to the owner's
+# group does not reach it. It kills the server group once the owner is gone: on the SIGTERM PR_SET_PDEATHSIG sends
+# when the owner dies (Linux), or when its parent is no longer the owner. A SIGTERM while the owner lives is ignored.
 _WATCHDOG = r"""
 import ctypes, os, signal, sys, time
 
@@ -136,14 +116,10 @@ kill_group()
 
 
 class VllmStartError(RuntimeError):
-    """A server that did not start, with the reason in :attr:`kind` (one of :data:`START_ERROR_KINDS`)."""
+    """A server that did not start, with the reason in `kind` (one of `START_ERROR_KINDS`)."""
 
     def __init__(self, kind: str, message: str) -> None:
         """Name the failure.
-
-        Args:
-            kind: One of :data:`START_ERROR_KINDS`.
-            message: What happened.
 
         Raises:
             ValueError: On an unknown kind.
@@ -154,27 +130,57 @@ class VllmStartError(RuntimeError):
         self.kind = kind
 
 
-def option_name(arg: str) -> str:
-    """The option name of a server argument as the server's parser reads it: before any ``=``, ``_`` as ``-``."""
-    name = arg.split("=", 1)[0]
-    return name.replace("_", "-") if name.startswith("--") else name
+class StaleAttestation(RuntimeError):
+    """A reply the attested server did not give: the server is no longer running, or another model answered."""
 
 
-def refused_arg(arg: str) -> bool:
-    """Whether a server argument could log request or output content.
+@dataclass(frozen=True)
+class Attestation:
+    """What a running server is: the version it reports, the model identity it loaded and its config digest."""
 
-    That is a content-logging flag (:data:`CONTENT_LOGGING_PREFIXES`, or an abbreviation of one of
-    :data:`CONTENT_LOGGING_FLAGS`) or :data:`REFUSED_FLAGS` (or an abbreviation), bare or ``flag=value``, in either
-    spelling of its dashes and underscores.
+    engine_version: str
+    model_identity: str
+    config_digest: str
+
+    def driver(self) -> dict[str, str]:
+        """Return the attestation as `ExecutionContext.driver` entries."""
+        return {
+            "engine": ENGINE,
+            "engine_version": self.engine_version,
+            "model_identity": self.model_identity,
+            "config_digest": self.config_digest,
+        }
+
+
+@dataclass(frozen=True)
+class Attested:
+    """A server's parsed reply and the attestation of the server that gave it."""
+
+    body: Any
+    attestation: Attestation
+
+
+def server_args(settings: Mapping[str, Any]) -> list[str]:
+    """Return the ``vllm serve`` arguments `settings` names, each as one ``--flag=value`` or switch.
+
+    Args:
+        settings: Every key of `SERVER_FLAGS` and `SWITCHES` and no other; ``limit_mm_per_prompt`` is a mapping of
+            per-modality counts, written as compact JSON with sorted keys.
+
+    Raises:
+        ValueError: A key is missing or unknown.
     """
-    name = option_name(arg)
-    if name.startswith(CONTENT_LOGGING_PREFIXES):
-        return True
-    return (
-        len(name) > 2
-        and name.startswith("--")
-        and any(f.startswith(name) for f in (*CONTENT_LOGGING_FLAGS, *REFUSED_FLAGS))
-    )
+    known = {key for key, _ in SERVER_FLAGS} | {key for key, _, _ in SWITCHES}
+    if set(settings) != known:
+        raise ValueError(f"vLLM settings lack {sorted(known - set(settings))} and add {sorted(set(settings) - known)}")
+    args: list[str] = []
+    for key, flag in SERVER_FLAGS:
+        value = settings[key]
+        if isinstance(value, Mapping):
+            value = json.dumps(dict(value), sort_keys=True, separators=(",", ":"))
+        args.append(f"{flag}={value}")
+    args += [on if settings[key] else off for key, on, off in SWITCHES]
+    return args
 
 
 def _free_port() -> int:
@@ -183,8 +189,8 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def _probe(url: str, key: str, timeout_s: float = 60.0) -> Any:  # noqa: ANN401 — a JSON value
-    """``GET url`` and return the body's ``key``; any failure is a ``version`` start error."""
+def _probe(url: str, key: str, timeout_s: float = 60.0) -> Any:  # noqa: ANN401 - a JSON value
+    """``GET url`` and return the body's `key`; any failure is a ``version`` start error."""
     try:
         with _NO_PROXY.open(url, timeout=timeout_s) as response:
             body = json.loads(response.read())
@@ -198,7 +204,7 @@ def _probe(url: str, key: str, timeout_s: float = 60.0) -> Any:  # noqa: ANN401 
 def _healthy(url: str) -> bool:
     try:
         with _NO_PROXY.open(f"{url}/health", timeout=5) as response:
-            return response.status == 200
+            return bool(response.status == HTTPStatus.OK)
     except (OSError, http.client.HTTPException):
         return False
 
@@ -210,135 +216,177 @@ def _killpg(pgid: int, sig: int) -> None:
         pass
 
 
-class VllmServer:
-    """One ``vllm serve`` over a model snapshot, listening on a free loopback port while the context is open.
+def _served(model: ResolvedModel) -> tuple[str, list[str]]:
+    """Return what ``vllm serve`` is given for `model` and the arguments that bind it to its identity."""
+    if not model.pinned:
+        raise ValueError(f"{model.ref} is not pinned; a server loads only a pinned model")
+    if model.ref.source == "hf":
+        return model.ref.id, [f"--revision={model.identity}", f"--tokenizer-revision={model.identity}"]
+    if model.ref.source == "local":
+        return model.ref.id, []
+    raise ValueError(f"a server loads a hub or local model, not a {model.ref.source} one")
 
-    On entry it takes ``fcntl.flock`` on ``<start_lock_dir>/vllm-start-<host>-<devices>.lock``, starts
-    ``<executable> serve <model_dir> --host 127.0.0.1 --port <port> *server_args`` in its own session (with
-    ``CUDA_VISIBLE_DEVICES`` set to ``devices`` when they are given), waits for ``/health`` and releases the lock.
-    It then checks that ``GET /version`` is ``expected_version`` and that the served model's root ends in
-    ``model_dir``'s last component (the ``snapshots/<commit>`` name). On exit, and on any start failure,
-    the server's process group gets SIGTERM, then SIGKILL.
+
+class VllmServer:
+    """One ``vllm serve`` of a pinned model in a built `Env.server` env, listening on loopback while open.
+
+    On entry it takes a `Lease` on ``<start_lock_dir>/vllm-start-<host>-<devices>``, starts ``<env>/bin/vllm serve``
+    in its own session (a hub model with ``--revision`` and ``--tokenizer-revision`` set to its commit;
+    ``CUDA_VISIBLE_DEVICES`` set to `devices` when given), waits for ``/health`` and releases the lease. It then
+    reads ``/version`` and checks that ``/v1/models`` serves the model. On exit, and on any start failure, the
+    server's process group gets SIGTERM, then SIGKILL.
 
     Attributes:
         url: ``http://127.0.0.1:<port>`` while the context is open, else None.
-        port: The port while the context is open, else None.
+        attestation: The running server's `Attestation` while the context is open, else None.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - the env, model and settings, then keyword-only placement and bounds
         self,
-        executable: Union[str, Path],
-        model_dir: Union[str, Path],
+        env: EnvHandle,
+        model: ResolvedModel,
+        settings: Mapping[str, Any],
         *,
-        server_args: Sequence[str],
-        devices: Optional[Sequence[Union[int, str]]] = None,
-        start_lock_dir: Union[str, Path],
-        expected_version: str,
-        log_dir: Optional[Union[str, Path]] = None,
-        startup_timeout_s: float = 1800,
+        start_lock_dir: Path,
+        startup_timeout_s: float,
+        devices: Sequence[int | str] | None = None,
+        log_dir: Path | None = None,
     ) -> None:
         """Describe the server; nothing starts until the context is entered.
 
         Args:
-            executable: The ``vllm`` console script to run (for example ``<venv>/bin/vllm``).
-            model_dir: The model snapshot directory, named by its commit.
-            server_args: The arguments after the port, such as :func:`server_args` builds.
-            devices: The server's visible devices. When given, the server's ``CUDA_VISIBLE_DEVICES`` is set to
-                them; when None, the inherited environment is left alone and the lock is named by the inherited
-                ``CUDA_VISIBLE_DEVICES`` (``all`` if unset).
-            start_lock_dir: Where the start lock file lives.
-            expected_version: The vLLM version the server must report.
-            log_dir: Where the server's output goes, one file per server with mode 600; the owner's stderr when
-                None.
-            startup_timeout_s: Seconds the server has to become healthy once the start lock is held.
+            env: The built env (`ensure_env` of an `Env.server` env) whose ``bin/vllm`` runs the server.
+            model: The model to serve, pinned to a hub commit or a local weights digest.
+            settings: The server settings `server_args` reads.
+            start_lock_dir: Where the start lease lives.
+            startup_timeout_s: Seconds the server has to become healthy once the lease is held; also the lease's
+                stale bound.
+            devices: The server's visible devices; when None the inherited environment is left alone and the lease
+                is named by the inherited ``CUDA_VISIBLE_DEVICES`` (``all`` if unset).
+            log_dir: Where the server's output goes, one mode-600 file per server; the owner's stderr when None.
 
         Raises:
-            ValueError: If ``server_args`` asks the server to log request or output content, or names a config
-                file.
+            ValueError: `model` is unpinned or a url model, or `settings` is not exactly the known keys.
         """
-        for arg in map(str, server_args):
-            if refused_arg(arg):
-                raise ValueError(f"{arg} could log request or output content; it is not allowed")
-        self.executable = str(executable)
-        self.model_dir = Path(model_dir)
-        self.server_args = [str(arg) for arg in server_args]
+        self.target, self._model_args = _served(model)
+        self.model = model
+        self.args = server_args(settings)
+        self.executable = Path(env.python).parent / "vllm"
         self.devices = None if devices is None else [str(device) for device in devices]
         self.start_lock_dir = Path(start_lock_dir)
-        self.expected_version = expected_version
-        self.log_dir = None if log_dir is None else Path(log_dir)
         self.startup_timeout_s = float(startup_timeout_s)
-        self.url: Optional[str] = None
-        self.port: Optional[int] = None
-        self._server: Optional[subprocess.Popen[bytes]] = None
-        self._watchdog: Optional[subprocess.Popen[bytes]] = None
-        self._log: Optional[IO[bytes]] = None
+        self.log_dir = log_dir
+        self.url: str | None = None
+        self.attestation: Attestation | None = None
+        self._env = env
+        self._server: subprocess.Popen[bytes] | None = None
+        self._watchdog: subprocess.Popen[bytes] | None = None
+        self._log: IO[bytes] | None = None
+
+    @property
+    def config_digest(self) -> str:
+        """The digest of the server arguments, which the attestation carries."""
+        return identity_digest(CONFIG_TAG, self.args)
 
     @property
     def lock_path(self) -> Path:
-        """The start lock shared by every server on this host's ``devices``."""
+        """The start lease's resource, shared by every server on this host's devices."""
         if self.devices is None:
             devices = os.environ.get("CUDA_VISIBLE_DEVICES", "all").replace(",", "-") or "none"
         else:
             devices = "-".join(self.devices) or "none"
-        return self.start_lock_dir / f"vllm-start-{socket.gethostname()}-{devices}.lock"
+        return self.start_lock_dir / f"vllm-start-{socket.gethostname()}-{devices}"
 
-    def __enter__(self) -> VllmServer:
-        """Start the server and check it.
-
-        Returns:
-            This server, with :attr:`url` and :attr:`port` set.
+    def __enter__(self) -> "VllmServer":
+        """Start the server and attest it.
 
         Raises:
-            VllmStartError: If the server exited before it was healthy, was not healthy in time, or serves another
-                version or snapshot.
+            VllmStartError: The server exited before it was healthy, was not healthy in time, or serves another
+                model.
+            LeaseTimeout, LeaseUnavailable: as `Lease`.
         """
         self.start_lock_dir.mkdir(parents=True, exist_ok=True)
         try:
-            with open(self.lock_path, "a") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
+            with Lease(self.lock_path, stale_after=self.startup_timeout_s, timeout=self.startup_timeout_s + TIMEOUT_S):
                 self._launch()
                 self._await_health()
-            self._check_identity()
+            self.attestation = self._attest()
         except BaseException:
             self.stop()
             raise
         return self
 
     def __exit__(
-        self,
-        exc_type: Optional[type[BaseException]],
-        exc: Optional[BaseException],
-        traceback: Optional[TracebackType],
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, traceback: TracebackType | None
     ) -> None:
         """Stop the server."""
         self.stop()
 
+    def context_fields(self) -> dict[str, Any]:
+        """Return the env's `ExecutionContext` fields with the attestation added to `driver`.
+
+        Raises:
+            StaleAttestation: The server is not running.
+        """
+        attestation = self._live()
+        fields = self._env.context_fields()
+        return {**fields, "driver": {**fields["driver"], **attestation.driver()}}
+
+    def chat(self, messages: Sequence[Mapping[str, Any]], *, sampling: Mapping[str, Any]) -> Attested:
+        """`chat` with this server's model; the reply carries this server's attestation.
+
+        Raises:
+            StaleAttestation: The server is not running, or the reply names another model.
+        """
+        attestation = self._live()
+        return self._attested(chat(str(self.url), self.target, messages, sampling=sampling), attestation)
+
+    def complete(self, prompt_token_ids: Sequence[int], *, sampling: Mapping[str, Any]) -> Attested:
+        """`complete` with this server's model; the reply carries this server's attestation.
+
+        Raises:
+            StaleAttestation: The server is not running, or the reply names another model.
+        """
+        attestation = self._live()
+        return self._attested(complete(str(self.url), self.target, prompt_token_ids, sampling=sampling), attestation)
+
+    def _live(self) -> Attestation:
+        if self.attestation is None or self._server is None or self._server.poll() is not None:
+            raise StaleAttestation(f"the vllm server of {self.model.ref} is not running")
+        return self.attestation
+
+    def _attested(self, body: Any, attestation: Attestation) -> Attested:  # noqa: ANN401 - a JSON value
+        served = body.get("model") if isinstance(body, dict) else None
+        if served != self.target:
+            raise StaleAttestation(f"a reply names model {served!r}, not {self.target!r}")
+        return Attested(body, attestation)
+
     def _launch(self) -> None:
         port = _free_port()
-        command = [self.executable, "serve", str(self.model_dir), "--host", HOST, "--port", str(port)]
+        command = [str(self.executable), "serve", self.target, f"--host={HOST}", f"--port={port}"]
         env = dict(os.environ)
         if self.devices is not None:
             env["CUDA_VISIBLE_DEVICES"] = ",".join(self.devices)
-        sink: Union[int, IO[bytes]] = 2
+        sink: int | IO[bytes] = 2
         if self.log_dir is not None:
             self.log_dir.mkdir(parents=True, exist_ok=True)
             path = self.log_dir / f"vllm-{socket.gethostname()}-{os.getpid()}-{port}.log"
             self._log = os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "wb")
             sink = self._log
-        self._server = subprocess.Popen(  # noqa: S603 — the caller's vllm executable
-            [*command, *self.server_args],
+        self._server = subprocess.Popen(  # noqa: S603 - the env's vllm executable
+            [*command, *self._model_args, *self.args],
             stdin=subprocess.DEVNULL,
             stdout=sink,
             stderr=subprocess.STDOUT,
             env=env,
             start_new_session=True,
         )
-        self._watchdog = subprocess.Popen(  # noqa: S603 — this interpreter
+        self._watchdog = subprocess.Popen(  # noqa: S603 - this interpreter
             [sys.executable, "-c", _WATCHDOG, str(os.getpid()), str(self._server.pid)],
             stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
-        self.port, self.url = port, f"http://{HOST}:{port}"
+        self.url = f"http://{HOST}:{port}"
 
     def _await_health(self) -> None:
         assert self._server is not None and self.url is not None
@@ -351,18 +399,17 @@ class VllmServer:
                 raise VllmStartError("timeout", f"vllm serve was not healthy within {self.startup_timeout_s:g}s")
             time.sleep(POLL_S)
 
-    def _check_identity(self) -> None:
-        assert self.url is not None
+    def _attest(self) -> Attestation:
         version = _probe(f"{self.url}/version", "version")
-        if version != self.expected_version:
-            raise VllmStartError("version", f"the server is vllm {version}, not {self.expected_version}")
+        if not isinstance(version, str) or not version:
+            raise VllmStartError("version", f"probe {self.url}/version: no version")
         data = _probe(f"{self.url}/v1/models", "data")
         if not isinstance(data, list) or not data or not isinstance(data[0], dict):
             raise VllmStartError("version", f"probe {self.url}/v1/models: no model entry")
-        model = data[0]
-        served = os.path.basename(os.path.normpath(str(model.get("root") or "")))
-        if served != self.model_dir.name:
-            raise VllmStartError("snapshot", f"the server serves snapshot {served!r}, not {self.model_dir.name!r}")
+        served = data[0].get("root")
+        if served != self.target:
+            raise VllmStartError("model", f"the server serves {served!r}, not {self.target!r}")
+        return Attestation(engine_version=version, model_identity=self.model.identity, config_digest=self.config_digest)
 
     def stop(self) -> None:
         """Stop the server's process group (SIGTERM, then SIGKILL) and its watchdog; safe to call twice."""
@@ -382,98 +429,13 @@ class VllmServer:
         log, self._log = self._log, None
         if log is not None:
             log.close()
-        self.url = self.port = None
+        self.url = None
+        self.attestation = None
 
 
-def server_args(settings: Mapping[str, Any]) -> list[str]:
-    """The ``vllm serve`` arguments a configuration names, after the port.
-
-    Args:
-        settings: A mapping with every key of :data:`SERVER_FLAGS` and :data:`SWITCHES`; ``limit_mm_per_prompt``
-            is a mapping of per-modality counts.
-
-    Returns:
-        The arguments, in a fixed order; a mapping value is written as compact JSON with sorted keys.
-
-    Raises:
-        KeyError: If a key is missing.
-    """
-    args: list[str] = []
-    for key, flag in SERVER_FLAGS:
-        value = settings[key]
-        if isinstance(value, Mapping):
-            value = json.dumps(dict(value), sort_keys=True, separators=(",", ":"))
-        args += [flag, str(value)]
-    for key, on, off in SWITCHES:
-        args.append(on if settings[key] else off)
-    return args
-
-
-def engine_identity(
-    version: str, server_args: Sequence[str], *, concurrency: int, batch_size: int, servers_per_card: int
-) -> dict[str, Any]:
-    """What a vLLM engine is, as a cache key and provenance carry it.
-
-    Args:
-        version: The vLLM version.
-        server_args: The server arguments.
-        concurrency: Requests in flight per server.
-        batch_size: Items per request batch.
-        servers_per_card: Servers sharing one card.
-
-    Returns:
-        ``name``, ``version``, ``server_args`` (a copy), ``concurrency``, ``batch_size`` and ``servers_per_card``.
-    """
-    return {
-        "name": "vllm",
-        "version": version,
-        "server_args": list(server_args),
-        "concurrency": concurrency,
-        "batch_size": batch_size,
-        "servers_per_card": servers_per_card,
-    }
-
-
-def utilisation(servers_per_card: int) -> float:
-    """The ``--gpu-memory-utilization`` of each of ``servers_per_card`` servers on one card.
-
-    Args:
-        servers_per_card: Servers sharing the card, at least one.
-
-    Returns:
-        ``floor(90 / servers_per_card) / 100``.
-
-    Raises:
-        ValueError: If fewer than one server.
-    """
-    if servers_per_card < 1:
-        raise ValueError(f"servers_per_card must be at least 1, not {servers_per_card}")
-    return (90 // servers_per_card) / 100
-
-
-def ensure_vllm_venv() -> Path:
-    """Build or reuse the server's venv from its committed lock and return its ``vllm`` executable.
-
-    The first call installs the venv (it needs the network); later calls reuse it without installing anything.
-
-    Returns:
-        ``<venv>/bin/vllm``, to pass to :class:`VllmServer`.
-
-    Raises:
-        VenvLockError: If the committed lock is missing or was compiled from other inputs.
-    """
-    from senselab.utils import subprocess_venv
-
-    venv_dir = subprocess_venv.ensure_venv(
-        VLLM_VENV, VLLM_REQUIREMENTS, python_version=VLLM_PYTHON, max_cuda_version=VLLM_MAX_CUDA
-    )
-    return Path(venv_dir) / "bin" / "vllm"
-
-
-def _path_label(path: Union[str, Path]) -> str:
-    """A media path as an error message may show it: its suffix and a short digest of the path, never its name."""
-    path = Path(path)
-    return f"a {path.suffix!r} file (path sha256 {hashlib.sha256(str(path).encode()).hexdigest()[:12]})"
+def _path_label(path: str | Path) -> str:
+    """A media path as an error message may show it: its suffix, never its name."""
+    return f"a {Path(path).suffix!r} file"
 
 
 def _data_url(path: Path) -> str:
@@ -483,26 +445,24 @@ def _data_url(path: Path) -> str:
     return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
 
 
-def content_part(
-    kind: str, source: Union[str, Path], *, local_media_dir: Optional[Union[str, Path]] = None
-) -> dict[str, Any]:
-    """One content part of a chat message.
+def content_part(kind: str, source: str | Path, *, local_media_dir: str | Path | None = None) -> dict[str, Any]:
+    """Return one content part of a chat message.
 
     Args:
         kind: ``text``, ``image``, ``video`` or ``audio``.
         source: The text for ``text``. For ``image`` and ``video``, an ``http(s)``, ``data:`` or ``file://`` URL is
             passed as is, and anything else is a local file. ``audio`` is always a local file.
         local_media_dir: The server's ``--allowed-local-media-path``. When given, a local image or video file goes
-            in as a ``file://`` URL and must lie under it; otherwise it is read and sent inline as a base64
-            ``data:`` URL. Audio is always sent inline.
+            in as a ``file://`` URL and must lie under it; otherwise it is sent inline as a base64 ``data:`` URL.
+            Audio is always sent inline.
 
     Returns:
-        A ``text``, ``image_url``, ``video_url`` or ``input_audio`` part. An audio part's ``format`` is the file's
+        A ``text``, ``image_url``, ``video_url`` or ``input_audio`` part; an audio part's ``format`` is the file's
         suffix.
 
     Raises:
-        ValueError: On an unknown kind, an audio URL, a file outside ``local_media_dir``, or a suffix with no
-            known media type.
+        ValueError: An unknown kind, an audio URL, a file outside `local_media_dir`, or a suffix with no known media
+            type.
     """
     if kind == "text":
         return {"type": "text", "text": str(source)}
@@ -522,10 +482,7 @@ def content_part(
         else:
             root, resolved = Path(local_media_dir).resolve(), path.resolve()
             if root not in resolved.parents:
-                raise ValueError(
-                    f"{_path_label(path)} is not under the server's local media directory"
-                    f" (path sha256 {hashlib.sha256(str(local_media_dir).encode()).hexdigest()[:12]})"
-                )
+                raise ValueError(f"{_path_label(path)} is not under the server's local media directory")
             url = resolved.as_uri()
     key = f"{kind}_url"
     return {"type": key, key: {"url": url}}
@@ -537,23 +494,8 @@ def _refuse_reserved(sampling: Mapping[str, Any], reserved: Sequence[str]) -> No
         raise ValueError(f"sampling may not set {taken}; the client sets them")
 
 
-def _send(request: urllib.request.Request, timeout_s: float) -> Any:  # noqa: ANN401 — a JSON value
-    """Send a request without any proxy and parse the JSON reply; nothing is logged.
-
-    A refused request re-raises its ``HTTPError`` with the server's error message (see :func:`_error_message`)
-    after the reason.
-    """
-    try:
-        with _NO_PROXY.open(request, timeout=timeout_s) as response:
-            return json.loads(response.read())
-    except urllib.error.HTTPError as exc:
-        message = _error_message(exc.read())
-        reason = f"{exc.reason}: {message}" if message else str(exc.reason)
-        raise urllib.error.HTTPError(exc.url, exc.code, reason, exc.headers, None) from None
-
-
 def _error_message(raw: bytes) -> str:
-    """The message of a vLLM error body, at most :data:`ERROR_DETAIL_CHARS` long.
+    """Return the message of a vLLM error body, at most `ERROR_DETAIL_CHARS` long.
 
     Only ``error.message``, a top-level ``message`` or ``detail`` is kept (a validation ``detail`` list as
     ``loc: msg`` items); ``input`` and every other field, which can echo the prompt, are dropped, as is a body
@@ -573,11 +515,21 @@ def _error_message(raw: bytes) -> str:
     return message[:ERROR_DETAIL_CHARS] if isinstance(message, str) else ""
 
 
-def _post_json(url: str, body: Mapping[str, Any], timeout_s: float) -> Any:  # noqa: ANN401 — a JSON value
-    request = urllib.request.Request(
+def _post_json(url: str, body: Mapping[str, Any], timeout_s: float) -> Any:  # noqa: ANN401 - a JSON value
+    """POST `body` without any proxy and parse the JSON reply; nothing is logged.
+
+    A refused request re-raises its ``HTTPError`` with the server's short error message after the reason.
+    """
+    request = urllib.request.Request(  # noqa: S310 - a loopback http URL
         url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST"
     )
-    return _send(request, timeout_s)
+    try:
+        with _NO_PROXY.open(request, timeout=timeout_s) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        message = _error_message(exc.read())
+        reason = f"{exc.reason}: {message}" if message else str(exc.reason)
+        raise urllib.error.HTTPError(exc.url, exc.code, reason, exc.headers, None) from None
 
 
 def chat(
@@ -587,102 +539,23 @@ def chat(
     *,
     sampling: Mapping[str, Any],
     timeout_s: float = REQUEST_TIMEOUT_S,
-) -> Any:  # noqa: ANN401 — a JSON value
-    """``POST /v1/chat/completions``, not streamed.
+) -> Any:  # noqa: ANN401 - a JSON value
+    """``POST /v1/chat/completions``, not streamed, and return the parsed reply.
 
     Args:
-        url: The server's base URL, such as :attr:`VllmServer.url`.
+        url: The server's base URL, such as `VllmServer.url`.
         model: The served model name.
-        messages: Chat messages; a message's ``content`` is a string or a list of :func:`content_part` parts.
+        messages: Chat messages; a message's ``content`` is a string or a list of `content_part` parts.
         sampling: Further request fields (``temperature``, ``max_tokens``, ``seed``, ...).
         timeout_s: Seconds to wait for the reply.
 
-    Returns:
-        The parsed reply.
-
     Raises:
-        ValueError: If ``sampling`` sets ``model``, ``messages`` or ``stream``.
-        urllib.error.HTTPError: If the server refuses the request; the message carries the server's short error
-            message.
+        ValueError: `sampling` sets ``model``, ``messages`` or ``stream``.
+        urllib.error.HTTPError: The server refused the request; the message carries its short error message.
     """
     _refuse_reserved(sampling, ("model", "messages", "stream"))
     body = {"model": model, "messages": list(messages), **sampling, "stream": False}
     return _post_json(f"{url}/v1/chat/completions", body, timeout_s)
-
-
-_UNSAFE_HEADER_CHARS = ('"', "\r", "\n")
-
-
-def _form_value(name: str, value: Any) -> str:  # noqa: ANN401 — a scalar form value
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (str, int, float)):
-        return str(value)
-    raise TypeError(f"form field {name!r} must be a string, number or bool, not {type(value).__name__}")
-
-
-def transcribe(
-    url: str,
-    model: str,
-    audio_path: Union[str, Path],
-    *,
-    language: Optional[str] = None,
-    prompt: Optional[str] = None,
-    sampling: Mapping[str, Any],
-    timeout_s: float = REQUEST_TIMEOUT_S,
-) -> Any:  # noqa: ANN401 — a JSON value
-    """``POST /v1/audio/transcriptions`` with the audio file as multipart form data.
-
-    Args:
-        url: The server's base URL.
-        model: The served model name.
-        audio_path: The audio file. It is sent as ``audio<suffix>``, so its name never leaves the host.
-        language: The audio's language, sent only when given.
-        prompt: A prompt for the transcription, sent only when given.
-        sampling: Further scalar form fields (``temperature``, ``response_format``, ...); a bool is sent as
-            ``true``/``false``. The reply is parsed as JSON, so ``response_format`` must be a JSON one.
-        timeout_s: Seconds to wait for the reply.
-
-    Returns:
-        The parsed reply.
-
-    Raises:
-        ValueError: If ``sampling`` sets ``file``, ``model``, ``language`` or ``prompt``, or a field name or the
-            file's suffix holds a quote, CR or LF.
-        TypeError: If a ``sampling`` value is not a string, number or bool.
-        urllib.error.HTTPError: If the server refuses the request; the message carries the server's short error
-            message.
-    """
-    _refuse_reserved(sampling, ("file", "model", "language", "prompt"))
-    fields = {"model": model, "language": language, "prompt": prompt}
-    form = [(name, value) for name, value in fields.items() if value is not None]
-    form += [(name, _form_value(name, value)) for name, value in sampling.items()]
-    path = Path(audio_path)
-    filename = f"audio{path.suffix}"
-    for name, _ in form:
-        if any(char in name for char in _UNSAFE_HEADER_CHARS):
-            raise ValueError(f"field name {name!r} holds a quote, CR or LF, which a multipart header cannot carry")
-    if any(char in filename for char in _UNSAFE_HEADER_CHARS):
-        raise ValueError(
-            f"the suffix of {_path_label(path)} holds a quote, CR or LF, which a multipart header cannot carry"
-        )
-    boundary = uuid.uuid4().hex
-    chunks: list[bytes] = []
-    for name, value in form:
-        chunks.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
-    mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-    chunks.append(
-        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-        f"Content-Type: {mime}\r\n\r\n".encode()
-    )
-    chunks += [path.read_bytes(), f"\r\n--{boundary}--\r\n".encode()]
-    request = urllib.request.Request(
-        f"{url}/v1/audio/transcriptions",
-        data=b"".join(chunks),
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-        method="POST",
-    )
-    return _send(request, timeout_s)
 
 
 def complete(
@@ -692,8 +565,8 @@ def complete(
     *,
     sampling: Mapping[str, Any],
     timeout_s: float = REQUEST_TIMEOUT_S,
-) -> Any:  # noqa: ANN401 — a JSON value
-    """``POST /v1/completions`` with the prompt as token ids, not streamed.
+) -> Any:  # noqa: ANN401 - a JSON value
+    """``POST /v1/completions`` with the prompt as token ids, not streamed, and return the parsed reply.
 
     Args:
         url: The server's base URL.
@@ -702,14 +575,10 @@ def complete(
         sampling: Further request fields (``max_tokens``, ``temperature``, ``stop_token_ids``, ...).
         timeout_s: Seconds to wait for the reply.
 
-    Returns:
-        The parsed reply.
-
     Raises:
-        ValueError: If the prompt is empty or holds anything but non-negative ints, or ``sampling`` sets
-            ``model``, ``prompt`` or ``stream``.
-        urllib.error.HTTPError: If the server refuses the request; the message carries the server's short error
-            message.
+        ValueError: The prompt is empty or holds anything but non-negative ints, or `sampling` sets ``model``,
+            ``prompt`` or ``stream``.
+        urllib.error.HTTPError: The server refused the request; the message carries its short error message.
     """
     ids = list(prompt_token_ids)
     if not ids or not all(isinstance(i, int) and not isinstance(i, bool) and i >= 0 for i in ids):
