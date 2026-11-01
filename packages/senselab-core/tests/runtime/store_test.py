@@ -38,9 +38,10 @@ from senselab_core.runtime.store import (
     StoredResult,
     output_identity,
 )
-from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
+from senselab_worker.canonical import canonical_npy_bytes, canonical_scalar, jcs_dumps
 from senselab_worker.digest import identity_digest
 from senselab_worker.ownership import UUID_HEX
+from syscall_faults_fixture import fail_open, on_rename, refuse_fchmod, spy_open, substitute_once
 
 
 def _sha(data: bytes) -> str:
@@ -197,19 +198,18 @@ def test_four_writers_agree_on_every_key(tmp_path: Path) -> None:
 def test_losing_rename_returns_winner_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A writer whose rename meets a committed entry discards its staging and returns the winner's identity."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
-    winner = s.put(k, {"y": 1}, c)
-    assert [a.parameters["outcome"] for a in s.provenance.activities()] == ["committed"]
-    real = store_module._committed_identity
-    calls: list[Path] = []
+    committed: list[str] = []
 
-    def miss_first(entry: Path, *, digest: str, fingerprint: str) -> str | None:
-        calls.append(entry)
-        return None if len(calls) == 1 else real(entry, digest=digest, fingerprint=fingerprint)
+    def commit_first() -> str:
+        committed.append(s.put(k, {"y": 1}, c))
+        assert [a.parameters["outcome"] for a in s.provenance.activities()] == ["committed"]
+        return committed[0]
 
-    monkeypatch.setattr(store_module, "_committed_identity", miss_first)
+    fired = on_rename(monkeypatch, lambda old, new: new == c.fingerprint(), commit_first, after=False)
     loser = s.put(k, {"y": 2}, c)
     monkeypatch.undo()
-    assert len(calls) == 2
+    assert len(fired) == 1, "the loser reached its rename after the winner committed"
+    (winner,) = committed
     assert loser == winner
     assert [a.parameters["outcome"] for a in s.provenance.activities()] == ["committed", "existing"]
     assert len(_entries(tmp_path)) == 1
@@ -471,19 +471,14 @@ def test_store_refuses_lossy_outputs(tmp_path: Path, lossy: object) -> None:
 
 
 @pytest.mark.logic
-def test_store_scalars_go_through_the_one_canonical_encoder(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every scalar the store encodes passes through `canonical_scalar`; there is no second encoder."""
-    seen: list[object] = []
-    real = store_module.canonical_scalar
-
-    def spy(v: object) -> object:
-        seen.append(v)
-        return real(v)
-
-    monkeypatch.setattr(store_module, "canonical_scalar", spy)
+def test_store_scalars_go_through_the_one_canonical_encoder() -> None:
+    """Every scalar the store encodes is keyed as `canonical_scalar` encodes it; there is no second encoder."""
     scalars = [None, True, 1, 0.5, "s", numpy.int32(2), numpy.float32(0.25)]
-    output_identity({"xs": scalars, "y": numpy.ones(2, "<f4")})
-    assert [type(v) for v in seen] == [type(v) for v in scalars]
+    canonical = [canonical_scalar(v) for v in scalars]
+    y = numpy.ones(2, "<f4")
+    assert output_identity({"xs": scalars, "y": y}) == output_identity({"xs": canonical, "y": y})
+    for v, canon in zip(scalars, canonical):
+        assert output_identity({"x": v}) == output_identity({"x": canon}), v
 
 
 @pytest.mark.logic
@@ -667,20 +662,6 @@ def _jcs_value(key: LogicalKey) -> object:
     return json.loads(jcs_dumps(key.model_dump()))
 
 
-def _raising_once(err: OSError, name: str) -> Callable[..., bytes | None]:
-    """A `StorageDir.read_regular` that raises `err` the first time it reads `name`."""
-    real = storage_module.StorageDir.read_regular
-    state = {"raised": False}
-
-    def read_regular(self: storage_module.StorageDir, member: str, *, limit: int | None = None) -> bytes | None:
-        if member == name and not state["raised"]:
-            state["raised"] = True
-            raise err
-        return real(self, member, limit=limit)
-
-    return read_regular
-
-
 @pytest.mark.logic
 @pytest.mark.parametrize("member", ["context.json", "result.json", "npy"])
 @pytest.mark.parametrize("err", [errno.EACCES, errno.ESTALE, errno.EIO, errno.EMFILE])
@@ -693,7 +674,7 @@ def test_transient_error_never_quarantines(
     s.put(k, outputs, c)
     entry = _entry_dir(tmp_path, k, c)
     name = _only_npy_name(entry).name if member == "npy" else member
-    monkeypatch.setattr(storage_module.StorageDir, "read_regular", _raising_once(OSError(err, os.strerror(err)), name))
+    fail_open(monkeypatch, name, OSError(err, os.strerror(err)))
     with pytest.raises(StoreUnavailable) as caught:
         s.get(k, c, ReusePolicy.EXACT)
     assert caught.value.errno == err
@@ -709,9 +690,7 @@ def test_transient_error_in_put_never_quarantines(tmp_path: Path, monkeypatch: p
     """One transient read error leaves a healthy entry in place; a put that cannot read raises `StoreUnavailable`."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     ident = s.put(k, {"y": "healthy"}, c)
-    monkeypatch.setattr(
-        storage_module.StorageDir, "read_regular", _raising_once(OSError(err, os.strerror(err)), "result.json")
-    )
+    fail_open(monkeypatch, "result.json", OSError(err, os.strerror(err)))
     with pytest.raises(StoreUnavailable):
         s.put(k, {"y": "healthy"}, c)
     assert _entry_dir(tmp_path, k, c).is_dir()
@@ -724,28 +703,24 @@ def test_put_verifies_the_arrays_of_an_existing_entry(tmp_path: Path, monkeypatc
     """A put over a valid committed entry reads every member, its arrays included, before returning its identity."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     ident = s.put(k, {"y": numpy.ones(1000, "<f8"), "z": numpy.zeros(4, "<i4")}, c)
-    read: list[str] = []
-    real = storage_module.StorageDir.read_regular
-
-    def spy(self: storage_module.StorageDir, name: str, *, limit: int | None = None) -> bytes | None:
-        read.append(name)
-        return real(self, name, limit=limit)
-
-    monkeypatch.setattr(storage_module.StorageDir, "read_regular", spy)
+    opened = spy_open(monkeypatch)
     assert s.put(k, {"y": numpy.ones(1000, "<f8"), "z": numpy.zeros(4, "<i4")}, c) == ident
+    read = [n for n in opened if n.endswith((".json", ".npy"))]
     assert sorted(read)[-2:] == ["context.json", "result.json"] and len([n for n in read if n.endswith(".npy")]) == 2
 
 
 def _heal_during_quarantine(root: str, detected: MpEvent, go: MpEvent, out: "MpQueue[Any]") -> None:
     """Find the corrupt entry, then pause before moving it until the parent has healed the address."""
-    real = store_module.ResultStore._quarantine
+    real = os.lstat
+    fingerprint = _ctx().fingerprint()
 
-    def paused(self: ResultStore, entry: Path, *, digest: str, fingerprint: str) -> None:
-        detected.set()
-        assert go.wait(60)
-        real(self, entry, digest=digest, fingerprint=fingerprint)
+    def paused(name: Any, **kwargs: Any) -> os.stat_result:  # noqa: ANN401
+        if name == fingerprint and not detected.is_set():
+            detected.set()
+            assert go.wait(60)
+        return real(name, **kwargs)
 
-    store_module.ResultStore._quarantine = paused  # type: ignore[method-assign]
+    os.lstat = paused  # type: ignore[assignment]
     s = ResultStore(Path(root))
     s.get(_key(), _ctx(), ReusePolicy.EXACT)
     out.put([a.parameters for a in s.provenance.activities(node="store.quarantine")])
@@ -784,13 +759,12 @@ def test_quarantine_keeps_the_copy_when_the_address_was_retaken(
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     s.put(k, {"v": "v1"}, c)
     entry = _entry_dir(tmp_path, k, c)
-    real = store_module.ResultStore._verdict
-
-    def commit_meanwhile(moved: Path, is_dir: bool, *, digest: str, fingerprint: str) -> tuple[str, str]:
-        ResultStore(tmp_path).put(k, {"v": "v2"}, c)
-        return real(moved, is_dir, digest=digest, fingerprint=fingerprint)
-
-    monkeypatch.setattr(store_module.ResultStore, "_verdict", staticmethod(commit_meanwhile))
+    on_rename(
+        monkeypatch,
+        lambda old, new: old == entry.name,
+        lambda: ResultStore(tmp_path).put(k, {"v": "v2"}, c),
+        after=True,
+    )
     s._quarantine(entry, digest=k.digest(), fingerprint=c.fingerprint())
     (activity,) = s.provenance.activities(node="store.quarantine")
     assert activity.parameters["outcome"] == "superseded"
@@ -842,17 +816,11 @@ def test_an_entry_reported_corrupt_once_is_still_served_afterwards(
     """A healthy entry whose first context read reports corruption is not quarantined and is served next time."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     s.put(k, {"y": "healthy"}, c)
-    real = store_module._read_context
-    state = {"raised": False}
-
-    def once(*args: Any, **kwargs: Any) -> Any:
-        if not state["raised"]:
-            state["raised"] = True
-            raise CorruptEntryError("claimed corrupt while it was being healed")
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(store_module, "_read_context", once)
+    torn = tmp_path / "torn"
+    torn.write_bytes(b"torn while it was being healed")
+    substituted = substitute_once(monkeypatch, "context.json", torn)
     s.get(k, c, ReusePolicy.EXACT)
+    assert substituted == ["context.json"]
     got = s.get(k, c, ReusePolicy.EXACT)
     assert got is not None and got.outputs == {"y": "healthy"}
 
@@ -913,16 +881,7 @@ def test_stray_file_at_entry_is_corrupt_not_fatal(tmp_path: Path, stray: str) ->
 def test_enospc_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int) -> None:
     """Running out of space while staging is StorageFull; no entry and no staging directory remain."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
-    real = store_module._write_synced
-    calls = {"n": 0}
-
-    def full(*args: object) -> None:
-        calls["n"] += 1
-        if calls["n"] == 2:
-            raise OSError(err, os.strerror(err))
-        real(*args)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(store_module, "_write_synced", full)
+    fail_open(monkeypatch, "context.json", OSError(err, os.strerror(err)), creating=True)
     with pytest.raises(StorageFull) as caught:
         s.put(k, {"y": numpy.ones(3, "<f4")}, c)
     assert caught.value.errno == err and "space" in str(caught.value)
@@ -949,25 +908,21 @@ def test_a_file_at_the_quarantine_is_set_aside_and_the_quarantine_rebuilt(tmp_pa
 
 
 @pytest.mark.logic
-def test_unwritable_quarantine_never_raises_a_raw_permission_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+@pytest.mark.skipif(os.geteuid() == 0, reason="root opens a 0o000 directory")
+def test_unwritable_quarantine_never_raises_a_raw_permission_error(tmp_path: Path) -> None:
     """When the quarantine cannot be opened, the corrupt entry is set aside in place and the key stays usable."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     s.put(k, {"y": 1}, c)
     entry = _entry_dir(tmp_path, k, c)
     CORRUPTIONS["result_garbled"](entry)
-    real = storage_module.StorageDir.child
-
-    def child(self: storage_module.StorageDir, name: str, **kwargs: object) -> storage_module.StorageDir:
-        if name == QUARANTINE_DIR:
-            raise PermissionError(errno.EACCES, "Permission denied", name)
-        return real(self, name, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(storage_module.StorageDir, "child", child)
-    assert s.get(k, c, ReusePolicy.EXACT) is None
-    assert s.put(k, {"y": 2}, c) == output_identity({"y": 2})
-    got = s.get(k, c, ReusePolicy.EXACT)
+    quarantine = tmp_path / QUARANTINE_DIR
+    quarantine.mkdir(mode=0o000)
+    try:
+        assert s.get(k, c, ReusePolicy.EXACT) is None
+        assert s.put(k, {"y": 2}, c) == output_identity({"y": 2})
+        got = s.get(k, c, ReusePolicy.EXACT)
+    finally:
+        quarantine.chmod(0o700)
     assert got is not None and got.outputs == {"y": 2}
     (aside,) = [p for p in entry.parent.iterdir() if p != entry]
     assert UUID_HEX.fullmatch(aside.name)
@@ -975,15 +930,7 @@ def test_unwritable_quarantine_never_raises_a_raw_permission_error(
 
 def _refuse_chmod_on(monkeypatch: pytest.MonkeyPatch, target: Path) -> None:
     """Refuse chmod on `target` (matched by inode) with EPERM, as for an entry another user owns."""
-    real = storage_module.set_mode
-    inode = os.lstat(target).st_ino
-
-    def set_mode(fd: int, mode: int) -> None:
-        if os.fstat(fd).st_ino == inode:
-            raise PermissionError(errno.EPERM, "Operation not permitted", str(target))
-        real(fd, mode)
-
-    monkeypatch.setattr(storage_module, "set_mode", set_mode)
+    refuse_fchmod(monkeypatch, os.lstat(target).st_ino)
 
 
 @pytest.mark.logic
@@ -1048,11 +995,10 @@ def test_entry_set_aside_in_place_is_collected(tmp_path: Path, monkeypatch: pyte
     entry = _entry_dir(tmp_path, k, c)
     CORRUPTIONS["result_garbled"](entry)
     _seal_entry(entry)
-    real_set_mode = storage_module.set_mode
     _refuse_chmod_on(monkeypatch, entry)
     s.put(k, {"y": 2}, c)
     (aside,) = [p for p in entry.parent.iterdir() if p != entry]
-    monkeypatch.setattr(storage_module, "set_mode", real_set_mode)
+    monkeypatch.undo()
     assert s.collect(now=time.time() + s.policy.quarantine_retention_s + 1) == 1
     assert [p.name for p in entry.parent.iterdir()] == [entry.name]
 
@@ -1172,16 +1118,7 @@ def test_stray_file_at_entry_does_not_block_put(tmp_path: Path, stray: str) -> N
 def test_enospc_mid_entry_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """ENOSPC on the second staged file is `StorageFull`, with nothing left behind."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
-    real = store_module._write_synced
-    calls = {"n": 0}
-
-    def boom(*args: object) -> None:
-        calls["n"] += 1
-        if calls["n"] == 2:
-            raise OSError(errno.ENOSPC, "No space left on device")
-        real(*args)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(store_module, "_write_synced", boom)
+    fail_open(monkeypatch, "result.json", OSError(errno.ENOSPC, "No space left on device"), creating=True)
     with pytest.raises(StorageFull):
         s.put(k, {"a": "x"}, c)
     assert _entries(tmp_path) == [] and list((tmp_path / "tmp").iterdir()) == []

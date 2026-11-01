@@ -8,6 +8,7 @@ import errno
 import os
 import stat
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -43,16 +44,60 @@ def fail_open(
 
 
 def spy_open(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Record the last path component of every `os.open`; return the list they are appended to."""
+    """Record the last path component of every `os.open` that does not create; return the list they go to."""
     real = os.open
     names: list[str] = []
 
     def opened(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:  # noqa: ANN401
-        names.append(os.path.basename(os.fsdecode(path)))
+        if not flags & os.O_CREAT:
+            names.append(os.path.basename(os.fsdecode(path)))
         return real(path, flags, *args, **kwargs)
 
     monkeypatch.setattr(os, "open", opened)
     return names
+
+
+def substitute_once(monkeypatch: pytest.MonkeyPatch, name: str, replacement: Path) -> list[str]:
+    """Make the first `os.open` of `name` (last path component) open `replacement` instead, as a torn read would.
+
+    Returns the list the substituted name is appended to.
+    """
+    real = os.open
+    done: list[str] = []
+
+    def opened(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:  # noqa: ANN401
+        if not done and os.path.basename(os.fsdecode(path)) == name:
+            done.append(name)
+            return real(replacement, flags)
+        return real(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", opened)
+    return done
+
+
+def on_rename(
+    monkeypatch: pytest.MonkeyPatch, matches: Callable[[str, str], bool], action: Callable[[], object], *, after: bool
+) -> list[object]:
+    """Run `action` once, just before (or just `after`) the first `os.rename(old, new)` that `matches`.
+
+    `matches` gets the last path components of `old` and `new`. Renames made by `action` itself pass
+    through unchanged. Returns the list `action`'s result is put in.
+    """
+    real = os.rename
+    results: list[object] = []
+
+    def rename(old: Any, new: Any, **dir_fds: Any) -> None:  # noqa: ANN401
+        fire = not results and matches(os.path.basename(os.fsdecode(old)), os.path.basename(os.fsdecode(new)))
+        if fire and not after:
+            results.append(None)
+            results[0] = action()
+        real(old, new, **dir_fds)
+        if fire and after:
+            results.append(None)
+            results[0] = action()
+
+    monkeypatch.setattr(os, "rename", rename)
+    return results
 
 
 def fail_fsync(monkeypatch: pytest.MonkeyPatch, when: Callable[[os.stat_result], bool], err: OSError) -> list[int]:
