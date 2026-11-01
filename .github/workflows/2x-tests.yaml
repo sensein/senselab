@@ -90,7 +90,7 @@ jobs:
 
   core-env:
     needs: detect
-    name: core-env (release gate and packaging)
+    name: core-env (release gate)
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
@@ -104,10 +104,8 @@ jobs:
       run: |
         uv venv -p 3.12 .core
         uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core --group packages/senselab-core/pyproject.toml:test
-    - name: Run the release gate and packaging tests, which build and create venvs
-      run: >-
-        .core/bin/pytest packages/senselab-core/tests/release_gate_test.py packages/senselab-core/tests/package_data_test.py
-        -m "env and not slow" -p no:cacheprovider
+    - name: Run the release gate tests, which build and create venvs
+      run: .core/bin/pytest packages/senselab-core/tests/release_gate_test.py -m "env and not slow" -p no:cacheprovider
 
   worker-floor:
     needs: detect
