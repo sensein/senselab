@@ -13,10 +13,21 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
 
+from senselab_worker.canonical import jcs_dumps
+
 from senselab_core.kernel import prov as kprov
-from senselab_core.kernel.formats import LABELS_FORMAT, PROVENANCE_FORMAT, readable
+from senselab_core.kernel.formats import LABELS_FORMAT, readable
 from senselab_core.runtime.locks import Lease
-from senselab_core.runtime.provenance import PROV_DIR, WRITER_DOCUMENT, ProvStore, pathless
+from senselab_core.runtime.provenance import (
+    FILE_LABEL,
+    PROV_DIR,
+    ConflictingNode,
+    DanglingReference,
+    MalformedDocument,
+    ProvenanceFormatRefused,
+    ProvStore,
+    pathless,
+)
 from senselab_core.runtime.storage import PRIVATE_DIR_MODE, StorageDir, write_atomically
 from senselab_core.runtime.vocabulary import core_vocabulary
 
@@ -26,8 +37,6 @@ LABELS_NAME = "labels@1.json"
 """The label map's file name in `<run>/private/`."""
 LABELS_MODE = 0o600
 """The mode of the label map and of its lease."""
-FILE_LABEL = re.compile(r"file-[1-9][0-9]*")
-"""A file's label: `file-` and its number in the run."""
 _LABELS_FILE = re.compile(re.escape(LABELS_NAME))
 _ENTITY_ID = re.compile(r"(content|output):[0-9a-f]{64}")
 _KINDS = {"prov:Entity", "prov:Activity", "prov:Agent"}
@@ -98,7 +107,7 @@ class LabelMap:
         for address, _ in items:
             if not _ENTITY_ID.fullmatch(address):
                 raise ValueError("a file's address is a content: or output: address")
-        return pathless(lambda: self._assign(items))
+        return pathless("assigning file labels", lambda: self._assign(items))
 
     def _assign(self, items: list[tuple[str, str]]) -> list[str]:
         with (
@@ -137,7 +146,7 @@ class LabelMap:
             except FileNotFoundError:
                 return {}
 
-        return pathless(read)
+        return pathless("reading the label map", read)
 
     def entities(
         self, files: Iterable[tuple[str, str]], vocabulary: kprov.Vocabulary | None = None
@@ -163,121 +172,114 @@ def file_entity(address: str, label: str, vocabulary: kprov.Vocabulary | None = 
     )
 
 
+_VALIDATION_ERRORS = (MalformedDocument, ConflictingNode, DanglingReference, ProvenanceFormatRefused)
+_WHOLE_DOCUMENT = "0" * 32 + ".jsonld"
+_TOKENS = re.compile(r"[/\\\s\"',;=]+")
+_SUBJECT = re.compile(r"(?<![A-Za-z0-9])(?:sub|ses)-[A-Za-z0-9]+")
+_LAYOUT_NAME = "prov-{writer}_all.jsonld"
+
+
+def layout_name(writer_document: str) -> str:
+    """Return the BEP028 name of a run's document `<writer>.jsonld`: `prov-<writer>_all.jsonld`, in `prov/`."""
+    return _LAYOUT_NAME.format(writer=writer_document.removesuffix(".jsonld"))
+
+
 def check_profile(doc: Mapping[str, object]) -> list[str]:
-    """Return the ways `doc`, a `provenance@3` document, does not meet the BEP028 profile; none when it does.
+    """Return the ways `doc`, a `provenance@3` document, leaves the profile; none when it conforms.
 
-    The profile: the published `@context` and a readable `format`; every graph node has a unique `@id` of the
-    address grammar and a PROV class as `@type`; an activity's end has its start and is not before it; every
-    `prov:used`, `prov:generated` and `prov:wasAssociatedWith` target is a node of the graph; a file label is
-    `file-<n>` and names one node. Messages name node ids (addresses) and terms, never a value.
+    `doc` is validated as `ProvStore.from_documents` validates a writer's document. On top of that: an activity's
+    end has a start and is not before it, and a `senselab:fileLabel` names one node.
     """
-    problems: list[str] = []
-    if doc.get("@context") != kprov.CONTEXT_URL:
-        problems.append(f"@context is not {kprov.CONTEXT_URL}")
-    if not readable(PROVENANCE_FORMAT, doc.get("format")):
-        problems.append(f"format is not {PROVENANCE_FORMAT}")
-    graph = doc.get("@graph")
-    nodes = [n for n in graph if isinstance(n, dict)] if isinstance(graph, list) else []
-    if not isinstance(graph, list) or len(nodes) != len(graph):
-        return [*problems, "@graph is not a list of nodes"]
-    ids = [n.get("@id") for n in nodes]
-    known = {i for i in ids if isinstance(i, str) and kprov.NODE_ID.fullmatch(i)}
-    labels: dict[str, str] = {}
-    for index, node in enumerate(nodes):
-        node_id = node.get("@id")
-        name = node_id if node_id in known else f"node {index}"
-        if node_id not in known:
-            problems.append(f"{name} has no @id of the address grammar")
-        elif ids.count(node_id) > 1:
-            problems.append(f"{name} is not the only node with its @id")
-        problems += _node_problems(name, node, known, labels)
-    return problems
-
-
-def _node_problems(name: str, node: Mapping[str, object], known: set[str], labels: dict[str, str]) -> list[str]:
-    problems = []
-    kinds = node.get("@type")
-    if not isinstance(kinds, list) or not _KINDS.intersection(kinds):
-        problems.append(f"{name} is not a prov:Entity, prov:Activity or prov:Agent")
-    elif "prov:Activity" in kinds:
-        problems += _activity_problems(name, node, known)
-    label = node.get("senselab:fileLabel")
-    if label is not None:
-        if not (isinstance(label, str) and FILE_LABEL.fullmatch(label)):
-            problems.append(f"{name} has a senselab:fileLabel that is not file-<n>")
-        elif labels.setdefault(label, name) != name:
-            problems.append(f"{name} has a senselab:fileLabel another node has")
-    return problems
-
-
-def _activity_problems(name: str, node: Mapping[str, object], known: set[str]) -> list[str]:
-    problems = []
-    start, end = node.get("prov:startedAtTime"), node.get("prov:endedAtTime")
-    if end is not None and start is None:
-        problems.append(f"{name} ends and never starts")
-    elif start is not None and end is not None and (_time(end) or datetime.max) < (_time(start) or datetime.min):
-        problems.append(f"{name} ends before it starts")
-    for term in ("prov:used", "prov:generated", "prov:wasAssociatedWith"):
-        refs = node.get(term, [])
-        targets = [r.get("@id") for r in refs if isinstance(r, dict)] if isinstance(refs, list) else [None]
-        if any(t not in known for t in targets):
-            problems.append(f"{name} has a {term} that is not a node of the document")
-    return problems
-
-
-def _time(literal: object) -> datetime | None:
     try:
-        value = kprov.literal_value(literal)
+        store = ProvStore.from_documents({_WHOLE_DOCUMENT: jcs_dumps(dict(doc))})
+    except _VALIDATION_ERRORS as err:
+        return [str(err)]
     except ValueError:
-        return None
-    return value if isinstance(value, datetime) else None
+        return ["the document has no canonical JSON form"]
+    problems: list[str] = []
+    labels: dict[str, str] = {}
+    for record in store.records():
+        node = record.node()
+        if "prov:Activity" in record.types():
+            problems += _time_problems(record.id, node)
+        label = node.get("senselab:fileLabel")
+        if isinstance(label, str) and labels.setdefault(label, record.id) != record.id:
+            problems.append(f"{record.id} has a senselab:fileLabel another node has")
+    return problems
 
 
-def export(run: str | Path, dest: str | Path, vocabulary: kprov.Vocabulary | None = None) -> list[Path]:
-    """Copy a run's provenance documents to `<dest>/prov/` and return the copies; the private directory is never read.
+def _time_problems(name: str, node: Mapping[str, object]) -> list[str]:
+    start, end = node.get("prov:startedAtTime"), node.get("prov:endedAtTime")
+    if end is None:
+        return []
+    if start is None:
+        return [f"{name} ends and never starts"]
+    began, ended = kprov.literal_value(start), kprov.literal_value(end)
+    if isinstance(began, datetime) and isinstance(ended, datetime) and ended < began:
+        return [f"{name} ends before it starts"]
+    return []
 
-    The run's provenance is read over `vocabulary` (the core vocabulary when None) and must meet
-    `check_profile`; no string of any document may contain a path of the run's label map.
 
-    Raises:
-        ProfileViolation: a profile violation, or a document that holds a path of the label map; nothing is copied.
-        ProvenanceFormatRefused, MalformedDocument, ConflictingNode, DanglingReference: as `ProvStore.read`.
-        RunIOError: a document cannot be read or copied; the error names no path.
-    """
-    source = Path(run) / PROV_DIR
-    store = ProvStore.read(run, vocabulary)
-    problems = check_profile(store.document())
-    documents = pathless(
-        lambda: (
-            {p.name: p.read_bytes() for p in sorted(source.iterdir()) if WRITER_DOCUMENT.fullmatch(p.name)}
-            if source.is_dir()
-            else {}
-        )
-    )
-    paths = {path for group in LabelMap(run).paths().values() for path in group if path}
-    for data in documents.values():
-        if any(path in text for text in _strings(json.loads(data)) for path in paths):
-            problems.append("a document holds a path of the run's label map")
-            break
-    if problems:
-        raise ProfileViolation(problems)
-    target = Path(dest) / PROV_DIR
-
-    def copy() -> list[Path]:
-        target.mkdir(parents=True, exist_ok=True)
-        for name, data in documents.items():
-            write_atomically(target / name, data, mode=0o644)
-        return [target / name for name in documents]
-
-    return pathless(copy)
+def _needles(paths: Iterable[str]) -> set[str]:
+    """Return every segment of each path, and each basename's stem: what identifies a file or a participant."""
+    out: set[str] = set()
+    for path in paths:
+        segments = [t for t in _TOKENS.split(path) if t not in ("", ".", "..")]
+        out.update(segments)
+        if segments:
+            out.add(Path(segments[-1]).stem)
+    return out - {""}
 
 
 def _strings(value: object) -> Iterable[str]:
+    """Yield every string of a parsed JSON value: its values and its object keys."""
     if isinstance(value, str):
         yield value
     elif isinstance(value, list):
         for item in value:
             yield from _strings(item)
     elif isinstance(value, dict):
-        for item in value.values():
+        for key, item in value.items():
+            yield key
             yield from _strings(item)
+
+
+def _leaks(documents: Iterable[bytes], paths: set[str]) -> bool:
+    """Whether a string of a document names a segment or stem of `paths` however spelt, or a BIDS subject."""
+    needles = _needles(paths)
+    for data in documents:
+        for text in _strings(json.loads(data)):
+            if _SUBJECT.search(text) or needles.intersection(_TOKENS.split(text)):
+                return True
+    return False
+
+
+def export(run: str | Path, dest: str | Path, vocabulary: kprov.Vocabulary | None = None) -> list[Path]:
+    """Copy a run's provenance documents to `<dest>/prov/prov-<writer>_all.jsonld` and return the copies.
+
+    The documents are read once; the bytes validated, profile-checked and scanned are the bytes copied. The run's
+    private directory is never copied. A document may not name any segment or stem of a path in the run's label
+    map, however spelt (`./`, `//`, backslashes), nor a BIDS `sub-`/`ses-` label.
+
+    Raises:
+        ProfileViolation: a profile violation or a leak; nothing is copied.
+        ProvenanceFormatRefused, MalformedDocument, ConflictingNode, DanglingReference: as `ProvStore.from_documents`.
+        RunIOError: the label map or a copy cannot be read or written; the error names no path.
+    """
+    documents = ProvStore.read_documents(run)
+    problems = check_profile(ProvStore.from_documents(documents, vocabulary).document())
+    if _leaks(documents.values(), {p for group in LabelMap(run).paths().values() for p in group}):
+        problems.append("a document names a path of the run's label map, or a BIDS subject")
+    if problems:
+        raise ProfileViolation(problems)
+    target = Path(dest) / PROV_DIR
+
+    def copy() -> list[Path]:
+        target.mkdir(parents=True, exist_ok=True)
+        copies = []
+        for name, data in documents.items():
+            write_atomically(target / layout_name(name), data, mode=0o644)
+            copies.append(target / layout_name(name))
+        return copies
+
+    return pathless("exporting the provenance documents", copy)

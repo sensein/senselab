@@ -567,11 +567,6 @@ class ResultStore:
         self._equivalence = equivalence
         self._last_collect: float | None = None
 
-    def _warn(self, message: str, *args: object) -> None:
-        """Log a warning whose arguments name store locations below the root, never the root itself."""
-        root = str(self.root)
-        logger.warning(message, *(str(a).replace(root + os.sep, "").replace(root, "<store>") for a in args))
-
     @property
     def equivalence(self) -> Equivalence:
         """The measured equivalence classes this store's `equivalent` reuse admits."""
@@ -589,7 +584,7 @@ class ResultStore:
         try:
             return root.walk(QUARANTINE_DIR, create=True, mode=shared_dir_mode(self.policy), aside=lambda: None)
         except (OSError, WrongKindError) as err:
-            self._warn("cannot open the quarantine of store %s: %s", self.root, err)
+            logger.warning("cannot open the quarantine of store %s: %s", self.root, err)
             return None
 
     def _ensure(self, root: StorageDir, *parts: str) -> StorageDir:
@@ -686,17 +681,17 @@ class ResultStore:
             try:
                 target.stamp(moved_name)
             except OSError as err:
-                self._warn("cannot stamp quarantined entry %s: %s", moved, err)
+                logger.warning("cannot stamp quarantined entry %s: %s", moved, err)
             verdict, reason = self._verdict(moved, is_dir, digest=digest, fingerprint=fingerprint)
             outcome = "quarantined" if into is not None else "set aside in place"
             if verdict != "corrupt":
                 outcome = self._restore(target, moved_name, parent, name)
             elif into is None:
-                self._warn("corrupt store entry set aside at %s; %s", moved, owner_remedy(moved))
+                logger.warning("corrupt store entry set aside at %s; %s", moved, owner_remedy(moved))
         finally:
             if into is not None:
                 into.close()
-        self._warn("store entry %s %s (%s): %s", entry, outcome, verdict, reason)
+        logger.warning("store entry %s %s (%s): %s", entry, outcome, verdict, reason)
 
     def _aside(self, root: StorageDir, parent: StorageDir, name: str, is_dir: bool) -> StorageDir | None:
         """Return the quarantine if `name` can be moved there, None to set it aside beside itself."""
@@ -707,7 +702,7 @@ class ResultStore:
             with parent.child(name) as entry:
                 entry.set_mode(STAGING_DIR_MODE)
         except (OSError, WrongKindError) as err:
-            self._warn("cannot move %s into the quarantine, setting it aside in place: %s", parent.path / name, err)
+            logger.warning("cannot move %s into the quarantine, setting it aside in place: %s", parent.path / name, err)
             quarantine.close()
             return None
         return quarantine
@@ -744,7 +739,7 @@ class ResultStore:
         try:
             self._quarantine(entry, digest=digest, fingerprint=fingerprint)
         except (StoreUnavailable, WrongKindError) as err:
-            self._warn("cannot quarantine store entry %s, skipping it: %s", entry, err)
+            logger.warning("cannot quarantine store entry %s, skipping it: %s", entry, err)
 
     def _collect_due(self) -> None:
         """Run `collect` if this store has not collected within `policy.collect_interval_s` (monotonic)."""
@@ -758,7 +753,7 @@ class ResultStore:
         try:
             info = parent.lstat(name)
         except OSError as err:
-            self._warn("cannot examine store entry %s: %s", parent.path / name, err)
+            logger.warning("cannot examine store entry %s: %s", parent.path / name, err)
             return
         if info is not None and info.st_mode & 0o222:
             _seal(parent, name, committed_modes(self.policy)[1])
@@ -776,14 +771,14 @@ class ResultStore:
             root = self._open_root(create=False)
         except OSError as err:
             if not isinstance(err, FileNotFoundError):
-                self._warn("cannot open store %s; not collecting: %s", self.root, err)
+                logger.warning("cannot open store %s; not collecting: %s", self.root, err)
             return 0
         with root:
             if now is None:
                 try:
                     now = root.fs_now()
                 except (OSError, WrongKindError) as err:
-                    self._warn("cannot read the clock of store %s; not collecting: %s", self.root, err)
+                    logger.warning("cannot read the clock of store %s; not collecting: %s", self.root, err)
                     return 0
             aside = now - self.policy.quarantine_retention_s
             removed = root.remove_older(aside)
@@ -904,7 +899,7 @@ class ResultStore:
             except FileNotFoundError:
                 return None
             except WrongKindError as err:
-                self._warn("cannot set aside %s, so key %s... is not served: %s", err.path, d[:12], err)
+                logger.warning("cannot set aside %s, so key %s... is not served: %s", err.path, d[:12], err)
                 return None
             except OSError as err:
                 raise storage_fault(err, self._entry(key)) from err

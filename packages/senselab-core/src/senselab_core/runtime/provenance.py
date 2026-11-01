@@ -9,6 +9,7 @@ another provenance format is refused (`ProvenanceFormatRefused`).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import uuid
@@ -25,9 +26,12 @@ from senselab_core.runtime.locks import LeaseUnavailable
 from senselab_core.runtime.storage import TEMPORARY_NAME, WrongKindError, write_atomically
 from senselab_core.runtime.vocabulary import core_vocabulary
 
+logger = logging.getLogger("senselab")
 T = TypeVar("T")
 WRITER_DOCUMENT = re.compile(r"[0-9a-f]{32}\.jsonld")
 """A writer's document in `<run>/prov/`: its writer uuid4 hex, `.jsonld`."""
+FILE_LABEL = re.compile(r"file-[1-9][0-9]*")
+"""A file's label, `senselab:fileLabel`: `file-` and its number in the run; never a path or a file name."""
 PROV_DIR = "prov"
 """The run subdirectory that holds the writers' documents."""
 MIGRATION_STATEMENT = "specs/20261030-140022-senselab-2x-api/migration-ledger.md#retired-provenance-formats"
@@ -118,8 +122,10 @@ class RunIOError(OSError):
         super().__init__(code, os.strerror(code) if code else type(cause).__name__)
 
 
-def pathless(operation: Callable[[], T]) -> T:
+def pathless(name: str, operation: Callable[[], T]) -> T:
     """Return `operation()`, raising a `RunIOError` in place of any OS, lease or wrong-kind error.
+
+    The original error, which may name a path, is logged for the operator as a warning naming `name`.
 
     Raises:
         RunIOError: if `operation` raised one of those; it carries the errno text only, with no cause or context.
@@ -127,6 +133,7 @@ def pathless(operation: Callable[[], T]) -> T:
     try:
         return operation()
     except (OSError, WrongKindError, LeaseUnavailable) as err:
+        logger.warning("%s failed: %s", name, err)
         raise RunIOError(err) from None
 
 
@@ -164,9 +171,12 @@ class ProvStore:
 
         Raises:
             ConflictingNode: if a record differs from the one held, or another one given, under its `@id`.
+            ValueError: if a record's `senselab:fileLabel` or `senselab:modelSource` is one the boundary refuses.
         """
         added: dict[str, kprov.Record] = {}
         for r in (r for record in records for r in (record, *record.files)):
+            if (problem := _boundary_problem(r)) is not None:
+                raise ValueError(problem)
             held = self._records.get(r.id) or added.setdefault(r.id, r)
             if held.jcs != r.jcs:
                 raise ConflictingNode(r.id)
@@ -238,7 +248,7 @@ class ProvStore:
             directory.mkdir(exist_ok=True)
             write_atomically(directory / f"{self.writer}.jsonld", data)
 
-        pathless(write)
+        pathless("writing the provenance document", write)
 
     @classmethod
     def read(cls, run: str | Path, vocabulary: kprov.Vocabulary | None = None) -> ProvStore:
@@ -252,27 +262,57 @@ class ProvStore:
         Raises:
             ProvenanceFormatRefused: on a file in `prov/` whose first line declares a format other than `provenance@3`.
             MalformedDocument: on a file in `prov/` that is not a writer's document or cannot be read, a document
-                of another shape, a node that differs from its rebuild, or attribute references nested deeper than
-                `MAX_DEPTH`.
+                of another shape, a node that differs from its rebuild, a `senselab:fileLabel` that is not
+                `file-<n>`, a local path as `senselab:modelSource`, or attribute references nested too deep.
+            ConflictingNode: if two writers hold different nodes under one `@id`.
+            DanglingReference: if a node names an `@id` the union does not hold.
+        """
+        return cls.from_documents(cls.read_documents(run), vocabulary)
+
+    @staticmethod
+    def read_documents(run: str | Path) -> dict[str, bytes]:
+        """Return `{file name: bytes}` of every document in `<run>/prov/`, temporaries of an interrupted write skipped.
+
+        Raises:
+            MalformedDocument: `prov/` cannot be listed, holds an entry that is not a regular file, or a file that
+                cannot be read; the message names an error class, never a path.
+        """
+        directory = Path(run) / PROV_DIR
+        documents: dict[str, bytes] = {}
+        try:
+            for path in sorted(directory.iterdir()) if directory.is_dir() else []:
+                if TEMPORARY_NAME.fullmatch(path.name):
+                    continue
+                if not path.is_file() or path.is_symlink():
+                    raise MalformedDocument(None, f"{PROV_DIR}/ holds an entry that is not a regular file")
+                writer = path.name.removesuffix(".jsonld") if WRITER_DOCUMENT.fullmatch(path.name) else None
+                try:
+                    documents[path.name] = path.read_bytes()
+                except OSError as err:
+                    raise MalformedDocument(writer, f"the document cannot be read ({type(err).__name__})") from None
+        except OSError as err:
+            raise MalformedDocument(None, f"{PROV_DIR}/ cannot be read ({type(err).__name__})") from None
+        return documents
+
+    @classmethod
+    def from_documents(cls, documents: Mapping[str, bytes], vocabulary: kprov.Vocabulary | None = None) -> ProvStore:
+        """Return the union of `documents` (`read_documents`' result), every node rebuilt over `vocabulary`.
+
+        Each node is rebuilt through the record builders over `vocabulary` (the core vocabulary when None) and
+        must be byte-identical to its rebuild, so its `@id`, terms and literals are all checked. Every relation
+        endpoint and every record an attribute names must be a node of the union.
+
+        Raises:
+            ProvenanceFormatRefused: on a document whose first line declares a format other than `provenance@3`.
+            MalformedDocument: on a file that is not a writer's document, a document of another shape, a node
+                that differs from its rebuild, a `senselab:fileLabel` that is not `file-<n>`, or attribute
+                references nested deeper than `MAX_DEPTH`.
             ConflictingNode: if two writers hold different nodes under one `@id`.
             DanglingReference: if a node names an `@id` the union does not hold.
         """
         nodes: dict[str, tuple[bytes, str]] = {}
-        directory = Path(run) / PROV_DIR
-        try:
-            listing = sorted(directory.iterdir()) if directory.is_dir() else []
-        except OSError as err:
-            raise MalformedDocument(None, f"{PROV_DIR}/ cannot be listed ({type(err).__name__})") from None
-        for path in listing:
-            if TEMPORARY_NAME.fullmatch(path.name):
-                continue
-            if not path.is_file() or path.is_symlink():
-                raise MalformedDocument(None, f"{PROV_DIR}/ holds an entry that is not a regular file")
-            writer = path.name.removesuffix(".jsonld") if WRITER_DOCUMENT.fullmatch(path.name) else None
-            try:
-                data = path.read_bytes()
-            except OSError as err:
-                raise MalformedDocument(writer, f"the document cannot be read ({type(err).__name__})") from None
+        for name, data in sorted(documents.items()):
+            writer = name.removesuffix(".jsonld") if WRITER_DOCUMENT.fullmatch(name) else None
             found = _declared_format(data)
             if found is not None and not readable(PROVENANCE_FORMAT, found):
                 raise ProvenanceFormatRefused(found)
@@ -282,6 +322,20 @@ class ProvStore:
                 if nodes.setdefault(node_id, (raw, writer))[0] != raw:
                     raise ConflictingNode(node_id)
         return cls(_Rebuild(nodes, vocabulary or core_vocabulary()).all())
+
+
+_LOCAL_PATH = re.compile(r"^(/|~|\.\.?/|[A-Za-z]:[\\/])|\\")
+
+
+def _boundary_problem(record: kprov.Record) -> str | None:
+    """Name what in `record` could carry a path: a bad `senselab:fileLabel` or a local `senselab:modelSource`."""
+    node = record.node()
+    label, source = node.get("senselab:fileLabel"), node.get("senselab:modelSource")
+    if label is not None and not (isinstance(label, str) and FILE_LABEL.fullmatch(label)):
+        return "a senselab:fileLabel is file-<n>"
+    if isinstance(source, str) and _LOCAL_PATH.search(source):
+        return "a senselab:modelSource is a source kind and an identity, never a local path"
+    return None
 
 
 def _declared_format(data: bytes) -> str | None:
@@ -361,6 +415,12 @@ class _Rebuild:
         return rebuilt
 
     def build(self, node_id: str, node: dict[str, Any]) -> kprov.Record:
+        record = self.make(node_id, node)
+        if (problem := _boundary_problem(record)) is not None:
+            raise MalformedDocument(self.nodes[node_id][1], f"{node_id}: {problem}")
+        return record
+
+    def make(self, node_id: str, node: dict[str, Any]) -> kprov.Record:
         kind = node_id.partition(":")[0]
         types = node["@type"]
         if kind == "activity":
