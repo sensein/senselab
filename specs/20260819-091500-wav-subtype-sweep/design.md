@@ -322,3 +322,25 @@ scope — only a literal is a decision made at that site.
 
 The generic marshaller in `utils/subprocess_venv.py` had already been moved to `.wav` in
 the same change; two docstrings still advertised `.flac` and now do not.
+
+## Byte-identical writes: libsndfile's PEAK chunk carried the clock
+
+`src/tests/utils/portable_audio_io_test.py::test_audio_and_the_shim_make_the_same_decision[in-range wav-0.9-test.wav-None-raise]`
+failed once on Linux at c9d00faf (files differ at byte 60: `0xe6` against `0xe7`) and passed at 7d20b482 and
+366f3e59. The input is deterministic (a float32 sine) and both writers go through `write_audio`, so no sample
+rounding could differ. The cause was the container: for a `FLOAT`/`DOUBLE` write to WAV, WAVEX or AIFF, libsndfile
+1.2.2 adds a PEAK chunk whose `dwTimeStamp` is the write's Unix time in seconds. In a mono FLOAT WAV the chunk
+starts at byte 48 and the timestamp occupies bytes 60-63, so two writes that straddle a second boundary differ by
+one in byte 60. Measured locally: writing every format/subtype libsndfile offers twice, one second apart,
+changed bytes in WAV, WAVEX and AIFF float writes (PEAK), and in MAT5, SVX, MPC2K (a creation time in the header)
+and OGG (a random stream serial).
+
+`write_audio` now issues `SFC_SET_ADD_PEAK_CHUNK` off for float writes to WAV, WAVEX and AIFF before the first
+frame. The PEAK chunk is optional metadata (a cached peak value); no reader in senselab uses it. The command is
+not issued for other containers: on RF64 libsndfile 1.2.2 *adds* a PEAK chunk when the command is sent, though a
+default RF64 write has none. MAT5, SVX, MPC2K and OGG keep their clock or serial, which libsndfile writes
+unconditionally; they are named in the contract and excluded from it.
+
+Tests: `test_a_write_straddling_a_second_boundary_is_byte_identical` (the regression, writing across a second
+boundary) and `test_every_libsndfile_container_writes_bytes_that_do_not_depend_on_the_clock` (every other
+format/subtype libsndfile can write, across a second boundary), both in `portable_audio_io_test.py`.

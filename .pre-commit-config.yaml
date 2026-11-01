@@ -1,8 +1,9 @@
 fail_fast: false
+# src/ is the 1.x source pool: frozen, and not checked on the 2.x line.
+exclude: ^src/
 
 repos:
-- repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.14.5
+- repo: local
   hooks:
   # Spec trees hold design notes plus the one-off scripts that reproduce a finding. Those scripts are
   # evidence -- several deliberately contain the defective pattern they demonstrate -- so linting
@@ -10,41 +11,109 @@ repos:
   # record of what was measured. Excluded here rather than in pyproject's ruff config, because
   # pyproject describes the package and `specs/` is not part of it (it is not in the wheel, and as
   # of this change not in the sdist either). The mypy hook below excludes the same trees.
+  # Both hooks run the ruff that uv.lock pins, so the hook and `uv run ruff` are one version.
   - id: ruff
+    name: ruff check (locked)
+    entry: uv run --frozen --no-sync ruff check --force-exclude
+    language: system
+    types_or: [python, pyi, jupyter]
+    require_serial: true
     exclude: ^specs/
   - id: ruff-format
+    name: ruff format (locked)
+    entry: uv run --frozen --no-sync ruff format --force-exclude
+    language: system
+    types_or: [python, pyi, jupyter]
+    require_serial: true
     exclude: ^specs/
 
+- repo: local
+  hooks:
+  # Strict on every module under packages/, run by the locked mypy so the hook and `uv run mypy` are one version
+  # and see the same numpy, hypothesis and huggingface_hub stubs. `--platform linux` makes the result the same on
+  # a macOS checkout and on CI. `packages/conftest.py` and `packages/senselab-core/tests/runtime/conftest.py` are
+  # both top-level `conftest` modules to mypy, which refuses a duplicate module name.
+  - id: mypy-strict
+    name: mypy --strict (packages, locked)
+    entry: uv run --frozen --no-sync mypy --strict --platform linux --ignore-missing-imports --extra-checks
+    language: system
+    files: ^packages/.*\.py$
+    exclude: ^packages/conftest\.py$
+    require_serial: true
 - repo: https://github.com/pre-commit/mirrors-mypy
   rev: v1.18.2
   hooks:
   - id: mypy
-    args: [--ignore-missing-imports, --extra-checks]
-    exclude: ^(scripts|specs)/
+    name: mypy (linux)
+    alias: mypy-linux
+    args: [--ignore-missing-imports, --extra-checks, --platform, linux]
+    files: ^packages/senselab-core/src/senselab_core/runtime/worker_client\.py$
     additional_dependencies:
     - pydantic>=1.10.4
     - types-requests
-    # `run_config.py` reads the packaged YAML, and this hook's mypy runs in an isolated env —
-    # so the stubs the dev group provides are not visible to it. Without this the hook fails
-    # with `Library stubs not installed for "yaml"` while a local `uv run mypy .` passes.
     - types-PyYAML
+  - id: mypy
+    name: mypy (darwin)
+    alias: mypy-darwin
+    args: [--ignore-missing-imports, --extra-checks, --platform, darwin]
+    files: ^packages/senselab-core/src/senselab_core/runtime/worker_client\.py$
+    additional_dependencies:
+    - pydantic>=1.10.4
+    - types-requests
+    - types-PyYAML
+- repo: https://github.com/pylint-dev/pylint
+  rev: v4.0.2
+  hooks:
+  # Duplicate code across the 2.x packages: one run per tree, because a duplicate is a pair of files, so the
+  # hook takes the directories and no filenames. Source is held to 4 similar lines (the tree has none at 3);
+  # tests to 10, which the tree passes (the longest duplicate in tests is 9 lines after comments, docstrings and
+  # imports are dropped). The similarity options are in pyproject.toml under [tool.pylint.similarities].
+  - id: pylint
+    name: duplicate-code in source (4 lines)
+    alias: duplicate-code-src
+    args:
+    - --disable=all
+    - --enable=duplicate-code
+    - --recursive=y
+    - --rcfile=pyproject.toml
+    - --min-similarity-lines=4
+    - packages/senselab-core/src
+    - packages/senselab-worker/src
+    files: ^packages/.*/src/.*\.py$
+    pass_filenames: false
+    require_serial: true
+  - id: pylint
+    name: duplicate-code in tests (10 lines)
+    alias: duplicate-code-tests
+    args:
+    - --disable=all
+    - --enable=duplicate-code
+    - --recursive=y
+    - --rcfile=pyproject.toml
+    - --min-similarity-lines=10
+    - packages/senselab-core/tests
+    - packages/senselab-worker/tests
+    files: ^packages/.*/tests/.*\.py$
+    pass_filenames: false
+    require_serial: true
 - repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
   rev: v2.15.0
   hooks:
-  # The cohort-condition profiles hold regular expressions; the formatter strips their quotes, and an
-  # unquoted `\btremors?\b` inside a flow list is not valid YAML, so it would break the file it formats.
   - id: pretty-format-yaml
-    # task_guidance.yaml is hashed by bytes into the reviewer and second-opinion cache identity
-    exclude: ^(src/senselab/audio/workflows/triage/data/cohort_conditions/|src/senselab/text/tasks/pii_detection/data/task_guidance\.yaml$)
     args:
     - --autofix
     - --indent=2
+    additional_dependencies:
+    - ruamel.yaml==0.19.1
   - id: pretty-format-toml
     exclude: ^uv.lock$
     args:
     - --autofix
     - --indent=2
     - --no-sort
+    additional_dependencies:
+    - toml-sort==0.25.0
+    - tomlrt==2.2.13
 
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v6.0.0
@@ -52,14 +121,12 @@ repos:
   - id: check-added-large-files
     args: [--maxkb=15000]
   - id: check-case-conflict
-  # The b2aiprep task registry is vendored verbatim from upstream (data/b2ai_task_registry/PROVENANCE.yaml:
-  # "never hand-edit them"), so the formatters and codespell leave it byte-identical to its source commit.
   - id: end-of-file-fixer
-    exclude: ^(specs/.*/raw/|src/senselab/audio/workflows/triage/data/b2ai_task_registry/)
+    exclude: ^specs/.*/raw/
   - id: trailing-whitespace
-    exclude: ^(specs/.*/raw/|src/senselab/audio/workflows/triage/review_page/vendor/)
+    exclude: ^specs/.*/raw/
   - id: pretty-format-json
-    exclude: ^(specs/.*/raw/|src/senselab/audio/workflows/triage/data/b2ai_task_registry/)
+    exclude: ^specs/.*/raw/
     args:
     - --autofix
     - --indent=4
@@ -84,20 +151,16 @@ repos:
     # extensions in the I/O format matrix. Each is a term codespell reads as a misspelling of
     # another word. Raw captured output is excluded rather than corrected: it is a verbatim
     # record, and a truncated word in a printed table is part of what was printed.
-    exclude: ^(specs/.*/raw/|src/senselab/audio/workflows/triage/review_page/vendor/)
+    exclude: ^specs/.*/raw/
     # The second group are this workflow's own vocabulary and its verbatim records:
     # UNDET/UNDETERMINED and NotIn are value names; FigureStyle is a class; allk, empt and
     # empted are fragments of identifiers codespell splits; disjointness, declaring, meaned,
     # retuned and unparseable are ordinary words it reads as misspellings; probablistic appears
     # only inside a quoted instruction, where correcting it would misquote the speaker.
-    # The vendored parquet reader and the page that inlines it are minified JavaScript, whose
-    # short identifiers codespell reads as misspelt words. Skipped whole, as the pdoc theme's
-    # generated CSS already is; the parts they are built from are checked normally. The vendored
-    # b2aiprep registry is upstream data (Spanish stimuli among it) and is skipped for the same
-    # reason. oclock is temporal_words.yaml's normalised key for "o'clock"; meu is Portuguese,
+    # oclock is temporal_words.yaml's normalised key for "o'clock"; meu is Portuguese,
     # quoted from a transcript in a spec. mis, ser, vas, hace and varios are Spanish words in the
     # redaction policy's Spanish lexicons.
-    args: [--skip=*.ipynb, --skip=src/senselab/audio/workflows/triage/viewer/vendor/*.js, --skip=src/senselab/audio/workflows/triage/viewer/recording_vectors_viewer.html, --skip=src/senselab/audio/workflows/triage/data/b2ai_task_registry/*, --ignore-words-list, 'oclock,meu,AER,FPR,PASE,preemptable,caf,als,UNDET,UNX,NotIn,FigureStyle,allk,empt,empted,disjointness,declaring,meaned,retuned,re-declaring,pre-empt,pre-empted,unparseable,probablistic,mis,ser,vas,hace,varios,scientisst,MAPE']
+    args: [--skip=*.ipynb, --ignore-words-list, 'oclock,meu,AER,FPR,PASE,preemptable,caf,als,UNDET,UNX,NotIn,FigureStyle,allk,empt,empted,disjointness,declaring,meaned,retuned,re-declaring,pre-empt,pre-empted,unparseable,probablistic,mis,ser,vas,hace,varios,scientisst,MAPE']
     additional_dependencies:
     - tomli
 - repo: local
@@ -111,3 +174,20 @@ repos:
     name: No research-participant identifiers in tracked files.
     entry: python scripts/check_participant_ids.py
     language: python
+  - id: fixture-budget
+    name: Committed test fixtures stay within the data-policy budget.
+    entry: uv run --frozen --no-sync python scripts/check_fixture_budget.py
+    language: system
+    pass_filenames: false
+    always_run: true
+  - id: size-budgets
+    name: File and function lengths stay within the size budget.
+    entry: uv run --frozen --no-sync python scripts/check_size_budgets.py
+    language: system
+    pass_filenames: false
+    always_run: true
+  - id: spec-ids
+    name: No ruling, finding or review-round ids under packages/.
+    entry: uv run --frozen --no-sync python scripts/check_spec_ids.py
+    language: system
+    files: ^packages/

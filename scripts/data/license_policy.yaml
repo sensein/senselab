@@ -1,0 +1,126 @@
+format: license-policy@1.2
+# The license policy for the locked packages the 2.x distributions ship, read by scripts/check_licenses.py.
+# A package is allowed when its license expression, and the license of each native library its wheel bundles,
+# lies in the union of the named sets its distributions allow. A package that two distributions need must be
+# allowed by both. A package with no license record, from any source below, is a failure unless `on_missing` is
+# `warn`.
+
+# `raise` fails the gate on a package with no record; `warn` prints it and passes. P-23: raise is the default,
+# and a relaxation is a visible edit of this file.
+on_missing: raise
+
+# Named license sets. An id is an SPDX identifier or an `id WITH exception` pair; matching ignores case.
+sets:
+  permissive:
+    derivation: >-
+      OSI-approved licenses with no copyleft condition on the code that links or imports them: attribution and
+      notice only. CC0-1.0 (a public-domain dedication) and 0BSD and Zlib appear because numpy's wheel lists
+      them for vendored sources.
+    ids: [MIT, MIT-0, BSD-2-Clause, BSD-3-Clause, 0BSD, Apache-2.0, ISC, PSF-2.0, Python-2.0, Unlicense, Zlib, CC0-1.0]
+  runtime-exception:
+    derivation: >-
+      GPL-3.0-or-later with the GCC Runtime Library Exception, which lets code that is not GPL link the
+      compiler's runtime libraries (libgfortran, libgcc_s) that numpy's Linux wheels bundle. The exception removes
+      the copyleft condition for the program that uses them.
+    ids: [GPL-3.0-or-later WITH GCC-exception-3.1]
+  weak-copyleft-ok:
+    derivation: >-
+      File-level or library-level copyleft: changes to the licensed files, or to the library itself, are shared
+      under the same license, and linking from other code is permitted. MPL-2.0 is file-level, LGPL is
+      library-level (libsndfile, libquadmath).
+    ids: [MPL-2.0, LGPL-2.1-only, LGPL-2.1-or-later, LGPL-3.0-only, LGPL-3.0-or-later]
+  copyleft-ok:
+    derivation: >-
+      Strong copyleft: the GPL and AGPL families. No shipped package may need these today; the set is named so a
+      policy can opt in to it.
+    ids: [GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-only, GPL-3.0-or-later, AGPL-3.0-only, AGPL-3.0-or-later]
+  non-commercial-ok:
+    derivation: >-
+      Licenses that forbid commercial use. Not allowed for any shipped distribution; named so a policy can opt in.
+    ids: [CC-BY-NC-4.0, CC-BY-NC-SA-4.0, CC-BY-NC-ND-4.0]
+
+# The sets each distribution allows. Its locked runtime dependencies, transitive ones included, are checked against it.
+# `allow_bundled` is the sets for the native libraries a wheel bundles, never for packages; absent, it is `allow`.
+distributions:
+  senselab-worker:
+    allow: [permissive, runtime-exception]
+    # numpy bundles libquadmath (LGPL), dynamically linked.
+    allow_bundled: [permissive, runtime-exception, weak-copyleft-ok]
+  senselab-core:
+    allow: [permissive, runtime-exception, weak-copyleft-ok]
+  senselab:
+    allow: [permissive, runtime-exception, weak-copyleft-ok]
+
+# Spellings of a license in a package's `License` field, and in its trove classifiers, mapped to SPDX.
+# The field is used only when it is one line and parses as an expression of known ids or aliases.
+aliases:
+  BSD 3-Clause License: BSD-3-Clause
+  BSD 2-Clause License: BSD-2-Clause
+  ISC License: ISC
+  MIT License: MIT
+  Apache 2.0: Apache-2.0
+  Apache License 2.0: Apache-2.0
+  Apache Software License: Apache-2.0
+  LGPL-2.1+: LGPL-2.1-or-later
+  LGPL-3.0+: LGPL-3.0-or-later
+classifiers:
+  'License :: OSI Approved :: MIT License': MIT
+  'License :: OSI Approved :: BSD License': BSD-3-Clause
+  'License :: OSI Approved :: Apache Software License': Apache-2.0
+  'License :: OSI Approved :: ISC License (ISCL)': ISC
+  'License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)': MPL-2.0
+  'License :: OSI Approved :: Python Software Foundation License': PSF-2.0
+  'License :: OSI Approved :: GNU Lesser General Public License v2 or later (LGPLv2+)': LGPL-2.1-or-later
+  'License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)': LGPL-3.0-or-later
+  'License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)': GPL-3.0-or-later
+  'License :: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication': CC0-1.0
+
+# Dated manual records for a package whose installed metadata names no license, or that is not installed on every
+# platform (so its metadata is not there to read). A manual record is the fallback and never overrides metadata.
+manual:
+- package: colorama
+  expression: BSD-3-Clause
+  source: https://github.com/tartley/colorama/blob/master/LICENSE.txt
+  verified: {date: '2026-11-01', how: manual}
+  reason: Installed on Windows only (a tqdm dependency), so the CI environment has no metadata for it.
+
+# Native libraries a wheel bundles, found from the wheel's RECORD (a shared library that is not a Python extension
+# module), keyed by the package that bundles it and then by the library's name without `lib`, version, hash and
+# architecture. A record holds only for the package it sits under: another package shipping a file of that name has
+# no record. A bundled library with no entry under its package is a missing record.
+bundled_libraries:
+  cffi:
+    ffi:
+      expression: MIT
+      source: https://github.com/libffi/libffi/blob/master/LICENSE
+      verified: {date: '2026-11-01', how: manual}
+  numpy:
+    scipy_openblas64:
+      expression: BSD-3-Clause
+      source: https://github.com/MacPython/openblas-libs/blob/main/LICENSE
+      verified: {date: '2026-11-01', how: manual}
+    scipy_openblas:
+      expression: BSD-3-Clause
+      source: https://github.com/MacPython/openblas-libs/blob/main/LICENSE
+      verified: {date: '2026-11-01', how: manual}
+    openblas:
+      expression: BSD-3-Clause
+      source: https://github.com/OpenMathLib/OpenBLAS/blob/develop/LICENSE
+      verified: {date: '2026-11-01', how: manual}
+    gfortran:
+      expression: GPL-3.0-or-later WITH GCC-exception-3.1
+      source: https://gcc.gnu.org/onlinedocs/libstdc++/manual/license.html
+      verified: {date: '2026-11-01', how: manual}
+    gcc_s:
+      expression: GPL-3.0-or-later WITH GCC-exception-3.1
+      source: https://gcc.gnu.org/onlinedocs/libstdc++/manual/license.html
+      verified: {date: '2026-11-01', how: manual}
+    quadmath:
+      expression: LGPL-2.1-or-later
+      source: https://gcc.gnu.org/onlinedocs/libquadmath/
+      verified: {date: '2026-11-01', how: manual}
+  soundfile:
+    sndfile:
+      expression: LGPL-2.1-or-later
+      source: https://github.com/libsndfile/libsndfile/blob/master/COPYING
+      verified: {date: '2026-11-01', how: manual}

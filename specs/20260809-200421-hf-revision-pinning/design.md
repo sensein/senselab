@@ -280,3 +280,36 @@ loads the same commit its parent resolved, rather than resolving one for itself.
 And the one that guards all three: **no load anywhere passes a ref.** Every loader call and every
 worker `input_json` carries a 40-hex SHA, so the commit named in the provenance is provably the
 commit whose weights ran — not a ref that merely pointed there at some earlier moment.
+
+## Rationale moved out of `senselab_core/runtime/revision.py` (2x H9b, fix round 1)
+
+The code now states only what each function does; the reasons that used to sit in its docstrings and
+comments are kept here.
+
+- **Why one resolution per run.** A cluster sweep is an array of jobs across nodes, running for hours or
+  days. If upstream pushes to `main` partway through, tasks that resolve after the push get different
+  weights from those before it; every task records its own SHA correctly and the run as a whole is quietly
+  inhomogeneous. Per-task provenance documents that split; it does not prevent it. So a run resolves each
+  `(repo_id, ref)` once, entries are append-if-absent and immutable for the run's life, and that
+  immutability is the whole guarantee.
+- **Run id choice.** `SENSELAB_RUN_ID` outranks everything so one Slurm submission shares an id across
+  nodes, tasks and subprocess venvs. Otherwise `SLURM_ARRAY_JOB_ID` is preferred to `SLURM_JOB_ID`, so an
+  N-task array uses one `runs/<id>/` instead of N in an inode-quota'd cache root; a bare launch gets a
+  fresh UUID4. Consequences: every invocation in one allocation shares a manifest (a second experiment in
+  the same batch script is pinned to the first one's SHAs; set `SENSELAB_RUN_ID` per experiment to avoid
+  it), and a recycled Slurm id can adopt a months-old manifest (unmitigated; folding in
+  `SLURM_CLUSTER_NAME` or ageing manifests by mtime would change what an id means and needs its own
+  measured change). Since 2x H9b a run id must be one path component, so an id with `/` or `..` is refused
+  rather than written outside `runs/`.
+- **Reject a non-SHA at the door.** An entry is immutable for the run's life, so one bad write poisons
+  every later participant that adopts it; a recorded non-SHA is likewise treated as absent and re-resolved
+  (a JSON null reads as the string `"None"`, and a hand edit can leave anything).
+- **Local cache before the Hub.** Re-checking the Hub on every resolution reintroduces the 429 rate
+  limiting `load_hf_resilient` avoids. A failed local lookup is logged at debug: a cold cache is normal.
+- **Retry the Hub call here.** It is the first network call a cold run makes; the wrapper turns any
+  failure into `RevisionResolutionError` (a `RuntimeError`, which `_is_transient` calls non-transient), so
+  a 429 escaping it would defeat the outer retry too. Only 429, 5xx and status-less connection failures are
+  retried; a definitive 4xx surfaces on the first attempt.
+- **Bounded waits (2x H9b fix round 1).** `record_resolution` used to retry every `TimeoutError` forever on
+  the claim that a timeout proves a live holder. A corrupt holder raised the same error, so a planted
+  `{}` spun every model load at 100 % CPU. The wait is now one bounded acquire that ends in `LockTimeout`.

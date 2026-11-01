@@ -206,3 +206,29 @@ as `took_over`. The reproduce driver needs it to tell a killed run of a step (wh
 waiter after a clean release. Timing the call from outside would also count the file touches, the identity write and
 the stale-takeover warning around the acquire, which on a loaded network filesystem can push a real takeover past the
 threshold; this verdict times the acquire alone, as the lock's own decision does.
+
+## The lock after 2x H9b fix round 1 (H-R40)
+
+`senselab_core.runtime.locks.SharedFileLock` no longer uses `filelock`. Its own `flock` on `<name>.lock`
+is opened relative to the directory's descriptor with `O_NOFOLLOW`, and the file must be regular with one
+link; the holder, heartbeat and clock sidecars are replaced whole by rename and never modified in place, so a
+planted symlink or hard link at any of them cannot redirect a write or a mode change (the H9b review's C-1
+and I-1). Assumptions that still hold, moved here from the old module docstring:
+
+- **Clock skew.** Ages are measured on the storage's own clock (a fresh `.clock` file's mtime), so a
+  holder's host clock running ahead or behind does not age a live heartbeat.
+- **`flock` coherence.** Mutual exclusion holds only where the filesystem implements `flock` coherently
+  across clients: local disks and NFSv4, not NFSv3 or advisory-only network filesystems.
+- **The locked file must be the one at the name.** After every `flock` the descriptor is compared (device
+  and inode, through a fresh open, not a cached `stat`) with the file now at the name, and a mismatch is
+  retried. The lock file is never unlinked on release, so the NFS silly-rename case that motivated this
+  check arises now only when the file was moved aside as corrupt.
+- **Dotted names.** Sidecar names append to the resource name (`<name>.lock`), never `with_suffix`, so two
+  resources differing after a dot never share a lock.
+- **Waits are bounded.** A timeout used to be described as proof of a live holder; a corrupt holder raised
+  the same error and callers retried it forever. Every wait now ends in `LockTimeout`, and a holder that is
+  not a whole identity is moved aside and the lock taken once its age passes `stale_after`.
+- **A hard link at the lock file breaks exclusion only with a live holder's cooperation of the planter.**
+  A group member who hard-links a live lock file makes the next acquirer move it aside and lock a new file
+  while the old holder still holds the old one. That needs write access to the lock's directory, which
+  already allows deleting the lock file; `owns()` lets a holder check before an irreversible step.

@@ -1,0 +1,158 @@
+[importlinter]
+root_packages =
+    senselab_worker
+    senselab_core
+    scripts
+include_external_packages = True
+
+[importlinter:contract:packages-not-1x]
+name = nothing in packages/ imports senselab, the 1.x source pool under src/
+type = forbidden
+source_modules =
+    senselab_worker
+    senselab_core
+forbidden_modules =
+    senselab
+
+[importlinter:contract:worker-is-the-base]
+name = senselab_worker imports nothing above it
+type = forbidden
+source_modules = senselab_worker
+forbidden_modules =
+    senselab_core
+    pydantic
+    torch
+    transformers
+    speechbrain
+    pyannote
+
+[importlinter:contract:kernel-below-runtime]
+name = senselab_core.kernel imports nothing from the runtime
+type = forbidden
+source_modules = senselab_core.kernel
+forbidden_modules =
+    senselab_core.runtime
+
+[importlinter:contract:kernel-does-no-io]
+name = senselab_core.kernel imports no decoder and no file or OS I/O module (ADR-009)
+type = forbidden
+source_modules = senselab_core.kernel
+forbidden_modules =
+    soundfile
+    os
+    io
+    shutil
+    tempfile
+    importlib
+    pathlib
+    glob
+    fileinput
+    mmap
+    fcntl
+    select
+    selectors
+    subprocess
+    socket
+    ssl
+    http
+    urllib
+    ftplib
+    smtplib
+    sqlite3
+    dbm
+    shelve
+    zipfile
+    tarfile
+    gzip
+    bz2
+    lzma
+    ctypes
+    multiprocessing
+    asyncio
+    senselab_worker.hashing
+allow_indirect_imports = True
+ignore_imports =
+    senselab_core.kernel.signals -> pathlib
+    senselab_core.kernel.identity -> urllib
+
+[importlinter:contract:core-is-framework-free]
+name = senselab_core imports no model framework
+type = forbidden
+source_modules = senselab_core
+forbidden_modules =
+    torch
+    transformers
+    speechbrain
+    pyannote
+
+[importlinter:contract:layers]
+name = senselab_core and senselab_worker are layered, each importing only downward
+type = layers
+layers =
+    senselab_core.cli | senselab_core.testing
+    senselab_core.runtime
+    senselab_core.kernel
+    senselab_worker
+
+[importlinter:contract:digests-are-tagged]
+name = only senselab_worker.digest and _raw_digest import a digest module (ADR-006)
+type = forbidden
+# The 2.x scripts; the other modules under scripts/ are 1.x and not checked on the 2.x line.
+source_modules =
+    senselab_worker
+    senselab_core
+    scripts.check_fixture_budget
+    scripts.check_licenses
+    scripts.check_participant_ids
+    scripts.check_size_budgets
+    scripts.check_spec_ids
+    scripts.lock_subprocess_venvs
+    scripts.profile_imports
+    scripts.profile_model_tiers
+    scripts.profile_with_scalene
+    scripts.release_gate
+forbidden_modules =
+    hashlib
+    _hashlib
+    hmac
+    blake3
+    xxhash
+    mmh3
+    Crypto
+    Cryptodome
+    cryptography
+    _md5
+    _sha1
+    _sha2
+    _sha3
+    _blake2
+    _sha256
+    _sha512
+allow_indirect_imports = True
+ignore_imports =
+    senselab_worker.digest -> hashlib
+    senselab_worker._raw_digest -> hashlib
+
+[importlinter:contract:raw-digest-owners]
+name = only the named owners hash bytes already in memory (senselab_worker._raw_digest, ADR-006)
+type = forbidden
+source_modules =
+    senselab_worker
+    senselab_core
+    scripts.check_fixture_budget
+    scripts.check_licenses
+    scripts.check_participant_ids
+    scripts.check_size_budgets
+    scripts.check_spec_ids
+    scripts.lock_subprocess_venvs
+    scripts.profile_imports
+    scripts.profile_model_tiers
+    scripts.profile_with_scalene
+    scripts.release_gate
+forbidden_modules =
+    senselab_worker._raw_digest
+allow_indirect_imports = True
+ignore_imports =
+    senselab_worker.codec -> senselab_worker._raw_digest
+    senselab_worker.hashing -> senselab_worker._raw_digest
+    senselab_core.runtime.store -> senselab_worker._raw_digest

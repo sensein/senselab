@@ -1,0 +1,39 @@
+format: size-budget@1.0
+# Length budgets for Python files tracked under packages/. Each value carries its derivation;
+# scripts/check_size_budgets.py refuses an entry without one. `exempt` names a function or file that is over a
+# limit on purpose, with the reason.
+
+src_file_max_lines:
+  value: 1200
+  derivation: >-
+    The longest source module when the budget was set was 1163 lines (senselab_core/runtime/provenance.py);
+    the median is about 200. 1200 is the next multiple of 100 above the longest, so the tree passes and the
+    next module that grows past it is reported with the largest ones, to split before it joins them.
+
+test_file_max_lines:
+  value: 1300
+  derivation: >-
+    The longest test module when the budget was set was 1224 lines (runtime/store_test.py). 1300 is the next
+    multiple of 100 above it. Tests are longer than the code they cover because each case is a short
+    function, so the limit sits above the source limit.
+
+src_function_max_lines:
+  value: 100
+  derivation: >-
+    99 percent of the 680 source functions were 57 lines or shorter and all but one were 81 or shorter. 100
+    leaves room above that tail. The one function above it is in `exempt`. The ruff statement limit
+    (PLR0915, 50) bounds a function's statements; this bounds the lines it takes, which a long literal can
+    stretch without adding statements.
+
+test_function_max_lines:
+  value: 100
+  derivation: >-
+    99 percent of the 1434 test functions were 33 lines or shorter and the longest was 81 (a probe fixture).
+    The same 100 as the source limit, since a test function past it is a scenario that wants splitting.
+
+exempt:
+- path: packages/senselab-core/src/senselab_core/testing/values.py
+  function: _register_kernel_samples
+  reason: >-
+    A table: one registered sample per kernel value type, 190 lines of literals with no branching. It is
+    split by type when a type is added.

@@ -1,0 +1,395 @@
+"""Recordings made of named channel groups, and audio."""
+
+import math
+from collections.abc import Mapping
+from fractions import Fraction
+from pathlib import Path
+from typing import TYPE_CHECKING, Annotated, ClassVar, Protocol, Self
+
+import numpy
+from pydantic import (
+    AfterValidator,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    ModelWrapValidatorHandler,
+    PlainSerializer,
+    StringConstraints,
+    TypeAdapter,
+    model_validator,
+)
+from senselab_worker.digest import identity_digest
+
+from senselab_core.kernel._base import (
+    Frozen,
+    FrozenMapping,
+    NonEmptyStr,
+    NsArray,
+    Rate,
+    as_numeric_array,
+    held_npy_digest,
+    require_finite,
+    require_ns,
+    value_digest,
+)
+from senselab_core.kernel.identity import ContentIdentity
+from senselab_core.kernel.time import TimeAnchor
+
+AUDIO_GROUP = "audio"
+AUDIO_UNITS = "FS"
+"""Digital full scale: the units of decoded audio samples."""
+
+AUDIO_DTYPE = numpy.dtype(numpy.float32)
+"""The dtype audio samples are held and read in: float32 full scale."""
+
+SIGNAL_DTYPES: Mapping[str, float | None] = FrozenMapping(
+    {"int16": 2.0**15, "int32": 2.0**31, "float32": None, "float64": None}
+)
+"""The sample dtypes `Audio.from_array` accepts, by name, with the full scale an integer dtype is divided by.
+
+Integer PCM maps to float32 full scale as the decoder maps it (`x / 2**(bits - 1)`); floats are cast.
+"""
+
+_NS_PER_S = 10**9
+SignalArray = Annotated[
+    numpy.ndarray,
+    BeforeValidator(lambda v: require_finite(as_numeric_array(v, 2), "signal samples", nan_is_missing=True)),
+]
+"""A frozen integer or float array of shape `(channels, samples)`: no infinite sample; a NaN marks a missing one.
+
+A NaN is held as the one quiet NaN without payload. A regular group refuses NaN; an irregular group holds it.
+"""
+
+
+class StaleSource(RuntimeError):
+    """A source file no longer matches the stamp recorded when it was opened."""
+
+
+class SourceStamp(Frozen):
+    """What a source file was when a reader opened it: its stat fields, a digest of its sound header, and its content.
+
+    `header` is `value_digest("soundfile.info", {frames, channels, samplerate, format, subtype})`;
+    `frames`, `channels` and `sampling_rate` repeat the header fields a group's layout is checked against.
+    `content` is the root of the file's content identity (`content_identity`), taken over every byte
+    when the stamp is taken; it is the identity root of a recording of that file. Stamps are taken and
+    checked by a `SourceReader` (`senselab_core.runtime.audio_io`).
+    """
+
+    size: int = Field(ge=0)
+    mtime_ns: int
+    inode: int = Field(ge=0)
+    device: int = Field(ge=0)
+    frames: int = Field(ge=0)
+    channels: int = Field(ge=1)
+    sampling_rate: Rate
+    header: NonEmptyStr
+    content: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+
+
+class SourceReader(Protocol):
+    """Decodes a source group's samples from its file; `senselab_core.runtime.audio_io.READER` implements it."""
+
+    def decode(self, source: Path, stamp: SourceStamp, first: int, count: int) -> numpy.ndarray:
+        """Return `(channels, count)` float32 samples from frame `first`, after checking the file still has `stamp`.
+
+        Raises:
+            StaleSource: if the file at `source` differs from `stamp`.
+        """
+        ...
+
+
+class ChannelInfo(Frozen):
+    """One channel: its name, signal type (`audio`, `ecg`, ...), units, and optional placement and reference."""
+
+    name: NonEmptyStr
+    type: NonEmptyStr
+    units: NonEmptyStr
+    placement: str | None = None
+    reference: str | None = None
+
+
+def _check_channels(channels: tuple[ChannelInfo, ...], rows: int) -> None:
+    names = [c.name for c in channels]
+    if len(set(names)) != len(names):
+        raise ValueError(f"channel names must be unique, got {names}")
+    if rows != len(channels):
+        raise ValueError(f"{len(channels)} channels declared, {rows} channels in the data")
+
+
+def _frame_at(t_ns: int, sampling_rate: float) -> int:
+    """Index of the first sample at or after `t_ns`, sample k lying at k / sampling_rate seconds."""
+    return math.ceil(Fraction(t_ns) * Fraction(sampling_rate) / _NS_PER_S)
+
+
+class RegularGroup(Frozen):
+    """Channels sampled together at one rate, held in `data` `(channels, samples)` or read from the sound file `source`.
+
+    Exactly one of `data` and `source` is given. A source group carries `source_stamp`, the stamp a
+    `SourceReader` took of the file; validation reads no file. The stamp's header must match the
+    declared channel count and rate. Samples are decoded only by `read` through a reader, which
+    checks the file still has the stamp, content included.
+    """
+
+    channels: tuple[ChannelInfo, ...] = Field(min_length=1)
+    sampling_rate: Rate
+    data: SignalArray | None = None
+    source: Path | None = None
+    source_stamp: SourceStamp | None = None
+
+    @model_validator(mode="after")
+    def _check_layout(self) -> "RegularGroup":
+        if (self.data is None) == (self.source is None):
+            raise ValueError("a regular group needs exactly one of data and source")
+        if self.data is not None:
+            if self.source_stamp is not None:
+                raise ValueError("a source stamp belongs to a source group, not to held data")
+            require_finite(self.data, "a regular group's samples")
+            rows = self.data.shape[0]
+        else:
+            if self.source_stamp is None:
+                raise ValueError("a source group carries the stamp a reader took of its file")
+            if self.source_stamp.sampling_rate != self.sampling_rate:
+                raise ValueError(
+                    f"declared rate {self.sampling_rate} Hz, file rate {self.source_stamp.sampling_rate} Hz"
+                )
+            rows = self.source_stamp.channels
+        _check_channels(self.channels, rows)
+        return self
+
+    @property
+    def frames(self) -> int:
+        """Number of samples per channel, from the held data or the source stamp."""
+        if self.data is not None:
+            return int(self.data.shape[1])
+        assert self.source_stamp is not None
+        return self.source_stamp.frames
+
+    def read(
+        self, start_ns: int | None = None, end_ns: int | None = None, reader: SourceReader | None = None
+    ) -> numpy.ndarray:
+        """Return the `(channels, samples)` samples whose times lie in `[start_ns, end_ns)` from the group start.
+
+        Omitted bounds mean the start and the end; a range running past the end stops there. Held
+        data is returned as a read-only view; a source group is decoded by `reader` to float32 for
+        the requested frames only, after the reader checks the file still matches `source_stamp`.
+
+        Raises:
+            TypeError: if a bound is not an integer.
+            ValueError: if `start_ns` is negative or `end_ns < start_ns`, a source group is read
+                without a reader, or a decoded sample is not finite or not of the group's layout.
+            StaleSource: if the source file changed since it was stamped.
+        """
+        start = 0 if start_ns is None else require_ns(start_ns, "start_ns")
+        if start < 0:
+            raise ValueError(f"start_ns must be non-negative, got {start}")
+        end = None if end_ns is None else require_ns(end_ns, "end_ns")
+        if end is not None and end < start:
+            raise ValueError(f"end_ns {end} is before start_ns {start}")
+        frames = self.frames
+        first = min(_frame_at(start, self.sampling_rate), frames)
+        stop = frames if end is None else min(_frame_at(end, self.sampling_rate), frames)
+        if self.data is not None:
+            return self.data[:, first:stop]
+        assert self.source is not None and self.source_stamp is not None
+        if reader is None:
+            raise ValueError(f"{self.source} is a source group; read it through a SourceReader")
+        samples = reader.decode(self.source, self.source_stamp, first, stop - first)
+        expected = (len(self.channels), stop - first)
+        if samples.shape != expected or samples.dtype != AUDIO_DTYPE:
+            raise ValueError(f"decoded {samples.dtype} {samples.shape} from {self.source}, expected float32 {expected}")
+        return require_finite(samples, f"samples decoded from {self.source}")
+
+
+class IrregularGroup(Frozen):
+    """Channels sampled together at the strictly increasing times `timestamps_ns`, one per `data` column.
+
+    A NaN in `data` marks a sample missing from its channel at that time.
+    """
+
+    channels: tuple[ChannelInfo, ...] = Field(min_length=1)
+    timestamps_ns: NsArray
+    data: SignalArray
+
+    @model_validator(mode="after")
+    def _check_layout(self) -> "IrregularGroup":
+        _check_channels(self.channels, self.data.shape[0])
+        if self.data.shape[1] != self.timestamps_ns.shape[0]:
+            raise ValueError(f"{self.timestamps_ns.shape[0]} timestamps for {self.data.shape[1]} samples")
+        if numpy.any(numpy.diff(self.timestamps_ns) <= 0):
+            raise ValueError("timestamps must be strictly increasing")
+        return self
+
+
+Groups = Annotated[
+    Mapping[NonEmptyStr, RegularGroup | IrregularGroup],
+    Field(min_length=1),
+    AfterValidator(FrozenMapping),
+    PlainSerializer(dict),
+]
+"""A non-empty read-only mapping of group name to group; serialised as a dict."""
+
+
+class Recording(Frozen):
+    """Named channel groups sharing one clock, anchored by `anchor`; `groups` is read-only.
+
+    `identity` is derived from the content by validation: omitted, it is filled in; supplied, it must
+    equal the derived one. A recording of one source group is identified by `content:` and the
+    content identity root of the file. Otherwise it is `content:` and `value_digest(IDENTITY_TYPE,
+    {"groups": ...})`, each source group standing as its channels, rate and content identity root.
+    `IDENTITY_TYPE` is a declared token, so moving, renaming or subclassing the class keeps identities.
+    """
+
+    IDENTITY_TYPE: ClassVar[str] = "recording"
+
+    groups: Groups
+    anchor: TimeAnchor
+    identity: ContentIdentity
+
+    if TYPE_CHECKING:
+
+        def __init__(
+            self,
+            *,
+            groups: Mapping[str, "RegularGroup | IrregularGroup"],
+            anchor: TimeAnchor,
+            identity: str | None = None,
+        ) -> None:
+            """Validate `groups` and `anchor`, deriving `identity` or checking the one supplied."""
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _derive_identity(cls, data: object, handler: ModelWrapValidatorHandler[Self]) -> Self:
+        if isinstance(data, Mapping) and "groups" in data:
+            groups = _GROUPS.validate_python(data["groups"])
+            derived = cls.identity_of(groups)
+            supplied = data.get("identity")
+            if supplied is not None and supplied != derived:
+                raise ValueError(f"identity {supplied!r} is not the content identity {derived!r}")
+            data = {**data, "groups": groups, "identity": derived}
+        return handler(data)
+
+    @classmethod
+    def identity_of(cls, groups: Mapping[str, "RegularGroup | IrregularGroup"]) -> str:
+        """Return the identity a recording of this type over `groups` has.
+
+        Raises:
+            ValueError: if `groups` is not a layout this type holds.
+        """
+        values = list(groups.values())
+        if len(values) == 1 and isinstance(values[0], RegularGroup) and values[0].source is not None:
+            return "content:" + _source_root(values[0])
+        fields = {name: _group_content(g) for name, g in groups.items()}
+        return "content:" + value_digest(cls.IDENTITY_TYPE, {"groups": fields})
+
+
+def _source_root(group: RegularGroup) -> str:
+    """Return the content identity root of a source group's file, as its stamp holds it."""
+    assert group.source is not None and group.source_stamp is not None
+    return group.source_stamp.content
+
+
+def _group_content(group: RegularGroup | IrregularGroup) -> object:
+    if isinstance(group, RegularGroup) and group.source is not None:
+        return {**group.model_dump(exclude={"source", "source_stamp"}), "content": _source_root(group)}
+    return group.model_dump()
+
+
+def _audio_group(groups: Mapping[str, RegularGroup | IrregularGroup]) -> RegularGroup:
+    group = groups.get(AUDIO_GROUP)
+    if list(groups) != [AUDIO_GROUP] or not isinstance(group, RegularGroup):
+        raise ValueError(f"audio has exactly one regular group named {AUDIO_GROUP!r}, got {list(groups)}")
+    channels = group.channels
+    if any(c.type != "audio" for c in channels):
+        raise ValueError(f"audio channels must have type 'audio', got {[c.type for c in channels]}")
+    if len({c.units for c in channels}) != 1:
+        raise ValueError(f"audio channels must share units, got {[c.units for c in channels]}")
+    if group.data is not None and group.data.dtype != AUDIO_DTYPE:
+        raise ValueError(f"audio samples are held as float32 full scale, got {group.data.dtype}")
+    return group
+
+
+def audio_channels(count: int) -> tuple[ChannelInfo, ...]:
+    """Return `count` audio channels in full-scale units, named `ch0`, `ch1`, ..."""
+    return tuple(ChannelInfo(name=f"ch{i}", type="audio", units=AUDIO_UNITS) for i in range(count))
+
+
+_GROUPS: TypeAdapter[Mapping[str, RegularGroup | IrregularGroup]] = TypeAdapter(
+    Groups, config=ConfigDict(arbitrary_types_allowed=True)
+)
+
+
+class Audio(Recording):
+    """A recording of one regular group named `audio` whose channels are all of type `audio`, in one unit.
+
+    Held samples are float32 (`AUDIO_DTYPE`). An in-memory audio's identity is `"content:" +
+    identity_digest("audio@3", {"npy": npy_digest("npy@1", <the (channels, samples) data>),
+    "sampling_rate": rate})`; a file-backed one's is `content:` and the root of the file's content identity.
+    """
+
+    if TYPE_CHECKING:
+
+        def __init__(
+            self,
+            *,
+            groups: Mapping[str, "RegularGroup | IrregularGroup"],
+            anchor: TimeAnchor,
+            identity: str | None = None,
+        ) -> None:
+            """Validate `groups` and `anchor`, deriving `identity` or checking the one supplied."""
+
+    @classmethod
+    def identity_of(cls, groups: Mapping[str, "RegularGroup | IrregularGroup"]) -> str:
+        """Return the identity of audio over `groups`, after checking they are an audio layout.
+
+        Raises:
+            ValueError: if `groups` is not one regular `audio` group of float32 audio channels in one unit.
+        """
+        group = _audio_group(groups)
+        if group.data is None:
+            return "content:" + _source_root(group)
+        npy = held_npy_digest(group.data)
+        return "content:" + identity_digest("audio@3", {"npy": npy, "sampling_rate": group.sampling_rate})
+
+    @classmethod
+    def from_group(cls, group: RegularGroup) -> "Audio":
+        """Return the audio of one regular group of audio channels, its clock named by its identity.
+
+        Raises:
+            ValueError: if `group` is not float32 audio channels in one unit.
+        """
+        identity = cls.identity_of({AUDIO_GROUP: group})
+        anchor = TimeAnchor(clock_id=identity, absolute_start_ns=None)
+        return cls(groups={AUDIO_GROUP: group}, anchor=anchor, identity=identity)
+
+    @classmethod
+    def from_array(cls, a: numpy.ndarray, sampling_rate: float) -> "Audio":
+        """Hold a float32 full-scale copy of samples shaped `(samples,)` or `(channels, samples)`.
+
+        Integer PCM is divided by its full scale (`SIGNAL_DTYPES`) as the decoder divides it; floats
+        are cast. The integer conversion is done in float32 (round to float32, then scale by a power of
+        two) and is bit-identical to dividing in float64 and casting to float32. The recording's clock
+        is named by its identity.
+
+        Raises:
+            ValueError: if `a` is neither 1-D nor 2-D, is empty, holds a NaN or infinite sample or one
+                that overflows float32, or its dtype is not in `SIGNAL_DTYPES` (complex, boolean, object,
+                datetime and other integer widths are refused).
+            pydantic.ValidationError: if `sampling_rate` is not a `Rate`.
+        """
+        if isinstance(a, numpy.ndarray) and type(a) is not numpy.ndarray:
+            raise ValueError(f"not a plain numpy.ndarray: {type(a).__qualname__}")
+        x = numpy.asarray(a)
+        if x.ndim == 1:
+            x = x.reshape(1, -1)
+        if x.ndim != 2:  # noqa: PLR2004 - the (channels, samples) layout has two axes
+            raise ValueError(f"audio samples must be 1-D or (channels, samples), got shape {x.shape}")
+        if x.size == 0:
+            raise ValueError(f"audio samples must not be empty, got shape {x.shape}")
+        if x.dtype.name not in SIGNAL_DTYPES:
+            raise ValueError(f"audio samples must be one of {sorted(SIGNAL_DTYPES)}, got {x.dtype}")
+        scale = SIGNAL_DTYPES[x.dtype.name]
+        with numpy.errstate(over="ignore", invalid="ignore"):
+            held = x.astype(AUDIO_DTYPE) if scale is None else x.astype(AUDIO_DTYPE) / AUDIO_DTYPE.type(scale)
+        held = require_finite(held, "audio samples, as float32")
+        group = RegularGroup(channels=audio_channels(x.shape[0]), sampling_rate=sampling_rate, data=held)
+        return cls.from_group(group)

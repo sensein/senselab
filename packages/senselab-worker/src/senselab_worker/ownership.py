@@ -1,0 +1,76 @@
+"""The one place that deletes runtime files: `remove_owned`, and the name patterns of what the runtime writes."""
+
+import os
+import re
+import shutil
+import stat
+import sys
+from pathlib import Path
+
+ARRAY_NAME = re.compile(r"^[0-9a-f]{64}\.npy$")
+"""An array file: the sha256 of its bytes, then `.npy`."""
+
+ARRAY_TEMP_NAME = re.compile(r"^\.[0-9a-f]{32}\.tmp$")
+"""An array file being written: a dot, a uuid4 hex, then `.tmp`."""
+
+UUID_HEX = re.compile(r"^[0-9a-f]{32}$")
+"""A staging file or directory named by a uuid4 hex."""
+
+
+def remove_owned(root: Path, path: Path, *, pattern: re.Pattern[str], root_fd: int | None = None) -> bool:  # noqa: C901
+    """Remove `path` if it is a direct child of `root` whose name fully matches `pattern`; return whether it did.
+
+    The child is examined with `lstat` relative to an open descriptor of `root`: `root_fd` when given
+    (the caller's descriptor of `root`, left open), otherwise one opened here. A directory is
+    removed, as a tree without following symlinks, only if its name also matches `UUID_HEX`;
+    any other directory is refused. Anything else, a symlink included, is unlinked and its target is
+    never touched. `.`, `..` and `root` itself are never children. A missing `root` or
+    child returns False.
+
+    Raises:
+        OSError: if the child exists but cannot be removed.
+    """
+
+    def _remove_tree_at(parent_fd: int, child: str) -> None:
+        """Remove the directory `child` of `parent_fd` and everything in it, relative to descriptors only."""
+        fd = os.open(child, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        try:
+            for entry in os.listdir(fd):
+                if stat.S_ISDIR(os.lstat(entry, dir_fd=fd).st_mode):
+                    _remove_tree_at(fd, entry)
+                else:
+                    os.unlink(entry, dir_fd=fd)
+        finally:
+            os.close(fd)
+        os.rmdir(child, dir_fd=parent_fd)
+
+    target = os.path.abspath(path)
+    name = os.path.basename(target)
+    if os.path.dirname(target) != os.path.abspath(root) or name in ("", ".", "..") or not pattern.fullmatch(name):
+        return False
+    borrowed = root_fd is not None
+    if root_fd is None:
+        try:
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        except FileNotFoundError:
+            return False
+    try:
+        try:
+            mode = os.lstat(name, dir_fd=root_fd).st_mode
+        except FileNotFoundError:
+            return False
+        if stat.S_ISDIR(mode) and not UUID_HEX.fullmatch(name):
+            return False
+        try:
+            if not stat.S_ISDIR(mode):
+                os.unlink(name, dir_fd=root_fd)
+            elif sys.version_info >= (3, 11):
+                shutil.rmtree(name, dir_fd=root_fd)
+            else:
+                _remove_tree_at(root_fd, name)
+        except FileNotFoundError:
+            return False
+        return True
+    finally:
+        if not borrowed:
+            os.close(root_fd)
