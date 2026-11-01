@@ -146,7 +146,7 @@ exclude = [
   "node_modules",
   "venv",
   # The 1.x source pool, frozen and not checked on the 2.x line.
-  "src",
+  "./src",
   # The 1.x scripts under scripts/, not checked on the 2.x line. The 2.x scripts are release_gate,
   # check_fixture_budget, check_participant_ids, lock_subprocess_venvs and profile_*.
   "scripts/adaptive_loop.py",
@@ -199,7 +199,7 @@ convention = "google"
 "tutorials/**/*.ipynb" = ["F821", "E402", "I001", "F811", "ANN001", "ANN201", "D103"]
 
 [tool.ruff.format]
-exclude = ["**/scripts/**"]
+exclude = ["scripts/**"]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
@@ -209,7 +209,7 @@ line-ending = "auto"
 skip = [
   "uv.lock",
   "docs_style/pdoc-theme/syntax-highlighting.css",
-  "src",
+  "./src",
   "*.cha",
   "*.ipynb"
 ]

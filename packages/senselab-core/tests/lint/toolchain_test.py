@@ -1,6 +1,9 @@
 """One ruff: the version uv.lock pins is the one pyproject requires and the one pre-commit runs."""
 
+import fnmatch
 import re
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -177,4 +180,71 @@ def test_an_unpinned_formatter_library_is_found() -> None:
     ]
     assert unpinned_formatter_libraries(config(**{"pretty-format-yaml": []})) == [
         "pretty-format-yaml does not pin ruamel.yaml"
+    ]
+
+
+KNOWN_SOURCE = "packages/senselab-core/src/senselab_core/kernel/identity.py"
+KNOWN_FILES = (KNOWN_SOURCE, "packages/senselab-worker/scripts/unicode_table.py")
+"""Package files every lint and format exclusion must leave checked."""
+
+
+def _ruff(path: str, *args: str) -> str:
+    done = subprocess.run(
+        [sys.executable, "-m", "ruff", *args, "--force-exclude", path],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return done.stdout + done.stderr
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("path", KNOWN_FILES)
+def test_ruff_check_covers_package_files(path: str) -> None:
+    """`ruff check` lists a package file even when pre-commit passes it with `--force-exclude`."""
+    assert path in _ruff(path, "check", "--show-files")
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("path", KNOWN_FILES)
+def test_ruff_format_covers_package_files(path: str) -> None:
+    """`ruff format` reaches a package file rather than reporting no files."""
+    assert "1 file already formatted" in _ruff(path, "format", "--check")
+
+
+def exclusions_matching(path: str, pyproject: dict[str, Any], precommit: dict[str, Any]) -> list[str]:
+    """Every codespell, mypy or pre-commit exclusion that matches `path`."""
+    found = []
+    parts = Path(path).parts
+    for glob in pyproject["tool"]["codespell"]["skip"]:
+        prefixes = ["./" + "/".join(parts[: i + 1]) for i in range(len(parts))]
+        if any(fnmatch.fnmatch(c, glob) for c in [path, *parts, *prefixes]):
+            found.append(f"codespell skip {glob!r}")
+    found += [f"mypy exclude {r!r}" for r in pyproject["tool"]["mypy"]["exclude"] if re.search(r, path)]
+    if re.search(precommit.get("exclude", "$^"), path):
+        found.append(f"pre-commit exclude {precommit['exclude']!r}")
+    for repo in precommit.get("repos", []):
+        for hook in repo.get("hooks", []):
+            if "ruff" in str(hook.get("entry", "")) and re.search(hook.get("exclude", "$^"), path):
+                found.append(f"hook {hook.get('id')} exclude {hook['exclude']!r}")
+    return found
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("path", KNOWN_FILES)
+def test_no_exclusion_matches_package_files(path: str) -> None:
+    """The 1.x-pool exclusions are anchored to the top-level tree and match nothing under `packages/`."""
+    pyproject, _, precommit = _repo_files()
+    assert exclusions_matching(path, pyproject, precommit) == []
+
+
+@pytest.mark.logic
+def test_an_unanchored_exclusion_is_found() -> None:
+    """A bare `src` skip or an unanchored `src/` regex is reported against a package source path."""
+    pyproject = {"tool": {"codespell": {"skip": ["src"]}, "mypy": {"exclude": ["src/"]}}}
+    assert exclusions_matching(KNOWN_SOURCE, pyproject, {"exclude": "src/"}) == [
+        "codespell skip 'src'",
+        "mypy exclude 'src/'",
+        "pre-commit exclude 'src/'",
     ]

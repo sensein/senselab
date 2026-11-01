@@ -579,9 +579,7 @@ def _register_kernel_samples() -> None:
             Recording(groups={"ecg": _data_group(), "hr": _irregular()}, anchor=_anchor()),
             Recording(groups={"ecg": _data_group(1)}, anchor=_anchor()),
             Recording(
-                groups={
-                    "mic": audio_io.source_group(_channels(1, "audio", "FS"), _RATE, _wav("mono", 1))
-                },
+                groups={"mic": audio_io.source_group(_channels(1, "audio", "FS"), _RATE, _wav("mono", 1))},
                 anchor=_anchor(),
             ),
         ],

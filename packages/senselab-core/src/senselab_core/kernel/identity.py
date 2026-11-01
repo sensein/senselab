@@ -279,14 +279,16 @@ EQUIVALENCE_FORMAT = "equivalence@1"
 
 def _equivalence_class(where: str, raw: object) -> frozenset[str]:
     if not isinstance(raw, Mapping) or set(raw) != {"fingerprints", "derivation"}:
-        raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} must be a mapping of exactly 'fingerprints' and 'derivation'")
+        raise ValueError(
+            f"{EQUIVALENCE_FORMAT} class {where} must be a mapping of exactly 'fingerprints' and 'derivation'"
+        )
     derivation, fingerprints = raw["derivation"], raw["fingerprints"]
     if not isinstance(derivation, str) or not derivation.strip():
         raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} needs a non-empty derivation")
     if not isinstance(fingerprints, list) or not all(isinstance(f, str) and _SHA256.fullmatch(f) for f in fingerprints):
         raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} must list context fingerprints, 64 lowercase hex each")
     members = frozenset(fingerprints)
-    if len(members) < 2:
+    if len(members) < 2:  # noqa: PLR2004 - a class is two or more members by definition, not a tunable
         raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} needs at least two distinct fingerprints")
     return members
 
