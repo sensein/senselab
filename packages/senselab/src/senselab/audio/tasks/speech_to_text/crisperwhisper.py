@@ -1,509 +1,289 @@
-"""CrisperWhisper 2.0 (verbatim, word-timed) via an isolated subprocess venv.
+"""Worker of backend `crisperwhisper` of `speech_to_text`: the CrisperWhisper library, verbatim and word-timed.
 
-CrisperWhisper 2.0 (nyralabs) is a Whisper-derived model for **verbatim** transcription with
-**word-level timestamps**: fillers come out as bracketed words (``[UM]``, ``[UH]``) and repetitions
-are kept. It runs in its own venv with the library's CTranslate2 backend on Linux x86_64 and its
-transformers backend elsewhere (CPU, CUDA, or MPS in float16 on Apple silicon).
-
-Each word chunk's ``score`` is its confidence: on the transformers backend, the mean teacher-forced
-probability of the word's tokens given the audio and the window's prompt; ``None`` on the CT2
-backend. The line ``score`` is the mean over words. Measurements and decisions:
-``specs/20261017-104000-asr-apple-silicon/``.
+`load` takes the pinned model in `init["model"]` (or `"stub": True` for the stub model) and builds nothing; `handle`
+builds the engine `backend_params["engine"]` names (`ct2` or `transformers`) on first use and answers one
+`transcript@1.0` wire form, or one typed fault, per item. Imports are stdlib, numpy and `senselab_worker`; the library,
+`torch`, `soundfile` and `huggingface_hub` load inside the engine.
 """
 
-from __future__ import annotations
-
+import contextlib
 import hashlib
+import math
 import os
-import platform
 import shutil
-import sys
 import tempfile
 import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Literal, get_args
 
-from senselab.audio.data_structures import Audio
-from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
-from senselab.utils.dependencies import hf_subprocess_env, resolve_model
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, venv_python
-from senselab.utils.venv_worker import serve_in_venv
+import numpy
+from senselab_worker.digest import COMMIT_HEX
+from senselab_worker.fake import FakeFaults
+from senselab_worker.faults import ContentFault
 
-_CRISPER_VENV = "crisperwhisper"
-# The CT2 backend on Linux x86_64, the transformers backend elsewhere. One requirement list with
-# environment markers, so the venv lock and its digest are the same on every host; see
-# specs/20261002-subprocess-venv-locks/design.md.
-_IS_LINUX_X86 = sys.platform.startswith("linux") and platform.machine().lower() in ("x86_64", "amd64")
-_LINUX_X86_MARKER = "sys_platform == 'linux' and platform_machine == 'x86_64'"
-_CRISPER_REQUIREMENTS = [
-    "crisperwhisper[transformers]==2.0.1",
-    f"crisperwhisper[ct2]==2.0.1; {_LINUX_X86_MARKER}",
-    "ctranslate2>=4.0; sys_platform != 'linux' or platform_machine != 'x86_64'",
-    "torch>=2.4",
-    "torchaudio>=2.4",
-]
-_CRISPER_PYTHON = "3.12"
+from senselab.audio.tasks.speech_to_text.item_faults import raise_injected, typed
 
-# Backend token passed to CrisperWhisperModel(..., backend=...). "auto" would try
-# ct2 first (and fail off Linux x86_64), so we pin it explicitly per platform.
-_CRISPER_BACKEND = "ct2" if _IS_LINUX_X86 else "transformers"
-
-# The library's HF->CT2 conversion cache: one directory per (model, quantization),
-# holding ``model.bin`` and stamped with ``.conversion_complete`` when written.
-_CT2_WEIGHTS = "model.bin"
-_CT2_MARKER = ".conversion_complete"
-
-# CTranslate2's C++ message when a decode step indexes past Whisper's 448 position
-# encodings; see specs/20260910-crisperwhisper-decoder-positions/.
-_CT2_POSITION_LIMIT = "No position encodings are defined for positions >="
-
-LONGFORM_STRATEGY = "continuation"
-"""The long-form strategy: 30 s windows, each prompted with the last words of the transcript so far."""
-
-CONTEXT_CAPPED = "continuation_context_capped"
-"""The ``decode_strategy`` of a recording decoded again after a position overrun, its context prompts capped."""
-
-DECODER_POSITIONS = 448
-"""Whisper's decoder position encodings, which a window's prompt and its generated tokens share."""
-
+WORKER_MODULE = "senselab.audio.tasks.speech_to_text.crisperwhisper"
+MODEL_ID = "nyralabs/CrisperWhisper2.0_turbo"
+Engine = Literal["ct2", "transformers"]
+ENGINES: tuple[Engine, ...] = get_args(Engine)
+DEFAULT_ENGINE: Engine = "transformers"
 MAX_NEW_TOKENS = 256
-"""The tokens a window may generate; the library's own default, passed explicitly."""
-
-
-class CrisperWhisperDecoderPositionsExceeded(ValueError):
-    """A chunk's prompt plus its token budget overran Whisper's 448 decoder positions; record it as an absence."""
-
-
-def _ct2_cache_root() -> Path:
-    """Return the conversion-cache root ``crisperwhisper.converter`` reads."""
-    env = os.environ.get("CRISPERWHISPER_CACHE")
-    return Path(env) if env else Path.home() / ".cache" / "crisperwhisper"
-
-
-def _ct2_cache_key(model_id: str, quantization: str) -> str:
-    """Return the conversion-cache directory name for one model and quantization.
-
-    Args:
-        model_id: The path or repo id handed to ``CrisperWhisperModel``.
-        quantization: The CT2 compute type (``float16``, ``float32``, ...).
-
-    Returns:
-        The directory name ``crisperwhisper.converter._cache_key`` would build.
-    """
-    slug = model_id.replace("/", "--").replace("\\", "--")
-    digest = hashlib.sha256(model_id.encode()).hexdigest()[:12]
-    return f"{slug}_{quantization}_{digest}"
-
-
-def _ct2_entry_is_torn(entry: Path) -> bool:
-    """Return whether a conversion-cache entry is stamped complete but has no weights.
-
-    Args:
-        entry: A conversion-cache directory.
-
-    Returns:
-        True when ``.conversion_complete`` exists and ``model.bin`` does not.
-    """
-    return (entry / _CT2_MARKER).exists() and not (entry / _CT2_WEIGHTS).exists()
-
-
-def _discard_torn_ct2_entry(entry: Path) -> bool:
-    """Detach and delete a conversion-cache entry that carries no weights.
-
-    Args:
-        entry: A conversion-cache directory.
-
-    Returns:
-        True when a torn entry was detached and deleted, False otherwise.
-    """
-    if not _ct2_entry_is_torn(entry):
-        return False
-    detached = entry.with_name(f"{entry.name}.torn-{uuid.uuid4().hex}")
-    try:
-        os.rename(entry, detached)
-    except OSError:
-        return False
-    shutil.rmtree(detached, ignore_errors=True)
-    return True
-
-
-# Worker — runs inside the isolated venv, served by senselab.utils.venv_worker.
-_CRISPER_WORKER_SCRIPT = r"""
-import os
-import shutil
-import uuid
-from pathlib import Path
-
-
-def load(init):
-    from crisperwhisper import CrisperWhisperModel
-
-    model_id = init["model_id"]
-    backend = init["backend"]
-    compute_type = init["compute_type"]
-
-    # The CT2 backend converts the HF snapshot into a shared cache directory whose
-    # writer is neither atomic nor locked. Convert into a private staging directory
-    # and publish it with one rename, so a concurrent converter can neither be read
-    # half-written nor delete what this process just wrote.
-    if backend == "ct2":
-        entry = Path(init["ct2_entry"])
-        if not (entry / "model.bin").exists():
-            from crisperwhisper.converter import ensure_ct2_model
-
-            staging = Path(init["ct2_staging_root"]) / (".staging-" + uuid.uuid4().hex)
-            converted = Path(ensure_ct2_model(model_id, quantization=compute_type, cache_dir=str(staging)))
-            entry.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                os.rename(str(converted), str(entry))
-            except OSError:
-                if not (entry / "model.bin").exists():
-                    shutil.rmtree(str(entry), ignore_errors=True)
-                    os.rename(str(converted), str(entry))
-            shutil.rmtree(str(staging), ignore_errors=True)
-        model_id = str(entry)
-
-    if init["device"] == "mps":
-        _disable_deferred_stop_check()
-
-    # CrisperWhisperModel takes no revision anywhere in its call chain; `model_id` is the local
-    # snapshot directory the parent resolved and staged for the run-agreed commit.
-    model = CrisperWhisperModel(model_id, backend=backend, device=init["device"], compute_type=compute_type)
-    global _CAPTURE
-    _CAPTURE = _install_word_confidence(model) if init.get("word_confidence") else None
-    return model
-
-
-def _disable_deferred_stop_check():
-    from transformers.generation import utils as generation_utils
-
-    deferred = getattr(generation_utils, "DeferredStopCheck", None)
-    if deferred is not None:
-        deferred.is_supported = staticmethod(lambda *args, **kwargs: False)
-
-
-_CAPTURE = None
-
-
-class _WordConfidence:
-    def __init__(self, engine):
-        import crisperwhisper.longform.continuation as continuation
-        import crisperwhisper.word_timing as word_timing
-
-        self.engine = engine
-        self.slots = []
-        self.encoded = None
-        self.prompt = None
-        engine.model.get_encoder().register_forward_hook(self._on_encoder)
-
-        extract_features = engine.extract_features_with_mel
-        generate = engine.generate_with_repair_and_attention
-        extract_words = word_timing.extract_word_timings
-        drop_index = continuation._overlap_drop_index
-
-        def extract_features_with_mel(*args, **kwargs):
-            self.slots.append({"words": [], "keep": None})
-            return extract_features(*args, **kwargs)
-
-        def generate_with_repair_and_attention(features, prompt_tokens, *args, **kwargs):
-            self.prompt = list(prompt_tokens)
-            return generate(features, prompt_tokens, *args, **kwargs)
-
-        def extract_word_timings(eng, gen_ids, attention, mel, **kwargs):
-            keep_unplaceable = kwargs.pop("keep_unplaceable", False)
-            words = extract_words(eng, gen_ids, attention, mel, keep_unplaceable=True, **kwargs)
-            if self.slots:
-                probs = self._word_probs(gen_ids, len(words))
-                self.slots[-1]["words"] = [(w.start is not None, p) for w, p in zip(words, probs)]
-            return words if keep_unplaceable else [w for w in words if w.start is not None]
-
-        def _overlap_drop_index(*args, **kwargs):
-            keep = drop_index(*args, **kwargs)
-            if self.slots:
-                self.slots[-1]["keep"] = keep
-            return keep
-
-        engine.extract_features_with_mel = extract_features_with_mel
-        engine.generate_with_repair_and_attention = generate_with_repair_and_attention
-        word_timing.extract_word_timings = extract_word_timings
-        continuation._overlap_drop_index = _overlap_drop_index
-
-    def _on_encoder(self, module, args, output):
-        self.encoded = output[0]
-
-    def _word_probs(self, gen_ids, n_words):
-        import torch
-        from crisperwhisper.word_timing import group_tokens_into_words
-
-        if self.encoded is None or self.prompt is None or not gen_ids:
-            return [None] * n_words
-        eng = self.engine
-        gen_ids = [int(t) for t in gen_ids]
-        groups, _ = group_tokens_into_words(gen_ids, [eng.tokenizer.decode([t]) for t in gen_ids])
-        if len(groups) != n_words:
-            return [None] * n_words
-        n_prompt = len(self.prompt)
-        dec = torch.tensor([self.prompt + gen_ids], device=eng.device, dtype=torch.long)
-        with torch.no_grad():
-            logits = eng.model(encoder_outputs=(self.encoded,), decoder_input_ids=dec, use_cache=False).logits[0]
-        logp = torch.log_softmax(logits[n_prompt - 1 : n_prompt - 1 + len(gen_ids)].float(), dim=-1)
-        target = torch.tensor(gen_ids, device=logp.device).unsqueeze(1)
-        token_p = logp.gather(1, target).squeeze(1).exp().cpu().tolist()
-        return [sum(token_p[i] for i in g) / len(g) for g in groups]
-
-    def reset(self):
-        self.slots = []
-
-    def final(self):
-        out = []
-        for slot in self.slots:
-            words = slot["words"] if slot["keep"] is None else slot["words"][: slot["keep"]]
-            out.extend(p for placed, p in words if placed)
-        return out
-
-
-def _install_word_confidence(model):
-    engine = getattr(model, "_engine", None)
-    if engine is None or type(engine).__name__ != "TransformersEngine":
-        return None
-    return _WordConfidence(engine)
-
-
-def _first_attr(obj, names):
-    for n in names:
-        v = getattr(obj, n, None)
-        if v is not None:
-            return v
-    return None
-
-
-def handle(model, args):
-    language = args.get("language") or "en"
-    strategy = args["longform_strategy"]
-    max_new_tokens = int(args["max_new_tokens"])
-    prompt_budget = args.get("prompt_token_budget")
-    position_limit = args["position_limit"]
-
-    def _decode(path):
-        return model.transcribe(
-            path,
-            language=language,
-            word_timestamps=True,
-            longform_strategy=strategy,
-            max_new_tokens=max_new_tokens,
-        )
-
-    def _decode_capped(path):
-        from crisperwhisper.prompt import PromptBuilder
-
-        original = PromptBuilder._build
-
-        def _build(self, mode, hotwords=None, context=None):
-            ids = original(self, mode, hotwords=hotwords, context=context)
-            words = (context or "").split()
-            while words and len(ids) > prompt_budget:
-                words = words[1:]
-                ids = original(self, mode, hotwords=hotwords, context=" ".join(words) or None)
-            return ids
-
-        PromptBuilder._build = _build
-        try:
-            return _decode(path)
-        finally:
-            PromptBuilder._build = original
-
-    results = []
-    for path in args["audio_paths"]:
-        used = strategy
-        if _CAPTURE is not None:
-            _CAPTURE.reset()
-        try:
-            r = _decode(path)
-        except Exception as overrun:
-            if prompt_budget is None or position_limit not in str(overrun):
-                raise
-            used = args["capped_strategy"]
-            if _CAPTURE is not None:
-                _CAPTURE.reset()
-            r = _decode_capped(path)
-        raw_words = getattr(r, "words", None) or []
-        captured = _CAPTURE.final() if _CAPTURE is not None else []
-        if len(captured) != len(raw_words):
-            captured = [None] * len(raw_words)
-        words = []
-        for w, captured_p in zip(raw_words, captured):
-            conf = _first_attr(w, ("probability", "confidence", "score", "prob"))
-            if conf is None:
-                conf = captured_p
-            words.append({
-                "text": _first_attr(w, ("word", "text")) or "",
-                "start": float(w.start),
-                "end": float(w.end),
-                "score": (float(conf) if conf is not None else None),
-            })
-        line_conf = _first_attr(r, ("confidence", "avg_logprob", "score"))
-        if line_conf is None:
-            cs = [w["score"] for w in words if w["score"] is not None]
-            line_conf = (sum(cs) / len(cs)) if cs else None
-        results.append({
-            "text": getattr(r, "text", "") or "",
-            "language": getattr(r, "language", language),
-            "words": words,
-            "score": (float(line_conf) if line_conf is not None else None),
-            "decode_strategy": used,
-        })
-    return {"results": results}
-"""
-
-_LOAD_TIMEOUT_S = 1800
-_REQUEST_TIMEOUT_S = 1800
-
-REQUEST_SECONDS_PER_AUDIO_SECOND = 3.0
-"""Per-file request timeout, in seconds per second of audio, when that exceeds ``_REQUEST_TIMEOUT_S``."""
-
+EXPECTED_RATE = 16_000
+LONGFORM_STRATEGY = "continuation"
+DEFAULT_LANGUAGE = "en"
 COMPUTE_TYPES = {"cuda": "float16", "mps": "float16", "cpu": "float32"}
-"""Weight precision per device (MPS measurements: specs/20261017-104000-asr-apple-silicon/)."""
+_INIT_KEYS = frozenset({"stub", "model", "device", "faults", "array_dir"})
+_NS_PER_S = 1_000_000_000
 
 
-class CrisperWhisperASR:
-    """CrisperWhisper 2.0 transcription via its isolated subprocess venv.
+@dataclass(frozen=True)
+class Decoded:
+    """One decode: `words` as `(text, start_s, end_s)`, a confidence per word (or none), and the mean confidence."""
 
-    Routed automatically by ``speech_to_text.api`` when the model id matches the
-    ``nyralabs/CrisperWhisper2.0`` prefix. Returns one ``ScriptLine`` per audio
-    with verbatim ``text``, per-word ``chunks`` (with ``score`` = word
-    confidence when available), and a line-level ``score``.
+    words: list[tuple[str, float, float]]
+    confidences: list[float | None]
+    mean: float | None
+
+
+class StubModel:
+    """The fake stack's model: deterministic words, evenly spaced over the audio, derived from its samples."""
+
+    def transcribe(self, samples: numpy.ndarray, language: str, max_new_tokens: int) -> Decoded:
+        """Return three words spaced over `samples`; `language` and `max_new_tokens` are unused."""
+        digest = hashlib.sha256(samples.astype(numpy.float32).tobytes()).hexdigest()
+        step = samples.size / EXPECTED_RATE / 3
+        words = [(f"w{digest[4 * i : 4 * i + 4]}", i * step, (i + 1) * step) for i in range(3)]
+        return Decoded(words, [None] * 3, None)
+
+
+@dataclass
+class State:
+    """A loaded backend: the pinned model, the device, the faults to inject and the engines built so far."""
+
+    model: dict[str, Any] | None
+    device: str
+    faults: FakeFaults
+    engines: dict[str, Any] = field(default_factory=dict)
+
+
+def load(init: dict[str, Any]) -> State:
+    """Return the worker's state from `init`.
+
+    `init` holds `model` (`{"source": "hf", "id", "identity"}`, `identity` a 40-hex commit) and `device`, or
+    `"stub": True`; it may hold `faults`, the fields of `FakeFaults`, and `array_dir`.
+
+    Raises:
+        ValueError: on an unknown key, a model that is not a pinned hub commit, or both `stub` and `model`.
     """
+    unknown = sorted(init.keys() - _INIT_KEYS)
+    if unknown:
+        raise ValueError(f"crisperwhisper init takes only {sorted(_INIT_KEYS)}, got {unknown}")
+    faults = FakeFaults.from_json(init.get("faults", {}))
+    model = init.get("model")
+    device = str(init.get("device", "cpu"))
+    if init.get("stub"):
+        if model is not None:
+            raise ValueError("crisperwhisper init takes `stub` or `model`, not both")
+        return State(None, device, faults, {engine: StubModel() for engine in ENGINES})
+    if not isinstance(model, dict) or model.get("source") != "hf":
+        raise ValueError(f"crisperwhisper loads a hub model, got {model!r}")
+    if not COMMIT_HEX.fullmatch(str(model.get("identity"))):
+        raise ValueError(f"a model is loaded by its 40-hex commit, never a ref: {model.get('identity')!r}")
+    return State(model, device, faults)
 
-    @classmethod
-    def transcribe_with_crisperwhisper(
-        cls,
-        audios: List[Audio],
-        model: Optional[HFModel] = None,
-        device: Optional[DeviceType] = None,
-        language: Optional[str] = None,
-    ) -> List[ScriptLine]:
-        """Transcribe audios with CrisperWhisper 2.0 via the dedicated subprocess venv.
 
-        Each audio is one request to the long-lived worker, which keeps the model loaded across
-        the list; a request's timeout grows with the audio's duration.
+def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return one `{"outputs": {"transcript": <transcript@1.0 wire form>}}` per item, or its typed fault.
 
-        Args:
-            audios: Audio clips (mono, 16 kHz expected).
-            model: HF model id (default ``nyralabs/CrisperWhisper2.0_turbo``).
-            device: CUDA, MPS or CPU (default: the fastest available). MPS runs the
-                transformers backend in float16.
-            language: Force a language (default ``en``); CrisperWhisper is en/de.
+    `params` holds the task's `language` and `timestamps` and `backend_params` (`engine`, `max_new_tokens`).
 
-        Returns:
-            One ``ScriptLine`` per input with verbatim ``text``, word-level
-            ``chunks`` carrying timestamps + ``score`` (word confidence, see the
-            module docstring), a line-level ``score``, and the ``decode_strategy``
-            used: :data:`LONGFORM_STRATEGY`, or :data:`CONTEXT_CAPPED` for an input
-            whose first decode overran the decoder's positions and was decoded
-            again with each window's context prompt cut, leading words first,
-            to :data:`DECODER_POSITIONS` less :data:`MAX_NEW_TOKENS`.
+    Raises:
+        ValueError: on an unknown engine or backend param, or an unknown `timestamps` level.
+    """
+    tuning = _backend_params(params.get("backend_params", {}))
+    timestamps = str(params.get("timestamps", "word"))
+    if timestamps not in ("word", "segment", "none"):
+        raise ValueError(f"timestamps is word, segment or none, got {timestamps!r}")
+    language = str(params.get("language") or DEFAULT_LANGUAGE)
+    engine = _engine(state, tuning["engine"])
+    results: list[dict[str, Any]] = []
+    for item in items:
+        try:
+            samples, clock_id = _prepare(item, state.faults)
+            decoded = engine.transcribe(samples, language, tuning["max_new_tokens"])
+            duration_ns = round(samples.size / EXPECTED_RATE * _NS_PER_S)
+            results.append({"outputs": {"transcript": transcript(decoded, timestamps, clock_id, duration_ns)}})
+        except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
+            results.append({"error": typed(exc)})
+    return results
+
+
+def _backend_params(given: Mapping[str, Any]) -> dict[str, Any]:
+    unknown = sorted(set(given) - {"engine", "max_new_tokens"})
+    if unknown:
+        raise ValueError(f"unknown backend params {unknown}; known: ['engine', 'max_new_tokens']")
+    tuning = {"engine": DEFAULT_ENGINE, "max_new_tokens": MAX_NEW_TOKENS} | dict(given)
+    if tuning["engine"] not in ENGINES:
+        raise ValueError(f"engine is one of {list(ENGINES)}, got {tuning['engine']!r}")
+    return tuning
+
+
+def _prepare(item: dict[str, Any], faults: FakeFaults) -> tuple[numpy.ndarray, str]:
+    """Return the item's mono samples and its clock id, or raise its content or resource fault."""
+    raise_injected(item["id"], faults)
+    wire = item["inputs"]["audio"]
+    group = wire["groups"]["audio"]
+    samples = numpy.asarray(group["data"])
+    if samples.shape[0] != 1:
+        raise ContentFault(f"crisperwhisper takes mono audio, got {samples.shape[0]} channels")
+    if float(group["sampling_rate"]) != EXPECTED_RATE:
+        raise ContentFault(
+            f"crisperwhisper takes {EXPECTED_RATE} Hz audio, got {group['sampling_rate']} Hz; resample it first"
+        )
+    return samples[0].astype(numpy.float32), str(wire["anchor"]["clock_id"])
+
+
+def transcript(decoded: Decoded, timestamps: str, clock_id: str, duration_ns: int) -> dict[str, Any]:
+    """Return the `transcript@1.0` wire form of `decoded` at the `timestamps` level.
+
+    `word` gives one segment dividing into words, `segment` the same segment without words, `none` one untimed
+    segment; no words give no segment. A word missing a time starts where the previous ended; spans are integer ns
+    clamped to `duration_ns`.
+    """
+    text = " ".join(w for w, _, _ in decoded.words).strip()
+    if not text:
+        return _doc([])
+    mean = None if decoded.mean is None else min(1.0, decoded.mean)
+    if timestamps == "none":
+        return _doc([_node(text, None, mean, [])])
+    floor = 0
+    children = []
+    for (word, start, end), confidence in zip(decoded.words, decoded.confidences):
+        begin = min(duration_ns, max(floor, round(start * _NS_PER_S)))
+        stop = min(duration_ns, max(begin, round(end * _NS_PER_S)))
+        children.append(_node(word, _span(begin, stop, clock_id), confidence, []))
+        floor = stop
+    whole = _span(children[0]["span"]["start_ns"], children[-1]["span"]["end_ns"], clock_id)
+    return _doc([_node(text, whole, mean, children if timestamps == "word" else [])])
+
+
+def _doc(segments: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"format": "transcript@1.0", "segments": segments}
+
+
+def _span(start_ns: int, end_ns: int, clock_id: str) -> dict[str, Any]:
+    return {"start_ns": start_ns, "end_ns": end_ns, "clock_id": clock_id}
+
+
+def _node(
+    text: str, span: dict[str, Any] | None, confidence: float | None, children: list[dict[str, Any]]
+) -> dict[str, Any]:
+    return {"text": text, "span": span, "confidence": confidence, "children": children}
+
+
+def _engine(state: State, name: str) -> Any:  # noqa: ANN401 - a StubModel or a Library
+    if name not in state.engines:
+        assert state.model is not None  # noqa: S101 - a stubbed state holds every engine from `load`
+        state.engines[name] = Library(state.model, state.device, name)
+    return state.engines[name]
+
+
+class Library:
+    """The CrisperWhisper library on one engine, loaded from the pinned snapshot of the model."""
+
+    def __init__(self, model: Mapping[str, Any], device: str, engine: str) -> None:
+        """Build the library model; `ct2` converts the snapshot once per model commit and compute type.
 
         Raises:
-            CrisperWhisperDecoderPositionsExceeded: The capped decode also
-                overran Whisper's 448 position encodings.
+            ValueError: for `ct2` on `mps`.
         """
-        if model is None:
-            model = HFModel(path_or_uri="nyralabs/CrisperWhisper2.0_turbo")
-        model_id = str(model.path_or_uri)
-        device_type, _ = _select_device_and_dtype(
-            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU]
+        from crisperwhisper import CrisperWhisperModel  # noqa: PLC0415 - the library loads in the engine only
+        from huggingface_hub import snapshot_download  # noqa: PLC0415 - as above
+
+        if engine == "ct2" and device == "mps":
+            raise ValueError("the ct2 engine runs on cuda or cpu, not mps")
+        compute = COMPUTE_TYPES[device]
+        path = snapshot_download(str(model["id"]), revision=str(model["identity"]))
+        if engine == "ct2":
+            path = _converted(path, str(model["identity"]), compute)
+        if device == "mps":
+            _disable_deferred_stop_check()
+        self.engine = engine
+        self.model = CrisperWhisperModel(path, backend=engine, device=device, compute_type=compute)
+
+    def transcribe(self, samples: numpy.ndarray, language: str, max_new_tokens: int) -> Decoded:
+        """Return the decode of `samples`, with word confidences on the transformers engine."""
+        import soundfile  # noqa: PLC0415 - loads in the engine only
+
+        from senselab.audio.tasks.speech_to_text.token_confidence import (  # noqa: PLC0415 - as above
+            capture_token_confidence,
+            merge_confidence_blocks,
+            special_token_ids,
+            word_confidences,
         )
-        device_str = device_type.value
-        compute_type = COMPUTE_TYPES[device_str]
 
-        venv_dir = ensure_venv(_CRISPER_VENV, _CRISPER_REQUIREMENTS, python_version=_CRISPER_PYTHON)
-        python = venv_python(venv_dir)
-
-        # CrisperWhisperModel has no revision parameter anywhere in its call chain (see
-        # the worker-script comment), so resolve the ref to the run-agreed commit SHA
-        # (download-once via the cross-process heartbeat lock) and point the worker at
-        # that commit's already-staged local snapshot directory instead of the mutable
-        # repo id -- both backends treat an existing local directory as already pinned.
-        revision, snapshot_path = resolve_model(model_id, model.revision or "main")
-
-        with tempfile.TemporaryDirectory(prefix="senselab-crisperwhisper-") as tmpdir:
-            tmp = Path(tmpdir)
-            cache_root = _ct2_cache_root()
-            ct2_entry = cache_root / _ct2_cache_key(str(snapshot_path), compute_type)
-            if _CRISPER_BACKEND == "ct2":
-                _discard_torn_ct2_entry(ct2_entry)
-            # Stage the model once (cross-process heartbeat lock) and run the worker offline so
-            # its weight fetch makes no Hub version check.
-            env = hf_subprocess_env(model_id, revision, base_env=_clean_subprocess_env())
-            entries: List[dict] = []
-            for i, audio in enumerate(audios):
-                path = tmp / f"audio_{i}.wav"
-                audio.save_to_file(str(path))
-                duration_s = audio.waveform.shape[-1] / float(audio.sampling_rate)
-                try:
-                    output = serve_in_venv(
-                        (Path(venv_dir).name, str(snapshot_path), revision, device_str, compute_type),
-                        python=python,
-                        script=_CRISPER_WORKER_SCRIPT,
-                        init={
-                            "model_id": str(snapshot_path),
-                            "backend": _CRISPER_BACKEND,
-                            "device": device_str,
-                            "compute_type": compute_type,
-                            "ct2_entry": str(ct2_entry),
-                            "ct2_staging_root": str(cache_root),
-                            "word_confidence": True,
-                        },
-                        request={
-                            "audio_paths": [str(path)],
-                            "language": language or "en",
-                            "longform_strategy": LONGFORM_STRATEGY,
-                            "max_new_tokens": MAX_NEW_TOKENS,
-                            "prompt_token_budget": DECODER_POSITIONS - MAX_NEW_TOKENS - 1,
-                            "capped_strategy": CONTEXT_CAPPED,
-                            "position_limit": _CT2_POSITION_LIMIT,
-                        },
-                        env=env,
-                        label="CrisperWhisper 2.0",
-                        load_timeout_s=_LOAD_TIMEOUT_S,
-                        request_timeout_s=max(_REQUEST_TIMEOUT_S, REQUEST_SECONDS_PER_AUDIO_SECOND * duration_s),
-                    )
-                except RuntimeError as err:
-                    if _CT2_POSITION_LIMIT in str(err):
-                        raise CrisperWhisperDecoderPositionsExceeded(str(err)) from err
-                    raise
-                path.unlink(missing_ok=True)
-                entries.extend(output.get("results", []))
-
-            results: List[ScriptLine] = []
-            for entry in entries:
-                words = entry.get("words") or []
-                chunks: Optional[List[ScriptLine]] = None
-                line_start: Optional[float] = None
-                line_end: Optional[float] = None
-                if words:
-                    chunks = [
-                        ScriptLine(
-                            text=w["text"],
-                            start=float(w["start"]),
-                            end=float(w["end"]),
-                            score=(float(w["score"]) if w.get("score") is not None else None),
-                        )
-                        for w in words
-                    ]
-                    chunks.sort(key=lambda c: c.start if c.start is not None else 0.0)
-                    starts = [c.start for c in chunks if c.start is not None]
-                    ends = [c.end for c in chunks if c.end is not None]
-                    line_start = min(starts) if starts else None
-                    line_end = max(ends) if ends else None
-                results.append(
-                    ScriptLine(
-                        text=entry.get("text", ""),
-                        start=line_start,
-                        end=line_end,
-                        chunks=chunks,
-                        score=(float(entry["score"]) if entry.get("score") is not None else None),
-                        decode_strategy=entry.get("decode_strategy"),
-                    )
+        engine = getattr(self.model, "_engine", None) if self.engine == "transformers" else None
+        special = special_token_ids(engine)
+        scoring: contextlib.AbstractContextManager[list[dict[str, Any]]] = (
+            capture_token_confidence(engine, special_token_ids=special) if engine else contextlib.nullcontext([])
+        )
+        with tempfile.TemporaryDirectory(prefix="senselab-crisperwhisper-") as scratch:
+            wav = Path(scratch) / "audio.wav"
+            soundfile.write(str(wav), samples, EXPECTED_RATE, subtype="FLOAT")
+            with scoring as blocks:
+                result = self.model.transcribe(
+                    str(wav),
+                    language=language,
+                    word_timestamps=True,
+                    longform_strategy=LONGFORM_STRATEGY,
+                    max_new_tokens=max_new_tokens,
                 )
-            return results
+        words = [(str(w.word or w.text), float(w.start), float(w.end)) for w in getattr(result, "words", None) or []]
+        confidences: list[float | None] = [None] * len(words)
+        mean = None
+        if blocks:
+            merged = merge_confidence_blocks(blocks)
+            mean = None if merged["avg_logprob"] is None else math.exp(merged["avg_logprob"])
+            if merged["tokens"]:
+                scored = word_confidences(
+                    merged["tokens"],
+                    merged["token_logprob"],
+                    lambda token: str(self.model._engine.tokenizer.decode([token])),
+                    special,
+                )
+                if len(scored) == len(words):
+                    confidences = list(scored)
+        return Decoded(words, confidences, mean)
+
+
+def _converted(snapshot: str, identity: str, compute: str) -> str:
+    """Return the CT2 conversion of `snapshot`, converted into a private directory and published by one rename."""
+    from crisperwhisper.converter import ensure_ct2_model  # noqa: PLC0415 - the library loads in the engine only
+
+    root = Path(os.environ.get("SENSELAB_CACHE") or Path.home() / ".cache" / "senselab") / "crisperwhisper-ct2"
+    entry = root / f"{identity}-{compute}"
+    if (entry / "model.bin").exists():
+        return str(entry)
+    root.mkdir(parents=True, exist_ok=True)
+    staging = root / f".staging-{uuid.uuid4().hex}"
+    try:
+        converted = Path(ensure_ct2_model(snapshot, quantization=compute, cache_dir=str(staging)))
+        try:
+            os.rename(converted, entry)
+        except OSError:
+            if not (entry / "model.bin").exists():
+                raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return str(entry)
+
+
+def _disable_deferred_stop_check() -> None:
+    from transformers.generation import utils  # noqa: PLC0415 - loads in the engine only
+
+    deferred = getattr(utils, "DeferredStopCheck", None)
+    if deferred is not None:
+        deferred.is_supported = staticmethod(lambda *args, **kwargs: False)

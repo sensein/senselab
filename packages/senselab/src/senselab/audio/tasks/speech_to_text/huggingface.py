@@ -20,9 +20,10 @@ from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime.audio_io import READER
 from senselab_worker.digest import COMMIT_HEX
 from senselab_worker.fake import FakeFaults
-from senselab_worker.faults import ContentFault, FaultClass, InfrastructureFault, ResourceFault, classify
+from senselab_worker.faults import ContentFault
 
 from senselab._api.declarations import SpeechToTextParams
+from senselab.audio.tasks.speech_to_text.item_faults import raise_injected, typed
 from senselab.audio.tasks.speech_to_text.token_confidence import (
     capture_token_confidence,
     merge_confidence_blocks,
@@ -146,7 +147,7 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
         try:
             ready.append((index, _prepare(state, item)))
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
-            results[index] = {"error": _typed(exc)}
+            results[index] = {"error": typed(exc)}
     try:
         for (index, _), transcript in zip(ready, _transcribe(state, [p for _, p in ready], task, tuning)):
             results[index] = {"outputs": {"transcript": transcript}}
@@ -155,7 +156,7 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
             try:
                 results[index] = {"outputs": {"transcript": _transcribe(state, [prepared], task, tuning)[0]}}
             except Exception as exc:  # noqa: BLE001 - as above
-                results[index] = {"error": _typed(exc)}
+                results[index] = {"error": typed(exc)}
     return [r for r in results if r is not None]
 
 
@@ -166,20 +167,8 @@ class _Prepared:
     duration_ns: int
 
 
-def _typed(exc: Exception) -> Exception:
-    """Return `exc` as a typed fault: resource when it says so, else the item's own (content)."""
-    if isinstance(exc, (ContentFault, ResourceFault, InfrastructureFault)):
-        return exc
-    if classify(exc) is FaultClass.RESOURCE:
-        return ResourceFault(f"{type(exc).__name__}: {exc}")
-    return ContentFault(f"{type(exc).__name__}: {exc}")
-
-
 def _prepare(state: State, item: dict[str, Any]) -> _Prepared:
-    if item["id"] in state.faults.fail_items:
-        raise ContentFault(f"injected failure for item {item['id']}")
-    if item["id"] in state.faults.oom_items:
-        raise ResourceFault(f"injected out of memory for item {item['id']}")
+    raise_injected(item["id"], state.faults)
     samples, rate, clock_id = _audio(item["inputs"]["audio"])
     if samples.shape[0] != 1:
         raise ContentFault(f"whisper takes mono audio, got {samples.shape[0]} channels")

@@ -8,6 +8,7 @@ Regenerate with `uv run python scripts/generate_task_api.py`.
 import senselab._api.declarations
 import senselab.signal.resample
 import senselab.audio.tasks.speech_to_text.huggingface
+import senselab.audio.tasks.speech_to_text.crisperwhisper_backend
 
 from collections.abc import Mapping
 from os import PathLike

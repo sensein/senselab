@@ -10,6 +10,7 @@ DECLARATION_MODULES: tuple[str, ...] = (
     "senselab._api.declarations",
     "senselab.signal.resample",
     "senselab.audio.tasks.speech_to_text.huggingface",
+    "senselab.audio.tasks.speech_to_text.crisperwhisper_backend",
 )
 """Importable modules declaring tasks and backends in `senselab_core.kernel.declare.REGISTRY`, in declaration order."""
 

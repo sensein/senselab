@@ -18,8 +18,8 @@ entries:
 - id: nyralabs/CrisperWhisper2.0_turbo
   revision: de0369c8a68025b7f6e86387b6eb5a3b369787c8
   tasks: [speech_to_text]
-  backends: [crisperwhisper-ct2, crisperwhisper-transformers]
-  stacks: [ct2, transformers]
+  backends: [crisperwhisper]
+  stacks: [crisperwhisper]
   default_for: []
   license:
     expression: LicenseRef-nyra-health-non-commercial-research
