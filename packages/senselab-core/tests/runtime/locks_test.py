@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from senselab_core.runtime import storage as storage_module
 from senselab_core.runtime.locks import Lease, LeaseTimeout, LeaseUnavailable
 
 pytestmark = pytest.mark.logic
@@ -47,6 +48,30 @@ def _plant_lease(resource: Path, *, at: float = OLD) -> Path:
     lease.write_text(json.dumps({"user": "u", "host": "h", "pid": 1}))
     os.utime(lease, (at, at))
     return lease
+
+
+class _SameInode:
+    """A stat result whose inode number is always 1, as a filesystem that reuses a freed number at once."""
+
+    def __init__(self, st: os.stat_result) -> None:
+        self._st = st
+
+    def __getattr__(self, name: str) -> object:
+        return 1 if name == "st_ino" else getattr(self._st, name)
+
+
+@pytest.fixture(params=["distinct", "reused"])
+def inodes(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Run as the filesystem numbers inodes, or as if every file had the same inode number (ext4's reuse)."""
+    if request.param == "reused":
+        real = storage_module.StorageDir.lstat
+
+        def lstat(self: storage_module.StorageDir, name: str) -> object:
+            st = real(self, name)
+            return None if st is None else _SameInode(st)
+
+        monkeypatch.setattr(storage_module.StorageDir, "lstat", lstat)
+    return str(request.param)
 
 
 def _join(threads: list[threading.Thread]) -> None:
@@ -163,8 +188,11 @@ def test_release_removes_the_lease_and_leaves_nothing_behind(tmp_path: Path) -> 
     assert not lease.owns()
 
 
-def test_a_release_never_removes_a_lease_another_holder_took(tmp_path: Path) -> None:
-    """A holder whose lease was broken releases nothing: the new holder's lease stays and it still owns it."""
+def test_a_release_never_removes_a_lease_another_holder_took(tmp_path: Path, inodes: str) -> None:
+    """A holder whose lease was broken releases nothing: the new holder's lease stays and it still owns it.
+
+    `reused` gives every file one inode number, as ext4 gives the broken lease's number to the next file.
+    """
     resource = tmp_path / "thing"
     first = Lease(resource, timeout=0)
     first.__enter__()
@@ -216,14 +244,19 @@ def test_staleness_is_read_on_the_storage_clock_not_the_local_one(
 # -- a stale lease is broken by rename, so two breakers cannot both win --
 
 
-def test_a_breaker_that_judged_an_old_lease_never_removes_the_new_one(tmp_path: Path) -> None:
-    """When another breaker took the name between a judgement and its rename, the new lease is put back."""
+def test_a_breaker_that_judged_an_old_lease_never_removes_the_new_one(tmp_path: Path, inodes: str) -> None:
+    """When another breaker took the name between a judgement and its rename, the new lease is left in place.
+
+    `reused` gives every file one inode number, as ext4 gives the broken lease's number to the next file.
+    """
     resource = tmp_path / "thing"
     planted = os.lstat(_plant_lease(resource))
+    if inodes == "reused":
+        planted = _SameInode(planted)  # type: ignore[assignment]
     late = Lease(resource, timeout=0, stale_after=60)
     with Lease(resource, timeout=1, stale_after=60) as winner:
         assert winner.broke
-        assert late._take_aside((planted.st_dev, planted.st_ino)) is False
+        assert late._take_aside(late._is(planted)) is False
         assert winner.owns()
     late._close()
     assert [p.name for p in tmp_path.iterdir() if p.name != ".clock"] == []

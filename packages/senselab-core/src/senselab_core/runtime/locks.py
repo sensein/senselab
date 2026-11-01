@@ -6,12 +6,14 @@ directory's descriptor and never follows a symlink:
 - **take:** the holder's identity is written to a fresh private temporary (`O_EXCL | O_NOFOLLOW`, its mode set
   through its descriptor) and hard-linked at `<name>.lease`; the link fails if anything is at the name, so one
   taker wins. The lease's mtime, stamped by the storage, is when it was taken.
-- **hold:** the holder owns the lease while the file at `<name>.lease` is the inode it linked.
+- **hold:** the holder owns the lease while the file at `<name>.lease` carries the token it wrote. A token, not
+  an inode number, because a filesystem may give a freed inode number to the next file (ext4 does at once).
 - **judge:** a lease is stale when its age on the storage clock (`StorageDir.fs_now`) passes `stale_after`.
   Anything but a regular file at `<name>.lease` is of the wrong kind and is moved aside (quarantined).
-- **break and release:** the lease is renamed to a fresh uuid name, which is atomic, and the moved inode is
-  compared with the one judged (or linked); a lease moved by mistake is linked back. So two breakers cannot
-  both remove one lease, and a releaser never removes another holder's lease.
+- **break and release:** the lease is renamed to a fresh uuid name, which is atomic, and the moved file is
+  compared with the one judged (device, inode and mtime, which rename keeps) or with the holder's token; a
+  lease moved by mistake is linked back. So two breakers cannot both remove one lease, and a releaser never
+  removes another holder's lease.
 
 Every wait ends at `timeout` in `LeaseTimeout`. The lease is an efficiency hint: a holder that outlives
 `stale_after` can be broken, and what it guards stays correct by idempotence, not by the lease.
@@ -29,6 +31,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from collections.abc import Callable
 from typing import Optional
 
 from senselab_worker.ownership import UUID_HEX
@@ -114,7 +117,7 @@ class Lease:
         self._file_mode = file_mode
         self._given = directory
         self._dir: Optional[StorageDir] = None
-        self._held: Optional[tuple[int, int]] = None
+        self._held: Optional[str] = None
         self._seen: Optional[tuple[tuple[int, int, int], float, float]] = None
         self.broke: list[Path] = []
         self.set_aside: list[Path] = []
@@ -129,12 +132,12 @@ class Lease:
             self._dir = self._given.dup() if self._given is not None else StorageDir.open_root(self._path.parent)
         return self._dir
 
-    def _identity(self) -> bytes:
-        record = {"user": getpass.getuser(), "host": socket.gethostname(), "pid": os.getpid()}
+    def _identity(self, token: str) -> bytes:
+        record = {"user": getpass.getuser(), "host": socket.gethostname(), "pid": os.getpid(), "token": token}
         return json.dumps(record).encode("utf-8")
 
-    def _try_take(self) -> Optional[tuple[int, int]]:
-        """Link a fresh identity at the lease name; return its `(device, inode)`, None if the name is taken.
+    def _try_take(self) -> Optional[str]:
+        """Link a fresh identity at the lease name; return its token, None if the name is taken.
 
         A link whose reply is lost (NFS) may fail although it was made, so the outcome is read from the
         temporary's link count, not from the error.
@@ -148,8 +151,9 @@ class Lease:
                 self._lease_path,
                 f"cannot take the lease {self._lease_path}: {err.strerror}; {owner_remedy(directory.path)}",
             ) from err
+        token = uuid.uuid4().hex
         try:
-            os.write(fd, self._identity())
+            os.write(fd, self._identity(token))
             os.fsync(fd)
             try:
                 directory.link(temporary, directory, self._name, grammar=LEASE_NAME)
@@ -158,49 +162,53 @@ class Lease:
                     if err.errno == errno.EEXIST:
                         return None
                     raise
-            held = os.fstat(fd)
-            return held.st_dev, held.st_ino
+            return token
         finally:
             os.close(fd)
             directory.remove_owned(temporary, pattern=TEMPORARY_NAME)
 
-    def _current(self) -> Optional[tuple[int, int]]:
-        """Return the `(device, inode)` of the regular file at the lease name, None if none is there.
-
-        The name is opened and `fstat`ed, never `stat`ed, so NFS revalidates it (close-to-open).
-        """
+    def _record_at(self, name: str) -> Optional[dict]:
+        """Return the identity recorded in the regular file `name`, None if none is legible there."""
         try:
-            fd = self._directory().open_regular(self._name)
-        except (OSError, WrongKindError):
+            data = self._directory().read_regular(name, limit=IDENTITY_LIMIT)
+            record = json.loads(data.decode("utf-8")) if data else None
+        except (OSError, ValueError, WrongKindError):
             return None
-        if fd is None:
-            return None
-        try:
-            st = os.fstat(fd)
-        finally:
-            os.close(fd)
-        return st.st_dev, st.st_ino
+        return record if isinstance(record, dict) else None
 
-    def _take_aside(self, expected: tuple[int, int]) -> bool:
-        """Rename the lease name aside and remove it if it is the inode `expected`; else link it back.
+    def _carries(self, token: str) -> Callable[[str], bool]:
+        """Return a test of whether the file at a name carries `token`."""
+        return lambda name: (self._record_at(name) or {}).get("token") == token
 
-        Returns whether `expected` was removed. Rename is atomic, so of two callers expecting one inode only
-        one moves it. A caller that moved another inode links it back; if a new lease took the name in
+    def _is(self, judged: os.stat_result) -> Callable[[str], bool]:
+        """Return a test of whether the object at a name is the file `judged`: device, inode and mtime."""
+        key = (judged.st_dev, judged.st_ino, judged.st_mtime_ns)
+
+        def test(name: str) -> bool:
+            st = self._directory().lstat(name)
+            return st is not None and (st.st_dev, st.st_ino, st.st_mtime_ns) == key
+
+        return test
+
+    def _take_aside(self, expected: Callable[[str], bool]) -> bool:
+        """Rename the lease name aside and remove it if `expected` holds of it; else link it back.
+
+        Returns whether the expected file was removed. Rename is atomic, so of two callers expecting one file
+        only one moves it. A caller that moved another file links it back; if a new lease took the name in
         between, the moved lease is removed and its holder finds it no longer owns it (`owns`).
         """
         directory = self._directory()
-        now = directory.lstat(self._name)
-        if now is None or (now.st_dev, now.st_ino) != expected:
+        if not expected(self._name):
             return False
         aside = uuid.uuid4().hex
         try:
             directory.rename(self._name, directory, aside, grammar=UUID_HEX)
         except FileNotFoundError:
             return False
-        moved = directory.lstat(aside)
-        if moved is not None and (moved.st_dev, moved.st_ino) == expected:
+        if expected(aside):
             directory.remove_owned(aside, pattern=UUID_HEX)
             return True
+        moved = directory.lstat(aside)
         if moved is None or not stat.S_ISREG(moved.st_mode):
             self.set_aside.append(directory.path / aside)
             return False
@@ -237,7 +245,7 @@ class Lease:
             if age <= self._stale_after:
                 return
             holder = self.holder() or "an unknown holder"
-            if self._take_aside((st.st_dev, st.st_ino)):
+            if self._take_aside(self._is(st)):
                 self.broke.append(self._lease_path)
                 logger.warning(
                     "lease %s: broke a stale lease %.1fs old (> %.1fs), held by %s",
@@ -255,16 +263,11 @@ class Lease:
 
     def holder(self) -> Optional[dict]:
         """Return the identity recorded in the lease file, None if none is legible there."""
-        try:
-            data = self._directory().read_regular(self._name, limit=IDENTITY_LIMIT)
-            record = json.loads(data.decode("utf-8")) if data else None
-        except (OSError, ValueError, WrongKindError):
-            return None
-        return record if isinstance(record, dict) else None
+        return self._record_at(self._name)
 
     def owns(self) -> bool:
-        """Return whether the file at the lease name is the one this lease linked."""
-        return self._held is not None and self._current() == self._held
+        """Return whether the file at the lease name carries the token this lease wrote."""
+        return self._held is not None and self._carries(self._held)(self._name)
 
     def __enter__(self) -> "Lease":
         """Take the lease, breaking a stale one and moving a wrong kind aside.
@@ -296,7 +299,7 @@ class Lease:
     def __exit__(self, *exc: object) -> None:
         """Release the lease if this lease still holds it; a lease broken while held is logged and left."""
         try:
-            if self._held is not None and not self._take_aside(self._held):
+            if self._held is not None and not self._take_aside(self._carries(self._held)):
                 logger.warning("lease %s: was broken while held; the work it guarded may run twice", self._lease_path)
         finally:
             self._held = None
