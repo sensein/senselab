@@ -61,7 +61,7 @@ PR - clarify the decisions"):
 |---|---|
 | Design | accepted 2026-10-30; amended 2026-10-31 and 2026-11-01 in #617 |
 | 0: freeze marker | done |
-| 1: kernel, worker runtime, identity, store, data fetch | T0–T15a done. Hardening done: H1–H8 (H8a–c), the H9 series (H9a–f, H9-compat, H9-collect, H9-cleanup, H9-ci), H10, **H11a** and **H11b** (including fix round 1). 2.x CI first fully green at `97b617c5`; Linux CI green after D-2 fix round 1 (`b76681a9`). Full review done 2026-11-01; its decisions are applied. Remaining: the "follows" items and the Phase 1 exit (next actions). |
+| 1: kernel, worker runtime, identity, store, data fetch | T0–T15a done. Hardening done: H1–H8 (H8a–c), the H9 series (H9a–f, H9-compat, H9-collect, H9-cleanup, H9-ci), H10, **H11a** and **H11b** (including fix round 1). 2.x CI first fully green at `97b617c5`; Linux CI green after D-2 fix round 1 (`b76681a9`). Full review done 2026-11-01; its decisions are applied. **Phase 1 done 2026-11-01** at `195406b7`: CI green, exit adversarial round fixed (R-135..R-159), ORCD full packages suite and release gate green, cross-node NFS lock checks (a)-(f) pass. |
 | 2–5 | not started |
 | pydra PRs (A0…K2) | proposed in #891; none implemented. Owners named in design §6.2 (Phase 2: gate prerequisites; Phase 3: the rest); dates not set |
 
@@ -107,22 +107,15 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
    1. X1 code fixes: done.
    2. CI green at the final head: done, `195406b7` (2026-11-01).
    3. Docs fixes: done.
-   4. The ORCD jobs (a)-(f) plus the env tier, pending owner sign-in. Run them on ORCD shared NFS scratch from
-      a pinned checkout, in a submitted job (never on login or claude-rc nodes), together with the local-tier
-      runs H11b did not make (the env tier and the later-boundary sweep): (a) `SENSELAB_WORK_POOL_NFS_DIR=<dir>` run of
-   `packages/senselab-core/tests/runtime/locks_test.py`, whose two `[nfs]` cases cover one taker and
-   concurrent breakers; (b) cross-node exclusion: processes on 2-4 nodes calling `record_resolution` with
-   distinct SHAs against one `SENSELAB_CACHE`, expecting one SHA, one manifest entry and no lease litter;
-   (c) lost-reply path: `link` EEXIST with `st_nlink == 2` under load; (d) clock skew: a lease planted on
-   one node is aged by `fs_now()` on another, within `acregmin`/`acregmax`, and the lstat pre-check is not
-   defeated by attribute caching; (e) stale-break race across nodes: one break log, and any "displaced"
-   warning matches a holder whose release logs it; (f) an unreadable 0o000 stale lease left by another
-   user in a group-writable run directory is still broken.
+   4. ORCD at `195406b7`: done. Packages 3023 passed, 4 skipped; release gate 17 passed; cross-node NFS lock
+      checks (a)-(f) pass on 3 nodes, NFS 4.2 (jobs 27543616, 27543968, 27545193). (c) forces the lost-reply path by
+      injection, (d) passes within a tolerance, (f) plants the unreadable lease as the same user. `src/tests` is not
+      run in the 2.x environment: the root is a metadata umbrella and `src/` equals `origin/alpha`, whose CI covers it.
    5. The Task 15 adversarial round with a duplicate-finding pass (P-37): done against `c54e9712`
       (`reviews/exit-adversarial-2026-11-01/`, R-135..R-159); 11 high/medium findings fixed and reviewed
       (`c294151c..195406b7`).
    6. Resolve or schedule every register finding: done; every open row names an owner.
-   7. Mark Phase 1 done, merge #617 into `2.x`, and retarget #619.
+   7. Mark Phase 1 done, merge #617 into `2.x`, and retarget #619: done 2026-11-01 (owner: "do 2").
 4. **Phase 2:** ADR-010 (PROV-O JSON-LD store, `senselab:` vocabulary, token-family removal, export
    redaction) and the benchmark harness with its data manifest and smoke suite, alongside the tasks and
    backends of design §6.2.
