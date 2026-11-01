@@ -33,6 +33,7 @@ from senselab_core.runtime.fetch import (
     default_cache_root,
     fetch,
 )
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.storage import StorageDir, StorageFull, StorePolicy, StoreUnavailable
 from senselab_worker.canonical import jcs_dumps
@@ -40,7 +41,7 @@ from senselab_worker.digest import identity_digest
 from syscall_faults_fixture import Step, fail_at
 
 STALE_SECONDS = StorePolicy.load_default().staging_stale_s
-NO_WAIT = RetryPolicy(attempts=RetryPolicy.load_default().attempts, first_backoff_s=0)
+NO_WAIT = RetryPolicy(attempts=ExecutionProfile.load().retry.attempts, first_backoff_s=0)
 
 PAYLOAD = b"hello senselab data" * 1000
 SHA = hashlib.sha256(PAYLOAD).hexdigest()
@@ -1174,4 +1175,4 @@ def test_fetch_retries_transient_by_packaged_policy(tmp_path: Path) -> None:
 
     with pytest.raises(FetchError):
         fetch(_manifest(version="2"), cache_root=tmp_path / "other", opener=refused, retry=NO_WAIT)
-    assert len(calls) == RetryPolicy.load_default().attempts
+    assert len(calls) == ExecutionProfile.load().retry.attempts

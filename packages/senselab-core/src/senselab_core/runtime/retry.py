@@ -3,17 +3,14 @@
 import logging
 import time
 from collections.abc import Callable
-from typing import Annotated, Self, TypeVar
+from typing import Annotated, TypeVar
 
 from pydantic import Field
 
 from senselab_core.kernel._base import Frozen
 from senselab_core.runtime.faults import is_transient
-from senselab_core.runtime.storage import load_policy_values
 
 logger = logging.getLogger("senselab")
-
-RETRY_POLICY_FORMAT = "retry-policy@1.0"
 
 _T = TypeVar("_T")
 
@@ -28,15 +25,6 @@ class RetryPolicy(Frozen):
 
     attempts: Annotated[int, Field(strict=True, ge=1)]
     first_backoff_s: Annotated[float, Field(ge=0)]
-
-    @classmethod
-    def load_default(cls) -> Self:
-        """Return the policy in `data/retry_policy.yaml`.
-
-        Raises:
-            ValueError: if the file lacks the format, an entry, or an entry's derivation.
-        """
-        return cls.model_validate(load_policy_values("senselab_core.runtime", "retry_policy.yaml", RETRY_POLICY_FORMAT))
 
 
 def retry_on_transient_error(

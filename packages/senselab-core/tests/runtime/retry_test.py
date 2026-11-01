@@ -16,7 +16,6 @@ import httpx
 import numpy
 import pytest
 import senselab_core.runtime.retry as retry_module
-import yaml
 from huggingface_hub import utils as hub_utils
 from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
 from senselab_core.runtime.faults import is_transient
@@ -228,16 +227,6 @@ def test_the_retry_policy_is_the_argument_and_no_environment_variable(monkeypatc
         retry_on_transient_error(_down, RetryPolicy(attempts=4, first_backoff_s=0.5), sleep=slept.append)
     assert calls["n"] == 4 and slept == [0.5, 1.0, 2.0]
     assert "max_retries" not in inspect.signature(retry_on_transient_error).parameters
-
-
-@pytest.mark.logic
-def test_the_packaged_retry_policy_carries_a_derivation_per_value() -> None:
-    """`RetryPolicy.load_default` reads `data/retry_policy.yaml`, whose every value has a derivation."""
-    path = Path(inspect.getfile(retry_module)).parent / "data" / "retry_policy.yaml"
-    raw = yaml.safe_load(path.read_text("utf-8"))
-    assert raw.pop("format") == "retry-policy@1.0"
-    assert all(entry["derivation"].strip() for entry in raw.values())
-    assert RetryPolicy.load_default() == RetryPolicy(**{name: entry["value"] for name, entry in raw.items()})
 
 
 @pytest.mark.logic

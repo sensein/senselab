@@ -20,6 +20,7 @@ from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import COMMIT_HEX
 
 from senselab_core.runtime.locks import Lease, LeaseUnavailable
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
@@ -356,8 +357,8 @@ class Resolver:
     """Asked for the commit of `(repo_id, ref, token)` when the local cache has none."""
     cache_root: Optional[Path] = None
     """The root of the run manifests (`manifest_path`); `cache_root()` when None."""
-    retry: RetryPolicy = field(default_factory=RetryPolicy.load_default)
-    """How `hub` is retried on a transient fault; the packaged `data/retry_policy.yaml` by default."""
+    retry: RetryPolicy = field(default_factory=lambda: ExecutionProfile.load().retry)
+    """How `hub` is retried on a transient fault; the packaged `laptop` profile's by default."""
     memo: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
     """This resolver's answers so far, by `manifest_key`."""
 

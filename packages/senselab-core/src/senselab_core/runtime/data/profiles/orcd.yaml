@@ -1,0 +1,40 @@
+format: execution-profile@1.0
+name: orcd
+stack_preferences: {}
+devices: [cuda, cpu]
+env_roots:
+  isolated: $SCRATCH/senselab-2x-venvs
+  server: $SCRATCH/senselab-2x-venvs/servers
+envs:
+  torch_index:
+model_sources:
+model_cache_budget_bytes:
+retry:
+  attempts: 3
+  first_backoff_s: 1.0
+network: online
+derivations:
+  stack_preferences: >-
+    Empty: no task has two stacks yet, so the backend order a task declares decides. A profile lists
+    a task's stacks best first once a second stack exists.
+  devices: >-
+    CUDA first, CPU last: the cluster has no Apple silicon. A backend takes the first listed device that
+    the host has and the backend declares.
+  env_roots: >-
+    Env trees live under the job's scratch directory, never the home directory, which is quota-limited and
+    slow for many small files. `$SCRATCH` is expanded where the root is used.
+  envs: >-
+    No torch index override: the CUDA index is probed from the host. A site whose probe is wrong sets
+    torch_index.
+  model_sources: >-
+    Null: the hub organisations of the catalogue entries. A site that mirrors or restricts models lists
+    organisations here.
+  model_cache_budget_bytes: >-
+    Null: no cap. No measurement of a model-cache size exists to derive a cap from.
+  retry: >-
+    Three tries and a one second first wait, doubling: the 1.x schedule (1 s, 2 s, 4 s) of
+    SENSELAB_HF_MAX_RETRIES. Not measured: no failure-rate data for the Hub or a mirror exists in this
+    repository. A fault that has not cleared after three seconds of waiting surfaces to the caller
+    rather than stalling the run.
+  network: >-
+    Online: compute nodes reach the Hub and the data mirrors.

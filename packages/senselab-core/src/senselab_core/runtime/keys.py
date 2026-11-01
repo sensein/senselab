@@ -29,7 +29,8 @@ class Placement:
     """Where a call runs: the backend and its params, the device, and how batches and chunks are formed.
 
     `batch_formation` and `chunk_grid` describe the placement whether or not the backend declares them
-    output-affecting.
+    output-affecting. `env_root` is the directory the backend's env is built under (None for a host env) and
+    `why` the sentence `explain` returns; neither reaches a key.
     """
 
     backend: BackendSpec
@@ -37,6 +38,17 @@ class Placement:
     device: str
     batch_formation: str | None = None
     chunk_grid: str | None = None
+    env_root: str | None = None
+    why: str = ""
+
+    def explain(self) -> str:
+        """Return the backend, stack, env, device and the reason for the choice, as one line."""
+        env = self.backend.env
+        where = env.kind if env.name is None else f"{env.kind}:{env.name}"
+        return (
+            f"{self.backend.task}: backend {self.backend.name!r} (stack {self.backend.stack!r}, env {where}, "
+            f"device {self.device}); {self.why}"
+        )
 
 
 def build_key(call: Call, placement: Placement, context: ExecutionContext) -> LogicalKey:

@@ -72,6 +72,7 @@ from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.fetch import DataFile, DataManifest
+from senselab_core.runtime.profiles import Envs, ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.storage import StorePolicy
 
@@ -773,8 +774,18 @@ def _register_runtime_samples() -> None:
         ],
     )
     register_samples(
+        Envs,
+        lambda: [Envs(), Envs(torch_index="https://download.pytorch.org/whl/cpu")],
+        invalid_updates=[{"torch_index": ""}],
+    )
+    register_samples(
+        ExecutionProfile,
+        lambda: [ExecutionProfile.load("laptop"), ExecutionProfile.load("orcd")],
+        invalid_updates=[{"network": "maybe"}, {"devices": ("tpu",)}, {"format": "execution-profile@2.0"}],
+    )
+    register_samples(
         RetryPolicy,
-        lambda: [RetryPolicy.load_default(), RetryPolicy(attempts=1, first_backoff_s=0)],
+        lambda: [ExecutionProfile.load().retry, RetryPolicy(attempts=1, first_backoff_s=0)],
         invalid_updates=[{"attempts": 0}, {"attempts": 2.5}, {"first_backoff_s": -1}],
     )
 

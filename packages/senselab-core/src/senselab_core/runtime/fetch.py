@@ -39,6 +39,7 @@ from senselab_worker.digest import SHA256_HEX, file_digest, identity_digest
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.license import License
 from senselab_core.kernel.prov import Record, Vocabulary
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
@@ -680,7 +681,7 @@ def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, ver
     `BlobStamp` (size, mtime, inode, ctime) equals the one recorded when its dataset was completed; `"full"`,
     and any other blob, re-hashes it. A download streams to `tmp/<uuid>`, is bounded by the declared
     size, is hashed, and is linked into `blobs/<sha256>` only on a match (first writer wins); a transfer
-    that fails transiently is retried under `retry` (`RetryPolicy.load_default()` when None), and on a
+    that fails transiently is retried under `retry` (the packaged `laptop` profile's when None), and on a
     mismatch or failed transfer the next mirror is tried. When every link is in place
     `datasets/<name>@<version>/.complete` records the dataset, the manifest digest and the blob stamps;
     it is rewritten when a stamp has changed, so a repaired blob is trusted again by size. The marker also
@@ -697,7 +698,7 @@ def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, ver
         WrongKindError: an object of the wrong kind in the cache could not be moved aside.
     """
     policy = policy if policy is not None else StorePolicy.load_default()
-    retry = retry if retry is not None else RetryPolicy.load_default()
+    retry = retry if retry is not None else ExecutionProfile.load().retry
     dir_mode = shared_dir_mode(policy)
     open_url = opener if opener is not None else _urlopen
     root = Path(cache_root)

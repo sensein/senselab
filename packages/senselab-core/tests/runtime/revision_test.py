@@ -17,6 +17,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from planted_objects_fixture import BAD_RUN_IDS, LEASE, NAME_BOUND_S, UNOPENABLE_NAMES, bounded
 from senselab_core.runtime.locks import LeaseUnavailable
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.revision import (
     MANIFEST_NAME,
@@ -389,7 +390,7 @@ def test_the_resolver_retries_the_hub_under_its_own_policy(tmp_path: Path, hub_e
     with pytest.raises(RevisionResolutionError):
         resolver.lookup("org/model", "main")
     assert calls["n"] == 2
-    assert Resolver().retry == RetryPolicy.load_default()
+    assert Resolver().retry == ExecutionProfile.load().retry
 
 
 @pytest.mark.logic
