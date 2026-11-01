@@ -637,8 +637,8 @@ def test_a11_publish_builds_every_package_and_gates_before_upload() -> None:
 
 @pytest.mark.logic
 def test_i3_a_ci_job_selects_the_core_env_tests() -> None:
-    """Some tests.yaml job runs the ``env`` tier over the core tests, so the release regressions run in CI."""
-    workflow = yaml.safe_load((REPO / ".github/workflows/tests.yaml").read_text())
+    """Some 2x-tests.yaml job runs the ``env`` tier over the core tests, so the release regressions run in CI."""
+    workflow = yaml.safe_load((REPO / ".github/workflows/2x-tests.yaml").read_text())
     runs = [s.get("run", "") for job in workflow["jobs"].values() for s in job.get("steps", [])]
     assert any("packages/senselab-core/tests" in r and "-m env" in r.replace('"', "").replace("'", "") for r in runs)
 

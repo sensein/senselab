@@ -8,7 +8,7 @@ import yaml
 from _pytest.mark.expression import Expression
 
 REPO = Path(__file__).resolve().parents[4]
-WORKFLOW = REPO / ".github" / "workflows" / "tests.yaml"
+WORKFLOW = REPO / ".github" / "workflows" / "2x-tests.yaml"
 TIERS = ("logic", "contract", "limits", "usecase", "env")
 
 
