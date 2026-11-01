@@ -724,6 +724,8 @@ formation is declared non-invariant until Task 22b certifies otherwise (ruling P
 
 ### Task 14: Port CrisperWhisper on ct2 and transformers (isolated)
 
+**Owner correction (2026-11-01):** backends are code paths, models are catalogue entries. `speech_to_text` has two backends: `transformers` (HF ASR pipeline, host; Task 13; accepts any Whisper-family model) and `crisperwhisper` (the crisperwhisper library, isolated; this task) with `engine: ct2 | transformers` as a backend param that enters the key. HF Whisper and CrisperWhisper are two models; neither names a backend.
+
 **Model:** sonnet implements; opus reviews. **Tier:** contract local; limits and env on ORCD. **Implements:** design
 §6.2, P-6, P-8; rulings P2-56, P2-65. **Depends on:** Tasks 9a2, 13.
 

@@ -49,3 +49,4 @@ The authority for the full review. Quoted as the owner wrote them; nothing parap
 40. "verdict/decision seems very specific to triage"
 41. "how are such things creeping in. if i did not notice it we would run into future refactors"
 42. "monitor weekly limit and try to minimize token usage - be succinct and to the point in all generative processes."
+43. "but the HF whisper and crisperwhisper are two different models."
