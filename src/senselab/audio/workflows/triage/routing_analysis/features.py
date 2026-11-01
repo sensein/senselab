@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
 import numpy as np
-from senselab_core.runtime.provenance import plain_values
 
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.consensus import vocabulary_key
@@ -298,7 +297,7 @@ def read_store(path: Path) -> Iterator[dict[str, Any]]:
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             if line.startswith(_ENTITY_PREFIX):
-                yield plain_values(json.loads(line))
+                yield json.loads(line)
 
 
 def invalidated_ids(path: Path) -> set[str]:

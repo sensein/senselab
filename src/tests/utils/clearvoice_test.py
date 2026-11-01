@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
-from senselab_core.runtime import models
 
 from senselab.utils import clearvoice as cv
 from senselab.utils.data_structures import DeviceType
@@ -130,7 +129,7 @@ def test_staging_downloads_only_the_files_the_commit_manifest_names(
         return str(snapshot / filename)
 
     monkeypatch.setattr("huggingface_hub.hf_hub_download", fake_download)
-    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", lambda *a, **k: sha)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
 
     checkpoint_dir, resolved = cv.stage_clearvoice_checkpoints(cv.CLEARVOICE_MODELS["MossFormer2_SR_48K"])
 
@@ -159,7 +158,7 @@ def test_staging_resolves_the_ref_to_a_commit_before_downloading(
         seen["repo"], seen["ref"] = repo_id, ref
         return sha
 
-    monkeypatch.setattr("senselab_core.runtime.revision.resolve_revision", fake_resolve)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", fake_resolve)
     monkeypatch.setattr(
         "huggingface_hub.hf_hub_download",
         lambda repo_id, filename, revision="main": str(snapshot / filename),
@@ -173,8 +172,7 @@ def test_staging_resolves_the_ref_to_a_commit_before_downloading(
 def test_the_s3fd_digest_is_a_full_sha256_at_a_pinned_commit() -> None:
     """This weight has no revision-addressable home, so the digest is its identity."""
     assert len(cv._S3FD_COMMIT) == 40 and set(cv._S3FD_COMMIT) <= SHA_CHARS
-    s3fd = models.WEIGHTS["s3fd"]
-    assert len(s3fd) == 64 and set(s3fd) <= SHA_CHARS
+    assert len(cv._S3FD_SHA256) == 64 and set(cv._S3FD_SHA256) <= SHA_CHARS
     assert cv._S3FD_COMMIT in cv._S3FD_URL, "the URL must be commit-addressed, not branch-addressed"
     assert "raw.githubusercontent.com" in cv._S3FD_URL
 
@@ -198,11 +196,11 @@ def test_a_wrong_digest_refuses_the_download(monkeypatch: pytest.MonkeyPatch, tm
             return None
 
     monkeypatch.setattr(cv.urllib.request, "urlopen", lambda url: _Response(b"not the detector"))
-    with pytest.raises(models.WeightsMismatch) as exc:
+    with pytest.raises(RuntimeError) as exc:
         cv.stage_s3fd_weights()
     assert hashlib.sha256(b"not the detector").hexdigest() in str(exc.value)
-    assert models.WEIGHTS["s3fd"] in str(exc.value)
-    staged = tmp_path / "clearvoice" / "s3fd" / models.WEIGHTS["s3fd"] / "sfd_face.pth"
+    assert cv._S3FD_SHA256 in str(exc.value)
+    staged = tmp_path / "clearvoice" / "s3fd" / cv._S3FD_SHA256 / "sfd_face.pth"
     assert not staged.exists(), "a mismatched download must not be left in the cache"
 
 
@@ -211,7 +209,7 @@ def test_a_matching_digest_is_cached_content_addressed(monkeypatch: pytest.Monke
     payload = b"pretend detector"
     digest = hashlib.sha256(payload).hexdigest()
     monkeypatch.setattr(cv, "_cache_dir_path", lambda: tmp_path)
-    monkeypatch.setattr(models, "WEIGHTS", {"s3fd": digest})
+    monkeypatch.setattr(cv, "_S3FD_SHA256", digest)
 
     class _Response:
         def __init__(self) -> None:

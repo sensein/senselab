@@ -27,8 +27,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from senselab_core.runtime.provenance import ProvStore, recorded
-
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
 from senselab.audio.workflows.triage.config import TriageConfig
@@ -79,6 +77,7 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     unplaced_phrase_quotes,
 )
 from senselab.text.tasks.pii_detection.redaction_review_vllm import ENGINE_TRANSFORMERS, engine_identity
+from senselab.utils.prov_store import ProvStore
 from senselab.utils.tasks.cached_inference import (
     canonical_params,
     result_cache_key,
@@ -855,7 +854,7 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
     if str(held.get("model_id")) != str(settings["model_id"]):
         return BACKFILL_SKIPPED, f"model {held.get('model_id')!r} is not the configured one"
     engine = dict(held.get("engine") or engine_identity(ENGINE_TRANSFORMERS))
-    if recorded(engine) != recorded(review_engine(settings)):
+    if engine != review_engine(settings):
         return BACKFILL_SKIPPED, f"engine {engine.get('name')!r} is not the configured one"
     original, redacted = transcript_texts(store)
     if bool(held.get("read_redacted")) != (redacted is not None):
@@ -899,7 +898,7 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
 def _resolved(settings: Mapping[str, Any]) -> str | None:
     """The commit the reviewer's ref resolves to, or None where it cannot be resolved here."""
     try:
-        from senselab_core.runtime.revision import resolve_revision
+        from senselab.utils.model_revision import resolve_revision
 
         return str(resolve_revision(str(settings["model_id"]), str(settings["ref"])))
     except Exception:  # noqa: BLE001 — no commit, no key; the loop records why

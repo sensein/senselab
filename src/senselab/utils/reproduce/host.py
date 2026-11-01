@@ -1,7 +1,7 @@
 """The host record: where a step ran, for provenance.
 
 `host_record` returns a fixed set of keys (`HOST_KEYS`): hostname, CPU model and counts, the first
-GPU's name and driver with the GPU count, the host's CUDA version (`hardware.detect_host_cuda`), the venv's
+GPU's name and driver with the GPU count, the host's CUDA version (`cuda_probe.detect_host_cuda`), the venv's
 Python, torch and torch CUDA versions, and the batch job id. A value that cannot be determined is None (GPU
 count 0).
 """
@@ -16,7 +16,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from senselab_core.runtime import hardware
+from senselab.utils import cuda_probe
 
 Runner = Callable[[Sequence[str]], tuple[int, str]]
 
@@ -115,25 +115,14 @@ def _probe(venv: Path, runner: Runner) -> dict[str, Any]:
 
 
 def _host_cuda() -> str | None:
-    """The driver's CUDA version as ``nvidia-smi`` reports it (`hardware.detect_host_cuda`); None otherwise."""
+    """The driver's CUDA version as ``nvidia-smi`` reports it (`cuda_probe.detect_host_cuda`); None otherwise."""
     try:
-        found = hardware.detect_host_cuda()
+        found = cuda_probe.detect_host_cuda()
     except (OSError, subprocess.SubprocessError):
         return None
     if found.source != "nvidia-smi" or found.version is None:
         return None
     return f"{found.version[0]}.{found.version[1]}"
-
-
-def _cpus_allowed() -> int | None:
-    """CPUs this process may run on (the Linux affinity mask), or None where the platform has no such call."""
-    getter: Callable[[int], set[int]] | None = getattr(os, "sched_getaffinity", None)
-    if getter is None:
-        return None
-    try:
-        return len(getter(0))
-    except OSError:
-        return None
 
 
 def host_record(
@@ -147,7 +136,7 @@ def host_record(
             caller that learns them inside the sandbox instead (the run's preamble).
         runner: Runs an argv and returns ``(returncode, stdout)``; a missing program or timeout is
             ``(127, "")``. Defaults to a subprocess runner. The host CUDA version is always probed by
-            `hardware.detect_host_cuda` and kept only from ``nvidia-smi`` (an ``nvcc`` toolkit is not the driver's).
+            `cuda_probe.detect_host_cuda` and kept only from ``nvidia-smi`` (an ``nvcc`` toolkit is not the driver's).
         hostname: Record this host's name; False records None (confidential provenance names no host).
 
     Returns:
@@ -155,7 +144,10 @@ def host_record(
     """
     run = runner or _run
     gpu_name, gpu_driver, gpu_count = _gpus(run)
-    allowed = _cpus_allowed()
+    try:
+        allowed: int | None = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        allowed = None
     return {
         "hostname": socket.gethostname() if hostname else None,
         "cpu_model": _cpu_model(),

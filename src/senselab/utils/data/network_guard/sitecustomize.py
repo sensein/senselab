@@ -88,15 +88,15 @@ def _install() -> None:
 
 
 def _chain() -> None:
-    import importlib.machinery  # noqa: TID251
-    import importlib.util  # noqa: TID251
+    import importlib.machinery
+    import importlib.util
 
     here = os.path.dirname(os.path.abspath(__file__))
     rest = [p for p in sys.path if os.path.abspath(p or os.curdir) != here]
-    spec = importlib.machinery.PathFinder.find_spec("sitecustomize", rest)  # noqa: TID251
+    spec = importlib.machinery.PathFinder.find_spec("sitecustomize", rest)
     if spec is None or spec.loader is None:
         return
-    module = importlib.util.module_from_spec(spec)  # noqa: TID251
+    module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
 

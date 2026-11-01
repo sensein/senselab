@@ -20,8 +20,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
-from senselab_core.runtime.provenance import ProvStore
-
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.label_membership import LabelMembership
 from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family, task_id_of
@@ -39,6 +37,7 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     load_ruleset,
     unreadable_branches,
 )
+from senselab.utils.prov_store import ProvStore
 
 EVIDENCE_PREFIX = "routing-evidence-"
 """Prefix of the transient store serialisation, written beside the run's own store and removed."""

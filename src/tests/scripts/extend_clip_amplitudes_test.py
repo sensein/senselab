@@ -17,7 +17,6 @@ from typing import Callable
 import numpy as np
 import pytest
 import soundfile as sf
-from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.nodes.admit import admit
@@ -30,6 +29,7 @@ from senselab.audio.workflows.triage.nodes.quality import (
     quality,
 )
 from senselab.audio.workflows.triage.vocabulary import UNDETERMINED
+from senselab.utils.prov_store import ProvStore
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_clip_amplitudes.py"

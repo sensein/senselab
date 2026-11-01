@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
-from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.vocabulary import (
@@ -21,6 +20,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     SECOND_OPINION_ANSWERS,
     SECOND_OPINION_DISAGREES,
 )
+from senselab.utils.prov_store import ProvStore
 from tests.scripts.extend_llm_review_test import _finished_run, _hints, _manifest, _seed_verdicts
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -146,7 +146,6 @@ def test_an_opinion_lands_and_a_second_pass_starts_no_server(tmp_path: Path) -> 
 def test_an_opinion_to_an_earlier_question_set_is_asked_again(tmp_path: Path) -> None:
     """A question-set-1 answer is not this question set's answer: asked again, and the old one retired."""
     from senselab.text.tasks.decision_model.second_opinion import QUESTION_SET_VERSION
-    from senselab_core.testing.provenance import with_entity_attributes
 
     run_root = _reviewed_run(tmp_path / "corpus")
     _run(tmp_path, run_root, _Opener())
@@ -156,7 +155,7 @@ def test_an_opinion_to_an_earlier_question_set_is_asked_again(tmp_path: Path) ->
         for entity in store.entities("measurement")
         if entity.attributes.get("name") == "second_opinion_answers" and not store.is_invalidated(entity.id)
     ]
-    store = with_entity_attributes(store, held.id, question_set_version=QUESTION_SET_VERSION - 1)
+    held.attributes["question_set_version"] = QUESTION_SET_VERSION - 1
     cli.write_store(store, run_root)
     assert cli.standing(cli.read_store(run_root)) is None
     assert _run(tmp_path, run_root, _Opener(other=0.6))["counts"] == {"ok": 1}

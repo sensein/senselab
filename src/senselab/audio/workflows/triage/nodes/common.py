@@ -17,8 +17,6 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Mapping
 
-from senselab_core.runtime.provenance import PROV_TYPE, Entity, ProvStore, file_attributes, revised
-
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.praat_parselmouth import CppsSettings
 from senselab.audio.workflows.triage.config import TriageConfig
@@ -32,6 +30,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     Triage,
 )
 from senselab.utils.portable_audio_io import NORMALIZE, AudioWriteReport
+from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore, file_attributes
 from senselab.utils.subprocess_venv import venv_environment
 
 RESERVED_REPORT_KEYS = frozenset(
@@ -588,7 +587,7 @@ def bound_word(word: Entity, duration_s: float) -> Entity:
     """
     if word.extent is None or float(word.extent[1]) <= duration_s:
         return word
-    return revised(word, extent=bound_word_extent(word.extent, duration_s))
+    return replace(word, extent=bound_word_extent(word.extent, duration_s))
 
 
 def lexical_words(store: ProvStore) -> list[Entity]:

@@ -20,7 +20,6 @@ from typing import Any, Callable, Mapping
 
 import pytest
 import torch
-from senselab_core.runtime.provenance import ProvStore
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage import run as run_module
@@ -58,6 +57,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     RunStatus,
     Triage,
 )
+from senselab.utils.prov_store import ProvStore
 
 
 @pytest.fixture(autouse=True)

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -13,8 +12,6 @@ import numpy as np
 import pytest
 import soundfile as sf
 import torch
-from senselab_core.runtime.provenance import ProvStore
-from senselab_core.testing.provenance import with_entity_attributes
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -34,6 +31,7 @@ from senselab.audio.workflows.triage.nodes.report import (
 )
 from senselab.audio.workflows.triage.nodes.verdict import verdict as fold_verdict
 from senselab.audio.workflows.triage.vocabulary import TASK, Outcome
+from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import SEED_SOURCES, word_attributes
 
 _SHA = "0" * 39 + "1"
@@ -1159,8 +1157,9 @@ class TestTheSummaryLayers:
             entity for entity in store.entities("measurement") if entity.attributes.get("name") == "hear_window"
         ]
         assert hear_windows
-        raw_scores = {"Cough": 0.12, "Breathe": 0.31, "Speech": 0.44}
-        store = with_entity_attributes(store, hear_windows[0].id, labels=[], scores={}, raw_scores=raw_scores)
+        hear_windows[0].attributes["labels"] = []
+        hear_windows[0].attributes["scores"] = {}
+        hear_windows[0].attributes["raw_scores"] = {"Cough": 0.12, "Breathe": 0.31, "Speech": 0.44}
 
         payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
 

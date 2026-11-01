@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from senselab_core.runtime.provenance import ProvStore
-
 from senselab.audio.workflows.triage.cohort_fold import participant_matched
 from senselab.audio.workflows.triage.cohort_stage import (
     RecordingFacts,
@@ -13,6 +11,7 @@ from senselab.audio.workflows.triage.cohort_stage import (
     non_task_spans,
     target_spans,
 )
+from senselab.utils.prov_store import ProvStore
 
 
 def _facts(stem: str = "sub-a_ses-1_task-word-color-stroop", **fields: object) -> RecordingFacts:

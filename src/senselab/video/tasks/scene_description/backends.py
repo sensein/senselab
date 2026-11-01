@@ -176,9 +176,8 @@ class MLXVLMBackend:
             max_tokens: Generation cap per completion.
             temperature: Sampling temperature; 0 is greedy.
         """
-        from senselab_core.runtime.revision import resolve_revision
-
         from senselab.utils.dependencies import resolve_model
+        from senselab.utils.model_revision import resolve_revision
 
         self.model_id = model_id
         self.revision = resolve_revision(model_id, revision)
@@ -266,7 +265,8 @@ class TransformersVLMBackend:
             max_tokens: Generation cap per completion.
         """
         import torch
-        from senselab_core.runtime.revision import resolve_revision
+
+        from senselab.utils.model_revision import resolve_revision
 
         self.model_id = model_id
         self.revision = resolve_revision(model_id, revision)

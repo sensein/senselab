@@ -38,8 +38,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
 
-from senselab_core.runtime.locks import SharedFileLock
-
+from senselab.utils.file_lock import SharedFileLock
 from senselab.utils.reproduce.locks import ReproduceLockError, verify_files
 from senselab.utils.reproduce.spec import FileRef, SourceSpec, StepSpec
 
