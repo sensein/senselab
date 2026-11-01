@@ -30,7 +30,7 @@ task or decision changes state. Newest log entries go first.
   P-39, P-40).
 - **What to build:** `design.md`, `adr/` (ADR-001..010), `execution.md`, `testing.md`, `docs.md`,
   `wire-protocol.md`.
-- **Plans:** `plans/phase-1.md`, `plans/phase-1-hardening.md`.
+- **Plans:** `plans/phase-1.md`, `plans/phase-1-hardening.md`, `plans/phase-2.md`.
 - **Migration:** `migration-ledger.md`, a mark per 1.x area (P-39) and the triage classification.
 - The controller's working notes under `.superpowers/` in the code worktree are git-excluded scratch.
   Nothing here cites them; anything a later session needs is in the files above.
@@ -118,7 +118,8 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
    7. Mark Phase 1 done, merge #617 into `2.x`, and retarget #619: done 2026-11-01 (owner: "do 2").
 4. **Phase 2:** ADR-010 (PROV-O JSON-LD store, `senselab:` vocabulary, token-family removal, export
    redaction) and the benchmark harness with its data manifest and smoke suite, alongside the tasks and
-   backends of design §6.2.
+   backends of design §6.2. Plan: [`plans/phase-2.md`](plans/phase-2.md) (Tasks 0–34); its planner rulings
+   P2-1..P2-32 await owner review.
 
 ## How to resume
 
