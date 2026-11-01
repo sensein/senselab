@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "senselab"
 dynamic = ["version", "dependencies"]
-description = "senselab is a Python package that simplifies building pipelines for speech and voice analysis."
+description = "senselab 2.x: installs the framework-free core and the subprocess worker runtime."
 authors = [
   { name = "Fabio Catania", email = "fabiocat@mit.edu" },
   { name = "Satra Ghosh", email = "satra@mit.edu" }
@@ -18,7 +18,7 @@ maintainers = [
 license = { file = "LICENSE.md" }
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
-keywords = ["audio", "voice", "speech", "video", "pose", "face", "text", "nlp"]
+keywords = ["audio", "voice", "speech", "provenance", "reproducibility"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3.11",
@@ -29,45 +29,12 @@ classifiers = [
   "Operating System :: OS Independent"
 ]
 
-[project.optional-dependencies]
-nlp = [
-  "jiwer>=3.0",
-  "nltk>=3.9",
-  "uroman>=1.3",
-  "g2p-en>=2.1"
-]
-text = [
-  "sentence-transformers>=5.1",
-  "pylangacq>=0.20"
-]
-video = [
-  "av>=15",
-  "opencv-python-headless>=4.11",
-  "ultralytics>=8.3"
-]
-senselab-ai = [
-  "jupyterlab~=4.4",
-  "notebook-intelligence~=2.3.2",
-  "ipywidgets~=8.1",
-  "ipykernel~=7.1",
-  "nbformat~=5.10",
-  "nbss-upload~=0.1"
-]
-# Everything. Declared because the README's first install command has always been
-# `pip install 'senselab[all]'`, and pip answers an unknown extra with a warning and a
-# base-only install — so the documented command quietly gave people less than they asked
-# for. Self-referential per PEP 621; keep in step when an extra is added below.
-all = [
-  "senselab[nlp,text,video,senselab-ai]"
-]
-
 [project.urls]
 Homepage = "https://github.com/sensein/senselab"
 Repository = "https://github.com/sensein/senselab"
 Documentation = "https://sensein.group/senselab"
 
 [project.scripts]
-senselab-ai = "senselab.agentic_interface.launcher:senselab_ai"
 senselab = "senselab_core.cli:main"
 
 [dependency-groups]
@@ -105,73 +72,21 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 senselab-core = { workspace = true }
+senselab-worker = { workspace = true }
 
 [tool.hatch.metadata.hooks.custom]
 path = "hatch_build_pins.py"
-pin = "senselab-core"
-dependencies = [
-  # PyTorch ecosystem
-  "torch>=2.8; sys_platform != 'darwin' or platform_machine == 'arm64'",
-  "torchvision>=0.23",
-  "torchcodec>=0.7",
-  "torchaudio>=2.8",
-  # ML frameworks (these pull packaging, joblib, etc.)
-  "huggingface-hub>=1.3",  # transformers>=5.0 needs hf-hub>=1.3
-  "transformers>=5.3",  # >=5.3 required for VibeVoiceAsrForConditionalGeneration (VibeVoice-ASR-HF diarization backend)
-  "datasets>=3.6",
-  "accelerate",
-  "peft>=0.13",  # required by Granite Speech 3.3's LoRA adapter
-  "speechbrain>=1.0",
-  # Audio processing backends (pyannote pulls matplotlib, torch-audiomentations)
-  "pyannote-audio>=4.0",
-  "audiomentations>=0.42",
-  "opensmile>=2.6",
-  "vocos>=0.1",
-  "praat-parselmouth>=0.4.3",  # 0.4.0-0.4.2 fail on Python 3.12+
-  # Signal analysis. librosa was previously transitive only; it is now used
-  # directly (pcen, A_weighting) so it must be declared. pyloudnorm implements
-  # ITU-R BS.1770 gated loudness (numpy/scipy only, no transitive weight).
-  "librosa>=0.11",
-  "pyloudnorm>=0.1.1",
-  # soundfile was previously transitive through librosa; the triage recording-vector scan decodes
-  # conditioned streams directly with it, so it must be declared.
-  "soundfile>=0.12",
-  # PyYAML was previously transitive only; the triage workflow's config loader imports `yaml`
-  # directly, so it must be declared.
-  "pyyaml>=6.0",
-  # Data / utilities. pyarrow was previously transitive through `datasets`; the triage routing
-  # analysis writes and reads its generated tables as parquet, so it must be declared.
-  "pyarrow>=17",
-  "pydantic>=2.11",
-  "pycountry>=24.6",
-  "iso639>=0.1",
-  "scikit-learn>=1.7",
-  "umap-learn>=0.5.4",  # 0.5.0-0.5.3 fail on Python 3.12+
-  "python-dotenv>=1.0",
-  "nest-asyncio>=1.6",
-  "xxhash>=3.5"
-]
+pins = ["senselab-core", "senselab-worker"]
+dependencies = []
 
 [tool.senselab.release]
 RELEASE_FLOOR = "2.0.0a0"
 
-[tool.hatch.build]
-artifacts = ["/src/**/data/**"]
-
 [tool.hatch.build.targets.wheel]
-packages = ["src/senselab"]
+bypass-selection = true
 
-# The wheel is scoped by `packages` above, but the sdist had no target config at all, so hatchling's
-# default swept in everything git tracks: `.claude/` (511 entries, including a whole abandoned
-# worktree), `.superpowers/`, `.specify/`, `.uv-cache/`, and 223 files of `specs/` design notes.
-# An 81 MB source distribution of a package whose importable code is a few MB, and every one of
-# those trees is working state for this repository rather than anything a consumer builds from.
-#
-# `only-include` rather than `exclude`: a new agent-tooling directory should be absent by default
-# and added deliberately, which is the opposite of what an exclude list does. `src` carries both
-# `senselab` and its tests, so a downstream rebuild can still run the suite.
 [tool.hatch.build.targets.sdist]
-only-include = ["src", "pyproject.toml", "hatch_build_pins.py", "README.md", "LICENSE.md", "SECURITY.md", "uv.lock"]
+only-include = ["pyproject.toml", "hatch_build_pins.py", "README.md", "LICENSE.md", "SECURITY.md", "uv.lock"]
 
 [tool.hatch.version]
 source = "vcs"
@@ -182,11 +97,8 @@ local_scheme = "no-local-version"
 git_describe_command = "git describe --dirty --tags --long --match '[0-9]*.[0-9]*.[0-9]*'"
 
 [tool.pytest.ini_options]
-pythonpath = [
-  "src"
-]
 testpaths = [
-  "src/tests"
+  "packages"
 ]
 addopts = "--strict-markers -p pytester"
 markers = [
@@ -200,18 +112,6 @@ markers = [
   "slow: long-running",
   "large_model: loads a large model"
 ]
-# A hung test must fail with a traceback, not consume the job.
-#
-# macOS-tests was cancelled twice — once at GitHub's 6-hour ceiling, once at the 90-minute cap added
-# after it — both times because a single test went silent mid-suite (66 minutes with no output on
-# run 31237438671). Neither cancellation says which test or where it was stuck, and the same test
-# passes in 9 s in isolation and on every other platform, so the log was the only evidence and it
-# had none.
-#
-# 900 s is set by the slowest *legitimate* test, not by taste: the HF dataset conversion in
-# `dataset_test` takes 558 s of network on a warm laptop, so anything near it would fail honest work.
-# The default signal method is deliberate — `thread` kills the whole process, losing every test after
-# the hang, while SIGALRM raises inside the stuck test and lets the suite carry on and report.
 timeout = 900
 
 [tool.mypy]
@@ -220,6 +120,7 @@ plugins = [
   "pydantic.mypy"
 ]
 extra_checks = true
+exclude = ["^src/"]
 
 [tool.ruff]
 exclude = [
@@ -244,6 +145,8 @@ exclude = [
   "dist",
   "node_modules",
   "venv",
+  # The 1.x source pool, frozen and not checked on the 2.x line.
+  "src",
   # One-off reproduction scripts for the analyze_audio audit's findings, kept beside the register
   # entry each reproduces. They are evidence, not source: each is meant to read as the code under
   # audit reads, and re-styling one would change what it demonstrates.
@@ -251,7 +154,6 @@ exclude = [
 ]
 line-length = 120
 indent-width = 4
-src = ["src"]
 target-version = "py311"
 
 [tool.ruff.lint]
@@ -285,7 +187,6 @@ convention = "google"
 "sklearn.utils.murmurhash3_32".msg = "an untagged digest; use senselab_worker.digest (ADR-006)"
 
 [tool.ruff.lint.per-file-ignores]
-"src/tests/**/*.py" = []
 "**/tests/**" = ["TID251", "B009", "S102", "S307"]
 "**/conftest.py" = ["TID251", "B009", "S102", "S307"]
 "**/scripts/**" = ["ANN", "D", "E", "I", "F541"]
@@ -303,8 +204,7 @@ line-ending = "auto"
 skip = [
   "uv.lock",
   "docs_style/pdoc-theme/syntax-highlighting.css",
-  "src/senselab/audio/workflows/triage/viewer/vendor/*.js",
-  "src/senselab/audio/workflows/triage/viewer/recording_vectors_viewer.html",
+  "src",
   "*.cha",
   "*.ipynb"
 ]

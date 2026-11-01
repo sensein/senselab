@@ -19,7 +19,7 @@ if "release_gate" not in sys.modules:
     sys.modules["release_gate"] = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(sys.modules["release_gate"])
 gate = sys.modules["release_gate"]
-PACKAGES = {"senselab": "senselab", "senselab-core": "senselab_core", "senselab-worker": "senselab_worker"}
+PACKAGES = {"senselab-core": "senselab_core", "senselab-worker": "senselab_worker"}
 
 
 @pytest.fixture(scope="module")
@@ -47,12 +47,14 @@ def test_the_build_of_this_tree_passes_the_static_release_checks(built: list[Pat
 @pytest.mark.env
 @pytest.mark.network
 def test_every_tracked_data_file_is_a_derived_member(built: list[Path]) -> None:
-    """The member derivation the checks use includes every tracked ``data/`` file of each import package."""
+    """The member derivation includes every tracked ``data/`` file of core and the worker; the umbrella ships none."""
     modes = gate.tracked_modes(REPO)
     for path in built:
         name = gate._metadata(path)[0]
-        root = gate.DIST_ROOTS[name]
-        prefix = "src/" if root == "." else f"{root}/src/"
-        data = {p for p in modes if p.startswith(f"{prefix}{PACKAGES[name]}/") and "/data/" in p}
         sources = {s for s in gate.expected_members(path, REPO, modes).values() if s is not None}
+        if name not in PACKAGES:
+            assert not any(s.endswith(".py") for s in sources), sources
+            continue
+        prefix = f"{gate.DIST_ROOTS[name]}/src/{PACKAGES[name]}/"
+        data = {p for p in modes if p.startswith(prefix) and "/data/" in p}
         assert data and data <= sources

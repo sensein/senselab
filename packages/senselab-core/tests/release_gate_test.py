@@ -55,7 +55,9 @@ def _release(fabricate: Callable[..., Path], version: str, **mod: dict[str, Any]
     return [
         fabricate("senselab-worker", version, **mod.get("worker", {})),
         fabricate("senselab-core", version, [f"senselab-worker=={version}"], **mod.get("core", {})),
-        fabricate("senselab", version, [f"senselab-core=={version}"], **mod.get("root", {})),
+        fabricate(
+            "senselab", version, [f"senselab-core=={version}", f"senselab-worker=={version}"], **mod.get("root", {})
+        ),
     ]
 
 
@@ -157,7 +159,7 @@ def test_a32_release_gate_refuses_a_sibling_requirement_that_is_not_the_exact_ve
     wheels = [
         fabricate("senselab-worker", "2.0.0"),
         fabricate("senselab-core", "2.0.0", [pin]),
-        fabricate("senselab", "2.0.0", ["senselab-core==2.0.0"]),
+        fabricate("senselab", "2.0.0", ["senselab-core==2.0.0", "senselab-worker==2.0.0"]),
     ]
     with pytest.raises(gate.GateError, match="senselab-core requires"):
         gate.check_closure(wheels)
@@ -187,7 +189,7 @@ HERE_PYTHON = {name: f"{sys.version_info.major}.{sys.version_info.minor}" for na
 OK_MODULES: dict[str, dict[str, dict[str, str]]] = {
     "worker": {"modules": {"senselab_worker/__init__.py": "\n"}},
     "core": {"modules": {"senselab_core/__init__.py": "\n"}},
-    "root": {"modules": {"senselab/__init__.py": "\n"}},
+    "root": {"modules": {}},
 }
 
 
@@ -202,11 +204,11 @@ def test_check_installs_installs_each_distribution_alone_and_imports_it(fabricat
 @pytest.mark.env
 @pytest.mark.network
 def test_a11_check_installs_refuses_a_wheel_that_does_not_import(fabricate: Callable[..., Path]) -> None:
-    """An installable dist whose root package raises on import is refused."""
+    """An installable dist whose core package raises on import is refused."""
     wheels = _release(
         fabricate,
         "2.0.0",
-        **{**OK_MODULES, "root": {"modules": {"senselab/__init__.py": "raise ImportError('broken')\n"}}},
+        **{**OK_MODULES, "core": {"modules": {"senselab_core/__init__.py": "raise ImportError('broken')\n"}}},
     )
     with pytest.raises(gate.GateError, match="broken"):
         gate.check_installs(gate.dist_files(wheels[0].parent), HERE_PYTHON)
@@ -214,7 +216,7 @@ def test_a11_check_installs_refuses_a_wheel_that_does_not_import(fabricate: Call
 
 @pytest.mark.env
 @pytest.mark.network
-@pytest.mark.parametrize("culprit", ["worker", "core", "root"])
+@pytest.mark.parametrize("culprit", ["worker", "core"])
 def test_i1_check_installs_refuses_an_undeclared_dependency(culprit: str, fabricate: Callable[..., Path]) -> None:
     """A distribution importing a third-party package its metadata omits fails in its own venv, whoever it is."""
     modules = {**OK_MODULES, culprit: {"modules": {next(iter(OK_MODULES[culprit]["modules"])): "import numpy\n"}}}
@@ -227,7 +229,11 @@ def test_i1_check_installs_refuses_an_undeclared_dependency(culprit: str, fabric
 @pytest.mark.parametrize("name", gate.DISTRIBUTIONS)
 def test_c1_release_gate_refuses_a_wheel_without_its_pin(name: str, fabricate: Callable[..., Path]) -> None:
     """A wheel whose requirements differ from the graph's, by omission or by an invented edge, is refused."""
-    graph = {"senselab": ["senselab-core==2.0.0"], "senselab-core": ["senselab-worker==2.0.0"], "senselab-worker": []}
+    graph = {
+        "senselab": ["senselab-core==2.0.0", "senselab-worker==2.0.0"],
+        "senselab-core": ["senselab-worker==2.0.0"],
+        "senselab-worker": [],
+    }
     # the worker has no pin to drop, so it gains one
     graph[name] = ["senselab-core==2.0.0"] if name == "senselab-worker" else []
     wheels = [fabricate(n, "2.0.0", graph[n]) for n in gate.DISTRIBUTIONS]
@@ -238,11 +244,11 @@ def test_c1_release_gate_refuses_a_wheel_without_its_pin(name: str, fabricate: C
 @pytest.mark.logic
 @pytest.mark.parametrize("extra", ["senselab", "senselab-core", "senselab-worker"])
 def test_c1_release_gate_refuses_a_sibling_the_graph_does_not_give(extra: str, fabricate: Callable[..., Path]) -> None:
-    """A wheel requiring a sibling beyond its one declared edge is refused."""
+    """A wheel requiring a sibling beyond, or twice beside, its declared edges is refused."""
     wheels = [
         fabricate("senselab-worker", "2.0.0"),
         fabricate("senselab-core", "2.0.0", ["senselab-worker==2.0.0"]),
-        fabricate("senselab", "2.0.0", ["senselab-core==2.0.0", f"{extra}==2.0.0"]),
+        fabricate("senselab", "2.0.0", ["senselab-core==2.0.0", "senselab-worker==2.0.0", f"{extra}==2.0.0"]),
     ]
     with pytest.raises(gate.GateError, match="the graph requires"):
         gate.check_closure(wheels)
@@ -529,13 +535,13 @@ def test_n3_contents_check_refuses_a_directory_that_is_not_a_repository(
 @pytest.mark.env
 @pytest.mark.network
 def test_n1_check_installs_exercises_the_sibling_edge(fabricate: Callable[..., Path]) -> None:
-    """A root that imports core but pins nothing fails in its own venv: siblings are reached only through the pin."""
+    """A core that imports the worker but pins nothing fails in its own venv: siblings are reached only by pins."""
     wheels = [
         fabricate("senselab-worker", "2.0.0", modules=OK_MODULES["worker"]["modules"]),
-        fabricate("senselab-core", "2.0.0", ["senselab-worker==2.0.0"], modules=OK_MODULES["core"]["modules"]),
-        fabricate("senselab", "2.0.0", [], modules=OK_MODULES["root"]["modules"]),
+        fabricate("senselab-core", "2.0.0", [], modules={"senselab_core/__init__.py": "import senselab_worker\n"}),
+        fabricate("senselab", "2.0.0", ["senselab-core==2.0.0", "senselab-worker==2.0.0"]),
     ]
-    with pytest.raises(gate.GateError, match="senselab_core"):
+    with pytest.raises(gate.GateError, match="senselab_worker"):
         gate.check_installs(gate.dist_files(wheels[0].parent), HERE_PYTHON)
 
 
@@ -644,6 +650,19 @@ def test_i3_a_ci_job_selects_the_core_env_tests() -> None:
 
 
 @pytest.mark.logic
+def test_the_root_distribution_is_a_metadata_only_umbrella(mini: Path) -> None:
+    """The root wheel selects no package and the sdist no directory; its derived wheel members are dist-info only."""
+    build = PYPROJECT["tool"]["hatch"]["build"]
+    assert build == {"targets": build["targets"]} and build["targets"]["wheel"] == {"bypass-selection": True}
+    assert all((REPO / entry).is_file() for entry in build["targets"]["sdist"]["only-include"])
+    assert "optional-dependencies" not in PYPROJECT["project"]
+    assert PYPROJECT["tool"]["hatch"]["metadata"]["hooks"]["custom"]["dependencies"] == []
+    wheel = next(p for p in _mini_dist(mini) if p.name.startswith("senselab-") and p.suffix == ".whl")
+    members = gate.expected_members(wheel, mini, gate.tracked_modes(mini))
+    assert members and all(m.startswith("senselab-2.0.0.dist-info/") for m in members)
+
+
+@pytest.mark.logic
 def test_a11_every_workspace_member_is_a_published_distribution() -> None:
     """``--all-packages`` builds the workspace members; the gate requires exactly those distributions."""
     assert PYPROJECT["tool"]["uv"]["workspace"]["members"] == ["packages/*"]
@@ -735,40 +754,43 @@ def _load_hook(path: str, monkeypatch: pytest.MonkeyPatch) -> Any:  # noqa: ANN4
 
 
 HOOKS = [
-    ("hatch_build_pins.py", "pyproject.toml", "senselab-core"),
-    ("packages/senselab-core/hatch_pin_loader.py", "packages/senselab-core/pyproject.toml", "senselab-worker"),
+    ("hatch_build_pins.py", "pyproject.toml", ("senselab-core", "senselab-worker")),
+    ("packages/senselab-core/hatch_pin_loader.py", "packages/senselab-core/pyproject.toml", ("senselab-worker",)),
 ]
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize(("path", "pyproject", "pin"), HOOKS)
+@pytest.mark.parametrize(("path", "pyproject", "pins"), HOOKS)
 @pytest.mark.parametrize("version", ["2.0.0+g1234", "2.0.0+local", "2.0.0+a.1", "1.0+1"])
 def test_a32_pin_hook_refuses_a_local_segment(
-    path: str, pyproject: str, pin: str, version: str, monkeypatch: pytest.MonkeyPatch
+    path: str, pyproject: str, pins: tuple[str, ...], version: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Both the shared hook and core's loader raise rather than write ``==X+local``."""
-    hook = _load_hook(path, monkeypatch).PinHook(str(REPO), {"pin": pin, "dependencies": ["numpy"]})
+    hook = _load_hook(path, monkeypatch).PinHook(str(REPO), {"pins": list(pins), "dependencies": ["numpy"]})
     with pytest.raises(ValueError, match="local"):
         hook.update({"version": version})
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize(("path", "pyproject", "pin"), HOOKS)
+@pytest.mark.parametrize(("path", "pyproject", "pins"), HOOKS)
 @pytest.mark.parametrize("version", ["2.0.0", "2.0.0a3", "2.1.0rc1", "10.20.30", "1.4.0a12.dev90"])
 def test_versions_are_pinned_equal(
-    path: str, pyproject: str, pin: str, version: str, monkeypatch: pytest.MonkeyPatch
+    path: str, pyproject: str, pins: tuple[str, ...], version: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Whatever the version, each distribution's hook, with its own declared config, pins its sibling exactly.
+    """Whatever the version, each distribution's hook, with its own declared config, pins its siblings exactly.
 
     This reads the hook's output, not the installed versions, which drift between commits in an editable workspace.
     """
     config = tomllib.loads((REPO / pyproject).read_text())["tool"]["hatch"]["metadata"]["hooks"]["custom"]
-    assert config["pin"] == pin
+    assert (
+        tuple(config["pins"])
+        == pins
+        == gate.DEPENDS_ON[tomllib.loads((REPO / pyproject).read_text())["project"]["name"]]
+    )
     hook = _load_hook(path, monkeypatch).PinHook(str(REPO), config)
     out: dict[str, Any] = {"version": version}
     hook.update(out)
-    assert out["dependencies"] == [*config["dependencies"], f"{pin}=={version}"]
-    assert out["dependencies"].count(f"{pin}=={version}") == 1
+    assert out["dependencies"] == [*config["dependencies"], *(f"{pin}=={version}" for pin in pins)]
 
 
 @pytest.mark.env
@@ -1304,9 +1326,14 @@ def test_xg4_the_repository_tag_spelling_binds_to_the_built_version(
 
 @pytest.mark.logic
 def test_root_imports_its_packages_and_subpackages_and_core_imports_every_module(mini: Path) -> None:
-    """The root distribution imports each package to depth two; core and the worker import every module."""
+    """A distribution outside ``IMPORT_EVERY_MODULE`` imports each package to depth two; core imports every module."""
     fixture = sys.modules["release_fixture"]
-    deep = {"senselab/audio/__init__.py": b"", "senselab/audio/tasks/__init__.py": b"", "senselab/audio/x.py": b""}
+    deep = {
+        "senselab/__init__.py": b"",
+        "senselab/audio/__init__.py": b"",
+        "senselab/audio/tasks/__init__.py": b"",
+        "senselab/audio/x.py": b"",
+    }
     root = fixture.write_mini_wheel(mini, mini.parent, "senselab", "2.0.0", lambda m: m.update(deep))
     assert gate.import_targets(root) == ["senselab", "senselab.audio"]
     core = fixture.write_mini_wheel(mini, mini.parent, "senselab-core", "2.0.0")
@@ -1376,7 +1403,7 @@ def test_xg5_every_derived_member_is_required(mini: Path) -> None:
         ("senselab-core", "senselab_core/kernel/identity.py"),
         ("senselab-core", "senselab_core/__init__.py"),
         ("senselab-worker", "senselab_worker/canonical.py"),
-        ("senselab", "senselab/data/table.yaml"),
+        ("senselab", "senselab-2.0.0.dist-info/licenses/LICENSE.md"),
     ],
 )
 def test_xg5_a_wheel_missing_a_tracked_package_file_is_refused(name: str, member: str, mini: Path) -> None:
@@ -1429,7 +1456,13 @@ def test_xg5_wheel_modules_are_the_py_files_of_packages(mini: Path) -> None:
         "senselab",
         "2.0.0",
         lambda m: m.update(
-            {"senselab/data/guard/sitecustomize.py": b"", "senselab/__main__.py": b"", "senselab/x.pyi": b""}
+            {
+                "senselab/__init__.py": b"",
+                "senselab/cli.py": b"",
+                "senselab/data/guard/sitecustomize.py": b"",
+                "senselab/__main__.py": b"",
+                "senselab/x.pyi": b"",
+            }
         ),
     )
     assert gate.wheel_modules(wheel) == ["senselab", "senselab.__main__", "senselab.cli"]
@@ -1576,8 +1609,27 @@ def test_xg8_wheel_and_metadata_files_are_parsed_strictly(
 def test_xg8_root_extras_are_expanded_as_hatch_expands_them(mini: Path) -> None:
     """``all = ["senselab[nlp]"]`` contributes nlp's requirements under ``extra == "all"``; dropping one is refused."""
     files = _mini_dist(mini)
-    meta = "senselab-2.0.0.dist-info/METADATA"
-    _rewrite(mini, "senselab", "wheel", _sub(meta, b"Requires-Dist: jiwer>=3.0; extra == 'all'\n", b""))
+    pyproject = mini / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text() + '[project.optional-dependencies]\nnlp = ["jiwer>=3.0"]\nall = ["senselab[nlp]"]\n'
+    )
+    lines = (
+        b"Provides-Extra: all\nRequires-Dist: jiwer>=3.0; extra == 'all'\n"
+        b"Provides-Extra: nlp\nRequires-Dist: jiwer>=3.0; extra == 'nlp'\n"
+    )
+
+    def extras(member: str, drop: bytes = b"") -> Callable[[dict[str, bytes]], None]:
+        return lambda m: m.update({member: m[member] + lines.replace(drop, b"")})
+
+    _rewrite(mini, "senselab", "wheel", extras("senselab-2.0.0.dist-info/METADATA"))
+    _rewrite(mini, "senselab", "sdist", extras("senselab-2.0.0/PKG-INFO"))
+    _static(files, mini)
+    _rewrite(
+        mini,
+        "senselab",
+        "wheel",
+        extras("senselab-2.0.0.dist-info/METADATA", b"Requires-Dist: jiwer>=3.0; extra == 'all'\n"),
+    )
     with pytest.raises(gate.GateError, match="not in Requires-Dist"):
         _static(files, mini)
 
@@ -1591,7 +1643,7 @@ def test_xg8_root_extras_are_expanded_as_hatch_expands_them(mini: Path) -> None:
         "senselab-2.0.0/../README.md",
         "senselab-2.0.0/./pyproject.toml",
         "senselab-2.0.0//pyproject.toml",
-        "senselab-2.0.0/SRC/senselab/__init__.py",
+        "senselab-2.0.0/PYPROJECT.toml",
         "othertop/pyproject.toml",
         "senselab-2.0.0\\pyproject.toml",
     ],
@@ -1599,18 +1651,17 @@ def test_xg8_root_extras_are_expanded_as_hatch_expands_them(mini: Path) -> None:
 def test_xg9_tar_members_are_normalised_relative_names_under_the_top(member: str, mini: Path) -> None:
     """``..``, absolute, dot, empty, backslash, outside-top and case-duplicate names are refused, whatever the bytes."""
     files = _mini_dist(mini)
-    source = "senselab-2.0.0/src/senselab/__init__.py" if "SRC" in member else "senselab-2.0.0/pyproject.toml"
-    _rewrite(mini, "senselab", "sdist", lambda m: m.__setitem__(member, m[source]))
+    _rewrite(mini, "senselab", "sdist", lambda m: m.__setitem__(member, m["senselab-2.0.0/pyproject.toml"]))
     with pytest.raises(gate.GateError):
         _static(files, mini)
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("member", ["../x.py", "/x.py", "senselab/../x.py", "SENSELAB/__init__.py"])
+@pytest.mark.parametrize("member", ["../x.py", "/x.py", "senselab_core/../x.py", "SENSELAB_CORE/__init__.py"])
 def test_xg9_zip_members_are_normalised_too(member: str, mini: Path) -> None:
     """The same name rules hold for wheel members."""
     files = _mini_dist(mini)
-    _rewrite(mini, "senselab", "wheel", lambda m: m.__setitem__(member, m["senselab/__init__.py"]))
+    _rewrite(mini, "senselab-core", "wheel", lambda m: m.__setitem__(member, m["senselab_core/__init__.py"]))
     with pytest.raises(gate.GateError):
         _static(files, mini)
 

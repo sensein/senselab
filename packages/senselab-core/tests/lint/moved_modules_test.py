@@ -70,8 +70,8 @@ def _imported_names(text: str, module: str) -> set[str]:
 FORBIDDEN_PATTERNS: tuple[re.Pattern[str], ...] = ()
 
 
-TEXT_EXCLUDED = ("specs/", ".specify/", ".claude/")
-"""Tracked trees of records and agent configuration, which name moved paths as history."""
+TEXT_EXCLUDED = ("specs/", ".specify/", ".claude/", "src/")
+"""Tracked trees of records, agent configuration and the frozen 1.x source pool, which name moved paths as history."""
 
 
 def _scanned_files() -> list[Path]:

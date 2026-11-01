@@ -22,7 +22,7 @@ uploaded:
   points are the declared ones;
 - each distribution installs alone, with only its own siblings, into a fresh venv at its floor Python, and
   imports there from the installed files: every module of core and the worker, and every top-level package and
-  subpackage of the root distribution;
+  subpackage of the root distribution, which is metadata only and ships none;
 - each sdist builds a wheel whose members are byte-identical to the wheel in ``dist/``.
 
 Every subprocess runs in ``gate_environment``: only the variables it names, whatever the caller exports.
@@ -64,8 +64,12 @@ from packaging.utils import canonicalize_name, parse_sdist_filename, parse_wheel
 from packaging.version import InvalidVersion, Version
 
 ROOT = Path(__file__).resolve().parents[1]
-DEPENDS_ON = {"senselab": "senselab-core", "senselab-core": "senselab-worker", "senselab-worker": None}
-"""The one declared dependency graph: each distribution and the sibling it pins exactly."""
+DEPENDS_ON: dict[str, tuple[str, ...]] = {
+    "senselab": ("senselab-core", "senselab-worker"),
+    "senselab-core": ("senselab-worker",),
+    "senselab-worker": (),
+}
+"""The one declared dependency graph: each distribution and the siblings it pins exactly."""
 DISTRIBUTIONS = tuple(DEPENDS_ON)
 DIST_ROOTS = {"senselab": ".", "senselab-core": "packages/senselab-core", "senselab-worker": "packages/senselab-worker"}
 """Each distribution's root, relative to the repository."""
@@ -84,7 +88,7 @@ DEFAULT_LICENSE_FILES = ("LICEN[CS]E*", "COPYING*", "NOTICE*", "AUTHORS*")
 """The license-file globs hatchling applies at a project root when the pyproject names none."""
 SUPPORTED_BUILD_KEYS = {
     "build": {"artifacts", "targets"},
-    "wheel": {"packages", "shared-scripts", "force-include"},
+    "wheel": {"packages", "bypass-selection", "shared-scripts", "force-include"},
     "sdist": {"only-include", "force-include"},
 }
 """The hatch build settings the member derivation understands; any other refuses the release."""
@@ -340,6 +344,18 @@ def _equals(text: str, version: Version) -> bool:
         return False
 
 
+def siblings_of(name: str) -> list[str]:
+    """Return every distribution ``name`` reaches through ``DEPENDS_ON``, nearest first, each once."""
+    out: list[str] = []
+    pending = list(DEPENDS_ON[name])
+    while pending:
+        sibling = pending.pop(0)
+        if sibling not in out:
+            out.append(sibling)
+            pending += DEPENDS_ON[sibling]
+    return out
+
+
 def check_closure(files: list[Path]) -> None:
     """Require each wheel and sdist to pin exactly the sibling ``DEPENDS_ON`` names, and no other sibling.
 
@@ -354,12 +370,12 @@ def check_closure(files: list[Path]) -> None:
     for path in files:
         name, _, requirements = _metadata(path)
         pins = [r for r in requirements if canonicalize_name(r.name) in DISTRIBUTIONS]
-        expected = DEPENDS_ON[name]
-        wanted = [] if expected is None else [expected]
+        wanted = sorted(DEPENDS_ON[name])
         got = sorted(canonicalize_name(r.name) for r in pins)
         if got != wanted:
             raise GateError(f"{name} requires siblings {got or 'none'}, the graph requires {wanted or 'none'}")
         for pin in pins:
+            expected = canonicalize_name(pin.name)
             if not _is_exact_pin(pin, expected, built[expected]):
                 raise GateError(f"{name} requires {pin}, not exactly {expected}=={built[expected]} from dist/")
 
@@ -512,7 +528,7 @@ def expected_members(path: Path, repo: Path, modes: Mapping[str, str]) -> dict[s
 
     if kind == "wheel":
         wheel = targets.get("wheel", {})
-        for package in wheel["packages"]:
+        for package in [] if wheel.get("bypass-selection") else wheel["packages"]:
             add(posixpath.basename(package), _join(root, package))
         for source, dest in wheel.get("shared-scripts", {}).items():
             out[f"{top}.data/scripts/{dest}"] = _join(root, source)
@@ -580,7 +596,7 @@ def declared_requirements(repo: Path, name: str, version: str) -> set[tuple[Any,
     """Return the requirement keys the pyproject of ``name`` declares at ``version``, extras expanded as hatch does.
 
     Base requirements come from ``[project] dependencies``, or from the pin hook's ``dependencies`` when they are
-    dynamic, plus the exact sibling pin. Each extra's requirements carry ``extra == "<name>"``; an extra naming the
+    dynamic, plus the exact sibling pins. Each extra's requirements carry ``extra == "<name>"``; an extra naming the
     distribution itself contributes the requirements of the extras it names.
     """
     pyproject = _pyproject(repo, Path(DIST_ROOTS[name]))
@@ -589,8 +605,7 @@ def declared_requirements(repo: Path, name: str, version: str) -> set[tuple[Any,
         base = list(pyproject["tool"]["hatch"]["metadata"]["hooks"]["custom"]["dependencies"])
     else:
         base = list(project.get("dependencies", []))
-    if DEPENDS_ON[name] is not None:
-        base.append(f"{DEPENDS_ON[name]}=={version}")
+    base += [f"{sibling}=={version}" for sibling in DEPENDS_ON[name]]
     extras = {canonicalize_name(k): v for k, v in project.get("optional-dependencies", {}).items()}
 
     def expand(extra: str, seen: frozenset[str]) -> list[Requirement]:
@@ -963,10 +978,7 @@ def check_installs(files: list[Path], pythons: Mapping[str, str], *, index_url: 
     links = next(iter(wheels.values())).parent
     with tempfile.TemporaryDirectory(prefix="release-gate-") as tmp:
         for name in DISTRIBUTIONS:
-            siblings, link = {}, DEPENDS_ON[name]
-            while link is not None:
-                siblings[link] = built[link]
-                link = DEPENDS_ON[link]
+            siblings = {sibling: built[sibling] for sibling in siblings_of(name)}
             venv = Path(tmp) / name
             _run("uv", "venv", "--python", pythons[name], str(venv), cwd=tmp)
             interpreter = str(venv / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python"))

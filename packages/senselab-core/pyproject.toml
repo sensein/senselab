@@ -38,7 +38,7 @@ packages = ["src/senselab_core"]
 
 [tool.hatch.metadata.hooks.custom]
 path = "hatch_pin_loader.py"
-pin = "senselab-worker"
+pins = ["senselab-worker"]
 dependencies = [
   "numpy>=1.23",
   "pydantic>=2,<3",

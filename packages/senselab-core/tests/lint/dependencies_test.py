@@ -36,8 +36,7 @@ def declared_dependencies(pyproject: dict[str, object]) -> set[str]:
     assert isinstance(project, dict)
     hook = pyproject.get("tool", {}).get("hatch", {}).get("metadata", {}).get("hooks", {}).get("custom", {})  # type: ignore[attr-defined]
     specs = [*project.get("dependencies", []), *hook.get("dependencies", [])]
-    if hook.get("pin"):
-        specs.append(hook["pin"])
+    specs += hook.get("pins", [])
     return {_normalise(re.split(r"[\s<>=!~;\[]", spec, maxsplit=1)[0]) for spec in specs}
 
 

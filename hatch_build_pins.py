@@ -1,4 +1,4 @@
-"""Hatchling metadata hook: the distribution's dependencies plus one exact pin on a sibling."""
+"""Hatchling metadata hook: the distribution's dependencies plus one exact pin on each named sibling."""
 
 from typing import Any
 
@@ -7,7 +7,7 @@ from packaging.version import Version
 
 
 class PinHook(MetadataHookInterface):
-    """Set ``dependencies`` to the hook's ``dependencies`` plus ``<pin>==<version>``."""
+    """Set ``dependencies`` to the hook's ``dependencies`` plus ``<pin>==<version>`` for each of its ``pins``."""
 
     PLUGIN_NAME = "custom"
 
@@ -19,5 +19,5 @@ class PinHook(MetadataHookInterface):
         """
         version = str(metadata["version"])
         if Version(version).local is not None:
-            raise ValueError(f"refusing to pin {self.config['pin']}=={version}: a local version segment")
-        metadata["dependencies"] = [*self.config["dependencies"], f"{self.config['pin']}=={version}"]
+            raise ValueError(f"refusing to pin {', '.join(self.config['pins'])}=={version}: a local version segment")
+        metadata["dependencies"] = [*self.config["dependencies"], *(f"{pin}=={version}" for pin in self.config["pins"])]

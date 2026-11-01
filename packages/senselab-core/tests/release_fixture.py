@@ -27,7 +27,7 @@ WORKSPACE_FILES = (
     "packages/senselab-core/hatch_pin_loader.py",
     "packages/senselab-worker/pyproject.toml",
 )
-WORKSPACE_TREES = ("packages/senselab-core/src", "packages/senselab-worker/src", "src/senselab")
+WORKSPACE_TREES = ("packages/senselab-core/src", "packages/senselab-worker/src")
 _GIT_ENV = {
     "GIT_CONFIG_GLOBAL": os.devnull,
     "GIT_CONFIG_SYSTEM": os.devnull,
@@ -144,21 +144,15 @@ MINI_FILES = {
     "pyproject.toml": (
         '[project]\nname = "senselab"\ndynamic = ["version", "dependencies"]\nrequires-python = ">=3.11"\n'
         'license = { file = "LICENSE.md" }\n'
-        '[project.optional-dependencies]\nnlp = ["jiwer>=3.0"]\nall = ["senselab[nlp]"]\n'
-        '[project.scripts]\nsenselab = "senselab.cli:main"\n'
-        '[tool.hatch.metadata.hooks.custom]\npin = "senselab-core"\ndependencies = ["numpy>=1.23"]\n'
-        '[tool.hatch.build]\nartifacts = ["/src/**/data/**"]\n'
-        '[tool.hatch.build.targets.wheel]\npackages = ["src/senselab"]\n'
-        '[tool.hatch.build.targets.sdist]\nonly-include = ["src", "pyproject.toml", "LICENSE.md"]\n'
+        '[project.scripts]\nsenselab = "senselab_core.cli:main"\n'
+        '[tool.hatch.metadata.hooks.custom]\npins = ["senselab-core", "senselab-worker"]\ndependencies = []\n'
+        "[tool.hatch.build.targets.wheel]\nbypass-selection = true\n"
+        '[tool.hatch.build.targets.sdist]\nonly-include = ["pyproject.toml", "LICENSE.md"]\n'
     ),
-    "src/senselab/__init__.py": "\n",
-    "src/senselab/cli.py": "def main():\n    return 0\n",
-    "src/senselab/data/table.yaml": "a: 1\n",
-    "src/tests/a_test.py": "def test_a():\n    pass\n",
     "packages/senselab-core/pyproject.toml": (
         '[project]\nname = "senselab-core"\ndynamic = ["version", "dependencies"]\nrequires-python = ">=3.11"\n'
         'license = "Apache-2.0"\n'
-        '[tool.hatch.metadata.hooks.custom]\npin = "senselab-worker"\ndependencies = ["pyyaml"]\n'
+        '[tool.hatch.metadata.hooks.custom]\npins = ["senselab-worker"]\ndependencies = ["pyyaml"]\n'
         '[tool.hatch.build.targets.wheel]\npackages = ["src/senselab_core"]\n'
         '[tool.hatch.build.targets.sdist.force-include]\n"../../hatch_build_pins.py" = "_shared_hatch_build_pins.py"\n'
     ),
@@ -174,7 +168,7 @@ MINI_FILES = {
     "packages/senselab-worker/src/senselab_worker/__init__.py": "\n",
     "packages/senselab-worker/src/senselab_worker/canonical.py": "Y = 2\n",
 }
-"""A miniature of this repository's three distributions: one module, data file and test each, and their pyprojects."""
+"""A miniature of the three distributions: a metadata-only umbrella, then core and worker, a module and test each."""
 
 
 def mini_repo(root: Path) -> Path:
@@ -200,12 +194,8 @@ def mini_metadata(name: str, version: str) -> str:
         "senselab": [
             "License-File: LICENSE.md",
             "Requires-Python: >=3.11",
-            "Requires-Dist: numpy>=1.23",
             f"Requires-Dist: senselab-core=={version}",
-            "Provides-Extra: all",
-            "Requires-Dist: jiwer>=3.0; extra == 'all'",
-            "Provides-Extra: nlp",
-            "Requires-Dist: jiwer>=3.0; extra == 'nlp'",
+            f"Requires-Dist: senselab-worker=={version}",
         ],
     }[name]
     return "\n".join(["Metadata-Version: 2.5", f"Name: {name}", f"Version: {version}", *lines]) + "\n"
@@ -221,14 +211,14 @@ MINI_ROOTS = {
 def _mini_sources(repo: Path, name: str, kind: str) -> dict[str, bytes]:
     """The tracked files a hatch build of ``name`` copies into a ``kind`` artifact, by member path (no top dir)."""
     root = MINI_ROOTS[name]
-    package = {"senselab": "senselab", "senselab-core": "senselab_core", "senselab-worker": "senselab_worker"}[name]
+    package = {"senselab": None, "senselab-core": "senselab_core", "senselab-worker": "senselab_worker"}[name]
     out = {}
     for rel in MINI_FILES:
-        if kind == "wheel" and rel.startswith(f"{root}src/{package}/"):
+        if kind == "wheel" and package is not None and rel.startswith(f"{root}src/{package}/"):
             out[rel.removeprefix(f"{root}src/")] = (repo / rel).read_bytes()
         elif kind == "sdist" and rel.startswith(root) and rel != ".gitignore":
             inner = rel.removeprefix(root)
-            if name != "senselab" or inner.split("/")[0] in ("src", "pyproject.toml", "LICENSE.md"):
+            if name != "senselab" or inner in ("pyproject.toml", "LICENSE.md"):
                 out[inner] = (repo / rel).read_bytes()
     if kind == "sdist":
         out[".gitignore"] = (repo / ".gitignore").read_bytes()
@@ -251,7 +241,7 @@ def write_mini_wheel(
         f"Wheel-Version: 1.0\nGenerator: hatchling {HATCHLING}\nRoot-Is-Purelib: true\nTag: py3-none-any\n".encode()
     )
     if name == "senselab":
-        members[f"{stem}.dist-info/entry_points.txt"] = b"[console_scripts]\nsenselab = senselab.cli:main\n"
+        members[f"{stem}.dist-info/entry_points.txt"] = b"[console_scripts]\nsenselab = senselab_core.cli:main\n"
         members[f"{stem}.dist-info/licenses/LICENSE.md"] = (repo / "LICENSE.md").read_bytes()
     edit(members)
     record = f"{stem}.dist-info/RECORD"
