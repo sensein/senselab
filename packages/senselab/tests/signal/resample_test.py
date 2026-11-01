@@ -66,6 +66,39 @@ def test_passband_within_design_ripple(pair: tuple[int, int], fraction: float) -
     assert abs(20 * math.log10(amplitude)) <= rs.design_bounds()[0]
 
 
+def _residual(rate: int, target: int, f: float) -> float:
+    """Largest interior deviation of the resampled tone from the ideal sine sampled at `m / target`."""
+    y = rs.resample_array(_tone(rate, f), rate, target)[0]
+    ideal = numpy.sin(2 * numpy.pi * f * numpy.arange(y.size) / target)
+    window = _interior(rate, target, y.size)
+    return float(numpy.abs(y[window] - ideal[window]).max())
+
+
+@pytest.mark.logic
+@SLOW
+@given(pair=PAIRS, fraction=st.floats(0.01, 1.0))
+def test_passband_tone_matches_ideal_sine(pair: tuple[int, int], fraction: float) -> None:
+    """A pass-band tone comes out as the ideal sine at `m / target`: no delay or phase error beyond the design."""
+    rate, target = pair
+    f = fraction * rs.passband_edge(rate, target)
+    assert _residual(rate, target, f) <= (math.ceil(target / rate) + 2) * DELTA
+
+
+@pytest.mark.logic
+@SLOW
+@given(pair=PAIRS.filter(lambda p: p[1] > p[0]), fraction=st.floats(0.5, 1.0))
+def test_upsampling_images_below_design_attenuation(pair: tuple[int, int], fraction: float) -> None:
+    """Images of a tone near the input's pass-band edge, above the input's Nyquist, stay at the stop-band level."""
+    rate, target = pair
+    f = fraction * rs.passband_edge(rate, target)
+    y = rs.resample_array(_tone(rate, f), rate, target)[0]
+    window = _interior(rate, target, y.size)
+    t = numpy.arange(y.size) / target
+    basis = numpy.stack([numpy.cos(2 * numpy.pi * f * t), numpy.sin(2 * numpy.pi * f * t)], axis=1)[window]
+    coef, *_ = numpy.linalg.lstsq(basis, y[window], rcond=None)
+    assert numpy.abs(y[window] - basis @ coef).max() <= (math.ceil(target / rate) + 1) * DELTA
+
+
 @pytest.mark.logic
 @SLOW
 @given(pair=PAIRS.filter(lambda p: p[1] < p[0]), fraction=st.floats(0.0, 1.0))

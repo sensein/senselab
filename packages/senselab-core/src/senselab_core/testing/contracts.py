@@ -41,7 +41,7 @@ from senselab_worker.digest import identity_digest, npy_digest
 from senselab_worker.faults import FaultClass
 
 from senselab_core.kernel._base import thawed
-from senselab_core.kernel.declare import OUTPUT_AFFECTING, BackendSpec, Registry, TaskSpec
+from senselab_core.kernel.declare import OUTPUT_AFFECTING, BackendSpec, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelRef, ResolvedModel
 from senselab_core.kernel.license import License
 from senselab_core.runtime.keys import Call, Placement, build_key
@@ -141,6 +141,25 @@ def contract_cases(
     return cases
 
 
+PROBE_KEY = "contract_probe"
+"""The `json_schema_extra` key under which a required param declares the sample value contract cases build it with."""
+
+
+def probe_params(task: TaskSpec) -> TaskParams:
+    """Return the task's params built from defaults, each required field taking its declared `PROBE_KEY` sample.
+
+    Raises:
+        AssertionError: if a required field declares no sample.
+    """
+    probes: dict[str, Any] = {}
+    for name, field in task.params.model_fields.items():
+        if field.is_required():
+            extra = field.json_schema_extra if isinstance(field.json_schema_extra, dict) else {}
+            assert PROBE_KEY in extra, f"required param {name!r} of {task.name!r} declares no {PROBE_KEY!r} sample"
+            probes[name] = extra[PROBE_KEY]
+    return task.params.model_validate(probes)
+
+
 def _task_cases(task: TaskSpec) -> list[tuple[str, Callable[[TaskSpec], None]]]:
     return [("params_round_trip", _params_round_trip), ("params_reject_unknown", _params_reject_unknown)]
 
@@ -180,7 +199,7 @@ def _backend_license(lock_records: LockRecords | None, task: TaskSpec, backend: 
 
 
 def _params_round_trip(task: TaskSpec) -> None:
-    params = task.params()
+    params = probe_params(task)
     assert task.params.model_validate_json(params.model_dump_json()) == params, "params do not survive JSON"
     assert task.params.model_validate(params.model_dump()) == params, "params do not survive a dict"
     assert task.params.model_json_schema()["type"] == "object"
@@ -190,7 +209,7 @@ def _params_reject_unknown(task: TaskSpec) -> None:
     known = list(task.params.model_fields)
     probe = f"{known[0]}_" if known else "unknown_param"
     try:
-        task.params.model_validate({**task.params().model_dump(), probe: 0})
+        task.params.model_validate({**probe_params(task).model_dump(), probe: 0})
     except ValidationError as e:
         message = str(e)
     else:
@@ -204,7 +223,7 @@ def base_call(task: TaskSpec, backend: BackendSpec) -> tuple[Call, Placement]:
     """Return the call and placement every key case starts from: default params, `BASE_MODEL`, every component set."""
     call = Call(
         task=task,
-        params=task.params(),
+        params=probe_params(task),
         inputs={port: "content:" + identity_digest("contract-probe@1", ["input", port]) for port in task.inputs},
         model=BASE_MODEL,
     )
@@ -409,7 +428,7 @@ def _content_fault_isolated(task: TaskSpec, backend: BackendSpec) -> None:
     items = [
         {"id": i, "inputs": {port: WIRE_INPUTS[t](i, port) for port, t in task.inputs.items()}} for i in ("a", "b", "c")
     ]
-    params = task.params().model_dump(mode="json")
+    params = probe_params(task).model_dump(mode="json")
     stub = thawed(backend.load_stub)
     with tempfile.TemporaryDirectory(prefix="senselab-contract-") as scratch:
         clean = _run_worker(backend, {**stub, "faults": {}}, items, params, Path(scratch))

@@ -2,9 +2,13 @@ stopband_attenuation_db: 80.0
 transition_fraction: 0.1
 max_block_elements: 4194304
 derivations:
+  kaiser: >-
+    Window shape beta and length follow Kaiser's design formulas (Kaiser and Schafer 1980, IEEE Trans. ASSP 28(1)):
+    beta = 0.1102 (A - 8.7) for A > 50, 0.5842 (A - 21)^0.4 + 0.07886 (A - 21) for 21 <= A <= 50, else 0;
+    taps = (A - 7.95) / (14.36 * width) for transition width in cycles per sample.
   stopband_attenuation_db: >-
     The Kaiser design target A: the filter's stop band lies at least this far below its pass band, and its
-    pass-band ripple is at most 20*log10(1 + 10**(-A/20)) dB (1 + delta with delta = 10**(-A/20)), the single
+    pass-band ripple is at most -20*log10(1 - delta) dB with delta = 10**(-A/20), the single
     ripple a Kaiser-windowed sinc has in both bands. 80 dB puts delta at 1e-4, a ripple of 0.00087 dB and
     an aliasing floor below the 16-bit quantisation floor of 98 dB relative to full scale for content within
     18 dB of full scale; it is a design choice, not a fit to any recording.

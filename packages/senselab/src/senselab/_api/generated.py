@@ -30,7 +30,7 @@ class Resample(ConfiguredTask):
         self,
         model: ModelRef | str | None = None,
         *,
-        target_rate: int = 16000,
+        target_rate: int,
         backend_params: Mapping[str, Any] | None = None,
     ) -> None:
         """Configure the task; params are validated now."""
@@ -81,7 +81,7 @@ def resample(
     series: RegularSeries | str | PathLike[str],
     *,
     model: ModelRef | str | None = None,
-    target_rate: int = 16000,
+    target_rate: int,
     backend_params: Mapping[str, Any] | None = None,
 ) -> Result:
     """Run `Resample` on the inputs: exactly `Resample(model, **params)(...)`."""

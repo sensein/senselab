@@ -2,7 +2,7 @@
 
 The backend `numpy-sinc` and its worker (`load`, `handle`) are this module. Filter parameters are in
 `data/resample.yaml`; `design_bounds` returns the pass-band ripple and stop-band attenuation the design
-guarantees, and `resample_array` is the filter.
+targets, and `resample_array` is the filter.
 """
 
 import math
@@ -35,7 +35,7 @@ _KAISER_LOW_DB = 21.0
 class ResampleParams(TaskParams):
     """Params of `signal.resample`: `target_rate` in Hz."""
 
-    target_rate: int = Field(default=16_000, gt=0)
+    target_rate: int = Field(gt=0, json_schema_extra={"contract_probe": 16_000})
 
 
 @task(name="signal.resample", version="1", kind="transform")
@@ -65,7 +65,7 @@ class NumpySinc:
 
 @dataclass(frozen=True)
 class Design:
-    """A designed lowpass: `taps` at the upsampled rate (DC gain `up`), its group delay `delay` and `passband_edge`."""
+    """A designed lowpass: `taps` at the upsampled rate (DC gain `up`), group delay `delay` in them, Kaiser `beta`."""
 
     taps: numpy.ndarray
     delay: int
@@ -73,13 +73,13 @@ class Design:
 
 
 def design_bounds() -> tuple[float, float]:
-    """Return `(passband_ripple_db, stopband_db)` the filter's Kaiser design guarantees.
+    """Return `(passband_ripple_db, stopband_db)`, the filter's Kaiser design targets.
 
-    The pass band deviates from unit gain by at most `passband_ripple_db` dB; the stop band is at least
-    `stopband_db` dB below it.
+    The pass band is designed to deviate from unit gain by at most `passband_ripple_db` dB; the stop band to lie at
+    least `stopband_db` dB below it.
     """
     delta = 10.0 ** (-_STOPBAND_DB / 20.0)
-    return 20.0 * math.log10(1.0 + delta), _STOPBAND_DB
+    return -20.0 * math.log10(1.0 - delta), _STOPBAND_DB
 
 
 def passband_edge(rate: float, target: float) -> float:
