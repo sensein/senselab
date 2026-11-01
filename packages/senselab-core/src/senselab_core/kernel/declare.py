@@ -22,6 +22,7 @@ from pydantic import (
 )
 from pydantic.json_schema import GenerateJsonSchema
 
+import senselab_core.kernel.results  # noqa: F401 - the kernel result types, decisions among them
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap
 from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import InputIdentity, LogicalKey, Params, ProfileSliceIdentity, ResolvedModel
@@ -29,8 +30,19 @@ from senselab_core.kernel.signals import Recording
 
 TaskKind = Literal["measure", "transform", "decide", "fit"]
 
-VERDICT_TYPES: frozenset[str] = frozenset({"Verdict"})
-"""Output types that carry a decision; only `decide` tasks may declare them (P-20)."""
+
+def _kernel_decision_types() -> frozenset[str]:
+    found, pending = set(), [Formatted]
+    while pending:
+        t = pending.pop()
+        pending += t.__subclasses__()
+        if t.DECISION and t.__module__.startswith("senselab_core.kernel."):
+            found.add(t.__name__)
+    return frozenset(found)
+
+
+VERDICT_TYPES: frozenset[str] = _kernel_decision_types()
+"""Names of the kernel types marked `DECISION`; only `decide` tasks may output them (P-20)."""
 
 OUTPUT_AFFECTING: frozenset[str] = frozenset({"batch_formation", "chunk_grid"})
 """Logical-key components a backend may declare output-affecting (ADR-002)."""
@@ -223,8 +235,9 @@ class BackendSpec(Frozen):
     `models` are the catalogue models it serves; `env` where it runs; `batch_invariant` whether an
     item's outputs are independent of its batch-mates; `tunables` the declared values of each
     tunable; `worker` the module serving `load(init)` and `handle(state, items, params)`;
-    `load_stub` the `init` that loads a model state with no weights; `params` its `BackendParams`
-    model. `output_affecting` names the components of `OUTPUT_AFFECTING` that change this backend's
+    `load_stub` the `init` under which `load` builds the fake stack's model in place of weights,
+    taking `faults` (the fields of `senselab_worker.fake.FakeFaults`) beside it; `params` its
+    `BackendParams` model. `output_affecting` names the components of `OUTPUT_AFFECTING` that change this backend's
     outputs and so enter its logical key, held sorted and once each.
     """
 
@@ -423,29 +436,40 @@ def key_for(  # noqa: PLR0913 - keyword-only, one argument per key component
     backend: BackendSpec,
     *,
     params: BaseModel,
+    backend_params: BaseModel,
     inputs: Mapping[str, InputIdentity],
     model: ResolvedModel | None = None,
     profile_slices: Mapping[str, ProfileSliceIdentity] | None = None,
+    batch_formation: str | None = None,
+    chunk_grid: str | None = None,
 ) -> LogicalKey:
     """Return the logical key of calling `backend` for `task` (ADR-002).
 
-    `params` is an instance of the task's params model; `inputs` maps each declared input port, and
-    no other, to its `content:` or `output:` identity; `model` is the resolved model, which enters
-    the key as its `key_identity()`; `profile_slices` maps each profile slice the call reads to its
-    `profile:` identity. Batch formation and
-    chunk grid are not set: `BackendSpec.output_affecting` does not reach the key yet.
+    `params` is an instance of the task's params model and `backend_params` of the backend's;
+    `inputs` maps each declared input port, and no other, to its `content:` or
+    `output:` identity; `model` is the resolved model, which enters the key as its `key_identity()`;
+    `profile_slices` maps each profile slice the call reads to its `profile:` identity.
+    `batch_formation` and `chunk_grid` are given exactly when the backend declares them
+    output-affecting. The runtime builds keys with `senselab_core.runtime.keys.build_key`.
 
     Raises:
-        ValueError: if the backend implements another task, or params or inputs do not match the task.
+        ValueError: if the backend implements another task, params, backend params or inputs do not
+            match the declarations, or an output-affecting component is given undeclared or missing.
         UnpinnedModel: if `model` is not pinned.
         pydantic.ValidationError: if an identity is not of its typed form.
     """
     if backend.task != task.name:
         raise ValueError(f"backend {backend.name!r} implements {backend.task!r}, not {task.name!r}")
-    if type(params) is not task.params:
-        raise ValueError(f"params of {task.name!r} are {task.params.__name__}, got {type(params).__name__}")
+    for model_type, value, whose in ((task.params, params, task.name), (backend.params, backend_params, backend.name)):
+        if type(value) is not model_type:
+            raise ValueError(f"params of {whose!r} are {model_type.__name__}, got {type(value).__name__}")
     if set(inputs) != set(task.inputs):
         raise ValueError(f"{task.name!r} takes inputs {sorted(task.inputs)}, got {sorted(inputs)}")
+    components = {"batch_formation": batch_formation, "chunk_grid": chunk_grid}
+    for name, component in components.items():
+        if (name in backend.output_affecting) != (component is not None):
+            state = "declares" if name in backend.output_affecting else "does not declare"
+            raise ValueError(f"backend {backend.name!r} {state} {name} output-affecting, got {component!r}")
     return LogicalKey(
         task=task.name,
         task_version=task.version,
@@ -453,6 +477,8 @@ def key_for(  # noqa: PLR0913 - keyword-only, one argument per key component
         backend_version=backend.version,
         model=None if model is None else model.key_identity(),
         params=params.model_dump(mode="json"),
+        backend_params=backend_params.model_dump(mode="json"),
         inputs=inputs,
         profile_slices=profile_slices or {},
+        **components,
     )

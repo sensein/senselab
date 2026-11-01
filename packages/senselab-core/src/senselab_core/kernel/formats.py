@@ -1,7 +1,7 @@
 """Format tags carried by every persisted artifact."""
 
 import re
-from typing import Annotated
+from typing import Annotated, ClassVar
 
 from pydantic import ConfigDict, StringConstraints, model_validator
 
@@ -48,6 +48,9 @@ class Formatted(Frozen):
     """
 
     model_config = ConfigDict(extra="ignore")
+
+    DECISION: ClassVar[bool] = False
+    """Whether a value of this type is a decision, which only a `decide` task may output (P-20)."""
 
     format: FormatTag
 

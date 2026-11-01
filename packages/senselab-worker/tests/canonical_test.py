@@ -470,11 +470,12 @@ def test_tagged_digest_separates_domains() -> None:
         "audio@2",
         "value@1",
         "logical-key@4",
+        "logical-key@5",
         "context@2",
         "weights@2",
         "provenance-id@2",
         "data-manifest@2",
-        "logical-key@5\x00",
+        "logical-key@6\x00",
         "nope@1",
     ],
 )

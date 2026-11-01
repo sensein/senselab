@@ -108,6 +108,7 @@ def test_context_is_not_in_key() -> None:
         "backend_version",
         "model",
         "params",
+        "backend_params",
         "inputs",
         "profile_slices",
         "batch_formation",
@@ -128,13 +129,14 @@ def test_digest_is_the_tagged_digest_of_the_fields() -> None:
         "backend_version": "1",
         "model": {"id": "org/name", "identity": COMMIT},
         "params": {"beam": 5, "lang": "en", "t": [0.5, None]},
+        "backend_params": {},
         "inputs": {"audio": CONTENT},
         "profile_slices": {},
         "batch_formation": None,
         "chunk_grid": None,
     }
     assert k.model_dump() == expected
-    assert k.digest() == identity_digest("logical-key@5", expected)
+    assert k.digest() == identity_digest("logical-key@6", expected)
     assert len(k.digest()) == 64
 
 

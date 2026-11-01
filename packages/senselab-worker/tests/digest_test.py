@@ -47,7 +47,7 @@ def test_an_identity_digest_hashes_the_tag_a_zero_byte_and_the_jcs(tag: str) -> 
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("tag", ["", "file", "file@2", "npy@1", "logical-key@5", "output@3", "file@1\x00"])
+@pytest.mark.parametrize("tag", ["", "file", "file@2", "npy@1", "logical-key@6", "output@3", "file@1\x00"])
 def test_a_file_digest_refuses_any_other_tag(tag: str, tmp_path: Path) -> None:
     """A tag outside `FILE_TAGS`, npy and identity tags included, is refused."""
     path = tmp_path / "x"
@@ -57,7 +57,7 @@ def test_a_file_digest_refuses_any_other_tag(tag: str, tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("tag", ["", "npy@2", "file@1", "logical-key@5", "output@3"])
+@pytest.mark.parametrize("tag", ["", "npy@2", "file@1", "logical-key@6", "output@3"])
 def test_an_npy_digest_refuses_any_other_tag(tag: str) -> None:
     """A tag outside `NPY_TAGS`, file and identity tags included, is refused."""
     with pytest.raises(ValueError, match="unregistered npy tag"):

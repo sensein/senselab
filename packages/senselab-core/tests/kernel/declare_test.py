@@ -10,6 +10,7 @@ from typing import Annotated, Any, Literal, Optional
 import jsonschema
 import pytest
 from pydantic import BaseModel, Field, ValidationError, create_model
+from senselab_core.kernel import declare
 from senselab_core.kernel._base import NonEmptyStr
 from senselab_core.kernel.declare import (
     SCHEMA_DIALECT,
@@ -28,9 +29,11 @@ from senselab_core.kernel.declare import (
     key_for,
     task,
 )
+from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import LogicalKey, ModelIdentity, ModelRef, ResolvedModel, UnpinnedModel
 from senselab_core.kernel.results import Annotation, Embedding
 from senselab_core.kernel.signals import Audio
+from senselab_core.testing.values import frozen_types
 
 COMMIT = "41f01f3fe87f28c78e2fbf8b568835947dd65ed9"
 AUDIO = "content:" + "a" * 64
@@ -344,7 +347,14 @@ def test_output_affecting_names_only_key_components() -> None:
 @pytest.mark.logic
 def test_key_for_builds_the_logical_key() -> None:
     """The key carries the declared task and backend identities, the params' JSON and the input identities."""
-    key = key_for(_task(), _backend(), params=_Params(window=5), inputs={"audio": AUDIO}, profile_slices={"p": SLICE})
+    key = key_for(
+        _task(),
+        _backend(),
+        backend_params=BackendParams(),
+        params=_Params(window=5),
+        inputs={"audio": AUDIO},
+        profile_slices={"p": SLICE},
+    )
     assert (key.task, key.task_version, key.backend, key.backend_version, key.model) == (
         "t.measure",
         "1",
@@ -375,25 +385,69 @@ class _Other(BaseModel):
 def test_key_for_refuses_a_call_off_the_declaration(kwargs: dict[str, Any], match: str) -> None:
     """Params must be the task's model, and inputs exactly its declared ports."""
     with pytest.raises(ValueError, match=match):
-        key_for(_task(), _backend(), **kwargs)
+        key_for(_task(), _backend(), backend_params=BackendParams(), **kwargs)
+
+
+@pytest.mark.logic
+def test_key_for_keys_backend_params() -> None:
+    """Backend params enter the key; params of another backend's model are refused."""
+    backend = _backend(params=_Beam)
+    call: dict[str, Any] = {"params": _Params(), "inputs": {"audio": AUDIO}}
+    default = key_for(_task(), backend, backend_params=_Beam(), **call)
+    assert dict(default.backend_params) == {"beam": 1}
+    assert key_for(_task(), backend, backend_params=_Beam(beam=2), **call).digest() != default.digest()
+    with pytest.raises(ValueError, match="_Beam"):
+        key_for(_task(), backend, backend_params=BackendParams(), **call)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "declared,given,match",
+    [((), {"chunk_grid": "g"}, "does not declare chunk_grid"), (("chunk_grid",), {}, "declares chunk_grid")],
+    ids=["undeclared_given", "declared_missing"],
+)
+def test_key_for_takes_an_output_affecting_component_exactly_when_declared(
+    declared: tuple[str, ...], given: dict[str, Any], match: str
+) -> None:
+    """A batch formation or chunk grid is keyed only when declared, and must be given when it is."""
+    with pytest.raises(ValueError, match=match):
+        key_for(
+            _task(),
+            _backend(output_affecting=declared),
+            backend_params=BackendParams(),
+            params=_Params(),
+            inputs={"audio": AUDIO},
+            **given,
+        )
 
 
 @pytest.mark.logic
 def test_key_for_refuses_a_backend_of_another_task() -> None:
     """The backend must implement the task."""
     with pytest.raises(ValueError, match="t.other"):
-        key_for(_task(), _backend(task="t.other"), params=_Params(), inputs={"audio": AUDIO})
+        key_for(
+            _task(), _backend(task="t.other"), backend_params=BackendParams(), params=_Params(), inputs={"audio": AUDIO}
+        )
 
 
 @pytest.mark.logic
 def test_key_for_puts_the_pinned_model_identity_into_the_key() -> None:
     """`key_for` takes a resolved model and keys its identity; an unpinned one is refused."""
     model = ResolvedModel(ref=ModelRef.parse("org/name@main"), identity=COMMIT)
-    key = key_for(_task(), _backend(), params=_Params(), inputs={"audio": AUDIO}, model=model)
+    key = key_for(
+        _task(), _backend(), backend_params=BackendParams(), params=_Params(), inputs={"audio": AUDIO}, model=model
+    )
     assert key.model == ModelIdentity(id="org/name", identity=COMMIT)
     unpinned = ResolvedModel(ref=ModelRef.parse("local:/m"), identity="/m", unresolved_reason="not hashed")
     with pytest.raises(UnpinnedModel):
-        key_for(_task(), _backend(), params=_Params(), inputs={"audio": AUDIO}, model=unpinned)
+        key_for(
+            _task(),
+            _backend(),
+            backend_params=BackendParams(),
+            params=_Params(),
+            inputs={"audio": AUDIO},
+            model=unpinned,
+        )
 
 
 @pytest.mark.logic
@@ -401,7 +455,7 @@ def test_key_for_puts_the_pinned_model_identity_into_the_key() -> None:
 def test_key_for_refuses_untyped_inputs(bad: str) -> None:
     """An input that is a path, bare hex or another kind of identity is refused."""
     with pytest.raises(ValidationError):
-        key_for(_task(), _backend(), params=_Params(), inputs={"audio": bad})
+        key_for(_task(), _backend(), backend_params=BackendParams(), params=_Params(), inputs={"audio": bad})
 
 
 class _Colour(str, Enum):
@@ -546,3 +600,10 @@ def test_schema_validates_2020_12() -> None:
     inputs = jsonschema.Draft202012Validator(documents[0]["inputs"])
     assert documents[0]["inputs"]["properties"] == {"audio": {"title": "Audio"}, "other": {"title": "Audio"}}
     assert not inputs.is_valid({"audio": "x"}) and not inputs.is_valid({"audio": "x", "other": "y", "z": "w"})
+
+
+@pytest.mark.logic
+def test_verdict_types_derived() -> None:
+    """`VERDICT_TYPES` names exactly the kernel `Formatted` types marked `DECISION`, no literal."""
+    marked = {t.__name__ for t in frozen_types() if issubclass(t, Formatted) and t.DECISION}
+    assert marked == declare.VERDICT_TYPES

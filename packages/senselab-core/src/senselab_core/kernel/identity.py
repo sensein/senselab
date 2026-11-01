@@ -210,8 +210,8 @@ Params = Annotated[
 class LogicalKey(Frozen):
     """The exact, portable identity of a task call (ADR-002).
 
-    `model` is a pinned model's identity; `params` is canonicalised (NFC strings, JCS numbers) at
-    construction and refused if it is not JSON; `inputs` maps input names to `content:` or
+    `model` is a pinned model's identity; `params` and `backend_params` are canonicalised (NFC strings,
+    JCS numbers) at construction and refused if they are not JSON; `inputs` maps input names to `content:` or
     `output:` identities and `profile_slices` slice names to `profile:` identities. The digest is
     computed at construction, so a key that validates can be digested. No execution context, code
     or environment is part of the key.
@@ -224,6 +224,7 @@ class LogicalKey(Frozen):
     backend_version: NonEmptyStr
     model: ModelIdentity | None
     params: Params
+    backend_params: Params = FrozenMapping({})
     inputs: Annotated[Mapping[str, InputIdentity], AfterValidator(FrozenMapping), PlainSerializer(dict)]
     profile_slices: Annotated[
         Mapping[str, ProfileSliceIdentity], AfterValidator(FrozenMapping), PlainSerializer(dict)
@@ -232,10 +233,10 @@ class LogicalKey(Frozen):
     chunk_grid: NonEmptyStr | None = None
 
     def _derived(self) -> Mapping[str, object]:
-        return {**super()._derived(), "_digest": identity_digest("logical-key@5", self.model_dump())}
+        return {**super()._derived(), "_digest": identity_digest("logical-key@6", self.model_dump())}
 
     def digest(self) -> str:
-        """Return `identity_digest("logical-key@5", fields)`, computed at construction."""
+        """Return `identity_digest("logical-key@6", fields)`, computed at construction."""
         return str(self.__pydantic_private__["_digest"])  # type: ignore[index]
 
 

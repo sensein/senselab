@@ -27,7 +27,7 @@ __all__ = [
 
 IDENTITY_TAGS: frozenset[str] = frozenset(
     {
-        "logical-key@5",
+        "logical-key@6",
         "output@3",
         "context@3",
         "content-root@2",
