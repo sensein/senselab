@@ -1,0 +1,8 @@
+# Inputs of the worker-floor job: the worker's one runtime dependency at its floor, and what its tests import.
+# The worker has no dependency group of its own, so this file is its test group.
+# Regenerate worker-floor.txt with:
+#   uv pip compile --universal --python-version 3.10 --generate-hashes .github/locks/worker-floor.in -o .github/locks/worker-floor.txt
+numpy==1.23.5
+pytest
+pytest-timeout
+hypothesis

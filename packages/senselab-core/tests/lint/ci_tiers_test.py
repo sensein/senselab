@@ -1,5 +1,6 @@
 """The CI cadence for the test tiers: what a PR runs, what waits for the nightly run or the `limits` label."""
 
+import re
 import shlex
 import tomllib
 from pathlib import Path
@@ -11,7 +12,7 @@ from _pytest.mark.expression import Expression
 REPO = Path(__file__).resolve().parents[4]
 WORKFLOW = REPO / ".github" / "workflows" / "2x-tests.yaml"
 WORKFLOWS_2X = sorted((REPO / ".github" / "workflows").glob("2x-*.yaml"))
-UNLOCKED_ALLOWED = {("2x-tests.yaml", "worker-floor")}
+FLOOR_LOCK = REPO / ".github" / "locks" / "worker-floor.txt"
 PYPROJECT = REPO / "pyproject.toml"
 TIERS = ("logic", "contract", "limits", "usecase", "env")
 EVERY_PR, ON_LABEL, NIGHTLY = "every_pr", "on_label", "nightly"
@@ -238,30 +239,68 @@ def test_a_job_on_src_tests_is_found() -> None:
 
 
 def unlocked_installs(workflow: str) -> list[tuple[str, str]]:
-    """``(job, command)`` for each ``pip install`` and each ``uv sync`` without ``--locked`` in a job."""
+    """``(job, command)`` for each resolving install in a job.
+
+    That is a ``pip install`` that passes neither ``--no-deps`` (it adds only what it names) nor ``--require-hashes``
+    (it installs only what the hashed lock names), a ``pip sync`` without ``--require-hashes``, and a ``uv sync``
+    without ``--locked`` or ``--frozen``.
+    """
     found = []
     for name, job in yaml.safe_load(workflow).get("jobs", {}).items():
         for step in job.get("steps", []):
             for argv in _commands(step.get("run", "")):
                 text = " ".join(argv)
-                if "install" in argv and "pip" in argv:
-                    found.append((name, text))
-                elif "uv" in argv and "sync" in argv and "--locked" not in argv and "--frozen" not in argv:
+                if "pip" in argv and "install" in argv:
+                    if "--no-deps" not in argv and "--require-hashes" not in argv:
+                        found.append((name, text))
+                elif "pip" in argv and "sync" in argv:
+                    if "--require-hashes" not in argv:
+                        found.append((name, text))
+                elif (
+                    "uv" in argv
+                    and "sync" in argv
+                    and "pip" not in argv
+                    and "--locked" not in argv
+                    and "--frozen" not in argv
+                ):
                     found.append((name, text))
     return found
 
 
 @pytest.mark.logic
 def test_every_2x_job_installs_from_the_lock() -> None:
-    """No 2.x job installs with pip or an unlocked ``uv sync``; the floor job, which the lock cannot serve, is named."""
+    """No 2.x job resolves dependencies at install time: each installs from ``uv.lock`` or a hashed lock file."""
     assert WORKFLOWS_2X
     found = {(path.name, job) for path in WORKFLOWS_2X for job, _command in unlocked_installs(path.read_text())}
-    assert found == UNLOCKED_ALLOWED
+    assert found == set()
+
+
+@pytest.mark.logic
+def test_the_floor_job_installs_the_hashed_floor_lock_then_the_wheel_without_resolving() -> None:
+    """``worker-floor`` syncs ``.github/locks/worker-floor.txt`` with hashes required, then adds the wheel alone."""
+    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["worker-floor"]
+    commands = [argv for step in job["steps"] for argv in _commands(step.get("run", ""))]
+    sync = next(argv for argv in commands if argv[:3] == ["uv", "pip", "sync"])
+    assert "--require-hashes" in sync and ".github/locks/worker-floor.txt" in sync
+    wheel = next(argv for argv in commands if argv[:3] == ["uv", "pip", "install"])
+    assert "--no-deps" in wheel
+    assert commands.index(sync) < commands.index(wheel)
+
+
+@pytest.mark.logic
+def test_the_floor_lock_pins_numpy_at_the_worker_floor_and_hashes_every_package() -> None:
+    """The lock was compiled for Python 3.10, pins numpy to the worker's floor, and every pin carries hashes."""
+    text = FLOOR_LOCK.read_text()
+    assert "--python-version 3.10" in text
+    floor = re.search(r"numpy>=(\d+\.\d+)", (REPO / "packages" / "senselab-worker" / "pyproject.toml").read_text())
+    assert floor and re.search(rf"^numpy=={re.escape(floor.group(1))}\.\d+ ", text, re.MULTILINE)
+    pins = re.findall(r"^[A-Za-z0-9_.-]+==\S+.*?(?=^[A-Za-z0-9_.-]+==|\Z)", text, re.MULTILINE | re.DOTALL)
+    assert pins and all("--hash=sha256:" in pin for pin in pins)
 
 
 @pytest.mark.logic
 def test_a_pip_install_and_an_unlocked_sync_are_found() -> None:
-    """Planted ``uv pip install``, ``pip install`` and ``uv sync`` runs are reported; ``uv sync --locked`` is not."""
+    """Planted resolving installs are reported; ``uv sync --locked``, ``--no-deps`` and ``--require-hashes`` are not."""
     planted = yaml.safe_dump(
         {
             "jobs": {
@@ -269,7 +308,11 @@ def test_a_pip_install_and_an_unlocked_sync_are_found() -> None:
                 "b": {"steps": [{"run": "python -m pip install pytest"}]},
                 "c": {"steps": [{"run": "uv sync --all-extras"}]},
                 "d": {"steps": [{"run": "uv sync --locked --package senselab-core --group test"}]},
+                "e": {"steps": [{"run": "uv pip install --no-deps dist/w.whl"}]},
+                "f": {"steps": [{"run": "uv pip install --require-hashes -r lock.txt"}]},
+                "g": {"steps": [{"run": "uv pip sync --require-hashes lock.txt"}]},
+                "h": {"steps": [{"run": "uv pip sync lock.txt"}]},
             }
         }
     )
-    assert [job for job, _ in unlocked_installs(planted)] == ["a", "b", "c"]
+    assert [job for job, _ in unlocked_installs(planted)] == ["a", "b", "c", "h"]

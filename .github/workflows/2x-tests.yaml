@@ -153,6 +153,34 @@ jobs:
     - name: Run the release gate tests, which build and create venvs
       run: .core/bin/pytest packages/senselab-core/tests/release_gate_test.py -m "env and not slow" -p no:cacheprovider
 
+  # Every locked runtime dependency of the three distributions has a license its distribution's policy allows
+  # (scripts/data/license_policy.yaml), and so has every native library a wheel bundles.
+  licenses:
+    needs: detect
+    name: licenses
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0   # hatch-vcs derives the version from tags
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        version: 0.13.6
+    - name: Install the root distribution and its dependencies, from uv.lock
+      env:
+        UV_PROJECT_ENVIRONMENT: .licenses
+      run: uv sync --locked --no-editable --python 3.12 --package senselab --no-default-groups
+    - name: Check the licenses
+      run: .licenses/bin/python scripts/check_licenses.py --json licenses.json
+    - name: Keep the license table
+      if: always()
+      uses: actions/upload-artifact@v5
+      with:
+        name: licenses
+        path: licenses.json
+        if-no-files-found: ignore
+
   worker-floor:
     needs: detect
     name: worker-floor (3.10)
@@ -167,11 +195,13 @@ jobs:
         version: 0.13.6
     - name: Build the worker wheel
       run: uv build --wheel --out-dir dist packages/senselab-worker
-    # The one job not installed from uv.lock: the lock's requires-python is >=3.11, so it cannot resolve for 3.10,
-    # and the job pins numpy to the worker's floor on purpose. ci_tiers_test names it as the only exception.
-    - name: Install the wheel alone at the floor
+    # The lock's requires-python is >=3.11, so uv.lock cannot serve 3.10. This job installs from its own lock,
+    # .github/locks/worker-floor.txt (numpy 1.23.5 and the worker's test dependencies, hashed), then the wheel
+    # built above with no dependency resolution.
+    - name: Install the lock, then the wheel, at the floor
       run: |
         uv venv -p 3.10 .floor
-        uv pip install --python .floor dist/senselab_worker-*.whl numpy==1.23.5 pytest pytest-timeout hypothesis
+        uv pip sync --python .floor --require-hashes .github/locks/worker-floor.txt
+        uv pip install --python .floor --no-deps dist/senselab_worker-*.whl
     - name: Run worker tests
       run: .floor/bin/pytest packages/senselab-worker/tests -m "logic or env or contract" -p no:cacheprovider
