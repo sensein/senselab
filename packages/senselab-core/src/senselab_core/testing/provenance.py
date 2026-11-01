@@ -6,7 +6,7 @@ from pathlib import Path
 
 from senselab_worker.canonical import jcs_dumps
 
-from senselab_core.runtime.provenance import JsonlProvStore, revised
+from senselab_core.runtime.provenance_jsonl import JsonlProvStore, revised
 
 
 def with_entity_attributes(store: JsonlProvStore, record_id: str, **attributes: object) -> JsonlProvStore:

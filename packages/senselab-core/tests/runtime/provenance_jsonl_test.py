@@ -19,8 +19,8 @@ import numpy
 import pytest
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
-from senselab_core.runtime import provenance
-from senselab_core.runtime.provenance import (
+from senselab_core.runtime import provenance_jsonl
+from senselab_core.runtime.provenance_jsonl import (
     PROV_TYPE,
     Activity,
     Agent,
@@ -724,7 +724,7 @@ def test_an_undeclared_value_raises_a_typed_error_at_the_boundary(
     attributes: dict[str, Any], path: str, type_name: str
 ) -> None:
     """`JsonlProvStore.entity` refuses a value outside the declared type, naming path and type."""
-    with pytest.raises(provenance.UnrecordableValue) as caught:
+    with pytest.raises(provenance_jsonl.UnrecordableValue) as caught:
         JsonlProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=attributes)
     assert caught.value.path == path and caught.value.type_name.endswith(type_name)
     assert path in str(caught.value) and type_name in str(caught.value)
@@ -741,7 +741,7 @@ def test_cycles_and_depth_raise_the_typed_error_through_the_shared_guard() -> No
     for _ in range(62):
         edge = [edge]
     for attributes in ({"loop": loop}, {"deep": deep}, {"edge": edge}):
-        with pytest.raises(provenance.UnrecordableValue, match="contains itself|deeper"):
+        with pytest.raises(provenance_jsonl.UnrecordableValue, match="contains itself|deeper"):
             JsonlProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=attributes)
 
 
@@ -760,8 +760,8 @@ def test_a_real_file_entity_gets_an_id(tmp_path: Path) -> None:
     """`mtime_ns` stays an integer stamp beyond 2**53; it is tokenised for the digest, not rewritten."""
     target = tmp_path / "a.wav"
     target.write_bytes(b"x")
-    attributes = {"path": str(target), **provenance.file_attributes(target)}
-    assert attributes[provenance.MTIME_KEY] == target.stat().st_mtime_ns > 2**53
+    attributes = {"path": str(target), **provenance_jsonl.file_attributes(target)}
+    assert attributes[provenance_jsonl.MTIME_KEY] == target.stat().st_mtime_ns > 2**53
     JsonlProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=attributes)
 
 
@@ -814,7 +814,7 @@ def test_a_file_without_the_provenance_2_format_record_is_refused_typed(
     """A `provenance@1` file, a `provenance@1.1` file, or any other first line is refused, naming the migration."""
     path = tmp_path / "old.jsonl"
     path.write_text("\n".join([*([first] if first else []), *_PROVENANCE_1_LINES]) + "\n")
-    with pytest.raises(provenance.ProvenanceFormatRefused) as refused:
+    with pytest.raises(provenance_jsonl.ProvenanceFormatRefused) as refused:
         JsonlProvStore.read_jsonl(path)
     assert refused.value.found == found and refused.value.path == str(path)
     assert "migration-ledger.md" in str(refused.value) and "re-run" in str(refused.value)
@@ -826,7 +826,7 @@ def test_an_empty_file_is_refused_typed(tmp_path: Path) -> None:
     """An empty file carries no format record and is not read as an empty store."""
     path = tmp_path / "empty.jsonl"
     path.write_text("")
-    with pytest.raises(provenance.ProvenanceFormatRefused):
+    with pytest.raises(provenance_jsonl.ProvenanceFormatRefused):
         JsonlProvStore.read_jsonl(path)
 
 
@@ -860,7 +860,7 @@ _RECORD_FIELDS: dict[type, dict[str, object]] = {
     Entity: {"prov_type": "artifact", "extent": None},
     Activity: {"node": "N", "step": None},
     Agent: {"agent_type": "software", "version": "1"},
-    provenance.Environment: {"kind": "host", "label": "h", "python_version": "3.12"},
+    provenance_jsonl.Environment: {"kind": "host", "label": "h", "python_version": "3.12"},
 }
 
 
@@ -880,14 +880,14 @@ def test_no_record_can_be_built_without_a_run_id(record_type: type) -> None:
 def test_revised_keeps_the_run_and_mints_the_id_of_the_new_content(record_type: type) -> None:
     """`revised` returns a record of the same run whose id is its own content's; `id` and `run_id` cannot change."""
     record = record_type(id="", run_id="r", **_RECORD_FIELDS[record_type])
-    name = {Entity: "extent", Activity: "step", Agent: "version", provenance.Environment: "label"}[record_type]
+    name = {Entity: "extent", Activity: "step", Agent: "version", provenance_jsonl.Environment: "label"}[record_type]
     value = {"extent": (0.0, 1.0), "step": "s", "version": "2", "label": "other"}[name]
-    changed = provenance.revised(record, **{name: value})
+    changed = provenance_jsonl.revised(record, **{name: value})
     assert changed.run_id == "r" and changed.id == changed.minted_id() and changed.id != record.id
     JsonlProvStore.merge([])._hold(changed)
     for frozen in ("id", "run_id"):
         with pytest.raises(ValueError, match="cannot revise"):
-            provenance.revised(record, **{frozen: "x"})
+            provenance_jsonl.revised(record, **{frozen: "x"})
 
 
 @settings(max_examples=300, deadline=None)
@@ -908,9 +908,9 @@ def test_the_store_records_again_every_form_it_returns(
     held = cast(dict[str, object], back.get_entity(eid).attributes)
     assert back.entity(prov_type="artifact", extent=(0.0, 1.0), attributes=held) == eid
     nested = back.entity(prov_type="artifact", extent=None, attributes={"inner": held, "list": [held]})
-    tokens = provenance.normalised(back.get_entity(nested).attributes)
-    assert tokens == provenance.normalised({"inner": attributes, "list": [attributes]})
-    with_extra = provenance.revised(held, added=extra)
+    tokens = provenance_jsonl.normalised(back.get_entity(nested).attributes)
+    assert tokens == provenance_jsonl.normalised({"inner": attributes, "list": [attributes]})
+    with_extra = provenance_jsonl.revised(held, added=extra)
     direct = back.entity(prov_type="artifact", extent=None, attributes={**dict(attributes), "added": extra})
     assert back.entity(prov_type="artifact", extent=None, attributes=with_extra) == direct
     again = path.with_name("again.jsonl")
@@ -941,7 +941,7 @@ def test_with_entity_attributes_keeps_order_and_relations_and_remints_the_edited
 def _decoded_type(value: object) -> type | None:  # noqa: PLR0911 - one return per token family
     """The type a caller reads back for a value of a token family, or None for a JSON value."""
     if isinstance(value, enum.Enum):
-        return provenance.EnumMember
+        return provenance_jsonl.EnumMember
     if isinstance(value, PurePath):
         return Path
     if isinstance(value, numpy.ndarray):
@@ -999,14 +999,14 @@ def test_every_read_path_hands_back_the_decoded_value_never_a_token(
         "get_activity": store.get_activity(aid).parameters[key],
         "read_jsonl": back.get_entity(eid).attributes[key],
         "read_jsonl activities": back.activities()[0].parameters[key],
-        "recorded": provenance.recorded({key: value})[key],
-        "plain_values": provenance.plain_values(line["attributes"])[key],
-        "revised": provenance.revised(store.get_entity(eid).attributes)[key],
+        "recorded": provenance_jsonl.recorded({key: value})[key],
+        "plain_values": provenance_jsonl.plain_values(line["attributes"])[key],
+        "revised": provenance_jsonl.revised(store.get_entity(eid).attributes)[key],
     }
-    expected = provenance.normalised(value)
+    expected = provenance_jsonl.normalised(value)
     for how, read in reads.items():
         assert _read_as_decoded(read, value), f"{how}: {read!r} for {value!r}"
-        assert provenance.normalised(read) == expected, how
+        assert provenance_jsonl.normalised(read) == expected, how
 
 
 def _compares_by_value(value: object) -> bool:  # noqa: PLR0911 - one return per value family

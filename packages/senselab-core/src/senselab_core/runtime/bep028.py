@@ -1,4 +1,4 @@
-"""A PROV-O JSON-LD serializer for :class:`~senselab_core.runtime.provenance.JsonlProvStore`, following BIDS BEP028.
+"""A PROV-O JSON-LD serializer for `JsonlProvStore` (`runtime.provenance_jsonl`), following BIDS BEP028.
 
 The store is the single source of truth; this module only reads it, so a run directory written before
 this module existed converts without re-running the pipeline. The design, the mapping table and every
@@ -14,7 +14,7 @@ from typing import Any
 
 from senselab_worker.digest import SHA256_HEX
 
-from senselab_core.runtime.provenance import (
+from senselab_core.runtime.provenance_jsonl import (
     CHECKSUM_KEY,
     CHECKSUM_UNRESOLVED_KEY,
     MTIME_KEY,

@@ -35,7 +35,7 @@ from senselab_core.kernel.signals import Audio, ChannelInfo, Recording, RegularG
 from senselab_core.kernel.time import Span, TimeAnchor, TimeMap
 from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER, open_audio, source_group
-from senselab_core.runtime.provenance import JsonlProvStore, normalised
+from senselab_core.runtime.provenance_jsonl import JsonlProvStore, normalised
 from senselab_core.testing.values import frozen_types, registered_types, value_cases
 from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
 

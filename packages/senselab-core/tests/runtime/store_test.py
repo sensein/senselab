@@ -26,7 +26,7 @@ from planted_objects_fixture import ARRAY_CORRUPTIONS, bounded, swap_subsets
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ReusePolicy
 from senselab_core.runtime import store as store_module
 from senselab_core.runtime.equivalence import EQUIVALENCE
-from senselab_core.runtime.provenance import CHECKSUM_KEY, JsonlProvStore
+from senselab_core.runtime.provenance_jsonl import CHECKSUM_KEY, JsonlProvStore
 from senselab_core.runtime.revision import MANIFEST_NAME, NAMESPACE, record_resolution
 from senselab_core.runtime.storage import StorageFull, StorePolicy, StoreUnavailable
 from senselab_core.runtime.store import (

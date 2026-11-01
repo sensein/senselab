@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 import pytest
-from senselab_core.runtime.provenance import (
+from senselab_core.runtime.provenance_jsonl import (
     CHECKSUM_KEY,
     CHECKSUM_UNRESOLVED_KEY,
     MTIME_KEY,

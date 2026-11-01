@@ -16,7 +16,7 @@ from senselab_core.runtime.bep028 import (
     to_bep028_graph,
     write_bep028_files,
 )
-from senselab_core.runtime.provenance import CHECKSUM_KEY, CHECKSUM_UNRESOLVED_KEY, JsonlProvStore
+from senselab_core.runtime.provenance_jsonl import CHECKSUM_KEY, CHECKSUM_UNRESOLVED_KEY, JsonlProvStore
 
 pytestmark = pytest.mark.logic
 

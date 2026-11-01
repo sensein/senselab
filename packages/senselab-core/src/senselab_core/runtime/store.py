@@ -68,7 +68,7 @@ from senselab_core.kernel.identity import (
     acceptable,
 )
 from senselab_core.runtime.equivalence import EQUIVALENCE
-from senselab_core.runtime.provenance import CHECKSUM_KEY, JsonlProvStore
+from senselab_core.runtime.provenance_jsonl import CHECKSUM_KEY, JsonlProvStore
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
     STAGING_DIR_MODE,
