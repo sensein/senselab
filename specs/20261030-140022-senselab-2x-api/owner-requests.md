@@ -46,3 +46,6 @@ The authority for the full review. Quoted as the owner wrote them; nothing parap
 37. "remember what i said about triage?"
 38. "it seems many components deviated from original discussion and decisions. run a full review after subagent is back."
 39. "i thought 22 was specifically about lists of words, not code sharpening. code review should happen during development not CI, so change it to be reviewed and compacted during development."
+40. "verdict/decision seems very specific to triage"
+41. "how are such things creeping in. if i did not notice it we would run into future refactors"
+42. "monitor weekly limit and try to minimize token usage - be succinct and to the point in all generative processes."
