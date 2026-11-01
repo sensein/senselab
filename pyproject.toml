@@ -214,3 +214,9 @@ skip = [
   "*.ipynb"
 ]
 ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO", "VAI", "vie", "g2p", "pres", "befores", "trough", "bellow", "coo", "patter", "AER", "preemptable"]
+
+[tool.pylint.similarities]
+ignore-comments = true
+ignore-docstrings = true
+ignore-imports = true
+ignore-signatures = true

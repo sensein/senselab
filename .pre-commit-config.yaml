@@ -61,6 +61,41 @@ repos:
     - pydantic>=1.10.4
     - types-requests
     - types-PyYAML
+- repo: https://github.com/pylint-dev/pylint
+  rev: v4.0.2
+  hooks:
+  # Duplicate code across the 2.x packages: one run per tree, because a duplicate is a pair of files, so the
+  # hook takes the directories and no filenames. Source is held to 4 similar lines (the tree has none at 3);
+  # tests to 10, which the tree passes (the longest duplicate in tests is 9 lines after comments, docstrings and
+  # imports are dropped). The similarity options are in pyproject.toml under [tool.pylint.similarities].
+  - id: pylint
+    name: duplicate-code in source (4 lines)
+    alias: duplicate-code-src
+    args:
+    - --disable=all
+    - --enable=duplicate-code
+    - --recursive=y
+    - --rcfile=pyproject.toml
+    - --min-similarity-lines=4
+    - packages/senselab-core/src
+    - packages/senselab-worker/src
+    files: ^packages/.*/src/.*\.py$
+    pass_filenames: false
+    require_serial: true
+  - id: pylint
+    name: duplicate-code in tests (10 lines)
+    alias: duplicate-code-tests
+    args:
+    - --disable=all
+    - --enable=duplicate-code
+    - --recursive=y
+    - --rcfile=pyproject.toml
+    - --min-similarity-lines=10
+    - packages/senselab-core/tests
+    - packages/senselab-worker/tests
+    files: ^packages/.*/tests/.*\.py$
+    pass_filenames: false
+    require_serial: true
 - repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
   rev: v2.15.0
   hooks:
@@ -145,3 +180,14 @@ repos:
     language: system
     pass_filenames: false
     always_run: true
+  - id: size-budgets
+    name: File and function lengths stay within the size budget.
+    entry: uv run --frozen --no-sync python scripts/check_size_budgets.py
+    language: system
+    pass_filenames: false
+    always_run: true
+  - id: spec-ids
+    name: No ruling, finding or review-round ids under packages/.
+    entry: uv run --frozen --no-sync python scripts/check_spec_ids.py
+    language: system
+    files: ^packages/
