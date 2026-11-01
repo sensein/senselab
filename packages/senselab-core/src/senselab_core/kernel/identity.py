@@ -157,24 +157,28 @@ class ResolvedModel(Frozen):
         """
         if not self.pinned:
             raise UnpinnedModel(f"{self.ref} is not pinned ({self.unresolved_reason}); it cannot enter a key")
-        return ModelIdentity(source=self.ref.source, id=self.ref.id, identity=self.identity)
+        model_id = self.ref.id if self.ref.source == "hf" else None
+        return ModelIdentity(source=self.ref.source, id=model_id, identity=self.identity)
 
 
 class ModelIdentity(Frozen):
-    """A pinned model's identity in a logical key: its source, id and weight identity.
+    """A pinned model's identity in a logical key: its source, its hub id, and its weight identity.
 
     Built by `ResolvedModel.key_identity`; validation applies the same pinning rule, so `identity`
-    is a 40-hex commit for `hf` and a sha256 otherwise.
+    is a 40-hex commit for `hf` and a sha256 otherwise. `id` is the repo id for `hf` and None for
+    `url` and `local`, whose identity is the content of the weights alone.
     """
 
     source: Literal["hf", "url", "local"]
-    id: NonEmptyStr
+    id: NonEmptyStr | None
     identity: NonEmptyStr
 
     @model_validator(mode="after")
     def _check_pinned(self) -> "ModelIdentity":
         if error := _pinned_identity_error(self.source, self.identity):
             raise ValueError(error)
+        if (self.source == "hf") != (self.id is not None):
+            raise ValueError(f"a {self.source} model identity carries {'a repo id' if self.source == 'hf' else 'no id'}")
         return self
 
 
@@ -229,10 +233,10 @@ class LogicalKey(Frozen):
     chunk_grid: NonEmptyStr | None = None
 
     def _derived(self) -> Mapping[str, object]:
-        return {**super()._derived(), "_digest": identity_digest("logical-key@3", self.model_dump())}
+        return {**super()._derived(), "_digest": identity_digest("logical-key@4", self.model_dump())}
 
     def digest(self) -> str:
-        """Return `identity_digest("logical-key@3", fields)`, computed at construction."""
+        """Return `identity_digest("logical-key@4", fields)`, computed at construction."""
         return str(self.__pydantic_private__["_digest"])  # type: ignore[index]
 
 

@@ -654,7 +654,7 @@ def _register_kernel_samples() -> None:
         ModelIdentity,
         lambda: [
             ModelIdentity(source="hf", id="org/m", identity=_COMMIT),
-            ModelIdentity(source="local", id="/m", identity=_SHA),
+            ModelIdentity(source="local", id=None, identity=_SHA),
         ],
         invalid_updates=[{"identity": "main"}],
     )

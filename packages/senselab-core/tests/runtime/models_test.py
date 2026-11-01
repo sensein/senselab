@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from senselab_core.kernel.identity import ModelRef
+from senselab_core.kernel.identity import LogicalKey, ModelRef
 from senselab_core.runtime.models import (
     WEIGHTS,
     WEIGHTS_FORMAT,
@@ -17,6 +17,7 @@ from senselab_core.runtime.models import (
     verify_weights,
 )
 from senselab_core.runtime.revision import Resolver
+from senselab_worker.digest import file_digest
 from senselab_worker.hashing import weights_identity
 
 
@@ -67,7 +68,34 @@ def test_resolve_local_uses_weights_identity(tmp_path: Path) -> None:
     assert r.pinned
     assert r.identity == weights_identity([tmp_path / "a.bin", tmp_path / "sub" / "b.bin"], root=tmp_path)
     one = resolve(ModelRef.parse(f"local:{tmp_path / 'a.bin'}"))
-    assert one.identity == weights_identity([tmp_path / "a.bin"], root=tmp_path)
+    assert one.identity == file_digest("file@1", tmp_path / "a.bin")
+
+
+def _model_key(text: str) -> LogicalKey:
+    model = resolve(ModelRef.parse(text)).key_identity()
+    return LogicalKey(task="t", task_version="1", backend="b", backend_version="1", model=model, params={}, inputs={})
+
+
+@pytest.mark.contract
+def test_a_local_or_url_model_is_keyed_by_its_weights_not_where_they_live(tmp_path: Path) -> None:
+    """The same weights at two paths share a key, different weights do not, and no path or URL enters a key."""
+    for name, weights in [("home-alice-m", b"w"), ("scratch-bob-m", b"w"), ("other", b"v")]:
+        (tmp_path / name / "cfg").mkdir(parents=True)
+        (tmp_path / name / "w.bin").write_bytes(weights)
+        (tmp_path / name / "cfg" / "c.json").write_bytes(b"{}")
+    a, b, other = (_model_key(f"local:{tmp_path / n}") for n in ("home-alice-m", "scratch-bob-m", "other"))
+    assert a.digest() == b.digest()
+    assert a.digest() != other.digest()
+    file_a, file_b = (_model_key(f"local:{tmp_path / n / 'w.bin'}") for n in ("home-alice-m", "scratch-bob-m"))
+    (tmp_path / "renamed.pt").write_bytes(b"w")
+    assert file_a.digest() == file_b.digest() == _model_key(f"local:{tmp_path / 'renamed.pt'}").digest()
+    sha = file_digest("file@1", tmp_path / "renamed.pt")
+    mirror_1, mirror_2 = (_model_key(f"url:https://{h}/u/alice/w.bin#sha256={sha}") for h in ("a.org", "b.net"))
+    assert mirror_1.digest() == mirror_2.digest()
+    for key in (a, b, file_a, file_b, mirror_1):
+        dumped = repr(key.model_dump())
+        assert str(tmp_path) not in dumped and "alice" not in dumped and "bob" not in dumped
+        assert key.model is not None and key.model.id is None
 
 
 @pytest.mark.logic

@@ -106,7 +106,7 @@ def _files_under(path: Path) -> list[Path]:
 
 def _local_identity(path: Path) -> str:
     if path.is_file():
-        return weights_identity([path], root=path.parent)
+        return file_digest("file@1", path)
     if path.is_dir():
         files = _files_under(path)
         if files:
@@ -119,7 +119,7 @@ def resolve(ref: ModelRef, *, token: str | None = None, resolver: Resolver = PRO
     """Bind `ref` to the identity of its weights.
 
     - hf: the 40-hex commit from `resolve_revision` through `resolver` (its errors propagate).
-    - local: `weights_identity` of the file, or of every file under the directory, rooted at it.
+    - local: the file's `file_digest`, or `weights_identity` of every file under the directory, rooted at it.
     - url: the hash declared in the reference (`url:<url>#sha256=<hex>`); nothing is downloaded.
       `verify_model` checks the downloaded bytes against it at load.
 

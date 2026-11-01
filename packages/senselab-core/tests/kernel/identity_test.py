@@ -132,7 +132,7 @@ def test_digest_is_the_tagged_digest_of_the_fields() -> None:
         "chunk_grid": None,
     }
     assert k.model_dump() == expected
-    assert k.digest() == identity_digest("logical-key@3", expected)
+    assert k.digest() == identity_digest("logical-key@4", expected)
     assert len(k.digest()) == 64
 
 
@@ -228,10 +228,22 @@ def test_key_identity_requires_pinned_model() -> None:
 @pytest.mark.logic
 def test_model_identity_applies_the_pinning_rule() -> None:
     """A model identity built directly is held to the rule `ResolvedModel` applies to a pinned model."""
-    assert ModelIdentity(source="local", id="/m", identity=SHA256).identity == SHA256
+    assert ModelIdentity(source="local", id=None, identity=SHA256).identity == SHA256
     for source, ident in [("hf", "main"), ("hf", SHA256), ("url", COMMIT), ("local", "x")]:
         with pytest.raises(ValidationError):
-            ModelIdentity(source=source, id="org/name", identity=ident)  # type: ignore[arg-type]
+            ModelIdentity(source=source, id=None if source != "hf" else "org/name", identity=ident)  # type: ignore[arg-type]
+
+
+@pytest.mark.logic
+def test_model_identity_names_a_hub_repo_and_never_a_location() -> None:
+    """A hub identity carries its repo id; a url or local identity carries none, since its id is a location."""
+    with pytest.raises(ValidationError):
+        ModelIdentity(source="hf", id=None, identity=COMMIT)
+    for source in ("url", "local"):
+        with pytest.raises(ValidationError):
+            ModelIdentity(source=source, id="/home/alice/m", identity=SHA256)  # type: ignore[arg-type]
+    local = ResolvedModel(ref=ModelRef.parse("local:/home/alice/m"), identity=SHA256)
+    assert local.key_identity() == ModelIdentity(source="local", id=None, identity=SHA256)
 
 
 _PARAM_VALUES = st.recursive(
