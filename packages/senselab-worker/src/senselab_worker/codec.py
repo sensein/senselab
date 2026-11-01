@@ -31,7 +31,14 @@ from senselab_worker.canonical import (
     unique_object,
 )
 from senselab_worker.digest import SHA256_HEX
-from senselab_worker.faults import ArrayIntegrityError, FaultClass, ProtocolError, ValueTooLarge, WireValueError
+from senselab_worker.faults import (
+    ArrayIntegrityError,
+    ArrayReadError,
+    FaultClass,
+    ProtocolError,
+    ValueTooLarge,
+    WireValueError,
+)
 from senselab_worker.ownership import ARRAY_TEMP_NAME, remove_owned
 
 MAX_LINE_BYTES = 16 * 2**20
@@ -340,7 +347,8 @@ def from_wire(
 
     Raises:
         ArrayIntegrityError: if a reference is malformed, points outside `array_dir`, or its file
-            is missing, not a regular file, unreadable, or differs from its sha256, dtype or shape.
+            is not a regular file or differs from its sha256, dtype or shape; `ArrayReadError`, also an
+            `OSError` with the failed call's errno, if the file cannot be opened or read.
         TimeoutError: if `deadline` passes while reading.
     """
     root = Path(array_dir).resolve()
@@ -410,6 +418,9 @@ def _read_array(ref: object, root: Path, deadline: Deadline, arrays: dict[str, n
             raise ValueError(f"array is {a.dtype.str} {list(a.shape)}, reference says {ref['dtype']} {ref['shape']}")
     except TimeoutError:
         raise
+    except OSError as exc:
+        what = exc.strerror or str(exc)
+        raise ArrayReadError(exc.errno, f"bad array reference: {type(exc).__name__}: {what}: {exc.filename}") from exc
     except Exception as exc:
         raise ArrayIntegrityError(f"bad array reference: {type(exc).__name__}: {exc}") from exc
     return a

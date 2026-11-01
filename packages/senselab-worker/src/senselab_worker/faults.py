@@ -40,6 +40,17 @@ class ArrayIntegrityError(InfrastructureFault):
     """An array reference is malformed, or its file is missing, unreadable or mismatched."""
 
 
+class ArrayReadError(ArrayIntegrityError, OSError):
+    """An array file could not be opened or read: an `OSError` carrying the failed call's errno."""
+
+    def __init__(self, errno: int | None, message: str) -> None:
+        """Carry `errno` (None when the failure had none) and the whole `message`."""
+        if errno is None:
+            OSError.__init__(self, message)
+        else:
+            OSError.__init__(self, errno, message)
+
+
 class WireValueError(ContentFault, ValueError):
     """A value with no wire form: a type off the whitelist, a non-finite float, invalid Unicode, a cycle, too deep."""
 

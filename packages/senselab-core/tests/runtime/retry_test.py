@@ -3,6 +3,7 @@
 import ast
 import errno
 import inspect
+import os
 import socket
 import urllib.error
 from collections.abc import Callable
@@ -11,6 +12,7 @@ from pathlib import Path
 from types import ModuleType
 
 import httpx
+import numpy
 import pytest
 import senselab_core.runtime.retry as retry_module
 import yaml
@@ -19,6 +21,8 @@ from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RepositoryNot
 from senselab_core.runtime.faults import is_transient
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import storage_fault
+from senselab_worker import codec
+from senselab_worker.faults import ArrayIntegrityError, ArrayReadError, FaultClass, classify
 
 POLICY = RetryPolicy(attempts=3, first_backoff_s=1.0)
 
@@ -229,3 +233,41 @@ def test_storage_faults_are_classified_by_the_same_classifier(err: OSError) -> N
     fault = storage_fault(err, Path("/store"))
     assert is_transient(fault) is is_transient(err)
     assert ("retry" in str(fault)) is is_transient(err)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("call", ["open", "read"])
+@pytest.mark.parametrize("code", [errno.EIO, errno.ESTALE, errno.EAGAIN, errno.EINTR, errno.EACCES, errno.ENOENT])
+def test_an_array_read_failure_keeps_its_errno_through_is_transient(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, call: str, code: int
+) -> None:
+    """A failed open or read of an array file is an `ArrayReadError` that `is_transient` judges by its errno."""
+    ref = codec.to_wire(numpy.arange(4), array_dir=tmp_path, at="line")
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise OSError(code, os.strerror(code))
+
+    monkeypatch.setattr(os, call, fail)
+    with pytest.raises(ArrayReadError) as caught:
+        codec.from_wire(ref, array_dir=tmp_path)
+    monkeypatch.undo()
+    err = caught.value
+    assert isinstance(err, ArrayIntegrityError) and isinstance(err, OSError) and err.errno == code
+    assert is_transient(err) == is_transient(OSError(code, "x"))
+    assert classify(err) is FaultClass.INFRASTRUCTURE
+
+
+@pytest.mark.logic
+def test_a_missing_array_file_is_a_permanent_read_error_and_a_mismatch_is_not_an_oserror(tmp_path: Path) -> None:
+    """A missing file is `ArrayReadError` with ENOENT; bytes that fail their sha256 are integrity, not I/O."""
+    ref = codec.to_wire(numpy.arange(4), array_dir=tmp_path, at="line")
+    path = Path(ref["__array__"]["path"])
+    data = path.read_bytes()
+    path.unlink()
+    with pytest.raises(ArrayReadError) as missing:
+        codec.from_wire(ref, array_dir=tmp_path)
+    assert missing.value.errno == errno.ENOENT and not is_transient(missing.value)
+    path.write_bytes(data[:-1] + b"\x01")
+    with pytest.raises(ArrayIntegrityError) as mismatch:
+        codec.from_wire(ref, array_dir=tmp_path)
+    assert not isinstance(mismatch.value, OSError)
