@@ -866,10 +866,7 @@ class WorkerClient:
         self, result: dict[str, Any], deadline: Deadline, shared: dict[str, numpy.ndarray]
     ) -> dict[str, Any]:
         if "error" in result:
-            error = _mapped(result["error"])
-            if error["gap"]:
-                logger.warning("worker fault classification gap: %s: %s", error["type"], error["message"])
-            return {"id": result["item"], "error": error}
+            return item_error(result["item"], result["error"])
         try:
             outputs = from_wire(result["outputs"], array_dir=self._array_dir, deadline=deadline, shared=shared)
         except ArrayIntegrityError as exc:
@@ -1106,6 +1103,14 @@ def _request_line(
         return kept, dump([wire for _, wire in kept])
     except LineTooLarge as exc:
         raise ValueTooLarge(f"request of {len(kept)} items does not fit one line; send fewer items: {exc}") from exc
+
+
+def item_error(item_id: str, record: dict[str, Any]) -> dict[str, Any]:
+    """Return the result of item `item_id` failing with the error record `record`; log a classification gap."""
+    error = _mapped(record)
+    if error["gap"]:
+        logger.warning("worker fault classification gap: %s: %s", error["type"], error["message"])
+    return {"id": item_id, "error": error}
 
 
 def _mapped(error: dict[str, Any]) -> dict[str, Any]:

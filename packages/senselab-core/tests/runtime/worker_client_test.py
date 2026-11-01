@@ -22,7 +22,10 @@ from backends.subdir_backend_fixture import ARRAY_LIKE
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from lifecycle_probes_fixture import alive, gate, group_alive, interpreter, listing, recorded_pids, state
+from senselab_core.kernel.declare import Env
 from senselab_core.runtime import worker_client
+from senselab_core.runtime.fake_backend import FAKE as FAKE_SPEC
+from senselab_core.runtime.in_process import InProcessWorker
 from senselab_core.runtime.worker_client import (
     DEFAULT_GRACES,
     ConcurrentUse,
@@ -38,6 +41,7 @@ from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_LINE_BYTES, Li
 from senselab_worker.digest import identity_digest
 from senselab_worker.fake import EXIT_CRASH
 from senselab_worker.faults import FaultClass, ProtocolError, ValueTooLarge, classify
+from senselab_worker.model_cache import ModelCache
 
 FAKE = "senselab_worker.fake"
 SCRIPTED = Path(__file__).parent / "scripted_worker_fixture.py"
@@ -1175,3 +1179,93 @@ def test_oversize_is_value_too_large_per_item_where_attributable(
         else:
             assert (result["error"]["type"], result["error"]["fault"]) == ("ValueTooLarge", FaultClass.RESOURCE)
     assert worker.alive
+
+
+COUNTING = "backends.counting_backend_fixture"
+FAKE_KEY = ("fake", "c" * 40, "cpu", "float32")
+
+
+def _one_byte(_: object) -> int:
+    return 1
+
+
+@pytest.mark.contract
+def test_host_and_isolated_share_handle(array_parent: Path) -> None:
+    """One backend's `handle` gives the same results in process (`Env.host`) and in a worker (`Env.isolated`).
+
+    The isolated env of the fake stack is the running interpreter (a declared test seam); no env is built.
+    """
+    isolated = FAKE_SPEC.model_copy(update={"env": Env.isolated("fake")})
+    items = [{"id": i, "inputs": {"payload": i, "signal": numpy.arange(4.0)}} for i in "abc"]
+    params = {"salt": "s", "faults": {"fail_items": ["b"], "oom_items": ["c"]}}
+    host = InProcessWorker(
+        FAKE_SPEC.worker, init=dict(FAKE_SPEC.load_stub), key=FAKE_KEY, cache=ModelCache(1), size_of=_one_byte
+    )
+    with WorkerClient(sys.executable, isolated.worker, init=dict(isolated.load_stub), array_parent=array_parent) as w:
+        remote = w.run(items, params)
+    local = host.run(items, params)
+
+    def comparable(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {**r, "error": {k: v for k, v in r["error"].items() if k != "traceback"}} if "error" in r else r
+            for r in results
+        ]
+
+    assert comparable(local) == comparable(remote)
+    assert [r.get("error", {}).get("fault") for r in local] == [None, FaultClass.CONTENT, FaultClass.RESOURCE]
+
+
+@pytest.mark.logic
+def test_in_process_model_loaded_once_across_calls() -> None:
+    """In process, calls and clients sharing a cache and key load the backend once."""
+    from backends import counting_backend_fixture as counting  # noqa: PLC0415 - the module records loads
+
+    counting.LOADS.clear()
+    cache = ModelCache(1)
+    for _ in range(2):
+        worker = InProcessWorker(COUNTING, init={}, key=FAKE_KEY, cache=cache, size_of=_one_byte)
+        worker.run([{"id": "a", "inputs": {}}], {})
+        worker.run([{"id": "b", "inputs": {}}], {})
+    assert counting.LOADS == [{}]
+
+
+@pytest.mark.logic
+def test_in_process_reloads_an_evicted_model() -> None:
+    """A run whose state was evicted by another model loads it again."""
+    from backends import counting_backend_fixture as counting  # noqa: PLC0415 - the module records loads
+
+    counting.LOADS.clear()
+    cache = ModelCache(1)
+    first = InProcessWorker(COUNTING, init={"faults": {}}, key=FAKE_KEY, cache=cache, size_of=_one_byte)
+    InProcessWorker(COUNTING, init={}, key=("fake", "d" * 40, "cpu", "float32"), cache=cache, size_of=_one_byte)
+    assert first.run([{"id": "a", "inputs": {}}], {})[0]["outputs"]["value"] == _value({}, {})
+    assert counting.LOADS == [{"faults": {}}, {}, {"faults": {}}]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(("module", "init"), [("no_such_backend_module", {}), (FAKE, {"unknown": 1})])
+def test_in_process_load_failure_is_worker_fatal(module: str, init: dict[str, Any]) -> None:
+    """An import or load failure is `WorkerFatal`, as a worker reports it, and nothing is cached."""
+    cache = ModelCache(1)
+    with pytest.raises(WorkerFatal):
+        InProcessWorker(module, init=init, key=FAKE_KEY, cache=cache, size_of=_one_byte)
+    assert cache.keys() == []
+
+
+@pytest.mark.logic
+def test_in_process_refuses_a_ref_and_reserved_init() -> None:
+    """A ref as the model identity, or `array_dir` in `init`, is refused before anything loads."""
+    cache = ModelCache(1)
+    with pytest.raises(ValueError, match="never a ref"):
+        InProcessWorker(FAKE, init={}, key=("fake", "main", "cpu", "float32"), cache=cache, size_of=_one_byte)
+    with pytest.raises(ValueError, match="reserved"):
+        InProcessWorker(FAKE, init={"array_dir": "/x"}, key=FAKE_KEY, cache=cache, size_of=_one_byte)
+    assert cache.keys() == []
+
+
+@pytest.mark.logic
+def test_in_process_malformed_request_is_value_error() -> None:
+    """A malformed request is a `ValueError`, as from `WorkerClient.run`."""
+    worker = InProcessWorker(FAKE, init={}, key=FAKE_KEY, cache=ModelCache(1), size_of=_one_byte)
+    with pytest.raises(ValueError, match="malformed request"):
+        worker.run([{"inputs": {}}], {})

@@ -105,14 +105,22 @@ def _respond(handle: Handle, state: object, msg: dict[str, Any], array_dir: Path
             except ArrayIntegrityError as exc:
                 entries[i] = {"error": exc}
         if decoded:
-            for (i, _), entry in zip(decoded, _call(handle, state, [item for _, item in decoded], params)):
+            for (i, _), entry in zip(decoded, call_handle(handle, state, [item for _, item in decoded], params)):
                 entries[i] = entry
     for item, entry in zip(items, entries):
         _write(tx, _result(msg["id"], item["id"], entry, array_dir))
     _write(tx, dump_line({"id": msg["id"], "done": len(items)}, "done"))
 
 
-def _call(handle: Handle, state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+def call_handle(
+    handle: Handle, state: object, items: list[dict[str, Any]], params: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Return `handle(state, items, params)` as one `{"outputs": dict}` or `{"error": exception}` per item; total.
+
+    Whatever `handle` raises becomes every item's error; a wrong-length result or a malformed entry becomes a
+    `ProtocolError`. `KeyboardInterrupt` and `SystemExit` propagate. Workers and the host's in-process path both
+    call it.
+    """
     try:
         entries = handle(state, items, params)
     except PASS_THROUGH:
