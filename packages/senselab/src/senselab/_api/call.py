@@ -154,7 +154,7 @@ class ConfiguredTask:
         except (ValidationError, ValueError) as error:
             raise _params_error(self.name, self.spec.params, given, error) from None
 
-    def _replace(self, changes: Mapping[str, Any]) -> Any:  # noqa: ANN401 - the generated subclass names its own type
+    def _replace(self, changes: Mapping[str, Any]) -> Self:
         merged = {**self._given, **{k: v for k, v in changes.items() if v is not UNSET}}
         return type(self)(self._model, **merged, backend_params=self._backend_params)
 

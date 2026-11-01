@@ -1,0 +1,18 @@
+stopband_attenuation_db: 80.0
+transition_fraction: 0.1
+max_block_elements: 4194304
+derivations:
+  stopband_attenuation_db: >-
+    The Kaiser design target A: the filter's stop band lies at least this far below its pass band, and its
+    pass-band ripple is at most 20*log10(1 + 10**(-A/20)) dB (1 + delta with delta = 10**(-A/20)), the single
+    ripple a Kaiser-windowed sinc has in both bands. 80 dB puts delta at 1e-4, a ripple of 0.00087 dB and
+    an aliasing floor below the 16-bit quantisation floor of 98 dB relative to full scale for content within
+    18 dB of full scale; it is a design choice, not a fit to any recording.
+  transition_fraction: >-
+    The transition band's width as a fraction of the lower of the two Nyquist frequencies. It ends at that
+    Nyquist (the stop-band edge) and starts below it, so a component that aliases lands at or above the
+    pass-band edge and is attenuated by A. 0.1 keeps the pass band flat to 90 % of the lower Nyquist
+    (14.4 kHz of 16 kHz audio resampled to 32 kHz) at about 16 000 taps for 44.1 to 48 kHz.
+  max_block_elements: >-
+    The most (channels x outputs x taps) values one gather holds at once, 2**22 float64 values (32 MiB):
+    a memory bound that changes no output.

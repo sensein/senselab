@@ -35,8 +35,9 @@ from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any, TypeVar
 
+import numpy
 from pydantic import BaseModel, ValidationError
-from senselab_worker.digest import identity_digest
+from senselab_worker.digest import identity_digest, npy_digest
 from senselab_worker.faults import FaultClass
 
 from senselab_core.kernel._base import thawed
@@ -77,7 +78,25 @@ PLACEMENT_ONLY: tuple[str, ...] = tuple(
 WORKER_TIMEOUT_S = 60
 """How long `content_fault_isolated` gives a worker to load its stub, and then to answer one request."""
 
-WIRE_INPUTS: Mapping[str, Callable[[str, str], object]] = {"json": lambda item, port: f"{item}:{port}"}
+
+def _regular_series(item: str, port: str) -> dict[str, Any]:
+    """Return the wire form of a one-channel regular group of 800 samples, its phase set by the item and port."""
+    phase = int(identity_digest("contract-probe@1", [item, port])[:8], 16) % 1000
+    data = numpy.sin(2.0 * numpy.pi * (numpy.arange(800) + phase) / 40.0).astype(numpy.float32)[None, :]
+    return {
+        "format": "regular-group@2.0",
+        "channels": [{"name": "ch0", "type": "audio", "units": "FS", "placement": None, "reference": None}],
+        "sampling_rate": 16000.0,
+        "data": data,
+        "source": None,
+        "source_stamp": None,
+    }
+
+
+WIRE_INPUTS: Mapping[str, Callable[[str, str], object]] = {
+    "json": lambda item, port: f"{item}:{port}",
+    "RegularSeries": _regular_series,
+}
 """Per input port type, the wire value `content_fault_isolated` sends for an item id and port."""
 
 FAULTED_ITEM = "b"
@@ -398,7 +417,20 @@ def _content_fault_isolated(task: TaskSpec, backend: BackendSpec) -> None:
         assert not any(Path(scratch).iterdir()), "the worker's array directory was left behind"
     assert all("outputs" in r for r in clean), f"a fault-free run failed: {clean}"
     assert faulted[1].get("error", {}).get("fault") is FaultClass.CONTENT, f"item b did not fail as content: {faulted}"
-    assert (faulted[0], faulted[2]) == (clean[0], clean[2]), "a content fault on b changed its batch-mates"
+    assert _comparable((faulted[0], faulted[2])) == _comparable((clean[0], clean[2])), (
+        "a content fault on b changed its batch-mates"
+    )
+
+
+def _comparable(value: object) -> object:
+    """Return `value` with each array replaced by its `npy_digest`, so results holding arrays compare with `==`."""
+    if isinstance(value, numpy.ndarray):
+        return npy_digest("npy@1", value)
+    if isinstance(value, Mapping):
+        return {k: _comparable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_comparable(v) for v in value]
+    return value
 
 
 def _run_worker(
