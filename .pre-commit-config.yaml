@@ -79,6 +79,7 @@ repos:
     - --min-similarity-lines=4
     - packages/senselab-core/src
     - packages/senselab-worker/src
+    - packages/senselab/src
     files: ^packages/.*/src/.*\.py$
     pass_filenames: false
     require_serial: true
@@ -93,6 +94,7 @@ repos:
     - --min-similarity-lines=10
     - packages/senselab-core/tests
     - packages/senselab-worker/tests
+    - packages/senselab/tests
     files: ^packages/.*/tests/.*\.py$
     pass_filenames: false
     require_serial: true

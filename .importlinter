@@ -2,11 +2,12 @@
 root_packages =
     senselab_worker
     senselab_core
+    senselab
     scripts
 include_external_packages = True
 
 [importlinter:contract:packages-not-1x]
-name = nothing in packages/ imports senselab, the 1.x source pool under src/
+name = senselab_core and senselab_worker never import senselab
 type = forbidden
 source_modules =
     senselab_worker
@@ -86,9 +87,10 @@ forbidden_modules =
     pyannote
 
 [importlinter:contract:layers]
-name = senselab_core and senselab_worker are layered, each importing only downward
+name = senselab, senselab_core and senselab_worker are layered, each importing only downward
 type = layers
 layers =
+    senselab
     senselab_core.cli | senselab_core.testing
     senselab_core.runtime
     senselab_core.kernel

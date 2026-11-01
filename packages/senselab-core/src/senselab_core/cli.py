@@ -1,4 +1,4 @@
-"""The `senselab` command line."""
+"""The ``data`` command group, mounted by ``senselab.cli``."""
 
 import argparse
 import sys
@@ -8,9 +8,8 @@ from pathlib import Path
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="senselab")
-    groups = parser.add_subparsers(dest="group", required=True)
+def mount_data(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
+    """Add the ``data`` command group to a parser's subparsers."""
     data = groups.add_parser("data", help="versioned datasets")
     commands = data.add_subparsers(dest="command", required=True)
     fetch_cmd = commands.add_parser("fetch", help="download and verify the files of a data manifest")
@@ -24,12 +23,11 @@ def _build_parser() -> argparse.ArgumentParser:
     fetch_cmd.add_argument(
         "--verify", action="store_true", help="re-hash every cached file instead of checking its size"
     )
-    return parser
+    data.set_defaults(run=run_data)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Run the CLI; return the process exit code (0 on success, 1 on a reported error)."""
-    args = _build_parser().parse_args(argv)
+def run_data(args: argparse.Namespace) -> int:
+    """Run a parsed ``data fetch``; return the exit code (0 on success, 1 on a reported error)."""
     try:
         manifest = DataManifest.load(args.manifest)
         paths = fetch(manifest, cache_root=args.cache or default_cache_root(), verify="full" if args.verify else "size")
@@ -46,6 +44,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     for name, path in paths.items():
         print(f"{name}\t{path}")
     return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the ``data`` group alone; return the process exit code."""
+    parser = argparse.ArgumentParser(prog="senselab")
+    mount_data(parser.add_subparsers(dest="group", required=True))
+    args = parser.parse_args(argv)
+    return int(args.run(args))
 
 
 if __name__ == "__main__":

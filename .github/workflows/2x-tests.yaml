@@ -79,9 +79,7 @@ jobs:
         UV_PROJECT_ENVIRONMENT: .core
       run: uv sync --locked --no-editable --python "$PYTHON_VERSION" --package senselab-core --group test
     - name: Run core tests
-      run: .core/bin/pytest packages -m "logic or contract" -p no:cacheprovider
-    - name: Check import contracts
-      run: .core/bin/lint-imports
+      run: .core/bin/pytest packages/senselab-core packages/senselab-worker -m "logic or contract" -p no:cacheprovider
     - name: Build each sdist into a wheel on its own
       run: |
         for src in packages/senselab-worker packages/senselab-core .; do
@@ -91,6 +89,33 @@ jobs:
           tar -xzf "$out"/dist/*.tar.gz -C "$out/unpacked"
           uv build --wheel --out-dir "$out/wheel" "$out"/unpacked/*
         done
+
+  # The root distribution without extras, from uv.lock: the 2.x package imports and runs with no model framework.
+  senselab-lean:
+    needs: detect
+    name: senselab-lean (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.14']
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0   # hatch-vcs derives the version from tags
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        version: 0.13.6
+    - name: Install the root distribution without extras, from uv.lock
+      env:
+        PYTHON_VERSION: ${{ matrix.python-version }}
+        UV_PROJECT_ENVIRONMENT: .lean
+      run: uv sync --locked --no-editable --python "$PYTHON_VERSION" --package senselab --no-default-groups --group test
+    - name: Run the senselab tests
+      run: .lean/bin/pytest packages/senselab/tests -m "logic or contract" -p no:cacheprovider
+    - name: Check import contracts
+      run: .lean/bin/lint-imports
 
   # The limits tier on a PR carrying the `limits` label.
   core-limits:

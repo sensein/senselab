@@ -3072,12 +3072,19 @@ profiling = [
     { name = "nbconvert" },
     { name = "scalene" },
 ]
+test = [
+    { name = "grimp" },
+    { name = "import-linter" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "senselab-core", editable = "packages/senselab-core" },
     { name = "senselab-worker", editable = "packages/senselab-worker" },
 ]
+provides-extras = ["torch"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3105,6 +3112,12 @@ docs = [{ name = "pdoc", specifier = "~=16.0" }]
 profiling = [
     { name = "nbconvert", specifier = ">=7" },
     { name = "scalene", specifier = ">=2.2" },
+]
+test = [
+    { name = "grimp" },
+    { name = "import-linter", specifier = "~=2.0" },
+    { name = "pytest" },
+    { name = "pytest-timeout", specifier = "~=2.4" },
 ]
 
 [[package]]
