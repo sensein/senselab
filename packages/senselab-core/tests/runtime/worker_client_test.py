@@ -160,6 +160,27 @@ def test_unencodable_item_fails_alone_on_the_host(worker: WorkerClient) -> None:
     assert out[0]["error"]["gap"] is False and out[1]["outputs"]["value"] == _value({}, {})
 
 
+def _oversized_ints() -> list[object]:
+    big = 10 ** sys.get_int_max_str_digits()
+    return [big, -big, [1, big], {"k": {"j": big}}, (big,)]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("value", _oversized_ints(), ids=["pos", "neg", "list", "nested", "tuple"])
+def test_an_oversized_int_in_one_items_inputs_fails_only_that_item(worker: WorkerClient, value: object) -> None:
+    """An int past the reader's digit limit is that item's content `WireValueError`; its batch-mates run."""
+    out = worker.run([{"id": "a", "inputs": {"n": value}}, {"id": "b", "inputs": {"n": 1}}], {})
+    assert (out[0]["error"]["type"], out[0]["error"]["fault"], out[0]["error"]["gap"]) == (
+        "WireValueError",
+        FaultClass.CONTENT,
+        False,
+    )
+    assert out[1]["outputs"]["value"] == _value({"n": 1}, {})
+    with pytest.raises(ValueError):
+        worker.run([{"id": "a", "inputs": {}}], {"n": value})
+    assert worker.run([{"id": "a", "inputs": {}}], {})[0]["outputs"]
+
+
 @pytest.mark.logic
 def test_unencodable_params_refuse_the_request(worker: WorkerClient) -> None:
     """Params with no wire form raise before sending, and the worker stays usable."""

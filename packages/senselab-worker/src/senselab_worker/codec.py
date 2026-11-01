@@ -205,7 +205,8 @@ def to_wire(value: object, *, array_dir: Path, at: Slot, limit: int = MAX_LINE_B
     arrays are exactly `numpy.ndarray`, and a reference is `ARRAY_REF_HEIGHT` containers tall.
 
     Raises:
-        WireValueError: on any other type or a subclass, a non-finite float, a string or key that
+        WireValueError: on any other type or a subclass, a non-finite float, an int with more decimal
+            digits than `sys.get_int_max_str_digits()` allows (the reader's limit), a string or key that
             is not valid Unicode, an object or structured array, a dict whose only key is
             `__array__`, a container that contains itself, or a container deeper than `MAX_DEPTH`
             on the line.
@@ -286,6 +287,8 @@ class _Encoder:
         if type(scalar) is str:
             self.charge(len(scalar) + 2)
             scalar.encode("utf-8")
+        elif type(scalar) is int:
+            self.charge(len(str(scalar)))
         else:
             self.charge(1)
         if type(scalar) is float and not math.isfinite(scalar):

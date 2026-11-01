@@ -2,6 +2,7 @@
 
 import io
 import json
+import sys
 from pathlib import Path
 from typing import Any, Callable, NoReturn
 
@@ -288,6 +289,26 @@ def test_per_item_errors_and_output_encoding_failures_stay_with_their_item(tmp_p
         ("WireValueError", "content", False),
         ("RuntimeError", "infrastructure", True),
     ]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("shape", ["bare", "neg", "list", "nested"])
+def test_an_oversized_int_in_an_output_is_that_items_content_fault(tmp_path: Path, shape: str) -> None:
+    """An output int past the reader's digit limit is stamped content, not gap, like every other value fault."""
+    big = 10 ** sys.get_int_max_str_digits()
+    value = {"bare": big, "neg": -big, "list": [0, big], "nested": {"a": {"b": big}}}[shape]
+
+    def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"outputs": {"n": value if item["id"] == "big" else 1}} for item in items]
+
+    _, out = _session(tmp_path, [_init(tmp_path), _request("big", "ok")], handle=handle)
+    big_result, ok = _replies(out)
+    assert (big_result["error"]["type"], big_result["error"]["fault"], big_result["error"]["gap"]) == (
+        "WireValueError",
+        "content",
+        False,
+    )
+    assert ok["outputs"] == {"n": 1}
 
 
 def _damaged_ref(tmp_path: Path) -> dict[str, Any]:
