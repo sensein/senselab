@@ -990,6 +990,18 @@ def _close_after_an_idle_crash_with_failing_ps(array_parent: Path, monkeypatch: 
 
 
 @pytest.mark.logic
+def test_linux_without_waitid_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On Linux without `os.waitid`, the exit probe answers 'running' and the leader probe asks `ps`."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    calls = _probe_fails(monkeypatch, "missing")
+    exited = threading.Event()
+    assert worker_client._exit_seen(os.getpid(), exited) is False
+    exited.set()
+    assert worker_client._leader_held(os.getpid(), exited, worker_client.LEADER_PROBE_TIMEOUT_S) is None
+    assert len(calls) == 1
+
+
+@pytest.mark.logic
 @pytest.mark.parametrize("how", ["missing", "timeout"])
 def test_unknown_leader_state_is_never_read_as_reaped(
     array_parent: Path, monkeypatch: pytest.MonkeyPatch, how: str
