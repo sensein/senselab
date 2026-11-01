@@ -55,6 +55,8 @@ def test_the_policy_file_loads_with_a_set_per_distribution() -> None:
     assert set(POLICY.distributions) == {"senselab", "senselab-core", "senselab-worker"}
     assert POLICY.on_missing == "raise"
     assert POLICY.distributions["senselab-worker"] < POLICY.distributions["senselab-core"]
+    assert POLICY.bundled_allow["senselab-core"] == POLICY.distributions["senselab-core"]
+    assert POLICY.bundled_allow["senselab-worker"] > POLICY.distributions["senselab-worker"]
 
 
 def _broken(tmp_path: Path, name: str, mutate: Callable[[dict[str, Any]], object]) -> Path:
@@ -189,13 +191,29 @@ def test_bundled_libraries_exclude_python_extension_modules() -> None:
 
 
 def test_a_bundled_library_with_no_record_is_a_finding_and_a_copyleft_one_follows_the_distribution() -> None:
-    """An unlisted library fails; libsndfile (LGPL) passes for core and fails for the worker."""
+    """An unlisted library fails; libsndfile (LGPL) passes for core and the worker.
+
+    A distribution with no `allow_bundled` is held to its `allow`.
+    """
     unlisted = FakeDist("x", {"License-Expression": "MIT"}, ["x.libs/libmystery-0a1b2c3d.so"])
     found = lic.check({"x": {"senselab-core"}}, POLICY, {"x": unlisted})
     assert [f.problem for f in found] == ["", "no license record"]
     sndfile = FakeDist("x", {"License-Expression": "MIT"}, ["_soundfile_data/libsndfile_arm64.dylib"])
     assert [f.problem for f in lic.check({"x": {"senselab-core"}}, POLICY, {"x": sndfile})] == ["", ""]
-    assert lic.check({"x": {"senselab-worker"}}, POLICY, {"x": sndfile})[1].problem == "not allowed for senselab-worker"
+    assert lic.check({"x": {"senselab-worker"}}, POLICY, {"x": sndfile})[1].problem == ""
+    strict = POLICY._replace(
+        bundled_allow={**POLICY.bundled_allow, "senselab-worker": POLICY.distributions["senselab-worker"]}
+    )
+    assert lic.check({"x": {"senselab-worker"}}, strict, {"x": sndfile})[1].problem == "not allowed for senselab-worker"
+
+
+def test_lgpl_fails_as_a_package_under_the_worker_and_passes_as_a_bundled_library() -> None:
+    """The worker's bundled allowance never widens what a Python package may be."""
+    lgpl_package = _dist(License_Expression="LGPL-3.0-or-later")
+    found = lic.check({"x": {"senselab-worker"}}, POLICY, {"x": lgpl_package})
+    assert [f.problem for f in found] == ["not allowed for senselab-worker"]
+    bundles = FakeDist("x", {"License-Expression": "MIT"}, ["_soundfile_data/libsndfile_arm64.dylib"])
+    assert [f.problem for f in lic.check({"x": {"senselab-worker"}}, POLICY, {"x": bundles})] == ["", ""]
 
 
 def test_the_locked_closure_is_transitive_and_records_who_needs_each_package(tmp_path: Path) -> None:

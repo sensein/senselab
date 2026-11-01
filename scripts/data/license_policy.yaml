@@ -1,4 +1,4 @@
-format: license-policy@1.0
+format: license-policy@1.1
 # The license policy for the locked packages the 2.x distributions ship, read by scripts/check_licenses.py.
 # A package is allowed when its license expression, and the license of each native library its wheel bundles,
 # lies in the union of the named sets its distributions allow. A package that two distributions need must be
@@ -40,11 +40,12 @@ sets:
     ids: [CC-BY-NC-4.0, CC-BY-NC-SA-4.0, CC-BY-NC-ND-4.0]
 
 # The sets each distribution allows. Its locked runtime dependencies, transitive ones included, are checked against it.
+# `allow_bundled` is the sets for the native libraries a wheel bundles, never for packages; absent, it is `allow`.
 distributions:
   senselab-worker:
-    # weak-copyleft-ok: numpy, the worker's one runtime dependency, bundles libquadmath (LGPL) in every Linux
-    # wheel, dynamically linked; no other LGPL or MPL dependency is admitted by this set today.
-    allow: [permissive, runtime-exception, weak-copyleft-ok]
+    allow: [permissive, runtime-exception]
+    # numpy bundles libquadmath (LGPL), dynamically linked.
+    allow_bundled: [permissive, runtime-exception, weak-copyleft-ok]
   senselab-core:
     allow: [permissive, runtime-exception, weak-copyleft-ok]
   senselab:

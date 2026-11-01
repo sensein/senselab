@@ -28,7 +28,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = Path(__file__).resolve().parent / "data" / "license_policy.yaml"
 LOCK = ROOT / "uv.lock"
-POLICY_FORMAT = "license-policy@1.0"
+POLICY_FORMAT = "license-policy@1.1"
 DISTRIBUTIONS = ("senselab", "senselab-core", "senselab-worker")
 ON_MISSING = ("raise", "warn")
 
@@ -51,6 +51,7 @@ class Policy(NamedTuple):
     on_missing: str
     sets: dict[str, frozenset[str]]
     distributions: dict[str, frozenset[str]]
+    bundled_allow: dict[str, frozenset[str]]
     aliases: dict[str, str]
     classifiers: dict[str, str]
     manual: dict[str, Record]
@@ -81,15 +82,18 @@ def load_policy(path: Path = POLICY) -> Policy:
             raise ValueError(f"{path}: set {name} needs ids and a derivation")
         sets[name] = frozenset(i.lower() for i in entry["ids"])
     distributions = {}
+    bundled_allow = {}
     for name, entry in raw["distributions"].items():
-        unknown = set(entry["allow"]) - set(sets)
-        if unknown:
-            raise ValueError(f"{path}: {name} allows unknown sets {sorted(unknown)}")
+        for key in ("allow", "allow_bundled"):
+            unknown = set(entry.get(key, [])) - set(sets)
+            if unknown:
+                raise ValueError(f"{path}: {name} {key} names unknown sets {sorted(unknown)}")
         distributions[name] = frozenset().union(*(sets[s] for s in entry["allow"]))
+        bundled_allow[name] = frozenset().union(*(sets[s] for s in entry.get("allow_bundled", entry["allow"])))
     manual = {_norm(m["package"]): _record(m, f"manual {m['package']}") for m in raw.get("manual") or []}
     bundled = {name: _record(entry, f"bundled {name}") for name, entry in (raw.get("bundled_libraries") or {}).items()}
     return Policy(
-        raw["on_missing"], sets, distributions, raw["aliases"], raw["classifiers"], manual, bundled
+        raw["on_missing"], sets, distributions, bundled_allow, raw["aliases"], raw["classifiers"], manual, bundled
     )
 
 
@@ -227,7 +231,9 @@ class Finding(NamedTuple):
     problem: str
 
 
-def _judge(subject: str, record: Record | None, needed_by: set[str], policy: Policy, version: str = "") -> Finding:
+def _judge(
+    subject: str, record: Record | None, needed_by: set[str], policy: Policy, version: str = "", bundled: bool = False
+) -> Finding:
     users = tuple(sorted(needed_by))
     if record is None:
         return Finding(subject, version, "", "", users, "no license record")
@@ -235,8 +241,9 @@ def _judge(subject: str, record: Record | None, needed_by: set[str], policy: Pol
         tree = parse_expression(record.expression)
     except ValueError as exc:
         return Finding(subject, version, record.expression, record.how, users, f"unparseable: {exc}")
+    table = policy.bundled_allow if bundled else policy.distributions
     for dist in users:
-        if not allows(tree, policy.distributions[dist]):
+        if not allows(tree, table[dist]):
             return Finding(subject, version, record.expression, record.how, users, f"not allowed for {dist}")
     return Finding(subject, version, record.expression, record.how, users, "")
 
@@ -250,7 +257,9 @@ def check(closure: dict[str, set[str]], policy: Policy, installed: dict[str, met
         record = record or policy.manual.get(_norm(name))
         out.append(_judge(name, record, closure[name], policy, dist.version if dist else "not installed"))
         for lib, file in sorted(bundled_libraries(dist).items() if dist else []):
-            out.append(_judge(f"{name} bundles {lib} ({file})", policy.bundled.get(lib), closure[name], policy))
+            out.append(
+                _judge(f"{name} bundles {lib} ({file})", policy.bundled.get(lib), closure[name], policy, bundled=True)
+            )
     return out
 
 
