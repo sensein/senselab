@@ -37,6 +37,7 @@ modify commit.
 | `src/senselab/utils/vllm_server.py` | `packages/senselab-core/src/senselab_core/runtime/vllm_server.py` | 9b |
 | `src/senselab/audio/tasks/preprocessing/` `resample_audios` (torch, speechbrain) | rewritten, not ported: `packages/senselab/src/senselab/signal/resample.py` (numpy Kaiser-windowed sinc, task `signal.resample`, ruling P2-59) | 12 |
 | `src/senselab/audio/tasks/speech_to_text/` `huggingface.py`, `token_confidence.py` | `packages/senselab/src/senselab/audio/tasks/speech_to_text/` (backend `transformers`, host; `token_confidence` is the one word-confidence engine, P2-56) | 13 |
+| `src/senselab/audio/tasks/speech_to_text/crisperwhisper.py` | `packages/senselab/src/senselab/audio/tasks/speech_to_text/` (`crisperwhisper.py` the isolated worker, `crisperwhisper_backend.py` the declaration, `item_faults.py` the typed faults shared with `huggingface.py`; one backend `crisperwhisper`, `engine: ct2 \| transformers` a backend param) | 14 |
 
 Unported in Task 13, each at its `alpha` source `36aa9615:src/senselab/audio/tasks/speech_to_text/`: `huggingface.py`:
 `HuggingFaceASR` and its class-level pipeline cache (the model cache and `load` replace them), `_attach_token_confidence`
@@ -45,6 +46,8 @@ and `load_hf_resilient` plumbing (kernel types, the catalogue's pinned commit an
 `api.py` `transcribe_audios` dispatch (never moves, P2-36; the generated `speech_to_text` task replaces it).
 `token_confidence.py`: `token_entropy`, `no_speech_prob` and the no-speech token lookup are removed (no 2.x consumer; the 1.x uncertainty loop read them); `torch` is imported lazily and each block gains `tokens` and `token_logprob`.
 Open for Task 22a: a mixed batch whose window count differs from its item count gets no word confidence (`_block` returns none), so batch formation owns its alignment.
+
+Unported in Task 14, each at its `alpha` source `36aa9615:src/senselab/audio/tasks/speech_to_text/crisperwhisper.py`: `CrisperWhisperASR` and its `serve_in_venv` call (the worker client replaces them); `_CRISPER_REQUIREMENTS` and the venv name (the committed `crisperwhisper` lock replaces them); the capped-context redecode (`CONTEXT_CAPPED`, `_decode_capped`, `CrisperWhisperDecoderPositionsExceeded`): a position overrun is a typed content fault, since `Transcript` has no `decode_strategy`; `_WordConfidence` (teacher-forced re-scoring), replaced by `token_confidence` (P2-56), so word confidence on the `transformers` engine comes from generate logits and is none where the library's words do not divide the generated tokens; the ct2 torn-entry discard (a conversion is published by one atomic rename); the library-supplied per-word `probability` probing.
 
 Unported in Task 9a1 (ruling P2-3), each at its `alpha` source `36aa9615:src/senselab/utils/<module>`:
 

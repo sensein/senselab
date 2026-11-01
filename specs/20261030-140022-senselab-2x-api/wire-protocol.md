@@ -10,6 +10,8 @@ longer fail its batch-mates (R-68). Every message is checked by one validator on
 the error path is total (R-92). There is no migration: a v1 worker and a v2 host refuse each other
 at the handshake.
 
+A worker in an isolated env is given inputs as wire forms and answers wire forms as plain dicts, because it cannot import `senselab_core`; its module reaches the env by placement (ADR-009, worker placement), not by installing `senselab`.
+
 ## Framing
 
 - One JSON object per line, UTF-8, terminated by `\n`. Wire JSON is not canonical (JCS is used
