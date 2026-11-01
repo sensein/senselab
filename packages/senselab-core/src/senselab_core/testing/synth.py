@@ -6,6 +6,7 @@ import numpy
 import soundfile
 
 from senselab_core.kernel.signals import AUDIO_GROUP, Audio, RegularGroup
+from senselab_core.runtime.audio_io import READER
 
 
 def _frames(duration_s: float, sampling_rate: int) -> int:
@@ -47,5 +48,5 @@ def write_wav(audio: Audio, path: Path) -> Path:
     group = audio.groups[AUDIO_GROUP]
     if not isinstance(group, RegularGroup):
         raise TypeError(f"audio group must be a RegularGroup, got {type(group).__name__}")
-    soundfile.write(path, group.read().T, int(group.sampling_rate), subtype="PCM_16", format="WAV")
+    soundfile.write(path, group.read(reader=READER).T, int(group.sampling_rate), subtype="PCM_16", format="WAV")
     return path

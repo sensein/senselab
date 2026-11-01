@@ -1,17 +1,12 @@
 """Recordings made of named channel groups, and audio."""
 
 import math
-import os
-import threading
-from collections import OrderedDict
-from collections.abc import Hashable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Mapping
 from fractions import Fraction
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Self
+from typing import TYPE_CHECKING, Annotated, ClassVar, Protocol, Self
 
 import numpy
-import soundfile
 from pydantic import (
     AfterValidator,
     BeforeValidator,
@@ -23,9 +18,7 @@ from pydantic import (
     TypeAdapter,
     model_validator,
 )
-from senselab_worker.canonical import canonical_npy_bytes
 from senselab_worker.digest import identity_digest
-from senselab_worker.hashing import content_identity
 
 from senselab_core.kernel._base import (
     Frozen,
@@ -58,62 +51,6 @@ Integer PCM maps to float32 full scale as the decoder maps it (`x / 2**(bits - 1
 """
 
 _NS_PER_S = 10**9
-SourceStampKey = str
-"""A source stamp's `canonical_digest`, the key of the per-process stamp and root memos."""
-
-SOURCE_MEMO_ENTRIES = 65_536
-"""How many (path, stamp) entries each per-process source memo keeps; the least recently used is evicted first."""
-
-
-class Memo:
-    """A thread-safe mapping that keeps at most `maxsize` entries, evicting the least recently used.
-
-    A miss is always safe: callers recompute what was evicted.
-    """
-
-    def __init__(self, maxsize: int) -> None:
-        """Start empty, keeping at most `maxsize` (at least 1) entries."""
-        if maxsize < 1:
-            raise ValueError(f"a memo keeps at least one entry, got {maxsize}")
-        self.maxsize = maxsize
-        self._items: OrderedDict[Hashable, object] = OrderedDict()
-        self._lock = threading.Lock()
-
-    def get(self, key: Hashable) -> object | None:
-        """Return the value held for `key`, marking it recently used, or `None`."""
-        with self._lock:
-            if key not in self._items:
-                return None
-            self._items.move_to_end(key)
-            return self._items[key]
-
-    def put(self, key: Hashable, value: object) -> None:
-        """Hold `value` for `key`, evicting the least recently used entry beyond `maxsize`."""
-        with self._lock:
-            self._items[key] = value
-            self._items.move_to_end(key)
-            while len(self._items) > self.maxsize:
-                self._items.popitem(last=False)
-
-    def clear(self) -> None:
-        """Drop every entry; callers recompute on their next miss."""
-        with self._lock:
-            self._items.clear()
-
-    def __len__(self) -> int:
-        """Return the number of entries held."""
-        with self._lock:
-            return len(self._items)
-
-
-_VERIFIED = Memo(SOURCE_MEMO_ENTRIES)
-"""(path, stamp) pairs this process stamped from the file and kept; a copy with one is checked by `os.stat` alone."""
-
-
-def _remember(path: str | os.PathLike[str], stamp: "SourceStamp") -> None:
-    _VERIFIED.put((os.fspath(path), stamp.canonical_digest()), True)
-
-
 SignalArray = Annotated[
     numpy.ndarray,
     BeforeValidator(lambda v: require_finite(as_numeric_array(v, 2), "signal samples", nan_is_missing=True)),
@@ -129,12 +66,13 @@ class StaleSource(RuntimeError):
 
 
 class SourceStamp(Frozen):
-    """What a source file was when it was opened: its stat fields, a digest of its sound header, and its content.
+    """What a source file was when a reader opened it: its stat fields, a digest of its sound header, and its content.
 
     `header` is `value_digest("soundfile.info", {frames, channels, samplerate, format, subtype})`;
     `frames`, `channels` and `sampling_rate` repeat the header fields a group's layout is checked against.
     `content` is the root of the file's content identity (`content_identity`), taken over every byte
-    when the stamp is taken; it is the identity root of a recording of that file.
+    when the stamp is taken; it is the identity root of a recording of that file. Stamps are taken and
+    checked by a `SourceReader` (`senselab_core.runtime.audio_io`).
     """
 
     size: int = Field(ge=0)
@@ -147,78 +85,17 @@ class SourceStamp(Frozen):
     header: NonEmptyStr
     content: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
-    @classmethod
-    def of(cls, path: str | os.PathLike[str]) -> "SourceStamp":
-        """Open the file at `path`, read every byte, and return its current stamp.
+
+class SourceReader(Protocol):
+    """Decodes a source group's samples from its file; `senselab_core.runtime.audio_io.READER` implements it."""
+
+    def decode(self, source: Path, stamp: SourceStamp, first: int, count: int) -> numpy.ndarray:
+        """Return `(channels, count)` float32 samples from frame `first`, after checking the file still has `stamp`.
 
         Raises:
-            StaleSource: if the file changed while it was read.
+            StaleSource: if the file at `source` differs from `stamp`.
         """
-        with _opened(path) as (_, stamp):
-            return stamp
-
-    def checked(self, path: str | os.PathLike[str]) -> None:
-        """Check that the file at `path` still has this stamp.
-
-        A stamp this process took from the file at `path` is checked by `os.stat` alone; any other
-        stamp is checked by stamping the file again, which reads every byte. Samples are never
-        decoded from the file without checking its content (`RegularGroup.read`).
-
-        Raises:
-            StaleSource: if the file differs from the stamp.
-        """
-        if _VERIFIED.get((os.fspath(path), self.canonical_digest())) is not None:
-            if not self.same_file(path):
-                raise StaleSource(f"{path} changed since it was opened: recorded {self!r}")
-            return
-        _require_stamp(self, SourceStamp.of(path), path)
-        _remember(path, self)
-
-    def same_file(self, path: str | os.PathLike[str]) -> bool:
-        """Return whether the stat fields of the file at `path` still match, without reading its header."""
-        st = os.stat(path)
-        return (st.st_size, st.st_mtime_ns, st.st_ino, st.st_dev) == (self.size, self.mtime_ns, self.inode, self.device)
-
-
-@contextmanager
-def _opened(path: str | os.PathLike[str]) -> Iterator[tuple[soundfile.SoundFile, SourceStamp]]:
-    """Open `path` once and yield the sound file with the stamp of that open file, its content read in full.
-
-    Raises:
-        StaleSource: if the file's stat fields changed while its content was read.
-    """
-    with open(path, "rb") as raw:
-        st = os.fstat(raw.fileno())
-        content = content_identity(raw)["root"]
-        raw.seek(0)
-        after = os.fstat(raw.fileno())
-        if (after.st_size, after.st_mtime_ns) != (st.st_size, st.st_mtime_ns):
-            raise StaleSource(f"{path} changed while it was read")
-        with soundfile.SoundFile(raw) as f:
-            header = {
-                "frames": f.frames,
-                "channels": f.channels,
-                "samplerate": f.samplerate,
-                "format": f.format,
-                "subtype": f.subtype,
-            }
-            stamp = SourceStamp(
-                size=st.st_size,
-                mtime_ns=st.st_mtime_ns,
-                inode=st.st_ino,
-                device=st.st_dev,
-                frames=f.frames,
-                channels=f.channels,
-                sampling_rate=f.samplerate,
-                header=value_digest("soundfile.info", header),
-                content=content,
-            )
-            yield f, stamp
-
-
-def _require_stamp(stamp: SourceStamp, current: SourceStamp, path: object) -> None:
-    if current != stamp:
-        raise StaleSource(f"{path} changed since it was opened: recorded {stamp!r}, now {current!r}")
+        ...
 
 
 class ChannelInfo(Frozen):
@@ -247,12 +124,10 @@ def _frame_at(t_ns: int, sampling_rate: float) -> int:
 class RegularGroup(Frozen):
     """Channels sampled together at one rate, held in `data` `(channels, samples)` or read from the sound file `source`.
 
-    Exactly one of `data` and `source` is given. A source group carries `source_stamp`, the stamp of
-    the file when it was opened: recorded at validation when not supplied, and checked against the
-    file when supplied (`SourceStamp.checked`, raising `StaleSource` if it differs), so a copy made
-    in this process does not read the file. The header must match the declared channel count and
-    rate; samples are decoded only by `read`, which stamps the file again, content included, and
-    refuses a file that no longer matches.
+    Exactly one of `data` and `source` is given. A source group carries `source_stamp`, the stamp a
+    `SourceReader` took of the file; validation reads no file. The stamp's header must match the
+    declared channel count and rate. Samples are decoded only by `read` through a reader, which
+    checks the file still has the stamp, content included.
     """
 
     channels: tuple[ChannelInfo, ...] = Field(min_length=1)
@@ -260,20 +135,6 @@ class RegularGroup(Frozen):
     data: SignalArray | None = None
     source: Path | None = None
     source_stamp: SourceStamp | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _stamp_source(cls, data: object) -> object:
-        if not isinstance(data, Mapping) or data.get("source") is None:
-            return data
-        supplied = data.get("source_stamp")
-        if supplied is None:
-            taken = SourceStamp.of(data["source"])
-            _remember(data["source"], taken)
-            return {**data, "source_stamp": taken}
-        stamp = SourceStamp.model_validate(supplied)
-        stamp.checked(data["source"])
-        return {**data, "source_stamp": stamp}
 
     @model_validator(mode="after")
     def _check_layout(self) -> "RegularGroup":
@@ -285,7 +146,8 @@ class RegularGroup(Frozen):
             require_finite(self.data, "a regular group's samples")
             rows = self.data.shape[0]
         else:
-            assert self.source_stamp is not None
+            if self.source_stamp is None:
+                raise ValueError("a source group carries the stamp a reader took of its file")
             if self.source_stamp.sampling_rate != self.sampling_rate:
                 raise ValueError(
                     f"declared rate {self.sampling_rate} Hz, file rate {self.source_stamp.sampling_rate} Hz"
@@ -302,17 +164,20 @@ class RegularGroup(Frozen):
         assert self.source_stamp is not None
         return self.source_stamp.frames
 
-    def read(self, start_ns: int | None = None, end_ns: int | None = None) -> numpy.ndarray:
+    def read(
+        self, start_ns: int | None = None, end_ns: int | None = None, reader: SourceReader | None = None
+    ) -> numpy.ndarray:
         """Return the `(channels, samples)` samples whose times lie in `[start_ns, end_ns)` from the group start.
 
         Omitted bounds mean the start and the end; a range running past the end stops there. Held
-        data is returned as a read-only view; a file is decoded to float32 for the requested frames
-        only, after checking it still matches `source_stamp`.
+        data is returned as a read-only view; a source group is decoded by `reader` to float32 for
+        the requested frames only, after the reader checks the file still matches `source_stamp`.
 
         Raises:
             TypeError: if a bound is not an integer.
-            ValueError: if `start_ns` is negative or `end_ns < start_ns`, or a decoded sample is not finite.
-            StaleSource: if the source file changed since it was opened.
+            ValueError: if `start_ns` is negative or `end_ns < start_ns`, a source group is read
+                without a reader, or a decoded sample is not finite or not of the group's layout.
+            StaleSource: if the source file changed since it was stamped.
         """
         start = 0 if start_ns is None else require_ns(start_ns, "start_ns")
         if start < 0:
@@ -325,17 +190,14 @@ class RegularGroup(Frozen):
         stop = frames if end is None else min(_frame_at(end, self.sampling_rate), frames)
         if self.data is not None:
             return self.data[:, first:stop]
-        return self._decode(first, stop - first)
-
-    def _decode(self, first: int, count: int) -> numpy.ndarray:
         assert self.source is not None and self.source_stamp is not None
-        with _opened(self.source) as (f, current):
-            _require_stamp(self.source_stamp, current, self.source)
-            if count == 0:
-                return numpy.zeros((len(self.channels), 0), dtype=AUDIO_DTYPE)
-            f.seek(first)
-            samples = f.read(count, dtype="float32", always_2d=True)
-        return require_finite(samples.T, f"samples decoded from {self.source}")
+        if reader is None:
+            raise ValueError(f"{self.source} is a source group; read it through a SourceReader")
+        samples = reader.decode(self.source, self.source_stamp, first, stop - first)
+        expected = (len(self.channels), stop - first)
+        if samples.shape != expected or samples.dtype != AUDIO_DTYPE:
+            raise ValueError(f"decoded {samples.dtype} {samples.shape} from {self.source}, expected float32 {expected}")
+        return require_finite(samples, f"samples decoded from {self.source}")
 
 
 class IrregularGroup(Frozen):
@@ -412,7 +274,6 @@ class Recording(Frozen):
 
         Raises:
             ValueError: if `groups` is not a layout this type holds.
-            StaleSource: if a source file changed since it was opened.
         """
         values = list(groups.values())
         if len(values) == 1 and isinstance(values[0], RegularGroup) and values[0].source is not None:
@@ -422,7 +283,7 @@ class Recording(Frozen):
 
 
 def _source_root(group: RegularGroup) -> str:
-    """Return the content identity root of a source group's file, as its checked stamp holds it."""
+    """Return the content identity root of a source group's file, as its stamp holds it."""
     assert group.source is not None and group.source_stamp is not None
     return group.source_stamp.content
 
@@ -445,6 +306,11 @@ def _audio_group(groups: Mapping[str, RegularGroup | IrregularGroup]) -> Regular
     if group.data is not None and group.data.dtype != AUDIO_DTYPE:
         raise ValueError(f"audio samples are held as float32 full scale, got {group.data.dtype}")
     return group
+
+
+def audio_channels(count: int) -> tuple[ChannelInfo, ...]:
+    """Return `count` audio channels in full-scale units, named `ch0`, `ch1`, ..."""
+    return tuple(ChannelInfo(name=f"ch{i}", type="audio", units=AUDIO_UNITS) for i in range(count))
 
 
 _GROUPS: TypeAdapter[Mapping[str, RegularGroup | IrregularGroup]] = TypeAdapter(
@@ -477,7 +343,6 @@ class Audio(Recording):
 
         Raises:
             ValueError: if `groups` is not one regular `audio` group of float32 audio channels in one unit.
-            StaleSource: if the source file changed since it was opened.
         """
         group = _audio_group(groups)
         if group.data is None:
@@ -486,32 +351,15 @@ class Audio(Recording):
         return "content:" + identity_digest("audio@3", {"npy": npy, "sampling_rate": group.sampling_rate})
 
     @classmethod
-    def _of(cls, group: RegularGroup) -> "Audio":
+    def from_group(cls, group: RegularGroup) -> "Audio":
+        """Return the audio of one regular group of audio channels, its clock named by its identity.
+
+        Raises:
+            ValueError: if `group` is not float32 audio channels in one unit.
+        """
         identity = cls.identity_of({AUDIO_GROUP: group})
         anchor = TimeAnchor(clock_id=identity, absolute_start_ns=None)
         return cls(groups={AUDIO_GROUP: group}, anchor=anchor, identity=identity)
-
-    @staticmethod
-    def _channels(count: int) -> tuple[ChannelInfo, ...]:
-        return tuple(ChannelInfo(name=f"ch{i}", type="audio", units=AUDIO_UNITS) for i in range(count))
-
-    @classmethod
-    def from_path(cls, path: str | os.PathLike[str]) -> "Audio":
-        """Open a sound file lazily: its bytes are hashed once and its header read; no sample is decoded.
-
-        Its identity is its content identity, and the recording's clock is named by its identity.
-        """
-        stamp = SourceStamp.of(path)
-        _remember(path, stamp)
-        group = RegularGroup.model_validate(
-            {
-                "channels": cls._channels(stamp.channels),
-                "sampling_rate": stamp.sampling_rate,
-                "source": Path(path),
-                "source_stamp": stamp,
-            }
-        )
-        return cls._of(group)
 
     @classmethod
     def from_array(cls, a: numpy.ndarray, sampling_rate: float) -> "Audio":
@@ -543,5 +391,5 @@ class Audio(Recording):
         with numpy.errstate(over="ignore", invalid="ignore"):
             held = x.astype(AUDIO_DTYPE) if scale is None else x.astype(AUDIO_DTYPE) / AUDIO_DTYPE.type(scale)
         held = require_finite(held, "audio samples, as float32")
-        group = RegularGroup(channels=cls._channels(x.shape[0]), sampling_rate=sampling_rate, data=held)
-        return cls._of(group)
+        group = RegularGroup(channels=audio_channels(x.shape[0]), sampling_rate=sampling_rate, data=held)
+        return cls.from_group(group)

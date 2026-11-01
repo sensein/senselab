@@ -118,7 +118,7 @@ def test_every_declared_shutdown_boundary_exists_and_nothing_else_is_accepted() 
         ("import senselab_core.runtime.revision as mr\nmr._MEMO = {}\n", 1),
         ("from senselab_core.runtime.store import ResultStore\nsetattr(ResultStore, 'get', None)\n", 1),
         ("import os\nmonkeypatch.setattr(os, 'open', None)\nos.lstat = None\n", 0),
-        ("from senselab_core.kernel import signals\nsignals._VERIFIED.clear()\n", 0),
+        ("from senselab_core.runtime import audio_io\naudio_io.VERIFIED.clear()\n", 0),
         ("setattr(*owner, value)\n", 1),
         ("from senselab_core.runtime.models import WEIGHTS\nwith pytest.raises(TypeError):\n    WEIGHTS['x'] = 1\n", 0),
     ],

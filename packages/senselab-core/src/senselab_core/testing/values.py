@@ -68,6 +68,8 @@ from senselab_core.kernel.signals import (
     SourceStamp,
 )
 from senselab_core.kernel.time import Span, TimeAnchor, TimeMap
+from senselab_core.runtime import audio_io
+from senselab_core.runtime.audio_io import READER
 from senselab_core.runtime.fetch import DataFile, DataManifest
 from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.storage import StorePolicy
@@ -209,7 +211,7 @@ def _writeable_dump(v: object, arrays: list[numpy.ndarray]) -> object:
 
 def _reads(v: object) -> list[numpy.ndarray]:
     if isinstance(v, RegularGroup):
-        return [numpy.array(v.read(), copy=True)]
+        return [numpy.array(v.read(reader=READER), copy=True)]
     if isinstance(v, IrregularGroup):
         return []
     if isinstance(v, Frozen):
@@ -548,7 +550,7 @@ def _register_kernel_samples() -> None:
     )
     register_samples(
         SourceStamp,
-        lambda: [SourceStamp.of(_wav("mono", 1)), SourceStamp.of(_wav("stereo", 2))],
+        lambda: [audio_io.stamp(_wav("mono", 1)), audio_io.stamp(_wav("stereo", 2))],
         invalid_updates=[{"size": -1}, {"sampling_rate": True}, {"channels": 0}],
     )
     register_samples(
@@ -556,7 +558,7 @@ def _register_kernel_samples() -> None:
         lambda: [
             _data_group(),
             _data_group(1),
-            RegularGroup(channels=_channels(2, "audio", "FS"), sampling_rate=_RATE, source=_wav("stereo", 2)),
+            audio_io.source_group(_channels(2, "audio", "FS"), _RATE, _wav("stereo", 2)),
         ],
         invalid_updates=[
             {"sampling_rate": -5},
@@ -578,9 +580,7 @@ def _register_kernel_samples() -> None:
             Recording(groups={"ecg": _data_group(1)}, anchor=_anchor()),
             Recording(
                 groups={
-                    "mic": RegularGroup(
-                        channels=_channels(1, "audio", "FS"), sampling_rate=_RATE, source=_wav("mono", 1)
-                    )
+                    "mic": audio_io.source_group(_channels(1, "audio", "FS"), _RATE, _wav("mono", 1))
                 },
                 anchor=_anchor(),
             ),
@@ -592,7 +592,7 @@ def _register_kernel_samples() -> None:
         lambda: [
             Audio.from_array(numpy.array([[0.25, -0.5, 0.75], [0.0, 0.5, -1.0]], dtype=numpy.float32), _RATE),
             Audio.from_array(numpy.array([1, -2, 3], dtype=numpy.int16), 16_000),
-            Audio.from_path(_wav("stereo", 2)),
+            audio_io.open_audio(_wav("stereo", 2)),
         ],
         invalid_updates=[{"groups": {"ecg": _data_group()}}, {"identity": "content:" + "f" * 64}],
     )

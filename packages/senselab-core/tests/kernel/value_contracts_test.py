@@ -19,7 +19,6 @@ import soundfile
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import ConfigDict, TypeAdapter, ValidationError
-from senselab_core.kernel import signals
 from senselab_core.kernel._base import (
     Frozen,
     FrozenMapping,
@@ -34,6 +33,8 @@ from senselab_core.kernel.license import License
 from senselab_core.kernel.results import Embedding, Events, Intervals
 from senselab_core.kernel.signals import Audio, ChannelInfo, Recording, RegularGroup, SignalArray, StaleSource
 from senselab_core.kernel.time import Span, TimeAnchor, TimeMap
+from senselab_core.runtime import audio_io
+from senselab_core.runtime.audio_io import READER, open_audio, source_group
 from senselab_core.runtime.provenance import ProvStore, normalised
 from senselab_core.testing.values import frozen_types, registered_types, value_cases
 from senselab_worker.canonical import canonical_npy_bytes, jcs_dumps
@@ -495,7 +496,7 @@ def test_attributes_cannot_forge_an_identity_or_a_stamp(tmp_path: Path) -> None:
         with pytest.raises(ValidationError):
             cls.model_validate(forged, from_attributes=True)
     path = _wav(tmp_path / "a.wav")
-    group = Audio.from_path(path).groups["audio"]
+    group = open_audio(path).groups["audio"]
     assert isinstance(group, RegularGroup) and group.source_stamp is not None
     stamp = group.source_stamp.model_copy(update={"frames": 10**9})
     held = types.SimpleNamespace(
@@ -507,9 +508,9 @@ def test_attributes_cannot_forge_an_identity_or_a_stamp(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_a_same_size_same_mtime_rewrite_is_stale(tmp_path: Path) -> None:
-    """A same-size, same-mtime, same-inode rewrite is refused on read, and by a deep copy with no memo entry."""
+    """A same-size, same-mtime, same-inode rewrite is refused on read, and by a check with no memo entry."""
     path = _wav(tmp_path / "a.wav")
-    audio = Audio.from_path(path)
+    audio = open_audio(path)
     group = audio.groups["audio"]
     assert isinstance(group, RegularGroup)
     st = os.stat(path)
@@ -520,11 +521,13 @@ def test_a_same_size_same_mtime_rewrite_is_stale(tmp_path: Path) -> None:
     after = os.stat(path)
     assert (after.st_size, after.st_mtime_ns, after.st_ino) == (st.st_size, st.st_mtime_ns, st.st_ino)
     with pytest.raises(StaleSource):
-        group.read()
+        group.read(reader=READER)
+    assert group.source_stamp is not None
     copy.deepcopy(audio)
-    signals._VERIFIED.clear()
+    audio_io.check(group.source_stamp, path)
+    audio_io.VERIFIED.clear()
     with pytest.raises(StaleSource):
-        copy.deepcopy(audio)
+        audio_io.check(group.source_stamp, path)
 
 
 @pytest.mark.logic
@@ -635,11 +638,11 @@ def test_small_loosenesses_are_refused() -> None:
 
 @pytest.mark.logic
 def test_a_nested_unsealed_or_subclass_instance_is_validated_again(tmp_path: Path) -> None:
-    """An instance built without validation, or of a subclass with other validators, cannot carry a forged identity."""
+    """A subclass with other validators cannot carry a forged identity; a forged stamp is refused by the reader."""
     from pydantic import BaseModel
 
     path = _wav(tmp_path / "a.wav")
-    real = Audio.from_path(path)
+    real = open_audio(path)
     group = real.groups["audio"]
     assert isinstance(group, RegularGroup) and group.source_stamp is not None
     forged_stamp = BaseModel.model_construct.__func__(  # type: ignore[attr-defined]
@@ -648,8 +651,14 @@ def test_a_nested_unsealed_or_subclass_instance_is_validated_again(tmp_path: Pat
     planted = BaseModel.model_construct.__func__(  # type: ignore[attr-defined]
         RegularGroup, **{**dict(group.__dict__), "source_stamp": forged_stamp}
     )
-    with pytest.raises((ValidationError, StaleSource)):
-        Audio(groups={"audio": planted}, anchor=real.anchor)
+    forged = Audio(groups={"audio": planted}, anchor=real.anchor)
+    assert forged.identity == "content:" + "0" * 64
+    forged_group = forged.groups["audio"]
+    assert isinstance(forged_group, RegularGroup) and forged_group.source_stamp is not None
+    with pytest.raises(StaleSource):
+        forged_group.read(reader=READER)
+    with pytest.raises(StaleSource):
+        source_group(forged_group.channels, RATE, path, forged_group.source_stamp)
 
     class EvilAudio(Audio):
         @classmethod
@@ -685,11 +694,11 @@ def test_a_float_wav_holding_nan_is_refused_on_decode(tmp_path: Path) -> None:
     samples = numpy.zeros(64, dtype=numpy.float32)
     samples[10] = numpy.nan
     soundfile.write(path, samples, RATE, subtype="FLOAT")
-    group = Audio.from_path(path).groups["audio"]
+    group = open_audio(path).groups["audio"]
     assert isinstance(group, RegularGroup)
     with pytest.raises(ValueError, match="NaN"):
-        group.read()
-    assert group.read(0, 10 * 10**9 // RATE).shape == (1, 10)
+        group.read(reader=READER)
+    assert group.read(0, 10 * 10**9 // RATE, reader=READER).shape == (1, 10)
 
 
 @pytest.mark.logic

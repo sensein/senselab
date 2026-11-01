@@ -33,6 +33,19 @@ source_modules = senselab_core.kernel
 forbidden_modules =
     senselab_core.runtime
 
+[importlinter:contract:kernel-does-no-io]
+name = senselab_core.kernel imports no decoder and no file or OS I/O module (ADR-009)
+type = forbidden
+source_modules = senselab_core.kernel
+forbidden_modules =
+    soundfile
+    os
+    io
+    shutil
+    tempfile
+    senselab_worker.hashing
+allow_indirect_imports = True
+
 [importlinter:contract:core-is-framework-free]
 name = senselab_core imports no model framework
 type = forbidden
