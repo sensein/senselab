@@ -50,7 +50,7 @@ jobs:
       with:
         python-version: '3.12'
     - name: Install dependencies with uv
-      run: uv sync --all-extras --group dev
+      run: uv sync --locked --all-extras --group dev
     - name: Fetch the 1.x freeze branch
       run: bash .github/scripts/fetch-1x-freeze.sh
     - name: Run pre-commit
@@ -73,12 +73,11 @@ jobs:
       uses: astral-sh/setup-uv@v5
       with:
         version: 0.13.6
-    - name: Install the core distributions alone
+    - name: Install the core distributions alone, from uv.lock
       env:
         PYTHON_VERSION: ${{ matrix.python-version }}
-      run: |
-        uv venv -p "$PYTHON_VERSION" .core
-        uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core --group packages/senselab-core/pyproject.toml:test
+        UV_PROJECT_ENVIRONMENT: .core
+      run: uv sync --locked --no-editable --python "$PYTHON_VERSION" --package senselab-core --group test
     - name: Run core tests
       run: .core/bin/pytest packages -m "logic or contract" -p no:cacheprovider
     - name: Check import contracts
@@ -107,10 +106,10 @@ jobs:
       uses: astral-sh/setup-uv@v5
       with:
         version: 0.13.6
-    - name: Install the core distributions alone
-      run: |
-        uv venv -p 3.12 .core
-        uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core --group packages/senselab-core/pyproject.toml:test
+    - name: Install the core distributions alone, from uv.lock
+      env:
+        UV_PROJECT_ENVIRONMENT: .core
+      run: uv sync --locked --no-editable --python 3.12 --package senselab-core --group test
     - name: Run the limits tier
       run: .core/bin/pytest packages -m limits -p no:cacheprovider
 
@@ -128,10 +127,10 @@ jobs:
       uses: astral-sh/setup-uv@v5
       with:
         version: 0.13.6
-    - name: Install the core distributions alone
-      run: |
-        uv venv -p 3.12 .core
-        uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core --group packages/senselab-core/pyproject.toml:test
+    - name: Install the core distributions alone, from uv.lock
+      env:
+        UV_PROJECT_ENVIRONMENT: .core
+      run: uv sync --locked --no-editable --python 3.12 --package senselab-core --group test
     - name: Run the limits and use-case tiers
       run: .core/bin/pytest packages -m "limits or usecase" -p no:cacheprovider
 
@@ -147,10 +146,10 @@ jobs:
       uses: astral-sh/setup-uv@v5
       with:
         version: 0.13.6
-    - name: Install the core distributions alone
-      run: |
-        uv venv -p 3.12 .core
-        uv pip install -p .core ./packages/senselab-worker ./packages/senselab-core --group packages/senselab-core/pyproject.toml:test
+    - name: Install the core distributions alone, from uv.lock
+      env:
+        UV_PROJECT_ENVIRONMENT: .core
+      run: uv sync --locked --no-editable --python 3.12 --package senselab-core --group test
     - name: Run the release gate tests, which build and create venvs
       run: .core/bin/pytest packages/senselab-core/tests/release_gate_test.py -m "env and not slow" -p no:cacheprovider
 
@@ -168,6 +167,8 @@ jobs:
         version: 0.13.6
     - name: Build the worker wheel
       run: uv build --wheel --out-dir dist packages/senselab-worker
+    # The one job not installed from uv.lock: the lock's requires-python is >=3.11, so it cannot resolve for 3.10,
+    # and the job pins numpy to the worker's floor on purpose. ci_tiers_test names it as the only exception.
     - name: Install the wheel alone at the floor
       run: |
         uv venv -p 3.10 .floor

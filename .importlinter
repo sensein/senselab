@@ -43,6 +43,7 @@ forbidden_modules =
     io
     shutil
     tempfile
+    importlib
     senselab_worker.hashing
 allow_indirect_imports = True
 

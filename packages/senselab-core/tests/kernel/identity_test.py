@@ -4,7 +4,6 @@ import copy
 import math
 import pickle
 import unicodedata
-from importlib import resources
 
 import numpy
 import pytest
@@ -410,11 +409,11 @@ def test_equivalence_is_scoped_to_its_backend() -> None:
 
 
 @pytest.mark.logic
-def test_phase_1_has_no_measured_equivalence() -> None:
-    """The packaged equivalence table, read from `kernel/data/equivalence.yaml`, is empty in Phase 1."""
-    text = resources.files("senselab_core.kernel").joinpath("data", "equivalence.yaml").read_text("utf-8")
-    assert identity.parse_equivalence(text) == {}
-    assert dict(identity.EQUIVALENCE) == {}
+def test_the_kernel_default_equivalence_is_empty() -> None:
+    """`acceptable` with no table admits only equal fingerprints: the kernel reads no packaged data."""
+    assert dict(identity.NO_EQUIVALENCE) == {}
+    c1, c2 = _ctx(platform="linux"), _ctx(platform="macos")
+    assert not acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="b")
 
 
 def _class(*fingerprints: str, derivation: object = "measured: agreement on 200 verify samples") -> dict[str, object]:

@@ -2,7 +2,6 @@
 
 import re
 from collections.abc import Mapping
-from importlib import resources
 from enum import Enum
 from typing import Annotated, Any, Literal, Self, assert_never
 from urllib.parse import urlsplit
@@ -318,13 +317,8 @@ def parse_equivalence(text: str) -> Equivalence:
     )
 
 
-EQUIVALENCE: Equivalence = parse_equivalence(
-    resources.files("senselab_core.kernel").joinpath("data", "equivalence.yaml").read_text("utf-8")
-)
-"""The packaged measured equivalence classes, read from `data/equivalence.yaml`; read-only.
-
-A caller holding another measured table passes it as `equivalence`.
-"""
+NO_EQUIVALENCE: Equivalence = FrozenMapping({})
+"""The empty table: no measured classes, so `equivalent` reuse admits only equal fingerprints."""
 
 
 def acceptable(
@@ -333,7 +327,7 @@ def acceptable(
     policy: ReusePolicy | str,
     *,
     backend: str,
-    equivalence: Equivalence = EQUIVALENCE,
+    equivalence: Equivalence = NO_EQUIVALENCE,
 ) -> bool:
     """Return whether a result `backend` computed in `stored` may be reused in `current` under `policy`.
 

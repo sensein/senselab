@@ -61,7 +61,6 @@ from senselab_worker.ownership import UUID_HEX
 from senselab_core.kernel._base import value_digest
 from senselab_core.kernel.identity import (
     DEFAULT_REUSE_POLICY,
-    EQUIVALENCE,
     Equivalence,
     ExecutionContext,
     LogicalKey,
@@ -69,6 +68,7 @@ from senselab_core.kernel.identity import (
     ReusePolicy,
     acceptable,
 )
+from senselab_core.runtime.equivalence import EQUIVALENCE
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
 from senselab_core.runtime.storage import (
     ASIDE_NAME,

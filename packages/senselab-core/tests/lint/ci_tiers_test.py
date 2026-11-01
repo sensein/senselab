@@ -10,6 +10,8 @@ from _pytest.mark.expression import Expression
 
 REPO = Path(__file__).resolve().parents[4]
 WORKFLOW = REPO / ".github" / "workflows" / "2x-tests.yaml"
+WORKFLOWS_2X = sorted((REPO / ".github" / "workflows").glob("2x-*.yaml"))
+UNLOCKED_ALLOWED = {("2x-tests.yaml", "worker-floor")}
 PYPROJECT = REPO / "pyproject.toml"
 TIERS = ("logic", "contract", "limits", "usecase", "env")
 EVERY_PR, ON_LABEL, NIGHTLY = "every_pr", "on_label", "nightly"
@@ -223,3 +225,41 @@ def test_a_job_on_src_tests_is_found() -> None:
         {"jobs": {"a": {"steps": [{"run": "uv run pytest src/tests -m logic -p no:cacheprovider packages"}]}}}
     )
     assert pytest_paths_outside_packages(planted) == [("a", "src/tests")]
+
+
+def unlocked_installs(workflow: str) -> list[tuple[str, str]]:
+    """``(job, command)`` for each ``pip install`` and each ``uv sync`` without ``--locked`` in a job."""
+    found = []
+    for name, job in yaml.safe_load(workflow).get("jobs", {}).items():
+        for step in job.get("steps", []):
+            for argv in _commands(step.get("run", "")):
+                text = " ".join(argv)
+                if "install" in argv and "pip" in argv:
+                    found.append((name, text))
+                elif "uv" in argv and "sync" in argv and "--locked" not in argv and "--frozen" not in argv:
+                    found.append((name, text))
+    return found
+
+
+@pytest.mark.logic
+def test_every_2x_job_installs_from_the_lock() -> None:
+    """No 2.x job installs with pip or an unlocked ``uv sync``; the floor job, which the lock cannot serve, is named."""
+    assert WORKFLOWS_2X
+    found = {(path.name, job) for path in WORKFLOWS_2X for job, _command in unlocked_installs(path.read_text())}
+    assert found == UNLOCKED_ALLOWED
+
+
+@pytest.mark.logic
+def test_a_pip_install_and_an_unlocked_sync_are_found() -> None:
+    """Planted ``uv pip install``, ``pip install`` and ``uv sync`` runs are reported; ``uv sync --locked`` is not."""
+    planted = yaml.safe_dump(
+        {
+            "jobs": {
+                "a": {"steps": [{"run": "uv venv .x\nuv pip install -p .x ./packages/senselab-core"}]},
+                "b": {"steps": [{"run": "python -m pip install pytest"}]},
+                "c": {"steps": [{"run": "uv sync --all-extras"}]},
+                "d": {"steps": [{"run": "uv sync --locked --package senselab-core --group test"}]},
+            }
+        }
+    )
+    assert [job for job, _ in unlocked_installs(planted)] == ["a", "b", "c"]

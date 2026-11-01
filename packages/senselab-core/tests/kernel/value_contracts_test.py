@@ -28,7 +28,7 @@ from senselab_core.kernel._base import (
     frozen_array,
     value_digest,
 )
-from senselab_core.kernel.identity import EQUIVALENCE, ExecutionContext, LogicalKey, ModelRef, acceptable
+from senselab_core.kernel.identity import NO_EQUIVALENCE, ExecutionContext, LogicalKey, ModelRef, acceptable
 from senselab_core.kernel.license import License
 from senselab_core.kernel.results import Embedding, Events, Intervals
 from senselab_core.kernel.signals import Audio, ChannelInfo, Recording, RegularGroup, SignalArray, StaleSource
@@ -621,7 +621,7 @@ def test_small_loosenesses_are_refused() -> None:
             verified={"date": "2026-W01-1", "how": "manual"},
         )
     with pytest.raises(TypeError):
-        EQUIVALENCE["b"] = {"c": frozenset()}  # type: ignore[index]
+        NO_EQUIVALENCE["b"] = {"c": frozenset()}  # type: ignore[index]
     context = ExecutionContext(
         env_lock="l",
         platform="p",
