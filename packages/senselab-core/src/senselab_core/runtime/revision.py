@@ -242,6 +242,7 @@ def get_cached_commit_hash(repo_id: str, revision: str = "main", *, cache_dir: O
 
     `cache_dir` is the HF hub cache to read, `huggingface_hub.constants.HF_HUB_CACHE` when None.
     Resolution order (all filesystem-only):
+      0. ``revision`` holding ``/``, a backslash or ``..``, or equal to ``.``, is refused before any read;
       1. ``revision`` is already a full 40-hex commit SHA -> return it unchanged;
       2. the authoritative ``refs/<revision>`` pointer file -> its SHA (works
          regardless of which files the repo ships, e.g. SpeechBrain/pyannote/NeMo
@@ -249,11 +250,13 @@ def get_cached_commit_hash(repo_id: str, revision: str = "main", *, cache_dir: O
       3. a cached file's ``snapshots/<sha>/`` parent directory.
 
     Raises:
-        RevisionResolutionError: If none of the above resolves ``revision`` to a
+        RevisionResolutionError: If ``revision`` is refused, or none of the above resolves it to a
             SHA. Callers needing an immutable identity cannot be handed the
             mutable ``revision`` back as if it were one; the caller can retry
             against the Hub instead (see `Resolver`).
     """
+    if any(part in revision for part in ("/", "\\", "..")) or revision in ("", "."):
+        raise RevisionResolutionError(f"{repo_id}@{revision} names no single refs/ entry; the local cache is not read")
     if COMMIT_HEX.fullmatch(revision):
         return revision
 

@@ -435,6 +435,24 @@ def test_cached_commit_hash_raises_rather_than_returning_a_ref(tmp_path: Path) -
         get_cached_commit_hash("org/never-downloaded", "main", cache_dir=tmp_path / "hub")
 
 
+TRAVERSING_REFS = ["../../../victim", "..", ".", "refs/../../victim", "a/b", "a\\b", "..\\victim", "/abs/victim", ""]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("ref", TRAVERSING_REFS)
+def test_a_ref_that_is_not_one_refs_entry_reads_nothing_from_the_cache(tmp_path: Path, ref: str) -> None:
+    """A ref with a separator or `..` is refused before the cache is read, so no planted file attests a commit."""
+    hub = tmp_path / "hub"
+    _fake_cache(hub, "org/model", "main", "a" * 40)
+    for victim in (tmp_path / "victim", hub / "models--org--model" / "refs" / "a" / "b"):
+        victim.parent.mkdir(parents=True, exist_ok=True)
+        victim.write_text("c" * 40)
+    with pytest.raises(RevisionResolutionError):
+        get_cached_commit_hash("org/model", ref, cache_dir=hub)
+    resolver = Resolver(cache_dir=hub, hub=_answers(SHA_B), cache_root=tmp_path / "senselab")
+    assert resolver.lookup("org/model", ref) == SHA_B
+
+
 @pytest.mark.logic
 def test_a_newline_suffixed_sha_is_not_passed_through(tmp_path: Path) -> None:
     """Unstripped subprocess stdout must not ride the full-SHA shortcut into provenance."""

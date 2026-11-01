@@ -23,7 +23,7 @@ from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMa
 from senselab_core.kernel.license import License
 
 _HF_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?")
-_HF_REF = re.compile(r"[^\s@]+")
+_HF_REF = re.compile(r"(?!.*\.\.)[^\s@/\\.][^\s@/\\]*(/[^\s@/\\.][^\s@/\\]*)*")
 _URL_HASH = "#sha256="
 
 ContentIdentity = Annotated[str, StringConstraints(pattern=r"^content:[0-9a-f]{64}$")]
@@ -68,7 +68,8 @@ class ModelRef(Frozen):
 
     Text forms, read by `parse` and written by `str`:
     - `<id>@<ref>`: source `hf`. `<id>` is `name` or `org/name` (letters, digits, `.`, `_`, `-`);
-      `<ref>` is a branch, tag or commit, non-empty, without whitespace or `@`.
+      `<ref>` is a branch, tag or commit: `/`-separated non-empty components without whitespace, `@` or a backslash,
+      none starting with `.`, and no `..` anywhere.
     - `url:<url>#sha256=<64 hex>`: source `url`. `<url>` is the id and must be an absolute URL with a
       scheme and a host; `ref` holds the declared weight hash (pip-style), which `resolve` requires and
       which is checked against the downloaded bytes at load. `ref` is empty only for a url with no
@@ -96,7 +97,8 @@ class ModelRef(Frozen):
                 raise ValueError(f"hub id must be 'name' or 'org/name', got {self.id!r}")
             if not _HF_REF.fullmatch(self.ref):
                 raise ValueError(
-                    f"hub reference {self.id!r} needs a revision without whitespace or '@', got {self.ref!r}"
+                    f"hub reference {self.id!r} needs a revision of '/'-separated components without whitespace, "
+                    f"'@', '\\', a leading '.' or '..', got {self.ref!r}"
                 )
             return
         if self.source == "local" and self.ref:
