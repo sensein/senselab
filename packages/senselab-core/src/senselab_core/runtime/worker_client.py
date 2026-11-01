@@ -251,7 +251,7 @@ def _wait_exit(pid: int) -> None:
 def _has_exited(pid: int) -> bool:
     """Whether child `pid` has exited, asked without blocking and without reaping it; False where it cannot be told."""
     try:
-        if sys.platform == "linux":
+        if sys.platform == "linux" and hasattr(os, "waitid"):
             return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
         if sys.platform == "darwin":
             kq = select.kqueue()
