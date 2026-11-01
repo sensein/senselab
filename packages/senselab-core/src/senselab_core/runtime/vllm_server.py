@@ -219,7 +219,7 @@ def _killpg(pgid: int, sig: int) -> None:
 def _served(model: ResolvedModel) -> tuple[str, list[str]]:
     """Return what ``vllm serve`` is given for `model` and the arguments that bind it to its identity."""
     if not model.pinned:
-        raise ValueError(f"{model.ref} is not pinned; a server loads only a pinned model")
+        raise ValueError(f"an unpinned {model.ref.source} model; a server loads only a pinned model")
     if model.ref.source == "hf":
         return model.ref.id, [f"--revision={model.identity}", f"--tokenizer-revision={model.identity}"]
     if model.ref.source == "local":
@@ -237,6 +237,7 @@ class VllmServer:
     server's process group gets SIGTERM, then SIGKILL.
 
     Attributes:
+        label: The model as a message names it: the hub reference, or a local model's identity prefix, never a path.
         url: ``http://127.0.0.1:<port>`` while the context is open, else None.
         attestation: The running server's `Attestation` while the context is open, else None.
     """
@@ -269,6 +270,7 @@ class VllmServer:
             ValueError: `model` is unpinned or a url model, or `settings` is not exactly the known keys.
         """
         self.target, self._model_args = _served(model)
+        self.label = str(model.ref) if model.ref.source == "hf" else f"local model {model.identity[:12]}"
         self.model = model
         self.args = server_args(settings)
         self.executable = Path(env.python).parent / "vllm"
@@ -352,13 +354,13 @@ class VllmServer:
 
     def _live(self) -> Attestation:
         if self.attestation is None or self._server is None or self._server.poll() is not None:
-            raise StaleAttestation(f"the vllm server of {self.model.ref} is not running")
+            raise StaleAttestation(f"the vllm server of {self.label} is not running")
         return self.attestation
 
     def _attested(self, body: Any, attestation: Attestation) -> Attested:  # noqa: ANN401 - a JSON value
         served = body.get("model") if isinstance(body, dict) else None
         if served != self.target:
-            raise StaleAttestation(f"a reply names model {served!r}, not {self.target!r}")
+            raise StaleAttestation(f"a reply names another model than {self.label}")
         return Attested(body, attestation)
 
     def _launch(self) -> None:
@@ -408,7 +410,7 @@ class VllmServer:
             raise VllmStartError("version", f"probe {self.url}/v1/models: no model entry")
         served = data[0].get("root")
         if served != self.target:
-            raise VllmStartError("model", f"the server serves {served!r}, not {self.target!r}")
+            raise VllmStartError("model", f"the server serves another model than {self.label}")
         return Attestation(engine_version=version, model_identity=self.model.identity, config_digest=self.config_digest)
 
     def stop(self) -> None:

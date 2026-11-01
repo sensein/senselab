@@ -146,7 +146,7 @@ def test_server_stops_on_exit(env: EnvHandle, tmp_path: Path) -> None:
 def test_reply_from_another_model_is_stale(env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A reply naming another model does not carry the attestation."""
     monkeypatch.setenv("FAKE_VLLM_REPLY_MODEL", "org/other")
-    with _server(env, tmp_path) as server, pytest.raises(vs.StaleAttestation, match="org/other"):
+    with _server(env, tmp_path) as server, pytest.raises(vs.StaleAttestation, match="another model than org/model@"):
         server.chat([{"role": "user", "content": "hi"}], sampling={})
 
 
@@ -191,3 +191,16 @@ def test_server_args_bind_values_to_flags() -> None:
     args = vs.server_args({**SETTINGS, "kv_cache_dtype": "--enable-log-requests"})
     assert "--kv-cache-dtype=--enable-log-requests" in args
     assert args[-2:] == ['--limit-mm-per-prompt={"image":0}', "--no-enable-prefix-caching"]
+
+
+def test_local_model_errors_name_no_path(env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local model is served by its path, and an error names it by identity, never by that path."""
+    weights = tmp_path / "private-weights"
+    model = ResolvedModel(ref=ModelRef.parse(f"local:{weights}"), identity="c" * 64)
+    monkeypatch.setenv("FAKE_VLLM_ROOT", "elsewhere")
+    server = vs.VllmServer(env, model, SETTINGS, start_lock_dir=tmp_path / "locks", startup_timeout_s=30)
+    with pytest.raises(vs.VllmStartError) as raised:
+        server.__enter__()
+    assert "private-weights" not in str(raised.value) and "c" * 12 in str(raised.value)
+    (record,) = _records(tmp_path)
+    assert record["argv"][1] == str(weights) and not any(a.startswith("--revision") for a in record["argv"])
