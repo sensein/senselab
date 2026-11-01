@@ -33,7 +33,7 @@ contradicts an earlier decision, or an owner correction did not land everywhere 
 | 11c | in place on alpha; core its own distribution | three distributions conform (design §5). "In place on alpha" superseded by owner #30; see #30 | conforms / F1 |
 | 11d | no second dataset, design standpoint: design.md:1043, Phase 4 exit design.md:958-963 | synthetic dataset with another entity scheme: Phase 4 | conforms (scheduled) |
 | 11e | commit+push early often: P-27 engineering.md:124-129 | branch pushed (`origin/2x/phase-1` = HEAD, 0 ahead/behind). P-27 statement still says "PR to `alpha`", "built in place on `alpha`" (engineering.md:127) | drift (F1) |
-| 11f | no identifiers leak: P-28 engineering.md:131-139 | `participant-ids` pre-commit hook (.pre-commit-config.yaml). Tracked `.claude/projects/-Users-satra-.../memory/*.md`; personal ORCD paths in inherited 1.x specs (e.g. specs/20261005-breathing-pattern/design.md:50) | deviates (M2) |
+| 11f | no identifiers leak: P-28 engineering.md:131-139 | `participant-ids` pre-commit hook (.pre-commit-config.yaml). Tracked `.claude/projects/-Users-<username>-.../memory/*.md`; personal ORCD paths in inherited 1.x specs (e.g. specs/20261005-breathing-pattern/design.md:50) | deviates (M2) |
 | 11g | local and ORCD tests within limits: P-29 engineering.md:141-151 | CLAUDE.md:27-36; ORCD runs recorded in the (untracked) ledger | conforms |
 | 11h | use cases and models research incl. actigraphy, ECG: use-cases.md §1-§5 (e.g. use-cases.md:13-21, 106) | research done; catalogue entries come with ports | conforms |
 | 11i | generic vs modality-specific: P-26 principles.md:225-236; design §4.15 design.md:654-669; use-cases.md §4 (use-cases.md:189-248) | kernel `Recording` with typed channel groups and `IrregularGroup` (`kernel/signals.py:242-417`); `sl.signal` tier Phase 4 (design.md:950, exit "one generic task runs unchanged on audio and on accelerometry") | conforms (scheduled) |
@@ -271,10 +271,10 @@ Rulings H-R31 and H-R42 and the H8 parked list in the ledger repeat the error. C
 
 - AGENTS.md is the 1.x file (AGENTS.md:7 "requires Python 3.11-3.12", :28 `uv run pytest -n auto`), against owner
   #34/#35 ("simplify claude.md to be clear and specific to 2.x"; "is there a reason to keep 1.x stuff").
-- `.claude/projects/-Users-satra-software-sensein-senselab/memory/*.md` are tracked 1.x memory notes whose path
+- `.claude/projects/-Users-<username>-software-sensein-senselab/memory/*.md` are tracked 1.x memory notes whose path
   carries a home-directory name (P-28 engineering.md:134: "no personal path enters the repository").
 - Inherited 1.x specs carry personal ORCD paths, e.g. specs/20261005-breathing-pattern/design.md:50
-  (`/orcd/scratch/bcs/002/<user>/...`), specs/20261001-nimble-second-opinion/design.md:50-55.
+  (`<cluster path>`), specs/20261001-nimble-second-opinion/design.md:50-55.
 - Correction: rewrite AGENTS.md to point at CLAUDE.md (or delete it); remove the tracked `.claude/projects/`
   files; redact or drop 1.x spec directories not needed on 2.x (they remain in git history and on `alpha`).
 
