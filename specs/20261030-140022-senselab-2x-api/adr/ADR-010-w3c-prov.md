@@ -1,6 +1,6 @@
 # ADR-010: Provenance is W3C PROV
 
-**Status:** accepted 2026-11-01 (owner: "use w3c prov, add ADR-010"); amended 2026-11-01 (twice).
+**Status:** accepted 2026-11-01 (owner: "use w3c prov, add ADR-010"); amended 2026-11-01 (three times).
 
 ## Context
 
@@ -117,3 +117,28 @@ Ruling P2-40 ([`plans/phase-2.md`](../plans/phase-2.md)); implemented in Phase 2
   It retires `https://senselab.sensein.group/prov#` (`SENSELAB_VOCABULARY` in `runtime/bep028.py`, and the triage
   BEP028 design), which is deleted with that exporter in Task 4. The w3id redirect is an external registration the
   owner confirms before it is filed, before the first 2.x release; no test dereferences either IRI.
+
+## Amendment 2026-11-01: the store as built (P2-4, R-149, R-150)
+
+Rulings P2-4, P2-6; implemented in Phase 2 Task 3b.
+
+- **One document per writer.** A writer holds the records it adds and replaces its own document,
+  `<run>/prov/<writer uuid4 hex>.jsonld`, atomically with the JCS text of `{"@context": ..., "@graph": [...]}`.
+  A run's provenance is the union of its writers' documents by `@id`; two different nodes under one `@id` are refused
+  (`ConflictingNode`). A temporary of an interrupted write is skipped; any other file in `prov/` is refused. A writer
+  is one process: a store used after `fork` mints a new writer id in the child, because children sharing the parent's
+  id would replace one another's document and lose records. An `add` that meets a conflict adds nothing.
+- **A reader rebuilds every node.** Each node read is rebuilt through the record builders over the reader's vocabulary
+  and must equal its bytes, so an `@id` that is not the node's address, a term outside the vocabulary or a literal
+  outside its range is refused (`MalformedDocument`) rather than wrapped as a record. Read errors name the writer and
+  a checked `@id`, never a file name, a refused id or a value; an OS error is reported by its class name, and a
+  literal the reader cannot parse by `literal_value`'s non-echoing `ValueError`. Attribute references nest at most
+  `MAX_DEPTH` deep, the canonical depth rule.
+- **Endpoints are checked over the union (R-150).** Every `prov:used`, `prov:generated` and `prov:wasAssociatedWith`
+  endpoint, and every record an attribute names, must be a node of the union (`DanglingReference`); an endpoint may sit
+  in another writer's document. A writer's own document is not checked alone.
+- **Accessors return in `@id` order (R-149),** so `merge` gives the same store for any order of its inputs.
+- **An activity is copied, not rebuilt.** Its times are in its address, so a second writer adds the record the executing
+  side built (or one read back) and the union holds one node.
+- **Until the result store moves over** (Task 3c), the `provenance@2.0` store stays beside this one as `JsonlProvStore`
+  in `runtime/provenance_jsonl.py`; Task 3c deletes that module, and registers the document's format, `provenance@3.0`.

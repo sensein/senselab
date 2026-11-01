@@ -335,7 +335,10 @@ amended; rulings P2-44, P2-57. **Depends on:** Task 3b.
 
 **Files:** Modify `runtime/store.py`, `kernel/formats.py` (`provenance@3.0`), `kernel/_base.py` (`FrozenDict` and
 the token helpers removed), `testing/provenance.py` (`revised` removed). Delete the old `runtime/bep028.py`
-translation and its tests (Task 4 creates the profile check from scratch).
+translation and its tests (Task 4 creates the profile check from scratch). Delete `runtime/provenance_jsonl.py`
+(the `provenance@2.0` store, `JsonlProvStore`, set aside by Task 3b), `tests/runtime/provenance_jsonl_test.py` and the
+part of `tests/runtime/provenance_checksum_test.py` that tests it; re-home `ProvenanceFormatRefused` in
+`runtime/provenance.py` for `test_provenance2_refused`.
 
 **Interfaces:**
 - The store writes the result entity and any reuse activity; it never writes an execution activity (that is
