@@ -13,6 +13,7 @@ from huggingface_hub.errors import RepositoryNotFoundError
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from planted_objects_fixture import BAD_RUN_IDS, LEASE, NAME_BOUND_S, UNOPENABLE_NAMES, bounded
+from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.revision import (
     MANIFEST_NAME,
     NAMESPACE,
@@ -38,7 +39,12 @@ def offline(tmp_path: Path) -> Callable[[HubLookup], Resolver]:
     """Build a fresh `Resolver` over an empty local HF cache and this test's cache root, asking `hub` on a miss."""
 
     def make(hub: HubLookup) -> Resolver:
-        return Resolver(cache_dir=tmp_path / "hf-hub", hub=hub, cache_root=tmp_path / "senselab")
+        return Resolver(
+            cache_dir=tmp_path / "hf-hub",
+            hub=hub,
+            cache_root=tmp_path / "senselab",
+            retry=RetryPolicy(attempts=3, first_backoff_s=0),
+        )
 
     return make
 
@@ -354,18 +360,31 @@ def test_resolution_retries_a_transient_hub_error(
 
 
 @pytest.mark.logic
+def test_the_resolver_retries_the_hub_under_its_own_policy(tmp_path: Path, hub_error: Callable[..., Exception]) -> None:
+    """The attempts come from the resolver's `retry`, and the packaged policy is the default."""
+    calls = {"n": 0}
+
+    def _down(repo_id: str, ref: str, token: object) -> object:
+        calls["n"] += 1
+        raise hub_error(503)
+
+    resolver = Resolver(
+        cache_dir=tmp_path / "hf-hub",
+        hub=_down,
+        cache_root=tmp_path / "s",
+        retry=RetryPolicy(attempts=2, first_backoff_s=0),
+    )
+    with pytest.raises(RevisionResolutionError):
+        resolver.lookup("org/model", "main")
+    assert calls["n"] == 2
+    assert Resolver().retry == RetryPolicy.load_default()
+
+
+@pytest.mark.logic
 def test_a_missing_repo_fails_without_being_retried(
     offline: Callable[[HubLookup], Resolver], hub_error: Callable[..., Exception]
 ) -> None:
-    """A genuine 404 surfaces as RevisionResolutionError on the first attempt.
-
-    The version of this test that shipped with the retry raised ``ValueError("not found")`` as a
-    stand-in for a 404. That passed for a reason a real 404 did not share -- a ``ValueError``
-    matches nothing in ``_TRANSIENT_EXCEPTIONS`` -- while the real
-    ``RepositoryNotFoundError`` classified as *transient* and was retried three times, which is
-    the opposite of what the docstring claimed. Use the real error, and assert the attempt count,
-    so the test fails if that regresses.
-    """
+    """A genuine 404, raised as the real `RepositoryNotFoundError`, surfaces on the first attempt."""
     calls = {"n": 0}
 
     def _always(repo_id: str, ref: str, token: object) -> object:

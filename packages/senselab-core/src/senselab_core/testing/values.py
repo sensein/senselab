@@ -69,6 +69,7 @@ from senselab_core.kernel.signals import (
 )
 from senselab_core.kernel.time import Span, TimeAnchor, TimeMap
 from senselab_core.runtime.fetch import DataFile, DataManifest
+from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.storage import StorePolicy
 
 Case = Callable[[], None]
@@ -739,6 +740,11 @@ def _register_runtime_samples() -> None:
             {"collect_interval_s": 0},
             {"world_readable": "yes"},
         ],
+    )
+    register_samples(
+        RetryPolicy,
+        lambda: [RetryPolicy.load_default(), RetryPolicy(attempts=1, first_backoff_s=0)],
+        invalid_updates=[{"attempts": 0}, {"attempts": 2.5}, {"first_backoff_s": -1}],
     )
 
 

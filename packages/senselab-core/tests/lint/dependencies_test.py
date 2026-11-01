@@ -85,10 +85,6 @@ def test_an_unlisted_package_is_not_a_root_package(tmp_path: Path) -> None:
     assert import_names(tmp_path) == {"alpha", "beta"} != root_packages(text)
 
 
-OPTIONAL_IMPORTS = {"senselab_core.runtime.retry": frozenset({"requests", "httpx"})}
-"""Modules a single module imports only inside ``try: ... except ImportError``; not dependencies."""
-
-
 def external_imports(graph: grimp.ImportGraph, own: set[str]) -> dict[str, set[str]]:
     """``{module: top-level modules it imports directly}`` for every module of the root packages ``own``."""
     out: dict[str, set[str]] = {}
@@ -100,12 +96,10 @@ def external_imports(graph: grimp.ImportGraph, own: set[str]) -> dict[str, set[s
     return out
 
 
-def undeclared_by_module(
-    imports: dict[str, set[str]], allowed: set[str], optional: dict[str, frozenset[str]]
-) -> dict[str, set[str]]:
-    """The imports of each module that are neither allowed, stdlib, nor optional for that module."""
+def undeclared_by_module(imports: dict[str, set[str]], allowed: set[str]) -> dict[str, set[str]]:
+    """The imports of each module that are neither allowed nor stdlib."""
     stdlib = set(sys.stdlib_module_names)
-    bad = {m: i - allowed - stdlib - optional.get(m, frozenset()) for m, i in imports.items()}
+    bad = {m: i - allowed - stdlib for m, i in imports.items()}
     return {m: i for m, i in bad.items() if i}
 
 
@@ -121,25 +115,7 @@ def test_packages_import_only_declared_dependencies() -> None:
         allowed = set(roots)
         for dist in declared_dependencies(data) - workspace:
             allowed |= import_names_of(dist)
-        assert undeclared_by_module(external_imports(graph, own), allowed, OPTIONAL_IMPORTS) == {}
-
-
-@pytest.mark.logic
-def test_optional_imports_are_still_imported() -> None:
-    """Every optional import allowance names a module that still imports those names."""
-    roots = import_names(PACKAGES)
-    graph = grimp.build_graph(*sorted(roots), include_external_packages=True)
-    imports = external_imports(graph, roots)
-    for module, names in OPTIONAL_IMPORTS.items():
-        assert names <= imports.get(module, set()), module
-
-
-@pytest.mark.logic
-def test_an_optional_import_is_allowed_only_in_its_own_module() -> None:
-    """The same import in another module of the package is reported."""
-    imports = {"pkg.retry": {"requests"}, "pkg.other": {"requests"}}
-    bad = undeclared_by_module(imports, set(), {"pkg.retry": frozenset({"requests"})})
-    assert bad == {"pkg.other": {"requests"}}
+        assert undeclared_by_module(external_imports(graph, own), allowed) == {}
 
 
 @pytest.mark.logic
@@ -156,9 +132,7 @@ def test_an_undeclared_third_party_import_is_found(tmp_path: Path, monkeypatch: 
     }
     assert imported == {"os", "json", "requests", "numpy"}
     assert undeclared_imports(graph, {"plantedpkg"}, {"numpy"}) == {"requests"}
-    assert undeclared_by_module(external_imports(graph, {"plantedpkg"}), {"numpy"}, {}) == {
-        "plantedpkg.mod": {"requests"}
-    }
+    assert undeclared_by_module(external_imports(graph, {"plantedpkg"}), {"numpy"}) == {"plantedpkg.mod": {"requests"}}
 
 
 TEST_GROUP = ("senselab-core", "test")
@@ -208,7 +182,7 @@ def test_every_third_party_import_in_the_tests_is_in_the_test_group() -> None:
         found.update(
             {
                 f"{tests_root.parent.name}/{f}": i
-                for f, i in undeclared_by_module(imports, allowed | local_modules(tests_root), {}).items()
+                for f, i in undeclared_by_module(imports, allowed | local_modules(tests_root)).items()
             }
         )
     assert found == {}
@@ -221,5 +195,5 @@ def test_an_import_missing_from_the_test_group_is_found(tmp_path: Path) -> None:
     (tmp_path / "a_test.py").write_text("import os\nimport helper\nimport httpx\nfrom grimp import build_graph\n")
     imports = imports_under(tmp_path)
     assert imports["a_test.py"] == {"os", "helper", "httpx", "grimp"}
-    bad = undeclared_by_module(imports, {"grimp"} | local_modules(tmp_path), {})
+    bad = undeclared_by_module(imports, {"grimp"} | local_modules(tmp_path))
     assert bad == {"a_test.py": {"httpx"}}

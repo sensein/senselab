@@ -18,7 +18,7 @@ from typing import Optional
 from senselab_worker.canonical import jcs_dumps
 
 from senselab_core.runtime.locks import Lease
-from senselab_core.runtime.retry import retry_on_transient_error
+from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import (
     STAGING_FILE_MODE,
     TEMPORARY_NAME,
@@ -308,6 +308,8 @@ class Resolver:
     """Asked for the commit of `(repo_id, ref, token)` when the local cache has none."""
     cache_root: Optional[Path] = None
     """The root of the run manifests (`manifest_path`); `cache_root()` when None."""
+    retry: RetryPolicy = field(default_factory=RetryPolicy.load_default)
+    """How `hub` is retried on a transient fault; the packaged `data/retry_policy.yaml` by default."""
     memo: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
     """This resolver's answers so far, by `manifest_key`."""
 
@@ -339,7 +341,7 @@ class Resolver:
         return binding
 
     def lookup(self, repo_id: str, ref: str, token: Optional[str] = None) -> str:
-        """Resolve `ref` from the local cache, else the Hub through `retry_on_transient_error`; record nothing.
+        """Resolve `ref` from the local cache, else the Hub, retried under `self.retry`; record nothing.
 
         Raises:
             RevisionResolutionError: neither answers with a 40-hex commit SHA.
@@ -353,7 +355,7 @@ class Resolver:
             return local
 
         try:
-            sha = retry_on_transient_error(lambda: self.hub(repo_id, ref, token))
+            sha = retry_on_transient_error(lambda: self.hub(repo_id, ref, token), self.retry)
         except Exception as exc:
             raise RevisionResolutionError(
                 f"Cannot resolve {repo_id}@{ref} to a commit SHA: {exc}. "

@@ -1,7 +1,8 @@
 """Storage faults, the store policy, object modes, the storage clock and the address contract.
 
-- `storage_fault` is the one mapping from an `OSError` to a retryable `StoreUnavailable` (or
-  `StorageFull`), used by the result store and the data-fetch cache.
+- `storage_fault` is the one mapping from an `OSError` to a `StoreUnavailable` (or `StorageFull`), used by
+  the result store and the data-fetch cache; whether it is transient is `faults.is_transient`.
+- `load_policy_values` reads a packaged policy file whose every value carries its derivation.
 - `StorePolicy` holds the modes and retention ages, read from `data/store_policy.yaml`.
 - Committed objects (store entries, fetch blobs and completion markers) are read-only:
   `committed_modes` gives their file and directory modes. Staging objects are `STAGING_FILE_MODE`
@@ -34,6 +35,7 @@ from pydantic import Field, StrictBool
 from senselab_worker.ownership import UUID_HEX, remove_owned
 
 from senselab_core.kernel._base import Frozen
+from senselab_core.runtime.faults import is_transient
 
 logger = logging.getLogger("senselab")
 
@@ -51,9 +53,10 @@ _WORLD_READ_SEARCH = 0o005
 
 
 class StoreUnavailable(OSError):
-    """Storage could not be read or written; nothing was changed or judged corrupt, and a retry may succeed.
+    """Storage could not be read or written; nothing was changed or judged corrupt.
 
-    `errno` and `filename` are those of the original error, which is the `__cause__`.
+    `errno` and `filename` are those of the original error, which is the `__cause__`; whether a retry may
+    succeed is `faults.is_transient` of it.
     """
 
 
@@ -71,23 +74,38 @@ def storage_fault(err: OSError, path: Path, *, hint: str | None = None) -> Store
         return err
     path = getattr(err, "storage_path", None) or path
     full = err.errno in _FULL_ERRNOS
-    fix = hint or (
-        "out of space or over quota; free space or move the store elsewhere"
-        if full
-        else "check the path exists, is a directory you can read and write, and retry"
-    )
+    if hint:
+        fix = hint
+    elif full:
+        fix = "out of space or over quota; free space or move the store elsewhere"
+    elif is_transient(err):
+        fix = "a transient fault; retry"
+    else:
+        fix = "check the path exists and is a directory you can read and write"
     cause = err.strerror or str(err) or type(err).__name__
     fault = (StorageFull if full else StoreUnavailable)(err.errno, f"{cause}: {fix}", str(path))
     fault.__cause__ = err
     return fault
 
 
-def _value(raw: object, name: str) -> object:
-    if not isinstance(raw, dict) or set(raw) != {"value", "derivation"}:
-        raise ValueError(f"{POLICY_FORMAT} entry {name!r} must be a mapping of exactly 'value' and 'derivation'")
-    if not isinstance(raw["derivation"], str) or not raw["derivation"].strip():
-        raise ValueError(f"{POLICY_FORMAT} entry {name!r} needs a non-empty derivation")
-    return raw["value"]
+def load_policy_values(package: str, file_name: str, policy_format: str) -> dict[str, object]:
+    """Return `{name: value}` from the packaged `data/<file_name>` of `package`, a policy whose entries carry derivations.
+
+    Raises:
+        ValueError: if the file lacks `format: <policy_format>`, or an entry is not exactly a `value` and a
+            non-empty `derivation`.
+    """
+    raw = yaml.safe_load(resources.files(package).joinpath("data", file_name).read_text("utf-8"))
+    if not isinstance(raw, dict) or raw.pop("format", None) != policy_format:
+        raise ValueError(f"{file_name} must carry format {policy_format!r}")
+    values = {}
+    for name, entry in raw.items():
+        if not isinstance(entry, dict) or set(entry) != {"value", "derivation"}:
+            raise ValueError(f"{policy_format} entry {name!r} must be a mapping of exactly 'value' and 'derivation'")
+        if not isinstance(entry["derivation"], str) or not entry["derivation"].strip():
+            raise ValueError(f"{policy_format} entry {name!r} needs a non-empty derivation")
+        values[name] = entry["value"]
+    return values
 
 
 class StorePolicy(Frozen):
@@ -112,11 +130,7 @@ class StorePolicy(Frozen):
         Raises:
             ValueError: if the file lacks the format, an entry, or an entry's derivation.
         """
-        text = resources.files("senselab_core.runtime").joinpath("data", "store_policy.yaml").read_text("utf-8")
-        raw = yaml.safe_load(text)
-        if not isinstance(raw, dict) or raw.pop("format", None) != POLICY_FORMAT:
-            raise ValueError(f"store_policy.yaml must carry format {POLICY_FORMAT!r}")
-        return cls.model_validate({name: _value(entry, name) for name, entry in raw.items()})
+        return cls.model_validate(load_policy_values("senselab_core.runtime", "store_policy.yaml", POLICY_FORMAT))
 
 
 def committed_modes(policy: StorePolicy) -> tuple[int, int]:
