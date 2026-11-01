@@ -119,7 +119,7 @@ def test_xk5_recorded_content_cannot_drift_from_its_id(tmp_path: Path) -> None:
     store = ProvStore(run_id="r")
     attributes: dict[str, object] = {"ev": {"n": [1, 2, 3]}}
     extent = [0.0, 1.0]
-    eid = store.entity(prov_type="span", extent=extent, attributes=attributes)  # type: ignore[arg-type]
+    eid = store.entity(prov_type="artifact", extent=extent, attributes=attributes)  # type: ignore[arg-type]
     attributes["ev"]["n"].append(4)  # type: ignore[index]
     extent[1] = 99.0
     entity = store.get_entity(eid)
@@ -154,7 +154,7 @@ def test_xk6_jsonl_is_lossless_and_ids_recompute(tmp_path: Path) -> None:
     store = ProvStore(run_id="r")
     for array in (one, two):
         store.entity(
-            prov_type="measurement",
+            prov_type="artifact",
             extent=None,
             attributes={
                 "a": array,
@@ -180,18 +180,17 @@ def test_xk6_jsonl_is_lossless_and_ids_recompute(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_xk6_a_line_without_a_run_id_is_refused(tmp_path: Path) -> None:
-    """A `revised` view written as a 2.0 line (its `run_id` null) is refused; a store holds no such record."""
+    """A 2.0 line whose `run_id` is null is refused; `revised` keeps the run and re-mints the id."""
     store = ProvStore(run_id="r")
-    eid = store.entity(prov_type="span", extent=(0.0, 1.0), attributes={"a": 1})
+    eid = store.entity(prov_type="artifact", extent=(0.0, 1.0), attributes={"a": 1})
     edited = revised(store.get_entity(eid), attributes={"a": 2})
-    assert edited.id == eid and edited.run_id is None
+    assert edited.run_id == "r" and edited.id != eid and edited.id == edited.minted_id()
     path = tmp_path / "edited.jsonl"
+    line = {**store.get_entity(eid).as_record(), "run_id": None}
     path.write_bytes(
-        b"".join(
-            jcs_dumps(line) + b"\n" for line in [{"format": "provenance@2.0", "record": "format"}, edited.as_record()]
-        )
+        b"".join(jcs_dumps(row) + b"\n" for row in [{"format": "provenance@2.0", "record": "format"}, line])
     )
-    with pytest.raises(ValueError, match="no run_id"):
+    with pytest.raises(ValueError, match="run_id must be text"):
         ProvStore.read_jsonl(path)
     store.write_jsonl(path)
     written = path.read_text()
@@ -212,10 +211,10 @@ def test_xk7_write_refuses_what_read_refuses() -> None:
     with pytest.raises(ValueError):
         store.environment(kind="bogus", label="l", python_version="3")  # type: ignore[arg-type]
     with pytest.raises(UnrecordableValue):
-        store.entity(prov_type="span", extent=None, attributes=[1])  # type: ignore[arg-type]
+        store.entity(prov_type="artifact", extent=None, attributes=[1])  # type: ignore[arg-type]
     for extent in (("a", 1.0), (0.0, float("nan")), (2.0, 1.0), (0.0,)):
         with pytest.raises(ValueError):
-            store.entity(prov_type="span", extent=extent, attributes={})  # type: ignore[arg-type]
+            store.entity(prov_type="artifact", extent=extent, attributes={})  # type: ignore[arg-type]
 
 
 @pytest.mark.logic

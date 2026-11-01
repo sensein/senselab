@@ -115,7 +115,7 @@ def test_text_with_post_13_code_points_is_recorded_and_is_its_own_family(head: s
     from senselab_core.runtime.provenance import ProvStore
 
     text = head + mark
-    ProvStore(run_id="t").entity(prov_type="span", extent=None, attributes={text: [text]})
+    ProvStore(run_id="t").entity(prov_type="artifact", extent=None, attributes={text: [text]})
     digest = Holder(x=text).canonical_digest()
     others = {Holder(x=v).canonical_digest() for v, _ in _family_samples().values()}
     others.add(Holder(x=unicodedata.normalize("NFC", head)).canonical_digest())
@@ -211,7 +211,7 @@ def test_xc5_a_shared_dag_is_bounded_on_every_canonical_path(where: str) -> None
     started = time.monotonic()
     with pytest.raises(ValueError, match="exceeds"):
         if where == "provenance":
-            ProvStore(run_id="t").entity(prov_type="span", extent=None, attributes={"x": dag})
+            ProvStore(run_id="t").entity(prov_type="artifact", extent=None, attributes={"x": dag})
         elif where == "store":
             output_identity({"x": dag})
         else:
@@ -225,7 +225,7 @@ def test_xc5_a_shared_dag_under_the_budget_is_walked_once_per_node() -> None:
     from senselab_core.runtime.provenance import ProvStore
 
     started = time.monotonic()
-    ProvStore(run_id="t").entity(prov_type="span", extent=None, attributes={"x": _dag(22)})
+    ProvStore(run_id="t").entity(prov_type="artifact", extent=None, attributes={"x": _dag(22)})
     assert time.monotonic() - started < 5.0
 
 

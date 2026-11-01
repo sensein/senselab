@@ -59,7 +59,7 @@ class TestPurpose:
         """The wasGeneratedBy relation replaces an author field."""
         s = _store()
         act = s.activity(node="PREPROCESS", step="spans", parameters={"k_db": 18.0})
-        ent = s.entity(prov_type="span", extent=(1.0, 2.0), attributes={"peak_over_floor_db": 31.4})
+        ent = s.entity(prov_type="artifact", extent=(1.0, 2.0), attributes={"peak_over_floor_db": 31.4})
         s.was_generated_by(ent, act)
         assert s.generated_by(ent) == act
         assert s.get_entity(ent).extent == (1.0, 2.0)
@@ -67,7 +67,7 @@ class TestPurpose:
     def test_used_records_what_a_node_read(self) -> None:
         """The relation that makes dependency order inspectable rather than inferred."""
         s = _store()
-        upstream = s.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
+        upstream = s.entity(prov_type="artifact", extent=(1.0, 2.0), attributes={})
         act = s.activity(node="AIRWAY", step="classify", parameters={})
         s.used(act, upstream)
         assert s.uses_of(act) == [upstream]
@@ -75,12 +75,12 @@ class TestPurpose:
     def test_an_assertion_is_an_entity_derived_from_what_it_is_about(self) -> None:
         """label/confirm/contest are entities, so a confirm can name the assertion it answers."""
         s = _store()
-        span = s.entity(prov_type="span", extent=(7.9, 8.5), attributes={})
+        span = s.entity(prov_type="artifact", extent=(7.9, 8.5), attributes={})
         act = s.activity(node="AIRWAY", step="classify", parameters={})
-        label = s.entity(prov_type="assertion", extent=None, attributes={"verb": "label", "value": "Cough"})
+        label = s.entity(prov_type="artifact", extent=None, attributes={"verb": "label", "value": "Cough"})
         s.was_generated_by(label, act)
         s.was_derived_from(label, span)
-        confirm = s.entity(prov_type="assertion", extent=None, attributes={"verb": "confirm"})
+        confirm = s.entity(prov_type="artifact", extent=None, attributes={"verb": "confirm"})
         s.was_derived_from(confirm, label)
         assert s.derived_from(confirm) == [label]
         assert s.derived_from(label) == [span]
@@ -291,7 +291,7 @@ class TestInvalidation:
     def test_an_invalidated_entity_is_still_readable(self) -> None:
         """Invalidation marks an entity unusable without removing it."""
         s = _store()
-        seg = s.entity(prov_type="speaker", extent=(7.9, 9.0), attributes={"speaker": "SPEAKER_00"})
+        seg = s.entity(prov_type="artifact", extent=(7.9, 9.0), attributes={"speaker": "SPEAKER_00"})
         act = s.activity(node="SPEECH", step="withdraw", parameters={"reason": "airway span"})
         s.was_invalidated_by(seg, act)
         assert s.is_invalidated(seg)
@@ -310,15 +310,15 @@ class TestOrderIndependence:
     def test_merging_in_either_order_gives_the_same_fingerprint(self) -> None:
         """Merge order does not change the merged content hash."""
         a, b = _store(), _store()
-        a.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
-        b.entity(prov_type="word", extent=(1.1, 1.4), attributes={"word": "hello"})
+        a.entity(prov_type="artifact", extent=(1.0, 2.0), attributes={})
+        b.entity(prov_type="artifact", extent=(1.1, 1.4), attributes={"word": "hello"})
         assert ProvStore.merge([a, b]).fingerprint() == ProvStore.merge([b, a]).fingerprint()
 
     def test_repeating_a_relation_does_not_change_the_fingerprint(self) -> None:
         """A re-run node recording the same relation twice is a no-op."""
         s = _store()
         act = s.activity(node="PREPROCESS", step=None, parameters={})
-        ent = s.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
+        ent = s.entity(prov_type="artifact", extent=(1.0, 2.0), attributes={})
         s.was_generated_by(ent, act)
         before = s.fingerprint()
         s.was_generated_by(ent, act)
@@ -328,7 +328,7 @@ class TestOrderIndependence:
         """merge([s]) carries the same content hash as s."""
         s = _store()
         act = s.activity(node="PREPROCESS", step=None, parameters={})
-        ent = s.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
+        ent = s.entity(prov_type="artifact", extent=(1.0, 2.0), attributes={})
         s.was_generated_by(ent, act)
         assert ProvStore.merge([s]).fingerprint() == s.fingerprint()
 
@@ -351,8 +351,8 @@ class TestRoundTrip:
             started="2026-08-21T10:00:00+00:00",
             ended="2026-08-21T10:00:07+00:00",
         )
-        span = s.entity(prov_type="span", extent=(7.9, 8.5), attributes={"peak_over_floor_db": 31.4})
-        verdict = s.entity(prov_type="verdict", extent=None, attributes={"value": "keep"})
+        span = s.entity(prov_type="artifact", extent=(7.9, 8.5), attributes={"peak_over_floor_db": 31.4})
+        verdict = s.entity(prov_type="artifact", extent=None, attributes={"value": "keep"})
         s.was_generated_by(verdict, act)
         s.used(act, span)
         s.was_associated_with(act, resolved)
@@ -394,7 +394,7 @@ class TestReadBackValidation:
         """A file carrying the same relation twice must not resurrect the duplicate-triple divergence."""
         s = _store()
         act = s.activity(node="PREPROCESS", step=None, parameters={})
-        ent = s.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
+        ent = s.entity(prov_type="artifact", extent=(1.0, 2.0), attributes={})
         s.was_generated_by(ent, act)
         path = tmp_path / "prov.jsonl"
         s.write_jsonl(path)
@@ -446,7 +446,7 @@ class TestReadBackValidation:
         """A relation outside PROV's own six fails the read instead of loading quietly."""
         s = _store()
         act = s.activity(node="PREPROCESS", step=None, parameters={})
-        ent = s.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
+        ent = s.entity(prov_type="artifact", extent=(1.0, 2.0), attributes={})
         s.was_generated_by(ent, act)
         path = tmp_path / "prov.jsonl"
         s.write_jsonl(path)
@@ -492,20 +492,11 @@ class TestActivityTimestamps:
 class TestSpeechStoreAdditions:
     """The two one-token additions SPEECH forces on the store."""
 
-    def test_target_match_is_a_prov_type(self, tmp_path: Path) -> None:
-        """branch-speech.md's product table names target_match as an element kind."""
-        store = ProvStore(run_id="t")
-        eid = store.entity(prov_type="target_match", extent=None, attributes={"speaker": "SPEAKER_00"})
-        assert store.get_entity(eid).prov_type == "target_match"
-        path = tmp_path / "prov.jsonl"
-        store.write_jsonl(path)
-        assert ProvStore.read_jsonl(path).get_entity(eid).prov_type == "target_match"
-
     def test_get_activity_returns_what_activity_recorded(self) -> None:
         """An entity's author node is reachable: generated_by -> get_activity -> .node."""
         store = ProvStore(run_id="t")
         act = store.activity(node="SPEECH", step="diarize", parameters={})
-        eid = store.entity(prov_type="speaker", extent=(1.0, 2.0), attributes={})
+        eid = store.entity(prov_type="artifact", extent=(1.0, 2.0), attributes={})
         store.was_generated_by(eid, act)
         generated = store.generated_by(eid)
         assert generated is not None
@@ -531,10 +522,10 @@ class TestAtomicWrite:
 
     def _two_versions(self, tmp_path: Path) -> tuple[ProvStore, Path, bytes]:
         s = _store()
-        s.entity(prov_type="measurement", extent=None, attributes={"name": "first"})
+        s.entity(prov_type="artifact", extent=None, attributes={"name": "first"})
         target = tmp_path / "store.jsonl"
         s.write_jsonl(target)
-        s.entity(prov_type="measurement", extent=None, attributes={"name": "second"})
+        s.entity(prov_type="artifact", extent=None, attributes={"name": "second"})
         return s, target, target.read_bytes()
 
     def test_a_write_interrupted_before_the_rename_keeps_the_previous_store(
@@ -556,7 +547,7 @@ class TestAtomicWrite:
         """The new store reads back whole; no temporary file stays in the directory."""
         s, target, _ = self._two_versions(tmp_path)
         s.write_jsonl(target)
-        names = {e.attributes["name"] for e in ProvStore.read_jsonl(target).entities("measurement")}
+        names = {e.attributes["name"] for e in ProvStore.read_jsonl(target).entities("artifact")}
         assert names == {"first", "second"}
         assert [p.name for p in tmp_path.iterdir()] == ["store.jsonl"]
 
@@ -655,7 +646,7 @@ def _oracle(value: object) -> object:
 
 
 def _id(value: object) -> str:
-    return ProvStore(run_id="r").entity(prov_type="measurement", extent=None, attributes={"value": value})
+    return ProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes={"value": value})
 
 
 @settings(max_examples=500, deadline=None)
@@ -720,7 +711,7 @@ class _Opaque:
 def test_an_undeclared_value_raises_a_typed_error_at_the_boundary(attributes: dict, path: str, type_name: str) -> None:
     """`ProvStore.entity` refuses a value outside the declared type with `UnrecordableValue` naming path and type."""
     with pytest.raises(provenance.UnrecordableValue) as caught:
-        ProvStore(run_id="r").entity(prov_type="measurement", extent=None, attributes=attributes)
+        ProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=attributes)
     assert caught.value.path == path and caught.value.type_name.endswith(type_name)
     assert path in str(caught.value) and type_name in str(caught.value)
 
@@ -737,17 +728,15 @@ def test_cycles_and_depth_raise_the_typed_error_through_the_shared_guard() -> No
         edge = [edge]
     for attributes in ({"loop": loop}, {"deep": deep}, {"edge": edge}):
         with pytest.raises(provenance.UnrecordableValue, match="contains itself|deeper"):
-            ProvStore(run_id="r").entity(prov_type="measurement", extent=None, attributes=attributes)
+            ProvStore(run_id="r").entity(prov_type="artifact", extent=None, attributes=attributes)
 
 
 def test_a_level_measurement_of_silence_gets_an_id() -> None:
     """The regression: a measurement entity carrying `-inf` dB (digital silence) is recorded with an id."""
     store = ProvStore(run_id="r")
-    first = store.entity(prov_type="measurement", extent=(0.0, 1.0), attributes={"level_dbfs": float("-inf")})
-    again = ProvStore(run_id="r").entity(
-        prov_type="measurement", extent=(0.0, 1.0), attributes={"level_dbfs": -math.inf}
-    )
-    other = store.entity(prov_type="measurement", extent=(0.0, 1.0), attributes={"level_dbfs": -120.0})
+    first = store.entity(prov_type="artifact", extent=(0.0, 1.0), attributes={"level_dbfs": float("-inf")})
+    again = ProvStore(run_id="r").entity(prov_type="artifact", extent=(0.0, 1.0), attributes={"level_dbfs": -math.inf})
+    other = store.entity(prov_type="artifact", extent=(0.0, 1.0), attributes={"level_dbfs": -120.0})
     assert first == again != other
 
 
@@ -772,7 +761,7 @@ def test_write_and_read_are_inverse_and_ids_recompute_from_the_file(
     Every record the writer accepts the reader accepts: they build records through one validator.
     """
     store = ProvStore(run_id="run")
-    eid = store.entity(prov_type="measurement", extent=(0.0, 1.5), attributes=attributes)
+    eid = store.entity(prov_type="artifact", extent=(0.0, 1.5), attributes=attributes)
     aid = store.activity(node="N", step=None, parameters=parameters, started="t0")
     store.agent(agent_type="software", version="1")
     store.environment(kind="host", label="h", python_version="3.12", dependencies={"numpy": "2"})
@@ -831,7 +820,7 @@ def test_hr47_a_kind_entity_is_refused_by_the_writer_and_the_reader(tmp_path: Pa
     with pytest.raises(ValueError, match="unknown prov_type 'kind'"):
         _store().entity(prov_type=cast(PROV_TYPE, "kind"), extent=None, attributes={"state": "uncertain"})
     store = _store()
-    store.entity(prov_type="measurement", extent=None, attributes={"state": "uncertain"})
+    store.entity(prov_type="artifact", extent=None, attributes={"state": "uncertain"})
     path = tmp_path / "prov.jsonl"
     store.write_jsonl(path)
     _rewrite_records(path, "entity", lambda rec: rec.update(prov_type="kind"))
@@ -839,20 +828,50 @@ def test_hr47_a_kind_entity_is_refused_by_the_writer_and_the_reader(tmp_path: Pa
         ProvStore.read_jsonl(path)
 
 
-def test_hr47_every_store_the_writer_writes_is_provenance_2_and_holds_no_record_without_a_run_id(
+def test_hr47_every_store_the_writer_writes_is_provenance_2_and_every_record_carries_its_run_id(
     tmp_path: Path,
 ) -> None:
-    """The writer has one format, and a store refuses a `revised` view (no `run_id`) on merge as on write."""
+    """The writer has one format, and every record it writes carries the run it was minted in."""
     store = _store()
-    eid = store.entity(prov_type="span", extent=(0.0, 1.0), attributes={"a": 1})
+    store.entity(prov_type="artifact", extent=(0.0, 1.0), attributes={"a": 1})
     path = tmp_path / "prov.jsonl"
     store.write_jsonl(path)
     assert path.read_text().splitlines()[0] == FORMAT_LINE
     assert all(record.run_id == "run-1" for record in ProvStore.read_jsonl(path).records())
-    forged = ProvStore(run_id="run-1")
-    forged._entities[eid] = provenance.revised(store.get_entity(eid), attributes={"a": 2})
-    with pytest.raises(ValueError, match="no run_id"):
-        ProvStore.merge([store, forged])
+
+
+_RECORD_FIELDS: dict[type, dict[str, object]] = {
+    Entity: {"prov_type": "artifact", "extent": None},
+    Activity: {"node": "N", "step": None},
+    Agent: {"agent_type": "software", "version": "1"},
+    provenance.Environment: {"kind": "host", "label": "h", "python_version": "3.12"},
+}
+
+
+@pytest.mark.parametrize("record_type", list(_RECORD_FIELDS), ids=lambda t: t.__name__)
+def test_hr50_no_record_can_be_built_without_a_run_id(record_type: type) -> None:
+    """`run_id` is a required field of every record type: omitting it or passing None is refused."""
+    fields = _RECORD_FIELDS[record_type]
+    with pytest.raises(TypeError, match="run_id"):
+        record_type(id="", **fields)
+    with pytest.raises(ValueError, match="run_id must be text"):
+        record_type(id="", run_id=None, **fields)
+    record = record_type(id="", run_id="r", **fields)
+    assert record.run_id == "r" and record.id == record.minted_id()
+
+
+@pytest.mark.parametrize("record_type", list(_RECORD_FIELDS), ids=lambda t: t.__name__)
+def test_hr50_revised_keeps_the_run_and_mints_the_id_of_the_new_content(record_type: type) -> None:
+    """`revised` returns a record of the same run whose id is its own content's; `id` and `run_id` cannot change."""
+    record = record_type(id="", run_id="r", **_RECORD_FIELDS[record_type])
+    name = {Entity: "extent", Activity: "step", Agent: "version", provenance.Environment: "label"}[record_type]
+    value = {"extent": (0.0, 1.0), "step": "s", "version": "2", "label": "other"}[name]
+    changed = provenance.revised(record, **{name: value})
+    assert changed.run_id == "r" and changed.id == changed.minted_id() and changed.id != record.id
+    ProvStore.merge([])._hold(changed)
+    for frozen in ("id", "run_id"):
+        with pytest.raises(ValueError, match="cannot revise"):
+            provenance.revised(record, **{frozen: "x"})
 
 
 @settings(max_examples=300, deadline=None)
@@ -866,18 +885,18 @@ def test_the_store_records_again_every_form_it_returns(
     they are; `revised` adds a value as the store would record it; write, read and write give identical lines.
     """
     store = ProvStore(run_id="run")
-    eid = store.entity(prov_type="measurement", extent=(0.0, 1.0), attributes=attributes)
+    eid = store.entity(prov_type="artifact", extent=(0.0, 1.0), attributes=attributes)
     path = tmp_path_factory.mktemp("prov") / "prov.jsonl"
     store.write_jsonl(path)
     back = ProvStore.read_jsonl(path, run_id="run")
     held = cast(dict[str, object], back.get_entity(eid).attributes)
-    assert back.entity(prov_type="measurement", extent=(0.0, 1.0), attributes=held) == eid
-    nested = back.entity(prov_type="measurement", extent=None, attributes={"inner": held, "list": [held]})
+    assert back.entity(prov_type="artifact", extent=(0.0, 1.0), attributes=held) == eid
+    nested = back.entity(prov_type="artifact", extent=None, attributes={"inner": held, "list": [held]})
     tokens = provenance.normalised(back.get_entity(nested).attributes)
     assert tokens == provenance.normalised({"inner": attributes, "list": [attributes]})
     with_extra = provenance.revised(held, added=extra)
-    direct = back.entity(prov_type="measurement", extent=None, attributes={**dict(attributes), "added": extra})
-    assert back.entity(prov_type="measurement", extent=None, attributes=with_extra) == direct
+    direct = back.entity(prov_type="artifact", extent=None, attributes={**dict(attributes), "added": extra})
+    assert back.entity(prov_type="artifact", extent=None, attributes=with_extra) == direct
     again = path.with_name("again.jsonl")
     back.write_jsonl(again)
     third = path.with_name("third.jsonl")
@@ -891,8 +910,8 @@ def test_with_entity_attributes_keeps_order_and_relations_and_remints_the_edited
     from senselab_core.testing.provenance import with_entity_attributes
 
     store = _store()
-    first = store.entity(prov_type="span", extent=(0.0, 1.0), attributes={"signal": "enhanced", "n": [1]})
-    second = store.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
+    first = store.entity(prov_type="artifact", extent=(0.0, 1.0), attributes={"signal": "enhanced", "n": [1]})
+    second = store.entity(prov_type="artifact", extent=(1.0, 2.0), attributes={})
     act = store.activity(node="N", step=None, parameters={})
     store.was_generated_by(first, act)
     edited = with_entity_attributes(store, first, signal="plain")
@@ -951,7 +970,7 @@ def test_every_read_path_hands_back_the_decoded_value_never_a_token(
 ) -> None:
     """On every read path a caller reads each family decoded, as its decoded type, and records it again losslessly."""
     store = ProvStore(run_id="run")
-    eid = store.entity(prov_type="measurement", extent=None, attributes={key: value})
+    eid = store.entity(prov_type="artifact", extent=None, attributes={key: value})
     aid = store.activity(node="N", step=None, parameters={key: value})
     path = tmp_path_factory.mktemp("prov") / "prov.jsonl"
     store.write_jsonl(path)
@@ -960,7 +979,7 @@ def test_every_read_path_hands_back_the_decoded_value_never_a_token(
     (line,) = [r for r in raw if r.get("id") == eid]
     reads = {
         "get_entity": store.get_entity(eid).attributes[key],
-        "entities": store.entities("measurement")[0].attributes[key],
+        "entities": store.entities("artifact")[0].attributes[key],
         "get_activity": store.get_activity(aid).parameters[key],
         "read_jsonl": back.get_entity(eid).attributes[key],
         "read_jsonl activities": back.activities()[0].parameters[key],

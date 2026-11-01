@@ -4,14 +4,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import get_args
 
 import pytest
 from senselab_core.runtime.provenance import (
     CHECKSUM_KEY,
     CHECKSUM_UNRESOLVED_KEY,
     MTIME_KEY,
-    PROV_TYPE,
     SIZE_KEY,
     ProvStore,
     file_attributes,
@@ -78,14 +76,13 @@ def test_attributes_refuse_a_digest_and_a_reason_together(tmp_path: Path) -> Non
         ({"path": "a", CHECKSUM_KEY: "0" * 63}, "64 lowercase hex"),
         ({"path": "a", CHECKSUM_KEY: "A" * 64}, "64 lowercase hex"),
         ({"path": "a", CHECKSUM_UNRESOLVED_KEY: "  "}, "must not be empty"),
-        ({CHECKSUM_KEY: "0" * 64}, "naming the file"),
     ],
 )
 def test_entity_refuses_a_dishonest_checksum(attributes: dict[str, object], match: str) -> None:
     """The store refuses at write time what it would refuse at read-back."""
     store = ProvStore(run_id="r")
     with pytest.raises(ValueError, match=match):
-        store.entity(prov_type="stream", extent=None, attributes=attributes)
+        store.entity(prov_type="artifact", extent=None, attributes=attributes)
 
 
 @pytest.mark.parametrize(
@@ -100,18 +97,10 @@ def test_an_artifact_checksum_needs_no_path(tmp_path: Path, attributes: dict[str
     assert ProvStore.read_jsonl(path).get_entity(eid).attributes == {"role": "input", **attributes}
 
 
-@pytest.mark.parametrize("prov_type", sorted(set(get_args(PROV_TYPE)) - {"artifact"}))
-def test_every_other_type_still_needs_a_path_for_its_checksum(prov_type: PROV_TYPE) -> None:
-    """Only an artifact is exempt; any other entity's checksum must still say which file it describes."""
-    store = ProvStore(run_id="r")
-    with pytest.raises(ValueError, match="naming the file"):
-        store.entity(prov_type=prov_type, extent=None, attributes={CHECKSUM_KEY: "0" * 64})
-
-
 def test_read_back_holds_a_written_store_to_the_same_checksum_invariants(tmp_path: Path) -> None:
     """A hand-edited store.jsonl carrying a malformed digest is refused, naming the entity."""
     store = ProvStore(run_id="r")
-    store.entity(prov_type="stream", extent=None, attributes={"path": "a", CHECKSUM_KEY: "0" * 64})
+    store.entity(prov_type="artifact", extent=None, attributes={"path": "a", CHECKSUM_KEY: "0" * 64})
     path = tmp_path / "store.jsonl"
     store.write_jsonl(path)
     path.write_text(path.read_text().replace("0" * 64, "0" * 63))
@@ -119,24 +108,10 @@ def test_read_back_holds_a_written_store_to_the_same_checksum_invariants(tmp_pat
         ProvStore.read_jsonl(path)
 
 
-def test_read_back_refuses_a_non_artifact_whose_path_was_removed(tmp_path: Path) -> None:
-    """A hand-edited store.jsonl cannot turn a located file into a pathless checksum; only an artifact may be one."""
-    store = ProvStore(run_id="r")
-    store.entity(prov_type="stream", extent=None, attributes={"path": "a.flac", CHECKSUM_KEY: "0" * 64})
-    path = tmp_path / "store.jsonl"
-    store.write_jsonl(path)
-    header, line = path.read_text().splitlines()
-    record = json.loads(line)
-    del record["attributes"]["path"]
-    path.write_text(header + "\n" + jcs_dumps(record).decode("utf-8") + "\n")
-    with pytest.raises(ValueError, match="naming the file"):
-        ProvStore.read_jsonl(path)
-
-
 def test_a_store_written_without_checksums_still_reads_back(tmp_path: Path) -> None:
-    """Runs recorded before checksums existed convert; they record no digest rather than a wrong one."""
+    """An entity without a checksum reads back with none: no digest is invented for it."""
     store = ProvStore(run_id="r")
-    store.entity(prov_type="stream", extent=None, attributes={"path": "streams/plain.flac"})
+    store.entity(prov_type="artifact", extent=None, attributes={"path": "streams/plain.flac"})
     path = tmp_path / "store.jsonl"
     store.write_jsonl(path)
     [entity] = ProvStore.read_jsonl(path).entities()
@@ -149,7 +124,7 @@ def test_entity_identity_follows_content(tmp_path: Path) -> None:
     store = ProvStore(run_id="r")
     target = tmp_path / "a.bin"
     target.write_bytes(b"one")
-    first = store.entity(prov_type="stream", extent=None, attributes={"path": "a.bin", **file_attributes(target)})
+    first = store.entity(prov_type="artifact", extent=None, attributes={"path": "a.bin", **file_attributes(target)})
     target.write_bytes(b"two")
-    second = store.entity(prov_type="stream", extent=None, attributes={"path": "a.bin", **file_attributes(target)})
+    second = store.entity(prov_type="artifact", extent=None, attributes={"path": "a.bin", **file_attributes(target)})
     assert first != second

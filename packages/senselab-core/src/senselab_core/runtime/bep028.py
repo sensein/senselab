@@ -89,7 +89,7 @@ RELATION_TERMS: dict[str, str] = {
 }
 """Each store relation and the JSON-LD term it is emitted under."""
 
-TRIAGE_DESCRIPTION = "in-process senselab triage step, not a shell command: {label}"
+STEP_DESCRIPTION = "in-process senselab step, not a shell command: {label}"
 """The default activity ``Description``; ``{label}`` is replaced by the activity's label."""
 
 _JSONLD_KEYWORDS = frozenset({"@context", "@id", "@type", "@graph", "@version", "@container", "@vocab"})
@@ -234,7 +234,7 @@ def _environment_record(environment: Environment, *, dataset: str) -> dict[str, 
 
 
 def to_bep028_graph(
-    store: ProvStore, *, dataset: str = "", label: str = "triage", description: str = TRIAGE_DESCRIPTION
+    store: ProvStore, *, label: str, dataset: str = "", description: str = STEP_DESCRIPTION
 ) -> dict[str, Any]:
     """Serialize a store as one aggregated BEP028 provenance graph.
 
@@ -287,7 +287,7 @@ def to_bep028_graph(
 
 
 def convert_store_file(
-    store_path: str | Path, *, dataset: str = "", label: str = "triage", description: str = TRIAGE_DESCRIPTION
+    store_path: str | Path, *, label: str, dataset: str = "", description: str = STEP_DESCRIPTION
 ) -> dict[str, Any]:
     """Read a written ``store.jsonl`` and serialize it as a BEP028 graph.
 
@@ -303,7 +303,7 @@ def convert_store_file(
     return to_bep028_graph(ProvStore.read_jsonl(store_path), dataset=dataset, label=label, description=description)
 
 
-def write_bep028_files(graph: dict[str, Any], prov_dir: str | Path, *, label: str = "triage") -> list[Path]:
+def write_bep028_files(graph: dict[str, Any], prov_dir: str | Path, *, label: str) -> list[Path]:
     """Split an aggregated graph into the BEP028-named provenance files.
 
     Args:

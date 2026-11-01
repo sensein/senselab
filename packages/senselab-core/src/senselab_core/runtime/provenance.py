@@ -41,27 +41,11 @@ from senselab_worker.digest import identity_digest
 from senselab_core.kernel._base import FrozenDict, FrozenList, frozen_array, thawed
 from senselab_core.runtime.storage import write_atomically
 
-PROV_TYPE = Literal[
-    "span",
-    "word",
-    "speaker",
-    "interval",
-    "measurement",
-    "stream",
-    "pii",
-    "verdict",
-    "branch_report",
-    "assertion",
-    "target_match",
-    "branch_decision",
-    "enrollment",
-    "artifact",
-]
+PROV_TYPE = Literal["artifact"]
 """Every entity type the store writes and reads; the writer and the reader share this one vocabulary.
 
-``artifact`` is a file set identified by its content alone: it may carry a checksum without a ``path``.
-``branch_report`` is what a node that reports rather than decides writes: task conformance and
-deviations, and no outcome.
+``artifact`` is a value or file set a node generated or used, identified by its content: it may carry a
+checksum with or without a ``path``.
 """
 AGENT_TYPE = Literal["model", "software"]
 ENVIRONMENT_KIND = Literal["host", "venv"]
@@ -138,17 +122,15 @@ def file_attributes(path: str | Path, *, digest: str | None = None, reason: str 
     return out
 
 
-def _check_entity_attributes(prov_type: str, attributes: Mapping[str, Any]) -> None:
+def _check_entity_attributes(attributes: Mapping[str, Any]) -> None:
     """Refuse checksum attributes the store never accepts, at write time and at read-back alike.
 
     Args:
-        prov_type: The entity's type; only an ``artifact`` may carry a checksum without a ``path``.
         attributes: The entity's attributes.
 
     Raises:
         ValueError: If a digest and a reason it is missing are supplied together, if the digest is
-            not 64 lowercase hex characters, if the reason is empty, or if either is present without
-            a ``path`` saying which file it describes on an entity other than an ``artifact``.
+            not 64 lowercase hex characters, or if the reason is empty.
     """
     digest, reason = attributes.get(CHECKSUM_KEY), attributes.get(CHECKSUM_UNRESOLVED_KEY)
     if digest is not None and reason is not None:
@@ -157,8 +139,6 @@ def _check_entity_attributes(prov_type: str, attributes: Mapping[str, Any]) -> N
         raise ValueError(f"{CHECKSUM_KEY} must be 64 lowercase hex characters, got {digest!r}")
     if reason is not None and not (isinstance(reason, str) and reason.strip()):
         raise ValueError(f"{CHECKSUM_UNRESOLVED_KEY} must not be empty; an empty reason says nothing")
-    if (digest is not None or reason is not None) and prov_type != "artifact" and not attributes.get(PATH_KEY):
-        raise ValueError(f"a checksum needs a {PATH_KEY!r} naming the file it describes")
 
 
 def _check_agent_fields(
@@ -450,11 +430,10 @@ class _Record:
 
     `_DIGESTED` names the fields the id covers, after `run_id`; `_VALUES` the fields of provenance values
     (attributes, parameters, dependencies). A value field holds what a caller reads back, every token
-    decoded; the record also keeps the tokens it was identified by, which the file holds. A record with a
-    `run_id` has its id checked against its content when it is built; a store holds only such records and
-    a file holds only such lines. A record whose `run_id` is `None` is a view `revised` returns, which keeps
-    the id of the record it copies and which no store holds. Two records are equal when their files' lines
-    identify the same content (JCS).
+    decoded; the record also keeps the tokens it was identified by, which the file holds. Every record
+    carries the `run_id` it was minted in and has its id checked against its content when it is built; an
+    empty `id` is minted from the content. Two records are equal when their files' lines identify the same
+    content (JCS).
     """
 
     _DIGESTED: ClassVar[tuple[str, ...]]
@@ -462,7 +441,7 @@ class _Record:
     _KIND: ClassVar[str]
     __hash__ = None  # type: ignore[assignment]
     id: str
-    run_id: str | None
+    run_id: str
 
     def _prefix(self) -> str:
         raise NotImplementedError
@@ -473,33 +452,32 @@ class _Record:
     def __post_init__(self) -> None:
         """Check the fields, hold each value field decoded beside its tokens, and check the id against them."""
         _text(self.id, "id")
-        _text(self.run_id, "run_id", optional=True)
+        _text(self.run_id, "run_id")
         tokens: dict[str, Any] = {}
         for name in self._VALUES:
             tokens[name], held = _held_value(getattr(self, name), name)
             object.__setattr__(self, name, held)
         object.__setattr__(self, "_tokens", FrozenDict(tokens))
         self._check()
-        if self.run_id is not None and self.id != self.minted_id():
-            raise ValueError(f"{self._KIND} id {self.id!r} is not the id of its content, {self.minted_id()!r}")
+        minted = self.minted_id()
+        if self.id == "":
+            object.__setattr__(self, "id", minted)
+        elif self.id != minted:
+            raise ValueError(f"{self._KIND} id {self.id!r} is not the id of its content, {minted!r}")
 
     def _field(self, name: str) -> Any:  # noqa: ANN401
         return self._tokens[name] if name in self._VALUES else getattr(self, name)  # type: ignore[attr-defined]
 
-    def minted_id(self, run_id: str | None = None) -> str:
-        """Return the id of this content in `run_id` (by default the record's own): `<prefix>-` and 16 hex.
+    def minted_id(self) -> str:
+        """Return the id of this content in the record's run: `<prefix>-` and 16 hex.
 
         The hex is `identity_digest("provenance-id@4", [run_id, *<the digested fields, value fields as tokens>])`.
 
         Raises:
-            ValueError: if neither `run_id` nor the record's has a value.
             UnrecordableValue: if the content, inside the id's envelope, nests deeper than `MAX_DEPTH` or
                 exceeds `MAX_CANONICAL_CHARS`.
         """
-        run = self.run_id if run_id is None else run_id
-        if run is None:
-            raise ValueError(f"{self._KIND} {self.id!r} is a revised view and has no run_id to mint from")
-        parts = [run, *(thawed(self._field(name)) for name in self._DIGESTED)]
+        parts = [self.run_id, *(thawed(self._field(name)) for name in self._DIGESTED)]
         try:
             digest = identity_digest(_ID_TAG, parts)
         except ValueError as err:
@@ -526,7 +504,7 @@ class Entity(_Record):
         prov_type: One of `PROV_TYPE`.
         extent: `(start, end)` in seconds, finite, `start <= end`, or None.
         attributes: The normalised, read-only attributes.
-        run_id: The run the id was minted in, or None for a view `revised` returns.
+        run_id: The run the id was minted in.
     """
 
     _DIGESTED: ClassVar[tuple[str, ...]] = ("prov_type", "extent", "attributes")
@@ -537,7 +515,7 @@ class Entity(_Record):
     prov_type: PROV_TYPE
     extent: tuple[float, float] | None
     attributes: Mapping[str, Any] = field(default_factory=dict)
-    run_id: str | None = None
+    run_id: str = field(kw_only=True)
 
     def _prefix(self) -> str:
         return self.prov_type
@@ -546,7 +524,7 @@ class Entity(_Record):
         if self.prov_type not in _PROV_TYPES:
             raise ValueError(f"unknown prov_type {self.prov_type!r}; known: {sorted(_PROV_TYPES)}")
         object.__setattr__(self, "extent", _extent(self.extent))
-        _check_entity_attributes(self.prov_type, self.attributes)
+        _check_entity_attributes(self.attributes)
 
 
 @dataclass(frozen=True, eq=False)
@@ -560,7 +538,7 @@ class Activity(_Record):
         started: When it began, ISO 8601, or None when unrecorded.
         ended: When it finished, ISO 8601, or None when unrecorded.
         parameters: The normalised, read-only values it ran with.
-        run_id: The run the id was minted in, or None for a view `revised` returns.
+        run_id: The run the id was minted in.
     """
 
     _DIGESTED: ClassVar[tuple[str, ...]] = ("node", "step", "parameters")
@@ -573,7 +551,7 @@ class Activity(_Record):
     started: str | None = None
     ended: str | None = None
     parameters: Mapping[str, Any] = field(default_factory=dict)
-    run_id: str | None = None
+    run_id: str = field(kw_only=True)
 
     def _prefix(self) -> str:
         return "act"
@@ -596,7 +574,7 @@ class Agent(_Record):
         unresolved_reason: Why the commit is unknown, when it is. A provenance model that cannot say
             "I could not resolve this" forces either a lie or a crash.
         version: Software version, for a software agent.
-        run_id: The run the id was minted in, or None for a view `revised` returns.
+        run_id: The run the id was minted in.
     """
 
     _DIGESTED: ClassVar[tuple[str, ...]] = ("agent_type", "model_id", "commit_sha", "unresolved_reason", "version")
@@ -608,7 +586,7 @@ class Agent(_Record):
     commit_sha: str | None = None
     unresolved_reason: str | None = None
     version: str | None = None
-    run_id: str | None = None
+    run_id: str = field(kw_only=True)
 
     def _prefix(self) -> str:
         return "agent"
@@ -637,7 +615,7 @@ class Environment(_Record):
         dependencies_digest: SHA-256 over the venv's full installed-distribution listing, when
             ``dependencies`` holds a declared subset rather than that full listing.
         senselab_version: senselab's own installed version, for the host.
-        run_id: The run the id was minted in, or None for a view `revised` returns.
+        run_id: The run the id was minted in.
     """
 
     _DIGESTED: ClassVar[tuple[str, ...]] = (
@@ -660,7 +638,7 @@ class Environment(_Record):
     dependencies: Mapping[str, str] = field(default_factory=dict)
     dependencies_digest: str | None = None
     senselab_version: str | None = None
-    run_id: str | None = None
+    run_id: str = field(kw_only=True)
 
     def _prefix(self) -> str:
         return "env"
@@ -699,8 +677,7 @@ def _mint(cls: type[_R], run_id: str, raw: Mapping[str, object], **plain: object
         UnrecordableValue: if a field holds a value outside the provenance value type.
         ValueError: if the record's fields are refused.
     """
-    draft = cls(id="", run_id=None, **raw, **plain)  # type: ignore[call-arg]
-    return cast(_R, replace(cast(Any, draft), id=draft.minted_id(run_id), run_id=run_id))
+    return cls(id="", run_id=run_id, **raw, **plain)  # type: ignore[call-arg]
 
 
 @overload
@@ -711,20 +688,20 @@ def revised(target: _Record | Mapping[str, Any], /, **changes: object) -> _Recor
     """Return a copy of a record, or of a mapping a record holds, with `changes`; the original is untouched.
 
     For a mapping a record holds (attributes, parameters, an object inside them): what a caller reads back
-    from a record of its items with `changes` (`recorded`). For a record: a copy with the changed fields
-    that keeps the record's id, with `run_id` None, so a store refuses to hold it. It is a view, such as a word
-    with a bounded extent.
+    from a record of its items with `changes` (`recorded`). For a record: the record of the changed content
+    minted in the same run, so it keeps the `run_id` and carries the id of its own content.
 
     Raises:
         UnrecordableValue: if a change holds a value outside the provenance value type.
-        ValueError: if a record's changed fields are refused, or a change names no field of the record.
+        ValueError: if a record's changed fields are refused, or a change names `id`, `run_id` or no field of
+            the record.
     """
     if isinstance(target, _Record):
-        names = {f.name for f in fields(cast(Any, target))}
+        names = {f.name for f in fields(cast(Any, target))} - {"id", "run_id"}
         unknown = sorted(set(changes) - names)
         if unknown:
-            raise ValueError(f"{type(target).__name__} has no fields {unknown}")
-        return cast(_Record, replace(cast(Any, target), run_id=None, **changes))
+            raise ValueError(f"{type(target).__name__} cannot revise {unknown}")
+        return cast(_Record, replace(cast(Any, target), id="", **changes))
     if not isinstance(target, Mapping):
         raise TypeError(f"revised takes a record or a mapping a record holds, not {type(target).__name__}")
     return cast(FrozenDict, recorded({**target, **changes}))
@@ -785,8 +762,7 @@ class ProvStore:
         Raises:
             UnrecordableValue: If ``attributes`` is not a mapping of provenance values.
             ValueError: If ``prov_type`` is unknown, the extent is malformed, or the attributes carry
-                both a checksum and a reason it is missing, a malformed digest, an empty reason, or
-                either without a ``path`` on an entity other than an ``artifact``.
+                both a checksum and a reason it is missing, a malformed digest or an empty reason.
         """
         record = _mint(Entity, self.run_id, {"attributes": attributes}, prov_type=prov_type, extent=extent)
         _put(self._entities, record)
@@ -1043,8 +1019,6 @@ class ProvStore:
         ]
 
     def _hold(self, record: _Record, where: str = "") -> None:
-        if record.run_id is None:
-            raise ValueError(f"{where}{record._KIND} {record.id!r} has no run_id; a store holds no revised view")
         tables: dict[str, dict[str, Any]] = {
             "entity": self._entities,
             "activity": self._activities,
