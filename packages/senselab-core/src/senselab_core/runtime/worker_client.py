@@ -178,8 +178,6 @@ class _Pump:
 
 
 _PS = "/bin/ps"
-_HAS_WAITID = sys.platform == "linux"
-_PROBE_RUN: Callable[..., "subprocess.CompletedProcess[str]"] = subprocess.run
 LEADER_PROBE_TIMEOUT_S = 2.0
 
 
@@ -222,19 +220,19 @@ def _leader_held(pid: int, exited: threading.Event, timeout: float) -> bool | No
     """Whether child `pid` is unreaped, so its pid and group id are still reserved; `None` if that cannot be told.
 
     A leader whose exit has not been observed is running, hence held. After its exit the answer comes
-    from `waitid(WNOHANG|WNOWAIT)` where the platform has it, else from `ps -o ppid=` run by
-    `_PROBE_RUN` within `timeout` seconds.
+    from `waitid(WNOHANG|WNOWAIT)` where the platform has it, else from `ps -o ppid=` run within
+    `timeout` seconds.
     """
     if not exited.is_set():
         return True
-    if sys.platform == "linux" and _HAS_WAITID:
+    if sys.platform == "linux" and hasattr(os, "waitid"):
         try:
             os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
         except ChildProcessError:
             return False
         return True
     try:
-        out = _PROBE_RUN([_PS, "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True, timeout=timeout)
+        out = subprocess.run([_PS, "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("cannot tell whether worker %d is still this process's child: %s", pid, exc)
         return None
@@ -370,8 +368,14 @@ class WorkerClient:
         expect_runtime: str | None = None,
         load_timeout: float | None = None,
         request_timeout: float | None = None,
+        stop_grace_s: float = STOP_GRACE_S,
+        term_grace_s: float = TERM_GRACE_S,
+        max_line_bytes: int = MAX_LINE_BYTES,
     ) -> None:
         """Start the worker, check its hello and wait until it has loaded `init`.
+
+        A graceful stop waits `stop_grace_s` in all and leaves SIGTERM the last `term_grace_s` of it.
+        Request lines, and the values encoded into them, are refused past `max_line_bytes`.
 
         Raises:
             ValueError: if `init` uses the reserved key `array_dir` or has no wire form.
@@ -387,6 +391,9 @@ class WorkerClient:
         if "array_dir" in init:
             raise ValueError("init key 'array_dir' is reserved")
         self._request_timeout = request_timeout
+        self._stop_grace_s = stop_grace_s
+        self._term_grace_s = term_grace_s
+        self._max_line_bytes = max_line_bytes
         self._stderr: collections.deque[str] = collections.deque(maxlen=STDERR_TAIL_LINES)
         self._lines: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
         self._proc: subprocess.Popen[bytes] | None = None
@@ -415,12 +422,17 @@ class WorkerClient:
             raise
         self._closed = False
         try:
-            wire_init = to_wire({"array_dir": str(self._array_dir), **init}, array_dir=self._array_dir, at="init")
+            wire_init = to_wire(
+                {"array_dir": str(self._array_dir), **init},
+                array_dir=self._array_dir,
+                at="init",
+                limit=self._max_line_bytes,
+            )
             self._init_names = self._owned(array_paths(wire_init))
             self._start(python, module)
             self.hello = self._handshake(expect_runtime or runtime_identity())
             deadline = Deadline(load_timeout)
-            self._send(dump_line({"init": wire_init}, "init"), deadline)
+            self._send(dump_line({"init": wire_init}, "init", limit=self._max_line_bytes), deadline)
             self._receive(deadline, "loading the backend", "ready")
         except BaseException as exc:
             raised = exc
@@ -575,17 +587,17 @@ class WorkerClient:
             validate_message({"id": request_id, "items": items, "params": params}, "request")
         except ProtocolError as exc:
             raise ValueError(f"malformed request: {exc}") from exc
-        wire_params = to_wire(params, array_dir=self._array_dir, at="params")
+        wire_params = to_wire(params, array_dir=self._array_dir, at="params", limit=self._max_line_bytes)
         results: list[dict[str, Any]] = [{} for _ in items]
         sent: list[tuple[int, dict[str, Any]]] = []
         for i, item in enumerate(items):
             try:
                 sent.append(
-                    (i, {"id": item["id"], "inputs": to_wire(item["inputs"], array_dir=self._array_dir, at="inputs")})
+                    (i, {"id": item["id"], "inputs": to_wire(item["inputs"], array_dir=self._array_dir, at="inputs", limit=self._max_line_bytes)})
                 )
             except Exception as exc:
                 results[i] = {"id": item["id"], "error": _mapped(error_record(exc))}
-        sent, line = _request_line(request_id, sent, wire_params, results)
+        sent, line = _request_line(request_id, sent, wire_params, results, self._max_line_bytes)
         if not sent:
             return results
         request = {"id": request_id, "items": [wire for _, wire in sent]}
@@ -890,12 +902,12 @@ class WorkerClient:
             return
         assert proc.stdout is not None and proc.stderr is not None
         pgid = proc.pid
-        stop = Deadline(STOP_GRACE_S)
+        stop = Deadline(self._stop_grace_s)
         if graceful and not self._exited.is_set():
             self._write_stop()
         self._retire_channel()
         if graceful:
-            self._exited.wait(max((stop.remaining() or 0.0) - TERM_GRACE_S, 0.0))
+            self._exited.wait(max((stop.remaining() or 0.0) - self._term_grace_s, 0.0))
         if proc.returncode is None:
             held = _leader_held(pgid, self._exited, min(LEADER_PROBE_TIMEOUT_S, stop.remaining() or 0.0))
             if held:
@@ -934,11 +946,12 @@ def _request_line(
     sent: list[tuple[int, dict[str, Any]]],
     params: object,
     results: list[dict[str, Any]],
+    limit: int,
 ) -> tuple[list[tuple[int, dict[str, Any]]], bytes]:
     """Return the items left to send and their request line; no items and an empty line if none is left.
 
-    An item whose request alone, with `params`, cannot fit one line gets its `ValueTooLarge` in
-    `results` and is left off.
+    An item whose request alone, with `params`, cannot fit one line of `limit` bytes gets its
+    `ValueTooLarge` in `results` and is left off.
 
     Raises:
         ValueTooLarge: if `params` with an empty item cannot fit one line, or the items that each
@@ -946,7 +959,7 @@ def _request_line(
     """
 
     def dump(items: list[dict[str, Any]]) -> bytes:
-        return dump_line({"id": request_id, "items": items, "params": params}, "request")
+        return dump_line({"id": request_id, "items": items, "params": params}, "request", limit=limit)
 
     if not sent:
         return sent, b""
@@ -962,8 +975,8 @@ def _request_line(
     kept: list[tuple[int, dict[str, Any]]] = []
     for i, wire in sent:
         size = frame + wire_size(wire)
-        if size > MAX_LINE_BYTES:
-            fault = ValueTooLarge(f"item {wire['id']!r} needs a {size}-byte request line; limit {MAX_LINE_BYTES}")
+        if size > limit:
+            fault = ValueTooLarge(f"item {wire['id']!r} needs a {size}-byte request line; limit {limit}")
             results[i] = {"id": wire["id"], "error": _mapped(error_record(fault))}
         else:
             kept.append((i, wire))

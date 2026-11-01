@@ -25,7 +25,6 @@ from senselab_core.runtime.worker_client import (
     SHUTDOWN_BOUND_S,
     WorkerClient,
     WorkerLost,
-    _signals_deferred,
 )
 from shutdown_schedule_fixture import (
     CASE_BOUND_S,
@@ -324,13 +323,15 @@ def test_collecting_a_client_whose_shutdown_was_cut_short_finishes_it(
     pgid = box[0].hello["pid"]
     array_dir = box[0].array_dir
     _interrupting(monkeypatch, times=2)
-    monkeypatch.setattr(worker_client.logger, "disabled", True)
+    logging.disable(logging.CRITICAL)
     try:
         box[0].close()
     except SystemExit:
         pass
     else:
         raise AssertionError("close() was not interrupted")
+    finally:
+        logging.disable(logging.NOTSET)
     assert array_dir.exists()
     monkeypatch.undo()
     box.clear()
@@ -338,22 +339,42 @@ def test_collecting_a_client_whose_shutdown_was_cut_short_finishes_it(
     assert not array_dir.exists() and not lifecycle_probes_fixture.group_alive(pgid)
 
 
-@pytest.mark.logic
-def test_ctrl_c_held_once_with_a_hint_and_escalated_by_a_second(
-    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The first SIGINT during shutdown is held and logs the hint; the second raises `KeyboardInterrupt` at once."""
-    monkeypatch.setattr(worker_client, "_HINTED", threading.Event())
-    with caplog.at_level(logging.WARNING), pytest.raises(KeyboardInterrupt):
-        with _signals_deferred(escalate=True):
-            signal.raise_signal(signal.SIGINT)
-            assert caplog.messages.count(ESCALATE_HINT) == 1
-            signal.raise_signal(signal.SIGINT)
-            raise AssertionError("the second SIGINT did not interrupt")
-
-
 def _bounded() -> None:
     resource.setrlimit(resource.RLIMIT_FSIZE, (2**20, 2**20))
+
+
+_HELD_THEN_ESCALATED = """
+import logging, signal
+from senselab_core.runtime.worker_client import ESCALATE_HINT, _signals_deferred
+messages = []
+class Keep(logging.Handler):
+    def emit(self, record):
+        messages.append(record.getMessage())
+logging.getLogger().addHandler(Keep())
+logging.getLogger().setLevel(logging.WARNING)
+try:
+    with _signals_deferred(escalate=True):
+        signal.raise_signal(signal.SIGINT)
+        assert messages.count(ESCALATE_HINT) == 1, messages
+        signal.raise_signal(signal.SIGINT)
+        raise SystemExit("the second SIGINT did not interrupt")
+except KeyboardInterrupt:
+    print("interrupted")
+"""
+
+
+@pytest.mark.logic
+def test_ctrl_c_held_once_with_a_hint_and_escalated_by_a_second() -> None:
+    """The first SIGINT during shutdown is held and logs the hint; the second raises `KeyboardInterrupt` at once."""
+    proc = subprocess.run(
+        [sys.executable, "-c", _HELD_THEN_ESCALATED],
+        capture_output=True,
+        text=True,
+        timeout=WAIT_S,
+        preexec_fn=_bounded,
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert proc.stdout.strip() == "interrupted"
 
 
 _THREE_SHUTDOWNS = """

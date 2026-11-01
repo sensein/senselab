@@ -90,21 +90,21 @@ def decode(line: bytes, kind: Kind, *, array_dir: Path) -> dict[str, Any]:
 
 
 class LineTooLarge(ProtocolError):
-    """A wire line, newline included, would exceed `MAX_LINE_BYTES`; `size` is its length in bytes."""
+    """A wire line, newline included, would exceed its limit (`MAX_LINE_BYTES`); `size` is its length in bytes."""
 
-    def __init__(self, size: int) -> None:
+    def __init__(self, size: int, limit: int = MAX_LINE_BYTES) -> None:
         """Name the line's size and the limit."""
-        super().__init__(f"wire line of {size} bytes exceeds {MAX_LINE_BYTES}; pass large data as arrays")
+        super().__init__(f"wire line of {size} bytes exceeds {limit}; pass large data as arrays")
         self.size = size
 
 
-def dump_line(msg: dict[str, Any], kind: Kind) -> bytes:
+def dump_line(msg: dict[str, Any], kind: Kind, *, limit: int = MAX_LINE_BYTES) -> bytes:
     """Return a message already in wire form as one line, after checking it is a valid `kind` message.
 
     Raises:
         ProtocolError: if `validate_message` refuses it, it nests deeper than `MAX_DEPTH`, or it is
             not JSON text.
-        LineTooLarge: if the line, newline included, exceeds `MAX_LINE_BYTES`.
+        LineTooLarge: if the line, newline included, exceeds `limit` bytes.
     """
     validate_message(msg, kind)
     _check_message(msg)
@@ -112,8 +112,8 @@ def dump_line(msg: dict[str, Any], kind: Kind) -> bytes:
         line = _json_bytes(msg) + b"\n"
     except (ValueError, TypeError, RecursionError) as exc:
         raise ProtocolError(f"{kind} message has no wire form: {type(exc).__name__}: {exc}") from exc
-    if len(line) > MAX_LINE_BYTES:
-        raise LineTooLarge(len(line))
+    if len(line) > limit:
+        raise LineTooLarge(len(line), limit)
     return line
 
 
@@ -213,7 +213,7 @@ def parse_line(line: bytes) -> dict[str, Any]:
     return msg
 
 
-def to_wire(value: object, *, array_dir: Path, at: Slot) -> Any:  # noqa: ANN401
+def to_wire(value: object, *, array_dir: Path, at: Slot, limit: int = MAX_LINE_BYTES) -> Any:  # noqa: ANN401
     """Return `value` as plain JSON data, writing each numpy array into `array_dir` as a reference.
 
     `at` names where the value sits on its line, and so how many containers enclose it
@@ -227,9 +227,9 @@ def to_wire(value: object, *, array_dir: Path, at: Slot) -> Any:  # noqa: ANN401
             is not valid Unicode, an object or structured array, a dict whose only key is
             `__array__`, a container that contains itself, or a container deeper than `MAX_DEPTH`
             on the line.
-        ValueTooLarge: once a lower bound on the value's encoded size exceeds `MAX_LINE_BYTES`.
+        ValueTooLarge: once a lower bound on the value's encoded size exceeds `limit` bytes.
     """
-    encoder = _Encoder(Path(array_dir), ENVELOPE[at])
+    encoder = _Encoder(Path(array_dir), ENVELOPE[at], limit)
     try:
         return encoder.encode(value)[0]
     except (WireValueError, ValueTooLarge):
@@ -241,17 +241,18 @@ def to_wire(value: object, *, array_dir: Path, at: Slot) -> Any:  # noqa: ANN401
 class _Encoder:
     """The state of one `to_wire` call."""
 
-    def __init__(self, array_dir: Path, base: int) -> None:
+    def __init__(self, array_dir: Path, base: int, limit: int) -> None:
         self.array_dir = array_dir
         self.base = base
+        self.limit = limit
         self.active: set[int] = set()
         self.done: dict[int, tuple[Any, int, int]] = {}
         self.spent = 0
 
     def charge(self, size: int) -> None:
         self.spent += size
-        if self.spent > MAX_LINE_BYTES:
-            raise ValueTooLarge(f"wire form exceeds {MAX_LINE_BYTES} bytes; pass large data as arrays")
+        if self.spent > self.limit:
+            raise ValueTooLarge(f"wire form exceeds {self.limit} bytes; pass large data as arrays")
 
     def encode(self, value: object) -> tuple[Any, int]:
         """Return the wire form of `value` and its height in containers (0 for a scalar)."""

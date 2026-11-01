@@ -88,6 +88,10 @@ TYPED: dict[str, set[str | None]] = {
 CLEAN = {"group_alive": False, "grandchild_alive": False, "reaped": True, "array_dir_gone": True}
 
 
+CONSTRUCTOR_GRACES = frozenset({"STOP_GRACE_S", "TERM_GRACE_S"})
+"""The graces a `WorkerClient` takes as constructor arguments, by the name of their default."""
+
+
 def _owner(boundary: str) -> tuple[Any, str]:
     where, name = boundary.split(":")
     return {"module": worker_client, "client": WorkerClient, "pump": _Pump, "popen": subprocess.Popen}[where], name
@@ -185,7 +189,8 @@ def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
     """Run one case and return its report."""
     graces = REAL_GRACES if case.get("real_graces") else GRACES
     for name, value in graces.items():
-        setattr(worker_client, name, value)
+        if name not in CONSTRUCTOR_GRACES:
+            setattr(worker_client, name, value)
     worker_client.SHUTDOWN_BOUND_S = shutdown_bound(graces)
     pid_file = parent / f"pids-{index}"
     injector = _Injector(case)
@@ -198,7 +203,15 @@ def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
     def build() -> None:
         timeout = REQUEST_TIMEOUT_S if case["path"] == "timeout" else None
         init = {"pid_file": str(pid_file), "exit_at_load": case["path"] == "init_lost"}
-        WorkerClient(sys.executable, BACKEND, init=init, array_parent=parent, request_timeout=timeout)
+        WorkerClient(
+            sys.executable,
+            BACKEND,
+            init=init,
+            array_parent=parent,
+            request_timeout=timeout,
+            stop_grace_s=graces["STOP_GRACE_S"],
+            term_grace_s=graces["TERM_GRACE_S"],
+        )
 
     _handlers(case["kind"], injector.clients)
     reals = {boundary: getattr(*_owner(boundary)) for boundary in BOUNDARIES}

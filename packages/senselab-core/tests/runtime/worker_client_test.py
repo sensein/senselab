@@ -88,6 +88,19 @@ def worker(array_parent: Path) -> Iterator[WorkerClient]:
     assert not client.alive
 
 
+SMALL_LINE_BYTES = 2048
+"""The request-line limit of `small_line_worker`."""
+
+
+@pytest.fixture
+def small_line_worker(array_parent: Path) -> Iterator[WorkerClient]:
+    """A client over the fake worker whose request lines are limited to `SMALL_LINE_BYTES`."""
+    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent, max_line_bytes=SMALL_LINE_BYTES)
+    yield client
+    client.close()
+    assert not client.alive
+
+
 def _lines(reply: dict | list) -> list[str]:
     return [
         part if isinstance(part, str) else json.dumps(part) for part in (reply if isinstance(reply, list) else [reply])
@@ -758,9 +771,14 @@ def test_graceful_close_leaves_sigterm_its_own_grace(
     array_parent: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A worker that ignores the stop line gets SIGTERM with `TERM_GRACE_S` of the stop window left."""
-    monkeypatch.setattr(worker_client, "STOP_GRACE_S", 2.0)
-    monkeypatch.setattr(worker_client, "TERM_GRACE_S", 1.0)
-    client = WorkerClient(sys.executable, "backends.slow_reader_backend_fixture", init={}, array_parent=array_parent)
+    client = WorkerClient(
+        sys.executable,
+        "backends.slow_reader_backend_fixture",
+        init={},
+        array_parent=array_parent,
+        stop_grace_s=2.0,
+        term_grace_s=1.0,
+    )
     client.run([{"id": "a", "inputs": {}}], {"mode": "stop_reading"})
     _wait_stopped(client.hello["pid"])
     sent = _record_killpg(monkeypatch)
@@ -772,10 +790,13 @@ def test_graceful_close_leaves_sigterm_its_own_grace(
 
 
 def _probe_fails(monkeypatch: pytest.MonkeyPatch, how: str) -> list[float]:
-    """Route the leader probe through the `ps` path and make every run of it fail as `how`."""
+    """Route the leader probe through `ps`, as where `waitid` is missing; make every `ps` fail as `how`."""
     calls: list[float] = []
+    real_run = subprocess.run
 
-    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:  # noqa: ANN401
+        if argv[0] != worker_client._PS:
+            return real_run(argv, **kwargs)
         timeout = kwargs["timeout"]
         assert isinstance(timeout, float) and timeout <= worker_client.LEADER_PROBE_TIMEOUT_S
         calls.append(timeout)
@@ -784,8 +805,8 @@ def _probe_fails(monkeypatch: pytest.MonkeyPatch, how: str) -> list[float]:
         time.sleep(timeout)
         raise subprocess.TimeoutExpired(argv, timeout)
 
-    monkeypatch.setattr(worker_client, "_HAS_WAITID", False)
-    monkeypatch.setattr(worker_client, "_PROBE_RUN", run)
+    monkeypatch.delattr(os, "waitid", raising=False)
+    monkeypatch.setattr(subprocess, "run", run)
     return calls
 
 
@@ -945,10 +966,10 @@ def test_items_that_fit_alone_but_not_together_raise_value_too_large(worker: Wor
     assert worker.alive and worker.run(items[:2], {})[0]["outputs"]
 
 
-def _fits(items: list[dict], params: dict) -> bool:
+def _fits(items: list[dict], params: dict, limit: int) -> bool:
     request = {"id": "0" * 36, "items": items, "params": params}
     try:
-        codec.dump_line(request, "request")
+        codec.dump_line(request, "request", limit=limit)
     except codec.LineTooLarge:
         return False
     return True
@@ -958,21 +979,19 @@ def _fits(items: list[dict], params: dict) -> bool:
 @settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(sizes=st.lists(st.integers(0, 1500), min_size=1, max_size=6), params_size=st.integers(0, 1500))
 def test_oversize_is_value_too_large_per_item_where_attributable(
-    worker: WorkerClient, monkeypatch: pytest.MonkeyPatch, sizes: list[int], params_size: int
+    small_line_worker: WorkerClient, sizes: list[int], params_size: int
 ) -> None:
     """An oversized request never raises a plain `ValueError`: what one item causes is that item's error.
 
     Against the codec's own line check: an item whose request alone cannot fit fails alone as
     `ValueTooLarge` (resource); params that cannot fit, or items that fit only alone, raise `ValueTooLarge`.
     """
-    budget = 2048
-    monkeypatch.setattr(codec, "MAX_LINE_BYTES", budget)
-    monkeypatch.setattr(worker_client, "MAX_LINE_BYTES", budget)
+    worker, budget = small_line_worker, SMALL_LINE_BYTES
     params = {"p": "y" * params_size}
     items = [{"id": str(i), "inputs": {"s": "x" * n}} for i, n in enumerate(sizes)]
-    alone = [_fits([item], params) for item in items]
+    alone = [_fits([item], params, budget) for item in items]
     kept = [item for item, ok in zip(items, alone) if ok]
-    if not _fits([{"id": "", "inputs": {}}], params) or (kept and not _fits(kept, params)):
+    if not _fits([{"id": "", "inputs": {}}], params, budget) or (kept and not _fits(kept, params, budget)):
         with pytest.raises(ValueTooLarge):
             worker.run(items, params)
         return
