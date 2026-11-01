@@ -6,7 +6,7 @@ Layout under `root`:
   `ExecutionContext.fingerprint()`, holding:
   - `result.json`: JCS JSON with `format: "result@2.0"`, the key, its digest, the context fingerprint,
     the encoded outputs and their output identity;
-  - `context.json`: JCS JSON with `format: "execution-context@1.0"` and the context's fields;
+  - `context.json`: JCS JSON with `format: "execution-context@2.0"` and the context's fields;
   - `<sha256>.npy`: each array output in canonical `.npy`, named by the sha256 of its bytes.
 - `tmp/<uuid>/`: a writer's staging directory, committed by renaming it onto the entry.
 - `quarantine/<uuid>`: entries that failed verification, and objects of the wrong kind found at a path
@@ -89,7 +89,7 @@ STORE_DIR = "store@4"
 STAGING_DIR = "tmp"
 QUARANTINE_DIR = "quarantine"
 RESULT_FORMAT = "result@2.0"
-CONTEXT_FORMAT = "execution-context@1.0"
+CONTEXT_FORMAT = "execution-context@2.0"
 ARRAY_TAG = ARRAY_TOKEN
 COMMIT_ATTEMPTS = 3
 """How many times `put` stages and renames before giving up on a target that keeps turning out corrupt."""

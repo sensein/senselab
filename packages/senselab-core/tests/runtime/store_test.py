@@ -52,7 +52,7 @@ def _key(task: str = "asr", **inputs: str) -> LogicalKey:
         task_version="1",
         backend="hf",
         backend_version="1",
-        model=ModelIdentity(source="hf", id="org/asr", identity="0" * 40),
+        model=ModelIdentity(id="org/asr", identity="0" * 40),
         params={"beam": 1},
         inputs={port: "content:" + digest for port, digest in (inputs or {"audio": "a" * 64}).items()},
     )
@@ -68,6 +68,7 @@ def _ctx(platform: str = "linux", host: str = "node1") -> ExecutionContext:
         driver={},
         host=host,
         protocol="p1",
+        model_source="hf",
     )
 
 
@@ -100,7 +101,7 @@ def test_put_get_exact(tmp_path: Path) -> None:
     assert result["output_identity"] == ident
     sha = _sha(canonical_npy_bytes(outputs["y"]))  # type: ignore[arg-type]
     assert (entry / f"{sha}.npy").read_bytes() == canonical_npy_bytes(outputs["y"])  # type: ignore[arg-type]
-    assert json.loads((entry / "context.json").read_bytes())["format"] == "execution-context@1.0"
+    assert json.loads((entry / "context.json").read_bytes())["format"] == "execution-context@2.0"
     assert s.get(_key(task="other"), c, ReusePolicy.TOLERANT) is None
 
 

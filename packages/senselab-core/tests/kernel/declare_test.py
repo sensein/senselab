@@ -214,7 +214,7 @@ def test_key_for_puts_the_pinned_model_identity_into_the_key() -> None:
     """`key_for` takes a resolved model and keys its identity; an unpinned one is refused."""
     model = ResolvedModel(ref=ModelRef.parse("org/name@main"), identity=COMMIT)
     key = key_for(_task(), _backend(), params=_Params(), inputs={"audio": AUDIO}, model=model)
-    assert key.model == ModelIdentity(source="hf", id="org/name", identity=COMMIT)
+    assert key.model == ModelIdentity(id="org/name", identity=COMMIT)
     unpinned = ResolvedModel(ref=ModelRef.parse("local:/m"), identity="/m", unresolved_reason="not hashed")
     with pytest.raises(UnpinnedModel):
         key_for(_task(), _backend(), params=_Params(), inputs={"audio": AUDIO}, model=unpinned)

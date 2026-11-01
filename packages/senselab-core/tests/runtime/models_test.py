@@ -98,6 +98,22 @@ def test_a_local_or_url_model_is_keyed_by_its_weights_not_where_they_live(tmp_pa
         assert key.model is not None and key.model.id is None
 
 
+@pytest.mark.contract
+def test_the_same_weights_by_url_and_by_local_share_one_key(tmp_path: Path) -> None:
+    """A weight file or directory reached by `url:` and by `local:` gives one key, which names neither source."""
+    (tmp_path / "m" / "cfg").mkdir(parents=True)
+    (tmp_path / "m" / "w.bin").write_bytes(b"weights")
+    (tmp_path / "m" / "cfg" / "c.json").write_bytes(b"{}")
+    file_sha = file_digest("file@1", tmp_path / "m" / "w.bin")
+    dir_sha = weights_identity([tmp_path / "m" / "w.bin", tmp_path / "m" / "cfg" / "c.json"], root=tmp_path / "m")
+    for path, sha in [(tmp_path / "m" / "w.bin", file_sha), (tmp_path / "m", dir_sha)]:
+        local, url = _model_key(f"local:{path}"), _model_key(f"url:https://a.org/w#sha256={sha}")
+        assert local.digest() == url.digest()
+        assert local.model_dump()["model"] == {"id": None, "identity": sha}
+    one_file = _model_key(f"url:https://a.org/w#sha256={file_sha}")
+    assert one_file.digest() != _model_key(f"local:{tmp_path / 'm'}").digest()
+
+
 @pytest.mark.logic
 def test_resolve_local_errors_are_typed(tmp_path: Path) -> None:
     """A missing local path and an empty directory raise rather than resolving softly."""

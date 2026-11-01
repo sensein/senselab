@@ -32,7 +32,7 @@ SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
 CONTENT = "content:" + SHA256
 OUTPUT = "output:" + SHA256
 PROFILE = "profile:" + SHA256
-MODEL = ModelIdentity(source="hf", id="org/name", identity=COMMIT)
+MODEL = ModelIdentity(id="org/name", identity=COMMIT)
 
 BASE: dict[str, object] = {
     "task": "t",
@@ -59,6 +59,7 @@ def _ctx(**overrides: object) -> ExecutionContext:
         "driver": {},
         "host": "node1",
         "protocol": "worker-c0ffee/wire-1",
+        "model_source": "hf",
     }
     fields.update(overrides)
     return ExecutionContext.model_validate(fields)
@@ -126,7 +127,7 @@ def test_digest_is_the_tagged_digest_of_the_fields() -> None:
         "task_version": "1",
         "backend": "b",
         "backend_version": "1",
-        "model": {"source": "hf", "id": "org/name", "identity": COMMIT},
+        "model": {"id": "org/name", "identity": COMMIT},
         "params": {"beam": 5, "lang": "en", "t": [0.5, None]},
         "inputs": {"audio": CONTENT},
         "profile_slices": {},
@@ -134,7 +135,7 @@ def test_digest_is_the_tagged_digest_of_the_fields() -> None:
         "chunk_grid": None,
     }
     assert k.model_dump() == expected
-    assert k.digest() == identity_digest("logical-key@4", expected)
+    assert k.digest() == identity_digest("logical-key@5", expected)
     assert len(k.digest()) == 64
 
 
@@ -190,8 +191,9 @@ def test_model_copy_revalidates_and_redigests() -> None:
     [
         {"model": "main"},
         {"model": COMMIT},
-        {"model": {"source": "hf", "id": "org/name", "identity": "main"}},
-        {"model": {"source": "local", "id": "/m", "identity": COMMIT}},
+        {"model": {"id": "org/name", "identity": "main"}},
+        {"model": {"id": None, "identity": COMMIT}},
+        {"model": {"source": "hf", "id": "org/name", "identity": COMMIT}},
         {"inputs": {"a": "/home/x/a.wav"}},
         {"inputs": {"a": "f" * 64}},
         {"inputs": {"a": "content:" + "F" * 64}},
@@ -230,22 +232,20 @@ def test_key_identity_requires_pinned_model() -> None:
 @pytest.mark.logic
 def test_model_identity_applies_the_pinning_rule() -> None:
     """A model identity built directly is held to the rule `ResolvedModel` applies to a pinned model."""
-    assert ModelIdentity(source="local", id=None, identity=SHA256).identity == SHA256
-    for source, ident in [("hf", "main"), ("hf", SHA256), ("url", COMMIT), ("local", "x")]:
+    assert ModelIdentity(id=None, identity=SHA256).identity == SHA256
+    for model_id, ident in [("org/name", "main"), ("org/name", SHA256), (None, COMMIT), (None, "x")]:
         with pytest.raises(ValidationError):
-            ModelIdentity(source=source, id=None if source != "hf" else "org/name", identity=ident)  # type: ignore[arg-type]
+            ModelIdentity(id=model_id, identity=ident)
 
 
 @pytest.mark.logic
-def test_model_identity_names_a_hub_repo_and_never_a_location() -> None:
-    """A hub identity carries its repo id; a url or local identity carries none, since its id is a location."""
+def test_model_identity_names_a_hub_repo_and_never_a_source() -> None:
+    """A hub identity carries its repo id; url and local weights carry only their digest, and one key for both."""
     with pytest.raises(ValidationError):
-        ModelIdentity(source="hf", id=None, identity=COMMIT)
-    for source in ("url", "local"):
-        with pytest.raises(ValidationError):
-            ModelIdentity(source=source, id="/home/alice/m", identity=SHA256)  # type: ignore[arg-type]
+        ModelIdentity.model_validate({"source": "local", "id": None, "identity": SHA256})
     local = ResolvedModel(ref=ModelRef.parse("local:/home/alice/m"), identity=SHA256)
-    assert local.key_identity() == ModelIdentity(source="local", id=None, identity=SHA256)
+    url = ResolvedModel(ref=ModelRef.parse(f"url:https://x.org/m#sha256={SHA256}"), identity=SHA256)
+    assert local.key_identity() == url.key_identity() == ModelIdentity(id=None, identity=SHA256)
 
 
 _PARAM_VALUES = st.recursive(
@@ -298,11 +298,13 @@ def test_key_schema_version_is_a_positive_integer(schema_version: object) -> Non
 
 
 @pytest.mark.logic
-def test_fingerprint_excludes_host_and_protocol() -> None:
-    """Host and protocol do not reach the fingerprint; every other context field does."""
+def test_fingerprint_excludes_host_protocol_and_model_source() -> None:
+    """Host, protocol and model source do not reach the fingerprint; every other context field does."""
     base = _ctx()
     assert _ctx(host="node2").fingerprint() == base.fingerprint()
     assert _ctx(protocol="worker-beef/wire-2").fingerprint() == base.fingerprint()
+    for source in ("url", "local", None):
+        assert _ctx(model_source=source).fingerprint() == base.fingerprint()
     for field, value in [
         ("env_lock", "c" * 64),
         ("platform", "macosx-arm64"),
@@ -366,9 +368,9 @@ def test_every_policy_member_is_dispatched(policy: ReusePolicy) -> None:
 
 @pytest.mark.logic
 def test_fingerprint_is_the_context_tagged_digest() -> None:
-    """The fingerprint is `identity_digest("context@3", fields without host and protocol)`."""
+    """The fingerprint is `identity_digest("context@3", fields without host, protocol and model source)`."""
     c = _ctx()
-    assert c.fingerprint() == identity_digest("context@3", c.model_dump(exclude={"host", "protocol"}))
+    assert c.fingerprint() == identity_digest("context@3", c.model_dump(exclude={"host", "protocol", "model_source"}))
 
 
 @pytest.mark.logic

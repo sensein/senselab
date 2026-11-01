@@ -25,6 +25,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import typing
 import unittest
 from collections import Counter
 from collections.abc import Callable, Mapping
@@ -79,6 +80,7 @@ BASE_CONTEXT: Mapping[str, Any] = {
     "driver": {"cuda": "12.8"},
     "host": "host",
     "protocol": "protocol",
+    "model_source": "hf",
 }
 """An execution context whose fields the context cases vary one at a time."""
 
@@ -197,6 +199,13 @@ def _key_deterministic(build: KeyBuilder, task: TaskSpec, backend: BackendSpec) 
     assert again.digest() == key.digest(), "input order or a params JSON round trip changed the key"
 
 
+def _literal_choices(annotation: object) -> list[object]:
+    """Return the values the `Literal`s in `annotation` admit, through unions; empty for any other type."""
+    if typing.get_origin(annotation) is typing.Literal:
+        return list(typing.get_args(annotation))
+    return [c for arg in typing.get_args(annotation) for c in _literal_choices(arg)]
+
+
 def _perturbed(field: str, value: object) -> object:
     if isinstance(value, bool):
         return not value
@@ -277,7 +286,10 @@ def _key_ignores(build: KeyBuilder, field: str, task: TaskSpec, backend: Backend
     assert field not in LogicalKey.model_fields, f"context field {field!r} is also a key field"
     assert field not in inspect.signature(build).parameters, f"the key builder takes context field {field!r}"
     base = ExecutionContext.model_validate(BASE_CONTEXT)
-    other = ExecutionContext.model_validate({**BASE_CONTEXT, field: _perturbed(field, base.model_dump()[field])})
+    value = base.model_dump()[field]
+    choices = _literal_choices(ExecutionContext.model_fields[field].annotation)
+    varied = next(c for c in choices if c != value) if choices else _perturbed(field, value)
+    other = ExecutionContext.model_validate({**BASE_CONTEXT, field: varied})
     assert other != base, f"ExecutionContext.{field} did not vary"
 
 

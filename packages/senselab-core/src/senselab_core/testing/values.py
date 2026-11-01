@@ -385,9 +385,9 @@ def _setstate_revalidates(factory: Factory, invalid: Sequence[Mapping[str, objec
 
 
 def _source_of(v: Frozen) -> str:
-    source = getattr(v, "source", None)
-    if source is None:
-        source = getattr(getattr(v, "ref"), "source")  # noqa: B009
+    if isinstance(v, ModelIdentity):
+        return "hf" if v.id is not None else "weights"
+    source = getattr(getattr(v, "ref"), "source")  # noqa: B009
     assert isinstance(source, str)
     return source
 
@@ -487,6 +487,7 @@ def _context(host: str = "host") -> ExecutionContext:
         driver={"cuda": "12.8"},
         host=host,
         protocol="2",
+        model_source="hf",
     )
 
 
@@ -496,7 +497,7 @@ def _key(task: str = "t") -> LogicalKey:
         task_version="1",
         backend="b",
         backend_version="1",
-        model=ModelIdentity(source="hf", id="org/m", identity=_COMMIT),
+        model=ModelIdentity(id="org/m", identity=_COMMIT),
         params={"n": [1, 2], "s": "x"},
         inputs={"audio": "content:" + _SHA},
     )
@@ -654,8 +655,8 @@ def _register_kernel_samples() -> None:
     register_samples(
         ModelIdentity,
         lambda: [
-            ModelIdentity(source="hf", id="org/m", identity=_COMMIT),
-            ModelIdentity(source="local", id=None, identity=_SHA),
+            ModelIdentity(id="org/m", identity=_COMMIT),
+            ModelIdentity(id=None, identity=_SHA),
         ],
         invalid_updates=[{"identity": "main"}],
     )

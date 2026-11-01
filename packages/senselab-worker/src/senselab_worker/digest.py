@@ -14,7 +14,7 @@ __all__ = ["BLOB_TAGS", "FILE_TAGS", "IDENTITY_TAGS", "NPY_TAGS", "file_digest",
 
 IDENTITY_TAGS: frozenset[str] = frozenset(
     {
-        "logical-key@4",
+        "logical-key@5",
         "output@3",
         "context@3",
         "content-root@2",

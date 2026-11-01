@@ -620,7 +620,15 @@ def test_small_loosenesses_are_refused() -> None:
     with pytest.raises(TypeError):
         EQUIVALENCE["b"] = {"c": frozenset()}  # type: ignore[index]
     context = ExecutionContext(
-        env_lock="l", platform="p", wheel_set="w", numerics={}, decoder=None, driver={}, host="h", protocol="1"
+        env_lock="l",
+        platform="p",
+        wheel_set="w",
+        numerics={},
+        decoder=None,
+        driver={},
+        host="h",
+        protocol="1",
+        model_source=None,
     )
     assert acceptable(context, context, "equivalent", backend="b")
 

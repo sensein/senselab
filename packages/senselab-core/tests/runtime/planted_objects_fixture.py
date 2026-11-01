@@ -72,7 +72,7 @@ def _key() -> Any:  # noqa: ANN401
         task_version="1",
         backend="hf",
         backend_version="1",
-        model=ModelIdentity(source="hf", id="org/asr", identity="0" * 40),
+        model=ModelIdentity(id="org/asr", identity="0" * 40),
         params={"beam": 1},
         inputs={"audio": "content:" + "a" * 64},
     )
@@ -90,6 +90,7 @@ def _ctx(platform: str = "linux") -> Any:  # noqa: ANN401
         driver={},
         host="node1",
         protocol="p1",
+        model_source="hf",
     )
 
 

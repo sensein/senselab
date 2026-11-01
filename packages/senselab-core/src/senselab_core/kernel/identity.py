@@ -160,27 +160,25 @@ class ResolvedModel(Frozen):
         if not self.pinned:
             raise UnpinnedModel(f"{self.ref} is not pinned ({self.unresolved_reason}); it cannot enter a key")
         model_id = self.ref.id if self.ref.source == "hf" else None
-        return ModelIdentity(source=self.ref.source, id=model_id, identity=self.identity)
+        return ModelIdentity(id=model_id, identity=self.identity)
 
 
 class ModelIdentity(Frozen):
-    """A pinned model's identity in a logical key: its source, its hub id, and its weight identity.
+    """A pinned model's identity in a logical key: a hub repo and commit, or the digest of the weights alone.
 
-    Built by `ResolvedModel.key_identity`; validation applies the same pinning rule, so `identity`
-    is a 40-hex commit for `hf` and a sha256 otherwise. `id` is the repo id for `hf` and None for
-    `url` and `local`, whose identity is the content of the weights alone.
+    Built by `ResolvedModel.key_identity`. With `id` a hub repo id, `identity` is its 40-hex commit;
+    with `id` None, `identity` is the sha256 of the weights (`file@1` of a single file, `weights@3` of
+    a set), whether they were reached by `url:` or `local:`. The source is recorded in the execution
+    context (`ExecutionContext.model_source`), not here.
     """
 
-    source: Literal["hf", "url", "local"]
     id: NonEmptyStr | None
     identity: NonEmptyStr
 
     @model_validator(mode="after")
     def _check_pinned(self) -> "ModelIdentity":
-        if error := _pinned_identity_error(self.source, self.identity):
+        if error := _pinned_identity_error("hf" if self.id is not None else "weights", self.identity):
             raise ValueError(error)
-        if (self.source == "hf") != (self.id is not None):
-            raise ValueError(f"a {self.source} model identity carries {'a repo id' if self.source == 'hf' else 'no id'}")
         return self
 
 
@@ -235,17 +233,18 @@ class LogicalKey(Frozen):
     chunk_grid: NonEmptyStr | None = None
 
     def _derived(self) -> Mapping[str, object]:
-        return {**super()._derived(), "_digest": identity_digest("logical-key@4", self.model_dump())}
+        return {**super()._derived(), "_digest": identity_digest("logical-key@5", self.model_dump())}
 
     def digest(self) -> str:
-        """Return `identity_digest("logical-key@4", fields)`, computed at construction."""
+        """Return `identity_digest("logical-key@5", fields)`, computed at construction."""
         return str(self.__pydantic_private__["_digest"])  # type: ignore[index]
 
 
 class ExecutionContext(Frozen):
     """Where and how a result was computed; recorded with each result, never keyed (ADR-002).
 
-    `protocol` is recorded but checked only at the worker handshake, so it is not fingerprinted.
+    `protocol` is recorded but checked only at the worker handshake; `model_source` is how the model's
+    weights were reached (`hf`, `url`, `local`, or None for a call without a model). Neither is fingerprinted.
     """
 
     env_lock: NonEmptyStr
@@ -256,10 +255,11 @@ class ExecutionContext(Frozen):
     driver: StrMap
     host: NonEmptyStr
     protocol: NonEmptyStr
+    model_source: Literal["hf", "url", "local"] | None
 
     def fingerprint(self) -> str:
-        """Return `identity_digest("context@3", fields)` over every field except `host` and `protocol`."""
-        return identity_digest("context@3", self.model_dump(exclude={"host", "protocol"}))
+        """Return `identity_digest("context@3", fields)` over every field but `host`, `protocol` and `model_source`."""
+        return identity_digest("context@3", self.model_dump(exclude={"host", "protocol", "model_source"}))
 
 
 class ReusePolicy(str, Enum):
