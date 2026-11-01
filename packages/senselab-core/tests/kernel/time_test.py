@@ -107,8 +107,8 @@ def test_nanoseconds_bounded_to_int64() -> None:
 
 @pytest.mark.logic
 @pytest.mark.parametrize("drift", [-1e6, 1e6, -3e6, 2e6])
-def test_a37_drift_cannot_reverse_or_stop_time(drift: float) -> None:
-    """A-37: a drift of +/-1e6 ppm or beyond (which stops or reverses time) is refused."""
+def test_drift_cannot_reverse_or_stop_time(drift: float) -> None:
+    """A drift of +/-1e6 ppm or beyond (which stops or reverses time) is refused."""
     with pytest.raises(ValidationError):
         TimeMap(source="a", target="b", offset_ns=0, drift_ppm=drift)
 

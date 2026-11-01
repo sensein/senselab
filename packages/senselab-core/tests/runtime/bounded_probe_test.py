@@ -1,4 +1,4 @@
-"""The shared probe limiter (H-R37): a finite source and a child under file-size, address-space and time limits."""
+"""The shared probe limiter: a finite source and a child under file-size, address-space and time limits."""
 
 import errno
 import os

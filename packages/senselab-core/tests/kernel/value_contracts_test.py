@@ -118,8 +118,8 @@ def _audio() -> Audio:
 
 
 @pytest.mark.logic
-def test_a1_flipped_flag_cannot_mutate_held_samples() -> None:
-    """A-1: the writeable flag cannot be turned back on, so samples and identity stay bound."""
+def test_flipped_flag_cannot_mutate_held_samples() -> None:
+    """The writeable flag cannot be turned back on, so samples and identity stay bound."""
     g = _audio().groups["audio"]
     assert isinstance(g, RegularGroup) and g.data is not None
     with pytest.raises(ValueError):
@@ -129,8 +129,8 @@ def test_a1_flipped_flag_cannot_mutate_held_samples() -> None:
 
 
 @pytest.mark.logic
-def test_a1_copies_hold_read_only_arrays() -> None:
-    """A-1: pickle, copy, deepcopy and model_copy return values whose arrays stay read-only."""
+def test_copies_hold_read_only_arrays() -> None:
+    """Pickle, copy, deepcopy and model_copy return values whose arrays stay read-only."""
     a = _audio()
     for c in (pickle.loads(pickle.dumps(a)), copy.copy(a), copy.deepcopy(a), a.model_copy(), a.model_copy(deep=True)):
         g = c.groups["audio"]
@@ -140,8 +140,8 @@ def test_a1_copies_hold_read_only_arrays() -> None:
 
 
 @pytest.mark.logic
-def test_a1_group_does_not_alias_the_callers_array() -> None:
-    """A-1: `RegularGroup(data=x)` copies `x`; writing `x` afterwards changes nothing held."""
+def test_group_does_not_alias_the_callers_array() -> None:
+    """`RegularGroup(data=x)` copies `x`; writing `x` afterwards changes nothing held."""
     x = numpy.arange(6, dtype=numpy.float32).reshape(1, 6)
     g = RegularGroup(channels=(ChannelInfo(name="a", type="ecg", units="mV"),), sampling_rate=10.0, data=x)
     digest = g.canonical_digest()
@@ -150,8 +150,8 @@ def test_a1_group_does_not_alias_the_callers_array() -> None:
 
 
 @pytest.mark.logic
-def test_a12_multi_element_values_compare_and_hash() -> None:
-    """A-12: `==` and `hash` work on multi-element values and agree with each other."""
+def test_multi_element_values_compare_and_hash() -> None:
+    """`==` and `hash` work on multi-element values and agree with each other."""
     ns = numpy.array([0, 10, 20])
     values = [
         (_audio(), _audio()),
@@ -168,8 +168,8 @@ def test_a12_multi_element_values_compare_and_hash() -> None:
 
 
 @pytest.mark.logic
-def test_a13_model_copy_revalidates() -> None:
-    """A-13: `model_copy(update=)` runs every validator; `model_construct` is refused."""
+def test_model_copy_revalidates() -> None:
+    """`model_copy(update=)` runs every validator; `model_construct` is refused."""
     g = _audio().groups["audio"]
     assert isinstance(g, RegularGroup)
     with pytest.raises(ValidationError):
@@ -183,8 +183,8 @@ def test_a13_model_copy_revalidates() -> None:
 
 
 @pytest.mark.logic
-def test_a13_frames_follow_the_data() -> None:
-    """A-13: a copy with other data reports that data's frame count."""
+def test_frames_follow_the_data() -> None:
+    """A copy with other data reports that data's frame count."""
     g = _audio().groups["audio"]
     assert isinstance(g, RegularGroup)
     swapped = g.model_copy(update={"data": numpy.zeros((1, 10), dtype=numpy.float32)})
@@ -192,8 +192,8 @@ def test_a13_frames_follow_the_data() -> None:
 
 
 @pytest.mark.logic
-def test_a37_forged_identity_is_refused() -> None:
-    """A-37: a recording's identity is derived; a supplied identity that differs is refused."""
+def test_forged_identity_is_refused() -> None:
+    """A recording's identity is derived; a supplied identity that differs is refused."""
     a = _audio()
     with pytest.raises(ValidationError):
         Audio.model_validate({**a.model_dump(), "identity": "content:" + "f" * 64})
@@ -203,7 +203,7 @@ def test_a37_forged_identity_is_refused() -> None:
 
 @pytest.mark.logic
 def test_frozenmapping_has_no_mutable_reach() -> None:
-    """A-37: neither the held items nor the attribute that holds them can be changed."""
+    """Neither the held items nor the attribute that holds them can be changed."""
     m = FrozenMapping({"k": 0})
     with pytest.raises(TypeError):
         m._items["k"] = 1  # type: ignore[index]
@@ -264,7 +264,7 @@ def _nested(depth: int) -> list[object]:
 
 
 @pytest.mark.logic
-def test_xc2_an_array_and_its_sha256_hex_string_differ() -> None:
+def test_an_array_and_its_sha256_hex_string_differ() -> None:
     """`Holder(x=a)` and `Holder(x=<sha256 of a's canonical .npy>)` neither compare equal nor share a digest."""
     from senselab_worker.canonical import canonical_npy_bytes
 
@@ -318,7 +318,7 @@ def test_every_value_family_has_its_own_encoding() -> None:
     st.sampled_from(["\U0001fae0", "\U0001fae8", "\U0001e08f", "\u0c5d", "\U000e0080"]),
 )
 def test_text_with_post_13_code_points_is_recorded_and_is_its_own_family(head: str, mark: str) -> None:
-    """Provenance records it (H-R29, H-R30); its value digest differs from its NFC and from every token family."""
+    """Provenance records it; its value digest differs from its NFC and from every token family."""
     text = head + mark
     ProvStore(run_id="t").entity(prov_type="artifact", extent=None, attributes={text: [text]})
     digest = Holder(x=text).canonical_digest()
@@ -347,7 +347,7 @@ def test_provenance_tokens_are_the_shared_families() -> None:
 
 @pytest.mark.logic
 @pytest.mark.parametrize("make", ["cycle", "dict-cycle", "deep"])
-def test_xc3_a_value_that_contains_itself_or_nests_deeply_raises_the_shared_error(make: str) -> None:
+def test_a_value_that_contains_itself_or_nests_deeply_raises_the_shared_error(make: str) -> None:
     """A cycle or 5000-deep nesting gives the shared guard's `ValueError` when the value is built, which digests it."""
     value: object
     if make == "cycle":
@@ -388,7 +388,7 @@ def test_any_nesting_digests_or_raises_value_error(kinds: list[str]) -> None:
 
 
 @pytest.mark.logic
-def test_xc4_audio_identity_is_one_per_value() -> None:
+def test_audio_identity_is_one_per_value() -> None:
     """Audio whose samples differ only by `-0.0` has one `content:` identity; NaNs of any sign have one `.npy` digest.
 
     Audio refuses NaN samples, so the NaN half is checked on the array digest audio identity is made of.
@@ -453,7 +453,7 @@ def test_a_shared_dag_under_the_budget_is_walked_in_bounded_time() -> None:
 
 
 @pytest.mark.logic
-def test_xc7_set_elements_of_one_canonical_form_are_one_element() -> None:
+def test_set_elements_of_one_canonical_form_are_one_element() -> None:
     """NFC-equal strings, and distinct NaN objects, are one element of a set in provenance and `value@2`."""
     composed, decomposed = "\u00e9", "e\u0301"
     assert jcs_dumps(normalised({composed, decomposed})) == jcs_dumps(normalised({composed}))
@@ -487,7 +487,7 @@ def _key(**params: object) -> LogicalKey:
 
 
 @pytest.mark.logic
-def test_xk1_attributes_cannot_forge_an_identity_or_a_stamp(tmp_path: Path) -> None:
+def test_attributes_cannot_forge_an_identity_or_a_stamp(tmp_path: Path) -> None:
     """`from_attributes=True` is refused, so neither a forged identity nor a forged stamp is accepted."""
     audio = Audio.from_array(numpy.zeros(16, dtype=numpy.float32), RATE)
     forged = types.SimpleNamespace(groups=dict(audio.groups), anchor=audio.anchor, identity="content:" + "0" * 64)
@@ -506,7 +506,7 @@ def test_xk1_attributes_cannot_forge_an_identity_or_a_stamp(tmp_path: Path) -> N
 
 
 @pytest.mark.logic
-def test_xk2_a_same_size_same_mtime_rewrite_is_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_same_size_same_mtime_rewrite_is_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A rewrite keeping size, mtime, inode and device is refused on read and on a copy in a fresh process."""
     path = _wav(tmp_path / "a.wav")
     audio = Audio.from_path(path)
@@ -527,7 +527,7 @@ def test_xk2_a_same_size_same_mtime_rewrite_is_stale(tmp_path: Path, monkeypatch
 
 
 @pytest.mark.logic
-def test_xk3_a_frozen_mapping_is_initialised_once() -> None:
+def test_a_frozen_mapping_is_initialised_once() -> None:
     """Re-calling `__init__` on a held mapping raises and leaves the value and its digest as they were."""
     key = _key(a=1)
     before = key.digest()
@@ -539,7 +539,7 @@ def test_xk3_a_frozen_mapping_is_initialised_once() -> None:
 
 
 @pytest.mark.logic
-def test_xk4_config_private_state_and_dict_cannot_change_a_value() -> None:
+def test_config_private_state_and_dict_cannot_change_a_value() -> None:
     """Flipping `model_config`, writing a private attribute, `__setstate__` and `__dict__` all raise."""
     span = Span(start_ns=0, end_ns=10, clock_id="c")
     other = Span(start_ns=0, end_ns=20, clock_id="c")
@@ -565,7 +565,7 @@ def test_xk4_config_private_state_and_dict_cannot_change_a_value() -> None:
 
 
 @pytest.mark.logic
-def test_xk10_deep_or_cyclic_params_raise_a_validation_error() -> None:
+def test_deep_or_cyclic_params_raise_a_validation_error() -> None:
     """Params nested 5000 deep, or holding themselves, raise `ValidationError`, not `RecursionError`."""
     deep: object = 1
     for _ in range(5000):
@@ -578,7 +578,7 @@ def test_xk10_deep_or_cyclic_params_raise_a_validation_error() -> None:
 
 
 @pytest.mark.logic
-def test_xk11_labels_equal_by_value_are_one_value() -> None:
+def test_labels_equal_by_value_are_one_value() -> None:
     """Label arrays of one set of strings are equal whatever width they were built at."""
     ns = numpy.array([0])
     by_width = [
@@ -592,7 +592,7 @@ def test_xk11_labels_equal_by_value_are_one_value() -> None:
 
 
 @pytest.mark.logic
-def test_xk12_small_loosenesses_are_refused() -> None:
+def test_small_loosenesses_are_refused() -> None:
     """Non-finite audio, lax floats, unknown fields, int64 overflow, unparseable refs, week dates, open classes."""
     for samples in ([0.0, float("nan")], [0.0, float("inf")], numpy.array([0.0, 1e300])):
         with pytest.raises(ValueError):
@@ -625,7 +625,7 @@ def test_xk12_small_loosenesses_are_refused() -> None:
 
 
 @pytest.mark.logic
-def test_xk1_a_nested_unsealed_or_subclass_instance_is_validated_again(tmp_path: Path) -> None:
+def test_a_nested_unsealed_or_subclass_instance_is_validated_again(tmp_path: Path) -> None:
     """An instance built without validation, or of a subclass with other validators, cannot carry a forged identity."""
     from pydantic import BaseModel
 

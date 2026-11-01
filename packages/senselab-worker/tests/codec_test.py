@@ -427,8 +427,8 @@ def test_parse_line_refuses_overflow_and_duplicate_keys(line: bytes) -> None:
 
 
 @pytest.mark.logic
-def test_a34_lax_wire_values_are_refused() -> None:
-    """The probe: `"wire": true` and `1.0` passed the hello, `1e999` and a duplicate key passed `parse_line`."""
+def test_lax_wire_values_are_refused() -> None:
+    """`"wire": true` and `1.0` fail the hello; `1e999` and a duplicate key fail `parse_line`."""
     from senselab_worker.codec import validate_message
 
     for wire in (True, 1.0):
@@ -600,10 +600,10 @@ def _doubling(levels: int) -> object:
 
 
 @pytest.mark.logic
-def test_a10_exponentially_shared_value_is_refused_after_linear_work(
+def test_exponentially_shared_value_is_refused_after_linear_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The probe: `l = [l, l]` sixty times never finished in `to_wire`; it now stops at the line budget.
+    """`l = [l, l]` sixty times stops in `to_wire` at the line budget.
 
     It is small in memory but 2**60 nodes as a tree. Each container is encoded once and charged per use.
     """
@@ -718,8 +718,8 @@ def _ref_to_bytes(directory: Path, data: bytes) -> dict[str, Any]:
 
 @pytest.mark.logic
 @pytest.mark.parametrize("variant", sorted(NPY_VARIANTS))
-def test_xw5_reader_refuses_a_sha_consistent_non_canonical_npy(tmp_path: Path, variant: str) -> None:
-    """The probe: a big-endian or Fortran-order file whose sha and reference agree was returned as it was.
+def test_reader_refuses_a_sha_consistent_non_canonical_npy(tmp_path: Path, variant: str) -> None:
+    """A big-endian or Fortran-order file whose sha and reference agree is refused.
 
     Every file that is not `npy_bytes` of the array it holds is refused; the canonical file of the same array passes.
     """
@@ -750,8 +750,8 @@ _trees = st.recursive(
 
 @pytest.mark.logic
 @given(tree=_trees, surrogate=st.integers(0xD800, 0xDFFF))
-def test_xw5_parse_line_refuses_a_lone_surrogate_anywhere(tree: object, surrogate: int) -> None:
-    """The probe: an escaped lone surrogate in an output key or value parsed, a string with no UTF-8 form.
+def test_parse_line_refuses_a_lone_surrogate_anywhere(tree: object, surrogate: int) -> None:
+    """A lone surrogate escaped in an output key or value is a string with no UTF-8 form.
 
     A lone surrogate escaped in any key or string of a line is refused; a surrogate pair, one astral
     character, is not.

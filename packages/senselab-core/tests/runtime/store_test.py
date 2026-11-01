@@ -442,8 +442,8 @@ def test_put_records_provenance(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a31_output_identity_differs_from_key_digest_of_same_tree() -> None:
-    """The probe: a key's fields stored as outputs hashed to the key's own digest."""
+def test_output_identity_differs_from_key_digest_of_same_tree() -> None:
+    """A key's fields stored as outputs hash to an identity other than the key's own digest."""
     k = _key()
     tree = k.model_dump()
     assert output_identity(tree).removeprefix("output:") != k.digest()
@@ -462,8 +462,8 @@ def test_a31_output_identity_differs_from_key_digest_of_same_tree() -> None:
     ],
     ids=["nat", "timedelta", "masked", "void", "str_enum"],
 )
-def test_a4_store_refuses_lossy_outputs(tmp_path: Path, lossy: object) -> None:
-    """The probe: NaT stored as null and a masked array as its fill values collided with other outputs."""
+def test_store_refuses_lossy_outputs(tmp_path: Path, lossy: object) -> None:
+    """NaT and a masked array are refused, so neither shares an identity with another output."""
     with pytest.raises(TypeError):
         output_identity({"a": lossy})
     with pytest.raises(TypeError):
@@ -488,7 +488,7 @@ def test_store_scalars_go_through_the_one_canonical_encoder(monkeypatch: pytest.
 
 
 @pytest.mark.logic
-def test_a24_large_float_output_reads_back(tmp_path: Path) -> None:
+def test_large_float_output_reads_back(tmp_path: Path) -> None:
     """An integral float beyond 2**53 survives put and get with its identity intact."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     ident = s.put(k, {"x": 1e20, "key": k.model_dump()}, c)
@@ -498,7 +498,7 @@ def test_a24_large_float_output_reads_back(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 @pytest.mark.parametrize("policy", ["exact", "equivalent", "tolerant", "bogus", None])
-def test_a23_get_coerces_policy(tmp_path: Path, policy: object) -> None:
+def test_get_coerces_policy(tmp_path: Path, policy: object) -> None:
     """`get` coerces its policy like `acceptable`: a member's value works, anything else raises."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     s.put(k, {"y": 1}, c)
@@ -613,8 +613,8 @@ def _swap_entry(src: Path, dst: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a2_misfiled_entry_is_not_served(tmp_path: Path) -> None:
-    """The probe: B's entry copied onto A's path was served for A, and put(A) returned B's identity."""
+def test_misfiled_entry_is_not_served(tmp_path: Path) -> None:
+    """B's entry copied onto A's path is not served for A, and `put(A)` returns A's own identity."""
     s, c = ResultStore(tmp_path), _ctx()
     a, b = _key(audio="a" * 64), _key(audio="b" * 64)
     s.put(a, {"text": "transcript of A"}, c)
@@ -632,7 +632,7 @@ def test_a2_misfiled_entry_is_not_served(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a2_misfiled_context_is_not_served(tmp_path: Path) -> None:
+def test_misfiled_context_is_not_served(tmp_path: Path) -> None:
     """An entry moved to another context's fingerprint directory is not served under that context."""
     s, k = ResultStore(tmp_path), _key()
     linux, mac = _ctx(platform="linux"), _ctx(platform="macos")
@@ -706,8 +706,8 @@ def test_transient_error_never_quarantines(
 
 @pytest.mark.logic
 @pytest.mark.parametrize("err", [errno.ESTALE, errno.EIO])
-def test_a3_transient_error_in_put_never_quarantines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int) -> None:
-    """The probe: one ESTALE moved a healthy entry into quarantine; a put that cannot read raises instead."""
+def test_transient_error_in_put_never_quarantines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int) -> None:
+    """One transient read error leaves a healthy entry in place; a put that cannot read raises `StoreUnavailable`."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     ident = s.put(k, {"y": "healthy"}, c)
     monkeypatch.setattr(
@@ -859,8 +859,8 @@ def test_an_entry_reported_corrupt_once_is_still_served_afterwards(
 
 
 @pytest.mark.logic
-def test_a17_quarantine_is_collected_by_put(tmp_path: Path) -> None:
-    """The probe: 406 quarantine directories were never collected; put now collects the aged ones."""
+def test_quarantine_is_collected_by_put(tmp_path: Path) -> None:
+    """A put collects the aged quarantine directories."""
     policy = StorePolicy(world_readable=False, quarantine_retention_s=60, staging_stale_s=60, collect_interval_s=60)
     s, k, c = ResultStore(tmp_path, policy=policy), _key(), _ctx()
     for _ in range(5):
@@ -1139,8 +1139,8 @@ def test_storage_fault_is_the_one_mapping() -> None:
 
 
 @pytest.mark.logic
-def test_a35_participant_outputs_are_not_world_readable_under_umask_077(tmp_path: Path) -> None:
-    """The probe: under umask 077 result.json came out 0664 in a 2775 directory, readable by every user."""
+def test_participant_outputs_are_not_world_readable_under_umask_077(tmp_path: Path) -> None:
+    """Under umask 077 a stored result and its directory carry no world bits."""
     old = os.umask(0o077)
     try:
         s, k, c = ResultStore(tmp_path / "s"), _key(), _ctx()
@@ -1154,8 +1154,8 @@ def test_a35_participant_outputs_are_not_world_readable_under_umask_077(tmp_path
 
 @pytest.mark.logic
 @pytest.mark.parametrize("stray", ["file", "dangling_symlink"])
-def test_a36_stray_file_at_entry_does_not_block_put(tmp_path: Path, stray: str) -> None:
-    """The probe: a stray file or dangling symlink at the entry path made every put raise NotADirectoryError."""
+def test_stray_file_at_entry_does_not_block_put(tmp_path: Path, stray: str) -> None:
+    """A stray file or dangling symlink at the entry path does not make every put raise."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     entry = _entry_dir(tmp_path, k, c)
     entry.parent.mkdir(parents=True)
@@ -1169,8 +1169,8 @@ def test_a36_stray_file_at_entry_does_not_block_put(tmp_path: Path, stray: str) 
 
 
 @pytest.mark.logic
-def test_a36_enospc_mid_entry_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The probe: ENOSPC on the second staged file surfaced as a raw OSError; it is StorageFull, nothing left behind."""
+def test_enospc_mid_entry_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ENOSPC on the second staged file is `StorageFull`, with nothing left behind."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     real = store_module._write_synced
     calls = {"n": 0}
@@ -1206,9 +1206,9 @@ def test_stored_bool_arrays_keep_their_shape_and_truth(tmp_path: Path, shape: tu
 
 @pytest.mark.logic
 @pytest.mark.parametrize("level", ["store", "prefix", "digest"])
-def test_xs3_a_file_at_a_store_directory_is_set_aside_and_put_commits(tmp_path: Path, level: str) -> None:
+def test_a_file_at_a_store_directory_is_set_aside_and_put_commits(tmp_path: Path, level: str) -> None:
     """A regular file where a store directory belongs is quarantined; put commits and get serves the new entry."""
-    report = bounded("probe_xs3", str(tmp_path), level, "open")
+    report = bounded("probe_file_at_a_store_directory", str(tmp_path), level, "open")
     assert (report["get_error"], report["got"], report["put_error"]) == ("", None, "")
     assert report["after"] == {"y": 2}
 
@@ -1216,17 +1216,17 @@ def test_xs3_a_file_at_a_store_directory_is_set_aside_and_put_commits(tmp_path: 
 @pytest.mark.logic
 @pytest.mark.skipif(os.geteuid() == 0, reason="root renames out of a read-only directory")
 @pytest.mark.parametrize("level", ["prefix", "digest"])
-def test_xs3_an_unmovable_file_at_a_store_directory_is_a_typed_error_naming_it(tmp_path: Path, level: str) -> None:
+def test_an_unmovable_file_at_a_store_directory_is_a_typed_error_naming_it(tmp_path: Path, level: str) -> None:
     """When the file cannot be moved, put raises a non-retryable error naming the path and its owner."""
-    report = bounded("probe_xs3", str(tmp_path), level, "sealed")
+    report = bounded("probe_file_at_a_store_directory", str(tmp_path), level, "sealed")
     assert report["put_error"] == "WrongKindError"
     assert report["target"] in report["message"] and "owned by" in report["message"]
 
 
 @pytest.mark.logic
-def test_xs4_swapped_result_files_are_not_served_under_the_other_context(tmp_path: Path) -> None:
+def test_swapped_result_files_are_not_served_under_the_other_context(tmp_path: Path) -> None:
     """Swapping two contexts' result.json files and arrays makes both entries misfiled; neither is served."""
-    report = bounded("probe_xs4", str(tmp_path), "result.json+arrays", "exact")
+    report = bounded("probe_swapped_entry_members", str(tmp_path), "result.json+arrays", "exact")
     assert report["served"] == {"linux": None, "macos": None}
 
 
@@ -1237,15 +1237,15 @@ def test_an_entry_serves_only_the_outputs_its_context_wrote_whatever_members_are
     tmp_path: Path, swapped: str, policy: str
 ) -> None:
     """For every set of members swapped between two contexts' entries, a hit's outputs are its own context's."""
-    report = bounded("probe_xs4", str(tmp_path), swapped, policy)
+    report = bounded("probe_swapped_entry_members", str(tmp_path), swapped, policy)
     for hit in report["served"].values():
         assert hit is None or hit[1] == report["expected"][hit[0]], report
 
 
 @pytest.mark.logic
-def test_xs5_put_over_an_entry_with_a_corrupt_array_rewrites_it(tmp_path: Path) -> None:
+def test_put_over_an_entry_with_a_corrupt_array_rewrites_it(tmp_path: Path) -> None:
     """A put over an entry whose array no longer hashes replaces it, so the get right after it is served."""
-    report = bounded("probe_xs5", str(tmp_path), "npy_bytes")
+    report = bounded("probe_corrupt_array", str(tmp_path), "npy_bytes")
     assert report == {"same_identity": True, "served": {"a": [0.0, 1.0, 2.0, 3.0]}}
 
 
@@ -1253,5 +1253,5 @@ def test_xs5_put_over_an_entry_with_a_corrupt_array_rewrites_it(tmp_path: Path) 
 @pytest.mark.parametrize("corruption", ARRAY_CORRUPTIONS)
 def test_a_put_that_reports_success_is_served_by_the_next_get(tmp_path: Path, corruption: str) -> None:
     """For every way an entry's array can be damaged, the put after it leaves an entry that get serves."""
-    report = bounded("probe_xs5", str(tmp_path), corruption)
+    report = bounded("probe_corrupt_array", str(tmp_path), corruption)
     assert report == {"same_identity": True, "served": {"a": [0.0, 1.0, 2.0, 3.0]}}

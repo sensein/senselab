@@ -72,7 +72,7 @@ def test_every_injection_at_every_later_boundary_call_ends_typed_bounded_and_cle
 @pytest.mark.logic
 @pytest.mark.parametrize("path", PATHS)
 @pytest.mark.parametrize("real_graces", [False, True])
-def test_l3_every_case_bound_carries_load_slack_yet_fails_a_real_hang(path: str, real_graces: bool) -> None:
+def test_every_case_bound_carries_load_slack_yet_fails_a_real_hang(path: str, real_graces: bool) -> None:
     """A shrunk-grace bound stays below the real STOP grace and a real-grace bound below the faulthandler timeout.
 
     A case that ignores the shrunk graces waits out at least the real STOP grace, and a deadlock ends at
@@ -105,8 +105,8 @@ def parent(tmp_path: Path) -> Iterator[Path]:
 
 
 @pytest.mark.contract
-def test_xw1_sigint_inside_shutdown_still_kills_the_group(tmp_path: Path) -> None:
-    """The probe: SIGINT while the group of a SIGTERM-trapping worker is being stopped left the group running."""
+def test_sigint_inside_shutdown_still_kills_the_group(tmp_path: Path) -> None:
+    """SIGINT while the group of a SIGTERM-trapping worker is being stopped still ends with the group killed."""
     case = {"path": "timeout", "boundary": "module:_members_gone", "kind": "sigint", "occurrence": 1}
     [report] = shutdown_schedule_fixture.run_schedule(tmp_path, [case])
     assert report["fired"] and report["outcome"] == "KeyboardInterrupt"
@@ -115,8 +115,8 @@ def test_xw1_sigint_inside_shutdown_still_kills_the_group(tmp_path: Path) -> Non
 
 
 @pytest.mark.contract
-def test_xw2_close_from_a_signal_handler_inside_close_returns(tmp_path: Path) -> None:
-    """The probe: a SIGUSR1 handler calling `close()` while `close()` stopped the group deadlocked on its lock."""
+def test_close_from_a_signal_handler_inside_close_returns(tmp_path: Path) -> None:
+    """A signal handler that calls `close()` while `close()` stops the group returns instead of waiting on its lock."""
     case = {"path": "close", "boundary": "module:_members_gone", "kind": "handler_close", "occurrence": 1}
     [report] = shutdown_schedule_fixture.run_schedule(tmp_path, [case])
     assert report["fired"] and report["outcome"] is None
@@ -133,10 +133,8 @@ def test_close_from_a_signal_handler_inside_close_returns_within_the_shutdown_bo
 
 
 @pytest.mark.logic
-def test_xw3_close_from_another_thread_while_encoding_is_worker_lost(
-    parent: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The probe: `close()` from another thread while `run` encoded made `run` raise `ValueError`, a content fault."""
+def test_close_from_another_thread_while_encoding_is_worker_lost(parent: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`close()` from another thread while `run` encodes makes `run` raise `WorkerLost`, not a content fault."""
     client = WorkerClient(sys.executable, FAKE, init={}, array_parent=parent)
     real = worker_client.to_wire
     closer = threading.Thread(target=client.close, daemon=True)
@@ -185,10 +183,10 @@ def _late_notification(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.logic
 @pytest.mark.parametrize("how", ["idle_sigkill", "crash_mid_request", "late_exit_notification", "exit_before_hello"])
-def test_xw4_every_death_carries_its_exit_code(parent: Path, monkeypatch: pytest.MonkeyPatch, how: str) -> None:
-    """The probes: the exit code was lost when the worker died idle, before its hello, or before kqueue registered.
+def test_every_death_carries_its_exit_code(parent: Path, monkeypatch: pytest.MonkeyPatch, how: str) -> None:
+    """A worker that dies idle, mid-request, before its hello or before the exit watch registers raises `WorkerLost`.
 
-    Every way the worker can die surfaces as a typed fault naming the code the worker exited with.
+    The fault names the code the worker exited with.
     """
     if how == "exit_before_hello":
         with pytest.raises(WorkerLost) as before:
@@ -244,11 +242,10 @@ def _forked(action: Any) -> int:
 
 @pytest.mark.contract
 @pytest.mark.parametrize("how", ["close", "collect", "run"])
-def test_i1_a_forked_child_never_touches_the_parents_worker(parent: Path, how: str) -> None:
-    """The probe: a forked child's `close()` stopped the parent's worker and deleted its array directory.
+def test_a_forked_child_never_touches_the_parents_worker(parent: Path, how: str) -> None:
+    """In a forked child, closing, collecting or running the inherited client leaves the parent's worker alone.
 
-    In a forked child, closing, collecting or running the inherited client leaves the parent's worker, files and
-    channel as they were.
+    The parent's worker, files and channel are as they were.
     """
     box = [WorkerClient(sys.executable, FAKE, init={}, array_parent=parent)]
     try:
@@ -286,10 +283,10 @@ def _interrupting(monkeypatch: pytest.MonkeyPatch, *, times: int) -> None:
 
 
 @pytest.mark.logic
-def test_i3_an_interrupted_idle_close_still_reaps_and_removes_the_files(
+def test_an_interrupted_idle_close_still_reaps_and_removes_the_files(
     parent: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The probe: `SystemExit` inside an idle `close()` left the leader unreaped and the array directory behind."""
+    """`SystemExit` inside an idle `close()` still reaps the leader and removes the array directory."""
     client = WorkerClient(sys.executable, FAKE, init={}, array_parent=parent)
     pgid = client.hello["pid"]
     _interrupting(monkeypatch, times=1)
@@ -300,7 +297,7 @@ def test_i3_an_interrupted_idle_close_still_reaps_and_removes_the_files(
 
 
 @pytest.mark.logic
-def test_i3_collecting_a_client_whose_shutdown_was_cut_short_finishes_it(
+def test_collecting_a_client_whose_shutdown_was_cut_short_finishes_it(
     parent: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A client whose close and finishing pass were both interrupted is finished when it is collected.
@@ -357,7 +354,7 @@ for _ in range(3):
 
 
 @pytest.mark.logic
-def test_l1_the_escalation_hint_is_logged_once_per_process() -> None:
+def test_the_escalation_hint_is_logged_once_per_process() -> None:
     """Three shutdowns in one process, each interrupted once, log the hint once."""
     proc = subprocess.run(
         [sys.executable, "-c", _THREE_SHUTDOWNS], capture_output=True, text=True, timeout=WAIT_S, preexec_fn=_bounded
@@ -404,7 +401,7 @@ def test_ctrl_c_twice_ends_the_close_within_the_ctrl_c_bound(tmp_path: Path) -> 
 
 @pytest.mark.contract
 @pytest.mark.parametrize("kind", ["handler_close", "close_same_thread", "close_other_thread"])
-def test_l2_close_during_the_spawn_leaves_no_group(tmp_path: Path, kind: str) -> None:
+def test_close_during_the_spawn_leaves_no_group(tmp_path: Path, kind: str) -> None:
     """`close()` while the constructor spawns the worker ends in `WorkerLost` or a built client, never an orphan."""
     case = {"path": "init", "boundary": "client:_start", "kind": kind, "occurrence": 1}
     [report] = shutdown_schedule_fixture.run_schedule(tmp_path, [case])
@@ -414,7 +411,7 @@ def test_l2_close_during_the_spawn_leaves_no_group(tmp_path: Path, kind: str) ->
 
 
 @pytest.mark.contract
-def test_l2_an_exception_in_the_kill_fallback_still_reaps_the_leader(tmp_path: Path) -> None:
+def test_an_exception_in_the_kill_fallback_still_reaps_the_leader(tmp_path: Path) -> None:
     """A `RuntimeError` from a handler while a SIGTERM-ignoring group is stopped leaves the leader reaped."""
     case = {"path": "timeout", "boundary": "module:_members_gone", "kind": "handler_raises_exception", "occurrence": 1}
     [report] = shutdown_schedule_fixture.run_schedule(tmp_path, [case])

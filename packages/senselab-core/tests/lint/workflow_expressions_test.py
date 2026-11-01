@@ -261,7 +261,7 @@ def interpolation_offenders(directory: Path) -> list[str]:
 
 
 @pytest.mark.logic
-def test_n5_no_workflow_interpolates_an_untrusted_expression() -> None:
+def test_no_workflow_interpolates_an_untrusted_expression() -> None:
     """Untrusted contexts reach a workflow only through ``env:`` values."""
     assert interpolation_offenders(REPO / ".github") == []
 
@@ -281,14 +281,14 @@ def test_n5_no_workflow_interpolates_an_untrusted_expression() -> None:
         ('run: echo "$HEAD"', False),
     ],
 )
-def test_m3_interpolation_guard_inspects_whole_scripts(script: str, bad: bool, tmp_path: Path) -> None:
+def test_interpolation_guard_inspects_whole_scripts(script: str, bad: bool, tmp_path: Path) -> None:
     """The guard parses YAML and scans each script as a whole: multi-line, literal and folded forms are all caught."""
     (tmp_path / "w.yaml").write_text(f"jobs:\n  j:\n    steps:\n    - {script}\n")
     assert bool(interpolation_offenders(tmp_path)) is bad
 
 
 @pytest.mark.logic
-def test_m3_interpolation_guard_covers_composite_actions_and_github_script(tmp_path: Path) -> None:
+def test_interpolation_guard_covers_composite_actions_and_github_script(tmp_path: Path) -> None:
     """A composite action's ``run`` and a github-script ``with.script`` are scripts too."""
     (tmp_path / "action.yml").write_text("runs:\n  steps:\n  - run: echo ${{ github.head_ref }}\n")
     (tmp_path / "w.yaml").write_text(
@@ -327,14 +327,14 @@ PLACES = {
 
 @pytest.mark.logic
 @pytest.mark.parametrize("place", sorted(PLACES))
-def test_xg11_an_untrusted_expression_is_refused_in_every_string(place: str, tmp_path: Path) -> None:
+def test_an_untrusted_expression_is_refused_in_every_string(place: str, tmp_path: Path) -> None:
     """``shell``, ``with`` values, ``working-directory``, ``uses``, names and outputs are inspected, as ``run`` is."""
     (tmp_path / "w.yaml").write_text(PLACES[place])
     assert interpolation_offenders(tmp_path), place
 
 
 @pytest.mark.logic
-def test_xg11_env_values_are_the_one_exemption(tmp_path: Path) -> None:
+def test_env_values_are_the_one_exemption(tmp_path: Path) -> None:
     """The same untrusted expression passes as an ``env:`` value at workflow, job and step level."""
     (tmp_path / "w.yaml").write_text(
         f"env:\n  A: {TITLE}\njobs:\n  j:\n    env:\n      B: {TITLE}\n"
@@ -359,7 +359,7 @@ MATRIX_RUN = "    steps:\n    - run: echo ${{ matrix.v }}\n      with:\n        
         ("v: ${{ fromJSON(env.VERSIONS) }}", True),
     ],
 )  # fmt: skip
-def test_xg11_matrix_values_are_trusted_only_when_the_matrix_is_clean(matrix: str, bad: bool, tmp_path: Path) -> None:
+def test_matrix_values_are_trusted_only_when_the_matrix_is_clean(matrix: str, bad: bool, tmp_path: Path) -> None:
     """``matrix.*`` is untrusted in a job whose matrix definition holds an expression that is not clean."""
     (tmp_path / "w.yaml").write_text(f"jobs:\n  j:\n    strategy:\n      matrix:\n        {matrix}\n{MATRIX_RUN}")
     offenders = interpolation_offenders(tmp_path)
@@ -395,7 +395,7 @@ def test_clean_expressions_pass(expression: str) -> None:
         "include:\n        - env: ${{ github.head_ref }}",
     ],
 )
-def test_xg11_a_matrix_variable_named_env_is_not_an_env_map(matrix: str, tmp_path: Path) -> None:
+def test_a_matrix_variable_named_env_is_not_an_env_map(matrix: str, tmp_path: Path) -> None:
     """``matrix.env`` is a matrix value: an untrusted definition makes both it and its use offenders."""
     (tmp_path / "w.yaml").write_text(
         f"jobs:\n  j:\n    strategy:\n      matrix:\n        {matrix}\n"

@@ -86,14 +86,14 @@ SERIALISED = json.dumps({"a": [1, 2]}, sort_keys=True)
     ],
     ids=["bytes", "bytearray", "memoryview", "BytesIO"],
 )
-def test_i1_serialised_bytes_cannot_reach_a_file_digest(source: object) -> None:
+def test_serialised_bytes_cannot_reach_a_file_digest(source: object) -> None:
     """Bytes and in-memory streams of `json.dumps(...).encode()` are refused: only a file on disk is hashed."""
     with pytest.raises(TypeError, match="path or a binary file opened on disk"):
         file_digest("file@1", source)  # type: ignore[arg-type]
 
 
 @pytest.mark.logic
-def test_i1_serialised_text_is_read_as_a_path_never_hashed(tmp_path: Path) -> None:
+def test_serialised_text_is_read_as_a_path_never_hashed(tmp_path: Path) -> None:
     """A `str` is a path: serialised text names no file and raises, and a text stream is refused."""
     with pytest.raises(FileNotFoundError):
         file_digest("file@1", str(tmp_path / SERIALISED))
@@ -103,7 +103,7 @@ def test_i1_serialised_text_is_read_as_a_path_never_hashed(tmp_path: Path) -> No
 
 @pytest.mark.logic
 @pytest.mark.parametrize("value", [SERIALISED, SERIALISED.encode(), [1, 2], 3.0], ids=["str", "bytes", "list", "float"])
-def test_i1_serialised_data_cannot_reach_an_npy_digest(value: object) -> None:
+def test_serialised_data_cannot_reach_an_npy_digest(value: object) -> None:
     """`npy_digest` takes an array only; text, bytes and other values are refused by type."""
     with pytest.raises(TypeError, match="takes a numpy array"):
         npy_digest("npy@1", value)  # type: ignore[arg-type]

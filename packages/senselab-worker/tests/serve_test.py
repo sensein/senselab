@@ -154,10 +154,7 @@ def test_unusable_lines_are_fatal_and_exit_nonzero(tmp_path: Path, messages: lis
 @pytest.mark.logic
 @pytest.mark.parametrize("stop", [False, None, 0, 1, "true", [], {}])
 def test_stop_not_exactly_true_is_a_fatal_protocol_error_and_exits_fatal(tmp_path: Path, stop: object) -> None:
-    """A message whose `stop` is not exactly `true` is answered with a fatal `ProtocolError`, then `EXIT_FATAL`.
-
-    The probe: `{"stop": false, ...}` on a request made the worker exit 0 without a reply.
-    """
+    """A message whose `stop` is not exactly `true` is answered with a fatal `ProtocolError`, then `EXIT_FATAL`."""
     request = {**_request("a"), "stop": stop}
     code, out = _session(tmp_path, [_init(tmp_path), json.dumps(request).encode() + b"\n"])
     error = _fatal(out)
@@ -370,8 +367,8 @@ def test_one_oversize_item_does_not_fail_batch_mates(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a10_aggregate_reply_over_the_budget_fails_no_item(tmp_path: Path) -> None:
-    """The probe: 20 items of 1 MB each (20 MB in all) killed the worker; now every item gets its outputs."""
+def test_aggregate_reply_over_the_budget_fails_no_item(tmp_path: Path) -> None:
+    """Twenty items of 1 MB each (20 MB in all) do not kill the worker; every item gets its outputs."""
 
     def handle(state: object, items: list[dict], params: dict) -> list[dict]:
         return [_sized(10**6) for _ in items]
@@ -389,8 +386,8 @@ class _Unprintable(Exception):
 
 
 @pytest.mark.logic
-def test_a10_unprintable_or_surrogate_error_fails_only_its_item(tmp_path: Path) -> None:
-    """The probe: an error whose `__str__` raises, or whose message holds a lone surrogate, killed the worker."""
+def test_unprintable_or_surrogate_error_fails_only_its_item(tmp_path: Path) -> None:
+    """An error whose `__str__` raises, or whose message holds a lone surrogate, fails only its item."""
 
     def handle(state: object, items: list[dict], params: dict) -> list[dict]:
         errors = {"str": _Unprintable(), "surrogate": OSError("cannot open /data/\udcff.wav")}
@@ -459,8 +456,8 @@ def test_output_depth_band_is_outputs_or_a_content_fault(tmp_path: Path, leaf: s
 
 
 @pytest.mark.logic
-def test_a10_exponentially_shared_output_fails_only_its_item(tmp_path: Path) -> None:
-    """The probe: an output `l = [l, l]` sixty times hung the worker. It is now that item's `ResponseTooLarge`."""
+def test_exponentially_shared_output_fails_only_its_item(tmp_path: Path) -> None:
+    """An output `l = [l, l]` sixty times is that item's `ResponseTooLarge`."""
 
     def handle(state: object, items: list[dict], params: dict) -> list[dict]:
         value: object = 0

@@ -355,7 +355,7 @@ _LOSSY = [
 
 @pytest.mark.logic
 @pytest.mark.parametrize("v", _LOSSY, ids=lambda v: type(v).__qualname__)
-def test_a4_lossy_values_refused(v: object) -> None:
+def test_lossy_values_refused(v: object) -> None:
     """A value whose JSON form would lose its type or unit is refused, at top level and nested."""
     for wrapped in (v, {"a": v}, [v], ({"b": [v]},)):
         with pytest.raises(TypeError):
@@ -365,8 +365,8 @@ def test_a4_lossy_values_refused(v: object) -> None:
 
 
 @pytest.mark.logic
-def test_a4_nat_and_none_never_share_bytes() -> None:
-    """The probe: NaT encoded as null, and timedelta64 of any unit as its integer."""
+def test_nat_and_none_never_share_bytes() -> None:
+    """NaT is not encoded as null, and timedelta64 of any unit is not encoded as its integer."""
     assert jcs_dumps({"a": None}) == b'{"a":null}'
     for v in (numpy.datetime64("NaT"), numpy.timedelta64(1, "ns"), numpy.timedelta64(1, "ps")):
         with pytest.raises(TypeError):
@@ -409,7 +409,7 @@ def test_jcs_refuses_cycles() -> None:
     ],
     ids=["masked", "matrix", "complex", "datetime", "timedelta", "bytes", "void"],
 )
-def test_a4_canonical_npy_refuses_subclasses_and_lossy_kinds(array: numpy.ndarray) -> None:
+def test_canonical_npy_refuses_subclasses_and_lossy_kinds(array: numpy.ndarray) -> None:
     """Only a plain `ndarray` of kind `b i u f U` has a canonical `.npy`; a masked array never encodes its fill."""
     with pytest.raises((TypeError, ValueError)):
         canonical_npy_bytes(array)
@@ -431,8 +431,8 @@ def test_jcs_round_trips_every_accepted_value(v: object) -> None:
 
 
 @pytest.mark.logic
-def test_a24_large_integral_float_parses_back_as_a_float() -> None:
-    """The probe: `1e20` serialises as an integer literal, which `jcs_loads` reads back as the float it was."""
+def test_large_integral_float_parses_back_as_a_float() -> None:
+    """`1e20` serialises as an integer literal, which `jcs_loads` reads back as the float it was."""
     assert jcs_dumps(1e20) == b"100000000000000000000"
     back = jcs_loads(b"100000000000000000000")
     assert type(back) is float and back == 1e20
@@ -518,12 +518,12 @@ def _jcs_sha(text: str) -> str:
 
 
 NFC_SENSITIVE = (_UNASSIGNED_IN_13, "e\u0301\U0001faf6", "\U0001fae8\u0301\u0323")
-"""Pinned strings an interpreter's NFC would change: the probes of XC-1."""
+"""Pinned strings an interpreter's NFC would change."""
 
 
 @pytest.mark.logic
 @pytest.mark.parametrize("text", NFC_SENSITIVE, ids=lambda t: ascii(t))
-def test_xc1_text_with_post_13_code_points_has_one_digest_on_every_interpreter(text: str) -> None:
+def test_text_with_post_13_code_points_has_one_digest_on_every_interpreter(text: str) -> None:
     """A string holding a code point unassigned in Unicode 13 digests as 3.10 digested it, as a value and a key."""
     assert _jcs_sha(text) == PINNED[text]
 
@@ -595,7 +595,7 @@ def _bits(dtype: str, words: list[int]) -> numpy.ndarray:
     ],
     ids=["nan-sign", "nan-payload", "inf-minus-inf", "negative-zero", "bool-byte-2", "f4-nan", "f2-nan"],
 )
-def test_xc4_values_adr006_counts_as_one_have_one_npy_form(left: numpy.ndarray, right: numpy.ndarray) -> None:
+def test_values_that_are_one_value_have_one_npy_form(left: numpy.ndarray, right: numpy.ndarray) -> None:
     """Every NaN, `0.0` and `-0.0`, and every nonzero bool byte, write the same canonical `.npy` bytes."""
     from senselab_worker.canonical import canonical_npy_bytes
 
@@ -647,7 +647,7 @@ def test_a_shared_dag_is_written_and_refused_in_bounded_time() -> None:
     ["1e400", "-1e400", '{"a":1,"a":2}', "[" * 100_000, "-0.0", "[1, 2]", '{"b":1,"a":2}', "1E3", '"e\u0301"'],
     ids=["overflow", "neg-overflow", "duplicate-key", "deep", "neg-zero", "spaces", "unsorted", "exponent", "nfd"],
 )
-def test_xc6_jcs_loads_refuses_what_jcs_dumps_cannot_have_written(text: str) -> None:
+def test_jcs_loads_refuses_what_jcs_dumps_cannot_have_written(text: str) -> None:
     """Overflow, duplicate keys, over-deep nesting and every non-canonical spelling raise one typed error."""
     from senselab_worker.canonical import jcs_loads
 
@@ -798,8 +798,8 @@ def test_canonical_string_arrays_keep_their_shape(shape: tuple[int, ...], data: 
 
 
 @pytest.mark.logic
-def test_x_i1_a_zero_d_bool_with_byte_2_keeps_its_shape() -> None:
-    """The review's probe: a 0-d bool of byte 2 is written as 0-d `True`, not as `[True]`."""
+def test_a_zero_d_bool_with_byte_2_keeps_its_shape() -> None:
+    """A 0-d bool of byte 2 is written as 0-d `True`, not as `[True]`."""
     import io
 
     from senselab_worker.canonical import canonical_npy_bytes

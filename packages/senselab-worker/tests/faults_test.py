@@ -114,8 +114,8 @@ def test_fallback_classification_marks_gap() -> None:
 
 
 @pytest.mark.logic
-def test_a25_bug_key_error_is_not_a_content_verdict() -> None:
-    """The probe: a backend bug raising `KeyError` was a plain `content` fault; it is now marked a gap."""
+def test_bug_key_error_is_not_a_content_verdict() -> None:
+    """A backend bug raising `KeyError` is marked a gap, not a plain `content` fault."""
     record = error_record(KeyError("missing"))
     assert (record["fault"], record["gap"]) == ("content", True)
 

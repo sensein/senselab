@@ -88,7 +88,7 @@ def _stubs(base: Path) -> None:
         _write(base, module.replace(".", "/") + ".py", "import json\n")
 
 
-XG1_IMPORTS = {
+RAW_DIGEST_IMPORTS = {
     "senselab_core/zz/probe_a.py": (
         """
         import hashlib, json
@@ -108,9 +108,9 @@ XG1_IMPORTS = {
         "senselab_worker._raw_digest",
     ),
 }
-"""XG-1: a module outside the owner hashes serialised data; the raw primitive it used no longer exists."""
+"""Imports of the raw digest primitive from a module outside the owner, each by module and reported name."""
 
-XG2_SPELLINGS = {
+HASH_SPELLINGS = {
     "sha384": "import hashlib\nhashlib.sha384(json.dumps(x).encode())",
     "sha224": "import hashlib\nhashlib.sha224(json.dumps(x).encode())",
     "sha3_512": "import hashlib\nhashlib.sha3_512(json.dumps(x).encode())",
@@ -131,22 +131,22 @@ XG2_SPELLINGS = {
     "blake3": "import blake3\nblake3.blake3(json.dumps(x).encode())",
     "xxhash": "import xxhash\nxxhash.xxh64(json.dumps(x).encode())",
 }
-"""XG-2: serialised data reaching a digest by spellings the data-flow lint missed; each needs a digest module."""
+"""Spellings by which serialised data reaches a digest, each needing a digest module."""
 
 
 @pytest.mark.contract
-def test_xg1_xg2_every_planted_digest_import_breaks_the_contract(tmp_path: Path) -> None:
-    """Each XG-1 and XG-2 spelling, planted in a package module, a former owner or a script, is reported."""
+def test_every_planted_digest_import_breaks_the_contract(tmp_path: Path) -> None:
+    """Each raw-digest import and hash spelling planted in a package module, a former owner or a script is reported."""
     _stubs(tmp_path)
     expected = set()
-    for rel, (source, module) in XG1_IMPORTS.items():
+    for rel, (source, module) in RAW_DIGEST_IMPORTS.items():
         _write(tmp_path, rel, source)
         expected.add(f"{rel.removesuffix('.py').replace('/', '.')} -> {module}")
-    for name, body in XG2_SPELLINGS.items():
-        _write(tmp_path, f"senselab_core/zz/xg2_{name}.py", f"import json\nx = m = None\n{body}\n")
+    for name, body in HASH_SPELLINGS.items():
+        _write(tmp_path, f"senselab_core/zz/spelling_{name}.py", f"import json\nx = m = None\n{body}\n")
         imported = re.match(r"(?:from |import )(\w+)", body)
         assert imported
-        expected.add(f"senselab_core.zz.xg2_{name} -> {imported.group(1)}")
+        expected.add(f"senselab_core.zz.spelling_{name} -> {imported.group(1)}")
     _write(tmp_path, "senselab_core/runtime/provenance.py", "import hashlib\nhashlib.sha256(b'')\n")
     expected.add("senselab_core.runtime.provenance -> hashlib")
     result = _lint_imports(tmp_path)
@@ -187,7 +187,7 @@ def _capability(obj: object) -> bool:
 
 @pytest.mark.contract
 @pytest.mark.parametrize("package", [senselab_worker, senselab_core], ids=lambda p: p.__name__)
-def test_xg1_xg3_no_module_exposes_a_digest_capability(package: types.ModuleType) -> None:
+def test_no_module_exposes_a_digest_capability(package: types.ModuleType) -> None:
     """No namespace holds a digest module or a function from one or from the raw form, so none is re-exported."""
     hits = [
         f"{module.__name__}.{name}"
@@ -212,8 +212,8 @@ def test_xg1_xg3_no_module_exposes_a_digest_capability(package: types.ModuleType
         "from senselab_worker._raw_digest import hashlib",
     ],
 )
-def test_xg1_xg3_the_raw_primitives_and_reexports_do_not_exist(statement: str) -> None:
-    """The XG-1 helper and the XG-3 re-export no longer import."""
+def test_the_raw_primitives_and_reexports_do_not_exist(statement: str) -> None:
+    """The raw digest helper and the digest re-exports do not import."""
     with pytest.raises(ImportError):
         exec(statement, {})  # noqa: S102
 
@@ -279,7 +279,7 @@ def test_the_digest_module_defines_only_tagged_digests() -> None:
         ("def bytes_digest(tag, data):\n    return ''\n", "bytes_digest: not a tagged digest"),
     ],
 )
-def test_xg2_a_planted_function_in_the_owner_is_reported(addition: str, expected: str) -> None:
+def test_a_planted_function_in_the_owner_is_reported(addition: str, expected: str) -> None:
     """A helper added to the owner module, or a digest that stops checking its tag, is reported."""
     planted = types.ModuleType(digest.__name__)
     source = Path(digest.__file__).read_text() + "\n" + addition

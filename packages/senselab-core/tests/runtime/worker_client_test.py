@@ -341,10 +341,7 @@ def test_fatal_during_a_request_is_worker_fatal(array_parent: Path) -> None:
     ],
 )
 def test_unknown_fatal_keeps_message(array_parent: Path, error: object, kept: tuple) -> None:
-    """A `fatal` whose fault is unknown or whose `gap` is missing is `infrastructure` with a gap, and keeps its text.
-
-    The probe: such a `fatal` became a `ProtocolError` and the worker's message was lost.
-    """
+    """A `fatal` whose fault is unknown or whose `gap` is missing is `infrastructure` with a gap, and keeps its text."""
     client = _scripted(array_parent, {"error": error, "fatal": True})
     with pytest.raises(WorkerFatal) as info:
         client.run([{"id": "a", "inputs": {}}], {})
@@ -399,10 +396,7 @@ def test_fatal_decode_is_total(error: object) -> None:
     ],
 )
 def test_crash_mid_reply_is_worker_lost_with_returncode(array_parent: Path, tail: list, code: int) -> None:
-    """A worker that exits after some of a reply's lines raises `WorkerLost` carrying its exit code.
-
-    The probe: a crash mid-reply surfaced as `ProtocolError`, with no exit code.
-    """
+    """A worker that exits after some of a reply's lines raises `WorkerLost` carrying its exit code."""
     client = _scripted(array_parent, [_ok("a"), *tail])
     with pytest.raises(WorkerLost) as info:
         client.run([{"id": "a", "inputs": {}}, {"id": "b", "inputs": {}}], {})
@@ -414,8 +408,8 @@ def test_crash_mid_reply_is_worker_lost_with_returncode(array_parent: Path, tail
 @pytest.mark.logic
 @posix_only
 @pytest.mark.parametrize("wire", [True, 1.0, "2", 1, None])
-def test_a34_hello_wire_must_be_an_int_on_the_host(array_parent: Path, wire: object) -> None:
-    """The probe: a hello with `"wire": true` or `1.0` was accepted; a wire that is not the int 2 is refused."""
+def test_hello_wire_must_be_an_int_on_the_host(array_parent: Path, wire: object) -> None:
+    """A hello whose `wire` is not the int 2, `true` and `1.0` included, is refused."""
     hello = {"wire": wire, "runtime": runtime_identity(), "python": "", "numpy": "", "pid": 0}
     line = json.dumps({"hello": hello})
     with pytest.raises(ProtocolMismatch):
@@ -515,8 +509,8 @@ def test_forking_backend_leaves_no_survivor(tmp_path: Path, backends_importable:
 
 
 @pytest.mark.limits
-def test_a7_timeout_returns_though_a_grandchild_holds_stderr(tmp_path: Path, backends_importable: None) -> None:
-    """The probe: a backend leaves a grandchild on stderr and hangs; `run` alone returns and kills it.
+def test_timeout_returns_though_a_grandchild_holds_stderr(tmp_path: Path, backends_importable: None) -> None:
+    """A backend that leaves a grandchild on stderr and hangs: `run` alone returns and kills it.
 
     The grandchildren start in `load`, so they exist before the request's timeout starts.
     """
@@ -554,8 +548,8 @@ def test_client_deletes_only_what_it_created(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a9_files_beside_the_array_dir_survive_runs_and_close(tmp_path: Path) -> None:
-    """The probe: a directory holding `thesis.txt` and `notes.md` is left exactly as it was."""
+def test_files_beside_the_array_dir_survive_runs_and_close(tmp_path: Path) -> None:
+    """A directory holding `thesis.txt` and `notes.md` is left exactly as it was."""
     parent = tmp_path / "work"
     parent.mkdir()
     (parent / "thesis.txt").write_text("t")
@@ -622,10 +616,10 @@ def test_backend_subdir_in_array_dir_does_not_fail_runs(tmp_path: Path, backends
 
 
 @pytest.mark.logic
-def test_a22_backend_subdir_leaves_runs_and_the_worker_usable(
+def test_backend_subdir_leaves_runs_and_the_worker_usable(
     tmp_path: Path, backends_importable: None, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The probe: a backend directory not named like an array is left in place and logged; runs succeed."""
+    """A backend directory not named like an array is left in place and logged; runs succeed."""
     with (
         caplog.at_level(logging.WARNING),
         WorkerClient(
@@ -662,8 +656,8 @@ def test_send_to_wedged_worker_respects_deadline(array_parent: Path, backends_im
 
 
 @pytest.mark.logic
-def test_a21_fifo_named_like_an_array_does_not_hang_the_host(array_parent: Path) -> None:
-    """The probe: a response naming a FIFO at `<sha>.npy` fails its item at once instead of blocking."""
+def test_fifo_named_like_an_array_does_not_hang_the_host(array_parent: Path) -> None:
+    """A response naming a FIFO at `<sha>.npy` fails its item at once instead of blocking."""
     sha = "a" * 64
     ref = {"__array__": {"path": f"$DIR/{sha}.npy", "sha256": sha, "dtype": "<f4", "shape": [1]}}
     client = _scripted(array_parent, [{"id": "$ID", "item": "a", "outputs": {"y": ref}}, _done(1)])
@@ -883,7 +877,7 @@ def test_input_depth_band_is_sent_or_a_content_fault(worker: WorkerClient, leaf:
 
 
 @pytest.mark.logic
-def test_a10_exponentially_shared_input_fails_only_its_item(worker: WorkerClient) -> None:
+def test_exponentially_shared_input_fails_only_its_item(worker: WorkerClient) -> None:
     """The host's encoder is bounded too: an input `l = [l, l]` sixty times is that item's `ValueTooLarge`."""
     value: object = 0
     for _ in range(60):

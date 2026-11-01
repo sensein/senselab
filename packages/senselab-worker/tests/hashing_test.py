@@ -152,7 +152,7 @@ def test_weights_identity_sorts_by_utf16_code_units(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a31_content_root_covers_chunk_size(tmp_path: Path) -> None:
+def test_content_root_covers_chunk_size(tmp_path: Path) -> None:
     """The same bytes read in two chunk sizes have two roots, even where the chunk lists coincide."""
     p = tmp_path / "x.bin"
     p.write_bytes(b"abc")
@@ -170,7 +170,7 @@ def test_hashing_uses_registered_tags() -> None:
 
 
 @pytest.mark.logic
-def test_xc1_weights_paths_with_post_13_code_points_are_named_raw(tmp_path: object) -> None:
+def test_weights_paths_with_post_13_code_points_are_named_raw(tmp_path: object) -> None:
     """A weight file whose relative path holds a code point unassigned in 13.0 has an identity over its raw name."""
     import hashlib
     import json

@@ -802,7 +802,7 @@ _PROVENANCE_1_LINES = [
         ('{"format": "provenance@2.0", "record": "format", "extra": 1}', "provenance@2.0"),
     ],
 )
-def test_hr47_a_file_without_the_provenance_2_format_record_is_refused_typed(
+def test_a_file_without_the_provenance_2_format_record_is_refused_typed(
     tmp_path: Path, first: str | None, found: str | None
 ) -> None:
     """A `provenance@1` file, a `provenance@1.1` file, or any other first line is refused, naming the migration."""
@@ -816,7 +816,7 @@ def test_hr47_a_file_without_the_provenance_2_format_record_is_refused_typed(
         assert "1.x provenance store (provenance@1)" in str(refused.value)
 
 
-def test_hr47_an_empty_file_is_refused_typed(tmp_path: Path) -> None:
+def test_an_empty_file_is_refused_typed(tmp_path: Path) -> None:
     """An empty file carries no format record and is not read as an empty store."""
     path = tmp_path / "empty.jsonl"
     path.write_text("")
@@ -824,7 +824,7 @@ def test_hr47_an_empty_file_is_refused_typed(tmp_path: Path) -> None:
         ProvStore.read_jsonl(path)
 
 
-def test_hr47_a_kind_entity_is_refused_by_the_writer_and_the_reader(tmp_path: Path) -> None:
+def test_a_kind_entity_is_refused_by_the_writer_and_the_reader(tmp_path: Path) -> None:
     """`kind` is not in `PROV_TYPE`: `entity()` refuses it, and so does `read_jsonl` on a 2.0 line carrying it."""
     assert "kind" not in get_args(PROV_TYPE)
     with pytest.raises(ValueError, match="unknown prov_type 'kind'"):
@@ -838,7 +838,7 @@ def test_hr47_a_kind_entity_is_refused_by_the_writer_and_the_reader(tmp_path: Pa
         ProvStore.read_jsonl(path)
 
 
-def test_hr47_every_store_the_writer_writes_is_provenance_2_and_every_record_carries_its_run_id(
+def test_every_store_the_writer_writes_is_provenance_2_and_every_record_carries_its_run_id(
     tmp_path: Path,
 ) -> None:
     """The writer has one format, and every record it writes carries the run it was minted in."""
@@ -859,7 +859,7 @@ _RECORD_FIELDS: dict[type, dict[str, object]] = {
 
 
 @pytest.mark.parametrize("record_type", list(_RECORD_FIELDS), ids=lambda t: t.__name__)
-def test_hr50_no_record_can_be_built_without_a_run_id(record_type: type) -> None:
+def test_no_record_can_be_built_without_a_run_id(record_type: type) -> None:
     """`run_id` is a required field of every record type: omitting it or passing None is refused."""
     fields = _RECORD_FIELDS[record_type]
     with pytest.raises(TypeError, match="run_id"):
@@ -871,7 +871,7 @@ def test_hr50_no_record_can_be_built_without_a_run_id(record_type: type) -> None
 
 
 @pytest.mark.parametrize("record_type", list(_RECORD_FIELDS), ids=lambda t: t.__name__)
-def test_hr50_revised_keeps_the_run_and_mints_the_id_of_the_new_content(record_type: type) -> None:
+def test_revised_keeps_the_run_and_mints_the_id_of_the_new_content(record_type: type) -> None:
     """`revised` returns a record of the same run whose id is its own content's; `id` and `run_id` cannot change."""
     record = record_type(id="", run_id="r", **_RECORD_FIELDS[record_type])
     name = {Entity: "extent", Activity: "step", Agent: "version", provenance.Environment: "label"}[record_type]
@@ -1020,7 +1020,7 @@ def _compares_by_value(value: object) -> bool:
     return True
 
 
-def test_m1_an_enum_read_back_equals_another_read_back_of_the_same_member() -> None:
+def test_an_enum_read_back_equals_another_read_back_of_the_same_member() -> None:
     """`recorded(x) == recorded(x)` for an enum member, alone and nested; another type or value is unequal."""
     assert recorded(Colour.RED) == recorded(Colour.RED)
     assert recorded({"e": [Colour.ONE]}) == recorded({"e": [Colour.ONE]})
@@ -1037,7 +1037,7 @@ def test_every_read_back_equals_another_read_back_of_the_same_value(value: objec
 
 
 @pytest.mark.logic
-def test_xk5_recorded_content_cannot_drift_from_its_id(tmp_path: Path) -> None:
+def test_recorded_content_cannot_drift_from_its_id(tmp_path: Path) -> None:
     """Mutating what was passed in, or what `get_entity` returns, cannot change a recorded entity."""
     store = ProvStore(run_id="r")
     attributes: dict[str, object] = {"ev": {"n": [1, 2, 3]}}
@@ -1065,7 +1065,7 @@ def test_xk5_recorded_content_cannot_drift_from_its_id(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_xk6_jsonl_is_lossless_and_ids_recompute(tmp_path: Path) -> None:
+def test_jsonl_is_lossless_and_ids_recompute(tmp_path: Path) -> None:
     """Arrays, paths, non-finite floats, enums, sets and bytes survive a write and read; ids recompute."""
     import enum
 
@@ -1102,7 +1102,7 @@ def test_xk6_jsonl_is_lossless_and_ids_recompute(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_xk6_a_line_without_a_run_id_is_refused(tmp_path: Path) -> None:
+def test_a_line_without_a_run_id_is_refused(tmp_path: Path) -> None:
     """A 2.0 line whose `run_id` is null is refused; `revised` keeps the run and re-mints the id."""
     store = ProvStore(run_id="r")
     eid = store.entity(prov_type="artifact", extent=(0.0, 1.0), attributes={"a": 1})
@@ -1124,7 +1124,7 @@ def test_xk6_a_line_without_a_run_id_is_refused(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_xk7_write_refuses_what_read_refuses() -> None:
+def test_write_refuses_what_read_refuses() -> None:
     """Unknown types and kinds, non-mapping attributes and malformed extents are refused when written."""
     store = ProvStore(run_id="r")
     with pytest.raises(ValueError):
@@ -1141,7 +1141,7 @@ def test_xk7_write_refuses_what_read_refuses() -> None:
 
 
 @pytest.mark.logic
-def test_xk8_a_ten_million_element_array_normalises_as_bytes_not_elements() -> None:
+def test_a_ten_million_element_array_normalises_as_bytes_not_elements() -> None:
     """Arrays normalise as canonical `.npy` bytes, so memory stays a small multiple of the data, not of its elements."""
     import tracemalloc
 
@@ -1157,7 +1157,7 @@ def test_xk8_a_ten_million_element_array_normalises_as_bytes_not_elements() -> N
 
 
 @pytest.mark.logic
-def test_xk9_normalisation_is_total_and_typed() -> None:
+def test_normalisation_is_total_and_typed() -> None:
     """An integer too long to write, and empty arrays of refused dtypes, raise `UnrecordableValue`."""
     with pytest.raises(UnrecordableValue):
         normalised(10**5000)

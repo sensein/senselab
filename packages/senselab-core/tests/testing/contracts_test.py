@@ -245,8 +245,8 @@ def test_hash_seed_case_catches_a_seed_dependent_builder() -> None:
 
 
 @pytest.mark.contract
-def test_a6_set_params_are_refused_and_caught_if_declared_anyway(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The probe: a `set[str]` param keyed differently under each hash seed.
+def test_set_params_are_refused_and_caught_if_declared_anyway(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A `set[str]` param is keyed differently under each hash seed.
 
     The registry refuses the type; a registry that skipped that check would still fail the generated case.
     """

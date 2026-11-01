@@ -199,8 +199,8 @@ def test_model_copy_revalidates_and_redigests() -> None:
         {"profile_slices": {"p": CONTENT}},
     ],
 )
-def test_a5_key_refuses_untyped_identities(bad: dict[str, object]) -> None:
-    """The probe: a ref as the model and a path or bare hex as an input; every identity field is typed."""
+def test_key_refuses_untyped_identities(bad: dict[str, object]) -> None:
+    """A ref as the model, and a path or bare hex as an input, are refused; every identity field is typed."""
     with pytest.raises(ValidationError):
         LogicalKey(**{**BASE, **bad})  # type: ignore[arg-type]
 
@@ -248,7 +248,7 @@ _PARAM_VALUES = st.recursive(
 
 @pytest.mark.logic
 @given(params=st.dictionaries(st.text(max_size=3), _PARAM_VALUES, max_size=4))
-def test_a24_constructible_key_is_digestible(params: dict[str, object]) -> None:
+def test_constructible_key_is_digestible(params: dict[str, object]) -> None:
     """Any params, large integral floats included: a key either fails validation or digests."""
     try:
         key = _key(params=params)
@@ -259,8 +259,8 @@ def test_a24_constructible_key_is_digestible(params: dict[str, object]) -> None:
 
 
 @pytest.mark.logic
-def test_a24_large_float_param_is_kept_and_digested() -> None:
-    """The probe: `params={"x": 1e20}` validated but could not be digested."""
+def test_large_float_param_is_kept_and_digested() -> None:
+    """`params={"x": 1e20}` validates and digests."""
     key = _key(params={"x": 1e20})
     assert key.params["x"] == 1e20 and len(key.digest()) == 64
     assert key.digest() == _key(params={"x": 10.0**20}).digest()
@@ -330,7 +330,7 @@ def test_equivalent_without_measurement_is_exact() -> None:
 
 @pytest.mark.logic
 @pytest.mark.parametrize("policy", ["exact", "bogus", "EXACT", "", 1, None, True])
-def test_a23_acceptable_coerces_policy(policy: object) -> None:
+def test_acceptable_coerces_policy(policy: object) -> None:
     """A policy value is coerced with `ReusePolicy(policy)`: `"exact"` is exact, anything else raises."""
     c1, c2 = _ctx(platform="linux"), _ctx(platform="macos")
     if policy == "exact":

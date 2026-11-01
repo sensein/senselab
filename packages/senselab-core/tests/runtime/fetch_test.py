@@ -616,8 +616,8 @@ def test_manifest_digest_is_tagged() -> None:
 
 
 @pytest.mark.logic
-def test_a18_manifest_file_named_like_the_marker_stays_payload(tmp_path: Path) -> None:
-    """The probe: a manifest file `.complete` was overwritten by the marker; it now lives under files/."""
+def test_manifest_file_named_like_the_marker_stays_payload(tmp_path: Path) -> None:
+    """A manifest file named `.complete` is payload under files/, not overwritten by the completion marker."""
     other = PAYLOAD + b"2"
     manifest = _manifest([_file(".complete", "https://x/c"), _file("x.wav", "https://x/x", other)])
     routes = {"https://x/c": PAYLOAD, "https://x/x": other}
@@ -646,8 +646,8 @@ def test_a18_manifest_file_named_like_the_marker_stays_payload(tmp_path: Path) -
     ],
     ids=lambda p: repr(p),
 )
-def test_a18_paths_that_are_not_prefix_free_are_refused(paths: list[str]) -> None:
-    """The probe: `.` and `a/b` with `a` validated; every non-normal or nested path set is refused."""
+def test_paths_that_are_not_prefix_free_are_refused(paths: list[str]) -> None:
+    """`.` and `a/b` beside `a` are refused; every non-normal or nested path set is."""
     with pytest.raises(ValueError):
         _manifest([_file(p, f"https://x/{i}") for i, p in enumerate(paths)])
 
@@ -778,8 +778,8 @@ def test_symlinked_or_dangling_blob_is_absent(tmp_path: Path, kind: str) -> None
 
 @pytest.mark.logic
 @pytest.mark.skipif(os.geteuid() == 0, reason="root writes a file whatever its mode")
-def test_a19_blob_cannot_be_written_through_the_returned_path(tmp_path: Path) -> None:
-    """The probe: a same-size write through the dataset path poisoned the shared blob; the blob is now read-only."""
+def test_blob_cannot_be_written_through_the_returned_path(tmp_path: Path) -> None:
+    """A same-size write through the dataset path is refused: the shared blob is read-only."""
     paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     with pytest.raises(PermissionError):
         open(paths["a/voice.wav"], "r+b")
@@ -831,7 +831,7 @@ def probe_fetch_from_an_endless_source(cache_root: str) -> dict[str, Any]:
 @pytest.mark.limits
 @pytest.mark.parametrize("size", [0, 1, 100, 3 * MIB + 5])
 def test_download_aborts_past_declared_size(tmp_path: Path, size: int) -> None:
-    """The probe: an endless source streamed 3.86 GB in 3 s; it now stops after size + 1 bytes."""
+    """An endless source is cut after the declared size + 1 bytes."""
     report = run_bounded(
         "fetch_test:probe_download_from_an_endless_source", str(tmp_path), str(size), fsize=size + 2 * MIB
     )
@@ -863,8 +863,8 @@ def test_non_https_refused(tmp_path: Path, url: str) -> None:
 
 
 @pytest.mark.logic
-def test_a20_file_url_is_not_read(tmp_path: Path) -> None:
-    """The probe: a file:// manifest URL was read by the default opener; nothing is opened now."""
+def test_file_url_is_not_read(tmp_path: Path) -> None:
+    """A `file://` manifest URL is refused by the default opener; nothing is opened."""
     secret = tmp_path / "secret.txt"
     secret.write_text("participant notes")
     manifest = _manifest([_file("a", f"file://{secret}")])
@@ -972,8 +972,8 @@ def test_stale_download_age_uses_the_storage_clock(tmp_path: Path, monkeypatch: 
 
 
 @pytest.mark.logic
-def test_a19_dangling_blob_symlink_is_not_trusted(tmp_path: Path) -> None:
-    """The probe: a dangling `blobs/<sha>` symlink was trusted as present; it is now replaced by a verified blob."""
+def test_dangling_blob_symlink_is_not_trusted(tmp_path: Path) -> None:
+    """A dangling `blobs/<sha>` symlink is replaced by a verified blob."""
     (tmp_path / "blobs").mkdir()
     os.symlink("/nonexistent/elsewhere", tmp_path / "blobs" / SHA)
     for _ in range(2):
@@ -983,8 +983,8 @@ def test_a19_dangling_blob_symlink_is_not_trusted(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a19_poisoned_blob_is_not_served_under_size_verification(tmp_path: Path) -> None:
-    """The probe: a same-size overwrite through the returned path was served by `verify="size"` with no network call."""
+def test_poisoned_blob_is_not_served_under_size_verification(tmp_path: Path) -> None:
+    """A same-size overwrite through the returned path is refetched under `verify="size"`."""
     paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     _unseal(tmp_path / "blobs" / SHA)
     with open(paths["a/voice.wav"], "r+b") as f:
@@ -995,8 +995,8 @@ def test_a19_poisoned_blob_is_not_served_under_size_verification(tmp_path: Path)
 
 
 @pytest.mark.limits
-def test_a20_endless_source_is_cut_at_declared_size(tmp_path: Path) -> None:
-    """The probe: an endless source wrote 3.86 GB to tmp/ before any check; fetch now stops at size + 1 bytes."""
+def test_endless_source_is_cut_at_declared_size(tmp_path: Path) -> None:
+    """An endless source is cut at the declared size + 1 bytes and leaves nothing in tmp/."""
     report = run_bounded("fetch_test:probe_fetch_from_an_endless_source", str(tmp_path), fsize=len(PAYLOAD) + 2 * MIB)
     assert report["error"].startswith("FetchError") and "more than the declared" in report["error"]
     assert report["served"] == len(PAYLOAD) + 1
@@ -1071,16 +1071,16 @@ def test_path_key_keeps_a_part_with_post_13_code_points_as_given() -> None:
 
 
 @pytest.mark.logic
-def test_xs1_fetch_does_not_write_through_a_symlinked_directory_under_files(tmp_path: Path) -> None:
+def test_fetch_does_not_write_through_a_symlinked_directory_under_files(tmp_path: Path) -> None:
     """A symlink to a directory outside the cache, planted under `files/`, is refused; nothing outside is written."""
-    report = bounded("probe_xs1", str(tmp_path))
+    report = bounded("probe_symlinked_directory_under_files", str(tmp_path))
     assert report == {"error": "ManifestConflictError", "victim_unchanged": True}
 
 
 @pytest.mark.logic
-def test_xs2_a_directory_at_a_blob_is_set_aside_and_the_blob_fetched(tmp_path: Path) -> None:
+def test_a_directory_at_a_blob_is_set_aside_and_the_blob_fetched(tmp_path: Path) -> None:
     """A directory where a blob belongs is moved aside, never a retryable error that wedges the dataset."""
-    report = bounded("probe_xs2", str(tmp_path), "open")
+    report = bounded("probe_directory_at_a_blob", str(tmp_path), "open")
     assert [o["error"] for o in report["outcomes"]] == ["", ""]
     assert [o["served"] for o in report["outcomes"]] == [True, True]
     assert report["blob_is_file"] is True
@@ -1088,24 +1088,24 @@ def test_xs2_a_directory_at_a_blob_is_set_aside_and_the_blob_fetched(tmp_path: P
 
 @pytest.mark.logic
 @pytest.mark.skipif(os.geteuid() == 0, reason="root renames out of a read-only directory")
-def test_xs2_an_unmovable_directory_at_a_blob_is_a_typed_error_naming_it(tmp_path: Path) -> None:
+def test_an_unmovable_directory_at_a_blob_is_a_typed_error_naming_it(tmp_path: Path) -> None:
     """When the directory cannot be moved, the error is not retryable and names the blob path and its owner."""
-    report = bounded("probe_xs2", str(tmp_path), "sealed")
+    report = bounded("probe_directory_at_a_blob", str(tmp_path), "sealed")
     first = report["outcomes"][0]
     assert first["error"] == "WrongKindError"
     assert report["blob_path"] in first["message"] and "owned by" in first["message"]
 
 
 @pytest.mark.logic
-def test_i4_a_blob_swapped_after_its_link_is_never_trusted_by_size(tmp_path: Path) -> None:
+def test_a_blob_swapped_after_its_link_is_never_trusted_by_size(tmp_path: Path) -> None:
     """Fetch stages in a private 0700 directory, and stamps only the inode it hashed, so a swap is re-hashed."""
-    report = bounded("probe_i4_swap_after_link", str(tmp_path))
+    report = bounded("probe_swap_after_link", str(tmp_path))
     assert report["stamped"] == [] and report["served"] is True, report
     assert report["staging_modes"] == [0o700], report
 
 
 @pytest.mark.logic
 @pytest.mark.parametrize("op", ["collect", "fetch"])
-def test_i1_a_hard_link_at_a_store_or_cache_clock_leaves_its_target_alone(tmp_path: Path, op: str) -> None:
+def test_a_hard_link_at_a_store_or_cache_clock_leaves_its_target_alone(tmp_path: Path, op: str) -> None:
     """A hard link at the store's or the cache's `.clock`: the file it shares is not chmodded or re-stamped."""
     assert bounded("probe_clock_hard_link", str(tmp_path), op) == {"error": "", "victim_unchanged": True}

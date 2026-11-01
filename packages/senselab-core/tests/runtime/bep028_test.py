@@ -278,7 +278,7 @@ def test_the_split_files_partition_the_graph(store: ProvStore, tmp_path: Path) -
     assert sorted(keys) == ["Activities", "Files", "Software", "prov:Entity"]
 
 
-def test_m6_a_symlink_at_a_sidecar_name_is_replaced_not_written_through(store: ProvStore, tmp_path: Path) -> None:
+def test_a_symlink_at_a_sidecar_name_is_replaced_not_written_through(store: ProvStore, tmp_path: Path) -> None:
     """A planted symlink at a BEP028 file name leaves its target unchanged and becomes the written file."""
     victim = tmp_path / "victim.txt"
     victim.write_text("keep")

@@ -340,8 +340,8 @@ def test_overwritten_source_raises_stale_source(tmp_path: Path, frames: int) -> 
 
 
 @pytest.mark.logic
-def test_a14_rewritten_source_never_reads_under_the_old_identity(tmp_path: Path) -> None:
-    """A-14: a WAV overwritten in place, or shrunk, cannot be read or copied under the old identity."""
+def test_rewritten_source_never_reads_under_the_old_identity(tmp_path: Path) -> None:
+    """A WAV overwritten in place, or shrunk, cannot be read or copied under the old identity."""
     p = write_wav(tmp_path, frames=4 * RATE)
     a = Audio.from_path(p)
     _rewrite(p, RATE, 0.5)
@@ -392,8 +392,8 @@ def test_from_array_matches_from_path(tmp_path: Path, dtype: str) -> None:
 
 
 @pytest.mark.logic
-def test_a16_int16_reads_full_scale() -> None:
-    """A-16: int16 samples are held as float32 full scale, as the decoder reads them."""
+def test_int16_reads_full_scale() -> None:
+    """Int16 samples are held as float32 full scale, as the decoder reads them."""
     g = Audio.from_array(numpy.array([16384, -32768], dtype=numpy.int16), 16_000).groups["audio"]
     assert isinstance(g, RegularGroup)
     assert g.read().dtype == numpy.float32 and g.read().tolist() == [[0.5, -1.0]]

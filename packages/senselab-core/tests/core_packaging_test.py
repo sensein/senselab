@@ -61,7 +61,7 @@ KINDS = ("editable", "wheel", "none")
 @pytest.mark.parametrize("core_kind", KINDS)
 @pytest.mark.parametrize("worker_kind", KINDS)
 @pytest.mark.parametrize("match", [True, False])
-def test_a32_core_checks_the_worker_version_only_between_non_editable_installs(
+def test_core_checks_the_worker_version_only_between_non_editable_installs(
     core_kind: str, worker_kind: str, match: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Over every install kind of each distribution, equal or not, only a pair of non-editable installs is checked."""
@@ -77,7 +77,7 @@ def test_a32_core_checks_the_worker_version_only_between_non_editable_installs(
 
 @pytest.mark.logic
 @pytest.mark.parametrize("core_kind", KINDS)
-def test_a32_core_refuses_a_missing_worker(core_kind: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_core_refuses_a_missing_worker(core_kind: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """A worker that is not installed raises ``ImportError`` whatever kind of install core is."""
     _install(monkeypatch, _Dist("2.0.0", core_kind), None)
     with pytest.raises(ImportError, match="not installed"):
@@ -86,7 +86,7 @@ def test_a32_core_refuses_a_missing_worker(core_kind: str, monkeypatch: pytest.M
 
 @pytest.mark.logic
 @pytest.mark.parametrize("text", ["", "{", "[]", '{"dir_info": []}', '{"dir_info": {"editable": "yes"}}'])
-def test_a32_malformed_direct_url_never_raises(text: str) -> None:
+def test_malformed_direct_url_never_raises(text: str) -> None:
     """A malformed direct_url.json never raises; only a true ``dir_info.editable`` marks an install editable."""
 
     class Dist:

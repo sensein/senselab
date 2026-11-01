@@ -145,10 +145,10 @@ def _outcome(call: Callable[[], Any]) -> tuple[str, Any]:
         return type(err).__name__, None
 
 
-# -- XS-1: fetch writes through a planted directory symlink under files/ --
+# -- fetch writes through a planted directory symlink under files/ --
 
 
-def probe_xs1(scratch: str) -> dict[str, Any]:
+def probe_symlinked_directory_under_files(scratch: str) -> dict[str, Any]:
     """Plant `files/sub -> victim` and fetch `sub/f`; report the error and the victim."""
     from senselab_core.runtime.fetch import fetch
 
@@ -163,10 +163,10 @@ def probe_xs1(scratch: str) -> dict[str, Any]:
     return {"error": error, "victim_unchanged": _snapshot(victim) == before}
 
 
-# -- XS-2: a directory at blobs/<sha256> wedges the dataset --
+# -- a directory at blobs/<sha256> wedges the dataset --
 
 
-def probe_xs2(scratch: str, sealed: str) -> dict[str, Any]:
+def probe_directory_at_a_blob(scratch: str, sealed: str) -> dict[str, Any]:
     """Make a directory at `blobs/<sha256>` and fetch twice; report the errors, the blob and the bytes served."""
     from senselab_core.runtime.fetch import fetch
 
@@ -195,10 +195,10 @@ def probe_xs2(scratch: str, sealed: str) -> dict[str, Any]:
     return {"outcomes": outcomes, "blob_is_file": stat.S_ISREG(blob.st_mode), "blob_path": str(cache / "blobs" / SHA)}
 
 
-# -- XS-3: a file at a store directory wedges put --
+# -- a file at a store directory wedges put --
 
 
-def probe_xs3(scratch: str, level: str, sealed: str) -> dict[str, Any]:
+def probe_file_at_a_store_directory(scratch: str, level: str, sealed: str) -> dict[str, Any]:
     """Replace the store directory at `level` on the way to an entry with a regular file; put and get."""
     from senselab_core.kernel.identity import ReusePolicy
     from senselab_core.runtime.store import ResultStore
@@ -238,7 +238,7 @@ def probe_xs3(scratch: str, level: str, sealed: str) -> dict[str, Any]:
     }
 
 
-# -- XS-4: result.json is not bound to context.json --
+# -- result.json is not bound to context.json --
 
 SWAPPABLE = ("result.json", "context.json", "arrays")
 
@@ -255,7 +255,7 @@ def _plain(outputs: dict[str, Any] | None) -> Any:  # noqa: ANN401
     return {k: v.tolist() if hasattr(v, "tolist") else v for k, v in outputs.items()}
 
 
-def probe_xs4(scratch: str, swapped: str, policy: str) -> dict[str, Any]:
+def probe_swapped_entry_members(scratch: str, swapped: str, policy: str) -> dict[str, Any]:
     """Put one key under two contexts, swap the members named in `swapped` between the entries, and get both."""
     from senselab_core.runtime.store import ResultStore
 
@@ -295,12 +295,12 @@ def swap_subsets() -> Iterator[str]:
         yield "+".join(name for i, name in enumerate(SWAPPABLE) if mask >> i & 1)
 
 
-# -- XS-5: put trusts an entry whose array is corrupt --
+# -- put trusts an entry whose array is corrupt --
 
 ARRAY_CORRUPTIONS = ("npy_bytes", "npy_truncated", "npy_missing", "npy_directory", "npy_symlink")
 
 
-def probe_xs5(scratch: str, corruption: str) -> dict[str, Any]:
+def probe_corrupt_array(scratch: str, corruption: str) -> dict[str, Any]:
     """Corrupt a committed entry's array, put the same outputs, and get at once."""
     import numpy
     from senselab_core.kernel.identity import ReusePolicy
@@ -329,12 +329,12 @@ def probe_xs5(scratch: str, corruption: str) -> dict[str, Any]:
     return {"same_identity": again == identity, "served": None if hit is None else _plain(hit.outputs)}
 
 
-# -- XS-7: run manifests: umask, run id, leftover temporaries --
+# -- run manifests: umask, run id, leftover temporaries --
 
 BAD_RUN_IDS = ("../../escaped", "..", ".", "", "a/b", "a\\b", "a\x00b", "/abs")
 
 
-def probe_xs7_run_id(scratch: str, run: str) -> dict[str, Any]:
+def probe_run_id(scratch: str, run: str) -> dict[str, Any]:
     """Record a resolution under run id `run`; report the error and every file written outside `runs/`."""
     from senselab_core.runtime import revision
 
@@ -351,7 +351,7 @@ def probe_xs7_run_id(scratch: str, run: str) -> dict[str, Any]:
     return {"error": error, "outside": outside}
 
 
-def probe_xs7_env_run_id(scratch: str, run: str) -> str:
+def probe_environment_run_id(scratch: str, run: str) -> str:
     """Return the error `run_id()` raises when SENSELAB_RUN_ID is `run`."""
     from senselab_core.runtime import revision
 
@@ -360,7 +360,7 @@ def probe_xs7_env_run_id(scratch: str, run: str) -> str:
     return _outcome(revision.run_id)[0]
 
 
-def probe_xs7_modes(scratch: str, umask: str) -> dict[str, Any]:
+def probe_run_manifest_modes(scratch: str, umask: str) -> dict[str, Any]:
     """Record two resolutions under `umask`, a dead writer's temporary planted between; report modes and leftovers."""
     from senselab_core.runtime import revision
     from senselab_core.runtime.storage import StorePolicy, committed_modes, shared_dir_mode
@@ -396,7 +396,7 @@ def probe_xs7_modes(scratch: str, umask: str) -> dict[str, Any]:
     }
 
 
-# -- XS-1..XS-3 class: every directory an operation reaches, planted with a symlink outside or a file --
+# -- every directory an operation reaches, planted with a symlink outside or a file --
 
 OPERATIONS = ("put", "get", "collect", "fetch", "record")
 TYPED = {"", "WrongKindError", "ManifestConflictError"}
@@ -596,7 +596,7 @@ PRIMITIVE = {
 }
 
 
-# -- H-R40: every name a writer writes, planted with a symlink, a hard link, a directory or corrupt content --
+# -- every name a writer writes, planted with a symlink, a hard link, a directory or corrupt content --
 
 NAME_OPERATIONS = ("put", "get", "collect", "fetch", "record", "lease")
 PLANTS = ("symlink", "hardlink", "directory", "corrupt")
@@ -720,7 +720,7 @@ def probe_planted_names(scratch: str, op: str, plant: str) -> dict[str, Any]:
     return {"reports": reports}
 
 
-# -- the H9b review's C-1 and I-1..I-4, on the run manifests, the lease and fetch --
+# -- run manifests, leases and fetch under planted objects --
 
 LEASE = "resolutions@2.json.lease"
 
@@ -777,7 +777,7 @@ def probe_record_with_plant(scratch: str, name: str, plant: str) -> dict[str, An
     }
 
 
-def probe_i4_swap_after_link(scratch: str) -> dict[str, Any]:
+def probe_swap_after_link(scratch: str) -> dict[str, Any]:
     """Swap `blobs/<sha>` for other bytes right after fetch links it; report the marker's stamps and a re-fetch."""
     import json as json_module
 

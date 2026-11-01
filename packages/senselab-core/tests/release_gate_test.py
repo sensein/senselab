@@ -90,14 +90,14 @@ def test_gate_accepts_a_releasable_version(v: str, fabricate: Callable[..., Path
         "2.0.0rc1.post1",
     ],
 )
-def test_a29_release_gate_refuses_version(v: str, fabricate: Callable[..., Path]) -> None:
+def test_release_gate_refuses_version(v: str, fabricate: Callable[..., Path]) -> None:
     """A dev, local or below-floor version is refused by the version check."""
     with pytest.raises(gate.GateError):
         gate.check_versions(_release(fabricate, v), FLOOR)
 
 
 @pytest.mark.logic
-def test_a29_release_gate_refuses_wheels_that_disagree(fabricate: Callable[..., Path]) -> None:
+def test_release_gate_refuses_wheels_that_disagree(fabricate: Callable[..., Path]) -> None:
     """Three wheels at two versions are refused even when each is releasable alone."""
     wheels = [
         fabricate("senselab-worker", "2.0.0"),
@@ -110,7 +110,7 @@ def test_a29_release_gate_refuses_wheels_that_disagree(fabricate: Callable[..., 
 
 @pytest.mark.logic
 @pytest.mark.parametrize("absent", gate.DISTRIBUTIONS)
-def test_a11_release_gate_refuses_missing_sibling(absent: str, fabricate: Callable[..., Path]) -> None:
+def test_release_gate_refuses_missing_sibling(absent: str, fabricate: Callable[..., Path]) -> None:
     """Dropping any one of the three wheels is refused, whichever it is."""
     wheels = [w for w in _release(fabricate, "2.0.0") if not w.name.startswith(absent.replace("-", "_") + "-")]
     assert len(wheels) == 2
@@ -119,7 +119,7 @@ def test_a11_release_gate_refuses_missing_sibling(absent: str, fabricate: Callab
 
 
 @pytest.mark.logic
-def test_a11_release_gate_refuses_the_root_wheel_alone(fabricate: Callable[..., Path]) -> None:
+def test_release_gate_refuses_the_root_wheel_alone(fabricate: Callable[..., Path]) -> None:
     """The wheel a bare ``uv build`` writes is refused."""
     with pytest.raises(gate.GateError):
         gate.check_pins([fabricate("senselab", "2.0.0", ["senselab-core==2.0.0"])])
@@ -141,7 +141,7 @@ def test_a11_release_gate_refuses_the_root_wheel_alone(fabricate: Callable[..., 
         "senselab-worker @ https://example.invalid/w.whl",
     ],
 )
-def test_a32_release_gate_refuses_a_sibling_requirement_that_is_not_the_exact_version(
+def test_release_gate_refuses_a_sibling_requirement_that_is_not_the_exact_version(
     pin: str, fabricate: Callable[..., Path]
 ) -> None:
     """Only ``==<this version>`` satisfies a sibling requirement; a range admits another or a local build."""
@@ -190,7 +190,7 @@ def test_check_installs_installs_each_distribution_alone_and_imports_it(fabricat
 
 @pytest.mark.env
 @pytest.mark.network
-def test_a11_check_installs_refuses_a_wheel_that_does_not_import(fabricate: Callable[..., Path]) -> None:
+def test_check_installs_refuses_a_wheel_that_does_not_import(fabricate: Callable[..., Path]) -> None:
     """An installable dist whose core package raises on import is refused."""
     wheels = _release(
         fabricate,
@@ -204,7 +204,7 @@ def test_a11_check_installs_refuses_a_wheel_that_does_not_import(fabricate: Call
 @pytest.mark.env
 @pytest.mark.network
 @pytest.mark.parametrize("culprit", ["worker", "core"])
-def test_i1_check_installs_refuses_an_undeclared_dependency(culprit: str, fabricate: Callable[..., Path]) -> None:
+def test_check_installs_refuses_an_undeclared_dependency(culprit: str, fabricate: Callable[..., Path]) -> None:
     """A distribution importing a third-party package its metadata omits fails in its own venv, whoever it is."""
     modules = {**OK_MODULES, culprit: {"modules": {next(iter(OK_MODULES[culprit]["modules"])): "import numpy\n"}}}
     wheels = _release(fabricate, "2.0.0", **modules)
@@ -214,7 +214,7 @@ def test_i1_check_installs_refuses_an_undeclared_dependency(culprit: str, fabric
 
 @pytest.mark.logic
 @pytest.mark.parametrize("name", gate.DISTRIBUTIONS)
-def test_c1_release_gate_refuses_a_wheel_without_its_pin(name: str, fabricate: Callable[..., Path]) -> None:
+def test_release_gate_refuses_a_wheel_without_its_pin(name: str, fabricate: Callable[..., Path]) -> None:
     """A wheel whose requirements differ from the graph's, by omission or by an invented edge, is refused."""
     graph = {
         "senselab": ["senselab-core==2.0.0", "senselab-worker==2.0.0"],
@@ -230,7 +230,7 @@ def test_c1_release_gate_refuses_a_wheel_without_its_pin(name: str, fabricate: C
 
 @pytest.mark.logic
 @pytest.mark.parametrize("extra", ["senselab", "senselab-core", "senselab-worker"])
-def test_c1_release_gate_refuses_a_sibling_the_graph_does_not_give(extra: str, fabricate: Callable[..., Path]) -> None:
+def test_release_gate_refuses_a_sibling_the_graph_does_not_give(extra: str, fabricate: Callable[..., Path]) -> None:
     """A wheel requiring a sibling beyond, or twice beside, its declared edges is refused."""
     wheels = [
         fabricate("senselab-worker", "2.0.0"),
@@ -259,7 +259,7 @@ def test_c1_release_gate_refuses_a_sibling_the_graph_does_not_give(extra: str, f
         ("garbage", None, False),
     ],
 )
-def test_i2_release_gate_binds_the_version_to_the_tag_and_prerelease_flag(
+def test_release_gate_binds_the_version_to_the_tag_and_prerelease_flag(
     tag: str, prerelease: bool | None, ok: bool, fabricate: Callable[..., Path]
 ) -> None:
     """The tag, canonical or ``X.Y.Z-(alpha|beta|rc).N``, names the built version; the prerelease flag matches."""
@@ -273,7 +273,7 @@ def test_i2_release_gate_binds_the_version_to_the_tag_and_prerelease_flag(
 
 
 @pytest.mark.logic
-def test_m4_release_gate_checks_every_file_in_dist(
+def test_release_gate_checks_every_file_in_dist(
     fabricate: Callable[..., Path], fabricate_sdist: Callable[..., Path]
 ) -> None:
     """A stale sdist, a duplicate, a foreign file or a missing sdist each refuse; the complete set passes."""
@@ -303,7 +303,7 @@ def test_m4_release_gate_checks_every_file_in_dist(
 
 
 @pytest.mark.logic
-def test_a11_publish_builds_every_package_and_gates_before_upload() -> None:
+def test_publish_builds_every_package_and_gates_before_upload() -> None:
     """The job fetches tags, builds all packages, gates with the tag, and uploads only on a release event."""
     workflow = yaml.safe_load((REPO / ".github/workflows/publish.yaml").read_text())
     triggers = workflow.get("on", workflow.get(True))
@@ -329,7 +329,7 @@ def test_a11_publish_builds_every_package_and_gates_before_upload() -> None:
 
 
 @pytest.mark.logic
-def test_i3_a_ci_job_selects_the_core_env_tests() -> None:
+def test_a_ci_job_selects_the_core_env_tests() -> None:
     """Some 2x-tests.yaml job runs the ``env`` tier over the core tests, so the release regressions run in CI."""
     workflow = yaml.safe_load((REPO / ".github/workflows/2x-tests.yaml").read_text())
     runs = [s.get("run", "") for job in workflow["jobs"].values() for s in job.get("steps", [])]
@@ -337,7 +337,7 @@ def test_i3_a_ci_job_selects_the_core_env_tests() -> None:
 
 
 @pytest.mark.logic
-def test_a11_every_workspace_member_is_a_published_distribution() -> None:
+def test_every_workspace_member_is_a_published_distribution() -> None:
     """``--all-packages`` builds the workspace members; the gate requires exactly those distributions."""
     assert PYPROJECT["tool"]["uv"]["workspace"]["members"] == ["packages/*"]
     names = {tomllib.loads(p.read_text())["project"]["name"] for p in (REPO / "packages").glob("*/pyproject.toml")}
@@ -361,7 +361,7 @@ _TAGS = [
 @pytest.mark.env
 @pytest.mark.network
 @pytest.mark.parametrize(("tags", "after", "releasable"), _TAGS)
-def test_a29_version_from_the_tag_history_is_gated(
+def test_version_from_the_tag_history_is_gated(
     tags: list[str], after: int, releasable: bool, tagged_workspace: Callable[..., Path], tmp_path: Path
 ) -> None:
     """Whatever hatch-vcs writes for a tag history is releasable exactly when it is a floor-or-above tag build."""
@@ -378,9 +378,7 @@ def test_a29_version_from_the_tag_history_is_gated(
 
 @pytest.mark.env
 @pytest.mark.network
-def test_a32_sdists_are_self_contained_and_the_pin_is_exact(
-    tagged_workspace: Callable[..., Path], tmp_path: Path
-) -> None:
+def test_sdists_are_self_contained_and_the_pin_is_exact(tagged_workspace: Callable[..., Path], tmp_path: Path) -> None:
     """The core sdist carries the hook loader and the shared hook as regular files, and its wheel pins the worker."""
     root = tagged_workspace(["2.3.4"])
     files = build(root, tmp_path / "out", "--package", "senselab-core")
@@ -423,7 +421,7 @@ HOOKS = [
 @pytest.mark.logic
 @pytest.mark.parametrize(("path", "pyproject", "pins"), HOOKS)
 @pytest.mark.parametrize("version", ["2.0.0+g1234", "2.0.0+local", "2.0.0+a.1", "1.0+1"])
-def test_a32_pin_hook_refuses_a_local_segment(
+def test_pin_hook_refuses_a_local_segment(
     path: str, pyproject: str, pins: tuple[str, ...], version: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Both the shared hook and core's loader raise rather than write ``==X+local``."""
@@ -456,7 +454,7 @@ def test_versions_are_pinned_equal(
 
 @pytest.mark.env
 @pytest.mark.network
-def test_i2_two_release_tags_on_one_commit_build_the_older_version(
+def test_two_release_tags_on_one_commit_build_the_older_version(
     tagged_workspace: Callable[..., Path], tmp_path: Path
 ) -> None:
     """With 2.0.0 and 2.1.0rc1 on one commit the build is 2.0.0, so a release for the rc is refused by its tag."""

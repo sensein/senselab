@@ -222,7 +222,7 @@ def test_key_for_puts_the_pinned_model_identity_into_the_key() -> None:
 
 @pytest.mark.logic
 @pytest.mark.parametrize("bad", ["/home/x/a.wav", "a" * 64, SLICE])
-def test_a5_key_for_refuses_untyped_inputs(bad: str) -> None:
+def test_key_for_refuses_untyped_inputs(bad: str) -> None:
     """An input that is a path, bare hex or another kind of identity is refused."""
     with pytest.raises(ValidationError):
         key_for(_task(), _backend(), params=_Params(), inputs={"audio": bad})
@@ -323,7 +323,7 @@ def test_canonical_param_types_are_admitted(annotation: object, wrap: Callable[[
 @pytest.mark.logic
 @pytest.mark.parametrize("wrap", [w for _, w in _wrappers()], ids=[n for n, _ in _wrappers()])
 @pytest.mark.parametrize("annotation", _NON_CANONICAL, ids=repr)
-def test_a6_registry_refuses_non_canonical_param_types(annotation: object, wrap: Callable[[Any], Any]) -> None:
+def test_registry_refuses_non_canonical_param_types(annotation: object, wrap: Callable[[Any], Any]) -> None:
     """A type with no single canonical JSON form is refused wherever it sits, naming the field."""
     registry = Registry()
     with pytest.raises(NonCanonicalParams, match="_Generated.field"):
