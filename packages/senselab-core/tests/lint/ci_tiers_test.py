@@ -41,6 +41,22 @@ def package_selections(workflow: str) -> list[tuple[str, str | None]]:
     return selections
 
 
+def pytest_paths_outside_packages(workflow: str) -> list[tuple[str, str]]:
+    """``(job, path)`` for each path a ``pytest`` command in the workflow runs that is not under ``packages``."""
+    found = []
+    for name, job in yaml.safe_load(workflow).get("jobs", {}).items():
+        for step in job.get("steps", []):
+            for argv in _commands(step.get("run", "")):
+                at = next((i for i, a in enumerate(argv) if Path(a).name == "pytest"), None)
+                if at is None or "install" in argv[:at]:
+                    continue
+                args = argv[at + 1 :]
+                values = {args[i + 1] for i, a in enumerate(args) if a in ("-m", "-p", "-k") and i + 1 < len(args)}
+                paths = [a for a in args if not a.startswith("-") and a not in values]
+                found += [(name, p) for p in paths if p != "packages" and not p.startswith("packages/")]
+    return found
+
+
 def selected_tiers(workflow: str) -> set[str]:
     """The tiers that some ``packages`` job selects: a job with no ``-m`` selects them all."""
     selected: set[str] = set()
@@ -87,3 +103,18 @@ def test_jobs_outside_packages_and_unmarked_runs_are_handled() -> None:
     assert selected_tiers(other) == set()
     bare = yaml.safe_dump({"jobs": {"a": {"steps": [{"run": "uv run pytest \\\n  packages/senselab-core"}]}}})
     assert selected_tiers(bare) == set(TIERS)
+
+
+@pytest.mark.logic
+def test_every_ci_test_run_is_under_packages() -> None:
+    """No 2.x CI job runs a test path outside ``packages/``: the 1.x source pool under ``src/`` is not tested here."""
+    assert pytest_paths_outside_packages(WORKFLOW.read_text()) == []
+
+
+@pytest.mark.logic
+def test_a_job_on_src_tests_is_found() -> None:
+    """A planted ``pytest src/tests`` job, with its markers and plugin flags, is reported by its path alone."""
+    planted = yaml.safe_dump(
+        {"jobs": {"a": {"steps": [{"run": "uv run pytest src/tests -m logic -p no:cacheprovider packages"}]}}}
+    )
+    assert pytest_paths_outside_packages(planted) == [("a", "src/tests")]

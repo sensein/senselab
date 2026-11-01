@@ -18,19 +18,15 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Without a packages/ tree (2.x at the freeze, senselab-2x-api) the core jobs skip. With one, a
-  # missing package or src/ fails this job.
+  # A missing package, or a package without its src/, fails this job and every job that needs it.
   detect:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    outputs:
-      packages: ${{ steps.packages.outputs.present }}
     steps:
     - uses: actions/checkout@v5
       with:
         fetch-depth: 1
-    - name: Look for the 2.x packages
-      id: packages
+    - name: Check the 2.x packages
       run: bash .github/scripts/check-2x-packages.sh
 
   pre-commit:
@@ -56,49 +52,8 @@ jobs:
       run: uv run pre-commit run --all-files
       shell: bash
 
-  # The 1.x tree (src/senselab) still lives on the 2.x line until it is retired.
-  cpu-tests:
-    if: github.event.pull_request.draft == false
-    name: cpu-tests (${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ${{ contains(github.event.pull_request.labels.*.name, 'full-matrix') && fromJSON('["3.11","3.12","3.13","3.14"]') || fromJSON('["3.12"]') }}
-    steps:
-    - uses: actions/checkout@v5
-      with:
-        fetch-depth: 1
-    - name: Install uv
-      uses: astral-sh/setup-uv@v5
-      with:
-        version: 0.13.6
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v6
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install FFmpeg shared libraries
-      run: bash scripts/install-ffmpeg.sh
-    - name: Install dependencies with uv
-      run: uv sync --all-extras --group dev
-    - name: Fetch the 1.x freeze branch
-      run: bash .github/scripts/fetch-1x-freeze.sh
-    - name: Run CPU tests
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      run: |
-        uv run pytest src/tests \
-          --junitxml=pytest.xml \
-          --cov-report=term-missing:skip-covered \
-          --cov-report=xml:coverage.xml \
-          --cov=src \
-          --log-level=DEBUG \
-          --verbose
-
   core-only:
     needs: detect
-    if: needs.detect.outputs.packages == 'true'
     name: core-only (${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
@@ -122,8 +77,6 @@ jobs:
     - name: Run core tests
       run: .core/bin/pytest packages -m "logic or contract or limits or usecase" -p no:cacheprovider
     - name: Check import contracts
-      env:
-        PYTHONPATH: src
       run: .core/bin/lint-imports
     - name: Build each sdist into a wheel on its own
       run: |
@@ -137,7 +90,6 @@ jobs:
 
   core-env:
     needs: detect
-    if: needs.detect.outputs.packages == 'true'
     name: core-env (release gate and packaging)
     runs-on: ubuntu-latest
     steps:
@@ -159,7 +111,6 @@ jobs:
 
   worker-floor:
     needs: detect
-    if: needs.detect.outputs.packages == 'true'
     name: worker-floor (3.10)
     runs-on: ubuntu-latest
     steps:
