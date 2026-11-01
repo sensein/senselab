@@ -195,3 +195,21 @@ def pause_replaces(
 
     monkeypatch.setattr(os, "replace", replace)
     return gates
+
+
+def displace_on_link(monkeypatch: pytest.MonkeyPatch, name: str) -> list[str]:
+    """Unlink `name` (last path component) just after every `os.link` that makes it, as a breaker would.
+
+    Returns the list each displacement appends `name` to.
+    """
+    real = os.link
+    displaced: list[str] = []
+
+    def link(src: Any, dst: Any, **kwargs: Any) -> None:  # noqa: ANN401
+        real(src, dst, **kwargs)
+        if os.path.basename(os.fsdecode(dst)) == name:
+            os.unlink(dst, dir_fd=kwargs.get("dst_dir_fd"))
+            displaced.append(name)
+
+    monkeypatch.setattr(os, "link", link)
+    return displaced

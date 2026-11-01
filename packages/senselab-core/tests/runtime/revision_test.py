@@ -16,10 +16,12 @@ from huggingface_hub.errors import RepositoryNotFoundError
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from planted_objects_fixture import BAD_RUN_IDS, LEASE, NAME_BOUND_S, UNOPENABLE_NAMES, bounded
+from senselab_core.runtime.locks import LeaseUnavailable
 from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.revision import (
     MANIFEST_NAME,
     NAMESPACE,
+    RECORD_ATTEMPTS,
     Resolver,
     RevisionResolutionError,
     choose_run_id,
@@ -31,7 +33,7 @@ from senselab_core.runtime.revision import (
     resolve_revision,
 )
 from senselab_core.runtime.storage import NAME_MAX
-from syscall_faults_fixture import pause_replaces
+from syscall_faults_fixture import displace_on_link, pause_replaces
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
@@ -511,6 +513,16 @@ def test_run_id_over_name_max_refused(tmp_path: Path) -> None:
             call()
     assert not (tmp_path / NAMESPACE).exists()
     record_resolution("org/m", "main", SHA_A, run="x" * NAME_MAX, root=tmp_path)
+
+
+@pytest.mark.logic
+def test_a_lease_displaced_on_every_take_is_a_typed_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A holder displaced on each of `RECORD_ATTEMPTS` takes raises `LeaseUnavailable` and writes nothing."""
+    displaced = displace_on_link(monkeypatch, f"{MANIFEST_NAME}.lease")
+    with pytest.raises(LeaseUnavailable, match="displaced"):
+        record_resolution("org/m", "main", SHA_A, run="r", root=tmp_path)
+    assert len(displaced) == RECORD_ATTEMPTS
+    assert read_manifest("r", root=tmp_path) == {}
 
 
 @pytest.mark.logic

@@ -19,7 +19,7 @@ from typing import Optional
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import COMMIT_HEX
 
-from senselab_core.runtime.locks import Lease
+from senselab_core.runtime.locks import Lease, LeaseUnavailable
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
@@ -45,6 +45,8 @@ _MANIFEST_TEMPORARY = re.compile(re.escape(f".{MANIFEST_NAME}.") + r"[0-9]+\.[0-
 """The manifest's own temporaries, and not its lease's, which a live taker may be writing."""
 MANIFEST_LIMIT = 1 << 24
 """The most bytes a run manifest is read to."""
+RECORD_ATTEMPTS = 3
+"""How many times `record_resolution` takes the manifest's lease before a displaced holder gives up."""
 
 
 class RevisionResolutionError(RuntimeError):
@@ -204,8 +206,8 @@ def record_resolution(
         RevisionResolutionError: ``sha`` is not a 40-hex commit SHA.
         ValueError: ``run`` (or this run's id) is refused by `run_component`.
         LeaseTimeout: the manifest's lease could not be taken within its timeout.
-        LeaseUnavailable: the manifest's lease cannot be taken in the run's directory, or what is at its name
-            cannot be moved aside.
+        LeaseUnavailable: the manifest's lease cannot be taken in the run's directory, what is at its name
+            cannot be moved aside, or it was displaced on each of `RECORD_ATTEMPTS` takes.
         WrongKindError: an object of the wrong kind at ``2x/``, ``2x/runs/`` or the run's directory cannot be
             moved aside.
     """
@@ -228,11 +230,15 @@ def _record_in(runs: StorageDir, run_dir: StorageDir, key: str, sha: str, policy
 
     A holder whose lease was displaced before or after its write (whose temporary the new holder may have
     removed) takes the lease again and re-reads and merges the manifest, so its entry is kept beside the
-    entries of the holder that displaced it.
+    entries of the holder that displaced it, up to `RECORD_ATTEMPTS` takes.
+
+    Raises:
+        LeaseUnavailable: the lease was displaced on every one of `RECORD_ATTEMPTS` takes.
     """
     lease_mode = STAGING_FILE_MODE | (0o004 if policy.world_readable else 0)
-    while True:
-        with Lease(run_dir.path / MANIFEST_NAME, file_mode=lease_mode, directory=run_dir) as lease:
+    path = run_dir.path / MANIFEST_NAME
+    for _ in range(RECORD_ATTEMPTS):
+        with Lease(path, file_mode=lease_mode, directory=run_dir) as lease:
             _remove_leftovers(runs, run_dir, policy)
             current = _read_in(run_dir)
             winner = current.get(key)
@@ -252,7 +258,12 @@ def _record_in(runs: StorageDir, run_dir: StorageDir, key: str, sha: str, policy
                         raise
                 if lease.owns():
                     return sha
-        logger.warning("run manifest %s: lease displaced; re-reading and merging", run_dir.path / MANIFEST_NAME)
+        logger.warning("run manifest %s: lease displaced; re-reading and merging", path)
+    raise LeaseUnavailable(
+        path.with_name(MANIFEST_NAME + ".lease"),
+        f"the lease on {path} was displaced on each of {RECORD_ATTEMPTS} takes; its stale_after is shorter than a "
+        "manifest write, or another process keeps breaking it",
+    )
 
 
 def _remove_leftovers(runs: StorageDir, run_dir: StorageDir, policy: StorePolicy) -> None:
