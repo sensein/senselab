@@ -12,7 +12,6 @@ import pytest
 from pydantic import BaseModel, Field, ValidationError, create_model
 from senselab_core.kernel._base import NonEmptyStr
 from senselab_core.kernel.declare import (
-    REGISTRY,
     SCHEMA_DIALECT,
     BackendParams,
     BackendSpec,
@@ -29,7 +28,7 @@ from senselab_core.kernel.declare import (
     key_for,
     task,
 )
-from senselab_core.kernel.identity import ModelIdentity, ModelRef, ResolvedModel, UnpinnedModel
+from senselab_core.kernel.identity import LogicalKey, ModelIdentity, ModelRef, ResolvedModel, UnpinnedModel
 from senselab_core.kernel.results import Annotation, Embedding
 from senselab_core.kernel.signals import Audio
 
@@ -312,11 +311,19 @@ def test_task_decorator_declares_its_spec() -> None:
 @pytest.mark.logic
 @pytest.mark.parametrize(
     "ports",
-    [{"inputs": {"audio": "Audio"}}, {"inputs": {"audio": int}}, {"inputs": None}],
-    ids=["name", "plain", "missing"],
+    [
+        {"inputs": {"audio": "Audio"}},
+        {"inputs": {"audio": int}},
+        {"inputs": None},
+        {"inputs": {"env": Env}},
+        {"inputs": {"spec": BackendSpec}},
+        {"inputs": {"spec": TaskSpec}},
+        {"inputs": {"key": LogicalKey}},
+    ],
+    ids=["name", "plain", "missing", "env", "backend_spec", "task_spec", "logical_key"],
 )
-def test_task_ports_are_kernel_types(ports: dict[str, Any]) -> None:
-    """Ports map to kernel types; a type name, a plain type or a missing mapping is refused."""
+def test_task_ports_are_kernel_value_types(ports: dict[str, Any]) -> None:
+    """Ports map to kernel value types; a type name, a plain type, a declaration or a key is refused."""
     registry = Registry()
     body = {"outputs": {"e": Embedding}, **{k: v for k, v in ports.items() if v is not None}}
     with pytest.raises(TypeError, match="inputs"):
@@ -518,14 +525,14 @@ def _schemas(document: dict[str, Any]) -> list[dict[str, Any]]:
 @pytest.mark.contract
 def test_schema_validates_2020_12() -> None:
     """Every generated schema names and validates under the 2020-12 metaschema, and checks instances as declared."""
-    import senselab_core.runtime.fake_backend  # noqa: F401, PLC0415 - registers fake.echo
+    from senselab_core.runtime.fake_backend import ECHO  # noqa: PLC0415 - importing it registers fake.echo
 
     registry = Registry()
     spec = _task(name="t.rich", params=_Rich, inputs={"audio": "Audio", "other": "Audio"})
     registry.add_task(spec)
     registry.add_backend(_backend(task="t.rich", name="beam", params=_Beam))
     registry.add_backend(_backend(task="t.rich", name="plain"))
-    documents = [json_schema(spec, registry), json_schema(REGISTRY.tasks()[0])]
+    documents = [json_schema(spec, registry), json_schema(ECHO)]
     assert set(documents[0]["backend_params"]) == {"beam", "plain"}
     for schema in [s for d in documents for s in _schemas(d)]:
         assert schema["$schema"] == SCHEMA_DIALECT == "https://json-schema.org/draft/2020-12/schema"

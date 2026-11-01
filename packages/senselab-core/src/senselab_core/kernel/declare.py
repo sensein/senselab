@@ -23,7 +23,9 @@ from pydantic import (
 from pydantic.json_schema import GenerateJsonSchema
 
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap
+from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import InputIdentity, LogicalKey, Params, ProfileSliceIdentity, ResolvedModel
+from senselab_core.kernel.signals import Recording
 
 TaskKind = Literal["measure", "transform", "decide", "fit"]
 
@@ -326,11 +328,12 @@ C = TypeVar("C", bound=type)
 def task(*, name: str, version: str, kind: TaskKind, registry: Registry = REGISTRY) -> Callable[[C], C]:
     """Declare the decorated class as a task in `registry` and set its `spec` to the `TaskSpec`.
 
-    The class holds `inputs` and `outputs`, each mapping port names to kernel types, and may hold
+    The class holds `inputs` and `outputs`, each mapping port names to kernel value types (a `Recording` or a
+    `Formatted` result), and may hold
     `Params`, a `TaskParams` subclass (`TaskParams` when absent).
 
     Raises:
-        TypeError: if `inputs` or `outputs` is missing or maps a port to anything but a kernel type.
+        TypeError: if `inputs` or `outputs` is missing or maps a port to anything but a kernel value type.
     """
 
     def declare(cls: C) -> C:
@@ -352,10 +355,10 @@ def task(*, name: str, version: str, kind: TaskKind, registry: Registry = REGIST
 def _port_types(cls: type, ports: str) -> dict[str, str]:
     declared = getattr(cls, ports, None)
     if not isinstance(declared, Mapping):
-        raise TypeError(f"task class {cls.__qualname__} must map {ports} port names to kernel types")
-    bad = {p: t for p, t in declared.items() if not (isinstance(t, type) and issubclass(t, Frozen))}
+        raise TypeError(f"task class {cls.__qualname__} must map {ports} port names to kernel value types")
+    bad = {p: t for p, t in declared.items() if not (isinstance(t, type) and issubclass(t, (Recording, Formatted)))}
     if bad:
-        raise TypeError(f"{cls.__qualname__}.{ports}: ports {sorted(bad)} are not kernel types")
+        raise TypeError(f"{cls.__qualname__}.{ports}: ports {sorted(bad)} are not kernel value types")
     return {p: t.__name__ for p, t in declared.items()}
 
 
