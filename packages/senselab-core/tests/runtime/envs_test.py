@@ -25,6 +25,7 @@ from senselab_core.runtime.envs import (
     compile_lock,
     detect_host_cuda,
     ensure_env,
+    installed_gaps,
     lock_digest,
     lock_identity_digest,
     pick_torch_index,
@@ -275,6 +276,25 @@ def _uv_lock(tmp_path: Path, *packages: tuple[str, str], extras: dict[str, dict[
 
 def _host(tmp_path: Path, lock: Path, requirements: list[str]) -> EnvHandle:
     return ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, uv=FAKE_UV, requirements=requirements)
+
+
+def test_host_without_a_lock_checks_the_installed_packages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no lock, a host env is opened when the installed distributions satisfy the requirements."""
+    monkeypatch.setenv("FAKE_UV_PYTHON_DIR", str(Path(sys.base_prefix).resolve().parent))
+    handle = ensure_env(Env.host(), None, tmp_path, settings=SETTINGS, uv=FAKE_UV, requirements=["numpy", "pytest>=1"])
+    assert handle.python == sys.executable and handle.lock_sha
+    assert installed_gaps(["numpy>=0", "no-such-dist-xyz", "numpy<0.1", "no-such-dist-xyz; python_version < '3'"]) == [
+        "no-such-dist-xyz",
+        "numpy<0.1",
+    ]
+
+
+def test_host_without_a_lock_refuses_a_real_gap(tmp_path: Path) -> None:
+    """With no lock, a requirement the installed packages do not satisfy refuses the backend, naming it."""
+    with pytest.raises(HostLockLacksBackend, match="no-such-dist-xyz"):
+        ensure_env(
+            Env.host(), None, tmp_path, settings=SETTINGS, uv=FAKE_UV, requirements=["numpy", "no-such-dist-xyz"]
+        )
 
 
 def test_host_refused_when_lock_lacks_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

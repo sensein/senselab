@@ -26,7 +26,7 @@ from senselab._api.declarations import SpeechToTextParams
 from senselab.audio.tasks.speech_to_text.token_confidence import (
     capture_token_confidence,
     merge_confidence_blocks,
-    whisper_token_ids,
+    special_token_ids,
     word_confidences,
 )
 
@@ -210,8 +210,8 @@ def _transcribe(
     if task.timestamps != "none":
         kwargs["return_timestamps"] = "word" if task.timestamps == "word" else True
     inputs = [{"array": p.samples, "sampling_rate": state.sampling_rate} for p in prepared]
-    no_speech_id, special_ids = whisper_token_ids(state.pipe)
-    with capture_token_confidence(state.pipe, no_speech_token_id=no_speech_id, special_token_ids=special_ids) as blocks:
+    special_ids = special_token_ids(state.pipe)
+    with capture_token_confidence(state.pipe, special_token_ids=special_ids) as blocks:
         outputs = state.pipe(inputs, **kwargs)
     tokenizer = getattr(state.pipe, "tokenizer", None)
     decode = None if tokenizer is None else (lambda token: str(tokenizer.decode([token])))

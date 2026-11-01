@@ -10,6 +10,7 @@ runtime is copied into every env as an overlay that leaves its wheel set unchang
 """
 
 import errno
+import importlib.metadata
 import logging
 import os
 import platform
@@ -261,7 +262,7 @@ def pick_torch_index(
 
 def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings, and two injectable boundaries
     env: Env,
-    lock: Path,
+    lock: Path | None,
     root: Path,
     *,
     settings: Envs,
@@ -271,7 +272,8 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
 ) -> EnvHandle:
     """Return the env `env` built from `lock` under `root`, building it once across processes.
 
-    For `Env.host()`, `lock` is the senselab lock and the env is this interpreter's, which must be uv-managed.
+    For `Env.host()`, `lock` is the senselab lock, or None when none ships with the install, in which case the installed
+    distributions are checked against `requirements`; the env is this interpreter's, which must be uv-managed.
 
     Args:
         env: The env a backend declares.
@@ -295,10 +297,17 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
     if env.kind == "host":
         if not requirements:
             raise EnvLockError("an Env.host() backend must pass its requirements, so the senselab lock can be checked")
+        if lock is None:
+            lacking = installed_gaps(requirements)
+            if lacking:
+                raise HostLockLacksBackend(f"the installed packages do not satisfy {lacking}")
+            return _host_env(None, uv, requirements)
         lacking = host_lock_gaps(lock, requirements)
         if lacking:
             raise HostLockLacksBackend(f"{lock} does not cover {lacking}; declare the backend Env.isolated instead")
-        return _host_env(lock, uv)
+        return _host_env(lock, uv, requirements)
+    if lock is None:
+        raise EnvLockError(f"a {env.kind} env is built from its lock, none was given")
     parsed = EnvLock.read(lock)
     index = None
     if parsed.torch_pins:
@@ -350,7 +359,7 @@ def _read_record(root: Path, stem: str) -> EnvRecord | None:
     return record if (root / record.directory).is_dir() else None
 
 
-def _host_env(lock: Path, uv: Uv) -> EnvHandle:
+def _host_env(lock: Path | None, uv: Uv, requirements: Sequence[str]) -> EnvHandle:
     suffix = "t" if sysconfig.get_config_var("Py_GIL_DISABLED") else ""
     managed = _check(uv("python", "dir"), "find the uv-managed interpreters").stdout.strip()
     if not managed or not Path(sys.base_prefix).resolve().is_relative_to(Path(managed).resolve()):
@@ -361,7 +370,7 @@ def _host_env(lock: Path, uv: Uv) -> EnvHandle:
     return EnvHandle(
         python=sys.executable,
         python_version=platform.python_version() + suffix,
-        lock_sha=file_digest("file@1", lock),
+        lock_sha=file_digest("file@1", lock) if lock else _requirements_digest(requirements),
         wheel_set=_wheel_set(Path(sysconfig.get_paths()["purelib"])),
         torch_index=None,
     )
@@ -596,6 +605,43 @@ def host_lock_gaps(lock: Path, requirements: Sequence[str]) -> list[str]:
     return gaps
 
 
+def _requirements_digest(requirements: Sequence[str]) -> str:
+    """Return the `wheel-set@1` digest of each requirement's installed `[name, version]`, for a lockless host env."""
+    pairs = sorted(
+        [_normalize(Requirement(t).name), importlib.metadata.version(Requirement(t).name)]
+        for t in requirements
+        if not (Requirement(t).marker and not Requirement(t).marker.evaluate())  # type: ignore[union-attr]
+    )
+    return identity_digest(WHEEL_SET_TAG, pairs)
+
+
+def installed_gaps(requirements: Sequence[str]) -> list[str]:
+    """Return the `requirements` the installed distributions do not satisfy.
+
+    A requirement whose marker is false on this host is skipped; any other needs its distribution installed at a version
+    its specifier admits (pre-releases included). A requirement naming a URL is never satisfied.
+
+    Raises:
+        EnvLockError: a requirement is not a valid requirement string.
+    """
+    gaps = []
+    for text in requirements:
+        try:
+            req = Requirement(text)
+        except InvalidRequirement as err:
+            raise EnvLockError(f"invalid requirement {text!r}: {err}") from err
+        if req.marker is not None and not req.marker.evaluate():
+            continue
+        try:
+            version = importlib.metadata.version(req.name)
+        except importlib.metadata.PackageNotFoundError:
+            gaps.append(text)
+            continue
+        if req.url is not None or not req.specifier.contains(version, prereleases=True):
+            gaps.append(text)
+    return gaps
+
+
 def _normalize(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
@@ -750,6 +796,7 @@ __all__ = [
     "detect_host_cuda",
     "ensure_env",
     "host_lock_gaps",
+    "installed_gaps",
     "lock_digest",
     "lock_identity_digest",
     "pick_torch_index",

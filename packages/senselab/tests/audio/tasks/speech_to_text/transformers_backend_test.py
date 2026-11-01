@@ -88,12 +88,12 @@ def test_word_confidence_is_joint_token_probability_when_words_align() -> None:
 
 @pytest.mark.logic
 def test_merge_concatenates_tokens_in_window_order() -> None:
-    """Windows of one transcript concatenate tokens and log-probabilities and keep the most silence-like window."""
-    a = {"tokens": [1], "token_logprob": [-1.0], "avg_logprob": -1.0, "no_speech_prob": 0.1}
-    b = {"tokens": [2], "token_logprob": [-3.0], "avg_logprob": -3.0, "no_speech_prob": 0.4}
+    """Windows of one transcript concatenate tokens and log-probabilities and average `avg_logprob`."""
+    a = {"tokens": [1], "token_logprob": [-1.0], "avg_logprob": -1.0}
+    b = {"tokens": [2], "token_logprob": [-3.0], "avg_logprob": -3.0}
     merged = merge_confidence_blocks([a, b])
     assert merged["tokens"] == [1, 2] and merged["token_logprob"] == [-1.0, -3.0]
-    assert merged["avg_logprob"] == -2.0 and merged["no_speech_prob"] == 0.4
+    assert merged["avg_logprob"] == -2.0
 
 
 @pytest.mark.logic
@@ -192,7 +192,8 @@ def test_backend_is_a_host_backend_the_senselab_lock_covers() -> None:
 
     (spec,) = [b for b in REGISTRY.backends("speech_to_text") if b.name == "transformers"]
     assert spec.env.kind == "host" and spec.requirements and not spec.batch_invariant
-    assert host_lock_gaps(host_lock(), spec.requirements) == []
+    lock = host_lock()
+    assert lock is not None and host_lock_gaps(lock, spec.requirements) == []
 
 
 def _real_state(faults: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
@@ -245,10 +246,38 @@ def test_transformers_backend_edge_inputs_with_real_weights() -> None:
 
 @pytest.mark.env
 def test_token_confidence_from_logits_scores_every_step() -> None:
-    """A uniform step has entropy ln(vocab); the chosen token's log-probability and id are returned per step."""
+    """A uniform step gives the chosen token's id and log-probability."""
     torch = pytest.importorskip("torch")
     from senselab.audio.tasks.speech_to_text.token_confidence import token_confidence_from_logits
 
     [block] = token_confidence_from_logits(logits=[torch.zeros(1, 4)], sequences=torch.tensor([[7, 2]]))
-    assert block["token_entropy"] == pytest.approx([float(numpy.log(4))])
     assert block["tokens"] == [2] and block["token_logprob"] == pytest.approx([float(numpy.log(0.25))])
+
+
+@pytest.mark.contract
+def test_torch_extra_is_the_backends_requirements() -> None:
+    """The root `torch` extra lists only requirements the host backend declares, so the two cannot drift."""
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[6]
+    extra = tomllib.loads((root / "pyproject.toml").read_text("utf-8"))["project"]["optional-dependencies"]["torch"]
+    (spec,) = [b for b in REGISTRY.backends("speech_to_text") if b.name == "transformers"]
+    assert set(extra) <= set(spec.requirements)
+
+
+@pytest.mark.contract
+def test_no_lock_checks_installed_versions_and_refuses_a_gap(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,  # noqa: ANN401
+) -> None:
+    """With no `uv.lock` above the package, `open_env` checks the backend's requirements against what is installed."""
+    from senselab._api import packaged
+    from senselab_core.runtime.envs import HostLockLacksBackend
+    from senselab_core.runtime.profiles import ExecutionProfile
+
+    monkeypatch.setattr(packaged, "host_lock", lambda: None)
+    (spec,) = [b for b in REGISTRY.backends("speech_to_text") if b.name == "transformers"]
+    gap = spec.model_copy(update={"requirements": ("no-such-dist-xyz>=1",)})
+    with pytest.raises(HostLockLacksBackend, match="no-such-dist-xyz"):
+        packaged.open_env(gap, ExecutionProfile.load())

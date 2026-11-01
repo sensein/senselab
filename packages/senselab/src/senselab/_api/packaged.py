@@ -6,7 +6,7 @@ from pathlib import Path
 from senselab_core.kernel.declare import BackendSpec
 from senselab_core.runtime.call import Packaged, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
-from senselab_core.runtime.envs import EnvHandle, EnvLockError, ensure_env
+from senselab_core.runtime.envs import EnvHandle, ensure_env
 from senselab_core.runtime.profiles import ExecutionProfile
 
 _DATA = resources.files("senselab").joinpath("data")
@@ -14,28 +14,31 @@ CATALOGUE = Catalogue.load(_DATA.joinpath("catalogue.yaml").read_text("utf-8"))
 """The packaged catalogue, `senselab/data/catalogue.yaml`."""
 
 
-def host_lock() -> Path:
+def host_lock() -> Path | None:
     """Return the senselab lock, the `uv.lock` beside the `pyproject.toml` of the checkout this package runs from.
 
-    Raises:
-        EnvLockError: no `uv.lock` lies above this package.
+    None when no checkout lies above the package, as in an installed wheel.
     """
     for parent in Path(__file__).resolve().parents:
         if (parent / "pyproject.toml").is_file() and (parent / "uv.lock").is_file():
             return parent / "uv.lock"
-    raise EnvLockError("no uv.lock lies above senselab, so a host backend cannot be checked against the senselab lock")
+    return None
 
 
 def open_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:
-    """Open the env `backend` declares: a host backend against the senselab lock, any other from `data/env_locks/`.
+    """Open the env `backend` declares.
+
+    A host backend is checked against the senselab lock, or the installed packages when the install ships none; any
+    other is built from `data/env_locks/`.
 
     Raises:
-        As `ensure_env` and `host_lock`.
+        As `ensure_env`.
     """
     env = backend.env
     if env.kind == "host":
         lock = host_lock()
-        return ensure_env(env, lock, lock.parent, settings=profile.envs, requirements=backend.requirements)
+        root = Path(".") if lock is None else lock.parent
+        return ensure_env(env, lock, root, settings=profile.envs, requirements=backend.requirements)
     env_lock = Path(str(_DATA.joinpath("env_locks", f"{env.name}.txt")))
     return ensure_env(env, env_lock, profile.env_root(env.kind), settings=profile.envs)
 
