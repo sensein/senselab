@@ -1,260 +1,49 @@
 # CLAUDE.md
 
-Guidance for Claude Code working in this repository.
+Guidance for work on **senselab 2.x** in this branch. 1.x guidance lives on `alpha`.
 
-**Setup, installation and the test/lint commands live in [README.md](README.md#development).**
-That file is the source of truth and is verified against a clean clone; this file does not repeat it.
-What is here is the rest: how the code is organised, the conventions that are not obvious from
-reading it, and the traps that have cost real time.
+## Where things are
 
-## Project Overview
+- **2.x code** is the uv workspace under `packages/`:
+  - `senselab-worker`: stdlib + numpy, Python ≥3.10. Wire protocol, canonical encoding, digests.
+  - `senselab-core`: Python ≥3.11. Kernel values and runtime: store, fetch, locks, provenance, worker client.
+- **Specs and state** are in `specs/20261030-140022-senselab-2x-api/`. Resume from `STATE.md`. The
+  principles are P-1..P-41 in `principles.md`, the decisions are ADR-001.. in `adr/`, and open findings
+  are in `review-register.md`.
+- **`src/` is the 1.x source pool, frozen and untested here.** A use case is ported by merging `alpha`, then a
+  rename-only `git mv` commit into `packages/`, then a modify commit (`migration-ledger.md`). Nothing in
+  `packages/` imports it. Triage's tasks and pipelines port like any other use case; its decision layer is
+  superseded by the flywheel.
 
-Senselab processes and analyses behavioural data — primarily voice and speech, also text and
-video — through reproducible pipelines. uv for dependency management; the interpreter is pinned in
-`.python-version` (3.12.11). The patch level is load-bearing: `_thread.RLock` gained
-`_recursion_count` after 3.12.0, and `multiprocess` (a `datasets` dependency) calls it during
-teardown, so on 3.12.0 the resource tracker's child is never reaped and a finished process hangs —
-18 minutes per task, measured on a cluster array. See
-`specs/20260905-resource-tracker-teardown/`. CI's cpu and gpu matrices already default to 3.12;
-the macOS and pre-commit jobs lagged at 3.11 until 2026-09-05, which is part of why this went
-unseen.
+## Branches and CI
 
-## Architecture
+- 2.x work merges into the `2.x` integration branch, never `alpha`.
+- CI is `.github/workflows/2x-tests.yaml` and `2x-docs-preview.yaml`. Previews appear under
+  `/senselab/2x/pr-N/`. The 1.x workflows skip the 2.x bases.
 
-### Module Structure
+## Commands
 
-```
-src/senselab/
-├── audio/           # Audio processing (largest module)
-│   ├── data_structures/  # Audio, AudioClassificationResult
-│   ├── tasks/            # Processing operations by capability
-│   └── workflows/        # Composite pipelines (e.g., health_measurements)
-├── video/           # Video processing
-│   ├── data_structures/  # Video, Pose
-│   └── tasks/            # pose_estimation, target_speaker_extraction, input_output
-├── text/            # Text processing
-│   └── tasks/            # embeddings_extraction
-├── utils/           # Shared utilities
-│   ├── data_structures/  # SenselabDataset, DeviceType, SenselabModel, Language
-│   └── tasks/            # batching, dimensionality_reduction, pooling, etc.
-└── agentic_interface/    # AI agent for Jupyter notebooks
-```
+- Setup: `uv sync --all-extras --group dev`. `uv sync` is subtractive, so always pass the full set.
+- Tests: `uv run --no-sync pytest <dirs you changed> -q`, run serially. Never `-n auto`: each worker
+  loads the ML stack separately.
+- Lint: `uv run lint-imports` and `uv run pre-commit run --all-files`.
 
-### Key Design Patterns
+## Local machine versus ORCD
 
-**Data Containers**: `Audio` and `Video` classes use lazy loading (private `_waveform`/`_frames` with property accessors). All data structures are Pydantic v2 models.
+- Locally, run only scoped tests and lint, in the existing `.venv`.
+- Do not run full suites, create new venvs or download models locally. The full `packages` suite and the
+  release-gate builds run on ORCD.
+- Every probe bounds itself: finite input, a file-size limit and a timeout.
 
-**Model Abstraction**: `SenselabModel` is the base class with provider-specific subclasses (`HFModel`, `SpeechBrainModel`, `PyannoteAudioModel`, etc.) that validate model IDs on instantiation.
+## Conventions
 
-**Task Organization**: Each task module has an `api.py` with public functions and backend-specific implementations (e.g., `huggingface.py`, `speechbrain.py`). Functions accept data objects, model specs, device, and return typed results.
-
-**Device Handling**: `DeviceType` enum (CPU, CUDA, MPS) with dtype mapping for cross-platform compatibility.
-
-### Audio Tasks
-
-Key audio processing capabilities in `audio/tasks/`:
-- `speech_to_text/` - ASR transcription
-- `speaker_verification/`, `speaker_embeddings/`, `speaker_diarization/`
-- `speech_enhancement/`, `voice_activity_detection/`
-- `voice_cloning/`, `text_to_speech/`
-- `forced_alignment/`, `features_extraction/`
-- `classification/` - includes speech emotion recognition
-- `preprocessing/` - resample, filter, normalize
-- `data_augmentation/`, `quality_control/`
-
-## Code Style
-
-- Google-style docstrings (enforced by ruff, `convention = "google"`)
-- Line length 120; type hints required (mypy with the pydantic plugin)
-- Tests in `src/tests/` mirroring the package, named `*_test.py`
-- **Rationale does not go in code, and not in config either.** Docstrings and comments say what a
-  thing is and how to call it; the measurement behind a choice, the failure that drove it and the
-  rejected alternatives go in `specs/`. This reverses an earlier convention, so much of the tree
-  still carries multi-paragraph rationale inline — move it out when you edit such a file rather
-  than extending it.
-- **A `derivation:` key in a config is a hashed value, not a comment — do not add one back.** The
-  triage config carried 50 kB of English in a top-level `derivation:` string, 547 of its 779 lines.
-  The loader hashes the merged mapping, so that prose sat inside `config_hash` and correcting a word
-  of it made two behaviourally identical runs report different identities. It now lives in
-  `specs/20260817-triage-workflow-dag/config-derivations.md`, keyed by config section, and the
-  config carries a short `#` description per section and per key. `#` comments are not hashed and
-  can be corrected freely. Two tests enforce this: no config value may carry prose, and `derivation`
-  stays absent. An earlier version of this file said such a block "is not code and stays where it
-  is" — that was reversed by the owner on 2026-09-04.
-
-## Traps that have cost time
-
-- **Do not run `pytest -n auto`.** Each xdist worker is a separate interpreter that imports torch +
-  transformers + speechbrain independently — **535 MB resident per worker before any test runs**,
-  plus a private copy of any model weights that worker loads. It has exhausted a 32 GB machine.
-  Measured on a 16-core node, `-n 16` also buys nothing on the fast suites: 68 s against 70 s
-  serial, because the import cost equals the test time. Run the directory you changed instead.
-  There is a second, independent reason, now **partly fixed**: `ensure_venv` does
-  `shutil.rmtree(venv_dir)` before installing, and two workers wanting the same subprocess venv
-  would delete each other's tree mid-install. It has held a `FileLock` around the whole
-  marker-check / rmtree / install sequence since PR #444, gated on a `.senselab-installed`
-  completion marker, so that specific race is closed. The macOS CI job carried `-n auto` and hung for 5.5 hours
-  until GitHub's 6-hour ceiling killed it (run 31218624423) — all three workers stalled at the same
-  instant, nothing completed afterwards. Every CI job now runs serially and the macOS job carries
-  `timeout-minutes: 90`, so the next hang costs minutes. What the venv lock still lacks is a
-  heartbeat: a holder that dies mid-install blocks every waiter for the full 600 s timeout and then
-  raises, rather than being detected as dead and taken over.
-- **`uv sync` is subtractive.** It removes extras not named in the command, so always pass the full
-  set (`--all-extras`).
-- **`uv sync` is also only half of setup, and the other half fails as a missing *import*.**
-  `torchcodec` `dlopen`s FFmpeg by soname at import time, so without the shared libraries
-  `src/tests/conftest.py` aborts collection with *"Dependencies failed to import — test environment
-  is broken"* — **for every test, including ones that never open audio**. That reads as a missing
-  Python package, so the reflex is to re-run `uv sync`, which changes nothing. The fix is
-  `bash scripts/install-ffmpeg.sh` plus `LD_LIBRARY_PATH` (`DYLD_LIBRARY_PATH` on macOS); the PyAV
-  wheel does not satisfy it, because PyAV mangles the filenames out of soname reach. The recipe is
-  in [README.md](README.md#development) and is not repeated here — what is here is the signature,
-  because this file is what reaches a fresh agent or worktree and the README is not. In a batch
-  script export it explicitly: a Slurm job does not inherit the login shell, and this omission has
-  killed whole job arrays with `OSError: Could not load this library: .../libtorchcodec_core4.so`.
-- **Cache invalidation is free.** Bump `CACHE_SCHEMA_VERSION` in
-  `src/senselab/utils/tasks/cached_inference.py` rather than reasoning about which
-  `artifacts/analyze_audio_cache/` entries survive. A stale entry that *looks* readable costs far
-  more than recomputing one, and the wipe is automatic on every host.
-- **A cache key is the input's content plus the process, and nothing else (schema 24).** Keys carry
-  the audio/text signature, the stage and its `STAGE_VERSIONS` number, the model id and its resolved
-  40-hex commit, and every result-shaping parameter. The senselab version is provenance, not key:
-  hatch-vcs changes it on every commit, so keying on it missed on every run (the bump to 24 recomputes
-  everything once). The price is that a
-  `tasks/` change altering a stage's output must bump that stage's number. Triage's own result cache
-  (`result_cache_key`, under `SENSELAB_CACHE/results/`) follows the same rule, and the
-  `analyze_audio` cache's prune and schema wipe touch only its own top-level `*.json` entries.
-- **A model load must pass a commit SHA, never a ref.** Resolving `main` to a SHA binds nothing by
-  itself: `snapshot_download(revision="main")` writes `refs/main` and the caller stays
-  ref-addressed, so a later load passing `"main"` goes back through that pointer, which may have
-  moved. Every load is therefore two calls — resolve, then load again with `revision=<sha>` — and
-  the second is free, because a full SHA triggers `huggingface_hub`'s commit-hash shortcut and
-  returns cached files with no network at all. `src/tests/utils/revision_pinning_guard_test.py`
-  enforces this by AST sweep over the subprocess-worker files: a new worker payload carrying a
-  `revision`-ish key fails the test until it is reviewed and allowlisted. Recording a SHA while
-  loading through a ref is the one outcome worse than recording nothing, because the provenance is
-  then confidently wrong.
-- **Thresholds belong in `data/` with a written derivation, never as code literals.** Two defects
-  this session came from literals that were never fitted: a silhouette coefficient read directly as
-  a probability, and a 2→10 dB HNR ramp under which ordinary voiced speech (median 8.12 dB) read as
-  only partly voiced. Regenerate a profile from measured verdicts; do not hand-edit one.
-- **Pre-alpha: rename and replace outright.** No parallel fields, no aliases, no deprecation
-  shims.
-
-## CUDA host configuration
-
-Subprocess-venv backends (`nemo-canary-qwen`, `nemo`, `qwen-asr`) install
-their own `torch` + `torchaudio` into isolated venvs at `~/.cache/senselab/venvs/`.
-On hosts with system CUDA newer than the PyTorch default-wheels CUDA
-(e.g. CUDA 12.9 against PyTorch's `cu128` default), the install would
-otherwise resolve `torch` and `torchaudio` to mismatched CUDA toolchains
-and break their ABI contract at import time.
-
-The shared installer (`ensure_venv` in `src/senselab/utils/subprocess_venv.py`)
-auto-detects the host CUDA via `nvidia-smi` / `nvcc` and routes the install
-through the matching PyTorch wheel index (`cu128` / `cu126` / `cu124` /
-`cu121` / `cpu`). No per-backend configuration needed.
-
-**Every subprocess venv installs from a committed lock** in `src/senselab/utils/data/venv_locks/`.
-Editing a backend's `_REQUIREMENTS`, Python version or CUDA cap makes `ensure_venv` refuse to build
-(`VenvLockError`) until the lock is regenerated with
-`uv run python scripts/lock_subprocess_venvs.py <name>` and committed;
-`src/tests/utils/venv_lock_test.py` fails first. The lock fixes exact `torch`/`torchaudio` pins,
-which are still installed from the host's CUDA index. See
-`specs/20261002-subprocess-venv-locks/design.md`.
-
-Operator override for internal mirrors or unsupported CUDA versions:
-
-```bash
-# Force CPU wheels (e.g. unsupported CUDA, or testing CPU path on a GPU host)
-SENSELAB_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu uv run python scripts/analyze_audio.py ...
-
-# Internal PyPI mirror
-SENSELAB_TORCH_INDEX_URL=https://pypi.internal.example.com/pytorch/cu128 uv run python ...
-```
-
-When no compatible wheel pair exists for the host (rare; happens for days
-after a fresh CUDA major release), the failure surfaces as a
-`SenselabCudaCompatibilityError` naming the host CUDA, the attempted index,
-and the recommended action. See
-`specs/20260512-204619-fix-canary-cuda-conflict/quickstart.md` for
-validation recipes.
-
-## Profiling with Scalene
-
-Optional development tool for line-level CPU and memory profiling of any Python script or Jupyter notebook in the repo.
-
-```bash
-# Install (opt-in; default uv sync is unaffected)
-uv sync --group profiling
-
-# Profile a script
-uv run python scripts/profile_with_scalene.py path/to/script.py
-
-# Profile a tutorial notebook
-uv run python scripts/profile_with_scalene.py tutorials/audio/speech_to_text.ipynb
-
-# Restrict to senselab code only
-uv run python scripts/profile_with_scalene.py --no-thirdparty examples/run.py
-```
-
-Reports are written to `artifacts/scalene/<target>_<timestamp>.html` (standalone, open in any browser). Constraints: notebooks must be non-interactive (no `input()` or widget event waits); child-process profiling is not supported by this wrapper in Scalene 2.2.
-
-See `specs/20260503-235625-scalene-profiling/quickstart.md` for the full option reference, and `scripts/profile_imports.py` for the separate cold-start import-time profiler.
-
-## Audio analysis: the uncertainty workflow
-
-Two entry points over one module, `senselab.audio.workflows.audio_analysis`:
-
-```bash
-# Analyse: every model on the recording, content-addressably cached. Two arguments.
-uv run python scripts/analyze_audio.py audio.wav [--out DIR]
-
-# Adapt: the uncertainty-driven intervention loop over a completed run directory.
-uv run python scripts/adaptive_loop.py artifacts/analyze_audio/<run>/
-```
-
-**The CLI is two arguments.** Everything else is one versioned config with each value's derivation
-written beside it: `src/senselab/audio/workflows/audio_analysis/data/run_config/default.yaml`.
-Override with a partial YAML deep-merged over the packaged one; the merged mapping's hash is stamped
-into every artifact.
-
-```bash
-cat > variant.yaml <<'EOF'
-models:
-  asr: [openai/whisper-large-v3-turbo]
-uncertainty:
-  aggregator: mean
-EOF
-uv run python scripts/analyze_audio.py audio.wav --config variant.yaml
-```
-
-There are deliberately **no per-knob flags**. Seventy existed, and the shipped defaults of the four
-grid flags put the four axes on four spacings sharing zero bucket keys — disabling every cross-axis
-coupling while reporting that it had run. Adding a flag back is adding an unmeasured decision with a
-public interface; add a config key with its derivation instead.
-
-**The design and its reasoning live in the module's own docs**, which pdoc renders and which stay
-next to the code they describe:
-
-- [`workflows/audio_analysis/doc.md`](src/senselab/audio/workflows/audio_analysis/doc.md) — one grid,
-  one fold, L1-measures/L2-decides, the four axes and their voters, outputs, public API, the
-  background-scene and per-speaker-identity design.
-- `specs/20260728-221507-per-speaker-identity-scene/layered-architecture.md` — decisions D-1…D-27.
-- `specs/20260728-221507-per-speaker-identity-scene/l1-post-processing-register.md` — every L1/L2
-  boundary violation, one item each (numbered 1-27, no `F-*` ids), with its status and the
-  measurement behind it.
-- `specs/20260815-215106-analyze-audio-audit/register.md` — the audit's findings, `F-1`..`F-187`,
-  one row each with its tier, severity and what the triage graph should do about it. This is where
-  every `F-*` id lives; the L1/L2 register above holds none of them.
-- `specs/20260508-173136-compare-uncertainty/` — the comparator's contracts.
-- `specs/20260506-154425-audio-analysis-asr-extensions/` — the ASR backend extensions
-  (Canary-Qwen, Qwen3-ASR, MMS alignment) and the separable ASR/alignment caches.
-
-**Open items are tracked in the two registers above, not in this file.** Which one depends on what
-the item is: an L1 emitting a decision instead of a measurement goes in the first, a defect claim
-with a mechanism goes in the second.
-
-Three id namespaces stay distinct because all three once rendered as `S0`: a model's own speaker
-labels (`SPEAKER_00`, `spk0`), the pass-wide cluster harmonising labels across diarizers (`C0`), and
-the fused speaker id in `final/speakers.json` (`S0`). Identity repair adds a fourth, `R*`.
+- **No backwards compatibility (P-14).** No shims, aliases, legacy readers or "historical" vocabulary in
+  `packages/`. Migration is documented, not coded.
+- **One implementation per behaviour (P-41).**
+- **README states 2.x's current status;** update it in the same PR as any change to what 2.x delivers.
+- **Rationale belongs in `specs/`.** Docstrings say what a thing is and how to call it.
+- **Thresholds live in `data/`** with a written derivation, never as literals.
+- **Every digest is tagged and registered** in `DIGEST_TAGS` (ADR-006). A value change bumps its tag.
+- **Model loads pass a commit SHA, never a ref.**
+- **Tests** are named `*_test.py` and carry exactly one tier marker. Each defect gets a regression plus a
+  generated or planted contract over its class, not a one-case patch.
