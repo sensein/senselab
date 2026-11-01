@@ -6,7 +6,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-from fake_clock_fixture import FakeClock
 from huggingface_hub.errors import HfHubHTTPError
 
 
@@ -27,9 +26,3 @@ def backends_importable(monkeypatch: pytest.MonkeyPatch) -> None:
     here = str(Path(__file__).parent)
     existing = os.environ.get("PYTHONPATH")
     monkeypatch.setenv("PYTHONPATH", here if not existing else f"{here}{os.pathsep}{existing}")
-
-
-@pytest.fixture
-def fake_clock() -> FakeClock:
-    """A fresh `FakeClock`."""
-    return FakeClock()

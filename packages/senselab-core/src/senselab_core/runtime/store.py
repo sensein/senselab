@@ -37,6 +37,7 @@ import logging
 import os
 import re
 import stat
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -57,6 +58,7 @@ from senselab_worker.canonical import (
 from senselab_worker.digest import identity_digest
 from senselab_worker.ownership import UUID_HEX
 
+from senselab_core.kernel._base import value_digest
 from senselab_core.kernel.identity import (
     EQUIVALENCE,
     Equivalence,
@@ -66,7 +68,6 @@ from senselab_core.kernel.identity import (
     ReusePolicy,
     acceptable,
 )
-from senselab_core.runtime.clock import SYSTEM_CLOCK, Clock
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
@@ -222,6 +223,12 @@ def _decode(value: object, entry: Path) -> object:
     if isinstance(value, list):
         return [_decode(v, entry) for v in value]
     return value
+
+
+def _equivalence_digest(table: Equivalence) -> str:
+    """Return the `value_digest` of an equivalence table, its classes as sets."""
+    fields = {backend: {name: set(members) for name, members in classes.items()} for backend, classes in table.items()}
+    return value_digest("equivalence", {"classes": fields})
 
 
 def _write_synced(directory: StorageDir, name: str, data: bytes, mode: int) -> None:
@@ -475,8 +482,8 @@ class ResultStore:
         provenance: Where `put`, quarantines and relaxed-policy `get` hits record activities; the
             store owns a fresh one when None.
         policy: Modes and retention ages; `StorePolicy.load_default()` when None.
-        equivalence: The measured equivalence classes `equivalent` reuse admits (`acceptable`).
-        clock: The clock `collect_interval_s` is measured on.
+        equivalence: The measured equivalence classes `equivalent` reuse admits (`acceptable`); a hit it
+            admits records the table's `value_digest` as `equivalence` in its `store.reuse` activity.
     """
 
     def __init__(
@@ -486,15 +493,18 @@ class ResultStore:
         *,
         policy: StorePolicy | None = None,
         equivalence: Equivalence = EQUIVALENCE,
-        clock: Clock = SYSTEM_CLOCK,
     ) -> None:
         """Open a store at `root`; nothing is created until the first `put`."""
         self.root = Path(root)
         self.provenance = provenance if provenance is not None else ProvStore(run_id=f"store-{uuid.uuid4().hex}")
         self.policy = policy if policy is not None else StorePolicy.load_default()
-        self.equivalence = equivalence
-        self.clock = clock
+        self._equivalence = equivalence
         self._last_collect: float | None = None
+
+    @property
+    def equivalence(self) -> Equivalence:
+        """The measured equivalence classes this store's `equivalent` reuse admits."""
+        return self._equivalence
 
     def _entry(self, key: LogicalKey) -> Path:
         d = key.digest()
@@ -670,7 +680,7 @@ class ResultStore:
 
     def _collect_due(self) -> None:
         """Run `collect` if this store has not collected within `policy.collect_interval_s` (monotonic)."""
-        now = self.clock.monotonic()
+        now = time.monotonic()
         if self._last_collect is None or now - self._last_collect >= self.policy.collect_interval_s:
             self._last_collect = now
             self.collect()
@@ -828,6 +838,11 @@ class ResultStore:
                 "stored_context": stored.fingerprint(),
                 "current_context": current.fingerprint(),
                 "policy_used": hit.policy_used.value,
+                **(
+                    {"equivalence": _equivalence_digest(self._equivalence)}
+                    if hit.policy_used is ReusePolicy.EQUIVALENT
+                    else {}
+                ),
             },
         )
         self.provenance.used(activity, self._result_entity(hit.output_identity, digest))
@@ -886,7 +901,11 @@ class ResultStore:
                 self._set_aside(base / name, digest=d, fingerprint=name)
                 continue
             rank = next(
-                (i for i, p in enumerate(allowed) if acceptable(stored, context, p, backend=key.backend, equivalence=self.equivalence)),
+                (
+                    i
+                    for i, p in enumerate(allowed)
+                    if acceptable(stored, context, p, backend=key.backend, equivalence=self._equivalence)
+                ),
                 None,
             )
             if rank is not None:

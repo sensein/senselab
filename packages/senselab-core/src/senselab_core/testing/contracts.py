@@ -134,7 +134,9 @@ def _backend_cases(
         (f"key_changes_with_{f}", functools.partial(_key_changes_with, build, f)) for f in LogicalKey.model_fields
     ]
     cases += [(f"key_ignores_{f}", functools.partial(_key_ignores, build, f)) for f in ExecutionContext.model_fields]
-    cases.append(("key_independent_of_hash_seed", functools.partial(_key_independent_of_hash_seed, build, hash_seed_timeout_s)))
+    cases.append(
+        ("key_independent_of_hash_seed", functools.partial(_key_independent_of_hash_seed, build, hash_seed_timeout_s))
+    )
     cases.append(("content_fault_isolated", FAULT_RUNNERS[backend.stack]))
     return cases
 

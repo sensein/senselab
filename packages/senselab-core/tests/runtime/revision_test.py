@@ -3,11 +3,12 @@
 import json
 import multiprocessing as mp
 import os
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from fake_clock_fixture import FakeClock
 from huggingface_hub.errors import RepositoryNotFoundError
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
@@ -17,13 +18,13 @@ from senselab_core.runtime.revision import (
     NAMESPACE,
     Resolver,
     RevisionResolutionError,
+    choose_run_id,
     get_cached_commit_hash,
     manifest_key,
     manifest_path,
     read_manifest,
     record_resolution,
     resolve_revision,
-    run_id,
 )
 
 SHA_A = "a" * 40
@@ -33,11 +34,11 @@ HubLookup = Callable[[str, str, "str | None"], object]
 
 
 @pytest.fixture
-def offline(tmp_path: Path, fake_clock: FakeClock) -> Callable[[HubLookup], Resolver]:
-    """Build a `Resolver` over an empty local HF cache, asking `hub` on a miss, on a clock that never waits."""
+def offline(tmp_path: Path) -> Callable[[HubLookup], Resolver]:
+    """Build a fresh `Resolver` over an empty local HF cache and this test's cache root, asking `hub` on a miss."""
 
     def make(hub: HubLookup) -> Resolver:
-        return Resolver(cache_dir=tmp_path / "hf-hub", hub=hub, clock=fake_clock)
+        return Resolver(cache_dir=tmp_path / "hf-hub", hub=hub, cache_root=tmp_path / "senselab")
 
     return make
 
@@ -48,69 +49,60 @@ def _answers(sha: str) -> HubLookup:
 
 @pytest.fixture(autouse=True)
 def _isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point SENSELAB_CACHE at a temp dir and clear any inherited run id."""
+    """Point SENSELAB_CACHE at a temp dir."""
     monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "senselab"))
-    monkeypatch.delenv("SENSELAB_RUN_ID", raising=False)
-    # Also drop any Slurm identity: run_id() now falls back to it, so a test running inside an
-    # allocation would otherwise see the real job id instead of a hermetic value.
-    monkeypatch.delenv("SLURM_ARRAY_JOB_ID", raising=False)
-    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
-    import senselab_core.runtime.revision as mr
 
-    mr._RUN_ID = None
-    mr._MEMO.clear()
+
+_RUN_ID_TWICE = """
+import json, os
+from senselab_core.runtime.revision import run_id
+print(json.dumps([run_id(), run_id(), os.environ["SENSELAB_RUN_ID"]]))
+"""
+
+
+def _run_id_in_a_fresh_process(**environ: str) -> list[str]:
+    """`run_id()` twice and the exported `SENSELAB_RUN_ID`, in a fresh interpreter whose run variables are `environ`."""
+    base = {k: v for k, v in os.environ.items() if k not in ("SENSELAB_RUN_ID", "SLURM_ARRAY_JOB_ID", "SLURM_JOB_ID")}
+    proc = subprocess.run(
+        [sys.executable, "-c", _RUN_ID_TWICE], env={**base, **environ}, capture_output=True, text=True, timeout=60
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    return list(json.loads(proc.stdout))
 
 
 @pytest.mark.logic
 def test_run_id_is_generated_once_and_exported() -> None:
     """A generated run id is stable within the process and exported to the environment."""
-    first = run_id()
-    second = run_id()
+    first, second, exported = _run_id_in_a_fresh_process()
     assert first == second, "run_id must be stable within a process"
-    assert os.environ["SENSELAB_RUN_ID"] == first, "run id must be exported so subprocesses inherit it"
+    assert exported == first, "run id must be exported so subprocesses inherit it"
 
 
 @pytest.mark.logic
-def test_run_id_is_inherited_when_already_set(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_id_is_inherited_when_already_set() -> None:
     """A pre-set SENSELAB_RUN_ID is reused rather than replaced with a fresh UUID."""
-    monkeypatch.setenv("SENSELAB_RUN_ID", "job-12345")
-    import senselab_core.runtime.revision as mr
-
-    mr._RUN_ID = None
-    assert run_id() == "job-12345"
+    assert choose_run_id({"SENSELAB_RUN_ID": "job-12345"}) == "job-12345"
 
 
 @pytest.mark.logic
-def test_run_id_falls_back_to_the_slurm_job_id(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_id_falls_back_to_the_slurm_job_id() -> None:
     """Without SENSELAB_RUN_ID, a Slurm job shares one manifest via its job id, not one per process."""
-    monkeypatch.setenv("SLURM_JOB_ID", "778899")
-    import senselab_core.runtime.revision as mr
-
-    mr._RUN_ID = None
-    assert run_id() == "778899"
-    assert os.environ["SENSELAB_RUN_ID"] == "778899", "the chosen id must be exported for subprocesses"
+    assert choose_run_id({"SLURM_JOB_ID": "778899"}) == "778899"
+    assert _run_id_in_a_fresh_process(SLURM_JOB_ID="778899") == ["778899"] * 3, (
+        "the chosen id must be exported for subprocesses"
+    )
 
 
 @pytest.mark.logic
-def test_run_id_prefers_the_array_job_id_so_an_array_shares_one_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_id_prefers_the_array_job_id_so_an_array_shares_one_manifest() -> None:
     """SLURM_ARRAY_JOB_ID (shared by the whole array) wins over per-task SLURM_JOB_ID."""
-    monkeypatch.setenv("SLURM_ARRAY_JOB_ID", "112233")
-    monkeypatch.setenv("SLURM_JOB_ID", "112240")  # differs across an array's tasks
-    import senselab_core.runtime.revision as mr
-
-    mr._RUN_ID = None
-    assert run_id() == "112233"
+    assert choose_run_id({"SLURM_ARRAY_JOB_ID": "112233", "SLURM_JOB_ID": "112240"}) == "112233"
 
 
 @pytest.mark.logic
-def test_explicit_run_id_wins_over_slurm(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_explicit_run_id_wins_over_slurm() -> None:
     """An explicit SENSELAB_RUN_ID still takes precedence over any Slurm identity."""
-    monkeypatch.setenv("SENSELAB_RUN_ID", "explicit")
-    monkeypatch.setenv("SLURM_ARRAY_JOB_ID", "112233")
-    import senselab_core.runtime.revision as mr
-
-    mr._RUN_ID = None
-    assert run_id() == "explicit"
+    assert choose_run_id({"SENSELAB_RUN_ID": "explicit", "SLURM_ARRAY_JOB_ID": "112233"}) == "explicit"
 
 
 @pytest.mark.logic
@@ -190,6 +182,19 @@ def test_the_manifest_pins_across_an_upstream_move(offline: Callable[[HubLookup]
 
 
 @pytest.mark.logic
+def test_an_injected_resolver_pins_nothing_for_another(tmp_path: Path) -> None:
+    """Two resolvers over different cache roots keep their own memo and manifest: neither answer reaches the other."""
+    first = Resolver(cache_dir=tmp_path / "hf-hub", hub=_answers(SHA_A), cache_root=tmp_path / "one")
+    second = Resolver(cache_dir=tmp_path / "hf-hub", hub=_answers(SHA_B), cache_root=tmp_path / "two")
+    assert resolve_revision("org/model", "main", resolver=first) == SHA_A
+    assert resolve_revision("org/model", "main", resolver=second) == SHA_B
+    key = manifest_key("org/model", "main")
+    assert read_manifest(root=tmp_path / "one") == {key: SHA_A} and read_manifest(root=tmp_path / "two") == {key: SHA_B}
+    assert first.memo == {key: SHA_A} and second.memo == {key: SHA_B}
+    assert read_manifest() == {}, "nothing is recorded under the process's cache root"
+
+
+@pytest.mark.logic
 def test_an_unresolvable_ref_raises_rather_than_falling_back(offline: Callable[[HubLookup], Resolver]) -> None:
     """A ref that cannot be resolved raises instead of silently returning the ref itself."""
 
@@ -211,12 +216,8 @@ def test_a_resolved_ref_is_recorded_so_the_rest_of_the_run_follows(
         calls.append((repo_id, ref))
         return SHA_A
 
-    resolver = offline(_once)
-    assert resolve_revision("org/model", "main", resolver=resolver) == SHA_A
-    import senselab_core.runtime.revision as mr
-
-    mr._MEMO.clear()  # force the manifest, not the memo, to answer the second call
-    assert resolve_revision("org/model", "main", resolver=resolver) == SHA_A
+    assert resolve_revision("org/model", "main", resolver=offline(_once)) == SHA_A
+    assert resolve_revision("org/model", "main", resolver=offline(_once)) == SHA_A, "a fresh memo reads the manifest"
     assert len(calls) == 1, "the manifest must answer after the first resolution"
 
 
@@ -325,14 +326,14 @@ def test_a_newline_suffixed_local_cache_answer_falls_through_to_the_hub(
     snapshot.mkdir(parents=True)
     (snapshot / "config.json").write_text("{}")
     assert get_cached_commit_hash("org/model", SHA_A + "\n", cache_dir=resolver.cache_dir) == SHA_A + "\n"
-    assert resolver("org/model", SHA_A + "\n") == SHA_B
+    assert resolver.lookup("org/model", SHA_A + "\n") == SHA_B
 
 
 @pytest.mark.logic
 def test_a_newline_suffixed_hub_sha_is_refused(offline: Callable[[HubLookup], Resolver]) -> None:
     """A Hub answer carrying a trailing newline raises rather than leaving the resolver as a commit."""
     with pytest.raises(RevisionResolutionError, match="no usable commit SHA"):
-        offline(_answers(SHA_A + "\n"))("org/model", "main")
+        offline(_answers(SHA_A + "\n")).lookup("org/model", "main")
 
 
 @pytest.mark.logic
@@ -348,10 +349,8 @@ def test_resolution_retries_a_transient_hub_error(
             raise hub_error(429)
         return SHA_A
 
-    resolver = offline(_flaky)
-    assert resolve_revision("org/model", "main", resolver=resolver) == SHA_A
+    assert resolve_revision("org/model", "main", resolver=offline(_flaky)) == SHA_A
     assert calls["n"] == 2, "the transient error must have been retried once"
-    assert isinstance(resolver.clock, FakeClock) and resolver.clock.slept == [1]
 
 
 @pytest.mark.logic

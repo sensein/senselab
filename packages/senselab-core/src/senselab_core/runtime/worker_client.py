@@ -593,7 +593,15 @@ class WorkerClient:
         for i, item in enumerate(items):
             try:
                 sent.append(
-                    (i, {"id": item["id"], "inputs": to_wire(item["inputs"], array_dir=self._array_dir, at="inputs", limit=self._max_line_bytes)})
+                    (
+                        i,
+                        {
+                            "id": item["id"],
+                            "inputs": to_wire(
+                                item["inputs"], array_dir=self._array_dir, at="inputs", limit=self._max_line_bytes
+                            ),
+                        },
+                    )
                 )
             except Exception as exc:
                 results[i] = {"id": item["id"], "error": _mapped(error_record(exc))}

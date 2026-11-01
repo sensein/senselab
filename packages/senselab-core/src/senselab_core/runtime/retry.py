@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Callable, Optional, TypeVar
-
-from senselab_core.runtime.clock import SYSTEM_CLOCK, Clock
 
 logger = logging.getLogger("senselab")
 
@@ -108,7 +107,7 @@ def retry_on_transient_error(
     fn: Callable[..., _T],
     *args: object,
     max_retries: Optional[int] = None,
-    clock: Clock = SYSTEM_CLOCK,
+    sleep: Callable[[float], None] = time.sleep,
     **kwargs: object,
 ) -> _T:
     """Call *fn* with retries on transient network errors.
@@ -121,7 +120,7 @@ def retry_on_transient_error(
         fn: The callable to invoke.
         *args: Positional arguments forwarded to *fn*.
         max_retries: Override for ``SENSELAB_HF_MAX_RETRIES`` (default 3).
-        clock: The clock the backoff waits on.
+        sleep: Waits out each backoff.
         **kwargs: Keyword arguments forwarded to *fn*.
 
     Returns:
@@ -141,7 +140,7 @@ def retry_on_transient_error(
                     exc,
                     wait,
                 )
-                clock.sleep(wait)
+                sleep(wait)
             else:
                 raise
     raise RuntimeError("Unreachable")  # pragma: no cover

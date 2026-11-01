@@ -140,17 +140,19 @@ def test_malformed_manifest_raises_one_typed_error(text: str) -> None:
 
 
 @pytest.mark.logic
-def test_resolve_hf_binds_the_commit_its_resolver_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_hf_binds_the_commit_its_resolver_names(tmp_path: Path) -> None:
     """An hf ref's identity is the commit its resolver returns, with the token passed through."""
-    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "senselab"))
-    monkeypatch.setenv("SENSELAB_RUN_ID", "models-test")
     seen: dict[str, object] = {}
 
     def hub(repo: str, ref: str, token: str | None) -> str:
         seen.update(repo=repo, ref=ref, token=token)
         return "a" * 40
 
-    r = resolve(ModelRef.parse("org/m@main"), token="t", resolver=Resolver(cache_dir=tmp_path / "hf-hub", hub=hub))
+    r = resolve(
+        ModelRef.parse("org/m@main"),
+        token="t",
+        resolver=Resolver(cache_dir=tmp_path / "hf-hub", hub=hub, cache_root=tmp_path / "senselab"),
+    )
     assert r.identity == "a" * 40 and seen == {"repo": "org/m", "ref": "main", "token": "t"}
 
 

@@ -12,7 +12,7 @@ from senselab_worker.digest import file_digest
 from senselab_worker.hashing import weights_identity
 
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
-from senselab_core.runtime.revision import HUB, Resolver, resolve_revision
+from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver, resolve_revision
 
 WEIGHTS_FORMAT = "weights@1.0"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -115,7 +115,7 @@ def _local_identity(path: Path) -> str:
     raise ModelResolutionError(f"local model path {path} does not exist")
 
 
-def resolve(ref: ModelRef, *, token: str | None = None, resolver: Resolver = HUB) -> ResolvedModel:
+def resolve(ref: ModelRef, *, token: str | None = None, resolver: Resolver = PROCESS_RESOLVER) -> ResolvedModel:
     """Bind `ref` to the identity of its weights.
 
     - hf: the 40-hex commit from `resolve_revision` through `resolver` (its errors propagate).

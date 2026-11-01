@@ -10,14 +10,13 @@ import logging
 import os
 import re
 import uuid
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from senselab_worker.canonical import jcs_dumps
 
-from senselab_core.runtime.clock import SYSTEM_CLOCK, Clock
 from senselab_core.runtime.locks import Lease
 from senselab_core.runtime.retry import retry_on_transient_error
 from senselab_core.runtime.storage import (
@@ -45,10 +44,7 @@ _MANIFEST_TEMPORARY = re.compile(re.escape(f".{MANIFEST_NAME}.") + r"[0-9]+\.[0-
 MANIFEST_LIMIT = 1 << 24
 """The most bytes a run manifest is read to."""
 
-# Process-local. _RUN_ID caches the run identity; _MEMO avoids re-reading the
-# manifest from disk for a pair already resolved in this process.
 _RUN_ID: Optional[str] = None
-_MEMO: dict[str, str] = {}
 
 
 class RevisionResolutionError(RuntimeError):
@@ -65,27 +61,35 @@ def manifest_key(repo_id: str, ref: str) -> str:
     return jcs_dumps([repo_id, ref]).decode()
 
 
-def run_id() -> str:
-    """Return this run's id, generating and exporting one if unset.
+def choose_run_id(environ: Mapping[str, str]) -> str:
+    """Return the run id `environ` names: `SENSELAB_RUN_ID`, else `SLURM_ARRAY_JOB_ID`, `SLURM_JOB_ID` or a UUID4.
 
-    The id is `SENSELAB_RUN_ID`, else `SLURM_ARRAY_JOB_ID`, else `SLURM_JOB_ID`, else a fresh UUID4, and is
-    exported as `SENSELAB_RUN_ID` so subprocesses inherit it.
+    Raises:
+        ValueError: the chosen id is not one path component.
+    """
+    chosen = (
+        environ.get("SENSELAB_RUN_ID")
+        or environ.get("SLURM_ARRAY_JOB_ID")
+        or environ.get("SLURM_JOB_ID")
+        or str(uuid.uuid4())
+    )
+    try:
+        return path_component(chosen)
+    except ValueError:
+        raise ValueError(f"run id {chosen!r} (from SENSELAB_RUN_ID or Slurm) must be one path component") from None
+
+
+def run_id() -> str:
+    """Return this process's run id (`choose_run_id` of the environment), chosen once and exported.
+
+    It is exported as `SENSELAB_RUN_ID` so subprocesses inherit it.
 
     Raises:
         ValueError: the chosen id is not one path component.
     """
     global _RUN_ID
     if _RUN_ID is None:
-        chosen = (
-            os.environ.get("SENSELAB_RUN_ID")
-            or os.environ.get("SLURM_ARRAY_JOB_ID")
-            or os.environ.get("SLURM_JOB_ID")
-            or str(uuid.uuid4())
-        )
-        try:
-            _RUN_ID = path_component(chosen)
-        except ValueError:
-            raise ValueError(f"run id {chosen!r} (from SENSELAB_RUN_ID or Slurm) must be one path component") from None
+        _RUN_ID = choose_run_id(os.environ)
         os.environ["SENSELAB_RUN_ID"] = _RUN_ID
     return _RUN_ID
 
@@ -98,27 +102,33 @@ def cache_root() -> Path:
     return Path.home() / ".cache" / "senselab" / "hf"
 
 
-def manifest_path(run: Optional[str] = None) -> Path:
+def manifest_path(run: Optional[str] = None, *, root: Optional[Path] = None) -> Path:
     """Return the path to run ``run``'s resolution manifest (this run's when ``run`` is None).
+
+    `root` is the cache root holding it, `cache_root()` when None.
 
     Raises:
         ValueError: `run` is not one path component.
     """
-    return cache_root() / NAMESPACE / "runs" / path_component(run_id() if run is None else run) / MANIFEST_NAME
+    base = cache_root() if root is None else Path(root)
+    return base / NAMESPACE / "runs" / path_component(run_id() if run is None else run) / MANIFEST_NAME
 
 
-def _run_dir(run: Optional[str], *, create: bool, policy: Optional[StorePolicy] = None) -> StorageDir:
-    """Open `2x/runs/<run>/` under the cache root (this run's when `run` is None), without following any symlink.
+def _run_dir(
+    run: Optional[str], root: Optional[Path], *, create: bool, policy: Optional[StorePolicy] = None
+) -> StorageDir:
+    """Open `2x/runs/<run>/` under `root` (this run's when `run` is None), without following any symlink.
 
     With `create`, missing directories get the policy's `shared_dir_mode`, and an object of the wrong kind at
     `2x/`, `runs/` or the run's directory is moved aside beside itself.
     """
-    name = manifest_path(run).parent.name
+    path = manifest_path(run, root=root)
+    name = path.parent.name
     mode = shared_dir_mode(policy) if policy is not None else None
-    with StorageDir.open_root(cache_root(), create=create, mode=mode) as root:
+    with StorageDir.open_root(path.parents[3], create=create, mode=mode) as root_dir:
         if not create:
-            return root.walk(NAMESPACE, "runs", name)
-        return root.walk(NAMESPACE, "runs", name, create=True, mode=mode, aside=lambda: None)
+            return root_dir.walk(NAMESPACE, "runs", name)
+        return root_dir.walk(NAMESPACE, "runs", name, create=True, mode=mode, aside=lambda: None)
 
 
 def _parse_manifest(data: Optional[bytes], where: Path) -> dict[str, str]:
@@ -143,8 +153,8 @@ def _read_in(run_dir: StorageDir) -> dict[str, str]:
     return _parse_manifest(data, run_dir.path / MANIFEST_NAME)
 
 
-def read_manifest(run: Optional[str] = None) -> dict[str, str]:
-    """Return a run's recorded resolutions, or an empty mapping.
+def read_manifest(run: Optional[str] = None, *, root: Optional[Path] = None) -> dict[str, str]:
+    """Return a run's recorded resolutions under `root` (`cache_root()` when None), or an empty mapping.
 
     The manifest is read through `2x/runs/<run>/`'s descriptor without following or blocking. A missing,
     empty, unreadable or unparsable manifest, or anything but a regular file at its name, reads as empty;
@@ -154,7 +164,7 @@ def read_manifest(run: Optional[str] = None) -> dict[str, str]:
         ValueError: `run` (or this run's id) is not one path component.
     """
     try:
-        run_dir = _run_dir(run, create=False)
+        run_dir = _run_dir(run, root, create=False)
     except (OSError, WrongKindError):
         return {}
     with run_dir:
@@ -164,8 +174,10 @@ def read_manifest(run: Optional[str] = None) -> dict[str, str]:
             return {}
 
 
-def record_resolution(repo_id: str, ref: str, sha: str, run: Optional[str] = None) -> str:
-    """Record ``(repo_id, ref) -> sha`` for this run and return the binding SHA.
+def record_resolution(
+    repo_id: str, ref: str, sha: str, run: Optional[str] = None, *, root: Optional[Path] = None
+) -> str:
+    """Record ``(repo_id, ref) -> sha`` for this run under `root` (`cache_root()` when None); return the binding SHA.
 
     Append-if-absent under a `Lease` on the manifest: a concurrent writer's entries are kept, and an
     existing commit SHA for the key wins over ``sha``. ``2x/runs/<run>/`` is reached through `StorageDir`
@@ -188,7 +200,7 @@ def record_resolution(repo_id: str, ref: str, sha: str, run: Optional[str] = Non
             "a run manifest entry must be a 40-hex commit SHA."
         )
     policy = StorePolicy.load_default()
-    with _run_dir(run, create=True, policy=policy) as run_dir:
+    with _run_dir(run, root, create=True, policy=policy) as run_dir:
         return _record_in(run_dir, manifest_key(repo_id, ref), sha, policy)
 
 
@@ -221,7 +233,7 @@ def _remove_leftovers(run_dir: StorageDir, policy: StorePolicy) -> None:
         if _MANIFEST_TEMPORARY.fullmatch(name):
             run_dir.remove_owned(name, pattern=TEMPORARY_NAME)
     try:
-        with StorageDir.open_root(cache_root()) as root, root.walk(NAMESPACE, "runs") as runs:
+        with StorageDir.open_root(run_dir.path.parents[2]) as root, root.walk(NAMESPACE, "runs") as runs:
             runs.remove_older(run_dir.fs_now() - policy.quarantine_retention_s)
     except (OSError, WrongKindError) as err:
         logger.warning("cannot collect what was set aside under 2x/runs/: %s", err)
@@ -283,19 +295,51 @@ def hub_commit(repo_id: str, ref: str, token: Optional[str]) -> object:
 
 @dataclass(frozen=True)
 class Resolver:
-    """Resolves a ref that the run manifest does not hold: from the local HF cache, else from the Hub."""
+    """Binds `(repo_id, ref)` to an immutable commit SHA for a run.
+
+    It answers from its memo, then from the run manifest under `cache_root`, then from the local HF cache
+    at `cache_dir`, then from `hub`; a fresh answer is recorded in the manifest and the memo. Two resolvers
+    share an answer only through a manifest they both read.
+    """
 
     cache_dir: Optional[Path] = None
     """The HF hub cache to read (`get_cached_commit_hash`); `HF_HUB_CACHE` when None."""
     hub: Callable[[str, str, Optional[str]], object] = hub_commit
     """Asked for the commit of `(repo_id, ref, token)` when the local cache has none."""
-    clock: Clock = SYSTEM_CLOCK
-    """The clock the Hub retry's backoff waits on."""
+    cache_root: Optional[Path] = None
+    """The root of the run manifests (`manifest_path`); `cache_root()` when None."""
+    memo: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
+    """This resolver's answers so far, by `manifest_key`."""
 
-    def __call__(self, repo_id: str, ref: str, token: Optional[str] = None) -> str:
-        """Resolve `ref` to a SHA without consulting the manifest or the memo.
+    def resolve(self, repo_id: str, ref: str = "main", token: Optional[str] = None) -> str:
+        """Return the commit SHA this run uses for ``(repo_id, ref)``.
 
-        The local cache first, the Hub only on a miss, through `retry_on_transient_error`.
+        A ref that is already a full SHA returns with no I/O. A manifest entry that is not a SHA is
+        logged and resolved again.
+
+        Raises:
+            RevisionResolutionError: no 40-hex commit SHA can be obtained.
+        """
+        if _SHA_RE.fullmatch(ref):
+            return ref
+        key = manifest_key(repo_id, ref)
+        memoized = self.memo.get(key)
+        if memoized is not None:
+            return memoized
+        recorded = read_manifest(root=self.cache_root).get(key)
+        if recorded is not None and _SHA_RE.fullmatch(recorded):
+            self.memo[key] = recorded
+            return recorded
+        if recorded is not None:
+            logger.warning(
+                "Run manifest entry for %s is not a commit SHA (%r); re-resolving and ignoring it", key, recorded
+            )
+        binding = record_resolution(repo_id, ref, self.lookup(repo_id, ref, token), root=self.cache_root)
+        self.memo[key] = binding
+        return binding
+
+    def lookup(self, repo_id: str, ref: str, token: Optional[str] = None) -> str:
+        """Resolve `ref` from the local cache, else the Hub through `retry_on_transient_error`; record nothing.
 
         Raises:
             RevisionResolutionError: neither answers with a 40-hex commit SHA.
@@ -309,7 +353,7 @@ class Resolver:
             return local
 
         try:
-            sha = retry_on_transient_error(lambda: self.hub(repo_id, ref, token), clock=self.clock)
+            sha = retry_on_transient_error(lambda: self.hub(repo_id, ref, token))
         except Exception as exc:
             raise RevisionResolutionError(
                 f"Cannot resolve {repo_id}@{ref} to a commit SHA: {exc}. "
@@ -320,40 +364,16 @@ class Resolver:
         return str(sha)
 
 
-HUB = Resolver()
-"""The default resolver: the default HF hub cache, then the Hub."""
+PROCESS_RESOLVER = Resolver()
+"""The process's resolver: the default HF hub cache and cache root, and the process's memo."""
 
 
 def resolve_revision(
-    repo_id: str, ref: str = "main", *, token: Optional[str] = None, resolver: Resolver = HUB
+    repo_id: str, ref: str = "main", *, token: Optional[str] = None, resolver: Resolver = PROCESS_RESOLVER
 ) -> str:
-    """Return the immutable commit SHA this run uses for ``(repo_id, ref)``.
-
-    Order: a ref that is already a full SHA short-circuits with no I/O; then this
-    process's memo; then the run manifest; then `resolver` (local cache and Hub). A freshly
-    resolved SHA is recorded so the rest of the run follows it.
+    """Return ``resolver.resolve(repo_id, ref, token)``, the commit SHA this run uses for ``(repo_id, ref)``.
 
     Raises:
         RevisionResolutionError: If no SHA can be obtained.
     """
-    if _SHA_RE.fullmatch(ref):
-        return ref
-
-    key = manifest_key(repo_id, ref)
-    memoized = _MEMO.get(key)
-    if memoized is not None:
-        return memoized
-
-    recorded = read_manifest().get(key)
-    if recorded is not None and _SHA_RE.fullmatch(recorded):
-        _MEMO[key] = recorded
-        return recorded
-    if recorded is not None:
-        logger.warning(
-            "Run manifest entry for %s is not a commit SHA (%r); re-resolving and ignoring it", key, recorded
-        )
-
-    sha = resolver(repo_id, ref, token)
-    binding = record_resolution(repo_id, ref, sha)
-    _MEMO[key] = binding
-    return binding
+    return resolver.resolve(repo_id, ref, token)

@@ -20,11 +20,10 @@ from typing import Any
 
 import numpy
 import pytest
-from fake_clock_fixture import FakeClock
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from planted_objects_fixture import ARRAY_CORRUPTIONS, bounded, swap_subsets
-from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ReusePolicy
+from senselab_core.kernel.identity import EQUIVALENCE, ExecutionContext, LogicalKey, ModelIdentity, ReusePolicy
 from senselab_core.runtime import store as store_module
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
 from senselab_core.runtime.storage import StorageFull, StorePolicy, StoreUnavailable
@@ -129,6 +128,11 @@ def test_equivalence_class_admits_under_equivalent(tmp_path: Path) -> None:
     assert ResultStore(tmp_path).get(k, mac, ReusePolicy.EQUIVALENT) is None
     got = s.get(k, mac, ReusePolicy.EQUIVALENT)
     assert got is not None and got.policy_used is ReusePolicy.EQUIVALENT
+    (reuse,) = s.provenance.activities(node="store.reuse")
+    assert reuse.parameters["equivalence"] == store_module._equivalence_digest(table)
+    assert reuse.parameters["equivalence"] != store_module._equivalence_digest(EQUIVALENCE)
+    with pytest.raises(AttributeError):
+        s.equivalence = {}  # type: ignore[misc]
     assert s.get(k, mac, ReusePolicy.EXACT) is None
 
 
@@ -1048,9 +1052,9 @@ def test_writable_committed_entry_is_resealed(tmp_path: Path, reader: str) -> No
 
 
 @pytest.mark.logic
-def test_put_collects_at_most_once_per_interval(tmp_path: Path, fake_clock: FakeClock) -> None:
+def test_put_collects_at_most_once_per_interval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Puts within `collect_interval_s` of each other run one collection, not one each."""
-    s, c = ResultStore(tmp_path, clock=fake_clock), _ctx()
+    s, c = ResultStore(tmp_path), _ctx()
     stale = tmp_path / "tmp" / ("5" * 32)
 
     def plant() -> None:
@@ -1064,7 +1068,8 @@ def test_put_collects_at_most_once_per_interval(tmp_path: Path, fake_clock: Fake
     for i in range(1, 5):
         s.put(_key(audio=f"{i:064x}"), {"y": i}, c)
     assert stale.exists(), "puts within the interval do not collect again"
-    fake_clock.advance(s.policy.collect_interval_s)
+    later = time.monotonic() + s.policy.collect_interval_s
+    monkeypatch.setattr(time, "monotonic", lambda: later)
     s.put(_key(task="other"), {"y": 1}, c)
     assert not stale.exists(), "a put once the interval has passed collects"
 

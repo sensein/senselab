@@ -30,8 +30,8 @@ import stat
 import threading
 import time
 import uuid
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 from typing import Optional
 
 from senselab_worker.ownership import UUID_HEX
