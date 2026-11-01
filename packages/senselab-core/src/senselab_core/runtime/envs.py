@@ -6,7 +6,8 @@ wheel index routed to the host's CUDA (`pick_torch_index`), then the lock body w
 `<name>` lives in `<name>[-<tag>]-<uuid>/`, and `<name>[-<tag>].json` (`env-record@1.0`) names the current build;
 both are written under a `Lease` on `<name>[-<tag>]`. A build is never moved or removed here, so a broken lease
 costs a duplicate build, never a mixed env, and a superseded build stays until an explicit clean-up. The worker
-runtime is copied into every env as an overlay that leaves its wheel set unchanged.
+runtime, and the worker modules a backend declares, are copied into every env as an overlay that leaves its
+wheel set unchanged.
 """
 
 import errno
@@ -24,7 +25,7 @@ import tempfile
 import tomllib
 import urllib.request
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -267,6 +268,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
     *,
     settings: Envs,
     requirements: Sequence[str] = (),
+    workers: Mapping[str, Path] | None = None,
     uv: Uv | None = None,
     host_cuda: HostCuda | None = None,
 ) -> EnvHandle:
@@ -282,6 +284,8 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
         settings: The profile's `envs`: `torch_index` replaces the probed index when set, and a build's lease is
             broken once older than `lease_stale_after_s`; a waiter waits that long plus `locks.TIMEOUT_S`.
         requirements: The backend's requirements; required for a host env, which is refused unless `lock` covers each.
+        workers: The backend's worker modules, dotted name to source file; each is copied into the env's
+            site-packages as that module, beside the worker runtime, and replaced when its source changes.
         uv: The `uv` command; `Uv.find()` when None.
         host_cuda: The host's CUDA; probed with `detect_host_cuda` when None and the lock pins torch.
 
@@ -322,7 +326,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
     if (
         current is not None
         and (current.lock_sha, current.torch_index) == wanted
-        and _overlaid(root / current.directory)
+        and _overlaid(root / current.directory, workers or {})
     ):
         return _handle(root, current)
     stale_after = settings.lease_stale_after_s
@@ -331,7 +335,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
         if current is None or (current.lock_sha, current.torch_index) != wanted:
             current = _build(root, stem, parsed, lock_sha, index, uv, host_cuda)
             write_atomically(root / f"{stem}.json", current.model_dump_json().encode())
-        _overlay(root / current.directory)
+        _overlay(root / current.directory, workers or {})
     return _handle(root, current)
 
 
@@ -447,18 +451,44 @@ def _wheel_set(site: Path) -> str:
     return identity_digest(WHEEL_SET_TAG, [list(pair) for pair in installed])
 
 
-def _overlaid(directory: Path) -> bool:
+def _overlaid(directory: Path, workers: Mapping[str, Path]) -> bool:
     try:
-        return (_site(directory) / _OVERLAY_STAMP).read_text() == senselab_worker.runtime_identity()
+        site = _site(directory)
+        return _runtime_current(site) and all(_placed(site, m, p) for m, p in workers.items())
     except (OSError, RuntimeError):
         return False
 
 
-def _overlay(directory: Path) -> None:
-    """Copy this worker runtime into the env's site-packages unless the copy there is already this one."""
-    if _overlaid(directory):
-        return
+def _runtime_current(site: Path) -> bool:
+    try:
+        return (site / _OVERLAY_STAMP).read_text() == senselab_worker.runtime_identity()
+    except OSError:
+        return False
+
+
+def _placed(site: Path, module: str, source: Path) -> bool:
+    """Return whether `module` sits in `site` with the bytes of `source`."""
+    return file_digest("file@1", _module_path(site, module)) == file_digest("file@1", source)
+
+
+def _module_path(site: Path, module: str) -> Path:
+    *packages, name = module.split(".")
+    return site.joinpath(*packages, f"{name}.py")
+
+
+def _overlay(directory: Path, workers: Mapping[str, Path]) -> None:
+    """Copy this worker runtime and the backend's worker modules into the env's site-packages unless already there."""
     site = _site(directory)
+    if not _runtime_current(site):
+        _copy_runtime(site)
+    for module, source in workers.items():
+        target = _module_path(site, module)
+        if not target.is_file() or not _placed(site, module, source):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            write_atomically(target, source.read_bytes())
+
+
+def _copy_runtime(site: Path) -> None:
     source = Path(senselab_worker.__file__).parent
     fresh, old = site / f".senselab_worker-{uuid.uuid4().hex}", site / f".senselab_worker-{uuid.uuid4().hex}"
     shutil.copytree(source, fresh, ignore=shutil.ignore_patterns("__pycache__"))

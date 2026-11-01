@@ -215,6 +215,42 @@ def test_worker_runtime_is_an_overlay(tmp_path: Path, uv_log: Path) -> None:
     assert not list(site.glob("senselab_worker*.dist-info"))
 
 
+def test_worker_modules_are_placed_where_the_worker_imports_them(tmp_path: Path, uv_log: Path) -> None:
+    """A declared worker module is importable by its dotted name in the env, and a changed source replaces the copy."""
+    source = tmp_path / "src" / "mod.py"
+    source.parent.mkdir()
+    source.write_text("VALUE = 1\n")
+    workers = {"demo_pkg.sub.mod": source}
+    lock = _lock(tmp_path)
+
+    def build() -> Path:
+        handle = ensure_env(
+            Env.isolated("demo"),
+            lock,
+            tmp_path / "envs",
+            settings=SETTINGS,
+            uv=FAKE_UV,
+            host_cuda=CUDA_12_8,
+            workers=workers,
+        )
+        return next((Path(handle.python).parent.parent / "lib").glob("python*/site-packages"))
+
+    def value(site: Path) -> str:
+        run = subprocess.run(
+            [sys.executable, "-c", "import demo_pkg.sub.mod as m; print(m.VALUE)"],
+            env={**os.environ, "PYTHONPATH": str(site)},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return run.stdout.strip()
+
+    site = build()
+    assert value(site) == "1" and not list(site.glob("demo_pkg*.dist-info"))
+    source.write_text("VALUE = 22\n")
+    assert build() == site and value(site) == "22"
+
+
 def test_host_env_requires_a_managed_interpreter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A host env is this interpreter, refused when it is not uv-managed."""
     lock = tmp_path / "uv.lock"

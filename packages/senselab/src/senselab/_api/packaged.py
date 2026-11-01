@@ -40,7 +40,8 @@ def open_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:
         root = Path(".") if lock is None else lock.parent
         return ensure_env(env, lock, root, settings=profile.envs, requirements=backend.requirements)
     env_lock = Path(str(_DATA.joinpath("env_locks", f"{env.name}.txt")))
-    return ensure_env(env, env_lock, profile.env_root(env.kind), settings=profile.envs)
+    workers = {module: Path(source) for module, source in backend.worker_sources.items()}
+    return ensure_env(env, env_lock, profile.env_root(env.kind), settings=profile.envs, workers=workers)
 
 
 PACKAGED = Packaged(CATALOGUE, open_env)

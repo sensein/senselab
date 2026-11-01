@@ -1,5 +1,7 @@
 """Backend `crisperwhisper` of `speech_to_text`: the CrisperWhisper library in its locked isolated env."""
 
+from pathlib import Path
+
 from pydantic import Field
 from senselab_core.kernel.declare import REGISTRY, BackendParams, Env, backend
 
@@ -10,6 +12,11 @@ from senselab.audio.tasks.speech_to_text.crisperwhisper import (
     WORKER_MODULE,
     Engine,
 )
+
+_HERE = Path(__file__).parent
+_WORKER_SOURCES = {
+    f"{__package__}.{name}": str(_HERE / f"{name}.py") for name in ("crisperwhisper", "item_faults", "token_confidence")
+}
 
 
 class CrisperWhisperParams(BackendParams):
@@ -26,6 +33,7 @@ class CrisperWhisperParams(BackendParams):
     stack="crisperwhisper",
     models=(MODEL_ID,),
     worker=WORKER_MODULE,
+    worker_sources=_WORKER_SOURCES,
     load_stub={"stub": True, "device": "cpu"},
     batch_invariant=True,
     devices=("cuda", "mps", "cpu"),

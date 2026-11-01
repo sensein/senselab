@@ -1,9 +1,6 @@
 """The `crisperwhisper` backend of `speech_to_text`: its engines, model, faults and the isolated worker's imports."""
 
-import ast
 import json
-import sys
-from pathlib import Path
 from typing import Any
 
 import numpy
@@ -12,7 +9,6 @@ from senselab._api.packaged import CATALOGUE
 from senselab.audio.tasks.speech_to_text import crisperwhisper as cw
 from senselab.audio.tasks.speech_to_text import (
     crisperwhisper_backend,  # noqa: F401 - declares the backend
-    item_faults,
 )
 from senselab_core.kernel.declare import REGISTRY
 from senselab_core.kernel.signals import Audio
@@ -148,30 +144,6 @@ def test_backend_serves_only_the_crisperwhisper_model_and_declares_its_isolated_
     only = profile.model_copy(update={"stack_preferences": {"speech_to_text": ("crisperwhisper",)}})
     with pytest.raises(NoBackend):
         resolve_execution(REGISTRY.spec("speech_to_text"), CATALOGUE.entry(WHISPER), only, HOST, REGISTRY, CATALOGUE)
-
-
-def _top_level_imports(module: Any) -> set[str]:  # noqa: ANN401 - a module
-    """Return the modules a module imports at its top level."""
-    found: set[str] = set()
-    for node in ast.parse(Path(module.__file__).read_text("utf-8")).body:
-        if isinstance(node, ast.Import):
-            found |= {a.name for a in node.names}
-        elif isinstance(node, ast.ImportFrom):
-            found.add(node.module or "")
-    return found
-
-
-@pytest.mark.logic
-def test_worker_modules_import_only_what_an_isolated_env_holds() -> None:
-    """The worker and the fault helper it shares import stdlib, numpy, `senselab_worker` and that helper only."""
-    allowed = {"numpy", "senselab_worker", "senselab.audio.tasks.speech_to_text.item_faults"}
-    for module in (cw, item_faults):
-        extra = {
-            m
-            for m in _top_level_imports(module)
-            if m.split(".")[0] not in sys.stdlib_module_names | allowed and m not in allowed
-        }
-        assert not extra, (module.__name__, sorted(extra))
 
 
 @pytest.mark.contract

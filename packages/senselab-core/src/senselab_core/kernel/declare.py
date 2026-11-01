@@ -4,6 +4,7 @@ Declarations only: no graph, planner or execution (ADR-001).
 """
 
 import difflib
+import re
 import types
 import typing
 from collections.abc import Callable, Mapping
@@ -222,7 +223,9 @@ class BackendSpec(Frozen):
 
     `models` are the catalogue models it serves; `env` where it runs; `batch_invariant` whether an
     item's outputs are independent of its batch-mates; `tunables` the declared values of each
-    tunable; `worker` the module serving `load(init)` and `handle(state, items, params)`;
+    tunable; `worker` the module serving `load(init)` and `handle(state, items, params)`; `worker_sources` the
+    source file of each module of an isolated or server backend's worker, by dotted name, `worker` among them (empty
+    for a host backend and for a worker the runtime itself provides), which `ensure_env` places in the env;
     `load_stub` the `init` under which `load` builds the fake stack's model in place of weights,
     taking `faults` (the fields of `senselab_worker.fake.FakeFaults`) beside it; `params` its
     `BackendParams` model; `requirements` the requirement strings a host backend needs from the senselab lock
@@ -242,6 +245,7 @@ class BackendSpec(Frozen):
     tunables: Tunables = FrozenMapping({})
     output_affecting: tuple[str, ...] = ()
     worker: ModuleName
+    worker_sources: StrMap = FrozenMapping({})
     load_stub: Params
     params: type[BackendParams] = BackendParams
     requirements: tuple[NonEmptyStr, ...] = ()
@@ -252,6 +256,22 @@ class BackendSpec(Frozen):
         if not set(v) <= OUTPUT_AFFECTING:
             raise ValueError(f"output_affecting may name only {sorted(OUTPUT_AFFECTING)}, got {sorted(v)}")
         return tuple(sorted(set(v)))
+
+    @field_validator("worker_sources")
+    @classmethod
+    def _check_worker_sources(cls, v: Mapping[str, str]) -> Mapping[str, str]:
+        bad = [m for m in v if not re.fullmatch(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*", m)]
+        if bad:
+            raise ValueError(f"worker_sources names {bad}, not dotted module names")
+        return v
+
+    @model_validator(mode="after")
+    def _check_worker_placement(self) -> "BackendSpec":
+        if self.worker_sources and self.worker not in self.worker_sources:
+            raise ValueError(f"worker_sources must hold the worker module {self.worker!r}")
+        if self.worker_sources and self.env.kind == "host":
+            raise ValueError("a host backend runs in the senselab venv and places no worker sources")
+        return self
 
     @model_validator(mode="after")
     def _check_batching(self) -> "BackendSpec":
