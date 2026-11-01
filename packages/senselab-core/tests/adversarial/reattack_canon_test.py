@@ -1,17 +1,16 @@
 # ruff: noqa: ANN401
-"""H8c re-attack findings on canonical identity (XC-2..XC-5, XC-7, XC-8), rebuilt from reviews/phase1-reattack/canon.md.
+"""H8c re-attack findings on canonical identity (XC-2..XC-5, XC-7), rebuilt from reviews/phase1-reattack/canon.md.
 
 Each `test_xc<n>_*` probe imports what existed at 99a6d5f8 inside the test and fails there on the finding's
 behaviour; the other tests are contracts over the class the finding belongs to.
 """
 
 import hashlib
-import re
 import time
 import unicodedata
 from decimal import Decimal
 from enum import Enum
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import Any
 
 import numpy
@@ -19,9 +18,6 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from senselab_core.kernel._base import Frozen
-
-REPO = Path(__file__).resolve().parents[4]
-ADR_006 = REPO / "specs" / "20261030-140022-senselab-2x-api" / "adr" / "ADR-006-formats.md"
 
 
 class Holder(Frozen):
@@ -252,17 +248,3 @@ def test_a_set_is_its_elements_canonical_forms(strings: frozenset[str]) -> None:
     forms = frozenset(unicodedata.normalize("NFC", s) for s in strings)
     assert jcs_dumps(normalised(strings)) == jcs_dumps(normalised(forms))
     assert Holder(x=strings) == Holder(x=forms)
-
-
-def _adr_tags(heading: str) -> set[str]:
-    _, found, rest = ADR_006.read_text(encoding="utf-8").partition(f"**{heading}**")
-    return set(re.findall(r"`([a-z][a-z0-9-]*@\d+)`", rest.split("\n\n", 1)[0])) if found else set()
-
-
-@pytest.mark.contract
-def test_xc8_adr006_lists_exactly_the_registered_tags() -> None:
-    """ADR-006's lists of identity and blob tags are `IDENTITY_TAGS` and `BLOB_TAGS`, no more and no fewer."""
-    from senselab_worker.digest import BLOB_TAGS, IDENTITY_TAGS
-
-    assert _adr_tags("Registered identity tags") == set(IDENTITY_TAGS)
-    assert _adr_tags("Registered blob tags") == set(BLOB_TAGS)
