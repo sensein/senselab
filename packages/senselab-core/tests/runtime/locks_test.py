@@ -10,9 +10,9 @@ import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
-from senselab_core.runtime import storage as storage_module
 from senselab_core.runtime.locks import Lease, LeaseTimeout, LeaseUnavailable
 
 pytestmark = pytest.mark.logic
@@ -64,13 +64,13 @@ class _SameInode:
 def inodes(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
     """Run as the filesystem numbers inodes, or as if every file had the same inode number (ext4's reuse)."""
     if request.param == "reused":
-        real = storage_module.StorageDir.lstat
+        real = os.lstat
 
-        def lstat(self: storage_module.StorageDir, name: str) -> object:
-            st = real(self, name)
-            return None if st is None else _SameInode(st)
+        def lstat(path: Any, *, dir_fd: int | None = None) -> object:  # noqa: ANN401
+            st = real(path, dir_fd=dir_fd)
+            return st if dir_fd is None else _SameInode(st)
 
-        monkeypatch.setattr(storage_module.StorageDir, "lstat", lstat)
+        monkeypatch.setattr(os, "lstat", lstat)
     return str(request.param)
 
 

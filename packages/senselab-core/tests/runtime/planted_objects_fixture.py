@@ -616,34 +616,56 @@ def _run_named(op: str, root: Path) -> bool:
         return lease.owns()
 
 
+def _fd_path(fd: int) -> Path:
+    """The path of the directory open on `fd`."""
+    if os.path.isdir("/proc/self/fd"):
+        return Path(os.readlink(f"/proc/self/fd/{fd}"))
+    import fcntl
+
+    return Path(fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(1024)).rstrip(b"\0").decode())  # type: ignore[attr-defined]
+
+
+def _at(name: Any, dir_fd: int | None) -> Path:  # noqa: ANN401
+    path = Path(os.fsdecode(name))
+    return path if dir_fd is None or path.is_absolute() else _fd_path(dir_fd) / path
+
+
 def _recording() -> list[Path]:
-    """Wrap every `StorageDir` write so the child records the path of each name it writes; return the record."""
-    from senselab_core.runtime.storage import StorageDir
+    """Record in this child the path of every name created through `os` (open, link, symlink, rename); return it.
+
+    `shutil` is imported first: it decides at import whether `os.open` takes `dir_fd`.
+    """
+    import shutil  # noqa: F401
 
     written: list[Path] = []
+    real_open, real_link, real_symlink = os.open, os.link, os.symlink
+    real_rename, real_replace = os.rename, os.replace
 
-    def wrap(method: str, position: int, target_position: int | None = None) -> None:
-        real = getattr(StorageDir, method)
+    def opened(path: Any, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:  # noqa: ANN401
+        if flags & os.O_CREAT:
+            written.append(_at(path, dir_fd))
+        return real_open(path, flags, mode, dir_fd=dir_fd)
 
-        def recorded(self: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-            where = args[target_position] if target_position is not None else self
-            written.append(Path(where.path) / args[position])
-            return real(self, *args, **kwargs)
+    def linked(src: Any, dst: Any, *, src_dir_fd: int | None = None, dst_dir_fd: int | None = None, **kw: Any) -> None:  # noqa: ANN401
+        written.append(_at(dst, dst_dir_fd))
+        real_link(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd, **kw)
 
-        setattr(StorageDir, method, recorded)
+    def symlinked(src: Any, dst: Any, target_is_directory: bool = False, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        written.append(_at(dst, dir_fd))
+        real_symlink(src, dst, target_is_directory, dir_fd=dir_fd)
 
-    for method in ("open_new", "write_new", "write_atomically"):
-        wrap(method, 0)
-    wrap("symlink", 1)
-    wrap("link", 2, 1)
-    wrap("rename", 2, 1)
-    real_now = StorageDir.fs_now
+    def moving(real: Callable[..., None]) -> Callable[..., None]:
+        def moved(src: Any, dst: Any, *, src_dir_fd: int | None = None, dst_dir_fd: int | None = None) -> None:  # noqa: ANN401
+            written.append(_at(dst, dst_dir_fd))
+            real(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
 
-    def now(self: StorageDir) -> float:
-        written.append(Path(self.path) / ".clock")
-        return real_now(self)
+        return moved
 
-    StorageDir.fs_now = now  # type: ignore[method-assign]
+    os.open = opened  # type: ignore[assignment]
+    os.link = linked  # type: ignore[assignment]
+    os.symlink = symlinked  # type: ignore[assignment]
+    os.rename = moving(real_rename)  # type: ignore[assignment]
+    os.replace = moving(real_replace)  # type: ignore[assignment]
     return written
 
 
@@ -784,21 +806,33 @@ def probe_swap_after_link(scratch: str) -> dict[str, Any]:
     from senselab_core.runtime import fetch as fetch_module
 
     cache = Path(scratch) / "cache"
-    real_commit = fetch_module._commit
+    real_link, real_replace = os.link, os.replace
     modes: list[int] = []
 
-    def commit(source: Any, name: str, target: Any, final: str, **kwargs: Any) -> bool:  # noqa: ANN401
-        modes.append(stat.S_IMODE(os.fstat(source.fd).st_mode))
-        placed = real_commit(source, name, target, final, **kwargs)
-        if final == SHA:
-            swap = Path(target.path) / ".swap"
-            swap.write_bytes(b"x" * len(PAYLOAD))
-            os.replace(swap, Path(target.path) / final)
-        return placed
+    def committing(real: Callable[..., None]) -> Callable[..., None]:
+        def commit(
+            src: Any,  # noqa: ANN401
+            dst: Any,  # noqa: ANN401
+            *,
+            src_dir_fd: int | None = None,
+            dst_dir_fd: int | None = None,
+            **kw: Any,  # noqa: ANN401
+        ) -> None:
+            final = os.path.basename(os.fsdecode(dst))
+            if final in (SHA, ".complete") and src_dir_fd is not None:
+                modes.append(stat.S_IMODE(os.fstat(src_dir_fd).st_mode))
+            real(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd, **kw)
+            if final == SHA:
+                where = _at(dst, dst_dir_fd).parent
+                (where / ".swap").write_bytes(b"x" * len(PAYLOAD))
+                real_replace(where / ".swap", where / final)
 
-    fetch_module._commit = commit  # type: ignore[assignment]
+        return commit
+
+    os.link = committing(real_link)  # type: ignore[assignment]
+    os.replace = committing(real_replace)  # type: ignore[assignment]
     fetch_module.fetch(_manifest(["a/voice.wav"]), cache_root=cache, opener=_opener)
-    fetch_module._commit = real_commit  # type: ignore[assignment]
+    os.link, os.replace = real_link, real_replace  # type: ignore[assignment]
     marker = json_module.loads((cache / "datasets" / "demo@1" / ".complete").read_bytes())
     paths = fetch_module.fetch(_manifest(["a/voice.wav"]), cache_root=cache, opener=_opener, verify="size")
     return {
