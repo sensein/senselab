@@ -121,6 +121,17 @@
             "rdfs:comment": "The execution context the activity ran in, as an execution-context@2.0 record."
         },
         {
+            "@id": "senselab:executionProfile",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The canonical digest of the execution profile the activity ran under."
+        },
+        {
             "@id": "senselab:storedContext",
             "@type": "rdf:Property",
             "rdfs:domain": {

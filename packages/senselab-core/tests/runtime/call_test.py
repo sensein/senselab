@@ -1,0 +1,225 @@
+"""`run_call`: placement by profile, store reuse, one activity per call, model source and profile digest recorded."""
+
+import platform
+import sys
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+import senselab_core.runtime.fake_backend as fake
+from senselab_core.kernel import prov
+from senselab_core.kernel.declare import REGISTRY, BackendSpec, Env, TaskSpec
+from senselab_core.kernel.identity import ReusePolicy
+from senselab_core.runtime.call import (
+    CallFailed,
+    Packaged,
+    RunConfig,
+    TaskCall,
+    run_call,
+    use_packaged,
+)
+from senselab_core.runtime.catalogue import Catalogue
+from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.store import ResultStore
+
+TOY = "toyorg/toy"
+REVISION = "a" * 40
+TASK = TaskSpec(
+    name="call_test.score",
+    version="1",
+    kind="transform",
+    inputs={"text": "json"},
+    outputs={"value": "sha256"},
+    params=fake.EchoParams,
+)
+
+
+def _backend(name: str, stack: str, env: Env) -> BackendSpec:
+    return BackendSpec(
+        task=TASK.name,
+        name=name,
+        version="1",
+        stack=stack,
+        models=(TOY,),
+        env=env,
+        devices=("cpu",),
+        batch_invariant=True,
+        worker=fake.WORKER_MODULE,
+        load_stub={},
+    )
+
+
+REGISTRY.add_task(TASK)
+REGISTRY.add_backend(_backend("fake-alpha", "alpha", Env.host()))
+REGISTRY.add_backend(_backend("fake-beta", "beta", Env.host()))
+REGISTRY.add_backend(_backend("fake-isolated", "isolated", Env.isolated("fake")))
+
+CATALOGUE = Catalogue.load(
+    f"""
+format: catalogue@1.0
+entries:
+- id: {TOY}
+  revision: {REVISION}
+  tasks: [{TASK.name}]
+  backends: [fake-alpha, fake-beta, fake-isolated]
+  stacks: [alpha, beta, isolated]
+  default_for: [{TASK.name}]
+  license:
+    expression: MIT
+    source: toy card
+    verified: {{date: 2026-11-01, how: hf-card}}
+    gated: false
+"""
+)
+
+
+def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+    """Every env is the running interpreter: the declared test seam of the fake stack; nothing is built."""
+    return EnvHandle(
+        python=sys.executable,
+        python_version=platform.python_version(),
+        lock_sha="1" * 64,
+        wheel_set="2" * 64,
+        torch_index=None,
+    )
+
+
+@pytest.fixture(autouse=True)
+def packaged() -> Iterator[None]:
+    """`run_call` reads the toy catalogue and opens every env as this interpreter."""
+    previous = use_packaged(Packaged(CATALOGUE, _this_interpreter))
+    yield
+    use_packaged(previous)
+
+
+@pytest.fixture
+def store(tmp_path: Path) -> ResultStore:
+    """A fresh result store."""
+    return ResultStore(tmp_path / "store")
+
+
+def _profile(*stacks: str, **override: object) -> ExecutionProfile:
+    return ExecutionProfile.load(
+        "laptop", {"devices": ["cpu"], "stack_preferences": {TASK.name: list(stacks)}, **override}
+    )
+
+
+def _call(text: object = "hello", **params: object) -> TaskCall:
+    return TaskCall.model_validate({"task": TASK.name, "inputs": {"text": text}, "params": params})
+
+
+def _activities(store: ResultStore) -> list[prov.Record]:
+    return store.provenance.activities()
+
+
+def _executions(store: ResultStore) -> list[prov.Record]:
+    return [a for a in _activities(store) if "senselab:Reuse" not in a.types()]
+
+
+@pytest.mark.logic
+def test_stack_switch_by_profile(store: ResultStore) -> None:
+    """Changing `stack_preferences` alone changes the backend and the recorded key, never the call or output ports."""
+    call = _call()
+    alpha = run_call(call, execution=_profile("alpha"), store=store)
+    beta = run_call(call, execution=_profile("beta"), store=store)
+    assert (alpha.placement.backend.stack, beta.placement.backend.stack) == ("alpha", "beta")
+    assert (alpha.key.backend, beta.key.backend) == ("fake-alpha", "fake-beta")
+    assert alpha.outputs.keys() == beta.outputs.keys() == set(TASK.outputs)
+    keys = [prov.literal_value(a.node()["senselab:logicalKey"]) for a in _executions(store)]
+    assert sorted(k["backend"] for k in keys if isinstance(k, dict)) == ["fake-alpha", "fake-beta"]
+
+
+@pytest.mark.logic
+def test_second_call_hits_store(store: ResultStore) -> None:
+    """The same call again is served from the store, with the outputs and identity the first one stored."""
+    first = run_call(_call(salt="s"), execution=_profile("alpha"), store=store)
+    second = run_call(_call(salt="s"), execution=_profile("alpha"), store=store)
+    assert (first.reused, second.reused) == (None, ReusePolicy.EXACT)
+    assert second.output_identity == first.output_identity and second.outputs == first.outputs
+    assert run_call(_call(salt="t"), execution=_profile("alpha"), store=store).reused is None
+
+
+@pytest.mark.logic
+def test_one_activity_per_call(store: ResultStore) -> None:
+    """An execution writes one activity and a store hit only the store's reuse activity, never a second execution."""
+    run_call(_call("one"), execution=_profile("alpha"), store=store)
+    [execution] = _activities(store)
+    assert "senselab:Reuse" not in execution.types()
+    assert execution.node()["prov:generated"] == [{"@id": _result_id(store)}]
+    run_call(_call("one"), execution=_profile("alpha"), store=store, run=RunConfig(reuse=ReusePolicy.EXACT))
+    assert len(_activities(store)) == 2
+    assert _executions(store) == [execution]
+
+
+def _result_id(store: ResultStore) -> str:
+    [entity] = [e for e in store.provenance.entities() if e.id.startswith("output:")]
+    return entity.id
+
+
+@pytest.mark.logic
+def test_model_source_recorded(store: ResultStore) -> None:
+    """The context's `model_source` is how the weights were reached; the agent names the model at its pin."""
+    result = run_call(_call(), execution=_profile("alpha"), store=store)
+    assert result.context.model_source == "hf"
+    assert result.key.model is not None and (result.key.model.id, result.key.model.identity) == (TOY, REVISION)
+    [agent] = store.provenance.agents()
+    assert agent.node()["senselab:modelSource"] == f"hf:{TOY}@{REVISION}"
+    [execution] = _executions(store)
+    assert execution.node()["prov:wasAssociatedWith"] == [{"@id": agent.id}]
+    modelless = run_call(
+        TaskCall.model_validate({"task": fake.ECHO.name, "inputs": {"payload": {"x": 1}}}),
+        execution=_profile(),
+        store=store,
+    )
+    assert modelless.context.model_source is None and modelless.key.model is None
+
+
+@pytest.mark.logic
+def test_profile_digest_recorded_not_keyed(store: ResultStore) -> None:
+    """Each execution records its profile's digest; a profile that changes no placement changes no key."""
+    plain, retrying = _profile("alpha"), _profile("alpha", retry={"attempts": 5})
+    first = run_call(_call(), execution=plain, store=store, run=RunConfig(reuse=ReusePolicy.EXACT))
+    second = run_call(_call(), execution=retrying, store=store, run=RunConfig(reuse=ReusePolicy.EXACT))
+    assert first.key == second.key and second.reused is ReusePolicy.EXACT
+    [execution] = _executions(store)
+    assert prov.literal_value(execution.node()["senselab:executionProfile"]) == plain.canonical_digest()
+
+
+@pytest.mark.logic
+def test_backend_params_reach_the_key_and_are_validated(store: ResultStore) -> None:
+    """Backend params are validated against the chosen backend; an unknown one is refused before anything runs."""
+    call = TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "x"}, "backend_params": {"beam": 2}})
+    with pytest.raises(ValueError, match="beam"):
+        run_call(call, execution=_profile("alpha"), store=store)
+    assert _activities(store) == []
+
+
+@pytest.mark.logic
+def test_backend_fault_raises_call_failed(store: ResultStore) -> None:
+    """An item the backend fails raises `CallFailed` with its fault class; nothing is stored or recorded."""
+    call = TaskCall.model_validate({"task": fake.ECHO.name, "inputs": {"payload": float("nan")}})
+    with pytest.raises(CallFailed) as info:
+        run_call(call, execution=_profile(), store=store)
+    assert info.value.error["fault"].value == "content"
+    assert _activities(store) == [] and store.provenance.entities() == []
+
+
+@pytest.mark.contract
+def test_isolated_worker_equals_host(store: ResultStore) -> None:
+    """An isolated backend runs in a pooled worker process and gives the host backend's outputs."""
+    host = run_call(_call("same"), execution=_profile("alpha"), store=store)
+    isolated = run_call(_call("same"), execution=_profile("isolated"), store=store)
+    again = run_call(_call("other"), execution=_profile("isolated"), store=store)
+    assert isolated.outputs == host.outputs and isolated.key != host.key
+    assert again.reused is None and again.outputs != isolated.outputs
+
+
+@pytest.mark.logic
+def test_call_shape_validates_against_the_declaration() -> None:
+    """A call from the one call shape validates its params against the task and parses its model reference."""
+    call = TaskCall.model_validate({"task": TASK.name, "inputs": {"text": 1}, "model": f"{TOY}@{REVISION}"})
+    assert call.task_version == "1" and type(call.params) is fake.EchoParams
+    assert call.model is not None and call.model.ref == REVISION
+    with pytest.raises(ValueError, match="salty"):
+        TaskCall.model_validate({"task": TASK.name, "inputs": {"text": 1}, "params": {"salty": 1}})

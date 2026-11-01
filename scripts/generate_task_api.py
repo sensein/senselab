@@ -19,8 +19,9 @@ from typing import Annotated, Literal, Union
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 from senselab_core.kernel.declare import REGISTRY, Registry, TaskSpec
+from senselab_core.runtime.call import kernel_types
 
-from senselab._api.call import callable_names, kernel_types
+from senselab._api.call import callable_names
 from senselab._api.declarations import DECLARATION_MODULES
 
 OUTPUT = Path(__file__).resolve().parents[1] / "packages" / "senselab" / "src" / "senselab" / "_api" / "generated.py"
@@ -119,7 +120,8 @@ def _render_task(spec: TaskSpec, imports: _Imports) -> tuple[str, str, str]:
         raise ValueError(f"task {spec.name!r}: names {sorted(clash)} are reserved or not identifiers")
     for module, name in (
         ("senselab._api.call", "ConfiguredTask"),
-        ("senselab._api.call", "TaskCall"),
+        ("senselab_core.runtime.call", "Result"),
+        ("senselab_core.runtime.call", "TaskCall"),
         ("senselab._api.call", "UNSET"),
         ("senselab_core.kernel.identity", "ModelRef"),
         ("collections.abc", "Mapping"),
@@ -163,14 +165,20 @@ def _render_task(spec: TaskSpec, imports: _Imports) -> tuple[str, str, str]:
         *_dict_arg(ports, "            "),
         "        )",
         "",
+        *_signature("def __call__", ["self", *data], [], "Result", "    "),
+        '        """Run this task on the inputs through `run_call` and return its one result."""',
+        "        return self._run(",
+        *_dict_arg(ports, "            "),
+        "        )",
         "",
-        *_signature(f"def {func}", data, [model, *params, backend], "TaskCall"),
-        f'    """Return the call of `{cls}` on the inputs: `{cls}(model, **params).call(...)`."""',
+        "",
+        *_signature(f"def {func}", data, [model, *params, backend], "Result"),
+        f'    """Run `{cls}` on the inputs: exactly `{cls}(model, **params)(...)`."""',
         f"    return {cls}(",
         "        model,",
         *(f"        {n}={n}," for n in names),
         "        backend_params=backend_params,",
-        f"    ).call({', '.join(ports)})",
+        f"    )({', '.join(ports)})",
     ]
     return "\n".join(lines), cls, func
 

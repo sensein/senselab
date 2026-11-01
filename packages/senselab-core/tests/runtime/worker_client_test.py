@@ -360,7 +360,7 @@ def test_no_array_file_remains_when_params_fail_to_encode(worker: WorkerClient) 
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("init", [{"model": "x"}, {"faults": {"crash_after": "soon", "bogus": 1}}])
+@pytest.mark.parametrize("init", [{"weights": "x"}, {"faults": {"crash_after": "soon", "bogus": 1}}])
 def test_load_failure_is_worker_fatal(array_parent: Path, init: dict[str, Any]) -> None:
     """A `fatal` during load raises `WorkerFatal`, an infrastructure fault carrying the error."""
     with pytest.raises(WorkerFatal) as info:

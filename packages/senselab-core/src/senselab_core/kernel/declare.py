@@ -307,6 +307,11 @@ class Registry:
         """Return the declared tasks."""
         return list(self._tasks.values())
 
+    def spec(self, task: str) -> TaskSpec:
+        """Return the declared task `task`, or raise `UnknownTask`."""
+        self._task_backends(task)
+        return self._tasks[task]
+
     def backends(self, task: str) -> list[BackendSpec]:
         """Return the backends of `task`, or raise `UnknownTask`."""
         return list(self._task_backends(task).values())

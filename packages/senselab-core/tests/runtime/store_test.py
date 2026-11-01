@@ -451,14 +451,14 @@ def test_store_writes_entity_and_reuse_only(tmp_path: Path, caplog: pytest.LogCa
     with caplog.at_level(logging.WARNING, logger="senselab"):
         assert s.get(other, linux, ReusePolicy.EXACT) is None
     assert [q["outcome"] for q in _quarantines(caplog.records)] == ["quarantined"]
-    reuses = provenance.activities(store_module._key_record(k))
+    reuses = provenance.activities(store_module.key_record(k))
     assert len(reuses) == 2 and provenance.activities() == reuses
     assert all(r.types() == ("prov:Activity", "senselab:Reuse") for r in reuses)
     assert all(r.node()["prov:used"] == [{"@id": ident}] for r in reuses)
     assert {r.id for r in provenance.entities()} == {ident, output_identity({"y": 2})}
     assert sorted(_reuses(s), key=lambda a: str(a["senselab:reusePolicy"])) == [
         {
-            "senselab:logicalKey": store_module._key_record(k),
+            "senselab:logicalKey": store_module.key_record(k),
             "senselab:context": {"format": "execution-context@2.0", **current.model_dump(mode="json")},
             "senselab:storedContext": {"format": "execution-context@2.0", **linux.model_dump(mode="json")},
             "senselab:reusePolicy": policy,

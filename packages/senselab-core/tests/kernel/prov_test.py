@@ -446,6 +446,7 @@ def test_core_vocabulary_holds_the_core_terms() -> None:
         ("senselab:modelSource", "prov:Agent", "xsd:string"),
         ("senselab:logicalKey", "prov:Activity", "rdf:JSON"),
         ("senselab:context", "prov:Activity", "rdf:JSON"),
+        ("senselab:executionProfile", "prov:Activity", "xsd:string"),
         ("senselab:storedContext", "senselab:Reuse", "rdf:JSON"),
         ("senselab:reusePolicy", "senselab:Reuse", "xsd:string"),
         ("senselab:equivalence", "senselab:Reuse", "xsd:string"),

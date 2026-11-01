@@ -256,12 +256,12 @@ def _equivalence_digest(table: Equivalence) -> str:
     return value_digest("equivalence", {"classes": fields})
 
 
-def _key_record(key: LogicalKey) -> object:
+def key_record(key: LogicalKey) -> object:
     """Return `key`'s fields as the JSON value a store entry and a reuse activity record."""
     return jcs_loads(jcs_dumps(key.model_dump()))
 
 
-def _context_record(context: ExecutionContext) -> dict[str, object]:
+def context_record(context: ExecutionContext) -> dict[str, object]:
     """Return `context` as an `execution-context@2.0` record: its format tag and its fields."""
     return {"format": CONTEXT_FORMAT, **context.model_dump(mode="json")}
 
@@ -453,13 +453,13 @@ def _commit(  # noqa: PLR0913 - what the entry holds, where it is staged and pla
                 staging.write_new(f"{sha}.npy", data, file_mode, grammar=MEMBER_NAME)
             staging.write_new(
                 "context.json",
-                jcs_dumps(_context_record(context)),
+                jcs_dumps(context_record(context)),
                 file_mode,
                 grammar=MEMBER_NAME,
             )
             result = {
                 "format": RESULT_FORMAT,
-                "key": _key_record(key),
+                "key": key_record(key),
                 "key_digest": key.digest(),
                 "context_fingerprint": context.fingerprint(),
                 "output_identity": identity,
@@ -849,9 +849,9 @@ class ResultStore:
 
     def _record_reuse(self, key: LogicalKey, current: ExecutionContext, hit: StoredResult, started: datetime) -> None:
         attributes: dict[str, object] = {
-            "senselab:logicalKey": _key_record(key),
-            "senselab:context": _context_record(current),
-            "senselab:storedContext": _context_record(hit.context),
+            "senselab:logicalKey": key_record(key),
+            "senselab:context": context_record(current),
+            "senselab:storedContext": context_record(hit.context),
             "senselab:reusePolicy": hit.policy_used.value,
         }
         if hit.policy_used is ReusePolicy.EQUIVALENT:

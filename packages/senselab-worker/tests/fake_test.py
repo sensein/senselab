@@ -102,9 +102,9 @@ def test_init_faults_are_the_default_and_params_replace_them() -> None:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("init", [{"model": "x"}, {"faults": {"bogus": 1}}, {"faults": []}])
+@pytest.mark.parametrize("init", [{"weights": "x"}, {"faults": {"bogus": 1}}, {"faults": []}])
 def test_unknown_init_is_refused(init: dict[str, Any]) -> None:
-    """`load` accepts only `array_dir` and `faults`, with known fault fields."""
+    """`load` accepts only `array_dir`, `faults`, `device` and `model`, with known fault fields."""
     with pytest.raises((ValueError, TypeError)):
         load(init)
 

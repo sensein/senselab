@@ -83,15 +83,15 @@ class _State:
 
 
 def load(init: dict[str, Any]) -> object:
-    """Return the fake's state; `init` may hold only `array_dir` and `faults`.
+    """Return the fake's state; `init` may hold only `array_dir`, `faults`, and the `device` and `model` it ignores.
 
     Raises:
         ValueError: on any other key.
         TypeError: on malformed faults.
     """
-    unknown = sorted(init.keys() - {"array_dir", "faults"})
+    unknown = sorted(init.keys() - {"array_dir", "faults", "device", "model"})
     if unknown:
-        raise ValueError(f"fake init takes only array_dir and faults, got {unknown}")
+        raise ValueError(f"fake init takes only array_dir, faults, device and model, got {unknown}")
     return _State(FakeFaults.from_json(init.get("faults", {})))
 
 

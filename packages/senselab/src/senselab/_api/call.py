@@ -1,21 +1,15 @@
-"""The call value, the base of every generated task class and the error envelope.
-
-Declarations only: a call is validated against its task's declaration and nothing is executed.
-"""
+"""The base of every generated task class and the error envelope; a configured task runs through `run_call`."""
 
 import difflib
 from collections.abc import Iterable, Mapping
 from os import PathLike
-from typing import Annotated, Any, ClassVar, Self
+from typing import Any, ClassVar, Self
 
-import senselab_core.kernel.results  # noqa: F401 - importing it defines the result types
-import senselab_core.kernel.time  # noqa: F401 - importing it defines the time types
-from pydantic import AfterValidator, BaseModel, ConfigDict, PlainSerializer, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 from senselab_core.kernel._base import FrozenMapping, NonEmptyStr
 from senselab_core.kernel.declare import REGISTRY, DeclaredParams, Registry, TaskParams, TaskSpec
-from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import ModelRef
-from senselab_core.kernel.signals import Recording
+from senselab_core.runtime.call import Result, TaskCall, kernel_types, run_call
 
 
 class _Unset:
@@ -61,18 +55,6 @@ def closest(word: str, known: Iterable[str], n: int = 3) -> list[str]:
     return difflib.get_close_matches(word, sorted(known), n=n)
 
 
-def kernel_types() -> dict[str, type]:
-    """Return the kernel value types a port may name, by name: every `Recording` and `Formatted` subclass."""
-    found: dict[str, type] = {}
-    pending: list[type] = [Recording, Formatted]
-    while pending:
-        for sub in pending.pop().__subclasses__():
-            found[sub.__name__] = sub
-            pending.append(sub)
-    found[Recording.__name__] = Recording
-    return found
-
-
 def callable_names(spec: TaskSpec) -> tuple[str, str]:
     """Return the generated class name and function name of `spec`: its last dotted segment, in CamelCase and as is."""
     segment = spec.name.rsplit(".", 1)[-1]
@@ -96,25 +78,6 @@ def task_spec(name: str, registry: Registry = REGISTRY) -> TaskSpec:
         field="task",
         suggestions=closest(name, declared),
     )
-
-
-Inputs = Annotated[Mapping[str, Any], AfterValidator(FrozenMapping), PlainSerializer(dict)]
-
-
-class TaskCall(BaseModel):
-    """A validated call: the task and its version, one input per declared port, validated params, the model.
-
-    `backend_params` are held as given; they are validated against the chosen backend when it is chosen.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
-
-    task: NonEmptyStr
-    task_version: NonEmptyStr
-    inputs: Inputs
-    params: TaskParams
-    model: ModelRef | None = None
-    backend_params: Inputs = FrozenMapping({})
 
 
 def _is_data(value: object, declared: type | None) -> bool:
@@ -195,6 +158,9 @@ class ConfiguredTask:
     def _replace(self, changes: Mapping[str, Any]) -> Any:  # noqa: ANN401 - the generated subclass names its own type
         merged = {**self._given, **{k: v for k, v in changes.items() if v is not UNSET}}
         return type(self)(self._model, **merged, backend_params=self._backend_params)
+
+    def _run(self, inputs: Mapping[str, Any]) -> Result:
+        return run_call(self._call(inputs))
 
     def _call(self, inputs: Mapping[str, Any]) -> TaskCall:
         spec = self.spec
