@@ -90,6 +90,7 @@ def run_bounded(
         timeout=timeout,
         preexec_fn=lambda: _limits(fsize, address_space),
         env={k: v for k, v in os.environ.items() if not k.startswith("PYTEST_")},
+        check=False,
     )
     lines = proc.stdout.strip().splitlines()
     if proc.returncode != 0 or not lines:

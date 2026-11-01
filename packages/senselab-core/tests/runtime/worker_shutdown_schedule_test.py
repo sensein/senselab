@@ -362,6 +362,7 @@ def test_ctrl_c_held_once_with_a_hint_and_escalated_by_a_second() -> None:
         text=True,
         timeout=WAIT_S,
         preexec_fn=_bounded,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr[-2000:]
     assert proc.stdout.strip() == "interrupted"
@@ -384,7 +385,12 @@ for _ in range(3):
 def test_the_escalation_hint_is_logged_once_per_process() -> None:
     """Three shutdowns in one process, each interrupted once, log the hint once."""
     proc = subprocess.run(
-        [sys.executable, "-c", _THREE_SHUTDOWNS], capture_output=True, text=True, timeout=WAIT_S, preexec_fn=_bounded
+        [sys.executable, "-c", _THREE_SHUTDOWNS],
+        capture_output=True,
+        text=True,
+        timeout=WAIT_S,
+        preexec_fn=_bounded,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr[-2000:]
     assert proc.stderr.count(ESCALATE_HINT) == 1

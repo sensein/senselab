@@ -164,7 +164,7 @@ class _Raises(Exception):
 
 class _NotStr(Exception):
     def __str__(self) -> str:
-        return 42  # type: ignore[return-value]
+        return 42  # type: ignore[return-value]  # noqa: PLE0307 - the case is a `__str__` that returns an int
 
 
 def _check_record(record: dict[str, Any]) -> None:
@@ -194,10 +194,11 @@ def test_error_record_is_total(
 ) -> None:
     """Raising `__str__` and `__repr__`, lone surrogates and huge messages all give a valid, bounded record."""
     cases: list[BaseException] = [_Raises(raise_str, raise_repr), ValueError(message), ContentFault(message), _NotStr()]
-    for exc in cases:
+    for case in cases:
+        exc = case
         if raised:
             try:
-                raise exc
+                raise case
             except BaseException as caught:  # noqa: BLE001 - the record is built from whatever was raised
                 exc = caught
         _check_record(error_record(exc))

@@ -323,7 +323,7 @@ CORRUPTIONS: dict[str, Callable[[Path], object]] = {
     "result_missing": lambda e: (_unseal(e) / "result.json").unlink(),
     "result_garbled": lambda e: (_unseal(e) / "result.json").write_bytes(b"{not json"),
     "context_garbled": lambda e: (_unseal(e) / "context.json").write_bytes(b"[1, 2"),
-    "npy_fifo": lambda e: _npy_to_fifo(e),
+    "npy_fifo": lambda e: _npy_to_fifo(e),  # noqa: PLW0108 - `_npy_to_fifo` is defined below this table
     "array_ref_escapes": lambda e: _rewrite_json(
         e / "result.json", lambda r: _forge(r, {"y": {"$array": "../" * 3 + "x"}, "n": 1})
     ),

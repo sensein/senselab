@@ -289,6 +289,7 @@ def run_schedule(tmp_path: Path, todo: list[dict[str, Any]]) -> list[dict[str, A
         env=env,
         timeout=CASE_BOUND_S * len(todo) + 60,
         preexec_fn=_bounded,
+        check=False,
     )
     reports = [json.loads(line) for line in proc.stdout.splitlines()]
     assert proc.returncode == 0 and len(reports) == len(todo), (

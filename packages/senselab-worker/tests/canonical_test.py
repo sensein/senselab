@@ -3,6 +3,7 @@
 import hashlib
 import io
 import json
+import math
 import struct
 import time
 import warnings
@@ -523,7 +524,7 @@ NFC_SENSITIVE = (_UNASSIGNED_IN_13, "e\u0301\U0001faf6", "\U0001fae8\u0301\u0323
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("text", NFC_SENSITIVE, ids=lambda t: ascii(t))
+@pytest.mark.parametrize("text", NFC_SENSITIVE, ids=ascii)
 def test_text_with_post_13_code_points_has_one_digest_on_every_interpreter(text: str) -> None:
     """A string holding a code point unassigned in Unicode 13 digests as 3.10 digested it, as a value and a key."""
     assert _jcs_sha(text) == PINNED[text]
@@ -679,7 +680,7 @@ def _reference_bits(dtype: str, word: int) -> int:
     """The canonical bits of one float word, by the ADR-006 list, without numpy."""
     size, fmt = _WIDTH[dtype]
     value = struct.unpack(fmt, word.to_bytes(size, "little"))[0]
-    if value != value:
+    if math.isnan(value):
         return {2: 0x7E00, 4: 0x7FC00000, 8: 0x7FF8000000000000}[size]
     return 0 if value == 0 else word
 

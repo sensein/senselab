@@ -686,7 +686,7 @@ def test_depth_check_of_a_shared_dag_matches_the_tree_and_enters_each_container_
     case: tuple[dict[str, object], int, int],
 ) -> None:
     """`dump_line` refuses exactly the messages whose tree is deeper than `MAX_DEPTH`, entering each container once."""
-    import senselab_worker.codec as codec
+    from senselab_worker import codec
 
     msg, height, distinct = case
     entries = 0

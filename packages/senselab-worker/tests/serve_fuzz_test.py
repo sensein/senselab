@@ -39,7 +39,7 @@ class _Unprintable(Exception):
 
 class _NotStr(ContentFault):
     def __str__(self) -> str:
-        return 3  # type: ignore[return-value]
+        return 3  # type: ignore[return-value]  # noqa: PLE0307 - the case is a `__str__` that returns an int
 
 
 class _Str(str):
@@ -152,7 +152,7 @@ _ERRORS: list[Callable[[], object]] = [
     lambda: OSError("cannot open /data/\udcff.wav"),
     lambda: RuntimeError("x" * (2 * MAX_LINE_BYTES)),
     lambda: _Escape("base"),
-    lambda: GeneratorExit(),
+    GeneratorExit,
 ]
 
 _SIZES = [MAX_LINE_BYTES - 200, MAX_LINE_BYTES, MAX_LINE_BYTES + 1, 3 * MAX_LINE_BYTES]
@@ -216,7 +216,9 @@ class Behaviour:
         """The number of items in the request."""
         return len(self.item_ids)
 
-    def handle(self, state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> object:
+    def handle(  # noqa: PLR0911 - one return per behaviour name, in the order the names are listed
+        self, state: object, items: list[dict[str, Any]], params: dict[str, Any]
+    ) -> object:
         """Answer the hostile request as this behaviour says; answer any other well."""
         if params.get("good"):
             return [{"outputs": {"ok": True}} for _ in items]

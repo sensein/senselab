@@ -56,6 +56,34 @@ def _refused_writes(tree: ast.Module) -> set[int]:
     return inside
 
 
+def _call_substitution(node: ast.Call, names: set[str], filename: str) -> str | None:
+    """``<line>: <what>`` if the call substitutes a senselab internal, else ``None``."""
+    func, target = node.func, node.args[0]
+    if isinstance(func, ast.Attribute) and func.attr in MONKEYPATCH_WRITES and _root(func) == "monkeypatch":
+        if _is_internal(target, names):
+            return f"{node.lineno}: monkeypatch.{func.attr} of {ast.unparse(target)}"
+    elif isinstance(func, ast.Name) and func.id in ("setattr", "delattr"):
+        if isinstance(target, ast.Starred) and filename != HARNESS:
+            return f"{node.lineno}: {func.id} with an unpacked target"
+        if _is_internal(target, names):
+            return f"{node.lineno}: {func.id} of {ast.unparse(target)}"
+    return None
+
+
+def _assignment_substitutions(node: ast.AST, names: set[str]) -> list[str]:
+    """``<line>: <what>`` for each assignment in `node` to an attribute or item of a senselab name."""
+    targets: list[ast.expr] = []
+    if isinstance(node, ast.Assign):
+        targets = node.targets
+    elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+        targets = [node.target]
+    return [
+        f"{target.lineno}: assignment to {ast.unparse(target)}"
+        for target in targets
+        if isinstance(target, (ast.Attribute, ast.Subscript)) and _root(target) in names
+    ]
+
+
 def substitutions(source: str, filename: str) -> list[str]:
     """``<line>: <what>`` for each substitution of a senselab internal in the test module `source`."""
     tree = ast.parse(source)
@@ -65,24 +93,9 @@ def substitutions(source: str, filename: str) -> list[str]:
     for node in ast.walk(tree):
         if id(node) in refused:
             continue
-        if isinstance(node, ast.Call) and node.args:
-            func, target = node.func, node.args[0]
-            if isinstance(func, ast.Attribute) and func.attr in MONKEYPATCH_WRITES and _root(func) == "monkeypatch":
-                if _is_internal(target, names):
-                    found.append(f"{node.lineno}: monkeypatch.{func.attr} of {ast.unparse(target)}")
-            elif isinstance(func, ast.Name) and func.id in ("setattr", "delattr"):
-                if isinstance(target, ast.Starred) and filename != HARNESS:
-                    found.append(f"{node.lineno}: {func.id} with an unpacked target")
-                elif _is_internal(target, names):
-                    found.append(f"{node.lineno}: {func.id} of {ast.unparse(target)}")
-        targets: list[ast.expr] = []
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
-            targets = [node.target]
-        for target in targets:
-            if isinstance(target, (ast.Attribute, ast.Subscript)) and _root(target) in names:
-                found.append(f"{target.lineno}: assignment to {ast.unparse(target)}")
+        if isinstance(node, ast.Call) and node.args and (hit := _call_substitution(node, names, filename)):
+            found.append(hit)
+        found += _assignment_substitutions(node, names)
     return found
 
 

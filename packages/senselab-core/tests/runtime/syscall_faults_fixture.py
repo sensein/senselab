@@ -17,7 +17,7 @@ Step = Literal["open", "read", "write", "fsync"]
 """Where `fail_at` makes a file's I/O fail."""
 
 
-def fail_at(
+def fail_at(  # noqa: C901, PLR0913 - one patcher over the five syscalls; the keyword-only options are the cases
     monkeypatch: pytest.MonkeyPatch,
     name: str,
     at: Step,

@@ -70,7 +70,12 @@ def _run_id_in_a_fresh_process(**environ: str) -> list[str]:
     """`run_id()` twice and the exported `SENSELAB_RUN_ID`, in a fresh interpreter whose run variables are `environ`."""
     base = {k: v for k, v in os.environ.items() if k not in ("SENSELAB_RUN_ID", "SLURM_ARRAY_JOB_ID", "SLURM_JOB_ID")}
     proc = subprocess.run(
-        [sys.executable, "-c", _RUN_ID_TWICE], env={**base, **environ}, capture_output=True, text=True, timeout=60
+        [sys.executable, "-c", _RUN_ID_TWICE],
+        env={**base, **environ},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr[-2000:]
     return list(json.loads(proc.stdout))

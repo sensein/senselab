@@ -49,8 +49,9 @@ def _rewrite_records(path: Path, kind: str, mutate: Callable[[dict[str, object]]
         rec = json.loads(line)
         if rec.get("record") == kind:
             mutate(rec)
-            line = jcs_dumps(rec).decode("utf-8")
-        lines.append(line)
+            lines.append(jcs_dumps(rec).decode("utf-8"))
+        else:
+            lines.append(line)
     path.write_text("\n".join(lines) + "\n")
 
 
@@ -622,7 +623,7 @@ def _number(value: float | int) -> object:
     return ("n", Fraction(value))
 
 
-def _oracle(value: object) -> object:
+def _oracle(value: object) -> object:  # noqa: C901, PLR0911 - the reference decision list, one case per family
     """An independent identity, modulo ADR-006's equivalences only.
 
     Finite numbers compare by value (1 = 1.0 = numpy 1, -0.0 = 0), every NaN is one, text compares after NFC,
@@ -935,7 +936,7 @@ def test_with_entity_attributes_keeps_order_and_relations_and_remints_the_edited
     assert store.get_entity(first).attributes["signal"] == "enhanced"
 
 
-def _decoded_type(value: object) -> type | None:
+def _decoded_type(value: object) -> type | None:  # noqa: PLR0911 - one return per token family
     """The type a caller reads back for a value of a token family, or None for a JSON value."""
     if isinstance(value, enum.Enum):
         return provenance.EnumMember
@@ -1006,7 +1007,7 @@ def test_every_read_path_hands_back_the_decoded_value_never_a_token(
         assert provenance.normalised(read) == expected, how
 
 
-def _compares_by_value(value: object) -> bool:
+def _compares_by_value(value: object) -> bool:  # noqa: PLR0911 - one return per value family
     """Whether Python equality is reflexive on `value`'s read-back: no NaN and no array anywhere in it."""
     if isinstance(value, numpy.ndarray):
         return False

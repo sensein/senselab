@@ -494,7 +494,9 @@ def probe_planted(scratch: str, op: str, plant: str) -> list[dict[str, Any]]:
 # -- the primitive: one planted test per operation --
 
 
-def probe_primitive(scratch: str, operation: str) -> dict[str, Any]:
+def probe_primitive(  # noqa: C901, PLR0915 - the table of probed primitives, one branch each
+    scratch: str, operation: str
+) -> dict[str, Any]:
     """Run one `StorageDir` operation on a name or path that is a symlink to a victim; report the victim and error."""
     from senselab_core.runtime.storage import TEMPORARY_NAME, StorageDir
     from senselab_worker.ownership import UUID_HEX
@@ -507,7 +509,7 @@ def probe_primitive(scratch: str, operation: str) -> dict[str, Any]:
     os.symlink(victim / "f", root / "file_link")
     before = _snapshot(victim)
 
-    def run() -> Any:  # noqa: ANN401
+    def run() -> Any:  # noqa: ANN401, C901, PLR0911, PLR0912 - one return per probed operation
         with StorageDir.open_root(root) as top:
             if operation == "child":
                 return top.child("link")
@@ -749,7 +751,9 @@ def probe_planted_names(scratch: str, op: str, plant: str) -> dict[str, Any]:
 LEASE = "resolutions@2.json.lease"
 
 
-def probe_record_with_plant(scratch: str, name: str, plant: str) -> dict[str, Any]:
+def probe_record_with_plant(  # noqa: C901 - one branch per plant
+    scratch: str, name: str, plant: str
+) -> dict[str, Any]:
     """Plant `plant` at `runs/r1/<name>` and record a resolution; report the error, the victim and what is outside."""
     from senselab_core.runtime import revision
 

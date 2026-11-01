@@ -56,7 +56,7 @@ def test_symlinks_submodules_and_odd_modes_are_refused_anywhere(mode: str) -> No
 
 def test_budget_passes_on_current_tree() -> None:
     """The script exits 0 on the committed index."""
-    done = subprocess.run([sys.executable, str(_SCRIPT)], capture_output=True, text=True)
+    done = subprocess.run([sys.executable, str(_SCRIPT)], capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stdout
 
 

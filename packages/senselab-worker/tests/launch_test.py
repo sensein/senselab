@@ -26,6 +26,7 @@ def _launch(tmp_path: Path, backend: str, *messages: dict[str, Any]) -> subproce
         capture_output=True,
         timeout=60,
         env=env,
+        check=False,
     )
 
 
@@ -87,7 +88,7 @@ def test_backend_children_inherit_dev_null_not_the_channel(tmp_path: Path) -> No
 def test_closed_fd0_at_start_reads_dev_null() -> None:
     """A worker started with fd 0 closed says hello and exits 0 at the end of its (empty) channel."""
     script = 'exec "$0" -m senselab_worker.launch senselab_worker.fake <&-'
-    proc = subprocess.run(["/bin/sh", "-c", script, sys.executable], capture_output=True, timeout=60)
+    proc = subprocess.run(["/bin/sh", "-c", script, sys.executable], capture_output=True, timeout=60, check=False)
     assert proc.returncode == 0, proc.stderr
     assert _keys(proc.stdout) == ["hello"]
 
@@ -126,6 +127,7 @@ def test_files_opened_at_interpreter_start_never_become_the_channel(tmp_path: Pa
         timeout=60,
         env=env,
         preexec_fn=_bounded,
+        check=False,
     )
     held = {int(fd) for fd in (tmp_path / "planted.bin.fds").read_text().split()}
     assert set(closed) <= held, "the plant did not land on the closed descriptors"

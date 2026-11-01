@@ -7,11 +7,11 @@ import unicodedata
 
 import numpy
 import pytest
-import senselab_core.kernel.identity as identity
 import yaml
 from hypothesis import given
 from hypothesis import strategies as st
 from pydantic import ValidationError
+from senselab_core.kernel import identity
 from senselab_core.kernel.identity import (
     DEFAULT_REUSE_POLICY,
     ExecutionContext,

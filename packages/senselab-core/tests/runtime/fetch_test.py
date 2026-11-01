@@ -643,7 +643,7 @@ def test_manifest_file_named_like_the_marker_stays_payload(tmp_path: Path) -> No
         ["e\u0301", "\u00e9"],
         ["a/.b." + "0" * 32],
     ],
-    ids=lambda p: repr(p),
+    ids=repr,
 )
 def test_paths_that_are_not_prefix_free_are_refused(paths: list[str]) -> None:
     """`.` and `a/b` beside `a` are refused; every non-normal or nested path set is."""

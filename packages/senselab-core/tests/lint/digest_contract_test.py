@@ -69,6 +69,7 @@ def _lint_imports(base: Path, *, extra_ignore: str = "", alerting: str = "none")
         capture_output=True,
         text=True,
         timeout=300,
+        check=False,
     )
 
 
