@@ -441,11 +441,11 @@ typed error at the boundary naming the attribute path and the type (H-R29, H-R30
 - **Version pinning.** pydra changes are used from the branch through `[tool.uv.sources]`, with
   the commit pinned in `uv.lock`, and released in 1.0 alphas.
 - **Decision gate at the start of Phase 3.** It decides only the default executor, not the format.
-  If E1, D1 and F2 are not working on the branch, senselab builds its own graph runner behind the
+  If E1, D1, F2 (with F1), K1 and K2 (with G1) are not working on the branch, senselab builds its own graph runner behind the
   same `Executor` protocol: 2–4k lines, 3–5
   person-weeks, reusing `reproduce/dag.py` and `audio_analysis/contracts.py:991`
   `unrolled_contracts`.
-- **Citations.** pydra changes are cited by proposal id (A0…J2), from
+- **Citations.** pydra changes are cited by proposal id (A0…K2), from
   [proposal 0001](https://github.com/nipype/pydra/blob/enh/execution-extensions/proposals/0001-execution-extensions.md).
 - **Why pydra:** `engine-choice.md`.
 
@@ -790,7 +790,11 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
   - cross-record batching under I-3;
   - a minimal BIDS adapter;
   - the `benchmarks/scale` ladder and the catalogue resource tables (P-7, P-33).
-- The pydra gate is decided at the start of this phase (section 4.9).
+- The pydra gate is decided at the start of this phase (section 4.9). Owners of the pydra PRs
+  (proposal 0001, nipype/pydra#891): **Phase 2 owns the gate prerequisites**, which must be
+  working on the branch before Phase 3 starts: D1, E1, F1, F2, G1, K1, K2. **Phase 3 owns the
+  rest**: A0, A1, A2, B1, B2, C, D2, E2, G2, H0, H, I, J1, J2. The gate decision is Phase 3's
+  first task. The dates are the owner's to set; none is set yet.
 - Exit:
   - a 1,000-record BIDS `.map` runs on a laptop and on ORCD, with plans differing only in
     execution fields (P-10);

@@ -63,7 +63,7 @@ PR - clarify the decisions"):
 | 0: freeze marker | done |
 | 1: kernel, worker runtime, identity, store, data fetch | T0–T15a done. Hardening done: H1–H8 (H8a–c), the H9 series (H9a–f, H9-compat, H9-collect, H9-cleanup, H9-ci), H10, **H11a** and **H11b** (including fix round 1). 2.x CI first fully green at `97b617c5`; Linux CI green after D-2 fix round 1 (`b76681a9`). Full review done 2026-11-01; its decisions are applied. Remaining: the "follows" items and the Phase 1 exit (next actions). |
 | 2–5 | not started |
-| pydra PRs (A0…K1) | proposed in #891; none implemented |
+| pydra PRs (A0…K2) | proposed in #891; none implemented. Owners named in design §6.2 (Phase 2: gate prerequisites; Phase 3: the rest); dates not set |
 
 ## Next actions, in order
 
@@ -86,7 +86,7 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
    `DEFAULT_REUSE_POLICY` (Ru I-1), equivalence classes as data (A I-8), owners for the clock re-binding
    (A I-9) and the source-digest CI check (A I-10); audio decoding out of the kernel and whole-file
    hashing against ADR-005 (Ar F-3, A I-5, R-109); the pydra corrections (Ar F-5, F-6) and owners for the
-   pydra PRs; one transient classifier (Ar F-7); the engineering and license gates (T F5–F7); the P-40
+   pydra PRs (**F2, done 2026-11-01**: environment is recorded not keyed; K2 added to the proposal; K1/K2 in the Phase 3 gate; owners in design §6.2; benchmark copy removed from `specs/`, kept in pydra `benchmarks/proposal_0001/`); one transient classifier (Ar F-7); the engineering and license gates (T F5–F7); the P-40
    roster and worktree isolation; a scheduled workflow on `alpha` (the default branch) that checks out `2.x` for nightly limits and use cases, landed as a `skip-release` PR (GitHub runs `schedule` only from the default branch); parked items moved into tracked registers (Ru I-11, I-12); lease renewal not yet implemented, owner:
    execution phase (Phase 3), since `Lease` has no renewal and `execution.md` 3.2 says workers renew.
 3. **Then the Phase 1 exit** (`plans/phase-1.md` Task 15, as amended): 2.x CI green; `src/` equals `alpha`; no 1.x

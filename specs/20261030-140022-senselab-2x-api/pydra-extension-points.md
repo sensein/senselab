@@ -194,9 +194,10 @@ copies need care.
 - cloudpickle as the fallback.
 - Keep the cache layout versioned (`tasks-v<N>/`, #825).
 
-*Upstream:* all of section 5. *senselab:* its key policy (model commit, env lock, identity
-tunables), which it supplies through `__bytes_repr__` on its own types plus the environment
-checksum (section 2). No pydra change is needed for that part.
+*Upstream:* all of section 5. *senselab:* its key policy (model commit, identity tunables; no environment), supplied
+through the node-supplied checksum hook (K2), so pydra's checksum equals senselab's key (ADR-001).
+The environment checksum (section 2) is recorded in the context beside the result and decided by
+the reuse policy through `lookup(checksum, context)` (D1, K2); it is not in the key (ADR-002).
 
 ## 6. Stateful and persistent tasks
 
@@ -210,7 +211,7 @@ checksum (section 2). No pydra change is needed for that part.
 - **Where a resident-resource concept fits.**
   1. **Declaration on the task.** An input field marked `resource=True` (for example
      `model: Resident["asr", WhisperSpec]`), excluded from the hash in the same way
-     `container_path` is (`task.py:494`). Its *identity* (model commit, env lock) is hashed through
+     `container_path` is (`task.py:494`). Its *identity* (model commit; the env lock is context, not key) is hashed through
      a sibling field, so the key stays correct.
   2. **Provision by the worker.** A `ResourceProvider` registry on the worker:
      `acquire(spec) -> handle`, LRU and memory budget per device, `release` at `Worker.close()`.
@@ -284,6 +285,6 @@ it lets any external scheduler (work pools, Ray, Parsl) drive pydra graphs.
 | environments | `Environment.checksum`; Python tasks in environments; a `Venv` env with a pluggable runner | `ensure_venv`, CUDA routing, lock grouping, worker-runtime codec |
 | provenance | `ProvSink` from `post_run_task`; offline context | ProvStore schema, model and weights agents, BEP028 |
 | resources | `ComputeResources` on task and node; worker mapping hook; cf GPU slots | resource classes, site profiles, hardware probe |
-| cache | `ResultStore` (atomic rename, first writer wins); typed serializers; versioned layout | key policy via `__bytes_repr__` and the environment checksum |
+| cache | `ResultStore` (atomic rename, first writer wins); typed serializers; versioned layout | key policy via the node-supplied checksum (K2); environment checksum recorded as context |
 | state | `Resident` field marker; `ResourceProvider` on workers; batching worker; no `chdir` | model cache, `serve_in_venv`, `VllmServer`, co-location |
 | graph | `GraphRunner` and `Executor` split; `plan()`; per-element dataflow | the planner's placement decisions and `explain()` |
