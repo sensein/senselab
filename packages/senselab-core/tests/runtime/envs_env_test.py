@@ -18,7 +18,8 @@ LOCK = Path(__file__).parents[4] / "packages/senselab/src/senselab/data/env_lock
 
 def _items() -> list[dict[str, Any]]:
     arrays = {
-        f"a_{dtype}": numpy.arange(6, dtype=dtype).reshape(2, 3) for dtype in ("<f4", "<f8", "<i4", "<i8", "|u1", "|b1")
+        f"a_{dtype}": numpy.arange(6).astype(dtype).reshape(2, 3)
+        for dtype in ("<f4", "<f8", "<i4", "<i8", "|u1", "|b1")
     }
     scalars = {
         "none": None,
