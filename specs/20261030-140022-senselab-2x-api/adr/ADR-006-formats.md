@@ -140,6 +140,37 @@ H-R2, H-R43, H-R47, H-R48 and H-R50 ([`rulings.md`](../rulings.md)).
   - the value token families that came from 1.x provenance (`$path`, `$enum`, `$dec`, `$bytes`, `$set`)
     are removed when ADR-010 is implemented.
 
+## Amendment 2026-11-01: retired formats are refused; the 1.x value tokens are removed
+
+Ruling P2-44 ([`plans/phase-2.md`](../plans/phase-2.md)) and ADR-010 as amended; implemented in Phase 2 Task 3c.
+
+- **Before the first 2.x release a major bump has no previous-major reader** (H-R2, P2-44). This replaces
+  "Readers support the current and the previous major version" and "Every reader needs a migration test from
+  the previous major version" until the first 2.x release. A file of a retired format is refused with a typed
+  error that names the format and the migration statement. No reader, converter or alias is written for it
+  (P-14). From the first 2.x release the Decision's previous-major readers and migration tests apply.
+- **`provenance@3.0`** is the format of a provenance document (ADR-010). It is the document's top-level
+  `format`, beside `@context` and `@graph`. The published context maps `format` to null, so a JSON-LD
+  processor ignores it. `provenance@2.0`, its JSONL reader and `provenance-id@4` are retired. A file in a
+  run's `prov/` that declares any other format is refused with `ProvenanceFormatRefused`.
+- **`value@2` has no set, enum, path, bytes or `Decimal` family.**
+  - In the `value@2` bullet, "(array, set, path, type, held value, out-of-range integer, non-finite float)"
+    becomes "(array, type, held value, out-of-range integer, non-finite float)".
+  - *Canonical equivalences* loses three entries: "a set and a frozenset; two set elements with one JCS form
+    are one element", "paths: one `as_posix()` text" and "bytes: `bytes` and `bytearray` of the same content".
+  - The tag stays `value@2`: every value the encoder still accepts encodes byte-identically (checked on 30
+    representative values). Three in-memory digests do change: `BackendSpec` and a `RegularGroup` with a
+    `source` (posix text, sorted tuple), and the equivalence digest. None is persisted; each feeds only equality,
+    hashing or the in-memory verified key.
+- **`FrozenMapping` is the one frozen mapping type.** Removing `FrozenDict` leaves a built `Frozen` value's
+  `__dict__` a plain dict: a direct `__dict__` write is not refused, though attribute writes, private-state writes
+  and `__setstate__` are. Such a write does not change equality, hash or `canonical_digest`.
+  - A value of these families is refused (`NoCanonicalForm`). A kernel value holds a path as its posix text
+    (`RegularGroup.source`) and a set as a sorted tuple (`BackendSpec.output_affecting`).
+  - The tag stays `value@2`. The encoding of every value the encoder still accepts is unchanged; the change
+    is a refusal. The two kernel fields whose type changed enter no persisted address: a recording's identity
+    stands a source group as its content root, not its path.
+
 ## Amendment log
 
 - 2026-10-30: canonical encoders take an exact-type whitelist; tagged digests; `value@1`.
@@ -165,3 +196,6 @@ H-R2, H-R43, H-R47, H-R48 and H-R50 ([`rulings.md`](../rulings.md)).
 - 2026-11-01: identity tags `prov-activity@1` (an activity's compact PROV-O node without `@id`) and `prov-node@1` (an
   agent's or environment's), and the data format `senselab-vocab@1.0` (`runtime/data/prov/senselab.jsonld`), for
   ADR-010 (Phase 2 Task 3a; rulings P2-5, P2-6, P2-7).
+- 2026-11-01: retired formats refused before the first 2.x release (P2-44); data format `provenance@3.0`;
+  `provenance@2.0` and `provenance-id@4` retired; `value@2` loses the set, enum, path, bytes and `Decimal`
+  families (Phase 2 Task 3c).

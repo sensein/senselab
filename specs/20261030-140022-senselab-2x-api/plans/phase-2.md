@@ -586,6 +586,10 @@ every response (I-8), stops with the owning process. Phase 2 has no cross-proces
 
 ### Task 10b: `run_call` and the wired generated API
 
+**Ruling (Task 3c review):** an exact store hit records one `senselab:Reuse` activity (written by the store's
+`get`) and no execution activity; `run_call` writes an execution activity only when the call executes. One
+activity per call holds either way.
+
 **Model:** opus implements (identity); fresh opus reviews. **Tier:** logic, contract. **Implements:** design §4.12,
 ADR-002, P-1, P-8; rulings P2-16, P2-37, P2-43, P2-46, P2-57, P2-63. **Depends on:** Tasks 3c, 6, 7, 8, 9b, 10a.
 

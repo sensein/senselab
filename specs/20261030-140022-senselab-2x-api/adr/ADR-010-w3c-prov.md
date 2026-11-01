@@ -1,6 +1,6 @@
 # ADR-010: Provenance is W3C PROV
 
-**Status:** accepted 2026-11-01 (owner: "use w3c prov, add ADR-010"); amended 2026-11-01 (three times).
+**Status:** accepted 2026-11-01 (owner: "use w3c prov, add ADR-010"); amended 2026-11-01 (four times).
 
 ## Context
 
@@ -142,3 +142,38 @@ Rulings P2-4, P2-6; implemented in Phase 2 Task 3b.
   side built (or one read back) and the union holds one node.
 - **Until the result store moves over** (Task 3c), the `provenance@2.0` store stays beside this one as `JsonlProvStore`
   in `runtime/provenance_jsonl.py`; Task 3c deletes that module, and registers the document's format, `provenance@3.0`.
+
+## Amendment 2026-11-01: the result store records PROV (P2-57)
+
+Rulings P2-44, P2-57; implemented in Phase 2 Task 3c.
+
+- **The store writes the result entity and the reuse activities, nothing else** (P2-57).
+  - A `put` adds the result's entity, `output:<hex>`, with no attributes.
+  - Every `get` hit, `exact` included, adds a `senselab:Reuse` activity that used that entity, with its start
+    and end times. It carries `senselab:logicalKey`, `senselab:context` (the current context),
+    `senselab:storedContext`, `senselab:reusePolicy`, and `senselab:equivalence` when `equivalent` admitted it.
+  - A call is then one activity whether it executed or reused. The execution activity is `run_call`'s
+    (Task 10b).
+  - A quarantine is logged, not recorded. Its record held the entry's path.
+- **Core terms added.** These extend the "Core terms" list of the P2-40 amendment.
+  - `senselab:Reuse` is a subclass of `prov:Activity`.
+  - `senselab:context` is on `prov:Activity`, with range `rdf:JSON`: an `execution-context@2.0` record. An
+    execution activity uses the same term.
+  - `senselab:storedContext` (`rdf:JSON`), `senselab:reusePolicy` (`xsd:string`) and `senselab:equivalence`
+    (`xsd:string`, the table's `value@2` digest) are on `senselab:Reuse`.
+- **The document's format is `provenance@3.0`**, its top-level `format`: `{"@context": ..., "format":
+  "provenance@3.0", "@graph": [...]}`. The published context maps `format` to null, so a JSON-LD processor
+  ignores the key by declaration, not by dropping an unknown term.
+  - A reader reads any minor of `provenance@3`.
+  - A file in `prov/` whose first line declares any other format, `provenance@2.0` included, is refused with
+    `ProvenanceFormatRefused`, which names the format and the migration statement (ADR-006 as amended, P2-44).
+  - A writer's document without a readable `format` is `MalformedDocument`.
+- **Deleted with `provenance@2.0`:**
+  - `runtime/provenance_jsonl.py` and its tests;
+  - `runtime/bep028.py` and its tests (Task 4 writes the profile check);
+  - `testing/provenance.py`;
+  - the token families `$path`, `$enum`, `$dec`, `$bytes` and `$set`, and `$nd`;
+  - `EnumMember`, `FrozenDict`, `FrozenList`, `revised`, `recorded`, `plain_values`, `PROV_TYPE` and the
+    checksum, path, size and mtime keys.
+- **One frozen mapping type.** A built `Frozen` value's `__dict__` is a plain `dict`. Attribute writes are
+  refused, and its digest is computed when it is built; a write through `__dict__` itself is not refused.

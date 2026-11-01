@@ -157,12 +157,16 @@ Triage scripts under `scripts/`:
 | `select_replay_manifest.py`, `verify_task_squim.py` | pipeline | corpus manifests and a measurement comparison |
 | `analyze_routing_evidence.py`, `score_taxonomy_ruleset.py`, `gate_family_matrix.py`, `evaluate_task_events.py`, `triage_corpus_report.py`, `triage_gate_breakdown.py`, `triage_replay_diff.py`, `triage_table.py`, `triage_review_page.py`, `triage_review_serve.py`, `triage_review_cache_backfill.py`, `free_speech_review_page.py` | decision layer | routing, decisions and their review |
 
-## 1.x provenance stores
+## Retired provenance formats
 
-1.x provenance stores (`provenance@1`, including historical `kind` records) are not readable by 2.x; they remain
-readable by 1.x (alpha and the freeze branch); migration is re-running the pipeline under 2.x. (H-R47, P-14; no
-converter exists. `ProvStore.read_jsonl` refuses such a file with `ProvenanceFormatRefused`, whose message points
-here.)
+2.x reads only `provenance@3.0` (ADR-010). Two formats are retired, and no converter exists for either (H-R47,
+P2-44, P-14).
+- 1.x provenance stores (`provenance@1`, including historical `kind` records) remain readable by 1.x (alpha and
+  the freeze branch).
+- `provenance@2.0` JSONL stores were written by 2.x before ADR-010 was implemented.
+
+Migrating either is re-running the pipeline under 2.x. `ProvStore.read` refuses a file in a run's `prov/` that
+declares any format but `provenance@3` with `ProvenanceFormatRefused`, whose message points here.
 
 ## Untagged digests in 1.x (H-R20)
 
