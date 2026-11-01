@@ -513,3 +513,12 @@ def _values(value: object) -> list[dict[str, object]]:
             return [value]
         return [x for v in value.values() for x in _values(v)]
     return []
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("kind", ["xsd:decimal", "xsd:integer", "xsd:double", "xsd:dateTime", "xsd:other"])
+def test_literal_value_refuses_without_echoing(kind: str) -> None:
+    """A literal the builders do not write is a `ValueError` whose message does not echo it."""
+    with pytest.raises(ValueError, match="not a literal") as caught:
+        literal_value({"@value": "/home/someone/sub-01.wav", "@type": kind})
+    assert "sub-01" not in str(caught.value)

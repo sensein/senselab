@@ -601,7 +601,7 @@ def literal_value(literal: object) -> object:
     `@list` a tuple and `{"@id": ...}` the id.
 
     Raises:
-        ValueError: on a literal these builders do not write.
+        ValueError: on a literal these builders do not write; the message does not echo it.
     """
     if not isinstance(literal, Mapping):
         return literal
@@ -615,9 +615,12 @@ def literal_value(literal: object) -> object:
         kind, text = literal["@type"], literal["@value"]
         if kind == "@json":
             return text
-        if kind in _READERS and isinstance(text, str):
-            return _READERS[kind](text)
-    raise ValueError(f"not a literal these builders write: {literal!r}")
+        if isinstance(kind, str) and kind in _READERS and isinstance(text, str):
+            try:
+                return _READERS[kind](text)
+            except (ArithmeticError, ValueError):
+                pass
+    raise ValueError("not a literal these builders write")
 
 
 def _read_time(text: str) -> datetime:

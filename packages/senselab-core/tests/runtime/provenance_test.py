@@ -1,6 +1,7 @@
 """`ProvStore`: one writer's PROV-O JSON-LD document per writer, and a run's provenance as their union by `@id`."""
 
 import itertools
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -230,19 +231,32 @@ def _unqualified_agent(doc: dict[str, Any]) -> None:
     doc["@graph"][0]["prov:wasAssociatedWith"].append({"@id": "/home/someone/sub-01_task-read.wav"})
 
 
+def _decimal_not_a_number(doc: dict[str, Any]) -> None:
+    doc["@graph"][-1]["senselab:notATerm"] = {"@value": "/home/someone/sub-01_task-read.wav", "@type": "xsd:decimal"}
+
+
 def _extra_key(doc: dict[str, Any]) -> None:
     doc["format"] = "x"
 
 
 @pytest.mark.parametrize(
     "edit",
-    [_drop_qualified_time, _out_of_range, _path_id, _unknown_term, _unqualified_agent, _extra_key],
+    [
+        _drop_qualified_time,
+        _out_of_range,
+        _path_id,
+        _unknown_term,
+        _unqualified_agent,
+        _decimal_not_a_number,
+        _extra_key,
+    ],
     ids=[
         "activity-not-its-address",
         "attribute-out-of-range",
         "path-as-id",
         "unknown-term",
         "path-as-agent",
+        "decimal-not-a-number",
         "extra-key",
     ],
 )
@@ -299,3 +313,65 @@ def test_a_document_that_is_not_canonical_is_refused(tmp_path: Path) -> None:
     path.write_bytes(jcs_dumps({"@context": "https://example.org/other", "@graph": []}))
     with pytest.raises(MalformedDocument, match="@context"):
         ProvStore.read(run, VOCAB)
+
+
+def test_add_is_all_or_nothing() -> None:
+    """An `add` that meets a conflict adds none of its records."""
+    store = ProvStore([prov.entity(OUTPUT, VOCAB, attributes={"senselab:label": "a"})])
+    with pytest.raises(ConflictingNode):
+        store.add(prov.entity(INPUT, VOCAB), prov.entity(OUTPUT, VOCAB, attributes={"senselab:label": "b"}))
+    assert [r.id for r in store.records()] == [OUTPUT]
+    fresh = ProvStore()
+    with pytest.raises(ConflictingNode):
+        fresh.add(
+            prov.entity(INPUT, VOCAB),
+            prov.entity(OUTPUT, VOCAB, attributes={"senselab:label": "a"}),
+            prov.entity(OUTPUT, VOCAB, attributes={"senselab:label": "b"}),
+        )
+    assert fresh.records() == []
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-0 file")
+def test_an_unreadable_document_is_refused_without_its_path(tmp_path: Path) -> None:
+    """A writer's document the reader cannot open is refused by writer, never by path."""
+    store = ProvStore(_entities())
+    run = _run(tmp_path, store)
+    _document_path(run, store).chmod(0)
+    try:
+        with pytest.raises(MalformedDocument, match="cannot be read") as caught:
+            ProvStore.read(run, VOCAB)
+    finally:
+        _document_path(run, store).chmod(0o600)
+    assert caught.value.writer == store.writer
+    assert str(tmp_path) not in str(caught.value)
+
+
+def test_attribute_references_nest_no_deeper_than_the_canonical_depth(tmp_path: Path) -> None:
+    """A chain of attribute references deeper than `MAX_DEPTH` is refused as malformed, not by the interpreter."""
+    chain = [prov.entity("content:" + f"{70:064x}", VOCAB, types=["senselab:File"])]
+    for i in range(69, -1, -1):
+        address = "content:" + f"{i:064x}"
+        chain.append(prov.entity(address, VOCAB, types=["senselab:File"], attributes={"senselab:waveform": chain[-1]}))
+    run = _run(tmp_path, ProvStore(chain))
+    with pytest.raises(MalformedDocument, match="deeper than 64"):
+        ProvStore.read(run, VOCAB)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork")
+def test_each_forked_process_writes_its_own_document(tmp_path: Path) -> None:
+    """A store shared across `fork` is a new writer in each child, so no child's document replaces another's."""
+    run = _run(tmp_path, store := ProvStore())
+    children = []
+    for i in range(4):
+        pid = os.fork()
+        if pid == 0:  # pragma: no cover - runs in the child
+            code = 1
+            try:
+                store.add(prov.entity("content:" + f"{i:064x}", VOCAB))
+                store.write(run)
+                code = 0
+            finally:
+                os._exit(code)
+        children.append(pid)
+    assert [os.waitpid(pid, 0)[1] for pid in children] == [0] * 4
+    assert [r.id for r in ProvStore.read(run, VOCAB).records()] == ["content:" + f"{i:064x}" for i in range(4)]

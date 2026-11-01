@@ -7,6 +7,7 @@ different nodes under one `@id` are refused, and every node read is rebuilt thro
 
 from __future__ import annotations
 
+import os
 import re
 import uuid
 from collections.abc import Iterable, Mapping
@@ -14,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from senselab_worker.canonical import jcs_dumps, jcs_loads
+from senselab_worker.canonical import jcs_dumps, jcs_loads, require_depth
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.runtime.storage import TEMPORARY_NAME, write_atomically
@@ -91,8 +92,7 @@ class ProvStore:
     `<run>/prov/<writer>.jsonld`, atomically; `read` returns the union of every writer's document in a run.
     Accessors return records in `@id` order.
 
-    Attributes:
-        writer: This writer's uuid4 hex, minted when the store is made; it names the document `write` replaces.
+    A store used after a `fork` is a new writer in the child, so each process writes its own document.
     """
 
     def __init__(self, records: Iterable[kprov.Record] = ()) -> None:
@@ -101,20 +101,31 @@ class ProvStore:
         Raises:
             ConflictingNode: if two of them are different nodes under one `@id`.
         """
-        self.writer = uuid.uuid4().hex
+        self._writer = (os.getpid(), uuid.uuid4().hex)
         self._records: dict[str, kprov.Record] = {}
         self.add(*records)
+
+    @property
+    def writer(self) -> str:
+        """This process's writer uuid4 hex: the name of the document `write` replaces."""
+        if self._writer[0] != os.getpid():
+            self._writer = (os.getpid(), uuid.uuid4().hex)
+        return self._writer[1]
 
     def add(self, *records: kprov.Record) -> None:
         """Hold each record and the files it names; a record already held under its `@id` is kept once.
 
+        Nothing is added unless every record is.
+
         Raises:
-            ConflictingNode: if a record differs from the one held under its `@id`.
+            ConflictingNode: if a record differs from the one held, or another one given, under its `@id`.
         """
-        for record in records:
-            for r in (record, *record.files):
-                if self._records.setdefault(r.id, r).jcs != r.jcs:
-                    raise ConflictingNode(r.id)
+        added: dict[str, kprov.Record] = {}
+        for r in (r for record in records for r in (record, *record.files)):
+            held = self._records.get(r.id) or added.setdefault(r.id, r)
+            if held.jcs != r.jcs:
+                raise ConflictingNode(r.id)
+        self._records.update(added)
 
     @classmethod
     def merge(cls, stores: Iterable[ProvStore]) -> ProvStore:
@@ -185,20 +196,29 @@ class ProvStore:
         write are skipped.
 
         Raises:
-            MalformedDocument: on a file in `prov/` that is not a writer's document, a document of another shape,
-                or a node that differs from its rebuild.
+            MalformedDocument: on a file in `prov/` that is not a writer's document or cannot be read, a document
+                of another shape, a node that differs from its rebuild, or attribute references nested deeper than
+                `MAX_DEPTH`.
             ConflictingNode: if two writers hold different nodes under one `@id`.
             DanglingReference: if a node names an `@id` the union does not hold.
         """
         nodes: dict[str, tuple[bytes, str]] = {}
         directory = Path(run) / PROV_DIR
-        for path in sorted(directory.iterdir()) if directory.is_dir() else ():
+        try:
+            listing = sorted(directory.iterdir()) if directory.is_dir() else []
+        except OSError as err:
+            raise MalformedDocument(None, f"{PROV_DIR}/ cannot be listed ({type(err).__name__})") from None
+        for path in listing:
             if TEMPORARY_NAME.fullmatch(path.name):
                 continue
             if not (WRITER_DOCUMENT.fullmatch(path.name) and path.is_file() and not path.is_symlink()):
                 raise MalformedDocument(None, f"{PROV_DIR}/ holds a file that is not a writer's document")
             writer = path.name.removesuffix(".jsonld")
-            for node_id, raw in _writer_nodes(writer, path.read_bytes()):
+            try:
+                data = path.read_bytes()
+            except OSError as err:
+                raise MalformedDocument(writer, f"the document cannot be read ({type(err).__name__})") from None
+            for node_id, raw in _writer_nodes(writer, data):
                 if nodes.setdefault(node_id, (raw, writer))[0] != raw:
                     raise ConflictingNode(node_id)
         return cls(_Rebuild(nodes, vocabulary or core_vocabulary()).all())
@@ -243,6 +263,10 @@ class _Rebuild:
         raw, writer = self.nodes[node_id]
         if node_id in self.pending:
             raise MalformedDocument(writer, f"{node_id} names itself through its attributes")
+        try:
+            require_depth(len(self.pending) + 1)
+        except ValueError as err:
+            raise MalformedDocument(writer, f"{node_id}: attribute references: {err}") from None
         self.pending.add(node_id)
         node = cast("dict[str, Any]", jcs_loads(raw))
         try:
