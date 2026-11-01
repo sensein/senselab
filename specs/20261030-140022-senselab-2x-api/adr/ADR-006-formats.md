@@ -228,3 +228,26 @@ Ruling P2-44 ([`plans/phase-2.md`](../plans/phase-2.md)) and ADR-010 as amended;
   `--flag=value` or switch); the server's attestation carries it as `config_digest`, with the reported engine version
   and the model identity, and the execution context records all three in `driver` (I-8). It replaces 1.x
   `engine_identity` (Phase 2 Task 9b).
+
+## Amendment 2026-11-01: kernel types of the Phase 2 tasks and their wire forms
+
+- 2026-11-01: data formats `text@1.0` (`PlainText`: canonical text and its content identity, `content:` +
+  `value@2` over type token `text`), `transcript@1.0` (a tree of nodes `{text, span?, confidence?, children}`, every
+  span integer ns on one clock), `text-spans@1.0` (columnar code-point spans `[start, end)` over a text's content
+  identity and length, with label and optional score), `trials@1.0` (row-paired embedding matrices `first`, `second`
+  in one `space`, with a bool `same` column) and `metric@1.0` (`{name, value, unit, items}`, `items >= 1`). Task
+  ports may also name the ADR-005 protocols `RegularSeries` (implemented by `RegularGroup`, `Audio`) and `Text`
+  (implemented by `PlainText`) (Phase 2 Task 11a).
+- 2026-11-01: **wire forms.** Every kernel value a port may carry has a wire form: its `model_dump()` with `format`
+  set to its tag, arrays sent as worker-wire array references. A `Formatted` type's tag is its format; the signal
+  types register `recording@1.0`, `audio@1.0` and `regular-group@1.0` (`kernel.wire.WIRE_FORMATS`). A file-backed
+  regular group travels as its samples decoded on the host together with the file's source stamp, so no path
+  reaches a worker and the decoder recorded in the context is the one that produced them. A regular group may hold
+  samples with the stamp of the file they were decoded from (their shape must match the stamp's channels and
+  frames); it is then identified as the file is, by the stamp's content root. A wire form is read by the registered
+  type of its tag's name and major version, keeping its `identity` and `anchor` (the host is trusted), so a
+  file-backed recording reads back with the file's identity, anchor and samples; only the path is gone. `run_call` sends isolated workers wire forms and host workers the values
+  themselves. Outputs are symmetric: an output on a port declared as a kernel type is stored as its wire form (a
+  host backend's kernel value is converted) and returned to the caller, fresh or from the store, as the declared
+  type read by `from_wire_form`; an output whose tag reads as another type is refused (`OutputTypeMismatch`) before
+  it is stored. A `str` passed for a `Text` port is held as `PlainText` (Phase 2 Task 11a).

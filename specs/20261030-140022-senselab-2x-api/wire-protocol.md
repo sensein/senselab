@@ -183,6 +183,16 @@ at the handshake.
   without a reply (ruling H-R13). v2 has no non-fatal message-level error, so an invalid host
   message cannot be answered without ending the session.
 
+## Kernel values
+
+- An isolated worker never receives a kernel object. `run_call` replaces each kernel value among an item's inputs by
+  its wire form (ADR-006, 2026-11-01 wire-forms amendment): a JSON object carrying `format: "<name>@<major>.<minor>"`
+  and the value's fields, arrays as references. A file-backed recording arrives as its decoded samples and its file's
+  source stamp, with its `identity` and `anchor` as the host holds them, so the worker reads no host file. A host worker is handed the
+  values themselves.
+- A worker returns an output on a port declared as a kernel type as that type's wire form. The host reads it with
+  `from_wire_form` and refuses it, before storing, unless it reads as the declared type.
+
 ## Arrays
 
 ```json
