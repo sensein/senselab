@@ -26,8 +26,25 @@ Principle P-38.
   the upstream **output** identity: the hash of the canonical serialised output (ADR-006). An
   upstream change that reproduces identical output therefore leaves downstream keys unchanged
   (early cutoff).
+- **Cached outputs are clock-relative.** An input's identity is its content, not its `TimeAnchor`, so two
+  recordings of one content on two clocks share a key; a stored output carrying a `clock_id` is re-bound to
+  the consumer's anchor when it is served.
 - **Long and large inputs** use chunked content identity: a hash list over fixed-size byte chunks.
   A time-range read is identified by the chunks it touches plus the range.
+- **Identities are typed, not free strings.** The key refuses a ref, a path or bare hex where an
+  identity belongs:
+  - the model is a `ModelIdentity` (`source`, `id`, `identity`), built from a pinned
+    `ResolvedModel` by `key_identity()`; an unpinned model raises `UnpinnedModel`;
+  - an input is `content:<64 hex>` (source bytes) or `output:<64 hex>` (an upstream output
+    identity);
+  - a profile slice is `profile:<64 hex>`.
+- **Params are canonical by declaration.** A task's params fields must have one canonical JSON
+  form (JSON scalars, `Literal`s of them, `str`-valued enums, lists, tuples, `str`-keyed mappings,
+  unions and nested params). The registry refuses `set`, `frozenset`, `Decimal`, `datetime`,
+  `Path`, `bytes`, `Any` and `object`. A generated contract builds every declared backend's key
+  under two `PYTHONHASHSEED` values and requires one digest.
+- **The digest is taken at construction** (`identity_digest("logical-key@3", fields)`, ADR-006), so a
+  key that validates can be digested.
 - **Versions are declared, not hashed.** `task_version` and `backend_version` are bumped by
   developers. A CI check fails when a task's or backend's source changes without a version bump,
   comparing a source digest against the last released one.

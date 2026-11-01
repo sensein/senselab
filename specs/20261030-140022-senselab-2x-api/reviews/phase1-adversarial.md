@@ -1,0 +1,116 @@
+# senselab 2.x Phase 1: adversarial round (P-35)
+
+Target: `senselab-2x-impl` @ `94e81479` (branch `2x/phase-1`). The repo was not modified (`git status` clean).
+The probe scripts are not in the repository. They were kept in the adversarial round's scratch
+directory, in the folders `worker/`, `identity/`, `store/`, `kernel/`, `guards/` and `verify/`; the
+paths quoted below are relative to it. Each finding's break column states its inputs and outcome,
+so `plans/phase-1-hardening.md` H8 rebuilds them as in-repo tests from this report.
+Run: `cd senselab-2x-impl && uv run --no-sync python -u <probe>`. Store probes need `PYTHONPATH=<scratch>/store`.
+
+**Verification column**
+- **L**: the lead re-ran the attacker's probe, or wrote an independent probe in `verify/`, and saw the quoted line.
+- **H**: a haiku verifier re-ran the attacker's probe and matched the line.
+- **A**: attacker run only.
+
+Every item in §1 to §3 was observed running. Unverified suspicions are kept apart in §4.
+
+## 1. High
+
+| Id | Surface | Break (inputs → wrong outcome) | Verif. | Reg. | Architectural resolution |
+|---|---|---|---|---|---|
+| A-1 | kernel | **Read-only arrays are not read-only.** `g = Audio.from_array(x,16000).groups['audio']`. Then `g.data.flags.writeable=True; g.data[0,0]=999` succeeds. `read()` gives `[999,1]` and `identity` is unchanged. `pickle`, `deepcopy`, `copy` and `model_copy` all return writeable arrays. `RegularGroup(data=x)` aliases the caller's `x`. | L `verify/v_kernel.py`: `V1 flip-flag mutate: [999. 1.] identity unchanged: True`; `V2 pickle writeable: True deepcopy: True` | NEW | **Invariant: a kernel value owns its bytes.** Copy into a buffer whose owner is non-writeable; `Frozen` owns `__reduce__`/`__deepcopy__`/`model_copy`. Generic contract over every `Frozen` subclass: no reachable ndarray (incl. `.base`) can be made writeable, before or after pickle/deepcopy/dump round trips. |
+| A-2 | store | **An entry is not bound to its address.** `get` checks only that `outputs` hash to the `output_identity` stored beside them. `key_digest`, `key` and the context fingerprint are never compared with the path read. B's entry copied onto A's path (rsync/restore mix-up) is served for A; a rewritten 0664 `result.json` with recomputed identity is served, and `put(A)` returns it as "existing". | L `store/p1_binding.py`: `misfiled entry served for key A: {'text': 'transcript of B'}`; `forged ... served: {'text': 'FORGED'}` | NEW (R-48 covers privacy, not integrity) | **Invariant: validity is re-derived from the address, never from the artifact's own claims.** Readers compare recomputed `key_digest`/fingerprint with the path; committed entries 0444/0555; format-generic contract: an entry at the wrong address never reads. |
+| A-3 | store | **Unverifiable is treated as corrupt, and good data is destroyed.** `_guarded` maps any `OSError` (EACCES, ESTALE, EIO, EMFILE) to `CorruptEntryError`, and the caller renames the entry into `quarantine/`. One NFS ESTALE, or a reader in another group, evicts a healthy result, against ADR-003 "never lost once committed". | L `store/p2_transient.py`: `entry still in place: False \| quarantined: 1`; `get with one transient ESTALE -> None` | NEW | **Principle: only a successful read that fails verification may trigger a destructive action.** I/O errors become a retryable `StoreUnavailable`; AST rule: no `rename`/`unlink`/`rmtree` reachable from an `except OSError` in `runtime/`. |
+| A-4 | identity / canonical | **The canonical encoder accepts lossy values.** `jcs_dumps` and the store's `_encode` call `.item()` on any `numpy.generic`. So `np.datetime64('NaT')` encodes as `null`, giving `output_identity({"a":NaT}) == output_identity({"a":None})`. `timedelta64(1,'ns')`, `timedelta64(1,'ps')` and `1` all encode as `b'1'`. A `np.ma` masked array encodes as its fill value, colliding with the plain array `[1,2,999999]`. A structured `np.void` encodes as a bare list. An `(int, Enum)` member emits `b'E.A'`, which is not JSON. | L `verify/v_ident.py`: `V2 NaT==None: True \| td ns vs ps vs 1: b'1' b'1' b'1'`; `V3 int-enum: b'E.A'`; masked-array npy bytes end in `0x0F423F` (999999) | NEW (R-42 is the spec; this is the implementation) | **Invariant: the canonical encoder is closed over an exact-type whitelist.** Exact types only, numpy kinds `b,i,u,f,U`, `type(a) is ndarray`; all else raises. Property test: `json.loads(jcs_dumps(v))` round-trips; every `numpy.generic` subclass raises or encodes as its exact Python value. |
+| A-5 | identity | **Key fields that must be identities are free strings.** `LogicalKey(model="main", inputs={"a": "/home/me/a.wav"})` validates. `key_for(model: str)` never sees a `ResolvedModel`, so the pinned-SHA rule is not typed. | L `verify/v_ident.py`: `V6 model='main', input=path accepted: main` | NEW (distinct from R-56) | **Type rule: identities are typed, not `str`.** `ModelIdentity` (only from a pinned `ResolvedModel`), `ContentId`/`OutputId` (tagged hex); `LogicalKey`/`key_for` accept only those. |
+| A-6 | identity | **Set-typed params make keys depend on `PYTHONHASHSEED`.** A `TaskParams` field `tags: set[str]` dumps in iteration order. Four seeds give four digests for the same call, so the cache never hits across processes. | L `verify/v_set.py`: seeds 1–4 give `a0a63586…`, `2df6d2ce…`, `c5d320ef…`, `17d32623…` | NEW | **Registry-time contract:** `TaskParams` field types come from a closed canonical-JSON-safe set (no `set`, `frozenset`, `Decimal`, `datetime` or `Path` without a declared canonicaliser). Generated contract digests every key under two hash seeds. |
+| A-7 | worker | **Timeout does not bound shutdown.** A backend that spawns a grandchild (which inherits stderr) and then hangs: with `request_timeout=2`, `run()` has not returned after 25 s and the grandchild survives. Cause: `proc.kill()` not `killpg`; `stderr.close()` blocks behind the pump thread. | L `worker/p4_grandchild.py`: `run() returned=False after 25.0s (request_timeout=2)`; `grandchild ... alive: True` | NEW | **Invariant: the unit of kill is the worker's process tree, and shutdown completes within a bound.** `start_new_session` + `killpg`; contract test: a forking backend leaves no survivors and `close()` returns within `STOP_GRACE_S`. |
+| A-8 | worker | **Backend children inherit fd 0 and steal protocol requests.** A backend calling `subprocess.Popen([...])` with the default stdin (as `subprocess.run(["ffmpeg",…])` does): the next request line goes to the child, and the host times out. `launch._claim_stdout` protects fd 1 only. | L `worker/p3_stdin_theft.py`: `req2 raised TimeoutError: no reply from the worker within 6 s` | NEW | **Invariant: the channel is private on both directions.** Launcher moves the protocol to private fds, fd 0 → `/dev/null`; contract test with a stdin-reading child. |
+| A-9 | worker | **`WorkerClient` destroys a caller-supplied directory.** Given an existing `array_dir` holding `thesis.txt` and `notes.md`, every file is deleted after the first `run()`, and the directory is `rmtree`'d on close. | L `worker/p1_existing_dir_destroyed.py`: `after one run(), files left: []`; `caller's dir still exists: False` | NEW | **Ownership invariant:** the runtime deletes only what it created. `mkdtemp` under a given parent; delete only `<64hex>.npy`; lint: `rmtree`/`unlink` only on paths the module created. |
+| A-10 | worker | **One item fails its batch-mates and the worker.** In three forms: an exception whose `__str__` raises, an error message with a lone surrogate (a surrogateescape filename), or an aggregate reply over 16 MiB (20 × 1 MB items). Each gives `WorkerFatal`, `alive: False`, and a retry fails identically. That contradicts wire-protocol "a failure in one item never fails its batch-mates". | L `worker/p2_error_serialisation.py`, `p7_response_budget.py`: `UnicodeEncodeError ... worker alive: False`; `wire line of 20000688 bytes exceeds 16777216 ... alive: False` | R-5 (resolved in design; implementation incomplete) | **Totality principle:** every function that turns backend objects into wire bytes is total. `error_record` falls back to type/`repr`; per-item byte budget → per-item `resource` error. Fuzz test: any `handle` output or exception yields a valid per-item response, never fatal. |
+| A-11 | packaging | **The release would publish an uninstallable `senselab`.** `publish.yaml` runs a bare `uv build` and `uv publish`. That builds only the root wheel (requires `senselab-core==2.0.0`); core and worker are never uploaded. | L: `publish.yaml:25 run: uv build`; A: `pin/` build gave only `senselab-2.0.0-*` | R-30 (resolved in design; wiring missing) | **Release-gate invariant:** build `--all-packages`., every sibling `Requires-Dist` satisfied in `dist/`, clean-venv install + import before upload. |
+
+## 2. Medium
+
+| Id | Surface | Break | Verif. | Reg. | Resolution |
+|---|---|---|---|---|---|
+| A-12 | kernel | `==` raises (`truth value ... ambiguous`) for multi-element `Audio`/`RegularGroup`/`Intervals`/`Embedding`; `hash()` raises. One-element fixtures hide it. | L `V3 eq raises: ValueError`; `hash raises: TypeError` | NEW | `Frozen` owns `__eq__`/`__hash__` over canonical bytes; contract `a==b ⇒ hash(a)==hash(b)` per type. |
+| A-13 | kernel | `model_copy(update=)`/`model_construct` skip validation: rate −5, `end_ns<start_ns`, `channels=()`, stale `frames` after a data swap. | L `end_ns=-1`, `rate -5: -5` | NEW | Revalidating `model_copy`; derived fields computed, not cached; lint bans `model_construct`. |
+| A-14 | kernel | Lazy source trusted after open: WAV overwritten in place → `read()` returns new samples under the old `identity`; shrunk file keeps `frames=32000`, returns 8000. | H `identity same: True`; `(32000, (1, 8000))` | NEW | Identity checked at use: stat tuple + header recorded, revalidated per read → typed `StaleSource`. |
+| A-15 | kernel | `from_path` reads the whole file at open (19.2/19.2 MB, 86 MB peak) and keeps only `root`; range identity cannot be formed. | H `19200044 of 19200044` | R-44 (unimplemented) | Keep the chunk list; test bounds bytes read for a range read. |
+| A-16 | kernel | No dtype/units policy: int16 `from_array` reads int16 `[16384,…]`, the same WAV reads float32 `[0.5,…]`, both `FS`; complex, `sampling_rate=True`/`'16000'`, empty arrays accepted. | H `ACCEPTED sr=True` | NEW | Strict shared `Rate`, per-signal dtype policy; contract `from_array(x).read() ≈ from_path(write(x)).read()`. |
+| A-17 | store | Check-then-quarantine race renames away a just-healed entry; quarantine never GC'd (406 dirs). | L `healthy entry exists: False` | NEW | Compare-and-rename quarantine (move, re-verify, restore no-replace); retention policy. |
+| A-18 | fetch | Payload and metadata share a namespace: manifest file `.complete` is overwritten by the marker; paths `.` and `a/b`+`a` validate. | L `p6_fetch.py` A/C | NEW | Payload under `files/`; manifest is a prefix-free path set; contract that no path addresses a store-owned name. |
+| A-19 | fetch | Blobs 0664 behind a symlink: a same-size write poisons the shared blob, `verify="size"` serves it; a dangling `blobs/<sha>` symlink is trusted as present. | L `serves poisoned: b'POISONED!!!!'` | NEW | Content-addressed objects 0444; `lstat` + regular-file check; present ≠ verified. |
+| A-20 | fetch | Unbounded download (3.86 GB in 3 s before any check); default opener takes `file://` and any urllib scheme. | L `p6_fetch.py` E/F | NEW (scheme ~R-48/R-14) | Manifest `size`, abort at `size+1`; `https` allowlist incl. redirects. |
+| A-21 | worker | Deadlines miss blocking calls: an 8 MB send to a wedged worker blocks >20 s at `request_timeout=2`; a FIFO `<sha>.npy` hangs the host read. | H `finished=False after 20.0s`; `[fifo] HUNG >12s` | NEW | One `Deadline` through send/recv/decode; `O_NONBLOCK\|O_NOFOLLOW` + `S_ISREG`. |
+| A-22 | worker | Single-outstanding not enforced: concurrent `run()`s delete each other's arrays (good items charged `ArrayIntegrityError`); a backend subdir in `array_dir` makes every `run()` raise bare `PermissionError` with `alive=True`. | H | NEW | Non-reentrant guard; total, logged cleanup that never masks a result. |
+| A-23 | identity | `acceptable()` uses `is`: `"exact"`, `"bogus"` etc. fall through to `equivalent` (latent: `EQUIVALENCE` empty). | L `'exact': True 'bogus': True` | NEW | Coerce `ReusePolicy(p)` at boundaries; exhaustive `match` + `assert_never`. |
+| A-24 | identity | `LogicalKey(params={"x":1e20})` validates, `digest()` raises (JCS round trip makes an out-of-range int). | L `constructed but digest raises` | NEW | Digest at construction; property: constructible ⇒ digestible. |
+| A-25 | faults | Classified by exception type: bug `KeyError` → `content` (cached as verdict); missing input / CUDA OOM → `infrastructure gap=True` (retried). | H `KeyError ... -> content` | R-52 (unimplemented) | Typed faults raised at the backend boundary; `isinstance` table as fallback; contract: zero `gap` over fixtures. |
+| A-26 | guards | Moved-module guard is a text scan: relative imports, `importlib` string concat, attribute chains, star imports, `.ipynb`/`.pyi`, and a shim at the old path all pass. No stale references exist today. | H (relative/importlib `PASSES (bypass)`); shim L by code reading (no existence check) | NEW | AST/grimp resolution of imports incl. notebooks; tombstone list asserting old paths do not exist. |
+| A-27 | guards | Fixture budget: a new allowlist entry + 9 MB file passes; 5 MB base64 `.py` exempt; non-test trees unscanned; dir symlinks skipped. | A | NEW | Allowlist ⊆ frozen 1.x tree, sizes monotone non-increasing, content-hashed; code-file byte cap; ban symlinks. |
+| A-28 | CI | CI runs `-m "logic or contract"`; untiered `test_leak_fixture_records_a_child_until_it_is_waited_on` never runs; P-30 "exactly one tier marker" unenforced. | L `tests.yaml:223` | NEW | Collection hook fails on 0 or >1 tier markers; every tier mapped to a job. |
+| A-29 | packaging | Missing tag → `0.1.devN` (no tag, `v`-prefixed tag, shallow clone as in CI); the version test checks only `not startswith("31.")`. | L test line 30; A builds | R-30 (inadequate) | Build hook refuses untagged/below-floor versions; test asserts `Version(v) >= floor`. |
+| A-30 | license | Flags are free inputs: `GPL-3.0-only` + `copyleft="none"`, `CC-BY-NC-4.0` + `commercial_use="yes"`, expression `"mit OR (("` accepted. | H `accepted` | R-10/R-33 | Flags derived from a parsed SPDX expression against a vendored table. |
+
+## 3. Low
+
+- **A-31.** Digests have no domain separation. `output_identity(key.model_dump()) == key.digest()`. `content_identity.root` is a bare `sha256(hex chunks)` that omits `chunk_size`. Resolution: `sha256(tag‖0x00‖JCS)` with registered tags, plus a test that tags are distinct and prefix-free. (H)
+- **A-32.** `==2.0.0` admits `2.0.0+local` (L: `True`). Core imports `senselab_worker.canonical` in process with no version check. Resolution: refuse local segments at build time. Core asserts the worker version at import.
+- **A-33.** The import-linter contracts are denylists over a closed `root_packages`. `yaml`, `scipy`, `torchaudio`, `librosa` and similar are not forbidden. A new package is unanalysed. There is no upward-layer rule (`runtime → cli/testing`). Resolution: a contract that each package imports only its declared dependencies plus the stdlib. Add a test that every `packages/*/src/*` package is in `root_packages`, and a `layers` contract. (A)
+- **A-34.** Handshake and fatal path are lax. `"wire": true` or `1.0` is accepted. A `fatal` with an unknown fault or no `gap` becomes `ProtocolError` and the message is lost. A crash mid-reply gives `ProtocolError`, not `WorkerLost` with a return code. `parse_line` accepts `1e999` and duplicate keys. Resolution: one wire-value validator shared by reader and writer, and a total `fatal` decode. (H)
+- **A-35.** Store files are 0664 and dirs 2775 regardless of a `077` umask, which makes participant-derived outputs world-readable. Resolution: the project policy sets the world bits, default none. (A/H; relates to R-48)
+- **A-36.** A stray file or dangling symlink at an entry path makes every `put` raise `NotADirectoryError`. ENOSPC surfaces as a raw `OSError`, though cleanup is correct. Resolution: one shared storage-fault mapping. (H)
+- **A-37.** Kernel edges: unbounded nanosecond ints (`Span(0, 2**200)`), `drift_ppm=-3e6` reverses time, a forged `identity='sha-forged'` is accepted, and `FrozenMapping._items` is mutable. Resolution: `Nanoseconds` limited to the int64 range, and identity recomputed or verified in the validator. (H for forged identity; rest A)
+- **A-38.** `manifest_key = f"{repo}@{ref}"` is ambiguous (`a@b`+`c` vs `a`+`b@c`). It is unreachable through `ModelRef`. Resolution: key by JCS `[repo, ref]`. (H)
+- **A-39.** `tests.yaml` triggers on non-draft `pull_request` only, so a direct push is unguarded. Resolution: required checks plus branch protection. (L)
+
+## 4. Unverified (not counted)
+
+- `parse_line`, `from_wire` and `_map_refs` raise `RecursionError` on deep nesting, so a batch-mate is lost. This is not producible from a 3.12 host.
+- A request carrying a top-level `"stop": false` makes the worker exit 0 without replying.
+- A `.pth`/sitecustomize print before fd 1 is claimed.
+- `WorkerClient` has no finaliser, so a leaked client leaks its process and directory.
+- `jcs_dumps` raises `RecursionError` on a cycle.
+- `SharedFileLock` writes the holder non-atomically.
+- Staging and download staleness is judged by mtime against a local clock, so clock skew could delete a live writer's staging.
+- ADR-007 "exports redact paths" has no implementation (`grep redact` finds nothing). This may be scheduled later (R-48).
+- `results.py` has no `Absent` type (I-6). Check whether that is a Phase 1 deliverable.
+
+## 5. Verification record
+
+The lead re-ran store p1/p2/p5/p6 and worker p1/p2/p3/p4/p7. The lead also wrote independent probes `verify/v_kernel.py`, `v_ident.py` and `v_set.py`, and checked the workflow and test lines by reading them. A haiku verifier re-ran kernel p1–p4, identity p1/p3/p4, worker p5/p6/p8/p9/p11/p12, store p3 and the moved-module probe. All 21 claims matched except one. The moved-module probe has no shim case; the lead confirmed that bypass by reading the code. No probe left a process running.
+
+## 6. What should block closing Phase 1
+
+Phase 1's exit claims are "keys are exact and portable", "results never lost once committed" and "worker faults are per item". These are contradicted by:
+- A-1 (identity names bytes the object no longer holds);
+- A-2 and A-3 (wrong entry served; healthy entry destroyed on a transient error);
+- A-4, A-5 and A-6 (collisions, path-or-ref keys, seed-dependent keys);
+- A-7, A-8, A-9 and A-10 (unbounded shutdown, request theft, data deletion, batch-mate failure).
+
+Each needs its contract test landed, not only a patch. A-11 and A-29 block the first tagged release rather than the phase.
+
+## 7. Re-run (H8c, after hardening H1–H8b)
+
+Five attackers, one per surface, at `b42d3cf0`, each briefed to break an invariant rather than re-find
+a pinned case; every high and medium finding was then reproduced independently at `99a6d5f8`. Raw
+findings with reproductions are in `phase1-reattack/` (wire, store, kernel, gate, canon).
+
+| Surface | Critical | High | Medium | Low | Rows |
+|---|---|---|---|---|---|
+| Worker wire and lifecycle | 0 | 1 | 2 | 2 | R-99 |
+| Store, fetch, locks | 0 | 1 | 3 | 3 | R-100, R-101 |
+| Kernel values, provenance | 0 | 1 | 5 | 6 | R-102, R-103, R-104 |
+| Guards, packaging, release gate | 0 | 2 | 8 | 2 | R-106, R-107, R-108 |
+| Canonical encoding, hashing | 0 | 0 | 4 | 4 | R-105 |
+
+All 31 high and medium findings reproduced; XG-12's red test was already fixed by H8b. What held, per
+surface, is listed in each findings file: JCS number and string vectors, `.npy` across endianness and
+numpy 1.23/2.x, tag unambiguity, the `path_key` sweep over 194,558 code points on APFS, concurrent
+fetch and crash-mid-link, H5's per-item totality, H7's pin, tag and cache-isolation checks.
+
+The pattern across surfaces: invariants enforced by checking spellings or one construction path hold
+against the cases that motivated them and fail against ordinary alternatives. Each row's resolution
+replaces the check with a structure in which the violating state cannot be constructed.
