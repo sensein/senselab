@@ -7,6 +7,7 @@ import copy
 import enum
 import json
 import math
+import os
 import unicodedata
 from collections.abc import Callable
 from decimal import Decimal
@@ -547,7 +548,7 @@ class TestAtomicWrite:
         def _killed(descriptor: int) -> None:
             raise KeyboardInterrupt("SIGTERM during the write")
 
-        monkeypatch.setattr("senselab_core.runtime.storage.os.fsync", _killed)
+        monkeypatch.setattr(os, "fsync", _killed)
         with pytest.raises(KeyboardInterrupt):
             s.write_jsonl(target)
         assert target.read_bytes() == before
