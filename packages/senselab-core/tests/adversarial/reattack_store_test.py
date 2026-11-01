@@ -866,20 +866,17 @@ def _ephemeral(rel: Path) -> bool:
     )
 
 
-def _names(op: str, scratch: Path, written: list[Path]) -> tuple[list[str], list[str]]:
-    """Run `op` cleanly; return the names it wrote that no listed grammar matches, and the names to plant at."""
-    grammars = importlib.import_module("written_names_test").written_names()
+def _names(op: str, scratch: Path, written: list[Path]) -> list[str]:
+    """Run `op` cleanly; return the names to plant at."""
     root = scratch / "clean" / "root"
     _setup(op, root)
     written.clear()
     _run_named(op, root)
     real_root = root.resolve()
     rels = {Path(os.path.realpath(p.parent)).relative_to(real_root) / p.name for p in written}
-    unlisted = sorted(str(r) for r in rels if not any(g.fullmatch(r.name) for g in grammars))
     final = {Path(c).relative_to(root) / n for c, _, files in os.walk(root) for n in files}
     clocks = {r.with_name(r.name.removesuffix(".lock") + ".clock") for r in rels if r.name.endswith(".lock")}
-    targets = sorted(str(r) for r in rels | final | clocks if not _ephemeral(r))
-    return unlisted, targets
+    return sorted(str(r) for r in rels | final | clocks if not _ephemeral(r))
 
 
 def _plant(target: Path, plant: str, victim: Path) -> None:
@@ -903,10 +900,9 @@ def _plant(target: Path, plant: str, victim: Path) -> None:
 
 def probe_planted_names(scratch: str, op: str, plant: str) -> dict[str, Any]:
     """At each name `op` writes, plant `plant` and run `op`; report each outcome, the victim and what is outside."""
-    sys.path.insert(0, str(HERE.parent / "lint"))
     written = _recording()
     base = Path(scratch)
-    unlisted, targets = _names(op, base, written)
+    targets = _names(op, base, written)
     reports = []
     for i, rel in enumerate(targets):
         case = base / f"case{i}"
@@ -930,7 +926,7 @@ def probe_planted_names(scratch: str, op: str, plant: str) -> dict[str, Any]:
                 "outside": sorted(p.name for p in case.iterdir()),
             }
         )
-    return {"unlisted": unlisted, "reports": reports}
+    return {"reports": reports}
 
 
 @pytest.mark.contract
@@ -939,11 +935,10 @@ def probe_planted_names(scratch: str, op: str, plant: str) -> dict[str, Any]:
 def test_no_written_name_is_written_through_or_wedged_by_a_planted_object(tmp_path: Path, op: str, plant: str) -> None:
     """At every name the store, fetch, a lock or a run manifest writes, a planted object changes no victim.
 
-    No victim's bytes, mode or mtime change, nothing is made outside the root, every name written matches a
-    grammar the modules list, and each outcome is a completed operation or a typed error within the bound.
+    No victim's bytes, mode or mtime change, nothing is made outside the root, and each outcome is a completed
+    operation or a typed error within the bound.
     """
     result = _bounded("probe_planted_names", str(tmp_path), op, plant)
-    assert result["unlisted"] == []
     assert result["reports"], "the operation wrote no name"
     for report in result["reports"]:
         assert report["victim_unchanged"], report

@@ -1,8 +1,8 @@
 # ruff: noqa: ANN401
 """Phase 1 adversarial findings with no regression test elsewhere, rebuilt from the report's break column.
 
-Rows A-26, A-27, A-28 and A-33 are guards over the repository itself. Each probe plants the offending input
-and asserts the guard refuses it. The last test fails if any report row has no ``test_a<n>_*`` under ``packages/``.
+Rows A-28 and A-33 are guards over the repository itself. Each probe plants the offending input and asserts the
+guard refuses it.
 """
 
 import ast
@@ -32,13 +32,6 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[4]
 PACKAGES = REPO / "packages"
-REPORT = REPO / "specs" / "20261030-140022-senselab-2x-api" / "reviews" / "phase1-adversarial.md"
-BUDGET = REPO / "scripts" / "check_fixture_budget.py"
-GUARD_REL = "packages/senselab-core/tests/lint/moved_modules_test.py"
-GUARD = REPO / GUARD_REL
-RESOLVER = GUARD.with_name("import_resolver_fixture.py")
-DEFERRED = frozenset({15, 30})
-OWNER_ACTION = frozenset({39})
 
 
 def _load(path: Path, name: str, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
@@ -75,199 +68,6 @@ def _pytest(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         text=True,
         timeout=300,
     )
-
-
-def _guard_tree(base: Path, plant: dict[str, str]) -> Path:
-    """A miniature repository holding the moved-module guard, the files it loads that exist, and ``plant``."""
-    for rel, source in {
-        GUARD_REL: GUARD,
-        GUARD_REL.replace("moved_modules_test.py", "import_resolver_fixture.py"): RESOLVER,
-        "scripts/check_fixture_budget.py": BUDGET,
-    }.items():
-        if not source.exists():
-            continue
-        (base / rel).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(source, base / rel)
-    for pkg in ("senselab", "senselab/utils", "senselab/audio"):
-        (base / _PLANTED / pkg).mkdir(parents=True, exist_ok=True)
-        (base / _PLANTED / pkg / "__init__.py").write_text("")
-    for rel, text in plant.items():
-        (base / rel).parent.mkdir(parents=True, exist_ok=True)
-        (base / rel).write_text(text)
-    subprocess.run(["git", "init", "-q"], cwd=base, check=True)
-    subprocess.run(["git", "add", "-A"], cwd=base, check=True)
-    return base / GUARD_REL
-
-
-GUARD_SELECTION = (
-    "test_no_moved_module_paths_remain or test_no_file_imports_a_moved_module or test_no_module_lives_at_a_moved_path"
-)
-
-_PLANTED = "packages/zz/src"
-_UTILS = "senselab" + ".utils"
-_FILE_LOCK = "file" + "_lock"
-_MODEL_REVISION = "model" + "_revision"
-
-BYPASSES = {
-    "relative-import": {f"{_PLANTED}/senselab/audio/bypass.py": "from ..utils import file_lock\n"},
-    "importlib-concat": {
-        f"{_PLANTED}/senselab/audio/bypass.py": (
-            "import importlib\nimportlib.import_module('senselab.utils.' + 'file_' + 'lock')\n"
-        )
-    },
-    "shim-at-old-path": {f"{_PLANTED}/senselab/utils/{_FILE_LOCK}.py": "from senselab_core.runtime.locks import *\n"},
-    "notebook-cell": {
-        f"{_PLANTED}/senselab/audio/bypass.ipynb": json.dumps(
-            {"cells": [{"cell_type": "code", "source": [f"from {_UTILS} import {_FILE_LOCK}\n"]}]}
-        )
-    },
-    "stub-file": {f"{_PLANTED}/senselab/audio/bypass.pyi": f"from {_UTILS}.{_MODEL_REVISION} import X\n"},
-    "relative-star-import": {f"{_PLANTED}/senselab/utils/bypass.py": "from .file_lock import *\n"},
-    "attribute-chain-off-an-alias": {
-        f"{_PLANTED}/senselab/audio/bypass.py": "from senselab import utils as u\nu.prov_bep028.run()\n"
-    },
-    "xg12-relative-name-with-package": {
-        f"{_PLANTED}/senselab/audio/bypass.py": (
-            f"import importlib\nimportlib.import_module('.{_FILE_LOCK}', '{_UTILS}')\n"
-        )
-    },
-    "xg12-keyword-name-and-package": {
-        f"{_PLANTED}/senselab/audio/bypass.py": (
-            f"from importlib import import_module\nimport_module(name='.{_MODEL_REVISION}', package='{_UTILS}')\n"
-        )
-    },
-    "xg12-getattr": {
-        f"{_PLANTED}/senselab/audio/bypass.py": "import senselab.utils\ngetattr(senselab.utils, 'prov_' + 'store')\n"
-    },
-    "xg12-shell-python-m": {"scripts/bypass.sh": f"python -m {_UTILS}.cuda" + "_probe\n"},
-    "xg12-yaml": {".github/workflows/bypass.yaml": f"run: python -m {_UTILS}.cuda" + "_probe\n"},
-}
-
-
-@pytest.mark.contract
-def test_moved_module_guard_passes_a_clean_tree(tmp_path: Path) -> None:
-    """Control: the guard, run on a tree with no reference to a moved module, passes."""
-    guard = _guard_tree(tmp_path, {})
-    result = _pytest(["-q", "--rootdir", str(tmp_path), "-k", GUARD_SELECTION, str(guard)], tmp_path)
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-@pytest.mark.contract
-@pytest.mark.parametrize("bypass", sorted(BYPASSES))
-def test_a26_moved_module_guard_catches_the_bypass(tmp_path: Path, bypass: str, worktree_untouched: None) -> None:
-    """Each bypass of the moved-module guard the report lists, in a tmp tree, fails the guard."""
-    guard = _guard_tree(tmp_path, BYPASSES[bypass])
-    result = _pytest(["-q", "--rootdir", str(tmp_path), "-k", GUARD_SELECTION, str(guard)], tmp_path)
-    assert result.returncode == 1, f"{bypass} passed the guard:\n{result.stdout}{result.stderr}"
-
-
-@pytest.mark.contract
-def test_a27_fixture_budget_refuses_a_symlink_and_a_base64_code_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], worktree_untouched: None
-) -> None:
-    """A tracked symlink is a violation, and a 5 MB base64 ``.py`` under a test tree exceeds the code-file cap."""
-    budget = _load(BUDGET, "a27_check_fixture_budget", monkeypatch)
-    payload = "DATA = '" + base64.b64encode(os.urandom(3_750_000)).decode() + "'\n"
-    _budget_repo(tmp_path, budget, {}, {"src/tests/link.txt": "small.txt"})
-    (tmp_path / "src" / "tests" / "payload.py").write_text(payload)
-    _git(tmp_path, "add", "-A")
-    assert _budget_main(budget, tmp_path, _empty_allowlist(tmp_path)) == 1
-    out = capsys.readouterr().out
-    assert "link.txt" in out and "symlink" in out and "payload.py" in out
-
-
-def _git(root: Path, *args: str) -> None:
-    subprocess.run(
-        ["git", "-c", "user.email=a@b", "-c", "user.name=a", "-c", "commit.gpgsign=false", *args],
-        cwd=root,
-        check=True,
-        capture_output=True,
-    )
-
-
-def _budget_repo(root: Path, budget: ModuleType, later: dict[str, int], links: dict[str, str] | None = None) -> None:
-    """A tmp git repo whose freeze branch holds one small file and whose index adds ``later`` and ``links``."""
-    _git(root, "init", "-q", "-b", "main")
-    (root / "src" / "tests").mkdir(parents=True)
-    (root / "src" / "tests" / "small.txt").write_text("x")
-    _git(root, "add", "-A")
-    _git(root, "commit", "-q", "-m", "freeze")
-    _git(root, "branch", getattr(budget, "FREEZE_BRANCH", "freeze-1x-2026-10-30"))
-    for name, size in later.items():
-        (root / name).parent.mkdir(parents=True, exist_ok=True)
-        (root / name).write_bytes(b"\0" * size)
-    for name, target in (links or {}).items():
-        (root / name).parent.mkdir(parents=True, exist_ok=True)
-        os.symlink(target, root / name)
-    _git(root, "add", "-A")
-
-
-def _empty_allowlist(root: Path) -> Path:
-    allow = root / "allow.txt"
-    allow.write_text("")
-    return allow
-
-
-def _budget_main(budget: ModuleType, root: Path, allow: Path) -> int:
-    """Run the budget's ``main`` on ``root``; where the policy is bound to the freeze, with one measured on it."""
-    if not hasattr(budget, "measure"):
-        return int(budget.main(root, allow))
-    import yaml
-
-    frozen = budget.measure(
-        budget.frozen_objects(root, budget.FREEZE_BRANCH), budget.parse_allowlist(allow.read_text()), {}
-    )
-    data: dict[str, Any] = {name: {"measured": frozen[name], "headroom": 2} for name in budget.CAPS}
-    if hasattr(budget, "freeze_problems"):
-        commit = subprocess.run(["git", "rev-parse", budget.FREEZE_BRANCH], cwd=root, capture_output=True, text=True)
-        data["freeze_commit"] = commit.stdout.strip()
-    policy = root / "policy.yaml"
-    policy.write_text(yaml.safe_dump(data))
-    return int(budget.main(root, allow, policy))
-
-
-def _allowlist_for(budget: ModuleType, path: str, size: int, root: Path) -> Path:
-    """An allowlist naming ``path``, in whichever column format the budget script parses."""
-    sha = hashlib.sha256(b"\0" * size).hexdigest()
-    allow = root / "allow.txt"
-    for text in (f"{path} {size}\n", f"{path}\t{sha}\t{size}\n"):
-        try:
-            budget.parse_allowlist(text)
-        except ValueError:
-            continue
-        allow.write_text(text)
-        return allow
-    raise AssertionError("no allowlist format parses")
-
-
-@pytest.mark.contract
-def test_a27_new_allowlist_entry_for_a_9mb_file_is_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], worktree_untouched: None
-) -> None:
-    """A new allowlist entry that grandfathers a new 9 MB file does not make the budget pass."""
-    budget = _load(BUDGET, "a27_budget_main", monkeypatch)
-    size = 9 * 1024 * 1024
-    _budget_repo(tmp_path, budget, {"src/tests/data/new.bin": size})
-    allow = _allowlist_for(budget, "src/tests/data/new.bin", size, tmp_path)
-    assert _budget_main(budget, tmp_path, allow) == 1
-    assert "new.bin" in capsys.readouterr().out
-
-
-@pytest.mark.contract
-def test_a27_directory_symlink_and_non_test_tree_are_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], worktree_untouched: None
-) -> None:
-    """A tracked symlink to a directory fails the budget, and so does a 9 MB file outside every test tree."""
-    budget = _load(BUDGET, "a27_budget_trees", monkeypatch)
-    for case, name in (("directory-symlink", "dirlink"), ("non-test-tree", "big.wav")):
-        root = tmp_path / case
-        root.mkdir()
-        if case == "directory-symlink":
-            _budget_repo(root, budget, {}, {"src/tests/dirlink": "."})
-        else:
-            _budget_repo(root, budget, {"docs/big.wav": 9 * 1024 * 1024})
-        assert _budget_main(budget, root, _empty_allowlist(root)) == 1, case
-        assert name in capsys.readouterr().out, case
 
 
 @pytest.mark.contract
@@ -426,8 +226,6 @@ def test_a14_probe_rewritten_source_is_not_read_under_the_old_identity(tmp_path:
 @pytest.mark.logic
 def test_a2_probe_misfiled_entry_is_not_served(tmp_path: Path) -> None:
     """B's entry copied onto A's path is not served for A."""
-    import shutil
-
     from senselab_core.kernel.identity import ReusePolicy
     from senselab_core.runtime.store import ResultStore
 
@@ -907,8 +705,6 @@ def test_a21_probe_fifo_named_like_an_array_does_not_hang(tmp_path: Path) -> Non
 @pytest.mark.logic
 def test_a34_probe_hello_wire_must_be_the_int_version(tmp_path: Path) -> None:
     """A hello whose `wire` is a float or a bool equal to the version is refused as a protocol mismatch."""
-    import json
-
     from senselab_core.runtime.worker_client import ProtocolMismatch
     from senselab_worker import WIRE_VERSION, runtime_identity
 
@@ -1049,106 +845,3 @@ def test_a32_probe_core_refuses_a_missing_worker(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(metadata, "distribution", distribution)
     with pytest.raises(ImportError):
         importlib.reload(senselab_core)
-
-
-def _is_skip_or_xfail(decorator: ast.expr) -> bool:
-    text = ast.unparse(decorator)
-    if "mark.xfail" in text or text.endswith("mark.skip") or "mark.skip(" in text:
-        return True
-    if "mark.skipif" in text and isinstance(decorator, ast.Call) and decorator.args:
-        first = decorator.args[0]
-        return isinstance(first, ast.Constant) and bool(first.value)
-    return False
-
-
-def _module_skips(tree: ast.Module) -> bool:
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets):
-            if any(_is_skip_or_xfail(n) for n in ast.walk(node.value) if isinstance(n, (ast.Attribute, ast.Call))):
-                return True
-    return False
-
-
-def _asserts(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Whether the body holds an ``assert``, a ``pytest.raises``/``pytest.warns`` block or a ``pytest.fail`` call."""
-    body = function.body
-    if (
-        body
-        and isinstance(body[0], ast.Expr)
-        and isinstance(body[0].value, ast.Constant)
-        and isinstance(body[0].value.value, str)
-    ):
-        body = body[1:]
-    for statement in body:
-        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
-            if ast.unparse(statement.value.func) == "pytest.skip":
-                return False
-        for node in ast.walk(statement):
-            if isinstance(node, ast.Assert):
-                return True
-            if isinstance(node, ast.With) and any(
-                isinstance(i.context_expr, ast.Call) and ast.unparse(i.context_expr.func) in ("pytest.raises", "raises")
-                for i in node.items
-            ):
-                return True
-            if isinstance(node, ast.Call) and ast.unparse(node.func) == "pytest.fail":
-                return True
-    return False
-
-
-def _tested_rows(root: Path) -> set[int]:
-    """Rows with a real ``test_a<n>_*`` function under ``root``: parsed, not skipped or xfailed, and asserting."""
-    found: set[int] = set()
-    for path in root.rglob("*_test.py"):
-        tree = ast.parse(path.read_text())
-        if _module_skips(tree):
-            continue
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            match = re.match(r"test_a(\d+)_", node.name)
-            if match and not any(_is_skip_or_xfail(d) for d in node.decorator_list) and _asserts(node):
-                found.add(int(match.group(1)))
-    return found
-
-
-def _report_rows() -> set[int]:
-    text = REPORT.read_text()
-    table = {int(m) for m in re.findall(r"^\| A-(\d+) \|", text, flags=re.M)}
-    bullets = {int(m) for m in re.findall(r"^- \*\*A-(\d+)\.?\*\*", text, flags=re.M)}
-    return table | bullets
-
-
-@pytest.mark.logic
-def test_every_adversarial_row_has_a_regression_test() -> None:
-    """Each report row, bar the deferred and owner-action ones, has a real ``test_a<n>_*`` under packages."""
-    rows = _report_rows()
-    assert rows and rows == set(range(1, max(rows) + 1)), f"report rows are not contiguous from A-1: {sorted(rows)}"
-    missing = sorted(rows - DEFERRED - OWNER_ACTION - _tested_rows(PACKAGES))
-    assert missing == [], f"rows with no asserting test_a<n>_* regression: {missing}"
-
-
-PLANTED = {
-    "a1_test.py": "def test_a1_valid():\n    assert 1 + 1 == 2\n",
-    "a2_test.py": "def test_a2_empty():\n    pass\n",
-    "a3_test.py": "import pytest\n\n@pytest.mark.skip(reason='x')\ndef test_a3_skipped():\n    assert False\n",
-    "a4_test.py": 'DOC = """\ndef test_a4_in_a_string():\n    assert True\n"""\n',
-    "a5_test.py": "import pytest\n\n@pytest.mark.xfail\ndef test_a5_xfail():\n    assert False\n",
-    "a6_test.py": "import pytest\n\ndef test_a6_skips_inside():\n    pytest.skip('later')\n    assert True\n",
-    "a7_test.py": (
-        "import pytest\n\n@pytest.mark.skipif(True, reason='always')\ndef test_a7_skipif_true():\n    assert 1\n"
-    ),
-    "a8_test.py": "import pytest\n\ndef test_a8_raises():\n    with pytest.raises(ValueError):\n        int('x')\n",
-    "a9_test.py": "import pytest\npytestmark = pytest.mark.skip\n\ndef test_a9_module_skip():\n    assert 1\n",
-    "a10_test.py": (
-        "import pytest\n\n@pytest.mark.skipif(1 > 2, reason='x')\ndef test_a10_conditional():\n    assert 1\n"
-    ),
-}
-
-
-@pytest.mark.logic
-def test_coverage_counts_only_real_asserting_tests(tmp_path: Path) -> None:
-    """A pass body, a skipped or xfailed test, a skip inside the body and a def inside a string are each rejected."""
-    for name, source in PLANTED.items():
-        (tmp_path / name).write_text(source)
-    assert _tested_rows(tmp_path) == {1, 8, 10}

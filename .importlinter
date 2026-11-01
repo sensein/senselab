@@ -83,10 +83,8 @@ ignore_imports =
     # H-R19: scripts, the migration worklist in migration-ledger.md
     scripts.analyze_audio -> hashlib
     scripts.build_classifier_ontology_map -> hashlib
-    scripts.check_fixture_budget -> hashlib
     scripts.extend_cohort -> hashlib
     scripts.free_speech_review_page -> hashlib
-    scripts.release_gate -> hashlib
     scripts.verify_grid_unification -> hashlib
 
 [importlinter:contract:raw-digest-owners]
