@@ -1019,7 +1019,7 @@ def _pin_hook(monkeypatch: pytest.MonkeyPatch) -> Any:
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, "a32_pin_hook", module)
     spec.loader.exec_module(module)
-    return module.PinHook(str(REPO), {"pin": "senselab-core", "dependencies": ["numpy"]})
+    return module.PinHook(str(REPO), {"pins": ["senselab-core", "senselab-worker"], "dependencies": ["numpy"]})
 
 
 @pytest.mark.logic
