@@ -54,7 +54,7 @@ from senselab_core.runtime.storage import (
 )
 
 MANIFEST_FORMAT = "data-manifest@2.0"
-MARKER_FORMAT = "dataset-marker@2.0"
+MARKER_FORMAT = "dataset-marker@2.1"
 CACHE_ENV = "SENSELAB_DATA_CACHE"
 ALLOWED_SCHEMES = frozenset({"https"})
 FILES_DIR = "files"
@@ -593,13 +593,23 @@ def _foreign_files(files_dir: Path, manifest: DataManifest) -> list[str]:
     return sorted(foreign)
 
 
-def _read_marker(ds: StorageDir, manifest: DataManifest, tmp: StorageDir) -> tuple[dict[str, BlobStamp], str]:
-    """Return `(recorded blob stamps, state)`; state is `"valid"`, `"absent"` or `"corrupt"`.
+def _superseded(record: Mapping[str, Any]) -> frozenset[str] | None:
+    """Return the versions a marker record says its version replaced as current, None if it states none legibly."""
+    value = record.get("superseded")
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        return None
+    return frozenset(value)
+
+
+def _read_marker(
+    ds: StorageDir, manifest: DataManifest, tmp: StorageDir
+) -> tuple[dict[str, BlobStamp], str, frozenset[str]]:
+    """Return `(recorded blob stamps, state, superseded versions)`; state is `"valid"`, `"absent"` or `"corrupt"`.
 
     The marker is read through `ds` without following or blocking. Anything but a regular file there is
-    moved into `tmp` and the state is `"corrupt"`. A marker that is not a whole `dataset-marker@2.0`
-    record is `"corrupt"` and contributes no stamps, but a dataset or manifest digest it still names must
-    be this one.
+    moved into `tmp` and the state is `"corrupt"`. A marker that is not a whole `dataset-marker@2.1`
+    record is `"corrupt"` and contributes no stamps or versions, but a dataset or manifest digest it still
+    names must be this one.
 
     Raises:
         ManifestConflictError: the marker belongs to another dataset or names another manifest.
@@ -612,13 +622,13 @@ def _read_marker(ds: StorageDir, manifest: DataManifest, tmp: StorageDir) -> tup
         logger.warning("moving aside the completion marker %s: %s", path, err)
         if ds.kind(COMPLETE_MARKER) not in (None, "file"):
             ds.set_aside(COMPLETE_MARKER, tmp)
-        return {}, "corrupt"
+        return {}, "corrupt", frozenset()
     if data is None:
-        return {}, "absent"
+        return {}, "absent", frozenset()
     record = _marker_record(data)
     if record is None:
         logger.warning("ignoring unreadable completion marker %s", path)
-        return {}, "corrupt"
+        return {}, "corrupt", frozenset()
     recorded_digest = record.get("manifest_sha256")
     if isinstance(recorded_digest, str) and recorded_digest != manifest.digest():
         raise ManifestConflictError(
@@ -629,14 +639,19 @@ def _read_marker(ds: StorageDir, manifest: DataManifest, tmp: StorageDir) -> tup
         found = _marker_address(record, path)
     except ManifestConflictError:
         logger.warning("ignoring malformed completion marker %s", path)
-        return {}, "corrupt"
+        return {}, "corrupt", frozenset()
     if found != ds.path.name:
         raise ManifestConflictError(f"completion marker {path} belongs to {found}; remove {ds.path} to refetch")
-    stamps = _stamps(record.get("stamps"))
-    if record.get("format") != MARKER_FORMAT or stamps is None or not isinstance(recorded_digest, str):
+    stamps, superseded = _stamps(record.get("stamps")), _superseded(record)
+    if (
+        record.get("format") != MARKER_FORMAT
+        or stamps is None
+        or superseded is None
+        or not isinstance(recorded_digest, str)
+    ):
         logger.warning("ignoring malformed completion marker %s", path)
-        return {}, "corrupt"
-    return stamps, "valid"
+        return {}, "corrupt", frozenset()
+    return stamps, "valid", superseded
 
 
 def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, verification and policies
@@ -657,9 +672,10 @@ def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, ver
     that fails transiently is retried under `retry` (`RetryPolicy.load_default()` when None), and on a
     mismatch or failed transfer the next mirror is tried. When every link is in place
     `datasets/<name>@<version>/.complete` records the dataset, the manifest digest and the blob stamps;
-    it is rewritten when a stamp has changed, so a repaired blob is trusted again by size. Then every
-    other completed version of the dataset (`<name>@<other version>`, its marker naming `name`) is
-    removed, so only the version fetched last is linked; blobs are kept.
+    it is rewritten when a stamp has changed, so a repaired blob is trusted again by size. The marker also
+    lists the versions this one superseded as current: each other completed version of the dataset whose
+    marker does not list this version is superseded, and its directory removed (blobs are kept). There is
+    no other version ordering: a version that once superseded this one is kept when this one is fetched again.
     A dataset without a valid marker must hold no file outside the manifest.
 
     Raises:
@@ -703,7 +719,7 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
         top.walk("datasets", create=True, mode=dir_mode, aside=aside) as datasets,
         datasets.walk(f"{manifest.name}@{manifest.version}", create=True, mode=dir_mode, aside=aside) as ds,
     ):
-        recorded, marker_state = _read_marker(ds, manifest, tmp)
+        recorded, marker_state, superseded = _read_marker(ds, manifest, tmp)
         with ds.walk(FILES_DIR, create=True, mode=dir_mode, aside=aside) as files:
             if marker_state != "valid" and (foreign := _foreign_files(files.path, manifest)):
                 raise ManifestConflictError(
@@ -717,12 +733,15 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
                 result[file.path] = _link(files, file.path, blob, dir_mode)
                 if stamp is not None:
                     stamps[file.sha256] = stamp
-        if marker_state != "valid" or stamps != recorded:
+        replaced = _replaced(datasets, manifest)
+        now_superseded = superseded.union(*replaced.values())
+        if marker_state != "valid" or stamps != recorded or now_superseded != superseded:
             record = {
                 "format": MARKER_FORMAT,
                 "name": manifest.name,
                 "version": manifest.version,
                 "manifest_sha256": manifest.digest(),
+                "superseded": sorted(now_superseded),
                 "stamps": {
                     sha: {
                         "size": st.size,
@@ -743,28 +762,38 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
                     replace=marker_state != "absent",
                     keeps=lambda: _read_marker(ds, manifest, tmp)[1] == "valid",
                 )
-        _remove_superseded(datasets, manifest, tmp)
+        for name in replaced:
+            try:
+                moved = datasets.set_aside(name, tmp)
+                (tmp if moved.parent == tmp.path else datasets).remove_owned(moved.name, pattern=ASIDE_NAME)
+            except (OSError, WrongKindError) as err:
+                logger.warning("cannot remove the superseded dataset %s: %s", datasets.path / name, err)
         return result
 
 
-def _remove_superseded(datasets: StorageDir, manifest: DataManifest, tmp: StorageDir) -> None:
-    """Remove every other version of `manifest`'s dataset: each `<name>@<v>` whose marker names this name.
+def _replaced(datasets: StorageDir, manifest: DataManifest) -> dict[str, frozenset[str]]:
+    """Return the versions of `manifest`'s dataset this fetch makes current over, by directory name.
 
-    Each is moved into `tmp` (or aside in `datasets`) and removed there; one without a legible marker is left.
-    Failures are logged.
+    Each is a completed `<name>@<v>` whose marker names this dataset and does not list this version as one
+    it superseded, with the versions it stands for: its own and those it superseded. A version that once
+    superseded this one stays current. A directory without a legible marker is left; read failures are logged.
     """
+    replaced: dict[str, frozenset[str]] = {}
     for name in datasets.listdir():
         if name == f"{manifest.name}@{manifest.version}" or not name.startswith(f"{manifest.name}@"):
             continue
         try:
             with datasets.child(name) as other:
                 record = _marker_record(other.read_regular(COMPLETE_MARKER, limit=MARKER_LIMIT) or b"")
-            if record is None or record.get("name") != manifest.name:
-                continue
-            moved = datasets.set_aside(name, tmp)
-            (tmp if moved.parent == tmp.path else datasets).remove_owned(moved.name, pattern=ASIDE_NAME)
         except (OSError, ValueError) as err:
-            logger.warning("cannot remove the superseded dataset %s: %s", datasets.path / name, err)
+            logger.warning("cannot read the dataset %s: %s", datasets.path / name, err)
+            continue
+        if record is None or record.get("name") != manifest.name or not isinstance(record.get("version"), str):
+            continue
+        listed = _superseded(record) or frozenset()
+        if manifest.version not in listed:
+            replaced[name] = listed | {record["version"]}
+    return replaced
 
 
 __all__ = [

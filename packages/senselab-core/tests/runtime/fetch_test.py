@@ -424,7 +424,7 @@ def test_completion_marker_records_manifest_hash(tmp_path: Path) -> None:
     fetch(manifest, cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     marker = json.loads((_dataset(tmp_path) / ".complete").read_text())
     assert marker["manifest_sha256"] == manifest.digest()
-    assert (marker["format"], marker["name"], marker["version"]) == ("dataset-marker@2.0", "demo", "1")
+    assert (marker["format"], marker["name"], marker["version"]) == ("dataset-marker@2.1", "demo", "1")
 
 
 @pytest.mark.logic
@@ -1126,6 +1126,20 @@ def test_superseded_version_links_removed(tmp_path: Path) -> None:
     assert paths["a/voice.wav"].read_bytes() == PAYLOAD
     assert sorted(p.name for p in (tmp_path / "datasets").iterdir()) == ["demo@0", "demo@1x@1", "demo@2"]
     assert list((tmp_path / "tmp").iterdir()) == []
+
+
+@pytest.mark.logic
+def test_an_older_version_fetched_again_keeps_the_current_one(tmp_path: Path) -> None:
+    """Fetching v1 after v2 superseded it keeps v2; fetching v2 again then removes v1."""
+    opener = _opener({"https://x/a.wav": PAYLOAD})
+
+    def versions() -> list[str]:
+        return sorted(p.name for p in (tmp_path / "datasets").iterdir())
+
+    for version, expected in (("1", ["demo@1"]), ("2", ["demo@2"]), ("1", ["demo@1", "demo@2"]), ("2", ["demo@2"])):
+        fetch(_manifest(version=version), cache_root=tmp_path, opener=opener)
+        assert versions() == expected, version
+    assert json.loads((_dataset(tmp_path, version="2") / ".complete").read_bytes())["superseded"] == ["1"]
 
 
 @pytest.mark.logic
