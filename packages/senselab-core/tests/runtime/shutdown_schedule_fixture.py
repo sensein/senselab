@@ -81,6 +81,8 @@ BOUNDARIES = (
     "pump:close",
     "popen:wait",
 )
+POLLED = {"module:_wait_exit": 1}
+"""Boundaries polled in timed loops, whose later calls vary with timing: the most occurrences injected into each."""
 ITEMS = [{"id": "a", "inputs": {}}]
 TYPED: dict[str, set[str | None]] = {
     "init": {None, "WorkerLost"},
@@ -268,7 +270,7 @@ def schedule(counts: dict[str, dict[str, int]], occurrences: range) -> list[dict
         for path in PATHS
         for boundary in BOUNDARIES
         for n in occurrences
-        if n <= counts[path][boundary]
+        if n <= min(counts[path][boundary], POLLED.get(boundary, n))
     ]
 
 
@@ -296,9 +298,13 @@ def run_schedule(tmp_path: Path, todo: list[dict[str, Any]]) -> list[dict[str, A
 
 
 def counted(tmp_path: Path) -> dict[str, dict[str, int]]:
-    """Per path, the calls each boundary gets when nothing is injected."""
-    todo = [{"path": path, "boundary": "", "occurrence": 0, "kind": "count"} for path in PATHS]
-    return {r["path"]: r["calls"] for r in run_schedule(tmp_path, todo)}
+    """Per path, the calls each boundary gets when nothing is injected: the fewer of two runs, by boundary."""
+    todo = [{"path": path, "boundary": "", "occurrence": 0, "kind": "count"} for path in PATHS for _ in range(2)]
+    calls: dict[str, dict[str, int]] = {}
+    for report in run_schedule(tmp_path, todo):
+        seen = calls.setdefault(report["path"], report["calls"])
+        calls[report["path"]] = {b: min(n, report["calls"][b]) for b, n in seen.items()}
+    return calls
 
 
 def violations(report: dict[str, Any]) -> list[str]:

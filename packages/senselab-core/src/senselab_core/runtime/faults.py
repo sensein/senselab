@@ -95,9 +95,8 @@ def _verdict(exc: BaseException) -> bool | BaseException:
         return True
     if isinstance(exc, urllib.error.URLError):
         return exc.reason if isinstance(exc.reason, BaseException) else False
-    if not isinstance(exc, OSError):
-        return False
-    if isinstance(exc, ssl.SSLError):
+    if not isinstance(exc, OSError) or isinstance(exc, ssl.SSLError):
         return isinstance(exc, TRANSIENT_SSL_ERRORS)
-    transient = _TRANSIENT_EAI if isinstance(exc, socket.gaierror) else TRANSIENT_ERRNOS
-    return exc.errno in transient if exc.errno is not None else (exc.__cause__ or False)
+    if exc.errno is not None:
+        return exc.errno in (_TRANSIENT_EAI if isinstance(exc, socket.gaierror) else TRANSIENT_ERRNOS)
+    return exc.__cause__ if exc.__cause__ is not None else False
