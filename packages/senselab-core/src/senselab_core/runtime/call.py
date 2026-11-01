@@ -1,7 +1,7 @@
 """`run_call`: one task call resolved, placed, keyed, served from the result store or executed, and recorded.
 
-A declaring package hands `run_call` its catalogue and how its backends' envs open with `use_packaged`, as it
-declares its tasks in `REGISTRY` on import. Until one does, the catalogue is empty and no env opens.
+A declaring package hands `run_call` its catalogue, how its backends' envs open and the registry of its tasks
+(`REGISTRY`) with `use_packaged`, on import. Until one does, the catalogue is empty and no env opens.
 """
 
 import atexit
@@ -16,17 +16,14 @@ from datetime import datetime, timezone
 from os import PathLike
 from typing import Annotated, Any
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, PlainSerializer, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, PlainSerializer, ValidationInfo, model_validator
 from senselab_worker import WIRE_VERSION
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.model_cache import ModelCache, ModelKey
 
-import senselab_core.kernel.results  # noqa: F401 - importing it defines the result types
-import senselab_core.kernel.time  # noqa: F401 - importing it defines the time types
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, value_digest
-from senselab_core.kernel.declare import REGISTRY, BackendSpec, TaskParams, TaskSpec
-from senselab_core.kernel.formats import Formatted
+from senselab_core.kernel.declare import REGISTRY, BackendSpec, Registry, TaskParams, TaskSpec, kernel_types
 from senselab_core.kernel.identity import (
     DEFAULT_REUSE_POLICY,
     ExecutionContext,
@@ -38,7 +35,7 @@ from senselab_core.kernel.identity import (
     ReusePolicy,
 )
 from senselab_core.kernel.signals import Recording
-from senselab_core.runtime.audio_io import open_audio
+from senselab_core.runtime.audio_io import DECODER, open_audio
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.hardware import HardwareInfo, numerics_class, probe_hardware
@@ -48,24 +45,14 @@ from senselab_core.runtime.models import resolve
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.runtime.revision import cache_root
 from senselab_core.runtime.store import ResultStore, context_record, key_record
+from senselab_core.runtime.store import output_identity as store_output_identity
 from senselab_core.runtime.vocabulary import core_vocabulary
 from senselab_core.runtime.worker_client import WorkerClient
 
 PRECISION = "default"
 """The precision a call records: the backend's own; no backend declares another yet."""
 ITEM_ID = "call"
-_READERS: Mapping[str, Callable[[str | PathLike[str]], Recording]] = {"Audio": open_audio}
-
-
-def kernel_types() -> dict[str, type]:
-    """Return the kernel value types a port may name, by name: every `Recording` and `Formatted` subclass."""
-    found: dict[str, type] = {Recording.__name__: Recording}
-    pending: list[type] = [Recording, Formatted]
-    while pending:
-        for sub in pending.pop().__subclasses__():
-            found[sub.__name__] = sub
-            pending.append(sub)
-    return found
+_READERS: Mapping[str, tuple[Callable[[str | PathLike[str]], Recording], str]] = {"Audio": (open_audio, DECODER)}
 
 
 Inputs = Annotated[Mapping[str, Any], AfterValidator(FrozenMapping), PlainSerializer(dict)]
@@ -76,8 +63,8 @@ class TaskCall(BaseModel):
 
     Built from a mapping (`{task, inputs, params, model, backend_params}`, the one call shape), `params` is
     validated against the declared task's params, `model` is parsed from its reference string and an absent
-    `task_version` is the declared one. `backend_params` are held as given and validated against the backend
-    `run_call` chooses.
+    `task_version` is the declared one; tasks are looked up in the validation context's `registry`, else the
+    packaged one. `backend_params` are held as given and validated against the backend `run_call` chooses.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
@@ -91,18 +78,36 @@ class TaskCall(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _from_call_shape(cls, data: Any) -> Any:  # noqa: ANN401 - pydantic's hook signature
+    def _from_call_shape(cls, data: Any, info: ValidationInfo) -> Any:  # noqa: ANN401 - pydantic's hook signature
         if not isinstance(data, Mapping) or not isinstance(data.get("task"), str):
             return data
         out = dict(data)
         if "task_version" not in out or not isinstance(out.get("params"), TaskParams):
-            spec = REGISTRY.spec(out["task"])
-            out.setdefault("task_version", spec.version)
+            registry = (info.context or {}).get("registry")
+            out.setdefault("task_version", (registry or _PACKAGED.registry).spec(out["task"]).version)
             if not isinstance(out.get("params"), TaskParams):
-                out["params"] = spec.params.model_validate(out.get("params") or {})
-        if isinstance(out.get("model"), str):
-            out["model"] = ModelRef.parse(out["model"])
+                out["params"] = cls.parse_params(out["task"], out.get("params") or {}, registry)
+        out["model"] = cls.parse_model(out.get("model"))
         return out
+
+    @staticmethod
+    def parse_params(task: str, params: Mapping[str, Any], registry: Registry | None = None) -> TaskParams:
+        """Return `params` validated against the params of `task` in `registry` (the packaged one when None).
+
+        Raises:
+            UnknownTask: `task` is not declared.
+            pydantic.ValidationError: the params do not validate.
+        """
+        return (registry or _PACKAGED.registry).spec(task).params.model_validate(dict(params))
+
+    @staticmethod
+    def parse_model(model: ModelRef | str | None) -> ModelRef | None:
+        """Return `model` as a reference: a string is parsed with `ModelRef.parse`.
+
+        Raises:
+            ValueError: the string is not a model reference.
+        """
+        return ModelRef.parse(model) if isinstance(model, str) else model
 
 
 @dataclass(frozen=True)
@@ -142,10 +147,11 @@ EnvOpener = Callable[[BackendSpec, ExecutionProfile], EnvHandle]
 
 @dataclass(frozen=True)
 class Packaged:
-    """What a declaring package hands `run_call`: its catalogue and how its backends' envs open."""
+    """What a declaring package hands `run_call`: its catalogue, how its backends' envs open, and the registry."""
 
     catalogue: Catalogue
     open_env: EnvOpener
+    registry: Registry = REGISTRY
 
 
 def _no_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
@@ -181,8 +187,9 @@ def run_call(
     opens through the packaged opener and its worker is reused across calls (one model per worker process; host
     backends share one `ModelCache` per budget). An execution writes one activity, associated with an agent carrying
     `senselab:modelSource`, recording the key, the context and the profile's digest; a store hit writes none (the
-    store records its reuse). `None` means the packaged default: the `laptop` profile, `RunConfig()` and the store
-    under `cache_root()/results`.
+    store records its reuse). An execution whose `put` finds different outputs another writer committed first is
+    served those, as a reuse, and writes no execution activity. `None` means the packaged default: the `laptop`
+    profile, `RunConfig()` and the store under `cache_root()/results`.
 
     Raises:
         UnknownTask: the call's task is not declared.
@@ -195,12 +202,12 @@ def run_call(
     profile = execution if execution is not None else ExecutionProfile.load()
     run = run if run is not None else RunConfig()
     store = store if store is not None else ResultStore(cache_root() / "results")
-    spec = REGISTRY.spec(call.task)
+    spec = _PACKAGED.registry.spec(call.task)
     if call.task_version != spec.version:
         raise ValueError(f"{call.task!r} is declared at version {spec.version!r}, the call names {call.task_version!r}")
     model, entry = _resolve_model(spec, call.model, profile, _PACKAGED.catalogue)
     hardware = _hardware()
-    placement = resolve_execution(spec, entry, profile, hardware, REGISTRY, _PACKAGED.catalogue)
+    placement = resolve_execution(spec, entry, profile, hardware, _PACKAGED.registry, _PACKAGED.catalogue)
     backend = placement.backend
     placement = replace(placement, backend_params=backend.params.model_validate(dict(call.backend_params)))
     if backend.env.kind == "server":
@@ -211,19 +218,24 @@ def run_call(
         **env.context_fields(),
         platform=sysconfig.get_platform(),
         numerics=numerics_class(hardware, placement.device, PRECISION),
-        decoder=None,
+        decoder=next((d for _, _, d in bound.values() if d is not None), None),
         host=platform.node(),
         protocol=f"wire@{WIRE_VERSION}",
         model_source=None if model is None else model.ref.source,
     )
-    identities = {port: identity for port, (identity, _) in bound.items()}
+    identities = {port: identity for port, (identity, _, _) in bound.items()}
     key = build_key(Call(task=spec, params=call.params, inputs=identities, model=model), placement, context)
     hit = store.get(key, context, run.reuse)
     if hit is not None:
         return Result(hit.outputs, hit.output_identity, key, hit.context, placement, hit.policy_used)
     started = datetime.now(timezone.utc)
-    outputs = _execute(call, placement, env, model, {port: value for port, (_, value) in bound.items()}, profile)
+    outputs = _execute(call, placement, env, model, {port: value for port, (_, value, _) in bound.items()}, profile)
     output_identity = store.put(key, outputs, context)
+    if output_identity != store_output_identity(outputs):
+        stored = store.get(key, context, ReusePolicy.EXACT)
+        if stored is None:
+            raise RuntimeError(f"the entry another writer committed for {key.task!r} could not be read back")
+        return Result(stored.outputs, stored.output_identity, key, stored.context, placement, stored.policy_used)
     store.provenance.add(
         *(kprov.entity(i, core_vocabulary()) for i in identities.values()),
         *_execution(key, context, profile, identities, output_identity, model, started),
@@ -249,18 +261,19 @@ def _resolve_model(
     return (resolved if entry is None else resolved.model_copy(update={"license": entry.license})), entry
 
 
-def _bind(port: str, port_type: str, value: object) -> tuple[InputIdentity, object]:
-    """Return an input's identity and the value its item carries: a kernel value as it is, a path read first."""
+def _bind(port: str, port_type: str, value: object) -> tuple[InputIdentity, object, str | None]:
+    """Return an input's identity, the value its item carries and the decoder that read it from a path, if one did."""
+    decoder = None
     if isinstance(value, str | PathLike) and port_type in kernel_types():
-        reader = _READERS.get(port_type)
-        if reader is None:
+        if port_type not in _READERS:
             raise ValueError(f"input {port!r} is a {port_type}, which is not read from a path; pass the value")
+        reader, decoder = _READERS[port_type]
         value = reader(value)
     if isinstance(value, Recording):
-        return value.identity, value
+        return value.identity, value, decoder
     if isinstance(value, Frozen):
-        return "content:" + value.canonical_digest(), value
-    return "content:" + value_digest("json", {"value": value}), value
+        return "content:" + value.canonical_digest(), value, decoder
+    return "content:" + value_digest("json", {"value": value}), value, decoder
 
 
 @functools.cache
@@ -297,13 +310,16 @@ def _execute(  # noqa: PLR0913 - the call and everything placing it
 def _worker(
     backend: BackendSpec, env: EnvHandle, init: dict[str, Any], model: ResolvedModel | None, budget: int | None
 ) -> InProcessWorker | WorkerClient:
-    """Return the pooled worker for this backend, env and init, starting one if none is alive."""
-    pool_key = (backend.env.kind, env.python, backend.worker, jcs_dumps(init).decode())
+    """Return the pooled worker for this backend, env, init and (in process) budget; a dead one is closed, replaced."""
+    host = backend.env.kind == "host"
+    pool_key = (backend.env.kind, env.python, backend.worker, jcs_dumps(init).decode(), str(budget) if host else "")
     with _POOL_LOCK:
         worker = _POOL.get(pool_key)
         if isinstance(worker, InProcessWorker) or (worker is not None and worker.alive):
             return worker
-        if backend.env.kind == "host":
+        if worker is not None:
+            worker.close()
+        if host:
             identity = model.identity if model is not None else value_digest("backend", {"name": backend.name})
             key: ModelKey = (backend.name, identity, init["device"], PRECISION)
             worker = InProcessWorker(

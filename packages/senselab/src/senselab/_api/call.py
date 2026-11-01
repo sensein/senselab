@@ -7,9 +7,9 @@ from typing import Any, ClassVar, Self
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 from senselab_core.kernel._base import FrozenMapping, NonEmptyStr
-from senselab_core.kernel.declare import REGISTRY, DeclaredParams, Registry, TaskParams, TaskSpec
+from senselab_core.kernel.declare import REGISTRY, DeclaredParams, Registry, TaskParams, TaskSpec, kernel_types
 from senselab_core.kernel.identity import ModelRef
-from senselab_core.runtime.call import Result, TaskCall, kernel_types, run_call
+from senselab_core.runtime.call import Result, TaskCall, run_call
 
 
 class _Unset:
@@ -118,7 +118,7 @@ class ConfiguredTask:
         params: Mapping[str, Any] | None = None,
         backend_params: Mapping[str, Any] | None = None,
     ) -> Self:
-        """Configure from the params mapping of the one call shape, as the CLI and JSON give it."""
+        """Configure from the params mapping of the one call shape, parsed as `TaskCall` parses it."""
         task = object.__new__(cls)
         ConfiguredTask.__init__(task, model, params or {}, backend_params)
         return task
@@ -149,11 +149,10 @@ class ConfiguredTask:
         return f"{type(self).__name__}(model={None if self._model is None else str(self._model)!r}, **{self._given!r})"
 
     def _validate_params(self, given: Mapping[str, Any]) -> TaskParams:
-        model = self.spec.params
         try:
-            return model(**given)
+            return TaskCall.parse_params(self.name, given, self.registry)
         except (ValidationError, ValueError) as error:
-            raise _params_error(self.name, model, given, error) from None
+            raise _params_error(self.name, self.spec.params, given, error) from None
 
     def _replace(self, changes: Mapping[str, Any]) -> Any:  # noqa: ANN401 - the generated subclass names its own type
         merged = {**self._given, **{k: v for k, v in changes.items() if v is not UNSET}}
@@ -191,10 +190,8 @@ class ConfiguredTask:
 
 
 def _model_ref(model: ModelRef | str | None) -> ModelRef | None:
-    if model is None or isinstance(model, ModelRef):
-        return model
     try:
-        return ModelRef.parse(model)
+        return TaskCall.parse_model(model)
     except ValueError as error:
         raise ApiError(
             "invalid_model", str(error), "write the model as `org/name@revision`, `url:...` or `local:...`", "model"

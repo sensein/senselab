@@ -19,7 +19,7 @@ from typing import Annotated, Literal, Union
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 from senselab_core.kernel.declare import REGISTRY, Registry, TaskSpec
-from senselab_core.runtime.call import kernel_types
+from senselab_core.kernel.declare import kernel_types
 
 from senselab._api.call import callable_names
 from senselab._api.declarations import DECLARATION_MODULES

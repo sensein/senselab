@@ -1,15 +1,22 @@
 """`run_call`: placement by profile, store reuse, one activity per call, model source and profile digest recorded."""
 
+import os
 import platform
+import signal
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
+import numpy
 import pytest
+import senselab_core.runtime.call as call_module
 import senselab_core.runtime.fake_backend as fake
+import soundfile
 from senselab_core.kernel import prov
-from senselab_core.kernel.declare import REGISTRY, BackendSpec, Env, TaskSpec
-from senselab_core.kernel.identity import ReusePolicy
+from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskSpec
+from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputIdentity, ReusePolicy
+from senselab_core.runtime.audio_io import DECODER
 from senselab_core.runtime.call import (
     CallFailed,
     Packaged,
@@ -22,6 +29,7 @@ from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.worker_client import WorkerClient
 
 TOY = "toyorg/toy"
 REVISION = "a" * 40
@@ -33,27 +41,39 @@ TASK = TaskSpec(
     outputs={"value": "sha256"},
     params=fake.EchoParams,
 )
+AUDIO_TASK = TaskSpec(
+    name="call_test.identify",
+    version="1",
+    kind="transform",
+    inputs={"audio": "Audio"},
+    outputs={"value": "sha256"},
+    params=fake.EchoParams,
+)
 
 
-def _backend(name: str, stack: str, env: Env) -> BackendSpec:
+def _backend(name: str, stack: str, env: Env, task: TaskSpec = TASK, worker: str = fake.WORKER_MODULE) -> BackendSpec:
     return BackendSpec(
-        task=TASK.name,
+        task=task.name,
         name=name,
         version="1",
         stack=stack,
-        models=(TOY,),
+        models=(TOY,) if task is TASK else (),
         env=env,
         devices=("cpu",),
         batch_invariant=True,
-        worker=fake.WORKER_MODULE,
+        worker=worker,
         load_stub={},
     )
 
 
-REGISTRY.add_task(TASK)
-REGISTRY.add_backend(_backend("fake-alpha", "alpha", Env.host()))
-REGISTRY.add_backend(_backend("fake-beta", "beta", Env.host()))
-REGISTRY.add_backend(_backend("fake-isolated", "isolated", Env.isolated("fake")))
+TEST_REGISTRY = Registry()
+for _task in (TASK, AUDIO_TASK, fake.ECHO):
+    TEST_REGISTRY.add_task(_task)
+TEST_REGISTRY.add_backend(_backend("fake-alpha", "alpha", Env.host()))
+TEST_REGISTRY.add_backend(_backend("fake-beta", "beta", Env.host()))
+TEST_REGISTRY.add_backend(_backend("fake-isolated", "isolated", Env.isolated("fake")))
+TEST_REGISTRY.add_backend(fake.FAKE)
+TEST_REGISTRY.add_backend(_backend("identity", "dsp", Env.host(), AUDIO_TASK, "backends.identity_backend_fixture"))
 
 CATALOGUE = Catalogue.load(
     f"""
@@ -87,8 +107,8 @@ def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHan
 
 @pytest.fixture(autouse=True)
 def packaged() -> Iterator[None]:
-    """`run_call` reads the toy catalogue and opens every env as this interpreter."""
-    previous = use_packaged(Packaged(CATALOGUE, _this_interpreter))
+    """`run_call` reads the toy catalogue and registry and opens every env as this interpreter."""
+    previous = use_packaged(Packaged(CATALOGUE, _this_interpreter, TEST_REGISTRY))
     yield
     use_packaged(previous)
 
@@ -223,3 +243,54 @@ def test_call_shape_validates_against_the_declaration() -> None:
     assert call.model is not None and call.model.ref == REVISION
     with pytest.raises(ValueError, match="salty"):
         TaskCall.model_validate({"task": TASK.name, "inputs": {"text": 1}, "params": {"salty": 1}})
+
+
+@pytest.mark.contract
+def test_dead_pooled_worker_is_closed_and_replaced(store: ResultStore) -> None:
+    """A pooled worker that died is closed, its array directory removed, and a new one runs the next call."""
+    run_call(_call("first"), execution=_profile("isolated"), store=store)
+    [old] = [w for w in call_module._POOL.values() if isinstance(w, WorkerClient) and w.alive]
+    os.kill(int(old.hello["pid"]), signal.SIGKILL)
+    deadline = time.monotonic() + 10
+    while old.alive and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not old.alive
+    result = run_call(_call("second"), execution=_profile("isolated"), store=store)
+    assert result.reused is None
+    assert not old.array_dir.exists() and old not in call_module._POOL.values()
+
+
+@pytest.mark.logic
+def test_budget_enters_the_host_pool(store: ResultStore) -> None:
+    """A host worker pooled under one cache budget is not reused under another, whose sizing it lacks."""
+    run_call(_call("budget"), execution=_profile("alpha"), store=store)
+    with pytest.raises(ValueError, match="state_bytes"):
+        run_call(_call("budget-2"), execution=_profile("alpha", model_cache_budget_bytes=10), store=store)
+
+
+@pytest.mark.logic
+def test_decoder_recorded_when_a_path_is_decoded(store: ResultStore, tmp_path: Path) -> None:
+    """An input read from a path records `open_audio`'s decoder; an in-memory input records none."""
+    path = tmp_path / "tone.wav"
+    soundfile.write(path, numpy.zeros(160, dtype=numpy.float32), 16000)
+    call = TaskCall.model_validate({"task": AUDIO_TASK.name, "inputs": {"audio": str(path)}})
+    result = run_call(call, execution=_profile(), store=store)
+    assert result.context.decoder == DECODER
+    assert run_call(_call(), execution=_profile("alpha"), store=store).context.decoder is None
+
+
+class _BeatenToCommit(ResultStore):
+    """A store where another writer commits different outputs for the key just before each `put`."""
+
+    def put(self, key: LogicalKey, outputs: dict[str, object], context: ExecutionContext) -> OutputIdentity:
+        super().put(key, {"value": "the other writer's"}, context)
+        return super().put(key, outputs, context)
+
+
+@pytest.mark.logic
+def test_lost_commit_race_serves_the_committed_entry(tmp_path: Path) -> None:
+    """When another writer committed first, the call returns that entry as a reuse and writes no execution."""
+    store = _BeatenToCommit(tmp_path / "store")
+    result = run_call(_call("race"), execution=_profile("alpha"), store=store)
+    assert result.outputs == {"value": "the other writer's"} and result.reused is ReusePolicy.EXACT
+    assert _executions(store) == [] and len(_activities(store)) == 1

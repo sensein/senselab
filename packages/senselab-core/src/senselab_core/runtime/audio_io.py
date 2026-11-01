@@ -29,6 +29,9 @@ from senselab_core.kernel.signals import (
 SOURCE_MEMO_ENTRIES = 65_536
 """How many (path, stamp) entries the per-process stamp memo keeps; the least recently used is evicted first."""
 
+DECODER = f"soundfile {soundfile.__version__}, libsndfile {soundfile.__libsndfile_version__}"
+"""The decoder `open_audio` reads with, as an execution context records it."""
+
 
 class Memo:
     """A thread-safe mapping that keeps at most `maxsize` entries, evicting the least recently used.

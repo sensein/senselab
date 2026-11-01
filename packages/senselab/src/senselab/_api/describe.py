@@ -5,9 +5,9 @@ from typing import Any
 
 from pydantic import BaseModel
 from pydantic.json_schema import GenerateJsonSchema
-from senselab_core.kernel.declare import REGISTRY, Registry, TaskSpec, json_schema
+from senselab_core.kernel.declare import REGISTRY, Registry, TaskSpec, json_schema, kernel_types
 from senselab_core.kernel.formats import Formatted
-from senselab_core.runtime.call import kernel_types, packaged
+from senselab_core.runtime.call import packaged
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
 
 from senselab._api.call import ApiError, callable_names, closest, task_spec

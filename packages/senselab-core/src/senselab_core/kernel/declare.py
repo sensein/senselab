@@ -22,6 +22,8 @@ from pydantic import (
 )
 from pydantic.json_schema import GenerateJsonSchema
 
+import senselab_core.kernel.results  # noqa: F401 - importing it defines the result types
+import senselab_core.kernel.time  # noqa: F401 - importing it defines the time types
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap
 from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import InputIdentity, LogicalKey, Params, ProfileSliceIdentity, ResolvedModel
@@ -325,6 +327,18 @@ class Registry:
 
 REGISTRY = Registry()
 """The process-wide registry; modules declaring tasks and backends add to it on import."""
+
+
+def kernel_types() -> dict[str, type]:
+    """Return the kernel value types a port may name, by name: every `Recording` and `Formatted` subclass."""
+    found: dict[str, type] = {Recording.__name__: Recording}
+    pending: list[type] = [Recording, Formatted]
+    while pending:
+        for sub in pending.pop().__subclasses__():
+            found[sub.__name__] = sub
+            pending.append(sub)
+    return found
+
 
 C = TypeVar("C", bound=type)
 
