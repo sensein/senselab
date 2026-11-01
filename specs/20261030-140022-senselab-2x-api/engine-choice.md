@@ -5,7 +5,7 @@ Status: draft, 2026-10-30. Evidence and citations:
   Nextflow prototype measurement;
 - [`pydra-extension-points.md`](pydra-extension-points.md);
 - pydra [proposal 0001](https://github.com/nipype/pydra/blob/enh/execution-extensions/proposals/0001-execution-extensions.md),
-  cited by PR id (A0…J2).
+  cited by PR id (A0…K2).
 
 The pydra facts were measured or read at `nipype/pydra@c5081a6` (v1.0a12). Facts about other
 engines come from their documentation; cells carried over with a † in `workflow-engines.md` were
@@ -19,7 +19,7 @@ Each requirement traces to a principle in [`principles.md`](principles.md).
 |---|---|---|---|
 | G1 | **Declarative graph**, inspectable and printable before running, serialisable as data | plans are printed and diffed before execution; agents read and edit pipelines as data | P-1, P-9, P-10 |
 | G2 | Nesting, **typed ports**, runtime fan-out (split/combine), conditional routing, bounded loops | nested pipelines; fan-out over segments and speakers; triage routing; adaptive rounds | P-9 |
-| G3 | Content-addressed cache with **caller-controlled keys** (model sha, env lock sha, params) | results are traceable to model bytes; cheap invalidation | P-3, P-4, P-19 |
+| G3 | Content-addressed cache with **caller-controlled keys** (logical identity: inputs, task, model sha, params; the env lock is recorded, not keyed, ADR-002) | results are traceable to model bytes; cheap invalidation | P-3, P-4, P-19 |
 | G4 | Cache that is safe on **shared NFS** and holds results in a **Python-version-neutral** format | multi-user cluster caches; envs on different Pythons | P-5, P-22 |
 | G5 | **Per-node isolated envs with mixed Python**, containers optional | 29 locked envs on Python 3.10–3.13 | P-6, P-22, P-25 |
 | G6 | **Resident model** per worker plus **batching** across items | GPU models loaded once and fed many recordings | P-5, P-7 |
@@ -106,7 +106,7 @@ senselab must do anyway, while Parsl's G1 gap is structural.
 - **Mitigation.** senselab uses pydra through Route A (`execution.md` §4): a pydra Submitter for
   the graph, a pool worker plugin for execution, and senselab's own store and identity
   (`design.md` §4.8). pydra changes are used from the branch.
-  - Decision gate at the start of Phase 3: if E1, D1 and F2 are not working, senselab builds its
+  - Decision gate at the start of Phase 3: if E1, D1, F2 (with F1), K1 and K2 (with G1) are not working, senselab builds its
     own graph layer behind the same `Executor` protocol (2–4k lines, 3–5 person-weeks;
     `design.md` §4.9).
   - No senselab user code would change.

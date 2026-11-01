@@ -86,6 +86,19 @@ and owner decision D-6 ([`decisions-2026-11-01.md`](../decisions-2026-11-01.md))
   (`roadmap.md`) and is deleted when its last use case moves. `migration-ledger.md` classifies each
   triage module.
 
+## Amendment 2026-11-01: the kernel does no I/O
+
+Ruling H-R57 and the F3 and F4 tasks ([`rulings.md`](../rulings.md)).
+
+- **The kernel does no I/O.** The import-linter contract `kernel-does-no-io` forbids `senselab_core.kernel`
+  from importing `soundfile`, `os`, `io`, `shutil`, `tempfile` and `importlib` (and `senselab_worker.hashing`).
+  `kernel-below-runtime` still forbids the runtime.
+- **Audio decoding, stamping and the stamp memo live in `runtime/audio_io.py`.** The kernel keeps the value
+  types and the `SourceReader` protocol; a file-backed group is read with `reader=audio_io.READER`. The file
+  entry point is `audio_io.open_audio(path)`, which replaces `Audio.from_path`.
+- **The equivalence table is loaded by the runtime** (`runtime/equivalence.py`); the kernel parses a table
+  (`parse_equivalence`) and loads none.
+
 ## Amendment log
 
 - 2026-10-30: the worker runtime is the base of the dependency direction, not a kernel dependent.
@@ -93,3 +106,4 @@ and owner decision D-6 ([`decisions-2026-11-01.md`](../decisions-2026-11-01.md))
 - 2026-11-01: 1.x lives on `alpha`; `src/` is the 1.x pool; use cases move by `git mv` then modify;
   triage's decision layer is superseded (H-R48, H-R51, H-R52).
 - 2026-11-01: `src/` is restored to 1.x as on `alpha` and never edited by 2.x (D-6).
+- 2026-11-01: the kernel does no I/O; decoding, stamping and the equivalence table load in the runtime (F3, F4, H-R57).

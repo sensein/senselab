@@ -147,7 +147,7 @@ code.
 **Delivery:** used from the branch through `[tool.uv.sources]`, with the commit pinned in
 `uv.lock`, and released in 1.0 alphas.
 
-**Decision gate at the start of Phase 3:** if E1, D1 and F2 are not working on the branch, build
+**Decision gate at the start of Phase 3:** if E1, D1, F2 (with F1), K1 and K2 (with G1) are not working on the branch, build
 the fallback graph layer behind the same `Executor` protocol (`design.md` §4.9).
 
 | pydra id | Change | Needed for |
@@ -156,11 +156,12 @@ the fallback graph layer behind the same `Executor` protocol (`design.md` §4.9)
 | B1, B2 | benchmarks, cheap submission | 10⁴–10⁶ items |
 | D1, C, D2 | store interface, leases + atomic commit, `PortableStore` | shared NFS; envs on different Python versions |
 | F1, F2 | `ComputeResources`, routing | mixed pools |
-| G1, G2 | env checksum, `Venv` + runner | L0 |
+| G1, G2 | env checksum (recorded as context, not keyed), `Venv` + runner | L0 |
 | H0, H | no-`chdir` option, provided objects + batching | L1 |
 | I | `pydra-workers-pool` | L2 |
 | A0, A1, A2 | Slurm fixes, budget, arrays | Slurm |
 | J1, J2 | provenance via messengers, `plan()` | P-3, P-10 |
+| K1, K2 | declared task identity; node-supplied checksum, `lookup(checksum, context)`, reuse-policy hook | ADR-001 (checksum equals key), ADR-002 (`equivalent`) |
 
 ## 5. What stays senselab-only
 

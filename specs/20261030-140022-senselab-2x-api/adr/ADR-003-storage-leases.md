@@ -148,8 +148,24 @@ run manifest. Owner decision D-2 ([`decisions-2026-11-01.md`](../decisions-2026-
   descriptor walk with `O_NOFOLLOW`, no modification in place, quarantine of wrong kinds, and private
   staging.
 
+## Amendment 2026-11-01: one transient classifier; retry takes a policy
+
+F1 and F3 ([`rulings.md`](../rulings.md), H-R57).
+
+- **`runtime/faults.py::is_transient` is the one classifier** of a fault as transient (a retry may succeed)
+  or permanent. For an OS error it reads `errno` (a fixed set: `EAGAIN`, `EINTR`, `EBUSY`, `ETIMEDOUT`,
+  `ECONNRESET`, `EIO`, `ESTALE` and similar; `FileNotFoundError`, `PermissionError` and `ENOSPC` are
+  permanent). For an HTTP error from any client it reads `response.status_code` (429 and 500 and above are
+  transient, every other status is permanent); `urllib.error.HTTPError.code` is read the same way.
+- **`storage_fault` uses it.** A `StoreUnavailable` says "retry" only when its cause is transient; it no
+  longer claims every storage fault is retryable.
+- **Retry takes an explicit `RetryPolicy`**, `retry_on_transient_error(fn, policy)`, loaded from
+  `runtime/data/retry_policy.yaml` (`retry-policy@1.0`). Its values (3 attempts, 1 s first backoff, doubling)
+  are the 1.x defaults and are not measured; the file says so. `SENSELAB_HF_MAX_RETRIES` is no longer read.
+
 ## Amendment log
 
 - 2026-10-31: paths, kinds and entry binding under a storage root (R-100, R-101; H9b).
 - 2026-10-31: lock files `flock`ed with heartbeat and takeover (H-R40..H-R42). Reverted 2026-11-01 (D-2).
 - 2026-11-01: locks are leases by rename and `O_EXCL` (D-2).
+- 2026-11-01: one transient classifier (`faults.is_transient`); retry takes a `RetryPolicy` from data; no ambient retry knob (F1, F3).

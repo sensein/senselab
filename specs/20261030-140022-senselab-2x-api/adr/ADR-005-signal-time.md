@@ -33,3 +33,9 @@ variable-frame-rate video or long recordings.
 ## Alternatives rejected
 - **One class with a single rate.** It cannot express mixed-rate recordings.
 - **Float seconds.** Precision loss over days.
+
+## Note 2026-11-01: where whole-file hashing lives
+
+Stamping a file on read hashes every byte, and that now lives in the runtime (`runtime/audio_io.py`), not the
+kernel. It still conflicts with "never hashed whole" above; that conflict remains R-109 and is decided in
+Phase 2.

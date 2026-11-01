@@ -191,7 +191,7 @@ self-declared unfinished (#798).
 | `vllm_server` | servers per card, start lock, engine identity, refused content-logging flags | **Keep.** A shared resource no engine models |
 | `reproduce/` (`dag.py` toposort with deterministic tie-break, `slurm.py` held `afterok` chains and `choose_partition`, spec, locks, weights, provenance) | pinned-commit, sandboxed, weights-stamped external runs; lock-sha env identity | **Keep as a consumer** of the store (design §4.8). Merge `dag.py` into the planner rather than keep a second DAG |
 | `ensure_venv` + CUDA routing + `uv_tools` | CUDA-aware wheel-index routing, requirements-sha | **Keep.** Ray `runtime_env` and Snakemake conda do not do this |
-| `CACHE_SCHEMA_VERSION`, commit-aware keys | caller-defined identity incl. commit and env lock | **Keep the policy.** Every engine needs it bolted on |
+| `CACHE_SCHEMA_VERSION`, commit-aware keys | caller-defined portable identity incl. model commit; env lock recorded beside the result, not keyed (ADR-002) | **Keep the policy.** Every engine needs it bolted on |
 
 ## 4. Recommendation
 
@@ -231,7 +231,7 @@ each is tested here.
   own `Executor` protocol and result store.
 - Do not use its pickle cache once the store interface lands. Route A (`execution.md` §4) uses a
   pool worker plugin and pydra's environment identity.
-- This is viable because the owner leads pydra. It is conditional on the proposal's E1, D1 and F2
+- This is viable because the owner leads pydra. It is conditional on the proposal's E1, D1, F2 (with F1), K1 and K2 (with G1)
   working on the branch, which senselab uses through `uv` git sources; a non-alpha release is not
   required. Without them, pydra's barrier semantics and per-item cost are disqualifying at 10^4+
   records.
@@ -261,13 +261,13 @@ which is now the only numbering. The original items map to it as follows:
 | provenance | J1 |
 | plan printing | J2 |
 
-The gate for senselab is E1, D1 and F2 working on the branch (`design.md` §4.9).
+The gate for senselab is E1, D1, F2 (with F1), K1 and K2 (with G1) working on the branch (`design.md` §4.9).
 
 ## Appendix: measurement scripts
 
 Laptop: 10 cores, macOS, Python 3.12.11. The venv was created with `uv venv -p 3.12 bench-venv`
-and `uv pip install ./pydra psutil` from pydra `c5081a6`. Scripts are under
-`bench/` (next to this file):
+and `uv pip install ./pydra psutil` from pydra `c5081a6`. Scripts are kept in one place, pydra `benchmarks/proposal_0001/` on branch `enh/execution-extensions`
+(nipype/pydra#891), and are not copied here:
 - `pydra_overhead.py`: run as `split:debug:100 split:debug:1000 chain:debug:200 split:cf:1000
   split:debug:5000 chain:cf:200`. It times a cold run, a fresh identical task object (warm), and a
   110%-length split.

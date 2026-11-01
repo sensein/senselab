@@ -150,7 +150,7 @@ The summary below follows that model.
 - **`IrregularSignal`** carries per-sample timestamps. Regularising one is an explicit task. Gaps
   are `Intervals` and are never zero-filled.
 - **`Video`, `Image` and `Text`** follow the same lazy, content-identified pattern.
-- **Loading** is lazy, by path, byte range, stream or time range. Derived data is chunked. Tensors
+- **Loading** is lazy, by path, byte range, stream or time range. A file is opened with `runtime.audio_io.open_audio`; the kernel does no I/O (ADR-009). Derived data is chunked. Tensors
   exist only inside backends.
 - **Identity** of source data is the hash of its raw content bytes, chunked for long recordings
   ([ADR-002](adr/ADR-002-identity-v2.md)). The decoder is recorded as execution context. Data
@@ -160,11 +160,11 @@ The summary below follows that model.
   canonical digest is computed when it is built, so a value that validates can be digested and a cycle
   or a form past the work budget is refused at construction.
 - **A source stamp binds the file's content** (R-103). The stamp is the file's content root, taken over
-  every byte, so a rewrite that keeps size, mtime, inode and device (`cp -p`, `rsync -t`) raises
+  every byte by `runtime/audio_io` (validation alone does not read the file; a read or `audio_io.check` does), so a rewrite that keeps size, mtime, inode and device (`cp -p`, `rsync -t`) raises
   `StaleSource` instead of returning other samples. Measured on a one-hour 16 kHz WAV (115 MB, local
   SSD, 2026-10-31): one full hash per read, about 0.5 s per GB, whatever the window. This conflicts with
-  ADR-005's "never hashed whole" (A I-5, R-109) and is decided with moving audio decoding out of the
-  kernel ([`decisions-2026-11-01.md`](decisions-2026-11-01.md), "Follows").
+  ADR-005's "never hashed whole" (A I-5, R-109). Decoding and stamping moved out of the kernel (F3); the
+  conflict with ADR-005 stays open as R-109, in Phase 2.
 - **A recording's anchor is not its identity.** A recording placed on a session clock carries that
   clock's name, so validation does not tie `anchor.clock_id` to `identity`; the anchor is part of the
   value's canonical digest, not of its content identity.
@@ -441,11 +441,11 @@ typed error at the boundary naming the attribute path and the type (H-R29, H-R30
 - **Version pinning.** pydra changes are used from the branch through `[tool.uv.sources]`, with
   the commit pinned in `uv.lock`, and released in 1.0 alphas.
 - **Decision gate at the start of Phase 3.** It decides only the default executor, not the format.
-  If E1, D1 and F2 are not working on the branch, senselab builds its own graph runner behind the
+  If E1, D1, F2 (with F1), K1 and K2 (with G1) are not working on the branch, senselab builds its own graph runner behind the
   same `Executor` protocol: 2–4k lines, 3–5
   person-weeks, reusing `reproduce/dag.py` and `audio_analysis/contracts.py:991`
   `unrolled_contracts`.
-- **Citations.** pydra changes are cited by proposal id (A0…J2), from
+- **Citations.** pydra changes are cited by proposal id (A0…K2), from
   [proposal 0001](https://github.com/nipype/pydra/blob/enh/execution-extensions/proposals/0001-execution-extensions.md).
 - **Why pydra:** `engine-choice.md`.
 
@@ -790,7 +790,11 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
   - cross-record batching under I-3;
   - a minimal BIDS adapter;
   - the `benchmarks/scale` ladder and the catalogue resource tables (P-7, P-33).
-- The pydra gate is decided at the start of this phase (section 4.9).
+- The pydra gate is decided at the start of this phase (section 4.9). Owners of the pydra PRs
+  (proposal 0001, nipype/pydra#891): **Phase 2 owns the gate prerequisites**, which must be
+  working on the branch before Phase 3 starts: D1, E1, F1, F2, G1, K1, K2. **Phase 3 owns the
+  rest**: A0, A1, A2, B1, B2, C, D2, E2, G2, H0, H, I, J1, J2. The gate decision is Phase 3's
+  first task. The dates are the owner's to set; none is set yet.
 - Exit:
   - a 1,000-record BIDS `.map` runs on a laptop and on ORCD, with plans differing only in
     execution fields (P-10);
@@ -939,3 +943,4 @@ R-n in [`review-register.md`](review-register.md).
 - 2026-11-01: 2.x lives on `2.x`; `src/` is 1.x as on `alpha`, never edited by 2.x; Phase 1 exit has no
   1.x rewire or 1.x tests (D-6, D-7, §6.1, §6.2, §8).
 - 2026-11-01: triage's tasks and pipelines port; its decision layer is superseded (H-R52, §6.2).
+- 2026-11-01: a model's key is its weights' digest and its source is context; decoding and stamping live in `runtime/audio_io`; every 2.x CI job except `worker-floor` installs with `uv sync --locked` (H-R56, H-R57; ADR-002, ADR-009).
