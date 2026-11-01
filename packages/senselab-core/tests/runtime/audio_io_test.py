@@ -5,6 +5,7 @@ import copy
 import multiprocessing as mp
 import os
 import pickle
+import subprocess
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -13,7 +14,7 @@ import numpy
 import pytest
 import soundfile
 from pydantic import ValidationError
-from senselab_core.kernel.signals import Audio, ChannelInfo, Recording, RegularGroup, StaleSource
+from senselab_core.kernel.signals import Audio, ChannelInfo, Recording, RegularGroup, StaleSource, audio_channels
 from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER, open_audio, source_group
 from senselab_worker.hashing import content_identity
@@ -292,3 +293,54 @@ def test_ctime_change_defeats_stat_fast_path(tmp_path: Path) -> None:
     assert (after.st_size, after.st_mtime_ns, after.st_ino) == (before.st_size, before.st_mtime_ns, before.st_ino)
     with pytest.raises(StaleSource):
         audio_io.check(taken, p)
+
+
+CHUNK = 4096
+
+
+def _window_group(tmp_path: Path) -> tuple[Path, RegularGroup]:
+    p = write_wav(tmp_path, frames=8 * RATE)
+    return p, source_group(audio_channels(2), RATE, p, audio_io.stamp(p, chunk_size=CHUNK))
+
+
+@pytest.mark.logic
+def test_window_read_hashes_touched_chunks_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A window read reads, at the `os` boundary, whole chunks only: the header's and the window's, never the file."""
+    p, group = _window_group(tmp_path)
+    preads: list[tuple[int, int]] = []
+    original = os.pread
+
+    def spy(fd: int, n: int, offset: int) -> bytes:
+        data = original(fd, n, offset)
+        preads.append((offset, len(data)))
+        return data
+
+    monkeypatch.setattr(os, "pread", spy)
+    monkeypatch.setattr(builtins, "open", lambda *a, **_: pytest.fail(f"opened {a[0]} by path"))
+    size = p.stat().st_size
+    window = group.read(4 * 10**9, 4 * 10**9 + 10**7, reader=READER)
+    k = numpy.arange(4 * RATE, 4 * RATE + 80)
+    assert numpy.array_equal(window, numpy.stack([(k % 100 + c) / 1000 for c in range(2)]).astype(numpy.float32))
+    offsets = [offset for offset, _ in preads]
+    assert all(offset % CHUNK == 0 for offset in offsets) and len(set(offsets)) == len(offsets)
+    assert 0 in offsets and (4 * RATE * 8 // CHUNK) * CHUNK in offsets
+    assert sum(n for _, n in preads) <= 3 * CHUNK < size // 8
+
+
+@pytest.mark.logic
+def test_rewrite_in_touched_chunk_is_stale(tmp_path: Path) -> None:
+    """A `cp -p` rewrite keeping size, mtime and inode is caught by a read touching it, and only by such a read."""
+    p, group = _window_group(tmp_path)
+    data = bytearray(p.read_bytes())
+    at = 4 * RATE * 8 + CHUNK
+    data[at] ^= 0xFF
+    edited = tmp_path / "edited.wav"
+    edited.write_bytes(bytes(data))
+    st = p.stat()
+    os.utime(edited, ns=(st.st_atime_ns, st.st_mtime_ns))
+    subprocess.run(["cp", "-p", str(edited), str(p)], check=True, timeout=30)
+    after = p.stat()
+    assert (after.st_size, after.st_mtime_ns, after.st_ino) == (st.st_size, st.st_mtime_ns, st.st_ino)
+    assert group.read(0, 10**7, reader=READER).shape == (2, 80)
+    with pytest.raises(StaleSource, match="chunk"):
+        group.read(4 * 10**9, 5 * 10**9, reader=READER)

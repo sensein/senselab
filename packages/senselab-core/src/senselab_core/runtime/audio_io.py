@@ -13,11 +13,10 @@ from pathlib import Path
 
 import numpy
 import soundfile
-from senselab_worker.hashing import content_identity
+from senselab_worker.hashing import DEFAULT_CHUNK_SIZE, chunk_digest, content_identity, content_root
 
 from senselab_core.kernel._base import value_digest
 from senselab_core.kernel.signals import (
-    AUDIO_DTYPE,
     Audio,
     ChannelInfo,
     RegularGroup,
@@ -82,8 +81,23 @@ def _remember(path: str | os.PathLike[str], stamp: SourceStamp, ctime_ns: int) -
     VERIFIED.put((os.fspath(path), stamp.canonical_digest()), ctime_ns)
 
 
+def _stat_fields(st: os.stat_result) -> tuple[int, int, int, int]:
+    return st.st_size, st.st_mtime_ns, st.st_ino, st.st_dev
+
+
+def _stamped_fields(stamp: SourceStamp) -> tuple[int, int, int, int]:
+    return stamp.size, stamp.mtime_ns, stamp.inode, stamp.device
+
+
+def _header(f: soundfile.SoundFile) -> str:
+    fields = {"frames": f.frames, "channels": f.channels, "samplerate": f.samplerate, "format": f.format}
+    return value_digest("soundfile.info", {**fields, "subtype": f.subtype})
+
+
 @contextmanager
-def _opened(path: str | os.PathLike[str]) -> Iterator[tuple[soundfile.SoundFile, SourceStamp, int]]:
+def _opened(
+    path: str | os.PathLike[str], chunk_size: int = DEFAULT_CHUNK_SIZE
+) -> Iterator[tuple[soundfile.SoundFile, SourceStamp, int]]:
     """Open `path` once and yield the sound file, the stamp of that open file (content read in full) and its ctime.
 
     Raises:
@@ -91,19 +105,12 @@ def _opened(path: str | os.PathLike[str]) -> Iterator[tuple[soundfile.SoundFile,
     """
     with open(path, "rb") as raw:
         st = os.fstat(raw.fileno())
-        content = content_identity(raw)["root"]
+        content = content_identity(raw, chunk_size=chunk_size)
         raw.seek(0)
         after = os.fstat(raw.fileno())
         if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (st.st_size, st.st_mtime_ns, st.st_ctime_ns):
             raise StaleSource(f"{path} changed while it was read")
         with soundfile.SoundFile(raw) as f:
-            header = {
-                "frames": f.frames,
-                "channels": f.channels,
-                "samplerate": f.samplerate,
-                "format": f.format,
-                "subtype": f.subtype,
-            }
             stamp = SourceStamp(
                 size=st.st_size,
                 mtime_ns=st.st_mtime_ns,
@@ -112,8 +119,10 @@ def _opened(path: str | os.PathLike[str]) -> Iterator[tuple[soundfile.SoundFile,
                 frames=f.frames,
                 channels=f.channels,
                 sampling_rate=f.samplerate,
-                header=value_digest("soundfile.info", header),
-                content=content,
+                header=_header(f),
+                chunk_size=chunk_size,
+                chunks=tuple(content["chunks"]),
+                content=content["root"],
             )
             yield f, stamp, st.st_ctime_ns
 
@@ -123,16 +132,17 @@ def _require_stamp(stamp: SourceStamp, current: SourceStamp, path: object) -> No
         raise StaleSource(f"{path} changed since it was opened: recorded {stamp!r}, now {current!r}")
 
 
-def stamp(path: str | os.PathLike[str]) -> SourceStamp:
+def stamp(path: str | os.PathLike[str], *, chunk_size: int = DEFAULT_CHUNK_SIZE) -> SourceStamp:
     """Open the sound file at `path`, read every byte and its header, and return its current stamp.
 
-    The stamp is remembered, so `check` of it at this path is an `os.stat`.
+    `chunk_size` is the grid its content is hashed on. The stamp is remembered, so `check` of it at this
+    path is an `os.stat`.
 
     Raises:
         StaleSource: if the file changed while it was read.
         soundfile.LibsndfileError: if the file is not a sound file.
     """
-    with _opened(path) as (_, taken, ctime_ns):
+    with _opened(path, chunk_size) as (_, taken, ctime_ns):
         pass
     _remember(path, taken, ctime_ns)
     return taken
@@ -151,35 +161,99 @@ def check(recorded: SourceStamp, path: str | os.PathLike[str]) -> None:
     ctime_ns = VERIFIED.get((os.fspath(path), recorded.canonical_digest()))
     if ctime_ns is not None:
         st = os.stat(path)
-        if (st.st_size, st.st_mtime_ns, st.st_ino, st.st_dev, st.st_ctime_ns) != (
-            recorded.size,
-            recorded.mtime_ns,
-            recorded.inode,
-            recorded.device,
-            ctime_ns,
-        ):
+        if (*_stat_fields(st), st.st_ctime_ns) != (*_stamped_fields(recorded), ctime_ns):
             raise StaleSource(f"{path} changed since it was opened: recorded {recorded!r}")
         return
-    with _opened(path) as (_, current, ctime_ns):
+    with _opened(path, recorded.chunk_size) as (_, current, ctime_ns):
         _require_stamp(recorded, current, path)
     _remember(path, recorded, ctime_ns)
 
 
+class _ChunkChecked:
+    """A read-only binary file over `fd` that serves bytes only from chunks whose digest the stamp records.
+
+    Each chunk a read touches is read whole by `os.pread`, hashed and compared before any of its bytes is
+    served; the last chunk read is kept for the reads that follow. A chunk that differs ends the read short and is
+    held in `stale`, since the decoder's callback cannot raise through it.
+    """
+
+    def __init__(self, fd: int, stamp: SourceStamp, path: object) -> None:
+        self._fd, self._stamp, self._path = fd, stamp, path
+        self._pos = 0
+        self._index = -1
+        self._chunk = b""
+        self.stale: StaleSource | None = None
+
+    def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
+        base = {os.SEEK_SET: 0, os.SEEK_CUR: self._pos, os.SEEK_END: self._stamp.size}[whence]
+        self._pos = max(base + offset, 0)
+        return self._pos
+
+    def tell(self) -> int:
+        return self._pos
+
+    def readinto(self, buffer: memoryview) -> int:
+        view = memoryview(buffer).cast("B")
+        done = 0
+        while done < len(view) and self._pos < self._stamp.size and self.stale is None:
+            index, offset = divmod(self._pos, self._stamp.chunk_size)
+            try:
+                chunk = self._verified(index)
+            except StaleSource as exc:
+                self.stale = exc
+                break
+            take = min(len(view) - done, len(chunk) - offset)
+            view[done : done + take] = chunk[offset : offset + take]
+            done += take
+            self._pos += take
+        return done
+
+    def _verified(self, index: int) -> bytes:
+        if index != self._index:
+            size = self._stamp.chunk_size
+            parts: list[bytes] = []
+            while (got := sum(map(len, parts))) < size and (part := os.pread(self._fd, size - got, index * size + got)):
+                parts.append(part)
+            chunk = b"".join(parts)
+            if chunk_digest(chunk) != self._stamp.chunks[index]:
+                raise StaleSource(f"{self._path} changed since it was opened: chunk {index} differs")
+            self._index, self._chunk = index, chunk
+        return self._chunk
+
+
 class SoundFileReader:
-    """The `SourceReader` over soundfile: every decode stamps the file again, content included."""
+    """The `SourceReader` over soundfile: a decode verifies only the content chunks it reads."""
 
     def decode(self, source: Path, stamp: SourceStamp, first: int, count: int) -> numpy.ndarray:
         """Return `(channels, count)` float32 samples from frame `first`, after checking the file still has `stamp`.
 
+        The file's stat fields and sound header are checked against `stamp`, the stamp's content against the root of
+        its chunk digests, and every chunk the decoder reads is hashed and compared with its digest before it is
+        decoded.
+
         Raises:
-            StaleSource: if the file at `source` differs from `stamp`.
+            StaleSource: if the file at `source` differs from `stamp` in its stat fields, its header or a chunk read,
+                or the stamp's content is not the root of its chunks.
         """
-        with _opened(source) as (f, current, _):
-            _require_stamp(stamp, current, source)
-            if count == 0:
-                return numpy.zeros((stamp.channels, 0), dtype=AUDIO_DTYPE)
-            f.seek(first)
-            samples = f.read(count, dtype="float32", always_2d=True)
+        fd = os.open(source, os.O_RDONLY)
+        try:
+            rooted = content_root(stamp.chunk_size, stamp.chunks) == stamp.content
+            if _stat_fields(os.fstat(fd)) != _stamped_fields(stamp) or not rooted:
+                raise StaleSource(f"{source} changed since it was opened: recorded {stamp!r}")
+            checked = _ChunkChecked(fd, stamp, source)
+            try:
+                with soundfile.SoundFile(checked) as f:
+                    if _header(f) != stamp.header:
+                        raise StaleSource(f"{source} changed since it was opened: its sound header differs")
+                    f.seek(first)
+                    samples = f.read(count, dtype="float32", always_2d=True)
+            except soundfile.LibsndfileError:
+                if checked.stale is None:
+                    raise
+            if checked.stale is not None:
+                raise checked.stale
+        finally:
+            os.close(fd)
         decoded: numpy.ndarray = samples.T
         return decoded
 

@@ -15,6 +15,8 @@ from senselab_core.kernel.identity import ModelRef, ResolvedModel
 from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver, resolve_revision
 
 WEIGHTS_FORMAT = "weights@1.0"
+VCS_DIRS = frozenset({".git", ".hg", ".svn"})
+"""The version-control metadata directories a local model's identity leaves out, at any depth."""
 
 
 class WeightsMismatch(RuntimeError):
@@ -103,7 +105,8 @@ def verify_model(model: ResolvedModel, path: Path) -> None:
 def _files_under(path: Path) -> list[Path]:
     """Return every regular file reachable under the directory `path`, sorted, named by where it sits.
 
-    Symlinks to files and to directories are followed; a file is named by its path under `path`, links unresolved.
+    Directories named in `VCS_DIRS` are skipped. Symlinks to files and to directories are followed; a file is
+    named by its path under `path`, links unresolved.
 
     Raises:
         ModelResolutionError: for an entry that is neither a regular file nor a directory (FIFO, socket,
@@ -121,6 +124,8 @@ def _files_under(path: Path) -> list[Path]:
             if stat.S_ISREG(st.st_mode):
                 files.append(here)
             elif stat.S_ISDIR(st.st_mode):
+                if entry.name in VCS_DIRS:
+                    continue
                 if (st.st_dev, st.st_ino) in holding:
                     raise ModelResolutionError(f"local model entry {here} links back to a directory holding it")
                 walk(here, holding | {(st.st_dev, st.st_ino)})
@@ -152,7 +157,8 @@ def resolve(ref: ModelRef, *, token: str | None = None, resolver: Resolver = PRO
 
     - hf: the 40-hex commit from `resolve_revision` through `resolver` (its errors propagate).
     - local: the file's `file_digest`, or `weights_identity` of every regular file reachable under the directory
-      (symlinks followed), rooted at it. Every file counts, including editor and download metadata.
+      (symlinks followed), rooted at it. Every file counts, including editor and download metadata, except those
+      under a version-control directory (`VCS_DIRS`).
     - url: the hash declared in the reference (`url:<url>#sha256=<hex>`); nothing is downloaded.
       `verify_model` checks the downloaded bytes against it at load.
 

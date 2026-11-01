@@ -18,9 +18,9 @@ from senselab_core.kernel import prov
 from senselab_core.kernel._base import Frozen
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputIdentity, ReusePolicy
-from senselab_core.kernel.results import Metric, Transcript, TranscriptNode, Trials
+from senselab_core.kernel.results import Intervals, Metric, Transcript, TranscriptNode, Trials
 from senselab_core.kernel.signals import Audio, PlainText
-from senselab_core.kernel.time import Span
+from senselab_core.kernel.time import Span, TimeAnchor
 from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime.audio_io import DECODER
 from senselab_core.runtime.call import (
@@ -74,6 +74,15 @@ TRANSCRIBE_TASK = TaskSpec(
     params=ReturnParams,
 )
 
+CLOCKED_TASK = TaskSpec(
+    name="call_test.detect",
+    version="1",
+    kind="transform",
+    inputs={"audio": "Audio"},
+    outputs={"spans": "Intervals"},
+    params=fake.EchoParams,
+)
+
 TRIALS_TASK = TaskSpec(
     name="call_test.pair",
     version="1",
@@ -100,7 +109,7 @@ def _backend(name: str, stack: str, env: Env, task: TaskSpec = TASK, worker: str
 
 
 TEST_REGISTRY = Registry()
-for _task in (TASK, AUDIO_TASK, TRANSCRIBE_TASK, TRIALS_TASK, fake.ECHO):
+for _task in (TASK, AUDIO_TASK, CLOCKED_TASK, TRANSCRIBE_TASK, TRIALS_TASK, fake.ECHO):
     TEST_REGISTRY.add_task(_task)
 TEST_REGISTRY.add_backend(_backend("fake-alpha", "alpha", Env.host()))
 TEST_REGISTRY.add_backend(_backend("fake-beta", "beta", Env.host()))
@@ -109,6 +118,7 @@ TEST_REGISTRY.add_backend(fake.FAKE)
 TEST_REGISTRY.add_backend(_backend("identity", "dsp", Env.host(), AUDIO_TASK, "backends.identity_backend_fixture"))
 TEST_REGISTRY.add_backend(_backend("fake-audio", "isolated", Env.isolated("fake"), AUDIO_TASK))
 TEST_REGISTRY.add_backend(_backend("fake-transcribe", "isolated", Env.isolated("fake"), TRANSCRIBE_TASK))
+TEST_REGISTRY.add_backend(_backend("clocked", "dsp", Env.host(), CLOCKED_TASK, "backends.clocked_backend_fixture"))
 TEST_REGISTRY.add_backend(_backend("trials", "dsp", Env.host(), TRIALS_TASK, "backends.trials_backend_fixture"))
 
 CATALOGUE = Catalogue.load(
@@ -380,3 +390,30 @@ def test_lost_commit_race_serves_the_committed_entry(tmp_path: Path) -> None:
     result = run_call(_call("race"), execution=_profile("alpha"), store=store)
     assert result.outputs == {"value": "the other writer's"} and result.reused is ReusePolicy.EXACT
     assert _executions(store) == [] and len(_activities(store)) == 1
+
+
+@pytest.mark.logic
+def test_rebound_equals_reclocked_compute(store: ResultStore, tmp_path: Path) -> None:
+    """One content under a session anchor, then standalone, gets spans on each reader's clock from one computation.
+
+    Each served result equals the one computed afresh on that reader's recording.
+    """
+    standalone = Audio.from_array(numpy.zeros(1600, dtype=numpy.float32), 16000)
+    session = Audio(groups=standalone.groups, anchor=TimeAnchor(clock_id="session-7", absolute_start_ns=5))
+
+    def detect(audio: Audio, into: ResultStore = store) -> Result:
+        call = TaskCall.model_validate({"task": CLOCKED_TASK.name, "inputs": {"audio": audio}})
+        return run_call(call, execution=_profile(), store=into)
+
+    under_session, alone, session_again = detect(session), detect(standalone), detect(session)
+    assert (under_session.reused, alone.reused is not None, session_again.reused is not None) == (None, True, True)
+    assert len(_executions(store)) == 1 and alone.key == under_session.key
+    assert alone.output_identity == under_session.output_identity
+    for served, audio, name in ((alone, standalone, "a"), (session_again, session, "b")):
+        assert served.outputs == detect(audio, ResultStore(tmp_path / name)).outputs
+    spans = [r.outputs["spans"] for r in (under_session, alone, session_again)]
+    assert [s.clock_id if isinstance(s, Intervals) else s for s in spans] == [
+        "session-7",
+        standalone.identity,
+        "session-7",
+    ]

@@ -1,8 +1,10 @@
 """Integer-nanosecond time on named clocks."""
 
+from collections.abc import Mapping
 from fractions import Fraction
-from typing import Annotated
+from typing import Annotated, TypeVar, cast
 
+import numpy
 from pydantic import Field, model_validator
 
 from senselab_core.kernel._base import (
@@ -10,6 +12,7 @@ from senselab_core.kernel._base import (
     INT64_MIN,
     FiniteFloat,
     Frozen,
+    FrozenMapping,
     Nanoseconds,
     NonEmptyStr,
     NonNegativeNs,
@@ -67,3 +70,54 @@ class Span(Frozen):
         if self.end_ns < self.start_ns:
             raise ValueError(f"span ends before it starts: {self.start_ns} > {self.end_ns}")
         return self
+
+
+T = TypeVar("T")
+
+
+def rebind(output: T, stored_anchor: TimeAnchor, reader_anchor: TimeAnchor, timemap: TimeMap) -> T:
+    """Return `output` with every clock-relative field on the stored anchor's clock moved to the reader's.
+
+    Walking kernel values, tuples and mappings, a value whose `clock_id` is `stored_anchor.clock_id` gets the
+    reader's `clock_id` and each of its `*_ns` fields (integers or integer arrays) mapped by `timemap`; a
+    `TimeAnchor` naming the stored clock becomes `reader_anchor`. Anything else is returned as it is.
+
+    Raises:
+        ValueError: if `timemap` does not map the stored clock to the reader's, or a `TimeAnchor` is to be
+            re-bound through a map that moves time.
+    """
+    source, target = stored_anchor.clock_id, reader_anchor.clock_id
+    if (timemap.source, timemap.target) != (source, target):
+        raise ValueError(f"timemap maps {timemap.source!r} to {timemap.target!r}, not {source!r} to {target!r}")
+    if source == target and timemap.offset_ns == 0 and timemap.drift_ppm == 0:
+        return output
+    return cast(T, _rebound(output, reader_anchor, timemap))
+
+
+def _rebound(value: object, anchor: TimeAnchor, timemap: TimeMap) -> object:
+    if isinstance(value, TimeAnchor):
+        if value.clock_id == timemap.source and (timemap.offset_ns != 0 or timemap.drift_ppm != 0):
+            raise ValueError("a recording's anchor re-binds only through a map that keeps time")
+        return anchor if value.clock_id == timemap.source else value
+    if isinstance(value, Frozen):
+        fields = {name: getattr(value, name) for name in type(value).model_fields}
+        moved = {name: _rebound(v, anchor, timemap) for name, v in fields.items()}
+        if fields.get("clock_id") == timemap.source:
+            moved = {name: _mapped(v, timemap) if name.endswith("_ns") else v for name, v in moved.items()}
+            moved["clock_id"] = timemap.target
+        return value if all(moved[n] is fields[n] for n in fields) else type(value).model_validate(moved)
+    if isinstance(value, tuple | Mapping):
+        items = dict(value.items() if isinstance(value, Mapping) else enumerate(value))
+        moved = {k: _rebound(v, anchor, timemap) for k, v in items.items()}
+        if all(moved[k] is items[k] for k in items):
+            return value
+        return FrozenMapping(moved) if isinstance(value, Mapping) else tuple(moved.values())
+    return value
+
+
+def _mapped(times: object, timemap: TimeMap) -> object:
+    if isinstance(times, numpy.ndarray):
+        return numpy.array([timemap.map(int(t)) for t in times], dtype=numpy.int64)
+    if isinstance(times, int):
+        return timemap.map(times)
+    return times

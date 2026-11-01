@@ -160,6 +160,24 @@ def test_local_identity_covers_files_under_directory_links(tmp_path: Path, linke
     assert keys["a"] == keys["c"]
 
 
+@pytest.mark.logic
+def test_vcs_dirs_do_not_change_identity(tmp_path: Path) -> None:
+    """VCS metadata directories at any depth leave the identity unchanged; any other dotfile or directory is content."""
+    model = tmp_path / "m"
+    (model / "sub").mkdir(parents=True)
+    (model / "w.bin").write_bytes(b"w")
+    before = resolve(ModelRef.parse(f"local:{model}")).identity
+    for where in (model, model / "sub"):
+        for vcs in (".git", ".hg", ".svn"):
+            (where / vcs / "objects").mkdir(parents=True)
+            (where / vcs / "objects" / "pack").write_bytes(os.urandom(8))
+    assert resolve(ModelRef.parse(f"local:{model}")).identity == before
+    for incidental in (model / ".gitattributes", model / ".github" / "x"):
+        incidental.parent.mkdir(exist_ok=True)
+        incidental.write_bytes(b"x")
+        assert resolve(ModelRef.parse(f"local:{model}")).identity != before
+
+
 def _plant_fifo(at: Path) -> None:
     os.mkfifo(at)
 

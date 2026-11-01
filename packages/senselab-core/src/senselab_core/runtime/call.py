@@ -10,7 +10,7 @@ import importlib
 import platform
 import sysconfig
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from os import PathLike
@@ -35,6 +35,7 @@ from senselab_core.kernel.identity import (
     ReusePolicy,
 )
 from senselab_core.kernel.signals import PlainText, Recording
+from senselab_core.kernel.time import TimeAnchor, TimeMap, rebind
 from senselab_core.kernel.wire import from_wire_form, wire_form
 from senselab_core.runtime.audio_io import DECODER, READER, open_audio
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
@@ -197,7 +198,9 @@ def run_call(
     `senselab:modelSource`, recording the key, the context and the profile's digest; a store hit writes none (the
     store records its reuse). An execution whose `put` finds different outputs another writer committed first is
     served those, as a reuse, and writes no execution activity. An output on a port declared as a kernel type is
-    stored as its wire form and returned as the kernel value, read by `from_wire_form`. `None` means the packaged
+    stored as its wire form and returned as the kernel value, read by `from_wire_form`. Outputs are stored on the
+    clocks their recording inputs' identities name and served re-bound (`rebind`) to the caller's anchors, so the key
+    holds no anchor and one entry serves one content under every anchor. `None` means the packaged
     default: the `laptop` profile, `RunConfig()` and the store under `cache_root()/results`.
 
     Raises:
@@ -236,24 +239,51 @@ def run_call(
     )
     identities = {port: identity for port, (identity, _, _) in bound.items()}
     key = build_key(Call(task=spec, params=call.params, inputs=identities, model=model), placement, context)
+    anchors = _anchors(value for _, value, _ in bound.values())
     hit = store.get(key, context, run.reuse)
     if hit is not None:
-        return Result(_decoded(spec, hit.outputs), hit.output_identity, key, hit.context, placement, hit.policy_used)
+        outputs = _rebound(_decoded(spec, hit.outputs), anchors)
+        return Result(outputs, hit.output_identity, key, hit.context, placement, hit.policy_used)
     started = datetime.now(timezone.utc)
-    outputs = _execute(call, placement, env, model, {port: value for port, (_, value, _) in bound.items()}, profile)
-    decoded = _decoded(spec, outputs)
+    computed = _execute(call, placement, env, model, {port: value for port, (_, value, _) in bound.items()}, profile)
+    decoded = _decoded(spec, computed)
+    on_identity_clocks = _rebound(decoded, [(reader, stored) for stored, reader in anchors])
+    outputs = {
+        p: wire_form(v, READER) if isinstance(v, Frozen) and v is not decoded[p] else computed[p]
+        for p, v in on_identity_clocks.items()
+    }
     output_identity = store.put(key, outputs, context)
     if output_identity != store_output_identity(outputs):
         stored = store.get(key, context, ReusePolicy.EXACT)
         if stored is None:
             raise RuntimeError(f"the entry another writer committed for {key.task!r} could not be read back")
-        stored_outputs = _decoded(spec, stored.outputs)
+        stored_outputs = _rebound(_decoded(spec, stored.outputs), anchors)
         return Result(stored_outputs, stored.output_identity, key, stored.context, placement, stored.policy_used)
     store.provenance.add(
         *(kprov.entity(i, core_vocabulary()) for i in identities.values()),
         *_execution(key, context, profile, identities, output_identity, model, started),
     )
     return Result(decoded, output_identity, key, context, placement, None)
+
+
+def _anchors(values: Iterable[object]) -> list[tuple[TimeAnchor, TimeAnchor]]:
+    """Return, for each recording input not on the clock its identity names, that clock's anchor and its own.
+
+    A store holds outputs on the identity clocks of their inputs, so one entry serves every anchor of one content.
+    """
+    return [
+        (TimeAnchor(clock_id=v.identity, absolute_start_ns=None), v.anchor)
+        for v in values
+        if isinstance(v, Recording) and v.anchor.clock_id != v.identity
+    ]
+
+
+def _rebound(outputs: dict[str, object], anchors: list[tuple[TimeAnchor, TimeAnchor]]) -> dict[str, object]:
+    """Return `outputs` re-bound from each pair's first anchor to its second, the two naming one content's start."""
+    for stored, reader in anchors:
+        timemap = TimeMap(source=stored.clock_id, target=reader.clock_id, offset_ns=0)
+        outputs = {port: rebind(value, stored, reader, timemap) for port, value in outputs.items()}
+    return outputs
 
 
 def _resolve_model(

@@ -296,6 +296,8 @@ def _stamp(frames: int = 8, channels: int = 2) -> SourceStamp:
         channels=channels,
         sampling_rate=RATE,
         header="h",
+        chunk_size=4,
+        chunks=("d" * 64,),
         content="c" * 64,
     )
 

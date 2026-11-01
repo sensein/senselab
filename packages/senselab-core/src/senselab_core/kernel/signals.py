@@ -70,14 +70,18 @@ class StaleSource(RuntimeError):
     """A source file no longer matches the stamp recorded when it was opened."""
 
 
+Hex64 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+
+
 class SourceStamp(Frozen):
     """What a source file was when a reader opened it: its stat fields, a digest of its sound header, and its content.
 
     `header` is `value_digest("soundfile.info", {frames, channels, samplerate, format, subtype})`;
     `frames`, `channels` and `sampling_rate` repeat the header fields a group's layout is checked against.
-    `content` is the root of the file's content identity (`content_identity`), taken over every byte
-    when the stamp is taken; it is the identity root of a recording of that file. Stamps are taken and
-    checked by a `SourceReader` (`senselab_core.runtime.audio_io`).
+    `chunks` are the sha256 of each consecutive `chunk_size`-byte chunk of the file and `content` their root, as
+    `content_identity` gives them; `content` is the identity root of a recording of that file. A windowed read
+    verifies only the chunks it touches. Stamps are taken and checked by a `SourceReader`
+    (`senselab_core.runtime.audio_io`).
     """
 
     size: int = Field(ge=0)
@@ -88,7 +92,15 @@ class SourceStamp(Frozen):
     channels: int = Field(ge=1)
     sampling_rate: Rate
     header: NonEmptyStr
-    content: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+    chunk_size: int = Field(ge=1)
+    chunks: tuple[Hex64, ...]
+    content: Hex64
+
+    @model_validator(mode="after")
+    def _one_digest_per_chunk(self) -> "SourceStamp":
+        if len(self.chunks) != -(-self.size // self.chunk_size):
+            raise ValueError(f"{len(self.chunks)} chunk digests for {self.size} bytes in {self.chunk_size}-byte chunks")
+        return self
 
 
 class SourceReader(Protocol):

@@ -32,7 +32,7 @@ _FORMATTED: tuple[type[Formatted], ...] = (
     Trials,
     Metric,
 )
-_SIGNALS: dict[str, type[Frozen]] = {"recording@1.0": Recording, "audio@1.0": Audio, "regular-group@1.0": RegularGroup}
+_SIGNALS: dict[str, type[Frozen]] = {"recording@2.0": Recording, "audio@2.0": Audio, "regular-group@2.0": RegularGroup}
 WIRE_FORMATS: Mapping[str, type[Frozen]] = FrozenMapping(_SIGNALS | {_tag(t): t for t in _FORMATTED})
 """The wire format of every kernel value a port may carry, by tag; a `Formatted` type's tag is its own format."""
 
