@@ -7,6 +7,7 @@ env_roots:
   server: ~/.cache/senselab/servers
 envs:
   lease_stale_after_s: 1200
+  server_start_margin_s: 60
   torch_index:
 model_sources:
 model_cache_budget_bytes:
@@ -28,7 +29,10 @@ derivations:
     ORCD (362.6 s GPU node, 579.7 s and 590 s CPU node, n=2 per host; specs/20260907-shared-lock-heartbeat-inf/
     stampede-timeout-and-identity-file.md), padded because two samples bound no population. A lease younger
     than that is a build in progress and is waited on. No torch index override: the CUDA index is probed
-    from the host. A site whose probe is wrong sets torch_index.
+    from the host. A site whose probe is wrong sets torch_index. server_start_margin_s 60: a server start
+    lease is taken before the server is launched and its health deadline begins, so its stale bound is the
+    start-up timeout plus this margin. Not measured: the launch (two process spawns) is sub-second, and the
+    margin is padded for the storage clock's mtime granularity and for a loaded host.
   model_sources: >-
     Null: the hub organisations of the catalogue entries. A site that mirrors or restricts models lists
     organisations here.

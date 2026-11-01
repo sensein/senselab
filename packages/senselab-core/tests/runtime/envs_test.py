@@ -37,7 +37,7 @@ pytestmark = pytest.mark.logic
 FAKE_UV = Uv((sys.executable, str(Path(__file__).with_name("fake_uv_fixture.py"))))
 CUDA_12_8 = HostCuda((12, 8), "nvidia-smi")
 PROFILE_INDEX = "https://mirror.example/whl/cu126"
-SETTINGS = Envs(lease_stale_after_s=30.0)
+SETTINGS = Envs(lease_stale_after_s=30.0, server_start_margin_s=1.0)
 
 
 def _lock(
@@ -106,7 +106,9 @@ def test_cuda_index_routing(smi: str | None, nvcc: str | None, ceiling: tuple[in
 def test_profile_torch_index_overrides_probe(tmp_path: Path, uv_log: Path) -> None:
     """The profile's `envs.torch_index` replaces the probed index, and torch installs from it."""
     assert pick_torch_index(CUDA_12_8, override=PROFILE_INDEX) == TorchIndex(PROFILE_INDEX, "profile", "profile")
-    handle = _ensure(tmp_path, _lock(tmp_path), Envs(lease_stale_after_s=30.0, torch_index=PROFILE_INDEX))
+    handle = _ensure(
+        tmp_path, _lock(tmp_path), Envs(lease_stale_after_s=30.0, server_start_margin_s=1.0, torch_index=PROFILE_INDEX)
+    )
     (stage_one,) = [c for c in _calls(uv_log) if "--index-url" in c]
     assert stage_one[stage_one.index("--index-url") + 1] == PROFILE_INDEX
     assert handle.torch_index == PROFILE_INDEX
@@ -249,11 +251,11 @@ def test_profile_lease_bound_breaks_an_expired_build_lease(tmp_path: Path, uv_lo
     assert ExecutionProfile.load("orcd").envs.lease_stale_after_s == ExecutionProfile.load().envs.lease_stale_after_s
     _plant_lease(tmp_path, age_s=120.0)
     started = time.monotonic()
-    _ensure(tmp_path, _lock(tmp_path), Envs(lease_stale_after_s=60.0))
+    _ensure(tmp_path, _lock(tmp_path), Envs(lease_stale_after_s=60.0, server_start_margin_s=1.0))
     assert time.monotonic() - started < 20  # noqa: PLR2004 - far below the 60 s a live lease would hold it
     lease = _plant_lease(tmp_path, age_s=0.0)
     started = time.monotonic()
-    _ensure(tmp_path, _lock(tmp_path, body="scipy==1.14.0\n"), Envs(lease_stale_after_s=1.0))
+    _ensure(tmp_path, _lock(tmp_path, body="scipy==1.14.0\n"), Envs(lease_stale_after_s=1.0, server_start_margin_s=1.0))
     assert time.monotonic() - started >= 0.9  # noqa: PLR2004 - the young lease was held until it aged past 1 s
     assert not lease.exists()
 

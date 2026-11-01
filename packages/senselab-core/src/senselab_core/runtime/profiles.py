@@ -51,10 +51,12 @@ class Envs(Frozen):
 
     Attributes:
         lease_stale_after_s: Seconds after which another process breaks an env build's lease.
+        server_start_margin_s: Seconds a server start lease outlives the start-up timeout before it is broken.
         torch_index: Replaces the probed CUDA wheel index when set.
     """
 
     lease_stale_after_s: Annotated[float, Field(gt=0)]
+    server_start_margin_s: Annotated[float, Field(gt=0)]
     torch_index: NonEmptyStr | None = None
 
 

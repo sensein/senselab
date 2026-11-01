@@ -50,13 +50,8 @@ URL_SCHEMES = ("http", "https", "data", "file")
 """Schemes an image or video part may name directly; anything else is read as a local path."""
 
 START_ERROR_KINDS = ("exited", "timeout", "version", "model")
-"""Why a server failed to start.
-
-- ``exited``: it exited before it was healthy (a KV cache that cannot hold ``max_model_len``, or a port taken
-  between `_free_port` releasing it and the server binding it).
-- ``timeout``: it was not healthy in time.
-- ``version``: its ``/version`` or ``/v1/models`` probe failed (an HTTP error, or a body of the wrong shape).
-- ``model``: it serves another model."""
+"""Why a server failed to start: it exited before it was healthy, was not healthy in time, its ``/version`` or
+``/v1/models`` probe failed, or it serves another model."""
 
 ERROR_DETAIL_CHARS = 300
 """The most characters of a server's error message a raised error keeps."""
@@ -82,9 +77,7 @@ STOP_TIMEOUT_S = 60.0
 
 _NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-# Runs as ``python -c _WATCHDOG <owner pid> <server group>`` in a session of its own, so a signal to the owner's
-# group does not reach it. It kills the server group once the owner is gone: on the SIGTERM PR_SET_PDEATHSIG sends
-# when the owner dies (Linux), or when its parent is no longer the owner. A SIGTERM while the owner lives is ignored.
+# Run as ``python -c _WATCHDOG <owner pid> <server group>`` in its own session; kills the group once the owner is gone.
 _WATCHDOG = r"""
 import ctypes, os, signal, sys, time
 
@@ -250,6 +243,7 @@ class VllmServer:
         *,
         start_lock_dir: Path,
         startup_timeout_s: float,
+        start_margin_s: float,
         devices: Sequence[int | str] | None = None,
         log_dir: Path | None = None,
     ) -> None:
@@ -260,8 +254,9 @@ class VllmServer:
             model: The model to serve, pinned to a hub commit or a local weights digest.
             settings: The server settings `server_args` reads.
             start_lock_dir: Where the start lease lives.
-            startup_timeout_s: Seconds the server has to become healthy once the lease is held; also the lease's
-                stale bound.
+            startup_timeout_s: Seconds the server has to become healthy once the lease is held.
+            start_margin_s: The profile's `envs.server_start_margin_s`; the lease is stale after
+                `startup_timeout_s` plus this.
             devices: The server's visible devices; when None the inherited environment is left alone and the lease
                 is named by the inherited ``CUDA_VISIBLE_DEVICES`` (``all`` if unset).
             log_dir: Where the server's output goes, one mode-600 file per server; the owner's stderr when None.
@@ -277,6 +272,7 @@ class VllmServer:
         self.devices = None if devices is None else [str(device) for device in devices]
         self.start_lock_dir = Path(start_lock_dir)
         self.startup_timeout_s = float(startup_timeout_s)
+        self.start_margin_s = float(start_margin_s)
         self.log_dir = log_dir
         self.url: str | None = None
         self.attestation: Attestation | None = None
@@ -309,7 +305,8 @@ class VllmServer:
         """
         self.start_lock_dir.mkdir(parents=True, exist_ok=True)
         try:
-            with Lease(self.lock_path, stale_after=self.startup_timeout_s, timeout=self.startup_timeout_s + TIMEOUT_S):
+            stale_after = self.startup_timeout_s + self.start_margin_s
+            with Lease(self.lock_path, stale_after=stale_after, timeout=stale_after + TIMEOUT_S):
                 self._launch()
                 self._await_health()
             self.attestation = self._attest()
@@ -440,11 +437,19 @@ def _path_label(path: str | Path) -> str:
     return f"a {Path(path).suffix!r} file"
 
 
+def _read(path: Path) -> str:
+    """Return the file's bytes as base64; an unreadable file raises `ValueError` naming only its suffix."""
+    try:
+        return base64.b64encode(path.read_bytes()).decode()
+    except OSError as exc:
+        raise ValueError(f"cannot read {_path_label(path)}: {exc.strerror}") from None
+
+
 def _data_url(path: Path) -> str:
     mime = mimetypes.guess_type(path.name)[0]
     if mime is None:
         raise ValueError(f"cannot tell the media type of {_path_label(path)} from its suffix")
-    return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
+    return f"data:{mime};base64,{_read(path)}"
 
 
 def content_part(kind: str, source: str | Path, *, local_media_dir: str | Path | None = None) -> dict[str, Any]:
@@ -463,8 +468,8 @@ def content_part(kind: str, source: str | Path, *, local_media_dir: str | Path |
         suffix.
 
     Raises:
-        ValueError: An unknown kind, an audio URL, a file outside `local_media_dir`, or a suffix with no known media
-            type.
+        ValueError: An unknown kind, an audio URL, a file outside `local_media_dir`, a suffix with no known media
+            type, or an unreadable file (named by its suffix only).
     """
     if kind == "text":
         return {"type": "text", "text": str(source)}
@@ -477,8 +482,10 @@ def content_part(kind: str, source: str | Path, *, local_media_dir: str | Path |
     else:
         path = Path(source)
         if kind == "audio":
-            data = base64.b64encode(path.read_bytes()).decode()
-            return {"type": "input_audio", "input_audio": {"data": data, "format": path.suffix.lstrip(".").lower()}}
+            return {
+                "type": "input_audio",
+                "input_audio": {"data": _read(path), "format": path.suffix.lstrip(".").lower()},
+            }
         if local_media_dir is None:
             url = _data_url(path)
         else:

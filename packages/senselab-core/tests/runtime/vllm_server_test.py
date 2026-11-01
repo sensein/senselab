@@ -42,7 +42,8 @@ from senselab_core.kernel.identity import ModelRef, ResolvedModel
 python, locks, sha, settings = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 env = EnvHandle(python=python, python_version="3.12", lock_sha="l", wheel_set="w", torch_index=None)
 model = ResolvedModel(ref=ModelRef.parse(f"org/model@{sha}"), identity=sha)
-with VllmServer(env, model, __import__("json").loads(settings), start_lock_dir=Path(locks), startup_timeout_s=30):
+kwargs = {"start_lock_dir": Path(locks), "startup_timeout_s": 30, "start_margin_s": 1}
+with VllmServer(env, model, __import__("json").loads(settings), **kwargs):
     print("up", flush=True)
     time.sleep(600)
 """
@@ -68,7 +69,9 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> EnvHandle:
 
 
 def _server(env: EnvHandle, tmp_path: Path, settings: dict[str, Any] = SETTINGS) -> vs.VllmServer:
-    return vs.VllmServer(env, MODEL, settings, start_lock_dir=tmp_path / "locks", startup_timeout_s=30)
+    return vs.VllmServer(
+        env, MODEL, settings, start_lock_dir=tmp_path / "locks", startup_timeout_s=30, start_margin_s=1
+    )
 
 
 def _records(tmp_path: Path) -> list[dict[str, Any]]:
@@ -176,7 +179,7 @@ def test_start_failure_is_typed_and_stops(
 def test_url_or_unpinned_model_refused(env: EnvHandle, tmp_path: Path, model: ResolvedModel) -> None:
     """Only a pinned hub or local model is served."""
     with pytest.raises(ValueError, match="pinned|url"):
-        vs.VllmServer(env, model, SETTINGS, start_lock_dir=tmp_path, startup_timeout_s=1)
+        vs.VllmServer(env, model, SETTINGS, start_lock_dir=tmp_path, startup_timeout_s=1, start_margin_s=1)
 
 
 @pytest.mark.parametrize("settings", [{k: v for k, v in SETTINGS.items() if k != "max_num_seqs"}, {**SETTINGS, "x": 1}])
@@ -198,9 +201,19 @@ def test_local_model_errors_name_no_path(env: EnvHandle, tmp_path: Path, monkeyp
     weights = tmp_path / "private-weights"
     model = ResolvedModel(ref=ModelRef.parse(f"local:{weights}"), identity="c" * 64)
     monkeypatch.setenv("FAKE_VLLM_ROOT", "elsewhere")
-    server = vs.VllmServer(env, model, SETTINGS, start_lock_dir=tmp_path / "locks", startup_timeout_s=30)
+    server = vs.VllmServer(
+        env, model, SETTINGS, start_lock_dir=tmp_path / "locks", startup_timeout_s=30, start_margin_s=1
+    )
     with pytest.raises(vs.VllmStartError) as raised:
         server.__enter__()
     assert "private-weights" not in str(raised.value) and "c" * 12 in str(raised.value)
     (record,) = _records(tmp_path)
     assert record["argv"][1] == str(weights) and not any(a.startswith("--revision") for a in record["argv"])
+
+
+@pytest.mark.parametrize("kind", ["audio", "image"])
+def test_unreadable_media_error_names_no_path(tmp_path: Path, kind: str) -> None:
+    """A missing media file is refused by its suffix, never its path."""
+    with pytest.raises(ValueError, match="cannot read a '.wav' file") as raised:
+        vs.content_part(kind, tmp_path / "secret-name.wav")
+    assert "secret-name" not in str(raised.value) and raised.value.__cause__ is None

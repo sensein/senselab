@@ -38,7 +38,13 @@ def test_vllm_server_attests_the_pii_model_and_a_restart_with_new_config_changes
     for seqs in (2, 4):
         settings = {**SETTINGS, "max_num_seqs": seqs}
         with VllmServer(
-            env, model, settings, start_lock_dir=tmp_path, startup_timeout_s=STARTUP_TIMEOUT_S, log_dir=tmp_path
+            env,
+            model,
+            settings,
+            start_lock_dir=tmp_path,
+            startup_timeout_s=STARTUP_TIMEOUT_S,
+            start_margin_s=profile.envs.server_start_margin_s,
+            log_dir=tmp_path,
         ) as server:
             reply = server.chat([{"role": "user", "content": "Say ok."}], sampling={"max_tokens": 8, "temperature": 0})
             assert reply.attestation == server.attestation

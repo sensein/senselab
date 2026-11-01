@@ -40,7 +40,11 @@ def _items() -> list[dict[str, Any]]:
 def test_envs_crisperwhisper_lock_builds_and_round_trips_every_wire_type(tmp_path: Path) -> None:
     """The lock builds under `ensure_env`; scalars, containers and every array dtype survive the env's worker."""
     handle = ensure_env(
-        Env.isolated("crisperwhisper"), LOCK, tmp_path / "envs", settings=Envs(lease_stale_after_s=600), uv=Uv.find()
+        Env.isolated("crisperwhisper"),
+        LOCK,
+        tmp_path / "envs",
+        settings=Envs(lease_stale_after_s=600, server_start_margin_s=60),
+        uv=Uv.find(),
     )
     assert handle.python_version and handle.lock_sha and handle.wheel_set
     items = _items()
