@@ -196,15 +196,32 @@ class WrongKindError(ValueError):
         self.found = found
 
 
+NAME_MAX = 255
+"""The most bytes of one path component: POSIX `NAME_MAX` on ext4, XFS, APFS and NFS."""
+
+
 def path_component(name: str) -> str:
-    """Return `name` if it is one path component: non-empty, not `.` or `..`, with no slash, backslash or NUL.
+    """Return `name` if it is one path component: non-empty, not `.` or `..`, no slash, backslash or NUL.
+
+    It is at most `NAME_MAX` bytes in the filesystem encoding.
 
     Raises:
         ValueError: otherwise.
     """
     if not isinstance(name, str) or name in ("", ".", "..") or any(c in name for c in "/\\\x00"):
         raise ValueError(f"{name!r} is not a single path component")
+    if len(os.fsencode(name)) > NAME_MAX:
+        raise ValueError(f"{name[:32]!r}... is longer than {NAME_MAX} bytes, the most one path component can hold")
     return name
+
+
+def temporary_name(name: str) -> str:
+    """Return a fresh `TEMPORARY_NAME` for a file being written in place of `name`.
+
+    Raises:
+        ValueError: the temporary would not be one path component.
+    """
+    return path_component(f".{name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
 
 
 def owner_remedy(path: Path) -> str:
@@ -624,7 +641,7 @@ class StorageDir:
             OSError: if the temporary cannot be written or renamed.
         """
         _owned(name, grammar)
-        temporary = f".{name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
+        temporary = temporary_name(name)
         with _Naming(self.path / temporary):
             descriptor = os.open(temporary, _NEW_FILE_FLAGS, 0o600, dir_fd=self.fd)
         try:
@@ -752,6 +769,7 @@ __all__ = [
     "owner_remedy",
     "path_component",
     "CLOCK_NAME",
+    "NAME_MAX",
     "TEMPORARY_NAME",
     "STAGING_DIR_MODE",
     "STAGING_FILE_MODE",
@@ -765,5 +783,6 @@ __all__ = [
     "set_mode",
     "shared_dir_mode",
     "storage_fault",
+    "temporary_name",
     "write_atomically",
 ]

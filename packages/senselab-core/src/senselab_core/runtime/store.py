@@ -184,19 +184,23 @@ def _require_directory(entry: Path) -> None:
         raise CorruptEntryError(f"corrupt store entry {entry}: not a directory")
 
 
+def _open_entry(entry: Path) -> StorageDir:
+    """Open the entry directory `entry` unfollowed; a gone entry, or anything but a directory, is corrupt."""
+    try:
+        return StorageDir.open_unfollowed(entry)
+    except OSError as err:
+        if err.errno not in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
+            raise
+        raise CorruptEntryError(f"corrupt store entry {entry}: it is gone or not a directory") from err
+
+
 def _read_member(entry: Path, name: str) -> bytes:
     """Return the bytes of the regular file `entry/name`, read through the entry's descriptor.
 
     The member is neither followed nor waited on; anything but a regular file there, or a gone entry,
     makes the entry corrupt.
     """
-    try:
-        directory = StorageDir.open_unfollowed(entry)
-    except OSError as err:
-        if err.errno not in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
-            raise
-        raise CorruptEntryError(f"corrupt store entry {entry}: it is gone or not a directory") from err
-    with directory:
+    with _open_entry(entry) as directory:
         try:
             data = directory.read_regular(name)
         except WrongKindError as err:
@@ -206,25 +210,40 @@ def _read_member(entry: Path, name: str) -> bytes:
     return data
 
 
-def _decode(value: object, entry: Path, *, load: bool = True) -> object:
-    """Return `value` with each array reference verified against its file and, with `load`, read as that array."""
+def _present(entry: Path, name: str, size: int | None) -> None:
+    """Require `entry/name` to be a regular file, of `size` bytes when `size` is given, without reading it."""
+    with _open_entry(entry) as directory:
+        st = directory.lstat(name)
+    if st is None or not stat.S_ISREG(st.st_mode):
+        raise CorruptEntryError(f"corrupt store entry {entry}: {name} is missing or not a regular file")
+    if size is not None and st.st_size != size:
+        raise CorruptEntryError(f"corrupt store entry {entry}: {name} holds {st.st_size} bytes, not {size}")
+
+
+def _decode(value: object, entry: Path, sizes: Mapping[str, int] | None = None) -> object:
+    """Return `value` with each array reference verified against its file and read as that array.
+
+    With `sizes` (the byte counts of arrays the caller holds, by sha256), each reference is instead kept
+    as it is and only its recorded file checked, by `_present`: a regular file, of the held size if any.
+    """
     if isinstance(value, dict):
         if set(value) == {ARRAY_TAG}:
             sha = value[ARRAY_TAG]
             if not isinstance(sha, str) or not SHA256_HEX.fullmatch(sha):
                 raise CorruptEntryError(f"corrupt store entry {entry}: array reference {sha!r} is not a sha256")
+            if sizes is not None:
+                _present(entry, f"{sha}.npy", sizes.get(sha))
+                return value
             data = _read_member(entry, f"{sha}.npy")
             if _raw_digest.bytes_digest("npy@1", data) != sha:
                 raise CorruptEntryError(f"corrupt store entry {entry}: {sha}.npy does not hash to its name")
-            if not load:
-                return value
             try:
                 return numpy.load(io.BytesIO(data), allow_pickle=False)
             except OSError as err:
                 raise CorruptEntryError(f"corrupt store entry {entry}: {sha}.npy is not an array: {err}") from err
-        return {k: _decode(v, entry, load=load) for k, v in value.items()}
+        return {k: _decode(v, entry, sizes) for k, v in value.items()}
     if isinstance(value, list):
-        return [_decode(v, entry, load=load) for v in value]
+        return [_decode(v, entry, sizes) for v in value]
     return value
 
 
@@ -232,10 +251,6 @@ def _equivalence_digest(table: Equivalence) -> str:
     """Return the `value_digest` of an equivalence table, its classes as sets."""
     fields = {backend: {name: set(members) for name, members in classes.items()} for backend, classes in table.items()}
     return value_digest("equivalence", {"classes": fields})
-
-
-def _write_synced(directory: StorageDir, name: str, data: bytes, mode: int) -> None:
-    directory.write_new(name, data, mode, grammar=MEMBER_NAME)
 
 
 def _read_object(entry: Path, name: str, fmt: str) -> dict[str, Any]:
@@ -320,14 +335,14 @@ def _read_result(
     digest: str,
     fingerprint: str,
     context: ExecutionContext | None = None,
-    load: bool = True,
+    sizes: Mapping[str, int] | None = None,
 ) -> tuple[str, dict[str, object], ExecutionContext]:
     """Return the output identity, decoded outputs and context of the entry at `entry`.
 
     The entry must be bound (`_stored_address`) to key digest `digest` and context fingerprint
     `fingerprint`, its outputs must hash to their output identity, and every array file must hash to its name.
-    `context` is the entry's context when the caller has already read it. Without `load`, array references
-    are verified and returned as references, not read as arrays.
+    `context` is the entry's context when the caller has already read it. With `sizes`, array references are
+    checked by `_present` and returned as references, not read (`_decode`).
 
     Raises:
         CorruptEntryError: the entry is gone or fails verification; `MisfiledEntryError` when it
@@ -341,7 +356,7 @@ def _read_result(
         tree, identity = record["outputs"], record["output_identity"]
         if not isinstance(identity, str) or _tree_identity(tree) != identity:
             raise CorruptEntryError(f"corrupt store entry {entry}: outputs do not hash to their output identity")
-        outputs = _decode(tree, entry, load=load)
+        outputs = _decode(tree, entry, sizes)
         if not isinstance(outputs, dict):
             raise CorruptEntryError(f"corrupt store entry {entry}: outputs are not an object")
         return identity, outputs, stored
@@ -375,8 +390,11 @@ class _StoreEntryFormat:
 STORE_ENTRY = _StoreEntryFormat()
 
 
-def _committed_identity(entry: Path, *, digest: str, fingerprint: str) -> str | None:
-    """Return the output identity of the entry at `entry`, None if nothing is there; every file is verified.
+def _committed_identity(entry: Path, *, digest: str, fingerprint: str, arrays: Mapping[str, bytes]) -> str | None:
+    """Return the output identity of the entry at `entry`, None if nothing is there.
+
+    Its JSON members are verified and bound to the address; each array it records is checked by the digest
+    recorded as its name, not read: a regular file, of the size of the caller's array of that digest if any.
 
     Raises:
         CorruptEntryError: something is at `entry` that is not a valid entry for this address.
@@ -388,7 +406,8 @@ def _committed_identity(entry: Path, *, digest: str, fingerprint: str) -> str | 
         return None
     except OSError as err:
         raise storage_fault(err, entry) from err
-    return _read_result(entry, digest=digest, fingerprint=fingerprint, load=False)[0]
+    sizes = {sha: len(data) for sha, data in arrays.items()}
+    return _read_result(entry, digest=digest, fingerprint=fingerprint, sizes=sizes)[0]
 
 
 def _commit(  # noqa: PLR0913 - what the entry holds, where it is staged and placed, and the policy
@@ -413,12 +432,12 @@ def _commit(  # noqa: PLR0913 - what the entry holds, where it is staged and pla
     try:
         with stage as staging:
             for sha, data in arrays.items():
-                _write_synced(staging, f"{sha}.npy", data, file_mode)
-            _write_synced(
-                staging,
+                staging.write_new(f"{sha}.npy", data, file_mode, grammar=MEMBER_NAME)
+            staging.write_new(
                 "context.json",
                 jcs_dumps({"format": CONTEXT_FORMAT, **context.model_dump(mode="json")}),
                 file_mode,
+                grammar=MEMBER_NAME,
             )
             result = {
                 "format": RESULT_FORMAT,
@@ -428,7 +447,7 @@ def _commit(  # noqa: PLR0913 - what the entry holds, where it is staged and pla
                 "output_identity": identity,
                 "outputs": tree,
             }
-            _write_synced(staging, "result.json", jcs_dumps(result), file_mode)
+            staging.write_new("result.json", jcs_dumps(result), file_mode, grammar=MEMBER_NAME)
             staging.fsync()
             try:
                 staging_root.rename(stage.name, parent, name, grammar=FINGERPRINT_NAME)
@@ -768,9 +787,11 @@ class ResultStore:
         Outputs are stored as JCS canonicalises them: `1.0` is stored as `1`, strings are
         NFC-normalised and tuples become lists, and the output identity is taken over that form.
         If a valid entry for `key` and `context` is already committed, nothing is written and that
-        entry's identity is returned, which may differ from the identity of `outputs`; every file of
-        it, arrays included, is verified first. Anything else at the entry's path is quarantined and
-        replaced, as is anything of the wrong kind at a directory of the store on the way to it.
+        entry's identity is returned, which may differ from the identity of `outputs`. Its JSON members
+        are verified first, and each array it records must be a regular file named by its digest, of the
+        size of this put's array of that digest if there is one; arrays are not read (a `get` reads and
+        hashes them). Anything else at the entry's path is quarantined and replaced, as is anything of the
+        wrong kind at a directory of the store on the way to it.
         Either way one provenance activity is appended.
 
         Raises:
@@ -805,7 +826,7 @@ class ResultStore:
         entry = parent.path / f
         for _ in range(COMMIT_ATTEMPTS):
             try:
-                existing = _committed_identity(entry, digest=d, fingerprint=f)
+                existing = _committed_identity(entry, digest=d, fingerprint=f, arrays=payload[1])
             except CorruptEntryError:
                 self._quarantine(entry, digest=d, fingerprint=f)
                 existing = None

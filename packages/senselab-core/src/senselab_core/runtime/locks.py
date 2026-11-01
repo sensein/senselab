@@ -27,7 +27,6 @@ import os
 import re
 import socket
 import stat
-import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -36,7 +35,14 @@ from typing import Any, Optional
 
 from senselab_worker.ownership import UUID_HEX
 
-from senselab_core.runtime.storage import TEMPORARY_NAME, StorageDir, WrongKindError, owner_remedy, path_component
+from senselab_core.runtime.storage import (
+    TEMPORARY_NAME,
+    StorageDir,
+    WrongKindError,
+    owner_remedy,
+    path_component,
+    temporary_name,
+)
 
 logger = logging.getLogger("senselab")
 
@@ -73,10 +79,6 @@ class LeaseUnavailable(RuntimeError):
         self.path = path
 
 
-def _temporary_name(lease: str) -> str:
-    return f".{lease}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
-
-
 class Lease:
     """A lease over the resource `path`, held for the duration of a `with` block.
 
@@ -105,12 +107,12 @@ class Lease:
         """Configure a lease over `path` without taking it.
 
         Raises:
-            ValueError: `timeout` or `stale_after` is negative, or `path`'s name is not one component.
+            ValueError: `timeout` or `stale_after` is negative, or `path`'s name or its lease's is not one component.
         """
         if timeout < 0 or stale_after < 0:
             raise ValueError(f"a lease's timeout and stale_after are not negative (got {timeout}, {stale_after})")
         self._path = Path(path)
-        self._name = path_component(self._path.name) + LEASE_SUFFIX
+        self._name = path_component(path_component(self._path.name) + LEASE_SUFFIX)
         self._lease_path = self._path.with_name(self._name)
         self._timeout = timeout
         self._stale_after = stale_after
@@ -143,7 +145,7 @@ class Lease:
         temporary's link count, not from the error.
         """
         directory = self._directory()
-        temporary = _temporary_name(self._name)
+        temporary = temporary_name(self._name)
         try:
             fd = directory.open_new(temporary, self._file_mode, grammar=TEMPORARY_NAME)
         except PermissionError as err:
@@ -276,6 +278,7 @@ class Lease:
             LeaseTimeout: a live lease was held for the whole `timeout`.
             LeaseUnavailable: a lease cannot be created in the directory, or a stale or wrong-kind object at
                 the lease name cannot be moved.
+            ValueError: the lease's temporary name is longer than `NAME_MAX`.
         """
         self.broke, self.set_aside, self._seen = [], [], None
         deadline = time.monotonic() + self._timeout

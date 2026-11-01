@@ -72,16 +72,16 @@ class Memo:
 
 
 VERIFIED = Memo(SOURCE_MEMO_ENTRIES)
-"""(path, stamp digest) pairs this process stamped from the file; a stamp with one is checked by `os.stat` alone."""
+"""The ctime, by (path, stamp digest), of each file this process stamped; a stamp with one is checked by `os.stat`."""
 
 
-def _remember(path: str | os.PathLike[str], stamp: SourceStamp) -> None:
-    VERIFIED.put((os.fspath(path), stamp.canonical_digest()), True)
+def _remember(path: str | os.PathLike[str], stamp: SourceStamp, ctime_ns: int) -> None:
+    VERIFIED.put((os.fspath(path), stamp.canonical_digest()), ctime_ns)
 
 
 @contextmanager
-def _opened(path: str | os.PathLike[str]) -> Iterator[tuple[soundfile.SoundFile, SourceStamp]]:
-    """Open `path` once and yield the sound file with the stamp of that open file, its content read in full.
+def _opened(path: str | os.PathLike[str]) -> Iterator[tuple[soundfile.SoundFile, SourceStamp, int]]:
+    """Open `path` once and yield the sound file, the stamp of that open file (content read in full) and its ctime.
 
     Raises:
         StaleSource: if the file's stat fields changed while its content was read.
@@ -91,7 +91,7 @@ def _opened(path: str | os.PathLike[str]) -> Iterator[tuple[soundfile.SoundFile,
         content = content_identity(raw)["root"]
         raw.seek(0)
         after = os.fstat(raw.fileno())
-        if (after.st_size, after.st_mtime_ns) != (st.st_size, st.st_mtime_ns):
+        if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (st.st_size, st.st_mtime_ns, st.st_ctime_ns):
             raise StaleSource(f"{path} changed while it was read")
         with soundfile.SoundFile(raw) as f:
             header = {
@@ -112,7 +112,7 @@ def _opened(path: str | os.PathLike[str]) -> Iterator[tuple[soundfile.SoundFile,
                 header=value_digest("soundfile.info", header),
                 content=content,
             )
-            yield f, stamp
+            yield f, stamp, st.st_ctime_ns
 
 
 def _require_stamp(stamp: SourceStamp, current: SourceStamp, path: object) -> None:
@@ -129,34 +129,37 @@ def stamp(path: str | os.PathLike[str]) -> SourceStamp:
         StaleSource: if the file changed while it was read.
         soundfile.LibsndfileError: if the file is not a sound file.
     """
-    with _opened(path) as (_, taken):
+    with _opened(path) as (_, taken, ctime_ns):
         pass
-    _remember(path, taken)
+    _remember(path, taken, ctime_ns)
     return taken
 
 
 def check(recorded: SourceStamp, path: str | os.PathLike[str]) -> None:
     """Check that the file at `path` still has the stamp `recorded`.
 
-    A stamp this process took from the file at `path` is checked by `os.stat` alone; any other
-    stamp is checked by stamping the file again, which reads every byte.
+    A stamp this process took from the file at `path` is checked by `os.stat` alone, its ctime included,
+    so a rewrite that restores size and mtime is caught; any other stamp is checked by stamping the file
+    again, which reads every byte.
 
     Raises:
         StaleSource: if the file differs from the stamp.
     """
-    if VERIFIED.get((os.fspath(path), recorded.canonical_digest())) is not None:
+    ctime_ns = VERIFIED.get((os.fspath(path), recorded.canonical_digest()))
+    if ctime_ns is not None:
         st = os.stat(path)
-        if (st.st_size, st.st_mtime_ns, st.st_ino, st.st_dev) != (
+        if (st.st_size, st.st_mtime_ns, st.st_ino, st.st_dev, st.st_ctime_ns) != (
             recorded.size,
             recorded.mtime_ns,
             recorded.inode,
             recorded.device,
+            ctime_ns,
         ):
             raise StaleSource(f"{path} changed since it was opened: recorded {recorded!r}")
         return
-    with _opened(path) as (_, current):
+    with _opened(path) as (_, current, ctime_ns):
         _require_stamp(recorded, current, path)
-    _remember(path, recorded)
+    _remember(path, recorded, ctime_ns)
 
 
 class SoundFileReader:
@@ -168,7 +171,7 @@ class SoundFileReader:
         Raises:
             StaleSource: if the file at `source` differs from `stamp`.
         """
-        with _opened(source) as (f, current):
+        with _opened(source) as (f, current, _):
             _require_stamp(stamp, current, source)
             if count == 0:
                 return numpy.zeros((stamp.channels, 0), dtype=AUDIO_DTYPE)

@@ -121,24 +121,27 @@ def manifest_path(run: Optional[str] = None, *, root: Optional[Path] = None) -> 
         ValueError: `run` is refused by `run_component`.
     """
     base = cache_root() if root is None else Path(root)
-    return base / NAMESPACE / "runs" / run_component(run_id() if run is None else run) / MANIFEST_NAME
+    return base / NAMESPACE / "runs" / _run_name(run) / MANIFEST_NAME
 
 
-def _run_dir(
-    run: Optional[str], root: Optional[Path], *, create: bool, policy: Optional[StorePolicy] = None
-) -> StorageDir:
-    """Open `2x/runs/<run>/` under `root` (this run's when `run` is None), without following any symlink.
+def _open_runs(root: Optional[Path], policy: Optional[StorePolicy] = None) -> StorageDir:
+    """Open `2x/runs/` under `root` (`cache_root()` when None), without following any symlink.
 
-    With `create`, missing directories get the policy's `shared_dir_mode`, and an object of the wrong kind at
-    `2x/`, `runs/` or the run's directory is moved aside beside itself.
+    With a `policy`, missing directories are made with its `shared_dir_mode`, and an object of the wrong kind
+    at `2x/` or `runs/` is moved aside beside itself.
     """
-    path = manifest_path(run, root=root)
-    name = path.parent.name
-    mode = shared_dir_mode(policy) if policy is not None else None
-    with StorageDir.open_root(path.parents[3], create=create, mode=mode) as root_dir:
-        if not create:
-            return root_dir.walk(NAMESPACE, "runs", name)
-        return root_dir.walk(NAMESPACE, "runs", name, create=True, mode=mode, aside=lambda: None)
+    base = cache_root() if root is None else Path(root)
+    if policy is None:
+        with StorageDir.open_root(base) as top:
+            return top.walk(NAMESPACE, "runs")
+    mode = shared_dir_mode(policy)
+    with StorageDir.open_root(base, create=True, mode=mode) as top:
+        return top.walk(NAMESPACE, "runs", create=True, mode=mode, aside=lambda: None)
+
+
+def _run_name(run: Optional[str]) -> str:
+    """Return the directory name of run `run` (this run's when None), refused by `run_component` before any I/O."""
+    return run_component(run_id() if run is None else run)
 
 
 def _parse_manifest(data: Optional[bytes], where: Path) -> dict[str, str]:
@@ -173,8 +176,10 @@ def read_manifest(run: Optional[str] = None, *, root: Optional[Path] = None) -> 
     Raises:
         ValueError: `run` (or this run's id) is refused by `run_component`.
     """
+    name = _run_name(run)
     try:
-        run_dir = _run_dir(run, root, create=False)
+        with _open_runs(root) as runs:
+            run_dir = runs.walk(name)
     except (OSError, WrongKindError):
         return {}
     with run_dir:
@@ -210,43 +215,62 @@ def record_resolution(
             "a run manifest entry must be a 40-hex commit SHA."
         )
     policy = StorePolicy.load_default()
-    with _run_dir(run, root, create=True, policy=policy) as run_dir:
-        return _record_in(run_dir, manifest_key(repo_id, ref), sha, policy)
+    name = _run_name(run)
+    with (
+        _open_runs(root, policy) as runs,
+        runs.walk(name, create=True, mode=shared_dir_mode(policy), aside=lambda: None) as run_dir,
+    ):
+        return _record_in(runs, run_dir, manifest_key(repo_id, ref), sha, policy)
 
 
-def _record_in(run_dir: StorageDir, key: str, sha: str, policy: StorePolicy) -> str:
-    """Append-if-absent `key -> sha` to the manifest in `run_dir`, under the manifest's lease."""
+def _record_in(runs: StorageDir, run_dir: StorageDir, key: str, sha: str, policy: StorePolicy) -> str:
+    """Append-if-absent `key -> sha` to the manifest in `run_dir`, under the manifest's lease.
+
+    A holder whose lease was displaced before or after its write (whose temporary the new holder may have
+    removed) takes the lease again and re-reads and merges the manifest, so its entry is kept beside the
+    entries of the holder that displaced it.
+    """
     lease_mode = STAGING_FILE_MODE | (0o004 if policy.world_readable else 0)
-    with Lease(run_dir.path / MANIFEST_NAME, file_mode=lease_mode, directory=run_dir):
-        _remove_leftovers(run_dir, policy)
-        current = _read_in(run_dir)
-        winner = current.get(key)
-        if winner is not None and COMMIT_HEX.fullmatch(winner):
-            return winner
-        current[key] = sha
-        run_dir.write_atomically(
-            MANIFEST_NAME,
-            json.dumps(current, indent=2, sort_keys=True).encode("utf-8"),
-            grammar=MANIFEST,
-            mode=committed_modes(policy)[0],
-        )
-        return sha
+    while True:
+        with Lease(run_dir.path / MANIFEST_NAME, file_mode=lease_mode, directory=run_dir) as lease:
+            _remove_leftovers(runs, run_dir, policy)
+            current = _read_in(run_dir)
+            winner = current.get(key)
+            if winner is not None and COMMIT_HEX.fullmatch(winner):
+                return winner
+            if lease.owns():
+                current[key] = sha
+                try:
+                    run_dir.write_atomically(
+                        MANIFEST_NAME,
+                        json.dumps(current, indent=2, sort_keys=True).encode("utf-8"),
+                        grammar=MANIFEST,
+                        mode=committed_modes(policy)[0],
+                    )
+                except FileNotFoundError:
+                    if lease.owns():
+                        raise
+                if lease.owns():
+                    return sha
+        logger.warning("run manifest %s: lease displaced; re-reading and merging", run_dir.path / MANIFEST_NAME)
 
 
-def _remove_leftovers(run_dir: StorageDir, policy: StorePolicy) -> None:
+def _remove_leftovers(runs: StorageDir, run_dir: StorageDir, policy: StorePolicy) -> None:
     """Remove dead writers' leftovers under the manifest's lease.
 
-    That is the manifest's temporaries in `run_dir` (any there under the lease is a dead writer's) and objects
-    moved aside under `2x/runs/` past the quarantine age.
+    That is the manifest's temporaries in `run_dir` (any there under the lease is a dead writer's), and objects
+    moved aside in `2x/runs/` or in `run_dir` past the quarantine age.
     """
     for name in run_dir.listdir():
         if _MANIFEST_TEMPORARY.fullmatch(name):
             run_dir.remove_owned(name, pattern=TEMPORARY_NAME)
     try:
-        with StorageDir.open_root(run_dir.path.parents[2]) as root, root.walk(NAMESPACE, "runs") as runs:
-            runs.remove_older(run_dir.fs_now() - policy.quarantine_retention_s)
+        cutoff = run_dir.fs_now() - policy.quarantine_retention_s
     except (OSError, WrongKindError) as err:
-        logger.warning("cannot collect what was set aside under 2x/runs/: %s", err)
+        logger.warning("cannot read the clock of %s; not collecting: %s", run_dir.path, err)
+        return
+    for directory in (runs, run_dir):
+        directory.remove_older(cutoff)
 
 
 def get_cached_commit_hash(repo_id: str, revision: str = "main", *, cache_dir: Optional[Path] = None) -> str:

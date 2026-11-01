@@ -275,3 +275,20 @@ def test_source_memos_are_bounded_and_rederive_missing_entries(tmp_path: Path) -
         loaded_only, checked, again = job.result(timeout=120)
     assert (loaded_only, checked) == (0, 1)
     assert again == first and again.identity == first.identity != second.identity
+
+
+@pytest.mark.logic
+def test_ctime_change_defeats_stat_fast_path(tmp_path: Path) -> None:
+    """A same-size rewrite in place with its mtime restored fails `check` of a stamp this process took."""
+    p = write_wav(tmp_path)
+    taken = audio_io.stamp(p)
+    before = os.stat(p)
+    data = bytearray(p.read_bytes())
+    data[-1] ^= 0xFF
+    with open(p, "r+b") as f:
+        f.write(data)
+    os.utime(p, ns=(before.st_atime_ns, before.st_mtime_ns))
+    after = os.stat(p)
+    assert (after.st_size, after.st_mtime_ns, after.st_ino) == (before.st_size, before.st_mtime_ns, before.st_ino)
+    with pytest.raises(StaleSource):
+        audio_io.check(taken, p)

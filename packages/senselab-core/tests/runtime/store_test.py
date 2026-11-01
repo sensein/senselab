@@ -27,6 +27,7 @@ from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIde
 from senselab_core.runtime import store as store_module
 from senselab_core.runtime.equivalence import EQUIVALENCE
 from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
+from senselab_core.runtime.revision import MANIFEST_NAME, NAMESPACE, record_resolution
 from senselab_core.runtime.storage import StorageFull, StorePolicy, StoreUnavailable
 from senselab_core.runtime.store import (
     QUARANTINE_DIR,
@@ -724,14 +725,14 @@ def test_transient_error_in_put_never_quarantines(
 
 
 @pytest.mark.logic
-def test_put_verifies_the_arrays_of_an_existing_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A put over a valid committed entry reads every member, its arrays included, before returning its identity."""
+def test_reput_verifies_recorded_digests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A put over a valid committed entry reads its JSON members and no array file."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
     ident = s.put(k, {"y": numpy.ones(1000, "<f8"), "z": numpy.zeros(4, "<i4")}, c)
     opened = spy_open(monkeypatch)
     assert s.put(k, {"y": numpy.ones(1000, "<f8"), "z": numpy.zeros(4, "<i4")}, c) == ident
     read = [n for n in opened if n.endswith((".json", ".npy"))]
-    assert sorted(read)[-2:] == ["context.json", "result.json"] and len([n for n in read if n.endswith(".npy")]) == 2
+    assert sorted(read) == ["context.json", "result.json"]
 
 
 def _heal_during_quarantine(root: str, detected: MpEvent, go: MpEvent, out: "MpQueue[Any]") -> None:
@@ -1015,6 +1016,41 @@ def test_collect_removes_exactly_the_aged_entries_set_aside_in_place(ages: list[
 
 
 @pytest.mark.logic
+def test_collect_covers_every_set_aside_location(tmp_path: Path) -> None:
+    """Aged set-aside objects at the store root, in place below it, in its quarantine and in run directories go."""
+    store_root, cache = tmp_path / "store", tmp_path / "cache"
+    s, k, c = ResultStore(store_root), _key(), _ctx()
+    s.put(k, {"y": 1}, c)
+    record_resolution("org/m", "main", "a" * 40, run="r", root=cache)
+    entry = _entry_dir(store_root, k, c)
+    runs = cache / NAMESPACE / "runs"
+    (store_root / QUARANTINE_DIR).mkdir()
+    places = [
+        store_root,
+        store_root / STORE_DIR,
+        entry.parent.parent,
+        entry.parent,
+        store_root / QUARANTINE_DIR,
+        runs,
+        runs / "r",
+    ]
+    old = time.time() - 30 * 24 * 3600
+    planted = []
+    for i, place in enumerate(places):
+        directory, link = place / f"{2 * i:032x}", place / f"{2 * i + 1:032x}"
+        directory.mkdir()
+        (directory / "x").write_bytes(b"x")
+        link.symlink_to(tmp_path / "victim")
+        for path in (directory, link):
+            os.utime(path, (old, old), follow_symlinks=False)
+        planted += [directory, link]
+    s.collect()
+    record_resolution("org/m", "main", "a" * 40, run="r", root=cache)
+    assert [p for p in planted if os.path.lexists(p)] == []
+    assert (runs / "r" / MANIFEST_NAME).is_file() and s.get(k, c, ReusePolicy.EXACT) is not None
+
+
+@pytest.mark.logic
 def test_entry_set_aside_in_place_is_collected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A corrupt entry renamed aside beside its key, read-only, is removed by `collect` once past the quarantine age."""
     s, k, c = ResultStore(tmp_path), _key(), _ctx()
@@ -1209,16 +1245,19 @@ def test_an_entry_serves_only_the_outputs_its_context_wrote_whatever_members_are
         assert hit is None or hit[1] == report["expected"][hit[0]], report
 
 
+SERVED = {"a": [0.0, 1.0, 2.0, 3.0]}
+
+
 @pytest.mark.logic
-def test_put_over_an_entry_with_a_corrupt_array_rewrites_it(tmp_path: Path) -> None:
-    """A put over an entry whose array no longer hashes replaces it, so the get right after it is served."""
+def test_reput_over_a_same_size_damaged_array_is_repaired_after_the_get(tmp_path: Path) -> None:
+    """A re-put trusts an array file of the recorded size; the get quarantines it and the next put rewrites it."""
     report = bounded("probe_corrupt_array", str(tmp_path), "npy_bytes")
-    assert report == {"same_identity": True, "served": {"a": [0.0, 1.0, 2.0, 3.0]}}
+    assert report == {"same_identity": True, "served": [None, SERVED]}
 
 
 @pytest.mark.contract
-@pytest.mark.parametrize("corruption", ARRAY_CORRUPTIONS)
+@pytest.mark.parametrize("corruption", [c for c in ARRAY_CORRUPTIONS if c != "npy_bytes"])
 def test_a_put_that_reports_success_is_served_by_the_next_get(tmp_path: Path, corruption: str) -> None:
-    """For every way an entry's array can be damaged, the put after it leaves an entry that get serves."""
+    """For every damage to an array file but same-size bytes, the re-put rewrites the entry and get serves it."""
     report = bounded("probe_corrupt_array", str(tmp_path), corruption)
-    assert report == {"same_identity": True, "served": {"a": [0.0, 1.0, 2.0, 3.0]}}
+    assert report == {"same_identity": True, "served": [SERVED, SERVED]}

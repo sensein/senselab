@@ -297,13 +297,13 @@ def swap_subsets() -> Iterator[str]:
         yield "+".join(name for i, name in enumerate(SWAPPABLE) if mask >> i & 1)
 
 
-# -- put trusts an entry whose array is corrupt --
+# -- a re-put over an entry whose array is damaged --
 
 ARRAY_CORRUPTIONS = ("npy_bytes", "npy_truncated", "npy_missing", "npy_directory", "npy_symlink")
 
 
 def probe_corrupt_array(scratch: str, corruption: str) -> dict[str, Any]:
-    """Corrupt a committed entry's array, put the same outputs, and get at once."""
+    """Corrupt a committed entry's array, then twice put the same outputs and get at once; report each get."""
     import numpy
     from senselab_core.kernel.identity import ReusePolicy
     from senselab_core.runtime.store import ResultStore
@@ -326,9 +326,12 @@ def probe_corrupt_array(scratch: str, corruption: str) -> dict[str, Any]:
     elif corruption == "npy_symlink":
         (Path(scratch) / "elsewhere.npy").write_bytes(data)
         os.symlink(Path(scratch) / "elsewhere.npy", npy)
-    again = store.put(k, outputs, c)
-    hit = store.get(k, c, ReusePolicy.EXACT)
-    return {"same_identity": again == identity, "served": None if hit is None else _plain(hit.outputs)}
+    served = []
+    for _ in range(2):
+        again = store.put(k, outputs, c)
+        hit = store.get(k, c, ReusePolicy.EXACT)
+        served.append(None if hit is None else _plain(hit.outputs))
+    return {"same_identity": again == identity, "served": served}
 
 
 # -- run manifests: umask, run id, leftover temporaries --

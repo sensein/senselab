@@ -5,6 +5,7 @@ import multiprocessing as mp
 import os
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -29,6 +30,8 @@ from senselab_core.runtime.revision import (
     record_resolution,
     resolve_revision,
 )
+from senselab_core.runtime.storage import NAME_MAX
+from syscall_faults_fixture import pause_replaces
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
@@ -492,6 +495,55 @@ def test_a_run_id_of_the_set_aside_form_is_refused(tmp_path: Path, run: str) -> 
         with pytest.raises(ValueError, match="set-aside"):
             call()
     assert not (tmp_path / NAMESPACE).exists()
+
+
+@pytest.mark.logic
+def test_run_id_over_name_max_refused(tmp_path: Path) -> None:
+    """A run id longer than one path component can hold is a `ValueError` before any I/O, never a raw `OSError`."""
+    run = "x" * (NAME_MAX + 1)
+    with pytest.raises(ValueError, match=str(NAME_MAX)):
+        choose_run_id({"SENSELAB_RUN_ID": run})
+    for call in (
+        lambda: record_resolution("org/m", "main", SHA_A, run=run, root=tmp_path),
+        lambda: read_manifest(run, root=tmp_path),
+    ):
+        with pytest.raises(ValueError, match=str(NAME_MAX)):
+            call()
+    assert not (tmp_path / NAMESPACE).exists()
+    record_resolution("org/m", "main", SHA_A, run="x" * NAME_MAX, root=tmp_path)
+
+
+@pytest.mark.logic
+def test_displaced_lease_keeps_manifest_update(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A holder displaced while it writes re-reads and merges under the lease: both holders' entries are kept.
+
+    A is held at its manifest write while its lease is removed, as a late breaker's link-back removes it;
+    B then takes the lease, removes A's temporary as a dead writer's, and is held at its own write.
+    """
+    (a_reached, a_go), (b_reached, b_go) = pause_replaces(monkeypatch, MANIFEST_NAME, 2)
+    answers: dict[str, object] = {}
+
+    def record(name: str, sha: str) -> None:
+        try:
+            answers[name] = record_resolution(f"org/{name}", "main", sha, run="r", root=tmp_path)
+        except Exception as err:  # noqa: BLE001 - reported to the test thread
+            answers[name] = err
+
+    a = threading.Thread(target=record, args=("a", SHA_A))
+    a.start()
+    assert a_reached.wait(60)
+    (manifest_path("r", root=tmp_path).parent / f"{MANIFEST_NAME}.lease").unlink()
+    b = threading.Thread(target=record, args=("b", SHA_B))
+    b.start()
+    assert b_reached.wait(60)
+    a_go.set()
+    time.sleep(0.2)
+    b_go.set()
+    a.join(60)
+    b.join(60)
+    assert answers == {"a": SHA_A, "b": SHA_B}
+    keys = {manifest_key("org/a", "main"): SHA_A, manifest_key("org/b", "main"): SHA_B}
+    assert read_manifest("r", root=tmp_path) == keys
 
 
 @pytest.mark.logic

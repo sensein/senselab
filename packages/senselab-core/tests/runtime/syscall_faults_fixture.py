@@ -7,6 +7,7 @@ meets the error at the call that real storage fails at.
 import errno
 import io
 import os
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
@@ -167,3 +168,30 @@ def refuse_fchmod(monkeypatch: pytest.MonkeyPatch, inode: int) -> None:
         real(fd, mode)
 
     monkeypatch.setattr(os, "fchmod", fchmod)
+
+
+def pause_replaces(
+    monkeypatch: pytest.MonkeyPatch, new: str, count: int
+) -> list[tuple[threading.Event, threading.Event]]:
+    """Hold each of the first `count` `os.replace` calls onto a name `new` (last path component) before it runs.
+
+    The i-th such call sets the first event of the i-th pair and waits (60 s at most) for the second.
+    """
+    real = os.replace
+    gates = [(threading.Event(), threading.Event()) for _ in range(count)]
+    seen: list[str] = []
+    lock = threading.Lock()
+
+    def replace(old: Any, dst: Any, **dir_fds: Any) -> None:  # noqa: ANN401
+        if os.path.basename(os.fsdecode(dst)) == new:
+            with lock:
+                index = len(seen)
+                seen.append(new)
+            if index < count:
+                reached, go = gates[index]
+                reached.set()
+                assert go.wait(60)
+        real(old, dst, **dir_fds)
+
+    monkeypatch.setattr(os, "replace", replace)
+    return gates

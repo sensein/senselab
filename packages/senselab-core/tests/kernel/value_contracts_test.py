@@ -508,7 +508,7 @@ def test_attributes_cannot_forge_an_identity_or_a_stamp(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_a_same_size_same_mtime_rewrite_is_stale(tmp_path: Path) -> None:
-    """A same-size, same-mtime, same-inode rewrite is refused on read, and by a check with no memo entry."""
+    """A same-size, same-mtime, same-inode rewrite is refused on read, and by a check with or without a memo entry."""
     path = _wav(tmp_path / "a.wav")
     audio = open_audio(path)
     group = audio.groups["audio"]
@@ -524,10 +524,10 @@ def test_a_same_size_same_mtime_rewrite_is_stale(tmp_path: Path) -> None:
         group.read(reader=READER)
     assert group.source_stamp is not None
     copy.deepcopy(audio)
-    audio_io.check(group.source_stamp, path)
-    audio_io.VERIFIED.clear()
-    with pytest.raises(StaleSource):
-        audio_io.check(group.source_stamp, path)
+    for _ in range(2):
+        with pytest.raises(StaleSource):
+            audio_io.check(group.source_stamp, path)
+        audio_io.VERIFIED.clear()
 
 
 @pytest.mark.logic

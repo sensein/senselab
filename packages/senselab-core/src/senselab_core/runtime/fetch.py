@@ -22,7 +22,6 @@ import json
 import logging
 import os
 import re
-import stat
 import unicodedata
 import urllib.parse
 import urllib.request
@@ -39,7 +38,9 @@ from senselab_worker.digest import SHA256_HEX, file_digest, identity_digest
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.license import License
+from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import (
+    ASIDE_NAME,
     PRIVATE_DIR_MODE,
     Staging,
     StorageDir,
@@ -258,36 +259,45 @@ def _remove_stale_downloads(top: StorageDir, tmp: StorageDir, stale_s: int) -> N
     tmp.remove_older(cutoff)
 
 
-def _download(url: str, opener: Callable[[str], BinaryIO], out: BinaryIO, *, size: int) -> None:
-    """Stream `url` into the open file `out`, reading at most `size + 1` bytes.
+def _download(  # noqa: PLR0913 - the source, the file it streams into, and the bound and retry on the transfer
+    url: str, opener: Callable[[str], BinaryIO], out: BinaryIO, where: Path, *, size: int, retry: RetryPolicy
+) -> None:
+    """Stream `url` into the open file `out` (at `where`), reading at most `size + 1` bytes.
+
+    A transfer that fails transiently (`faults.is_transient` of the opener's or the read's error) is
+    started again from the first byte under `retry`.
 
     Raises:
         FetchError: the URL is not `https`, the opener or a read failed, or the source served more
             or fewer than `size` bytes.
-        OSError: the file could not be written.
+        StoreUnavailable: the file could not be written.
     """
     _require_https(url)
-    try:
-        source = opener(url)
-    except Exception as err:  # noqa: BLE001 - any opener failure is this source's failure
-        raise _SourceError(f"{type(err).__name__}: {err}") from err
-    received = 0
-    with source:
-        while True:
-            try:
-                chunk = source.read(min(_CHUNK, size + 1 - received))
-            except Exception as err:  # noqa: BLE001 - a dropped connection is this source's failure
-                raise _SourceError(f"{type(err).__name__}: {err}") from err
-            if not chunk:
-                break
-            received += len(chunk)
-            if received > size:
-                raise _SourceError(f"served more than the declared {size} bytes")
-            out.write(chunk)
+
+    def transfer() -> None:
+        out.seek(0)
+        out.truncate()
+        received = 0
+        with opener(url) as source:
+            while chunk := source.read(min(_CHUNK, size + 1 - received)):
+                received += len(chunk)
+                if received > size:
+                    raise _SourceError(f"served more than the declared {size} bytes")
+                try:
+                    out.write(chunk)
+                except OSError as err:
+                    raise storage_fault(err, where) from err
         if received < size:
             raise _SourceError(f"ended after {received} of the declared {size} bytes")
-        out.flush()
-        os.fsync(out.fileno())
+
+    try:
+        retry_on_transient_error(transfer, retry)
+    except (_SourceError, StoreUnavailable):
+        raise
+    except Exception as err:  # noqa: BLE001 - any other failure of the opener or a read is this source's
+        raise _SourceError(f"{type(err).__name__}: {err}") from err
+    out.flush()
+    os.fsync(out.fileno())
 
 
 def _commit(  # noqa: PLR0913 - source and target are each a directory and a name
@@ -360,24 +370,23 @@ def _stamp(st: os.stat_result) -> BlobStamp:
     return BlobStamp(st.st_size, st.st_mtime_ns, st.st_ino, st.st_ctime_ns)
 
 
-def _regular(path: Path) -> os.stat_result | None:
-    """Return the `lstat` of `path` if it is a regular file, None if it is absent or anything else."""
-    try:
-        st = os.lstat(path)
-    except FileNotFoundError:
-        return None
-    return st if stat.S_ISREG(st.st_mode) else None
-
-
 class _BlobFormat:
     """A blob as an addressed format: `blobs/<sha256 of its bytes>`."""
 
     name = "fetch-blob"
 
     def address_of(self, path: Path) -> str:
-        if _regular(path) is None:
+        with StorageDir.open_root(path.parent) as blobs:
+            try:
+                fd = blobs.open_regular(path.name)
+            except WrongKindError:
+                fd = None
+        if fd is None:
             raise BlobMismatchError(f"blob {path} is not a regular file")
-        return file_digest("file@1", path)
+        try:
+            return _hashed(fd)
+        finally:
+            os.close(fd)
 
     def address_at(self, path: Path) -> str:
         return path.name
@@ -429,6 +438,7 @@ def _ensure_blob(  # noqa: PLR0913 - the per-file step of _fetch_into, passed th
     recorded: Mapping[str, BlobStamp],
     verify: str,
     file_mode: int,
+    retry: RetryPolicy,
 ) -> tuple[Path, BlobStamp | None]:
     """Return `blobs/<sha256>` holding the file's bytes, and the stamp of the inode this call verified there.
 
@@ -444,7 +454,7 @@ def _ensure_blob(  # noqa: PLR0913 - the per-file step of _fetch_into, passed th
         try:
             with Staging(tmp, mode=PRIVATE_DIR_MODE) as private:
                 with os.fdopen(private.open_new(STAGED_BLOB, file_mode, grammar=STAGED_NAME), "w+b") as out:
-                    _download(url, opener, out, size=file.size)
+                    _download(url, opener, out, private.path / STAGED_BLOB, size=file.size, retry=retry)
                     actual = _hashed(out.fileno())
                     if actual != file.sha256:
                         tried.append(f"{url} (sha256 {actual[:12]}..., expected {file.sha256[:12]}...)")
@@ -629,23 +639,27 @@ def _read_marker(ds: StorageDir, manifest: DataManifest, tmp: StorageDir) -> tup
     return stamps, "valid"
 
 
-def fetch(
+def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, verification and policies
     manifest: DataManifest,
     *,
     cache_root: Path,
     opener: Callable[[str], BinaryIO] | None = None,
     verify: Literal["size", "full"] = "size",
     policy: StorePolicy | None = None,
+    retry: RetryPolicy | None = None,
 ) -> dict[str, Path]:
     """Download every file of `manifest` into the cache and return `{file path: path under datasets/.../files/}`.
 
     A present blob is reused with no network call. `verify="size"` trusts a regular-file blob whose
     `BlobStamp` (size, mtime, inode, ctime) equals the one recorded when its dataset was completed; `"full"`,
     and any other blob, re-hashes it. A download streams to `tmp/<uuid>`, is bounded by the declared
-    size, is hashed, and is linked into `blobs/<sha256>` only on a match (first writer wins); on a
+    size, is hashed, and is linked into `blobs/<sha256>` only on a match (first writer wins); a transfer
+    that fails transiently is retried under `retry` (`RetryPolicy.load_default()` when None), and on a
     mismatch or failed transfer the next mirror is tried. When every link is in place
     `datasets/<name>@<version>/.complete` records the dataset, the manifest digest and the blob stamps;
-    it is rewritten when a stamp has changed, so a repaired blob is trusted again by size.
+    it is rewritten when a stamp has changed, so a repaired blob is trusted again by size. Then every
+    other completed version of the dataset (`<name>@<other version>`, its marker naming `name`) is
+    removed, so only the version fetched last is linked; blobs are kept.
     A dataset without a valid marker must hold no file outside the manifest.
 
     Raises:
@@ -656,13 +670,14 @@ def fetch(
         WrongKindError: an object of the wrong kind in the cache could not be moved aside.
     """
     policy = policy if policy is not None else StorePolicy.load_default()
+    retry = retry if retry is not None else RetryPolicy.load_default()
     dir_mode = shared_dir_mode(policy)
     open_url = opener if opener is not None else _urlopen
     root = Path(cache_root)
     try:
         with StorageDir.open_root(root, create=True, mode=dir_mode) as top:
             with top.walk("tmp", create=True, mode=dir_mode, aside=lambda: None) as tmp:
-                return _fetch_into(manifest, top, tmp, open_url, verify, policy)
+                return _fetch_into(manifest, top, tmp, open_url, verify, policy, retry)
     except OSError as err:
         raise storage_fault(err, root) from err
 
@@ -674,6 +689,7 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
     open_url: Callable[[str], BinaryIO],
     verify: str,
     policy: StorePolicy,
+    retry: RetryPolicy,
 ) -> dict[str, Path]:
     file_mode, _ = committed_modes(policy)
     dir_mode = shared_dir_mode(policy)
@@ -684,7 +700,8 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
     _remove_stale_downloads(top, tmp, policy.staging_stale_s)
     with (
         top.walk("blobs", create=True, mode=dir_mode, aside=aside) as blobs,
-        top.walk("datasets", f"{manifest.name}@{manifest.version}", create=True, mode=dir_mode, aside=aside) as ds,
+        top.walk("datasets", create=True, mode=dir_mode, aside=aside) as datasets,
+        datasets.walk(f"{manifest.name}@{manifest.version}", create=True, mode=dir_mode, aside=aside) as ds,
     ):
         recorded, marker_state = _read_marker(ds, manifest, tmp)
         with ds.walk(FILES_DIR, create=True, mode=dir_mode, aside=aside) as files:
@@ -696,7 +713,7 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
             result: dict[str, Path] = {}
             stamps: dict[str, BlobStamp] = {}
             for file in manifest.files:
-                blob, stamp = _ensure_blob(file, blobs, tmp, open_url, recorded, verify, file_mode)
+                blob, stamp = _ensure_blob(file, blobs, tmp, open_url, recorded, verify, file_mode, retry)
                 result[file.path] = _link(files, file.path, blob, dir_mode)
                 if stamp is not None:
                     stamps[file.sha256] = stamp
@@ -726,7 +743,28 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
                     replace=marker_state != "absent",
                     keeps=lambda: _read_marker(ds, manifest, tmp)[1] == "valid",
                 )
+        _remove_superseded(datasets, manifest, tmp)
         return result
+
+
+def _remove_superseded(datasets: StorageDir, manifest: DataManifest, tmp: StorageDir) -> None:
+    """Remove every other version of `manifest`'s dataset: each `<name>@<v>` whose marker names this name.
+
+    Each is moved into `tmp` (or aside in `datasets`) and removed there; one without a legible marker is left.
+    Failures are logged.
+    """
+    for name in datasets.listdir():
+        if name == f"{manifest.name}@{manifest.version}" or not name.startswith(f"{manifest.name}@"):
+            continue
+        try:
+            with datasets.child(name) as other:
+                record = _marker_record(other.read_regular(COMPLETE_MARKER, limit=MARKER_LIMIT) or b"")
+            if record is None or record.get("name") != manifest.name:
+                continue
+            moved = datasets.set_aside(name, tmp)
+            (tmp if moved.parent == tmp.path else datasets).remove_owned(moved.name, pattern=ASIDE_NAME)
+        except (OSError, ValueError) as err:
+            logger.warning("cannot remove the superseded dataset %s: %s", datasets.path / name, err)
 
 
 __all__ = [
