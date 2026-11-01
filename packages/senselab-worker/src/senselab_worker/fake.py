@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy
 
+from senselab_worker.canonical import MAX_SAFE_INT
 from senselab_worker.codec import MAX_LINE_BYTES
 from senselab_worker.digest import identity_digest, npy_digest
 from senselab_worker.faults import ContentFault, ResourceFault
@@ -100,8 +101,8 @@ def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -
     """Return `{"outputs": {"value": identity_digest("fake-output@1", {"inputs", "params"})}}` per item.
 
     `params["faults"]` is excluded from the digest; a batch adds `"batch"` and `nondeterministic` a random `"nonce"`.
-    Arrays enter it as `npy_digest("npy@1", array)`. A non-empty `params["outputs_json"]` is instead returned, parsed,
-    as every item's outputs.
+    Arrays enter it as `npy_digest("npy@1", array)`, integers outside the I-JSON range as their decimal text. A
+    non-empty `params["outputs_json"]` is instead returned, parsed, as every item's outputs.
     """
     if not isinstance(state, _State):
         raise TypeError("state must come from load")
@@ -143,6 +144,8 @@ def _one(item: dict[str, Any], params: object, faults: FakeFaults, batch: list[o
 
 
 def _identity_view(value: object) -> object:
+    if type(value) is int and abs(value) > MAX_SAFE_INT:
+        return str(value)
     if isinstance(value, numpy.ndarray):
         return npy_digest("npy@1", value)
     if isinstance(value, dict):

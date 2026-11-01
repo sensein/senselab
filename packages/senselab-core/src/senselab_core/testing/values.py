@@ -469,6 +469,13 @@ def _data_group(seed: int = 0) -> RegularGroup:
     return RegularGroup(channels=_channels(2), sampling_rate=250.0, data=numpy.arange(8.0).reshape(2, 4) + seed)
 
 
+def _decoded_group() -> RegularGroup:
+    """Samples held with the stamp of the file they were decoded from."""
+    source = audio_io.source_group(_channels(2, "audio", "FS"), _RATE, _wav("stereo", 2))
+    data = source.read(reader=READER)
+    return RegularGroup(channels=source.channels, sampling_rate=_RATE, data=data, source_stamp=source.source_stamp)
+
+
 def _irregular(seed: int = 0) -> IrregularGroup:
     return IrregularGroup(
         channels=_channels(1, "hr", "bpm"),
@@ -592,6 +599,7 @@ def _register_kernel_samples() -> None:
             _data_group(),
             _data_group(1),
             audio_io.source_group(_channels(2, "audio", "FS"), _RATE, _wav("stereo", 2)),
+            _decoded_group(),
         ],
         invalid_updates=[
             {"sampling_rate": -5},

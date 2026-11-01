@@ -132,7 +132,8 @@ class RegularGroup(Frozen):
     Exactly one of `data` and `source` is given. A source group carries `source_stamp`, the stamp a
     `SourceReader` took of the file; validation reads no file. The stamp's header must match the
     declared channel count and rate. Samples are decoded only by `read` through a reader, which
-    checks the file still has the stamp, content included.
+    checks the file still has the stamp, content included. A held group may carry the stamp of the file
+    its samples were decoded from, matching their shape; it is then identified as that file is.
     """
 
     channels: tuple[ChannelInfo, ...] = Field(min_length=1)
@@ -145,19 +146,19 @@ class RegularGroup(Frozen):
     def _check_layout(self) -> "RegularGroup":
         if (self.data is None) == (self.source is None):
             raise ValueError("a regular group needs exactly one of data and source")
+        stamp = self.source_stamp
+        if self.source is not None and stamp is None:
+            raise ValueError("a source group carries the stamp a reader took of its file")
+        if stamp is not None and stamp.sampling_rate != self.sampling_rate:
+            raise ValueError(f"declared rate {self.sampling_rate} Hz, file rate {stamp.sampling_rate} Hz")
         if self.data is not None:
-            if self.source_stamp is not None:
-                raise ValueError("a source stamp belongs to a source group, not to held data")
             require_finite(self.data, "a regular group's samples")
+            if stamp is not None and self.data.shape != (stamp.channels, stamp.frames):
+                raise ValueError(f"held samples {self.data.shape} are not the stamped file's channels and frames")
             rows = self.data.shape[0]
         else:
-            if self.source_stamp is None:
-                raise ValueError("a source group carries the stamp a reader took of its file")
-            if self.source_stamp.sampling_rate != self.sampling_rate:
-                raise ValueError(
-                    f"declared rate {self.sampling_rate} Hz, file rate {self.source_stamp.sampling_rate} Hz"
-                )
-            rows = self.source_stamp.channels
+            assert stamp is not None
+            rows = stamp.channels
         _check_channels(self.channels, rows)
         return self
 
@@ -267,9 +268,10 @@ class Recording(Frozen):
     """Named channel groups sharing one clock, anchored by `anchor`; `groups` is read-only.
 
     `identity` is derived from the content by validation: omitted, it is filled in; supplied, it must
-    equal the derived one. A recording of one source group is identified by `content:` and the
-    content identity root of the file. Otherwise it is `content:` and `value_digest(IDENTITY_TYPE,
-    {"groups": ...})`, each source group standing as its channels, rate and content identity root.
+    equal the derived one. A recording of one stamped group (a source group, or samples held with the
+    stamp of the file they were decoded from) is identified by `content:` and the content identity root of
+    the file. Otherwise it is `content:` and `value_digest(IDENTITY_TYPE, {"groups": ...})`, each stamped
+    group standing as its channels, rate and content identity root.
     `IDENTITY_TYPE` is a declared token, so moving, renaming or subclassing the class keeps identities.
     """
 
@@ -310,21 +312,21 @@ class Recording(Frozen):
             ValueError: if `groups` is not a layout this type holds.
         """
         values = list(groups.values())
-        if len(values) == 1 and isinstance(values[0], RegularGroup) and values[0].source is not None:
+        if len(values) == 1 and isinstance(values[0], RegularGroup) and values[0].source_stamp is not None:
             return "content:" + _source_root(values[0])
         fields = {name: _group_content(g) for name, g in groups.items()}
         return "content:" + value_digest(cls.IDENTITY_TYPE, {"groups": fields})
 
 
 def _source_root(group: RegularGroup) -> str:
-    """Return the content identity root of a source group's file, as its stamp holds it."""
-    assert group.source is not None and group.source_stamp is not None
+    """Return the content identity root of a stamped group's file, as its stamp holds it."""
+    assert group.source_stamp is not None
     return group.source_stamp.content
 
 
 def _group_content(group: RegularGroup | IrregularGroup) -> object:
-    if isinstance(group, RegularGroup) and group.source is not None:
-        return {**group.model_dump(exclude={"source", "source_stamp"}), "content": _source_root(group)}
+    if isinstance(group, RegularGroup) and group.source_stamp is not None:
+        return {**group.model_dump(exclude={"source", "source_stamp"}), "data": None, "content": _source_root(group)}
     return group.model_dump()
 
 
@@ -357,7 +359,8 @@ class Audio(Recording):
 
     Held samples are float32 (`AUDIO_DTYPE`). An in-memory audio's identity is `"content:" +
     identity_digest("audio@3", {"npy": npy_digest("npy@1", <the (channels, samples) data>),
-    "sampling_rate": rate})`; a file-backed one's is `content:` and the root of the file's content identity.
+    "sampling_rate": rate})`; a stamped one's (file-backed, or held with its file's stamp) is `content:` and the root
+    of the file's content identity.
     """
 
     if TYPE_CHECKING:
@@ -379,7 +382,7 @@ class Audio(Recording):
             ValueError: if `groups` is not one regular `audio` group of float32 audio channels in one unit.
         """
         group = _audio_group(groups)
-        if group.data is None:
+        if group.source_stamp is not None or group.data is None:
             return "content:" + _source_root(group)
         npy = held_npy_digest(group.data)
         return "content:" + identity_digest("audio@3", {"npy": npy, "sampling_rate": group.sampling_rate})

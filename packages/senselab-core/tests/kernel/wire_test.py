@@ -24,19 +24,26 @@ WIRE_TYPES: list[type[Frozen]] = sorted(WIRE_FORMATS.values(), key=operator.attr
 
 def _through_the_wire(value: Frozen, array_dir: Path) -> Frozen:
     """Encode `value` as a worker input, frame it as JSON, and decode it as the worker and the host would."""
-    wire = json.loads(json.dumps(to_wire(wire_form(value), array_dir=array_dir, at="inputs")))
+    form = wire_form(value, reader=audio_io.READER)
+    wire = json.loads(json.dumps(to_wire(form, array_dir=array_dir, at="inputs")))
     return from_wire_form(from_wire(wire, array_dir=array_dir))
 
 
 @pytest.mark.contract
 @pytest.mark.parametrize("cls", WIRE_TYPES, ids=operator.attrgetter("__name__"))
 def test_every_new_type_round_trips_by_format_tag(cls: type[Frozen], tmp_path: Path) -> None:
-    """Every in-memory sample of every wire type comes back equal through the codec, by its format tag."""
-    held = [v for v in samples_of(cls) if not _file_backed(v)]
-    assert held, f"{cls.__name__} has no in-memory sample"
-    for value in held:
-        assert wire_form(value)["format"] in WIRE_FORMATS
-        assert _through_the_wire(value, tmp_path) == value
+    """Every sample of every wire type comes back through the codec by its format tag.
+
+    A value held in memory comes back equal; a file-backed one with the same identity and samples.
+    """
+    for value in samples_of(cls):
+        back = _through_the_wire(value, tmp_path)
+        if not _file_backed(value):
+            assert back == value
+            continue
+        assert getattr(back, "identity", None) == getattr(value, "identity", None)
+        assert isinstance(back, RegularGroup | Recording) and isinstance(value, RegularGroup | Recording)
+        assert _samples(back).tolist() == _samples(value).tolist()
 
 
 @pytest.mark.contract
@@ -51,7 +58,7 @@ def test_every_port_type_has_a_wire_form() -> None:
 
 @pytest.mark.logic
 def test_a_file_backed_audio_travels_as_its_samples(tmp_path: Path) -> None:
-    """A file-backed audio's wire form holds the decoded samples, never the path; it decodes to those samples."""
+    """A file-backed audio travels as its samples and its file's stamp, never the path, and keeps its identity."""
     path = tmp_path / "tone.wav"
     soundfile.write(path, numpy.array([0.25, -0.5, 0.75], dtype=numpy.float32), 16_000, subtype="FLOAT")
     audio = audio_io.open_audio(path)
@@ -59,7 +66,8 @@ def test_a_file_backed_audio_travels_as_its_samples(tmp_path: Path) -> None:
     assert str(path) not in json.dumps(to_wire(form, array_dir=tmp_path, at="inputs"))
     assert form["identity"] == audio.identity and form["anchor"]["clock_id"] == audio.anchor.clock_id
     back = from_wire_form(form)
-    assert isinstance(back, Audio) and back.read().tolist() == audio.read(reader=audio_io.READER).tolist()
+    assert isinstance(back, Audio) and back.identity == audio.identity and back.anchor == audio.anchor
+    assert back.read().tolist() == audio.read(reader=audio_io.READER).tolist()
     with pytest.raises(ValueError, match="SourceReader"):
         wire_form(audio)
 
@@ -78,3 +86,8 @@ def test_unknown_or_retired_tags_are_refused() -> None:
 def _file_backed(value: Frozen) -> bool:
     groups = value.groups.values() if isinstance(value, Recording) else [value]
     return any(isinstance(g, RegularGroup) and g.source is not None for g in groups)
+
+
+def _samples(value: RegularGroup | Recording) -> numpy.ndarray:
+    groups = value.groups.values() if isinstance(value, Recording) else [value]
+    return numpy.concatenate([g.read(reader=audio_io.READER) for g in groups if isinstance(g, RegularGroup)])

@@ -2,7 +2,8 @@
 
 A value's wire form is its `model_dump()` with `format` set to its registered tag (`WIRE_FORMATS`): nested
 values are objects, arrays stay arrays (the worker codec sends them as `.npy` files), tuples are lists. A
-regular group read from a file travels as its decoded samples: no path reaches a worker.
+regular group read from a file travels as its decoded samples with the file's stamp, so it keeps the file's
+identity and no path reaches a worker.
 """
 
 from collections.abc import Mapping
@@ -60,14 +61,12 @@ def wire_form(value: Frozen, reader: SourceReader | None = None) -> dict[str, An
 def _held(group: RegularGroup, reader: SourceReader | None) -> dict[str, Any]:
     form = group.model_dump()
     if group.source is not None:
-        form.update(data=group.read(reader=reader), source=None, source_stamp=None)
+        form.update(data=group.read(reader=reader), source=None)
     return form
 
 
 def from_wire_form(form: Mapping[str, Any]) -> Frozen:
     """Return the kernel value a wire form holds, read by the registered type of its tag's name and major version.
-
-    A recording's identity is derived from the samples it holds, not read from the form.
 
     Raises:
         ValueError: if `form` has no `format` naming a registered wire format of a readable version.
@@ -80,6 +79,4 @@ def from_wire_form(form: Mapping[str, Any]) -> Frozen:
     fields = dict(form)
     if not issubclass(cls, Formatted):
         del fields["format"]
-    if issubclass(cls, Recording):
-        fields.pop("identity", None)
     return cls.model_validate(fields)

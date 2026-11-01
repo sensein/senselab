@@ -34,7 +34,7 @@ from senselab_core.kernel.identity import (
     ResolvedModel,
     ReusePolicy,
 )
-from senselab_core.kernel.signals import Recording
+from senselab_core.kernel.signals import PlainText, Recording
 from senselab_core.kernel.wire import from_wire_form, wire_form
 from senselab_core.runtime.audio_io import DECODER, READER, open_audio
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
@@ -275,14 +275,19 @@ def _resolve_model(
 
 
 def _bind(port: str, port_type: str, value: object) -> tuple[InputIdentity, object, str | None]:
-    """Return an input's identity, the value its item carries and the decoder that read it from a path, if one did."""
+    """Return an input's identity, the value its item carries and the decoder that read it from a path, if one did.
+
+    A `str` for a `Text` port is held as `PlainText`.
+    """
     decoder = None
+    if port_type == "Text" and isinstance(value, str):
+        value = PlainText(content=value)
     if isinstance(value, str | PathLike) and port_type in kernel_types():
         if port_type not in _READERS:
             raise ValueError(f"input {port!r} is a {port_type}, which is not read from a path; pass the value")
         reader, decoder = _READERS[port_type]
         value = reader(value)
-    if isinstance(value, Recording):
+    if isinstance(value, Recording | PlainText):
         return value.identity, value, decoder
     if isinstance(value, Frozen):
         return "content:" + value.canonical_digest(), value, decoder

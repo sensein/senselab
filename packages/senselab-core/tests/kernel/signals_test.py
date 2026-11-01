@@ -361,3 +361,13 @@ def test_plain_text_is_canonical_and_content_identified() -> None:
     assert composed.identity != PlainText(content="cafe").identity and composed.format == "text@1.0"
     with pytest.raises(ValidationError, match="identity"):
         PlainText(content="cafe", identity=composed.identity)
+
+
+@pytest.mark.logic
+def test_samples_held_with_their_files_stamp_keep_its_identity() -> None:
+    """Samples held with the stamp of their file are identified as the file; a stamp of another shape is refused."""
+    data = numpy.zeros((2, 8), dtype=numpy.float32)
+    group = RegularGroup(channels=audio_channels(2), sampling_rate=RATE, data=data, source_stamp=_stamp())
+    assert Audio.from_group(group).identity == "content:" + "c" * 64
+    with pytest.raises(ValidationError, match="channels and frames"):
+        RegularGroup(channels=audio_channels(2), sampling_rate=RATE, data=data, source_stamp=_stamp(frames=7))

@@ -18,8 +18,8 @@ from senselab_core.kernel import prov
 from senselab_core.kernel._base import Frozen
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputIdentity, ReusePolicy
-from senselab_core.kernel.results import Metric, Transcript, TranscriptNode
-from senselab_core.kernel.signals import Audio
+from senselab_core.kernel.results import Metric, Transcript, TranscriptNode, Trials
+from senselab_core.kernel.signals import Audio, PlainText
 from senselab_core.kernel.time import Span
 from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime.audio_io import DECODER
@@ -69,9 +69,18 @@ TRANSCRIBE_TASK = TaskSpec(
     name="call_test.transcribe",
     version="1",
     kind="transform",
-    inputs={"text": "json"},
+    inputs={"text": "Text"},
     outputs={"transcript": "Transcript"},
     params=ReturnParams,
+)
+
+TRIALS_TASK = TaskSpec(
+    name="call_test.pair",
+    version="1",
+    kind="transform",
+    inputs={"text": "json"},
+    outputs={"trials": "Trials"},
+    params=fake.EchoParams,
 )
 
 
@@ -91,7 +100,7 @@ def _backend(name: str, stack: str, env: Env, task: TaskSpec = TASK, worker: str
 
 
 TEST_REGISTRY = Registry()
-for _task in (TASK, AUDIO_TASK, TRANSCRIBE_TASK, fake.ECHO):
+for _task in (TASK, AUDIO_TASK, TRANSCRIBE_TASK, TRIALS_TASK, fake.ECHO):
     TEST_REGISTRY.add_task(_task)
 TEST_REGISTRY.add_backend(_backend("fake-alpha", "alpha", Env.host()))
 TEST_REGISTRY.add_backend(_backend("fake-beta", "beta", Env.host()))
@@ -100,6 +109,7 @@ TEST_REGISTRY.add_backend(fake.FAKE)
 TEST_REGISTRY.add_backend(_backend("identity", "dsp", Env.host(), AUDIO_TASK, "backends.identity_backend_fixture"))
 TEST_REGISTRY.add_backend(_backend("fake-audio", "isolated", Env.isolated("fake"), AUDIO_TASK))
 TEST_REGISTRY.add_backend(_backend("fake-transcribe", "isolated", Env.isolated("fake"), TRANSCRIBE_TASK))
+TEST_REGISTRY.add_backend(_backend("trials", "dsp", Env.host(), TRIALS_TASK, "backends.trials_backend_fixture"))
 
 CATALOGUE = Catalogue.load(
     f"""
@@ -295,10 +305,20 @@ def test_isolated_outputs_are_read_as_their_declared_types(store: ResultStore) -
 
     fresh, hit = transcribe(transcript, "a"), transcribe(transcript, "a")
     assert fresh.outputs == hit.outputs == {"transcript": transcript} and hit.reused is not None
+    assert fresh.key.inputs == {"text": PlainText(content="a").identity}
     with pytest.raises(OutputTypeMismatch, match="metric@1.0"):
         transcribe(Metric(name="wer", value=0.1, unit="1", items=1), "b")
     call_module._close_workers()
     assert len(_executions(store)) == 1
+
+
+@pytest.mark.logic
+def test_array_outputs_are_stored_and_read_back(store: ResultStore) -> None:
+    """A host backend's `Trials` output is stored with its arrays and read back equal from the store."""
+    call = TaskCall.model_validate({"task": TRIALS_TASK.name, "inputs": {"text": "pairs"}})
+    fresh, hit = (run_call(call, execution=_profile(), store=store) for _ in range(2))
+    assert isinstance(fresh.outputs["trials"], Trials) and fresh.reused is None and hit.reused is not None
+    assert hit.outputs == fresh.outputs and hit.output_identity == fresh.output_identity
 
 
 @pytest.mark.logic
