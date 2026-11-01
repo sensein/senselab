@@ -15,8 +15,10 @@ from senselab_core.runtime.envs import (
     LOCK_DIGEST_TAG,
     CudaCompatibilityError,
     EnvHandle,
+    EnvLockError,
     HostCuda,
     HostLockLacksBackend,
+    LockInputs,
     ManagedPythonMissing,
     TorchIndex,
     Uv,
@@ -26,7 +28,7 @@ from senselab_core.runtime.envs import (
     lock_digest,
     lock_identity_digest,
     pick_torch_index,
-    retag_lock,
+    read_lock_inputs,
 )
 from senselab_core.runtime.profiles import Envs, ExecutionProfile
 
@@ -213,14 +215,14 @@ def test_worker_runtime_is_an_overlay(tmp_path: Path, uv_log: Path) -> None:
 def test_host_env_requires_a_managed_interpreter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A host env is this interpreter, refused when it is not uv-managed."""
     lock = tmp_path / "uv.lock"
-    lock.write_text("version = 1\n")
+    lock.write_text('version = 1\n[[package]]\nname = "numpy"\nversion = "2.1.0"\n')
     monkeypatch.setenv("FAKE_UV_PYTHON_DIR", str(Path(sys.base_prefix).resolve().parent))
-    handle = ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, uv=FAKE_UV)
+    handle = ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, uv=FAKE_UV, requirements=["numpy"])
     assert handle.python == sys.executable
     assert handle.torch_index is None
     monkeypatch.setenv("FAKE_UV_PYTHON_DIR", str(tmp_path / "elsewhere"))
     with pytest.raises(ManagedPythonMissing, match="uv python install"):
-        ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, uv=FAKE_UV)
+        ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, uv=FAKE_UV, requirements=["numpy"])
 
 
 def test_other_venv_failure_is_not_managed_python_missing(
@@ -256,52 +258,108 @@ def test_profile_lease_bound_breaks_an_expired_build_lease(tmp_path: Path, uv_lo
     assert not lease.exists()
 
 
-def _uv_lock(tmp_path: Path, *packages: tuple[str, str]) -> Path:
+def _uv_lock(tmp_path: Path, *packages: tuple[str, str], extras: dict[str, dict[str, list[str]]] | None = None) -> Path:
     path = tmp_path / "uv.lock"
-    path.write_text("version = 1\n" + "".join(f'[[package]]\nname = "{n}"\nversion = "{v}"\n' for n, v in packages))
+    text = "version = 1\n"
+    for name, version in packages:
+        text += f'[[package]]\nname = "{name}"\nversion = "{version}"\n'
+        if name in (extras or {}):
+            text += "[package.optional-dependencies]\n"
+            for extra, deps in extras[name].items():  # type: ignore[index]
+                text += f"{extra} = [" + ", ".join(f'{{ name = "{d}" }}' for d in deps) + "]\n"
+    path.write_text(text)
     return path
 
 
+def _host(tmp_path: Path, lock: Path, requirements: list[str]) -> EnvHandle:
+    return ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, uv=FAKE_UV, requirements=requirements)
+
+
 def test_host_refused_when_lock_lacks_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A host env is refused unless the root lock pins every requirement of its backend."""
+    """A host env is refused unless the root lock covers every requirement of its backend, version included."""
     monkeypatch.setenv("FAKE_UV_PYTHON_DIR", str(Path(sys.base_prefix).resolve().parent))
-    lock = _uv_lock(tmp_path, ("numpy", "2.1.0"), ("Some_Pkg", "1.0"))
-    ok = ensure_env(
-        Env.host(), lock, tmp_path, settings=SETTINGS, uv=FAKE_UV, requirements=["numpy>=2", "some-pkg==1.0"]
-    )
-    assert ok.python == sys.executable
-    for requirements in (["numpy", "absent-pkg>=1"], ["some-pkg==2.0"]):
+    lock = _uv_lock(tmp_path, ("numpy", "2.1.0"), ("Some_Pkg", "1.0"), ("torch", "2.4.0"))
+    assert _host(tmp_path, lock, ["numpy>=2", "some-pkg==1.0", "numpy"]).python == sys.executable
+    for missing in ("absent-pkg>=1", "some-pkg==2.0", "torch>=2.8,<2.9", "numpy>=3", "pkg @ https://x.example/p.whl"):
         with pytest.raises(HostLockLacksBackend, match="Env.isolated") as info:
-            ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, uv=FAKE_UV, requirements=requirements)
-        assert requirements[-1] in str(info.value)
+            _host(tmp_path, lock, ["numpy", missing])
+        assert missing in str(info.value)
+
+
+def test_host_marker_and_extras(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A requirement whose marker is false here is skipped; an extra needs its locked dependencies."""
+    monkeypatch.setenv("FAKE_UV_PYTHON_DIR", str(Path(sys.base_prefix).resolve().parent))
+    lock = _uv_lock(tmp_path, ("a", "1.0"), ("b", "1.0"), extras={"a": {"x": ["b"], "y": ["c"]}})
+    assert _host(tmp_path, lock, ["a", "absent; python_version < '3'", "a[x]"]).python == sys.executable
+    with pytest.raises(HostLockLacksBackend):
+        _host(tmp_path, lock, ["a[y]"])
+    with pytest.raises(HostLockLacksBackend):
+        _host(tmp_path, lock, ["a[nope]"])
+    with pytest.raises(HostLockLacksBackend):
+        _host(tmp_path, lock, ["absent; python_version >= '3'"])
+
+
+def test_host_requires_requirements_and_valid_ones(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A host env with no requirements, or an unparsable one, is refused outright."""
+    monkeypatch.setenv("FAKE_UV_PYTHON_DIR", str(Path(sys.base_prefix).resolve().parent))
+    lock = _uv_lock(tmp_path, ("a", "1.0"))
+    for requirements in ([], ["not a requirement!"]):
+        with pytest.raises(EnvLockError):
+            _host(tmp_path, lock, requirements)
+
+
+def _inputs(**changes: object) -> LockInputs:
+    fields: dict[str, object] = {
+        "name": "demo", "requirements": ("numpy>=2", "torch>=2"), "python": "3.12",
+        "exclude_newer": "2026-10-02T00:00:00Z", "max_cuda": (13, 0), "quarantined": ("lightning!=2.6.2",),
+        "base": ("numpy",),
+    }  # fmt: skip
+    return LockInputs(**{**fields, **changes})  # type: ignore[arg-type]
 
 
 def test_lock_header_is_tagged_digest(tmp_path: Path, uv_log: Path) -> None:
     """A compiled lock carries `# identity-digest: <registered tag> <digest of its inputs>`, not a bare sha256."""
     from senselab_worker.digest import IDENTITY_TAGS
 
-    text = compile_lock(
-        "demo", ["numpy>=2", "torch>=2"], "3.12", (13, 0), exclude_newer="2026-10-02T00:00:00Z", uv=FAKE_UV,
-        check_torch_index=False,
-    )  # fmt: skip
+    inputs = _inputs()
+    text = compile_lock(inputs, uv=FAKE_UV, check_torch_index=False)
     path = tmp_path / "demo.txt"
     path.write_text(text)
     tag, digest = lock_identity_digest(path)
     assert tag == LOCK_DIGEST_TAG and tag in IDENTITY_TAGS
-    assert digest == lock_digest(["numpy>=2", "torch>=2"], "3.12", (13, 0))
-    assert lock_digest(["numpy>=2", "torch>=2"], "3.12", (12, 8)) != digest
+    assert digest == lock_digest(inputs)
     assert "requirements-sha256" not in text and "# torch-index: cu130" in text
-    assert "numpy==1.0.0" in text and "\ntorch==" not in text.split("# note")[-1]
+    assert "# exclude-newer: 2026-10-02T00:00:00Z" in text and "numpy==1.0.0" in text
     compiles = [c for c in _calls(uv_log) if c[:2] == ["pip", "compile"]]
     assert compiles and all(c[c.index("--python-preference") + 1] == "only-managed" for c in compiles)
+    assert all(c[c.index("--exclude-newer") + 1] == inputs.exclude_newer for c in compiles)
 
 
-def test_retag_replaces_only_the_digest_line() -> None:
-    """Re-tagging an old lock rewrites its digest line and leaves the body and other headers as they were."""
-    old = "# senselab env lock: x\n# requirements-sha256: " + "a" * 64 + "\n# python: 3.12\nnumpy==2.1.0\n"
-    new = retag_lock(old, "b" * 64)
-    assert (
-        new
-        == f"# senselab env lock: x\n# identity-digest: {LOCK_DIGEST_TAG} {'b' * 64}\n# python: 3.12\nnumpy==2.1.0\n"
-    )
-    assert retag_lock(new, "c" * 64).count("identity-digest") == 1
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"exclude_newer": "2026-10-03T00:00:00Z"},
+        {"quarantined": ()},
+        {"base": ()},
+        {"requirements": ("numpy>=2",)},
+        {"python": "3.13"},
+        {"max_cuda": (12, 8)},
+        {"excluded": ("pyaudio",)},
+    ],
+)
+def test_every_resolution_input_changes_the_digest(change: dict[str, object]) -> None:
+    """The digest covers each input of the resolution; the env's name is not one."""
+    assert lock_digest(_inputs(**change)) != lock_digest(_inputs())
+    assert lock_digest(_inputs(name="other")) == lock_digest(_inputs())
+
+
+def test_lock_inputs_file_is_read(tmp_path: Path) -> None:
+    """`read_lock_inputs` reads the packaged inputs and refuses another format."""
+    root = Path(__file__).parents[4] / "packages/senselab/src/senselab/data/env_locks/inputs.yaml"
+    inputs = read_lock_inputs(root)
+    assert set(inputs) == {"crisperwhisper", "vllm-server", "pii-review"}
+    assert inputs["vllm-server"].max_cuda == (13, 0) and inputs["pii-review"].quarantined
+    bad = tmp_path / "inputs.yaml"
+    bad.write_text("format: other@1.0\n")
+    with pytest.raises(EnvLockError, match="format"):
+        read_lock_inputs(bad)

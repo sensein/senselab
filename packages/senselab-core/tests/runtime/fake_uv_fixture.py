@@ -10,6 +10,7 @@ fails as uv does when no wheel matches), `FAKE_UV_DELAY` (seconds each `pip inst
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -60,11 +61,11 @@ def _pip_install(args: list[str]) -> int:
 
 def _pip_compile(args: list[str]) -> int:
     hashes = "--generate-hashes" in args
+    skipped = {args[i + 1] for i, a in enumerate(args) if a == "--no-emit-package"}
     for line in Path(args[2]).read_text().splitlines():
-        name = line.split(";")[0].split("[")[0].split("=")[0].split(">")[0].split("<")[0].strip()
-        if name in args[args.index("--no-emit-package") + 1 :: 2] if "--no-emit-package" in args else False:
-            continue
-        print(f"{name}==1.0.0 \\\n    --hash=sha256:{'0' * 64}" if hashes else f"{name}==1.0.0  # via demo")
+        name = re.match(r"[A-Za-z0-9._-]+", line)[0]  # type: ignore[index]
+        if name not in skipped:
+            print(f"{name}==1.0.0 \\\n    --hash=sha256:{'0' * 64}" if hashes else f"{name}==1.0.0  # via demo")
     return 0
 
 

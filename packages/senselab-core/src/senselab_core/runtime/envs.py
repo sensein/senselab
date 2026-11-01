@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 import senselab_worker
+import yaml
+from packaging.requirements import InvalidRequirement, Requirement
 from pydantic import ValidationError
 from senselab_worker.digest import file_digest, identity_digest
 
@@ -68,15 +70,11 @@ _NO_INTERPRETER = re.compile(r"no interpreter found|no download found", re.IGNOR
 _OVERLAY_STAMP = "senselab_worker.runtime"
 LOCK_DIGEST_TAG = "env-lock@1"
 """The `identity_digest` tag of a lock's inputs, recorded in its `# identity-digest:` header line."""
-BASE_REQUIREMENTS = ("safetensors", "numpy")
-"""Resolved into every lock beside the backend's requirements."""
-QUARANTINED = ("lightning!=2.6.2,!=2.6.3", "pytorch-lightning!=2.6.2,!=2.6.3")
-"""Constraints on every resolution: releases withdrawn from PyPI as malicious."""
+LOCK_INPUTS_FORMAT = "env-lock-inputs@1.0"
 TORCH_PACKAGES = frozenset({"torch", "torchaudio"})
 _TORCH_VARIANTS = ("nvidia-", "triton", "pytorch-triton", "cuda-")
 _LOCK_LINE = re.compile(r"^([A-Za-z0-9._-]+)(\[[^\]]*\])?\s*(==|@)\s*([^\s;#\\]+)")
 _VIA = re.compile(r"#\s*via\s+(.*)$")
-_REQUIREMENT = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*(?:==\s*([^\s;,]+))?")
 _LINUX_X86_64 = ("linux", "x86_64")
 _MACOS_ARM64 = ("macosx", "arm64")
 
@@ -281,20 +279,22 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
         root: The directory the profile's `env_roots` gives for `env.kind`; unused for a host env.
         settings: The profile's `envs`: `torch_index` replaces the probed index when set, and a build's lease is
             broken once older than `lease_stale_after_s`; a waiter waits that long plus `locks.TIMEOUT_S`.
-        requirements: The backend's requirements; a host env is refused unless `lock` covers each.
+        requirements: The backend's requirements; required for a host env, which is refused unless `lock` covers each.
         uv: The `uv` command; `Uv.find()` when None.
         host_cuda: The host's CUDA; probed with `detect_host_cuda` when None and the lock pins torch.
 
     Raises:
         ManagedPythonMissing: no uv-managed interpreter of the needed version, or the host's is not uv-managed.
         CudaCompatibilityError: the routed index has no wheel for the lock's torch pins.
-        EnvLockError: the lock's header lacks what a build needs.
+        EnvLockError: the lock's header lacks what a build needs, or a host env got no `requirements`.
         HostLockLacksBackend: a host env whose `lock` does not pin every one of `requirements`.
         RuntimeError: another `uv` step failed; the message carries uv's stderr.
         LeaseTimeout, LeaseUnavailable: as `Lease`.
     """
     uv = uv or Uv.find()
     if env.kind == "host":
+        if not requirements:
+            raise EnvLockError("an Env.host() backend must pass its requirements, so the senselab lock can be checked")
         lacking = host_lock_gaps(lock, requirements)
         if lacking:
             raise HostLockLacksBackend(f"{lock} does not cover {lacking}; declare the backend Env.isolated instead")
@@ -477,80 +477,70 @@ def _group_readable(directory: Path) -> None:
                     raise
 
 
-__all__ = [
-    "CPU_INDEX",
-    "CUDA_INDEXES",
-    "DEFAULT_MAX_CUDA",
-    "ENV_RECORD_FORMAT",
-    "PYTHON_PREFERENCE",
-    "CudaCompatibilityError",
-    "EnvHandle",
-    "EnvLock",
-    "EnvLockError",
-    "EnvRecord",
-    "HostCuda",
-    "ManagedPythonMissing",
-    "TorchIndex",
-    "Uv",
-    "detect_host_cuda",
-    "ensure_env",
-    "pick_torch_index",
-]
+@dataclass(frozen=True)
+class LockInputs:
+    """Everything a lock is compiled from; `lock_digest` covers every field but `name`.
 
-
-def host_lock_gaps(lock: Path, requirements: Sequence[str]) -> list[str]:
-    """Return the `requirements` the `uv.lock` at `lock` does not cover.
-
-    A requirement is covered when its distribution is a locked package and, for an `==` pin, at that version.
+    `exclude_newer` is the RFC 3339 cutoff for uploads, `quarantined` the constraints applied to the resolution,
+    `base` the requirements resolved into every lock beside `requirements`, `excluded` the distributions left out of
+    the body, `max_cuda` the CUDA index ceiling (None: `DEFAULT_MAX_CUDA`).
     """
-    locked = {
-        re.sub(r"[-_.]+", "-", str(p["name"]).lower()): p.get("version")
-        for p in tomllib.loads(Path(lock).read_text("utf-8")).get("package", [])
-    }
-    gaps = []
-    for text in requirements:
-        match = _REQUIREMENT.match(text)
-        name = re.sub(r"[-_.]+", "-", match[1].lower()) if match else None
-        if name not in locked or (match and match[2] and locked[name] != match[2]):
-            gaps.append(text)
-    return gaps
+
+    name: str
+    requirements: tuple[str, ...]
+    python: str
+    exclude_newer: str
+    max_cuda: tuple[int, int] | None = None
+    excluded: tuple[str, ...] = ()
+    quarantined: tuple[str, ...] = ()
+    base: tuple[str, ...] = ()
 
 
-def lock_digest(
-    requirements: Sequence[str],
-    python: str,
-    max_cuda: tuple[int, int] | None = None,
-    excluded: Sequence[str] = (),
-) -> str:
-    """Return the digest of everything a lock is compiled from, tagged `LOCK_DIGEST_TAG`."""
+def read_lock_inputs(path: Path) -> dict[str, LockInputs]:
+    """Read the `env-lock-inputs@1.0` file at `path`: its `quarantine` and `base_requirements`, and each env's inputs.
+
+    Raises:
+        EnvLockError: the format is not `LOCK_INPUTS_FORMAT`, or an env lacks `python`, `requirements` or
+            `exclude_newer`.
+    """
+    raw = yaml.safe_load(Path(path).read_text("utf-8"))
+    if raw.get("format") != LOCK_INPUTS_FORMAT:
+        raise EnvLockError(f"{path}: format is {raw.get('format')!r}, not {LOCK_INPUTS_FORMAT!r}")
+    quarantined = tuple(raw["quarantine"]["value"])
+    base = tuple(raw["base_requirements"]["value"])
+    out = {}
+    for name, spec in raw["envs"].items():
+        missing = [k for k in ("python", "requirements", "exclude_newer") if k not in spec]
+        if missing:
+            raise EnvLockError(f"{path}: env {name!r} lacks {missing}")
+        cuda = spec.get("max_cuda")
+        out[name] = LockInputs(
+            name=name,
+            requirements=tuple(spec["requirements"]),
+            python=str(spec["python"]),
+            exclude_newer=str(spec["exclude_newer"]),
+            max_cuda=(cuda[0], cuda[1]) if cuda else None,
+            excluded=tuple(spec.get("excluded", ())),
+            quarantined=quarantined,
+            base=base,
+        )
+    return out
+
+
+def lock_digest(inputs: LockInputs) -> str:
+    """Return the digest of `inputs`, tagged `LOCK_DIGEST_TAG`; the env's name is not part of it."""
     return identity_digest(
         LOCK_DIGEST_TAG,
         {
-            "requirements": list(requirements),
-            "base": list(BASE_REQUIREMENTS),
-            "python": python,
-            "max_cuda": list(max_cuda) if max_cuda else None,
-            "exclude": sorted(_normalize(n) for n in excluded),
+            "requirements": list(inputs.requirements),
+            "base": list(inputs.base),
+            "quarantined": list(inputs.quarantined),
+            "python": inputs.python,
+            "exclude_newer": inputs.exclude_newer,
+            "max_cuda": list(inputs.max_cuda) if inputs.max_cuda else None,
+            "exclude": sorted(_normalize(n) for n in inputs.excluded),
         },
     )
-
-
-def retag_lock(text: str, digest: str) -> str:
-    """Return the lock `text` with its header's digest line replaced by `# identity-digest: <tag> <digest>`.
-
-    Nothing is resolved or installed; the body and every other header line are unchanged.
-
-    Raises:
-        EnvLockError: `text` has neither an `identity-digest` nor a `requirements-sha256` header line.
-    """
-    lines = text.splitlines(keepends=True)
-    for i, line in enumerate(lines):
-        if not line.startswith("#"):
-            break
-        if line.startswith(("# requirements-sha256:", "# identity-digest:")):
-            lines[i] = f"# identity-digest: {LOCK_DIGEST_TAG} {digest}\n"
-            return "".join(lines)
-    raise EnvLockError("lock has no digest header line to replace")
 
 
 def lock_identity_digest(path: Path) -> tuple[str, str]:
@@ -568,6 +558,42 @@ def lock_identity_digest(path: Path) -> tuple[str, str]:
                 return found[1], found[2]
             break
     raise EnvLockError(f"lock {path} has no `# identity-digest: <tag> <sha256>` header line")
+
+
+def host_lock_gaps(lock: Path, requirements: Sequence[str]) -> list[str]:
+    """Return the `requirements` the `uv.lock` at `lock` does not cover.
+
+    A requirement whose marker is false on this host is skipped. Any other is covered when its distribution is a
+    locked package at a version its specifier admits (pre-releases included) and, for each extra it names, the
+    package's locked optional dependencies for that extra are locked too. A requirement naming a URL is never covered.
+
+    Raises:
+        EnvLockError: a requirement is not a valid requirement string.
+    """
+    packages: dict[str, dict[str, Any]] = {
+        _normalize(str(p["name"])): p for p in tomllib.loads(Path(lock).read_text("utf-8")).get("package", [])
+    }
+    gaps = []
+    for text in requirements:
+        try:
+            req = Requirement(text)
+        except InvalidRequirement as err:
+            raise EnvLockError(f"invalid requirement {text!r}: {err}") from err
+        if req.marker is not None and not req.marker.evaluate():
+            continue
+        package = packages.get(_normalize(req.name))
+        covered = (
+            package is not None and req.url is None and req.specifier.contains(package["version"], prereleases=True)
+        )
+        if covered and package is not None:
+            extras = package.get("optional-dependencies", {})
+            covered = all(
+                extra in extras and all(_normalize(d["name"]) in packages for d in extras[extra])
+                for extra in req.extras
+            )
+        if not covered:
+            gaps.append(text)
+    return gaps
 
 
 def _normalize(name: str) -> str:
@@ -632,33 +658,19 @@ def _wheel_on_index(package: str, version: str, tag: str, python: str, platform_
     return any(w.startswith(prefixes) and f"-{cp}-" in w and all(p in w for p in platform_parts) for w in wheels)
 
 
-def compile_lock(  # noqa: PLR0913 - a lock's inputs and its two environment-facing switches
-    name: str,
-    requirements: Sequence[str],
-    python: str,
-    max_cuda: tuple[int, int] | None = None,
-    *,
-    exclude_newer: str | None = None,
-    excluded: Sequence[str] = (),
-    check_torch_index: bool = True,
-    max_steps: int = 12,
-    uv: Uv | None = None,
+def compile_lock(
+    inputs: LockInputs, *, check_torch_index: bool = True, max_steps: int = 12, uv: Uv | None = None
 ) -> str:
     """Return a lock's full text: `uv pip compile --universal --generate-hashes` under a header.
 
     Needs network. When the resolution pins `torch`, its and `torchaudio`'s versions must be served by the top CUDA
     index and the CPU index on Linux x86_64 and by the CPU index on macOS arm64; otherwise `torch` is bounded below
     the rejected version and the resolution repeated, up to `max_steps` times. `torch`, `torchaudio`, the CUDA
-    packages only they pull in and `excluded` are left out of the body; the builder installs the header's pins from
-    the PyTorch index.
+    packages only they pull in and `inputs.excluded` are left out of the body; the builder installs the header's pins
+    from the PyTorch index. uv runs with `--python-preference only-managed`.
 
     Args:
-        name: The env name, written to the header.
-        requirements: The backend's requirement specs.
-        python: `major.minor`, passed to uv with `--python-preference only-managed`.
-        max_cuda: The backend's CUDA index ceiling.
-        exclude_newer: An RFC 3339 timestamp; later uploads are ignored.
-        excluded: Distributions resolved but left out of the body.
+        inputs: What the lock is compiled from.
         check_torch_index: Whether to check the PyTorch indexes (needs network).
         max_steps: How many times `torch` may be bounded down.
         uv: The `uv` command; `Uv.find()` when None.
@@ -668,17 +680,18 @@ def compile_lock(  # noqa: PLR0913 - a lock's inputs and its two environment-fac
         RuntimeError: `uv pip compile` failed; the message carries uv's stderr.
     """
     uv = uv or Uv.find()
-    tag = _top_cuda_tag(max_cuda)
+    python, name = inputs.python, inputs.name
+    tag = _top_cuda_tag(inputs.max_cuda)
     targets = [(tag, _LINUX_X86_64), ("cpu", _LINUX_X86_64), ("cpu", _MACOS_ARM64)]
     with tempfile.TemporaryDirectory(prefix=f"env-lock-{name}-") as tmp:
         work = Path(tmp)
         in_file, constraints = work / "requirements.in", work / "constraints.txt"
-        in_file.write_text("\n".join([*requirements, *BASE_REQUIREMENTS]) + "\n")
+        in_file.write_text("\n".join([*inputs.requirements, *inputs.base]) + "\n")
         extra: list[str] = []
         notes: list[str] = []
+        flags = ["--constraint", str(constraints), "--exclude-newer", inputs.exclude_newer]
         for _ in range(max_steps):
-            constraints.write_text("\n".join([*QUARANTINED, *extra]) + "\n")
-            flags = ["--constraint", str(constraints), *(["--exclude-newer", exclude_newer] if exclude_newer else [])]
+            constraints.write_text("\n".join([*inputs.quarantined, *extra]) + "\n")
             packages = _resolved(_pip_compile(uv, in_file, python, [*flags, "--annotation-style", "line"]))
             pins = tuple(f"{p}=={packages[p][0]}" for p in sorted(TORCH_PACKAGES) if p in packages)
             if not pins or not check_torch_index:
@@ -697,18 +710,48 @@ def compile_lock(  # noqa: PLR0913 - a lock's inputs and its two environment-fac
             extra.append(f"torch<{packages['torch'][0]}")
         else:
             raise EnvLockError(f"{name!r}: no torch within the requirements is served on every index: {notes}")
-        no_emit = [*(_torch_only(packages) if pins else ()), *sorted(_normalize(n) for n in excluded)]
+        no_emit = [*(_torch_only(packages) if pins else ()), *sorted(_normalize(n) for n in inputs.excluded)]
         skip = [a for n in no_emit for a in ("--no-emit-package", n)]
         body = _pip_compile(uv, in_file, python, [*flags, "--generate-hashes", *skip])
     header = [
         f"# senselab env lock: {name}",
-        f"# identity-digest: {LOCK_DIGEST_TAG} {lock_digest(requirements, python, max_cuda, excluded)}",
+        f"# identity-digest: {LOCK_DIGEST_TAG} {lock_digest(inputs)}",
         f"# python: {python}",
         f"# torch: {' '.join(pins) if pins else 'none'}",
         f"# torch-index: {tag if pins else 'none'}",
-        f"# exclude-newer: {exclude_newer or 'none'}",
+        f"# exclude-newer: {inputs.exclude_newer}",
         f"# uv: {_check(uv('--version'), 'report its version').stdout.strip()}",
-        *([f"# exclude: {' '.join(sorted(_normalize(n) for n in excluded))}"] if excluded else []),
+        *([f"# exclude: {' '.join(sorted(_normalize(n) for n in inputs.excluded))}"] if inputs.excluded else []),
         *(f"# note: {note}" for note in notes),
     ]
     return "\n".join(header) + "\n" + body
+
+
+__all__ = [
+    "CPU_INDEX",
+    "CUDA_INDEXES",
+    "DEFAULT_MAX_CUDA",
+    "ENV_RECORD_FORMAT",
+    "LOCK_DIGEST_TAG",
+    "LOCK_INPUTS_FORMAT",
+    "PYTHON_PREFERENCE",
+    "CudaCompatibilityError",
+    "EnvHandle",
+    "EnvLock",
+    "EnvLockError",
+    "EnvRecord",
+    "HostCuda",
+    "HostLockLacksBackend",
+    "LockInputs",
+    "ManagedPythonMissing",
+    "TorchIndex",
+    "Uv",
+    "compile_lock",
+    "detect_host_cuda",
+    "ensure_env",
+    "host_lock_gaps",
+    "lock_digest",
+    "lock_identity_digest",
+    "pick_torch_index",
+    "read_lock_inputs",
+]

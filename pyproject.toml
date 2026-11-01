@@ -118,6 +118,7 @@ markers = [
   "limits: behaviour at declared limits",
   "usecase: an end-to-end use case",
   "env: needs a built environment",
+  "model: loads weights or needs a backend env",
   "gpu: needs a GPU",
   "network: needs network outside the sandbox",
   "slow: long-running",

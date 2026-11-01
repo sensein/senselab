@@ -3262,6 +3262,7 @@ source = { editable = "packages/senselab-core" }
 dependencies = [
     { name = "huggingface-hub" },
     { name = "numpy" },
+    { name = "packaging" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "senselab-worker" },
@@ -3286,6 +3287,7 @@ test = [
 requires-dist = [
     { name = "huggingface-hub", specifier = ">=1.3,<3" },
     { name = "numpy", specifier = ">=1.23" },
+    { name = "packaging" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pyyaml" },
     { name = "senselab-worker", editable = "packages/senselab-worker" },
