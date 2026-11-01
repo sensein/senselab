@@ -42,8 +42,8 @@ PR - clarify the decisions"):
 
 - **D-1** Guards and gates cut back to the design: keep the import-linter contracts, the identifier check,
   the fixture budget (256 KB per file, 2 MB total) and the workflow-expression guard; delete the
-  spelling-based bypass lints, `moved_modules_test.py` and tests that only make other tests exist; add the
-  advisory agent prose review.
+  spelling-based bypass lints, `moved_modules_test.py` and tests that only make other tests exist; review and
+  compact during development, no model in CI (owner item 39).
 - **D-2** Locks are leases by rename and `O_EXCL` (ADR-003); revert the `flock`/heartbeat/takeover protocol
   and the 1.x-only lock modes; keep H9b's path safety.
 - **D-3** Canonical text is NFC except text with code points unassigned in Unicode 13.0, for portability
@@ -68,8 +68,7 @@ PR - clarify the decisions"):
 ## Next actions, in order
 
 Done on 2026-11-01: specs merged into `2x/phase-1` (`d90b5057`); **D-6** `src/` = `alpha` (`ffdf06e6`,
-merge `a2be7b27`); **D-1** guard layer cut and advisory prose review added (`f7026f54`, `b2db96be`;
-needs the `ANTHROPIC_API_KEY` repository secret); **D-5** release gate trimmed (`a3ea1894`); **D-2** locks are leases by rename and `O_EXCL` (`5a325c29..12853f8b`; ADR-003 amended to
+merge `a2be7b27`); **D-1** guard layer cut (`f7026f54`; the CI prose review of `b2db96be` was removed per owner item 39); **D-5** release gate trimmed (`a3ea1894`); **D-2** locks are leases by rename and `O_EXCL` (`5a325c29..12853f8b`; ADR-003 amended to
 match what was built), plus **fix round 1** (`b76681a9`): a holder is identified by its uuid token and a judged lease by device, inode and mtime, because ext4 reuses inode numbers at once; Linux CI green; the D-1 fixture budget numbers (256 KB per file, 2 MB total) now live in
 `scripts/data/fixture_budget.yaml` with their derivations.
 
