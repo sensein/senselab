@@ -55,6 +55,17 @@
             "rdfs:comment": "An activity that served a stored result in place of executing."
         },
         {
+            "@id": "senselab:fileLabel",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "senselab:File"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The file's per-run label, file-<n>; the label's path is only in the run's private label map."
+        },
+        {
             "@id": "senselab:logicalKey",
             "@type": "rdf:Property",
             "rdfs:domain": {

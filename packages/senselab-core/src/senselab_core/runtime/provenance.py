@@ -12,18 +12,20 @@ import json
 import os
 import re
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 from senselab_worker.canonical import jcs_dumps, jcs_loads, require_depth
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.formats import FORMAT_PATTERN, PROVENANCE_FORMAT, readable
-from senselab_core.runtime.storage import TEMPORARY_NAME, write_atomically
+from senselab_core.runtime.locks import LeaseUnavailable
+from senselab_core.runtime.storage import TEMPORARY_NAME, WrongKindError, write_atomically
 from senselab_core.runtime.vocabulary import core_vocabulary
 
+T = TypeVar("T")
 WRITER_DOCUMENT = re.compile(r"[0-9a-f]{32}\.jsonld")
 """A writer's document in `<run>/prov/`: its writer uuid4 hex, `.jsonld`."""
 PROV_DIR = "prov"
@@ -105,6 +107,27 @@ class ProvenanceFormatRefused(ValueError):
             f" re-running it under 2.x. See {MIGRATION_STATEMENT}"
         )
         self.found = found
+
+
+class RunIOError(OSError):
+    """An OS-level failure on a run's provenance or private files, reported by its errno text and never a path."""
+
+    def __init__(self, cause: BaseException) -> None:
+        """Keep the cause's errno and its generic text; its file names are dropped."""
+        code = cause.errno if isinstance(cause, OSError) and cause.errno else 0
+        super().__init__(code, os.strerror(code) if code else type(cause).__name__)
+
+
+def pathless(operation: Callable[[], T]) -> T:
+    """Return `operation()`, raising a `RunIOError` in place of any OS, lease or wrong-kind error.
+
+    Raises:
+        RunIOError: if `operation` raised one of those; it carries the errno text only, with no cause or context.
+    """
+    try:
+        return operation()
+    except (OSError, WrongKindError, LeaseUnavailable) as err:
+        raise RunIOError(err) from None
 
 
 class ProvStore:
@@ -203,10 +226,19 @@ class ProvStore:
         return kprov.document(self.records())
 
     def write(self, run: str | Path) -> None:
-        """Replace this writer's document, `<run>/prov/<writer>.jsonld`, atomically with `document()` as JCS."""
+        """Replace this writer's document, `<run>/prov/<writer>.jsonld`, atomically with `document()` as JCS.
+
+        Raises:
+            RunIOError: if the document cannot be written; the error names no path.
+        """
         directory = Path(run) / PROV_DIR
-        directory.mkdir(exist_ok=True)
-        write_atomically(directory / f"{self.writer}.jsonld", jcs_dumps(self.document()))
+        data = jcs_dumps(self.document())
+
+        def write() -> None:
+            directory.mkdir(exist_ok=True)
+            write_atomically(directory / f"{self.writer}.jsonld", data)
+
+        pathless(write)
 
     @classmethod
     def read(cls, run: str | Path, vocabulary: kprov.Vocabulary | None = None) -> ProvStore:

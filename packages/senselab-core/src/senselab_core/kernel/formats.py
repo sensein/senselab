@@ -18,6 +18,9 @@ PROV_NODE_TAG = "prov-node@1"
 PROVENANCE_FORMAT = "provenance@3.0"
 """The format of a PROV-O JSON-LD provenance document, carried as its top-level `format` (ADR-010)."""
 
+LABELS_FORMAT = "labels@1.0"
+"""The format of a run's private label map, `<run>/private/labels@1.json` (ADR-007)."""
+
 FormatTag = Annotated[str, StringConstraints(pattern=FORMAT_PATTERN)]
 """`<name>@<major>.<minor>`."""
 

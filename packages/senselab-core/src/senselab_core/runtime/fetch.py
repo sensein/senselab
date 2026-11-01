@@ -38,6 +38,8 @@ from senselab_worker.digest import SHA256_HEX, file_digest, identity_digest
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.license import License
+from senselab_core.kernel.prov import Record, Vocabulary
+from senselab_core.runtime.bep028 import LabelMap
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
@@ -183,6 +185,13 @@ class DataManifest(Frozen):
     def digest(self) -> str:
         """Return `identity_digest("data-manifest@3", <the manifest's JSON form>)`."""
         return identity_digest("data-manifest@3", self.model_dump(mode="json"))
+
+    def file_entities(self, labels: LabelMap, vocabulary: Vocabulary | None = None) -> list[Record]:
+        """Return a `senselab:File` entity per file, named by its sha256 and a label of `labels`; no path is in them.
+
+        Each file's dataset path is recorded under its label in the run's private label map only.
+        """
+        return labels.entities([(f"content:{f.sha256}", f.path) for f in self.files], vocabulary)
 
     @classmethod
     def load(cls, path: Path) -> "DataManifest":
