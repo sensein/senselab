@@ -18,7 +18,7 @@ Principle P-38.
 **1. Logical key: exact, and portable across machines.**
 ```
 {schema, task, task_version, backend, backend_version,
- model weight identity, params (RFC 8785 JCS canonical JSON),
+ model weight identity, params and backend params (RFC 8785 JCS canonical JSON),
  input identities, declared profile slices,
  batch formation and chunk grid, when the backend declares them output-affecting}
 ```
@@ -45,7 +45,7 @@ Principle P-38.
   unions and nested params). The registry refuses `set`, `frozenset`, `Decimal`, `datetime`,
   `Path`, `bytes`, `Any` and `object`. A generated contract builds every declared backend's key
   under two `PYTHONHASHSEED` values and requires one digest.
-- **The digest is taken at construction** (`identity_digest("logical-key@5", fields)`, ADR-006), so a
+- **The digest is taken at construction** (`identity_digest("logical-key@6", fields)`, ADR-006), so a
   key that validates can be digested.
 - **Versions are declared, not hashed.** `task_version` and `backend_version` are bumped by
   developers. A CI check fails when a task's or backend's source changes without a version bump,
@@ -118,10 +118,13 @@ Rulings H-R56 and H-R57 ([`rulings.md`](../rulings.md)); tags in ADR-006.
   `parse_equivalence` refuses a class without one. The file holds no class, so `equivalent` behaves as `exact`.
 - **Verify sampling (§4) has no owner yet.** No phase builds it, so nothing adds evidence to a class or splits
   one; classes are added by hand from measurement until an owner is named.
-- Logical keys written under `logical-key@3` or `@4` are not addressed; this is accepted before release.
+- Logical keys written under `logical-key@3`, `@4` or `@5` are not addressed; this is accepted before release.
 
 ## Amendment log
 
 - 2026-11-01: model key is the weights digest or hub repo plus commit; source is context (`logical-key@5`,
   `execution-context@2.0`; H-R56); `equivalent` applied by default; equivalence classes are data with a
   derivation; verify sampling unowned (F1, F3, F4).
+- 2026-11-01: backend params enter the key; batch formation and chunk grid enter only when the backend
+  declares them output-affecting; one key builder, `runtime/keys.build_key(call, placement, context)`, with
+  `kernel.declare.key_for` its kernel half (`logical-key@6`; P2-47, P2-48; Phase 2 Task 5b).

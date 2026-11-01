@@ -87,7 +87,7 @@ findings are in [`reviews/phase1-reattack/canon.md`](../reviews/phase1-reattack/
   `digests-are-tagged` forbids hash modules everywhere except the digest module, and `raw-digest-owners`
   names the few owners allowed to hash bytes already in memory.
 
-  **Registered identity tags:** `logical-key@5`, `output@3`, `context@3`, `content-root@2`, `audio@3`,
+  **Registered identity tags:** `logical-key@6`, `output@3`, `context@3`, `content-root@2`, `audio@3`,
   `weights@3`, `value@2`, `provenance-id@4`, `data-manifest@3`, `worker-runtime@1`, `fake-output@1`,
   `contract-probe@1`, `prov-activity@1`, `prov-node@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a
   `format:` line in a packaged YAML file or in a store entry): `equivalence@1`, `retry-policy@1.0`, and
@@ -204,3 +204,7 @@ Ruling P2-44 ([`plans/phase-2.md`](../plans/phase-2.md)) and ADR-010 as amended;
 
 - 2026-11-01: new data format `labels@1.0`, the run's private label map `<run>/private/labels@1.json`
   (ADR-007 amendment, Phase 2 Task 4); a reader reads any minor of `labels@1`.
+
+## Amendment 2026-11-01: backend params in the logical key
+
+- 2026-11-01: `logical-key@5` → `@6`: the key gains `backend_params` (ADR-002 amendment, Phase 2 Task 5b).
