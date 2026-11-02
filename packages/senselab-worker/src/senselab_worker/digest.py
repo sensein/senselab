@@ -43,6 +43,7 @@ IDENTITY_TAGS: frozenset[str] = frozenset(
         "prov-node@1",
         "wheel-set@1",
         "env-lock@1",
+        "env-overlay@1",
         "vllm-config@1",
         "source@1",
     }
