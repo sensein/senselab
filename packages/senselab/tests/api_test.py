@@ -21,6 +21,8 @@ from senselab._api.call import ApiError
 from senselab._api.describe import JSON_FORM, PORT_FORMS, describe, models, tasks
 from senselab._api.packaged import CATALOGUE
 from senselab_core.kernel.declare import REGISTRY, BackendSpec, Env, Registry, TaskParams, TaskSpec, kernel_types
+from senselab_core.kernel.identity import TEXT_IDENTITY_FORMS
+from senselab_core.kernel.results import TextSpans
 from senselab_core.kernel.signals import Audio, PlainText
 from senselab_core.runtime.call import (
     Packaged,
@@ -404,21 +406,47 @@ def test_describe_of_every_task_is_enough_to_write_a_call() -> None:
             TaskCall.model_validate(call["example"])
 
 
-@pytest.mark.logic
-def test_text_spans_text_says_the_text_itself_is_accepted() -> None:
-    """The `text` of span inputs names the expression that yields it."""
-    schema = describe("span_f1")["inputs"]["$defs"]["TextSpans"]["properties"]["text"]
-    assert "text the spans lie over, itself" in schema["description"] and schema["examples"]
+_SPANS = {"text": "x", "length": 5, "start": [0], "end": [5], "label": ["A"]}
+_ID = PlainText(content="hello").identity
 
 
 @pytest.mark.logic
-def test_an_identity_field_given_as_the_text_binds_to_its_identity() -> None:
-    """A text for an identity field is bound as its content identity; an identity given is kept."""
-    spans = {"text": "hello", "length": 5, "start": [0], "end": [5], "label": ["A"]}
-    identity = PlainText(content="hello").identity
-    by_text = bind_input("reference", "TextSpans", spans)
-    by_identity = bind_input("reference", "TextSpans", {**spans, "text": identity})
-    assert by_text[0] == by_identity[0] and by_text[1]["text"] == identity  # type: ignore[index]
+def test_text_spans_text_states_both_forms_from_the_rule() -> None:
+    """The `text` of span inputs is described as exactly the two forms the rule accepts."""
+    prop = describe("span_f1")["inputs"]["$defs"]["TextSpans"]["properties"]["text"]
+    forms = [f["description"] for f in prop["oneOf"]]
+    assert tuple(forms) == TEXT_IDENTITY_FORMS and all(f["examples"] for f in prop["oneOf"])
+
+
+@pytest.mark.logic
+def test_text_identity_given_as_content_binds_to_the_identity_of_that_text() -> None:
+    """`{"content": text}` and the identity of that text bind to one identity, as does the object built in code."""
+    by_text = bind_input("reference", "TextSpans", {**_SPANS, "text": {"content": "hello"}})
+    by_identity = bind_input("reference", "TextSpans", {**_SPANS, "text": _ID})
+    built = bind_input("reference", "TextSpans", TextSpans.model_validate({**_SPANS, "text": _ID}))
+    assert by_text[0] == by_identity[0] == built[0] and getattr(by_text[1], "text") == _ID
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "hello",
+        _ID[:-1],
+        _ID.upper(),
+        "content:" + "A" * 64,
+        "local:/x",
+        "url:http://a",
+        "output:" + "0" * 64,
+        " " + _ID,
+        _ID + "\n",
+        {"content": "a", "extra": 1},
+    ],
+)
+def test_a_text_identity_in_neither_form_is_refused(bad: object) -> None:
+    """A text identity in neither form, `content:<64 lowercase hex>` or `{"content": text}`, is refused."""
+    with pytest.raises(ValueError, match=r"field 'text' takes .*content:.*\{\"content\""):
+        bind_input("reference", "TextSpans", {**_SPANS, "text": bad})
 
 
 def _unresolved(node: object, defs: dict[str, Any]) -> list[str]:

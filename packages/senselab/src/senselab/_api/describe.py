@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from pydantic.json_schema import GenerateJsonSchema
 from senselab_core.kernel.declare import REGISTRY, Registry, TaskSpec, json_schema, kernel_types
 from senselab_core.kernel.formats import Formatted
+from senselab_core.kernel.identity import TEXT_IDENTITY_FORMS, text_identity_fields
 from senselab_core.runtime.call import input_binding, input_model, packaged
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
 
@@ -49,6 +50,8 @@ def _link_ports(ports: dict[str, Any], declared: Mapping[str, str]) -> dict[str,
             properties[port] = {**prop, "description": JSON_FORM}
             continue
         schema = _format_schema(model)
+        for field in text_identity_fields(model):
+            schema["properties"][field] = _text_identity_schema(schema["properties"][field])
         defs.update(schema.pop("$defs", {}))
         defs[model.__name__] = schema
         form = PORT_FORMS[input_binding(declared[port])].format(type=declared[port])
@@ -60,6 +63,30 @@ def _link_ports(ports: dict[str, Any], declared: Mapping[str, str]) -> dict[str,
             else {**prop, "description": form, **ref}
         )
     return {**ports, "properties": properties, **({"$defs": defs} if defs else {})}
+
+
+def _text_identity_schema(prop: dict[str, Any]) -> dict[str, Any]:
+    """Return a `TextIdentity` field's schema as the two forms a call may give, `TEXT_IDENTITY_FORMS`."""
+    identity, text = TEXT_IDENTITY_FORMS
+    return {
+        **{k: v for k, v in prop.items() if k not in ("type", "pattern")},
+        "oneOf": [
+            {
+                "type": "string",
+                "pattern": prop["pattern"],
+                "description": identity,
+                "examples": ["content:" + "0" * 64],
+            },
+            {
+                "type": "object",
+                "properties": {"content": {"type": "string"}},
+                "required": ["content"],
+                "additionalProperties": False,
+                "description": text,
+                "examples": [{"content": "My name is Ada."}],
+            },
+        ],
+    }
 
 
 def _example(spec: TaskSpec, params: dict[str, Any], default_model: str | None) -> dict[str, Any]:
@@ -95,8 +122,9 @@ def _envelope(
         },
         "model": {"allowed": model_ids, "default": default_model},
         "backend": {
-            "named_by": "no call key: the backend is the first, in the execution profile's stack preference for the "
-            "task, that serves the model",
+            "named_by": "no call key: the first backend serving the model, in the execution profile's stack "
+            "preference for the task, else in declaration order (any backend serves a model outside the catalogue); "
+            "the device is the profile's first that the host has and the backend declares",
             "allowed": [b.name for b in backends],
             "stacks": sorted({b.stack for b in backends}),
         },

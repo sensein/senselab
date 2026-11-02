@@ -2,12 +2,14 @@
 
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import Enum
 from typing import Annotated, Any, Literal, assert_never
 from urllib.parse import urlsplit
 
 from pydantic import (
     AfterValidator,
+    BaseModel,
     BeforeValidator,
     Field,
     PlainSerializer,
@@ -27,6 +29,27 @@ _URL_HASH = "#sha256="
 
 ContentIdentity = Annotated[str, StringConstraints(pattern=r"^content:[0-9a-f]{64}$")]
 """The identity of source bytes: `content:` and a 64-hex digest."""
+
+
+@dataclass(frozen=True)
+class TextIdentityMark:
+    """Marks a field holding the identity of a text: given as `content:<hex>` or as `{"content": <the text>}`."""
+
+
+TextIdentity = Annotated[ContentIdentity, TextIdentityMark()]
+"""The identity of a text, `PlainText(content=<text>).identity`."""
+
+TEXT_IDENTITY_FORMS = (
+    "`content:` and 64 lowercase hex digits, the identity of the text",
+    '`{"content": "<the text>"}`, from which the identity is computed',
+)
+"""The two forms a call may give a `TextIdentity` field, in the order the error and `describe` state them."""
+
+
+def text_identity_fields(model: type[BaseModel]) -> tuple[str, ...]:
+    """Return the names of the `TextIdentity` fields of `model`."""
+    return tuple(n for n, f in model.model_fields.items() if any(isinstance(m, TextIdentityMark) for m in f.metadata))
+
 
 OutputIdentity = Annotated[str, StringConstraints(pattern=r"^output:[0-9a-f]{64}$")]
 """The identity of a stored result's outputs: `output:` and a 64-hex digest."""

@@ -18,7 +18,7 @@ from senselab_core.kernel._base import (
     require_finite,
 )
 from senselab_core.kernel.formats import FormatTag, Formatted
-from senselab_core.kernel.identity import ContentIdentity
+from senselab_core.kernel.identity import TextIdentity
 from senselab_core.kernel.signals import Text
 from senselab_core.kernel.time import Span
 
@@ -170,10 +170,7 @@ class TextSpans(Formatted):
 
     format: FormatTag = "text-spans@1.0"
 
-    text: ContentIdentity = Field(
-        description="The text the spans lie over, itself (a call computes its identity), or its `content:<hex>`.",
-        examples=["content:" + "0" * 64],
-    )
+    text: TextIdentity
     length: Annotated[int, Strict(), Field(ge=0)]
     start: OffsetArray
     end: OffsetArray

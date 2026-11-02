@@ -1,6 +1,7 @@
 """Recordings made of named channel groups, and audio."""
 
 import math
+import re
 from collections.abc import Mapping
 from fractions import Fraction
 from pathlib import Path, PurePath
@@ -34,7 +35,7 @@ from senselab_core.kernel._base import (
     value_digest,
 )
 from senselab_core.kernel.formats import FormatTag, Formatted
-from senselab_core.kernel.identity import ContentIdentity
+from senselab_core.kernel.identity import TEXT_IDENTITY_FORMS, ContentIdentity
 from senselab_core.kernel.time import TimeAnchor
 
 AUDIO_GROUP = "audio"
@@ -472,6 +473,9 @@ class Audio(Recording):
         return cls.from_group(group)
 
 
+_TEXT_IDENTITY = re.compile(r"content:[0-9a-f]{64}")
+
+
 @runtime_checkable
 class Text(Protocol):
     """Text a task reads: its content in canonical form (`canonical_text`) and that content's identity.
@@ -519,3 +523,18 @@ class PlainText(Formatted):
                 raise ValueError(f"identity {supplied!r} is not the content identity {derived!r}")
             data = {**data, "content": content, "identity": derived}
         return data
+
+
+def text_identity(field: str, given: object) -> str:
+    """Return the identity a `TextIdentity` field named `field` takes from `given`.
+
+    Raises:
+        ValueError: `given` is neither `content:` and 64 lowercase hex digits nor `{"content": <text>}`; names the
+            field and both forms.
+    """
+    if isinstance(given, str) and _TEXT_IDENTITY.fullmatch(given):
+        return given
+    if isinstance(given, Mapping) and set(given) == {"content"} and isinstance(given["content"], str):
+        return PlainText(content=given["content"]).identity
+    forms = " or ".join(TEXT_IDENTITY_FORMS)
+    raise ValueError(f"field {field!r} takes {forms}; got {given!r}")
