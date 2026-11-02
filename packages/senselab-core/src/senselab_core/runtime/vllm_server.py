@@ -15,6 +15,7 @@ import http.client
 import json
 import mimetypes
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -123,6 +124,10 @@ class VllmStartError(RuntimeError):
         self.kind = kind
 
 
+class AttestationMismatch(RuntimeError):
+    """A started server attests something other than what its env lock, model and settings declare."""
+
+
 class StaleAttestation(RuntimeError):
     """A reply the attested server did not give: the server is no longer running, or another model answered."""
 
@@ -151,6 +156,28 @@ class Attested:
 
     body: Any
     attestation: Attestation
+
+
+def expected_attestation(env: EnvHandle, model: ResolvedModel, settings: Mapping[str, Any]) -> Attestation:
+    """Return what a server of `model` with `settings` in `env` must attest, without starting it.
+
+    The engine version is the ``vllm==`` pin of the env's lock.
+
+    Raises:
+        VllmStartError: ``version``, the env has no lock or the lock pins no ``vllm``.
+        ValueError: as `server_args`.
+    """
+    text = env.lock.read_text("utf-8") if env.lock is not None else ""
+    pin = re.search(r"^vllm==([^\s\\;]+)", text, re.MULTILINE)
+    if pin is None:
+        raise VllmStartError("version", "the env's lock pins no vllm")
+    return Attestation(pin.group(1), model.identity, identity_digest(CONFIG_TAG, server_args(settings)))
+
+
+def attested_fields(env: EnvHandle, attestation: Attestation) -> dict[str, Any]:
+    """Return the env's `ExecutionContext` fields with `attestation` added to `driver`."""
+    fields = env.context_fields()
+    return {**fields, "driver": {**fields["driver"], **attestation.driver()}}
 
 
 def server_args(settings: Mapping[str, Any]) -> list[str]:
@@ -327,9 +354,7 @@ class VllmServer:
         Raises:
             StaleAttestation: The server is not running.
         """
-        attestation = self._live()
-        fields = self._env.context_fields()
-        return {**fields, "driver": {**fields["driver"], **attestation.driver()}}
+        return attested_fields(self._env, self._live())
 
     def chat(self, messages: Sequence[Mapping[str, Any]], *, sampling: Mapping[str, Any]) -> Attested:
         """`chat` with this server's model; the reply carries this server's attestation.

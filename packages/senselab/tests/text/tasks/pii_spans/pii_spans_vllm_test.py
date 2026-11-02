@@ -23,7 +23,7 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.runtime.store import ResultStore
-from senselab_core.runtime.vllm_server import CONFIG_TAG, VllmServer, server_args
+from senselab_core.runtime.vllm_server import CONFIG_TAG, AttestationMismatch, VllmServer, server_args
 from senselab_core.testing.contracts import contract_cases
 from senselab_worker.digest import identity_digest
 from senselab_worker.faults import FaultClass
@@ -54,24 +54,35 @@ def _spans(outputs: dict[str, object]) -> TextSpans:
     return spans
 
 
-@pytest.fixture
-def fake_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> EnvHandle:
-    """A server env whose `bin/vllm` is the fake server, replying `ANSWER`."""
-    out = tmp_path / "fake"
-    out.mkdir()
-    exe = tmp_path / "env" / "bin" / "vllm"
+def _make_env(root: Path, name: str) -> EnvHandle:
+    """A server env whose `bin/vllm` is the fake server and whose lock pins vllm 0.31.0."""
+    exe = root / name / "bin" / "vllm"
     exe.parent.mkdir(parents=True)
     exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE}" "$@"\n')
     exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
-    monkeypatch.setenv("FAKE_VLLM_DIR", str(out))
-    monkeypatch.setenv("FAKE_VLLM_CONTENT", ANSWER)
+    lock = root / "vllm-server.txt"
+    lock.write_text("vllm==0.31.0 \\\n    --hash=sha256:00\n")
     return EnvHandle(
         python=str(exe.with_name("python")),
         python_version="3.12",
         lock_sha="l" * 8,
         wheel_set="w" * 8,
         torch_index=None,
+        lock=lock,
     )
+
+
+def _starts(root: Path) -> int:
+    return len(list((root / "fake").glob("*.json")))
+
+
+@pytest.fixture
+def fake_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> EnvHandle:
+    """A server env on the fake server, replying `ANSWER`; the fake records each start in `<tmp>/fake`."""
+    (tmp_path / "fake").mkdir()
+    monkeypatch.setenv("FAKE_VLLM_DIR", str(tmp_path / "fake"))
+    monkeypatch.setenv("FAKE_VLLM_CONTENT", ANSWER)
+    return _make_env(tmp_path, "env")
 
 
 @pytest.fixture
@@ -82,7 +93,9 @@ def served(fake_env: EnvHandle) -> Iterator[Registry]:
     registry.add_task(spec)
     for backend in REGISTRY.backends("pii_spans"):
         registry.add_backend(backend.model_copy(update={"devices": ("cpu",)}) if backend.name == "vllm" else backend)
-    previous = use_packaged(Packaged(CATALOGUE, lambda _b, _p: fake_env, registry))
+    opened = [fake_env]
+    previous = use_packaged(Packaged(CATALOGUE, lambda _b, _p: opened[-1], registry))
+    registry.opened = opened  # type: ignore[attr-defined]
     yield registry
     use_packaged(previous)
 
@@ -227,3 +240,22 @@ def test_pii_spans_vllm_on_the_h100_finds_spans_and_bounds_edge_inputs(tmp_path:
 
 def _call_of(text: str) -> TaskCall:
     return TaskCall.model_validate({"task": "pii_spans", "inputs": {"text": text}, "params": {}})
+
+
+@pytest.mark.logic
+def test_a_store_hit_starts_no_server_and_a_mismatching_attestation_refuses(
+    served: Registry, fake_env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The context holds the declared attestation, so a hit needs no server; a started server must attest it."""
+    profile, store = _profile(tmp_path, "vllm"), ResultStore(tmp_path / "results")
+    run_call(_call(), execution=profile, store=store)
+    assert _starts(tmp_path) == 1
+    (tmp_path / "fake2").mkdir()
+    monkeypatch.setenv("FAKE_VLLM_DIR", str(tmp_path / "fake2"))
+    served.opened.append(_make_env(tmp_path, "env2"))  # type: ignore[attr-defined]
+    assert run_call(_call(), execution=profile, store=store).reused is not None
+    assert not list((tmp_path / "fake2").glob("*.json"))
+    monkeypatch.setenv("FAKE_VLLM_VERSION", "9.9.9")
+    served.opened.append(_make_env(tmp_path, "env3"))  # type: ignore[attr-defined]
+    with pytest.raises(AttestationMismatch, match="9.9.9"):
+        run_call(_call_of("Call 555-0199."), execution=profile, store=store)

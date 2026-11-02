@@ -176,7 +176,8 @@ class EnvHandle:
     """A ready env: its interpreter and the identities an execution context records.
 
     `lock_sha` is the lock file's sha256, `wheel_set` the digest of the installed distributions, `torch_index` the
-    URL torch came from (None for a torch-free env), `python_version` the interpreter's (`t` for free-threaded).
+    URL torch came from (None for a torch-free env), `python_version` the interpreter's (`t` for free-threaded),
+    `lock` the lock file it was built from (None for a host env).
     """
 
     python: str
@@ -184,6 +185,7 @@ class EnvHandle:
     lock_sha: str
     wheel_set: str
     torch_index: str | None
+    lock: Path | None = None
 
     def context_fields(self) -> dict[str, Any]:
         """Return the `ExecutionContext` fields this env decides: `env_lock`, `wheel_set` and `driver`."""
@@ -328,7 +330,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
         and (current.lock_sha, current.torch_index) == wanted
         and _overlaid(root / current.directory, workers or {})
     ):
-        return _handle(root, current)
+        return _handle(root, current, parsed.path)
     stale_after = settings.lease_stale_after_s
     with Lease(root / stem, stale_after=stale_after, timeout=stale_after + TIMEOUT_S):
         current = _read_record(root, stem)
@@ -336,16 +338,17 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
             current = _build(root, stem, parsed, lock_sha, index, uv, host_cuda)
             write_atomically(root / f"{stem}.json", current.model_dump_json().encode())
         _overlay(root / current.directory, workers or {})
-    return _handle(root, current)
+    return _handle(root, current, parsed.path)
 
 
-def _handle(root: Path, record: EnvRecord) -> EnvHandle:
+def _handle(root: Path, record: EnvRecord, lock: Path) -> EnvHandle:
     return EnvHandle(
         python=str(_python(root / record.directory)),
         python_version=record.python_version,
         lock_sha=record.lock_sha,
         wheel_set=record.wheel_set,
         torch_index=record.torch_index,
+        lock=lock,
     )
 
 

@@ -48,7 +48,14 @@ from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.runtime.revision import cache_root
 from senselab_core.runtime.store import ResultStore, context_record, key_record
 from senselab_core.runtime.store import output_identity as store_output_identity
-from senselab_core.runtime.vllm_server import StaleAttestation, VllmServer
+from senselab_core.runtime.vllm_server import (
+    Attestation,
+    AttestationMismatch,
+    StaleAttestation,
+    VllmServer,
+    attested_fields,
+    expected_attestation,
+)
 from senselab_core.runtime.vocabulary import core_vocabulary
 from senselab_core.runtime.worker_client import WorkerClient
 
@@ -199,9 +206,9 @@ def run_call(
     The model is the catalogue's pin for a catalogue model at that revision (the task's catalogue default when the
     call names none), else `resolve()`d. `resolve_execution` places the call under `execution`; the backend's env
     opens through the packaged opener and its worker is reused across calls (one model per worker process; host
-    backends share one `ModelCache` per budget). A server backend's `VllmServer` starts on the first call that
-    needs it (even one a store would serve, since its attestation is part of the context the store matches),
-    serves every later call of that env and model, and stops at exit; the context carries its attestation.
+    backends share one `ModelCache` per budget). A server backend's context carries the attestation its lock,
+    model and settings declare; its `VllmServer` starts on the first call the store does not serve, must attest
+    exactly that, serves every later call of that env and model, and stops at exit.
     An execution writes one activity, associated with an agent carrying `senselab:modelSource`, recording the key,
     the context and the profile's digest; a store hit writes none (the store records its reuse). An execution whose
     `put` finds different outputs another writer committed first is served those, as a reuse, and writes no
@@ -219,6 +226,7 @@ def run_call(
         ValueError: an input has no reader for its port's type or, for an isolated or server backend, no wire form;
             the backend params do not validate; or a server backend got no model.
         VllmStartError, LeaseTimeout, LeaseUnavailable: a server backend's server did not start.
+        AttestationMismatch: a started server attests other than its declared attestation.
         CallFailed: the backend failed the item.
         OutputTypeMismatch: an output of a kernel-typed port is not a wire form of its declared type.
         WorkerFatal, WorkerLost, ProtocolError: as the worker reports them.
@@ -236,9 +244,9 @@ def run_call(
     placement = replace(placement, backend_params=backend.params.model_validate(dict(call.backend_params)))
     bound = {port: _bind(port, spec.inputs[port], value) for port, value in call.inputs.items()}
     env = _PACKAGED.open_env(backend, profile)
-    server = _server(backend, env, model, profile) if backend.env.kind == "server" else None
+    expected = _expected(backend, env, model) if backend.env.kind == "server" else None
     context = ExecutionContext(
-        **(env if server is None else server).context_fields(),
+        **(env.context_fields() if expected is None else attested_fields(env, expected)),
         platform=sysconfig.get_platform(),
         numerics=numerics_class(hardware, placement.device, PRECISION),
         decoder=next((d for _, _, d in bound.values() if d is not None), None),
@@ -254,6 +262,7 @@ def run_call(
         outputs = _rebound(_decoded(spec, hit.outputs), anchors)
         return Result(outputs, hit.output_identity, key, hit.context, placement, hit.policy_used)
     started = datetime.now(timezone.utc)
+    server = _server(backend, env, model, profile, expected) if expected is not None else None
     computed = _execute(
         call, placement, env, model, {port: value for port, (_, value, _) in bound.items()}, profile, server
     )
@@ -354,14 +363,27 @@ _SERVERS: dict[tuple[str, str, str], VllmServer] = {}
 _SERVER_LOCK = threading.Lock()
 
 
-def _server(backend: BackendSpec, env: EnvHandle, model: ResolvedModel | None, profile: ExecutionProfile) -> VllmServer:
-    """Return the running server of this backend, env and model, starting it (or replacing a dead one) if needed.
+def _expected(backend: BackendSpec, env: EnvHandle, model: ResolvedModel | None) -> Attestation:
+    """Return the attestation a server of this backend must give, computed without starting it.
 
     Raises:
-        ValueError: the call has no model, or it is not pinned.
+        ValueError: the call has no model.
+        VllmStartError: the env's lock pins no vllm.
     """
     if model is None or backend.server is None:
         raise ValueError(f"backend {backend.name!r} serves a model through a server, and the call resolved none")
+    return expected_attestation(env, model, backend.server.settings)
+
+
+def _server(
+    backend: BackendSpec, env: EnvHandle, model: ResolvedModel | None, profile: ExecutionProfile, expected: Attestation
+) -> VllmServer:
+    """Return the running server of this backend, env and model, starting it (or replacing a dead one) if needed.
+
+    Raises:
+        AttestationMismatch: the server attests something other than `expected`.
+    """
+    assert model is not None and backend.server is not None
     key = (env.python, backend.name, model.identity)
     root = profile.env_root("server")
     with _SERVER_LOCK:
@@ -382,6 +404,10 @@ def _server(backend: BackendSpec, env: EnvHandle, model: ResolvedModel | None, p
             log_dir=root / "logs",
         )
         server.__enter__()
+        if server.attestation != expected:
+            attested = server.attestation
+            server.stop()
+            raise AttestationMismatch(f"the server of {server.label} attests {attested}, the lock declares {expected}")
         _SERVERS[key] = server
         return server
 
