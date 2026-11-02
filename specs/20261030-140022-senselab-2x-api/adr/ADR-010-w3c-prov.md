@@ -203,3 +203,16 @@ Source: bids-standard/BEP028_BIDSprov, `bep028spec.md` at master 162bea57 (2026-
 - **Core term added:** `senselab:fileLabel`, on `senselab:File`, `xsd:string`.
 - **`senselab:File` from an array has no label.** It names no path; only a path-sourced file
   (`DataManifest.file_entities`) gets one.
+
+## Amendment 2026-11-02: env versions are agents; licenses are recorded (P2-92, P2-93; Phase 2 Task 34d)
+
+- **The software agent is `agent_record(key, context)`**, shared by `run_call` and the store. It carries
+  `senselab:envLock` (the env lock sha), `senselab:license` (the env's `License` record as `rdf:JSON`, when the
+  context has one) and, with a model, `senselab:modelSource` as before. An env at another lock is another agent.
+- **A reuse records both agents.** A `senselab:Reuse` activity is associated with the current context's agent
+  (`prov:qualifiedAssociation`, role the task) and names the agent that computed the served result in
+  `senselab:storedAgent` (`xsd:string`, its `@id`); both agent records are added. The stored agent is rebuilt
+  from the stored context, so it is the same node the execution that computed the result recorded.
+- **Core terms added** (`senselab-vocab@1.2`): `senselab:envLock` (`prov:Agent`, `xsd:string`),
+  `senselab:license` (`prov:Agent`, `rdf:JSON`), `senselab:storedAgent` (`prov:Activity`, `xsd:string`).
+  `senselab:context` and `senselab:storedContext` are `execution-context@3.0` records.

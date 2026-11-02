@@ -286,8 +286,9 @@ stored output in an `@1` form is recomputed after its store entry is removed (Ph
 
 ## Retired store formats
 
-2.x reads `result@2` and `execution-context@2` store members, any minor. `result@1` and `execution-context@1` are
-retired with no converter (P2-44): a store read raises `StoreFormatRetired`, naming the member, and leaves the entry in
+2.x reads `result@2` and `execution-context@3` store members, any minor, under `store@5/`. `result@1`,
+`execution-context@1` and `execution-context@2` are retired with no converter (P2-44; `@2` by Phase 2 Task 34d, whose
+`@3` adds the env license): a store read raises `StoreFormatRetired`, naming the member, and leaves the entry in
 place. Migrating it is removing the entry and recomputing it under this version. An entry written in a later major, or
 a later minor whose context carries fields this version does not know, is another version's: it is skipped, never
 quarantined (Phase 2 Task 34a).

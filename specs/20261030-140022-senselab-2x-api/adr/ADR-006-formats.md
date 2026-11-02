@@ -320,3 +320,8 @@ Phase 2 Task 22f.
   (`runtime/data/tolerance_coverage.yaml`: target 0.95, confidence 0.95, so 59 items), each value with its derivation.
   An `@2.0` profile reads as before, with no stated coverage. The 12-item `speech_to_text/transformers` and
   `diarize/pyannote` profiles state 0.779 when regenerated; reaching the target is a re-measurement.
+- 2026-11-02: `equivalence@2.0` → `@3.0` (members are a numerics class and an env lock; `@2.0` refused);
+  `equivalence-evidence@1.0` → `@2.0` (each side's env lock), under `equivalence-evidence@2/`;
+  `execution-context@2.0` → `@3.0` (`env_license`); `store@4` → `store@5`; `senselab-vocab@1.1` → `@1.2`
+  (`senselab:envLock`, `senselab:license`, `senselab:storedAgent`); `execution-context@2` joins the retired store
+  formats (P2-92, P2-93; Phase 2 Task 34d).

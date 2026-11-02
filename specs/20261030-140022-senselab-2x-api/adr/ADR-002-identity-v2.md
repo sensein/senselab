@@ -193,6 +193,9 @@ Rulings P2-23, P2-43, P2-60, P2-83, P2-89 (Phase 2 Task 21; R-112, R-155). This 
   P2-89; Phase 2 Task 21).
 - 2026-11-03: the profile a verify comparison reads is `tolerance@2.0`, whose fields name index-free paths (ADR-006
   amendment 2026-11-03; Phase 2 Task 22f).
+- 2026-11-02: equivalence members are (numerics class, env lock), `equivalence@3.0`, `equivalence-evidence@2.0`;
+  consistency (`exact`, `equivalent`) vs availability (`tolerant`); `ExecutionContext.env_license`,
+  `execution-context@3.0`, `store@5`; `RunConfig.licenses` (P2-92, P2-93; Phase 2 Task 34d).
 
 ## Amendment 2026-11-02: the producers of batch formation and chunk grid (Phase 2 Task 34a)
 
@@ -203,3 +206,38 @@ Rulings P2-23, P2-43, P2-60, P2-83, P2-89 (Phase 2 Task 21; R-112, R-155). This 
 - The backend contract gains `output_affecting_produced`: every declared output-affecting component has a value from
   `request_components`, and a backend that is not batch-invariant declares `batch_formation` output-affecting.
   `speech_to_text/transformers` now declares it, so its keys carry `batch_formation: single`.
+
+## Amendment 2026-11-02: env versions are agents; equivalence members carry the env lock
+
+Ruling P2-92 (owner item 45; supersedes the P2-23 reading in R-185). Phase 2 Task 34d.
+
+- **A member of an equivalence class is a numerics class in one env lock.** `runtime/data/equivalence.yaml` is
+  `equivalence@3.0`: per backend, classes of `{numerics, env_lock}` members (`member_key`, the JCS text of both),
+  each with a derivation. `equivalence@1` and `@2.0` are refused with `EquivalenceFormatRetired`. Under
+  `equivalent` a stored context serves the current one when their fingerprints are equal or their members are in one
+  class of the backend; platform, wheel set, decoder and driver still do not enter that test (P2-23).
+- **A class never spans env locks without evidence for that pair.** `EvidenceSide` records the env lock
+  (`equivalence-evidence@2.0`, stored under `equivalence-evidence@2/`), and regeneration keys each pair by both
+  members, so agreement within lock L1 and within lock L2 never joins L1 and L2. Splits act on members.
+- **The packaged table is empty again.** Its one class (pyannote, cpu and cuda sm_90) was measured from
+  `equivalence-evidence@1.0` records that carry no env lock, so it cannot be attributed to a lock pair; it returns
+  when the verify-sampling run is repeated and the table regenerated.
+- **Which policy is which.** `exact` and `equivalent` are the consistency policies: neither serves a result from
+  another env lock unless a measured class holds that pair (`exact` never does). `tolerant` is the availability
+  policy: it serves another env lock's result, and the reuse records both agents (ADR-010 amendment of this date).
+  No policy was added.
+- **Provenance agent of a result** carries its env lock (`senselab:envLock`), so a difference in env is always
+  visible.
+
+## Amendment 2026-11-02: the env license is context
+
+Ruling P2-93 (owner item 46). Phase 2 Task 34d.
+
+- `ExecutionContext.env_license` (a `License` or None) is the code license of the env, `backend_license` over its
+  env lock's license records. It is recorded, never fingerprinted, like `host`, `protocol` and `model_source`.
+  Stored contexts are `execution-context@3.0`; entries live under `store@5/`, and `execution-context@2` is a
+  retired store format (the store format gate, Task 34a).
+- `RunConfig.licenses` (`LicensePolicy`, the user's allowed and refused SPDX ids, `allow` None meaning every id not
+  refused) is the only thing that refuses a call for its license: a refused env or model license raises
+  `LicenseRefused` before the env opens, and a stored result whose env license the policy refuses is not served.
+  A subject with no license record is refused when a policy is named. With no policy, no license refuses a call.
