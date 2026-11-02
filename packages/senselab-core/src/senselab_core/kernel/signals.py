@@ -147,8 +147,9 @@ class RegularGroup(Frozen):
     Exactly one of `data` and `source` is given. A source group carries `source_stamp`, the stamp a
     `SourceReader` took of the file; validation reads no file. The stamp's header must match the
     declared channel count and rate. Samples are decoded only by `read` through a reader, which
-    checks the file still has the stamp, content included. A held group may carry the stamp of the file
-    its samples were decoded from, matching their shape; it is then identified as that file is.
+    checks the file still has the stamp, content included. A held group carries a file's stamp only as
+    `decoded_from` builds it: with `decoded`, the `npy@1` digest of the samples the reader decoded, which
+    the held samples must still have; it is then identified as that file is.
     """
 
     channels: tuple[ChannelInfo, ...] = Field(min_length=1)
@@ -156,6 +157,7 @@ class RegularGroup(Frozen):
     data: SignalArray | None = None
     source: SourcePath | None = None
     source_stamp: SourceStamp | None = None
+    decoded: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = None
 
     @model_validator(mode="after")
     def _check_layout(self) -> "RegularGroup":
@@ -164,18 +166,36 @@ class RegularGroup(Frozen):
         stamp = self.source_stamp
         if self.source is not None and stamp is None:
             raise ValueError("a source group carries the stamp a reader took of its file")
+        if self.decoded is not None and (self.data is None or stamp is None):
+            raise ValueError("`decoded` belongs only to held samples carrying their file's stamp")
         if stamp is not None and stamp.sampling_rate != self.sampling_rate:
             raise ValueError(f"declared rate {self.sampling_rate} Hz, file rate {stamp.sampling_rate} Hz")
         if self.data is not None:
             require_finite(self.data, "a regular group's samples")
             if stamp is not None and self.data.shape != (stamp.channels, stamp.frames):
                 raise ValueError(f"held samples {self.data.shape} are not the stamped file's channels and frames")
+            if stamp is not None and self.decoded != held_npy_digest(self.data):
+                raise ValueError("held samples carry a file's stamp only as decoded from it (`decoded_from`)")
             rows = self.data.shape[0]
         else:
             assert stamp is not None
             rows = stamp.channels
         _check_channels(self.channels, rows)
         return self
+
+    @classmethod
+    def decoded_from(cls, group: "RegularGroup", reader: SourceReader) -> "RegularGroup":
+        """Return a source group's samples decoded by `reader`, held with the file's stamp and their digest.
+
+        Raises:
+            ValueError: if `group` holds its samples, or as `read`.
+            StaleSource: if the file changed since it was stamped.
+        """
+        if group.source is None:
+            raise ValueError("only a source group is decoded; a held group is its own samples")
+        data = group.read(reader=reader)
+        fields = {"channels": group.channels, "sampling_rate": group.sampling_rate, "data": data}
+        return cls(**fields, source_stamp=group.source_stamp, decoded=held_npy_digest(data))
 
     @property
     def frames(self) -> int:
@@ -341,7 +361,8 @@ def _source_root(group: RegularGroup) -> str:
 
 def _group_content(group: RegularGroup | IrregularGroup) -> object:
     if isinstance(group, RegularGroup) and group.source_stamp is not None:
-        return {**group.model_dump(exclude={"source", "source_stamp"}), "data": None, "content": _source_root(group)}
+        held = group.model_dump(exclude={"source", "source_stamp", "decoded"})
+        return {**held, "data": None, "content": _source_root(group)}
     return group.model_dump()
 
 

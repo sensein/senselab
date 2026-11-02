@@ -1,5 +1,6 @@
 """Recordings, channel groups and audio."""
 
+import copy
 import hashlib
 from pathlib import Path
 
@@ -369,10 +370,19 @@ def test_plain_text_is_canonical_and_content_identified() -> None:
 
 
 @pytest.mark.logic
-def test_samples_held_with_their_files_stamp_keep_its_identity() -> None:
-    """Samples held with the stamp of their file are identified as the file; a stamp of another shape is refused."""
-    data = numpy.zeros((2, 8), dtype=numpy.float32)
-    group = RegularGroup(channels=audio_channels(2), sampling_rate=RATE, data=data, source_stamp=_stamp())
-    assert Audio.from_group(group).identity == "content:" + "c" * 64
+def test_samples_carry_their_files_stamp_only_as_decoded_from_it(tmp_path: Path) -> None:
+    """Decoded samples keep the file's identity; other held samples under its stamp, or changed ones, are refused."""
+    samples = numpy.arange(16, dtype=numpy.float32).reshape(2, 8) / 16
+    source = RegularGroup(channels=audio_channels(2), sampling_rate=RATE, source=tmp_path / "a", source_stamp=_stamp())
+    decoded = RegularGroup.decoded_from(source, _Reader(samples))
+    assert Audio.from_group(decoded).identity == "content:" + "c" * 64
+    assert copy.deepcopy(decoded) == decoded and decoded.read().tolist() == samples.tolist()
+    zeros = numpy.zeros((2, 8), dtype=numpy.float32)
+    with pytest.raises(ValidationError, match="decoded_from"):
+        RegularGroup(channels=audio_channels(2), sampling_rate=RATE, data=zeros, source_stamp=_stamp())
+    with pytest.raises(ValidationError, match="decoded_from"):
+        decoded.model_copy(update={"data": zeros})
     with pytest.raises(ValidationError, match="channels and frames"):
-        RegularGroup(channels=audio_channels(2), sampling_rate=RATE, data=data, source_stamp=_stamp(frames=7))
+        decoded.model_copy(update={"source_stamp": _stamp(frames=7)})
+    with pytest.raises(ValueError, match="source group"):
+        RegularGroup.decoded_from(decoded, _Reader(samples))
