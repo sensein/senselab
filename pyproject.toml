@@ -79,7 +79,8 @@ profiling = [
   "nbconvert>=7"
 ]
 benchmarks = [
-  "pyarrow>=18"
+  "pyarrow>=18",
+  "scipy>=1.11"
 ]
 
 [tool.uv.workspace]

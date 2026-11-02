@@ -3770,6 +3770,8 @@ torch = [
 [package.dev-dependencies]
 benchmarks = [
     { name = "pyarrow" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
 dev = [
     { name = "codespell" },
@@ -3821,7 +3823,10 @@ requires-dist = [
 provides-extras = ["torch"]
 
 [package.metadata.requires-dev]
-benchmarks = [{ name = "pyarrow", specifier = ">=18" }]
+benchmarks = [
+    { name = "pyarrow", specifier = ">=18" },
+    { name = "scipy", specifier = ">=1.11" },
+]
 dev = [
     { name = "codespell", specifier = "~=2.3" },
     { name = "hypothesis", specifier = "~=6.0" },
