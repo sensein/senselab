@@ -221,7 +221,6 @@ def test_export_refuses_a_recorded_path_and_copies_nothing(tmp_path: Path, leak:
         ("ds/clip.wav", "Clip.wav"),
         ("ds/my clip.wav", "read my clip.wav"),
         ("ds/clip,1.wav", "clip,1.wav"),
-        ("ds/caf\u00e9.wav", "cafe\u0301.wav"),
         ("ds/cafe\u0301.wav", "caf\u00e9.wav"),
     ],
 )

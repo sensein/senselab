@@ -90,7 +90,6 @@ ERROR_CODES: tuple[tuple[type[Exception], str, str], ...] = (
     (WorkerLost, "worker_failed", "the worker stopped; this is a fault of the host, not of the input"),
     (ProtocolError, "worker_failed", "the worker broke its protocol; report the backend"),
     (ValueError, "invalid_call", "see the message for the value to correct"),
-    (LookupError, "not_found", "see the message for what is missing"),
 )
 """Each error `run_call` documents, with its envelope code and fix; the first row an error is an instance of wins."""
 
@@ -214,9 +213,7 @@ class ConfiguredTask:
         try:
             return TaskCall.parse_params(self.name, given, self.registry)
         except InconsistentInputs as error:
-            raise ApiError(
-                "inconsistent_inputs", str(error), "give params that agree; `describe` lists the constraints"
-            ) from None
+            raise api_error(error) from None  # type: ignore[misc]
         except (ValidationError, ValueError) as error:
             raise _params_error(self.name, self.spec.params, given, error) from None
 
