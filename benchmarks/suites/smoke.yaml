@@ -2,7 +2,7 @@ format: benchmark-suite@1.0
 name: smoke
 benchmarks:
 - {name: librispeech-asr, manifest: librispeech-test-clean, adapter: librispeech_asr, items: 50, task: speech_to_text, params: {timestamps: none}, metric: wer}
-- {name: voxconverse-diarization, manifest: voxconverse-v0.3, adapter: voxconverse_diarization, items: 5, task: diarize, metric: der}
+- {name: voxconverse-diarization, manifest: voxconverse-test-mirror, adapter: voxconverse_diarization, items: 5, task: diarize, metric: der}
 - {name: librispeech-speaker-trials, manifest: librispeech-test-clean, adapter: librispeech_trials, items: 50, task: speaker_embeddings, metric: eer}
 - {name: gretel-pii, manifest: gretel-synthetic-pii, adapter: gretel_pii, items: 200, task: pii_spans, metric: span_f1}
 - {name: synthetic-tones, adapter: synthetic_tones, items: 5, task: signal.resample, params: {target_rate: 16000}, metric: resample_error}

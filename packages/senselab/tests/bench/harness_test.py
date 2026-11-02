@@ -224,7 +224,7 @@ def test_shipped_suite_resolves_to_pinned_manifests() -> None:
     suite = harness.Suite.load(BENCHMARKS / "suites" / "smoke.yaml")
     assert {b.adapter for b in suite.benchmarks} <= set(harness.ADAPTERS)
     names = {b.manifest for b in suite.benchmarks if b.manifest}
-    assert names == {"librispeech-test-clean", "voxconverse-v0.3", "gretel-synthetic-pii"}
+    assert names == {"librispeech-test-clean", "voxconverse-test-mirror", "gretel-synthetic-pii"}
     for name in names:
         manifest = DataManifest.load(BENCHMARKS / "manifests" / f"{name}.yaml")
         assert manifest.name == name and manifest.license.expression and manifest.terms
@@ -268,3 +268,12 @@ def test_bench_cli_reports_unknown_suite(tmp_path: Path, capsys: pytest.CaptureF
     bad.write_text("format: nope\n")
     assert main(["bench", "run", str(bad), "--benchmarks", str(BENCHMARKS), "--out", str(tmp_path / "o")]) == 1
     assert "benchmark-suite@1.0" in capsys.readouterr().err
+
+
+@pytest.mark.logic
+def test_fault_text_names_type_and_no_path() -> None:
+    """A fault row carries the error type and fault class; a path in the message is replaced."""
+    text = harness._fault_text(
+        {"type": "ValueError", "fault": "content", "message": "bad file /tmp/x/a.wav at C:\\d\\a"}
+    )
+    assert text == "ValueError (content): bad file <path> at <path>"

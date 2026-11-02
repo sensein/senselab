@@ -1,9 +1,9 @@
 format: data-manifest@2.0
-name: voxconverse-v0.3
-version: diarizers-community-3acfa1b4
+name: voxconverse-test-mirror
+version: hf-3acfa1b4
 license:
   expression: CC-BY-4.0
-  commercial_use: !!str yes
+  commercial_use: !!str no
   copyleft: none
   attribution: true
   gated: false
@@ -13,8 +13,7 @@ terms: >-
   VoxConverse (Chung et al., 2020), CC BY 4.0 for research use; the video copyright stays with the original owners.
   The official audio host (robots.ox.ac.uk) did not answer on 2026-11-01, so the manifest pins the first test shard of
   the HF mirror diarizers-community/voxconverse at commit 3acfa1b45ca4b7419aee999d67d94c617f9c9d47 (card licence
-  cc-by-4.0, audio and turn columns derived from the official RTTMs). Which RTTM release the mirror carries is not
-  stated on its card.
+  cc-by-4.0, audio and turn columns derived from the official RTTMs). The mirror card does not state which RTTM release (v0.3 or earlier) it carries.
 files:
 - path: test-00000-of-00011.parquet
   url: https://huggingface.co/datasets/diarizers-community/voxconverse/resolve/3acfa1b45ca4b7419aee999d67d94c617f9c9d47/data/test-00000-of-00011.parquet

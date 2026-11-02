@@ -375,6 +375,13 @@ class BenchmarkResult(Formatted):
     contexts: tuple[ExecutionContext, ...]
 
 
+def _fault_text(error: Mapping[str, Any]) -> str:
+    """Return `<type> (<fault class>): <message>` of a worker error with every path-like word replaced by `<path>`."""
+    words = str(error.get("message", "")).split()
+    message = " ".join("<path>" if "/" in w or "\\" in w else w for w in words)
+    return f"{error.get('type')} ({error.get('fault')}): {message}"
+
+
 def _record(task: str, result: Result) -> CallRecord:
     return CallRecord(
         task=task,
@@ -421,7 +428,7 @@ def _run_benchmark(  # noqa: PLR0913 - the benchmark and everything it runs unde
         try:
             result = run_call(call, execution=execution, store=store)
         except CallFailed as err:
-            rows.append(Row(label=item.id, split=split_of(item.id), fault=str(err.error.get("fault"))))
+            rows.append(Row(label=item.id, split=split_of(item.id), fault=_fault_text(err.error)))
             continue
         outputs[item.id] = result.outputs
         records[item.id] = _record(bench.task, result)
