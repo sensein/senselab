@@ -6,11 +6,10 @@ from senselab_core.kernel.declare import REGISTRY, BackendParams, Env, backend
 
 from senselab.audio.tasks.speaker_diarization.pyannote import MODEL_ID, WORKER_MODULE
 
-_SPEECH_TO_TEXT = "senselab.audio.tasks.speech_to_text"
 _HERE = Path(__file__).parent
 _WORKER_SOURCES = {
     WORKER_MODULE: str(_HERE / "pyannote.py"),
-    f"{_SPEECH_TO_TEXT}.item_faults": str(_HERE.parent / "speech_to_text" / "item_faults.py"),
+    "senselab.audio.item_faults": str(_HERE.parents[1] / "item_faults.py"),
 }
 
 

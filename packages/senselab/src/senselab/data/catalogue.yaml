@@ -39,18 +39,6 @@ entries:
     verified: {date: 2026-11-01, how: hf-card}
     gated: true
   resources: {}
-- id: pyannote/segmentation-3.0
-  revision: e66f3d3b9eb0873085418a7b813d3b369bf160bb
-  tasks: [diarize]
-  backends: [pyannote]
-  stacks: [pyannote]
-  default_for: []
-  license:
-    expression: MIT
-    source: pyannote/segmentation-3.0 README.md at e66f3d3b9eb0873085418a7b813d3b369bf160bb
-    verified: {date: 2026-11-01, how: hf-card}
-    gated: true
-  resources: {}
 - id: speechbrain/spkrec-ecapa-voxceleb
   revision: 0f99f2d0ebe89ac095bcc5903c4dd8f72b367286
   tasks: [speaker_embeddings]

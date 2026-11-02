@@ -23,7 +23,7 @@ import numpy
 from senselab_worker.digest import COMMIT_HEX
 from senselab_worker.fake import FakeFaults
 
-from senselab.audio.tasks.speech_to_text.item_faults import mono_samples, typed
+from senselab.audio.item_faults import mono_samples, typed
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.crisperwhisper"
 MODEL_ID = "nyralabs/CrisperWhisper2.0_turbo"
@@ -112,7 +112,7 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
     results: list[dict[str, Any]] = []
     for item in items:
         try:
-            samples, clock_id = _prepare(item, state.faults)
+            samples, clock_id = mono_samples(item, state.faults, EXPECTED_RATE, "crisperwhisper")
             decoded = engine.transcribe(samples, language, tuning["max_new_tokens"])
             duration_ns = round(samples.size / EXPECTED_RATE * _NS_PER_S)
             results.append({"outputs": {"transcript": transcript(decoded, timestamps, clock_id, duration_ns)}})
@@ -129,11 +129,6 @@ def _backend_params(given: Mapping[str, Any]) -> dict[str, Any]:
     if tuning["engine"] not in ENGINES:
         raise ValueError(f"engine is one of {list(ENGINES)}, got {tuning['engine']!r}")
     return tuning
-
-
-def _prepare(item: dict[str, Any], faults: FakeFaults) -> tuple[numpy.ndarray, str]:
-    """Return the item's mono samples and its clock id, or raise its content or resource fault."""
-    return mono_samples(item, faults, EXPECTED_RATE, "crisperwhisper")
 
 
 def transcript(decoded: Decoded, timestamps: str, clock_id: str, duration_ns: int) -> dict[str, Any]:
