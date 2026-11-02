@@ -37,6 +37,7 @@ from senselab_core.kernel.identity import ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.launch import Launch, launch
 from senselab_core.runtime.locks import TIMEOUT_S, Lease
+from senselab_core.runtime.network import Network, network_variables
 
 HOST = "127.0.0.1"
 """The only address a server listens on."""
@@ -310,6 +311,7 @@ class VllmServer:
         start_margin_s: float,
         devices: Sequence[int | str] | None = None,
         log_dir: Path | None = None,
+        network: Network = "online",
     ) -> None:
         """Describe the server; nothing starts until the context is entered.
 
@@ -324,6 +326,7 @@ class VllmServer:
             devices: The server's visible devices; when None the inherited environment is left alone and the lease
                 is named by the inherited ``CUDA_VISIBLE_DEVICES`` (``all`` if unset).
             log_dir: Where the server's output goes, one mode-600 file per server; the owner's stderr when None.
+            network: The profile's `network`; `offline` gives the server `OFFLINE_VARIABLES`.
 
         Raises:
             ValueError: `model` is unpinned or a url model, or `settings` is not exactly the known keys.
@@ -343,6 +346,7 @@ class VllmServer:
         self.url: str | None = None
         self.attestation: Attestation | None = None
         self._env = env
+        self._network = network
         self._server: subprocess.Popen[bytes] | None = None
         self._watchdog: subprocess.Popen[bytes] | None = None
         self._log: IO[bytes] | None = None
@@ -427,7 +431,7 @@ class VllmServer:
     @property
     def launch(self) -> Launch:
         """How the server process is started: its declared variables and devices over the allowlisted ambient ones."""
-        return server_launch(self._env, self.variables, self.devices)
+        return server_launch(self._env, {**self.variables, **network_variables(self._network)}, self.devices)
 
     def _launch(self) -> None:
         port = _free_port()
