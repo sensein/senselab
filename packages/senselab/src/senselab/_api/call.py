@@ -10,6 +10,7 @@ from senselab_core.kernel._base import FrozenMapping, NonEmptyStr
 from senselab_core.kernel.declare import (
     REGISTRY,
     DeclaredParams,
+    InconsistentInputs,
     Registry,
     TaskParams,
     TaskSpec,
@@ -67,6 +68,7 @@ class ApiError(Exception):
 
 
 ERROR_CODES: tuple[tuple[type[Exception], str, str], ...] = (
+    (InconsistentInputs, "inconsistent_inputs", "give inputs and params that agree; `describe` lists the constraints"),
     (UnknownTask, "unknown_task", "name a declared task; `tasks()` lists them"),
     (AmbiguousClock, "ambiguous_clock", "give the recordings of one content the same anchor"),
     (OutputTypeMismatch, "output_type_mismatch", "a backend returned a value of the wrong type; report the backend"),
@@ -211,6 +213,10 @@ class ConfiguredTask:
     def _validate_params(self, given: Mapping[str, Any]) -> TaskParams:
         try:
             return TaskCall.parse_params(self.name, given, self.registry)
+        except InconsistentInputs as error:
+            raise ApiError(
+                "inconsistent_inputs", str(error), "give params that agree; `describe` lists the constraints"
+            ) from None
         except (ValidationError, ValueError) as error:
             raise _params_error(self.name, self.spec.params, given, error) from None
 

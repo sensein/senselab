@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import numpy
-from senselab_core.kernel.declare import REGISTRY, TaskParams, backend, task
+from senselab_core.kernel.declare import REGISTRY, InputsAgree, TaskParams, backend, task
 from senselab_core.kernel.results import Metric
 from senselab_core.kernel.signals import RegularSeries
 from senselab_core.runtime.audio_io import READER
@@ -21,7 +21,12 @@ WORKER_MODULE = "senselab.metrics.resample_error"
 load = _worker.load
 
 
-@task(name="resample_error", version="1", kind="transform", registry=REGISTRY)
+SAME = tuple(
+    InputsAgree(ports=("reference", "hypothesis"), property=p) for p in ("channels", "sampling_rate", "frames")
+)
+
+
+@task(name="resample_error", version="1", kind="transform", constraints=SAME, registry=REGISTRY)
 class ResampleError:
     """Score a resampled series against its reference: the relative RMS error."""
 

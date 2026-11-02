@@ -23,7 +23,7 @@ from senselab._api.describe import JSON_FORM, PORT_FORMS, describe, models, task
 from senselab._api.packaged import CATALOGUE
 from senselab_core.kernel.declare import REGISTRY, BackendSpec, Env, Registry, TaskParams, TaskSpec, kernel_types
 from senselab_core.kernel.identity import TEXT_IDENTITY_FORMS
-from senselab_core.kernel.results import TextSpans
+from senselab_core.kernel.results import TextSpans, Transcript
 from senselab_core.kernel.signals import Audio, PlainText
 from senselab_core.runtime.call import (
     CallFailed,
@@ -655,9 +655,26 @@ def test_a_call_failure_carries_its_fault_class_in_the_envelope_code() -> None:
 def test_a_call_error_leaves_a_configured_task_as_the_envelope() -> None:
     """A backend refusal leaves a configured task as the `ApiError` of its fault class."""
     with pytest.raises(ApiError) as failed:
-        senselab.span_f1(_text_spans("red"), _text_spans("blue"))
+        senselab.wer(Transcript(segments=()), Transcript(segments=()))
     assert failed.value.envelope.code == "content_fault"
     assert api_error(RuntimeError("bug")) is None
+
+
+@pytest.mark.logic
+def test_describe_states_the_constraints_and_the_call_path_enforces_them() -> None:
+    """`describe` renders a task's declared constraints; inputs or params that break one are refused before a call."""
+    assert describe("span_f1")["constraints"] == [
+        {"kind": "inputs_agree", "ports": ["reference", "hypothesis"], "property": "text"}
+    ]
+    assert describe("diarize")["constraints"] == [
+        {"kind": "params_ordered", "low": "min_speakers", "high": "max_speakers"}
+    ]
+    with pytest.raises(ApiError) as inputs:
+        senselab.span_f1(_text_spans("red"), _text_spans("blue"))
+    assert inputs.value.envelope.code == "inconsistent_inputs" and "text" in inputs.value.envelope.message
+    with pytest.raises(ApiError) as params:
+        senselab.Diarize(min_speakers=3, max_speakers=2)
+    assert params.value.envelope.code == "inconsistent_inputs"
 
 
 def _text_spans(text: str) -> TextSpans:

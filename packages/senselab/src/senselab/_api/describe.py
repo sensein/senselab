@@ -204,7 +204,8 @@ def describe(name: str, registry: Registry = REGISTRY, catalogue: Catalogue | No
     `backend_params` and `outputs` (each port says how a call gives it and, of a kernel type, links to that type's
     format schema in its `$defs`), `backends` as `{name, version, stack, devices}`, the sorted `stacks` and `devices`
     they cover, `callable`, the generated `{class, function}` names, `models` (as `models(name)` gives them, licenses
-    included) and `default_model`, the catalogue default as `id@revision` (None for a task with none). `catalogue` is
+    included) and `constraints` (the relations between inputs or between params that a call must satisfy, as data) and
+    `default_model`, the catalogue default as `id@revision` (None for a task with none). `catalogue` is
     the one `run_call` reads when None.
 
     The function and the class run the task on the inputs, given as positional data in the form each port's
@@ -229,6 +230,7 @@ def describe(name: str, registry: Registry = REGISTRY, catalogue: Catalogue | No
         **schema,
         "inputs": _link_ports(schema["inputs"], spec.inputs, given=True),
         "outputs": _link_ports(schema["outputs"], spec.outputs, given=False),
+        "constraints": [c.model_dump(mode="json") for c in spec.constraints],
         "backends": [
             {"name": b.name, "version": b.version, "stack": b.stack, "devices": list(b.devices)} for b in backends
         ],

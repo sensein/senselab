@@ -5,6 +5,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Annotated, Any, Literal, Optional
 
 import jsonschema
@@ -17,7 +18,10 @@ from senselab_core.kernel.declare import (
     BackendSpec,
     DuplicateDeclaration,
     Env,
+    InconsistentInputs,
+    InputsAgree,
     NonCanonicalParams,
+    ParamsOrdered,
     Registry,
     ServerConfig,
     TaskParams,
@@ -41,6 +45,11 @@ SLICE = "profile:" + "b" * 64
 
 class _Params(TaskParams):
     window: int = 3
+
+
+class _Bounds(TaskParams):
+    lo: int | None = None
+    hi: int | None = None
 
 
 def _task(**overrides: object) -> TaskSpec:
@@ -633,3 +642,25 @@ def test_schema_validates_2020_12() -> None:
     inputs = jsonschema.Draft202012Validator(documents[0]["inputs"])
     assert documents[0]["inputs"]["properties"] == {"audio": {"title": "Audio"}, "other": {"title": "Audio"}}
     assert not inputs.is_valid({"audio": "x"}) and not inputs.is_valid({"audio": "x", "other": "y", "z": "w"})
+
+
+@pytest.mark.logic
+def test_constraints_name_declared_ports_and_params_and_are_checked_as_data() -> None:
+    """A constraint naming no declared port or param is refused; the declared ones refuse what contradicts them."""
+    with pytest.raises(ValidationError, match="does not declare"):
+        _task(constraints=(InputsAgree(ports=("audio", "other"), property="clock_id"),))
+    with pytest.raises(ValidationError, match="does not declare"):
+        _task(constraints=(ParamsOrdered(low="window", high="missing"),))
+    spec = _task(
+        inputs={"audio": "Audio", "other": "Audio"},
+        params=_Bounds,
+        constraints=(InputsAgree(ports=("audio", "other"), property="clock_id"), ParamsOrdered(low="lo", high="hi")),
+    )
+    spec.check_inputs({"audio": SimpleNamespace(clock_id="a"), "other": SimpleNamespace(clock_id="a")})
+    with pytest.raises(InconsistentInputs, match="differ in clock_id"):
+        spec.check_inputs({"audio": SimpleNamespace(clock_id="a"), "other": SimpleNamespace(clock_id="b")})
+    spec.check_params(_Bounds(lo=1, hi=2))
+    spec.check_params(_Bounds(lo=3))
+    with pytest.raises(InconsistentInputs, match="exceeds"):
+        spec.check_params(_Bounds(lo=3, hi=2))
+    assert TaskSpec.model_validate(spec.model_dump()) == spec

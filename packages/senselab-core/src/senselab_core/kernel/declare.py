@@ -50,6 +50,10 @@ class UnknownTask(LookupError):
     """A task name that no declaration in the registry carries."""
 
 
+class InconsistentInputs(ValueError):
+    """A call's inputs or params contradict a constraint its task declares."""
+
+
 class DeclaredParams(BaseModel):
     """Base for declared params: immutable, unknown keys refused with the closest known key suggested."""
 
@@ -147,10 +151,30 @@ def _check_plain(t: object, where: str, seen: set[type[BaseModel]]) -> None:
         raise NonCanonicalParams(f"{where}: {t!r} has no canonical JSON form; declare a canonical type")
 
 
-class TaskSpec(Frozen):
-    """A declared task: its name and version, kind, typed ports and params model.
+class InputsAgree(Frozen):
+    """The two input ports `ports` hold values with equal `property`."""
 
-    `inputs` and `outputs` map port names to kernel type names.
+    kind: Literal["inputs_agree"] = "inputs_agree"
+    ports: tuple[str, str]
+    property: Literal["clock_id", "text", "sampling_rate", "channels", "frames"]
+
+
+class ParamsOrdered(Frozen):
+    """The param `low` is at most the param `high`, whenever both are given."""
+
+    kind: Literal["params_ordered"] = "params_ordered"
+    low: NonEmptyStr
+    high: NonEmptyStr
+
+
+Constraint = Annotated[InputsAgree | ParamsOrdered, Field(discriminator="kind")]
+"""A relation between a task's inputs or between its params, checked before a call is keyed."""
+
+
+class TaskSpec(Frozen):
+    """A declared task: its name and version, kind, typed ports, params model and constraints.
+
+    `inputs` and `outputs` map port names to kernel type names. `constraints` name only declared ports and params.
     """
 
     name: NonEmptyStr
@@ -159,10 +183,49 @@ class TaskSpec(Frozen):
     inputs: StrMap
     outputs: StrMap
     params: type[TaskParams]
+    constraints: tuple[Constraint, ...] = ()
+
+    @model_validator(mode="after")
+    def _constraints_name_declared_things(self) -> "TaskSpec":
+        for c in self.constraints:
+            names, declared = (
+                (c.ports, self.inputs) if isinstance(c, InputsAgree) else ((c.low, c.high), self.params.model_fields)
+            )
+            unknown = [n for n in names if n not in declared]
+            if unknown:
+                raise ValueError(f"{self.name}: constraint {c.kind} names {unknown}, which the task does not declare")
+        return self
 
     def signature(self) -> tuple[str, frozenset[tuple[str, str]], frozenset[tuple[str, str]]]:
         """Return the declared operation: kind, input ports and output ports with their types."""
         return self.kind, frozenset(self.inputs.items()), frozenset(self.outputs.items())
+
+    def check_inputs(self, values: Mapping[str, object]) -> None:
+        """Check each `InputsAgree` constraint against the input values by port.
+
+        Raises:
+            InconsistentInputs: two inputs differ in a property the task declares they share.
+        """
+        for c in self.constraints:
+            if isinstance(c, InputsAgree):
+                first, second = (getattr(values[p], c.property) for p in c.ports)
+                if first != second:
+                    raise InconsistentInputs(
+                        f"inputs {c.ports[0]!r} and {c.ports[1]!r} of {self.name!r} differ in {c.property}: "
+                        f"{first!r} and {second!r}"
+                    )
+
+    def check_params(self, params: BaseModel) -> None:
+        """Check each `ParamsOrdered` constraint against the validated params.
+
+        Raises:
+            InconsistentInputs: a `low` param exceeds its `high` param.
+        """
+        for c in self.constraints:
+            if isinstance(c, ParamsOrdered):
+                low, high = getattr(params, c.low), getattr(params, c.high)
+                if low is not None and high is not None and low > high:
+                    raise InconsistentInputs(f"param {c.low!r} ({low}) exceeds param {c.high!r} ({high})")
 
 
 EnvName = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]*$")]
@@ -404,7 +467,9 @@ def kernel_types() -> dict[str, type]:
 C = TypeVar("C", bound=type)
 
 
-def task(*, name: str, version: str, kind: TaskKind, registry: Registry = REGISTRY) -> Callable[[C], C]:
+def task(  # noqa: PLR0913 - a task declares its name, version, kind, constraints and registry
+    *, name: str, version: str, kind: TaskKind, constraints: tuple[Constraint, ...] = (), registry: Registry = REGISTRY
+) -> Callable[[C], C]:
     """Declare the decorated class as a task in `registry` and set its `spec` to the `TaskSpec`.
 
     The class holds `inputs` and `outputs`, each mapping port names to kernel value types (a port protocol, a
@@ -422,6 +487,7 @@ def task(*, name: str, version: str, kind: TaskKind, registry: Registry = REGIST
             inputs=_port_types(cls, "inputs"),
             outputs=_port_types(cls, "outputs"),
             params=getattr(cls, "Params", TaskParams),
+            constraints=constraints,
         )
         registry.add_task(spec)
         cls.spec = spec  # type: ignore[attr-defined]

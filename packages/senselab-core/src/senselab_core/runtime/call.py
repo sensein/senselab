@@ -129,8 +129,12 @@ class TaskCall(BaseModel):
         Raises:
             UnknownTask: `task` is not declared.
             pydantic.ValidationError: the params do not validate.
+            InconsistentInputs: the params contradict a constraint the task declares.
         """
-        return (registry or packaged().registry).spec(task).params.model_validate(dict(params))
+        spec = (registry or packaged().registry).spec(task)
+        validated = spec.params.model_validate(dict(params))
+        spec.check_params(validated)
+        return validated
 
     @staticmethod
     def parse_model(model: ModelRef | str | None) -> ModelRef | None:
@@ -335,7 +339,7 @@ def run_call(
     default: the `laptop` profile, `RunConfig()` and the store under `cache_root()/results`.
 
     Raises:
-        UnknownTask: the call's task is not declared.
+        UnknownTask, InconsistentInputs: the task is not declared; the inputs contradict a constraint it declares.
         AmbiguousClock: two recording inputs of one content carry different anchors.
         WireFormatRetired: a stored output is in a retired wire format.
         UnlistedSource, NoBackend, NoDevice: as `resolve_execution`.
@@ -357,7 +361,7 @@ def run_call(
     model, hardware, placement = _place(spec, call.model, profile)
     backend = placement.backend
     placement = replace(placement, backend_params=backend.params.model_validate(dict(call.backend_params)))
-    bound = {port: bind_input(port, spec.inputs[port], value) for port, value in call.inputs.items()}
+    bound = _bound(spec, call)
     env = packaged().open_env(backend, profile)
     expected = _expected(backend, env, model) if backend.env.kind == "server" else None
     context = ExecutionContext(
@@ -405,6 +409,13 @@ def run_call(
         *_execution(key, context, profile, identities, output_identity, model, started, attributes),
     )
     return Result(decoded, output_identity, key, context, placement, None)
+
+
+def _bound(spec: TaskSpec, call: TaskCall) -> dict[str, tuple[InputIdentity, object, str | None]]:
+    """Return the call's inputs bound by port, once they satisfy the constraints the task declares."""
+    bound = {port: bind_input(port, spec.inputs[port], value) for port, value in call.inputs.items()}
+    spec.check_inputs({port: value for port, (_, value, _) in bound.items()})
+    return bound
 
 
 def _as_stored(

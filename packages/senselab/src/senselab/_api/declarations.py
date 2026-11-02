@@ -3,7 +3,7 @@
 from typing import Literal
 
 from pydantic import Field
-from senselab_core.kernel.declare import REGISTRY, TaskParams, task
+from senselab_core.kernel.declare import REGISTRY, ParamsOrdered, TaskParams, task
 from senselab_core.kernel.results import Embedding, Intervals, TextSpans, Transcript
 from senselab_core.kernel.signals import Audio, Text
 
@@ -51,7 +51,13 @@ class DiarizeParams(TaskParams):
     max_speakers: int | None = Field(default=None, ge=1)
 
 
-@task(name="diarize", version="1", kind="transform", registry=REGISTRY)
+@task(
+    name="diarize",
+    version="1",
+    kind="transform",
+    constraints=(ParamsOrdered(low="min_speakers", high="max_speakers"),),
+    registry=REGISTRY,
+)
 class Diarize:
     """Find who speaks when in mono speech: speaker turns as `Intervals`, labelled by speaker, ordered by start."""
 
