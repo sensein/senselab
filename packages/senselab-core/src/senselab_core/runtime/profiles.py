@@ -9,6 +9,7 @@ user mapping or YAML file over a packaged profile (`laptop`, `orcd`). A profile 
 import difflib
 import os
 import platform
+import re
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
@@ -60,6 +61,9 @@ class Envs(Frozen):
     torch_index: NonEmptyStr | None = None
 
 
+_DEFAULTED = re.compile(r"\$\{(\w+):-([^}]*)\}")
+
+
 class ExecutionProfile(Formatted):
     """Where and how calls run on one site.
 
@@ -68,7 +72,7 @@ class ExecutionProfile(Formatted):
         stack_preferences: Per task, its stacks best first.
         devices: Device kinds best first (`cuda`, `mps`, `cpu`).
         env_roots: Per env kind (`isolated`, `server`), the directory env trees are built under;
-            `~` and `$VAR` are expanded where the root is used.
+            `${VAR:-fallback}`, then `~` and `$VAR`, are expanded where the root is used.
         envs: Env settings.
         model_sources: Allowed hub organisations; None allows those of the catalogue entries.
         model_cache_budget_bytes: Cap on the model cache; None for none.
@@ -109,14 +113,17 @@ class ExecutionProfile(Formatted):
         return cls.model_validate(merged)
 
     def env_root(self, kind: str) -> Path:
-        """Return the root for env `kind` with `~` and `$VAR` expanded.
+        """Return the root for env `kind` with `${VAR:-fallback}`, then `~` and `$VAR`, expanded.
+
+        `${VAR:-fallback}` is VAR's value, or `fallback` when VAR is unset or empty.
 
         Raises:
             KeyError: the profile has no root for `kind`.
             ValueError: the root names an unset variable.
         """
         raw = self.env_roots[kind]
-        expanded = os.path.expanduser(os.path.expandvars(raw))
+        chosen = _DEFAULTED.sub(lambda m: os.environ.get(m[1]) or m[2], raw)
+        expanded = os.path.expanduser(os.path.expandvars(chosen))
         if "$" in expanded:
             raise ValueError(f"env root {raw!r} names a variable that is not set")
         return Path(expanded)

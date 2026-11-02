@@ -170,9 +170,13 @@ def test_packaged_profile_loads_with_a_derivation_per_key(name: str) -> None:
 
 @pytest.mark.logic
 def test_env_root_expands_home_and_refuses_unset_variable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The orcd roots sit under `~/orcd/scratch`, which needs no variable; an unset variable is an error."""
+    """The orcd roots sit under `~/orcd/scratch` unless `SENSELAB_ENV_ROOT` names one; an unset variable is an error."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("SCRATCH", raising=False)
+    monkeypatch.setenv("SENSELAB_ENV_ROOT", str(tmp_path / "group"))
+    assert ExecutionProfile.load("orcd").env_root("isolated") == tmp_path / "group"
+    assert ExecutionProfile.load("orcd").env_root("server") == tmp_path / "group" / "servers"
+    monkeypatch.delenv("SENSELAB_ENV_ROOT")
     root = tmp_path / "orcd" / "scratch" / "senselab-2x-venvs"
     assert ExecutionProfile.load("orcd").env_root("isolated") == root
     assert ExecutionProfile.load("orcd").env_root("server") == root / "servers"

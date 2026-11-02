@@ -3,8 +3,8 @@ name: orcd
 stack_preferences: {}
 devices: [cuda, cpu]
 env_roots:
-  isolated: ~/orcd/scratch/senselab-2x-venvs
-  server: ~/orcd/scratch/senselab-2x-venvs/servers
+  isolated: ${SENSELAB_ENV_ROOT:-~/orcd/scratch/senselab-2x-venvs}
+  server: ${SENSELAB_ENV_ROOT:-~/orcd/scratch/senselab-2x-venvs}/servers
 envs:
   lease_stale_after_s: 1200
   server_start_margin_s: 60
@@ -25,7 +25,9 @@ derivations:
   env_roots: >-
     Env trees live under the user's scratch, never the home directory, which is quota-limited and slow for
     many small files. ORCD sets no `$SCRATCH`; each user's `~/orcd/scratch` links to their scratch directory,
-    so the root is reached through that link.
+    so the root is reached through that link. `$SENSELAB_ENV_ROOT`, when set, replaces that root: personal
+    scratch has a file-count quota (1M inodes, shared with the user's other work) that one set of backend
+    envs nearly fills (job 27609929 failed at 950K files), so a job may put envs on group scratch.
   envs: >-
     lease_stale_after_s 1200: about twice the slowest measured cold build of the crisperwhisper env on
     ORCD (362.6 s GPU node, 579.7 s and 590 s CPU node, n=2 per host; specs/20260907-shared-lock-heartbeat-inf/
