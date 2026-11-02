@@ -674,7 +674,7 @@ def test_every_error_run_call_documents_has_an_envelope_code() -> None:
 def test_a_call_failure_carries_its_fault_class_in_the_envelope_code() -> None:
     """A failed call maps to `<fault>_fault`, whatever the class of the backend's own exception."""
     codes = {
-        fault: api_error(CallFailed({"type": "X", "fault": fault, "message": "m"})).envelope.code  # type: ignore[union-attr]
+        fault: api_error(CallFailed({"type": "X", "fault": fault, "message": "m"})).envelope.code
         for fault in ("content", "resource", "infrastructure")
     }
     assert codes == {"content": "content_fault", "resource": "resource_fault", "infrastructure": "infrastructure_fault"}
