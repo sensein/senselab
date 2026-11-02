@@ -3,6 +3,8 @@
 import itertools
 import json
 import math
+from pathlib import Path
+from typing import Any
 
 import numpy
 import pytest
@@ -15,6 +17,7 @@ from senselab_core.runtime.compare import (
     Fields,
     Threshold,
     Thresholds,
+    UnknownThreshold,
     best_assignment,
     compare,
     compare_fields,
@@ -194,3 +197,44 @@ def test_flatten2_leaves() -> None:
     assert len(flat) == 1001 and flat["label[1000]"] == '"B"'
     assert flatten({"m": numpy.zeros((2, 2))}) == {"m": [0.0, 0.0, 0.0, 0.0]}
     assert index_free("t.segments[12].words[3].text") == "t.segments[*].words[*].text"
+
+
+@pytest.mark.logic
+def test_packaged_thresholds_cover_every_rule_and_a_run_config_overrides_one(tmp_path: Path) -> None:
+    """The packaged run config names every threshold a rule reads; a user's run config replaces one bound of one."""
+    packaged = Thresholds.load()
+    assert set(NAMES) <= set(packaged.by_name)
+    config = tmp_path / "run.yaml"
+    config.write_text("thresholds:\n  embedding:\n    atol: 2\n    derivation: my own\n", "utf-8")
+    mine = Thresholds.load(config)
+    assert mine.by_name["embedding"] == Threshold(rtol=packaged.by_name["embedding"].rtol, atol=2.0)
+    assert {n: b for n, b in mine.by_name.items() if n != "embedding"} == {
+        n: b for n, b in packaged.by_name.items() if n != "embedding"
+    }
+    assert mine.canonical_digest() != packaged.canonical_digest() == Thresholds.load({}).canonical_digest()
+    expected: Fields = {"e.format": '"embedding@1.0"', "e.vector": [0.0]}
+    moved: Fields = {**expected, "e.vector": [1.5]}
+    assert not compare_fields(expected, moved, packaged).agree
+    assert compare_fields(expected, moved, mine).agree
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("override", "match"),
+    [
+        ({"thresholds": {"embeddingz": {"atol": 1.0}}}, "did you mean 'embedding'"),
+        ({"threshold": {}}, "did you mean 'thresholds'"),
+        ({"thresholds": {"embedding": {"tol": 1.0}}}, "unknown key"),
+    ],
+)
+def test_an_unknown_threshold_is_refused(override: dict[str, Any], match: str) -> None:
+    """A misspelt threshold, run config key or bound is refused, naming the closest one."""
+    with pytest.raises(UnknownThreshold, match=match):
+        Thresholds.load(override)
+
+
+@pytest.mark.logic
+def test_a_negative_bound_is_refused() -> None:
+    """A bound is a finite non-negative number."""
+    with pytest.raises(ValueError, match="greater than or equal"):
+        Thresholds.load({"thresholds": {"time_ns": {"atol": -1}}})

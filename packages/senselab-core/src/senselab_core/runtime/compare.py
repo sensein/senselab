@@ -1,17 +1,21 @@
 """Output agreement by standard comparisons: hash equality, exact equality, and `isclose` within named thresholds.
 
 `runtime/data/comparison.yaml` (`comparison@1.0`) declares, per kernel type, how each field of its wire form
-compares (`COMPARISONS`). `compare` decides whether two outputs agree and returns the field-level differences, each
-with the threshold it was judged by. Outputs are compared as their flattened leaves (`flatten`).
+compares (`COMPARISONS`); the thresholds its rules name are the run config's (`Thresholds.load`, over the packaged
+`runtime/data/run_config.yaml`). `compare` decides whether two outputs agree and returns the field-level
+differences, each with the threshold it was judged by. Outputs are compared as their flattened leaves (`flatten`).
 """
 
+import difflib
+import functools
 import json
 import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib import resources
-from typing import Annotated, Literal
+from pathlib import Path
+from typing import Annotated, Any, Literal
 
 import numpy
 import yaml
@@ -87,10 +91,76 @@ class Threshold(Frozen):
     atol: Annotated[FiniteFloat, Field(ge=0)]
 
 
+class UnknownThreshold(ValueError):
+    """A run config names a threshold, or a key, that the packaged run config does not define."""
+
+
 class Thresholds(Frozen):
     """The named thresholds a comparison reads; `canonical_digest` is what a verify or parity decision records."""
 
     by_name: Mapping[str, Threshold]
+
+    @classmethod
+    def load(cls, override: Mapping[str, Any] | Path | None = None) -> "Thresholds":
+        """Return the packaged run config's `thresholds` with `override`'s (a run config mapping or YAML) merged over.
+
+        A threshold of `override` may set `rtol`, `atol` or both, and may carry a `derivation`.
+
+        Raises:
+            UnknownThreshold: `override` names a key or threshold the packaged run config lacks, naming the closest.
+            ValueError: the packaged file is not `run-config@1.0` with a derivation per threshold, or a merged bound
+                is not a finite non-negative number.
+        """
+        merged = {name: dict(bound) for name, bound in _packaged_thresholds().items()}
+        raw = _read_yaml(override) if isinstance(override, Path) else dict(override or {})
+        _known("run config key", set(raw) - {"format"}, {"thresholds"})
+        given = raw.get("thresholds") or {}
+        _known("threshold", set(given), set(merged))
+        for name, bound in given.items():
+            _known(f"key of threshold {name!r}", set(bound), {"rtol", "atol", "derivation"})
+            merged[name] |= {k: v for k, v in bound.items() if k != "derivation"}
+        return cls(by_name={n: Threshold(**{k: _number(v) for k, v in b.items()}) for n, b in merged.items()})
+
+
+RUN_CONFIG_FORMAT = "run-config@1.0"
+
+
+def _read_yaml(path: Path) -> dict[str, Any]:
+    raw = yaml.safe_load(path.read_text("utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"a run config is a mapping, {path} is not")
+    return raw
+
+
+def _number(v: object) -> object:
+    return float(v) if isinstance(v, int) and not isinstance(v, bool) else v
+
+
+def _known(what: str, given: set[str], known: set[str]) -> None:
+    for name in sorted(given - known):
+        closest = difflib.get_close_matches(name, sorted(known), n=1)
+        raise UnknownThreshold(f"unknown {what} {name!r}" + (f"; did you mean {closest[0]!r}?" if closest else ""))
+
+
+@functools.cache
+def _packaged_thresholds() -> dict[str, dict[str, object]]:
+    raw = yaml.safe_load(
+        resources.files("senselab_core.runtime").joinpath("data", "run_config.yaml").read_text("utf-8")
+    )
+    if (
+        not isinstance(raw, dict)
+        or raw.get("format") != RUN_CONFIG_FORMAT
+        or not isinstance(raw.get("thresholds"), dict)
+    ):
+        raise ValueError(f"run_config.yaml must carry format {RUN_CONFIG_FORMAT!r} and 'thresholds'")
+    out = {}
+    for name, entry in raw["thresholds"].items():
+        if not isinstance(entry, dict) or set(entry) != {"rtol", "atol", "derivation"}:
+            raise ValueError(f"{RUN_CONFIG_FORMAT} threshold {name!r} is exactly 'rtol', 'atol' and 'derivation'")
+        if not isinstance(entry["derivation"], str) or not entry["derivation"].strip():
+            raise ValueError(f"{RUN_CONFIG_FORMAT} threshold {name!r} needs a non-empty derivation")
+        out[str(name)] = {"rtol": entry["rtol"], "atol": entry["atol"]}
+    return out
 
 
 @dataclass(frozen=True)

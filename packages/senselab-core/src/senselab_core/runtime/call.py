@@ -14,7 +14,7 @@ import platform
 import sysconfig
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from importlib.metadata import entry_points
 from importlib.resources.abc import Traversable
@@ -55,6 +55,7 @@ from senselab_core.kernel.time import TimeAnchor, TimeMap, rebind
 from senselab_core.kernel.wire import WireFormatRetired, from_wire_form, wire_form
 from senselab_core.runtime.audio_io import DECODER, READER, open_audio
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
+from senselab_core.runtime.compare import Thresholds, flatten
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import SAMPLING, EquivalenceEvidence, EvidenceSide, sampled
 from senselab_core.runtime.hardware import HardwareInfo, numerics_class, probe_hardware
@@ -68,7 +69,7 @@ from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.runtime.revision import PROCESS_RESOLVER, cache_root, run_id
 from senselab_core.runtime.store import ResultStore, StoredResult, agent_record, context_record, key_record
 from senselab_core.runtime.store import output_identity as store_output_identity
-from senselab_core.runtime.tolerance import NoToleranceProfile, ToleranceProfile, flatten, read_profile, within
+from senselab_core.runtime.tolerance import NoToleranceProfile, ToleranceProfile, read_profile, within
 from senselab_core.runtime.vllm_server import (
     Attestation,
     AttestationMismatch,
@@ -154,15 +155,17 @@ class TaskCall(BaseModel):
 
 @dataclass(frozen=True)
 class RunConfig:
-    """A run's settings: `reuse`, the widest policy under which a stored result serves a call, `verify` and `licenses`.
+    """A run's settings: `reuse`, the widest policy under which a stored result serves a call, `verify`, `licenses`.
 
-    `verify` is the fraction of cross-context hits recomputed and compared within the backend's tolerance profile.
-    `licenses` is the user's license policy; with None no call is refused for its license.
+    `verify` is the fraction of cross-context hits recomputed and compared under `thresholds` (`Thresholds.load`,
+    the packaged run config's unless a user's is merged over it). `licenses` is the user's license policy; with None
+    no call is refused for its license.
     """
 
     reuse: ReusePolicy = DEFAULT_REUSE_POLICY
     verify: float = 0.0
     licenses: LicensePolicy | None = None
+    thresholds: Thresholds = field(default_factory=Thresholds.load)
 
     def __post_init__(self) -> None:
         """Refuse a `verify` outside [0, 1]."""
