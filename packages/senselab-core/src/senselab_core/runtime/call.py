@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from importlib.resources.abc import Traversable
 from os import PathLike
 from pathlib import Path
-from typing import Annotated, Any, Literal, get_args
+from typing import Annotated, Any, Literal, get_args, get_type_hints
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, PlainSerializer, ValidationInfo, model_validator
 from senselab_worker import WIRE_VERSION
@@ -477,6 +477,23 @@ def _with_identities(kernel_type: type, value: Mapping[str, Any]) -> Mapping[str
             if not re.fullmatch(constraint.pattern, given):
                 out[name] = PlainText(content=given).identity
     return out
+
+
+def input_model(port_type: str) -> type[BaseModel] | None:
+    """Return the model `bind_input` holds a value of `port_type` as: the type itself, or what a protocol port binds to.
+
+    `Text` binds to `PlainText` and a type with a reader to what the reader returns; None for a type that is not a
+    kernel type.
+    """
+    kernel_type = kernel_types().get(port_type)
+    if kernel_type is None:
+        return None
+    if issubclass(kernel_type, BaseModel):
+        return kernel_type
+    if port_type == "Text":
+        return PlainText
+    returned: type[BaseModel] = get_type_hints(_READERS[port_type][0])["return"]
+    return returned
 
 
 def bind_input(port: str, port_type: str, value: object) -> tuple[InputIdentity, object, str | None]:

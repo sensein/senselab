@@ -311,7 +311,7 @@ def test_describe_is_valid_schema() -> None:
     schemas = [document[k] for k in ("inputs", "params", "outputs")] + list(document["backend_params"].values())
     for schema in schemas:
         jsonschema.Draft202012Validator.check_schema(schema)
-    assert document["inputs"]["properties"]["audio"]["$ref"] == "#/$defs/Audio"
+    assert document["inputs"]["properties"]["audio"]["anyOf"][1] == {"$ref": "#/$defs/Audio"}
     assert "groups" in document["inputs"]["$defs"]["Audio"]["properties"]
     embedding = document["outputs"]["$defs"]["Embedding"]
     assert embedding["x-senselab-format"] == "embedding@1.0" and embedding["properties"]["vector"]["type"] == "array"
@@ -390,6 +390,8 @@ def test_describe_of_every_task_is_enough_to_write_a_call() -> None:
             assert form == (expected if port_type in kernel_types() else JSON_FORM)
             if input_binding(port_type) == "path":
                 assert "a path to a local file" in form
+            if port_type in kernel_types():
+                _assert_port_schema(document["inputs"], port, input_binding(port_type) != "value")
         call = document["call"]
         assert set(call["keys"]) == {"task", "task_version", "inputs", "params", "model", "backend_params"}
         assert call["model"]["allowed"] == [f"{m['id']}@{m['revision']}" for m in document["models"]]
@@ -417,3 +419,22 @@ def test_an_identity_field_given_as_the_text_binds_to_its_identity() -> None:
     by_text = bind_input("reference", "TextSpans", spans)
     by_identity = bind_input("reference", "TextSpans", {**spans, "text": identity})
     assert by_text[0] == by_identity[0] and by_text[1]["text"] == identity  # type: ignore[index]
+
+
+def _unresolved(node: object, defs: dict[str, Any]) -> list[str]:
+    if isinstance(node, dict):
+        found = [r for r in [node.get("$ref")] if isinstance(r, str) and r.rsplit("/", 1)[-1] not in defs]
+        return found + [u for v in node.values() for u in _unresolved(v, defs)]
+    if isinstance(node, list):
+        return [u for v in node for u in _unresolved(v, defs)]
+    return []
+
+
+def _assert_port_schema(inputs: dict[str, Any], port: str, takes_string: bool) -> None:
+    """A kernel port's schema is complete, and accepts a string where `bind_input` does."""
+    schema = inputs["properties"][port]
+    assert "$ref" in schema or "anyOf" in schema
+    defs = inputs.get("$defs", {})
+    assert not _unresolved(schema, defs)
+    if takes_string:
+        jsonschema.validate("a string", {**schema, "$defs": defs})

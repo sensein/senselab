@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from pydantic.json_schema import GenerateJsonSchema
 from senselab_core.kernel.declare import REGISTRY, Registry, TaskSpec, json_schema, kernel_types
 from senselab_core.kernel.formats import Formatted
-from senselab_core.runtime.call import input_binding, packaged
+from senselab_core.runtime.call import input_binding, input_model, packaged
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
 
 from senselab._api.call import ApiError, callable_names, closest, task_spec
@@ -32,6 +32,7 @@ PORT_FORMS = {
     "text": "the text itself as a string (not a path), or a PlainText",
     "value": "the {type} object as its format schema gives it; a string is not read as a path",
 }
+STRING_FORMS = {"path": "path to a local file", "text": "the text itself"}
 JSON_FORM = "a JSON value"
 
 
@@ -40,22 +41,24 @@ def _link_ports(ports: dict[str, Any], declared: Mapping[str, str]) -> dict[str,
 
     How a port is given is `input_binding` of its type, in `PORT_FORMS`.
     """
-    types = kernel_types()
     defs: dict[str, Any] = {}
     properties = {}
     for port, prop in ports["properties"].items():
-        kernel_type = types.get(declared[port])
-        if kernel_type is None:
+        model = input_model(declared[port])
+        if model is None:
             properties[port] = {**prop, "description": JSON_FORM}
             continue
-        form = PORT_FORMS[input_binding(declared[port])].format(type=declared[port])
-        if not (isinstance(kernel_type, type) and issubclass(kernel_type, BaseModel)):
-            properties[port] = {**prop, "description": form}
-            continue
-        schema = _format_schema(kernel_type)
+        schema = _format_schema(model)
         defs.update(schema.pop("$defs", {}))
-        defs[kernel_type.__name__] = schema
-        properties[port] = {**prop, "description": form, "$ref": f"#/$defs/{kernel_type.__name__}"}
+        defs[model.__name__] = schema
+        form = PORT_FORMS[input_binding(declared[port])].format(type=declared[port])
+        by_str = STRING_FORMS.get(input_binding(declared[port]))
+        ref = {"$ref": f"#/$defs/{model.__name__}"}
+        properties[port] = (
+            {**prop, "description": form, "anyOf": [{"type": "string", "description": by_str}, ref]}
+            if by_str
+            else {**prop, "description": form, **ref}
+        )
     return {**ports, "properties": properties, **({"$defs": defs} if defs else {})}
 
 
