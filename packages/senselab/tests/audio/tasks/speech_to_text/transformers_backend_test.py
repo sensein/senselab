@@ -180,18 +180,24 @@ def test_load_refuses_a_ref_an_unknown_key_and_both_stub_and_model() -> None:
             hf.load(init)
 
 
+CASES = {
+    name: c
+    for name, c in contract_cases(REGISTRY, lock_records=LOCK_RECORDS)
+    if name.startswith(("speech_to_text::", "speech_to_text/transformers::"))
+}
+
+
 @pytest.mark.contract
-@pytest.mark.parametrize(
-    "case",
-    [
-        pytest.param(c, id=name)
-        for name, c in contract_cases(REGISTRY, lock_records=LOCK_RECORDS)
-        if name.startswith(("speech_to_text::", "transformers::"))
-    ],
-)
+@pytest.mark.parametrize("case", [pytest.param(c, id=name) for name, c in CASES.items()])
 def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract case
     """The task and backend satisfy the generated contract, the worker running on its load stub."""
     case()
+
+
+@pytest.mark.contract
+def test_contract_selects_the_backend() -> None:
+    """The backend's cases, `output_affecting_produced` among them, are selected, not filtered away."""
+    assert "speech_to_text/transformers::output_affecting_produced" in CASES
 
 
 @pytest.mark.contract
