@@ -1,11 +1,13 @@
 """Backend workers on their catalogue models, each started in the env its backend declares."""
 
 from collections.abc import Mapping
+from contextlib import suppress
 from typing import Any
 
 from senselab_worker.faults import FaultClass
 
 from senselab_core.runtime.call import packaged
+from senselab_core.runtime.catalogue import UnknownModel
 from senselab_core.runtime.hardware import probe_hardware
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.worker_client import WorkerClient
@@ -34,7 +36,7 @@ class RealWorkers:
     """Start workers through the packaged env opener under `profile`; `close` stops every one started.
 
     One worker is live at a time: starting a worker first stops those started before it. Each worker loads its
-    backend's first model, when it declares one, at the packaged catalogue's pin,
+    backend's first model (else its task's catalogue default, when there is one) at the packaged catalogue's pin,
     on `cuda` when the host has a GPU, else `cpu`.
     """
 
@@ -59,8 +61,14 @@ class RealWorkers:
         backend = found[0]
         self.close()
         init: dict[str, Any] = {"device": self.device, "faults": dict(faults or {})}
+        catalogue = packaged().catalogue
+        entry = None
         if backend.models:
-            entry = packaged().catalogue.entry(backend.models[0])
+            entry = catalogue.entry(backend.models[0])
+        else:
+            with suppress(UnknownModel):
+                entry = catalogue.default(task)
+        if entry is not None:
             init["model"] = {"source": "hf", "id": entry.id, "identity": entry.revision}
         worker = WorkerClient(packaged().open_env(backend, self.profile).python, backend.worker, init=init)
         self.started.append(worker)
