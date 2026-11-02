@@ -8,11 +8,13 @@ import time
 from pathlib import Path
 
 import pytest
+import senselab_worker
 from senselab_core.kernel.declare import Env
 from senselab_core.kernel.identity import ExecutionContext
 from senselab_core.runtime.envs import (
     CPU_INDEX,
     LOCK_DIGEST_TAG,
+    OVERLAY_DIGEST_TAG,
     CudaCompatibilityError,
     EnvHandle,
     EnvLockError,
@@ -32,6 +34,7 @@ from senselab_core.runtime.envs import (
     read_lock_inputs,
 )
 from senselab_core.runtime.profiles import Envs, ExecutionProfile
+from senselab_worker.digest import identity_digest
 
 pytestmark = pytest.mark.logic
 
@@ -216,7 +219,7 @@ def test_worker_runtime_is_an_overlay(tmp_path: Path, uv_log: Path) -> None:
 
 
 def test_worker_modules_are_placed_where_the_worker_imports_them(tmp_path: Path, uv_log: Path) -> None:
-    """A declared worker module is importable by its dotted name in the env, and a changed source replaces the copy."""
+    """A declared worker module is importable by its dotted name; a changed source is a new env, the old one kept."""
     source = tmp_path / "src" / "mod.py"
     source.parent.mkdir()
     source.write_text("VALUE = 1\n")
@@ -248,7 +251,8 @@ def test_worker_modules_are_placed_where_the_worker_imports_them(tmp_path: Path,
     site = build()
     assert value(site) == "1" and not list(site.glob("demo_pkg*.dist-info"))
     source.write_text("VALUE = 22\n")
-    assert build() == site and value(site) == "22"
+    changed = build()
+    assert changed != site and value(changed) == "22" and value(site) == "1"
 
 
 def test_host_env_requires_a_managed_interpreter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -275,7 +279,8 @@ def test_other_venv_failure_is_not_managed_python_missing(
 
 
 def _plant_lease(tmp_path: Path, age_s: float) -> Path:
-    lease = tmp_path / "envs" / "demo-cu128.lease"
+    overlay = identity_digest(OVERLAY_DIGEST_TAG, [senselab_worker.runtime_identity(), []])
+    lease = tmp_path / "envs" / f"demo-cu128-{overlay[:16]}.lease"
     lease.parent.mkdir(parents=True, exist_ok=True)
     lease.write_text(json.dumps({"user": "u", "host": "h", "pid": 1, "token": "0" * 32}))
     then = time.time() - age_s
