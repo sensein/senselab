@@ -259,9 +259,8 @@ def _wired(port: str, port_type: str, value: object) -> object:
 
 
 def resolve(task: str, backend_name: str) -> tuple[Any, Any]:
-    """Return (task spec, backend spec), importing `senselab` first: that import registers the packaged tasks."""
-    importlib.import_module("senselab")
-    from senselab_core.runtime.call import packaged  # noqa: PLC0415 - needs the registered runtime
+    """Return (task spec, backend spec) of the packaged declarations."""
+    from senselab_core.runtime.call import packaged  # noqa: PLC0415 - needs the runtime
 
     backend = next(b for b in packaged().registry.backends(task) if b.name == backend_name)
     return packaged().registry.spec(task), backend

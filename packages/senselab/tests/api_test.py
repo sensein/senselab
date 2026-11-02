@@ -506,20 +506,27 @@ assert _RUN_CALLS and _RUN_CALLS.loader
 
 @pytest.mark.logic
 def test_run_calls_reports_one_line_per_call_and_fails_on_any(
-    fake_stack: None,  # noqa: ARG001 - the fixture's effect
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A good call prints `ok` with its output types, an invalid one `FAILED` with its error type; exit is 1."""
+    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path))
     module = importlib.util.module_from_spec(_RUN_CALLS)  # type: ignore[arg-type]
     sys.modules["run_calls"] = module
     _RUN_CALLS.loader.exec_module(module)  # type: ignore[union-attr]
-    document = describe(fake.ECHO.name)
-    good = {"task": fake.ECHO.name, "inputs": {p: {"text": "hi"} for p in document["inputs"]["required"]}, "params": {}}
-    bad = {"task": fake.ECHO.name, "inputs": {}, "params": {"nope": 1}}
+    transcript = {"segments": [{"text": "hello world"}]}
+    good = {"task": "wer", "inputs": {"reference": transcript, "hypothesis": transcript}, "params": {}}
+    bad = {"task": "wer", "inputs": {}, "params": {"nope": 1}}
     for calls, code in (([good], 0), ([good, bad], 1)):
         path = tmp_path / "calls.json"
         path.write_text(json.dumps(calls))
         assert module.main([str(path)]) == code
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0].startswith("fake.echo: ok ") and lines[-1].startswith("fake.echo: FAILED ")
+    assert lines[0].startswith("wer: ok ") and lines[-1].startswith("wer: FAILED ")
+
+
+@pytest.mark.logic
+def test_a_fresh_process_finds_the_packaged_tasks_without_importing_senselab() -> None:
+    """`packaged()` loads the `senselab.packages` entry points itself, so `run_call` needs no `import senselab`."""
+    code = "from senselab_core.runtime.call import packaged; print(sorted(packaged().registry._tasks))"
+    run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True, timeout=120)  # noqa: S603
+    assert "'wer'" in run.stdout and "'speech_to_text'" in run.stdout

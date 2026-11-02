@@ -12,8 +12,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from senselab_core.kernel.declare import REGISTRY
-from senselab_core.runtime.call import TaskCall, run_call
+from senselab_core.runtime.call import TaskCall, packaged, run_call
 from senselab_core.runtime.profiles import ExecutionProfile
 
 
@@ -27,7 +26,7 @@ def run_calls(calls: Sequence[Any], execution: ExecutionProfile) -> list[str]:
         except Exception as error:  # noqa: BLE001 - the harness reports every failure of a call
             lines.append(f"{task}: FAILED {type(error).__name__}: {' '.join(str(error).split())}")
             continue
-        spec = REGISTRY.spec(task)
+        spec = packaged().registry.spec(task)
         lines.append(f"{task}: ok {' '.join(f'{p}:{t}' for p, t in spec.outputs.items())}")
         assert set(result.outputs) == set(spec.outputs)
     return lines

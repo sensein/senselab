@@ -14,6 +14,7 @@ import threading
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from importlib.metadata import entry_points
 from importlib.resources.abc import Traversable
 from os import PathLike
 from pathlib import Path
@@ -106,7 +107,7 @@ class TaskCall(BaseModel):
         out = dict(data)
         if "task_version" not in out or not isinstance(out.get("params"), TaskParams):
             registry = (info.context or {}).get("registry")
-            out.setdefault("task_version", (registry or _PACKAGED.registry).spec(out["task"]).version)
+            out.setdefault("task_version", (registry or packaged().registry).spec(out["task"]).version)
             if not isinstance(out.get("params"), TaskParams):
                 out["params"] = cls.parse_params(out["task"], out.get("params") or {}, registry)
         out["model"] = cls.parse_model(out.get("model"))
@@ -120,7 +121,7 @@ class TaskCall(BaseModel):
             UnknownTask: `task` is not declared.
             pydantic.ValidationError: the params do not validate.
         """
-        return (registry or _PACKAGED.registry).spec(task).params.model_validate(dict(params))
+        return (registry or packaged().registry).spec(task).params.model_validate(dict(params))
 
     @staticmethod
     def parse_model(model: ModelRef | str | None) -> ModelRef | None:
@@ -201,15 +202,29 @@ def _no_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # no
 _PACKAGED = Packaged(Catalogue(entries=()), _no_env)
 
 
+PACKAGES_GROUP = "senselab.packages"
+"""The entry-point group of declaring packages; each entry names a module that calls `use_packaged` on import."""
+
+_STATE = {"registered": False, "discovered": False}
+
+
 def use_packaged(packaged: Packaged) -> Packaged:
     """Make `packaged` what `run_call` reads, and return what it read before."""
     global _PACKAGED  # noqa: PLW0603 - the process-wide counterpart of REGISTRY
     previous, _PACKAGED = _PACKAGED, packaged
+    _STATE["registered"] = True
     return previous
 
 
 def packaged() -> Packaged:
-    """Return what `run_call` reads: the catalogue and env opener last given to `use_packaged`."""
+    """Return what `run_call` reads: the catalogue and env opener last given to `use_packaged`.
+
+    When no package has been registered, the first call loads every entry point of `PACKAGES_GROUP`, once.
+    """
+    if not _STATE["registered"] and not _STATE["discovered"]:
+        _STATE["discovered"] = True
+        for entry in entry_points(group=PACKAGES_GROUP):
+            entry.load()
     return _PACKAGED
 
 
@@ -259,14 +274,14 @@ def run_call(
     profile = execution if execution is not None else ExecutionProfile.load()
     run = run if run is not None else RunConfig()
     store = store if store is not None else ResultStore(cache_root() / "results")
-    spec = _PACKAGED.registry.spec(call.task)
+    spec = packaged().registry.spec(call.task)
     if call.task_version != spec.version:
         raise ValueError(f"{call.task!r} is declared at version {spec.version!r}, the call names {call.task_version!r}")
     model, hardware, placement = _place(spec, call.model, profile)
     backend = placement.backend
     placement = replace(placement, backend_params=backend.params.model_validate(dict(call.backend_params)))
     bound = {port: bind_input(port, spec.inputs[port], value) for port, value in call.inputs.items()}
-    env = _PACKAGED.open_env(backend, profile)
+    env = packaged().open_env(backend, profile)
     expected = _expected(backend, env, model) if backend.env.kind == "server" else None
     context = ExecutionContext(
         **(env.context_fields() if expected is None else attested_fields(env, expected)),
@@ -351,9 +366,10 @@ def _tolerance(key: LogicalKey) -> ToleranceProfile:
     Raises:
         NoToleranceProfile: the backend has none, or no package names a folder of profiles.
     """
-    if _PACKAGED.tolerance is None:
+    folder = packaged().tolerance
+    if folder is None:
         raise NoToleranceProfile(f"no package names a folder of tolerance profiles for {key.backend!r}")
-    return read_profile(_PACKAGED.tolerance, key.task, key.backend)
+    return read_profile(folder, key.task, key.backend)
 
 
 def _verify(  # noqa: PLR0913 - the hit, its recomputation and the profile judging them
@@ -422,9 +438,9 @@ def _rebound(outputs: dict[str, object], anchors: list[tuple[TimeAnchor, TimeAnc
 def _place(
     spec: TaskSpec, ref: ModelRef | None, profile: ExecutionProfile
 ) -> tuple[ResolvedModel | None, HardwareInfo, Placement]:
-    model, entry = _resolve_model(spec, ref, profile, _PACKAGED.catalogue)
+    model, entry = _resolve_model(spec, ref, profile, packaged().catalogue)
     hardware = _hardware()
-    return model, hardware, resolve_execution(spec, entry, profile, hardware, _PACKAGED.registry, _PACKAGED.catalogue)
+    return model, hardware, resolve_execution(spec, entry, profile, hardware, packaged().registry, packaged().catalogue)
 
 
 def placement_of(task: str, model: ModelRef | None, execution: ExecutionProfile) -> Placement:
@@ -434,7 +450,7 @@ def placement_of(task: str, model: ModelRef | None, execution: ExecutionProfile)
         UnknownTask: the task is not declared.
         UnlistedSource, NoBackend, NoDevice: as `resolve_execution`.
     """
-    return _place(_PACKAGED.registry.spec(task), model, execution)[2]
+    return _place(packaged().registry.spec(task), model, execution)[2]
 
 
 def _resolve_model(

@@ -40,6 +40,9 @@ torch = ["torch>=2.4", "transformers>=5.8"]
 [project.scripts]
 senselab = "senselab.cli:main"
 
+[project.entry-points."senselab.packages"]
+senselab = "senselab._api.packaged"
+
 [dependency-groups]
 dev = [
   "pytest-xdist[psutil]~=3.8.0",
