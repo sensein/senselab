@@ -37,6 +37,7 @@ jobs:
       run: |
         .docs/bin/pdoc senselab_core senselab_worker senselab.reference -o docs -t docs_style/pdoc-theme --docformat google \
           --favicon https://readthedocs.org/favicon.ico
+        if grep -rl "Page unavailable:" docs/senselab; then echo 'a reference page has no sources' >&2; exit 1; fi
         touch docs/.nojekyll
     - name: Deploy preview
       id: deploy

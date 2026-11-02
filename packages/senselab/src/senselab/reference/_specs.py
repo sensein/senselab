@@ -68,6 +68,16 @@ def open_register_rows(register: str) -> list[dict[str, str]]:
     return [r for r in keyed if r.get("Status", "").lower().startswith(("open", "scheduled"))]
 
 
+_ID = re.compile(
+    r"\s*\(§[\d.]+\)|\s*\((?:[^()]*\b(?:ADR|[PRHD])-?\d[^()]*)\)|\b(?:ADR|P2|[PRHD])-\d+\w*\b|\bH\d+[a-z]?\b"
+)
+
+
+def scrub(text: str) -> str:
+    """Return `text` without register, principle, hardening and ADR ids, and without the parentheses that held them."""
+    return " ".join(_ID.sub("", text).split())
+
+
 def phase_exits(design: str, phase: int) -> list[str]:
     """Return the exit bullets of Phase `phase` in design section 6.2, each as one line."""
     block = re.search(rf"^\*\*Phase {phase}:.*?(?=^\*\*Phase \d|^###|\Z)", design, re.MULTILINE | re.DOTALL)
@@ -75,7 +85,7 @@ def phase_exits(design: str, phase: int) -> list[str]:
     if exits is None:
         return []
     bullets = re.findall(r"^ {2}- (.*?)(?=^ {2}- |\Z)", exits.group(1), re.MULTILINE | re.DOTALL)
-    return [" ".join(b.split()).rstrip(";.") for b in bullets]
+    return [scrub(b).rstrip(";.") for b in bullets]
 
 
 def consolidation_inventory(design: str) -> list[dict[str, str]]:
@@ -84,6 +94,23 @@ def consolidation_inventory(design: str) -> list[dict[str, str]]:
 
 
 def phase_states(state: str) -> dict[str, str]:
-    """Return the phase table of the working state file as `{phase: state}`."""
+    """Return the phase table of the working state file as `{phase: done | in progress | not started}`."""
     rows = next((t for t in tables(state) if t[0][:2] == ["Phase", "State"]), [])
-    return {r[0]: r[1] for r in rows[1:] if len(r) > 1}
+    return {r[0]: _phase_word(r[1]) for r in rows[1:] if len(r) > 1}
+
+
+def _phase_word(cell: str) -> str:
+    lowered = cell.lower()
+    if "not started" in lowered:
+        return "not started"
+    return "done" if lowered.startswith("done") or re.search(r"phase \d+ done", lowered) else "in progress"
+
+
+def open_by_phase(register: str) -> dict[str, int]:
+    """Return the count of open register rows by the phase that owns them, `unassigned` when a row names none."""
+    counts: dict[str, int] = {}
+    for row in open_register_rows(register):
+        owner = re.search(r"owner: ([^;,(]*?Phase \d|first 2\.x release)", row["Status"])
+        key = re.sub(r".*(Phase \d)", r"\1", owner.group(1)) if owner else "unassigned"
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))

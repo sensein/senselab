@@ -163,8 +163,58 @@ def test_status_page_reads_the_registry_and_the_checkout_specs() -> None:
 
 @pytest.mark.contract
 @pytest.mark.parametrize("page", PAGES)
-def test_pages_use_no_verdict_or_decision_vocabulary_of_their_own(page: str) -> None:
-    """Pages use no verdict or decision vocabulary of their own."""
+def test_pages_use_no_retired_vocabulary_anywhere(page: str) -> None:
+    """Pages use no retired triage vocabulary, tables included."""
     text = importlib.import_module(f"senselab.reference.{page}").__doc__ or ""
-    own = re.sub(r"^\|.*\|$", "", text, flags=re.MULTILINE)
-    assert not re.search(r"verdict|decision", own, re.IGNORECASE)
+    assert not re.search(r"verdict|decision|\breject\b", text, re.IGNORECASE)
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("page", PAGES)
+def test_pages_publish_no_spec_ids_or_paths(page: str) -> None:
+    """Pages publish no register, principle, hardening or ADR id and no spec path."""
+    text = importlib.import_module(f"senselab.reference.{page}").__doc__ or ""
+    assert not re.search(r"\b(?:ADR|P2|[PRHD])-\d|\bH\d+[a-z]?\b|specs/", text)
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("page", PAGES)
+def test_every_page_is_built_in_a_checkout(page: str) -> None:
+    """Every page has content in a checkout and none is the unavailable notice."""
+    text = importlib.import_module(f"senselab.reference.{page}").__doc__ or ""
+    assert len(text) > 300
+    assert _render.UNAVAILABLE not in text
+
+
+@pytest.mark.logic
+def test_a_page_without_sources_is_a_notice_not_a_crash() -> None:
+    """A page whose sources are absent becomes the unavailable notice."""
+
+    def missing() -> str:
+        raise FileNotFoundError("no checkout")
+
+    assert _render.or_unavailable(missing).startswith(_render.UNAVAILABLE)
+
+
+@pytest.mark.logic
+def test_scrub_removes_ids_and_their_parentheses() -> None:
+    """Scrub removes ids and the parentheses that held them."""
+    assert _specs.scrub("switches by profile alone (P-8)") == "switches by profile alone"
+    assert _specs.scrub("one store (ADR-002), a lock") == "one store, a lock"
+
+
+@pytest.mark.logic
+def test_open_items_count_by_owner_phase() -> None:
+    """Open items are counted by owner phase and name no row."""
+    assert _specs.open_by_phase(REGISTER) == {"Phase 3": 1, "unassigned": 1}
+
+
+@pytest.mark.logic
+def test_parity_reads_the_tolerance_folder(tmp_path: Path) -> None:
+    """A task is at parity when every backend has a profile in the folder, and not before."""
+    before = {s["task"]: s["parity"] for s in _render.task_states(REGISTRY, "", None, tmp_path)}
+    assert not any(before.values())
+    for backend in REGISTRY.backends("diarize"):
+        (tmp_path / f"{backend.name}.yaml").write_text("x: 1\n")
+    after = {s["task"]: s["parity"] for s in _render.task_states(REGISTRY, "", None, tmp_path)}
+    assert after["diarize"] and not after["wer"]

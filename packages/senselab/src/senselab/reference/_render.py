@@ -1,7 +1,9 @@
 """Markdown of the reference and status pages, from the declarations, the catalogue and the checkout's specs."""
 
-from collections.abc import Iterable, Mapping, Sequence
+import re
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from importlib import resources
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Any
 
@@ -171,11 +173,36 @@ model's terms before using it on clinical or commercial work; a gated model need
 """
 
 
+UNAVAILABLE = "Page unavailable:"
+"""The start of a page built outside a checkout; the docs job fails when it finds it in the output."""
+
+
+def or_unavailable(page: Callable[[], str]) -> str:
+    """Return `page()`, or a notice starting `UNAVAILABLE` when no checkout holds its sources."""
+    try:
+        return page()
+    except FileNotFoundError as err:
+        return f"{UNAVAILABLE} {err}"
+
+
+def _require_root(root: Path | None) -> Path:
+    found = root or _specs.checkout_root()
+    if found is None:
+        raise FileNotFoundError("the reference pages are built from a senselab checkout; none lies above this package")
+    return found
+
+
 def datasets_page(root: Path | None = None) -> str:
-    """Return the public datasets of the benchmark manifests with their licenses and how to fetch them."""
-    root = root or _specs.checkout_root()
-    manifests = sorted((root / "benchmarks" / "manifests").glob("*.yaml")) if root else []
-    loaded = [(m.relative_to(root), DataManifest.load(m)) for m in manifests] if root else []
+    """Return the public datasets of the benchmark manifests with their licenses and how to fetch them.
+
+    Raises:
+        FileNotFoundError: no checkout holds the manifests.
+    """
+    root = _require_root(root)
+    manifests = sorted((root / "benchmarks" / "manifests").glob("*.yaml"))
+    loaded = [(m.relative_to(root), DataManifest.load(m)) for m in manifests]
+    if not loaded:
+        raise FileNotFoundError(f"no data manifests under {root / 'benchmarks' / 'manifests'}")
     rows = [
         (
             f"`{m.name}`",
@@ -193,7 +220,7 @@ def datasets_page(root: Path | None = None) -> str:
 
 Examples and benchmarks run on public datasets. A data manifest pins each file by sha256 with its license and
 terms; `senselab data fetch` downloads into a cache outside the repository and refuses a hash mismatch. No dataset
-is committed, and a source that is unavailable fails the build rather than being replaced.
+is committed; an unavailable source fails the build.
 
 {table(["Dataset", "Version", "License", "Commercial use", "Gated", "Files", "Fetch"], rows)}
 
@@ -222,17 +249,24 @@ def _smoke_tasks(root: Path | None) -> set[str]:
     return {b["task"] for s in suites for b in yaml.safe_load(s.read_text("utf-8")).get("benchmarks", ())}
 
 
-def _has_tolerance(registry: Registry, task: str) -> bool:
-    folder = resources.files("senselab").joinpath("data", "tolerance")
+def tolerance_dir() -> Traversable:
+    """Return the folder `scripts/generate_tolerance.py` writes a backend's profile to, `<backend>.yaml`."""
+    return resources.files("senselab").joinpath("data", "tolerance")
+
+
+def _has_tolerance(registry: Registry, task: str, folder: Traversable) -> bool:
     backends = registry.backends(task)
     return bool(backends) and all(folder.joinpath(f"{b.name}.yaml").is_file() for b in backends)
 
 
-def task_states(registry: Registry = REGISTRY, ledger: str = "", root: Path | None = None) -> list[dict[str, Any]]:
+def task_states(
+    registry: Registry = REGISTRY, ledger: str = "", root: Path | None = None, tolerance: Traversable | None = None
+) -> list[dict[str, Any]]:
     """Return each declared task's state: `{task, declared, implemented, ported, benchmarked, parity}`.
 
     Declared: in `registry`. Implemented: a backend is declared. Ported: a row of the ledger's moved-in-Phase-2 table
-    names the task. Benchmarked: a benchmark suite names it. Parity: a tolerance profile exists for every backend.
+    names the task by name. Benchmarked: a benchmark suite names it.
+    Parity: every backend has a tolerance profile in `tolerance`, the folder the generator writes (the packaged one).
     """
     moved = " ".join(" ".join(r.values()) for r in _specs.moved_in_phase(ledger, 2))
     benchmarked = _smoke_tasks(root)
@@ -241,9 +275,9 @@ def task_states(registry: Registry = REGISTRY, ledger: str = "", root: Path | No
             "task": s.name,
             "declared": True,
             "implemented": bool(registry.backends(s.name)),
-            "ported": f"`{s.name}`" in moved or f"{s.name.replace('.', '/')}" in moved,
+            "ported": re.search(rf"[`/]{re.escape(s.name)}[`/]", moved) is not None,
             "benchmarked": s.name in benchmarked,
-            "parity": _has_tolerance(registry, s.name),
+            "parity": _has_tolerance(registry, s.name, tolerance or tolerance_dir()),
         }
         for s in registry.tasks()
     ]
@@ -254,26 +288,32 @@ def _mark(flag: bool) -> str:  # noqa: FBT001
 
 
 def status_page(registry: Registry = REGISTRY, root: Path | None = None) -> str:
-    """Return the 2.x status page: tasks, phases and exits, consolidation, ledger marks and open register rows."""
-    root = root or _specs.checkout_root()
+    """Return the 2.x status page: tasks, phases and exits, consolidation, ledger marks and open review items.
+
+    Raises:
+        FileNotFoundError: no checkout holds the specs.
+    """
+    root = _require_root(root)
     ledger, register, design, state = (
         _specs.read_spec(n, root) for n in ("migration-ledger.md", "review-register.md", "design.md", "STATE.md")
     )
     tasks = table(
         ["Task", "Declared", "Implemented", "Ported", "Benchmarked", "At parity"],
         [
-            (f"`{t['task']}`", *(_mark(t[k]) for k in ("declared", "implemented", "ported", "benchmarked", "parity")))
+            (
+                f"`{t['task']}`",
+                *(_mark(t[k]) for k in ("declared", "implemented", "ported", "benchmarked")),
+                "measured" if t["parity"] else "not measured",
+            )
             for t in task_states(registry, ledger, root)
         ],
     )
-    phases = table(
-        ["Phase", "State"], [(p, _cell(s, 200)) for p, s in _specs.phase_states(state).items() if p[0].isdigit()]
-    )
+    phases = table(["Phase", "State"], [(p, s) for p, s in _specs.phase_states(state).items() if p[0].isdigit()])
     exits = "\n".join(f"- {e}" for e in _specs.phase_exits(design, 2)) or _NONE
     inventory = table(
         ["Behaviour", "Copies today", "One implementation in 2.x"],
         [
-            (r["Behaviour"], r["Copies today"], r["One implementation in 2.x"])
+            tuple(_specs.scrub(r[k]) for k in ("Behaviour", "Copies today", "One implementation in 2.x"))
             for r in _specs.consolidation_inventory(design)
         ],
     )
@@ -285,16 +325,10 @@ def status_page(registry: Registry = REGISTRY, root: Path | None = None) -> str:
         ],
     )
     moved = table(
-        ["1.x module", "Moved to", "Task"],
-        [
-            (r.get("1.x module (alpha `36aa9615`)", next(iter(r.values()))), *list(r.values())[1:3])
-            for r in _specs.moved_in_phase(ledger, 2)
-        ],
+        ["1.x module", "Moved to"],
+        [tuple(_specs.scrub(v) for v in list(r.values())[:2]) for r in _specs.moved_in_phase(ledger, 2)],
     )
-    open_rows = table(
-        ["Row", "Owner and state"],
-        [(r["Id"], _cell(r["Status"], 120)) for r in _specs.open_register_rows(register)],
-    )
+    open_rows = table(["Owner", "Open items"], _specs.open_by_phase(register).items())
     return f"""{BADGES["2x"]}
 
 What 2.x has built so far. Generated from the declarations and the spec files of the checkout.
@@ -303,7 +337,7 @@ What 2.x has built so far. Generated from the declarations and the spec files of
 
 A task is declared when its declaration is in the registry, implemented when a backend is declared, ported when
 the ledger lists the 1.x module it came from, benchmarked when a benchmark suite runs it, and at parity when every
-backend has a tolerance profile.
+backend has a measured tolerance profile.
 
 {tasks}
 
@@ -331,9 +365,9 @@ Moved in Phase 2:
 
 {moved}
 
-## Open review-register rows
+## Open review items
 
-Each row is in `specs/20261030-140022-senselab-2x-api/review-register.md`.
+Items found in review and not yet resolved, by the phase that owns them.
 
 {open_rows}
 """
