@@ -90,6 +90,7 @@ from senselab_core.kernel.time import Span, TimeAnchor, TimeMap
 from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
+from senselab_core.runtime.compare import Threshold, Thresholds
 from senselab_core.runtime.envs import EnvRecord
 from senselab_core.runtime.equivalence import EquivalenceEvidence, EvidenceSide
 from senselab_core.runtime.fetch import DataFile, DataManifest
@@ -972,6 +973,13 @@ def _register_tolerance_samples() -> None:
             ),
         ],
         invalid_updates=[{"format": "equivalence-evidence@1.0"}, {"key": "short"}, {"run": ""}],
+    )
+    bounds = (Threshold(rtol=0.0, atol=0.5), Threshold(rtol=1e-6, atol=0.0))
+    register_samples(Threshold, lambda: bounds, invalid_updates=[{"rtol": -1.0}, {"atol": float("inf")}])
+    register_samples(
+        Thresholds,
+        lambda: [Thresholds(by_name={"a": bounds[0]}), Thresholds(by_name={"a": bounds[0], "b": bounds[1]})],
+        invalid_updates=[{"by_name": {"a": 1}}],
     )
     spreads = (AxisSpread(axis="repeat", spread=0.0, pairs=3), AxisSpread(axis="device", spread=0.5, pairs=2))
     register_samples(AxisSpread, lambda: spreads, invalid_updates=[{"axis": ""}, {"pairs": "many"}])

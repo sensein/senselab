@@ -1,16 +1,10 @@
 """Equivalence classes (`equivalence@3.0`), read by the runtime, and the verify evidence they are regenerated from."""
 
-import itertools
-from collections.abc import Iterable
 from pathlib import Path
 
-import numpy
 import pytest
 import yaml
 from senselab_core.kernel.identity import ExecutionContext, acceptable, member_key
-from senselab_core.kernel.results import Intervals
-from senselab_core.kernel.wire import wire_form
-from senselab_core.runtime.audio_io import READER
 from senselab_core.runtime.equivalence import (
     EQUIVALENCE,
     HEADER,
@@ -24,15 +18,6 @@ from senselab_core.runtime.equivalence import (
     split,
 )
 from senselab_core.runtime.store import CorruptEntryError, ResultStore
-from senselab_core.runtime.tolerance import (
-    Fields,
-    ToleranceProfile,
-    best_assignment,
-    flatten,
-    index_free,
-    relabel_turns,
-    within,
-)
 
 
 @pytest.mark.logic
@@ -271,67 +256,3 @@ def test_a_disagreement_split_persists_in_the_store(tmp_path: Path) -> None:
     assert again.equivalence == {"b": {}}
     assert not acceptable(_context(CPU), _context(MPS), "equivalent", backend="b", equivalence=again.equivalence)
     assert ResultStore(tmp_path / "other", equivalence=table).equivalence == table
-
-
-@pytest.mark.logic
-def test_best_assignment_is_optimal() -> None:
-    """The assignment of largest total weight, against every permutation of a rectangular matrix."""
-    rng = numpy.random.default_rng(0)
-    for n, m in ((1, 1), (3, 3), (2, 4), (4, 2), (5, 5)):
-        weights = rng.integers(0, 10, size=(n, m)).astype(float).tolist()
-        pairs = best_assignment(weights)
-        assert len(pairs) == min(n, m) and len({r for r, _ in pairs}) == len({c for _, c in pairs}) == min(n, m)
-        best = max(
-            sum(weights[r][c] for r, c in zip(rows, cols, strict=False))
-            for rows in itertools.permutations(range(n), min(n, m))
-            for cols in itertools.permutations(range(m), min(n, m))
-        )
-        assert sum(weights[r][c] for r, c in pairs) == best
-    assert best_assignment([]) == []
-
-
-def _turns(labels: list[str], ends: list[int] | None = None) -> Fields:
-    """The flattened wire form of a real `Intervals` output on port `spans`, one 10 ns turn per label by default."""
-    n = len(labels)
-    spans = Intervals(
-        start_ns=[10 * i for i in range(n)],
-        end_ns=ends or [10 * i + 10 for i in range(n)],
-        label=numpy.array(labels),
-        clock_id="c",
-    )
-    return flatten({"spans": wire_form(spans, READER)})
-
-
-def _exact_profile(fields: Iterable[str]) -> ToleranceProfile:
-    return ToleranceProfile.model_validate(
-        {
-            "task": "t",
-            "backend": "b",
-            "derivation": {"shas": [], "jobs": [], "split": "calibration", "items": [], "contexts": []},
-            "fields": [
-                {"path": p, "kind": "exact", "spreads": [], "tolerance": 0.0} for p in {*map(index_free, fields)}
-            ],
-            "findings": [],
-        }
-    )
-
-
-@pytest.mark.logic
-def test_within_compares_intervals_under_the_best_label_map() -> None:
-    """On a real `Intervals`, under any port: swapped labels agree, a merged speaker does not."""
-    ref = _turns(["A", "B"], ends=[10, 15])
-    profile = _exact_profile(ref)
-    assert "spans.label[1]" in ref and relabel_turns(ref, _turns(["S1", "S0"], ends=[10, 15])) == ref
-    assert within(ref, _turns(["S1", "S0"], ends=[10, 15]), profile) == {}
-    assert list(within(ref, _turns(["S0", "S0"], ends=[10, 15]), profile)) == ["spans.label[1]"]
-
-
-@pytest.mark.logic
-def test_one_label_of_2000_differing_disagrees() -> None:
-    """A long label array differing at one index is a disagreement, never hidden by a truncated form."""
-    labels = ["A"] * 1000 + ["B"] * 1000
-    changed = [*labels]
-    changed[1500] = "A"
-    ref = _turns(labels)
-    assert list(within(ref, _turns(changed), _exact_profile(ref))) == ["spans.label[1500]"]
-    assert within(ref, _turns(labels), _exact_profile(ref)) == {}

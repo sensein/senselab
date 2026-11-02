@@ -1,0 +1,99 @@
+format: comparison@1.0
+# How each field of a kernel type's wire form compares, by the type's `<name>@<major>`. A field is `exact` (equal
+# values) or `{close: <threshold>}`, numpy `isclose` within the run config's threshold of that name. Field patterns
+# are index-free paths below the type's own `format` leaf, `*` matching any characters; the first match wins.
+# `match_labels` names the label, start and end columns compared under the optimal one-to-one label map.
+types:
+  annotation@1:
+    fields:
+      format: exact
+      span.start_ns: {close: time_ns}
+      span.end_ns: {close: time_ns}
+      span.clock_id: exact
+      label: exact
+      value: {close: value}
+      score: {close: score}
+      producer: exact
+      guideline: exact
+      uncertainty: {close: value}
+  audio@2:
+    fields: &recording
+      format: exact
+      identity: exact
+      anchor.*: exact
+      groups.*.data: {close: samples}
+      groups.*.timestamps_ns: {close: time_ns}
+      groups.*: exact
+  embedding@1:
+    fields:
+      format: exact
+      vector: {close: embedding}
+      space: exact
+  events@1:
+    fields:
+      format: exact
+      time_ns: {close: time_ns}
+      label*: exact
+      value: {close: value}
+      clock_id: exact
+  intervals@1:
+    match_labels: {label: label, start: start_ns, end: end_ns}
+    fields:
+      format: exact
+      start_ns: {close: time_ns}
+      end_ns: {close: time_ns}
+      label*: exact
+      clock_id: exact
+  metric@1:
+    fields:
+      format: exact
+      name: exact
+      value: {close: value}
+      unit: exact
+      items: exact
+  recording@2:
+    fields: *recording
+  regular-group@2:
+    fields:
+      format: exact
+      data: {close: samples}
+      '*': exact
+  text@1:
+    fields:
+      format: exact
+      content: exact
+      identity: exact
+  text-spans@1:
+    fields:
+      format: exact
+      text: exact
+      length: exact
+      start: exact
+      end: exact
+      label*: exact
+      score: {close: score}
+  timemap@1:
+    fields:
+      format: exact
+      source: exact
+      target: exact
+      offset_ns: {close: time_ns}
+      drift_ppm: {close: value}
+      uncertainty_ns: {close: time_ns}
+  transcript@1:
+    fields:
+      format: exact
+      '*text': exact
+      '*confidence': {close: probability}
+      '*span.start_ns': {close: time_ns}
+      '*span.end_ns': {close: time_ns}
+      '*span.clock_id': exact
+      '*children': exact
+      segments: exact
+  trials@1:
+    fields:
+      format: exact
+      first: {close: embedding}
+      second: {close: embedding}
+      same: exact
+      space: exact
