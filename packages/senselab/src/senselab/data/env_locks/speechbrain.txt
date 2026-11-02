@@ -4,7 +4,7 @@
 # torch: torch==2.11.0 torchaudio==2.11.0
 # torch-index: cu128
 # exclude-newer: 2026-10-02T00:00:00Z
-# uv: uv 0.11.3 (Homebrew 2026-04-01 aarch64-apple-darwin)
+# uv: uv 0.12.2 (x86_64-unknown-linux-gnu)
 # note: torch 2.14.1 skipped: not served as torch==2.14.1 on cu128/('linux', 'x86_64')
 # note: torch 2.14.0 skipped: not served as torch==2.14.0 on cu128/('linux', 'x86_64')
 # note: torch 2.13.0 skipped: not served as torch==2.13.0 on cu128/('linux', 'x86_64')
@@ -543,7 +543,7 @@ numpy==2.5.3 \
     --hash=sha256:fc36dc566135b5eceec4cf89758fcb719266a019ef07dae1754ae7c9f617ef3e \
     --hash=sha256:ffdc76bfcae6b255dff75202c5e7feaf95b40246bc0a17944facc1fecf9f79ab
     # via
-    #   -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/env-lock-speechbrain-tdrur4uf/requirements.in
+    #   -r /tmp/env-lock-speechbrain-wqy7se0m/requirements.in
     #   scipy
     #   soundfile
     #   speechbrain
@@ -845,7 +845,7 @@ soundfile==0.14.0 \
 speechbrain==1.1.1 \
     --hash=sha256:3b69d9341662478b3c564837613f7a87bfcfd40d88cd54b4d19d2cca31e3dd3d \
     --hash=sha256:de4f78d3564d40443e11e01648b00b4c47a6f942558c7ab08b5c350264ffcd7c
-    # via -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/env-lock-speechbrain-tdrur4uf/requirements.in
+    # via -r /tmp/env-lock-speechbrain-wqy7se0m/requirements.in
 sympy==1.14.0 \
     --hash=sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517 \
     --hash=sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5

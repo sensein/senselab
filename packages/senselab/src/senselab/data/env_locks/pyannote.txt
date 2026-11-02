@@ -4,7 +4,7 @@
 # torch: torch==2.11.0 torchaudio==2.11.0
 # torch-index: cu128
 # exclude-newer: 2026-10-02T00:00:00Z
-# uv: uv 0.11.3 (Homebrew 2026-04-01 aarch64-apple-darwin)
+# uv: uv 0.12.2 (x86_64-unknown-linux-gnu)
 # note: torch 2.14.1 skipped: not served as torch==2.14.1 on cu128/('linux', 'x86_64')
 # note: torch 2.14.0 skipped: not served as torch==2.14.0 on cu128/('linux', 'x86_64')
 # note: torch 2.13.0 skipped: not served as torch==2.13.0 on cu128/('linux', 'x86_64')
@@ -915,7 +915,7 @@ lightning==2.6.6 \
     --hash=sha256:1c6329e241f8a85f29fedead89c1ee138b36caa08de60c260c6a7eaee81c8295 \
     --hash=sha256:2bcbd6ee840071cd076c7dc9953d7ac1040df92f1c5fa76583aae644f037ab85
     # via
-    #   -c /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/env-lock-pyannote-xgqqc90n/constraints.txt
+    #   -c /tmp/env-lock-pyannote-zvi1s84c/constraints.txt
     #   pyannote-audio
 lightning-utilities==0.15.3 \
     --hash=sha256:6c55f1bee70084a1cbeaa41ada96e4b3a0fea5909e844dd335bd80f5a73c5f91 \
@@ -1339,7 +1339,7 @@ numpy==2.5.3 \
     --hash=sha256:fc36dc566135b5eceec4cf89758fcb719266a019ef07dae1754ae7c9f617ef3e \
     --hash=sha256:ffdc76bfcae6b255dff75202c5e7feaf95b40246bc0a17944facc1fecf9f79ab
     # via
-    #   -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/env-lock-pyannote-xgqqc90n/requirements.in
+    #   -r /tmp/env-lock-pyannote-zvi1s84c/requirements.in
     #   asteroid-filterbanks
     #   contourpy
     #   matplotlib
@@ -1737,7 +1737,7 @@ protobuf==7.36.2 \
 pyannote-audio==4.0.7 \
     --hash=sha256:3a903dfb5ca711d134cc2522561c9158b186836f5d62e8a57c46c6648e8a8229 \
     --hash=sha256:852ea15c4d85bc34773e618267603ffca6a521669a74d33742692cc67fc700d6
-    # via -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/env-lock-pyannote-xgqqc90n/requirements.in
+    # via -r /tmp/env-lock-pyannote-zvi1s84c/requirements.in
 pyannote-core==6.0.1 \
     --hash=sha256:4b4ada3276f6df4e073fa79166636e3597d0dcb5a0fe26014a3477867cc033fb \
     --hash=sha256:924550d6ecf6b05ad13bf3f66f59c29fc740cf1c62a6fca860ac2e66908203e5
@@ -1783,7 +1783,7 @@ pytorch-lightning==2.6.6 \
     --hash=sha256:52c52b20522dd3d3feb3bb3aae2dbe3f291e8e836d4111a74cfd72e9df018834 \
     --hash=sha256:71f95c7b22f25c4f91cc659e1734bcdc6c69c8b66543f2ed2d78dbe29ce2f167
     # via
-    #   -c /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/env-lock-pyannote-xgqqc90n/constraints.txt
+    #   -c /tmp/env-lock-pyannote-zvi1s84c/constraints.txt
     #   lightning
 pytorch-metric-learning==2.9.0 \
     --hash=sha256:27a626caf5e2876a0fd666605a78cb67ef7597e25d7a68c18053dd503830701f \
