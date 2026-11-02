@@ -9,11 +9,13 @@ from pathlib import Path
 
 import pytest
 import senselab_core.runtime.fake_backend as fake
-from senselab_core.kernel.declare import BackendSpec, Env, Registry
-from senselab_core.runtime.call import Packaged, use_packaged
+from senselab_core.kernel.declare import BackendSpec, Env, Registry, ServerConfig
+from senselab_core.runtime.call import Packaged, packaged, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.vllm_server import VllmStartError
+from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.workers import RealWorkers, run_alone
 from senselab_worker.faults import FaultClass
 
@@ -85,6 +87,7 @@ def test_worker_runs_in_the_opened_env_on_the_catalogue_pin(env_python: Path, tm
     """
     workers = RealWorkers(ExecutionProfile.load())
     worker = workers(fake.ECHO.name, "fake-isolated", {"fail_items": ["b"]})
+    assert isinstance(worker, WorkerClient)
     results = worker.run([{"id": i, "inputs": {"payload": i}} for i in "ab"], {})
     alone = run_alone(worker, {i: {"id": i, "inputs": {"payload": i}} for i in "ab"}, {})
     workers.close()
@@ -99,5 +102,57 @@ def test_starting_a_worker_stops_the_one_before(env_python: Path) -> None:  # no
     workers = RealWorkers(ExecutionProfile.load())
     first = workers(fake.ECHO.name, "fake-isolated")
     second = workers(fake.ECHO.name, "fake-isolated", {"fail_items": ["b"]})
+    assert isinstance(first, WorkerClient) and isinstance(second, WorkerClient)
     assert not first.alive and second.alive and workers.started == [second]
     workers.close()
+
+
+def _opened_by(seen: list[BackendSpec], python: Path, backend: BackendSpec) -> None:
+    registry = Registry()
+    registry.add_task(fake.ECHO)
+    registry.add_backend(backend)
+
+    def opener(b: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+        seen.append(b)
+        return EnvHandle(str(python), platform.python_version(), "1" * 64, "2" * 64, None)
+
+    use_packaged(Packaged(CATALOGUE, opener, registry))
+
+
+def test_worker_sources_reach_the_opener_that_places_them(env_python: Path) -> None:
+    """RealWorkers asks the packaged opener, which places `worker_sources`, for the backend as declared."""
+    placed = BACKEND.model_copy(update={"worker_sources": {fake.WORKER_MODULE: "worker.py"}})
+    seen: list[BackendSpec] = []
+    previous = packaged()
+    _opened_by(seen, env_python, placed)
+    workers = RealWorkers(ExecutionProfile.load())
+    workers(fake.ECHO.name, "fake-isolated")
+    workers.close()
+    use_packaged(previous)
+    assert [b.worker_sources for b in seen] == [placed.worker_sources]
+
+
+def test_server_backend_starts_over_its_server_not_in_the_env_python(env_python: Path, tmp_path: Path) -> None:
+    """A server backend's worker runs in this process over its attested server: the env's python is never launched."""
+    server = BackendSpec(
+        task=fake.ECHO.name,
+        name="fake-server",
+        version="1",
+        stack="server",
+        models=(TOY,),
+        env=Env.server("fake"),
+        devices=("cpu",),
+        batch_invariant=True,
+        worker=fake.WORKER_MODULE,
+        load_stub={},
+        server=ServerConfig(settings={}, startup_timeout_s=1.0),
+    )
+    previous = packaged()
+    _opened_by([], env_python, server)
+    workers = RealWorkers(ExecutionProfile.load())
+    try:
+        with pytest.raises(VllmStartError, match="pins no vllm"):
+            workers(fake.ECHO.name, "fake-server")
+    finally:
+        use_packaged(previous)
+    assert not (tmp_path / "argv.json").exists()

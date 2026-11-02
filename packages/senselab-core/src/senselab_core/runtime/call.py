@@ -428,6 +428,28 @@ def _server(
         return server
 
 
+def _server_worker(backend: BackendSpec, init: dict[str, Any], server: VllmServer) -> InProcessWorker:
+    """Return the in-process worker of a server backend, given `server` in its init."""
+    return InProcessWorker(
+        backend.worker,
+        init={**init, "server": server},
+        key=(backend.name, init["model"]["identity"], init["device"], PRECISION),
+        cache=ModelCache(2**63 - 1),
+        size_of=lambda _: 0,
+    )
+
+
+def start_server_worker(
+    backend: BackendSpec, env: EnvHandle, model: ResolvedModel, profile: ExecutionProfile, init: dict[str, Any]
+) -> InProcessWorker:
+    """Return the worker `run_call` would run a server backend on: in this process, over its attested running server.
+
+    Raises:
+        ValueError, VllmStartError, LeaseTimeout, LeaseUnavailable, AttestationMismatch: as `run_call`.
+    """
+    return _server_worker(backend, init, _server(backend, env, model, profile, _expected(backend, env, model)))
+
+
 def _execute(  # noqa: PLR0913 - the call and everything placing it
     call: TaskCall,
     placement: Placement,
@@ -449,13 +471,7 @@ def _execute(  # noqa: PLR0913 - the call and everything placing it
         init["model"] = {"source": model.ref.source, "id": model.ref.id, "identity": model.identity}
     params = {**call.params.model_dump(mode="json"), "backend_params": placement.backend_params.model_dump(mode="json")}
     if server is not None:
-        worker: InProcessWorker | WorkerClient = InProcessWorker(
-            backend.worker,
-            init={**init, "server": server},
-            key=(backend.name, init["model"]["identity"], placement.device, PRECISION),
-            cache=ModelCache(2**63 - 1),
-            size_of=lambda _: 0,
-        )
+        worker: InProcessWorker | WorkerClient = _server_worker(backend, init, server)
     else:
         worker = _worker(backend, env, init, model, profile.model_cache_budget_bytes)
     if backend.env.kind != "host":
