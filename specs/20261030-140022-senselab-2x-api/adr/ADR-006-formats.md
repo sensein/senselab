@@ -171,6 +171,21 @@ Ruling P2-44 ([`plans/phase-2.md`](../plans/phase-2.md)) and ADR-010 as amended;
     is a refusal. The two kernel fields whose type changed enter no persisted address: a recording's identity
     stands a source group as its content root, not its path.
 
+## Amendment 2026-11-03: index-free tolerance paths; observations name their flatten
+
+Phase 2 Task 22f.
+
+- **`tolerance@2.0`.** A tolerance profile's field `path` is index-free: every `[n]` of a flattened output path is
+  `[*]` (`runtime.tolerance.index_free`). A field's spreads pool every index of its path, and a comparison judges
+  each flattened path by the field of its index-free form, so an output with more turns or segments than any
+  calibration item is covered. A path with no field is a disagreement. A `tolerance@1.0` profile (indexed paths, or
+  a whole label array as one path) is refused with `ToleranceProfileRetired`, naming the regeneration.
+- **`tolerance-observations@2.0`** carries `flatten`, the version of the leaf flattening that wrote it
+  (`flatten@2`: numbers, None and numeric arrays as float lists with None where a value is absent, NaN read as
+  None; a non-numeric array element by element; anything else as its JSON). `generate` refuses an observation file
+  of another format or flatten, naming the file; nothing is upgraded. `tolerance-observations@1.0` files, written
+  by `flatten@1` (a non-numeric array as its truncated repr at one path), are all re-measured.
+
 ## Amendment log
 
 - 2026-10-30: canonical encoders take an exact-type whitelist; tagged digests; `value@1`.
@@ -265,3 +280,5 @@ Ruling P2-44 ([`plans/phase-2.md`](../plans/phase-2.md)) and ADR-010 as amended;
   comparison per file under a result store's `equivalence-evidence@1/`, named by its canonical digest;
   `senselab-vocab@1.0` → `@1.1`, adding `senselab:verifyFraction`, `senselab:verifySampling` and
   `senselab:verifies` (Phase 2 Task 21).
+- 2026-11-03: `tolerance@1.0` → `tolerance@2.0` (index-free field paths); `tolerance-observations@1.0` → `@2.0`
+  carrying `flatten@2`; stale observations refused by name (Phase 2 Task 22f).
