@@ -11,21 +11,25 @@ import senselab.audio.tasks.speech_to_text.huggingface
 import senselab.audio.tasks.speech_to_text.crisperwhisper_backend
 import senselab.audio.tasks.speaker_diarization.pyannote_backend
 import senselab.audio.tasks.speaker_embeddings.speechbrain_backend
+import senselab.text.tasks.pii_spans.transformers_backend
 
 from collections.abc import Mapping
 from os import PathLike
 from senselab._api.call import ConfiguredTask, UNSET
+from senselab.text.tasks.pii_spans.profile import PiiProfile
 from senselab_core.kernel.identity import ModelRef
-from senselab_core.kernel.signals import Audio, RegularSeries
+from senselab_core.kernel.signals import Audio, RegularSeries, Text
 from senselab_core.runtime.call import Result, TaskCall
 from typing import Any, Literal
 
 __all__ = [
     "Diarize",
+    "PiiSpans",
     "Resample",
     "SpeakerEmbeddings",
     "SpeechToText",
     "diarize",
+    "pii_spans",
     "resample",
     "speaker_embeddings",
     "speech_to_text",
@@ -252,6 +256,83 @@ def speaker_embeddings(
         model,
         backend_params=backend_params,
     )(audio)
+
+
+class PiiSpans(ConfiguredTask):
+    """The configured, immutable task pii_spans v1 (transform): text -> spans."""
+
+    name = "pii_spans"
+
+    def __init__(
+        self,
+        model: ModelRef | str | None = None,
+        *,
+        profile: PiiProfile = UNSET,
+        family: str | None = None,
+        backend_params: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Configure the task; params are validated now."""
+        super().__init__(
+            model,
+            {
+                "profile": profile,
+                "family": family,
+            },
+            backend_params,
+        )
+
+    def with_params(
+        self,
+        *,
+        profile: PiiProfile = UNSET,
+        family: str | None = UNSET,
+    ) -> "PiiSpans":
+        """Return a new task with these params changed; this one is unchanged."""
+        return self._replace(
+            {
+                "profile": profile,
+                "family": family,
+            },
+        )
+
+    def call(
+        self,
+        text: Text | str | PathLike[str],
+    ) -> TaskCall:
+        """Return the validated call of this task on the inputs."""
+        return self._call(
+            {
+                "text": text,
+            },
+        )
+
+    def __call__(
+        self,
+        text: Text | str | PathLike[str],
+    ) -> Result:
+        """Run this task on the inputs through `run_call` and return its one result."""
+        return self._run(
+            {
+                "text": text,
+            },
+        )
+
+
+def pii_spans(
+    text: Text | str | PathLike[str],
+    *,
+    model: ModelRef | str | None = None,
+    profile: PiiProfile = UNSET,
+    family: str | None = None,
+    backend_params: Mapping[str, Any] | None = None,
+) -> Result:
+    """Run `PiiSpans` on the inputs: exactly `PiiSpans(model, **params)(...)`."""
+    return PiiSpans(
+        model,
+        profile=profile,
+        family=family,
+        backend_params=backend_params,
+    )(text)
 
 
 class Resample(ConfiguredTask):

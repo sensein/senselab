@@ -44,6 +44,7 @@ from senselab_core.kernel._base import thawed
 from senselab_core.kernel.declare import OUTPUT_AFFECTING, BackendSpec, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelRef, ResolvedModel
 from senselab_core.kernel.license import License
+from senselab_core.kernel.signals import PlainText
 from senselab_core.runtime.keys import Call, Placement, build_key
 from senselab_core.runtime.licenses import backend_license, check_license
 from senselab_core.runtime.worker_client import WorkerClient
@@ -106,10 +107,17 @@ def _audio(item: str, port: str) -> dict[str, Any]:
     }
 
 
+def _text(item: str, port: str) -> dict[str, Any]:
+    """Return the wire form of a short text, its digits set by the item and port."""
+    digits = int(identity_digest("contract-probe@1", [item, port])[:4], 16)
+    return PlainText(content=f"{item} {port} rang 555{digits}").model_dump()
+
+
 WIRE_INPUTS: Mapping[str, Callable[[str, str], object]] = {
     "json": lambda item, port: f"{item}:{port}",
     "RegularSeries": _regular_series,
     "Audio": _audio,
+    "Text": _text,
 }
 """Per input port type, the wire value `content_fault_isolated` sends for an item id and port."""
 

@@ -1,8 +1,10 @@
 """Typed per-item faults and audio checks shared by the isolated backends; imports only numpy and `senselab_worker`."""
 
+from collections.abc import Collection, Mapping
 from typing import Any
 
 import numpy
+from senselab_worker.digest import COMMIT_HEX
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault, FaultClass, InfrastructureFault, ResourceFault, classify
 
@@ -38,3 +40,28 @@ def mono_samples(item: dict[str, Any], faults: FakeFaults, rate: int, who: str) 
     if float(group["sampling_rate"]) != rate:
         raise ContentFault(f"{who} takes {rate} Hz audio, got {group['sampling_rate']} Hz; resample it first")
     return samples[0].astype(numpy.float32), str(wire["anchor"]["clock_id"])
+
+
+def init_model(init: Mapping[str, Any], keys: Collection[str], who: str) -> tuple[FakeFaults, Mapping[str, Any] | None]:
+    """Return the faults and the pinned hub model a worker's `init` names; the model is None under `"stub": True`.
+
+    `keys` are the init keys the backend `who` takes.
+
+    Raises:
+        ValueError: on an unknown key, a model that is not a hub model pinned by its 40-hex commit, or both `stub`
+            and `model`.
+    """
+    unknown = sorted(init.keys() - set(keys))
+    if unknown:
+        raise ValueError(f"{who} init takes only {sorted(keys)}, got {unknown}")
+    faults = FakeFaults.from_json(init.get("faults", {}))
+    model = init.get("model")
+    if init.get("stub"):
+        if model is not None:
+            raise ValueError(f"{who} init takes `stub` or `model`, not both")
+        return faults, None
+    if not isinstance(model, dict) or model.get("source") != "hf":
+        raise ValueError(f"{who} loads a hub model, got {model!r}")
+    if not COMMIT_HEX.fullmatch(str(model.get("identity"))):
+        raise ValueError(f"a model is loaded by its 40-hex commit, never a ref: {model.get('identity')!r}")
+    return faults, model

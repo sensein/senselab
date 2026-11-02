@@ -4,8 +4,10 @@ from typing import Literal
 
 from pydantic import Field
 from senselab_core.kernel.declare import REGISTRY, TaskParams, task
-from senselab_core.kernel.results import Embedding, Intervals, Transcript
-from senselab_core.kernel.signals import Audio
+from senselab_core.kernel.results import Embedding, Intervals, TextSpans, Transcript
+from senselab_core.kernel.signals import Audio, Text
+
+from senselab.text.tasks.pii_spans.profile import PiiProfile, packaged_profile
 
 DECLARATION_MODULES: tuple[str, ...] = (
     "senselab._api.declarations",
@@ -14,6 +16,7 @@ DECLARATION_MODULES: tuple[str, ...] = (
     "senselab.audio.tasks.speech_to_text.crisperwhisper_backend",
     "senselab.audio.tasks.speaker_diarization.pyannote_backend",
     "senselab.audio.tasks.speaker_embeddings.speechbrain_backend",
+    "senselab.text.tasks.pii_spans.transformers_backend",
 )
 """Importable modules declaring tasks and backends in `senselab_core.kernel.declare.REGISTRY`, in declaration order."""
 
@@ -57,3 +60,19 @@ class SpeakerEmbeddings:
 
     inputs = {"audio": Audio}
     outputs = {"embedding": Embedding}
+
+
+class PiiSpansParams(TaskParams):
+    """Params of `pii_spans`: the `profile` slice the prompt is built from, and the task `family` selecting guidance."""
+
+    profile: PiiProfile = Field(default_factory=packaged_profile)
+    family: str | None = None
+
+
+@task(name="pii_spans", version="1", kind="transform", registry=REGISTRY)
+class PiiSpans:
+    """Find the spans of a text that identify a person: `TextSpans` labelled by category, each with a score."""
+
+    inputs = {"text": Text}
+    outputs = {"spans": TextSpans}
+    Params = PiiSpansParams

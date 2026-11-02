@@ -18,12 +18,11 @@ from senselab_core.kernel.results import Transcript, TranscriptNode
 from senselab_core.kernel.time import Span
 from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime.audio_io import READER
-from senselab_worker.digest import COMMIT_HEX
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault
 
 from senselab._api.declarations import SpeechToTextParams
-from senselab.audio.item_faults import raise_injected, typed
+from senselab.audio.item_faults import init_model, raise_injected, typed
 from senselab.audio.tasks.speech_to_text.token_confidence import (
     capture_token_confidence,
     merge_confidence_blocks,
@@ -112,24 +111,16 @@ def load(init: dict[str, Any]) -> State:
     Raises:
         ValueError: on an unknown key, a model that is not a pinned hub commit, or both `stub` and `model`.
     """
-    unknown = sorted(init.keys() - _INIT_KEYS)
-    if unknown:
-        raise ValueError(f"transformers init takes only {sorted(_INIT_KEYS)}, got {unknown}")
-    faults = FakeFaults.from_json(init.get("faults", {}))
-    model = init.get("model")
-    if init.get("stub"):
-        if model is not None:
-            raise ValueError("transformers init takes `stub` or `model`, not both")
+    faults, model = init_model(init, _INIT_KEYS, "transformers")
+    if model is None:
         return State(StubPipeline(), EXPECTED_RATE, faults)
-    if not isinstance(model, dict) or model.get("source") != "hf":
-        raise ValueError(f"transformers loads a hub model, got {model!r}")
-    identity = str(model.get("identity"))
-    if not COMMIT_HEX.fullmatch(identity):
-        raise ValueError(f"a model is loaded by its 40-hex commit, never a ref: {identity!r}")
     from transformers import pipeline  # noqa: PLC0415 - the framework loads in `load` only
 
     pipe = pipeline(
-        "automatic-speech-recognition", model=str(model["id"]), revision=identity, device=init.get("device", "cpu")
+        "automatic-speech-recognition",
+        model=str(model["id"]),
+        revision=str(model["identity"]),
+        device=init.get("device", "cpu"),
     )
     return State(pipe, int(pipe.feature_extractor.sampling_rate), faults)  # type: ignore[union-attr]
 

@@ -20,10 +20,9 @@ from pathlib import Path
 from typing import Any, Literal, get_args
 
 import numpy
-from senselab_worker.digest import COMMIT_HEX
 from senselab_worker.fake import FakeFaults
 
-from senselab.audio.item_faults import mono_samples, typed
+from senselab.audio.item_faults import init_model, mono_samples, typed
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.crisperwhisper"
 MODEL_ID = "nyralabs/CrisperWhisper2.0_turbo"
@@ -63,7 +62,7 @@ class StubModel:
 class State:
     """A loaded backend: the pinned model, the device, the faults to inject and the engines built so far."""
 
-    model: dict[str, Any] | None
+    model: Mapping[str, Any] | None
     device: str
     faults: FakeFaults
     engines: dict[str, Any] = field(default_factory=dict)
@@ -78,20 +77,10 @@ def load(init: dict[str, Any]) -> State:
     Raises:
         ValueError: on an unknown key, a model that is not a pinned hub commit, or both `stub` and `model`.
     """
-    unknown = sorted(init.keys() - _INIT_KEYS)
-    if unknown:
-        raise ValueError(f"crisperwhisper init takes only {sorted(_INIT_KEYS)}, got {unknown}")
-    faults = FakeFaults.from_json(init.get("faults", {}))
-    model = init.get("model")
     device = str(init.get("device", "cpu"))
-    if init.get("stub"):
-        if model is not None:
-            raise ValueError("crisperwhisper init takes `stub` or `model`, not both")
+    faults, model = init_model(init, _INIT_KEYS, "crisperwhisper")
+    if model is None:
         return State(None, device, faults, {engine: StubModel() for engine in ENGINES})
-    if not isinstance(model, dict) or model.get("source") != "hf":
-        raise ValueError(f"crisperwhisper loads a hub model, got {model!r}")
-    if not COMMIT_HEX.fullmatch(str(model.get("identity"))):
-        raise ValueError(f"a model is loaded by its 40-hex commit, never a ref: {model.get('identity')!r}")
     return State(model, device, faults)
 
 
