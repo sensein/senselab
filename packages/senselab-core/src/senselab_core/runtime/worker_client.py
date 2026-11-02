@@ -50,6 +50,8 @@ from senselab_worker.faults import (
 )
 from senselab_worker.ownership import ARRAY_FILE, remove_owned
 
+from senselab_core.runtime.launch import launch
+
 LAUNCHER = "senselab_worker.launch"
 HELLO_TIMEOUT_S = 60.0
 DEFERRED_SIGNALS = (signal.SIGINT, signal.SIGTERM)
@@ -430,7 +432,7 @@ def _code_text(returncode: int | None) -> str:
 
 
 class WorkerClient:
-    """A worker process running `python -m senselab_worker.launch <module>`, spoken to over the wire protocol.
+    """A worker process running `python -I -m senselab_worker.launch <module>` as `launch` starts it, over the wire.
 
     `module` defines `load` and `handle` (see `senselab_worker.launch`). The client makes its own
     `array_dir` under `array_parent` (the system temporary directory if `None`) and deletes only the
@@ -725,11 +727,20 @@ class WorkerClient:
 
     def _start(self, python: str | os.PathLike[str], module: str) -> None:
         pipe = subprocess.PIPE
-        argv = [os.fspath(python), "-m", LAUNCHER, module]
+        started = launch(python)
+        argv = started.module(LAUNCHER, module)
         with self._shutdown_lock:
             if self._closed:
                 raise WorkerLost("the client was closed before its worker started")
-            self._proc = proc = subprocess.Popen(argv, stdin=pipe, stdout=pipe, stderr=pipe, start_new_session=True)
+            self._proc = proc = subprocess.Popen(  # noqa: S603 - the env's interpreter
+                argv,
+                stdin=pipe,
+                stdout=pipe,
+                stderr=pipe,
+                env=dict(started.variables),
+                cwd=started.cwd,
+                start_new_session=True,
+            )
         assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
         os.set_blocking(proc.stdin.fileno(), False)
         tail = self._stderr

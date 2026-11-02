@@ -60,6 +60,7 @@ from senselab_core.runtime.equivalence import SAMPLING, EquivalenceEvidence, Evi
 from senselab_core.runtime.hardware import HardwareInfo, numerics_class, probe_hardware
 from senselab_core.runtime.in_process import InProcessWorker
 from senselab_core.runtime.keys import Call, Placement, build_key
+from senselab_core.runtime.launch import launch
 from senselab_core.runtime.models import resolve
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.runtime.revision import cache_root, run_id
@@ -73,6 +74,8 @@ from senselab_core.runtime.vllm_server import (
     VllmServer,
     attested_fields,
     expected_attestation,
+    server_launch,
+    server_variables,
 )
 from senselab_core.runtime.vocabulary import core_vocabulary
 from senselab_core.runtime.worker_client import WorkerClient
@@ -356,7 +359,7 @@ def run_call(
     env = packaged().open_env(backend, profile)
     expected = _expected(backend, env, model) if backend.env.kind == "server" else None
     context = ExecutionContext(
-        **(env.context_fields() if expected is None else attested_fields(env, expected)),
+        **_context_fields(backend, env, expected),
         platform=sysconfig.get_platform(),
         numerics=numerics_class(hardware, placement.device, PRECISION),
         decoder=next((d for _, _, d in bound.values() if d is not None), None),
@@ -609,6 +612,17 @@ _CACHES: dict[int | None, ModelCache] = {}
 _POOL_LOCK = threading.Lock()
 _SERVERS: dict[tuple[str, str, str], VllmServer] = {}
 _SERVER_LOCK = threading.Lock()
+
+
+def _context_fields(backend: BackendSpec, env: EnvHandle, expected: Attestation | None) -> dict[str, Any]:
+    """Return the env's context fields: with the attestation of a server, the launch digest of any worker process."""
+    if expected is not None:
+        assert backend.server is not None
+        return attested_fields(env, expected, server_launch(env, server_variables(backend.server.settings)))
+    fields = env.context_fields()
+    if backend.env.kind == "host":
+        return fields
+    return {**fields, "driver": {**fields["driver"], "launch_env": launch(env.python).digest}}
 
 
 def _expected(backend: BackendSpec, env: EnvHandle, model: ResolvedModel | None) -> Attestation:

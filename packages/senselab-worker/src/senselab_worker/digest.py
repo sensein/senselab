@@ -44,6 +44,7 @@ IDENTITY_TAGS: frozenset[str] = frozenset(
         "wheel-set@1",
         "env-lock@1",
         "env-overlay@1",
+        "launch-env@1",
         "vllm-config@1",
         "source@1",
     }

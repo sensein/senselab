@@ -64,7 +64,8 @@ def _make_env(root: Path, name: str) -> EnvHandle:
     """A server env whose `bin/vllm` is the fake server and whose lock pins vllm 0.31.0."""
     exe = root / name / "bin" / "vllm"
     exe.parent.mkdir(parents=True)
-    exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE}" "$@"\n')
+    knobs = f'FAKE_VLLM_KNOBS="{root / "fake_vllm.json"}"'
+    exe.write_text(f'#!/bin/sh\n{knobs} exec "{sys.executable}" "{FAKE}" "$@"\n')
     exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
     lock = root / "vllm-server.txt"
     lock.write_text("vllm==0.31.0 \\\n    --hash=sha256:00\n")
@@ -78,6 +79,12 @@ def _make_env(root: Path, name: str) -> EnvHandle:
     )
 
 
+def _knob(root: Path, **knobs: str) -> None:
+    """Set `knobs` for every fake server under `root`."""
+    path = root / "fake_vllm.json"
+    path.write_text(json.dumps({**(json.loads(path.read_text()) if path.exists() else {}), **knobs}))
+
+
 def _starts(root: Path) -> int:
     return len(list((root / "fake").glob("*.json")))
 
@@ -86,8 +93,7 @@ def _starts(root: Path) -> int:
 def fake_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> EnvHandle:
     """A server env on the fake server, replying `ANSWER`; the fake records each start in `<tmp>/fake`."""
     (tmp_path / "fake").mkdir()
-    monkeypatch.setenv("FAKE_VLLM_DIR", str(tmp_path / "fake"))
-    monkeypatch.setenv("FAKE_VLLM_CONTENT", ANSWER)
+    _knob(tmp_path, FAKE_VLLM_DIR=str(tmp_path / "fake"), FAKE_VLLM_CONTENT=ANSWER)
     return _make_env(tmp_path, "env")
 
 
@@ -162,7 +168,7 @@ def test_run_call_serves_spans_through_the_server_and_records_its_attestation(
     assert first.placement.backend.name == "vllm" and first.reused is None
     with _server(fake_env, tmp_path) as server:
         assert server.attestation is not None
-        assert first.context.driver == {**fake_env.context_fields()["driver"], **server.attestation.driver()}
+        assert first.context.driver == server.context_fields()["driver"]
         assert server.attestation.config_digest == config_digest(CONFIG.settings)
     assert first.context.driver["model_identity"] == ENTRY.revision and first.context.driver["engine"] == "vllm"
     second = run_call(_call(), execution=profile, store=ResultStore(tmp_path / "results"))
@@ -176,7 +182,7 @@ def test_run_call_fails_the_item_when_the_answer_is_not_spans(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A server answer that is not the span object asked for is the item's content fault."""
-    monkeypatch.setenv("FAKE_VLLM_CONTENT", "I cannot help with that.")
+    _knob(tmp_path, FAKE_VLLM_CONTENT="I cannot help with that.")
     with pytest.raises(CallFailed) as raised:
         run_call(_call(), execution=_profile(tmp_path, "vllm"), store=ResultStore(tmp_path / "results"))
     assert raised.value.error["fault"] is FaultClass.CONTENT
@@ -312,11 +318,11 @@ def test_a_store_hit_starts_no_server_and_a_mismatching_attestation_refuses(
     run_call(_call(), execution=profile, store=store)
     assert _starts(tmp_path) == 1
     (tmp_path / "fake2").mkdir()
-    monkeypatch.setenv("FAKE_VLLM_DIR", str(tmp_path / "fake2"))
+    _knob(tmp_path, FAKE_VLLM_DIR=str(tmp_path / "fake2"))
     served.opened.append(_make_env(tmp_path, "env2"))  # type: ignore[attr-defined]
     assert run_call(_call(), execution=profile, store=store).reused is not None
     assert not list((tmp_path / "fake2").glob("*.json"))
-    monkeypatch.setenv("FAKE_VLLM_VERSION", "9.9.9")
+    _knob(tmp_path, FAKE_VLLM_VERSION="9.9.9")
     served.opened.append(_make_env(tmp_path, "env3"))  # type: ignore[attr-defined]
     with pytest.raises(AttestationMismatch, match="9.9.9"):
         run_call(_call_of("Call 555-0199."), execution=profile, store=store)

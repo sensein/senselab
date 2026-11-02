@@ -5,7 +5,9 @@ or `FAKE_VLLM_ROOT`) and `POST /v1/chat/completions` (the reply names `FAKE_VLLM
 and its text is `FAKE_VLLM_CONTENT`, default `ok`) on `127.0.0.1:<--port>`. It forks one child into its process
 group, as vLLM's engine process is, and writes `<pid>.json` (`argv`, `pgid`, `pids`, and `sampler`, its
 `VLLM_USE_FLASHINFER_SAMPLER`) into `FAKE_VLLM_DIR`.
-`FAKE_VLLM_EXIT` makes it exit 1 before listening.
+`FAKE_VLLM_EXIT` makes it exit 1 before listening. A server's launch passes no such variable, so each is also read
+from the JSON object in `fake_vllm.json` beside the `bin/vllm` that runs this fake, which names that file as
+`FAKE_VLLM_KNOBS`.
 """
 
 import json
@@ -14,6 +16,9 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+if os.path.exists(knobs := os.environ.get("FAKE_VLLM_KNOBS", "")):
+    with open(knobs) as file:
+        os.environ.update(json.load(file))
 argv = sys.argv[1:]
 assert argv[0] == "serve"
 model = argv[1]

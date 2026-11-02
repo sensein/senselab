@@ -35,6 +35,7 @@ from senselab_worker.digest import identity_digest
 
 from senselab_core.kernel.identity import ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.launch import Launch, launch
 from senselab_core.runtime.locks import TIMEOUT_S, Lease
 
 HOST = "127.0.0.1"
@@ -137,19 +138,26 @@ class StaleAttestation(RuntimeError):
 
 @dataclass(frozen=True)
 class Attestation:
-    """What a running server is: the version it reports, the model identity it loaded and its config digest."""
+    """What a running server is.
+
+    `engine_version` and `served_model` are observed: what the server reports at `/version` and `/v1/models`.
+    `model_identity` and `config_digest` are asserted: the pinned model and the settings the client launched it with.
+    """
 
     engine_version: str
+    served_model: str
     model_identity: str
     config_digest: str
 
     def driver(self) -> dict[str, str]:
-        """Return the attestation as `ExecutionContext.driver` entries."""
+        """Return the attestation as `ExecutionContext.driver` entries; `observed` names the observed ones."""
         return {
             "engine": ENGINE,
             "engine_version": self.engine_version,
+            "served_model": self.served_model,
             "model_identity": self.model_identity,
             "config_digest": self.config_digest,
+            "observed": "engine_version served_model",
         }
 
 
@@ -174,13 +182,19 @@ def expected_attestation(env: EnvHandle, model: ResolvedModel, settings: Mapping
     pin = re.search(r"^vllm==([^\s\\;]+)", text, re.MULTILINE)
     if pin is None:
         raise VllmStartError("version", "the env's lock pins no vllm")
-    return Attestation(pin.group(1), model.identity, config_digest(settings))
+    return Attestation(pin.group(1), _served(model)[0], model.identity, config_digest(settings))
 
 
-def attested_fields(env: EnvHandle, attestation: Attestation) -> dict[str, Any]:
-    """Return the env's `ExecutionContext` fields with `attestation` added to `driver`."""
+def server_launch(env: EnvHandle, variables: Mapping[str, str], devices: Sequence[str] | None = None) -> Launch:
+    """Return how a server of `env` with `variables` (`server_variables`) on `devices` is started."""
+    declared = dict(variables) if devices is None else {**variables, "CUDA_VISIBLE_DEVICES": ",".join(devices)}
+    return launch(env.python, declared)
+
+
+def attested_fields(env: EnvHandle, attestation: Attestation, launched: Launch) -> dict[str, Any]:
+    """Return the env's `ExecutionContext` fields with `attestation` and the launch's digest added to `driver`."""
     fields = env.context_fields()
-    return {**fields, "driver": {**fields["driver"], **attestation.driver()}}
+    return {**fields, "driver": {**fields["driver"], **attestation.driver(), "launch_env": launched.digest}}
 
 
 def config_digest(settings: Mapping[str, Any]) -> str:
@@ -379,7 +393,7 @@ class VllmServer:
         Raises:
             StaleAttestation: The server is not running.
         """
-        return attested_fields(self._env, self._live())
+        return attested_fields(self._env, self._live(), self.launch)
 
     def chat(self, messages: Sequence[Mapping[str, Any]], *, sampling: Mapping[str, Any]) -> Attested:
         """`chat` with this server's model; the reply carries this server's attestation.
@@ -410,12 +424,15 @@ class VllmServer:
             raise StaleAttestation(f"a reply names another model than {self.label}")
         return Attested(body, attestation)
 
+    @property
+    def launch(self) -> Launch:
+        """How the server process is started: its declared variables and devices over the allowlisted ambient ones."""
+        return server_launch(self._env, self.variables, self.devices)
+
     def _launch(self) -> None:
         port = _free_port()
-        command = [str(self.executable), "serve", self.target, f"--host={HOST}", f"--port={port}"]
-        env = {**os.environ, **self.variables}
-        if self.devices is not None:
-            env["CUDA_VISIBLE_DEVICES"] = ",".join(self.devices)
+        started = self.launch
+        command = started.script(self.executable, "serve", self.target, f"--host={HOST}", f"--port={port}")
         sink: int | IO[bytes] = 2
         if self.log_dir is not None:
             self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -427,7 +444,8 @@ class VllmServer:
             stdin=subprocess.DEVNULL,
             stdout=sink,
             stderr=subprocess.STDOUT,
-            env=env,
+            env=dict(started.variables),
+            cwd=started.cwd,
             start_new_session=True,
         )
         self._watchdog = subprocess.Popen(  # noqa: S603 - this interpreter
@@ -458,7 +476,12 @@ class VllmServer:
         served = data[0].get("root")
         if served != self.target:
             raise VllmStartError("model", f"the server serves another model than {self.label}")
-        return Attestation(engine_version=version, model_identity=self.model.identity, config_digest=self.config_digest)
+        return Attestation(
+            engine_version=version,
+            served_model=served,
+            model_identity=self.model.identity,
+            config_digest=self.config_digest,
+        )
 
     def stop(self) -> None:
         """Stop the server's process group (SIGTERM, then SIGKILL) and its watchdog; safe to call twice."""

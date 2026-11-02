@@ -1,8 +1,11 @@
 """Probes the worker lifecycle tests share: process liveness, process groups and a gate backends block on."""
 
 import json
+import os
+import shlex
 import socket
 import subprocess
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -45,9 +48,13 @@ def recorded_pids(pid_file: Path) -> list[int]:
 
 
 def interpreter(directory: Path, body: str) -> Path:
-    """Write an executable shell script that stands in for the worker's interpreter and ignores its arguments."""
+    """Write an executable shell script that stands in for the worker's interpreter and ignores its arguments.
+
+    The script imports from this process's `sys.path`, which it sets as its `PYTHONPATH`.
+    """
     path = directory / "interpreter"
-    path.write_text(f"#!/bin/sh\n{body}\n")
+    paths = shlex.quote(os.pathsep.join(p for p in sys.path if p))
+    path.write_text(f"#!/bin/sh\nexport PYTHONPATH={paths}\n{body}\n")
     path.chmod(0o755)
     return path
 
