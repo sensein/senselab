@@ -35,7 +35,7 @@ jobs:
       run: uv sync --locked --python 3.12 --no-default-groups --group docs
     - name: Build docs
       run: |
-        .docs/bin/pdoc senselab_core senselab_worker -o docs -t docs_style/pdoc-theme --docformat google \
+        .docs/bin/pdoc senselab_core senselab_worker senselab.reference -o docs -t docs_style/pdoc-theme --docformat google \
           --favicon https://readthedocs.org/favicon.ico
         touch docs/.nojekyll
     - name: Deploy preview

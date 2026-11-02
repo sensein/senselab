@@ -8,13 +8,18 @@ environments.
 
 ## Status
 
-2.x is in Phase 1 and has no release yet.
+2.x is in Phase 2 and has no release yet.
 
-- Phase 1 delivers two distributions: `senselab-worker`, the subprocess worker runtime (standard
-  library and numpy), and `senselab-core`, the kernel (values, identity, formats) and the runtime
-  (result store, data fetch, locks, provenance, worker client).
-- The root `senselab` distribution installs both and ships no code of its own.
-- Tasks and pipelines are not ported yet.
+- Phase 1 delivered `senselab-worker`, the subprocess worker runtime (standard library and numpy), and
+  `senselab-core`, the kernel (values, identity, formats) and the runtime (result store, data fetch, locks,
+  provenance, worker client).
+- Phase 2 adds `senselab`, the public package: declared tasks and backends (`speech_to_text`, `diarize`,
+  `speaker_embeddings`, `pii_spans`, `signal.resample`, and the metric tasks), a catalogue of models pinned by
+  commit, the benchmark harness and its smoke suite. A backend is a code path; a model is a catalogue entry.
+- Pipelines are not ported yet.
+- The API reference and the generated 2.x status page are built from the declarations and the specs; see
+  `senselab.reference` in the pull-request preview.
+- Environments are built with uv-managed Python interpreters only.
 - 1.x is developed on the `alpha` branch and released on PyPI as `senselab` 1.x. On this branch
   `src/` is the frozen 1.x source pool that use cases are ported from, one at a time; triage's
   tasks and pipelines port like any other use case, and its decision layer is superseded by the

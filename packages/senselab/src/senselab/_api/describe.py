@@ -30,14 +30,14 @@ def _format_schema(kernel_type: type[BaseModel]) -> dict[str, Any]:
 def _link_ports(ports: dict[str, Any], declared: Mapping[str, str]) -> dict[str, Any]:
     """Return `ports` with each port of a kernel type linked to that type's format schema under `$defs`.
 
-    A port of another type takes a path or URI.
+    A port of another type, or of a protocol such as `Text`, takes a path or URI.
     """
     types = kernel_types()
     defs: dict[str, Any] = {}
     properties = {}
     for port, prop in ports["properties"].items():
         kernel_type = types.get(declared[port])
-        if kernel_type is None:
+        if kernel_type is None or not issubclass(kernel_type, BaseModel):
             properties[port] = {**prop, "description": "a path or URI"}
             continue
         schema = _format_schema(kernel_type)
