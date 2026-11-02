@@ -20,6 +20,7 @@ from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import COMMIT_HEX
 
 from senselab_core.runtime.locks import Lease, LeaseUnavailable
+from senselab_core.runtime.network import Network, require_online
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import (
@@ -355,6 +356,8 @@ class Resolver:
     """The HF hub cache to read (`get_cached_commit_hash`); `HF_HUB_CACHE` when None."""
     hub: Callable[[str, str, Optional[str]], object] = hub_commit
     """Asked for the commit of `(repo_id, ref, token)` when the local cache has none."""
+    network: Network = "online"
+    """When `offline`, `hub` is never asked; a ref the local cache cannot resolve raises `Offline`."""
     cache_root: Optional[Path] = None
     """The root of the run manifests (`manifest_path`); `cache_root()` when None."""
     retry: RetryPolicy = field(default_factory=lambda: ExecutionProfile.load().retry)
@@ -402,6 +405,7 @@ class Resolver:
             local = None
         if local and COMMIT_HEX.fullmatch(local):
             return local
+        require_online(self.network, f"resolving {repo_id}@{ref} on the Hub")
 
         try:
             sha = retry_on_transient_error(lambda: self.hub(repo_id, ref, token), self.retry)

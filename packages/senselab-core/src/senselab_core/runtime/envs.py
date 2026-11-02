@@ -40,6 +40,7 @@ from senselab_core.kernel.declare import Env
 from senselab_core.kernel.formats import FormatTag, Formatted
 from senselab_core.runtime.hardware import _run
 from senselab_core.runtime.locks import TIMEOUT_S, Lease
+from senselab_core.runtime.network import Network, require_online
 from senselab_core.runtime.profiles import Envs
 from senselab_core.runtime.storage import write_atomically
 
@@ -274,6 +275,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
     workers: Mapping[str, Path] | None = None,
     uv: Uv | None = None,
     host_cuda: HostCuda | None = None,
+    network: Network = "online",
 ) -> EnvHandle:
     """Return the env `env` built from `lock` and overlaid with `workers` under `root`, built once across processes.
 
@@ -294,6 +296,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
             site-packages as that module, beside the worker runtime, when the env is built.
         uv: The `uv` command; `Uv.find()` when None.
         host_cuda: The host's CUDA; probed with `detect_host_cuda` when None and the lock pins torch.
+        network: The profile's `network`; an `offline` profile uses a built env and builds none.
 
     Raises:
         ManagedPythonMissing: no uv-managed interpreter of the needed version, or the host's is not uv-managed.
@@ -302,6 +305,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
         HostLockLacksBackend: a host env whose `lock` does not pin every one of `requirements`.
         RuntimeError: another `uv` step failed; the message carries uv's stderr.
         LeaseTimeout, LeaseUnavailable: as `Lease`.
+        Offline: the env is not built and `network` is `offline`.
     """
     uv = uv or Uv.find()
     if env.kind == "host":
@@ -336,6 +340,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
     with Lease(root / stem, stale_after=stale_after, timeout=stale_after + TIMEOUT_S):
         current = _read_record(root, stem)
         if current is None or (current.lock_sha, current.torch_index) != wanted:
+            require_online(network, f"building env {stem}")
             current = _build(root, stem, parsed, lock_sha, index, uv, host_cuda, workers or {})
             write_atomically(root / f"{stem}.json", current.model_dump_json().encode())
     return _handle(root, current, parsed.path)

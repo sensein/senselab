@@ -39,6 +39,7 @@ from senselab_worker.digest import SHA256_HEX, file_digest, identity_digest
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.license import License
 from senselab_core.kernel.prov import Record, Vocabulary
+from senselab_core.runtime.network import Network, Offline, offline
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import (
@@ -261,6 +262,10 @@ def _urlopen(url: str) -> BinaryIO:
     return _https_opener().open(url, timeout=60)  # type: ignore[no-any-return]
 
 
+def _offline(url: str) -> BinaryIO:
+    raise offline(f"downloading {url}")
+
+
 def _remove_stale_downloads(top: StorageDir, tmp: StorageDir, stale_s: int) -> None:
     """Remove downloads in `tmp` older than `stale_s` on the cache's own clock; failures are logged."""
     try:
@@ -304,7 +309,7 @@ def _download(  # noqa: PLR0913 - the source, the file it streams into, and the 
 
     try:
         retry_on_transient_error(transfer, retry)
-    except (_SourceError, StoreUnavailable):
+    except (_SourceError, StoreUnavailable, Offline):
         raise
     except Exception as err:  # noqa: BLE001 - any other failure of the opener or a read is this source's
         raise _SourceError(f"{type(err).__name__}: {err}") from err
@@ -674,6 +679,7 @@ def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, ver
     verify: Literal["size", "full"] = "size",
     policy: StorePolicy | None = None,
     retry: RetryPolicy | None = None,
+    network: Network = "online",
 ) -> dict[str, Path]:
     """Download every file of `manifest` into the cache and return `{file path: path under datasets/.../files/}`.
 
@@ -696,11 +702,14 @@ def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, ver
             symlink or non-directory is where a directory of a manifest path belongs.
         StoreUnavailable: the cache could not be read or written; `StorageFull` when out of space.
         WrongKindError: an object of the wrong kind in the cache could not be moved aside.
+        Offline: `network` is `offline` and a file is not in the cache.
     """
     policy = policy if policy is not None else StorePolicy.load_default()
     retry = retry if retry is not None else ExecutionProfile.load().retry
     dir_mode = shared_dir_mode(policy)
     open_url = opener if opener is not None else _urlopen
+    if network == "offline":
+        open_url = _offline
     root = Path(cache_root)
     try:
         with StorageDir.open_root(root, create=True, mode=dir_mode) as top:

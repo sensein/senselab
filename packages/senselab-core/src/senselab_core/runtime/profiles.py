@@ -24,6 +24,7 @@ from senselab_core.kernel.formats import FormatTag, Formatted
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import Placement
+from senselab_core.runtime.network import Network
 from senselab_core.runtime.retry import RetryPolicy
 
 EXECUTION_PROFILE_FORMAT = "execution-profile@1.0"
@@ -89,7 +90,7 @@ class ExecutionProfile(Formatted):
     model_sources: tuple[NonEmptyStr, ...] | None
     model_cache_budget_bytes: int | None
     retry: RetryPolicy
-    network: Literal["online", "offline"]
+    network: Network
 
     @classmethod
     def load(cls, name: str = DEFAULT_PROFILE, override: Mapping[str, Any] | Path | None = None) -> "ExecutionProfile":

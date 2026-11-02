@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
 from types import TracebackType
@@ -463,11 +463,13 @@ class WorkerClient:
         request_timeout: float | None = None,
         graces: ShutdownGraces = DEFAULT_GRACES,
         max_line_bytes: int = MAX_LINE_BYTES,
+        variables: Mapping[str, str] | None = None,
     ) -> None:
         """Start the worker, check its hello and wait until it has loaded `init`; stop it within `graces`.
 
         `max_line_bytes` bounds every line the client sends and every reply line it accepts after the hello;
         a longer reply is `LineTooLarge`, a `ProtocolError`.
+        `variables` are set on the worker process over the launch's allowlist (`launch`).
 
         Raises:
             ValueError: if `init` uses the reserved key `array_dir` or has no wire form, or `max_line_bytes` is
@@ -526,7 +528,7 @@ class WorkerClient:
                 limit=self._max_line_bytes,
             )
             self._init_names = self._owned(array_paths(wire_init))
-            self._start(python, module)
+            self._start(python, module, variables or {})
             self.hello = self._handshake(expect_runtime or runtime_identity())
             deadline = Deadline(load_timeout)
             self._send(dump_line({"init": wire_init}, "init", limit=self._max_line_bytes), deadline)
@@ -725,9 +727,9 @@ class WorkerClient:
             results[i] = reply
         return results
 
-    def _start(self, python: str | os.PathLike[str], module: str) -> None:
+    def _start(self, python: str | os.PathLike[str], module: str, variables: Mapping[str, str]) -> None:
         pipe = subprocess.PIPE
-        started = launch(python)
+        started = launch(python, variables)
         argv = started.module(LAUNCHER, module)
         with self._shutdown_lock:
             if self._closed:

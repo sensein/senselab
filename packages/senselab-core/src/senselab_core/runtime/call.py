@@ -62,8 +62,9 @@ from senselab_core.runtime.in_process import InProcessWorker
 from senselab_core.runtime.keys import Call, Placement, build_key
 from senselab_core.runtime.launch import launch
 from senselab_core.runtime.models import resolve
+from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
-from senselab_core.runtime.revision import cache_root, run_id
+from senselab_core.runtime.revision import PROCESS_RESOLVER, cache_root, run_id
 from senselab_core.runtime.store import ResultStore, StoredResult, context_record, key_record
 from senselab_core.runtime.store import output_identity as store_output_identity
 from senselab_core.runtime.tolerance import NoToleranceProfile, ToleranceProfile, flatten, read_profile, within
@@ -359,7 +360,7 @@ def run_call(
     env = packaged().open_env(backend, profile)
     expected = _expected(backend, env, model) if backend.env.kind == "server" else None
     context = ExecutionContext(
-        **_context_fields(backend, env, expected),
+        **_context_fields(backend, env, expected, network_variables(profile.network)),
         platform=sysconfig.get_platform(),
         numerics=numerics_class(hardware, placement.device, PRECISION),
         decoder=next((d for _, _, d in bound.values() if d is not None), None),
@@ -542,7 +543,7 @@ def _resolve_model(
         return ResolvedModel(ref=ref, identity=entry.revision, license=entry.license), entry
     if ref.source == "hf":
         profile.check_source(ref.id, catalogue)
-    resolved = resolve(ref)
+    resolved = resolve(ref, resolver=replace(PROCESS_RESOLVER, network=profile.network))
     return (resolved if entry is None else resolved.model_copy(update={"license": entry.license})), entry
 
 
@@ -614,15 +615,21 @@ _SERVERS: dict[tuple[str, str, str], VllmServer] = {}
 _SERVER_LOCK = threading.Lock()
 
 
-def _context_fields(backend: BackendSpec, env: EnvHandle, expected: Attestation | None) -> dict[str, Any]:
-    """Return the env's context fields: with the attestation of a server, the launch digest of any worker process."""
+def _context_fields(
+    backend: BackendSpec, env: EnvHandle, expected: Attestation | None, declared: Mapping[str, str]
+) -> dict[str, Any]:
+    """Return the env's context fields: with the attestation of a server, the launch digest of any worker process.
+
+    `declared` are the variables the profile sets on every process it starts.
+    """
     if expected is not None:
         assert backend.server is not None
-        return attested_fields(env, expected, server_launch(env, server_variables(backend.server.settings)))
+        variables = {**server_variables(backend.server.settings), **declared}
+        return attested_fields(env, expected, server_launch(env, variables))
     fields = env.context_fields()
     if backend.env.kind == "host":
         return fields
-    return {**fields, "driver": {**fields["driver"], "launch_env": launch(env.python).digest}}
+    return {**fields, "driver": {**fields["driver"], "launch_env": launch(env.python, declared).digest}}
 
 
 def _expected(backend: BackendSpec, env: EnvHandle, model: ResolvedModel | None) -> Attestation:
@@ -664,6 +671,7 @@ def _server(
             startup_timeout_s=backend.server.startup_timeout_s,
             start_margin_s=profile.envs.server_start_margin_s,
             log_dir=root / "logs",
+            network=profile.network,
         )
         server.__enter__()
         if server.attestation != expected:
@@ -721,7 +729,7 @@ def _execute(  # noqa: PLR0913 - the call and everything placing it
     held: contextlib.AbstractContextManager[InProcessWorker | WorkerClient] = (
         contextlib.nullcontext(_server_worker(backend, init, server))
         if server is not None
-        else _checked_out(backend, env, init, model, profile.model_cache_budget_bytes)
+        else _checked_out(backend, env, init, model, profile)
     )
     with held as worker:
         [result] = worker.run([{"id": ITEM_ID, "inputs": inputs}], params)
@@ -757,14 +765,16 @@ def _decoded(spec: TaskSpec, outputs: Mapping[str, object]) -> dict[str, object]
 
 @contextlib.contextmanager
 def _checked_out(
-    backend: BackendSpec, env: EnvHandle, init: dict[str, Any], model: ResolvedModel | None, budget: int | None
+    backend: BackendSpec, env: EnvHandle, init: dict[str, Any], model: ResolvedModel | None, profile: ExecutionProfile
 ) -> Iterator[InProcessWorker | WorkerClient]:
-    """Hold the pooled worker for this backend, env, init and (in process) budget; another call waits for it.
+    """Hold the pooled worker for this backend, env, init and (in process) budget or (isolated) network; others wait.
 
     A dead pooled worker is closed and replaced.
     """
     host = backend.env.kind == "host"
-    pool_key = (backend.env.kind, env.python, backend.worker, jcs_dumps(init).decode(), str(budget) if host else "")
+    budget = profile.model_cache_budget_bytes
+    variant = str(budget) if host else profile.network
+    pool_key = (backend.env.kind, env.python, backend.worker, jcs_dumps(init).decode(), variant)
     with _POOL_LOCK:
         held = _HELD.setdefault(pool_key, threading.Lock())
     with held:
@@ -772,17 +782,18 @@ def _checked_out(
         if not (isinstance(worker, InProcessWorker) or (worker is not None and worker.alive)):
             if worker is not None:
                 worker.close()
-            worker = _new_worker(backend, env, init, model, budget)
+            worker = _new_worker(backend, env, init, model, profile)
             with _POOL_LOCK:
                 _POOL[pool_key] = worker
         yield worker
 
 
 def _new_worker(
-    backend: BackendSpec, env: EnvHandle, init: dict[str, Any], model: ResolvedModel | None, budget: int | None
+    backend: BackendSpec, env: EnvHandle, init: dict[str, Any], model: ResolvedModel | None, profile: ExecutionProfile
 ) -> InProcessWorker | WorkerClient:
     if backend.env.kind != "host":
-        return WorkerClient(env.python, backend.worker, init=init)
+        return WorkerClient(env.python, backend.worker, init=init, variables=network_variables(profile.network))
+    budget = profile.model_cache_budget_bytes
     identity = model.identity if model is not None else value_digest("backend", {"name": backend.name})
     key: ModelKey = (backend.name, identity, init["device"], PRECISION)
     return InProcessWorker(
