@@ -17,6 +17,7 @@ DECLARATION_MODULES: tuple[str, ...] = (
     "senselab.audio.tasks.speaker_diarization.pyannote_backend",
     "senselab.audio.tasks.speaker_embeddings.speechbrain_backend",
     "senselab.text.tasks.pii_spans.transformers_backend",
+    "senselab.text.tasks.pii_spans.vllm_backend",
 )
 """Importable modules declaring tasks and backends in `senselab_core.kernel.declare.REGISTRY`, in declaration order."""
 

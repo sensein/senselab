@@ -178,7 +178,7 @@ def test_load_refuses_a_ref_an_unknown_key_and_both_stub_and_model() -> None:
 def test_profile_edit_changes_the_key() -> None:
     """The profile is a param of the call, so a different instruction is a different logical key."""
     spec = REGISTRY.spec("pii_spans")
-    (backend,) = REGISTRY.backends("pii_spans")
+    backend = next(b for b in REGISTRY.backends("pii_spans") if b.name == "transformers")
     entry = CATALOGUE.entry(worker.MODEL_ID)
     placed = resolve_execution(spec, entry, ExecutionProfile.load(), HOST, REGISTRY, CATALOGUE)
     context = ExecutionContext.model_validate(BASE_CONTEXT)
@@ -195,11 +195,11 @@ def test_profile_edit_changes_the_key() -> None:
 @pytest.mark.contract
 def test_backend_serves_the_catalogue_model_and_declares_its_isolated_env() -> None:
     """One isolated backend `transformers` over the catalogue's default `pii_spans` model, pinned by commit."""
-    (spec,) = REGISTRY.backends("pii_spans")
+    spec = next(b for b in REGISTRY.backends("pii_spans") if b.name == "transformers")
     assert spec.name == "transformers" and spec.models == (worker.MODEL_ID,) and spec.batch_invariant
     assert spec.env.kind == "isolated" and spec.env.name == "pii-spans" and spec.worker in spec.worker_sources
     entry = CATALOGUE.entry(worker.MODEL_ID)
-    assert list(entry.backends) == ["transformers"] and list(entry.stacks) == [spec.stack]
+    assert list(entry.backends) == ["transformers", "vllm"] and spec.stack in entry.stacks
     assert list(entry.default_for) == ["pii_spans"]
     placed = resolve_execution(REGISTRY.spec("pii_spans"), entry, ExecutionProfile.load(), HOST, REGISTRY, CATALOGUE)
     assert placed.backend.name == "transformers"

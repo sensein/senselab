@@ -12,6 +12,7 @@ import senselab.audio.tasks.speech_to_text.crisperwhisper_backend
 import senselab.audio.tasks.speaker_diarization.pyannote_backend
 import senselab.audio.tasks.speaker_embeddings.speechbrain_backend
 import senselab.text.tasks.pii_spans.transformers_backend
+import senselab.text.tasks.pii_spans.vllm_backend
 
 from collections.abc import Mapping
 from os import PathLike

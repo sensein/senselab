@@ -54,8 +54,8 @@ entries:
 - id: google/gemma-4-31B-it-qat-w4a16-ct
   revision: 52f3f65bc7a02d555763bc923bd1d9094898219d
   tasks: [pii_spans]
-  backends: [transformers]
-  stacks: [transformers]
+  backends: [transformers, vllm]
+  stacks: [transformers, vllm]
   default_for: [pii_spans]
   license:
     expression: Apache-2.0

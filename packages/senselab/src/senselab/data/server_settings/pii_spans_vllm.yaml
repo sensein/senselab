@@ -1,0 +1,25 @@
+format: server-settings@1.0
+# derivation:
+#   startup_timeout_s: the bound of the H100 server test of the catalogue's 31B model (1800 s); a load that is
+#   not healthy by then is a failed start, not a slow one.
+#   max_model_len: 8192 = a prompt of 6144 tokens (the instruction, the categories and a text of about 4500 words)
+#   plus the 2048 tokens of `engine.MAX_NEW_TOKENS` the answer may take. A longer text is refused by the server
+#   and reaches the caller as that item's typed fault. Not measured.
+#   max_num_seqs: 8, the batch the card is asked to hold; a call sends one item, so it bounds nothing until
+#   batched callers exist. Not measured.
+#   gpu_memory_utilization: 0.9, the value the H100 server test runs the same model with.
+#   kv_cache_dtype: auto, the model's own dtype; no quantised cache, which would change outputs.
+#   generation_config: vllm, so the model repository's `generation_config.json` does not override the greedy
+#   sampling the backend requests.
+#   limit_mm_per_prompt: image 0, the task is text only; no image memory is reserved.
+#   enable_prefix_caching: false; the instruction is the one shared prefix and caching it is a speed-up not yet
+#   measured, so outputs are left independent of what the server served before.
+startup_timeout_s: 1800
+settings:
+  max_model_len: 8192
+  max_num_seqs: 8
+  gpu_memory_utilization: 0.9
+  kv_cache_dtype: auto
+  generation_config: vllm
+  limit_mm_per_prompt: {image: 0}
+  enable_prefix_caching: false
