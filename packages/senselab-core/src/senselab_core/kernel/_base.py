@@ -1,7 +1,6 @@
 """Shared base model and field types of the kernel."""
 
 import math
-import threading
 import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -107,12 +106,12 @@ def frozen_array(a: object) -> numpy.ndarray:
 
 
 _NPY_DIGESTS: dict[int, str] = {}
-_NPY_LOCK = threading.Lock()
+"""Digests of live frozen arrays by `id`, read and written by single dict calls under no lock (`_forget` runs from the
+garbage collector, inside any allocation)."""
 
 
 def _forget(key: int) -> None:
-    with _NPY_LOCK:
-        _NPY_DIGESTS.pop(key, None)
+    _NPY_DIGESTS.pop(key, None)
 
 
 def held_npy_digest(a: numpy.ndarray) -> str:
@@ -120,15 +119,12 @@ def held_npy_digest(a: numpy.ndarray) -> str:
     if not is_frozen(a):
         return npy_digest("npy@1", a)
     key = id(a)
-    with _NPY_LOCK:
-        held = _NPY_DIGESTS.get(key)
+    held = _NPY_DIGESTS.get(key)
     if held is not None:
         return held
     digest = npy_digest("npy@1", a)
-    with _NPY_LOCK:
-        if key not in _NPY_DIGESTS:
-            _NPY_DIGESTS[key] = digest
-            weakref.finalize(a, _forget, key)
+    if _NPY_DIGESTS.setdefault(key, digest) is digest:
+        weakref.finalize(a, _forget, key)
     return digest
 
 
