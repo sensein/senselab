@@ -50,3 +50,7 @@ The authority for the full review. Quoted as the owner wrote them; nothing parap
 41. "how are such things creeping in. if i did not notice it we would run into future refactors"
 42. "monitor weekly limit and try to minimize token usage - be succinct and to the point in all generative processes."
 43. "but the HF whisper and crisperwhisper are two different models."
+44. "push and open the drafts (then merge on green CI into the enh branch)."
+45. "models often use different data type on different systems and are not guaranteed to be bitwise identical. provenance should capture the difference. given that we may want to optimize a pipeline in a cluster, a user should be able to use what's available but if the user's requirement is consistency then that should enforce differences across versions. some models/tools will behave identically, and some not. without knowing, environments with different versions should be treated as different software agents."
+46. "confirm on licenses. noting that licensing should be transparent and whether it can be used should be determined by user."
+47. "there will be many vllm server paths or vllm-omni server paths. if it's a task that can be reused keep it. or a pipeline that can be reused."

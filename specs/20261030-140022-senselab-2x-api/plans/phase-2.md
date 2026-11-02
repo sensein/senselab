@@ -1275,6 +1275,9 @@ decision takes effect only through the dated amendment its task commits (ADR-000
 - **P2-89** ruling: Diarization parity compares speaker labels under the optimal one-to-one time-overlap mapping, because labels are arbitrary per run, and an unmatched speaker is a mismatch.
 - **P2-90** ruling: A backend is a code path (stack plus env) and a model is a catalogue entry, because one model can run on several stacks.
 - **P2-91** ruling: The P-8 two-stack check covers calls with two stacks (PII vLLM and transformers). CrisperWhisper's ct2 and transformers are values of its `engine` backend param on one stack, so it is checked by `backend_params`, not `stack_preferences`; the Task 32 text naming it as two-stack was wrong.
+- **P2-92** ruling (owner item 45): An environment at a different version is a different software agent unless measured otherwise. Provenance records the agent of every result, so a difference in env lock is always visible. Reuse across env locks is a user choice: a policy that asks for what is available may serve another version's result (recorded as such); a policy that asks for consistency refuses it. Equivalence classes therefore hold (numerics class, env lock) members, and a class never spans env locks without measured evidence for that pair. This supersedes the P-23 reading in R-185.
+- **P2-93** ruling (owner item 46): The license sets `permissive-other` and `vendor-eula` are confirmed for env locks. License data is transparent: every backend's licenses are stated by `describe()` and recorded in provenance, and whether a license is acceptable is the user's policy, not a fixed block in the runtime.
+- **P2-94** ruling (owner item 47): `pii_spans` is kept as a reusable task. Reusable tasks and pipelines are kept; vLLM and vLLM-omni server paths are expected to be many, so the server path stays general.
 
 ## Design gaps left open
 
