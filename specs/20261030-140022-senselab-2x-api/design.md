@@ -255,13 +255,12 @@ class CrisperWhisperCt2: ...
 
 - **Stacks:** `transformers`, `vllm`, `vllm-omni`, `nemo`, `ct2`, `mlx`, `onnx`, `speechbrain`,
   `pyannote`, `dsp`. A task can have one backend per stack for the same model.
-  - Amended 2026-11-02 (owner correction of 2026-11-01, Phase 2 plan Task 14): a backend is a code path and a
-    model is a catalogue entry (§4.3). A backend accepts any model of its family and a model names no backend:
-    `models` in the example above is an optional list of the catalogue models the backend is known to serve, not a
-    binding of one model to one backend. The example's one-backend-per-model reading is superseded. A backend
-    declares `name` and `version`, both required (P2-47). Two models that one code path runs (HF Whisper and
-    CrisperWhisper's transformers engine) are two catalogue entries, not two backends; an engine choice inside one
-    code path (`ct2` or `transformers`) is a backend param that enters the key.
+  - Amended 2026-11-02 (P2-90): a backend is a code path (stack plus env) and a model is a catalogue entry
+    (§4.3), because the execution profile picks the backend (P-8). `speech_to_text` has two backends:
+    `transformers` runs HF Whisper in-process on the host, and `crisperwhisper` runs in its own isolated env with an
+    `engine` param (`ct2` or `transformers`) that enters the key. `models` in the example above lists the catalogue
+    models a backend is known to serve; it does not make a model a backend. A backend declares `name` and `version`,
+    both required (P2-47).
 - **Env kinds, all locked (P-25):**
   - `Env.host()`: in-process, in the locked senselab venv. It is allowed only when that lock
     covers the backend.
@@ -957,4 +956,4 @@ R-n in [`review-register.md`](review-register.md).
 - 2026-11-01: a model's key is its weights' digest and its source is context; decoding and stamping live in `runtime/audio_io`; every 2.x CI job except `worker-floor` installs with `uv sync --locked` (H-R56, H-R57; ADR-002, ADR-009).
 - 2026-11-02: Phase 2 spec pass: §6.1 reconciles `alpha` by merge (D-6, P2-35); A1 is a Phase 2 gate prerequisite
   (P2-39); the source-stamp conflict is closed (P2-21); backends are code paths and models are catalogue entries
-  (Task 14 correction, P2-47).
+  (P2-90, P2-47).

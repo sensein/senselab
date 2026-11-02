@@ -226,7 +226,7 @@ CC0 / ODbL sets.
 
 Spot-checked against the sources: ESC-50 is CC BY-NC 3.0, but its ESC-10 subset is CC BY 3.0, so it is a permissive option for the open smoke suite; PTB-XL is CC BY 4.0; VoxConverse is CC BY 4.0, with video copyright kept by the original owners.
 
-## Amendment 2026-11-02: a benchmark whose backend cannot be placed is reported, not run
+## Amendment 2026-11-02: a benchmark whose backend cannot be placed is reported, not run (P2-88)
 
 - The harness resolves each benchmark's backend against the run's device (the backend's declared devices and the
   execution profile's placement, P2-13). A benchmark whose backend cannot be placed there is reported as not

@@ -247,11 +247,10 @@ and docs.
 
 ## Amendments 2026-11-02 (Phase 2 spec pass)
 
-- **Tolerance profiles are keyed by task and backend** (§4, cross-context equivalence; ADR-002 amendment
+- **Tolerance profiles are keyed by task and backend** (P2-87; §4, cross-context equivalence; ADR-002 amendment
   2026-11-02). A backend serving two tasks has two profiles. The limits tier writes each to its own
   `(task, backend)` profile.
-- **Parity of speaker labels is taken under the optimal one-to-one mapping** (§4, parity tests; decided in
-  Phase 2). Diarization labels are arbitrary names, so a permutation of
+- **Parity of speaker labels is taken under the optimal one-to-one time-overlap mapping** (P2-89; §4, parity tests; P2-41). Diarization labels are arbitrary names, so a permutation of
   them is not a difference. The 2.x and 1.x labels are matched by the assignment that maximises agreement, as in
   DER scoring; a speaker left unmatched on either side is a mismatch. A label-assignment regression that a
   permutation-blind comparison would mask is still caught by the unmatched count.

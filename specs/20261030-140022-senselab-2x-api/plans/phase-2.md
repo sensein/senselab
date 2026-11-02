@@ -1270,6 +1270,10 @@ decision takes effect only through the dated amendment its task commits (ADR-000
   the new `src` on `PYTHONPATH` and the existing `.venv` via `uv run --no-sync`; the locked install is proved in CI.
 - **P2-86** ruling (Table 2 rows 18, 19, 23): Each of Tasks 18, 19 and 23a names its files; Task 19 names the R-133 and
   R-134 outputs; Task 23's code and spec commits are separate tasks on separate branches.
+- **P2-87** ruling: Tolerance profiles are keyed by task and backend, because backend names repeat across tasks.
+- **P2-88** ruling: A benchmark whose backend cannot be placed on the host is reported as not placeable and never run, because a CPU host cannot load a GPU-only model, and a skip must not read as a pass.
+- **P2-89** ruling: Diarization parity compares speaker labels under the optimal one-to-one time-overlap mapping, because labels are arbitrary per run, and an unmatched speaker is a mismatch.
+- **P2-90** ruling: A backend is a code path (stack plus env) and a model is a catalogue entry, because one model can run on several stacks.
 
 ## Design gaps left open
 
