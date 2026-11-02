@@ -44,7 +44,10 @@ from senselab_core.kernel._base import thawed
 from senselab_core.kernel.declare import OUTPUT_AFFECTING, BackendSpec, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelRef, ResolvedModel
 from senselab_core.kernel.license import License
+from senselab_core.kernel.results import Intervals, TextSpans, Transcript, TranscriptNode, Trials
 from senselab_core.kernel.signals import PlainText
+from senselab_core.kernel.time import Span
+from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime.keys import Call, Placement, build_key
 from senselab_core.runtime.licenses import backend_license, check_license
 from senselab_core.runtime.worker_client import WorkerClient
@@ -113,11 +116,60 @@ def _text(item: str, port: str) -> dict[str, Any]:
     return PlainText(content=f"{item} {port} rang 555{digits}").model_dump()
 
 
+def _digits(item: str, port: str) -> int:
+    return int(identity_digest("contract-probe@1", [item, port])[:4], 16)
+
+
+def _transcript(item: str, port: str) -> dict[str, Any]:
+    """Return the wire form of a one-segment transcript, its last word set by the item and port."""
+    span = Span(start_ns=0, end_ns=1_000_000_000, clock_id="contract-clock")
+    node = TranscriptNode(text=f"{item} spoke twice then {_digits(item, port) % 7}", span=span)
+    return wire_form(Transcript(segments=(node,)))
+
+
+def _intervals(item: str, port: str) -> dict[str, Any]:
+    """Return the wire form of two speaker turns, their boundary set by the item and port."""
+    cut = 400_000_000 + _digits(item, port) % 200_000_000
+    return wire_form(
+        Intervals(
+            start_ns=[0, cut],
+            end_ns=[cut, 1_000_000_000],
+            label=numpy.array(["spk0", "spk1"]),
+            clock_id="contract-clock",
+        )
+    )
+
+
+def _trials(item: str, port: str) -> dict[str, Any]:
+    """Return the wire form of four trials, two of each kind, over three-dimensional embeddings."""
+    rng = numpy.random.default_rng(_digits(item, port))
+    first = rng.standard_normal((4, 3)) + 1.0
+    return wire_form(
+        Trials(
+            first=first,
+            second=first + 0.1 * rng.standard_normal((4, 3)) * numpy.array([[1], [5], [1], [5]]),
+            same=numpy.array([True, False, True, False]),
+            space="contract-space",
+        )
+    )
+
+
+def _text_spans(item: str, port: str) -> dict[str, Any]:
+    """Return the wire form of spans over the item's text, the second span's label set by the port."""
+    text = PlainText(content=f"{item}: call Ada Lovelace on 555 0100")
+    label = "name" if _digits(item, port) % 2 else "person"
+    return wire_form(TextSpans.over(text, start=[0, 3], end=[1, 9], label=numpy.array([label, "phone"])))
+
+
 WIRE_INPUTS: Mapping[str, Callable[[str, str], object]] = {
     "json": lambda item, port: f"{item}:{port}",
     "RegularSeries": _regular_series,
     "Audio": _audio,
     "Text": _text,
+    "Transcript": _transcript,
+    "Intervals": _intervals,
+    "Trials": _trials,
+    "TextSpans": _text_spans,
 }
 """Per input port type, the wire value `content_fault_isolated` sends for an item id and port."""
 

@@ -7,6 +7,11 @@ Regenerate with `uv run python scripts/generate_task_api.py`.
 
 import senselab._api.declarations
 import senselab.signal.resample
+import senselab.metrics.wer
+import senselab.metrics.der
+import senselab.metrics.eer
+import senselab.metrics.span_f1
+import senselab.metrics.resample_error
 import senselab.audio.tasks.speech_to_text.huggingface
 import senselab.audio.tasks.speech_to_text.crisperwhisper_backend
 import senselab.audio.tasks.speaker_diarization.pyannote_backend
@@ -19,21 +24,32 @@ from os import PathLike
 from senselab._api.call import ConfiguredTask, UNSET
 from senselab.text.tasks.pii_spans.profile import PiiProfile
 from senselab_core.kernel.identity import ModelRef
+from senselab_core.kernel.results import Intervals, TextSpans, Transcript, Trials
 from senselab_core.kernel.signals import Audio, RegularSeries, Text
 from senselab_core.runtime.call import Result, TaskCall
 from typing import Any, Literal
 
 __all__ = [
+    "Der",
     "Diarize",
+    "Eer",
     "PiiSpans",
     "Resample",
+    "ResampleError",
+    "SpanF1",
     "SpeakerEmbeddings",
     "SpeechToText",
+    "Wer",
+    "der",
     "diarize",
+    "eer",
     "pii_spans",
     "resample",
+    "resample_error",
+    "span_f1",
     "speaker_embeddings",
     "speech_to_text",
+    "wer",
 ]
 
 
@@ -405,3 +421,357 @@ def resample(
         target_rate=target_rate,
         backend_params=backend_params,
     )(series)
+
+
+class Wer(ConfiguredTask):
+    """The configured, immutable task wer v1 (transform): reference, hypothesis -> metric."""
+
+    name = "wer"
+
+    def __init__(
+        self,
+        model: ModelRef | str | None = None,
+        *,
+        normalise: Literal["open_asr", "none"] = "open_asr",
+        backend_params: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Configure the task; params are validated now."""
+        super().__init__(
+            model,
+            {
+                "normalise": normalise,
+            },
+            backend_params,
+        )
+
+    def with_params(
+        self,
+        *,
+        normalise: Literal["open_asr", "none"] = UNSET,
+    ) -> "Wer":
+        """Return a new task with these params changed; this one is unchanged."""
+        return self._replace(
+            {
+                "normalise": normalise,
+            },
+        )
+
+    def call(
+        self,
+        reference: Transcript | str | PathLike[str],
+        hypothesis: Transcript | str | PathLike[str],
+    ) -> TaskCall:
+        """Return the validated call of this task on the inputs."""
+        return self._call(
+            {
+                "reference": reference,
+                "hypothesis": hypothesis,
+            },
+        )
+
+    def __call__(
+        self,
+        reference: Transcript | str | PathLike[str],
+        hypothesis: Transcript | str | PathLike[str],
+    ) -> Result:
+        """Run this task on the inputs through `run_call` and return its one result."""
+        return self._run(
+            {
+                "reference": reference,
+                "hypothesis": hypothesis,
+            },
+        )
+
+
+def wer(
+    reference: Transcript | str | PathLike[str],
+    hypothesis: Transcript | str | PathLike[str],
+    *,
+    model: ModelRef | str | None = None,
+    normalise: Literal["open_asr", "none"] = "open_asr",
+    backend_params: Mapping[str, Any] | None = None,
+) -> Result:
+    """Run `Wer` on the inputs: exactly `Wer(model, **params)(...)`."""
+    return Wer(
+        model,
+        normalise=normalise,
+        backend_params=backend_params,
+    )(reference, hypothesis)
+
+
+class Der(ConfiguredTask):
+    """The configured, immutable task der v1 (transform): reference, hypothesis -> metric."""
+
+    name = "der"
+
+    def __init__(
+        self,
+        model: ModelRef | str | None = None,
+        *,
+        collar: float = 0.0,
+        skip_overlap: bool = False,
+        backend_params: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Configure the task; params are validated now."""
+        super().__init__(
+            model,
+            {
+                "collar": collar,
+                "skip_overlap": skip_overlap,
+            },
+            backend_params,
+        )
+
+    def with_params(
+        self,
+        *,
+        collar: float = UNSET,
+        skip_overlap: bool = UNSET,
+    ) -> "Der":
+        """Return a new task with these params changed; this one is unchanged."""
+        return self._replace(
+            {
+                "collar": collar,
+                "skip_overlap": skip_overlap,
+            },
+        )
+
+    def call(
+        self,
+        reference: Intervals | str | PathLike[str],
+        hypothesis: Intervals | str | PathLike[str],
+    ) -> TaskCall:
+        """Return the validated call of this task on the inputs."""
+        return self._call(
+            {
+                "reference": reference,
+                "hypothesis": hypothesis,
+            },
+        )
+
+    def __call__(
+        self,
+        reference: Intervals | str | PathLike[str],
+        hypothesis: Intervals | str | PathLike[str],
+    ) -> Result:
+        """Run this task on the inputs through `run_call` and return its one result."""
+        return self._run(
+            {
+                "reference": reference,
+                "hypothesis": hypothesis,
+            },
+        )
+
+
+def der(
+    reference: Intervals | str | PathLike[str],
+    hypothesis: Intervals | str | PathLike[str],
+    *,
+    model: ModelRef | str | None = None,
+    collar: float = 0.0,
+    skip_overlap: bool = False,
+    backend_params: Mapping[str, Any] | None = None,
+) -> Result:
+    """Run `Der` on the inputs: exactly `Der(model, **params)(...)`."""
+    return Der(
+        model,
+        collar=collar,
+        skip_overlap=skip_overlap,
+        backend_params=backend_params,
+    )(reference, hypothesis)
+
+
+class Eer(ConfiguredTask):
+    """The configured, immutable task eer v1 (transform): trials -> metric."""
+
+    name = "eer"
+
+    def __init__(
+        self,
+        model: ModelRef | str | None = None,
+        *,
+        backend_params: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Configure the task; params are validated now."""
+        super().__init__(
+            model,
+            {},
+            backend_params,
+        )
+
+    def with_params(
+        self,
+    ) -> "Eer":
+        """Return a new task with these params changed; this one is unchanged."""
+        return self._replace(
+            {},
+        )
+
+    def call(
+        self,
+        trials: Trials | str | PathLike[str],
+    ) -> TaskCall:
+        """Return the validated call of this task on the inputs."""
+        return self._call(
+            {
+                "trials": trials,
+            },
+        )
+
+    def __call__(
+        self,
+        trials: Trials | str | PathLike[str],
+    ) -> Result:
+        """Run this task on the inputs through `run_call` and return its one result."""
+        return self._run(
+            {
+                "trials": trials,
+            },
+        )
+
+
+def eer(
+    trials: Trials | str | PathLike[str],
+    *,
+    model: ModelRef | str | None = None,
+    backend_params: Mapping[str, Any] | None = None,
+) -> Result:
+    """Run `Eer` on the inputs: exactly `Eer(model, **params)(...)`."""
+    return Eer(
+        model,
+        backend_params=backend_params,
+    )(trials)
+
+
+class SpanF1(ConfiguredTask):
+    """The configured, immutable task span_f1 v1 (transform): reference, hypothesis -> metric."""
+
+    name = "span_f1"
+
+    def __init__(
+        self,
+        model: ModelRef | str | None = None,
+        *,
+        backend_params: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Configure the task; params are validated now."""
+        super().__init__(
+            model,
+            {},
+            backend_params,
+        )
+
+    def with_params(
+        self,
+    ) -> "SpanF1":
+        """Return a new task with these params changed; this one is unchanged."""
+        return self._replace(
+            {},
+        )
+
+    def call(
+        self,
+        reference: TextSpans | str | PathLike[str],
+        hypothesis: TextSpans | str | PathLike[str],
+    ) -> TaskCall:
+        """Return the validated call of this task on the inputs."""
+        return self._call(
+            {
+                "reference": reference,
+                "hypothesis": hypothesis,
+            },
+        )
+
+    def __call__(
+        self,
+        reference: TextSpans | str | PathLike[str],
+        hypothesis: TextSpans | str | PathLike[str],
+    ) -> Result:
+        """Run this task on the inputs through `run_call` and return its one result."""
+        return self._run(
+            {
+                "reference": reference,
+                "hypothesis": hypothesis,
+            },
+        )
+
+
+def span_f1(
+    reference: TextSpans | str | PathLike[str],
+    hypothesis: TextSpans | str | PathLike[str],
+    *,
+    model: ModelRef | str | None = None,
+    backend_params: Mapping[str, Any] | None = None,
+) -> Result:
+    """Run `SpanF1` on the inputs: exactly `SpanF1(model, **params)(...)`."""
+    return SpanF1(
+        model,
+        backend_params=backend_params,
+    )(reference, hypothesis)
+
+
+class ResampleError(ConfiguredTask):
+    """The configured, immutable task resample_error v1 (transform): reference, hypothesis -> metric."""
+
+    name = "resample_error"
+
+    def __init__(
+        self,
+        model: ModelRef | str | None = None,
+        *,
+        backend_params: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Configure the task; params are validated now."""
+        super().__init__(
+            model,
+            {},
+            backend_params,
+        )
+
+    def with_params(
+        self,
+    ) -> "ResampleError":
+        """Return a new task with these params changed; this one is unchanged."""
+        return self._replace(
+            {},
+        )
+
+    def call(
+        self,
+        reference: RegularSeries | str | PathLike[str],
+        hypothesis: RegularSeries | str | PathLike[str],
+    ) -> TaskCall:
+        """Return the validated call of this task on the inputs."""
+        return self._call(
+            {
+                "reference": reference,
+                "hypothesis": hypothesis,
+            },
+        )
+
+    def __call__(
+        self,
+        reference: RegularSeries | str | PathLike[str],
+        hypothesis: RegularSeries | str | PathLike[str],
+    ) -> Result:
+        """Run this task on the inputs through `run_call` and return its one result."""
+        return self._run(
+            {
+                "reference": reference,
+                "hypothesis": hypothesis,
+            },
+        )
+
+
+def resample_error(
+    reference: RegularSeries | str | PathLike[str],
+    hypothesis: RegularSeries | str | PathLike[str],
+    *,
+    model: ModelRef | str | None = None,
+    backend_params: Mapping[str, Any] | None = None,
+) -> Result:
+    """Run `ResampleError` on the inputs: exactly `ResampleError(model, **params)(...)`."""
+    return ResampleError(
+        model,
+        backend_params=backend_params,
+    )(reference, hypothesis)

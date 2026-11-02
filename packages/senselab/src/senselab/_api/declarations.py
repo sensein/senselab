@@ -12,6 +12,11 @@ from senselab.text.tasks.pii_spans.profile import PiiProfile, packaged_profile
 DECLARATION_MODULES: tuple[str, ...] = (
     "senselab._api.declarations",
     "senselab.signal.resample",
+    "senselab.metrics.wer",
+    "senselab.metrics.der",
+    "senselab.metrics.eer",
+    "senselab.metrics.span_f1",
+    "senselab.metrics.resample_error",
     "senselab.audio.tasks.speech_to_text.huggingface",
     "senselab.audio.tasks.speech_to_text.crisperwhisper_backend",
     "senselab.audio.tasks.speaker_diarization.pyannote_backend",

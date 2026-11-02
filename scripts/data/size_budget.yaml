@@ -33,3 +33,11 @@ exempt:
   reason: >-
     A table: one registered sample per kernel value type, 190 lines of literals with no branching. It is
     split by type when a type is added.
+- path: packages/senselab/src/senselab/metrics/open_asr/normalizer.py
+  function: __init__
+  reason: >-
+    Vendored reference code, kept diffable against its source: the normaliser's filler-word and contraction tables.
+- path: packages/senselab/src/senselab/metrics/open_asr/normalizer.py
+  function: process_words
+  reason: >-
+    Vendored reference code, kept diffable against its source: the number-word state machine.

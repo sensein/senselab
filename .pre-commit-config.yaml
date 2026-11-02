@@ -153,7 +153,7 @@ repos:
     # extensions in the I/O format matrix. Each is a term codespell reads as a misspelling of
     # another word. Raw captured output is excluded rather than corrected: it is a verbatim
     # record, and a truncated word in a printed table is part of what was printed.
-    exclude: ^specs/.*/raw/
+    exclude: ^specs/.*/raw/|^packages/senselab/src/senselab/metrics/(open_asr/|data/open_asr_)
     # The second group are this workflow's own vocabulary and its verbatim records:
     # UNDET/UNDETERMINED and NotIn are value names; FigureStyle is a class; allk, empt and
     # empted are fragments of identifiers codespell splits; disjointness, declaring, meaned,
