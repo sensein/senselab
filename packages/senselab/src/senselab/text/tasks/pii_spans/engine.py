@@ -1,16 +1,27 @@
-"""The prompt and parsing engine of `pii_spans`, shared by its backends; imports only numpy and `senselab_worker`.
+"""The engine of `pii_spans`, shared by its backends; imports only numpy, `senselab_worker` and `senselab.item_faults`.
 
 `build_prompt` turns the profile slice, the optional task family and a text into one prompt; `parse_completion`
 turns a model's JSON answer into spans located in the text; `spans_wire_form` writes them as `text-spans@1.0`.
+`handle` is every backend's worker entry point: it asks `State.model.generate(prompt)` once per item.
 """
 
 import json
+import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import numpy
+from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault
 
+from senselab.item_faults import raise_injected, typed
+
+MODEL_ID = "google/gemma-4-31B-it-qat-w4a16-ct"
+"""The catalogue model every backend serves."""
+
+STUB_CATEGORY = "ID"
+_DIGITS = re.compile(r"\d+")
 MAX_NEW_TOKENS = 2048
 """Generation bound of every backend: the longest answer read; a longer one is cut and fails to parse."""
 
@@ -99,3 +110,49 @@ def spans_wire_form(text: Mapping[str, Any], spans: Sequence[tuple[int, int, str
         "label": numpy.array([s[2] for s in spans], dtype=str),
         "score": numpy.array([s[3] for s in spans], dtype=numpy.float64),
     }
+
+
+class StubModel:
+    """The fake stack's model: answers with every digit run of the text as one `ID` span."""
+
+    def generate(self, prompt: str) -> str:
+        """Return the JSON answer marking each distinct digit run of the prompt's text."""
+        runs = sorted(set(_DIGITS.findall(text_of(prompt))))
+        return (
+            '{"spans": ['
+            + ", ".join(f'{{"quote": "{r}", "category": "{STUB_CATEGORY}", "score": 0.5}}' for r in runs)
+            + "]}"
+        )
+
+
+@dataclass(frozen=True)
+class State:
+    """A loaded backend: the model (a stub or the generator) and the faults to inject."""
+
+    faults: FakeFaults
+    model: Any  # noqa: ANN401 - a StubModel or a Generator
+
+
+def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return one `{"outputs": {"spans": <text-spans@1.0 wire form>}}` per item, or its typed fault.
+
+    `params` holds the task's `profile` and `family` and the (empty) `backend_params`.
+
+    Raises:
+        ValueError: on a backend param; this backend takes none.
+    """
+    if params.get("backend_params"):
+        raise ValueError(f"unknown backend params {sorted(params['backend_params'])}; known: []")
+    profile = params["profile"]
+    names = [c["name"] for c in profile["categories"]]
+    results: list[dict[str, Any]] = []
+    for item in items:
+        try:
+            raise_injected(item["id"], state.faults)
+            text = item["inputs"]["text"]
+            completion = state.model.generate(build_prompt(profile, text["content"], params.get("family")))
+            spans = parse_completion(completion, text["content"], names)
+            results.append({"outputs": {"spans": spans_wire_form(text, spans)}})
+        except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
+            results.append({"error": typed(exc)})
+    return results
