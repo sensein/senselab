@@ -17,7 +17,7 @@ from pathlib import Path
 from senselab_worker.canonical import jcs_dumps
 
 from senselab_core.kernel import prov as kprov
-from senselab_core.kernel.formats import LABELS_FORMAT, readable
+from senselab_core.kernel.formats import LABELS_FORMAT, FormatVerdict, check
 from senselab_core.runtime.locks import Lease
 from senselab_core.runtime.provenance import (
     FILE_LABEL,
@@ -64,7 +64,7 @@ def _read_labels(directory: StorageDir) -> dict[str, tuple[str, list[str]]]:
         record = json.loads(data)
         labels = record["labels"]
         valid = (
-            readable(LABELS_FORMAT, record["format"])
+            check(LABELS_FORMAT, record["format"]) is FormatVerdict.ACCEPTED
             and isinstance(labels, dict)
             and all(
                 FILE_LABEL.fullmatch(k)

@@ -80,27 +80,54 @@ def store_key(task: str = "asr", **inputs: str) -> Any:  # noqa: ANN401
     )
 
 
-def _ctx(platform: str = "linux") -> Any:  # noqa: ANN401
+def store_context(platform: str = "linux", host: str = "node1", device: str = "cpu") -> Any:  # noqa: ANN401
+    """Return the store tests' execution context on `platform`, `host` and `device`."""
     from senselab_core.kernel.identity import ExecutionContext
 
     return ExecutionContext(
         env_lock="lock",
         platform=platform,
         wheel_set="wheels",
-        numerics={"device": "cpu", "precision": "fp32"},
+        numerics={"device": device, "precision": "fp32"},
         decoder=None,
         driver={},
-        host="node1",
+        host=host,
         protocol="p1",
         model_source="hf",
     )
+
+
+def entry_dir(root: Path, k: Any, c: Any) -> Path:  # noqa: ANN401
+    """Return the store entry of key `k` in context `c` under `root`."""
+    from senselab_core.runtime.store import STORE_DIR
+
+    d = str(k.digest())
+    return root / STORE_DIR / d[:2] / d / str(c.fingerprint())
+
+
+def unseal(entry: Path) -> Path:
+    """Make a committed entry writable, as an operator with the owner's rights could."""
+    entry.chmod(0o770)
+    for member in entry.iterdir():
+        member.chmod(0o660)
+    return entry
+
+
+def rewrite_json(path: Path, change: Callable[[dict[str, Any]], None]) -> None:
+    """Apply `change` to a store member's JSON record and write it back canonical."""
+    from senselab_worker.canonical import jcs_dumps
+
+    unseal(path.parent)
+    record = json.loads(path.read_bytes())
+    change(record)
+    path.write_bytes(jcs_dumps(record))
 
 
 def _entry(root: Path, platform: str = "linux") -> Path:
     from senselab_core.runtime.store import STORE_DIR
 
     d = store_key().digest()
-    entry: Path = root / STORE_DIR / d[:2] / d / _ctx(platform).fingerprint()
+    entry: Path = root / STORE_DIR / d[:2] / d / store_context(platform).fingerprint()
     return entry
 
 
@@ -208,7 +235,7 @@ def probe_file_at_a_store_directory(scratch: str, level: str, sealed: str) -> di
     from senselab_core.runtime.store import ResultStore
 
     root = Path(scratch) / "root"
-    store, k, c = ResultStore(root), store_key(), _ctx()
+    store, k, c = ResultStore(root), store_key(), store_context()
     store.put(k, {"y": 1}, c)
     entry = _entry(root)
     target = {"store": entry.parents[2], "prefix": entry.parents[1], "digest": entry.parent}[level]
@@ -266,7 +293,7 @@ def probe_swapped_entry_members(scratch: str, swapped: str, policy: str) -> dict
     root = Path(scratch) / "root"
     store, k = ResultStore(root), store_key()
     for platform in ("linux", "macos"):
-        store.put(k, _outputs_of(platform), _ctx(platform))
+        store.put(k, _outputs_of(platform), store_context(platform))
     linux, macos = _entry(root, "linux"), _entry(root, "macos")
     _unseal(linux)
     _unseal(macos)
@@ -288,7 +315,7 @@ def probe_swapped_entry_members(scratch: str, swapped: str, policy: str) -> dict
         os.chmod(entry, 0o550)
     served = {}
     for platform in ("linux", "macos"):
-        hit = store.get(k, _ctx(platform), policy)
+        hit = store.get(k, store_context(platform), policy)
         served[platform] = None if hit is None else [hit.context.platform, _plain(hit.outputs)]
     return {"served": served, "expected": {p: _plain(_outputs_of(p)) for p in ("linux", "macos")}}
 
@@ -311,7 +338,7 @@ def probe_corrupt_array(scratch: str, corruption: str) -> dict[str, Any]:
     from senselab_core.runtime.store import ResultStore
 
     root = Path(scratch) / "root"
-    store, k, c = ResultStore(root), store_key(), _ctx()
+    store, k, c = ResultStore(root), store_key(), store_context()
     outputs: dict[str, object] = {"a": numpy.arange(4, dtype="<f8")}
     identity = store.put(k, outputs, c)
     entry = _entry(root)
@@ -414,9 +441,9 @@ def _setup(op: str, root: Path) -> None:
     from senselab_core.runtime.store import ResultStore
 
     if op in ("get", "collect"):
-        ResultStore(root).put(store_key(), _outputs_of("linux"), _ctx())
+        ResultStore(root).put(store_key(), _outputs_of("linux"), store_context())
     if op == "get":
-        ResultStore(root).put(store_key(), _outputs_of("macos"), _ctx("macos"))
+        ResultStore(root).put(store_key(), _outputs_of("macos"), store_context("macos"))
         damaged = _entry(root, "macos")
         _unseal(damaged)
         (damaged / "context.json").write_bytes(b"{}")
@@ -436,11 +463,11 @@ def _run(op: str, root: Path) -> bool:
 
     if op == "put":
         store = ResultStore(root)
-        store.put(store_key(), _outputs_of("linux"), _ctx())
-        hit = store.get(store_key(), _ctx(), ReusePolicy.EXACT)
+        store.put(store_key(), _outputs_of("linux"), store_context())
+        hit = store.get(store_key(), store_context(), ReusePolicy.EXACT)
         return hit is not None and _plain(hit.outputs) == _plain(_outputs_of("linux"))
     if op == "get":
-        hit = ResultStore(root).get(store_key(), _ctx(), ReusePolicy.EXACT)
+        hit = ResultStore(root).get(store_key(), store_context(), ReusePolicy.EXACT)
         return hit is None or _plain(hit.outputs) == _plain(_outputs_of("linux"))
     if op == "collect":
         ResultStore(root).collect(now=time.time() + 10**9)

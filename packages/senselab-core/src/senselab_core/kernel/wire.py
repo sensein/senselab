@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from senselab_core.kernel._base import Frozen, FrozenMapping
-from senselab_core.kernel.formats import Formatted, readable
+from senselab_core.kernel.formats import Formatted, FormatVerdict, check
 from senselab_core.kernel.results import Annotation, Embedding, Events, Intervals, Metric, TextSpans, Transcript, Trials
 from senselab_core.kernel.signals import Audio, PlainText, Recording, RegularGroup, SourceReader
 from senselab_core.kernel.time import TimeMap
@@ -97,9 +97,10 @@ def from_wire_form(form: Mapping[str, Any]) -> Frozen:
         pydantic.ValidationError: if the fields do not validate as that type.
     """
     found = form.get("format")
-    if isinstance(found, str) and found.split(".")[0] in RETIRED_WIRE_FORMATS:
-        raise WireFormatRetired(found)
-    cls = next((t for tag, t in WIRE_FORMATS.items() if readable(tag, found)), None)
+    verdicts = {tag: check(tag, found, RETIRED_WIRE_FORMATS) for tag in WIRE_FORMATS}
+    cls = next((WIRE_FORMATS[tag] for tag, v in verdicts.items() if v is FormatVerdict.ACCEPTED), None)
+    if cls is None and FormatVerdict.RETIRED in verdicts.values():
+        raise WireFormatRetired(str(found))
     if cls is None:
         raise ValueError(f"no wire format reads {found!r}; registered: {sorted(WIRE_FORMATS)}")
     fields = dict(form)
