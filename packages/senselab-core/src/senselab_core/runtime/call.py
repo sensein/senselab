@@ -554,6 +554,11 @@ def close_workers() -> None:
         if isinstance(worker, WorkerClient):
             worker.close()
     _POOL.clear()
+    stop_servers()
+
+
+def stop_servers() -> None:
+    """Stop every server `run_call` or `start_server_worker` started in this process."""
     for server in _SERVERS.values():
         server.stop()
     _SERVERS.clear()

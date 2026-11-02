@@ -29,6 +29,7 @@ from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.vllm_server import AttestationMismatch, VllmServer, config_digest, server_args
 from senselab_core.testing.contracts import contract_cases
 from senselab_core.testing.lock_licenses import packaged_lock_records
+from senselab_core.testing.workers import RealWorkers
 from senselab_worker.faults import FaultClass
 
 LOCK_RECORDS = packaged_lock_records("senselab")
@@ -271,6 +272,35 @@ def test_close_workers_stops_the_server_run_call_started(
             return
         time.sleep(0.1)
     pytest.fail("the server's process group outlived close_workers")
+
+
+@pytest.mark.logic
+def test_real_workers_close_and_the_next_start_stop_the_server(
+    served: Registry,  # noqa: ARG001 - the fixture's effect
+    tmp_path: Path,
+) -> None:
+    """A server backend's worker from `RealWorkers`: `close` stops its server, as does starting another worker."""
+    workers = RealWorkers(_profile(tmp_path, "vllm"))
+    seen: set[int] = set()
+    for stop in (workers.close, lambda: workers("pii_spans", "transformers")):
+        workers("pii_spans", "vllm")
+        (pgid,) = {json.loads(p.read_text())["pgid"] for p in (tmp_path / "fake").glob("*.json")} - seen
+        seen.add(pgid)
+        os.killpg(pgid, 0)
+        try:
+            stop()
+        except Exception:  # noqa: BLE001 - the transformers worker may not start here; only the server's stop is asked
+            pass
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(pgid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            pytest.fail("the server outlived the stop")
+    workers.close()
 
 
 @pytest.mark.logic
