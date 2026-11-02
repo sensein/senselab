@@ -32,27 +32,27 @@ def raise_injected(item_id: str, faults: FakeFaults) -> None:
 def mono_samples(item: dict[str, Any], faults: FakeFaults, rate: int, who: str) -> tuple[numpy.ndarray, str]:
     """Return the item's mono float32 samples and its clock id, or raise its content or resource fault.
 
-    The item's audio is an `Audio` (a host backend) or its wire form (an isolated one).
-
-    `who` names the backend in the message; `rate` is the sampling rate it takes.
+    The item's audio is a wire form. `who` names the backend in the message; `rate` is the sampling rate it takes.
     """
     raise_injected(item["id"], faults)
-    samples, sampling_rate, clock_id = _audio(item["inputs"]["audio"])
+    return mono_check(*wire_audio(item["inputs"]["audio"]), rate, who)
+
+
+def wire_audio(wire: Mapping[str, Any]) -> tuple[numpy.ndarray, float, str]:
+    """Return `(samples (channels, n), sampling_rate, clock_id)` of an `audio@2.0` wire form."""
+    group = wire["groups"]["audio"]
+    return numpy.asarray(group["data"]), float(group["sampling_rate"]), str(wire["anchor"]["clock_id"])
+
+
+def mono_check(
+    samples: numpy.ndarray, sampling_rate: float, clock_id: str, rate: int, who: str
+) -> tuple[numpy.ndarray, str]:
+    """Return the mono float32 samples and clock id, or raise a content fault for stereo or a rate other than `rate`."""
     if samples.shape[0] != 1:
         raise ContentFault(f"{who} takes mono audio, got {samples.shape[0]} channels")
     if sampling_rate != rate:
         raise ContentFault(f"{who} takes {rate} Hz audio, got {sampling_rate} Hz; resample it first")
     return samples[0].astype(numpy.float32), clock_id
-
-
-def _audio(value: Any) -> tuple[numpy.ndarray, float, str]:  # noqa: ANN401 - an `Audio` or its wire form
-    """Return `(samples (channels, n), sampling_rate, clock_id)` of an `Audio` (host backends) or its wire form."""
-    if isinstance(value, dict):
-        group = value["groups"]["audio"]
-        return numpy.asarray(group["data"]), float(group["sampling_rate"]), str(value["anchor"]["clock_id"])
-    from senselab_core.runtime.audio_io import READER  # noqa: PLC0415 - only a host backend is handed an object
-
-    return value.read(reader=READER), float(value.sampling_rate), str(value.anchor.clock_id)
 
 
 def init_model(init: Mapping[str, Any], keys: Collection[str], who: str) -> tuple[FakeFaults, Mapping[str, Any] | None]:

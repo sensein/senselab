@@ -17,6 +17,7 @@ from senselab_core.kernel.declare import REGISTRY, BackendParams, Env, backend
 from senselab_core.kernel.results import Transcript, TranscriptNode
 from senselab_core.kernel.time import Span
 from senselab_core.kernel.wire import wire_form
+from senselab_core.runtime.audio_io import READER
 from senselab_worker.fake import FakeFaults
 
 from senselab._api.declarations import SpeechToTextParams
@@ -26,7 +27,7 @@ from senselab.audio.tasks.speech_to_text.token_confidence import (
     special_token_ids,
     word_confidences,
 )
-from senselab.item_faults import NS_PER_S, clamp_ns, init_model, mono_samples
+from senselab.item_faults import NS_PER_S, clamp_ns, init_model, mono_check, raise_injected, wire_audio
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.huggingface"
 EXPECTED_RATE = 16_000
@@ -156,7 +157,13 @@ class _Prepared:
 
 
 def _prepare(state: State, item: dict[str, Any]) -> _Prepared:
-    samples, clock_id = mono_samples(item, state.faults, state.sampling_rate, "whisper")
+    raise_injected(item["id"], state.faults)
+    value = item["inputs"]["audio"]
+    if isinstance(value, dict):
+        samples, rate, clock_id = wire_audio(value)
+    else:
+        samples, rate, clock_id = value.read(reader=READER), float(value.sampling_rate), str(value.anchor.clock_id)
+    samples, clock_id = mono_check(samples, rate, clock_id, state.sampling_rate, "whisper")
     return _Prepared(samples, clock_id, round(samples.size / state.sampling_rate * NS_PER_S))
 
 
