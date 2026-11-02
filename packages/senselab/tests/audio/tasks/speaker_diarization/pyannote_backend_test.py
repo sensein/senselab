@@ -1,5 +1,6 @@
 """The `pyannote` backend of `diarize`: its turns, faults, model and the isolated worker's contract."""
 
+import importlib
 from typing import Any
 
 import numpy
@@ -129,7 +130,7 @@ def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract c
 
 
 def _real_state(faults: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
-    import torch
+    torch = importlib.import_module("torch")
 
     entry = CATALOGUE.entry(pa.MODEL_ID)
     model = {"source": "hf", "id": entry.id, "identity": entry.revision}
