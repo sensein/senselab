@@ -31,7 +31,7 @@ IDENTITY_TAGS: frozenset[str] = frozenset(
         "output@3",
         "context@3",
         "content-root@2",
-        "audio@3",
+        "audio@4",
         "weights@3",
         "value@2",
         "provenance-id@4",
