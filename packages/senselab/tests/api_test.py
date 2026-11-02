@@ -20,7 +20,7 @@ import senselab_core.runtime.fake_backend as fake
 from pydantic import Field
 from senselab._api.call import ERROR_CODES, ApiError, api_error
 from senselab._api.describe import JSON_FORM, PORT_FORMS, describe, models, tasks
-from senselab._api.packaged import CATALOGUE
+from senselab._api.packaged import CATALOGUE, register
 from senselab_core.kernel.declare import REGISTRY, BackendSpec, Env, Registry, TaskParams, TaskSpec, kernel_types
 from senselab_core.kernel.identity import TEXT_IDENTITY_FORMS
 from senselab_core.kernel.results import TextSpans, Transcript
@@ -387,11 +387,18 @@ def test_facade_exposes_discovery_and_the_generated_names() -> None:
 @pytest.mark.logic
 def test_describe_states_each_backends_env_license() -> None:
     """Each backend in `describe` states the license its env lock's records derive, the same `run_call` records."""
-    records = packaged_lock_records("senselab")
-    for spec in REGISTRY.tasks():
-        stated = {b["name"]: b["license"] for b in describe(spec.name)["backends"]}
-        derived = {b.name: backend_license(b, records(b)).model_dump(mode="json") for b in REGISTRY.backends(spec.name)}
-        assert stated == derived and all(lic["expression"] for lic in stated.values()), spec.name
+    records, registry = packaged_lock_records("senselab"), Registry()
+    previous = use_packaged(register(registry))
+    try:
+        for spec in registry.tasks():
+            stated = {b["name"]: b["license"] for b in describe(spec.name, registry)["backends"]}
+            derived = {
+                b.name: backend_license(b, records(b)).model_dump(mode="json") for b in registry.backends(spec.name)
+            }
+            assert stated == derived and all(lic["expression"] for lic in stated.values()), spec.name
+        assert registry.tasks()
+    finally:
+        use_packaged(previous)
 
 
 @pytest.mark.logic
