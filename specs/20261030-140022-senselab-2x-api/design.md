@@ -478,6 +478,12 @@ typed error at the boundary naming the attribute path and the type (H-R29, H-R30
   counts, views, fields), profiles and executors. Port-type queries such as
   `tasks(accepts="Transcript")` are supported, and the graph format has a JSON Schema.
 - **Errors:** one envelope, `{code, message, fix, field, suggestions}`.
+  Every error `run_call` documents has one code (`unknown_task`, `inconsistent_inputs`, `content_fault`,
+  `resource_fault`, `infrastructure_fault`, `worker_failed`, ...); `ConfiguredTask._run` maps them, and a test
+  checks the table covers the `Raises:` section.
+- **Constraints:** a task declaration carries `constraints` as data (`inputs_agree` on a property of two ports,
+  `params_ordered` on two params). `describe()` renders them; the call path refuses a violation as
+  `inconsistent_inputs` before the call is keyed.
 - **Results:** inline up to a size cap; above it, a reference `{ref, shape, dtype, summary}`.
   Dataset-wide results are paginated.
 - **Runs:** `run` returns a handle immediately. The tools `runs`, `status`, `progress`
