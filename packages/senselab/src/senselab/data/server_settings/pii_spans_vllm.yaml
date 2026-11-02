@@ -14,6 +14,9 @@ format: server-settings@1.0
 #   limit_mm_per_prompt: image 0, the task is text only; no image memory is reserved.
 #   enable_prefix_caching: false; the instruction is the one shared prefix and caching it is a speed-up not yet
 #   measured, so outputs are left independent of what the server served before.
+#   flashinfer_sampler: false. FlashInfer's top-k/top-p sampler compiles its kernel at start-up with the CUDA
+#   toolkit's nvcc, which the locked env does not put on the path; the H100 start of job 27603492 exited on
+#   "Could not find nvcc". vLLM's own sampler needs no compiler, and the backend requests greedy decoding.
 startup_timeout_s: 1800
 settings:
   max_model_len: 8192
@@ -23,3 +26,4 @@ settings:
   generation_config: vllm
   limit_mm_per_prompt: {image: 0}
   enable_prefix_caching: false
+  flashinfer_sampler: false

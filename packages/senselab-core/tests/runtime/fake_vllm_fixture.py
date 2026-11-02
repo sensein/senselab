@@ -3,7 +3,8 @@
 It serves `/health`, `/version` (`FAKE_VLLM_VERSION`, default `0.31.0`), `/v1/models` (root: the model argument,
 or `FAKE_VLLM_ROOT`) and `POST /v1/chat/completions` (the reply names `FAKE_VLLM_REPLY_MODEL`, default the model,
 and its text is `FAKE_VLLM_CONTENT`, default `ok`) on `127.0.0.1:<--port>`. It forks one child into its process
-group, as vLLM's engine process is, and writes `<pid>.json` (`argv`, `pgid`, `pids`) into `FAKE_VLLM_DIR`.
+group, as vLLM's engine process is, and writes `<pid>.json` (`argv`, `pgid`, `pids`, and `sampler`, its
+`VLLM_USE_FLASHINFER_SAMPLER`) into `FAKE_VLLM_DIR`.
 `FAKE_VLLM_EXIT` makes it exit 1 before listening.
 """
 
@@ -65,5 +66,6 @@ if child == 0:
     while True:
         time.sleep(1)
 with open(os.path.join(out, f"{os.getpid()}.json"), "w") as handle:
-    json.dump({"argv": argv, "pgid": os.getpgid(0), "pids": [os.getpid(), child]}, handle)
+    record = {"argv": argv, "pgid": os.getpgid(0), "pids": [os.getpid(), child]}
+    json.dump({**record, "sampler": os.environ.get("VLLM_USE_FLASHINFER_SAMPLER")}, handle)
 HTTPServer(("127.0.0.1", int(flags["port"])), Handler).serve_forever()

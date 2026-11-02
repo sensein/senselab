@@ -42,7 +42,7 @@ HOST = "127.0.0.1"
 
 ENGINE = "vllm"
 CONFIG_TAG = "vllm-config@1"
-"""The `identity_digest` tag of a server's configuration: its ordered server arguments."""
+"""The `identity_digest` tag of a server's configuration: its ordered server arguments, then its engine variables."""
 
 REQUEST_TIMEOUT_S = 600.0
 """Default seconds a client waits for a reply."""
@@ -69,6 +69,9 @@ SERVER_FLAGS = (
 
 SWITCHES = (("enable_prefix_caching", "--enable-prefix-caching", "--no-enable-prefix-caching"),)
 """The settings passed as on/off server switches, after the valued flags."""
+
+ENGINE_VARIABLES = (("flashinfer_sampler", "VLLM_USE_FLASHINFER_SAMPLER"),)
+"""The settings passed as boolean environment variables of the server process, ``1`` or ``0``."""
 
 POLL_S = 0.5
 """Seconds between health probes during start-up."""
@@ -171,7 +174,7 @@ def expected_attestation(env: EnvHandle, model: ResolvedModel, settings: Mapping
     pin = re.search(r"^vllm==([^\s\\;]+)", text, re.MULTILINE)
     if pin is None:
         raise VllmStartError("version", "the env's lock pins no vllm")
-    return Attestation(pin.group(1), model.identity, identity_digest(CONFIG_TAG, server_args(settings)))
+    return Attestation(pin.group(1), model.identity, config_digest(settings))
 
 
 def attested_fields(env: EnvHandle, attestation: Attestation) -> dict[str, Any]:
@@ -180,17 +183,37 @@ def attested_fields(env: EnvHandle, attestation: Attestation) -> dict[str, Any]:
     return {**fields, "driver": {**fields["driver"], **attestation.driver()}}
 
 
+def config_digest(settings: Mapping[str, Any]) -> str:
+    """Return the digest a server with `settings` attests: of its `server_args`, then its `server_variables`.
+
+    Raises:
+        ValueError: as `server_args`.
+    """
+    variables = [f"{name}={value}" for name, value in server_variables(settings).items()]
+    return identity_digest(CONFIG_TAG, [*server_args(settings), *variables])
+
+
+def server_variables(settings: Mapping[str, Any]) -> dict[str, str]:
+    """Return the environment variables `settings` set on the server process, in `ENGINE_VARIABLES` order.
+
+    Raises:
+        ValueError: as `server_args`.
+    """
+    server_args(settings)
+    return {name: "1" if settings[key] else "0" for key, name in ENGINE_VARIABLES}
+
+
 def server_args(settings: Mapping[str, Any]) -> list[str]:
     """Return the ``vllm serve`` arguments `settings` names, each as one ``--flag=value`` or switch.
 
     Args:
-        settings: Every key of `SERVER_FLAGS` and `SWITCHES` and no other; ``limit_mm_per_prompt`` is a mapping of
-            per-modality counts, written as compact JSON with sorted keys.
+        settings: Every key of `SERVER_FLAGS`, `SWITCHES` and `ENGINE_VARIABLES` and no other;
+            ``limit_mm_per_prompt`` is a mapping of per-modality counts, written as compact JSON with sorted keys.
 
     Raises:
         ValueError: A key is missing or unknown.
     """
-    known = {key for key, _ in SERVER_FLAGS} | {key for key, _, _ in SWITCHES}
+    known = {key for key, _ in SERVER_FLAGS} | {key for key, _, _ in SWITCHES} | {key for key, _ in ENGINE_VARIABLES}
     if set(settings) != known:
         raise ValueError(f"vLLM settings lack {sorted(known - set(settings))} and add {sorted(set(settings) - known)}")
     args: list[str] = []
@@ -295,6 +318,8 @@ class VllmServer:
         self.label = str(model.ref) if model.ref.source == "hf" else f"local model {model.identity[:12]}"
         self.model = model
         self.args = server_args(settings)
+        self.variables = server_variables(settings)
+        self._digest = config_digest(settings)
         self.executable = Path(env.python).parent / "vllm"
         self.devices = None if devices is None else [str(device) for device in devices]
         self.start_lock_dir = Path(start_lock_dir)
@@ -310,8 +335,8 @@ class VllmServer:
 
     @property
     def config_digest(self) -> str:
-        """The digest of the server arguments, which the attestation carries."""
-        return identity_digest(CONFIG_TAG, self.args)
+        """The digest of the server arguments and variables, which the attestation carries."""
+        return self._digest
 
     @property
     def lock_path(self) -> Path:
@@ -388,7 +413,7 @@ class VllmServer:
     def _launch(self) -> None:
         port = _free_port()
         command = [str(self.executable), "serve", self.target, f"--host={HOST}", f"--port={port}"]
-        env = dict(os.environ)
+        env = {**os.environ, **self.variables}
         if self.devices is not None:
             env["CUDA_VISIBLE_DEVICES"] = ",".join(self.devices)
         sink: int | IO[bytes] = 2

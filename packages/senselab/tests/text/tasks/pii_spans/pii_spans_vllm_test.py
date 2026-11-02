@@ -23,10 +23,9 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.runtime.store import ResultStore
-from senselab_core.runtime.vllm_server import CONFIG_TAG, AttestationMismatch, VllmServer, server_args
+from senselab_core.runtime.vllm_server import AttestationMismatch, VllmServer, config_digest, server_args
 from senselab_core.testing.contracts import contract_cases
 from senselab_core.testing.lock_licenses import packaged_lock_records
-from senselab_worker.digest import identity_digest
 from senselab_worker.faults import FaultClass
 
 LOCK_RECORDS = packaged_lock_records("senselab")
@@ -160,7 +159,7 @@ def test_run_call_serves_spans_through_the_server_and_records_its_attestation(
     with _server(fake_env, tmp_path) as server:
         assert server.attestation is not None
         assert first.context.driver == {**fake_env.context_fields()["driver"], **server.attestation.driver()}
-        assert server.attestation.config_digest == identity_digest(CONFIG_TAG, server_args(CONFIG.settings))
+        assert server.attestation.config_digest == config_digest(CONFIG.settings)
     assert first.context.driver["model_identity"] == ENTRY.revision and first.context.driver["engine"] == "vllm"
     second = run_call(_call(), execution=profile, store=ResultStore(tmp_path / "results"))
     assert second.reused is not None and second.context == first.context

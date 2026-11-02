@@ -28,6 +28,7 @@ SETTINGS: dict[str, Any] = {
     "generation_config": "vllm",
     "limit_mm_per_prompt": {"image": 0},
     "enable_prefix_caching": False,
+    "flashinfer_sampler": False,
 }
 FAKE = Path(__file__).with_name("fake_vllm_fixture.py")
 
@@ -99,7 +100,9 @@ def test_attestation_enters_context(env: EnvHandle, tmp_path: Path) -> None:
     """The served version, the model commit and the config digest reach the context and every reply."""
     with _server(env, tmp_path) as server:
         attestation = server.attestation
-        assert attestation == vs.Attestation("0.31.0", SHA, identity_digest(vs.CONFIG_TAG, server.args))
+        assert attestation == vs.Attestation(
+            "0.31.0", SHA, identity_digest(vs.CONFIG_TAG, [*server.args, "VLLM_USE_FLASHINFER_SAMPLER=0"])
+        )
         driver = _context(server.context_fields()).driver
         assert {k: driver[k] for k in attestation.driver()} == attestation.driver()
         assert server.chat([{"role": "user", "content": "hi"}], sampling={}).attestation == attestation
@@ -115,6 +118,16 @@ def test_restart_with_new_config_changes_attestation(env: EnvHandle, tmp_path: P
         with _server(env, tmp_path, settings) as server:
             contexts.append(_context(server.context_fields()).fingerprint())
     assert contexts[0] != contexts[1] and contexts[0] == contexts[2]
+
+
+def test_engine_variables_reach_the_server_and_its_digest(env: EnvHandle, tmp_path: Path) -> None:
+    """`flashinfer_sampler` is set on the server process as `VLLM_USE_FLASHINFER_SAMPLER` and changes the digest."""
+    digests, seen = [], []
+    for on in (False, True):
+        with _server(env, tmp_path, {**SETTINGS, "flashinfer_sampler": on}) as server:
+            digests.append(server.config_digest)
+        seen.append({r["sampler"] for r in _records(tmp_path)})
+    assert seen == [{"0"}, {"0", "1"}] and digests[0] != digests[1]
 
 
 def test_server_stops_with_owner(env: EnvHandle, tmp_path: Path) -> None:

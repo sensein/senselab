@@ -22,6 +22,7 @@ SETTINGS = {
     "generation_config": "vllm",
     "limit_mm_per_prompt": {"image": 0},
     "enable_prefix_caching": False,
+    "flashinfer_sampler": False,
 }
 
 
