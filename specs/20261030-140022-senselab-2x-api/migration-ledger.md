@@ -289,3 +289,5 @@ mark, since 2.x does not lint `src/`.
 forms, whose source stamps carry no chunk digests, are retired with no converter (P2-44): `from_wire_form` refuses
 them with `WireFormatRetired`. Migrating a value is re-reading its source file (`open_audio`) or recomputing it; a
 stored output in an `@1` form is recomputed after its store entry is removed (Phase 2 Task 11b).
+
+- `pii-review-vllm` lock (1.x `redaction_review_vllm`): not ported; superseded by `Env.server("vllm-server")` (Task 17b).
