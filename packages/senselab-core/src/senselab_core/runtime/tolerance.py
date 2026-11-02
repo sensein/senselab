@@ -1,7 +1,8 @@
 """Tolerance profiles (`tolerance@1.0`): where one backend's lives, its model, and outputs judged within it."""
 
 import json
-from collections.abc import Mapping
+import re
+from collections.abc import Mapping, Sequence
 from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import TypeVar
@@ -106,15 +107,87 @@ def flatten(value: object, prefix: str = "") -> Fields:
     return {prefix: json.dumps(value, sort_keys=True, default=str)}
 
 
+_LABEL = re.compile(r"turns\.label\[(\d+)\]")
+_TIMES = ("turns.start_ns", "turns.end_ns")
+
+
+def best_assignment(weights: Sequence[Sequence[float]]) -> list[tuple[int, int]]:
+    """Return the one-to-one (row, column) pairs of largest total weight (Hungarian method), one per row or column.
+
+    Pairs are as many as the smaller side; with a tie any optimum is returned.
+    """
+    n, m = len(weights), len(weights[0]) if weights else 0
+    size = max(n, m)
+    top = max((w for row in weights for w in row), default=0.0)
+    cost = [[top - (weights[i][j] if i < n and j < m else 0.0) for j in range(size)] for i in range(size)]
+    u, v, match, way = [0.0] * (size + 1), [0.0] * (size + 1), [0] * (size + 1), [0] * (size + 1)
+    for i in range(1, size + 1):
+        match[0], column = i, 0
+        least, used = [float("inf")] * (size + 1), [False] * (size + 1)
+        while match[column]:
+            used[column], row, delta, nxt = True, match[column], float("inf"), 0
+            for j in range(1, size + 1):
+                if not used[j]:
+                    reduced = cost[row - 1][j - 1] - u[row] - v[j]
+                    if reduced < least[j]:
+                        least[j], way[j] = reduced, column
+                    if least[j] < delta:
+                        delta, nxt = least[j], j
+            for j in range(size + 1):
+                if used[j]:
+                    u[match[j]] += delta
+                    v[j] -= delta
+                else:
+                    least[j] -= delta
+            column = nxt
+        while column:
+            previous = way[column]
+            match[column] = match[previous]
+            column = previous
+    return sorted((match[j] - 1, j - 1) for j in range(1, size + 1) if match[j] - 1 < n and j - 1 < m)
+
+
+def relabel_turns(expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str]) -> Fields:
+    """Return `actual` with its speaker labels renamed to `expected`'s by the one-to-one map of most shared time.
+
+    Speaker labels are arbitrary per run, so turns are compared under the mapping DER scores under. A label with
+    no counterpart (no shared time) is renamed to one no reference label can equal. `actual` is unchanged where
+    either side has no turns.
+    """
+
+    def keys(fields: Mapping[str, object]) -> list[str]:
+        found = [(int(m.group(1)), k) for k in fields if (m := _LABEL.fullmatch(k))]
+        return [k for _, k in sorted(found)]
+
+    ek, ak = keys(expected), keys(actual)
+    if not ek or not ak or any(t not in expected or t not in actual for t in _TIMES):
+        return dict(actual)
+    elabel = [json.loads(str(expected[k])) for k in ek]
+    alabel = [json.loads(str(actual[k])) for k in ak]
+    rows, cols = sorted(set(elabel)), sorted(set(alabel))
+    overlap = [[0.0] * len(cols) for _ in rows]
+    spans = [[list(f[t]) for t in _TIMES] for f in (expected, actual)]
+    for i, (es, ee) in enumerate(zip(*spans[0], strict=True)):
+        for j, (a_s, a_e) in enumerate(zip(*spans[1], strict=True)):
+            overlap[rows.index(elabel[i])][cols.index(alabel[j])] += max(0.0, min(ee, a_e) - max(es, a_s))
+    mapped = {cols[c]: rows[r] for r, c in best_assignment(overlap) if overlap[r][c] > 0}
+    out = dict(actual)
+    for k, label in zip(ak, alabel, strict=True):
+        out[k] = json.dumps(mapped.get(label, f"<unmatched:{label}>"))
+    return out
+
+
 def within(
     expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str], profile: ToleranceProfile
 ) -> dict[str, str]:
     """Return, by path of `expected`, why `actual` differs from it beyond `profile`; empty when they agree.
 
-    A path differs when `actual` lacks it, its shape differs, the profile has no tolerance for it, or the
-    difference exceeds the profile's tolerance (an exact field must be equal).
+    Speaker turns are compared under `relabel_turns`. A path differs when `actual` lacks it, its shape differs,
+    the profile has no tolerance for it, or the difference exceeds the profile's tolerance (an exact field must be
+    equal).
     """
     bound = {f.path: f.tolerance for f in profile.fields}
+    actual = relabel_turns(expected, actual)
     out = {}
     for path in sorted(expected):
         a, b = expected[path], actual.get(path)

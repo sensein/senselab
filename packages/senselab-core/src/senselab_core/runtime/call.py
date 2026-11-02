@@ -44,7 +44,7 @@ from senselab_core.kernel.wire import WireFormatRetired, from_wire_form, wire_fo
 from senselab_core.runtime.audio_io import DECODER, READER, open_audio
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.equivalence import EquivalenceEvidence, EvidenceSide, sampled
+from senselab_core.runtime.equivalence import SAMPLING, EquivalenceEvidence, EvidenceSide, sampled
 from senselab_core.runtime.hardware import HardwareInfo, numerics_class, probe_hardware
 from senselab_core.runtime.in_process import InProcessWorker
 from senselab_core.runtime.keys import Call, Placement, build_key
@@ -53,7 +53,7 @@ from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.runtime.revision import cache_root, run_id
 from senselab_core.runtime.store import ResultStore, StoredResult, context_record, key_record
 from senselab_core.runtime.store import output_identity as store_output_identity
-from senselab_core.runtime.tolerance import NoToleranceProfile, flatten, read_profile, within
+from senselab_core.runtime.tolerance import NoToleranceProfile, ToleranceProfile, flatten, read_profile, within
 from senselab_core.runtime.vllm_server import (
     Attestation,
     AttestationMismatch,
@@ -234,9 +234,11 @@ def run_call(
     kernel value, read by `from_wire_form`. Outputs are stored on the
     clocks their recording inputs' identities name and served re-bound (`rebind`) to the caller's anchors, so the key
     holds no anchor and one entry serves one content under every anchor. A cross-context hit among the fraction
-    `run.verify` (`sampled`) is executed as a miss, compared with the stored result within the backend's tolerance
-    profile, and the comparison recorded in the store as `EquivalenceEvidence`; a disagreement splits the store's
-    class of the two numerics classes (`ResultStore.split`) and is logged. `None` means the packaged
+    `run.verify` (`sampled`) is not served: the backend's tolerance profile is read, the call executes, and the
+    outputs are compared with the stored result before anything is stored; the comparison is recorded as
+    `EquivalenceEvidence` (a disagreement splits the store's class and is logged), then the outputs are stored and
+    the execution activity names the evidence (`senselab:verifies`). Every activity a call writes records
+    `senselab:verifyFraction` and `senselab:verifySampling`. `None` means the packaged
     default: the `laptop` profile, `RunConfig()` and the store under `cache_root()/results`.
 
     Raises:
@@ -277,52 +279,94 @@ def run_call(
     identities = {port: identity for port, (identity, _, _) in bound.items()}
     key = build_key(Call(task=spec, params=call.params, inputs=identities, model=model), placement, context)
     anchors = _anchors(value for _, value, _ in bound.values())
-    hit = store.get(key, context, run.reuse)
-    if hit is not None and not (
-        hit.policy_used is not ReusePolicy.EXACT and sampled(run.verify, key.digest(), hit.context, context)
-    ):
-        outputs = _rebound(_decoded(spec, hit.outputs), anchors)
-        return Result(outputs, hit.output_identity, key, hit.context, placement, hit.policy_used)
+    looked = datetime.now(timezone.utc)
+    hit = store.get(key, context, run.reuse, record=False)
+    check = (
+        hit is not None
+        and hit.policy_used is not ReusePolicy.EXACT
+        and sampled(run.verify, key.digest(), hit.context, context)
+    )
+    if hit is not None and not check:
+        store.record_reuse(key, context, hit, looked, _verify_attributes(run))
+        return _served(spec, hit, key, placement, anchors)
+    tolerance = _tolerance(key) if check else None
     started = datetime.now(timezone.utc)
     server = _server(backend, env, model, profile, expected) if expected is not None else None
     computed = _execute(
         call, placement, env, model, {port: value for port, (_, value, _) in bound.items()}, profile, server
     )
+    decoded, outputs = _as_stored(spec, computed, anchors)
+    attributes = _verify_attributes(run)
+    if hit is not None and tolerance is not None:
+        attributes["senselab:verifies"] = _verify(store, key, hit, context, outputs, tolerance)
+    output_identity = store.put(key, outputs, context)
+    if output_identity != store_output_identity(outputs):
+        looked = datetime.now(timezone.utc)
+        stored = store.get(key, context, ReusePolicy.EXACT, record=False)
+        if stored is None:
+            raise RuntimeError(f"the entry another writer committed for {key.task!r} could not be read back")
+        store.record_reuse(key, context, stored, looked, attributes)
+        return _served(spec, stored, key, placement, anchors)
+    store.provenance.add(
+        *(kprov.entity(i, core_vocabulary()) for i in identities.values()),
+        *_execution(key, context, profile, identities, output_identity, model, started, attributes),
+    )
+    return Result(decoded, output_identity, key, context, placement, None)
+
+
+def _as_stored(
+    spec: TaskSpec, computed: dict[str, object], anchors: list[tuple[TimeAnchor, TimeAnchor]]
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Return computed outputs decoded, and as the store holds them: on their identity clocks, as wire forms."""
     decoded = _decoded(spec, computed)
     on_identity_clocks = _rebound(decoded, [(reader, stored) for stored, reader in anchors])
     outputs = {
         p: wire_form(v, READER) if isinstance(v, Frozen) and v is not decoded[p] else computed[p]
         for p, v in on_identity_clocks.items()
     }
-    output_identity = store.put(key, outputs, context)
-    if hit is not None:
-        _verify(store, key, hit, context, outputs)
-    if output_identity != store_output_identity(outputs):
-        stored = store.get(key, context, ReusePolicy.EXACT)
-        if stored is None:
-            raise RuntimeError(f"the entry another writer committed for {key.task!r} could not be read back")
-        stored_outputs = _rebound(_decoded(spec, stored.outputs), anchors)
-        return Result(stored_outputs, stored.output_identity, key, stored.context, placement, stored.policy_used)
-    store.provenance.add(
-        *(kprov.entity(i, core_vocabulary()) for i in identities.values()),
-        *_execution(key, context, profile, identities, output_identity, model, started),
-    )
-    return Result(decoded, output_identity, key, context, placement, None)
+    return decoded, outputs
 
 
-def _verify(
-    store: ResultStore, key: LogicalKey, hit: StoredResult, context: ExecutionContext, outputs: dict[str, object]
-) -> None:
-    """Compare a sampled hit with its recomputation within the backend's profile and record the evidence.
+def _served(
+    spec: TaskSpec,
+    hit: StoredResult,
+    key: LogicalKey,
+    placement: Placement,
+    anchors: list[tuple[TimeAnchor, TimeAnchor]],
+) -> Result:
+    """Return a stored result as the call's result, its outputs decoded and re-bound to the caller's anchors."""
+    outputs = _rebound(_decoded(spec, hit.outputs), anchors)
+    return Result(outputs, hit.output_identity, key, hit.context, placement, hit.policy_used)
 
-    A disagreement splits the store's class of the two numerics classes and is logged.
+
+def _verify_attributes(run: RunConfig) -> dict[str, object]:
+    """Return the verify settings a call's activity records: the fraction and how hits are sampled."""
+    return {"senselab:verifyFraction": float(run.verify), "senselab:verifySampling": SAMPLING}
+
+
+def _tolerance(key: LogicalKey) -> ToleranceProfile:
+    """Return the tolerance profile of the key's backend.
 
     Raises:
-        NoToleranceProfile: the backend has no profile.
+        NoToleranceProfile: the backend has none, or no package names a folder of profiles.
     """
     if _PACKAGED.tolerance is None:
         raise NoToleranceProfile(f"no package names a folder of tolerance profiles for {key.backend!r}")
-    profile = read_profile(_PACKAGED.tolerance, key.task, key.backend)
+    return read_profile(_PACKAGED.tolerance, key.task, key.backend)
+
+
+def _verify(  # noqa: PLR0913 - the hit, its recomputation and the profile judging them
+    store: ResultStore,
+    key: LogicalKey,
+    hit: StoredResult,
+    context: ExecutionContext,
+    outputs: dict[str, object],
+    profile: ToleranceProfile,
+) -> str:
+    """Compare a sampled hit with its recomputation within `profile`, record the evidence and return its digest.
+
+    A disagreement splits the store's class of the two numerics classes (`ResultStore.add_evidence`) and is logged.
+    """
     mismatched = within(flatten(hit.outputs), flatten(outputs), profile)
     stored, current = EvidenceSide.of(hit.context), EvidenceSide.of(context)
     evidence = EquivalenceEvidence(
@@ -337,7 +381,6 @@ def _verify(
     )
     store.add_evidence(evidence)
     if mismatched:
-        store.split(key.backend, numerics_key(stored.numerics), numerics_key(current.numerics))
         logger.warning(
             "verify: %s on %s disagrees with its result from %s beyond its tolerance in %s",
             key.backend,
@@ -345,6 +388,7 @@ def _verify(
             numerics_key(stored.numerics),
             ", ".join(mismatched),
         )
+    return evidence.canonical_digest()
 
 
 def _anchors(values: Iterable[object]) -> list[tuple[TimeAnchor, TimeAnchor]]:
@@ -635,8 +679,12 @@ def _execution(  # noqa: PLR0913 - one execution's records
     output: OutputIdentity,
     model: ResolvedModel | None,
     started: datetime,
+    attributes: Mapping[str, object],
 ) -> tuple[kprov.Record, kprov.Record]:
-    """Return the execution's agent and its activity, which used the inputs and generated the output."""
+    """Return the execution's agent and its activity, which used the inputs and generated the output.
+
+    `attributes` are recorded on the activity beside the key, the context and the profile's digest.
+    """
     vocabulary = core_vocabulary()
     source: str | None = None if model is None else model.ref.source
     if model is not None and model.ref.source == "hf":
@@ -649,6 +697,7 @@ def _execution(  # noqa: PLR0913 - one execution's records
     activity = kprov.activity(
         vocabulary,
         attributes={
+            **attributes,
             "senselab:logicalKey": key_record(key),
             "senselab:context": context_record(context),
             "senselab:executionProfile": profile.canonical_digest(),
