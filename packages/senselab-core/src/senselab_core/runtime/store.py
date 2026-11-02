@@ -70,6 +70,7 @@ from senselab_core.kernel.identity import (
     OutputIdentity,
     ReusePolicy,
     acceptable,
+    numerics_key,
 )
 from senselab_core.runtime.equivalence import EQUIVALENCE, EquivalenceEvidence
 from senselab_core.runtime.equivalence import split as split_class
@@ -547,8 +548,13 @@ class ResultStore:
     staging directories older than the policy's ages. An entry found valid but writable is re-sealed.
 
     Provenance: a `put` adds the result entity, `output:<hex>`; a `get` hit adds a `senselab:Reuse` activity that
-    used it, carrying the key, the current and stored contexts, the admitting policy and, under `equivalent`, the
-    equivalence table's `value_digest`. The store writes no execution activity.
+    used it (or, with `record=False`, leaves that to `record_reuse`), carrying the key, the current and stored
+    contexts, the admitting policy and, under `equivalent`, the equivalence table's `value_digest`. The store writes
+    no execution activity.
+
+    Splits: a disagreeing `EquivalenceEvidence` takes its two numerics classes out of the class holding both
+    (`equivalence.split`). It is persisted as the evidence record, and every store over the same root applies
+    the recorded disagreements to its table when it first reads the table.
 
     Args:
         root: The store root.
@@ -570,19 +576,32 @@ class ResultStore:
         self.provenance = provenance if provenance is not None else ProvStore()
         self.policy = policy if policy is not None else StorePolicy.load_default()
         self._equivalence = equivalence
+        self._splits_read = False
         self._last_collect: float | None = None
 
     @property
     def equivalence(self) -> Equivalence:
-        """The measured equivalence classes this store's `equivalent` reuse admits."""
+        """The classes this store's `equivalent` reuse admits: those given, split by the store's disagreements.
+
+        Raises:
+            CorruptEntryError, StoreUnavailable: as `evidence`, when the table has a class to split.
+        """
+        if not self._splits_read:
+            if any(self._equivalence.values()):
+                for e in self.evidence():
+                    self._split(e)
+            self._splits_read = True
         return self._equivalence
 
-    def split(self, backend: str, a: str, b: str) -> None:
-        """Take numerics classes `a` and `b` out of `backend`'s class holding both (`equivalence.split`)."""
-        self._equivalence = split_class(self._equivalence, backend, a, b)
+    def _split(self, evidence: EquivalenceEvidence) -> None:
+        if not evidence.agree:
+            a, b = numerics_key(evidence.stored.numerics), numerics_key(evidence.current.numerics)
+            self._equivalence = split_class(self._equivalence, evidence.backend, a, b)
 
     def add_evidence(self, evidence: EquivalenceEvidence) -> None:
-        """Record `evidence` under its digest, written atomically; recording it again changes nothing.
+        """Record `evidence` under its digest, written atomically, and split this store's table if it disagrees.
+
+        Recording it again changes nothing.
 
         Raises:
             StoreUnavailable: the store could not be written.
@@ -599,6 +618,7 @@ class ResultStore:
                 )
         except OSError as err:
             raise storage_fault(err, self.root) from err
+        self._split(evidence)
 
     def evidence(self) -> list[EquivalenceEvidence]:
         """Return every verify-sampling record in the store, by digest.
@@ -899,19 +919,28 @@ class ResultStore:
                 return payload[2]
         raise RuntimeError(f"{entry} was still corrupt after {COMMIT_ATTEMPTS} commits")
 
-    def _record_reuse(self, key: LogicalKey, current: ExecutionContext, hit: StoredResult, started: datetime) -> None:
-        attributes: dict[str, object] = {
+    def record_reuse(
+        self,
+        key: LogicalKey,
+        current: ExecutionContext,
+        hit: StoredResult,
+        started: datetime,
+        attributes: Mapping[str, object] | None = None,
+    ) -> None:
+        """Add the `senselab:Reuse` activity of serving `hit` for `key` in `current`, `attributes` beside its own."""
+        own: dict[str, object] = {
+            **(attributes or {}),
             "senselab:logicalKey": key_record(key),
             "senselab:context": context_record(current),
             "senselab:storedContext": context_record(hit.context),
             "senselab:reusePolicy": hit.policy_used.value,
         }
         if hit.policy_used is ReusePolicy.EQUIVALENT:
-            attributes["senselab:equivalence"] = _equivalence_digest(self._equivalence)
+            own["senselab:equivalence"] = _equivalence_digest(self.equivalence)
         reuse = kprov.activity(
             core_vocabulary(),
             types=["senselab:Reuse"],
-            attributes=attributes,
+            attributes=own,
             used=[kprov.Usage(hit.output_identity)],
             started=started,
             ended=datetime.now(timezone.utc),
@@ -919,15 +948,22 @@ class ResultStore:
         self.provenance.add(_result_entity(hit.output_identity), reuse)
 
     def get(
-        self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy | str = DEFAULT_REUSE_POLICY
+        self,
+        key: LogicalKey,
+        context: ExecutionContext,
+        policy: ReusePolicy | str = DEFAULT_REUSE_POLICY,
+        *,
+        record: bool = True,
     ) -> StoredResult | None:
         """Return a committed result for `key` whose context `policy` admits for `context`, or None.
+
+        With `record`, a hit adds its reuse activity; without, a caller that serves the hit calls `record_reuse`.
 
         `policy` is `DEFAULT_REUSE_POLICY` when the caller names none.
 
         Candidates are tried narrowest admitting policy first, the current fingerprint first among
         `exact`, then by fingerprint. A candidate that fails verification is quarantined (or, if the
-        store cannot be written, skipped) and the next one tried. Every hit adds a reuse activity to provenance.
+        store cannot be written, skipped) and the next one tried.
 
         Raises:
             ValueError: if `policy` is not a `ReusePolicy` value.
@@ -957,8 +993,8 @@ class ResultStore:
                 raise storage_fault(err, self._entry(key)) from err
             with base:
                 hit = self._get_in(key, context, policy, base)
-        if hit is not None:
-            self._record_reuse(key, context, hit, started)
+        if hit is not None and record:
+            self.record_reuse(key, context, hit, started)
         return hit
 
     def _get_in(
@@ -982,7 +1018,7 @@ class ResultStore:
                 (
                     i
                     for i, p in enumerate(allowed)
-                    if acceptable(stored, context, p, backend=key.backend, equivalence=self._equivalence)
+                    if acceptable(stored, context, p, backend=key.backend, equivalence=self.equivalence)
                 ),
                 None,
             )

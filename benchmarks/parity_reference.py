@@ -12,7 +12,6 @@ import argparse
 import importlib.util
 import json
 import math
-import re
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -171,54 +170,11 @@ def load_profile(path: Path) -> ToleranceProfile:
     return profile
 
 
-_LABEL = re.compile(r"turns\.label\[(\d+)\]")
-
-
-def relabel_turns(expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str]) -> dict[str, Any]:
-    """Return `actual` with its speaker labels renamed to `expected`'s by the one-to-one map of most shared time.
-
-    The map is the one DER scores under. A label with no counterpart is renamed to one no reference label can equal.
-    `actual` is unchanged where either side has no turns.
-    """
-
-    def keys(fields: Mapping[str, Any]) -> list[str]:
-        found = [(int(m.group(1)), k) for k in fields if (m := _LABEL.fullmatch(k))]
-        return [k for _, k in sorted(found)]
-
-    ek, ak = keys(expected), keys(actual)
-    times = ("turns.start_ns", "turns.end_ns")
-    if not ek or not ak or any(t not in expected or t not in actual for t in times):
-        return dict(actual)
-    elabel = [json.loads(str(expected[k])) for k in ek]
-    alabel = [json.loads(str(actual[k])) for k in ak]
-    rows, cols = sorted(set(elabel)), sorted(set(alabel))
-    overlap = numpy.zeros((len(rows), len(cols)))
-    spans = [[list(f[t]) for t in times] for f in (expected, actual)]
-    for i, (es, ee) in enumerate(zip(*spans[0], strict=True)):
-        for j, (a_s, a_e) in enumerate(zip(*spans[1], strict=True)):
-            overlap[rows.index(elabel[i]), cols.index(alabel[j])] += max(0.0, min(ee, a_e) - max(es, a_s))
-    linear_sum_assignment = importlib.import_module("scipy.optimize").linear_sum_assignment
-    mapped = {
-        cols[c]: rows[r]
-        for r, c in zip(*linear_sum_assignment(overlap, maximize=True), strict=True)
-        if overlap[r, c] > 0
-    }
-    out = dict(actual)
-    for k, label in zip(ak, alabel, strict=True):
-        out[k] = json.dumps(mapped.get(label, f"<unmatched:{label}>"))
-    return out
-
-
 def compare(
     expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str], profile: ToleranceProfile
 ) -> list[str]:
-    """Return what differs, `expected` against `actual` over the paths of `expected`, each judged by `profile`.
-
-    A path is a mismatch when `actual` lacks it, its shape differs, the profile has no tolerance for it, or the
-    difference exceeds the profile's tolerance (an exact field must be equal).
-    """
-    mismatched = within(expected, relabel_turns(expected, actual), profile)
-    return [f"{path}: {why}" for path, why in mismatched.items()]
+    """Return `within(expected, actual, profile)` as `<path>: <why>` lines."""
+    return [f"{path}: {why}" for path, why in within(expected, actual, profile).items()]
 
 
 def compare_items(

@@ -46,6 +46,7 @@ from senselab_core.runtime.call import (
 from senselab_core.runtime.call import packaged as packaged_now
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.equivalence import SAMPLING
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.tolerance import NoToleranceProfile, read_profile, tolerance_profile_path
@@ -524,15 +525,38 @@ def test_verify_disagreement_splits_class(tmp_path: Path, profiles: Path, caplog
     [evidence] = store.evidence()
     assert not evidence.agree and evidence.mismatched == ("value",)
     assert store.equivalence == {"fake-alpha": {}}
+    assert ResultStore(store.root, equivalence=_class(here)).equivalence == {"fake-alpha": {}}
     assert "fake-alpha" in caplog.text and "value" in caplog.text and "not what" not in caplog.text
 
 
 @pytest.mark.logic
 def test_verify_without_a_profile_raises(tmp_path: Path) -> None:
-    """A sampled hit of a backend with no tolerance profile cannot be judged, so it raises."""
-    _, store = _elsewhere(tmp_path, "x")
+    """A sampled hit of a backend with no tolerance profile raises before anything is executed, stored or recorded."""
+    here, store = _elsewhere(tmp_path, "x")
     with pytest.raises(NoToleranceProfile):
         run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(ReusePolicy.TOLERANT, 1.0))
+    assert store.get(here.key, here.context, ReusePolicy.EXACT, record=False) is None
+    assert _activities(store) == [] and store.evidence() == []
+
+
+@pytest.mark.logic
+def test_sampled_hit_records_an_execution_not_a_reuse(tmp_path: Path, profiles: Path) -> None:  # noqa: ARG001 - the fixture installs the profile
+    """A sampled hit records one execution naming its evidence; a served hit one reuse; both record the fraction."""
+    here, store = _elsewhere(tmp_path, None)
+    _, store = _elsewhere(tmp_path / "s", here.outputs["value"])
+    run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(ReusePolicy.TOLERANT, 1.0))
+    [execution] = _activities(store)
+    [evidence] = store.evidence()
+    node = execution.node()
+    assert "senselab:Reuse" not in execution.types()
+    assert prov.literal_value(node["senselab:verifies"]) == evidence.canonical_digest()
+    assert prov.literal_value(node["senselab:verifyFraction"]) == 1.0
+    assert prov.literal_value(node["senselab:verifySampling"]) == SAMPLING
+    _, store = _elsewhere(tmp_path / "t", here.outputs["value"])
+    run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(ReusePolicy.TOLERANT, 0.0))
+    [reuse] = _activities(store)
+    assert "senselab:Reuse" in reuse.types() and "senselab:verifies" not in reuse.node()
+    assert prov.literal_value(reuse.node()["senselab:verifyFraction"]) == 0.0
 
 
 @pytest.mark.logic

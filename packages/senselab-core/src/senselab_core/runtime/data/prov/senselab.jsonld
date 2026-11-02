@@ -4,7 +4,7 @@
         {
             "@id": "senselab:",
             "@type": "owl:Ontology",
-            "owl:versionInfo": "senselab-vocab@1.0"
+            "owl:versionInfo": "senselab-vocab@1.1"
         },
         {
             "@id": "senselab:Run",
@@ -163,6 +163,39 @@
                 "@id": "xsd:string"
             },
             "rdfs:comment": "The value digest of the equivalence table that admitted the stored result under the equivalent policy."
+        },
+        {
+            "@id": "senselab:verifyFraction",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "xsd:double"
+            },
+            "rdfs:comment": "The verify fraction of the run config the call ran under: the share of cross-context hits recomputed."
+        },
+        {
+            "@id": "senselab:verifySampling",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "How a cross-context hit is chosen for verification: the value-digest tag over the key digest and the two context fingerprints."
+        },
+        {
+            "@id": "senselab:verifies",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The canonical digest of the equivalence-evidence record a sampled call's execution produced."
         }
     ]
 }
