@@ -22,7 +22,7 @@ from typing import Any, Literal, get_args
 import numpy
 from senselab_worker.fake import FakeFaults
 
-from senselab.audio.item_faults import init_model, mono_samples, typed
+from senselab.item_faults import init_model, mono_samples, typed
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.crisperwhisper"
 MODEL_ID = "nyralabs/CrisperWhisper2.0_turbo"

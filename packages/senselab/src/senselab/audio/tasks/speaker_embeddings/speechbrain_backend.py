@@ -9,7 +9,7 @@ from senselab.audio.tasks.speaker_embeddings.speechbrain import MODEL_ID, WORKER
 _HERE = Path(__file__).parent
 _WORKER_SOURCES = {
     WORKER_MODULE: str(_HERE / "speechbrain.py"),
-    "senselab.audio.item_faults": str(_HERE.parents[1] / "item_faults.py"),
+    "senselab.item_faults": str(_HERE.parents[2] / "item_faults.py"),
 }
 
 

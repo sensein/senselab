@@ -22,13 +22,13 @@ from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault
 
 from senselab._api.declarations import SpeechToTextParams
-from senselab.audio.item_faults import init_model, raise_injected, typed
 from senselab.audio.tasks.speech_to_text.token_confidence import (
     capture_token_confidence,
     merge_confidence_blocks,
     special_token_ids,
     word_confidences,
 )
+from senselab.item_faults import init_model, raise_injected, typed
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.huggingface"
 EXPECTED_RATE = 16_000

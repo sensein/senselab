@@ -12,7 +12,7 @@ from typing import Any
 
 from senselab_worker.fake import FakeFaults
 
-from senselab.audio.item_faults import init_model, raise_injected, typed
+from senselab.item_faults import init_model, raise_injected, typed
 from senselab.text.tasks.pii_spans.engine import (
     MAX_NEW_TOKENS,
     build_prompt,

@@ -10,7 +10,7 @@ _HERE = Path(__file__).parent
 _WORKER_SOURCES = {
     WORKER_MODULE: str(_HERE / "transformers.py"),
     "senselab.text.tasks.pii_spans.engine": str(_HERE / "engine.py"),
-    "senselab.audio.item_faults": str(_HERE.parents[2] / "audio" / "item_faults.py"),
+    "senselab.item_faults": str(_HERE.parents[2] / "item_faults.py"),
 }
 
 
@@ -19,7 +19,7 @@ _WORKER_SOURCES = {
     name="transformers",
     version="1",
     stack="transformers",
-    env=Env.isolated("pii-review"),
+    env=Env.isolated("pii-spans"),
     models=(MODEL_ID,),
     worker=WORKER_MODULE,
     worker_sources=_WORKER_SOURCES,

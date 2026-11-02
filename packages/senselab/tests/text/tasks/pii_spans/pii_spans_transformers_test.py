@@ -99,12 +99,18 @@ def test_findings_parsed_into_text_spans() -> None:
 
 
 @pytest.mark.logic
-def test_overlapping_quotes_keep_one_span() -> None:
-    """Where two quotes overlap the earlier span is kept."""
-    spans = engine.parse_completion(
-        _answer(("Ann Lee", "PERSON", 0.8), ("Lee Park", "PERSON", 0.9)), "Ann Lee Park", NAMES
-    )
-    assert spans == [(0, 7, "PERSON", 0.8)]
+def test_overlapping_quotes_of_one_category_merge() -> None:
+    """Overlapping spans of one category become their union at the higher score."""
+    completion = _answer(("Ann Lee", "PERSON", 0.8), ("Lee Park", "PERSON", 0.9))
+    assert engine.parse_completion(completion, "Ann Lee Park", NAMES) == [(0, 12, "PERSON", 0.9)]
+
+
+@pytest.mark.logic
+def test_overlapping_quotes_of_two_categories_are_a_content_fault() -> None:
+    """Spans of different categories over the same characters are not resolved by dropping one."""
+    completion = _answer(("Ann Lee", "PERSON", 0.8), ("Lee Park", "LOCATION", 0.9))
+    with pytest.raises(ContentFault, match="overlap"):
+        engine.parse_completion(completion, "Ann Lee Park", NAMES)
 
 
 @pytest.mark.logic
@@ -191,7 +197,7 @@ def test_backend_serves_the_catalogue_model_and_declares_its_isolated_env() -> N
     """One isolated backend `transformers` over the catalogue's default `pii_spans` model, pinned by commit."""
     (spec,) = REGISTRY.backends("pii_spans")
     assert spec.name == "transformers" and spec.models == (worker.MODEL_ID,) and spec.batch_invariant
-    assert spec.env.kind == "isolated" and spec.env.name == "pii-review" and spec.worker in spec.worker_sources
+    assert spec.env.kind == "isolated" and spec.env.name == "pii-spans" and spec.worker in spec.worker_sources
     entry = CATALOGUE.entry(worker.MODEL_ID)
     assert list(entry.backends) == ["transformers"] and list(entry.stacks) == [spec.stack]
     assert list(entry.default_for) == ["pii_spans"]

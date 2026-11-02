@@ -32,7 +32,7 @@ def test_vllm_server_attests_the_pii_model_and_a_restart_with_new_config_changes
     env = ensure_env(
         Env.server("vllm-server"), DATA / "env_locks/vllm-server.txt", profile.env_root("server"), settings=profile.envs
     )
-    entry = Catalogue.load(DATA / "catalogue.yaml").default("pii_review")
+    entry = Catalogue.load(DATA / "catalogue.yaml").default("pii_spans")
     model = ResolvedModel(ref=ModelRef(source="hf", id=entry.id, ref=entry.revision), identity=entry.revision)
     digests = []
     for seqs in (2, 4):

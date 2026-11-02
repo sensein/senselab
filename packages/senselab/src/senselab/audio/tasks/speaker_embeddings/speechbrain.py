@@ -14,7 +14,7 @@ from typing import Any
 import numpy
 from senselab_worker.fake import FakeFaults
 
-from senselab.audio.item_faults import init_model, mono_samples, typed
+from senselab.item_faults import init_model, mono_samples, typed
 
 WORKER_MODULE = "senselab.audio.tasks.speaker_embeddings.speechbrain"
 MODEL_ID = "speechbrain/spkrec-ecapa-voxceleb"

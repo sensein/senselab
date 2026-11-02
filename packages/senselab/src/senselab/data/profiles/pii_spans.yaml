@@ -7,7 +7,7 @@ slice: pii_spans
 #   families: what counts as a task's own content, from the owner's rule that a task's stimulus and the words that
 #   explain it identify nobody ("redaction should take task into account. in tasks like productive vocabulary,
 #   the target word should be considered", 2026-10-04); a family matches a name when it equals it or starts with it
-#   and a hyphen. The 2026-11-01 profile drops the per-family release instructions of the 1.x guidance: the task
+#   and a hyphen. Per-family handling instructions are left out: the task
 #   marks spans and decides nothing about them.
 instruction: >-
   Mark every span of the text that identifies a person, the speaker or anyone named, under the HIPAA Safe Harbor

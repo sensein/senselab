@@ -43,11 +43,12 @@ def text_of(prompt: str) -> str:
 def parse_completion(completion: str, text: str, categories: Sequence[str]) -> list[tuple[int, int, str, float]]:
     """Return `(start, end, category, score)` for every occurrence in `text` of every span the answer quotes.
 
-    Spans are in code points, ordered by start; where two overlap the earlier, then the higher-scored, is kept.
+    Spans are in code points, ordered by start; overlapping spans of one
+    category merge to their union at the higher score.
 
     Raises:
         ContentFault: if the answer holds no JSON object of the format, a span's category is not in `categories`,
-            its score is not a number, or its quote does not occur in `text`.
+            its score is not a number, its quote does not occur in `text`, or spans of two categories overlap.
     """
     start = completion.find("{")
     if start < 0:
@@ -69,11 +70,21 @@ def parse_completion(completion: str, text: str, categories: Sequence[str]) -> l
         while at >= 0:
             found.append((at, at + len(quote), category, min(1.0, max(0.0, float(score)))))
             at = text.find(quote, at + len(quote))
-    found.sort(key=lambda s: (s[0], -s[3]))
+    return _merged(sorted(found), text)
+
+
+def _merged(found: list[tuple[int, int, str, float]], text: str) -> list[tuple[int, int, str, float]]:
     kept: list[tuple[int, int, str, float]] = []
-    for span in found:
-        if not kept or span[0] >= kept[-1][1]:
-            kept.append(span)
+    for start, end, category, score in found:
+        if not kept or start >= kept[-1][1]:
+            kept.append((start, end, category, score))
+            continue
+        last = kept[-1]
+        if category != last[2]:
+            raise ContentFault(
+                f"spans {text[last[0] : last[1]]!r} ({last[2]}) and {text[start:end]!r} ({category}) overlap"
+            )
+        kept[-1] = (last[0], max(last[1], end), category, max(last[3], score))
     return kept
 
 
