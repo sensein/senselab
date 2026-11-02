@@ -6,15 +6,16 @@ in the same PR as the reconciliation. A 1.x module may be deleted only when its 
 
 Base: the design branch was cut from `alpha` at `19834fdd`. No commits had landed on `alpha`
 since then as of 2026-10-30. P-39 reconciliation at Phase 2 start (2026-11-01): `origin/alpha` is `22d2c103`, already merged into `2x/phase-2` at `90615bac`. Four commits landed since `19834fdd` (`078471b3`, `1101ca0d`, `e4b7f087`, merge `22d2c103`); all touch only `.github/` CI and `src/tests/scripts/docs_deploy_test.py`, so none touches an area Phase 2 ports (Tasks 13-17) and no port-task rows are added.
+P-39 reconciliation at Phase 2 exit (2026-11-02): `origin/alpha` is `36aa9615`, merged into `2x/phase-2`. Of the commits since `22d2c103`, only `48ea265d` (uv-managed interpreters) touches an area Phase 2 ported, and `envs.py` already carries it, so no port-task row is added.
 
 | Area (1.x paths) | Where | Mark | Reconciled changes (commit → 2.x handling) |
 |---|---|---|---|
-| `src/senselab/audio/tasks/` | on alpha | `22d2c103` | — (no change under this area since `19834fdd`) |
-| `src/senselab/video/tasks/`, `src/senselab/text/tasks/` | on alpha | `22d2c103` | — (no change under this area since `19834fdd`) |
-| `src/senselab/audio/workflows/audio_analysis/` | on alpha | `22d2c103` | — (no change under this area since `19834fdd`) |
-| `src/senselab/audio/workflows/triage/` | on alpha | `22d2c103` | — (no change under this area since `19834fdd`) |
-| `src/senselab/utils/` | on alpha | `22d2c103` | — (no change under this area since `19834fdd`) |
-| `scripts/` (1.x scripts), `tutorials/` | on alpha | `22d2c103` | — (no change under this area since `19834fdd`) |
+| `src/senselab/audio/tasks/` | on alpha | `36aa9615` | — (no change under this area since `19834fdd`) |
+| `src/senselab/video/tasks/`, `src/senselab/text/tasks/` | on alpha | `36aa9615` | — (no change under this area since `19834fdd`) |
+| `src/senselab/audio/workflows/audio_analysis/` | on alpha | `36aa9615` | — (no change under this area since `19834fdd`) |
+| `src/senselab/audio/workflows/triage/` | on alpha | `36aa9615` | — (no change under this area since `19834fdd`) |
+| `src/senselab/utils/` | on alpha | `36aa9615` | — (no change under this area since `19834fdd`) |
+| `scripts/` (1.x scripts), `tutorials/` | on alpha | `36aa9615` | — (no change under this area since `19834fdd`) |
 
 "On alpha": the module is developed on `alpha`, and its copy under `src/` on the 2.x line is the
 source pool it ports from (ADR-009). No 1.x module has moved into `packages/` yet.

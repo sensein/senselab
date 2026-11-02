@@ -1274,6 +1274,7 @@ decision takes effect only through the dated amendment its task commits (ADR-000
 - **P2-88** ruling: A benchmark whose backend cannot be placed on the host is reported as not placeable and never run, because a CPU host cannot load a GPU-only model, and a skip must not read as a pass.
 - **P2-89** ruling: Diarization parity compares speaker labels under the optimal one-to-one time-overlap mapping, because labels are arbitrary per run, and an unmatched speaker is a mismatch.
 - **P2-90** ruling: A backend is a code path (stack plus env) and a model is a catalogue entry, because one model can run on several stacks.
+- **P2-91** ruling: The P-8 two-stack check covers calls with two stacks (PII vLLM and transformers). CrisperWhisper's ct2 and transformers are values of its `engine` backend param on one stack, so it is checked by `backend_params`, not `stack_preferences`; the Task 32 text naming it as two-stack was wrong.
 
 ## Design gaps left open
 
