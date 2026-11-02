@@ -19,7 +19,8 @@ from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.testing.contracts import contract_cases
 from senselab_core.testing.lock_licenses import packaged_lock_records
-from senselab_worker.faults import ContentFault, ResourceFault
+from senselab_core.testing.workers import RealWorkers, run_alone
+from senselab_worker.faults import ContentFault, FaultClass, ResourceFault
 
 LOCK_RECORDS = packaged_lock_records("senselab")
 
@@ -155,43 +156,34 @@ def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract c
     case()
 
 
-def _real_state(faults: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
-    import importlib
-
-    torch = importlib.import_module("torch")
-    entry = CATALOGUE.entry(sb.MODEL_ID)
-    model = {"source": "hf", "id": entry.id, "identity": entry.revision}
-    return sb.load({"model": model, "device": "cuda" if torch.cuda.is_available() else "cpu", "faults": faults or {}})
-
-
 @pytest.mark.env
 @pytest.mark.model
-def test_content_fault_isolated_with_real_weights() -> None:
-    """On the pinned model a content fault leaves batch-mates' vectors unchanged."""
+def test_content_fault_isolated_with_real_weights(real_worker: RealWorkers) -> None:
+    """On the pinned model, in its env, a content fault leaves batch-mates' vectors unchanged."""
     items = [_item(i, _tone(2.0 + n)) for n, i in enumerate("abc")]
-    clean = sb.handle(_real_state(), items, PARAMS)
-    faulted = sb.handle(_real_state({"fail_items": ["b"]}), items, PARAMS)
-    assert all("outputs" in r for r in clean) and isinstance(faulted[1]["error"], ContentFault)
+    clean = real_worker("speaker_embeddings", "speechbrain").run(items, PARAMS)
+    faulted = real_worker("speaker_embeddings", "speechbrain", {"fail_items": ["b"]}).run(items, PARAMS)
+    assert all("outputs" in r for r in clean) and faulted[1]["error"]["fault"] is FaultClass.CONTENT
     assert numpy.array_equal(_vector(faulted[0]), _vector(clean[0]))
     assert numpy.array_equal(_vector(faulted[2]), _vector(clean[2]))
 
 
 @pytest.mark.limits
 @pytest.mark.model
-def test_short_span_keeps_its_vector_inside_a_batch_with_long_recordings() -> None:
+def test_short_span_keeps_its_vector_inside_a_batch_with_long_recordings(real_worker: RealWorkers) -> None:
     """A 0.5 s span embedded alone and inside a batch with 8 s and 2 s recordings gives the identical vector."""
-    state = _real_state()
+    worker = real_worker("speaker_embeddings", "speechbrain")
     short = _item("s", _tone(0.5, hz=300))
-    mixed = sb.handle(state, [short, _item("l", _tone(8.0)), _item("m", _tone(2.0, hz=500))], PARAMS)
-    alone = sb.handle(state, [short], PARAMS)
+    mixed = worker.run([short, _item("l", _tone(8.0)), _item("m", _tone(2.0, hz=500))], PARAMS)
+    alone = worker.run([short], PARAMS)
     assert numpy.array_equal(_vector(mixed[0]), _vector(alone[0]))
 
 
 @pytest.mark.limits
 @pytest.mark.model
-def test_edge_inputs_with_real_weights() -> None:
+def test_edge_inputs_with_real_weights(real_worker: RealWorkers) -> None:
     """One sample, silence, clipping, long input and wrong rates each give a vector or a typed fault."""
-    state = _real_state()
+    worker = real_worker("speaker_embeddings", "speechbrain")
     cases = {
         "one-sample": _tone(1 / 16000),
         "silence": _tone(2.0, gain=0.0),
@@ -199,9 +191,5 @@ def test_edge_inputs_with_real_weights() -> None:
         "long": _tone(70.0),
         **{f"rate-{r}": _tone(1.0, r) for r in (8000, 22050, 48000)},
     }
-    for name, audio in cases.items():
-        [result] = sb.handle(state, [_item(name, audio)], PARAMS)
-        if "error" in result:
-            assert isinstance(result["error"], (ContentFault, ResourceFault)), (name, result["error"])
-        else:
-            assert isinstance(from_wire_form(result["outputs"]["embedding"]), Embedding)
+    outputs = run_alone(worker, {n: _item(n, a) for n, a in cases.items()}, PARAMS)
+    assert all(isinstance(from_wire_form(o["embedding"]), Embedding) for o in outputs.values())

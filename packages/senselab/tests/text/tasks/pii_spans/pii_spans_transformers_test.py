@@ -21,7 +21,8 @@ from senselab_core.runtime.keys import Call, build_key
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.testing.contracts import BASE_CONTEXT, contract_cases
 from senselab_core.testing.lock_licenses import packaged_lock_records
-from senselab_worker.faults import ContentFault, ResourceFault
+from senselab_core.testing.workers import RealWorkers, run_alone
+from senselab_worker.faults import ContentFault, FaultClass, ResourceFault
 
 LOCK_RECORDS = packaged_lock_records("senselab")
 
@@ -222,49 +223,34 @@ def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract c
     case()
 
 
-def _real_state(faults: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
-    import importlib
-
-    torch = importlib.import_module("torch")
-    entry = CATALOGUE.entry(worker.MODEL_ID)
-    model = {"source": "hf", "id": entry.id, "identity": entry.revision}
-    return worker.load(
-        {"model": model, "device": "cuda" if torch.cuda.is_available() else "cpu", "faults": faults or {}}
-    )
-
-
 @pytest.mark.env
 @pytest.mark.model
-def test_pii_spans_transformers_finds_the_identifying_span_with_real_weights() -> None:
+def test_pii_spans_transformers_finds_the_identifying_span_with_real_weights(real_worker: RealWorkers) -> None:
     """On the pinned model a name and a number are covered by spans; a content fault leaves batch-mates unchanged."""
     text = "My name is Margaret Hollis and you can reach me on 617-555-0142."
     items = [_item("a", text), _item("b", text), _item("c", "The sky is blue today.")]
-    clean = worker.handle(_real_state(), items, PARAMS)
+    clean = real_worker("pii_spans", "transformers").run(items, PARAMS)
     covered = {text[a:b] for a, b in zip(_spans(clean[0]).start, _spans(clean[0]).end, strict=True)}
     assert any("Hollis" in c for c in covered) and any("555-0142" in c for c in covered), covered
-    faulted = worker.handle(_real_state({"fail_items": ["b"]}), items, PARAMS)
-    assert isinstance(faulted[1]["error"], ContentFault)
+    faulted = real_worker("pii_spans", "transformers", {"fail_items": ["b"]}).run(items, PARAMS)
+    assert faulted[1]["error"]["fault"] is FaultClass.CONTENT
     assert numpy.array_equal(_spans(faulted[0]).start, _spans(clean[0]).start)
     assert numpy.array_equal(_spans(faulted[2]).start, _spans(clean[2]).start)
 
 
 @pytest.mark.limits
 @pytest.mark.model
-def test_pii_spans_transformers_edge_inputs_with_real_weights() -> None:
+def test_pii_spans_transformers_edge_inputs_with_real_weights(real_worker: RealWorkers) -> None:
     """Empty, non-BMP, repeated and long texts each give spans inside the text or a typed fault."""
-    state = _real_state()
+    client = real_worker("pii_spans", "transformers")
     cases = {
         "empty": "",
         "emoji": "😀😀 I am Dana Wu 😀",
         "repeated": "Dana Wu said Dana Wu lives here.",
         "long": "The meeting ran long. " * 400 + "Call Dana Wu on 617-555-0142.",
     }
-    for name, content in cases.items():
-        [result] = worker.handle(state, [_item(name, content)], PARAMS)
-        if "error" in result:
-            assert isinstance(result["error"], (ContentFault, ResourceFault)), (name, result["error"])
-        else:
-            out = _spans(result)
-            assert out.length == len(content) and all(
-                0 <= a <= b <= out.length for a, b in zip(out.start, out.end, strict=True)
-            )
+    for name, outputs in run_alone(client, {n: _item(n, c) for n, c in cases.items()}, PARAMS).items():
+        out = _spans({"outputs": outputs})
+        assert out.length == len(cases[name]) and all(
+            0 <= a <= b <= out.length for a, b in zip(out.start, out.end, strict=True)
+        )

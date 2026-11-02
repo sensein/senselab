@@ -1,6 +1,5 @@
 """The `crisperwhisper` backend of `speech_to_text`: its engines, model, faults and the isolated worker's imports."""
 
-import importlib
 import json
 from typing import Any
 
@@ -18,8 +17,9 @@ from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.profiles import ExecutionProfile, NoBackend, resolve_execution
 from senselab_core.testing.contracts import contract_cases
 from senselab_core.testing.lock_licenses import packaged_lock_records
+from senselab_core.testing.workers import RealWorkers, run_alone
 from senselab_worker.fake import FakeFaults
-from senselab_worker.faults import ContentFault, ResourceFault
+from senselab_worker.faults import ContentFault, FaultClass, ResourceFault
 
 LOCK_RECORDS = packaged_lock_records("senselab")
 
@@ -164,34 +164,26 @@ def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract c
     case()
 
 
-def _real_state(faults: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
-    torch = importlib.import_module("torch")
-
-    entry = CATALOGUE.entry(cw.MODEL_ID)
-    model = {"source": "hf", "id": entry.id, "identity": entry.revision}
-    return cw.load({"model": model, "device": "cuda" if torch.cuda.is_available() else "cpu", "faults": faults or {}})
-
-
 @pytest.mark.env
 @pytest.mark.model
 @pytest.mark.parametrize("engine", cw.ENGINES)
-def test_content_fault_isolated_with_real_weights(engine: str) -> None:
-    """On the pinned model each engine isolates a content fault: batch-mates' transcripts are unchanged."""
+def test_content_fault_isolated_with_real_weights(real_worker: RealWorkers, engine: str) -> None:
+    """On the pinned model, in its env, each engine isolates a content fault: batch-mates' transcripts are unchanged."""
     items = [_item(i, _tone(1.0 + n)) for n, i in enumerate("abc")]
     params = {**PARAMS, "backend_params": {"engine": engine}}
-    clean = cw.handle(_real_state(), items, params)
-    faulted = cw.handle(_real_state({"fail_items": ["b"]}), items, params)
+    clean = real_worker("speech_to_text", "crisperwhisper").run(items, params)
+    faulted = real_worker("speech_to_text", "crisperwhisper", {"fail_items": ["b"]}).run(items, params)
     assert all("outputs" in r for r in clean)
-    assert isinstance(faulted[1]["error"], ContentFault)
+    assert faulted[1]["error"]["fault"] is FaultClass.CONTENT
     assert (faulted[0], faulted[2]) == (clean[0], clean[2])
 
 
 @pytest.mark.limits
 @pytest.mark.model
 @pytest.mark.parametrize("engine", cw.ENGINES)
-def test_edge_inputs_with_real_weights(engine: str) -> None:
+def test_edge_inputs_with_real_weights(real_worker: RealWorkers, engine: str) -> None:
     """One sample, silence, clipping, long input and wrong rates each give a transcript or a typed fault."""
-    state = _real_state()
+    worker = real_worker("speech_to_text", "crisperwhisper")
     params = {**PARAMS, "backend_params": {"engine": engine}}
     cases = {
         "one-sample": _tone(1 / 16000),
@@ -200,9 +192,5 @@ def test_edge_inputs_with_real_weights(engine: str) -> None:
         "long": _tone(70.0),
         **{f"rate-{r}": _tone(1.0, r) for r in (8000, 22050, 48000)},
     }
-    for name, audio in cases.items():
-        [result] = cw.handle(state, [_item(name, audio)], params)
-        if "error" in result:
-            assert isinstance(result["error"], (ContentFault, ResourceFault)), (name, result["error"])
-        else:
-            assert from_wire_form(result["outputs"]["transcript"]) is not None
+    outputs = run_alone(worker, {n: _item(n, a) for n, a in cases.items()}, params)
+    assert all(from_wire_form(o["transcript"]) is not None for o in outputs.values())
