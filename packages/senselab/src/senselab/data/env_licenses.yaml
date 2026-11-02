@@ -5,7 +5,7 @@ envs:
       source: accelerate 1.15.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.15.0
     annotated-doc:
       expression: MIT
@@ -26,7 +26,7 @@ envs:
       source: certifi 2026.7.22 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2026.7.22
     cffi:
       expression: MIT-0
@@ -47,28 +47,28 @@ envs:
       source: colorama 0.4.6 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.4.6
     crisperwhisper:
       expression: MIT
       source: crisperwhisper 2.0.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.0.1
     ctranslate2:
       expression: MIT
       source: ctranslate2 4.8.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 4.8.2
     ctranslate2-crisperwhisper:
       expression: MIT
       source: ctranslate2-crisperwhisper 4.7.1.post3 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 4.7.1.post3
     filelock:
       expression: MIT
@@ -89,7 +89,7 @@ envs:
       source: h11 0.16.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.16.0
     hf-xet:
       expression: Apache-2.0
@@ -110,14 +110,14 @@ envs:
       source: httpx 0.28.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.28.1
     huggingface-hub:
       expression: Apache-2.0
       source: huggingface-hub 1.33.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.33.0
     idna:
       expression: BSD-3-Clause
@@ -131,14 +131,14 @@ envs:
       source: jinja2 3.1.6 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 3.1.6
     markdown-it-py:
       expression: MIT
       source: markdown-it-py 4.2.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 4.2.0
     markupsafe:
       expression: BSD-3-Clause
@@ -152,14 +152,14 @@ envs:
       source: mdurl 0.1.2 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.1.2
     mpmath:
       expression: BSD-3-Clause
       source: mpmath 1.3.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.3.0
     networkx:
       expression: BSD-3-Clause
@@ -187,7 +187,7 @@ envs:
       source: nvidia-cuda-nvrtc-cu12 12.9.86 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 12.9.86
     packaging:
       expression: Apache-2.0 OR BSD-2-Clause
@@ -201,7 +201,7 @@ envs:
       source: psutil 7.2.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 7.2.2
     pycparser:
       expression: BSD-3-Clause
@@ -222,7 +222,7 @@ envs:
       source: pyyaml 6.0.3 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 6.0.3
     regex:
       expression: Apache-2.0 AND CNRI-Python
@@ -236,14 +236,14 @@ envs:
       source: rich 15.0.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 15.0.0
     safetensors:
       expression: Apache-2.0
       source: safetensors 0.8.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.8.0
     setuptools:
       expression: MIT
@@ -257,14 +257,14 @@ envs:
       source: shellingham 1.5.4 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.5.4
     soundfile:
       expression: BSD-3-Clause
       source: soundfile 0.14.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.14.0
     soxr:
       expression: LGPL-2.1-or-later
@@ -278,28 +278,28 @@ envs:
       source: sympy 1.14.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.14.0
     tokenizers:
       expression: Apache-2.0
       source: tokenizers 0.23.2 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.23.2
     tqdm:
       expression: MPL-2.0 AND MIT
       source: tqdm 4.70.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 4.70.1
     transformers:
       expression: Apache-2.0
       source: transformers 5.18.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 5.18.0
     typer:
       expression: MIT
@@ -321,7 +321,7 @@ envs:
       source: annotated-types 0.7.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.7.0
     anyio:
       expression: MIT
@@ -349,7 +349,7 @@ envs:
       source: colorama 0.4.6 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.4.6
     filelock:
       expression: MIT
@@ -370,7 +370,7 @@ envs:
       source: h11 0.16.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.16.0
     hf-xet:
       expression: Apache-2.0
@@ -405,7 +405,7 @@ envs:
       source: huggingface-hub 2.4.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.4.0
     idna:
       expression: BSD-3-Clause
@@ -454,21 +454,21 @@ envs:
       source: pyyaml 6.0.3 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 6.0.3
     soundfile:
       expression: BSD-3-Clause
       source: soundfile 0.13.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.13.1
     tqdm:
       expression: MPL-2.0 AND MIT
       source: tqdm 4.67.3 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 4.67.3
     truststore:
       expression: MIT
@@ -497,7 +497,7 @@ envs:
       source: accelerate 1.15.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.15.0
     annotated-doc:
       expression: MIT
@@ -525,7 +525,7 @@ envs:
       source: certifi 2026.7.22 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2026.7.22
     click:
       expression: BSD-3-Clause
@@ -539,14 +539,14 @@ envs:
       source: colorama 0.4.6 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.4.6
     compressed-tensors:
       expression: Apache-2.0
       source: compressed-tensors 0.15.0.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.15.0.1
     filelock:
       expression: MIT
@@ -567,7 +567,7 @@ envs:
       source: h11 0.16.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.16.0
     hf-xet:
       expression: Apache-2.0
@@ -588,14 +588,14 @@ envs:
       source: httpx 0.28.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.28.1
     huggingface-hub:
       expression: Apache-2.0
       source: huggingface-hub 1.33.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.33.0
     idna:
       expression: BSD-3-Clause
@@ -609,21 +609,21 @@ envs:
       source: jinja2 3.1.6 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 3.1.6
     loguru:
       expression: MIT
       source: loguru 0.7.3 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.7.3
     markdown-it-py:
       expression: MIT
       source: markdown-it-py 4.2.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 4.2.0
     markupsafe:
       expression: BSD-3-Clause
@@ -637,14 +637,14 @@ envs:
       source: mdurl 0.1.2 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.1.2
     mpmath:
       expression: BSD-3-Clause
       source: mpmath 1.3.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.3.0
     networkx:
       expression: BSD-3-Clause
@@ -672,7 +672,7 @@ envs:
       source: psutil 7.2.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 7.2.2
     pydantic:
       expression: MIT
@@ -700,7 +700,7 @@ envs:
       source: pyyaml 6.0.3 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 6.0.3
     regex:
       expression: Apache-2.0 AND CNRI-Python
@@ -714,14 +714,14 @@ envs:
       source: rich 15.0.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 15.0.0
     safetensors:
       expression: Apache-2.0
       source: safetensors 0.8.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.8.0
     setuptools:
       expression: MIT
@@ -735,35 +735,35 @@ envs:
       source: shellingham 1.5.4 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.5.4
     sympy:
       expression: BSD-3-Clause
       source: sympy 1.14.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.14.0
     tokenizers:
       expression: Apache-2.0
       source: tokenizers 0.23.2 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.23.2
     tqdm:
       expression: MPL-2.0 AND MIT
       source: tqdm 4.70.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 4.70.1
     transformers:
       expression: Apache-2.0
       source: transformers 5.18.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 5.18.0
     typer:
       expression: MIT
@@ -791,7 +791,7 @@ envs:
       source: win32-setctime 1.2.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.2.0
   pyannote:
     aiohappyeyeballs:
@@ -799,21 +799,21 @@ envs:
       source: aiohappyeyeballs 2.7.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.7.1
     aiohttp:
       expression: Apache-2.0 AND MIT
       source: aiohttp 3.14.3 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 3.14.3
     aiosignal:
       expression: Apache-2.0
       source: aiosignal 1.4.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.4.0
     alembic:
       expression: MIT
@@ -834,7 +834,7 @@ envs:
       source: asteroid-filterbanks 0.4.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.4.0
     attrs:
       expression: MIT
@@ -848,14 +848,14 @@ envs:
       source: certifi 2026.7.22 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2026.7.22
     charset-normalizer:
       expression: MIT
       source: charset-normalizer 3.5.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 3.5.2
     click:
       expression: BSD-3-Clause
@@ -869,21 +869,21 @@ envs:
       source: cloudpickle 3.1.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 3.1.2
     colorama:
       expression: BSD-3-Clause
       source: colorama 0.4.6 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.4.6
     colorlog:
       expression: MIT
       source: colorlog 6.12.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 6.12.0
     contourpy:
       expression: BSD-3-Clause
@@ -897,14 +897,14 @@ envs:
       source: cycler 0.12.1 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.12.1
     einops:
       expression: MIT
       source: einops 0.8.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.8.2
     filelock:
       expression: MIT
@@ -918,14 +918,14 @@ envs:
       source: fonttools 4.66.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 4.66.1
     frozenlist:
       expression: Apache-2.0
       source: frozenlist 1.8.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.8.0
     fsspec:
       expression: BSD-3-Clause
@@ -953,7 +953,7 @@ envs:
       source: h11 0.16.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.16.0
     hf-xet:
       expression: Apache-2.0
@@ -988,7 +988,7 @@ envs:
       source: huggingface-hub 2.1.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.1.1
     idna:
       expression: BSD-3-Clause
@@ -1002,7 +1002,7 @@ envs:
       source: jinja2 3.1.6 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 3.1.6
     joblib:
       expression: BSD-3-Clause
@@ -1016,28 +1016,28 @@ envs:
       source: julius 0.2.8 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.2.8
     kiwisolver:
       expression: BSD-3-Clause
       source: kiwisolver 1.5.1 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.5.1
     lightning:
       expression: Apache-2.0
       source: lightning 2.6.6 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.6.6
     lightning-utilities:
       expression: Apache-2.0
       source: lightning-utilities 0.15.3 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.15.3
     mako:
       expression: MIT
@@ -1051,7 +1051,7 @@ envs:
       source: markdown-it-py 4.2.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 4.2.0
     markupsafe:
       expression: BSD-3-Clause
@@ -1065,28 +1065,28 @@ envs:
       source: matplotlib 3.11.2 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 3.11.2
     mdurl:
       expression: MIT
       source: mdurl 0.1.2 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.1.2
     mpmath:
       expression: BSD-3-Clause
       source: mpmath 1.3.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.3.0
     multidict:
       expression: Apache-2.0
       source: multidict 6.9.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 6.9.1
     narwhals:
       expression: MIT
@@ -1184,7 +1184,7 @@ envs:
       source: optuna 5.0.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 5.0.0
     packaging:
       expression: Apache-2.0 OR BSD-2-Clause
@@ -1198,7 +1198,7 @@ envs:
       source: pandas 3.0.6 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 3.0.6
     pillow:
       expression: MIT-CMU
@@ -1212,21 +1212,21 @@ envs:
       source: primepy 1.3 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: '1.3'
     propcache:
       expression: Apache-2.0
       source: propcache 0.5.4 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.5.4
     protobuf:
       expression: BSD-3-Clause
       source: protobuf 7.36.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 7.36.2
     pyannote-audio:
       expression: MIT
@@ -1289,49 +1289,49 @@ envs:
       source: python-dateutil 2.9.0.post0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 2.9.0.post0
     pytorch-lightning:
       expression: Apache-2.0
       source: pytorch-lightning 2.6.6 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.6.6
     pytorch-metric-learning:
       expression: MIT
       source: pytorch-metric-learning 2.9.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 2.9.0
     pyyaml:
       expression: MIT
       source: pyyaml 6.0.3 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 6.0.3
     requests:
       expression: Apache-2.0
       source: requests 2.34.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.34.2
     rich:
       expression: MIT
       source: rich 15.0.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 15.0.0
     safetensors:
       expression: Apache-2.0
       source: safetensors 0.8.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.8.0
     scikit-learn:
       expression: BSD-3-Clause
@@ -1345,7 +1345,7 @@ envs:
       source: scipy 1.18.1 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.18.1
     setuptools:
       expression: MIT
@@ -1359,14 +1359,14 @@ envs:
       source: six 1.17.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.17.0
     sortedcontainers:
       expression: Apache-2.0
       source: sortedcontainers 2.4.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.4.0
     sqlalchemy:
       expression: MIT
@@ -1380,7 +1380,7 @@ envs:
       source: sympy 1.14.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.14.0
     threadpoolctl:
       expression: BSD-3-Clause
@@ -1394,14 +1394,14 @@ envs:
       source: torch-audiomentations 0.12.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.12.0
     torch-pitch-shift:
       expression: MIT
       source: torch-pitch-shift 1.2.5 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.2.5
     torchcodec:
       expression: BSD-3-Clause
@@ -1415,14 +1415,14 @@ envs:
       source: torchmetrics 1.9.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.9.0
     tqdm:
       expression: MPL-2.0 AND MIT
       source: tqdm 4.70.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 4.70.1
     truststore:
       expression: MIT
@@ -1443,7 +1443,7 @@ envs:
       source: tzdata 2026.4 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: '2026.4'
     urllib3:
       expression: MIT
@@ -1457,7 +1457,7 @@ envs:
       source: yarl 1.25.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.25.1
   speechbrain:
     anyio:
@@ -1472,7 +1472,7 @@ envs:
       source: certifi 2026.7.22 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2026.7.22
     cffi:
       expression: MIT-0
@@ -1486,7 +1486,7 @@ envs:
       source: charset-normalizer 3.5.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 3.5.2
     click:
       expression: BSD-3-Clause
@@ -1500,14 +1500,14 @@ envs:
       source: cloudpickle 3.1.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 3.1.2
     colorama:
       expression: BSD-3-Clause
       source: colorama 0.4.6 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.4.6
     filelock:
       expression: MIT
@@ -1528,7 +1528,7 @@ envs:
       source: h11 0.16.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.16.0
     hf-xet:
       expression: Apache-2.0
@@ -1563,14 +1563,14 @@ envs:
       source: huggingface-hub 2.1.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.1.1
     hyperpyyaml:
       expression: Apache-2.0
       source: hyperpyyaml 1.2.3 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.2.3
     idna:
       expression: BSD-3-Clause
@@ -1584,7 +1584,7 @@ envs:
       source: jinja2 3.1.6 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 3.1.6
     joblib:
       expression: BSD-3-Clause
@@ -1605,7 +1605,7 @@ envs:
       source: mpmath 1.3.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.3.0
     networkx:
       expression: BSD-3-Clause
@@ -1640,35 +1640,35 @@ envs:
       source: pyyaml 6.0.3 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 6.0.3
     requests:
       expression: Apache-2.0
       source: requests 2.34.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.34.2
     ruamel-yaml:
       expression: MIT
       source: ruamel-yaml 0.18.17 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.18.17
     ruamel-yaml-clib:
       expression: MIT
       source: ruamel-yaml-clib 0.2.15 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.2.15
     scipy:
       expression: BSD-3-Clause
       source: scipy 1.18.1 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.18.1
     sentencepiece:
       expression: Apache-2.0
@@ -1689,28 +1689,28 @@ envs:
       source: soundfile 0.14.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.14.0
     speechbrain:
       expression: Apache-2.0
       source: speechbrain 1.1.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.1.1
     sympy:
       expression: BSD-3-Clause
       source: sympy 1.14.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.14.0
     tqdm:
       expression: MPL-2.0 AND MIT
       source: tqdm 4.70.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 4.70.1
     truststore:
       expression: MIT
@@ -1746,7 +1746,7 @@ envs:
       source: aiohappyeyeballs 2.7.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.7.1
     aiohttp:
       expression: Apache-2.0 AND MIT
@@ -1760,7 +1760,7 @@ envs:
       source: aiosignal 1.4.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.4.0
     annotated-doc:
       expression: MIT
@@ -1781,7 +1781,7 @@ envs:
       source: anthropic 1.13.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.13.0
     anyio:
       expression: MIT
@@ -1795,14 +1795,14 @@ envs:
       source: apache-tvm-ffi 0.1.11 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.1.11
     astor:
       expression: BSD-3-Clause
       source: astor 0.8.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.8.1
     attrs:
       expression: MIT
@@ -1816,7 +1816,7 @@ envs:
       source: blake3 1.0.11 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.0.11
     cachetools:
       expression: MIT
@@ -1837,7 +1837,7 @@ envs:
       source: certifi 2026.7.22 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2026.7.22
     cffi:
       expression: MIT-0
@@ -1851,7 +1851,7 @@ envs:
       source: charset-normalizer 3.5.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 3.5.2
     click:
       expression: BSD-3-Clause
@@ -1865,21 +1865,21 @@ envs:
       source: cloudpickle 3.1.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 3.1.2
     colorama:
       expression: BSD-3-Clause
       source: colorama 0.4.6 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.4.6
     compressed-tensors:
       expression: Apache-2.0
       source: compressed-tensors 0.17.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.17.0
     cryptography:
       expression: Apache-2.0 OR BSD-3-Clause
@@ -1928,7 +1928,7 @@ envs:
       source: depyf 0.20.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.20.0
     detect-installer:
       expression: 0BSD
@@ -1942,7 +1942,7 @@ envs:
       source: dill 0.4.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.4.1
     dnspython:
       expression: ISC
@@ -1956,21 +1956,21 @@ envs:
       source: docstring-parser 0.18.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.18.0
     einops:
       expression: MIT
       source: einops 0.8.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.8.2
     email-validator:
       expression: Unlicense
       source: email-validator 2.3.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.3.0
     fastapi:
       expression: MIT
@@ -1991,21 +1991,21 @@ envs:
       source: fastapi-cloud-cli 0.26.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.26.0
     fastar:
       expression: MIT
       source: fastar 0.12.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.12.0
     fastsafetensors:
       expression: Apache-2.0
       source: fastsafetensors 0.4.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.4.0
     filelock:
       expression: MIT
@@ -2026,7 +2026,7 @@ envs:
       source: frozenlist 1.8.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.8.0
     fsspec:
       expression: BSD-3-Clause
@@ -2054,7 +2054,7 @@ envs:
       source: h11 0.16.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.16.0
     hf-xet:
       expression: Apache-2.0
@@ -2089,7 +2089,7 @@ envs:
       source: httpx 0.28.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.28.1
     httpx2:
       expression: BSD-3-Clause
@@ -2110,7 +2110,7 @@ envs:
       source: huggingface-hub 1.33.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.33.0
     humming-kernels:
       expression: Apache-2.0
@@ -2145,14 +2145,14 @@ envs:
       source: interegular 0.3.3 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.3.3
     jinja2:
       expression: BSD-3-Clause
       source: jinja2 3.1.6 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 3.1.6
     jiter:
       expression: MIT
@@ -2166,7 +2166,7 @@ envs:
       source: jmespath 1.1.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.1.0
     jsonschema:
       expression: MIT
@@ -2187,7 +2187,7 @@ envs:
       source: lark 1.2.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.2.2
     llguidance:
       expression: MIT
@@ -2208,21 +2208,21 @@ envs:
       source: lm-format-enforcer 0.11.3 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.11.3
     loguru:
       expression: MIT
       source: loguru 0.7.3 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.7.3
     markdown-it-py:
       expression: MIT
       source: markdown-it-py 4.2.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 4.2.0
     markupsafe:
       expression: BSD-3-Clause
@@ -2236,21 +2236,21 @@ envs:
       source: mcp 2.3.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.3.0
     mcp-types:
       expression: MIT
       source: mcp-types 2.3.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.3.0
     mdurl:
       expression: MIT
       source: mdurl 0.1.2 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.1.2
     mistral-common:
       expression: Apache-2.0
@@ -2271,14 +2271,14 @@ envs:
       source: model-hosting-container-standards 0.1.16 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.1.16
     mpmath:
       expression: BSD-3-Clause
       source: mpmath 1.3.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.3.0
     msgspec:
       expression: BSD-3-Clause
@@ -2292,7 +2292,7 @@ envs:
       source: multidict 6.9.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 6.9.1
     nccl-extensions:
       expression: Apache-2.0
@@ -2327,7 +2327,7 @@ envs:
       source: numba 0.65.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.65.0
     numpy:
       expression: BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0
@@ -2383,7 +2383,7 @@ envs:
       source: nvidia-cudnn-frontend 1.31.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.31.0
     nvidia-cutlass-dsl:
       expression: LicenseRef-NVIDIA-Software-License-Agreement
@@ -2425,7 +2425,7 @@ envs:
       source: nvidia-ml-py 13.615.71 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 13.615.71
     nvidia-nvvm:
       expression: LicenseRef-NVIDIA-Proprietary
@@ -2453,7 +2453,7 @@ envs:
       source: opencv-python-headless 5.0.0.93 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 5.0.0.93
     opentelemetry-api:
       expression: Apache-2.0
@@ -2544,7 +2544,7 @@ envs:
       source: outlines-core 0.2.14 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.2.14
     packaging:
       expression: Apache-2.0 OR BSD-2-Clause
@@ -2558,7 +2558,7 @@ envs:
       source: partial-json-parser 0.2.1.1.post7 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.2.1.1.post7
     pillow:
       expression: MIT-CMU
@@ -2579,35 +2579,35 @@ envs:
       source: prometheus-fastapi-instrumentator 8.1.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 8.1.0
     propcache:
       expression: Apache-2.0
       source: propcache 0.5.4 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.5.4
     protobuf:
       expression: BSD-3-Clause
       source: protobuf 7.36.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 7.36.1
     psutil:
       expression: BSD-3-Clause
       source: psutil 7.2.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 7.2.2
     py-cpuinfo:
       expression: MIT
       source: py-cpuinfo 9.0.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 9.0.0
     pybase64:
       expression: BSD-2-Clause
@@ -2677,14 +2677,14 @@ envs:
       source: pynvvideocodec 2.0.4 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.0.4
     python-dotenv:
       expression: BSD-3-Clause
       source: python-dotenv 1.2.4 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.2.4
     python-json-logger:
       expression: BSD-2-Clause
@@ -2705,14 +2705,14 @@ envs:
       source: pywin32 312 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: '312'
     pyyaml:
       expression: MIT
       source: pyyaml 6.0.3 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 6.0.3
     pyzmq:
       expression: BSD-3-Clause
@@ -2747,14 +2747,14 @@ envs:
       source: requests 2.34.2 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 2.34.2
     rich:
       expression: MIT
       source: rich 15.0.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 15.0.0
     rich-toolkit:
       expression: MIT
@@ -2768,7 +2768,7 @@ envs:
       source: rignore 0.8.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.8.1
     rpds-py:
       expression: MIT
@@ -2782,7 +2782,7 @@ envs:
       source: safetensors 0.8.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.8.0
     sentencepiece:
       expression: Apache-2.0
@@ -2803,7 +2803,7 @@ envs:
       source: setproctitle 1.3.8 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.3.8
     setuptools:
       expression: MIT
@@ -2817,21 +2817,21 @@ envs:
       source: shellingham 1.5.4 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.5.4
     six:
       expression: MIT
       source: six 1.17.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.17.0
     sniffio:
       expression: MIT OR Apache-2.0
       source: sniffio 1.3.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.3.1
     sse-starlette:
       expression: BSD-3-Clause
@@ -2859,7 +2859,7 @@ envs:
       source: sympy 1.14.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.14.0
     tabulate:
       expression: MIT
@@ -2887,7 +2887,7 @@ envs:
       source: tokenizers 0.23.3 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.23.3
     tokenspeed-mla:
       expression: MIT
@@ -2901,14 +2901,14 @@ envs:
       source: tokenspeed-triton 3.9.10.post20261008 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 3.9.10.post20261008
     torch-c-dlpack-ext:
       expression: Apache-2.0
       source: torch-c-dlpack-ext 0.1.5 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 0.1.5
     torchcodec:
       expression: BSD-3-Clause
@@ -2929,14 +2929,14 @@ envs:
       source: tqdm 4.70.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 4.70.1
     transformers:
       expression: Apache-2.0
       source: transformers 5.17.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 5.17.0
     truststore:
       expression: MIT
@@ -2985,7 +2985,7 @@ envs:
       source: uvloop 0.23.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.23.0
     vllm:
       expression: Apache-2.0
@@ -2999,7 +2999,7 @@ envs:
       source: watchfiles 1.3.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.3.0
     websockets:
       expression: BSD-3-Clause
@@ -3013,27 +3013,27 @@ envs:
       source: win32-setctime 1.2.0 classifier
       verified:
         date: '2026-11-01'
-        how: manual
+        how: classifier
       version: 1.2.0
     xgrammar:
       expression: Apache-2.0
       source: xgrammar 0.2.7 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 0.2.7
     yarl:
       expression: Apache-2.0
       source: yarl 1.25.1 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 1.25.1
     z3-solver:
       expression: MIT
       source: z3-solver 4.15.4.0 license-field
       verified:
         date: '2026-11-01'
-        how: manual
+        how: license-field
       version: 4.15.4.0
 format: env-licenses@1.0

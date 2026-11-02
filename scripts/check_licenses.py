@@ -27,9 +27,9 @@ import sys
 import tomllib
 import urllib.error
 import urllib.request
+from datetime import date
 from email.message import Message
 from importlib import metadata
-from datetime import date
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
 
@@ -46,7 +46,6 @@ ENV_LICENSES_FORMAT = "env-licenses@1.0"
 INSTALLER = "env-lock"
 POLICY_FORMAT = "license-policy@1.2"
 DISTRIBUTIONS = ("senselab", "senselab-core", "senselab-worker")
-"""The shipped distributions; ``env-lock`` is the policy entry the pins of a backend env are judged against."""
 ON_MISSING = ("raise", "warn")
 
 _SHARED = re.compile(r"\.(?:so(?:\.\d+)*|dylib|dll)$")
@@ -279,7 +278,7 @@ def pinned_dists(
     return out
 
 
-def env_records(findings: list[Finding], date: str) -> dict[str, dict[str, Any]]:
+def env_records(findings: list[Finding], today: str) -> dict[str, dict[str, Any]]:
     """The ``env-licenses`` entries of the package findings that hold a record, in name order."""
     out = {}
     for f in findings:
@@ -291,7 +290,7 @@ def env_records(findings: list[Finding], date: str) -> dict[str, dict[str, Any]]
             "version": f.version,
             "expression": f.expression,
             "source": f"{f.subject} {f.version} {'License-Expression' if pep639 else how}",
-            "verified": {"date": when or date, "how": "pep639" if pep639 else "manual"},
+            "verified": {"date": when or today, "how": how},
         }
     return out
 

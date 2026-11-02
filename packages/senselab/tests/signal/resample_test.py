@@ -7,12 +7,14 @@ import numpy
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from senselab._api.packaged import LOCK_RECORDS
 from senselab.signal import resample as rs
 from senselab_core.kernel.declare import REGISTRY
 from senselab_core.kernel.signals import RegularGroup, audio_channels
 from senselab_core.kernel.wire import from_wire_form
 from senselab_core.testing.contracts import contract_cases
+from senselab_core.testing.lock_licenses import packaged_lock_records
+
+LOCK_RECORDS = packaged_lock_records("senselab")
 
 RATES = [8000, 11025, 16000, 22050, 32000, 44100, 48000]
 PAIRS = st.tuples(st.sampled_from(RATES), st.sampled_from(RATES)).filter(lambda p: p[0] != p[1])

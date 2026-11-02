@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy
 import pytest
-from senselab._api.packaged import CATALOGUE, LOCK_RECORDS
+from senselab._api.packaged import CATALOGUE
 from senselab.text.tasks.pii_spans import (
     engine,
     transformers_backend,  # noqa: F401 - declares the backend
@@ -25,8 +25,11 @@ from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.vllm_server import CONFIG_TAG, AttestationMismatch, VllmServer, server_args
 from senselab_core.testing.contracts import contract_cases
+from senselab_core.testing.lock_licenses import packaged_lock_records
 from senselab_worker.digest import identity_digest
 from senselab_worker.faults import FaultClass
+
+LOCK_RECORDS = packaged_lock_records("senselab")
 
 FAKE = Path(__file__).parents[5] / "senselab-core/tests/runtime/fake_vllm_fixture.py"
 ENTRY = CATALOGUE.entry(engine.MODEL_ID)

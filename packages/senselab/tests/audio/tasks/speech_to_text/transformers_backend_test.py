@@ -5,7 +5,6 @@ from typing import Any
 
 import numpy
 import pytest
-from senselab._api.packaged import LOCK_RECORDS
 from senselab.audio.tasks.speech_to_text import huggingface as hf
 from senselab.audio.tasks.speech_to_text.token_confidence import (
     capture_token_confidence,
@@ -16,8 +15,11 @@ from senselab_core.kernel.declare import REGISTRY
 from senselab_core.kernel.signals import Audio
 from senselab_core.kernel.wire import from_wire_form, wire_form
 from senselab_core.testing.contracts import contract_cases
+from senselab_core.testing.lock_licenses import packaged_lock_records
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault, ResourceFault
+
+LOCK_RECORDS = packaged_lock_records("senselab")
 
 CLOCK = "content:" + "a" * 64
 PIPE_OUT = {

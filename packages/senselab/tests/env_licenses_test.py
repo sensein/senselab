@@ -6,9 +6,8 @@ from pathlib import Path
 
 import pytest
 import yaml
-from senselab._api.packaged import LOCK_RECORDS
 from senselab_core.kernel.declare import REGISTRY, Env
-from senselab_core.testing.lock_licenses import HOST_ENV, lock_records_from
+from senselab_core.testing.lock_licenses import HOST_ENV, lock_records_from, packaged_lock_records
 
 ROOT = Path(__file__).resolve().parents[3]
 LOCKS = ROOT / "packages/senselab/src/senselab/data/env_locks"
@@ -17,6 +16,7 @@ assert _spec and _spec.loader
 lic = importlib.util.module_from_spec(_spec)
 sys.modules["check_licenses"] = lic
 _spec.loader.exec_module(lic)
+LOCK_RECORDS = packaged_lock_records("senselab")
 RECORDS = yaml.safe_load(lic.ENV_LICENSES.read_text())
 
 

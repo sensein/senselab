@@ -299,7 +299,7 @@ def test_a_pypi_release_reads_like_installed_metadata() -> None:
 
 
 def test_env_records_keep_the_package_findings_that_hold_a_record_with_how_it_was_read() -> None:
-    """A PEP 639 read stays `pep639`, any other read is `manual`; a bundled library or a gap has no entry."""
+    """Each read keeps its own method, a dated manual record is `manual`; a bundled library or a gap has no entry."""
     dists = {
         "a": FakeDist("a", {"License-Expression": "MIT"}),
         "b": FakeDist("b", {"License": "ISC License"}),
@@ -310,7 +310,7 @@ def test_env_records_keep_the_package_findings_that_hold_a_record_with_how_it_wa
     records = lic.env_records(found, "2026-11-02")
     assert sorted(records) == ["a", "b", "colorama"]
     assert records["a"]["verified"] == {"date": "2026-11-02", "how": "pep639"}
-    assert records["b"]["verified"] == {"date": "2026-11-02", "how": "manual"}
+    assert records["b"]["verified"] == {"date": "2026-11-02", "how": "license-field"}
     assert records["colorama"]["verified"] == {"date": "2026-11-01", "how": "manual"}
 
 

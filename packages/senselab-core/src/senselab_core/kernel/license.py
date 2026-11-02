@@ -9,7 +9,7 @@ from pydantic import AfterValidator, StrictBool
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr, StrMap
 
-VERIFIED_HOW: tuple[str, ...] = ("hf-card", "pep639", "manual")
+VERIFIED_HOW: tuple[str, ...] = ("hf-card", "pep639", "license-field", "classifier", "manual")
 """The methods a license record may name in `verified["how"]`."""
 
 

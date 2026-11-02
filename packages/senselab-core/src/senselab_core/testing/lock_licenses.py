@@ -4,6 +4,8 @@ The file is written by ``scripts/check_licenses.py --lock NAME`` (or ``--host``)
 the lock names, and ``host`` for the root lock; `lock_records_from` gives `contract_cases` its ``lock_records``.
 """
 
+from importlib import resources
+
 import yaml
 
 from senselab_core.kernel.declare import BackendSpec
@@ -41,5 +43,18 @@ def lock_records_from(text: str) -> LockRecords:
             )
             for package, entry in envs[name].items()
         }
+
+    return records
+
+
+def packaged_lock_records(package: str) -> LockRecords:
+    """Return the provider over ``data/env_licenses.yaml`` of `package`, read on its first use."""
+    cache: list[LockRecords] = []
+
+    def records(backend: BackendSpec) -> dict[str, License | None]:
+        if not cache:
+            text = resources.files(package).joinpath("data", "env_licenses.yaml").read_text("utf-8")
+            cache.append(lock_records_from(text))
+        return dict(cache[0](backend))
 
     return records

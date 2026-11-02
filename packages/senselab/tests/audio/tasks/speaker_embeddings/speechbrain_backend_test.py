@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy
 import pytest
-from senselab._api.packaged import CATALOGUE, LOCK_RECORDS
+from senselab._api.packaged import CATALOGUE
 from senselab.audio.tasks.speaker_embeddings import speechbrain as sb
 from senselab.audio.tasks.speaker_embeddings import (
     speechbrain_backend,  # noqa: F401 - declares the backend
@@ -18,7 +18,10 @@ from senselab_core.kernel.wire import from_wire_form, wire_form
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.testing.contracts import contract_cases
+from senselab_core.testing.lock_licenses import packaged_lock_records
 from senselab_worker.faults import ContentFault, ResourceFault
+
+LOCK_RECORDS = packaged_lock_records("senselab")
 
 HOST = HardwareInfo(cpu_count=1, memory_bytes=1, gpus=(), apple_silicon=False, platform="linux-x86_64")
 PARAMS: dict[str, Any] = {"backend_params": {}}
