@@ -96,7 +96,7 @@ from senselab_core.runtime.fetch import DataFile, DataManifest
 from senselab_core.runtime.profiles import Envs, ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.storage import StorePolicy
-from senselab_core.runtime.tolerance import AxisSpread, Derivation, FieldTolerance, ToleranceProfile
+from senselab_core.runtime.tolerance import AxisSpread, Coverage, Derivation, FieldTolerance, ToleranceProfile
 
 Case = Callable[[], None]
 Factory = Callable[[], Sequence[Frozen]]
@@ -973,11 +973,24 @@ def _register_tolerance_samples() -> None:
         FieldTolerance(path="vector", kind="numeric", spreads=spreads, tolerance=0.5, shape_mismatches=1),
     )
     register_samples(FieldTolerance, lambda: fields, invalid_updates=[{"path": ""}, {"tolerance": "wide"}])
+    coverages = (Coverage.of(1), Coverage.of(2))
+    register_samples(
+        Coverage, lambda: coverages, invalid_updates=[{"target": 1.0}, {"confidence": 0.0}, {"required_items": 2}]
+    )
     derivations = (
         Derivation(shas=("0" * 40,), jobs=("1",), split="calibration", items=("i",), contexts=("cpu",)),
-        Derivation(shas=("1" * 40,), jobs=("1", "2"), split="calibration", items=("i", "j"), contexts=("cuda",)),
+        Derivation(
+            shas=("1" * 40,),
+            jobs=("1", "2"),
+            split="calibration",
+            items=("i", "j"),
+            contexts=("cuda",),
+            coverage=coverages[1],
+        ),
     )
-    register_samples(Derivation, lambda: derivations, invalid_updates=[{"split": ""}, {"jobs": 3}])
+    register_samples(
+        Derivation, lambda: derivations, invalid_updates=[{"split": ""}, {"jobs": 3}, {"coverage": Coverage.of(5)}]
+    )
     register_samples(
         ToleranceProfile,
         lambda: [

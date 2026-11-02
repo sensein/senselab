@@ -21,6 +21,7 @@ from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.formats import TOLERANCE_OBSERVATIONS_FORMAT, FormatTag, Formatted
 from senselab_core.runtime.tolerance import (
     AxisSpread,
+    Coverage,
     Derivation,
     FieldTolerance,
     ToleranceProfile,
@@ -218,6 +219,7 @@ def derive(observations: Sequence[Observations], split_of: Any) -> ToleranceProf
             split=CALIBRATION,
             items=tuple(sorted(ids)),
             contexts=tuple(sorted(contexts)),
+            coverage=Coverage.of(len(ids)),
         ),
         fields=fields,
         findings=_findings(fields),
