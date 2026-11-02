@@ -6,6 +6,7 @@
 """
 
 import argparse
+import importlib
 import importlib.util
 import sys
 from collections.abc import Sequence
@@ -63,7 +64,11 @@ def _regenerate_cli(args: argparse.Namespace) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Command line: `sample` one context into a store, `regenerate` the table from stores."""
+    """Command line: `sample` one context into a store, `regenerate` the table from stores.
+
+    `senselab` is imported first, for every subcommand: that import registers the packaged tasks and catalogue.
+    """
+    importlib.import_module("senselab")
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(required=True)
     s = sub.add_parser("sample")
