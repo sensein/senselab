@@ -38,6 +38,7 @@ from senselab_core.runtime.call import (
 )
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.licenses import backend_license, packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile
 
 import senselab
@@ -381,6 +382,16 @@ def test_facade_exposes_discovery_and_the_generated_names() -> None:
 
     assert senselab.tasks is tasks and senselab.describe is describe and senselab.models is models
     assert senselab.__all__ == ["describe", "models", "tasks", *generated.__all__]
+
+
+@pytest.mark.logic
+def test_describe_states_each_backends_env_license() -> None:
+    """Each backend in `describe` states the license its env lock's records derive, the same `run_call` records."""
+    records = packaged_lock_records("senselab")
+    for spec in REGISTRY.tasks():
+        stated = {b["name"]: b["license"] for b in describe(spec.name)["backends"]}
+        derived = {b.name: backend_license(b, records(b)).model_dump(mode="json") for b in REGISTRY.backends(spec.name)}
+        assert stated == derived and all(lic["expression"] for lic in stated.values()), spec.name
 
 
 @pytest.mark.logic

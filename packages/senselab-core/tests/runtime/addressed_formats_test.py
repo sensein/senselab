@@ -40,6 +40,7 @@ def _key(audio: str) -> LogicalKey:
 def _ctx(platform: str = "linux") -> ExecutionContext:
     return ExecutionContext(
         env_lock="lock",
+        env_license=None,
         platform=platform,
         wheel_set="wheels",
         numerics={"device": "cpu", "precision": "fp32"},

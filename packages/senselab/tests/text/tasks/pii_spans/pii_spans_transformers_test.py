@@ -18,9 +18,9 @@ from senselab_core.kernel.signals import PlainText
 from senselab_core.kernel.wire import from_wire_form
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.keys import Call, build_key
+from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.testing.contracts import BASE_CONTEXT, contract_cases
-from senselab_core.testing.lock_licenses import packaged_lock_records
 from senselab_core.testing.workers import RealWorkers, run_alone
 from senselab_worker.faults import ContentFault, FaultClass, ResourceFault
 

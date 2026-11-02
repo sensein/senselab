@@ -93,6 +93,7 @@ def _ctx(platform: str = "linux") -> Any:  # noqa: ANN401
         host="node1",
         protocol="p1",
         model_source="hf",
+        env_license=None,
     )
 
 

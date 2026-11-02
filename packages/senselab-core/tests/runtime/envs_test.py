@@ -126,6 +126,7 @@ def test_torch_index_recorded_in_context(tmp_path: Path, uv_log: Path) -> None:
         host="node",
         protocol="p",
         model_source=None,
+        env_license=None,
     )
     assert context.driver["torch_index"] == "https://download.pytorch.org/whl/cu128"
     assert context.env_lock == handle.lock_sha

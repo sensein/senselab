@@ -188,6 +188,7 @@ def _context(numerics: dict[str, str], env_lock: str = L1) -> ExecutionContext:
         host="h",
         protocol="p",
         model_source=None,
+        env_license=None,
     )
 
 

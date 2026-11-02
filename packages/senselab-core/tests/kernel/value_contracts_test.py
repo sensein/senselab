@@ -602,6 +602,7 @@ def test_small_loosenesses_are_refused() -> None:
         host="h",
         protocol="1",
         model_source=None,
+        env_license=None,
     )
     assert acceptable(context, context, "equivalent", backend="b")
 

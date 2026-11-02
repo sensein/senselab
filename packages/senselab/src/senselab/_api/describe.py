@@ -8,7 +8,7 @@ from pydantic.json_schema import GenerateJsonSchema
 from senselab_core.kernel.declare import REGISTRY, Registry, TaskSpec, json_schema, kernel_types
 from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import TEXT_IDENTITY_FORMS, text_identity_fields
-from senselab_core.runtime.call import input_binding, input_model, packaged
+from senselab_core.runtime.call import env_license, input_binding, input_model, packaged
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
 
 from senselab._api.call import ApiError, callable_names, closest, task_spec
@@ -202,7 +202,9 @@ def describe(name: str, registry: Registry = REGISTRY, catalogue: Catalogue | No
 
     The result holds `task`, `version`, `kind`, `call` (the call envelope), the schemas `inputs`, `params`,
     `backend_params` and `outputs` (each port says how a call gives it and, of a kernel type, links to that type's
-    format schema in its `$defs`), `backends` as `{name, version, stack, devices}`, the sorted `stacks` and `devices`
+    format schema in its `$defs`), `backends` as `{name, version, stack, devices, license}` (`license` the code license
+    of the backend's env from its lock's license records, `env_license`; None when no records are packaged), the
+    sorted `stacks` and `devices`
     they cover, `callable`, the generated `{class, function}` names, `models` (as `models(name)` gives them, licenses
     included) and `constraints` (the relations between inputs or between params that a call must satisfy, as data) and
     `default_model`, the catalogue default as `id@revision` (None for a task with none). `catalogue` is
@@ -232,7 +234,14 @@ def describe(name: str, registry: Registry = REGISTRY, catalogue: Catalogue | No
         "outputs": _link_ports(schema["outputs"], spec.outputs, given=False),
         "constraints": [c.model_dump(mode="json") for c in spec.constraints],
         "backends": [
-            {"name": b.name, "version": b.version, "stack": b.stack, "devices": list(b.devices)} for b in backends
+            {
+                "name": b.name,
+                "version": b.version,
+                "stack": b.stack,
+                "devices": list(b.devices),
+                "license": None if (code := env_license(b)) is None else code.model_dump(mode="json"),
+            }
+            for b in backends
         ],
         "callable": dict(zip(("class", "function"), callable_names(spec), strict=True)),
         "stacks": sorted({b.stack for b in backends}),

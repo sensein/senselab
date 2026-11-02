@@ -48,6 +48,7 @@ from senselab_core.kernel.identity import (
     ReusePolicy,
     text_identity_fields,
 )
+from senselab_core.kernel.license import License
 from senselab_core.kernel.signals import PlainText, Recording, text_identity
 from senselab_core.kernel.time import TimeAnchor, TimeMap, rebind
 from senselab_core.kernel.wire import WireFormatRetired, from_wire_form, wire_form
@@ -58,6 +59,7 @@ from senselab_core.runtime.equivalence import SAMPLING, EquivalenceEvidence, Evi
 from senselab_core.runtime.hardware import HardwareInfo, numerics_class, probe_hardware
 from senselab_core.runtime.in_process import InProcessWorker
 from senselab_core.runtime.keys import Call, Placement, build_key
+from senselab_core.runtime.licenses import LicensePolicy, LockRecords, backend_license
 from senselab_core.runtime.models import resolve
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.runtime.revision import cache_root, run_id
@@ -147,13 +149,15 @@ class TaskCall(BaseModel):
 
 @dataclass(frozen=True)
 class RunConfig:
-    """A run's settings: `reuse`, the widest policy under which a stored result serves a call, and `verify`.
+    """A run's settings: `reuse`, the widest policy under which a stored result serves a call, `verify` and `licenses`.
 
     `verify` is the fraction of cross-context hits recomputed and compared within the backend's tolerance profile.
+    `licenses` is the user's license policy; with None no call is refused for its license.
     """
 
     reuse: ReusePolicy = DEFAULT_REUSE_POLICY
     verify: float = 0.0
+    licenses: LicensePolicy | None = None
 
     def __post_init__(self) -> None:
         """Refuse a `verify` outside [0, 1]."""
@@ -199,12 +203,33 @@ EnvOpener = Callable[[BackendSpec, ExecutionProfile], EnvHandle]
 
 @dataclass(frozen=True)
 class Packaged:
-    """What a declaring package hands `run_call`: its catalogue, env opener, registry and tolerance profiles' folder."""
+    """What a declaring package hands `run_call`: catalogue, env opener, registry, tolerance profiles, lock records.
+
+    `lock_records` gives each backend's env-lock package license records, from which `env_license` derives.
+    """
 
     catalogue: Catalogue
     open_env: EnvOpener
     registry: Registry = REGISTRY
     tolerance: Path | Traversable | None = None
+    lock_records: LockRecords | None = None
+
+
+def env_license(backend: BackendSpec) -> License | None:
+    """Return the code license of `backend`'s env, `backend_license` over the packaged lock records.
+
+    None when the declaring package hands no lock records.
+
+    Raises:
+        ValueError, MissingLicense: as the lock records provider and `backend_license`.
+    """
+    records = packaged().lock_records
+    return None if records is None else _derived_license(records, backend)
+
+
+@functools.cache
+def _derived_license(records: LockRecords, backend: BackendSpec) -> License:
+    return backend_license(backend, records(backend))
 
 
 def _no_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
@@ -317,25 +342,26 @@ def run_call(
 ) -> Result:
     """Run `call` once: serve it from `store` under `run.reuse`, else execute it, store the outputs and record it.
 
-    The model is the catalogue's pin for a catalogue model at that revision (the task's catalogue default when the
-    call names none), else `resolve()`d. `resolve_execution` places the call under `execution`; the backend's env
-    opens through the packaged opener and its worker is reused across calls (one model per worker process; host
-    backends share one `ModelCache` per budget). A server backend's context carries the attestation its lock,
-    model and settings declare; its `VllmServer` starts on the first call the store does not serve, must attest
-    exactly that, serves every later call of that env and model, and stops at exit.
-    An execution writes one activity, associated with its agent (`agent_record`, env lock included), recording the key,
-    the context and the profile's digest; a store hit writes none (the store records its reuse). An execution whose
-    `put` finds different outputs another writer committed first is served those, as a reuse, and writes no
-    execution activity. An output on a port declared as a kernel type is stored as its wire form and returned as the
-    kernel value, read by `from_wire_form`. Outputs are stored on the
-    clocks their recording inputs' identities name and served re-bound (`rebind`) to the caller's anchors, so the key
-    holds no anchor and one entry serves one content under every anchor. A cross-context hit among the fraction
-    `run.verify` (`sampled`) is not served: the backend's tolerance profile is read, the call executes, and the
-    outputs are compared with the stored result before anything is stored; the comparison is recorded as
-    `EquivalenceEvidence` (a disagreement splits the store's class and is logged), then the outputs are stored and
-    the execution activity names the evidence (`senselab:verifies`). Every activity a call writes records
-    `senselab:verifyFraction` and `senselab:verifySampling`. `None` means the packaged
-    default: the `laptop` profile, `RunConfig()` and the store under `cache_root()/results`.
+    The model is the catalogue's pin for a catalogue model at that revision (the task's catalogue default when the call
+    names none), else `resolve()`d. `resolve_execution` places the call under `execution`; the backend's env opens
+    through the packaged opener and its worker is reused across calls (one model per worker process; host backends share
+    one `ModelCache` per budget). A server backend's context carries the attestation its lock, model and settings
+    declare; its `VllmServer` starts on the first call the store does not serve, must attest exactly that, serves every
+    later call of that env and model, and stops at exit. An execution writes one activity, associated with its agent
+    (`agent_record`, env lock included), recording the key, the context and the profile's digest; a store hit writes
+    none (the store records its reuse). An execution whose `put` finds different outputs another writer committed first
+    is served those, as a reuse, and writes no execution activity. An output on a port declared as a kernel type is
+    stored as its wire form and returned as the kernel value, read by `from_wire_form`. Outputs are stored on the clocks
+    their recording inputs' identities name and served re-bound (`rebind`) to the caller's anchors, so the key holds no
+    anchor and one entry serves one content under every anchor. A cross-context hit among the fraction `run.verify`
+    (`sampled`) is not served: the backend's tolerance profile is read, the call executes, and the outputs are compared
+    with the stored result before anything is stored; the comparison is recorded as `EquivalenceEvidence` (a
+    disagreement splits the store's class and is logged), then the outputs are stored and the execution activity names
+    the evidence (`senselab:verifies`). The context and its agent record the env's code license (`env_license`). Only
+    `run.licenses` refuses a license: a refused env or model license raises before anything opens, and a result from a
+    refused env is not served. Every activity a call writes records `senselab:verifyFraction` and
+    `senselab:verifySampling`. `None` means the packaged default: the `laptop` profile, `RunConfig()` and the store
+    under `cache_root()/results`.
 
     Raises:
         UnknownTask, InconsistentInputs: the task is not declared; the inputs contradict a constraint it declares.
@@ -350,6 +376,7 @@ def run_call(
         OutputTypeMismatch: an output of a kernel-typed port is not a wire form of its declared type.
         WorkerFatal, WorkerLost, ProtocolError: as the worker reports them.
         NoToleranceProfile: a sampled hit's backend has no tolerance profile.
+        LicenseRefused: `run.licenses` refuses the license of the backend's env or of the model.
     """
     profile = execution if execution is not None else ExecutionProfile.load()
     run = run if run is not None else RunConfig()
@@ -359,24 +386,22 @@ def run_call(
         raise ValueError(f"{call.task!r} is declared at version {spec.version!r}, the call names {call.task_version!r}")
     model, hardware, placement = _place(spec, call.model, profile)
     backend = placement.backend
+    code_license = _code_license(run, backend, model)
     placement = replace(placement, backend_params=backend.params.model_validate(dict(call.backend_params)))
     bound = _bound(spec, call)
     env = packaged().open_env(backend, profile)
     expected = _expected(backend, env, model) if backend.env.kind == "server" else None
     context = ExecutionContext(
         **(env.context_fields() if expected is None else attested_fields(env, expected)),
-        platform=sysconfig.get_platform(),
-        numerics=numerics_class(hardware, placement.device, PRECISION),
-        decoder=next((d for _, _, d in bound.values() if d is not None), None),
-        host=platform.node(),
-        protocol=f"wire@{WIRE_VERSION}",
+        **_host_fields(hardware, placement, bound),
         model_source=None if model is None else model.ref.source,
+        env_license=code_license,
     )
     identities = {port: identity for port, (identity, _, _) in bound.items()}
     key = build_key(Call(task=spec, params=call.params, inputs=identities, model=model), placement, context)
     anchors = _anchors(value for _, value, _ in bound.values())
     looked = datetime.now(timezone.utc)
-    hit = store.get(key, context, run.reuse, record=False)
+    hit = _hit(store, key, context, run)
     check = (
         hit is not None
         and hit.policy_used is not ReusePolicy.EXACT
@@ -408,6 +433,41 @@ def run_call(
         *_execution(key, context, profile, identities, output_identity, started, attributes),
     )
     return Result(decoded, output_identity, key, context, placement, None)
+
+
+def _host_fields(
+    hardware: HardwareInfo, placement: Placement, bound: Mapping[str, tuple[InputIdentity, object, str | None]]
+) -> dict[str, Any]:
+    """Return the context fields this host and the bound inputs decide: platform, numerics, decoder, host, protocol."""
+    return {
+        "platform": sysconfig.get_platform(),
+        "numerics": numerics_class(hardware, placement.device, PRECISION),
+        "decoder": next((d for _, _, d in bound.values() if d is not None), None),
+        "host": platform.node(),
+        "protocol": f"wire@{WIRE_VERSION}",
+    }
+
+
+def _code_license(run: RunConfig, backend: BackendSpec, model: ResolvedModel | None) -> License | None:
+    """Return the code license of `backend`'s env, once `run.licenses`, when given, accepts it and the model's.
+
+    Raises:
+        LicenseRefused: the policy refuses the env's or the model's license.
+    """
+    code = env_license(backend)
+    if run.licenses is not None:
+        run.licenses.check(f"the env of backend {backend.name!r}", code)
+        if model is not None:
+            run.licenses.check(f"model {model.ref}", model.license)
+    return code
+
+
+def _hit(store: ResultStore, key: LogicalKey, context: ExecutionContext, run: RunConfig) -> StoredResult | None:
+    """Return the stored result `run.reuse` admits for `key` in `context`, unless `run.licenses` refuses its env."""
+    hit = store.get(key, context, run.reuse, record=False)
+    if hit is not None and run.licenses is not None and run.licenses.refusal("", hit.context.env_license):
+        return None
+    return hit
 
 
 def _bound(spec: TaskSpec, call: TaskCall) -> dict[str, tuple[InputIdentity, object, str | None]]:

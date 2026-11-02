@@ -60,6 +60,7 @@ def _ctx(**overrides: object) -> ExecutionContext:
         "host": "node1",
         "protocol": "worker-c0ffee/wire-1",
         "model_source": "hf",
+        "env_license": None,
     }
     fields.update(overrides)
     return ExecutionContext.model_validate(fields)
@@ -300,9 +301,12 @@ def test_key_schema_version_is_a_positive_integer(schema_version: object) -> Non
 
 
 @pytest.mark.logic
-def test_fingerprint_excludes_host_protocol_and_model_source() -> None:
-    """Host, protocol and model source do not reach the fingerprint; every other context field does."""
+def test_fingerprint_excludes_host_protocol_model_source_and_license() -> None:
+    """Host, protocol, model source and env license do not reach the fingerprint; every other context field does."""
     base = _ctx()
+    mit = {"expression": "MIT", "commercial_use": "yes", "copyleft": "none", "attribution": True, "gated": False}
+    licensed = _ctx(env_license={**mit, "source": "lock", "verified": {"date": "2026-11-02", "how": "pep639"}})
+    assert licensed.fingerprint() == base.fingerprint() and licensed != base
     assert _ctx(host="node2").fingerprint() == base.fingerprint()
     assert _ctx(protocol="worker-beef/wire-2").fingerprint() == base.fingerprint()
     for source in ("url", "local", None):
@@ -370,9 +374,10 @@ def test_every_policy_member_is_dispatched(policy: ReusePolicy) -> None:
 
 @pytest.mark.logic
 def test_fingerprint_is_the_context_tagged_digest() -> None:
-    """The fingerprint is `identity_digest("context@3", fields without host, protocol and model source)`."""
+    """The fingerprint is `identity_digest("context@3", fields without host, protocol, model source, env license)`."""
     c = _ctx()
-    assert c.fingerprint() == identity_digest("context@3", c.model_dump(exclude={"host", "protocol", "model_source"}))
+    recorded_only = {"host", "protocol", "model_source", "env_license"}
+    assert c.fingerprint() == identity_digest("context@3", c.model_dump(exclude=recorded_only))
 
 
 @pytest.mark.logic

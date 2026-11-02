@@ -27,6 +27,7 @@ from senselab_core.kernel.identity import (
     ReusePolicy,
     member_key,
 )
+from senselab_core.kernel.license import License
 from senselab_core.kernel.results import Intervals, Metric, Transcript, TranscriptNode, Trials
 from senselab_core.kernel.signals import Audio, PlainText
 from senselab_core.kernel.time import Span, TimeAnchor
@@ -47,6 +48,7 @@ from senselab_core.runtime.call import packaged as packaged_now
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import SAMPLING
+from senselab_core.runtime.licenses import LicensePolicy, LicenseRefused, license_record
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.tolerance import NoToleranceProfile, read_profile, tolerance_profile_path
@@ -594,3 +596,61 @@ def test_verify_is_a_fraction(k: float) -> None:
     """`verify` outside [0, 1] is refused."""
     with pytest.raises(ValueError, match="verify"):
         RunConfig(verify=k)
+
+
+def _record(expression: str) -> License:
+    return license_record(expression, source="lock", verified={"date": "2026-11-02", "how": "pep639"}, gated=False)
+
+
+@pytest.fixture
+def licensed() -> Iterator[None]:
+    """Every env of the fake stack is locked to packages licensed `Apache-2.0 AND MPL-2.0`; the toy model is MIT."""
+    records = {"pkg": _record("Apache-2.0 AND MPL-2.0")}
+    previous = use_packaged(dataclasses.replace(packaged_now(), lock_records=lambda _: records))
+    yield
+    use_packaged(previous)
+
+
+@pytest.mark.logic
+@pytest.mark.usefixtures("licensed")
+def test_the_env_license_is_recorded_on_the_context_and_its_agent(store: ResultStore) -> None:
+    """A result's context and agent carry its env's license; a reuse names that agent as the one that computed it."""
+    result = run_call(_call(), execution=_profile("alpha"), store=store)
+    assert result.context.env_license is not None and result.context.env_license.expression == "Apache-2.0 AND MPL-2.0"
+    [agent] = store.provenance.agents()
+    assert prov.literal_value(agent.node()["senselab:license"]) == result.context.env_license.model_dump(mode="json")
+    assert run_call(_call(), execution=_profile("alpha"), store=store).reused is ReusePolicy.EXACT
+    [reuse] = [a.node() for a in _activities(store) if "senselab:Reuse" in a.types()]
+    assert prov.literal_value(reuse["senselab:storedAgent"]) == agent.id
+
+
+@pytest.mark.logic
+@pytest.mark.usefixtures("licensed")
+def test_only_a_users_license_policy_refuses_a_call(store: ResultStore) -> None:
+    """With no policy a call runs; a policy refusing an id of the env's or the model's license refuses it first."""
+    for policy, subject in [
+        (LicensePolicy(refuse=frozenset({"MPL-2.0"})), "fake-alpha"),
+        (LicensePolicy(allow=frozenset({"MIT"})), "fake-alpha"),
+        (LicensePolicy(allow=frozenset({"apache-2.0", "mpl-2.0"})), "model"),
+    ]:
+        with pytest.raises(LicenseRefused, match=subject):
+            run_call(_call(), execution=_profile("alpha"), store=store, run=RunConfig(licenses=policy))
+    assert _activities(store) == []
+    allowed = RunConfig(licenses=LicensePolicy(allow=frozenset({"MIT", "Apache-2.0", "MPL-2.0"})))
+    assert run_call(_call(), execution=_profile("alpha"), store=store, run=allowed).reused is None
+
+
+@pytest.mark.logic
+@pytest.mark.usefixtures("licensed")
+def test_a_policy_never_serves_a_result_from_an_env_it_refuses(tmp_path: Path) -> None:
+    """Under `tolerant` a stored result from a GPL env is served, unless the run's policy refuses GPL."""
+    here = run_call(_call("v"), execution=_profile("alpha"), store=ResultStore(tmp_path / "here"))
+    gpl = ExecutionContext.model_validate(
+        {**here.context.model_dump(), "numerics": GPU, "env_license": _record("GPL-3.0-only")}
+    )
+    no_gpl = LicensePolicy(refuse=frozenset({"GPL-3.0-only"}))
+    for policy, reused in [(None, ReusePolicy.TOLERANT), (no_gpl, None)]:
+        store = ResultStore(tmp_path / str(policy))
+        store.put(here.key, {"value": "from a GPL env"}, gpl)
+        run = RunConfig(ReusePolicy.TOLERANT, licenses=policy)
+        assert run_call(_call("v"), execution=_profile("alpha"), store=store, run=run).reused is reused

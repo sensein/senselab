@@ -24,11 +24,11 @@ from senselab_core.kernel.results import TextSpans
 from senselab_core.runtime.call import CallFailed, Packaged, TaskCall, close_workers, run_call, use_packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
+from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.vllm_server import AttestationMismatch, VllmServer, config_digest, server_args
 from senselab_core.testing.contracts import contract_cases
-from senselab_core.testing.lock_licenses import packaged_lock_records
 from senselab_core.testing.workers import RealWorkers
 from senselab_worker.faults import FaultClass
 
