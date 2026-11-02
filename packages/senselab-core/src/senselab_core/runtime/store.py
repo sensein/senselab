@@ -103,7 +103,7 @@ EVIDENCE_NAME = re.compile(r"[0-9a-f]{64}\.json")
 QUARANTINE_DIR = "quarantine"
 RESULT_FORMAT = "result@2.0"
 CONTEXT_FORMAT = "execution-context@3.0"
-RETIRED_STORE_FORMATS = frozenset({"result@1", "execution-context@1"})
+RETIRED_STORE_FORMATS = frozenset({"result@1", "execution-context@1", "execution-context@2"})
 """Store member formats 2.x no longer reads, as `<name>@<major>`."""
 STORE_MIGRATION_STATEMENT = "specs/20261030-140022-senselab-2x-api/migration-ledger.md#retired-store-formats"
 """Where the statement on retired store formats is: they are not read; recomputing under this version migrates."""

@@ -17,8 +17,8 @@ from senselab_core.runtime.store import (
 
 SKEWS: dict[str, tuple[str, Callable[[dict[str, Any]], None]]] = {
     "later_major_result": ("result.json", lambda r: r.update(format="result@3.0")),
-    "later_major_context": ("context.json", lambda r: r.update(format="execution-context@3.0")),
-    "later_minor_context_field": ("context.json", lambda r: r.update(format="execution-context@2.4", added=1)),
+    "later_major_context": ("context.json", lambda r: r.update(format="execution-context@4.0")),
+    "later_minor_context_field": ("context.json", lambda r: r.update(format="execution-context@3.4", added=1)),
 }
 
 
@@ -44,7 +44,7 @@ def test_a_later_minor_is_read(tmp_path: Path) -> None:
     s.put(k, {"y": 1}, c)
     entry = entry_dir(tmp_path, k, c)
     rewrite_json(entry / "result.json", lambda r: r.update(format="result@2.3", added=1))
-    rewrite_json(entry / "context.json", lambda r: r.update(format="execution-context@2.4"))
+    rewrite_json(entry / "context.json", lambda r: r.update(format="execution-context@3.4"))
     got = s.get(k, c, ReusePolicy.EXACT)
     assert got is not None and got.outputs == {"y": 1}
 
