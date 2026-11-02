@@ -754,6 +754,23 @@ def test_backend_subdir_in_array_dir_does_not_fail_runs(tmp_path: Path, backends
 
 
 @pytest.mark.logic
+def test_a_worker_is_started_isolated_from_the_callers_environment(
+    tmp_path: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker runs under `-I` in its interpreter's directory with the allowlist only; numerics variables are kept."""
+    monkeypatch.setenv("PYTHONSTARTUP", str(tmp_path / "startup.py"))
+    monkeypatch.setenv("SENSELAB_AMBIENT", "1")
+    monkeypatch.setenv("OMP_NUM_THREADS", "3")
+    monkeypatch.chdir(tmp_path)
+    with WorkerClient(sys.executable, "backends.environ_backend_fixture", init={}, array_parent=tmp_path) as c:
+        [result] = c.run([{"id": "i", "inputs": {}}], {})
+    started = result["outputs"]
+    assert started["isolated"] == 1 and started["cwd"] == str(Path(os.path.abspath(sys.executable)).parent)
+    assert started["environ"]["OMP_NUM_THREADS"] == "3"
+    assert not {"PYTHONSTARTUP", "SENSELAB_AMBIENT", "PYTHONPATH"} & set(started["environ"])
+
+
+@pytest.mark.logic
 @pytest.mark.parametrize("copies", [2, 5])
 def test_one_array_in_every_items_outputs_is_read_once(tmp_path: Path, backends_importable: None, copies: int) -> None:
     """Results naming one array file are one read-only array; an array in one result alone stays writable."""

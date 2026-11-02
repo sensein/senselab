@@ -57,9 +57,10 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> EnvHandle:
     out.mkdir()
     exe = tmp_path / "env" / "bin" / "vllm"
     exe.parent.mkdir(parents=True)
-    exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE}" "$@"\n')
+    knobs = 'FAKE_VLLM_KNOBS="$(dirname "$0")/fake_vllm.json"'
+    exe.write_text(f'#!/bin/sh\n{knobs} exec "{sys.executable}" "{FAKE}" "$@"\n')
     exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
-    monkeypatch.setenv("FAKE_VLLM_DIR", str(out))
+    _knob(tmp_path, FAKE_VLLM_DIR=str(out))
     return EnvHandle(
         python=str(exe.with_name("python")),
         python_version="3.12",
@@ -67,6 +68,12 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> EnvHandle:
         wheel_set="w" * 8,
         torch_index=None,
     )
+
+
+def _knob(tmp_path: Path, **knobs: str) -> None:
+    """Set `knobs` for the fake server of the `env` fixture."""
+    path = tmp_path / "env" / "bin" / "fake_vllm.json"
+    path.write_text(json.dumps({**(json.loads(path.read_text()) if path.exists() else {}), **knobs}))
 
 
 def _server(env: EnvHandle, tmp_path: Path, settings: dict[str, Any] = SETTINGS) -> vs.VllmServer:
@@ -101,7 +108,7 @@ def test_attestation_enters_context(env: EnvHandle, tmp_path: Path) -> None:
     with _server(env, tmp_path) as server:
         attestation = server.attestation
         assert attestation == vs.Attestation(
-            "0.31.0", SHA, identity_digest(vs.CONFIG_TAG, [*server.args, "VLLM_USE_FLASHINFER_SAMPLER=0"])
+            "0.31.0", "org/model", SHA, identity_digest(vs.CONFIG_TAG, [*server.args, "VLLM_USE_FLASHINFER_SAMPLER=0"])
         )
         driver = _context(server.context_fields()).driver
         assert {k: driver[k] for k in attestation.driver()} == attestation.driver()
@@ -109,6 +116,19 @@ def test_attestation_enters_context(env: EnvHandle, tmp_path: Path) -> None:
     (record,) = _records(tmp_path)
     assert record["argv"][1] == "org/model"
     assert {f"--revision={SHA}", f"--tokenizer-revision={SHA}", "--max-num-seqs=4"} <= set(record["argv"])
+
+
+def test_an_ambient_engine_variable_reaches_the_context(
+    env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ambient `VLLM_*` variable the server inherits changes the launch digest its context records."""
+    digests = []
+    for backend in (None, "FLASH_ATTN"):
+        if backend is not None:
+            monkeypatch.setenv("VLLM_ATTENTION_BACKEND", backend)
+        with _server(env, tmp_path) as server:
+            digests.append(_context(server.context_fields()).driver["launch_env"])
+    assert digests[0] != digests[1]
 
 
 def test_restart_with_new_config_changes_attestation(env: EnvHandle, tmp_path: Path) -> None:
@@ -161,7 +181,7 @@ def test_server_stops_on_exit(env: EnvHandle, tmp_path: Path) -> None:
 
 def test_reply_from_another_model_is_stale(env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A reply naming another model does not carry the attestation."""
-    monkeypatch.setenv("FAKE_VLLM_REPLY_MODEL", "org/other")
+    _knob(tmp_path, FAKE_VLLM_REPLY_MODEL="org/other")
     with _server(env, tmp_path) as server, pytest.raises(vs.StaleAttestation, match="another model than org/model@"):
         server.chat([{"role": "user", "content": "hi"}], sampling={})
 
@@ -173,7 +193,7 @@ def test_start_failure_is_typed_and_stops(
     env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str, kind: str
 ) -> None:
     """A server that exits, serves another model or reports no version raises its kind and leaves nothing."""
-    monkeypatch.setenv(variable, {"FAKE_VLLM_EXIT": "1", "FAKE_VLLM_ROOT": "org/other"}.get(variable, ""))
+    _knob(tmp_path, **{variable: {"FAKE_VLLM_EXIT": "1", "FAKE_VLLM_ROOT": "org/other"}.get(variable, "")})
     server = _server(env, tmp_path)
     with pytest.raises(vs.VllmStartError) as raised:
         server.__enter__()
@@ -213,7 +233,7 @@ def test_local_model_errors_name_no_path(env: EnvHandle, tmp_path: Path, monkeyp
     """A local model is served by its path, and an error names it by identity, never by that path."""
     weights = tmp_path / "private-weights"
     model = ResolvedModel(ref=ModelRef.parse(f"local:{weights}"), identity="c" * 64)
-    monkeypatch.setenv("FAKE_VLLM_ROOT", "elsewhere")
+    _knob(tmp_path, FAKE_VLLM_ROOT="elsewhere")
     server = vs.VllmServer(
         env, model, SETTINGS, start_lock_dir=tmp_path / "locks", startup_timeout_s=30, start_margin_s=1
     )
