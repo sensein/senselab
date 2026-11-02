@@ -256,12 +256,20 @@ def numeric_gap(a: Sequence[float | None], b: Sequence[float | None]) -> float |
     """Return the largest absolute difference of two equal-length numeric leaves, 0 when empty.
 
     A None agrees only with a None at the same position; a None against a number returns None, a disagreement
-    and never a distance.
+    and never a distance. Equal values (an infinity against the same infinity) differ by 0; a pair with any
+    other non-finite value differs by `inf`.
     """
     if any((x is None) != (y is None) for x, y in zip(a, b, strict=True)):
         return None
     pairs = [(x, y) for x, y in zip(a, b, strict=True) if x is not None and y is not None]
-    return max((abs(x - y) for x, y in pairs), default=0.0)
+    return max((_pair_gap(x, y) for x, y in pairs), default=0.0)
+
+
+def _pair_gap(x: float, y: float) -> float:
+    if x == y:
+        return 0.0
+    gap = abs(x - y)
+    return gap if math.isfinite(gap) else math.inf
 
 
 def within(expected: Mapping[str, Value], actual: Mapping[str, Value], profile: ToleranceProfile) -> dict[str, str]:
@@ -270,8 +278,8 @@ def within(expected: Mapping[str, Value], actual: Mapping[str, Value], profile: 
     Each path is judged by the profile's field of its `index_free` form. Speaker turns are compared under
     `relabel_turns`. A path differs when `actual` lacks it, its shape differs, a
     None stands against a number (`numeric_gap`),
-    the profile has no tolerance for it, or the difference exceeds the profile's tolerance (an exact field must be
-    equal).
+    the profile has no tolerance for it, or the difference exceeds the profile's tolerance or is infinite (an exact
+    field must be equal).
     """
     bound = {f.path: f.tolerance for f in profile.fields}
     actual = relabel_turns(expected, actual)
@@ -289,6 +297,6 @@ def within(expected: Mapping[str, Value], actual: Mapping[str, Value], profile: 
             out[path] = f"{len(a)} values against {len(b)}"
         elif (gap := numeric_gap(a, b)) is None:
             out[path] = "a None against a number"
-        elif gap > bound[index_free(path)]:
+        elif gap > bound[index_free(path)] or math.isinf(gap):
             out[path] = f"difference {gap:g} exceeds tolerance {bound[index_free(path)]:g}"
     return out
