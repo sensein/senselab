@@ -19,10 +19,10 @@ from types import ModuleType
 from typing import Any
 
 import numpy
-import yaml
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.formats import PARITY_OUTPUTS_FORMAT, PARITY_REFERENCE_FORMAT, FormatTag, Formatted
 from senselab_core.runtime.tolerance import INTERVALS_FORMAT, Fields, ToleranceProfile, Value, flatten, within
+from senselab_core.runtime.tolerance import load_profile as read_profile_file
 
 ROOT = Path(__file__).resolve().parents[1]
 HELDOUT = "heldout"
@@ -162,9 +162,9 @@ def convert(directory: Path, *, task: str, backend: str, alpha_sha: str, job: st
 
 
 def load_profile(path: Path) -> ToleranceProfile:
-    """Read a `tolerance@2.0` file, refusing one not derived from calibration items alone."""
+    """Read a profile as the runtime does (`runtime.tolerance.load_profile`), refusing one not from calibration."""
     tol = tolerance_module()
-    profile = ToleranceProfile.model_validate(yaml.safe_load(path.read_text("utf-8")))
+    profile = read_profile_file(path)
     held = sorted(i for i in profile.derivation.items if split_of(i) != tol.CALIBRATION)
     if profile.derivation.split != tol.CALIBRATION or held:
         raise ParityError(f"{path.name} is not a calibration-only profile; held-out items: {held}")

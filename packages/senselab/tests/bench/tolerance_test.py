@@ -188,7 +188,7 @@ def test_label_permutation_derives_no_spread() -> None:
 
 
 def _asr_observations(tmp_path: Path, device: str, span: list[float | None]) -> Any:  # noqa: ANN401
-    """A speech_to_text observation as the ORCD jobs wrote it (`flatten@1`), read through `load_observations`.
+    """A real-shaped speech_to_text observation file, read through `load_observations`.
 
     `timestamps: none` leaves each span `[null]`; the text is a JSON-encoded string.
     """
@@ -208,7 +208,8 @@ def _asr_observations(tmp_path: Path, device: str, span: list[float | None]) -> 
         for batch in ("1", "N")
     ]
     document = {
-        "format": "tolerance-observations@1.0",
+        "format": "tolerance-observations@2.0",
+        "flatten": "flatten@2",
         "task": "speech_to_text",
         "backend": "transformers",
         "sha": "a" * 40,
@@ -222,10 +223,8 @@ def _asr_observations(tmp_path: Path, device: str, span: list[float | None]) -> 
 
 @pytest.mark.logic
 def test_real_shaped_asr_observation_validates(tmp_path: Path) -> None:
-    """A `flatten@1` file with a `[null]` span and a JSON-encoded text string is read as `flatten@2`, None kept."""
-    observations = _asr_observations(tmp_path, "cpu", [None])
-    assert (observations.format, observations.flatten) == ("tolerance-observations@2.0", "flatten@2")
-    [item] = observations.items
+    """A `[null]` span and a JSON-encoded text string validate, the None kept as None."""
+    [item] = _asr_observations(tmp_path, "cpu", [None]).items
     assert item.runs[0].fields["transcript.segments[0].span"] == [None]
     assert item.runs[0].fields["transcript.segments[0].text"] == '"HELLO WORLD"'
 
@@ -346,45 +345,19 @@ def _old(fields: dict[str, Any], **override: Any) -> dict[str, Any]:  # noqa: AN
 
 @pytest.mark.logic
 @pytest.mark.parametrize(
-    ("document", "reason"),
+    "document",
     [
-        (_old({"turns.label": json.dumps("['SPEAKER_00' 'SPEAKER_01']")}), "array reprs at"),
-        (_old({"spans.label": json.dumps("['NAME' 'NAME' ... 'NAME']")}), "array reprs at"),
-        (_old({"turns.label": []}), "array reprs at"),
-        (_old({}, format="tolerance-observations@2.0", flatten="flatten@1"), "re-measure it"),
-        (_old({}, format="tolerance-observations@2.0"), "re-measure it"),
-        (_old({}, format="tolerance-observations@3.0", flatten="flatten@2"), "re-measure it"),
+        _old({"embedding.vector": [0.5]}),
+        _old({"turns.label": json.dumps("['SPEAKER_00' 'SPEAKER_01']")}),
+        _old({}, format="tolerance-observations@2.0", flatten="flatten@1"),
+        _old({}, format="tolerance-observations@2.0"),
+        _old({}, format="tolerance-observations@3.0", flatten="flatten@2"),
     ],
-    ids=["diarize-repr", "pii-truncated-repr", "empty-label-array", "older-flatten", "no-flatten", "other-format"],
+    ids=["observations@1", "observations@1-repr", "older-flatten", "no-flatten", "other-format"],
 )
-def test_stale_observations_refused(tmp_path: Path, document: dict[str, Any], reason: str) -> None:
-    """An observation file of an older flatten, or a flatten@1 one holding an array repr, is refused by name."""
+def test_stale_observations_refused(tmp_path: Path, document: dict[str, Any]) -> None:
+    """Every observation file not of the current format and flatten is refused by name, never upgraded."""
     path = _write(tmp_path, document)
-    with pytest.raises(tol.ToleranceError, match=reason) as raised:
+    with pytest.raises(tol.ToleranceError, match="re-measure it") as raised:
         tol.load_observations(path)
     assert str(path) in str(raised.value)
-
-
-@pytest.mark.logic
-@pytest.mark.parametrize(
-    "fields",
-    [
-        {"embedding.vector": [0.5, 1.5]},
-        {"transcript.segments[0].span": [None], "transcript.segments[0].text": '"[inaudible"'},
-        {"series.channels[0].name": '"left"', "series.data": [0.0, 1.0]},
-    ],
-    ids=["numeric", "null-span", "indexed-names"],
-)
-def test_flatten1_observations_without_reprs_upgrade(tmp_path: Path, fields: dict[str, Any]) -> None:
-    """A flatten@1 file whose fields flatten@2 writes alike is read unchanged, as flatten@2."""
-    observations = tol.load_observations(_write(tmp_path, _old(fields)))
-    assert observations.flatten == "flatten@2" and dict(observations.items[0].runs[0].fields) == fields
-
-
-@pytest.mark.logic
-def test_bracketed_text_is_not_an_array_repr(tmp_path: Path) -> None:
-    """Text such as `[BLANK_AUDIO]` is no array repr: only quoted elements apart by whitespace are."""
-    fields = {"t[0].text": json.dumps("[BLANK_AUDIO]"), "t[1].text": json.dumps("['a', 'b']")}
-    assert tol.load_observations(_write(tmp_path, _old(fields))).flatten == "flatten@2"
-    with pytest.raises(tol.ToleranceError, match="array reprs"):
-        tol.load_observations(_write(tmp_path, _old({"t.label2": json.dumps("['a' 'b'\n 'c']")})))

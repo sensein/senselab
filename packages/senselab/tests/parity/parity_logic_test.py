@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 import yaml
 from senselab_core.kernel.formats import PARITY_OUTPUTS_FORMAT, PARITY_REFERENCE_FORMAT
+from senselab_core.runtime.tolerance import ToleranceProfileRetired
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -235,3 +236,12 @@ def test_diarization_speaker_without_counterpart_is_a_mismatch(tmp_path: Path) -
     assert par.compare(one, two, profile)
     assert par.compare(two, one, profile)
     assert par.compare(two, turns(["SPEAKER_00", "SPEAKER_01"]), profile) == []
+
+
+@pytest.mark.logic
+def test_parity_refuses_a_retired_profile(tmp_path: Path) -> None:
+    """Parity reads profiles through the runtime's loader, so a `tolerance@1.0` profile is refused as retired."""
+    path = _profile(tmp_path, _ids("calibration", 1), {"v": ("numeric", 0.0)})
+    path.write_text(path.read_text("utf-8").replace("tolerance@2.0", "tolerance@1.0"), "utf-8")
+    with pytest.raises(ToleranceProfileRetired, match="regenerate"):
+        par.load_profile(path)

@@ -10,7 +10,6 @@ import argparse
 import importlib.util
 import itertools
 import json
-import re
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -340,42 +339,13 @@ def _measure_cli(args: argparse.Namespace) -> None:
     args.out.write_text(observations.model_dump_json(indent=1), "utf-8")
 
 
-def _upgradable(raw: dict[str, Any]) -> list[str]:
-    """Return the paths of a `flatten@1` observation that `flatten@2` writes differently, empty if none.
-
-    `flatten@1` wrote a non-numeric array as its truncated repr, one string at the array's own path, where
-    `flatten@2` writes one indexed path per element; it differs from `flatten@2` nowhere else.
-    """
-    found = set()
-    for item in raw.get("items", []):
-        for run in item.get("runs", []):
-            for path, value in run.get("fields", {}).items():
-                text = json.loads(value) if isinstance(value, str) else None
-                if path.endswith(".label") or (isinstance(text, str) and _ARRAY_REPR.fullmatch(text)):
-                    found.add(path)
-    return sorted(found)
-
-
-_ELEMENT = r"""(?:'[^']*'|"[^"]*")"""
-_ARRAY_REPR = re.compile(rf"\[\s*(?:{_ELEMENT}(?:\s+{_ELEMENT}|\s+\.\.\.)*)?\s*\]", re.DOTALL)
-"""The repr numpy gives a string array: quoted elements apart by whitespace, `...` where it is truncated."""
-
-
 def load_observations(path: Path) -> Observations:
-    """Read one observation file of the current flatten, or upgrade a `tolerance-observations@1.0` one.
-
-    A `@1.0` file was written by `flatten@1`; it is read as `flatten@2` when no field holds an array repr, where the
-    two are identical and paths are pooled by `index_free` in `derive` alike.
+    """Read one observation file, of the current format and flatten only.
 
     Raises:
-        ToleranceError: the file is of another flatten, or a `@1.0` file holds an array repr; it names the file.
+        ToleranceError: the file is of another format or flatten; it names the file.
     """
     raw = json.loads(path.read_text("utf-8"))
-    if raw.get("format") == "tolerance-observations@1.0":
-        stale = _upgradable(raw)
-        if stale:
-            raise ToleranceError(f"{path}: flatten@1 observations hold array reprs at {stale[:5]}; re-measure them")
-        raw = {**raw, "format": TOLERANCE_OBSERVATIONS_FORMAT, "flatten": "flatten@2"}
     if raw.get("flatten") != FLATTEN_VERSION or raw.get("format") != TOLERANCE_OBSERVATIONS_FORMAT:
         raise ToleranceError(
             f"{path}: written by {raw.get('flatten', 'flatten@1')} as {raw.get('format')}, generate reads"

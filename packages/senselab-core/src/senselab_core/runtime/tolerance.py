@@ -89,11 +89,21 @@ def read_profile(folder: Path | Traversable, task: str, backend: str) -> Toleran
     path = tolerance_profile_path(folder, task, backend)
     if not path.is_file():
         raise NoToleranceProfile(f"backend {backend!r} of {task!r} has no tolerance profile")
+    return load_profile(path)
+
+
+def load_profile(path: Path | Traversable) -> ToleranceProfile:
+    """Return the profile in the file `path`.
+
+    Raises:
+        ToleranceProfileRetired: it is in a retired format.
+        pydantic.ValidationError: the file is not a `tolerance@2.0` profile.
+    """
     raw = yaml.safe_load(path.read_text("utf-8"))
     found = raw.get("format") if isinstance(raw, dict) else None
     if isinstance(found, str) and found.startswith("tolerance@") and not readable(TOLERANCE_FORMAT, found):
         raise ToleranceProfileRetired(
-            f"the profile of {backend!r} of {task!r} is {found}, read {TOLERANCE_FORMAT}: regenerate it with"
+            f"the profile {path.name} is {found}, read {TOLERANCE_FORMAT}: regenerate it with"
             " scripts/generate_tolerance.py generate from observations of the current flatten"
         )
     return ToleranceProfile.model_validate(raw)
