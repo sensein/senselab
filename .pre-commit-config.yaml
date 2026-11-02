@@ -38,7 +38,7 @@ repos:
     entry: uv run --frozen --no-sync mypy --strict --platform linux --ignore-missing-imports --extra-checks
     language: system
     files: ^packages/.*\.py$
-    exclude: ^packages/conftest\.py$
+    exclude: ^packages/(.*/)?conftest\.py$
     require_serial: true
 - repo: https://github.com/pre-commit/mirrors-mypy
   rev: v1.18.2
