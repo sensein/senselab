@@ -33,8 +33,8 @@ def run_alone(worker: WorkerClient, items: Mapping[str, dict[str, Any]], params:
 class RealWorkers:
     """Start workers through the packaged env opener under `profile`; `close` stops every one started.
 
-    Each worker loads its backend's first model at the packaged catalogue's pin, on `cuda` when the host has a GPU,
-    else `cpu`.
+    One worker is live at a time: starting a worker first stops those started before it. Each worker loads its
+    backend's first model at the packaged catalogue's pin, on `cuda` when the host has a GPU, else `cpu`.
     """
 
     def __init__(self, profile: ExecutionProfile) -> None:
@@ -44,7 +44,9 @@ class RealWorkers:
         self.started: list[WorkerClient] = []
 
     def __call__(self, task: str, name: str, faults: Mapping[str, Any] | None = None) -> WorkerClient:
-        """Return a started worker of backend `name` of `task`, with `faults` (the `FakeFaults` fields) in its init.
+        """Stop the workers started before, then return a started worker of backend `name` of `task`.
+
+        `faults` (the `FakeFaults` fields) go in its init.
 
         Raises:
             ValueError: `task` has no backend `name`.
@@ -55,6 +57,7 @@ class RealWorkers:
             raise ValueError(f"{task!r} has no backend {name!r}")
         backend = found[0]
         entry = packaged().catalogue.entry(backend.models[0])
+        self.close()
         init = {
             "model": {"source": "hf", "id": entry.id, "identity": entry.revision},
             "device": self.device,

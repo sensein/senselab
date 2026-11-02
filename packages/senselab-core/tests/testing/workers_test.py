@@ -92,3 +92,12 @@ def test_worker_runs_in_the_opened_env_on_the_catalogue_pin(env_python: Path, tm
     assert fake.WORKER_MODULE in json.loads((tmp_path / "argv.json").read_text()) and not worker.alive
     with pytest.raises(ValueError, match="no backend"):
         workers(fake.ECHO.name, "absent")
+
+
+def test_starting_a_worker_stops_the_one_before(env_python: Path) -> None:  # noqa: ARG001 - the fixture's effect
+    """Two models never share the device: the second start stops the first worker."""
+    workers = RealWorkers(ExecutionProfile.load())
+    first = workers(fake.ECHO.name, "fake-isolated")
+    second = workers(fake.ECHO.name, "fake-isolated", {"fail_items": ["b"]})
+    assert not first.alive and second.alive and workers.started == [second]
+    workers.close()
