@@ -8,16 +8,20 @@ PROV documents of every call under `<out>/<run id>/prov/`.
 """
 
 import hashlib
+import importlib
+import io
 import json
+import logging
 import tarfile
 from collections import defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, BinaryIO, Protocol
 
 import numpy
+import soundfile
 import yaml
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.formats import BENCHMARK_RESULT_FORMAT, FormatTag, Formatted
@@ -33,6 +37,32 @@ from senselab_core.testing.synth import tone
 SUITE_FORMAT = "benchmark-suite@1.0"
 SPLITS = ("calibration", "heldout")
 POOLED = "pooled:"
+
+
+class _Once(logging.Filter):
+    """Lets each distinct message through once."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: set[str] = set()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if message in self.seen:
+            return False
+        self.seen.add(message)
+        return True
+
+
+def log_each_warning_once() -> None:
+    """Make the `transformers` log handlers print each distinct message once per run, when transformers is installed."""
+    try:
+        library = importlib.import_module("transformers.utils.logging")
+    except ImportError:
+        return
+    once = _Once()
+    for handler in library.get_logger("transformers").handlers:
+        handler.addFilter(once)
 
 
 def split_of(item_id: str) -> str:
@@ -66,8 +96,8 @@ class Scoring:
 class Adapter(Protocol):
     """Turns fetched files into items, and a task's outputs into metric inputs."""
 
-    def items(self, files: Mapping[str, Path], count: int, work: Path) -> list[Item]:
-        """Return `count` items; any file the task reads is written under `work`."""
+    def items(self, files: Mapping[str, Path], count: int, work: Path, seconds: float | None) -> list[Item]:
+        """Return `count` items; any file the task reads is written under `work`, cut to `seconds` when given."""
         ...
 
     def scoring(self, items: Sequence[Item], outputs: Mapping[str, Mapping[str, Any]]) -> list[Scoring]:
@@ -126,7 +156,7 @@ def _libri(files: Mapping[str, Path]) -> Path:
 class LibriSpeechAsr(_PerItem):
     """LibriSpeech test-clean utterances, transcribed; the metric reads the reference and hypothesis transcripts."""
 
-    def items(self, files: Mapping[str, Path], count: int, work: Path) -> list[Item]:
+    def items(self, files: Mapping[str, Path], count: int, work: Path, seconds: float | None) -> list[Item]:
         tar_path = _libri(files)
         transcripts, audio = _read_tar(tar_path)
         members = dict(audio)
@@ -146,7 +176,7 @@ class LibriSpeechTrials:
 
     per_speaker = 5
 
-    def items(self, files: Mapping[str, Path], count: int, work: Path) -> list[Item]:
+    def items(self, files: Mapping[str, Path], count: int, work: Path, seconds: float | None) -> list[Item]:
         tar_path = _libri(files)
         _, audio = _read_tar(tar_path)
         members = dict(audio)
@@ -189,10 +219,29 @@ def _parquet_rows(path: Path, columns: Sequence[str]) -> list[dict[str, Any]]:
     return table.to_pylist()  # type: ignore[no-any-return]
 
 
+def _cut_wav(data: bytes, seconds: float | None) -> bytes:
+    """Return the first `seconds` of the WAV `data` as a WAV (the bytes unchanged when `seconds` is None)."""
+    if seconds is None:
+        return data
+    with soundfile.SoundFile(io.BytesIO(data)) as source:
+        rate = source.samplerate
+        samples = source.read(frames=round(seconds * rate), dtype="float32")
+    out = io.BytesIO()
+    soundfile.write(out, samples, rate, format="WAV", subtype="PCM_16")
+    return out.getvalue()
+
+
+def _clip_turns(turns: Iterable[tuple[float, float, str]], seconds: float | None) -> list[tuple[float, float, str]]:
+    """Return the turns cut at `seconds`: later turns dropped, a straddling one ended there."""
+    if seconds is None:
+        return list(turns)
+    return [(s, min(e, seconds), who) for s, e, who in turns if s < seconds]
+
+
 class VoxConverseDiarization(_PerItem):
     """VoxConverse test recordings of the first shard, diarized; the metric reads the reference and hypothesis turns."""
 
-    def items(self, files: Mapping[str, Path], count: int, work: Path) -> list[Item]:
+    def items(self, files: Mapping[str, Path], count: int, work: Path, seconds: float | None) -> list[Item]:
         [shard] = files.values()
         work.mkdir(parents=True, exist_ok=True)
         items = []
@@ -201,8 +250,10 @@ class VoxConverseDiarization(_PerItem):
                 break
             uid = Path(row["audio"].get("path") or f"recording-{n:04d}").stem
             target = work / f"{uid}.wav"
-            target.write_bytes(row["audio"]["bytes"])
-            turns = list(zip(row["timestamps_start"], row["timestamps_end"], row["speakers"], strict=True))
+            target.write_bytes(_cut_wav(row["audio"]["bytes"], seconds))
+            turns = _clip_turns(
+                zip(row["timestamps_start"], row["timestamps_end"], row["speakers"], strict=True), seconds
+            )
             items.append(Item(uid, {"audio": target}, turns))
         return items
 
@@ -217,10 +268,16 @@ class VoxConverseDiarization(_PerItem):
         return {"reference": reference, "hypothesis": hypothesis}
 
 
+def pii_spans(raw: str | Sequence[Any]) -> list[dict[str, Any]]:
+    """Return the span dicts `{start, end, label}` of a gretel `pii_spans` value."""
+    parsed = json.loads(raw) if isinstance(raw, str) else raw
+    return [json.loads(s) if isinstance(s, str) else dict(s) for s in parsed]
+
+
 class GretelPii(_PerItem):
     """Gretel synthetic finance documents of the test split; the metric reads reference and hypothesis spans."""
 
-    def items(self, files: Mapping[str, Path], count: int, work: Path) -> list[Item]:  # noqa: ARG002 - the protocol
+    def items(self, files: Mapping[str, Path], count: int, work: Path, seconds: float | None) -> list[Item]:  # noqa: ARG002 - the protocol
         [parquet] = files.values()
         rows = {
             f"{r['language']}-{r['index']}": r
@@ -229,8 +286,7 @@ class GretelPii(_PerItem):
         items = []
         for uid in _by_digest(list(rows))[:count]:
             text = PlainText(content=rows[uid]["generated_text"])
-            spans = [json.loads(s) if isinstance(s, str) else s for s in rows[uid]["pii_spans"]]
-            spans = [s for s in spans if 0 <= s["start"] <= s["end"] <= len(text.content)]
+            spans = [s for s in pii_spans(rows[uid]["pii_spans"]) if 0 <= s["start"] <= s["end"] <= len(text.content)]
             reference = TextSpans.over(
                 text,
                 start=numpy.array([s["start"] for s in spans], dtype=numpy.int64),
@@ -251,7 +307,7 @@ class SyntheticTones(_PerItem):
     source_rate = 44_100
     target_rate = 16_000
 
-    def items(self, files: Mapping[str, Path], count: int, work: Path) -> list[Item]:  # noqa: ARG002 - no data
+    def items(self, files: Mapping[str, Path], count: int, work: Path, seconds: float | None) -> list[Item]:  # noqa: ARG002 - no data
         tones = [self.frequencies_hz[n % len(self.frequencies_hz)] for n in range(count)]
         return [
             Item(f"tone-{n:02d}", {"series": tone(f, duration_s=1.0, sampling_rate=self.source_rate)}, f)
@@ -290,6 +346,7 @@ class Benchmark:
     metric: str
     manifest: str | None = None
     model: str | None = None
+    max_seconds: float | None = None
     params: Mapping[str, Any] = field(default_factory=dict)
     metric_params: Mapping[str, Any] = field(default_factory=dict)
 
@@ -417,7 +474,7 @@ def _run_benchmark(  # noqa: PLR0913 - the benchmark and everything it runs unde
     work: Path,
     contexts: dict[str, ExecutionContext],
 ) -> tuple[Row, ...]:
-    items = adapter.items(files, bench.items, work)
+    items = adapter.items(files, bench.items, work, bench.max_seconds)
     records: dict[str, CallRecord] = {}
     outputs: dict[str, Mapping[str, Any]] = {}
     rows: list[Row] = []
@@ -480,6 +537,7 @@ def run_suite(  # noqa: PLR0913 - the suite and where everything it reads and wr
         SuiteError: a benchmark names an adapter or a manifest that does not exist.
         As `fetch` and `run_call`, but a call the backend fails (`CallFailed`) is recorded as a row's fault.
     """
+    log_each_warning_once()
     run = out / run_id
     run.mkdir(parents=True, exist_ok=False)
     store = store if store is not None else ResultStore(out / "results")

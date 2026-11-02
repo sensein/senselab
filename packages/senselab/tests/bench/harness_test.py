@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import logging
 import platform
 import sys
 from collections.abc import Iterator, Mapping, Sequence
@@ -104,7 +105,7 @@ def packaged() -> Iterator[None]:
 class ToyAdapter:
     """Items are the lines of the one fetched file; the metric is the word error rate against the line."""
 
-    def items(self, files: Mapping[str, Path], count: int, work: Path) -> list[Any]:  # noqa: ARG002, D102
+    def items(self, files: Mapping[str, Path], count: int, work: Path, seconds: float | None) -> list[Any]:  # noqa: ARG002, D102
         [path] = files.values()
         lines = [line.split("\t") for line in path.read_text("utf-8").splitlines()]
         return [harness.Item(uid, {"text": text}, text) for uid, text in lines[:count]]
@@ -277,3 +278,46 @@ def test_fault_text_names_type_and_no_path() -> None:
         {"type": "ValueError", "fault": "content", "message": "bad file /tmp/x/a.wav at C:\\d\\a"}
     )
     assert text == "ValueError (content): bad file <path> at <path>"
+
+
+RECORDED_PII_SPANS = (
+    '[{"start": 21, "end": 66, "label": "company"}, {"start": 83, "end": 93, "label": "date"}]',
+    "[]",
+)
+
+
+@pytest.mark.logic
+def test_gretel_spans_parse_the_recorded_shape() -> None:
+    """The dataset stores `pii_spans` as one JSON array text (recorded rows); elements as texts or dicts also read."""
+    assert harness.pii_spans(RECORDED_PII_SPANS[0]) == [
+        {"start": 21, "end": 66, "label": "company"},
+        {"start": 83, "end": 93, "label": "date"},
+    ]
+    assert harness.pii_spans(RECORDED_PII_SPANS[1]) == []
+    assert (
+        harness.pii_spans(['{"start": 1, "end": 2, "label": "x"}', {"start": 3, "end": 4, "label": "y"}])[1]["start"]
+        == 3
+    )
+
+
+@pytest.mark.logic
+def test_diarization_clip_cuts_audio_and_turns() -> None:
+    """A clip keeps the first seconds of audio and ends or drops the turns past them."""
+    import numpy
+    import soundfile
+
+    buffer = io.BytesIO()
+    soundfile.write(buffer, numpy.zeros(16000 * 5, numpy.float32), 16000, format="WAV")
+    clipped = harness._cut_wav(buffer.getvalue(), 2.0)
+    assert soundfile.info(io.BytesIO(clipped)).frames == 32000
+    assert harness._cut_wav(buffer.getvalue(), None) == buffer.getvalue()
+    turns = [(0.0, 1.0, "a"), (1.5, 3.0, "b"), (2.5, 4.0, "c")]
+    assert harness._clip_turns(turns, 2.0) == [(0.0, 1.0, "a"), (1.5, 2.0, "b")]
+
+
+@pytest.mark.logic
+def test_repeated_warning_prints_once() -> None:
+    """The log filter lets each distinct message through once."""
+    once = harness._Once()
+    records = [logging.LogRecord("t", logging.WARNING, "f", 1, m, None, None) for m in ("a", "a", "b", "a")]
+    assert [once.filter(r) for r in records] == [True, False, True, False]
