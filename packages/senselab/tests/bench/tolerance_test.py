@@ -155,3 +155,27 @@ def test_flatten_leaves_by_path() -> None:
     """Leaves are keyed by dotted path; numbers as float lists, the rest as JSON."""
     flat = tol.flatten({"a": {"b": [1, 2]}, "c": "x", "d": [{"e": 1.5}, "y"]})
     assert flat == {"a.b": [1.0, 2.0], "c": '"x"', "d[0].e": [1.5], "d[1]": '"y"'}
+
+
+class Diarizer:
+    """A worker whose speaker labels swap on every other request; the turns themselves never change."""
+
+    def __init__(self) -> None:
+        """Start at the first labelling."""
+        self.calls = 0
+
+    def run(self, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:  # noqa: ARG002
+        """Return two turns per item, labelled A/B or B/A."""
+        self.calls += 1
+        labels = ["A", "B"] if self.calls % 2 else ["B", "A"]
+        turns = {"start_ns": [0, 10], "end_ns": [10, 15], "label": labels}
+        return [{"id": i["id"], "outputs": {"turns": turns}} for i in items]
+
+
+@pytest.mark.logic
+def test_label_permutation_derives_no_spread() -> None:
+    """Runs differing only by a permutation of speaker labels derive zero spread on every label field."""
+    ids = _ids("calibration", 2)
+    obs = [_observe(Diarizer(), "cpu", ids), _observe(Diarizer(), "cuda", ids)]  # type: ignore[arg-type]
+    labels = [f for f in tol.derive(obs, split_of).fields if f.path.startswith("turns.label")]
+    assert labels and all(f.tolerance == 0.0 for f in labels)
