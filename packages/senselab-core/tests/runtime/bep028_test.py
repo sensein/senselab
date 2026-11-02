@@ -317,11 +317,12 @@ def _failures(base: Path, run: Path) -> list[str]:
             with pytest.raises(RunIOError) as caught:
                 action()
             err = caught.value
-            assert err.filename is None and err.__cause__ is None and err.__suppress_context__
+            assert err.filename is None and err.__cause__ is None and err.__context__ is None
             texts += [str(err), repr(err), err.strerror or ""]
         for read in (ProvStore.read, lambda r: export(r, base / "never")):
             with pytest.raises(MalformedDocument) as refused:
                 read(unreadable)
+            assert refused.value.__context__ is None
             texts += [str(refused.value), repr(refused.value)]
     finally:
         (unreadable / PROV_DIR).chmod(0o700)
