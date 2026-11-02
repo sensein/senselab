@@ -159,3 +159,46 @@ def test_reference_producer_imports_no_2x() -> None:
         elif isinstance(node, ast.ImportFrom):
             roots.add((node.module or "").split(".")[0])
     assert roots <= {"argparse", "json", "pathlib", "typing", "senselab"}
+
+
+@pytest.mark.logic
+def test_diarization_labels_compared_under_best_mapping(tmp_path: Path) -> None:
+    """A speaker-label permutation alone is no mismatch; a turn moved in time or a merged speaker is."""
+    flatten = par.tolerance_module().flatten
+
+    def turns(start: list[int], end: list[int], label: list[str]) -> dict[str, Any]:
+        flat: dict[str, Any] = flatten({"turns": {"start_ns": start, "end_ns": end, "label": label}})
+        return flat
+
+    cal = _ids("calibration", 1)
+    paths = {"turns.start_ns": 0.0, "turns.end_ns": 0.0, **{f"turns.label[{n}]": 0.0 for n in range(3)}}
+    profile = par.load_profile(
+        _profile(tmp_path, cal, {p: ("exact" if "label" in p else "numeric", t) for p, t in paths.items()})
+    )
+    ref = turns([0, 10, 20], [10, 20, 30], ["SPEAKER_00", "SPEAKER_01", "SPEAKER_00"])
+    swapped = turns([0, 10, 20], [10, 20, 30], ["SPEAKER_01", "SPEAKER_00", "SPEAKER_01"])
+    assert par.compare(ref, swapped, profile) == []
+    merged = turns([0, 10, 20], [10, 20, 30], ["SPEAKER_00", "SPEAKER_00", "SPEAKER_00"])
+    assert any("label[1]" in f for f in par.compare(ref, merged, profile))
+    shifted = turns([0, 10, 20], [10, 20, 31], ["SPEAKER_01", "SPEAKER_00", "SPEAKER_01"])
+    assert any("end_ns" in f for f in par.compare(ref, shifted, profile))
+
+
+@pytest.mark.logic
+def test_real_script_path_resolves_every_suite_task() -> None:
+    """The script's own task lookup, for one benchmark of each task of the smoke suite, finds the task and backend."""
+    tol = par.tolerance_module()
+    suite = tol._harness().Suite.load(ROOT / "benchmarks" / "suites" / "smoke.yaml")
+    seen: dict[str, Any] = {}
+    for bench in suite.benchmarks:
+        seen.setdefault(bench.task, bench)
+    assert {"speech_to_text", "diarize", "speaker_embeddings", "pii_spans"} <= set(seen)
+    importlib.import_module("senselab")
+    from senselab_core.runtime.call import packaged  # noqa: PLC0415
+
+    for task, bench in seen.items():
+        if task.startswith("signal."):
+            continue
+        backend = packaged().registry.backends(task)[0].name
+        spec, found = tol.resolve(bench.task, backend)
+        assert spec.name == task and found.name == backend

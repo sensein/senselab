@@ -295,6 +295,15 @@ def _wired(port: str, port_type: str, value: object) -> object:
     return wire_form(bound, READER) if isinstance(bound, Frozen) else bound
 
 
+def resolve(task: str, backend_name: str) -> tuple[Any, Any]:
+    """Return (task spec, backend spec), importing `senselab` first: that import registers the packaged tasks."""
+    importlib.import_module("senselab")
+    from senselab_core.runtime.call import packaged  # noqa: PLC0415 - needs the registered runtime
+
+    backend = next(b for b in packaged().registry.backends(task) if b.name == backend_name)
+    return packaged().registry.spec(task), backend
+
+
 def prepare(  # noqa: PLR0913 - what picks one benchmark's items and params
     suite: Path,
     benchmark: str,
@@ -305,15 +314,13 @@ def prepare(  # noqa: PLR0913 - what picks one benchmark's items and params
     split: str,
 ) -> tuple[Any, Any, dict[str, dict[str, object]], dict[str, Any]]:
     """Return (benchmark, backend spec, wired inputs of the `split` items by id, call params) for one benchmark."""
-    from senselab_core.runtime.call import packaged  # noqa: PLC0415 - only a real run needs the runtime
-    from senselab_core.runtime.fetch import DataManifest, fetch  # noqa: PLC0415
+    from senselab_core.runtime.fetch import DataManifest, fetch  # noqa: PLC0415 - only a real run needs the runtime
 
     harness = _harness()
     [bench] = [b for b in harness.Suite.load(suite).benchmarks if b.name == benchmark]
     manifest = DataManifest.load(ROOT / "benchmarks" / "manifests" / f"{bench.manifest}.yaml")
     files = fetch(manifest, cache_root=data_cache)
-    spec = packaged().registry.spec(bench.task)
-    backend = next(b for b in packaged().registry.backends(bench.task) if b.name == backend_name)
+    spec, backend = resolve(bench.task, backend_name)
     wired = {
         item.id: {p: _wired(p, spec.inputs[p], v) for p, v in item.inputs.items()}
         for item in harness.ADAPTERS[bench.adapter]().items(files, bench.items, work, bench.max_seconds)

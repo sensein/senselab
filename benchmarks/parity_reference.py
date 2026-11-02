@@ -12,6 +12,7 @@ import argparse
 import importlib.util
 import json
 import math
+import re
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -178,6 +179,57 @@ def load_profile(path: Path) -> Bounded:
     return profile
 
 
+_LABEL = re.compile(r"turns\.label\[(\d+)\]")
+
+
+def _assignment(overlap: Mapping[tuple[str, str], float], rows: Sequence[str], cols: Sequence[str]) -> dict[str, str]:
+    """Return the one-to-one map of `cols` onto `rows` of greatest total `overlap` (exhaustive over the columns)."""
+    from functools import lru_cache  # noqa: PLC0415
+
+    @lru_cache(maxsize=None)
+    def best(r: int, used: frozenset[str]) -> tuple[float, tuple[tuple[str, str], ...]]:
+        if r == len(rows):
+            return 0.0, ()
+        options = [best(r + 1, used)]
+        for c in cols:
+            if c not in used:
+                gain, rest = best(r + 1, used | {c})
+                options.append((gain + overlap.get((rows[r], c), 0.0), ((c, rows[r]), *rest)))
+        return max(options, key=lambda o: o[0])
+
+    return dict(best(0, frozenset())[1])
+
+
+def relabel_turns(expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str]) -> dict[str, Any]:
+    """Return `actual` with its speaker labels renamed to `expected`'s by the one-to-one map of most shared time.
+
+    The map is the one DER scores under. `actual` is unchanged where either side has no turns.
+    """
+
+    def keys(fields: Mapping[str, Any]) -> list[str]:
+        found = [(int(m.group(1)), k) for k in fields if (m := _LABEL.fullmatch(k))]
+        return [k for _, k in sorted(found)]
+
+    ek, ak = keys(expected), keys(actual)
+    times = ("turns.start_ns", "turns.end_ns")
+    if not ek or not ak or any(t not in expected or t not in actual for t in times):
+        return dict(actual)
+    elabel = [json.loads(str(expected[k])) for k in ek]
+    alabel = [json.loads(str(actual[k])) for k in ak]
+    overlap: dict[tuple[str, str], float] = {}
+    spans = [[list(f[t]) for t in times] for f in (expected, actual)]
+    for i, (es, ee) in enumerate(zip(*spans[0], strict=True)):
+        for j, (a_s, a_e) in enumerate(zip(*spans[1], strict=True)):
+            gap = min(ee, a_e) - max(es, a_s)
+            if gap > 0:
+                overlap[(elabel[i], alabel[j])] = overlap.get((elabel[i], alabel[j]), 0.0) + gap
+    mapping = _assignment(overlap, sorted(set(elabel)), sorted(set(alabel)))
+    out = dict(actual)
+    for k, label in zip(ak, alabel, strict=True):
+        out[k] = json.dumps(mapping.get(label, label))
+    return out
+
+
 def compare(
     expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str], profile: Bounded
 ) -> list[str]:
@@ -187,6 +239,7 @@ def compare(
     difference exceeds the profile's tolerance (an exact field must be equal).
     """
     bound = {f.path: f.tolerance for f in profile.fields}
+    actual = relabel_turns(expected, actual)
     out = []
     for path in sorted(expected):
         a, b = expected[path], actual.get(path)
@@ -265,6 +318,7 @@ def _items_cli(args: argparse.Namespace) -> None:
     from senselab_core.runtime.fetch import DataManifest, fetch  # noqa: PLC0415
 
     harness = tolerance_module()._harness()
+    importlib.import_module("senselab")
     [bench] = [b for b in harness.Suite.load(args.suite).benchmarks if b.name == args.benchmark]
     manifest = DataManifest.load(ROOT / "benchmarks" / "manifests" / f"{bench.manifest}.yaml")
     files = fetch(manifest, cache_root=args.data_cache)
