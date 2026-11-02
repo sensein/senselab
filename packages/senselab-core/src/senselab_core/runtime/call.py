@@ -58,7 +58,7 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import SAMPLING, EquivalenceEvidence, EvidenceSide, sampled
 from senselab_core.runtime.hardware import HardwareInfo, numerics_class, probe_hardware
 from senselab_core.runtime.in_process import InProcessWorker
-from senselab_core.runtime.keys import Call, Placement, build_key
+from senselab_core.runtime.keys import Call, Placement, build_key, request_components
 from senselab_core.runtime.models import resolve
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.runtime.revision import cache_root, run_id
@@ -517,7 +517,8 @@ def _place(
 ) -> tuple[ResolvedModel | None, HardwareInfo, Placement]:
     model, entry = _resolve_model(spec, ref, profile, packaged().catalogue)
     hardware = _hardware()
-    return model, hardware, resolve_execution(spec, entry, profile, hardware, packaged().registry, packaged().catalogue)
+    placement = resolve_execution(spec, entry, profile, hardware, packaged().registry, packaged().catalogue)
+    return model, hardware, replace(placement, **request_components(placement.backend))
 
 
 def placement_of(task: str, model: ModelRef | None, execution: ExecutionProfile) -> Placement:
