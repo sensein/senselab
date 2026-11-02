@@ -215,6 +215,25 @@ def test_export_refuses_a_recorded_path_and_copies_nothing(tmp_path: Path, leak:
     assert not (tmp_path / "out").exists()
 
 
+@pytest.mark.parametrize(
+    ("path", "leak"),
+    [
+        ("ds/clip.wav", "Clip.wav"),
+        ("ds/my clip.wav", "read my clip.wav"),
+        ("ds/clip,1.wav", "clip,1.wav"),
+        ("ds/caf\u00e9.wav", "cafe\u0301.wav"),
+        ("ds/cafe\u0301.wav", "caf\u00e9.wav"),
+    ],
+)
+def test_export_refuses_a_name_in_another_case_unicode_form_or_with_separators(
+    tmp_path: Path, path: str, leak: str
+) -> None:
+    """A basename is matched after NFC and casefolding, and whole, so a space or comma in it does not split it."""
+    run, _ = _run(tmp_path, path, key=leak)
+    with pytest.raises(ProfileViolation, match="label map"):
+        export(run, tmp_path / "out")
+
+
 @pytest.mark.parametrize(("path", "key", "port"), [("audio/clip.wav", "k", "audio"), ("k.wav", "k", "audio")])
 def test_a_directory_segment_or_a_short_name_alone_is_exported(tmp_path: Path, path: str, key: str, port: str) -> None:
     """A port or key equal to a directory segment or a stem of a recorded path is not that path."""

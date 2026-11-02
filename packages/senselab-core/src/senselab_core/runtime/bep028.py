@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
@@ -175,7 +176,7 @@ def file_entity(address: str, label: str, vocabulary: kprov.Vocabulary | None = 
 _VALIDATION_ERRORS = (MalformedDocument, ConflictingNode, DanglingReference, ProvenanceFormatRefused)
 _WHOLE_DOCUMENT = "0" * 32 + ".jsonld"
 _TOKENS = re.compile(r"[/\\\s\"',;=]+")
-_SUBJECT = re.compile(r"(?<![A-Za-z0-9])(?:sub|ses)-[A-Za-z0-9]+")
+_SUBJECT = re.compile(r"(?<![a-z0-9])(?:sub|ses)-[a-z0-9]+")
 _LAYOUT_NAME = "prov-{writer}_all.jsonld"
 
 
@@ -238,22 +239,30 @@ def _spelling(text: str) -> str:
     return "/".join(t for t in text.replace("\\", "/").split("/") if t not in ("", "."))
 
 
+def _fold(text: str) -> str:
+    """Return `text` in NFC and casefolded, so the spelling of a letter does not decide a match."""
+    return unicodedata.normalize("NFC", text).casefold()
+
+
 def _leaks(documents: Iterable[bytes], paths: set[str]) -> bool:
     """Whether a string of a document holds a recorded path, its basename, or a BIDS subject label.
 
-    A path is held whole, however spelt; its basename is held as a whole token or as the stem of one
-    (`clip.json` for `clip.wav`). A directory segment alone is not: a port `audio` is not the path `audio/clip.wav`.
+    Strings and paths are compared in NFC, casefolded and with backslashes as `/`. A path is held whole as a substring,
+    however spelt; its basename is held as a substring, or as the stem of a token (`clip.json` for `clip.wav`). A
+    directory segment alone is not: a port `audio` is not the path `audio/clip.wav`.
     """
-    whole = {_spelling(p) for p in paths} - {""}
+    whole = {_spelling(_fold(p)) for p in paths} - {""}
     names = {Path(w).name for w in whole}
     stems = {Path(n).stem + "." for n in names}
     for data in documents:
         for text in _strings(json.loads(data)):
-            tokens = [t for t in _TOKENS.split(text) if t]
+            folded = _fold(text)
+            spelled = _spelling(folded)
+            tokens = [t for t in _TOKENS.split(folded) if t]
             if (
-                _SUBJECT.search(text)
-                or any(w in _spelling(text) for w in whole)
-                or names.intersection(tokens)
+                _SUBJECT.search(folded)
+                or any(w in spelled for w in whole)
+                or any(n in spelled for n in names)
                 or any(t.startswith(stem) for t in tokens for stem in stems)
             ):
                 return True
