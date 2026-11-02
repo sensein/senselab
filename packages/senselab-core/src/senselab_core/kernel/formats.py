@@ -24,6 +24,11 @@ LABELS_FORMAT = "labels@1.0"
 BENCHMARK_RESULT_FORMAT = "benchmark-result@1.0"
 """The format of a benchmark run's result document, `<run>/result.json`."""
 
+TOLERANCE_FORMAT = "tolerance@1.0"
+"""The format of a backend's tolerance profile, `senselab/data/tolerance/<backend>.yaml`."""
+TOLERANCE_OBSERVATIONS_FORMAT = "tolerance-observations@1.0"
+"""The format of one measurement job's output, the input of `scripts/generate_tolerance.py generate`."""
+
 FormatTag = Annotated[str, StringConstraints(pattern=FORMAT_PATTERN)]
 """`<name>@<major>.<minor>`."""
 
