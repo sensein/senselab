@@ -5,11 +5,13 @@ format: spdx-licenses@1.0
 groups:
 - derivation: >-
     Permissive licenses that require the copyright and license notice to be kept: commercial use is allowed,
-    no condition reaches code that links or imports the licensed work.
+    no condition reaches code that links or imports the licensed work. MIT-CMU and CNRI-Python are notice-only
+    licenses; the LLVM exception waives the Apache-2.0 notice for object code; the Repoze BSD-derived license
+    (Supervisor's LICENSES.txt) adds a modified-files notice and a no-endorsement clause, and no copyleft.
   commercial_use: true
   copyleft: none
   attribution: true
-  ids: [MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, PSF-2.0, Python-2.0, CC-BY-4.0]
+  ids: [MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, PSF-2.0, Python-2.0, CC-BY-4.0, MIT-CMU, CNRI-Python, Apache-2.0 WITH LLVM-exception, LicenseRef-repoze-bsd-derived]
 - derivation: >-
     Public-domain dedications and licenses with no notice condition on redistribution in binary form: commercial
     use is allowed and nothing has to be reproduced.
@@ -60,3 +62,11 @@ groups:
   copyleft: strong
   attribution: true
   ids: [CC-BY-NC-SA-4.0]
+- derivation: >-
+    Vendor end-user agreements (NVIDIA CUDA runtime libraries and the CUTLASS DSL): proprietary text whose
+    redistribution and commercial-use terms are not derivable from an identifier, so commercial use is unknown.
+    No copyleft; the agreement is to be kept with any redistribution.
+  commercial_use: unknown
+  copyleft: none
+  attribution: true
+  ids: [LicenseRef-NVIDIA-Proprietary, LicenseRef-NVIDIA-Software-License-Agreement]

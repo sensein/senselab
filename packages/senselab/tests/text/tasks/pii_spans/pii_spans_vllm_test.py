@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy
 import pytest
-from senselab._api.packaged import CATALOGUE
+from senselab._api.packaged import CATALOGUE, LOCK_RECORDS
 from senselab.text.tasks.pii_spans import (
     engine,
     transformers_backend,  # noqa: F401 - declares the backend
@@ -198,7 +198,7 @@ def test_load_takes_a_pinned_model_with_a_server_or_the_stub() -> None:
     "case",
     [
         pytest.param(c, id=name)
-        for name, c in contract_cases(REGISTRY)
+        for name, c in contract_cases(REGISTRY, lock_records=LOCK_RECORDS)
         if name.startswith(("pii_spans/vllm::", "vllm::"))
     ],
 )

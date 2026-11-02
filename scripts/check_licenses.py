@@ -7,9 +7,15 @@ manual record. A package not installed here (a platform-only dependency) has onl
 libraries a wheel bundles are found in its ``RECORD`` and each needs a record of its own, declared under that package. The policy, with the
 named license sets, the set each distribution allows and ``on_missing``, is ``scripts/data/license_policy.yaml``.
 
+Env locks (``--lock NAME``, ``--host``) are read the same way over the pinned packages of a lock in
+``data/env_locks/``, or of the root lock for ``--host``. A package's metadata comes from ``--site`` (the
+site-packages of a built env) or, without it, from the PyPI JSON of its pinned version. ``--write`` merges the records
+into ``data/env_licenses.yaml``.
+
 Usage::
 
     uv run python scripts/check_licenses.py [--json PATH]
+    uv run python scripts/check_licenses.py (--lock NAME | --host) [--site DIR] [--write]
 """
 
 from __future__ import annotations
@@ -19,9 +25,13 @@ import json
 import re
 import sys
 import tomllib
+import urllib.error
+import urllib.request
+from email.message import Message
 from importlib import metadata
+from datetime import date
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Callable, NamedTuple
 
 import yaml
 from senselab_core.runtime.licenses import allows, ids_of, parse_expression
@@ -29,8 +39,13 @@ from senselab_core.runtime.licenses import allows, ids_of, parse_expression
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = Path(__file__).resolve().parent / "data" / "license_policy.yaml"
 LOCK = ROOT / "uv.lock"
+ENV_LOCKS = ROOT / "packages/senselab/src/senselab/data/env_locks"
+ENV_LICENSES = ROOT / "packages/senselab/src/senselab/data/env_licenses.yaml"
+ENV_LICENSES_FORMAT = "env-licenses@1.0"
+INSTALLER = "env-lock"
 POLICY_FORMAT = "license-policy@1.2"
 DISTRIBUTIONS = ("senselab", "senselab-core", "senselab-worker")
+"""The shipped distributions; ``env-lock`` is the policy entry the pins of a backend env are judged against."""
 ON_MISSING = ("raise", "warn")
 
 _SHARED = re.compile(r"\.(?:so(?:\.\d+)*|dylib|dll)$")
@@ -214,14 +229,115 @@ def table(findings: list[Finding]) -> str:
     return "\n".join("  ".join(c.ljust(w) for c, w in zip(r, widths, strict=True)).rstrip() for r in rows)
 
 
+class PypiDist:
+    """The slice of `metadata.Distribution` the reader needs, built from a PyPI release's JSON."""
+
+    def __init__(self, info: dict[str, Any]) -> None:
+        """Map the release's ``license_expression``, ``license`` and ``classifiers`` to the core-metadata fields."""
+        self.metadata = Message()
+        self.metadata["Name"] = info["name"]
+        for key, value in (("License-Expression", info.get("license_expression")), ("License", info.get("license"))):
+            if value:
+                self.metadata[key] = value
+        for classifier in info.get("classifiers") or []:
+            self.metadata["Classifier"] = classifier
+        self.version = info["version"]
+        self.files = None
+
+
+def fetch_pypi(name: str, version: str) -> PypiDist | None:
+    """The metadata of `name` at `version` from PyPI, or ``None`` when the release is not there."""
+    try:
+        with urllib.request.urlopen(f"https://pypi.org/pypi/{name}/{version}/json", timeout=30) as response:  # noqa: S310
+            return PypiDist(json.load(response)["info"])
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
+def lock_pins(path: Path) -> dict[str, str]:
+    """The ``name -> version`` pins of an env lock file, markers ignored."""
+    pins = {}
+    for line in path.read_text().splitlines():
+        match = re.match(r"([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;]+)", line)
+        if match:
+            pins[_norm(match[1])] = match[2]
+    return pins
+
+
+def host_pins(lock: Path = LOCK) -> dict[str, str]:
+    """The ``name -> version`` pins of the runtime closure of senselab in `uv.lock`, the repository's own packages apart."""
+    packages = {_norm(p["name"]): p for p in tomllib.loads(lock.read_text())["package"]}
+    closure = locked_closure(lock, DISTRIBUTIONS[:1])
+    return {_norm(n): packages[_norm(n)].get("version", "") for n in closure if n not in DISTRIBUTIONS}
+
+
+def pinned_dists(
+    pins: dict[str, str],
+    installed: dict[str, metadata.Distribution],
+    fetch: Callable[[str, str], Any] = fetch_pypi,
+) -> dict[str, Any]:
+    """The metadata of each pin: the installed distribution when its version matches, else `fetch(name, version)`."""
+    out = {}
+    for name, version in sorted(pins.items()):
+        dist = installed.get(name)
+        dist = dist if dist is not None and dist.version == version else fetch(name, version)
+        if dist is not None:
+            out[name] = dist
+    return out
+
+
+def env_records(findings: list[Finding], date: str) -> dict[str, dict[str, Any]]:
+    """The ``env-licenses`` entries of the package findings that hold a record, in name order."""
+    out = {}
+    for f in findings:
+        if " bundles " in f.subject or not f.expression:
+            continue
+        how, _, when = f.how.partition(" ")
+        pep639 = how == "pep639"
+        out[_norm(f.subject)] = {
+            "version": f.version,
+            "expression": f.expression,
+            "source": f"{f.subject} {f.version} {'License-Expression' if pep639 else how}",
+            "verified": {"date": when or date, "how": "pep639" if pep639 else "manual"},
+        }
+    return out
+
+
+def write_env_records(path: Path, env: str, records: dict[str, dict[str, Any]]) -> None:
+    """Replace env `env`'s entries in the ``env-licenses`` file at `path`, keeping the other envs."""
+    raw = yaml.safe_load(path.read_text()) if path.exists() else {"format": ENV_LICENSES_FORMAT, "envs": {}}
+    raw["envs"][env] = records
+    path.write_text(yaml.safe_dump(raw, sort_keys=True, width=120))
+
+
 def main(argv: list[str]) -> int:
-    """Check the locked runtime closure of the three distributions; return the exit status."""
+    """Check the locked runtime closure of the three distributions, or one env lock; return the exit status."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--json", type=Path, help="also write the findings here")
+    which = parser.add_mutually_exclusive_group()
+    which.add_argument("--lock", metavar="NAME", help="check the pins of data/env_locks/NAME.txt")
+    which.add_argument("--host", action="store_true", help="check the pins of the root lock's senselab closure")
+    parser.add_argument("--site", type=Path, help="read metadata from this site-packages instead of PyPI")
+    parser.add_argument("--write", action="store_true", help="merge the records into data/env_licenses.yaml")
     args = parser.parse_args(argv)
     policy = load_policy()
-    installed = {_norm(d.metadata["Name"]): d for d in metadata.distributions() if d.metadata["Name"]}
-    findings = check(locked_closure(), policy, installed)
+    if args.lock or args.host:
+        pins = lock_pins(ENV_LOCKS / f"{args.lock}.txt") if args.lock else host_pins()
+        scan = (
+            metadata.distributions(path=[str(args.site)])
+            if args.site
+            else (metadata.distributions() if args.host else [])
+        )
+        installed = {_norm(d.metadata["Name"]): d for d in scan if d.metadata["Name"]}
+        dists = pinned_dists(pins, installed)
+        findings = check({n: {INSTALLER} for n in pins}, policy, dists)
+        if args.write and not failures(findings, policy):
+            write_env_records(ENV_LICENSES, args.lock or "host", env_records(findings, date.today().isoformat()))
+    else:
+        installed = {_norm(d.metadata["Name"]): d for d in metadata.distributions() if d.metadata["Name"]}
+        findings = check(locked_closure(), policy, installed)
     print(table(findings))
     if args.json:
         args.json.write_text(json.dumps([f._asdict() for f in findings], indent=2) + "\n")

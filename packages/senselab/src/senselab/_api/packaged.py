@@ -8,10 +8,13 @@ from senselab_core.runtime.call import Packaged, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle, ensure_env
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.testing.lock_licenses import lock_records_from
 
 _DATA = resources.files("senselab").joinpath("data")
 CATALOGUE = Catalogue.load(_DATA.joinpath("catalogue.yaml").read_text("utf-8"))
 """The packaged catalogue, `senselab/data/catalogue.yaml`."""
+LOCK_RECORDS = lock_records_from(_DATA.joinpath("env_licenses.yaml").read_text("utf-8"))
+"""The license records of each env lock's packages, `senselab/data/env_licenses.yaml`, for `contract_cases`."""
 
 
 def host_lock() -> Path | None:

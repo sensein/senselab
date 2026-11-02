@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy
 import pytest
-from senselab._api.packaged import CATALOGUE
+from senselab._api.packaged import CATALOGUE, LOCK_RECORDS
 from senselab.text.tasks.pii_spans import (
     engine,
     transformers_backend,  # noqa: F401 - declares the backend
@@ -210,7 +210,7 @@ def test_backend_serves_the_catalogue_model_and_declares_its_isolated_env() -> N
     "case",
     [
         pytest.param(c, id=name)
-        for name, c in contract_cases(REGISTRY)
+        for name, c in contract_cases(REGISTRY, lock_records=LOCK_RECORDS)
         if name.startswith(("pii_spans::", "pii_spans/transformers::", "transformers::"))
     ],
 )

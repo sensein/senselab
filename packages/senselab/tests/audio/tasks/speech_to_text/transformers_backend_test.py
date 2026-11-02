@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy
 import pytest
+from senselab._api.packaged import LOCK_RECORDS
 from senselab.audio.tasks.speech_to_text import huggingface as hf
 from senselab.audio.tasks.speech_to_text.token_confidence import (
     capture_token_confidence,
@@ -182,7 +183,7 @@ def test_load_refuses_a_ref_an_unknown_key_and_both_stub_and_model() -> None:
     "case",
     [
         pytest.param(c, id=name)
-        for name, c in contract_cases(REGISTRY)
+        for name, c in contract_cases(REGISTRY, lock_records=LOCK_RECORDS)
         if name.startswith(("speech_to_text::", "transformers::"))
     ],
 )

@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy
 import pytest
-from senselab._api.packaged import CATALOGUE
+from senselab._api.packaged import CATALOGUE, LOCK_RECORDS
 from senselab.audio.tasks.speech_to_text import crisperwhisper as cw
 from senselab.audio.tasks.speech_to_text import (
     crisperwhisper_backend,  # noqa: F401 - declares the backend
@@ -152,7 +152,7 @@ def test_backend_serves_only_the_crisperwhisper_model_and_declares_its_isolated_
     "case",
     [
         pytest.param(c, id=name)
-        for name, c in contract_cases(REGISTRY)
+        for name, c in contract_cases(REGISTRY, lock_records=LOCK_RECORDS)
         if name.startswith(("speech_to_text::", "crisperwhisper::"))
     ],
 )

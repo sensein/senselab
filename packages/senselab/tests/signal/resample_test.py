@@ -7,6 +7,7 @@ import numpy
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from senselab._api.packaged import LOCK_RECORDS
 from senselab.signal import resample as rs
 from senselab_core.kernel.declare import REGISTRY
 from senselab_core.kernel.signals import RegularGroup, audio_channels
@@ -149,7 +150,7 @@ def test_a_non_integer_input_rate_is_a_content_fault() -> None:
     "case",
     [
         pytest.param(c, id=name)
-        for name, c in contract_cases(REGISTRY)
+        for name, c in contract_cases(REGISTRY, lock_records=LOCK_RECORDS)
         if name.startswith(("signal.resample::", "numpy-sinc::"))
     ],
 )

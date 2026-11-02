@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy
 import pytest
-from senselab._api.packaged import CATALOGUE
+from senselab._api.packaged import CATALOGUE, LOCK_RECORDS
 from senselab.audio.tasks.speaker_embeddings import speechbrain as sb
 from senselab.audio.tasks.speaker_embeddings import (
     speechbrain_backend,  # noqa: F401 - declares the backend
@@ -143,7 +143,7 @@ def test_backend_serves_the_ecapa_model_and_declares_its_isolated_env() -> None:
     "case",
     [
         pytest.param(c, id=name)
-        for name, c in contract_cases(REGISTRY)
+        for name, c in contract_cases(REGISTRY, lock_records=LOCK_RECORDS)
         if name.startswith(("speaker_embeddings::", "speechbrain::"))
     ],
 )

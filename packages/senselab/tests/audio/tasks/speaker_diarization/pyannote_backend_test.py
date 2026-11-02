@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy
 import pytest
-from senselab._api.packaged import CATALOGUE
+from senselab._api.packaged import CATALOGUE, LOCK_RECORDS
 from senselab.audio.tasks.speaker_diarization import pyannote as pa
 from senselab.audio.tasks.speaker_diarization import (
     pyannote_backend,  # noqa: F401 - declares the backend
@@ -122,7 +122,11 @@ def test_backend_serves_the_community_model_and_declares_its_isolated_env() -> N
 @pytest.mark.contract
 @pytest.mark.parametrize(
     "case",
-    [pytest.param(c, id=name) for name, c in contract_cases(REGISTRY) if name.startswith(("diarize::", "pyannote::"))],
+    [
+        pytest.param(c, id=name)
+        for name, c in contract_cases(REGISTRY, lock_records=LOCK_RECORDS)
+        if name.startswith(("diarize::", "pyannote::"))
+    ],
 )
 def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract case
     """The task and backend satisfy the generated contract, the worker running on its load stub."""
