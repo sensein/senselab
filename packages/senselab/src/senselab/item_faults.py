@@ -32,17 +32,27 @@ def raise_injected(item_id: str, faults: FakeFaults) -> None:
 def mono_samples(item: dict[str, Any], faults: FakeFaults, rate: int, who: str) -> tuple[numpy.ndarray, str]:
     """Return the item's mono float32 samples and its clock id, or raise its content or resource fault.
 
+    The item's audio is an `Audio` (a host backend) or its wire form (an isolated one).
+
     `who` names the backend in the message; `rate` is the sampling rate it takes.
     """
     raise_injected(item["id"], faults)
-    wire = item["inputs"]["audio"]
-    group = wire["groups"]["audio"]
-    samples = numpy.asarray(group["data"])
+    samples, sampling_rate, clock_id = _audio(item["inputs"]["audio"])
     if samples.shape[0] != 1:
         raise ContentFault(f"{who} takes mono audio, got {samples.shape[0]} channels")
-    if float(group["sampling_rate"]) != rate:
-        raise ContentFault(f"{who} takes {rate} Hz audio, got {group['sampling_rate']} Hz; resample it first")
-    return samples[0].astype(numpy.float32), str(wire["anchor"]["clock_id"])
+    if sampling_rate != rate:
+        raise ContentFault(f"{who} takes {rate} Hz audio, got {sampling_rate} Hz; resample it first")
+    return samples[0].astype(numpy.float32), clock_id
+
+
+def _audio(value: Any) -> tuple[numpy.ndarray, float, str]:  # noqa: ANN401 - an `Audio` or its wire form
+    """Return `(samples (channels, n), sampling_rate, clock_id)` of an `Audio` (host backends) or its wire form."""
+    if isinstance(value, dict):
+        group = value["groups"]["audio"]
+        return numpy.asarray(group["data"]), float(group["sampling_rate"]), str(value["anchor"]["clock_id"])
+    from senselab_core.runtime.audio_io import READER  # noqa: PLC0415 - only a host backend is handed an object
+
+    return value.read(reader=READER), float(value.sampling_rate), str(value.anchor.clock_id)
 
 
 def init_model(init: Mapping[str, Any], keys: Collection[str], who: str) -> tuple[FakeFaults, Mapping[str, Any] | None]:
