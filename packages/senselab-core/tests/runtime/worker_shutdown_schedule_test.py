@@ -25,6 +25,7 @@ from senselab_core.runtime.worker_client import (
     WorkerClient,
     WorkerLost,
 )
+from senselab_core.testing.interpreter import source_tree_python
 from shutdown_schedule_fixture import (
     CASE_BOUND_S,
     KINDS,
@@ -37,6 +38,8 @@ from shutdown_schedule_fixture import (
     schedule,
     violations,
 )
+
+PYTHON = source_tree_python()
 
 
 def _check(tmp_path: Path, kind: str, occurrences: range) -> list[dict[str, Any]]:
@@ -190,7 +193,7 @@ def test_every_death_carries_its_exit_code(parent: Path, how: str) -> None:
         assert client_code == EXIT_CRASH
         return
     init = {} if how == "idle_sigkill" else {"faults": {"crash_after": 0}}
-    client = WorkerClient(sys.executable, FAKE, init=init, array_parent=parent)
+    client = WorkerClient(PYTHON, FAKE, init=init, array_parent=parent)
     try:
         expected = EXIT_CRASH
         if how == "idle_sigkill":
@@ -239,7 +242,7 @@ def test_a_forked_child_never_touches_the_parents_worker(parent: Path, how: str)
 
     The parent's worker, files and channel are as they were.
     """
-    box = [WorkerClient(sys.executable, FAKE, init={}, array_parent=parent)]
+    box = [WorkerClient(PYTHON, FAKE, init={}, array_parent=parent)]
     try:
 
         def act() -> None:
@@ -292,7 +295,7 @@ def test_an_interrupted_idle_close_still_reaps_and_removes_the_files(
     parent: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`SystemExit` inside an idle `close()` still reaps the leader and removes the array directory."""
-    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=parent)
+    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=parent)
     pgid = client.hello["pid"]
     _interrupting(monkeypatch, times=1)
     with pytest.raises(SystemExit):
@@ -309,7 +312,7 @@ def test_collecting_a_client_whose_shutdown_was_cut_short_finishes_it(
 
     Nothing may keep the interruption's traceback, which holds the client: the log record is suppressed.
     """
-    box = [WorkerClient(sys.executable, FAKE, init={}, array_parent=parent)]
+    box = [WorkerClient(PYTHON, FAKE, init={}, array_parent=parent)]
     pgid = box[0].hello["pid"]
     array_dir = box[0].array_dir
     _interrupting(monkeypatch, times=2)

@@ -1,7 +1,6 @@
 """Every fixture backend, on every shutdown path, leaves no process and no file behind, within the bound."""
 
 import os
-import sys
 import threading
 import time
 from pathlib import Path
@@ -12,6 +11,9 @@ from backends.subdir_backend_fixture import ARRAY_LIKE
 from lifecycle_probes_fixture import alive, gate, group_alive, listing, recorded_pids
 from senselab_core.runtime import worker_client
 from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerClient, WorkerLost
+from senselab_core.testing.interpreter import source_tree_python
+
+PYTHON = source_tree_python()
 
 BACKENDS = [
     "backends.forking_backend_fixture",
@@ -75,7 +77,7 @@ def _shutdown_leaves_nothing(
     late = _signals_only_while_the_leader_is_held(monkeypatch)
     with gate() as g:
         client = WorkerClient(
-            sys.executable,
+            PYTHON,
             backend,
             init={"pid_file": str(pid_file), "gate_port": g.port},
             array_parent=parent,

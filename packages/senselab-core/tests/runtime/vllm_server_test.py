@@ -118,17 +118,18 @@ def test_attestation_enters_context(env: EnvHandle, tmp_path: Path) -> None:
     assert {f"--revision={SHA}", f"--tokenizer-revision={SHA}", "--max-num-seqs=4"} <= set(record["argv"])
 
 
-def test_an_ambient_engine_variable_reaches_the_context(
+def test_an_ambient_engine_variable_never_reaches_the_server(
     env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An ambient `VLLM_*` variable the server inherits changes the launch digest its context records."""
-    digests = []
+    """Only the declared engine variables reach the server; an ambient `VLLM_*` neither passes nor moves the digest."""
+    launches = []
     for backend in (None, "FLASH_ATTN"):
         if backend is not None:
             monkeypatch.setenv("VLLM_ATTENTION_BACKEND", backend)
         with _server(env, tmp_path) as server:
-            digests.append(_context(server.context_fields()).driver["launch_env"])
-    assert digests[0] != digests[1]
+            launches.append((server.launch, _context(server.context_fields()).driver["launch_env"]))
+    assert "VLLM_ATTENTION_BACKEND" not in launches[1][0].variables
+    assert launches[0][0].variables["VLLM_USE_FLASHINFER_SAMPLER"] == "0" and launches[0][1] == launches[1][1]
 
 
 def test_restart_with_new_config_changes_attestation(env: EnvHandle, tmp_path: Path) -> None:

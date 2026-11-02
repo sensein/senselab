@@ -29,6 +29,9 @@ from bounded_probe_fixture import limit_file_size
 from lifecycle_probes_fixture import alive, group_alive, recorded_pids
 from senselab_core.runtime import worker_client
 from senselab_core.runtime.worker_client import DEFAULT_GRACES, ShutdownGraces, WorkerClient, WorkerLost, _Pump
+from senselab_core.testing.interpreter import source_tree_python
+
+PYTHON = source_tree_python()
 
 RUNTIME_TESTS = Path(__file__).parent
 BACKEND = "backends.forking_backend_fixture"
@@ -203,7 +206,7 @@ def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
         init = {"pid_file": str(pid_file), "exit_at_load": case["path"] == "init_lost"}
         _Capturing(
             injector.clients,
-            sys.executable,
+            PYTHON,
             BACKEND,
             init=init,
             array_parent=parent,
@@ -347,7 +350,7 @@ def _substituted(boundary: str, wrapper: Callable[[Callable[..., Any]], Callable
 
 def close_while_encoding(parent: str, wait_s: float) -> list[str]:
     """In this child: `close()` on another thread while `run` encodes its inputs; return what `run` raised."""
-    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=Path(parent))
+    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=Path(parent))
     closer = threading.Thread(target=client.close, daemon=True)
 
     def encoding(real: Callable[..., Any]) -> Callable[..., Any]:
@@ -393,7 +396,7 @@ def crash_with_a_late_exit_notification(parent: str) -> tuple[int | None, str, i
         return wait
 
     with _substituted("module:_wait_exit", late):
-        client = WorkerClient(sys.executable, FAKE, init={"faults": {"crash_after": 0}}, array_parent=Path(parent))
+        client = WorkerClient(PYTHON, FAKE, init={"faults": {"crash_after": 0}}, array_parent=Path(parent))
         try:
             try:
                 client.run([{"id": "a", "inputs": {}}], {})
