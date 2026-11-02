@@ -230,7 +230,9 @@ def write_profile(profile: ToleranceProfile, out: Path) -> Path:
     """Write `<out>/<task>/<backend>.yaml`."""
     path = tolerance_profile_path(out, profile.task, profile.backend)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(HEADER + yaml.safe_dump(json.loads(profile.model_dump_json()), sort_keys=False), "utf-8")
+    path.write_text(
+        HEADER + yaml.safe_dump(json.loads(profile.model_dump_json()), sort_keys=False, width=float("inf")), "utf-8"
+    )
     return path
 
 
