@@ -11,6 +11,7 @@ import yaml
 from senselab_core.kernel.declare import REGISTRY, Registry
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.fetch import DataManifest
+from senselab_core.runtime.tolerance import tolerance_profile_path
 
 from senselab._api.describe import describe
 from senselab._api.packaged import CATALOGUE
@@ -250,13 +251,13 @@ def _smoke_tasks(root: Path | None) -> set[str]:
 
 
 def tolerance_dir() -> Traversable:
-    """Return the folder `scripts/generate_tolerance.py` writes a backend's profile to, `<backend>.yaml`."""
+    """Return the folder `scripts/generate_tolerance.py` writes profiles to, `<task>/<backend>.yaml` under it."""
     return resources.files("senselab").joinpath("data", "tolerance")
 
 
 def _has_tolerance(registry: Registry, task: str, folder: Traversable) -> bool:
     backends = registry.backends(task)
-    return bool(backends) and all(folder.joinpath(f"{b.name}.yaml").is_file() for b in backends)
+    return bool(backends) and all(tolerance_profile_path(folder, task, b.name).is_file() for b in backends)
 
 
 def task_states(

@@ -1,6 +1,6 @@
 """Measure a backend's outputs across contexts on the calibration split and derive its tolerance profile.
 
-`measure` runs one backend's worker over the calibration items of a suite benchmark, in one device and stack: each
+`measure` runs one backend's worker over the calibration items of a suite benchmark (default suite `tolerance`), in one device and stack: each
 item alone and all items in one batch, each `--repeats` times, and writes `tolerance-observations@1.0`.
 `generate` reads the observations of every context of one backend and writes `tolerance@1.0`: per output field,
 the spread across each axis (repeat, device, batch, stack). Held-out items are refused; a profile is never edited.
@@ -25,6 +25,7 @@ from senselab_core.kernel.formats import (
     FormatTag,
     Formatted,
 )
+from senselab_core.runtime.tolerance import tolerance_profile_path
 
 ROOT = Path(__file__).resolve().parents[1]
 AXES = ("repeat", "device", "batch", "stack")
@@ -164,11 +165,17 @@ def measure(  # noqa: PLR0913 - what one measurement job fixes
     job: str,
     backend_params: Mapping[str, Any] | None = None,
     split_of: Any,
+    minimum: int = 1,
 ) -> Observations:
     """Run the calibration items of `items` alone and in one batch, `repeats` times each.
 
-    An item the worker fails on has no run. Raises ToleranceError if `items` holds a held-out item.
+    An item the worker fails on has no run.
+
+    Raises:
+        ToleranceError: `items` holds a held-out item, or fewer than `minimum` items have a run.
     """
+    if len(items) < minimum:
+        raise ToleranceError(f"{task}/{backend}: the calibration split has {len(items)} items, {minimum} are declared")
     held = sorted(i for i in items if split_of(i) != CALIBRATION)
     if held:
         raise ToleranceError(f"held-out items cannot be measured for a profile: {held}")
@@ -183,13 +190,11 @@ def measure(  # noqa: PLR0913 - what one measurement job fixes
                         runs[result["id"]].append(
                             Run(repeat=repeat, device=device, stack=stack, batch=batch, fields=fields)
                         )
+    observed = tuple(ObservedItem(id=i, split=CALIBRATION, runs=tuple(r)) for i, r in runs.items() if r)
+    if len(observed) < minimum:
+        raise ToleranceError(f"{task}/{backend}: {len(observed)} of {len(items)} items ran, {minimum} are declared")
     return Observations(
-        task=task,
-        backend=backend,
-        sha=sha,
-        job=job,
-        backend_params=dict(backend_params or {}),
-        items=tuple(ObservedItem(id=i, split=CALIBRATION, runs=tuple(r)) for i, r in runs.items() if r),
+        task=task, backend=backend, sha=sha, job=job, backend_params=dict(backend_params or {}), items=observed
     )
 
 
@@ -278,9 +283,9 @@ def _findings(fields: Sequence[FieldTolerance]) -> tuple[str, ...]:
 
 
 def write_profile(profile: ToleranceProfile, out: Path) -> Path:
-    """Write `<out>/<backend>.yaml`."""
-    out.mkdir(parents=True, exist_ok=True)
-    path = out / f"{profile.backend}.yaml"
+    """Write `<out>/<task>/<backend>.yaml`."""
+    path = tolerance_profile_path(out, profile.task, profile.backend)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(HEADER + yaml.safe_dump(json.loads(profile.model_dump_json()), sort_keys=False), "utf-8")
     return path
 
@@ -308,8 +313,7 @@ def load_items(suite: Path, benchmark: str, data_cache: Path, work: Path, split:
     """Return (benchmark, its adapter items of `split`), the data fetched into `data_cache`, files under `work`."""
     from senselab_core.runtime.fetch import DataManifest, fetch  # noqa: PLC0415 - only a real run needs the runtime
 
-    harness = _harness()
-    [bench] = [b for b in harness.Suite.load(suite).benchmarks if b.name == benchmark]
+    [bench] = [b for b in _harness().Suite.load(suite).benchmarks if b.name == benchmark]
     files = (
         {}
         if bench.manifest is None
@@ -317,8 +321,14 @@ def load_items(suite: Path, benchmark: str, data_cache: Path, work: Path, split:
             DataManifest.load(ROOT / "benchmarks" / "manifests" / f"{bench.manifest}.yaml"), cache_root=data_cache
         )
     )
+    return bench, split_items(bench, files, work, split)
+
+
+def split_items(bench: Any, files: Mapping[str, Path], work: Path, split: str) -> list[Any]:  # noqa: ANN401
+    """Return the items of `bench`'s adapter, of any adapter, that belong to `split`."""
+    harness = _harness()
     items = harness.ADAPTERS[bench.adapter]().items(files, bench.items, work, bench.max_seconds)
-    return bench, [i for i in items if harness.split_of(i.id) == split]
+    return [i for i in items if harness.split_of(i.id) == split]
 
 
 def prepare(  # noqa: PLR0913 - what picks one benchmark's items and params
@@ -364,6 +374,7 @@ def _measure_cli(args: argparse.Namespace) -> None:
             job=args.job,
             backend_params=params["backend_params"],
             split_of=_harness().split_of,
+            minimum=bench.min_calibration,
         )
     finally:
         workers.close()
@@ -381,7 +392,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(required=True)
     m = sub.add_parser("measure")
-    m.add_argument("--suite", type=Path, default=ROOT / "benchmarks" / "suites" / "smoke.yaml")
+    m.add_argument("--suite", type=Path, default=ROOT / "benchmarks" / "suites" / "tolerance.yaml")
     m.add_argument("--benchmark", required=True)
     m.add_argument("--backend", required=True)
     m.add_argument("--execution", default="orcd")

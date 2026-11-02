@@ -30,7 +30,7 @@ runpy.run_path(sys.argv[0], run_name="__main__")
 """
 
 
-def _cli(script: str, *args: str | Path) -> None:
+def _cli(script: str, *args: str | Path, ok: bool = True) -> str:
     done = subprocess.run(  # noqa: S603 - the repo's own scripts under this interpreter
         [sys.executable, "-c", RUNNER, str(ROOT / script), *map(str, args)],
         capture_output=True,
@@ -38,7 +38,8 @@ def _cli(script: str, *args: str | Path) -> None:
         timeout=50,
         check=False,
     )
-    assert done.returncode == 0, done.stderr[-3000:]
+    assert (done.returncode == 0) == ok, done.stderr[-3000:]
+    return done.stderr
 
 
 @pytest.mark.logic
@@ -76,7 +77,7 @@ def test_cli_measure_generate_items_run_end_to_end(tmp_path: Path) -> None:
     assert observed["backend"] == "fake"
     assert observed["items"], "no calibration item ran"
     _cli("scripts/generate_tolerance.py", "generate", measured, "--out", tmp_path / "profiles")
-    profile = yaml.safe_load((tmp_path / "profiles" / "fake.yaml").read_text("utf-8"))
+    profile = yaml.safe_load((tmp_path / "profiles" / "fake.echo" / "fake.yaml").read_text("utf-8"))
     assert profile["derivation"]["split"] == "calibration" and profile["fields"]
 
     items = tmp_path / "items.json"
@@ -102,3 +103,38 @@ def test_cli_measure_generate_items_run_end_to_end(tmp_path: Path) -> None:
     ran: dict[str, Any] = json.loads(outputs.read_text("utf-8"))
     assert {i["id"] for i in ran["items"]} == set(document["items"])
     assert all(set(i["batches"]) == {"1", "N"} and i["split"] == "heldout" for i in ran["items"])
+
+
+@pytest.mark.logic
+def test_cli_measure_fails_when_the_split_is_smaller_than_declared(tmp_path: Path) -> None:
+    """A suite declaring more calibration items than its split holds fails `measure` and writes no observations."""
+    suite = tmp_path / "thin.yaml"
+    entry = {"name": "echo", "adapter": "echo_payloads", "items": 12, "min_calibration": 50, "task": "fake.echo"}
+    suite.write_text(
+        yaml.safe_dump({"format": "benchmark-suite@1.0", "name": "thin", "benchmarks": [{**entry, "metric": "none"}]})
+    )
+    out = tmp_path / "obs.json"
+    error = _cli(
+        "scripts/generate_tolerance.py",
+        "measure",
+        "--suite",
+        suite,
+        "--benchmark",
+        "echo",
+        "--backend",
+        "fake",
+        "--execution",
+        "laptop",
+        "--sha",
+        "a" * 40,
+        "--job",
+        "1",
+        "--data-cache",
+        tmp_path / "data",
+        "--work",
+        tmp_path / "work",
+        "--out",
+        out,
+        ok=False,
+    )
+    assert "are declared" in error and not out.exists()

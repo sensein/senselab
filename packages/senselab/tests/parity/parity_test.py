@@ -1,7 +1,7 @@
 """Parity on the held-out split, from the files an ORCD campaign produced under `$SENSELAB_PARITY_DIR`.
 
-`reference/<backend>.json` is `parity-reference@1.0` (1.x, converted); `outputs/*.json` is `parity-outputs@1.0` (2.x,
-one per backend, stack and device). Bounds are the backends' packaged `tolerance@1.0` profiles. A failure is a finding.
+`reference/<task>/<backend>.json` is `parity-reference@1.0` (1.x, converted); `outputs/*.json` is `parity-outputs@1.0`
+(2.x, one per backend, stack and device). Bounds are the packaged `tolerance@1.0` profiles. A failure is a finding.
 """
 
 import importlib.util
@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from senselab_core.runtime.tolerance import tolerance_profile_path
 
 ROOT = Path(__file__).resolve().parents[4]
 PROFILES = ROOT / "packages" / "senselab" / "src" / "senselab" / "data" / "tolerance"
@@ -43,7 +44,7 @@ OUTPUTS = _outputs()
 
 
 def _name(o: Any) -> str:  # noqa: ANN401
-    return f"{o.backend}-{o.stack}-{o.device}".replace(" ", "_")
+    return f"{o.task}-{o.backend}-{o.stack}-{o.device}".replace(" ", "_")
 
 
 def _need_outputs() -> None:
@@ -67,11 +68,11 @@ def test_outputs_present() -> None:
 @pytest.mark.parametrize("output", OUTPUTS, ids=_name)
 def test_matches_1x_reference(output: Any) -> None:  # noqa: ANN401
     """2.x alone-per-item outputs equal the 1.x reference within the backend's tolerance profile."""
-    reference = DIRECTORY / "reference" / f"{output.backend}.json"  # type: ignore[operator]
+    reference = DIRECTORY / "reference" / output.task / f"{output.backend}.json"  # type: ignore[operator]
     if not reference.exists():
-        pytest.skip(f"no 1.x reference for backend {output.backend}")
+        pytest.skip(f"no 1.x reference for {output.task} backend {output.backend}")
     ref = par.ParityReference.model_validate_json(reference.read_text("utf-8"))
-    profile = par.load_profile(PROFILES / f"{output.backend}.yaml")
+    profile = par.load_profile(tolerance_profile_path(PROFILES, output.task, output.backend))
     found = par.compare_items({i.id: i.fields for i in ref.items}, _batch(output, "1"), profile)
     assert not found, found
 
@@ -84,12 +85,12 @@ def test_cross_stack_agreement() -> None:
     pairs = [
         (a, b)
         for a, b in combinations(OUTPUTS, 2)
-        if a.backend == b.backend and a.stack != b.stack and a.device == b.device
+        if (a.task, a.backend) == (b.task, b.backend) and a.stack != b.stack and a.device == b.device
     ]
     if not pairs:
         pytest.skip("no backend was run on two stacks")
     for a, b in pairs:
-        profile = par.load_profile(PROFILES / f"{a.backend}.yaml")
+        profile = par.load_profile(tolerance_profile_path(PROFILES, a.task, a.backend))
         found = par.compare_items(_batch(a, "1"), _batch(b, "1"), profile)
         assert not found, (a.stack, b.stack, found)
 
@@ -103,5 +104,6 @@ def test_claimed_batch_invariance() -> None:
     if not claimed:
         pytest.skip("no port claims batch invariance")
     for o in claimed:
-        found = par.compare_items(_batch(o, "1"), _batch(o, "N"), par.load_profile(PROFILES / f"{o.backend}.yaml"))
+        profile = par.load_profile(tolerance_profile_path(PROFILES, o.task, o.backend))
+        found = par.compare_items(_batch(o, "1"), _batch(o, "N"), profile)
         assert not found, (_name(o), found)
