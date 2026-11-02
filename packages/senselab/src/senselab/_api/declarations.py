@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import Field
 from senselab_core.kernel.declare import REGISTRY, TaskParams, task
-from senselab_core.kernel.results import Intervals, Transcript
+from senselab_core.kernel.results import Embedding, Intervals, Transcript
 from senselab_core.kernel.signals import Audio
 
 DECLARATION_MODULES: tuple[str, ...] = (
@@ -13,6 +13,7 @@ DECLARATION_MODULES: tuple[str, ...] = (
     "senselab.audio.tasks.speech_to_text.huggingface",
     "senselab.audio.tasks.speech_to_text.crisperwhisper_backend",
     "senselab.audio.tasks.speaker_diarization.pyannote_backend",
+    "senselab.audio.tasks.speaker_embeddings.speechbrain_backend",
 )
 """Importable modules declaring tasks and backends in `senselab_core.kernel.declare.REGISTRY`, in declaration order."""
 
@@ -48,3 +49,11 @@ class Diarize:
     inputs = {"audio": Audio}
     outputs = {"turns": Intervals}
     Params = DiarizeParams
+
+
+@task(name="speaker_embeddings", version="1", kind="transform", registry=REGISTRY)
+class SpeakerEmbeddings:
+    """Embed mono speech as one speaker `Embedding`, in the space of the model that produced it."""
+
+    inputs = {"audio": Audio}
+    outputs = {"embedding": Embedding}

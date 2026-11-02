@@ -1,150 +1,111 @@
-"""Provides a factory for extracting speaker embeddings from a list of audios using speechbrain."""
+"""Worker of backend `speechbrain` of `speaker_embeddings`: a SpeechBrain `EncoderClassifier`, one vector per item.
 
-from typing import Dict, List, Optional
+`load` takes the pinned model in `init["model"]` (or `"stub": True` for the stub model); `handle` answers one
+`embedding@1.0` wire form, or one typed fault, per item. Each item is encoded alone: no item is padded to another's
+length. Imports are stdlib, numpy and `senselab_worker`; `torch` and the library load when the model is built.
+"""
 
-import torch
-import torch.nn.functional as F
+import hashlib
+import tempfile
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
 
-from senselab.audio.data_structures import Audio
-from senselab.utils.data_structures import DeviceType, SpeechBrainModel, _select_device_and_dtype, device_run_opt
-from senselab.utils.dependencies import (
-    resolve_model,
-    retry_on_transient_error,
-    speechbrain_load_device,
-    speechbrain_loading_cwd,
-    speechbrain_move_to,
-    speechbrain_savedir,
-)
+import numpy
+from senselab_worker.digest import COMMIT_HEX
+from senselab_worker.fake import FakeFaults
 
-try:
-    from speechbrain.inference.speaker import EncoderClassifier
+from senselab.audio.item_faults import mono_samples, typed
 
-    SPEECHBRAIN_AVAILABLE = True
-except ModuleNotFoundError:
-    SPEECHBRAIN_AVAILABLE = False
+WORKER_MODULE = "senselab.audio.tasks.speaker_embeddings.speechbrain"
+MODEL_ID = "speechbrain/spkrec-ecapa-voxceleb"
+EXPECTED_RATE = 16_000
+STUB_DIMENSION = 192
+_INIT_KEYS = frozenset({"stub", "model", "device", "faults", "array_dir"})
 
 
-class SpeechBrainEmbeddings:
-    """A factory for extracting speaker embeddings using speechbrain models."""
+class StubModel:
+    """The fake stack's model: a vector derived from the samples, so different audio gives different vectors."""
 
-    _models: Dict[str, "EncoderClassifier"] = {}
+    def embed(self, samples: numpy.ndarray) -> numpy.ndarray:
+        """Return a finite `STUB_DIMENSION` vector seeded by the digest of `samples`."""
+        seed = int.from_bytes(hashlib.sha256(samples.tobytes()).digest()[:8], "big")
+        return numpy.random.default_rng(seed).standard_normal(STUB_DIMENSION).astype(numpy.float32)
 
-    @classmethod
-    def _get_speechbrain_model(
-        cls,
-        model: SpeechBrainModel,
-        device: Optional[DeviceType] = None,
-    ) -> "EncoderClassifier":
-        """Get or create a SpeechBrain model.
 
-        Args:
-            model (SpeechBrainModel): The SpeechBrain model.
-            device (Optional[DeviceType]): The device to run the model on.
-                CPU, CUDA or MPS; the fastest available when omitted.
+class Encoder:
+    """The SpeechBrain speaker encoder, loaded from the pinned commit of the model onto one device."""
 
-        Returns:
-            EncoderClassifier: The SpeechBrain model.
+    def __init__(self, model: Mapping[str, Any], device: str) -> None:
+        """Download the snapshot at the model's commit and build the classifier from that local copy."""
+        from huggingface_hub import snapshot_download  # noqa: PLC0415 - loads when the encoder is built
+        from speechbrain.inference.speaker import EncoderClassifier  # noqa: PLC0415 - as above
 
-        Todo:
-            - Adding savedir for storing models
-        """
-        if not SPEECHBRAIN_AVAILABLE:
-            raise ModuleNotFoundError(
-                "`speechbrain` is not installed. "
-                "Please install senselab audio dependencies using `pip install senselab`."
-            )
-
-        device, _ = _select_device_and_dtype(
-            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU]
+        snapshot = snapshot_download(str(model["id"]), revision=str(model["identity"]))
+        self.device = device
+        self.classifier = EncoderClassifier.from_hparams(
+            source=snapshot, savedir=tempfile.mkdtemp(prefix="speechbrain-"), run_opts={"device": device}
         )
-        key = f"{model.path_or_uri}-{model.revision}-{device.value}"
-        if key not in cls._models:
-            # Stage the model once (download-once via the cross-process heartbeat
-            # lock) and load from the resulting local snapshot dir. SpeechBrain's
-            # ``from_hparams`` treats a local ``source`` as local files, so it makes
-            # no per-file Hub HEAD — the request that rate-limits (429) when a
-            # parallel batch loads this model across many processes. SpeechBrain has
-            # no ``revision`` argument, so we pin by pointing ``source`` at the
-            # immutable snapshot path rather than the mutable repo id.
-            _, snapshot_path = resolve_model(str(model.path_or_uri), model.revision or "main")
-            savedir = speechbrain_savedir(str(model.path_or_uri), model.revision)
-            target = device_run_opt(device)
-            with speechbrain_loading_cwd(savedir):
-                loaded = retry_on_transient_error(
-                    EncoderClassifier.from_hparams,
-                    source=str(snapshot_path),
-                    savedir=str(savedir),
-                    run_opts={"device": speechbrain_load_device(target)},
-                )
-            cls._models[key] = speechbrain_move_to(loaded, target)
-        return cls._models[key]
 
-    @classmethod
-    def extract_speechbrain_speaker_embeddings_from_audios(
-        cls,
-        audios: List[Audio],
-        model: Optional[SpeechBrainModel] = None,
-        device: Optional[DeviceType] = None,
-    ) -> List[torch.Tensor]:
-        """Compute the speaker embeddings of audio signals.
+    def embed(self, samples: numpy.ndarray) -> numpy.ndarray:
+        """Return the 1-D embedding of `samples` as float32."""
+        import torch  # noqa: PLC0415 - loads when the encoder is built
 
-        Args:
-            audios (List[Audio]): A list of Audio objects containing the audio signals and their properties.
-            model (SpeechBrainModel): The model used to compute the embeddings.
-                If None, the default model "speechbrain/spkrec-ecapa-voxceleb" is used.
-            device (Optional[DeviceType]): The device to run the model on (default is None).
-                CPU, CUDA or MPS; the fastest available when omitted.
+        with torch.inference_mode():
+            vector = self.classifier.encode_batch(torch.from_numpy(samples[None, :]).to(self.device))
+        return numpy.asarray(vector.reshape(-1).detach().cpu().numpy(), dtype=numpy.float32)
 
-        Returns:
-            List[torch.Tensor]: CPU tensors, one speaker embedding per audio, whatever the compute device.
 
-        Todo:
-            - Optimizing the computation by working in batches
-            - Double-checking the input size of classifier.encode_batch
-        """
-        if not SPEECHBRAIN_AVAILABLE:
-            raise ModuleNotFoundError(
-                "`speechbrain` is not installed. "
-                "Please install senselab audio dependencies using `pip install senselab`."
+@dataclass(frozen=True)
+class State:
+    """A loaded backend: the model (a stub or the encoder), the space its vectors live in, and the faults to inject."""
+
+    model: Any  # noqa: ANN401 - a StubModel or an Encoder
+    space: str
+    faults: FakeFaults
+
+
+def load(init: dict[str, Any]) -> State:
+    """Return the worker's state from `init`.
+
+    `init` holds `model` (`{"source": "hf", "id", "identity"}`, `identity` a 40-hex commit) and `device`, or
+    `"stub": True`; it may hold `faults`, the fields of `FakeFaults`, and `array_dir`.
+
+    Raises:
+        ValueError: on an unknown key, a model that is not a pinned hub commit, or both `stub` and `model`.
+    """
+    unknown = sorted(init.keys() - _INIT_KEYS)
+    if unknown:
+        raise ValueError(f"speechbrain init takes only {sorted(_INIT_KEYS)}, got {unknown}")
+    faults = FakeFaults.from_json(init.get("faults", {}))
+    model = init.get("model")
+    if init.get("stub"):
+        if model is not None:
+            raise ValueError("speechbrain init takes `stub` or `model`, not both")
+        return State(StubModel(), f"stub:{MODEL_ID}", faults)
+    if not isinstance(model, dict) or model.get("source") != "hf":
+        raise ValueError(f"speechbrain loads a hub model, got {model!r}")
+    if not COMMIT_HEX.fullmatch(str(model.get("identity"))):
+        raise ValueError(f"a model is loaded by its 40-hex commit, never a ref: {model.get('identity')!r}")
+    return State(Encoder(model, str(init.get("device", "cpu"))), f"{model['id']}@{model['identity']}", faults)
+
+
+def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return one `{"outputs": {"embedding": <embedding@1.0 wire form>}}` per item, or its typed fault.
+
+    Raises:
+        ValueError: on a backend param; this backend takes none.
+    """
+    if params.get("backend_params"):
+        raise ValueError(f"unknown backend params {sorted(params['backend_params'])}; known: []")
+    results: list[dict[str, Any]] = []
+    for item in items:
+        try:
+            samples, _ = mono_samples(item, state.faults, EXPECTED_RATE, "speechbrain")
+            vector = state.model.embed(samples)
+            results.append(
+                {"outputs": {"embedding": {"format": "embedding@1.0", "vector": vector, "space": state.space}}}
             )
-
-        if len(audios) == 0:
-            return []
-
-        if model is None:
-            model = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
-
-        classifier = cls._get_speechbrain_model(model=model, device=device)
-        # 16khz comes from the model cards of ecapa-tdnn, resnet, and xvector
-        expected_sample_rate = 16000
-
-        # Check that all audio objects have the correct sampling rate
-        for audio in audios:
-            if audio.waveform.shape[0] != 1:
-                raise ValueError(f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels")
-            if audio.sampling_rate != expected_sample_rate:
-                raise ValueError(
-                    "Audio sampling rate "
-                    + str(audio.sampling_rate)
-                    + " does not match expected "
-                    + str(expected_sample_rate)
-                )
-
-        # Calculate relative lengths
-        lengths = torch.tensor([audio.waveform.shape[1] for audio in audios])
-        max_len = torch.max(lengths)
-
-        wav_lens = lengths.float() / max_len
-
-        # Stack audio waveforms for batch processing, zero-padding to ensure equal length
-        waveforms = torch.stack(
-            [F.pad(audio.waveform, (0, int(max_len - audio.waveform.shape[1]))) for audio in audios]
-        ).squeeze()
-
-        # Compute embeddings in a batch
-        embeddings_batch = classifier.encode_batch(waveforms, wav_lens)
-
-        # Split the batch embeddings into a list of individual embeddings
-        embeddings = [embedding.squeeze().detach().cpu() for embedding in embeddings_batch]
-
-        return embeddings
+        except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
+            results.append({"error": typed(exc)})
+    return results

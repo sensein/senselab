@@ -10,6 +10,7 @@ import senselab.signal.resample
 import senselab.audio.tasks.speech_to_text.huggingface
 import senselab.audio.tasks.speech_to_text.crisperwhisper_backend
 import senselab.audio.tasks.speaker_diarization.pyannote_backend
+import senselab.audio.tasks.speaker_embeddings.speechbrain_backend
 
 from collections.abc import Mapping
 from os import PathLike
@@ -22,9 +23,11 @@ from typing import Any, Literal
 __all__ = [
     "Diarize",
     "Resample",
+    "SpeakerEmbeddings",
     "SpeechToText",
     "diarize",
     "resample",
+    "speaker_embeddings",
     "speech_to_text",
 ]
 
@@ -185,6 +188,68 @@ def diarize(
         num_speakers=num_speakers,
         min_speakers=min_speakers,
         max_speakers=max_speakers,
+        backend_params=backend_params,
+    )(audio)
+
+
+class SpeakerEmbeddings(ConfiguredTask):
+    """The configured, immutable task speaker_embeddings v1 (transform): audio -> embedding."""
+
+    name = "speaker_embeddings"
+
+    def __init__(
+        self,
+        model: ModelRef | str | None = None,
+        *,
+        backend_params: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Configure the task; params are validated now."""
+        super().__init__(
+            model,
+            {},
+            backend_params,
+        )
+
+    def with_params(
+        self,
+    ) -> "SpeakerEmbeddings":
+        """Return a new task with these params changed; this one is unchanged."""
+        return self._replace(
+            {},
+        )
+
+    def call(
+        self,
+        audio: Audio | str | PathLike[str],
+    ) -> TaskCall:
+        """Return the validated call of this task on the inputs."""
+        return self._call(
+            {
+                "audio": audio,
+            },
+        )
+
+    def __call__(
+        self,
+        audio: Audio | str | PathLike[str],
+    ) -> Result:
+        """Run this task on the inputs through `run_call` and return its one result."""
+        return self._run(
+            {
+                "audio": audio,
+            },
+        )
+
+
+def speaker_embeddings(
+    audio: Audio | str | PathLike[str],
+    *,
+    model: ModelRef | str | None = None,
+    backend_params: Mapping[str, Any] | None = None,
+) -> Result:
+    """Run `SpeakerEmbeddings` on the inputs: exactly `SpeakerEmbeddings(model, **params)(...)`."""
+    return SpeakerEmbeddings(
+        model,
         backend_params=backend_params,
     )(audio)
 

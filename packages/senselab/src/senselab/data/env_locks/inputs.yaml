@@ -45,3 +45,10 @@ envs:
     - pyannote.audio>=4.0,<5
     - torch>=2.8
     - torchaudio>=2.8
+  speechbrain:
+    python: '3.12'
+    exclude_newer: '2026-10-02T00:00:00Z'
+    requirements:
+    - speechbrain>=1.0,<2
+    - torch>=2.8
+    - torchaudio>=2.8

@@ -42,7 +42,7 @@ entries:
 - id: speechbrain/spkrec-ecapa-voxceleb
   revision: 0f99f2d0ebe89ac095bcc5903c4dd8f72b367286
   tasks: [speaker_embeddings]
-  backends: [speechbrain-ecapa]
+  backends: [speechbrain]
   stacks: [speechbrain]
   default_for: [speaker_embeddings]
   license:
