@@ -202,3 +202,26 @@ def test_real_script_path_resolves_every_suite_task() -> None:
         backend = packaged().registry.backends(task)[0].name
         spec, found = tol.resolve(bench.task, backend)
         assert spec.name == task and found.name == backend
+
+
+@pytest.mark.logic
+def test_diarization_speaker_without_counterpart_is_a_mismatch(tmp_path: Path) -> None:
+    """An extra or a missing speaker never reads as a match, even when its name equals a mapped one."""
+    flatten = par.tolerance_module().flatten
+
+    def turns(label: list[str]) -> dict[str, Any]:
+        flat: dict[str, Any] = flatten({"turns": {"start_ns": [0, 10], "end_ns": [10, 20], "label": label}})
+        return flat
+
+    paths = {
+        "turns.start_ns": "numeric",
+        "turns.end_ns": "numeric",
+        "turns.label[0]": "exact",
+        "turns.label[1]": "exact",
+    }
+    profile = par.load_profile(_profile(tmp_path, _ids("calibration", 1), {p: (k, 0.0) for p, k in paths.items()}))
+    one = turns(["SPEAKER_00", "SPEAKER_00"])
+    two = turns(["SPEAKER_01", "SPEAKER_00"])
+    assert par.compare(one, two, profile)
+    assert par.compare(two, one, profile)
+    assert par.compare(two, turns(["SPEAKER_00", "SPEAKER_01"]), profile) == []

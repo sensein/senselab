@@ -304,6 +304,18 @@ def resolve(task: str, backend_name: str) -> tuple[Any, Any]:
     return packaged().registry.spec(task), backend
 
 
+def load_items(suite: Path, benchmark: str, data_cache: Path, work: Path, split: str) -> tuple[Any, list[Any]]:
+    """Return (benchmark, its adapter items of `split`), the data fetched into `data_cache`, files under `work`."""
+    from senselab_core.runtime.fetch import DataManifest, fetch  # noqa: PLC0415 - only a real run needs the runtime
+
+    harness = _harness()
+    [bench] = [b for b in harness.Suite.load(suite).benchmarks if b.name == benchmark]
+    manifest = DataManifest.load(ROOT / "benchmarks" / "manifests" / f"{bench.manifest}.yaml")
+    files = fetch(manifest, cache_root=data_cache)
+    items = harness.ADAPTERS[bench.adapter]().items(files, bench.items, work, bench.max_seconds)
+    return bench, [i for i in items if harness.split_of(i.id) == split]
+
+
 def prepare(  # noqa: PLR0913 - what picks one benchmark's items and params
     suite: Path,
     benchmark: str,
@@ -314,18 +326,9 @@ def prepare(  # noqa: PLR0913 - what picks one benchmark's items and params
     split: str,
 ) -> tuple[Any, Any, dict[str, dict[str, object]], dict[str, Any]]:
     """Return (benchmark, backend spec, wired inputs of the `split` items by id, call params) for one benchmark."""
-    from senselab_core.runtime.fetch import DataManifest, fetch  # noqa: PLC0415 - only a real run needs the runtime
-
-    harness = _harness()
-    [bench] = [b for b in harness.Suite.load(suite).benchmarks if b.name == benchmark]
-    manifest = DataManifest.load(ROOT / "benchmarks" / "manifests" / f"{bench.manifest}.yaml")
-    files = fetch(manifest, cache_root=data_cache)
+    bench, items = load_items(suite, benchmark, data_cache, work, split)
     spec, backend = resolve(bench.task, backend_name)
-    wired = {
-        item.id: {p: _wired(p, spec.inputs[p], v) for p, v in item.inputs.items()}
-        for item in harness.ADAPTERS[bench.adapter]().items(files, bench.items, work, bench.max_seconds)
-        if harness.split_of(item.id) == split
-    }
+    wired = {i.id: {p: _wired(p, spec.inputs[p], v) for p, v in i.inputs.items()} for i in items}
     params = {
         **spec.params.model_validate(bench.params).model_dump(mode="json"),
         "backend_params": backend.params.model_validate(backend_params).model_dump(mode="json"),

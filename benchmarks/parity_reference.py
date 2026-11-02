@@ -182,28 +182,11 @@ def load_profile(path: Path) -> Bounded:
 _LABEL = re.compile(r"turns\.label\[(\d+)\]")
 
 
-def _assignment(overlap: Mapping[tuple[str, str], float], rows: Sequence[str], cols: Sequence[str]) -> dict[str, str]:
-    """Return the one-to-one map of `cols` onto `rows` of greatest total `overlap` (exhaustive over the columns)."""
-    from functools import lru_cache  # noqa: PLC0415
-
-    @lru_cache(maxsize=None)
-    def best(r: int, used: frozenset[str]) -> tuple[float, tuple[tuple[str, str], ...]]:
-        if r == len(rows):
-            return 0.0, ()
-        options = [best(r + 1, used)]
-        for c in cols:
-            if c not in used:
-                gain, rest = best(r + 1, used | {c})
-                options.append((gain + overlap.get((rows[r], c), 0.0), ((c, rows[r]), *rest)))
-        return max(options, key=lambda o: o[0])
-
-    return dict(best(0, frozenset())[1])
-
-
 def relabel_turns(expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str]) -> dict[str, Any]:
     """Return `actual` with its speaker labels renamed to `expected`'s by the one-to-one map of most shared time.
 
-    The map is the one DER scores under. `actual` is unchanged where either side has no turns.
+    The map is the one DER scores under. A label with no counterpart is renamed to one no reference label can equal.
+    `actual` is unchanged where either side has no turns.
     """
 
     def keys(fields: Mapping[str, Any]) -> list[str]:
@@ -216,17 +199,21 @@ def relabel_turns(expected: Mapping[str, list[float] | str], actual: Mapping[str
         return dict(actual)
     elabel = [json.loads(str(expected[k])) for k in ek]
     alabel = [json.loads(str(actual[k])) for k in ak]
-    overlap: dict[tuple[str, str], float] = {}
+    rows, cols = sorted(set(elabel)), sorted(set(alabel))
+    overlap = numpy.zeros((len(rows), len(cols)))
     spans = [[list(f[t]) for t in times] for f in (expected, actual)]
     for i, (es, ee) in enumerate(zip(*spans[0], strict=True)):
         for j, (a_s, a_e) in enumerate(zip(*spans[1], strict=True)):
-            gap = min(ee, a_e) - max(es, a_s)
-            if gap > 0:
-                overlap[(elabel[i], alabel[j])] = overlap.get((elabel[i], alabel[j]), 0.0) + gap
-    mapping = _assignment(overlap, sorted(set(elabel)), sorted(set(alabel)))
+            overlap[rows.index(elabel[i]), cols.index(alabel[j])] += max(0.0, min(ee, a_e) - max(es, a_s))
+    linear_sum_assignment = importlib.import_module("scipy.optimize").linear_sum_assignment
+    mapped = {
+        cols[c]: rows[r]
+        for r, c in zip(*linear_sum_assignment(overlap, maximize=True), strict=True)
+        if overlap[r, c] > 0
+    }
     out = dict(actual)
     for k, label in zip(ak, alabel, strict=True):
-        out[k] = json.dumps(mapping.get(label, label))
+        out[k] = json.dumps(mapped.get(label, f"<unmatched:{label}>"))
     return out
 
 
@@ -314,22 +301,18 @@ def run(  # noqa: PLR0913 - what one 2.x parity run fixes
 
 
 def _items_cli(args: argparse.Namespace) -> None:
+    """Write the held-out items (path or text inputs, as strings) and the model pin of `args.backend`."""
     from senselab_core.runtime.call import packaged  # noqa: PLC0415 - only a real export needs the runtime
-    from senselab_core.runtime.fetch import DataManifest, fetch  # noqa: PLC0415
 
-    harness = tolerance_module()._harness()
-    importlib.import_module("senselab")
-    [bench] = [b for b in harness.Suite.load(args.suite).benchmarks if b.name == args.benchmark]
-    manifest = DataManifest.load(ROOT / "benchmarks" / "manifests" / f"{bench.manifest}.yaml")
-    files = fetch(manifest, cache_root=args.data_cache)
-    backend = next(b for b in packaged().registry.backends(bench.task) if b.name == args.backend)
+    tol = tolerance_module()
+    bench, items = tol.load_items(args.suite, args.benchmark, args.data_cache, args.work, HELDOUT)
+    _, backend = tol.resolve(bench.task, args.backend)
     entry = packaged().catalogue.entry(backend.models[0])
-    items = {
-        i.id: {k: str(v) for k, v in i.inputs.items()}
-        for i in harness.ADAPTERS[bench.adapter]().items(files, bench.items, args.work, bench.max_seconds)
-        if harness.split_of(i.id) == HELDOUT
+    document = {
+        "task": bench.task,
+        "model": {"id": entry.id, "revision": entry.revision},
+        "items": {i.id: {k: str(v) for k, v in i.inputs.items()} for i in items},
     }
-    document = {"task": bench.task, "model": {"id": entry.id, "revision": entry.revision}, "items": items}
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(document, indent=1, sort_keys=True), "utf-8")
 

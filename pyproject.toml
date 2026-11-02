@@ -68,7 +68,8 @@ test = [
   "import-linter~=2.0",
   "grimp",
   "jsonschema",
-  "hypothesis"
+  "hypothesis",
+  "scipy>=1.11"
 ]
 docs = [
   "pdoc~=16.0"
