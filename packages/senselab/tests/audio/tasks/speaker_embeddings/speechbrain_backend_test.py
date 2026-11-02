@@ -1,5 +1,6 @@
 """The `speechbrain` backend of `speaker_embeddings`: its vectors, faults, model and the isolated worker's contract."""
 
+from types import SimpleNamespace
 from typing import Any
 
 import numpy
@@ -9,7 +10,7 @@ from senselab.audio.tasks.speaker_embeddings import speechbrain as sb
 from senselab.audio.tasks.speaker_embeddings import (
     speechbrain_backend,  # noqa: F401 - declares the backend
 )
-from senselab.audio.tasks.speaker_embeddings.windowing import slice_audio, window_starts
+from senselab.audio.tasks.speaker_embeddings.windowing import embed_windows, slice_audio, window_starts
 from senselab_core.kernel.declare import REGISTRY
 from senselab_core.kernel.results import Embedding
 from senselab_core.kernel.signals import Audio
@@ -106,6 +107,23 @@ def test_windows_cover_the_audio_and_end_on_its_tail() -> None:
     assert slice_audio(_tone(2.0), 0.5, 1.5).frames == 16000
 
 
+@pytest.mark.logic
+def test_embed_windows_makes_one_task_call_per_window_in_order() -> None:
+    """A 2 s audio at window 1 s, hop 0.5 s gives three windows, each embedded by its own call on the stub worker."""
+    calls: list[Audio] = []
+
+    def task(audio: Audio) -> Any:  # noqa: ANN401 - a stand-in with a Result's `outputs`
+        calls.append(audio)
+        out = _run([_item("w", audio)])[0]["outputs"]
+        return SimpleNamespace(outputs={"embedding": from_wire_form(out["embedding"])})
+
+    windows = embed_windows(_tone(2.0), task, window_s=1.0, hop_s=0.5)
+    assert [(w.start_s, w.end_s) for w in windows] == [(0.0, 1.0), (0.5, 1.5), (1.0, 2.0)] and len(calls) == 3
+    assert all(c.frames == 16000 for c in calls) and all(w.embedding.space.endswith(sb.MODEL_ID) for w in windows)
+    with pytest.raises(ValueError, match="shorter"):
+        embed_windows(_tone(0.5), task)
+
+
 @pytest.mark.contract
 def test_backend_serves_the_ecapa_model_and_declares_its_isolated_env() -> None:
     """One isolated backend `speechbrain` over the catalogue's default `speaker_embeddings` model."""
@@ -157,16 +175,13 @@ def test_content_fault_isolated_with_real_weights() -> None:
 
 @pytest.mark.limits
 @pytest.mark.model
-def test_short_spans_match_their_duration_matched_controls() -> None:
-    """A short span batched with long ones keeps the vector it has alone, and a duration-matched control agrees."""
+def test_short_span_keeps_its_vector_inside_a_batch_with_long_recordings() -> None:
+    """A 0.5 s span embedded alone and inside a batch with 8 s and 2 s recordings gives the identical vector."""
     state = _real_state()
-    short = _tone(0.5, hz=300)
-    control = _tone(0.5, hz=300)
-    mixed = sb.handle(state, [_item("s", short), _item("l", _tone(8.0)), _item("m", _tone(2.0))], PARAMS)
-    alone = sb.handle(state, [_item("s", short)], PARAMS)
-    matched = sb.handle(state, [_item("s", control), _item("t", _tone(0.5, hz=500))], PARAMS)
-    assert numpy.allclose(_vector(mixed[0]), _vector(alone[0]), atol=1e-4)
-    assert numpy.array_equal(_vector(alone[0]), _vector(matched[0]))
+    short = _item("s", _tone(0.5, hz=300))
+    mixed = sb.handle(state, [short, _item("l", _tone(8.0)), _item("m", _tone(2.0, hz=500))], PARAMS)
+    alone = sb.handle(state, [short], PARAMS)
+    assert numpy.array_equal(_vector(mixed[0]), _vector(alone[0]))
 
 
 @pytest.mark.limits

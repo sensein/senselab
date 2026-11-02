@@ -1,12 +1,12 @@
 """Uniform windows over mono audio and the speaker embedding of each, through the `speaker_embeddings` task."""
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from senselab_core.kernel.results import Embedding
 from senselab_core.kernel.signals import Audio
-
-from senselab._api.generated import SpeakerEmbeddings
+from senselab_core.runtime.call import Result
 
 _NS_PER_S = 1_000_000_000
 
@@ -43,12 +43,12 @@ def slice_audio(audio: Audio, start_s: float, end_s: float) -> Audio:
 
 
 def embed_windows(
-    audio: Audio, task: SpeakerEmbeddings, window_s: float = 1.0, hop_s: float = 0.5
+    audio: Audio, task: Callable[[Audio], Result], window_s: float = 1.0, hop_s: float = 0.5
 ) -> list[WindowEmbedding]:
-    """Return the embedding of each window of `audio` (mono) under `task`, in window order.
+    """Return the embedding of each window of `audio` (mono), one `task` call per window, in window order.
 
     Raises:
-        ValueError: if `audio` is shorter than one window; the windows are of one duration, so none is padded.
+        ValueError: if `audio` is shorter than one window.
     """
     duration_s = audio.frames / audio.sampling_rate
     if duration_s < window_s:
