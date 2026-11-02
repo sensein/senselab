@@ -5,7 +5,7 @@ import re
 from collections.abc import Mapping
 from fractions import Fraction
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Protocol, Self, get_args, runtime_checkable
 
 import numpy
 from pydantic import (
@@ -23,6 +23,7 @@ from senselab_worker.canonical import canonical_text
 from senselab_worker.digest import identity_digest
 
 from senselab_core.kernel._base import (
+    ArrayForm,
     Frozen,
     FrozenMapping,
     NonEmptyStr,
@@ -57,6 +58,7 @@ _NS_PER_S = 10**9
 SignalArray = Annotated[
     numpy.ndarray,
     BeforeValidator(lambda v: require_finite(as_numeric_array(v, 2), "signal samples", nan_is_missing=True)),
+    ArrayForm(("number",), 2, None, "Shape (channels, samples); a null marks a missing sample."),
 ]
 """A frozen integer or float array of shape `(channels, samples)`: no infinite sample; a NaN marks a missing one.
 
@@ -473,7 +475,7 @@ class Audio(Recording):
         return cls.from_group(group)
 
 
-_TEXT_IDENTITY = re.compile(r"content:[0-9a-f]{64}")
+_TEXT_IDENTITY = re.compile(get_args(ContentIdentity)[1].pattern)
 
 
 @runtime_checkable

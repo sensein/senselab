@@ -7,6 +7,7 @@ import numpy
 from pydantic import BeforeValidator, Field, Strict, model_validator
 
 from senselab_core.kernel._base import (
+    ArrayForm,
     FiniteFloat,
     Frozen,
     LabelArray,
@@ -83,7 +84,11 @@ class Embedding(Formatted):
 
     format: FormatTag = "embedding@1.0"
 
-    vector: Annotated[numpy.ndarray, BeforeValidator(_finite_vector)]
+    vector: Annotated[
+        numpy.ndarray,
+        BeforeValidator(_finite_vector),
+        ArrayForm(("number",), 1, None, "The embedding's finite components."),
+    ]
     space: NonEmptyStr
 
 
@@ -112,7 +117,14 @@ class Events(Formatted):
 
     time_ns: NsArray
     label: LabelArray
-    value: Annotated[numpy.ndarray, BeforeValidator(lambda v: as_numeric_array(v, 1))] | None
+    value: (
+        Annotated[
+            numpy.ndarray,
+            BeforeValidator(lambda v: as_numeric_array(v, 1)),
+            ArrayForm(("number",), 1, None, "One numeric value per row."),
+        ]
+        | None
+    )
     clock_id: NonEmptyStr
 
     @model_validator(mode="after")
@@ -124,7 +136,11 @@ class Events(Formatted):
 Probability = Annotated[FiniteFloat, Field(ge=0, le=1)]
 """A finite float in `[0, 1]`."""
 
-OffsetArray = Annotated[numpy.ndarray, BeforeValidator(lambda v: as_int64_array(v, "character offsets"))]
+OffsetArray = Annotated[
+    numpy.ndarray,
+    BeforeValidator(lambda v: as_int64_array(v, "character offsets")),
+    ArrayForm(("integer",), 1, "characters", "Code-point offsets into the canonical text."),
+]
 """1-D frozen int64 character offsets."""
 
 
@@ -171,11 +187,18 @@ class TextSpans(Formatted):
     format: FormatTag = "text-spans@1.0"
 
     text: TextIdentity
-    length: Annotated[int, Strict(), Field(ge=0)]
+    length: Annotated[int, Strict(), Field(ge=0, description="Length of the text in code points.")]
     start: OffsetArray
     end: OffsetArray
     label: LabelArray
-    score: Annotated[numpy.ndarray, BeforeValidator(_finite_column)] | None = None
+    score: (
+        Annotated[
+            numpy.ndarray,
+            BeforeValidator(_finite_column),
+            ArrayForm(("number",), 1, None, "One finite score per span."),
+        ]
+        | None
+    ) = None
 
     @model_validator(mode="after")
     def _check_columns(self) -> "TextSpans":
@@ -198,9 +221,21 @@ class Trials(Formatted):
 
     format: FormatTag = "trials@1.0"
 
-    first: Annotated[numpy.ndarray, BeforeValidator(_finite_matrix)]
-    second: Annotated[numpy.ndarray, BeforeValidator(_finite_matrix)]
-    same: Annotated[numpy.ndarray, BeforeValidator(_bool_column)]
+    first: Annotated[
+        numpy.ndarray,
+        BeforeValidator(_finite_matrix),
+        ArrayForm(("number",), 2, None, "Rows are trials, columns embedding dimensions, in `space`."),
+    ]
+    second: Annotated[
+        numpy.ndarray,
+        BeforeValidator(_finite_matrix),
+        ArrayForm(("number",), 2, None, "Rows are trials, columns embedding dimensions, in `space`."),
+    ]
+    same: Annotated[
+        numpy.ndarray,
+        BeforeValidator(_bool_column),
+        ArrayForm(("boolean",), 1, None, "True where the pair is one source."),
+    ]
     space: NonEmptyStr
 
     @model_validator(mode="after")

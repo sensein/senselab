@@ -394,6 +394,10 @@ def test_describe_of_every_task_is_enough_to_write_a_call() -> None:
                 assert "a path to a local file" in form
             if port_type in kernel_types():
                 _assert_port_schema(document["inputs"], port, input_binding(port_type) != "value")
+        for side in ("inputs", "outputs"):
+            assert not _bare_arrays(document[side]), f"{spec.name} {side}"
+        assert "anyOf" not in json.dumps(document["outputs"]["properties"])
+        assert "oneOf" not in json.dumps(document["outputs"])
         call = document["call"]
         assert set(call["keys"]) == {"task", "task_version", "inputs", "params", "model", "backend_params"}
         assert call["model"]["allowed"] == [f"{m['id']}@{m['revision']}" for m in document["models"]]
@@ -449,6 +453,16 @@ def test_a_text_identity_in_neither_form_is_refused(bad: object) -> None:
         bind_input("reference", "TextSpans", {**_SPANS, "text": bad})
 
 
+def _bare_arrays(node: object, path: str = "") -> list[str]:
+    """Return the paths of array schemas that give no `items`."""
+    if isinstance(node, dict):
+        bare = [path] if node.get("type") == "array" and "items" not in node else []
+        return bare + [b for k, v in node.items() for b in _bare_arrays(v, f"{path}/{k}")]
+    if isinstance(node, list):
+        return [b for i, v in enumerate(node) for b in _bare_arrays(v, f"{path}[{i}]")]
+    return []
+
+
 def _unresolved(node: object, defs: dict[str, Any]) -> list[str]:
     if isinstance(node, dict):
         found = [r for r in [node.get("$ref")] if isinstance(r, str) and r.rsplit("/", 1)[-1] not in defs]
@@ -466,3 +480,46 @@ def _assert_port_schema(inputs: dict[str, Any], port: str, takes_string: bool) -
     assert not _unresolved(schema, defs)
     if takes_string:
         jsonschema.validate("a string", {**schema, "$defs": defs})
+
+
+@pytest.mark.logic
+def test_array_fields_state_element_rank_and_unit() -> None:
+    """An array field's schema is generated from its declaration: element type, rank and unit where it has one."""
+    defs = describe("der")["inputs"]["$defs"]["Intervals"]["properties"]
+    assert defs["start_ns"]["items"] == {"type": "integer"} and defs["start_ns"]["x-senselab-unit"] == "ns"
+    trials = describe("eer")["inputs"]["$defs"]["Trials"]["properties"]["first"]
+    assert trials["x-senselab-ndim"] == 2 and trials["items"]["items"] == {"type": "number"}
+    spans = describe("span_f1")["inputs"]["$defs"]["TextSpans"]["properties"]
+    assert spans["start"]["x-senselab-unit"] == "characters" and spans["length"]["description"]
+
+
+@pytest.mark.logic
+def test_params_omission_is_stated_from_the_declaration() -> None:
+    """`params` may be omitted exactly when every param has a default; otherwise the required ones are named."""
+    assert "may be omitted" in describe("pii_spans")["call"]["keys"]["params"]
+    assert "['target_rate'] must be given" in describe("signal.resample")["call"]["keys"]["params"]
+
+
+_RUN_CALLS = importlib.util.spec_from_file_location("run_calls", ROOT / "scripts" / "run_calls.py")
+assert _RUN_CALLS and _RUN_CALLS.loader
+
+
+@pytest.mark.logic
+def test_run_calls_reports_one_line_per_call_and_fails_on_any(
+    fake_stack: None,  # noqa: ARG001 - the fixture's effect
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A good call prints `ok` with its output types, an invalid one `FAILED` with its error type; exit is 1."""
+    module = importlib.util.module_from_spec(_RUN_CALLS)  # type: ignore[arg-type]
+    sys.modules["run_calls"] = module
+    _RUN_CALLS.loader.exec_module(module)  # type: ignore[union-attr]
+    document = describe(fake.ECHO.name)
+    good = {"task": fake.ECHO.name, "inputs": {p: {"text": "hi"} for p in document["inputs"]["required"]}, "params": {}}
+    bad = {"task": fake.ECHO.name, "inputs": {}, "params": {"nope": 1}}
+    for calls, code in (([good], 0), ([good, bad], 1)):
+        path = tmp_path / "calls.json"
+        path.write_text(json.dumps(calls))
+        assert module.main([str(path)]) == code
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith("fake.echo: ok ") and lines[-1].startswith("fake.echo: FAILED ")

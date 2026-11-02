@@ -37,10 +37,11 @@ STRING_FORMS = {"path": "path to a local file", "text": "the text itself"}
 JSON_FORM = "a JSON value"
 
 
-def _link_ports(ports: dict[str, Any], declared: Mapping[str, str]) -> dict[str, Any]:
-    """Return `ports` with each port saying how a call gives it, and each kernel-typed port linked to its schema.
+def _link_ports(ports: dict[str, Any], declared: Mapping[str, str], *, given: bool) -> dict[str, Any]:
+    """Return `ports` with each kernel-typed port linked to its schema.
 
-    How a port is given is `input_binding` of its type, in `PORT_FORMS`.
+    With `given` (the inputs), each port also says how a call gives it, `input_binding` of its type in `PORT_FORMS`,
+    and takes the forms of `bind_input`; an output port is only linked.
     """
     defs: dict[str, Any] = {}
     properties = {}
@@ -50,10 +51,13 @@ def _link_ports(ports: dict[str, Any], declared: Mapping[str, str]) -> dict[str,
             properties[port] = {**prop, "description": JSON_FORM}
             continue
         schema = _format_schema(model)
-        for field in text_identity_fields(model):
+        for field in text_identity_fields(model) if given else ():
             schema["properties"][field] = _text_identity_schema(schema["properties"][field])
         defs.update(schema.pop("$defs", {}))
         defs[model.__name__] = schema
+        if not given:
+            properties[port] = {**prop, "$ref": f"#/$defs/{model.__name__}"}
+            continue
         form = PORT_FORMS[input_binding(declared[port])].format(type=declared[port])
         by_str = STRING_FORMS.get(input_binding(declared[port]))
         ref = {"$ref": f"#/$defs/{model.__name__}"}
@@ -89,6 +93,14 @@ def _text_identity_schema(prop: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _params_note(spec: TaskSpec) -> str:
+    """Return how a call gives `params`: omittable when every param has a default, else naming those it must give."""
+    required = sorted(n for n, f in spec.params.model_fields.items() if f.is_required())
+    if required:
+        return f"the `params` schema; {required} must be given, any other param takes its default"
+    return "the `params` schema; every param has a default, so `params` may be omitted or {}"
+
+
 def _example(spec: TaskSpec, params: dict[str, Any], default_model: str | None) -> dict[str, Any]:
     """Return a call of `spec` with a placeholder per input and an example per required param."""
     placeholders = {"path": "<path>", "text": "<text>", "value": "<object>"}
@@ -115,7 +127,7 @@ def _envelope(
             "task": f"the task name, {spec.name!r}",
             "task_version": f"optional; the declared version, {spec.version!r}",
             "inputs": "one value per input port, as each port's description says",
-            "params": "the `params` schema; omitted params take their defaults",
+            "params": _params_note(spec),
             "model": "optional; `org/name@revision`, `url:<url>#sha256=<hex>` or `local:<path>`; None or omitted takes "
             "`default_model`",
             "backend_params": "optional; the params of the chosen backend, per `backend_params`; default {}",
@@ -215,8 +227,8 @@ def describe(name: str, registry: Registry = REGISTRY, catalogue: Catalogue | No
         "kind": spec.kind,
         "call": _envelope(spec, schema, backends, [f"{m['id']}@{m['revision']}" for m in model_list], default),
         **schema,
-        "inputs": _link_ports(schema["inputs"], spec.inputs),
-        "outputs": _link_ports(schema["outputs"], spec.outputs),
+        "inputs": _link_ports(schema["inputs"], spec.inputs, given=True),
+        "outputs": _link_ports(schema["outputs"], spec.outputs, given=False),
         "backends": [
             {"name": b.name, "version": b.version, "stack": b.stack, "devices": list(b.devices)} for b in backends
         ],

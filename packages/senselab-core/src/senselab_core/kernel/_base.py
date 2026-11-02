@@ -4,6 +4,7 @@ import math
 import threading
 import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Annotated, Any, NoReturn, Self, TypeVar
 
@@ -464,10 +465,45 @@ FiniteFloat = Annotated[float, Strict(), AfterValidator(_finite)]
 Rate = Annotated[float, Strict(), Field(gt=0, allow_inf_nan=False)]
 """A sampling rate in Hz: a positive finite number; bools, strings and non-finite values are refused."""
 
-NsArray = Annotated[numpy.ndarray, BeforeValidator(as_ns_array)]
+
+@dataclass(frozen=True)
+class ArrayForm:
+    """What an array field holds, for its JSON Schema: element JSON types `items`, `ndim`, `unit`, `meaning`."""
+
+    items: tuple[str, ...]
+    ndim: int = 1
+    unit: str | None = None
+    meaning: str = ""
+
+    def schema(self) -> dict[str, Any]:
+        """Return the schema of the array: nested `ndim` deep, each level with `items`, and its unit and meaning."""
+        node: dict[str, Any] = {"type": self.items[0] if len(self.items) == 1 else list(self.items)}
+        for _ in range(self.ndim):
+            node = {"type": "array", "items": node}
+        described = "-D ".join([str(self.ndim), "array"]) + (f" in {self.unit}" if self.unit else "")
+        node["description"] = f"{described}. {self.meaning}".strip()
+        node["x-senselab-ndim"] = self.ndim
+        if self.unit:
+            node["x-senselab-unit"] = self.unit
+        return node
+
+    def __get_pydantic_json_schema__(self, core_schema: Any, handler: Any) -> dict[str, Any]:  # noqa: ANN401, ARG002
+        """Give the field this schema in place of the generator's, wherever the field is used."""
+        return self.schema()
+
+
+NsArray = Annotated[
+    numpy.ndarray,
+    BeforeValidator(as_ns_array),
+    ArrayForm(("integer",), 1, "ns", "int64 nanoseconds on the clock named by `clock_id`."),
+]
 """1-D frozen int64 nanoseconds."""
 
-LabelArray = Annotated[numpy.ndarray, BeforeValidator(as_label_array)]
+LabelArray = Annotated[
+    numpy.ndarray,
+    BeforeValidator(as_label_array),
+    ArrayForm(("string", "number", "boolean"), 1, None, "One label per row, all of one kind."),
+]
 """1-D frozen labels."""
 
 StrMap = Annotated[Mapping[str, str], AfterValidator(FrozenMapping), PlainSerializer(dict)]
