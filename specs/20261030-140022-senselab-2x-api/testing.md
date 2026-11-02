@@ -46,15 +46,17 @@ on. The default run is `-m logic`; contract, limits, use case and env are desele
 
 | Tier | Marker | Exercises | Inputs | Runs where | Gate |
 |---|---|---|---|---|---|
-| **Logic** | `logic` (default) | Behaviour of code: data types, identity and keys, params validation, planner decisions, graph semantics, decision rules, codecs | small synthetic signals; the `fake` stack | every PR on Python 3.11 and 3.14 from a core-only install (`core-only` job); worker tests on the 3.10 floor from the built wheel (`worker-floor`); a wider Python matrix is not yet in CI | blocking |
+| **Logic** | `logic` (default) | Behaviour of code: data types, identity and keys, params validation, planner decisions, graph semantics, decision rules, codecs | small synthetic signals; the `fake` stack | every PR on Python 3.11 and 3.14 from a core-only install (`core-only` job, `-m "(logic or contract) and not model"`); worker tests on the 3.10 floor from the built wheel (`worker-floor`); a wider Python matrix is not yet in CI | blocking |
 | **Contract** | `contract` | Every declared task, backend, env and profile meets the framework contract | declarations | every PR (`-m "logic or contract"`, `core-only` on 3.11 and 3.14; worker contract on 3.10) | blocking |
-| **Limits** | `limits` | Parameter boundaries and edge inputs against real backends | synthetic edge signals + 3–4 shared fixtures | nightly, or on a PR carrying the `limits` label (which runs limits only); GPU subset on ORCD | blocking for touched backends |
-| **Use case** | `usecase` | One realistic end-to-end pipeline per use case | small public or synthetic recordings with licenses recorded | nightly and ORCD only, never on a PR or a label (H-R54); ORCD before release | blocking for release |
-| **Env** | `env` | Each locked env builds, imports the worker runtime and round-trips every data type | lock files | the release-gate build on every PR (`core-env`, `-m "env and not slow"`); per-lock builds for changed locks are not yet in CI; full builds weekly on ORCD | blocking for that env |
+| **Limits** | `limits` | Parameter boundaries and edge inputs against real backends | synthetic edge signals + 3–4 shared fixtures | GitHub: limits that need no model, nightly and on a PR carrying the `limits` label (`-m "limits and not model"`). ORCD only, submitted from a pinned SHA: every limit that loads a model or needs a backend env, and the GPU subset | blocking for touched backends |
+| **Use case** | `usecase` | One realistic end-to-end pipeline per use case | small public or synthetic recordings with licenses recorded | ORCD only, submitted from a pinned SHA; never in GitHub CI, on a PR, a label or nightly (H-R54, P2-33) | blocking for release |
+| **Env** | `env` | Each locked env builds, imports the worker runtime and round-trips every data type | lock files | GitHub: the model-free release-gate packaging build on every PR (`core-env`, `-m "env and not slow and not model"`), which builds wheels and a venv of the senselab distributions and no backend env. ORCD only: every backend env build, per-lock builds for changed locks, full builds weekly | blocking for that env |
 | **Benchmark** | not pytest | Accuracy and speed on public data, tracked over releases | public benchmark subsets and full sets | CPU smoke (<15 min) on PRs touching a task and nightly (not yet in CI); GPU smoke weekly on ORCD; full per release on ORCD | tracked, not pass/fail; regressions beyond a band open an issue |
 
 Within limits and use cases, sub-markers `gpu`, `network` and `slow` select hardware and runtime.
-Both tiers are deselected by default, as are contract and env: the PR command is `-m "logic or contract"`.
+Both tiers are deselected by default, as are contract and env: the PR command is `-m "(logic or contract) and not model"`.
+
+The sub-marker `model` marks a test that loads weights or needs a backend env. It goes only with `limits`, `usecase` or `env` (`packages/conftest.py`), and no GitHub job selects it (`ci_tiers_test.py`): GitHub CI runs logic, contract and model-free limits, and runs no model, for review or otherwise (P2-33).
 
 ## 3. Logic tests: write less, generate more
 
@@ -172,7 +174,7 @@ module over the registry, with ids equal to the task, backend or profile name.
 - `uv run pytest` runs logic tests in under a few minutes on a laptop, serially, scoped to the
   package changed.
 - `uv run pytest -m limits -k <backend>` runs one backend's limits.
-- The nightly job needs a scheduled workflow on the default branch (`alpha`) that checks out `2.x`: GitHub runs `schedule` workflows only from the default branch.
+- The nightly job is `2x-nightly.yaml` on the default branch (`alpha`), which checks out `2.x`: GitHub runs `schedule` workflows only from the default branch. It calls `2x-tests.yaml@2.x` with `ref: 2.x` (every PR job) and runs `limits and not model`.
 - A test that builds a wheel or sdist, creates a venv or installs from an index carries `network`
   beside its tier, so `-m "not network"` runs none of them. The release-gate and packaging ones
   (`packages/senselab-core/tests/release_gate_test.py`) run in the
@@ -189,10 +191,11 @@ module over the registry, with ids equal to the task, backend or profile name.
 
 | When | What |
 |---|---|
-| every PR | `pre-commit`; logic + contract on 3.11 and 3.14 from a locked core-only install (`uv sync --locked`), with import contracts and per-distribution sdist-to-wheel builds (`core-only`); the release-gate env tests (`core-env`); worker logic, env and contract tests on 3.10 (`worker-floor`, the one job that does not install from `uv.lock`: the lock requires Python 3.11 or later, so a locked 3.10 constraints file is a follow). A guard test (`ci_tiers_test.py`) refuses any other unlocked install. Not yet in CI: per-lock env builds, CPU smoke benchmarks (<15 min) when a task is touched |
-| label on a PR (`limits`) | limits only, on 3.12 (`core-limits`); never use cases (H-R54) |
-| nightly (`schedule`, `workflow_dispatch`) | every PR job, and limits and use cases on 3.12 (`core-nightly`). A schedule runs the default branch's copy of the workflow, so this takes effect once 2.x is merged there. Not yet in CI: a wider Python matrix, the scale ladder (`benchmarks/scale`, P-33), CPU smoke benchmarks |
-| weekly (ORCD) | GPU smoke benchmarks; core CPU benchmark suite; full env builds; use cases on ORCD |
+| every PR | `pre-commit`; logic + contract, model-free, on 3.11 and 3.14 from a locked core-only install (`uv sync --locked`), with import contracts and per-distribution sdist-to-wheel builds (`core-only`); the source-digest check (`source-digests`, `scripts/check_source_digests.py`); the implementer and reviewer models differ (`pr-models`, `scripts/check_pr_models.py`); the model-free release-gate packaging tests (`core-env`); worker logic, env and contract tests on 3.10 (`worker-floor`, the one job that does not install from `uv.lock`: the lock requires Python 3.11 or later, so a locked 3.10 constraints file is a follow). A guard test (`ci_tiers_test.py`) refuses any other unlocked install. Not yet in CI: per-lock env builds, CPU smoke benchmarks (<15 min) when a task is touched |
+| label on a PR (`limits`) | model-free limits only, on 3.12 (`core-limits`); never use cases (H-R54) |
+| nightly (`schedule`, `workflow_dispatch`; `2x-nightly.yaml` on `alpha`) | every PR job against `2.x`, and `limits and not model` on 3.12. No use case and no model test: those are ORCD. Not yet in CI: a wider Python matrix, the scale ladder (`benchmarks/scale`, P-33), CPU smoke benchmarks |
+| every pushed SHA on a task or backend change (ORCD) | the model, backend-env and GPU tiers the change touches, and the use cases, submitted from a pinned SHA |
+| weekly (ORCD) | GPU smoke benchmarks; core CPU benchmark suite; full env builds; use cases |
 | per release (ORCD) | full benchmarks; GPU limits |
 
 **Forbidden in 2.x tests.** Enforced today: patching senselab internals (`tests/lint/internal_patches_test.py`),

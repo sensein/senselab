@@ -89,7 +89,7 @@ findings are in [`reviews/phase1-reattack/canon.md`](../reviews/phase1-reattack/
 
   **Registered identity tags:** `logical-key@6`, `output@3`, `context@3`, `content-root@2`, `audio@3`,
   `weights@3`, `value@2`, `provenance-id@4`, `data-manifest@3`, `worker-runtime@1`, `fake-output@1`,
-  `contract-probe@1`, `prov-activity@1`, `prov-node@1`, `wheel-set@1`, `env-lock@1`, `vllm-config@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a
+  `contract-probe@1`, `prov-activity@1`, `prov-node@1`, `wheel-set@1`, `env-lock@1`, `vllm-config@1`, `source@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a
   `format:` line in a packaged YAML file or in a store entry): `equivalence@1`, `retry-policy@1.0`, `catalogue@1.0`, `spdx-licenses@1.0`, and
   `execution-context@2.0` in a store entry's `context.json`; `env-record@1.0`, an env root's `<name>[-<tag>].json`; `senselab-vocab@1.0`, a vocabulary document's
   `owl:versionInfo` (ADR-010).
@@ -228,6 +228,11 @@ Ruling P2-44 ([`plans/phase-2.md`](../plans/phase-2.md)) and ADR-010 as amended;
   `--flag=value` or switch); the server's attestation carries it as `config_digest`, with the reported engine version
   and the model identity, and the execution context records all three in `driver` (I-8). It replaces 1.x
   `engine_identity` (Phase 2 Task 9b).
+- 2026-11-01: identity tag `source@1`, the digest of a declaration's normalised source (docstrings and the `version`
+  argument left out) and of its worker module's, taken by `scripts/check_source_digests.py`. Data format
+  `source-digests@1`: `data/source_digests.yaml`, written at a release, mapping `task:<name>` and
+  `backend:<task>/<name>` to `version` and `digest`; before the first release the baseline is the tree at the
+  merge-base with `2.x` (P2-54, Phase 2 Task 19).
 
 ## Amendment 2026-11-01: kernel types of the Phase 2 tasks and their wire forms
 

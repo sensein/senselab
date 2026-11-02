@@ -65,6 +65,22 @@ The PR template carries this checklist. Pre-commit and CI check what they can.
 - [ ] The PR records the implementer and reviewer models, and they differ (P-40).
 - [ ] The ledger mark is current for any 1.x area touched (P-39).
 
+### Size budgets
+
+`scripts/check_size_budgets.py` reads three limits (the function limit serves source and tests) from `scripts/data/size_budget.yaml`; each follows from a standard
+here, not from the tree.
+
+- **Function, 100 lines (source and test).** ruff caps a function at 50 statements (`PLR0915`, P-32). A wrapped call or
+  a literal takes two lines, so 50 statements fit in 100 lines; past that a function holds more than one idea. A
+  test function past it is a scenario that wants splitting.
+- **Source file, 1200 lines.** A reviewer reads a module whole in one pass (P-32). The read tool returns 2000 lines at a
+  time; 1200 leaves the reviewer's notes and the module's tests inside one window.
+- **Test file, 1300 lines.** A test file is read beside its subject, so it may exceed the source limit by one function
+  limit.
+
+A function or file over its limit is listed in `exempt` with a reason, or split. The tree is measured against these
+limits on every pre-commit run, which prints the five longest files and functions.
+
 ## What "special-casing" means (rejected in review)
 
 - A branch on a dataset, recording, subject, model id or host name.
