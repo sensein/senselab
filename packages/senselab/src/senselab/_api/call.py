@@ -7,9 +7,25 @@ from typing import Any, ClassVar, Self
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 from senselab_core.kernel._base import FrozenMapping, NonEmptyStr
-from senselab_core.kernel.declare import REGISTRY, DeclaredParams, Registry, TaskParams, TaskSpec, kernel_types
+from senselab_core.kernel.declare import (
+    REGISTRY,
+    DeclaredParams,
+    Registry,
+    TaskParams,
+    TaskSpec,
+    UnknownTask,
+    kernel_types,
+)
 from senselab_core.kernel.identity import ModelRef
-from senselab_core.runtime.call import Result, TaskCall, run_call
+from senselab_core.kernel.wire import WireFormatRetired
+from senselab_core.runtime.call import AmbiguousClock, CallFailed, OutputTypeMismatch, Result, TaskCall, run_call
+from senselab_core.runtime.locks import LeaseTimeout, LeaseUnavailable
+from senselab_core.runtime.models import ModelResolutionError
+from senselab_core.runtime.profiles import NoBackend, NoDevice, UnlistedSource
+from senselab_core.runtime.tolerance import NoToleranceProfile
+from senselab_core.runtime.vllm_server import AttestationMismatch, VllmStartError
+from senselab_core.runtime.worker_client import WorkerFatal, WorkerLost
+from senselab_worker.faults import FaultClass, ProtocolError
 
 
 class _Unset:
@@ -48,6 +64,50 @@ class ApiError(Exception):
     def to_dict(self) -> dict[str, Any]:
         """Return the envelope as a JSON-ready mapping."""
         return self.envelope.model_dump(mode="json")
+
+
+ERROR_CODES: tuple[tuple[type[Exception], str, str], ...] = (
+    (UnknownTask, "unknown_task", "name a declared task; `tasks()` lists them"),
+    (AmbiguousClock, "ambiguous_clock", "give the recordings of one content the same anchor"),
+    (OutputTypeMismatch, "output_type_mismatch", "a backend returned a value of the wrong type; report the backend"),
+    (WireFormatRetired, "wire_format_retired", "recompute the call; its stored output is in a retired format"),
+    (UnlistedSource, "unlisted_source", "list the model source in the execution profile's allowlist"),
+    (NoBackend, "no_backend", "choose a model with a backend, or one the execution profile allows"),
+    (NoDevice, "no_device", "make a device the backend supports available, or change the execution profile"),
+    (ModelResolutionError, "model_resolution_failed", "check the model reference and the network, then retry"),
+    (VllmStartError, "server_start_failed", "see the server log; retry once the host has the resources it needs"),
+    (AttestationMismatch, "attestation_mismatch", "start the server as the backend declares it"),
+    (LeaseTimeout, "resource_busy", "retry when the other holder of the resource has finished"),
+    (LeaseUnavailable, "resource_busy", "retry when the other holder of the resource has finished"),
+    (
+        NoToleranceProfile,
+        "no_tolerance_profile",
+        "add a tolerance profile for the backend, or turn sampled verification off",
+    ),
+    (WorkerFatal, "worker_failed", "the worker stopped; this is a fault of the host, not of the input"),
+    (WorkerLost, "worker_failed", "the worker stopped; this is a fault of the host, not of the input"),
+    (ProtocolError, "worker_failed", "the worker broke its protocol; report the backend"),
+    (ValueError, "invalid_call", "see the message for the value to correct"),
+    (LookupError, "not_found", "see the message for what is missing"),
+)
+"""Each error `run_call` documents, with its envelope code and fix; the first row an error is an instance of wins."""
+
+_FAULT_FIX = {
+    FaultClass.CONTENT: "the backend rejected the input; correct or replace it",
+    FaultClass.RESOURCE: "the call ran out of memory or time; give it a smaller input or more resources",
+    FaultClass.INFRASTRUCTURE: "the backend failed for a reason of its own, not of the input; report it",
+}
+
+
+def api_error(error: Exception) -> ApiError | None:
+    """Return the `ApiError` for an error `run_call` documents, or None when it documents none such."""
+    if isinstance(error, CallFailed):
+        fault = FaultClass(error.error.get("fault", FaultClass.INFRASTRUCTURE))
+        return ApiError(f"{fault.value}_fault", str(error), _FAULT_FIX[fault])
+    for kind, code, fix in ERROR_CODES:
+        if isinstance(error, kind):
+            return ApiError(code, " ".join(str(error).split()) or type(error).__name__, fix)
+    return None
 
 
 def closest(word: str, known: Iterable[str], n: int = 3) -> list[str]:
@@ -159,7 +219,14 @@ class ConfiguredTask:
         return type(self)(self._model, **merged, backend_params=self._backend_params)
 
     def _run(self, inputs: Mapping[str, Any]) -> Result:
-        return run_call(self._call(inputs))
+        call = self._call(inputs)
+        try:
+            return run_call(call)
+        except Exception as error:
+            envelope = api_error(error)
+            if envelope is None:
+                raise
+            raise envelope from error
 
     def _call(self, inputs: Mapping[str, Any]) -> TaskCall:
         spec = self.spec

@@ -18,7 +18,7 @@ import numpy
 import pytest
 import senselab_core.runtime.fake_backend as fake
 from pydantic import Field
-from senselab._api.call import ApiError
+from senselab._api.call import ERROR_CODES, ApiError, api_error
 from senselab._api.describe import JSON_FORM, PORT_FORMS, describe, models, tasks
 from senselab._api.packaged import CATALOGUE
 from senselab_core.kernel.declare import REGISTRY, BackendSpec, Env, Registry, TaskParams, TaskSpec, kernel_types
@@ -26,6 +26,7 @@ from senselab_core.kernel.identity import TEXT_IDENTITY_FORMS
 from senselab_core.kernel.results import TextSpans
 from senselab_core.kernel.signals import Audio, PlainText
 from senselab_core.runtime.call import (
+    CallFailed,
     Packaged,
     Result,
     TaskCall,
@@ -625,3 +626,40 @@ def test_a_load_that_fails_after_declaring_is_rolled_back_and_retried_cleanly(tm
     )
     run = _child(tmp_path, {"halfway.entry": entry}, script, {"halfway.decl": _DECLARE})
     assert run.stdout.splitlines() == ["first PackageLoadError", "second 1 True"], run.stderr
+
+
+def _documented_errors() -> list[str]:
+    raises = (run_call.__doc__ or "").split("Raises:")[1]
+    names = [n for line in raises.splitlines() if ":" in line for n in line.split(":")[0].split(",")]
+    return [n.strip() for n in names]
+
+
+@pytest.mark.contract
+def test_every_error_run_call_documents_has_an_envelope_code() -> None:
+    """Each exception class in `run_call`'s `Raises:` section is a row of the error-code table."""
+    table = {kind.__name__ for kind, _, _ in ERROR_CODES} | {"CallFailed"}
+    assert set(_documented_errors()) <= table, sorted(set(_documented_errors()) - table)
+
+
+@pytest.mark.logic
+def test_a_call_failure_carries_its_fault_class_in_the_envelope_code() -> None:
+    """A failed call maps to `<fault>_fault`, whatever the class of the backend's own exception."""
+    codes = {
+        fault: api_error(CallFailed({"type": "X", "fault": fault, "message": "m"})).envelope.code  # type: ignore[union-attr]
+        for fault in ("content", "resource", "infrastructure")
+    }
+    assert codes == {"content": "content_fault", "resource": "resource_fault", "infrastructure": "infrastructure_fault"}
+
+
+@pytest.mark.logic
+def test_a_call_error_leaves_a_configured_task_as_the_envelope() -> None:
+    """A backend refusal leaves a configured task as the `ApiError` of its fault class."""
+    with pytest.raises(ApiError) as failed:
+        senselab.span_f1(_text_spans("red"), _text_spans("blue"))
+    assert failed.value.envelope.code == "content_fault"
+    assert api_error(RuntimeError("bug")) is None
+
+
+def _text_spans(text: str) -> TextSpans:
+    empty = numpy.array([], dtype=numpy.int64)
+    return TextSpans.over(PlainText(content=text), start=empty, end=empty, label=numpy.array([], dtype=str))
