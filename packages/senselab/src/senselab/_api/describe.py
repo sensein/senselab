@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from pydantic.json_schema import GenerateJsonSchema
 from senselab_core.kernel.declare import REGISTRY, Registry, TaskSpec, json_schema, kernel_types
 from senselab_core.kernel.formats import Formatted
-from senselab_core.runtime.call import packaged
+from senselab_core.runtime.call import input_binding, packaged
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
 
 from senselab._api.call import ApiError, callable_names, closest, task_spec
@@ -27,24 +27,78 @@ def _format_schema(kernel_type: type[BaseModel]) -> dict[str, Any]:
     return schema
 
 
-def _link_ports(ports: dict[str, Any], declared: Mapping[str, str]) -> dict[str, Any]:
-    """Return `ports` with each port of a kernel type linked to that type's format schema under `$defs`.
+PORT_FORMS = {
+    "path": "a path to a local file, read when the call runs, or the {type} object",
+    "text": "the text itself as a string (not a path), or a PlainText",
+    "value": "the {type} object as its format schema gives it; a string is not read as a path",
+}
+JSON_FORM = "a JSON value"
 
-    A port of another type, or of a protocol such as `Text`, takes a path or URI.
+
+def _link_ports(ports: dict[str, Any], declared: Mapping[str, str]) -> dict[str, Any]:
+    """Return `ports` with each port saying how a call gives it, and each kernel-typed port linked to its schema.
+
+    How a port is given is `input_binding` of its type, in `PORT_FORMS`.
     """
     types = kernel_types()
     defs: dict[str, Any] = {}
     properties = {}
     for port, prop in ports["properties"].items():
         kernel_type = types.get(declared[port])
-        if kernel_type is None or not issubclass(kernel_type, BaseModel):
-            properties[port] = {**prop, "description": "a path or URI"}
+        if kernel_type is None:
+            properties[port] = {**prop, "description": JSON_FORM}
+            continue
+        form = PORT_FORMS[input_binding(declared[port])].format(type=declared[port])
+        if not (isinstance(kernel_type, type) and issubclass(kernel_type, BaseModel)):
+            properties[port] = {**prop, "description": form}
             continue
         schema = _format_schema(kernel_type)
         defs.update(schema.pop("$defs", {}))
         defs[kernel_type.__name__] = schema
-        properties[port] = {**prop, "$ref": f"#/$defs/{kernel_type.__name__}"}
+        properties[port] = {**prop, "description": form, "$ref": f"#/$defs/{kernel_type.__name__}"}
     return {**ports, "properties": properties, **({"$defs": defs} if defs else {})}
+
+
+def _example(spec: TaskSpec, params: dict[str, Any], default_model: str | None) -> dict[str, Any]:
+    """Return a call of `spec` with a placeholder per input and an example per required param."""
+    placeholders = {"path": "<path>", "text": "<text>", "value": "<object>"}
+    required = {
+        n: p.get("examples", ["<example>"])[0]
+        for n, p in params["properties"].items()
+        if n in params.get("required", ())
+    }
+    return {
+        "task": spec.name,
+        "inputs": {port: placeholders[input_binding(t)] for port, t in spec.inputs.items()},
+        "params": required,
+        "model": default_model,
+        "backend_params": {},
+    }
+
+
+def _envelope(
+    spec: TaskSpec, schema: dict[str, Any], backends: list[Any], model_ids: list[str], default_model: str | None
+) -> dict[str, Any]:
+    """Return the call envelope: its keys, how a call names a model and a backend, and what this task allows."""
+    return {
+        "keys": {
+            "task": f"the task name, {spec.name!r}",
+            "task_version": f"optional; the declared version, {spec.version!r}",
+            "inputs": "one value per input port, as each port's description says",
+            "params": "the `params` schema; omitted params take their defaults",
+            "model": "optional; `org/name@revision`, `url:<url>#sha256=<hex>` or `local:<path>`; None or omitted takes "
+            "`default_model`",
+            "backend_params": "optional; the params of the chosen backend, per `backend_params`; default {}",
+        },
+        "model": {"allowed": model_ids, "default": default_model},
+        "backend": {
+            "named_by": "no call key: the backend is the first, in the execution profile's stack preference for the "
+            "task, that serves the model",
+            "allowed": [b.name for b in backends],
+            "stacks": sorted({b.stack for b in backends}),
+        },
+        "example": _example(spec, schema["params"], default_model),
+    }
 
 
 def tasks(accepts: str | None = None, registry: Registry = REGISTRY) -> list[dict[str, Any]]:
@@ -103,14 +157,16 @@ def models(task: str | None = None, catalogue: Catalogue | None = None) -> list[
 def describe(name: str, registry: Registry = REGISTRY, catalogue: Catalogue | None = None) -> dict[str, Any]:
     """Return the JSON Schema of task `name` with its backends, stacks, devices and models.
 
-    The result holds `task`, `version`, `kind`, the schemas `inputs`, `params`, `backend_params` and `outputs`
-    (each port of a kernel type links to that type's format schema in its `$defs`), `backends` as
-    `{name, version, stack, devices}`, the sorted `stacks` and `devices` they cover, `callable`, the generated
-    `{class, function}` names, `models` (as `models(name)` gives them, licenses included) and `default_model`, the
-    catalogue default as `id@revision` (None for a task with none). `catalogue` is the one `run_call` reads when None.
+    The result holds `task`, `version`, `kind`, `call` (the call envelope), the schemas `inputs`, `params`,
+    `backend_params` and `outputs` (each port says how a call gives it and, of a kernel type, links to that type's
+    format schema in its `$defs`), `backends` as `{name, version, stack, devices}`, the sorted `stacks` and `devices`
+    they cover, `callable`, the generated `{class, function}` names, `models` (as `models(name)` gives them, licenses
+    included) and `default_model`, the catalogue default as `id@revision` (None for a task with none). `catalogue` is
+    the one `run_call` reads when None.
 
-    The function and the class run the task on the inputs, given as positional data: an object, a path or a URI (a
-    port whose type is not a kernel type takes a JSON value, such as a path or URI string). The one call shape of
+    The function and the class run the task on the inputs, given as positional data in the form each port's
+    description states (an object, a file path or the text itself; a port that is not a kernel type takes a JSON
+    value). The one call shape of
     the CLI and JSON, `{task, inputs, params, model, backend_params}`, validates as a `TaskCall` and runs with
     `run_call`.
 
@@ -120,10 +176,13 @@ def describe(name: str, registry: Registry = REGISTRY, catalogue: Catalogue | No
     spec = task_spec(name, registry)
     schema = json_schema(spec, registry)
     backends = registry.backends(name)
+    model_list = models(name, catalogue)
+    default = _default_model(name, catalogue or packaged().catalogue)
     return {
         "task": spec.name,
         "version": spec.version,
         "kind": spec.kind,
+        "call": _envelope(spec, schema, backends, [f"{m['id']}@{m['revision']}" for m in model_list], default),
         **schema,
         "inputs": _link_ports(schema["inputs"], spec.inputs),
         "outputs": _link_ports(schema["outputs"], spec.outputs),
@@ -133,8 +192,8 @@ def describe(name: str, registry: Registry = REGISTRY, catalogue: Catalogue | No
         "callable": dict(zip(("class", "function"), callable_names(spec), strict=True)),
         "stacks": sorted({b.stack for b in backends}),
         "devices": sorted({d for b in backends for d in b.devices}),
-        "models": models(name, catalogue),
-        "default_model": _default_model(name, catalogue or packaged().catalogue),
+        "models": model_list,
+        "default_model": default,
     }
 
 

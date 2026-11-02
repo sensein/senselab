@@ -71,8 +71,23 @@ class SpeakerEmbeddings:
 class PiiSpansParams(TaskParams):
     """Params of `pii_spans`: the `profile` slice the prompt is built from, and the task `family` selecting guidance."""
 
-    profile: PiiProfile = Field(default_factory=packaged_profile)
-    family: str | None = None
+    profile: PiiProfile = Field(
+        default_factory=packaged_profile,
+        description=(
+            "The slice the prompt is built from: an `instruction`, the `categories` a span may carry (each a "
+            "`name` in capitals and a `description`) and optional `families` of guidance. Omitted, the packaged one."
+        ),
+        examples=[
+            {
+                "instruction": "Mark every span of personally identifying information in the text.",
+                "categories": [
+                    {"name": "PERSON", "description": "A person's name."},
+                    {"name": "EMAIL", "description": "An email address."},
+                ],
+            }
+        ],
+    )
+    family: str | None = Field(default=None, description="The task family selecting guidance from the profile.")
 
 
 @task(name="pii_spans", version="1", kind="transform", registry=REGISTRY)

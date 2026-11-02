@@ -18,11 +18,11 @@ import pytest
 import senselab_core.runtime.fake_backend as fake
 from pydantic import Field
 from senselab._api.call import ApiError
-from senselab._api.describe import describe, models, tasks
+from senselab._api.describe import JSON_FORM, PORT_FORMS, describe, models, tasks
 from senselab._api.packaged import CATALOGUE
-from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
+from senselab_core.kernel.declare import REGISTRY, BackendSpec, Env, Registry, TaskParams, TaskSpec, kernel_types
 from senselab_core.kernel.signals import Audio
-from senselab_core.runtime.call import Packaged, Result, TaskCall, packaged, run_call, use_packaged
+from senselab_core.runtime.call import Packaged, Result, TaskCall, input_binding, packaged, run_call, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -286,12 +286,12 @@ def test_signatures_are_real(generated: ModuleType) -> None:
 
 
 @pytest.mark.logic
-def test_non_kernel_ports_take_a_path_or_uri() -> None:
-    """A port whose type is not a kernel type is described as a path or URI, and is not linked."""
+def test_non_kernel_ports_take_a_json_value() -> None:
+    """A port whose type is not a kernel type is described as a JSON value, and is not linked."""
     registry = Registry()
     registry.add_task(fake.ECHO)
     port = describe("fake.echo", registry)["inputs"]["properties"]["payload"]
-    assert "$ref" not in port and port["description"] == "a path or URI"
+    assert "$ref" not in port and port["description"] == "a JSON value"
 
 
 @pytest.mark.logic
@@ -368,3 +368,33 @@ def test_facade_exposes_discovery_and_the_generated_names() -> None:
 
     assert senselab.tasks is tasks and senselab.describe is describe and senselab.models is models
     assert senselab.__all__ == ["describe", "models", "tasks", *generated.__all__]
+
+
+@pytest.mark.logic
+def test_describe_of_every_task_is_enough_to_write_a_call() -> None:
+    """Every registered task's describe states each input's form, the call envelope and a param example."""
+    for spec in REGISTRY.tasks():
+        document = describe(spec.name)
+        for port, port_type in spec.inputs.items():
+            form = document["inputs"]["properties"][port]["description"]
+            expected = PORT_FORMS[input_binding(port_type)].format(type=port_type)
+            assert form == (expected if port_type in kernel_types() else JSON_FORM)
+            if input_binding(port_type) == "path":
+                assert "a path to a local file" in form
+        call = document["call"]
+        assert set(call["keys"]) == {"task", "task_version", "inputs", "params", "model", "backend_params"}
+        assert call["model"]["allowed"] == [f"{m['id']}@{m['revision']}" for m in document["models"]]
+        assert call["backend"]["allowed"] == [b["name"] for b in document["backends"]]
+        assert set(call["example"]) == {"task", "inputs", "params", "model", "backend_params"}
+        for name in document["params"].get("required", ()):
+            prop = document["params"]["properties"][name]
+            assert prop.get("description") and prop.get("examples"), f"{spec.name}.{name}"
+        if not document["params"].get("required"):
+            TaskCall.model_validate(call["example"])
+
+
+@pytest.mark.logic
+def test_text_spans_text_says_how_to_get_its_identity() -> None:
+    """The `text` of span inputs names the expression that yields it."""
+    schema = describe("span_f1")["inputs"]["$defs"]["TextSpans"]["properties"]["text"]
+    assert "PlainText(content=" in schema["description"] and schema["examples"]

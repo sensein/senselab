@@ -35,7 +35,12 @@ _KAISER_LOW_DB = 21.0
 class ResampleParams(TaskParams):
     """Params of `signal.resample`: `target_rate` in Hz."""
 
-    target_rate: int = Field(gt=0, json_schema_extra={"contract_probe": 16_000})
+    target_rate: int = Field(
+        gt=0,
+        description="The sampling rate to resample to, in Hz.",
+        examples=[16_000],
+        json_schema_extra={"contract_probe": 16_000},
+    )
 
 
 @task(name="signal.resample", version="1", kind="transform")

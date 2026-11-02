@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from importlib.resources.abc import Traversable
 from os import PathLike
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, PlainSerializer, ValidationInfo, model_validator
 from senselab_worker import WIRE_VERSION
@@ -452,6 +452,16 @@ def _resolve_model(
         profile.check_source(ref.id, catalogue)
     resolved = resolve(ref)
     return (resolved if entry is None else resolved.model_copy(update={"license": entry.license})), entry
+
+
+def input_binding(port_type: str) -> Literal["path", "text", "value"]:
+    """Return how `bind_input` takes a `str` for `port_type`: a `path` it reads, the `text` itself or a `value`.
+
+    A `value` port takes the object, or for a type that is not a kernel type its JSON value; a path is refused.
+    """
+    if port_type == "Text":
+        return "text"
+    return "path" if port_type in _READERS else "value"
 
 
 def bind_input(port: str, port_type: str, value: object) -> tuple[InputIdentity, object, str | None]:
