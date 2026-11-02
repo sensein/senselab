@@ -1,13 +1,15 @@
-"""SPDX license expressions and the license records derived from them (P-23).
+"""SPDX license expressions, the license records derived from them, and a user's license policy (P-23).
 
 `parse_expression`, `ids_of` and `allows` read an expression; `derive_flags` reads its flags from the packaged
 table `data/spdx_licenses.yaml`; `license_record` builds a `License` whose flags are those; `check_license` refuses
 a record whose flags contradict its expression; `backend_license` derives a backend's code license from its env
-lock's package records.
+lock's package records, which `lock_records_from` reads from an `env-licenses` document. `LicensePolicy` is a
+run's own allowed and refused license ids.
 """
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from functools import cache
 from importlib import resources
 from typing import Any, Literal, NamedTuple
@@ -210,3 +212,87 @@ def backend_license(backend: BackendSpec, lock_records: Mapping[str, License | N
         verified={"date": max(r.verified["date"] for r in records.values()), "how": how},
         gated=any(r.gated for r in records.values()),
     )
+
+
+LockRecords = Callable[[BackendSpec], Mapping[str, License | None]]
+"""A backend's env-lock package records, `package name -> license record` (`None` for a package without one)."""
+ENV_LICENSES_FORMAT = "env-licenses@1.0"
+HOST_ENV = "host"
+
+
+def env_name(backend: BackendSpec) -> str:
+    """Return the env whose records cover `backend`: its lock name, or ``host``."""
+    return HOST_ENV if backend.env.kind == "host" else str(backend.env.name)
+
+
+def lock_records_from(text: str) -> LockRecords:
+    """Return the provider of ``package -> License`` over the ``env-licenses`` document `text`.
+
+    The document is written by ``scripts/check_licenses.py --lock NAME`` (or ``--host``) from package metadata; its
+    envs are the lock names, and ``host`` for the root lock.
+
+    Raises:
+        ValueError: if the format is not ``env-licenses@1.0``, or (from the provider) a backend's env has no records.
+    """
+    raw = yaml.safe_load(text)
+    if not isinstance(raw, dict) or raw.get("format") != ENV_LICENSES_FORMAT:
+        raise ValueError(f"env licenses must carry format {ENV_LICENSES_FORMAT!r}")
+    envs = raw["envs"]
+
+    def records(backend: BackendSpec) -> dict[str, License | None]:
+        name = env_name(backend)
+        if name not in envs:
+            raise ValueError(f"no license records for env {name!r}; run scripts/check_licenses.py --lock {name}")
+        return {
+            package: license_record(
+                entry["expression"], source=entry["source"], verified=entry["verified"], gated=False
+            )
+            for package, entry in envs[name].items()
+        }
+
+    return records
+
+
+def packaged_lock_records(package: str) -> LockRecords:
+    """Return the provider over ``data/env_licenses.yaml`` of `package`, read on its first use."""
+    read: list[LockRecords] = []
+
+    def records(backend: BackendSpec) -> dict[str, License | None]:
+        if not read:
+            read.append(
+                lock_records_from(resources.files(package).joinpath("data", "env_licenses.yaml").read_text("utf-8"))
+            )
+        return dict(read[0](backend))
+
+    return records
+
+
+class LicenseRefused(ValueError):
+    """A run's license policy refuses the license of a backend's env or of a model."""
+
+
+@dataclass(frozen=True)
+class LicensePolicy:
+    """A run's license policy: the SPDX ids it allows and those it refuses, matched ignoring case.
+
+    `allow` None allows every id `refuse` does not name. A license is accepted when its expression is satisfied by
+    the allowed ids that are not refused (`allows`); a subject with no license record is refused.
+    """
+
+    allow: frozenset[str] | None = None
+    refuse: frozenset[str] = frozenset()
+
+    def refusal(self, subject: str, record: License | None) -> str | None:
+        """Return why the policy refuses `record`, the license of `subject`, or None when it accepts it."""
+        if record is None:
+            return f"{subject} has no license record"
+        tree = parse_expression(record.expression)
+        allowed = {i.lower() for i in (ids_of(tree) if self.allow is None else self.allow)}
+        if allows(tree, frozenset(allowed - {i.lower() for i in self.refuse})):
+            return None
+        return f"{subject} is licensed {record.expression!r}, which the run's license policy does not allow"
+
+    def check(self, subject: str, record: License | None) -> None:
+        """Raise `LicenseRefused` when the policy refuses `record`, the license of `subject`."""
+        if (reason := self.refusal(subject, record)) is not None:
+            raise LicenseRefused(reason)

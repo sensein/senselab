@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 from senselab_core.kernel.declare import REGISTRY, Env
-from senselab_core.testing.lock_licenses import HOST_ENV, lock_records_from, packaged_lock_records
+from senselab_core.runtime.licenses import HOST_ENV, lock_records_from, packaged_lock_records
 
 ROOT = Path(__file__).resolve().parents[3]
 LOCKS = ROOT / "packages/senselab/src/senselab/data/env_locks"

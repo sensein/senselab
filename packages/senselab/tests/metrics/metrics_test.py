@@ -10,8 +10,8 @@ from senselab_core.kernel.declare import REGISTRY
 from senselab_core.kernel.results import Intervals, Metric, TextSpans, Transcript, TranscriptNode, Trials
 from senselab_core.kernel.signals import PlainText, RegularGroup, audio_channels
 from senselab_core.kernel.wire import from_wire_form
+from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.testing.contracts import contract_cases
-from senselab_core.testing.lock_licenses import packaged_lock_records
 
 LOCK_RECORDS = packaged_lock_records("senselab")
 CLOCK = "clock"

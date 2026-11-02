@@ -2,11 +2,11 @@
 
 Layout under `root`:
 
-- `store@4/<d[:2]>/<d>/<f>/`, where `d` is `LogicalKey.digest()` and `f` is
+- `store@5/<d[:2]>/<d>/<f>/`, where `d` is `LogicalKey.digest()` and `f` is
   `ExecutionContext.fingerprint()`, holding:
   - `result.json`: JCS JSON with `format: "result@2.0"`, the key, its digest, the context fingerprint,
     the encoded outputs and their output identity;
-  - `context.json`: JCS JSON with `format: "execution-context@2.0"` and the context's fields;
+  - `context.json`: JCS JSON with `format: "execution-context@3.0"` and the context's fields;
   - `<sha256>.npy`: each array output in canonical `.npy`, named by the sha256 of its bytes.
 - `equivalence-evidence@2/<d>.json`: one verify-sampling comparison (`EquivalenceEvidence`), JSON named by
   `d`, its canonical digest.
@@ -96,13 +96,13 @@ from senselab_core.runtime.vocabulary import core_vocabulary
 
 logger = logging.getLogger("senselab")
 
-STORE_DIR = "store@4"
+STORE_DIR = "store@5"
 STAGING_DIR = "tmp"
 EVIDENCE_DIR = "equivalence-evidence@2"
 EVIDENCE_NAME = re.compile(r"[0-9a-f]{64}\.json")
 QUARANTINE_DIR = "quarantine"
 RESULT_FORMAT = "result@2.0"
-CONTEXT_FORMAT = "execution-context@2.0"
+CONTEXT_FORMAT = "execution-context@3.0"
 RETIRED_STORE_FORMATS = frozenset({"result@1", "execution-context@1"})
 """Store member formats 2.x no longer reads, as `<name>@<major>`."""
 STORE_MIGRATION_STATEMENT = "specs/20261030-140022-senselab-2x-api/migration-ledger.md#retired-store-formats"
@@ -305,17 +305,20 @@ def key_record(key: LogicalKey) -> object:
 
 
 def context_record(context: ExecutionContext) -> dict[str, object]:
-    """Return `context` as an `execution-context@2.0` record: its format tag and its fields."""
+    """Return `context` as an `execution-context@3.0` record: its format tag and its fields."""
     return {"format": CONTEXT_FORMAT, **context.model_dump(mode="json")}
 
 
 def agent_record(key: LogicalKey, context: ExecutionContext) -> kprov.Record:
     """Return the software agent that computes `key` in `context`.
 
-    It carries `senselab:envLock`, so an env at another lock is another agent, and, for a call with a model,
+    It carries `senselab:envLock`, so an env at another lock is another agent, `senselab:license`, the env's code
+    license when the context records one, and, for a call with a model,
     `senselab:modelSource`: `hf:<id>@<commit>` for a hub model, else `url` or `local`.
     """
     attributes: dict[str, object] = {"senselab:envLock": context.env_lock}
+    if context.env_license is not None:
+        attributes["senselab:license"] = context.env_license.model_dump(mode="json")
     if key.model is not None and context.model_source is not None:
         hub = context.model_source == "hf"
         attributes["senselab:modelSource"] = f"hf:{key.model.id}@{key.model.identity}" if hub else context.model_source
@@ -894,7 +897,7 @@ class ResultStore:
     def collect(self, now: float | None = None) -> int:
         """Remove quarantined entries and staging directories older than the policy's ages; return how many.
 
-        Objects set aside in place (`<uuid>` under the root, `store@4/`, a prefix or a key, beside what
+        Objects set aside in place (`<uuid>` under the root, `store@5/`, a prefix or a key, beside what
         they displaced) count as quarantined. Ages are measured from each object's mtime to `now`, which
         defaults to the storage's own clock (`StorageDir.fs_now` on `root`). Only uuid-named children are
         removed, through `remove_owned`; no directory below `root` is reached through a symlink. A failure

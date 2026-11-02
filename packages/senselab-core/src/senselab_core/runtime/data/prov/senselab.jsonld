@@ -118,7 +118,7 @@
             "rdfs:range": {
                 "@id": "rdf:JSON"
             },
-            "rdfs:comment": "The execution context the activity ran in, as an execution-context@2.0 record."
+            "rdfs:comment": "The execution context the activity ran in, as an execution-context@3.0 record."
         },
         {
             "@id": "senselab:executionProfile",
@@ -140,7 +140,7 @@
             "rdfs:range": {
                 "@id": "rdf:JSON"
             },
-            "rdfs:comment": "The execution context the served result was computed in, as an execution-context@2.0 record."
+            "rdfs:comment": "The execution context the served result was computed in, as an execution-context@3.0 record."
         },
         {
             "@id": "senselab:reusePolicy",
@@ -207,6 +207,17 @@
                 "@id": "xsd:string"
             },
             "rdfs:comment": "The sha of the env lock the agent ran in; an env at another lock is another agent."
+        },
+        {
+            "@id": "senselab:license",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Agent"
+            },
+            "rdfs:range": {
+                "@id": "rdf:JSON"
+            },
+            "rdfs:comment": "The code license of the agent's env, derived from its lock's license records."
         },
         {
             "@id": "senselab:storedAgent",

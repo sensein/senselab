@@ -43,13 +43,12 @@ from senselab_worker.faults import FaultClass
 from senselab_core.kernel._base import thawed
 from senselab_core.kernel.declare import OUTPUT_AFFECTING, BackendSpec, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelRef, ResolvedModel
-from senselab_core.kernel.license import License
 from senselab_core.kernel.results import Intervals, TextSpans, Transcript, TranscriptNode, Trials
 from senselab_core.kernel.signals import PlainText
 from senselab_core.kernel.time import Span
 from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime.keys import Call, Placement, build_key, request_components
-from senselab_core.runtime.licenses import backend_license, check_license
+from senselab_core.runtime.licenses import LockRecords, backend_license, check_license
 from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
 
@@ -57,8 +56,6 @@ Case = Callable[[], None]
 P = TypeVar("P", bound=BaseModel)
 KeyBuilder = Callable[[Call, Placement, ExecutionContext], LogicalKey]
 """`build_key`'s call shape."""
-LockRecords = Callable[[BackendSpec], Mapping[str, License | None]]
-"""A backend's env-lock package records, `package name -> license record` (`None` for a package without one)."""
 
 HASH_SEEDS: tuple[str, str] = ("1", "2")
 """The `PYTHONHASHSEED` values `key_independent_of_hash_seed` builds a key under."""
@@ -190,6 +187,15 @@ BASE_CONTEXT: Mapping[str, Any] = {
     "host": "host",
     "protocol": "protocol",
     "model_source": "hf",
+    "env_license": {
+        "expression": "MIT",
+        "commercial_use": "yes",
+        "copyleft": "none",
+        "attribution": True,
+        "gated": False,
+        "source": "env lock",
+        "verified": {"date": "2026-11-02", "how": "pep639"},
+    },
 }
 """An execution context whose fields the context cases vary one at a time."""
 
@@ -440,7 +446,11 @@ def _key_ignores_context(build: KeyBuilder, field: str, task: TaskSpec, backend:
     assert field not in LogicalKey.model_fields, f"context field {field!r} is also a key field"
     value = BASE.model_dump()[field]
     choices = _literal_choices(ExecutionContext.model_fields[field].annotation)
-    varied = next(c for c in choices if c != value) if choices else _perturbed(field, value)
+    optional = type(None) in typing.get_args(ExecutionContext.model_fields[field].annotation)
+    if choices:
+        varied = next(c for c in choices if c != value)
+    else:
+        varied = None if optional and value is not None else _perturbed(field, value)
     other = ExecutionContext.model_validate({**BASE_CONTEXT, field: varied})
     assert other != BASE, f"ExecutionContext.{field} did not vary"
     call, placement = base_call(task, backend)

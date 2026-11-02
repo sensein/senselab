@@ -1,4 +1,4 @@
-"""The packaged catalogue, env locks and tolerance profiles, and the `register` the `senselab.packages` entry names."""
+"""The packaged catalogue, env locks, tolerance profiles and env licenses; the `senselab.packages` `register`."""
 
 import importlib
 from importlib import resources
@@ -8,6 +8,7 @@ from senselab_core.kernel.declare import BackendSpec, Registry, declare_module
 from senselab_core.runtime.call import Packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle, ensure_env
+from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile
 
 from senselab._api.declarations import DECLARATION_MODULES
@@ -51,7 +52,9 @@ def open_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:
     )
 
 
-PACKAGED = Packaged(CATALOGUE, open_env, tolerance=_DATA.joinpath("tolerance"))
+PACKAGED = Packaged(
+    CATALOGUE, open_env, tolerance=_DATA.joinpath("tolerance"), lock_records=packaged_lock_records("senselab")
+)
 
 
 def register(registry: Registry) -> Packaged:

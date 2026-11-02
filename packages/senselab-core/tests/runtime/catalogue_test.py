@@ -8,6 +8,8 @@ from senselab_core.kernel.license import License, MissingLicense
 from senselab_core.runtime.catalogue import Catalogue, UnknownModel
 from senselab_core.runtime.fake_backend import FAKE
 from senselab_core.runtime.licenses import (
+    LicensePolicy,
+    LicenseRefused,
     allows,
     backend_license,
     derive_flags,
@@ -161,6 +163,19 @@ def test_backend_license_from_lock_records() -> None:
     assert dict(got.verified) == {"date": "2026-11-01", "how": "pep639"}
     assert backend_license(FAKE, {"a": _lic("MIT"), "b": _lic("MIT", how="manual")}).verified["how"] == "manual"
     assert backend_license(FAKE, {"a": _lic("MIT")}).expression == "MIT"
+
+
+@pytest.mark.logic
+def test_a_license_policy_is_the_users_allowed_and_refused_ids() -> None:
+    """A policy accepts what its allowed, unrefused ids satisfy (case ignored) and refuses a missing record."""
+    either, both = _lic("MIT OR GPL-3.0-only"), _lic("MIT AND MPL-2.0")
+    refuse_gpl, only_mit = LicensePolicy(refuse=frozenset({"gpl-3.0-only"})), LicensePolicy(allow=frozenset({"MIT"}))
+    assert refuse_gpl.refusal("x", either) is None and refuse_gpl.refusal("x", both) is None
+    assert only_mit.refusal("x", either) is None
+    assert "MIT AND MPL-2.0" in str(only_mit.refusal("x", both))
+    with pytest.raises(LicenseRefused, match="x is licensed 'MIT OR GPL-3.0-only'"):
+        LicensePolicy(refuse=frozenset({"MIT", "GPL-3.0-only"})).check("x", either)
+    assert LicensePolicy().refusal("x", None) == "x has no license record"
 
 
 @pytest.mark.logic

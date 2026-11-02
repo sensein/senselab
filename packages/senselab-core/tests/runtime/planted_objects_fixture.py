@@ -94,6 +94,7 @@ def store_context(platform: str = "linux", host: str = "node1", device: str = "c
         host=host,
         protocol="p1",
         model_source="hf",
+        env_license=None,
     )
 
 

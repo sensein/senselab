@@ -88,7 +88,14 @@ def _records(tmp_path: Path) -> list[dict[str, Any]]:
 
 def _context(fields: dict[str, Any]) -> ExecutionContext:
     return ExecutionContext(
-        **fields, platform="linux-x86_64", numerics={}, decoder=None, host="h", protocol="p", model_source="hf"
+        **fields,
+        platform="linux-x86_64",
+        numerics={},
+        decoder=None,
+        host="h",
+        protocol="p",
+        model_source="hf",
+        env_license=None,
     )
 
 
