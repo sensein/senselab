@@ -1,11 +1,13 @@
 """`run_call`: placement by profile, store reuse, one activity per call, model source and profile digest recorded."""
 
 import dataclasses
+import importlib
 import json
 import os
 import platform
 import signal
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -51,7 +53,8 @@ from senselab_core.runtime.equivalence import SAMPLING
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.tolerance import NoToleranceProfile, read_profile, tolerance_profile_path
-from senselab_core.runtime.worker_client import WorkerClient
+from senselab_core.runtime.worker_client import ConcurrentUse, WorkerClient
+from senselab_worker.faults import InfrastructureFault
 
 TOY = "toyorg/toy"
 REVISION = "a" * 40
@@ -114,6 +117,7 @@ TRIALS_TASK = TaskSpec(
     outputs={"trials": "Trials"},
     params=fake.EchoParams,
 )
+OVERLAP_TASK = TRIALS_TASK.model_copy(update={"name": "call_test.overlap", "inputs": {"label": "json"}})
 
 
 def _backend(name: str, stack: str, env: Env, task: TaskSpec = TASK, worker: str = fake.WORKER_MODULE) -> BackendSpec:
@@ -132,7 +136,7 @@ def _backend(name: str, stack: str, env: Env, task: TaskSpec = TASK, worker: str
 
 
 TEST_REGISTRY = Registry()
-for _task in (TASK, AUDIO_TASK, PAIR_TASK, CLOCKED_TASK, TRANSCRIBE_TASK, TRIALS_TASK, fake.ECHO):
+for _task in (TASK, AUDIO_TASK, PAIR_TASK, CLOCKED_TASK, TRANSCRIBE_TASK, TRIALS_TASK, OVERLAP_TASK, fake.ECHO):
     TEST_REGISTRY.add_task(_task)
 TEST_REGISTRY.add_backend(_backend("fake-alpha", "alpha", Env.host()))
 TEST_REGISTRY.add_backend(
@@ -154,6 +158,7 @@ TEST_REGISTRY.add_backend(_backend("fake-transcribe", "isolated", Env.isolated("
 TEST_REGISTRY.add_backend(_backend("pair", "dsp", Env.host(), PAIR_TASK, "backends.identity_backend_fixture"))
 TEST_REGISTRY.add_backend(_backend("clocked", "dsp", Env.host(), CLOCKED_TASK, "backends.clocked_backend_fixture"))
 TEST_REGISTRY.add_backend(_backend("trials", "dsp", Env.host(), TRIALS_TASK, "backends.trials_backend_fixture"))
+TEST_REGISTRY.add_backend(_backend("overlap", "dsp", Env.host(), OVERLAP_TASK, "backends.overlap_backend_fixture"))
 
 CATALOGUE = Catalogue.load(
     f"""
@@ -405,6 +410,36 @@ def test_dead_pooled_worker_is_closed_and_replaced(store: ResultStore) -> None:
     result = run_call(_call("second"), execution=_profile("isolated"), store=store)
     assert result.reused is None
     assert not old.array_dir.exists() and old not in call_module._POOL.values()
+
+
+@pytest.mark.logic
+def test_concurrent_calls_take_turns_on_a_pooled_worker(store: ResultStore) -> None:
+    """Two threads calling one backend and model each hold the pooled worker for their call, never at once."""
+    overlap = importlib.import_module("backends.overlap_backend_fixture")
+    overlap.BARRIER.reset()
+    overlap.MET.clear()
+    start = threading.Barrier(2)
+    failures: list[BaseException] = []
+
+    def call(text: str) -> None:
+        start.wait()
+        try:
+            run_call(TaskCall.model_validate({"task": OVERLAP_TASK.name, "inputs": {"label": text}}), store=store)
+        except Exception as exc:  # noqa: BLE001 - every failure is reported by the assertion
+            failures.append(exc)
+
+    threads = [threading.Thread(target=call, args=(text,)) for text in ("first", "second")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert failures == [] and overlap.MET == [False, False]
+
+
+@pytest.mark.logic
+def test_concurrent_use_of_a_worker_client_is_an_infrastructure_fault() -> None:
+    """A second `run` in flight on one client is an infrastructure fault, typed as such."""
+    assert issubclass(ConcurrentUse, InfrastructureFault)
 
 
 @pytest.mark.logic

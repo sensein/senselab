@@ -141,7 +141,7 @@ class WorkerFatal(InfrastructureFault):
         self.error = error
 
 
-class ConcurrentUse(RuntimeError):
+class ConcurrentUse(InfrastructureFault):
     """`run` was called while another `run` on the same client was in flight."""
 
 
