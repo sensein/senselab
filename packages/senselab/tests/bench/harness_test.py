@@ -321,3 +321,64 @@ def test_repeated_warning_prints_once() -> None:
     once = harness._Once()
     records = [logging.LogRecord("t", logging.WARNING, "f", 1, m, None, None) for m in ("a", "a", "b", "a")]
     assert [once.filter(r) for r in records] == [True, False, True, False]
+
+
+def _gpu_only_registry() -> Registry:
+    registry = _registry()
+    gpu_task = TRANSCRIBE.model_copy(update={"name": "bench_test.gpu_transcribe", "inputs": {"prompt": "Text"}})
+    registry.add_task(gpu_task)
+    registry.add_backend(
+        BackendSpec(
+            task=gpu_task.name,
+            name="fake-gpu",
+            version="1",
+            stack="isolated",
+            env=Env.isolated("fake"),
+            devices=("cuda",),
+            batch_invariant=True,
+            worker=fake.WORKER_MODULE,
+            load_stub={},
+        )
+    )
+    return registry
+
+
+@pytest.mark.logic
+def test_cuda_only_backend_on_cpu_host_is_not_placeable_and_the_rest_runs(tmp_path: Path) -> None:
+    """A benchmark whose backend declares no device the profile and host share is reported, never started."""
+    _toy_manifests(tmp_path)
+    use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, _gpu_only_registry()))
+    fetched: list[str] = []
+
+    def opener(url: str) -> io.BytesIO:
+        fetched.append(url)
+        return io.BytesIO(TOY_ROWS.encode())
+
+    gpu = harness.Benchmark(
+        name="gpu-asr", adapter="toy", items=4, task="bench_test.gpu_transcribe", metric="wer", manifest="toy"
+    )
+    suite = harness.Suite("mixed", (gpu, *_toy_suite().benchmarks))
+    run = harness.run_suite(
+        suite,
+        execution=ExecutionProfile.load("laptop", {"devices": ["cpu"]}),
+        manifests=tmp_path / "manifests",
+        data_cache=tmp_path / "data",
+        out=tmp_path / "out",
+        run_id="r1",
+        opener=opener,
+        adapters={"toy": ToyAdapter},
+    )
+    skipped, ran = harness.load_result(run / "result.json").entries
+    assert skipped.benchmark == "gpu-asr" and skipped.rows == ()
+    assert skipped.not_placeable is not None and "fake-gpu" in skipped.not_placeable and "cuda" in skipped.not_placeable
+    assert ran.not_placeable is None and len(ran.rows) == 4 and all(r.fault is None for r in ran.rows)
+    assert len(fetched) == 1
+
+
+@pytest.mark.logic
+def test_pii_spans_transformers_backend_is_cuda_only() -> None:
+    """The 31B catalogue model of `pii_spans` is declared runnable on cuda alone."""
+    from senselab.text.tasks.pii_spans import transformers_backend  # noqa: F401, PLC0415 - declares the backend
+
+    [spec] = [b for b in REGISTRY.backends("pii_spans") if b.name == "transformers"]
+    assert spec.devices == ("cuda",)

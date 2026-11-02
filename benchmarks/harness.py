@@ -28,9 +28,9 @@ from senselab_core.kernel.formats import BENCHMARK_RESULT_FORMAT, FormatTag, For
 from senselab_core.kernel.identity import ExecutionContext
 from senselab_core.kernel.results import Embedding, Intervals, Metric, TextSpans, Transcript, TranscriptNode, Trials
 from senselab_core.kernel.signals import PlainText
-from senselab_core.runtime.call import CallFailed, Result, TaskCall, run_call
+from senselab_core.runtime.call import CallFailed, Result, TaskCall, placement_of, run_call
 from senselab_core.runtime.fetch import DataManifest, fetch
-from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.profiles import ExecutionProfile, NoDevice
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.synth import tone
 
@@ -425,6 +425,7 @@ class Entry(Frozen):
     manifest_digest: str | None
     rows: tuple[Row, ...]
     aggregates: tuple[Aggregate, ...]
+    not_placeable: str | None = None
 
 
 class BenchmarkResult(Formatted):
@@ -555,6 +556,22 @@ def run_suite(  # noqa: PLR0913 - the suite and where everything it reads and wr
     for bench in suite.benchmarks:
         if bench.adapter not in adapters:
             raise SuiteError(f"benchmark {bench.name!r} names adapter {bench.adapter!r}; known: {sorted(adapters)}")
+        try:
+            placement_of(bench.task, TaskCall.parse_model(bench.model), execution)
+        except NoDevice as err:
+            entries.append(
+                Entry(
+                    benchmark=bench.name,
+                    task=bench.task,
+                    metric=bench.metric,
+                    manifest=None,
+                    manifest_digest=None,
+                    rows=(),
+                    aggregates=(),
+                    not_placeable=" ".join(str(err).split()),
+                )
+            )
+            continue
         manifest, files = None, {}
         if bench.manifest is not None:
             path = manifests / f"{bench.manifest}.yaml"

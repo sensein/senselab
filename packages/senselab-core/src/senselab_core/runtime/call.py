@@ -237,9 +237,7 @@ def run_call(
     spec = _PACKAGED.registry.spec(call.task)
     if call.task_version != spec.version:
         raise ValueError(f"{call.task!r} is declared at version {spec.version!r}, the call names {call.task_version!r}")
-    model, entry = _resolve_model(spec, call.model, profile, _PACKAGED.catalogue)
-    hardware = _hardware()
-    placement = resolve_execution(spec, entry, profile, hardware, _PACKAGED.registry, _PACKAGED.catalogue)
+    model, hardware, placement = _place(spec, call.model, profile)
     backend = placement.backend
     placement = replace(placement, backend_params=backend.params.model_validate(dict(call.backend_params)))
     bound = {port: bind_input(port, spec.inputs[port], value) for port, value in call.inputs.items()}
@@ -311,6 +309,24 @@ def _rebound(outputs: dict[str, object], anchors: list[tuple[TimeAnchor, TimeAnc
         timemap = TimeMap(source=stored.clock_id, target=reader.clock_id, offset_ns=0)
         outputs = {port: rebind(value, stored, reader, timemap) for port, value in outputs.items()}
     return outputs
+
+
+def _place(
+    spec: TaskSpec, ref: ModelRef | None, profile: ExecutionProfile
+) -> tuple[ResolvedModel | None, HardwareInfo, Placement]:
+    model, entry = _resolve_model(spec, ref, profile, _PACKAGED.catalogue)
+    hardware = _hardware()
+    return model, hardware, resolve_execution(spec, entry, profile, hardware, _PACKAGED.registry, _PACKAGED.catalogue)
+
+
+def placement_of(task: str, model: ModelRef | None, execution: ExecutionProfile) -> Placement:
+    """Return where `run_call` would run `task` on `model` under `execution` on this host, starting nothing.
+
+    Raises:
+        UnknownTask: the task is not declared.
+        UnlistedSource, NoBackend, NoDevice: as `resolve_execution`.
+    """
+    return _place(_PACKAGED.registry.spec(task), model, execution)[2]
 
 
 def _resolve_model(
