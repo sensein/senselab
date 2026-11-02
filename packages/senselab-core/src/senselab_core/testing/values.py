@@ -54,7 +54,15 @@ from senselab_worker.canonical import canonical_npy_bytes
 import senselab_core.kernel
 import senselab_core.runtime
 from senselab_core.kernel._base import Frozen, FrozenMapping, digest_of
-from senselab_core.kernel.declare import BackendSpec, Env, ServerConfig, TaskParams, TaskSpec
+from senselab_core.kernel.declare import (
+    BackendSpec,
+    Env,
+    InputsAgree,
+    ParamsOrdered,
+    ServerConfig,
+    TaskParams,
+    TaskSpec,
+)
 from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ModelRef, ResolvedModel
 from senselab_core.kernel.license import License
@@ -736,6 +744,16 @@ def _register_kernel_samples() -> None:
             ),
         ],
         invalid_updates=[{"kind": "other"}, {"name": ""}],
+    )
+    register_samples(
+        InputsAgree,
+        lambda: [InputsAgree(ports=("a", "b"), property="clock_id"), InputsAgree(ports=("b", "a"), property="text")],
+        invalid_updates=[{"property": "other"}, {"ports": ("a",)}],
+    )
+    register_samples(
+        ParamsOrdered,
+        lambda: [ParamsOrdered(low="lo", high="hi"), ParamsOrdered(low="a", high="b")],
+        invalid_updates=[{"low": ""}, {"kind": "other"}],
     )
     register_samples(
         Env,
