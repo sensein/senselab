@@ -24,7 +24,7 @@ from senselab_core.runtime.equivalence import (
     split,
 )
 from senselab_core.runtime.store import CorruptEntryError, ResultStore
-from senselab_core.runtime.tolerance import ToleranceProfile, best_assignment, flatten, relabel_turns, within
+from senselab_core.runtime.tolerance import Fields, ToleranceProfile, best_assignment, flatten, relabel_turns, within
 
 
 @pytest.mark.logic
@@ -230,7 +230,7 @@ def test_best_assignment_is_optimal() -> None:
     assert best_assignment([]) == []
 
 
-def _turns(labels: list[str], ends: list[int] | None = None) -> dict[str, list[float] | str]:
+def _turns(labels: list[str], ends: list[int] | None = None) -> Fields:
     """The flattened wire form of a real `Intervals` output on port `spans`, one 10 ns turn per label by default."""
     n = len(labels)
     spans = Intervals(
