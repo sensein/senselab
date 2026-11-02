@@ -34,7 +34,8 @@ class RealWorkers:
     """Start workers through the packaged env opener under `profile`; `close` stops every one started.
 
     One worker is live at a time: starting a worker first stops those started before it. Each worker loads its
-    backend's first model at the packaged catalogue's pin, on `cuda` when the host has a GPU, else `cpu`.
+    backend's first model, when it declares one, at the packaged catalogue's pin,
+    on `cuda` when the host has a GPU, else `cpu`.
     """
 
     def __init__(self, profile: ExecutionProfile) -> None:
@@ -56,13 +57,11 @@ class RealWorkers:
         if not found:
             raise ValueError(f"{task!r} has no backend {name!r}")
         backend = found[0]
-        entry = packaged().catalogue.entry(backend.models[0])
         self.close()
-        init = {
-            "model": {"source": "hf", "id": entry.id, "identity": entry.revision},
-            "device": self.device,
-            "faults": dict(faults or {}),
-        }
+        init: dict[str, Any] = {"device": self.device, "faults": dict(faults or {})}
+        if backend.models:
+            entry = packaged().catalogue.entry(backend.models[0])
+            init["model"] = {"source": "hf", "id": entry.id, "identity": entry.revision}
         worker = WorkerClient(packaged().open_env(backend, self.profile).python, backend.worker, init=init)
         self.started.append(worker)
         return worker

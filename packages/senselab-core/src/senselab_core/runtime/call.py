@@ -242,7 +242,7 @@ def run_call(
     placement = resolve_execution(spec, entry, profile, hardware, _PACKAGED.registry, _PACKAGED.catalogue)
     backend = placement.backend
     placement = replace(placement, backend_params=backend.params.model_validate(dict(call.backend_params)))
-    bound = {port: _bind(port, spec.inputs[port], value) for port, value in call.inputs.items()}
+    bound = {port: bind_input(port, spec.inputs[port], value) for port, value in call.inputs.items()}
     env = _PACKAGED.open_env(backend, profile)
     expected = _expected(backend, env, model) if backend.env.kind == "server" else None
     context = ExecutionContext(
@@ -331,7 +331,7 @@ def _resolve_model(
     return (resolved if entry is None else resolved.model_copy(update={"license": entry.license})), entry
 
 
-def _bind(port: str, port_type: str, value: object) -> tuple[InputIdentity, object, str | None]:
+def bind_input(port: str, port_type: str, value: object) -> tuple[InputIdentity, object, str | None]:
     """Return an input's identity, the value its item carries and the decoder that read it from a path, if one did.
 
     A `str` for a `Text` port is held as `PlainText`.

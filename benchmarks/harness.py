@@ -321,12 +321,20 @@ class SyntheticTones(_PerItem):
         }
 
 
+class EchoPayloads(_PerItem):
+    """JSON payloads for the model-free `fake.echo` task: plumbing runs of the measurement and parity CLIs."""
+
+    def items(self, files: Mapping[str, Path], count: int, work: Path, seconds: float | None) -> list[Item]:  # noqa: ARG002 - no data
+        return [Item(f"echo-{n:02d}", {"payload": {"n": n}}) for n in range(count)]
+
+
 ADAPTERS: Mapping[str, Callable[[], Adapter]] = {
     "librispeech_asr": LibriSpeechAsr,
     "librispeech_trials": LibriSpeechTrials,
     "voxconverse_diarization": VoxConverseDiarization,
     "gretel_pii": GretelPii,
     "synthetic_tones": SyntheticTones,
+    "echo_payloads": EchoPayloads,
 }
 """The adapter classes a suite may name."""
 

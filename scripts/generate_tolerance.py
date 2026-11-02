@@ -310,8 +310,13 @@ def load_items(suite: Path, benchmark: str, data_cache: Path, work: Path, split:
 
     harness = _harness()
     [bench] = [b for b in harness.Suite.load(suite).benchmarks if b.name == benchmark]
-    manifest = DataManifest.load(ROOT / "benchmarks" / "manifests" / f"{bench.manifest}.yaml")
-    files = fetch(manifest, cache_root=data_cache)
+    files = (
+        {}
+        if bench.manifest is None
+        else fetch(
+            DataManifest.load(ROOT / "benchmarks" / "manifests" / f"{bench.manifest}.yaml"), cache_root=data_cache
+        )
+    )
     items = harness.ADAPTERS[bench.adapter]().items(files, bench.items, work, bench.max_seconds)
     return bench, [i for i in items if harness.split_of(i.id) == split]
 

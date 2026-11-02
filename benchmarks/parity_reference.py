@@ -307,10 +307,10 @@ def _items_cli(args: argparse.Namespace) -> None:
     tol = tolerance_module()
     bench, items = tol.load_items(args.suite, args.benchmark, args.data_cache, args.work, HELDOUT)
     _, backend = tol.resolve(bench.task, args.backend)
-    entry = packaged().catalogue.entry(backend.models[0])
+    entry = packaged().catalogue.entry(backend.models[0]) if backend.models else None
     document = {
         "task": bench.task,
-        "model": {"id": entry.id, "revision": entry.revision},
+        "model": None if entry is None else {"id": entry.id, "revision": entry.revision},
         "items": {i.id: {k: str(v) for k, v in i.inputs.items()} for i in items},
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
