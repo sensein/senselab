@@ -101,7 +101,8 @@ def _audio(item: str, port: str) -> dict[str, Any]:
     """Return the wire form of the audio whose one mono group is `_regular_series`'s, anchored on its identity."""
     group = {k: v for k, v in _regular_series(item, port).items() if k != "format"}
     data = group["data"]
-    identity = "content:" + identity_digest("audio@3", {"npy": npy_digest("npy@1", data), "sampling_rate": 16000.0})
+    fields = {"npy": npy_digest("npy@1", data), "sampling_rate": 16000.0, "channels": group["channels"]}
+    identity = "content:" + identity_digest("audio@4", fields)
     return {
         "format": "audio@2.0",
         "groups": {"audio": group},

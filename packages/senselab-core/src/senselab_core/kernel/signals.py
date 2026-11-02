@@ -373,9 +373,9 @@ class Audio(Recording):
     """A recording of one regular group named `audio` whose channels are all of type `audio`, in one unit.
 
     Held samples are float32 (`AUDIO_DTYPE`). An in-memory audio's identity is `"content:" +
-    identity_digest("audio@3", {"npy": npy_digest("npy@1", <the (channels, samples) data>),
-    "sampling_rate": rate})`; a stamped one's (file-backed, or held with its file's stamp) is `content:` and the root
-    of the file's content identity.
+    identity_digest("audio@4", {"npy": npy_digest("npy@1", <the (channels, samples) data>),
+    "sampling_rate": rate, "channels": <each ChannelInfo's model_dump()>})`; a stamped one's (file-backed, or held
+    with its file's stamp) is `content:` and the root of the file's content identity.
     """
 
     if TYPE_CHECKING:
@@ -400,7 +400,9 @@ class Audio(Recording):
         if group.source_stamp is not None or group.data is None:
             return "content:" + _source_root(group)
         npy = held_npy_digest(group.data)
-        return "content:" + identity_digest("audio@3", {"npy": npy, "sampling_rate": group.sampling_rate})
+        channels = [c.model_dump() for c in group.channels]
+        fields = {"npy": npy, "sampling_rate": group.sampling_rate, "channels": channels}
+        return "content:" + identity_digest("audio@4", fields)
 
     @property
     def group(self) -> RegularGroup:

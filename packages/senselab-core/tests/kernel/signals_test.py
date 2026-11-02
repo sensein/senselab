@@ -147,15 +147,18 @@ def test_irregular_group_validates_timestamps() -> None:
 
 @pytest.mark.logic
 def test_audio_from_array_identity_construction() -> None:
-    """In-memory audio's identity hashes the canonical array with the sampling rate."""
+    """In-memory audio's identity hashes the canonical array with the sampling rate and the channels."""
     x = numpy.linspace(-1, 1, 50, dtype=numpy.float32)
     a = Audio.from_array(x, 16_000)
-    expected = "content:" + identity_digest(
-        "audio@3", {"npy": hashlib.sha256(canonical_npy_bytes(x.reshape(1, -1))).hexdigest(), "sampling_rate": 16_000}
-    )
+    npy = hashlib.sha256(canonical_npy_bytes(x.reshape(1, -1))).hexdigest()
+    channels = [{"name": "ch0", "type": "audio", "units": "FS", "placement": None, "reference": None}]
+    expected = "content:" + identity_digest("audio@4", {"npy": npy, "sampling_rate": 16_000, "channels": channels})
     assert a.identity == expected
     assert Audio.from_array(x.reshape(1, -1), 16_000.0).identity == expected
     assert Audio.from_array(x, 8_000).identity != expected
+    named = (ChannelInfo(name="left", type="audio", units="Pa"),)
+    relabelled = RegularGroup(channels=named, sampling_rate=16_000, data=x.reshape(1, -1))
+    assert Audio.from_group(relabelled).identity != expected
     group = a.groups["audio"]
     assert isinstance(group, RegularGroup) and group.read().shape == (1, 50)
 
