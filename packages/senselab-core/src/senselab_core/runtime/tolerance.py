@@ -1,6 +1,7 @@
-"""Tolerance profiles (`tolerance@1.0`): where one backend's lives, its model, and outputs judged within it."""
+"""Tolerance profiles (`tolerance@2.0`): where one backend's lives, its model, and outputs judged within it."""
 
 import json
+import math
 import re
 from collections.abc import Mapping, Sequence
 from importlib.resources.abc import Traversable
@@ -26,6 +27,10 @@ class NoToleranceProfile(LookupError):
     """A backend has no tolerance profile, so its outputs cannot be judged across contexts."""
 
 
+class ToleranceProfileRetired(ValueError):
+    """A tolerance profile in a retired format; the message names the migration."""
+
+
 class AxisSpread(Frozen):
     """The largest difference (or count of unequal values) over `pairs` pairs of runs differing only along `axis`."""
 
@@ -35,7 +40,10 @@ class AxisSpread(Frozen):
 
 
 class FieldTolerance(Frozen):
-    """One output field's spread per axis and its tolerance, the largest spread."""
+    """One output field's spread per axis and its tolerance, the largest spread, over every index of its path.
+
+    `path` is `index_free`: `segments[*].text` holds every segment's text.
+    """
 
     path: NonEmptyStr
     kind: NonEmptyStr
@@ -75,25 +83,50 @@ def read_profile(folder: Path | Traversable, task: str, backend: str) -> Toleran
 
     Raises:
         NoToleranceProfile: there is none.
-        pydantic.ValidationError: the file is not a `tolerance@1.0` profile.
+        ToleranceProfileRetired: it is in a retired format.
+        pydantic.ValidationError: the file is not a `tolerance@2.0` profile.
     """
     path = tolerance_profile_path(folder, task, backend)
     if not path.is_file():
         raise NoToleranceProfile(f"backend {backend!r} of {task!r} has no tolerance profile")
-    return ToleranceProfile.model_validate(yaml.safe_load(path.read_text("utf-8")))
+    raw = yaml.safe_load(path.read_text("utf-8"))
+    found = raw.get("format") if isinstance(raw, dict) else None
+    if isinstance(found, str) and found.startswith("tolerance@") and not readable(TOLERANCE_FORMAT, found):
+        raise ToleranceProfileRetired(
+            f"the profile of {backend!r} of {task!r} is {found}, read {TOLERANCE_FORMAT}: regenerate it with"
+            " scripts/generate_tolerance.py generate from observations of the current flatten"
+        )
+    return ToleranceProfile.model_validate(raw)
+
+
+FLATTEN_VERSION = "flatten@2"
+"""The version of `flatten` and its path form, recorded with every observation; a change to either bumps it."""
+_INDEX = re.compile(r"\[\d+\]")
+
+
+def index_free(path: str) -> str:
+    """Return `path` with every `[n]` as `[*]`: the form a tolerance field names, pooled over every index."""
+    return _INDEX.sub("[*]", path)
 
 
 def _numeric(value: object) -> bool:
     if isinstance(value, (bool, str)):
         return False
+    if isinstance(value, numpy.ndarray):
+        return value.dtype.kind in "biuf"
     try:
-        return numpy.asarray(value).dtype.kind in "biuf"
+        numpy.asarray(value, dtype=float)
     except (TypeError, ValueError):
         return False
+    return True
 
 
 def flatten(value: object, prefix: str = "") -> Fields:
-    """Return the leaves of `value` by dotted path: numbers and arrays as float lists, anything else as its JSON."""
+    """Return the leaves of `value` by dotted path (`FLATTEN_VERSION`).
+
+    Numbers, None and numeric arrays are float lists, a None (or NaN) where a value is absent; a non-numeric
+    array is flattened element by element, like a list; anything else is its JSON.
+    """
     if isinstance(value, numpy.ndarray) and not _numeric(value):
         return flatten(value.tolist(), prefix)
     if isinstance(value, Mapping):
@@ -107,7 +140,8 @@ def flatten(value: object, prefix: str = "") -> Fields:
             out |= flatten(element, f"{prefix}[{n}]")
         return out
     if _numeric(value):
-        return {prefix: numpy.asarray(value, dtype=float).ravel().tolist()}
+        floats = numpy.asarray(value, dtype=float).ravel().tolist()
+        return {prefix: [None if math.isnan(x) else x for x in floats]}
     return {prefix: json.dumps(value, sort_keys=True, default=str)}
 
 
@@ -216,7 +250,8 @@ def numeric_gap(a: Sequence[float | None], b: Sequence[float | None]) -> float |
 def within(expected: Mapping[str, Value], actual: Mapping[str, Value], profile: ToleranceProfile) -> dict[str, str]:
     """Return, by path of `expected`, why `actual` differs from it beyond `profile`; empty when they agree.
 
-    Speaker turns are compared under `relabel_turns`. A path differs when `actual` lacks it, its shape differs, a
+    Each path is judged by the profile's field of its `index_free` form. Speaker turns are compared under
+    `relabel_turns`. A path differs when `actual` lacks it, its shape differs, a
     None stands against a number (`numeric_gap`),
     the profile has no tolerance for it, or the difference exceeds the profile's tolerance (an exact field must be
     equal).
@@ -228,7 +263,7 @@ def within(expected: Mapping[str, Value], actual: Mapping[str, Value], profile: 
         a, b = expected[path], actual.get(path)
         if b is None:
             out[path] = "missing from the compared output"
-        elif path not in bound:
+        elif index_free(path) not in bound:
             out[path] = "the profile has no tolerance for it"
         elif isinstance(a, str) or isinstance(b, str):
             if a != b:
@@ -237,6 +272,6 @@ def within(expected: Mapping[str, Value], actual: Mapping[str, Value], profile: 
             out[path] = f"{len(a)} values against {len(b)}"
         elif (gap := numeric_gap(a, b)) is None:
             out[path] = "a None against a number"
-        elif gap > bound[path]:
-            out[path] = f"difference {gap:g} exceeds tolerance {bound[path]:g}"
+        elif gap > bound[index_free(path)]:
+            out[path] = f"difference {gap:g} exceeds tolerance {bound[index_free(path)]:g}"
     return out

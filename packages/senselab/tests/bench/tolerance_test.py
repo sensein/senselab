@@ -183,12 +183,15 @@ def test_label_permutation_derives_no_spread() -> None:
     ids = _ids("calibration", 2)
     obs = [_observe(Diarizer(), "cpu", ids), _observe(Diarizer(), "cuda", ids)]  # type: ignore[arg-type]
     labels = [f for f in tol.derive(obs, split_of).fields if f.path.startswith("turns.label")]
-    assert [f.path for f in labels] == ["turns.label[0]", "turns.label[1]"]
+    assert [f.path for f in labels] == ["turns.label[*]"]
     assert all(f.tolerance == 0.0 for f in labels)
 
 
-def _asr_observations(device: str, span: list[float | None]) -> Any:  # noqa: ANN401
-    """A speech_to_text observation as the ORCD jobs wrote it: `timestamps: none` leaves each span `[null]`."""
+def _asr_observations(tmp_path: Path, device: str, span: list[float | None]) -> Any:  # noqa: ANN401
+    """A speech_to_text observation as the ORCD jobs wrote it (`flatten@1`), read through `load_observations`.
+
+    `timestamps: none` leaves each span `[null]`; the text is a JSON-encoded string.
+    """
     runs = [
         {
             "repeat": 0,
@@ -212,32 +215,38 @@ def _asr_observations(device: str, span: list[float | None]) -> Any:  # noqa: AN
         "job": "7",
         "items": [{"id": _ids("calibration", 1)[0], "split": "calibration", "runs": runs}],
     }
-    return tol.Observations.model_validate_json(json.dumps(document))
+    path = tmp_path / f"{device}-{len(list(tmp_path.iterdir()))}.json"
+    path.write_text(json.dumps(document), "utf-8")
+    return tol.load_observations(path)
 
 
 @pytest.mark.logic
-def test_real_shaped_asr_observation_validates() -> None:
-    """A `[null]` span and a JSON-encoded text string validate, the None kept as None."""
-    [item] = _asr_observations("cpu", [None]).items
+def test_real_shaped_asr_observation_validates(tmp_path: Path) -> None:
+    """A `flatten@1` file with a `[null]` span and a JSON-encoded text string is read as `flatten@2`, None kept."""
+    observations = _asr_observations(tmp_path, "cpu", [None])
+    assert (observations.format, observations.flatten) == ("tolerance-observations@2.0", "flatten@2")
+    [item] = observations.items
     assert item.runs[0].fields["transcript.segments[0].span"] == [None]
     assert item.runs[0].fields["transcript.segments[0].text"] == '"HELLO WORLD"'
 
 
 @pytest.mark.logic
-def test_null_spans_derive_zero_spread() -> None:
+def test_null_spans_derive_zero_spread(tmp_path: Path) -> None:
     """Two runs whose spans are both `[null]` derive zero spread on the span, with no shape mismatch."""
-    profile = tol.derive([_asr_observations("cpu", [None]), _asr_observations("cuda", [None])], split_of)
-    [span] = [f for f in profile.fields if f.path == "transcript.segments[0].span"]
+    obs = [_asr_observations(tmp_path, "cpu", [None]), _asr_observations(tmp_path, "cuda", [None])]
+    profile = tol.derive(obs, split_of)
+    [span] = [f for f in profile.fields if f.path == "transcript.segments[*].span"]
     assert span.tolerance == 0.0 and span.shape_mismatches == 0 and profile.findings == ()
 
 
 @pytest.mark.logic
-def test_none_against_a_float_disagrees() -> None:
+def test_none_against_a_float_disagrees(tmp_path: Path) -> None:
     """A None against a number is a disagreement in derive and in `within`, never a numeric distance."""
-    profile = tol.derive([_asr_observations("cpu", [None]), _asr_observations("cuda", [1.5])], split_of)
-    [span] = [f for f in profile.fields if f.path == "transcript.segments[0].span"]
+    obs = [_asr_observations(tmp_path, "cpu", [None]), _asr_observations(tmp_path, "cuda", [1.5])]
+    profile = tol.derive(obs, split_of)
+    [span] = [f for f in profile.fields if f.path == "transcript.segments[*].span"]
     assert span.shape_mismatches > 0 and span.tolerance == 0.0
-    assert "transcript.segments[0].span: 2 pairs differ in shape" in profile.findings
+    assert "transcript.segments[*].span: 2 pairs differ in shape" in profile.findings
     loose = tol.ToleranceProfile.model_validate(
         {**profile.model_dump(mode="json"), "fields": [{**span.model_dump(mode="json"), "tolerance": 1e9}]}
     )
@@ -247,3 +256,135 @@ def test_none_against_a_float_disagrees() -> None:
         "transcript.segments[0].span": "a None against a number"
     }
     assert within(expected, {"transcript.segments[0].span": [None]}, loose) == {}
+
+
+def _intervals_output(n: int, labels: list[str] | None = None, shift: int = 0) -> dict[str, Any]:
+    """The wire form of a real `Intervals` of `n` 10 ns turns on port `turns`."""
+    intervals = importlib.import_module("senselab_core.kernel.results").Intervals
+    wire = importlib.import_module("senselab_core.kernel.wire")
+    reader = importlib.import_module("senselab_core.runtime.audio_io").READER
+    turns = intervals(
+        start_ns=[10 * k + shift for k in range(n)],
+        end_ns=[10 * k + 10 + shift for k in range(n)],
+        label=numpy.array(labels or [f"S{k % 2}" for k in range(n)]),
+        clock_id="c",
+    )
+    return {"turns": wire.wire_form(turns, reader)}
+
+
+class Turns:
+    """A worker returning as many turns as an item's `n`, the same on every run."""
+
+    def run(self, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:  # noqa: ARG002
+        """Return `n` turns per item."""
+        return [{"id": i["id"], "outputs": _intervals_output(i["inputs"]["n"])} for i in items]
+
+
+def _turns_profile() -> Any:  # noqa: ANN401
+    """A profile derived on cpu and cuda from calibration items of 1 and 2 turns."""
+    ids = _ids("calibration", 2)
+    items = {ids[0]: {"n": 1}, ids[1]: {"n": 2}}
+    common = {"task": "diarize", "backend": "b", "stack": "s", "repeats": 1, "sha": "a" * 40, "job": "7"}
+    obs = [tol.measure(Turns(), items, {}, device=d, split_of=split_of, **common) for d in ("cpu", "cuda")]
+    return tol.derive(obs, split_of)
+
+
+@pytest.mark.logic
+def test_three_turns_verify_against_a_profile_of_one_and_two() -> None:
+    """A held-out output with more turns than any calibration item is judged by the index-free fields."""
+    profile = _turns_profile()
+    assert {f.path for f in profile.fields} >= {"turns.label[*]", "turns.start_ns", "turns.end_ns"}
+    within = importlib.import_module("senselab_core.runtime.tolerance").within
+    three = tol.flatten(_intervals_output(3))
+    assert within(three, tol.flatten(_intervals_output(3, ["T1", "T0", "T1"])), profile) == {}
+    assert list(within(three, tol.flatten(_intervals_output(3, shift=1)), profile)) == [
+        "turns.end_ns",
+        "turns.start_ns",
+    ]
+
+
+@pytest.mark.logic
+def test_identical_single_turn_outputs_agree() -> None:
+    """Identical cpu and cuda outputs of one turn (`SPEAKER_00`, same times) pass `within`."""
+    within = importlib.import_module("senselab_core.runtime.tolerance").within
+    one = tol.flatten(_intervals_output(1, ["SPEAKER_00"]))
+    assert within(one, tol.flatten(_intervals_output(1, ["SPEAKER_00"])), _turns_profile()) == {}
+
+
+@pytest.mark.logic
+def test_derive_pools_spreads_over_indices() -> None:
+    """Every index of a path feeds one index-free field, its tolerance the largest spread over all of them."""
+    a = {"seg[0].v": [1.0], "seg[1].v": [5.0], "seg[1].t": '"x"'}
+    b = {"seg[0].v": [1.5], "seg[1].v": [7.0], "seg[1].t": '"x"'}
+    runs = [tol.Run(repeat=0, device=d, stack="s", batch="1", fields=f) for d, f in (("cpu", a), ("cuda", b))]
+    item = tol.ObservedItem(id=_ids("calibration", 1)[0], split="calibration", runs=tuple(runs))
+    obs = tol.Observations(flatten="flatten@2", task="t", backend="b", sha="s", job="j", items=(item,))
+    fields = {f.path: f for f in tol.derive([obs], split_of).fields}
+    assert set(fields) == {"seg[*].v", "seg[*].t"}
+    assert fields["seg[*].v"].tolerance == 2.0 and fields["seg[*].v"].spreads[0].pairs == 2
+
+
+def _write(tmp_path: Path, document: dict[str, Any]) -> Path:
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps(document), "utf-8")
+    return path
+
+
+def _old(fields: dict[str, Any], **override: Any) -> dict[str, Any]:  # noqa: ANN401
+    run = {"repeat": 0, "device": "cpu", "stack": "s", "batch": "1", "fields": fields}
+    item = {"id": "i", "split": "calibration", "runs": [run]}
+    return {
+        "format": "tolerance-observations@1.0",
+        "task": "t",
+        "backend": "b",
+        "sha": "s",
+        "job": "j",
+        "items": [item],
+        **override,
+    }
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("document", "reason"),
+    [
+        (_old({"turns.label": json.dumps("['SPEAKER_00' 'SPEAKER_01']")}), "array reprs at"),
+        (_old({"spans.label": json.dumps("['NAME' 'NAME' ... 'NAME']")}), "array reprs at"),
+        (_old({"turns.label": []}), "array reprs at"),
+        (_old({}, format="tolerance-observations@2.0", flatten="flatten@1"), "re-measure it"),
+        (_old({}, format="tolerance-observations@2.0"), "re-measure it"),
+        (_old({}, format="tolerance-observations@3.0", flatten="flatten@2"), "re-measure it"),
+    ],
+    ids=["diarize-repr", "pii-truncated-repr", "empty-label-array", "older-flatten", "no-flatten", "other-format"],
+)
+def test_stale_observations_refused(tmp_path: Path, document: dict[str, Any], reason: str) -> None:
+    """An observation file of an older flatten, or a flatten@1 one holding an array repr, is refused by name."""
+    path = _write(tmp_path, document)
+    with pytest.raises(tol.ToleranceError, match=reason) as raised:
+        tol.load_observations(path)
+    assert str(path) in str(raised.value)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"embedding.vector": [0.5, 1.5]},
+        {"transcript.segments[0].span": [None], "transcript.segments[0].text": '"[inaudible"'},
+        {"series.channels[0].name": '"left"', "series.data": [0.0, 1.0]},
+    ],
+    ids=["numeric", "null-span", "indexed-names"],
+)
+def test_flatten1_observations_without_reprs_upgrade(tmp_path: Path, fields: dict[str, Any]) -> None:
+    """A flatten@1 file whose fields flatten@2 writes alike is read unchanged, as flatten@2."""
+    observations = tol.load_observations(_write(tmp_path, _old(fields)))
+    assert observations.flatten == "flatten@2" and dict(observations.items[0].runs[0].fields) == fields
+
+
+@pytest.mark.logic
+def test_bracketed_text_is_not_an_array_repr(tmp_path: Path) -> None:
+    """Text such as `[BLANK_AUDIO]` is no array repr: only quoted elements apart by whitespace are."""
+    fields = {"t[0].text": json.dumps("[BLANK_AUDIO]"), "t[1].text": json.dumps("['a', 'b']")}
+    assert tol.load_observations(_write(tmp_path, _old(fields))).flatten == "flatten@2"
+    with pytest.raises(tol.ToleranceError, match="array reprs"):
+        tol.load_observations(_write(tmp_path, _old({"t.label2": json.dumps("['a' 'b'\n 'c']")})))

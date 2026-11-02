@@ -1,7 +1,7 @@
 """Parity on the held-out split, from the files an ORCD campaign produced under `$SENSELAB_PARITY_DIR`.
 
 `reference/<task>/<backend>.json` is `parity-reference@1.0` (1.x, converted); `outputs/*.json` is `parity-outputs@1.0`
-(2.x, one per backend, stack and device). Bounds are the packaged `tolerance@1.0` profiles. A failure is a finding.
+(2.x, one per backend, stack and device). Bounds are the packaged `tolerance@2.0` profiles. A failure is a finding.
 """
 
 import importlib.util

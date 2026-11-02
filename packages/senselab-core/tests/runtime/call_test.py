@@ -458,12 +458,12 @@ GPU = {"device_kind": "cuda", "precision": "default", "gpu_architecture": "sm_90
 
 @pytest.fixture
 def profiles(tmp_path: Path) -> Iterator[Path]:
-    """A fixture `tolerance@1.0` profile of `fake-alpha`: its one output, `value`, must be equal."""
+    """A fixture `tolerance@2.0` profile of `fake-alpha`: its one output, `value`, must be equal."""
     folder = tmp_path / "tolerance"
     path = tolerance_profile_path(folder, TASK.name, "fake-alpha")
     path.parent.mkdir(parents=True)
     profile = {
-        "format": "tolerance@1.0",
+        "format": "tolerance@2.0",
         "task": TASK.name,
         "backend": "fake-alpha",
         "derivation": {"shas": ["0" * 40], "jobs": ["1"], "split": "calibration", "items": ["i"], "contexts": ["cpu"]},

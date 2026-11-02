@@ -966,7 +966,7 @@ def _register_tolerance_samples() -> None:
             ToleranceProfile(task="t", backend="b", derivation=derivations[0], fields=fields[:1], findings=()),
             ToleranceProfile(task="t", backend="b", derivation=derivations[1], fields=fields, findings=("f",)),
         ],
-        invalid_updates=[{"format": "tolerance@2.0"}, {"backend": ""}],
+        invalid_updates=[{"format": "tolerance@1.0"}, {"backend": ""}],
     )
 
 

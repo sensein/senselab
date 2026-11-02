@@ -1,8 +1,8 @@
 """Measure a backend's outputs across contexts on the calibration split and derive its tolerance profile.
 
 `measure` runs one backend's worker over the calibration items of a suite benchmark (default suite `tolerance`), in one device and stack: each
-item alone and all items in one batch, each `--repeats` times, and writes `tolerance-observations@1.0`.
-`generate` reads the observations of every context of one backend and writes `tolerance@1.0`: per output field,
+item alone and all items in one batch, each `--repeats` times, and writes `tolerance-observations@2.0` with the `flatten` version.
+`generate` reads the observations of every context of one backend and writes `tolerance@2.0`: per index-free output field,
 the spread across each axis (repeat, device, batch, stack). Held-out items are refused; a profile is never edited.
 """
 
@@ -10,6 +10,7 @@ import argparse
 import importlib.util
 import itertools
 import json
+import re
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -24,9 +25,11 @@ from senselab_core.runtime.tolerance import (
     Derivation,
     FieldTolerance,
     ToleranceProfile,
+    FLATTEN_VERSION,
     Fields,
     Value,
     flatten,
+    index_free,
     numeric_gap,
     relabel_turns,
     tolerance_profile_path,
@@ -65,6 +68,7 @@ class Observations(Formatted):
     """What one measurement job saw: the SHA and job it ran at and, per item, every run."""
 
     format: FormatTag = TOLERANCE_OBSERVATIONS_FORMAT
+    flatten: NonEmptyStr
     task: NonEmptyStr
     backend: NonEmptyStr
     sha: NonEmptyStr
@@ -133,7 +137,13 @@ def measure(  # noqa: PLR0913 - what one measurement job fixes
     if len(observed) < minimum:
         raise ToleranceError(f"{task}/{backend}: {len(observed)} of {len(items)} items ran, {minimum} are declared")
     return Observations(
-        task=task, backend=backend, sha=sha, job=job, backend_params=dict(backend_params or {}), items=observed
+        flatten=FLATTEN_VERSION,
+        task=task,
+        backend=backend,
+        sha=sha,
+        job=job,
+        backend_params=dict(backend_params or {}),
+        items=observed,
     )
 
 
@@ -151,7 +161,8 @@ def _spread(a: Value, b: Value) -> tuple[float, bool]:
 def derive(observations: Sequence[Observations], split_of: Any) -> ToleranceProfile:
     """Return the profile of the observations of one backend, every item checked to be a calibration item.
 
-    Speaker turns of two runs are compared under `relabel_turns`.
+    Speaker turns of two runs are compared under `relabel_turns`; each field's spreads are pooled over every index
+    of its path (`index_free`).
 
     Raises:
         ToleranceError: an item is held out or was not recorded as calibration, the observations are of
@@ -180,9 +191,10 @@ def derive(observations: Sequence[Observations], split_of: Any) -> ToleranceProf
             if len(differing) != 1:
                 continue
             b_fields = relabel_turns(a.fields, b.fields)
-            for path in a.fields.keys() & b_fields.keys():
-                value, bad_shape = _spread(a.fields[path], b_fields[path])
-                kinds[path] = "exact" if isinstance(a.fields[path], str) else "numeric"
+            for indexed in a.fields.keys() & b_fields.keys():
+                value, bad_shape = _spread(a.fields[indexed], b_fields[indexed])
+                path = index_free(indexed)
+                kinds[path] = "exact" if isinstance(a.fields[indexed], str) else "numeric"
                 shapes[path] = shapes.get(path, 0) + bad_shape
                 spreads.setdefault(path, {}).setdefault(differing[0], []).append(value)
     if not spreads:
@@ -328,8 +340,52 @@ def _measure_cli(args: argparse.Namespace) -> None:
     args.out.write_text(observations.model_dump_json(indent=1), "utf-8")
 
 
+def _upgradable(raw: dict[str, Any]) -> list[str]:
+    """Return the paths of a `flatten@1` observation that `flatten@2` writes differently, empty if none.
+
+    `flatten@1` wrote a non-numeric array as its truncated repr, one string at the array's own path, where
+    `flatten@2` writes one indexed path per element; it differs from `flatten@2` nowhere else.
+    """
+    found = set()
+    for item in raw.get("items", []):
+        for run in item.get("runs", []):
+            for path, value in run.get("fields", {}).items():
+                text = json.loads(value) if isinstance(value, str) else None
+                if path.endswith(".label") or (isinstance(text, str) and _ARRAY_REPR.fullmatch(text)):
+                    found.add(path)
+    return sorted(found)
+
+
+_ELEMENT = r"""(?:'[^']*'|"[^"]*")"""
+_ARRAY_REPR = re.compile(rf"\[\s*(?:{_ELEMENT}(?:\s+{_ELEMENT}|\s+\.\.\.)*)?\s*\]", re.DOTALL)
+"""The repr numpy gives a string array: quoted elements apart by whitespace, `...` where it is truncated."""
+
+
+def load_observations(path: Path) -> Observations:
+    """Read one observation file of the current flatten, or upgrade a `tolerance-observations@1.0` one.
+
+    A `@1.0` file was written by `flatten@1`; it is read as `flatten@2` when no field holds an array repr, where the
+    two are identical and paths are pooled by `index_free` in `derive` alike.
+
+    Raises:
+        ToleranceError: the file is of another flatten, or a `@1.0` file holds an array repr; it names the file.
+    """
+    raw = json.loads(path.read_text("utf-8"))
+    if raw.get("format") == "tolerance-observations@1.0":
+        stale = _upgradable(raw)
+        if stale:
+            raise ToleranceError(f"{path}: flatten@1 observations hold array reprs at {stale[:5]}; re-measure them")
+        raw = {**raw, "format": TOLERANCE_OBSERVATIONS_FORMAT, "flatten": "flatten@2"}
+    if raw.get("flatten") != FLATTEN_VERSION or raw.get("format") != TOLERANCE_OBSERVATIONS_FORMAT:
+        raise ToleranceError(
+            f"{path}: written by {raw.get('flatten', 'flatten@1')} as {raw.get('format')}, generate reads"
+            f" {FLATTEN_VERSION} as {TOLERANCE_OBSERVATIONS_FORMAT}; re-measure it"
+        )
+    return Observations.model_validate(raw)
+
+
 def _generate_cli(args: argparse.Namespace) -> None:
-    observations = [Observations.model_validate_json(p.read_text("utf-8")) for p in args.observations]
+    observations = [load_observations(p) for p in args.observations]
     print(write_profile(derive(observations, _harness().split_of), args.out))
 
 

@@ -45,7 +45,7 @@ def _profile(
     tmp_path: Path, items: list[str], tolerances: dict[str, tuple[str, float]], split: str = "calibration"
 ) -> Path:
     document = {
-        "format": "tolerance@1.0",
+        "format": "tolerance@2.0",
         "task": "t",
         "backend": "b",
         "derivation": {
@@ -180,7 +180,7 @@ def test_diarization_labels_compared_under_best_mapping(tmp_path: Path) -> None:
         return flat
 
     cal = _ids("calibration", 1)
-    paths = {"turns.start_ns": 0.0, "turns.end_ns": 0.0, **{f"turns.label[{n}]": 0.0 for n in range(3)}}
+    paths = {"turns.start_ns": 0.0, "turns.end_ns": 0.0, "turns.label[*]": 0.0}
     kinds = {p: ("exact" if "label" in p else "numeric", t) for p, t in paths.items()}
     profile = par.load_profile(_profile(tmp_path, cal, {**kinds, "turns.format": ("exact", 0.0)}))
     ref = turns([0, 10, 20], [10, 20, 30], ["SPEAKER_00", "SPEAKER_01", "SPEAKER_00"])
@@ -227,8 +227,7 @@ def test_diarization_speaker_without_counterpart_is_a_mismatch(tmp_path: Path) -
         "turns.format": "exact",
         "turns.start_ns": "numeric",
         "turns.end_ns": "numeric",
-        "turns.label[0]": "exact",
-        "turns.label[1]": "exact",
+        "turns.label[*]": "exact",
     }
     profile = par.load_profile(_profile(tmp_path, _ids("calibration", 1), {p: (k, 0.0) for p, k in paths.items()}))
     one = turns(["SPEAKER_00", "SPEAKER_00"])

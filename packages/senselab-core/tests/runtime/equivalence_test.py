@@ -24,7 +24,15 @@ from senselab_core.runtime.equivalence import (
     split,
 )
 from senselab_core.runtime.store import CorruptEntryError, ResultStore
-from senselab_core.runtime.tolerance import Fields, ToleranceProfile, best_assignment, flatten, relabel_turns, within
+from senselab_core.runtime.tolerance import (
+    Fields,
+    ToleranceProfile,
+    best_assignment,
+    flatten,
+    index_free,
+    relabel_turns,
+    within,
+)
 
 
 @pytest.mark.logic
@@ -248,7 +256,9 @@ def _exact_profile(fields: Iterable[str]) -> ToleranceProfile:
             "task": "t",
             "backend": "b",
             "derivation": {"shas": [], "jobs": [], "split": "calibration", "items": [], "contexts": []},
-            "fields": [{"path": p, "kind": "exact", "spreads": [], "tolerance": 0.0} for p in fields],
+            "fields": [
+                {"path": p, "kind": "exact", "spreads": [], "tolerance": 0.0} for p in {*map(index_free, fields)}
+            ],
             "findings": [],
         }
     )

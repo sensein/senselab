@@ -5,7 +5,7 @@ Subcommands, in the order a campaign runs them:
 `convert` turns that script's output files into `parity-reference@1.0`;
 `run` runs a 2.x backend over the same items and writes `parity-outputs@1.0`.
 `compare` is what `packages/senselab/tests/parity` asserts. Calibration items are refused everywhere and a bound is
-never written here: the bound is the backend's `tolerance@1.0` profile.
+never written here: the bound is the backend's `tolerance@2.0` profile.
 """
 
 import argparse
@@ -162,7 +162,7 @@ def convert(directory: Path, *, task: str, backend: str, alpha_sha: str, job: st
 
 
 def load_profile(path: Path) -> ToleranceProfile:
-    """Read a `tolerance@1.0` file, refusing one not derived from calibration items alone."""
+    """Read a `tolerance@2.0` file, refusing one not derived from calibration items alone."""
     tol = tolerance_module()
     profile = ToleranceProfile.model_validate(yaml.safe_load(path.read_text("utf-8")))
     held = sorted(i for i in profile.derivation.items if split_of(i) != tol.CALIBRATION)
