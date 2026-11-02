@@ -15,7 +15,7 @@ import numpy
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault
 
-from senselab.item_faults import raise_injected, typed
+from senselab.item_faults import raise_injected
 
 MODEL_ID = "google/gemma-4-31B-it-qat-w4a16-ct"
 """The catalogue model every backend serves."""
@@ -154,5 +154,5 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
             spans = parse_completion(completion, text["content"], names)
             results.append({"outputs": {"spans": spans_wire_form(text, spans)}})
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
-            results.append({"error": typed(exc)})
+            results.append({"error": exc})
     return results

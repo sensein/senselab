@@ -17,7 +17,7 @@ from senselab_core.kernel.wire import from_wire_form, wire_form
 from senselab_core.testing.contracts import contract_cases
 from senselab_core.testing.lock_licenses import packaged_lock_records
 from senselab_worker.fake import FakeFaults
-from senselab_worker.faults import ContentFault, ResourceFault
+from senselab_worker.faults import ContentFault, ResourceFault, error_record
 
 LOCK_RECORDS = packaged_lock_records("senselab")
 
@@ -154,7 +154,7 @@ def test_faults_stay_with_their_item() -> None:
 
 @pytest.mark.logic
 def test_a_pipeline_failure_is_isolated_by_rerunning_items_alone() -> None:
-    """When a batch call raises, only the item whose own run raises carries the fault, typed, never a gap."""
+    """When a batch call raises, only the item whose own run raises carries the fault, with `gap: true`."""
 
     class Picky:
         feature_extractor = hf.StubPipeline.feature_extractor
@@ -168,7 +168,7 @@ def test_a_pipeline_failure_is_isolated_by_rerunning_items_alone() -> None:
     items = [{"id": i, "inputs": {"audio": _audio(n)}} for i, n in (("a", 1600), ("b", 1700), ("c", 1800))]
     out = hf.handle(state, items, PARAMS)
     assert "outputs" in out[0] and "outputs" in out[2]
-    assert isinstance(out[1]["error"], ContentFault)
+    assert (error_record(out[1]["error"])["fault"], error_record(out[1]["error"])["gap"]) == ("infrastructure", True)
 
 
 @pytest.mark.logic

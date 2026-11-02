@@ -22,7 +22,7 @@ from typing import Any, Literal, get_args
 import numpy
 from senselab_worker.fake import FakeFaults
 
-from senselab.item_faults import init_model, mono_samples, typed
+from senselab.item_faults import init_model, mono_samples
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.crisperwhisper"
 MODEL_ID = "nyralabs/CrisperWhisper2.0_turbo"
@@ -106,7 +106,7 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
             duration_ns = round(samples.size / EXPECTED_RATE * _NS_PER_S)
             results.append({"outputs": {"transcript": transcript(decoded, timestamps, clock_id, duration_ns)}})
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
-            results.append({"error": typed(exc)})
+            results.append({"error": exc})
     return results
 
 

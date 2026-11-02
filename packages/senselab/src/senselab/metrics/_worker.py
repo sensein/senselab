@@ -15,7 +15,7 @@ from senselab_core.kernel.wire import from_wire_form, wire_form
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault
 
-from senselab.item_faults import raise_injected, typed
+from senselab.item_faults import raise_injected
 
 _INIT_KEYS = frozenset({"array_dir", "faults", "device", "model"})
 
@@ -50,7 +50,7 @@ def load(init: dict[str, Any]) -> FakeFaults:
 def serve(
     state: FakeFaults, items: list[dict[str, Any]], params: dict[str, Any], model: type[BaseModel], score: Scorer
 ) -> list[dict[str, Any]]:
-    """Return one `{"outputs": {"metric": <metric@1.0 wire form>}}` per item, or its typed fault."""
+    """Return one `{"outputs": {"metric": <metric@1.0 wire form>}}` per item, or its fault."""
     validated = model.model_validate({k: v for k, v in params.items() if k != "backend_params"})
     results: list[dict[str, Any]] = []
     for item in items:
@@ -59,7 +59,7 @@ def serve(
             inputs = {port: _kernel(value) for port, value in item["inputs"].items()}
             results.append({"outputs": {"metric": wire_form(score(inputs, validated))}})
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
-            results.append({"error": typed(exc)})
+            results.append({"error": exc})
     return results
 
 

@@ -14,7 +14,7 @@ from typing import Any
 import numpy
 from senselab_worker.fake import FakeFaults
 
-from senselab.item_faults import init_model, mono_samples, typed
+from senselab.item_faults import init_model, mono_samples
 
 WORKER_MODULE = "senselab.audio.tasks.speaker_embeddings.speechbrain"
 MODEL_ID = "speechbrain/spkrec-ecapa-voxceleb"
@@ -96,5 +96,5 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
                 {"outputs": {"embedding": {"format": "embedding@1.0", "vector": vector, "space": state.space}}}
             )
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
-            results.append({"error": typed(exc)})
+            results.append({"error": exc})
     return results

@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy
 import pytest
+from pydantic import BaseModel
 from senselab.metrics import der, eer, resample_error, span_f1, wer
 from senselab_core.kernel.declare import REGISTRY
 from senselab_core.kernel.results import Intervals, Metric, TextSpans, Transcript, TranscriptNode, Trials
@@ -246,3 +247,22 @@ def test_input_with_nothing_to_score_is_a_content_fault(
 def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract case
     """Each metric task and backend satisfies the generated contract."""
     case()
+
+
+class _NoParams(BaseModel):
+    pass
+
+
+@pytest.mark.logic
+def test_a_scorer_bug_is_infrastructure_with_a_gap_not_a_content_fault() -> None:
+    """A bare `RuntimeError` out of a scorer is infrastructure with `gap: true`, never the item's content."""
+    from senselab.metrics._worker import serve
+    from senselab_worker.fake import FakeFaults
+    from senselab_worker.faults import error_record
+
+    def broken(inputs: Any, params: Any) -> Any:  # noqa: ANN401
+        raise RuntimeError("CUDA error: device-side assert triggered")
+
+    [result] = serve(FakeFaults.from_json({}), [{"id": "a", "inputs": {}}], {}, _NoParams, broken)
+    record = error_record(result["error"])
+    assert (record["fault"], record["gap"]) == ("infrastructure", True)

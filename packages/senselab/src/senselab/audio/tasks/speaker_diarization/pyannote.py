@@ -15,7 +15,7 @@ from typing import Any
 import numpy
 from senselab_worker.fake import FakeFaults
 
-from senselab.item_faults import init_model, mono_samples, typed
+from senselab.item_faults import init_model, mono_samples
 
 WORKER_MODULE = "senselab.audio.tasks.speaker_diarization.pyannote"
 MODEL_ID = "pyannote/speaker-diarization-community-1"
@@ -114,7 +114,7 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
                 {"outputs": {"turns": intervals(turns, clock_id, round(samples.size / EXPECTED_RATE * _NS_PER_S))}}
             )
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
-            results.append({"error": typed(exc)})
+            results.append({"error": exc})
     return results
 
 

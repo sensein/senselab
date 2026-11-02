@@ -28,7 +28,7 @@ from senselab.audio.tasks.speech_to_text.token_confidence import (
     special_token_ids,
     word_confidences,
 )
-from senselab.item_faults import init_model, raise_injected, typed
+from senselab.item_faults import init_model, raise_injected
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.huggingface"
 EXPECTED_RATE = 16_000
@@ -138,7 +138,7 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
         try:
             ready.append((index, _prepare(state, item)))
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
-            results[index] = {"error": typed(exc)}
+            results[index] = {"error": exc}
     try:
         for (index, _), transcript in zip(ready, _transcribe(state, [p for _, p in ready], task, tuning)):
             results[index] = {"outputs": {"transcript": transcript}}
@@ -147,7 +147,7 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
             try:
                 results[index] = {"outputs": {"transcript": _transcribe(state, [prepared], task, tuning)[0]}}
             except Exception as exc:  # noqa: BLE001 - as above
-                results[index] = {"error": typed(exc)}
+                results[index] = {"error": exc}
     return [r for r in results if r is not None]
 
 

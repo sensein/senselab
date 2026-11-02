@@ -1,4 +1,4 @@
-"""Typed per-item faults and audio checks shared by the isolated backends; imports only numpy and `senselab_worker`."""
+"""Injected per-item faults and audio checks shared by the isolated backends; imports numpy and `senselab_worker`."""
 
 from collections.abc import Collection, Mapping
 from typing import Any
@@ -6,16 +6,7 @@ from typing import Any
 import numpy
 from senselab_worker.digest import COMMIT_HEX
 from senselab_worker.fake import FakeFaults
-from senselab_worker.faults import ContentFault, FaultClass, InfrastructureFault, ResourceFault, classify
-
-
-def typed(exc: Exception) -> Exception:
-    """Return `exc` as a typed fault: resource when it says so, else the item's own (content)."""
-    if isinstance(exc, (ContentFault, ResourceFault, InfrastructureFault)):
-        return exc
-    if classify(exc) is FaultClass.RESOURCE:
-        return ResourceFault(f"{type(exc).__name__}: {exc}")
-    return ContentFault(f"{type(exc).__name__}: {exc}")
+from senselab_worker.faults import ContentFault, ResourceFault
 
 
 def raise_injected(item_id: str, faults: FakeFaults) -> None:
