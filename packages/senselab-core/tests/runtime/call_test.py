@@ -303,7 +303,7 @@ def test_isolated_worker_reads_audio_by_its_wire_form(store: ResultStore, tmp_pa
         for a in (str(path), Audio.from_array(numpy.array([0.25, -0.5], dtype=numpy.float32), 16000))
     ]
     results = [run_call(c, execution=profile, store=store) for c in calls]
-    call_module._close_workers()
+    call_module.close_workers()
     assert all(r.placement.backend.name == "fake-audio" and r.reused is None for r in results)
     assert results[0].outputs != results[1].outputs
 
@@ -329,7 +329,7 @@ def test_isolated_outputs_are_read_as_their_declared_types(store: ResultStore) -
     assert fresh.key.inputs == {"text": PlainText(content="a").identity}
     with pytest.raises(OutputTypeMismatch, match="metric@1.0"):
         transcribe(Metric(name="wer", value=0.1, unit="1", items=1), "b")
-    call_module._close_workers()
+    call_module.close_workers()
     assert len(_executions(store)) == 1
 
 

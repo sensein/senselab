@@ -1,7 +1,10 @@
 """The `vllm` backend of `pii_spans`: the engine over an attested `VllmServer`, selected by the profile alone."""
 
+import json
+import os
 import stat
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -18,7 +21,7 @@ from senselab.text.tasks.pii_spans import vllm as worker
 from senselab_core.kernel.declare import REGISTRY, Registry
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
 from senselab_core.kernel.results import TextSpans
-from senselab_core.runtime.call import CallFailed, Packaged, TaskCall, run_call, use_packaged
+from senselab_core.runtime.call import CallFailed, Packaged, TaskCall, close_workers, run_call, use_packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
@@ -225,6 +228,13 @@ def test_pii_spans_vllm_on_the_h100_finds_spans_and_bounds_edge_inputs(tmp_path:
         return run_call(_call_of(text), execution=profile, store=store)
 
     text = "My name is Margaret Hollis and you can reach me on 617-555-0142."
+    try:
+        _served_spans_and_edges(run, text)
+    finally:
+        close_workers()
+
+
+def _served_spans_and_edges(run: Any, text: str) -> None:  # noqa: ANN401
     result = run(text)
     spans = _spans(result.outputs)
     covered = {text[a:b] for a, b in zip(spans.start, spans.end, strict=True)}
@@ -242,6 +252,25 @@ def test_pii_spans_vllm_on_the_h100_finds_spans_and_bounds_edge_inputs(tmp_path:
 
 def _call_of(text: str) -> TaskCall:
     return TaskCall.model_validate({"task": "pii_spans", "inputs": {"text": text}, "params": {}})
+
+
+@pytest.mark.logic
+def test_close_workers_stops_the_server_run_call_started(
+    served: Registry,  # noqa: ARG001 - the fixture's effect
+    tmp_path: Path,
+) -> None:
+    """`close_workers` stops the server's process group, so the card is free for the next server."""
+    run_call(_call(), execution=_profile(tmp_path, "vllm"), store=ResultStore(tmp_path / "results"))
+    (record,) = [json.loads(p.read_text()) for p in (tmp_path / "fake").glob("*.json")]
+    close_workers()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(record["pgid"], 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    pytest.fail("the server's process group outlived close_workers")
 
 
 @pytest.mark.logic

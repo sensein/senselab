@@ -516,7 +516,8 @@ def _size_of(module: str, budget: int | None) -> Callable[[object], int]:
 
 
 @atexit.register
-def _close_workers() -> None:
+def close_workers() -> None:
+    """Stop every worker and server `run_call` started in this process; a later call starts its own again."""
     for worker in _POOL.values():
         if isinstance(worker, WorkerClient):
             worker.close()

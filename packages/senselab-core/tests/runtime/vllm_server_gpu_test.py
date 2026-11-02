@@ -27,7 +27,7 @@ SETTINGS = {
 
 
 @pytest.mark.timeout(3 * STARTUP_TIMEOUT_S)
-def test_vllm_server_attests_the_pii_model_and_a_restart_with_new_config_changes_it(tmp_path: Path) -> None:
+def test_vllm_server_attests_the_pii_model_and_a_restart_with_new_config_changes_it() -> None:
     """The server loads the catalogue commit, every reply carries its attestation, and a new config re-attests."""
     profile = ExecutionProfile.load("orcd")
     env = ensure_env(
@@ -42,10 +42,10 @@ def test_vllm_server_attests_the_pii_model_and_a_restart_with_new_config_changes
             env,
             model,
             settings,
-            start_lock_dir=tmp_path,
+            start_lock_dir=profile.env_root("server") / "locks",
             startup_timeout_s=STARTUP_TIMEOUT_S,
             start_margin_s=profile.envs.server_start_margin_s,
-            log_dir=tmp_path,
+            log_dir=profile.env_root("server") / "logs",
         ) as server:
             reply = server.chat([{"role": "user", "content": "Say ok."}], sampling={"max_tokens": 8, "temperature": 0})
             assert reply.attestation == server.attestation
