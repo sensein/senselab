@@ -90,8 +90,8 @@ findings are in [`reviews/phase1-reattack/canon.md`](../reviews/phase1-reattack/
   **Registered identity tags:** `logical-key@6`, `output@3`, `context@3`, `content-root@2`, `audio@3`,
   `weights@3`, `value@2`, `provenance-id@4`, `data-manifest@3`, `worker-runtime@1`, `fake-output@1`,
   `contract-probe@1`, `prov-activity@1`, `prov-node@1`, `wheel-set@1`, `env-lock@1`, `vllm-config@1`, `source@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a
-  `format:` line in a packaged YAML file or in a store entry): `equivalence@1`, `retry-policy@1.0`, `catalogue@1.0`, `spdx-licenses@1.0`, and
-  `execution-context@2.0` in a store entry's `context.json`; `env-record@1.0`, an env root's `<name>[-<tag>].json`; `senselab-vocab@1.0`, a vocabulary document's
+  `format:` line in a packaged YAML file or in a store entry): `equivalence@2.0`, `equivalence-evidence@1.0`, `retry-policy@1.0`, `catalogue@1.0`, `spdx-licenses@1.0`, and
+  `execution-context@2.0` in a store entry's `context.json`; `env-record@1.0`, an env root's `<name>[-<tag>].json`; `senselab-vocab@1.1`, a vocabulary document's
   `owl:versionInfo` (ADR-010).
 - **The store is `store@4` and an entry's `result.json` is `result@2.0`,** which adds the fingerprint of the
   context it was written in (R-101, ADR-003). A `result@1.0` entry cannot show which context it belongs to,
@@ -260,3 +260,8 @@ Ruling P2-44 ([`plans/phase-2.md`](../plans/phase-2.md)) and ADR-010 as amended;
   over (ADR-005 amendment); the signal wire formats become `recording@2.0`, `audio@2.0` and `regular-group@2.0`; an
   `@1` form is refused with `WireFormatRetired`, naming its format and the migration statement (P2-44) (Phase 2 Task
   11b).
+- 2026-11-02: `equivalence@1` → `equivalence@2.0` (`runtime/data/equivalence.yaml`, classes of numerics classes per
+  backend; `@1` refused with `EquivalenceFormatRetired`); new data format `equivalence-evidence@1.0`, one verify
+  comparison per file under a result store's `equivalence-evidence@1/`, named by its canonical digest;
+  `senselab-vocab@1.0` → `@1.1`, adding `senselab:verifyFraction`, `senselab:verifySampling` and
+  `senselab:verifies` (Phase 2 Task 21).
