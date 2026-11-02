@@ -22,7 +22,7 @@ import numpy
 import yaml
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.formats import PARITY_OUTPUTS_FORMAT, PARITY_REFERENCE_FORMAT, FormatTag, Formatted
-from senselab_core.runtime.tolerance import Fields, ToleranceProfile, flatten, within
+from senselab_core.runtime.tolerance import INTERVALS_FORMAT, Fields, ToleranceProfile, flatten, within
 
 ROOT = Path(__file__).resolve().parents[1]
 HELDOUT = "heldout"
@@ -107,6 +107,7 @@ def _turns(lines: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     turns = sorted((round(float(ln["start"]) * NS), round(float(ln["end"]) * NS), str(ln["speaker"])) for ln in lines)
     return {
         "turns": {
+            "format": INTERVALS_FORMAT,
             "start_ns": [s for s, _, _ in turns],
             "end_ns": [max(s, e) for s, e, _ in turns],
             "label": [label for _, _, label in turns],

@@ -1,12 +1,16 @@
 """Equivalence classes (`equivalence@2.0`), read by the runtime, and the verify evidence they are regenerated from."""
 
 import itertools
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy
 import pytest
 import yaml
 from senselab_core.kernel.identity import ExecutionContext, acceptable, numerics_key
+from senselab_core.kernel.results import Intervals
+from senselab_core.kernel.wire import wire_form
+from senselab_core.runtime.audio_io import READER
 from senselab_core.runtime.equivalence import (
     EQUIVALENCE,
     HEADER,
@@ -20,7 +24,7 @@ from senselab_core.runtime.equivalence import (
     split,
 )
 from senselab_core.runtime.store import CorruptEntryError, ResultStore
-from senselab_core.runtime.tolerance import ToleranceProfile, best_assignment, within
+from senselab_core.runtime.tolerance import ToleranceProfile, best_assignment, flatten, relabel_turns, within
 
 
 @pytest.mark.logic
@@ -226,22 +230,46 @@ def test_best_assignment_is_optimal() -> None:
     assert best_assignment([]) == []
 
 
-@pytest.mark.logic
-def test_within_compares_turns_under_the_best_label_map() -> None:
-    """Speaker labels swapped between two runs agree; a merged speaker does not (labels are arbitrary per run)."""
-    turns: dict[str, list[float] | str] = {"turns.start_ns": [0.0, 10.0], "turns.end_ns": [10.0, 15.0]}
-    ref: dict[str, list[float] | str] = {**turns, "turns.label[0]": '"A"', "turns.label[1]": '"B"'}
-    exact = [{"path": p, "kind": "exact", "spreads": [], "tolerance": 0.0} for p in ref]
-    profile = ToleranceProfile.model_validate(
+def _turns(labels: list[str], ends: list[int] | None = None) -> dict[str, list[float] | str]:
+    """The flattened wire form of a real `Intervals` output on port `spans`, one 10 ns turn per label by default."""
+    n = len(labels)
+    spans = Intervals(
+        start_ns=[10 * i for i in range(n)],
+        end_ns=ends or [10 * i + 10 for i in range(n)],
+        label=numpy.array(labels),
+        clock_id="c",
+    )
+    return flatten({"spans": wire_form(spans, READER)})
+
+
+def _exact_profile(fields: Iterable[str]) -> ToleranceProfile:
+    return ToleranceProfile.model_validate(
         {
-            "task": "diarize",
+            "task": "t",
             "backend": "b",
             "derivation": {"shas": [], "jobs": [], "split": "calibration", "items": [], "contexts": []},
-            "fields": exact,
+            "fields": [{"path": p, "kind": "exact", "spreads": [], "tolerance": 0.0} for p in fields],
             "findings": [],
         }
     )
-    assert within(ref, {**turns, "turns.label[0]": '"S1"', "turns.label[1]": '"S0"'}, profile) == {}
-    assert list(within(ref, {**turns, "turns.label[0]": '"S0"', "turns.label[1]": '"S0"'}, profile)) == [
-        "turns.label[1]"
-    ]
+
+
+@pytest.mark.logic
+def test_within_compares_intervals_under_the_best_label_map() -> None:
+    """On a real `Intervals`, under any port: swapped labels agree, a merged speaker does not."""
+    ref = _turns(["A", "B"], ends=[10, 15])
+    profile = _exact_profile(ref)
+    assert "spans.label[1]" in ref and relabel_turns(ref, _turns(["S1", "S0"], ends=[10, 15])) == ref
+    assert within(ref, _turns(["S1", "S0"], ends=[10, 15]), profile) == {}
+    assert list(within(ref, _turns(["S0", "S0"], ends=[10, 15]), profile)) == ["spans.label[1]"]
+
+
+@pytest.mark.logic
+def test_one_label_of_2000_differing_disagrees() -> None:
+    """A long label array differing at one index is a disagreement, never hidden by a truncated form."""
+    labels = ["A"] * 1000 + ["B"] * 1000
+    changed = [*labels]
+    changed[1500] = "A"
+    ref = _turns(labels)
+    assert list(within(ref, _turns(changed), _exact_profile(ref))) == ["spans.label[1500]"]
+    assert within(ref, _turns(labels), _exact_profile(ref)) == {}

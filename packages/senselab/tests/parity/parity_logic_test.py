@@ -88,7 +88,14 @@ def test_converter_reads_1x_output_files(tmp_path: Path) -> None:
     assert fields["transcript.segments[0].confidence"][0] == pytest.approx(0.9048374, abs=1e-6)
     turns = par.convert(dia, task="diarize", **kwargs).items[0].fields
     assert turns == flatten(
-        {"turns": {"start_ns": [0, 1_000_000_000], "end_ns": [500_000_000, 2_000_000_000], "label": ["A", "B"]}}
+        {
+            "turns": {
+                "format": "intervals@1.0",
+                "start_ns": [0, 1_000_000_000],
+                "end_ns": [500_000_000, 2_000_000_000],
+                "label": ["A", "B"],
+            }
+        }
     )
     assert par.convert(emb, task="speaker_embeddings", **kwargs).items[0].fields == {"embedding.vector": [0.5, 1.5]}
 
@@ -167,14 +174,15 @@ def test_diarization_labels_compared_under_best_mapping(tmp_path: Path) -> None:
     flatten = par.tolerance_module().flatten
 
     def turns(start: list[int], end: list[int], label: list[str]) -> dict[str, Any]:
-        flat: dict[str, Any] = flatten({"turns": {"start_ns": start, "end_ns": end, "label": label}})
+        flat: dict[str, Any] = flatten(
+            {"turns": {"format": "intervals@1.0", "start_ns": start, "end_ns": end, "label": label}}
+        )
         return flat
 
     cal = _ids("calibration", 1)
     paths = {"turns.start_ns": 0.0, "turns.end_ns": 0.0, **{f"turns.label[{n}]": 0.0 for n in range(3)}}
-    profile = par.load_profile(
-        _profile(tmp_path, cal, {p: ("exact" if "label" in p else "numeric", t) for p, t in paths.items()})
-    )
+    kinds = {p: ("exact" if "label" in p else "numeric", t) for p, t in paths.items()}
+    profile = par.load_profile(_profile(tmp_path, cal, {**kinds, "turns.format": ("exact", 0.0)}))
     ref = turns([0, 10, 20], [10, 20, 30], ["SPEAKER_00", "SPEAKER_01", "SPEAKER_00"])
     swapped = turns([0, 10, 20], [10, 20, 30], ["SPEAKER_01", "SPEAKER_00", "SPEAKER_01"])
     assert par.compare(ref, swapped, profile) == []
@@ -210,10 +218,13 @@ def test_diarization_speaker_without_counterpart_is_a_mismatch(tmp_path: Path) -
     flatten = par.tolerance_module().flatten
 
     def turns(label: list[str]) -> dict[str, Any]:
-        flat: dict[str, Any] = flatten({"turns": {"start_ns": [0, 10], "end_ns": [10, 20], "label": label}})
+        flat: dict[str, Any] = flatten(
+            {"turns": {"format": "intervals@1.0", "start_ns": [0, 10], "end_ns": [10, 20], "label": label}}
+        )
         return flat
 
     paths = {
+        "turns.format": "exact",
         "turns.start_ns": "numeric",
         "turns.end_ns": "numeric",
         "turns.label[0]": "exact",
