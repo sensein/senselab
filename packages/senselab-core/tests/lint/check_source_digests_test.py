@@ -18,6 +18,7 @@ _spec.loader.exec_module(digests)
 
 MODULE = "packages/p/src/p/m.py"
 WORKER = "packages/p/src/p/w.py"
+PARAMS = "packages/p/src/p/q.py"
 SOURCE = '''
 WORKER_MODULE = "p.w"
 
@@ -50,6 +51,21 @@ def test_source_edit_without_bump_fails() -> None:
     edited = _files()
     edited[MODULE] = edited[MODULE].replace("inputs = {}", "inputs = {'x': 1}")
     assert _flagged(_files(), edited) == ["task:t"]
+
+
+def test_a_separately_defined_params_default_is_part_of_the_digest() -> None:
+    """A params class named by `params=`, in the module or imported from another, is hashed with its backend."""
+    declared = SOURCE.replace("worker=WORKER_MODULE)", "worker=WORKER_MODULE, params=BParams)")
+
+    def files(default: int, imported: bool) -> dict[str, str]:
+        params = f"class BParams:\n    n: int = {default}\n"
+        if imported:
+            return {MODULE: "from p.q import BParams\n" + declared.format(task="1", backend="1"), PARAMS: params}
+        return {MODULE: params + declared.format(task="1", backend="1")}
+
+    for imported in (False, True):
+        assert _flagged(files(1, imported), files(2, imported)) == ["backend:t/b"]
+        assert _flagged(files(1, imported), files(1, imported)) == []
 
 
 def test_source_edit_with_bump_passes() -> None:

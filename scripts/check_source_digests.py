@@ -1,7 +1,8 @@
 """Fail when a task's or backend's source changed without a bump of its declared version.
 
 Each ``@task`` class and each ``@backend`` class under ``packages/*/src`` has a source digest: its class body
-(docstrings and the ``version`` argument left out) and, for a backend, the source of its worker module. The digests
+(docstrings and the ``version`` argument left out), the class named by ``params=``, and, for a backend, the
+source of its worker module. The digests
 are compared with a baseline: ``packages/senselab/src/senselab/data/source_digests.yaml`` once it exists, else the
 tree at the merge-base of ``HEAD`` with the ``2.x`` branch. A declaration whose digest changed and whose version did
 not is named.
@@ -77,6 +78,18 @@ def _worker_source(module_name: str | None, files: Mapping[str, str]) -> str | N
     return None
 
 
+def _class_source(name: str, module: ast.Module, files: Mapping[str, str]) -> str | None:
+    """The normalised class `name`, defined in `module` or imported into it from a module in `files`."""
+    for stmt in module.body:
+        if isinstance(stmt, ast.ClassDef) and stmt.name == name:
+            return _normalised(stmt)
+        if isinstance(stmt, ast.ImportFrom) and stmt.module and any((a.asname or a.name) == name for a in stmt.names):
+            source = _worker_source(stmt.module, files)
+            if source is not None:
+                return _class_source(name, ast.parse(source), {})
+    return None
+
+
 def digests_of(files: Mapping[str, str]) -> dict[str, Declared]:
     """Map ``task:<name>`` and ``backend:<task>/<name>`` to the version and source digest of each declaration."""
     found: dict[str, Declared] = {}
@@ -99,7 +112,11 @@ def digests_of(files: Mapping[str, str]) -> dict[str, Declared]:
                     if isinstance(d, ast.Call):
                         d.keywords = [k for k in d.keywords if k.arg != "version"]
                 worker = _worker_source(_constant(args.get("worker"), module), files) if kind == "backend" else None
-                digest = identity_digest(SOURCE_TAG, {"declaration": _normalised(bare), "worker": worker})
+                params = args.get("params")
+                params_source = _class_source(params.id, module, files) if isinstance(params, ast.Name) else None
+                digest = identity_digest(
+                    SOURCE_TAG, {"declaration": _normalised(bare), "worker": worker, "params": params_source}
+                )
                 found[key] = Declared(version, digest)
     return found
 

@@ -20,13 +20,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
 
 jobs:
   # A missing package, or a package without its src/, fails this job and every job that needs it.
   detect:
-    if: github.event_name != 'push' && github.event.pull_request.draft != true
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
@@ -37,7 +37,7 @@ jobs:
       run: bash .github/scripts/check-2x-packages.sh
 
   pre-commit:
-    if: github.event_name != 'push' && github.event.pull_request.draft != true
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
