@@ -44,6 +44,7 @@ IDENTITY_TAGS: frozenset[str] = frozenset(
         "wheel-set@1",
         "env-lock@1",
         "vllm-config@1",
+        "source@1",
     }
 )
 """The registered tags of `identity_digest`; no tag is a prefix of another."""

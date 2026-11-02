@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 HOOK = Path(__file__).resolve().parents[3] / "conftest.py"
-MARKERS = "[pytest]\nmarkers =\n    logic\n    contract\n    limits\n    usecase\n    env\n    network\n"
+MARKERS = "[pytest]\nmarkers =\n    logic\n    contract\n    limits\n    usecase\n    env\n    network\n    model\n"
 
 
 def _project(pytester: pytest.Pytester, body: str) -> None:
@@ -61,4 +61,19 @@ def test_hook_applies_only_under_packages(pytester: pytest.Pytester) -> None:
     pytester.mkdir("packages")
     (pytester.path / "packages" / "conftest.py").write_text(HOOK.read_text())
     pytester.makepyfile(test_outside="def test_bare():\n    pass\n")
+    assert pytester.runpytest().ret == pytest.ExitCode.OK
+
+
+@pytest.mark.logic
+def test_model_goes_only_with_a_tier_that_runs_on_orcd(pytester: pytest.Pytester) -> None:
+    """`model` beside logic or contract fails collection; beside limits, usecase or env it collects."""
+    _project(
+        pytester,
+        "import pytest\n\n@pytest.mark.logic\n@pytest.mark.model\ndef test_l():\n    pass\n\n"
+        "@pytest.mark.contract\n@pytest.mark.model\ndef test_c():\n    pass\n",
+    )
+    result = pytester.runpytest()
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    assert "test_sample.py::test_l" in result.stderr.str() and "test_sample.py::test_c" in result.stderr.str()
+    _project(pytester, "import pytest\n\n@pytest.mark.env\n@pytest.mark.model\ndef test_e():\n    pass\n")
     assert pytester.runpytest().ret == pytest.ExitCode.OK

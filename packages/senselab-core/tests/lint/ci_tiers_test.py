@@ -1,6 +1,5 @@
-"""The CI cadence for the test tiers: what a PR runs, what waits for the nightly run or the `limits` label."""
+"""The CI cadence for the test tiers: what a PR, the `limits` label and the nightly run select; the rest is ORCD."""
 
-import re
 import shlex
 import tomllib
 from pathlib import Path
@@ -11,8 +10,8 @@ from _pytest.mark.expression import Expression
 
 REPO = Path(__file__).resolve().parents[4]
 WORKFLOW = REPO / ".github" / "workflows" / "2x-tests.yaml"
+NIGHTLY_WORKFLOW = REPO / ".github" / "workflows" / "2x-nightly.yaml"
 WORKFLOWS_2X = sorted((REPO / ".github" / "workflows").glob("2x-*.yaml"))
-FLOOR_LOCK = REPO / ".github" / "locks" / "worker-floor.txt"
 PYPROJECT = REPO / "pyproject.toml"
 TIERS = ("logic", "contract", "limits", "usecase", "env")
 EVERY_PR, ON_LABEL, NIGHTLY = "every_pr", "on_label", "nightly"
@@ -68,13 +67,13 @@ def pytest_paths_outside_packages(workflow: str) -> list[tuple[str, str]]:
 
 
 class _Names:
-    """A marker-expression matcher that is true for the one tier name it holds."""
+    """A marker-expression matcher that is true for the marker names it holds."""
 
-    def __init__(self, tier: str) -> None:
-        self.tier = tier
+    def __init__(self, *names: str) -> None:
+        self.names = frozenset(names)
 
     def __call__(self, name: str, /, **_: str | int | bool | None) -> bool:
-        return name == self.tier
+        return name in self.names
 
 
 def tiers_of(marker: str | None) -> set[str]:
@@ -83,6 +82,14 @@ def tiers_of(marker: str | None) -> set[str]:
         return set(TIERS)
     expression = Expression.compile(marker)
     return {t for t in TIERS if expression.evaluate(_Names(t))}
+
+
+def admits_model(marker: str | None) -> bool:
+    """Whether a ``-m`` expression selects a test that carries `model` beside any tier."""
+    if marker is None:
+        return True
+    expression = Expression.compile(marker)
+    return any(expression.evaluate(_Names(t, "model")) for t in TIERS)
 
 
 def cadence(workflow: str) -> dict[str, set[str]]:
@@ -135,12 +142,23 @@ def test_a_pull_request_runs_logic_and_contract_and_nothing_slower() -> None:
 
 
 @pytest.mark.logic
-def test_limits_run_nightly_and_on_the_limits_label_and_use_cases_only_nightly() -> None:
-    """A job gated on the schedule selects limits and use cases; one gated on the `limits` label, limits only."""
-    when = cadence(WORKFLOW.read_text())
-    assert {"limits", "usecase"} <= when[NIGHTLY]
-    assert "limits" in when[ON_LABEL]
-    assert "usecase" not in when[ON_LABEL]
+def test_limits_without_a_model_run_on_the_label_and_nightly_and_use_cases_nowhere_in_github() -> None:
+    """The `limits` label runs limits; the nightly workflow runs limits too; no GitHub job selects a use case."""
+    assert "limits" in cadence(WORKFLOW.read_text())[ON_LABEL]
+    nightly = package_selections(NIGHTLY_WORKFLOW.read_text())
+    assert nightly and all(tiers_of(marker) == {"limits"} for _job, marker, _if in nightly)
+    for path in WORKFLOWS_2X:
+        assert "usecase" not in cadence(path.read_text())[NIGHTLY] | cadence(path.read_text())[ON_LABEL]
+
+
+@pytest.mark.logic
+def test_no_github_job_selects_a_test_that_loads_a_model() -> None:
+    """Every `pytest` selection in a 2.x workflow excludes `model`: model, backend-env and GPU tests run on ORCD."""
+    selections = [
+        (path.name, job, marker) for path in WORKFLOWS_2X for job, marker, _if in package_selections(path.read_text())
+    ]
+    assert selections
+    assert [s for s in selections if admits_model(s[2])] == []
 
 
 @pytest.mark.logic
@@ -150,12 +168,21 @@ def test_the_env_tier_runs_on_every_pr() -> None:
 
 
 @pytest.mark.logic
-def test_the_workflow_runs_nightly_and_reruns_when_a_label_is_added() -> None:
-    """The workflow has a cron schedule, and a PR that gains a label triggers it."""
-    workflow = yaml.safe_load(WORKFLOW.read_text())
-    triggers = workflow.get("on", workflow.get(True))
+def test_the_nightly_workflow_tests_2x_and_a_pr_gaining_a_label_reruns_the_tests() -> None:
+    """The nightly workflow is scheduled and checks out 2.x; the test workflow reruns on `labeled`."""
+    nightly = yaml.safe_load(NIGHTLY_WORKFLOW.read_text())
+    triggers = nightly.get("on", nightly.get(True))
     assert triggers["schedule"] and all("cron" in entry for entry in triggers["schedule"])
-    assert "labeled" in triggers["pull_request"]["types"]
+    called = nightly["jobs"]["pr-jobs"]
+    assert called["uses"].endswith("/.github/workflows/2x-tests.yaml@2.x") and called["with"]["ref"] == "2.x"
+    checkouts = [
+        step for job in nightly["jobs"].values() for step in job.get("steps", []) if "checkout" in step.get("uses", "")
+    ]
+    assert checkouts and all(step["with"]["ref"] == "2.x" for step in checkouts)
+    tests = yaml.safe_load(WORKFLOW.read_text())
+    on = tests.get("on", tests.get(True))
+    assert "schedule" not in on and "labeled" in on["pull_request"]["types"]
+    assert on["workflow_call"]["inputs"]["ref"]
 
 
 @pytest.mark.logic
@@ -276,29 +303,6 @@ def test_every_2x_job_installs_from_the_lock() -> None:
 
 
 @pytest.mark.logic
-def test_the_floor_job_installs_the_hashed_floor_lock_then_the_wheel_without_resolving() -> None:
-    """``worker-floor`` syncs ``.github/locks/worker-floor.txt`` with hashes required, then adds the wheel alone."""
-    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["worker-floor"]
-    commands = [argv for step in job["steps"] for argv in _commands(step.get("run", ""))]
-    sync = next(argv for argv in commands if argv[:3] == ["uv", "pip", "sync"])
-    assert "--require-hashes" in sync and ".github/locks/worker-floor.txt" in sync
-    wheel = next(argv for argv in commands if argv[:3] == ["uv", "pip", "install"])
-    assert "--no-deps" in wheel
-    assert commands.index(sync) < commands.index(wheel)
-
-
-@pytest.mark.logic
-def test_the_floor_lock_pins_numpy_at_the_worker_floor_and_hashes_every_package() -> None:
-    """The lock was compiled for Python 3.10, pins numpy to the worker's floor, and every pin carries hashes."""
-    text = FLOOR_LOCK.read_text()
-    assert "--python-version 3.10" in text
-    floor = re.search(r"numpy>=(\d+\.\d+)", (REPO / "packages" / "senselab-worker" / "pyproject.toml").read_text())
-    assert floor and re.search(rf"^numpy=={re.escape(floor.group(1))}\.\d+ ", text, re.MULTILINE)
-    pins = re.findall(r"^[A-Za-z0-9_.-]+==\S+.*?(?=^[A-Za-z0-9_.-]+==|\Z)", text, re.MULTILINE | re.DOTALL)
-    assert pins and all("--hash=sha256:" in pin for pin in pins)
-
-
-@pytest.mark.logic
 def test_a_pip_install_and_an_unlocked_sync_are_found() -> None:
     """Planted resolving installs are reported; ``uv sync --locked``, ``--no-deps`` and ``--require-hashes`` are not."""
     planted = yaml.safe_dump(
@@ -316,3 +320,11 @@ def test_a_pip_install_and_an_unlocked_sync_are_found() -> None:
         }
     )
     assert [job for job, _ in unlocked_installs(planted)] == ["a", "b", "c", "h"]
+
+
+@pytest.mark.logic
+def test_a_selection_that_can_pick_a_model_test_is_found() -> None:
+    """A tier expression admits `model` tests unless it says `not model`."""
+    assert admits_model("logic or contract") and admits_model(None)
+    assert not admits_model("(logic or contract) and not model")
+    assert not admits_model("limits and not model")

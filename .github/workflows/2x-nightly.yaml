@@ -1,0 +1,41 @@
+name: 2x-nightly
+
+# Lives on the default branch, because GitHub runs `schedule` only from there, and tests the 2.x branch. GitHub CI
+# runs logic, contract and model-free limits only: model, backend-env and GPU tiers and the use cases run on ORCD.
+on:
+  schedule:
+  - cron: 17 3 * * *
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  # Every PR job, from 2.x's own copy of the workflow.
+  pr-jobs:
+    uses: sensein/senselab/.github/workflows/2x-tests.yaml@2.x
+    with:
+      ref: 2.x
+
+  limits:
+    name: limits (model-free)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: 2.x
+        fetch-depth: 0   # hatch-vcs derives the version from tags
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        version: 0.13.6
+    - name: Install the core distributions alone, from uv.lock
+      env:
+        UV_PROJECT_ENVIRONMENT: .core
+      run: uv sync --locked --no-editable --python 3.12 --package senselab-core --group test
+    - name: Run the limits tier that needs no model
+      run: .core/bin/pytest packages -m "limits and not model" -p no:cacheprovider

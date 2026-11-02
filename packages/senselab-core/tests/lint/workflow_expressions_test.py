@@ -31,6 +31,7 @@ TRUSTED = frozenset(
         "github.event.pull_request.number",
         "github.event.pull_request.draft",
         "github.event.issue.number",
+        "inputs.ref",
         "github.event.release.prerelease",
         "runner.os",
         "runner.arch",

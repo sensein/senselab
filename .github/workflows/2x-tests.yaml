@@ -6,14 +6,15 @@ on:
     branches: [2.x, senselab-2x-api, 2x/**]
   pull_request:
     branches: [2.x, senselab-2x-api, 2x/**]
-    # `ready_for_review` matters because every job below is gated on `pull_request.draft == false`:
-    # without it a draft PR marked ready never re-triggers this workflow.
-    types: [opened, synchronize, reopened, labeled, ready_for_review]
-  # Nightly: every job below, and the limits and use-case tiers. A schedule runs the default branch's copy of
-  # this file, so it takes effect once the 2.x line is merged there.
-  schedule:
-  - cron: 17 3 * * *
+    # `ready_for_review` re-triggers a draft PR marked ready; `edited` re-checks the models named in the body.
+    types: [opened, synchronize, reopened, labeled, ready_for_review, edited]
   workflow_dispatch:
+  # The nightly workflow on the default branch (2x-nightly.yaml) calls this file at 2.x with `ref: 2.x`.
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -25,21 +26,23 @@ concurrency:
 jobs:
   # A missing package, or a package without its src/, fails this job and every job that needs it.
   detect:
-    if: github.event.pull_request.draft == false
+    if: github.event_name != 'push' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: ${{ inputs.ref }}
         fetch-depth: 1
     - name: Check the 2.x packages
       run: bash .github/scripts/check-2x-packages.sh
 
   pre-commit:
-    if: github.event.pull_request.draft == false
+    if: github.event_name != 'push' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: ${{ inputs.ref }}
         fetch-depth: 1
     - name: Install uv
       uses: astral-sh/setup-uv@v5
@@ -68,6 +71,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: ${{ inputs.ref }}
         fetch-depth: 0   # hatch-vcs derives the version from tags
     - name: Install uv
       uses: astral-sh/setup-uv@v5
@@ -79,7 +83,7 @@ jobs:
         UV_PROJECT_ENVIRONMENT: .core
       run: uv sync --locked --no-editable --python "$PYTHON_VERSION" --package senselab-core --group test
     - name: Run core tests
-      run: .core/bin/pytest packages/senselab-core packages/senselab-worker -m "logic or contract" -p no:cacheprovider
+      run: .core/bin/pytest packages/senselab-core packages/senselab-worker -m "(logic or contract) and not model" -p no:cacheprovider
     - name: Build each sdist into a wheel on its own
       run: |
         for src in packages/senselab-worker packages/senselab-core .; do
@@ -102,6 +106,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: ${{ inputs.ref }}
         fetch-depth: 0   # hatch-vcs derives the version from tags
     - name: Install uv
       uses: astral-sh/setup-uv@v5
@@ -113,11 +118,11 @@ jobs:
         UV_PROJECT_ENVIRONMENT: .lean
       run: uv sync --locked --no-editable --python "$PYTHON_VERSION" --package senselab --no-default-groups --group test
     - name: Run the senselab tests
-      run: .lean/bin/pytest packages/senselab/tests -m "logic or contract" -p no:cacheprovider
+      run: .lean/bin/pytest packages/senselab/tests -m "(logic or contract) and not model" -p no:cacheprovider
     - name: Check import contracts
       run: .lean/bin/lint-imports
 
-  # The limits tier on a PR carrying the `limits` label.
+  # The model-free limits tier on a PR carrying the `limits` label; limits that load a model run on ORCD.
   core-limits:
     needs: detect
     name: core-limits
@@ -126,6 +131,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: ${{ inputs.ref }}
         fetch-depth: 0   # hatch-vcs derives the version from tags
     - name: Install uv
       uses: astral-sh/setup-uv@v5
@@ -136,18 +142,17 @@ jobs:
         UV_PROJECT_ENVIRONMENT: .core
       run: uv sync --locked --no-editable --python 3.12 --package senselab-core --group test
     - name: Run the limits tier
-      run: .core/bin/pytest packages -m limits -p no:cacheprovider
+      run: .core/bin/pytest packages -m "limits and not model" -p no:cacheprovider
 
-  # The limits and use-case tiers: nightly and on demand.
-  core-nightly:
+  # The declared version of a task or backend moves whenever its source does (scripts/check_source_digests.py).
+  source-digests:
     needs: detect
-    name: core-nightly
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
       with:
-        fetch-depth: 0   # hatch-vcs derives the version from tags
+        ref: ${{ inputs.ref }}
+        fetch-depth: 0   # the merge-base with 2.x
     - name: Install uv
       uses: astral-sh/setup-uv@v5
       with:
@@ -156,8 +161,26 @@ jobs:
       env:
         UV_PROJECT_ENVIRONMENT: .core
       run: uv sync --locked --no-editable --python 3.12 --package senselab-core --group test
-    - name: Run the limits and use-case tiers
-      run: .core/bin/pytest packages -m "limits or usecase" -p no:cacheprovider
+    - name: Check the source digests
+      run: .core/bin/python scripts/check_source_digests.py
+
+  # The PR names an implementer model and a different reviewer model (P-40).
+  pr-models:
+    needs: detect
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 1
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        version: 0.13.6
+    - name: Check the models in the PR body
+      env:
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: uv run --no-project --python 3.12 python scripts/check_pr_models.py
 
   core-env:
     needs: detect
@@ -166,6 +189,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: ${{ inputs.ref }}
         fetch-depth: 0   # hatch-vcs derives the version from tags
     - name: Install uv
       uses: astral-sh/setup-uv@v5
@@ -176,7 +200,7 @@ jobs:
         UV_PROJECT_ENVIRONMENT: .core
       run: uv sync --locked --no-editable --python 3.12 --package senselab-core --group test
     - name: Run the release gate tests, which build and create venvs
-      run: .core/bin/pytest packages/senselab-core/tests/release_gate_test.py -m "env and not slow" -p no:cacheprovider
+      run: .core/bin/pytest packages/senselab-core/tests/release_gate_test.py -m "env and not slow and not model" -p no:cacheprovider
 
   # Every locked runtime dependency of the three distributions has a license its distribution's policy allows
   # (scripts/data/license_policy.yaml), and so has every native library a wheel bundles.
@@ -187,6 +211,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: ${{ inputs.ref }}
         fetch-depth: 0   # hatch-vcs derives the version from tags
     - name: Install uv
       uses: astral-sh/setup-uv@v5
@@ -213,6 +238,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
+        ref: ${{ inputs.ref }}
         fetch-depth: 0   # hatch-vcs derives the version from tags
     - name: Install uv
       uses: astral-sh/setup-uv@v5
@@ -229,4 +255,4 @@ jobs:
         uv pip sync --python .floor --require-hashes .github/locks/worker-floor.txt
         uv pip install --python .floor --no-deps dist/senselab_worker-*.whl
     - name: Run worker tests
-      run: .floor/bin/pytest packages/senselab-worker/tests -m "logic or env or contract" -p no:cacheprovider
+      run: .floor/bin/pytest packages/senselab-worker/tests -m "(logic or env or contract) and not model" -p no:cacheprovider

@@ -106,7 +106,9 @@ source_modules =
     scripts.check_fixture_budget
     scripts.check_licenses
     scripts.check_participant_ids
+    scripts.check_pr_models
     scripts.check_size_budgets
+    scripts.check_source_digests
     scripts.check_spec_ids
     scripts.lock_envs
     scripts.profile_imports
