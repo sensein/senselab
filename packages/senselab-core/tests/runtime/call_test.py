@@ -23,6 +23,7 @@ from senselab_core.kernel.identity import (
     Equivalence,
     ExecutionContext,
     LogicalKey,
+    ModelRef,
     OutputIdentity,
     ReusePolicy,
     numerics_key,
@@ -204,6 +205,16 @@ def _activities(store: ResultStore) -> list[prov.Record]:
 
 def _executions(store: ResultStore) -> list[prov.Record]:
     return [a for a in _activities(store) if "senselab:Reuse" not in a.types()]
+
+
+@pytest.mark.logic
+def test_catalogue_metadata_binds_to_the_pinned_revision() -> None:
+    """A model resolved to its pin carries the entry's license and placement; another commit carries neither."""
+    model, entry = call_module._resolve_model(TASK, ModelRef.parse(f"{TOY}@{REVISION}"), _profile("alpha"), CATALOGUE)
+    assert model is not None and model.license is not None and entry is not None
+    other = "b" * 40
+    model, entry = call_module._resolve_model(TASK, ModelRef.parse(f"{TOY}@{other}"), _profile("alpha"), CATALOGUE)
+    assert model is not None and (model.identity, model.license, entry) == (other, None, None)
 
 
 @pytest.mark.logic

@@ -533,6 +533,7 @@ def placement_of(task: str, model: ModelRef | None, execution: ExecutionProfile)
 def _resolve_model(
     spec: TaskSpec, ref: ModelRef | None, profile: ExecutionProfile, catalogue: Catalogue
 ) -> tuple[ResolvedModel | None, CatalogueEntry | None]:
+    """Return the model `ref` resolves to and the catalogue entry of that `(id, revision)`, None off every pin."""
     if ref is None:
         try:
             default = catalogue.default(spec.name)
@@ -545,7 +546,9 @@ def _resolve_model(
     if ref.source == "hf":
         profile.check_source(ref.id, catalogue)
     resolved = resolve(ref)
-    return (resolved if entry is None else resolved.model_copy(update={"license": entry.license})), entry
+    if entry is None or resolved.identity != entry.revision:
+        return resolved, None
+    return resolved.model_copy(update={"license": entry.license}), entry
 
 
 def input_binding(port_type: str) -> Literal["path", "text", "value"]:
