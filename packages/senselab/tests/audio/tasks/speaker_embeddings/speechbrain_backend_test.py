@@ -1,5 +1,6 @@
 """The `speechbrain` backend of `speaker_embeddings`: its vectors, faults, model and the isolated worker's contract."""
 
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -134,6 +135,44 @@ def test_checkpoint_paths_outside_the_pinned_snapshot_are_named() -> None:
     snapshot = "/cache/models--speechbrain--spkrec-ecapa-voxceleb/snapshots/" + "a" * 40
     paths = {"embedding_model": f"{snapshot}/embedding_model.ckpt", "hub": f"{sb.MODEL_ID}/embedding_model.ckpt"}
     assert sb.unpinned_paths(paths, snapshot) == {"hub": f"{sb.MODEL_ID}/embedding_model.ckpt"}
+
+
+@pytest.mark.logic
+def test_the_encoder_loads_at_the_commit_with_its_checkpoints_overridden_to_the_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The load names the 40-hex commit, overrides `pretrained_path` to the snapshot and refuses a path outside it."""
+    snapshot, commit = "/cache/snap", "a" * 40
+    seen: dict[str, Any] = {}
+
+    def snapshot_download(repo: str, revision: str) -> str:
+        seen["download"] = (repo, revision)
+        return snapshot
+
+    class Classifier:
+        paths = {"embedding_model": f"{snapshot}/embedding_model.ckpt"}
+
+        @classmethod
+        def from_hparams(cls, **kwargs: Any) -> Any:  # noqa: ANN401 - the third-party signature
+            seen["load"] = kwargs
+            return SimpleNamespace(hparams=SimpleNamespace(pretrainer=SimpleNamespace(paths=cls.paths)))
+
+    hub = SimpleNamespace(snapshot_download=snapshot_download)
+    speaker = SimpleNamespace(EncoderClassifier=Classifier)
+    for name, module in {
+        "huggingface_hub": hub,
+        "speechbrain": SimpleNamespace(),
+        "speechbrain.inference": SimpleNamespace(),
+        "speechbrain.inference.speaker": speaker,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    model = {"source": "hf", "id": sb.MODEL_ID, "identity": commit}
+    sb.Encoder(model, "cpu")
+    assert seen["download"] == (sb.MODEL_ID, commit)
+    assert seen["load"]["source"] == snapshot and seen["load"]["overrides"] == {"pretrained_path": snapshot}
+    Classifier.paths = {"embedding_model": f"{sb.MODEL_ID}/embedding_model.ckpt"}
+    with pytest.raises(RuntimeError, match="outside the pinned snapshot"):
+        sb.Encoder(model, "cpu")
 
 
 @pytest.mark.contract
