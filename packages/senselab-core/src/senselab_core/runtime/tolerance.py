@@ -1,4 +1,4 @@
-"""Tolerance profiles (`tolerance@2.0`): where one backend's lives, its model, and outputs judged within it."""
+"""Tolerance profiles (`tolerance@2`): where one backend's lives, its model, and outputs judged within it."""
 
 import json
 import math
@@ -6,14 +6,16 @@ import re
 from collections.abc import Mapping, Sequence
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import TypeVar
+from typing import Annotated, Self, TypeVar
 
 import numpy
 import yaml
+from pydantic import Field, model_validator
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.formats import TOLERANCE_FORMAT, FormatTag, Formatted, readable
 from senselab_core.kernel.results import Intervals
+from senselab_core.runtime.storage import load_policy_values
 
 Folder = TypeVar("Folder", Path, Traversable)
 
@@ -52,14 +54,70 @@ class FieldTolerance(Frozen):
     shape_mismatches: int = 0
 
 
+COVERAGE_FORMAT = "tolerance-coverage@1.0"
+Fraction = Annotated[float, Field(gt=0, lt=1)]
+
+
+def required_items(target: float, confidence: float) -> int:
+    """Return the least n whose largest spread covers `target` of items with probability `confidence`."""
+    return math.ceil(math.log(1 - confidence) / math.log(target))
+
+
+def attained_coverage(items: int, confidence: float) -> float:
+    """Return the fraction of items the largest of `items` spreads covers with probability `confidence`."""
+    return float((1 - confidence) ** (1 / items))
+
+
+class Coverage(Frozen):
+    """The coverage a profile states, from its item count.
+
+    Each tolerance, the largest spread of the calibration items, is a distribution-free one-sided upper tolerance
+    bound covering `attained` of items with probability `confidence`. `target` is the coverage
+    `data/tolerance_coverage.yaml` asks for, which `required_items` items reach.
+    """
+
+    target: Fraction
+    confidence: Fraction
+    required_items: int
+    attained: Fraction
+
+    @classmethod
+    def of(cls, items: int) -> Self:
+        """Return the coverage `items` calibration items state under the packaged target and confidence."""
+        policy = load_policy_values("senselab_core.runtime", "tolerance_coverage.yaml", COVERAGE_FORMAT)
+        target, confidence = float(policy["target"]), float(policy["confidence"])  # type: ignore[arg-type]
+        return cls(
+            target=target,
+            confidence=confidence,
+            required_items=required_items(target, confidence),
+            attained=attained_coverage(items, confidence),
+        )
+
+    @model_validator(mode="after")
+    def _check_required(self) -> Self:
+        if self.required_items != required_items(self.target, self.confidence):
+            raise ValueError(f"{self.target}/{self.confidence} needs {required_items(self.target, self.confidence)}")
+        return self
+
+
 class Derivation(Frozen):
-    """What a profile was measured from."""
+    """What a profile was measured from, and the coverage its item count states (absent before `tolerance@2.1`)."""
 
     shas: tuple[str, ...]
     jobs: tuple[str, ...]
     split: NonEmptyStr
     items: tuple[str, ...]
     contexts: tuple[str, ...]
+    coverage: Coverage | None = None
+
+    @model_validator(mode="after")
+    def _check_coverage(self) -> Self:
+        stated = self.coverage
+        if stated is not None and not math.isclose(
+            stated.attained, attained_coverage(len(self.items), stated.confidence)
+        ):
+            raise ValueError(f"{len(self.items)} items do not state coverage {stated.attained}")
+        return self
 
 
 class ToleranceProfile(Formatted):
@@ -84,7 +142,7 @@ def read_profile(folder: Path | Traversable, task: str, backend: str) -> Toleran
     Raises:
         NoToleranceProfile: there is none.
         ToleranceProfileRetired: it is in a retired format.
-        pydantic.ValidationError: the file is not a `tolerance@2.0` profile.
+        pydantic.ValidationError: the file is not a `tolerance@2` profile.
     """
     path = tolerance_profile_path(folder, task, backend)
     if not path.is_file():
@@ -97,7 +155,7 @@ def load_profile(path: Path | Traversable) -> ToleranceProfile:
 
     Raises:
         ToleranceProfileRetired: it is in a retired format.
-        pydantic.ValidationError: the file is not a `tolerance@2.0` profile.
+        pydantic.ValidationError: the file is not a `tolerance@2` profile.
     """
     raw = yaml.safe_load(path.read_text("utf-8"))
     found = raw.get("format") if isinstance(raw, dict) else None

@@ -5,12 +5,16 @@ import math
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from pydantic import ValidationError
 from senselab_core.runtime.tolerance import (
     AxisSpread,
+    Coverage,
     Derivation,
     FieldTolerance,
     ToleranceProfile,
+    attained_coverage,
     numeric_gap,
+    required_items,
     within,
 )
 
@@ -59,3 +63,20 @@ def test_a_large_finite_difference_always_fails(prefix: list[float | None], x: f
     """Whatever matched values precede it, a finite difference above the tolerance is a disagreement."""
     a, b = [*prefix, x], [*prefix, x + delta]
     assert "x" in within({"x": a}, {"x": b}, _profile(0.5))
+
+
+@pytest.mark.logic
+def test_coverage_is_stated_from_the_item_count() -> None:
+    """The packaged 0.95/0.95 bound needs 59 items; 12 items state 0.779 coverage, and a misstated one is refused."""
+    assert required_items(0.95, 0.95) == 59 and required_items(0.99, 0.95) == 299
+    assert attained_coverage(59, 0.95) >= 0.95 > attained_coverage(58, 0.95)
+    thin = Coverage.of(12)
+    assert (thin.target, thin.confidence, thin.required_items) == (0.95, 0.95, 59)
+    assert round(thin.attained, 3) == 0.779
+    items = tuple(f"i{n}" for n in range(12))
+    derivation = Derivation(shas=(), jobs=(), split="calibration", items=items, contexts=("c",), coverage=thin)
+    assert derivation.coverage == thin
+    with pytest.raises(ValidationError, match="do not state"):
+        Derivation(shas=(), jobs=(), split="calibration", items=items[:3], contexts=("c",), coverage=thin)
+    with pytest.raises(ValidationError, match="needs 59"):
+        Coverage(target=0.95, confidence=0.95, required_items=12, attained=thin.attained)
