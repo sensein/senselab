@@ -7,7 +7,6 @@ import unicodedata
 
 import numpy
 import pytest
-import yaml
 from hypothesis import given
 from hypothesis import strategies as st
 from pydantic import ValidationError
@@ -22,6 +21,7 @@ from senselab_core.kernel.identity import (
     ReusePolicy,
     UnpinnedModel,
     acceptable,
+    numerics_key,
 )
 from senselab_core.kernel.license import License
 from senselab_worker.digest import identity_digest
@@ -389,11 +389,15 @@ def test_another_protocol_is_the_same_context() -> None:
     assert stored.protocol != current.protocol
 
 
+def _cpu(device: str) -> ExecutionContext:
+    return _ctx(numerics={"device": device, "precision": "fp32"})
+
+
 @pytest.mark.logic
 def test_equivalent_reuses_within_a_measured_class() -> None:
-    """Two contexts in one of the backend's measured classes are equivalent; `exact` still refuses them."""
-    c1, c2, c3 = _ctx(platform="linux"), _ctx(platform="macos"), _ctx(platform="windows")
-    table = {"b": {"cpu-fp32": frozenset({c1.fingerprint(), c2.fingerprint()})}}
+    """Two contexts whose numerics classes are in one of the backend's classes are equivalent; `exact` refuses them."""
+    c1, c2, c3 = _cpu("cpu"), _cpu("cuda"), _cpu("mps")
+    table = {"b": {"c": frozenset({numerics_key(c1.numerics), numerics_key(c2.numerics)})}}
     assert acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="b", equivalence=table) and acceptable(
         c2, c1, ReusePolicy.EQUIVALENT, backend="b", equivalence=table
     )
@@ -405,8 +409,8 @@ def test_equivalent_reuses_within_a_measured_class() -> None:
 @pytest.mark.logic
 def test_equivalence_is_scoped_to_its_backend() -> None:
     """A class measured for backend A does not make the same contexts equivalent for backend B."""
-    c1, c2 = _ctx(platform="linux"), _ctx(platform="macos")
-    table = {"A": {"cpu-fp32": frozenset({c1.fingerprint(), c2.fingerprint()})}}
+    c1, c2 = _cpu("cpu"), _cpu("cuda")
+    table = {"A": {"c": frozenset({numerics_key(c1.numerics), numerics_key(c2.numerics)})}}
     assert acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="A", equivalence=table)
     assert not acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="B", equivalence=table)
 
@@ -419,42 +423,10 @@ def test_the_kernel_default_equivalence_is_empty() -> None:
     assert not acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="b")
 
 
-def _class(*fingerprints: str, derivation: object = "measured: agreement on 200 verify samples") -> dict[str, object]:
-    return {"fingerprints": list(fingerprints), "derivation": derivation}
-
-
 @pytest.mark.logic
-def test_equivalence_data_reads_each_class_with_its_derivation() -> None:
-    """A class names its context fingerprints and carries a derivation; the table is read-only."""
-    c1, c2 = _ctx(platform="linux").fingerprint(), _ctx(platform="macos").fingerprint()
-    text = yaml.safe_dump({"format": "equivalence@1", "backends": {"b": {"cpu-fp32": _class(c1, c2)}}})
-    table = identity.parse_equivalence(text)
-    assert table == {"b": {"cpu-fp32": frozenset({c1, c2})}}
-    assert acceptable(_ctx(platform="linux"), _ctx(platform="macos"), "equivalent", backend="b", equivalence=table)
-    with pytest.raises(TypeError):
-        table["b"] = {}
-
-
-@pytest.mark.logic
-@pytest.mark.parametrize(
-    "document",
-    [
-        {"format": "equivalence@2", "backends": {}},
-        {"backends": {}},
-        {"format": "equivalence@1"},
-        {"format": "equivalence@1", "backends": {"b": {"c": _class("a" * 64, "b" * 64, derivation="")}}},
-        {"format": "equivalence@1", "backends": {"b": {"c": _class("a" * 64, "b" * 64, derivation=None)}}},
-        {"format": "equivalence@1", "backends": {"b": {"c": {"fingerprints": ["a" * 64, "b" * 64]}}}},
-        {"format": "equivalence@1", "backends": {"b": {"c": _class("a" * 64)}}},
-        {"format": "equivalence@1", "backends": {"b": {"c": _class("a" * 64, "linux")}}},
-        {"format": "equivalence@1", "backends": {"b": {"c": {**_class("a" * 64, "b" * 64), "k": 1}}}},
-        {"format": "equivalence@1", "backends": {"b": []}},
-    ],
-)
-def test_equivalence_data_refuses_a_class_without_derivation_or_fingerprints(document: dict[str, object]) -> None:
-    """A wrong format, a class with no derivation, fewer than two fingerprints or a non-fingerprint is refused."""
-    with pytest.raises(ValueError, match="equivalence"):
-        identity.parse_equivalence(yaml.safe_dump(document))
+def test_numerics_key_is_order_free() -> None:
+    """A numerics class is one string whatever the order of its mapping."""
+    assert numerics_key({"a": "1", "b": "2"}) == numerics_key({"b": "2", "a": "1"}) == '{"a":"1","b":"2"}'
 
 
 # Model references

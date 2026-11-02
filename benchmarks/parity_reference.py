@@ -17,25 +17,18 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Protocol
+from typing import Any
 
 import numpy
 import yaml
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.formats import PARITY_OUTPUTS_FORMAT, PARITY_REFERENCE_FORMAT, FormatTag, Formatted
+from senselab_core.runtime.tolerance import Fields, ToleranceProfile, flatten, within
 
 ROOT = Path(__file__).resolve().parents[1]
 HELDOUT = "heldout"
 SINGLE, MANY = "1", "N"
 NS = 1e9
-Fields = dict[str, list[float] | str]
-
-
-class Bounded(Protocol):
-    """A tolerance profile as the comparison reads it: `derivation` and `fields` (each a `path` and a `tolerance`)."""
-
-    derivation: Any
-    fields: Sequence[Any]
 
 
 class ParityError(ValueError):
@@ -93,7 +86,7 @@ def _load(name: str, path: Path) -> ModuleType:
 
 
 def tolerance_module() -> ModuleType:
-    """Return `scripts/generate_tolerance.py`, the owner of `flatten`, the profile model and item preparation."""
+    """Return `scripts/generate_tolerance.py`, the owner of item preparation and the calibration split."""
     return sys.modules.get("generate_tolerance") or _load(
         "generate_tolerance", ROOT / "scripts" / "generate_tolerance.py"
     )
@@ -150,8 +143,7 @@ def project(record: Mapping[str, Any]) -> Fields:
         raise ParityError(
             f"a 1.x output record of task {task!r} with keys {sorted(record)} is not one the converter reads"
         )
-    fields: Fields = tolerance_module().flatten(shaped)
-    return fields
+    return flatten(shaped)
 
 
 def convert(directory: Path, *, task: str, backend: str, alpha_sha: str, job: str) -> ParityReference:
@@ -169,10 +161,10 @@ def convert(directory: Path, *, task: str, backend: str, alpha_sha: str, job: st
     return ParityReference(task=task, backend=backend, alpha_sha=alpha_sha, job=job, items=items)
 
 
-def load_profile(path: Path) -> Bounded:
+def load_profile(path: Path) -> ToleranceProfile:
     """Read a `tolerance@1.0` file, refusing one not derived from calibration items alone."""
     tol = tolerance_module()
-    profile: Bounded = tol.ToleranceProfile.model_validate(yaml.safe_load(path.read_text("utf-8")))
+    profile = ToleranceProfile.model_validate(yaml.safe_load(path.read_text("utf-8")))
     held = sorted(i for i in profile.derivation.items if split_of(i) != tol.CALIBRATION)
     if profile.derivation.split != tol.CALIBRATION or held:
         raise ParityError(f"{path.name} is not a calibration-only profile; held-out items: {held}")
@@ -218,36 +210,21 @@ def relabel_turns(expected: Mapping[str, list[float] | str], actual: Mapping[str
 
 
 def compare(
-    expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str], profile: Bounded
+    expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str], profile: ToleranceProfile
 ) -> list[str]:
     """Return what differs, `expected` against `actual` over the paths of `expected`, each judged by `profile`.
 
     A path is a mismatch when `actual` lacks it, its shape differs, the profile has no tolerance for it, or the
     difference exceeds the profile's tolerance (an exact field must be equal).
     """
-    bound = {f.path: f.tolerance for f in profile.fields}
-    actual = relabel_turns(expected, actual)
-    out = []
-    for path in sorted(expected):
-        a, b = expected[path], actual.get(path)
-        if b is None:
-            out.append(f"{path}: missing from the compared output")
-        elif path not in bound:
-            out.append(f"{path}: the profile has no tolerance for it")
-        elif isinstance(a, str) or isinstance(b, str):
-            if a != b:
-                out.append(f"{path}: {a!r} != {b!r}")
-        elif len(a) != len(b):
-            out.append(f"{path}: {len(a)} values against {len(b)}")
-        elif a and (gap := float(numpy.max(numpy.abs(numpy.asarray(a) - numpy.asarray(b))))) > bound[path]:
-            out.append(f"{path}: difference {gap:g} exceeds tolerance {bound[path]:g}")
-    return out
+    mismatched = within(expected, relabel_turns(expected, actual), profile)
+    return [f"{path}: {why}" for path, why in mismatched.items()]
 
 
 def compare_items(
     expected: Mapping[str, Fields],
     actual: Mapping[str, Fields],
-    profile: Bounded,  # noqa: ANN401
+    profile: ToleranceProfile,
 ) -> dict[str, list[str]]:
     """Return per-item mismatches over held-out items; an item `actual` lacks is a mismatch.
 
@@ -281,7 +258,6 @@ def run(  # noqa: PLR0913 - what one 2.x parity run fixes
         ParityError: `items` holds a calibration item.
     """
     require_heldout(list(items))
-    flatten = tolerance_module().flatten
     seen: dict[str, dict[str, Fields]] = {i: {} for i in items}
     for batch, groups in ((SINGLE, [[i] for i in items]), (MANY, [list(items)])):
         for group in groups:

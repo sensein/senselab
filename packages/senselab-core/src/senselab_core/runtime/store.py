@@ -8,6 +8,8 @@ Layout under `root`:
     the encoded outputs and their output identity;
   - `context.json`: JCS JSON with `format: "execution-context@2.0"` and the context's fields;
   - `<sha256>.npy`: each array output in canonical `.npy`, named by the sha256 of its bytes.
+- `equivalence-evidence@1/<d>.json`: one verify-sampling comparison (`EquivalenceEvidence`), JSON named by
+  `d`, its canonical digest.
 - `tmp/<uuid>/`: a writer's staging directory, committed by renaming it onto the entry.
 - `quarantine/<uuid>`: entries that failed verification, and objects of the wrong kind found at a path
   the store owns, moved aside by rename.
@@ -69,7 +71,8 @@ from senselab_core.kernel.identity import (
     ReusePolicy,
     acceptable,
 )
-from senselab_core.runtime.equivalence import EQUIVALENCE
+from senselab_core.runtime.equivalence import EQUIVALENCE, EquivalenceEvidence
+from senselab_core.runtime.equivalence import split as split_class
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
@@ -90,6 +93,8 @@ logger = logging.getLogger("senselab")
 
 STORE_DIR = "store@4"
 STAGING_DIR = "tmp"
+EVIDENCE_DIR = "equivalence-evidence@1"
+EVIDENCE_NAME = re.compile(r"[0-9a-f]{64}\.json")
 QUARANTINE_DIR = "quarantine"
 RESULT_FORMAT = "result@2.0"
 CONTEXT_FORMAT = "execution-context@2.0"
@@ -571,6 +576,53 @@ class ResultStore:
     def equivalence(self) -> Equivalence:
         """The measured equivalence classes this store's `equivalent` reuse admits."""
         return self._equivalence
+
+    def split(self, backend: str, a: str, b: str) -> None:
+        """Take numerics classes `a` and `b` out of `backend`'s class holding both (`equivalence.split`)."""
+        self._equivalence = split_class(self._equivalence, backend, a, b)
+
+    def add_evidence(self, evidence: EquivalenceEvidence) -> None:
+        """Record `evidence` under its digest, written atomically; recording it again changes nothing.
+
+        Raises:
+            StoreUnavailable: the store could not be written.
+            WrongKindError: an object of the wrong kind on the way cannot be moved aside.
+        """
+        data = jcs_dumps(evidence.model_dump(mode="json"))
+        try:
+            with self._open_root(create=True) as root, self._ensure(root, EVIDENCE_DIR) as directory:
+                directory.write_atomically(
+                    f"{evidence.canonical_digest()}.json",
+                    data,
+                    grammar=EVIDENCE_NAME,
+                    mode=committed_modes(self.policy)[0],
+                )
+        except OSError as err:
+            raise storage_fault(err, self.root) from err
+
+    def evidence(self) -> list[EquivalenceEvidence]:
+        """Return every verify-sampling record in the store, by digest.
+
+        Raises:
+            CorruptEntryError: a record is not the evidence its name is the digest of.
+            StoreUnavailable: the store could not be read.
+        """
+        try:
+            with self._open_root(create=False) as root, root.walk(EVIDENCE_DIR) as directory:
+                out = []
+                for name in sorted(n for n in directory.listdir() if EVIDENCE_NAME.fullmatch(n)):
+                    try:
+                        record = EquivalenceEvidence.model_validate_json(directory.read_regular(name) or b"")
+                    except ValidationError:
+                        record = None
+                    if record is None or f"{record.canonical_digest()}.json" != name:
+                        raise CorruptEntryError(f"evidence record {name[:12]}... is not the record its name digests")
+                    out.append(record)
+                return out
+        except FileNotFoundError:
+            return []
+        except OSError as err:
+            raise storage_fault(err, self.root) from err
 
     def _entry(self, key: LogicalKey) -> Path:
         d = key.digest()

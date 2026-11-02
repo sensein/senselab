@@ -1,4 +1,4 @@
-"""The packaged catalogue and env locks, handed to `run_call` when `senselab` is imported."""
+"""The packaged catalogue, env locks and tolerance profiles, handed to `run_call` when `senselab` is imported."""
 
 from importlib import resources
 from pathlib import Path
@@ -44,5 +44,5 @@ def open_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:
     return ensure_env(env, env_lock, profile.env_root(env.kind), settings=profile.envs, workers=workers)
 
 
-PACKAGED = Packaged(CATALOGUE, open_env)
+PACKAGED = Packaged(CATALOGUE, open_env, tolerance=_DATA.joinpath("tolerance"))
 use_packaged(PACKAGED)
