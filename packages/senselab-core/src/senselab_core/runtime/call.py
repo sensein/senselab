@@ -9,6 +9,7 @@ import functools
 import importlib
 import logging
 import platform
+import re
 import sysconfig
 import threading
 from collections.abc import Callable, Iterable, Mapping
@@ -17,7 +18,7 @@ from datetime import datetime, timezone
 from importlib.resources.abc import Traversable
 from os import PathLike
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, PlainSerializer, ValidationInfo, model_validator
 from senselab_worker import WIRE_VERSION
@@ -29,6 +30,7 @@ from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, value
 from senselab_core.kernel.declare import REGISTRY, BackendSpec, Registry, TaskParams, TaskSpec, kernel_types
 from senselab_core.kernel.identity import (
     DEFAULT_REUSE_POLICY,
+    ContentIdentity,
     ExecutionContext,
     InputIdentity,
     LogicalKey,
@@ -464,12 +466,27 @@ def input_binding(port_type: str) -> Literal["path", "text", "value"]:
     return "path" if port_type in _READERS else "value"
 
 
+def _with_identities(kernel_type: type, value: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return `value` with each identity field of `kernel_type` that holds the text itself replaced by its identity."""
+    fields = getattr(kernel_type, "model_fields", {})
+    constraint = get_args(ContentIdentity)[1]
+    out = dict(value)
+    for name, field in fields.items():
+        given = out.get(name)
+        if name != "identity" and constraint in field.metadata and isinstance(given, str):
+            if not re.fullmatch(constraint.pattern, given):
+                out[name] = PlainText(content=given).identity
+    return out
+
+
 def bind_input(port: str, port_type: str, value: object) -> tuple[InputIdentity, object, str | None]:
     """Return an input's identity, the value its item carries and the decoder that read it from a path, if one did.
 
     A `str` for a `Text` port is held as `PlainText`.
     """
     decoder = None
+    if isinstance(value, Mapping) and isinstance(kernel_types().get(port_type), type):
+        value = _with_identities(kernel_types()[port_type], value)
     if port_type == "Text" and isinstance(value, str):
         value = PlainText(content=value)
     if isinstance(value, str | PathLike) and port_type in kernel_types():

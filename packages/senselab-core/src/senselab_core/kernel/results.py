@@ -171,7 +171,7 @@ class TextSpans(Formatted):
     format: FormatTag = "text-spans@1.0"
 
     text: ContentIdentity = Field(
-        description="Identity of the text the spans lie over: `PlainText(content=<the text>).identity`.",
+        description="The text the spans lie over, itself (a call computes its identity), or its `content:<hex>`.",
         examples=["content:" + "0" * 64],
     )
     length: Annotated[int, Strict(), Field(ge=0)]

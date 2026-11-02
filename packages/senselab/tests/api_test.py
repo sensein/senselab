@@ -21,8 +21,17 @@ from senselab._api.call import ApiError
 from senselab._api.describe import JSON_FORM, PORT_FORMS, describe, models, tasks
 from senselab._api.packaged import CATALOGUE
 from senselab_core.kernel.declare import REGISTRY, BackendSpec, Env, Registry, TaskParams, TaskSpec, kernel_types
-from senselab_core.kernel.signals import Audio
-from senselab_core.runtime.call import Packaged, Result, TaskCall, input_binding, packaged, run_call, use_packaged
+from senselab_core.kernel.signals import Audio, PlainText
+from senselab_core.runtime.call import (
+    Packaged,
+    Result,
+    TaskCall,
+    bind_input,
+    input_binding,
+    packaged,
+    run_call,
+    use_packaged,
+)
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -394,7 +403,17 @@ def test_describe_of_every_task_is_enough_to_write_a_call() -> None:
 
 
 @pytest.mark.logic
-def test_text_spans_text_says_how_to_get_its_identity() -> None:
+def test_text_spans_text_says_the_text_itself_is_accepted() -> None:
     """The `text` of span inputs names the expression that yields it."""
     schema = describe("span_f1")["inputs"]["$defs"]["TextSpans"]["properties"]["text"]
-    assert "PlainText(content=" in schema["description"] and schema["examples"]
+    assert "text the spans lie over, itself" in schema["description"] and schema["examples"]
+
+
+@pytest.mark.logic
+def test_an_identity_field_given_as_the_text_binds_to_its_identity() -> None:
+    """A text for an identity field is bound as its content identity; an identity given is kept."""
+    spans = {"text": "hello", "length": 5, "start": [0], "end": [5], "label": ["A"]}
+    identity = PlainText(content="hello").identity
+    by_text = bind_input("reference", "TextSpans", spans)
+    by_identity = bind_input("reference", "TextSpans", {**spans, "text": identity})
+    assert by_text[0] == by_identity[0] and by_text[1]["text"] == identity  # type: ignore[index]
