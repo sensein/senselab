@@ -1,6 +1,7 @@
 """Tier hook: every test under ``packages/`` carries exactly one of the five tier markers.
 
 The `model` sub-marker (loads weights or needs a backend env, ORCD only) goes with `limits`, `usecase` or `env`.
+A `gpu` test is skipped on a host with no GPU.
 """
 
 from __future__ import annotations
@@ -30,3 +31,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             f"each test under packages/ needs exactly one tier marker of {sorted(TIERS)}, "
             f"and `model` only beside {sorted(MODEL_TIERS)}:\n" + "\n".join(offenders)
         )
+    gpu = [item for item in items if item.get_closest_marker("gpu")]
+    if gpu:
+        from senselab_core.runtime.hardware import (
+            probe_hardware,  # noqa: PLC0415 - probed only when a gpu test is collected
+        )
+
+        if not probe_hardware().gpus:
+            for item in gpu:
+                item.add_marker(pytest.mark.skip(reason="needs a GPU; this host has none"))

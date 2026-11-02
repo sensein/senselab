@@ -225,6 +225,7 @@ def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract c
 
 @pytest.mark.env
 @pytest.mark.model
+@pytest.mark.gpu
 def test_pii_spans_transformers_finds_the_identifying_span_with_real_weights(real_worker: RealWorkers) -> None:
     """On the pinned model a name and a number are covered by spans; a content fault leaves batch-mates unchanged."""
     text = "My name is Margaret Hollis and you can reach me on 617-555-0142."
@@ -240,6 +241,7 @@ def test_pii_spans_transformers_finds_the_identifying_span_with_real_weights(rea
 
 @pytest.mark.limits
 @pytest.mark.model
+@pytest.mark.gpu
 def test_pii_spans_transformers_edge_inputs_with_real_weights(real_worker: RealWorkers) -> None:
     """Empty, non-BMP, repeated and long texts each give spans inside the text or a typed fault."""
     client = real_worker("pii_spans", "transformers")
