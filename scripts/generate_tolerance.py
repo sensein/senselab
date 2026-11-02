@@ -19,13 +19,15 @@ from typing import Any, Protocol
 import numpy
 import yaml
 from senselab_core.kernel._base import Frozen, NonEmptyStr
-from senselab_core.kernel.formats import (
-    TOLERANCE_FORMAT,
-    TOLERANCE_OBSERVATIONS_FORMAT,
-    FormatTag,
-    Formatted,
+from senselab_core.kernel.formats import TOLERANCE_OBSERVATIONS_FORMAT, FormatTag, Formatted
+from senselab_core.runtime.tolerance import (
+    AxisSpread,
+    Derivation,
+    FieldTolerance,
+    ToleranceProfile,
+    flatten,
+    tolerance_profile_path,
 )
-from senselab_core.runtime.tolerance import tolerance_profile_path
 
 ROOT = Path(__file__).resolve().parents[1]
 AXES = ("repeat", "device", "batch", "stack")
@@ -68,45 +70,6 @@ class Observations(Formatted):
     items: tuple[ObservedItem, ...]
 
 
-class AxisSpread(Frozen):
-    """The largest difference (or count of unequal values) over `pairs` pairs of runs differing only along `axis`."""
-
-    axis: NonEmptyStr
-    spread: float
-    pairs: int
-
-
-class FieldTolerance(Frozen):
-    """One output field's spread per axis and its tolerance, the largest spread."""
-
-    path: NonEmptyStr
-    kind: NonEmptyStr
-    spreads: tuple[AxisSpread, ...]
-    tolerance: float
-    shape_mismatches: int = 0
-
-
-class Derivation(Frozen):
-    """What a profile was measured from."""
-
-    shas: tuple[str, ...]
-    jobs: tuple[str, ...]
-    split: NonEmptyStr
-    items: tuple[str, ...]
-    contexts: tuple[str, ...]
-
-
-class ToleranceProfile(Formatted):
-    """A backend's cross-context spread on the calibration split."""
-
-    format: FormatTag = TOLERANCE_FORMAT
-    task: NonEmptyStr
-    backend: NonEmptyStr
-    derivation: Derivation
-    fields: tuple[FieldTolerance, ...]
-    findings: tuple[str, ...]
-
-
 class Runner(Protocol):
     """What `measure` needs of a worker."""
 
@@ -122,33 +85,6 @@ def _harness() -> ModuleType:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
-
-
-def flatten(value: object, prefix: str = "") -> dict[str, list[float] | str]:
-    """Return the leaves of `value` by dotted path: numbers and arrays as float lists, anything else as its JSON."""
-    if isinstance(value, Mapping):
-        out: dict[str, list[float] | str] = {}
-        for key in sorted(value, key=str):
-            out |= flatten(value[key], f"{prefix}.{key}" if prefix else str(key))
-        return out
-    if isinstance(value, (list, tuple)) and not _numeric(value):
-        out = {}
-        for n, element in enumerate(value):
-            out |= flatten(element, f"{prefix}[{n}]")
-        return out
-    if _numeric(value):
-        return {prefix: numpy.asarray(value, dtype=float).ravel().tolist()}
-    return {prefix: json.dumps(value, sort_keys=True, default=str)}
-
-
-def _numeric(value: object) -> bool:
-    if isinstance(value, (bool, str)):
-        return False
-    try:
-        numpy.asarray(value, dtype=float)
-    except (TypeError, ValueError):
-        return False
-    return True
 
 
 def measure(  # noqa: PLR0913 - what one measurement job fixes

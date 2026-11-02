@@ -1,5 +1,6 @@
 """`run_call`: placement by profile, store reuse, one activity per call, model source and profile digest recorded."""
 
+import dataclasses
 import json
 import os
 import platform
@@ -17,7 +18,15 @@ import soundfile
 from senselab_core.kernel import prov
 from senselab_core.kernel._base import Frozen
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
-from senselab_core.kernel.identity import ExecutionContext, LogicalKey, OutputIdentity, ReusePolicy
+from senselab_core.kernel.identity import (
+    NO_EQUIVALENCE,
+    Equivalence,
+    ExecutionContext,
+    LogicalKey,
+    OutputIdentity,
+    ReusePolicy,
+    numerics_key,
+)
 from senselab_core.kernel.results import Intervals, Metric, Transcript, TranscriptNode, Trials
 from senselab_core.kernel.signals import Audio, PlainText
 from senselab_core.kernel.time import Span, TimeAnchor
@@ -34,10 +43,12 @@ from senselab_core.runtime.call import (
     run_call,
     use_packaged,
 )
+from senselab_core.runtime.call import packaged as packaged_now
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.tolerance import NoToleranceProfile, read_profile, tolerance_profile_path
 from senselab_core.runtime.worker_client import WorkerClient
 
 TOY = "toyorg/toy"
@@ -439,3 +450,94 @@ def test_one_content_under_two_anchors_is_refused(store: ResultStore) -> None:
     with pytest.raises(AmbiguousClock, match=audio.identity):
         run_call(call, execution=_profile(), store=store)
     assert _activities(store) == []
+
+
+GPU = {"device_kind": "cuda", "precision": "default", "gpu_architecture": "sm_90"}
+
+
+@pytest.fixture
+def profiles(tmp_path: Path) -> Iterator[Path]:
+    """A fixture `tolerance@1.0` profile of `fake-alpha`: its one output, `value`, must be equal."""
+    folder = tmp_path / "tolerance"
+    path = tolerance_profile_path(folder, TASK.name, "fake-alpha")
+    path.parent.mkdir(parents=True)
+    profile = {
+        "format": "tolerance@1.0",
+        "task": TASK.name,
+        "backend": "fake-alpha",
+        "derivation": {"shas": ["0" * 40], "jobs": ["1"], "split": "calibration", "items": ["i"], "contexts": ["cpu"]},
+        "fields": [{"path": "value", "kind": "exact", "spreads": [], "tolerance": 0.0}],
+        "findings": [],
+    }
+    path.write_text(json.dumps(profile), "utf-8")
+    previous = use_packaged(dataclasses.replace(packaged_now(), tolerance=folder))
+    yield folder
+    use_packaged(previous)
+
+
+def _elsewhere(tmp_path: Path, value: object, equivalence: Equivalence = NO_EQUIVALENCE) -> tuple[Result, ResultStore]:
+    """Return a call's result here, and a store holding `value` for its key computed on a GPU instead."""
+    here = run_call(_call("v"), execution=_profile("alpha"), store=ResultStore(tmp_path / "here"))
+    gpu = ExecutionContext.model_validate({**here.context.model_dump(), "numerics": GPU})
+    store = ResultStore(tmp_path / "there", equivalence=equivalence)
+    store.put(here.key, {"value": value}, gpu)
+    return here, store
+
+
+def _class(here: Result) -> Equivalence:
+    return {"fake-alpha": {"c": frozenset({numerics_key(here.context.numerics), numerics_key(GPU)})}}
+
+
+@pytest.mark.logic
+def test_unmeasured_equivalent_is_exact(tmp_path: Path) -> None:
+    """With no class, `equivalent` serves no other context's result; a measured class of the two numerics does."""
+    here, store = _elsewhere(tmp_path, "from the gpu")
+    assert run_call(_call("v"), execution=_profile("alpha"), store=store).reused is None
+    _, measured = _elsewhere(tmp_path / "m", "from the gpu", _class(here))
+    served = run_call(_call("v"), execution=_profile("alpha"), store=measured)
+    assert served.reused is ReusePolicy.EQUIVALENT and served.outputs == {"value": "from the gpu"}
+
+
+@pytest.mark.logic
+def test_verify_agreement_adds_evidence(tmp_path: Path, profiles: Path) -> None:
+    """A sampled cross-context hit is recomputed and, agreeing within the profile, adds evidence; `verify: 0` none."""
+    here, _ = _elsewhere(tmp_path, None)
+    _, store = _elsewhere(tmp_path / "s", here.outputs["value"])
+    served = run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(ReusePolicy.TOLERANT))
+    assert served.reused is ReusePolicy.TOLERANT and store.evidence() == []
+    _, store = _elsewhere(tmp_path / "t", here.outputs["value"])
+    verified = run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(ReusePolicy.TOLERANT, 1.0))
+    assert verified.reused is None and verified.outputs == here.outputs
+    [evidence] = store.evidence()
+    assert evidence.agree and (evidence.backend, evidence.key) == ("fake-alpha", here.key.digest())
+    assert (evidence.stored.numerics, evidence.current.numerics) == (GPU, here.context.numerics)
+    assert evidence.tolerance == read_profile(profiles, TASK.name, "fake-alpha").canonical_digest()
+
+
+@pytest.mark.logic
+def test_verify_disagreement_splits_class(tmp_path: Path, profiles: Path, caplog: pytest.LogCaptureFixture) -> None:  # noqa: ARG001 - the fixture installs the profile
+    """A sampled hit beyond the profile is recorded as disagreeing, splits the store's class and is logged."""
+    here, _ = _elsewhere(tmp_path, None)
+    _, store = _elsewhere(tmp_path / "s", "not what the cpu computes", _class(here))
+    result = run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(verify=1.0))
+    assert result.reused is None and result.outputs == here.outputs
+    [evidence] = store.evidence()
+    assert not evidence.agree and evidence.mismatched == ("value",)
+    assert store.equivalence == {"fake-alpha": {}}
+    assert "fake-alpha" in caplog.text and "value" in caplog.text and "not what" not in caplog.text
+
+
+@pytest.mark.logic
+def test_verify_without_a_profile_raises(tmp_path: Path) -> None:
+    """A sampled hit of a backend with no tolerance profile cannot be judged, so it raises."""
+    _, store = _elsewhere(tmp_path, "x")
+    with pytest.raises(NoToleranceProfile):
+        run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(ReusePolicy.TOLERANT, 1.0))
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("k", [-0.1, 1.5])
+def test_verify_is_a_fraction(k: float) -> None:
+    """`verify` outside [0, 1] is refused."""
+    with pytest.raises(ValueError, match="verify"):
+        RunConfig(verify=k)

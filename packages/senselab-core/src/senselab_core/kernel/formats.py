@@ -29,6 +29,11 @@ TOLERANCE_FORMAT = "tolerance@1.0"
 TOLERANCE_OBSERVATIONS_FORMAT = "tolerance-observations@1.0"
 """The format of one measurement job's output, the input of `scripts/generate_tolerance.py generate`."""
 
+EQUIVALENCE_FORMAT = "equivalence@2.0"
+"""The format of the measured equivalence classes, `runtime/data/equivalence.yaml`."""
+EQUIVALENCE_EVIDENCE_FORMAT = "equivalence-evidence@1.0"
+"""The format of one verify-sampling comparison, a record in the result store."""
+
 PARITY_REFERENCE_FORMAT = "parity-reference@1.0"
 """The format of the 1.x outputs of the held-out items of one backend, `benchmarks/parity_reference.py convert`."""
 PARITY_OUTPUTS_FORMAT = "parity-outputs@1.0"

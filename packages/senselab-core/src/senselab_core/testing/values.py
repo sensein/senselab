@@ -83,10 +83,12 @@ from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.envs import EnvRecord
+from senselab_core.runtime.equivalence import EquivalenceEvidence, EvidenceSide
 from senselab_core.runtime.fetch import DataFile, DataManifest
 from senselab_core.runtime.profiles import Envs, ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.storage import StorePolicy
+from senselab_core.runtime.tolerance import AxisSpread, Derivation, FieldTolerance, ToleranceProfile
 
 Case = Callable[[], None]
 Factory = Callable[[], Sequence[Frozen]]
@@ -910,6 +912,61 @@ def _register_runtime_samples() -> None:
         RetryPolicy,
         lambda: [ExecutionProfile.load().retry, RetryPolicy(attempts=1, first_backoff_s=0)],
         invalid_updates=[{"attempts": 0}, {"attempts": 2.5}, {"first_backoff_s": -1}],
+    )
+    _register_tolerance_samples()
+
+
+def _register_tolerance_samples() -> None:
+    sides = (
+        EvidenceSide(fingerprint="a" * 64, numerics={"device_kind": "cpu"}),
+        EvidenceSide(fingerprint="b" * 64, numerics={"device_kind": "cuda", "gpu_architecture": "sm_90"}),
+    )
+    register_samples(EvidenceSide, lambda: sides, invalid_updates=[{"fingerprint": "main"}, {"numerics": {"k": 1}}])
+    register_samples(
+        EquivalenceEvidence,
+        lambda: [
+            EquivalenceEvidence(
+                task="t",
+                backend="b",
+                key="c" * 64,
+                stored=sides[0],
+                current=sides[1],
+                mismatched=(),
+                tolerance="d" * 64,
+                run="slurm-1",
+            ),
+            EquivalenceEvidence(
+                task="t",
+                backend="b",
+                key="c" * 64,
+                stored=sides[1],
+                current=sides[0],
+                mismatched=("value",),
+                tolerance="d" * 64,
+                run="slurm-2",
+            ),
+        ],
+        invalid_updates=[{"format": "equivalence-evidence@2.0"}, {"key": "short"}, {"run": ""}],
+    )
+    spreads = (AxisSpread(axis="repeat", spread=0.0, pairs=3), AxisSpread(axis="device", spread=0.5, pairs=2))
+    register_samples(AxisSpread, lambda: spreads, invalid_updates=[{"axis": ""}, {"pairs": "many"}])
+    fields = (
+        FieldTolerance(path="value", kind="exact", spreads=(), tolerance=0.0),
+        FieldTolerance(path="vector", kind="numeric", spreads=spreads, tolerance=0.5, shape_mismatches=1),
+    )
+    register_samples(FieldTolerance, lambda: fields, invalid_updates=[{"path": ""}, {"tolerance": "wide"}])
+    derivations = (
+        Derivation(shas=("0" * 40,), jobs=("1",), split="calibration", items=("i",), contexts=("cpu",)),
+        Derivation(shas=("1" * 40,), jobs=("1", "2"), split="calibration", items=("i", "j"), contexts=("cuda",)),
+    )
+    register_samples(Derivation, lambda: derivations, invalid_updates=[{"split": ""}, {"jobs": 3}])
+    register_samples(
+        ToleranceProfile,
+        lambda: [
+            ToleranceProfile(task="t", backend="b", derivation=derivations[0], fields=fields[:1], findings=()),
+            ToleranceProfile(task="t", backend="b", derivation=derivations[1], fields=fields, findings=("f",)),
+        ],
+        invalid_updates=[{"format": "tolerance@2.0"}, {"backend": ""}],
     )
 
 

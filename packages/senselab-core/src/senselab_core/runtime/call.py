@@ -7,13 +7,16 @@ A declaring package hands `run_call` its catalogue, how its backends' envs open 
 import atexit
 import functools
 import importlib
+import logging
 import platform
 import sysconfig
 import threading
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from importlib.resources.abc import Traversable
 from os import PathLike
+from pathlib import Path
 from typing import Annotated, Any
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, PlainSerializer, ValidationInfo, model_validator
@@ -33,6 +36,7 @@ from senselab_core.kernel.identity import (
     OutputIdentity,
     ResolvedModel,
     ReusePolicy,
+    numerics_key,
 )
 from senselab_core.kernel.signals import PlainText, Recording
 from senselab_core.kernel.time import TimeAnchor, TimeMap, rebind
@@ -40,14 +44,16 @@ from senselab_core.kernel.wire import WireFormatRetired, from_wire_form, wire_fo
 from senselab_core.runtime.audio_io import DECODER, READER, open_audio
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.equivalence import EquivalenceEvidence, EvidenceSide, sampled
 from senselab_core.runtime.hardware import HardwareInfo, numerics_class, probe_hardware
 from senselab_core.runtime.in_process import InProcessWorker
 from senselab_core.runtime.keys import Call, Placement, build_key
 from senselab_core.runtime.models import resolve
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
-from senselab_core.runtime.revision import cache_root
-from senselab_core.runtime.store import ResultStore, context_record, key_record
+from senselab_core.runtime.revision import cache_root, run_id
+from senselab_core.runtime.store import ResultStore, StoredResult, context_record, key_record
 from senselab_core.runtime.store import output_identity as store_output_identity
+from senselab_core.runtime.tolerance import NoToleranceProfile, flatten, read_profile, within
 from senselab_core.runtime.vllm_server import (
     Attestation,
     AttestationMismatch,
@@ -58,6 +64,8 @@ from senselab_core.runtime.vllm_server import (
 )
 from senselab_core.runtime.vocabulary import core_vocabulary
 from senselab_core.runtime.worker_client import WorkerClient
+
+logger = logging.getLogger("senselab")
 
 PRECISION = "default"
 """The precision a call records: the backend's own; no backend declares another yet."""
@@ -125,9 +133,18 @@ class TaskCall(BaseModel):
 
 @dataclass(frozen=True)
 class RunConfig:
-    """A run's settings: `reuse`, the widest policy under which a stored result serves a call."""
+    """A run's settings: `reuse`, the widest policy under which a stored result serves a call, and `verify`.
+
+    `verify` is the fraction of cross-context hits recomputed and compared within the backend's tolerance profile.
+    """
 
     reuse: ReusePolicy = DEFAULT_REUSE_POLICY
+    verify: float = 0.0
+
+    def __post_init__(self) -> None:
+        """Refuse a `verify` outside [0, 1]."""
+        if not 0.0 <= self.verify <= 1.0:
+            raise ValueError(f"verify is a fraction in [0, 1], got {self.verify}")
 
 
 @dataclass(frozen=True)
@@ -168,11 +185,12 @@ EnvOpener = Callable[[BackendSpec, ExecutionProfile], EnvHandle]
 
 @dataclass(frozen=True)
 class Packaged:
-    """What a declaring package hands `run_call`: its catalogue, how its backends' envs open, and the registry."""
+    """What a declaring package hands `run_call`: its catalogue, env opener, registry and tolerance profiles' folder."""
 
     catalogue: Catalogue
     open_env: EnvOpener
     registry: Registry = REGISTRY
+    tolerance: Path | Traversable | None = None
 
 
 def _no_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
@@ -215,7 +233,10 @@ def run_call(
     execution activity. An output on a port declared as a kernel type is stored as its wire form and returned as the
     kernel value, read by `from_wire_form`. Outputs are stored on the
     clocks their recording inputs' identities name and served re-bound (`rebind`) to the caller's anchors, so the key
-    holds no anchor and one entry serves one content under every anchor. `None` means the packaged
+    holds no anchor and one entry serves one content under every anchor. A cross-context hit among the fraction
+    `run.verify` (`sampled`) is executed as a miss, compared with the stored result within the backend's tolerance
+    profile, and the comparison recorded in the store as `EquivalenceEvidence`; a disagreement splits the store's
+    class of the two numerics classes (`ResultStore.split`) and is logged. `None` means the packaged
     default: the `laptop` profile, `RunConfig()` and the store under `cache_root()/results`.
 
     Raises:
@@ -230,6 +251,7 @@ def run_call(
         CallFailed: the backend failed the item.
         OutputTypeMismatch: an output of a kernel-typed port is not a wire form of its declared type.
         WorkerFatal, WorkerLost, ProtocolError: as the worker reports them.
+        NoToleranceProfile: a sampled hit's backend has no tolerance profile.
     """
     profile = execution if execution is not None else ExecutionProfile.load()
     run = run if run is not None else RunConfig()
@@ -256,7 +278,9 @@ def run_call(
     key = build_key(Call(task=spec, params=call.params, inputs=identities, model=model), placement, context)
     anchors = _anchors(value for _, value, _ in bound.values())
     hit = store.get(key, context, run.reuse)
-    if hit is not None:
+    if hit is not None and not (
+        hit.policy_used is not ReusePolicy.EXACT and sampled(run.verify, key.digest(), hit.context, context)
+    ):
         outputs = _rebound(_decoded(spec, hit.outputs), anchors)
         return Result(outputs, hit.output_identity, key, hit.context, placement, hit.policy_used)
     started = datetime.now(timezone.utc)
@@ -271,6 +295,8 @@ def run_call(
         for p, v in on_identity_clocks.items()
     }
     output_identity = store.put(key, outputs, context)
+    if hit is not None:
+        _verify(store, key, hit, context, outputs)
     if output_identity != store_output_identity(outputs):
         stored = store.get(key, context, ReusePolicy.EXACT)
         if stored is None:
@@ -282,6 +308,43 @@ def run_call(
         *_execution(key, context, profile, identities, output_identity, model, started),
     )
     return Result(decoded, output_identity, key, context, placement, None)
+
+
+def _verify(
+    store: ResultStore, key: LogicalKey, hit: StoredResult, context: ExecutionContext, outputs: dict[str, object]
+) -> None:
+    """Compare a sampled hit with its recomputation within the backend's profile and record the evidence.
+
+    A disagreement splits the store's class of the two numerics classes and is logged.
+
+    Raises:
+        NoToleranceProfile: the backend has no profile.
+    """
+    if _PACKAGED.tolerance is None:
+        raise NoToleranceProfile(f"no package names a folder of tolerance profiles for {key.backend!r}")
+    profile = read_profile(_PACKAGED.tolerance, key.task, key.backend)
+    mismatched = within(flatten(hit.outputs), flatten(outputs), profile)
+    stored, current = EvidenceSide.of(hit.context), EvidenceSide.of(context)
+    evidence = EquivalenceEvidence(
+        task=key.task,
+        backend=key.backend,
+        key=key.digest(),
+        stored=stored,
+        current=current,
+        mismatched=tuple(mismatched),
+        tolerance=profile.canonical_digest(),
+        run=run_id(),
+    )
+    store.add_evidence(evidence)
+    if mismatched:
+        store.split(key.backend, numerics_key(stored.numerics), numerics_key(current.numerics))
+        logger.warning(
+            "verify: %s on %s disagrees with its result from %s beyond its tolerance in %s",
+            key.backend,
+            numerics_key(current.numerics),
+            numerics_key(stored.numerics),
+            ", ".join(mismatched),
+        )
 
 
 def _anchors(values: Iterable[object]) -> list[tuple[TimeAnchor, TimeAnchor]]:

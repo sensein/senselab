@@ -25,7 +25,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from planted_objects_fixture import ARRAY_CORRUPTIONS, bounded, store_key, swap_subsets
 from senselab_core.kernel import prov
-from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ReusePolicy
+from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ReusePolicy, numerics_key
 from senselab_core.runtime import store as store_module
 from senselab_core.runtime.equivalence import EQUIVALENCE
 from senselab_core.runtime.provenance import ProvStore
@@ -50,12 +50,12 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _ctx(platform: str = "linux", host: str = "node1") -> ExecutionContext:
+def _ctx(platform: str = "linux", host: str = "node1", device: str = "cpu") -> ExecutionContext:
     return ExecutionContext(
         env_lock="lock",
         platform=platform,
         wheel_set="wheels",
-        numerics={"device": "cpu", "precision": "fp32"},
+        numerics={"device": device, "precision": "fp32"},
         decoder=None,
         driver={},
         host=host,
@@ -135,8 +135,8 @@ def test_cross_context_follows_policy(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_equivalence_class_admits_under_equivalent(tmp_path: Path) -> None:
     """A measured equivalence class admits a cross-context result under `equivalent`, not `exact`."""
-    linux, mac = _ctx(platform="linux"), _ctx(platform="macos")
-    table = {"hf": {"cpu-fp32": frozenset({linux.fingerprint(), mac.fingerprint()})}}
+    linux, mac = _ctx(device="cpu"), _ctx(device="mps")
+    table = {"hf": {"c": frozenset({numerics_key(linux.numerics), numerics_key(mac.numerics)})}}
     s, k = ResultStore(tmp_path, equivalence=table), store_key()
     s.put(k, {"y": 1}, linux)
     assert ResultStore(tmp_path).get(k, mac, ReusePolicy.EQUIVALENT) is None
@@ -153,9 +153,11 @@ def test_equivalence_class_admits_under_equivalent(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_get_without_a_policy_applies_the_default_equivalent(tmp_path: Path) -> None:
     """A `get` naming no policy reuses under `equivalent`: a measured class admits, an unmeasured context not."""
-    linux, mac, gpu = _ctx(platform="linux"), _ctx(platform="macos"), _ctx(platform="linux-cuda")
+    linux, mac, gpu = _ctx(device="cpu"), _ctx(device="mps"), _ctx(device="cuda")
     s, k = (
-        ResultStore(tmp_path, equivalence={"hf": {"cpu-fp32": frozenset({linux.fingerprint(), mac.fingerprint()})}}),
+        ResultStore(
+            tmp_path, equivalence={"hf": {"c": frozenset({numerics_key(linux.numerics), numerics_key(mac.numerics)})}}
+        ),
         store_key(),
     )
     s.put(k, {"y": 1}, linux)
