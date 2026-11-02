@@ -508,7 +508,11 @@ def _run_benchmark(  # noqa: PLR0913 - the benchmark and everything it runs unde
         metric_call = TaskCall.model_validate(
             {"task": bench.metric, "inputs": scoring.inputs, "params": bench.metric_params}
         )
-        scored = run_call(metric_call, execution=execution, store=store)
+        try:
+            scored = run_call(metric_call, execution=execution, store=store)
+        except CallFailed as err:
+            rows.append(Row(label=scoring.label, split=scoring.split, fault=_fault_text(err.error)))
+            continue
         metric: Metric = scored.outputs["metric"]  # type: ignore[assignment]
         contexts[scored.context.fingerprint()] = scored.context
         pooled = scoring.label.startswith(POOLED)

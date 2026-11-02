@@ -144,6 +144,13 @@ def test_metric_carries_name_unit_and_items() -> None:
 
 
 @pytest.mark.logic
+def test_span_f1_of_no_spans_against_no_spans_is_one_over_one_item() -> None:
+    """A text with no entities that the model also leaves clean is a correct result, not a fault."""
+    metric = _score(span_f1, {"reference": spans(), "hypothesis": spans()})
+    assert (metric.value, metric.items) == (1.0, 1)
+
+
+@pytest.mark.logic
 def test_der_ignores_speaker_names_and_order() -> None:
     """Relabelling hypothesis speakers or reordering turns leaves the DER unchanged."""
     renamed = turns(("z9", 2, 13), ("q", 13, 14), ("m", 14, 20), ("k", 22, 38), ("q", 38, 40))
@@ -200,7 +207,6 @@ def test_eer_is_invariant_to_a_monotone_rescoring() -> None:
         ),
         (der, {"reference": turns(("A", 3, 3)), "hypothesis": turns(("x", 0, 1))}, {}),
         (eer, {"trials": trials([0.9, 0.8], [True, True])}, {}),
-        (span_f1, {"reference": spans(), "hypothesis": spans()}, {}),
         (
             span_f1,
             {
@@ -217,7 +223,6 @@ def test_eer_is_invariant_to_a_monotone_rescoring() -> None:
         "der-clock",
         "der-silent",
         "eer-one-kind",
-        "span-f1-empty",
         "span-f1-text",
         "rerr-silent",
         "rerr-length",

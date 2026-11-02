@@ -125,6 +125,18 @@ class ToyAdapter:
         ]
 
 
+class EmptyReferenceAdapter(ToyAdapter):
+    """As `ToyAdapter`, but item `u2` has no reference words, so its metric has nothing to score."""
+
+    def scoring(self, items: Sequence[Any], outputs: Mapping[str, Mapping[str, Any]]) -> list[Any]:  # noqa: D102
+        return [
+            harness.Scoring(s.label, s.split, {**s.inputs, "reference": Transcript(segments=())})
+            if s.label == "u2"
+            else s
+            for s in super().scoring(items, outputs)
+        ]
+
+
 def _toy_manifests(tmp_path: Path) -> Path:
     directory = tmp_path / "manifests"
     directory.mkdir()
@@ -203,6 +215,25 @@ def test_harness_records_provenance(tmp_path: Path) -> None:
     assert sum(a.rows for a in entry.aggregates) == 4
     assert str(tmp_path) not in (run / "result.json").read_text("utf-8")
     assert result.execution == "laptop"
+
+
+@pytest.mark.logic
+def test_a_metric_fault_is_that_rows_fault_and_the_suite_completes(tmp_path: Path) -> None:
+    """An item the metric cannot score is a fault row; the rows before and after it are kept."""
+    _toy_manifests(tmp_path)
+    run = harness.run_suite(
+        _toy_suite(),
+        execution=ExecutionProfile.load("laptop", {"devices": ["cpu"]}),
+        manifests=tmp_path / "manifests",
+        data_cache=tmp_path / "data",
+        out=tmp_path / "out",
+        run_id="r1",
+        opener=lambda url: io.BytesIO(TOY_ROWS.encode()),  # noqa: ARG005
+        adapters={"toy": EmptyReferenceAdapter},
+    )
+    [entry] = harness.load_result(run / "result.json").entries
+    assert {r.label: r.fault is not None for r in entry.rows} == {"u1": False, "u2": True, "u3": False, "u4": False}
+    assert "no words" in next(r.fault for r in entry.rows if r.label == "u2")
 
 
 @pytest.mark.logic

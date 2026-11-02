@@ -11,7 +11,6 @@ from typing import Any
 from senselab_core.kernel.declare import REGISTRY, TaskParams, backend, task
 from senselab_core.kernel.results import Metric, TextSpans
 from senselab_worker.fake import FakeFaults
-from senselab_worker.faults import ContentFault
 
 from senselab.metrics import _worker
 
@@ -37,15 +36,15 @@ def _triples(spans: TextSpans) -> Counter[tuple[int, int, str]]:
 
 
 def f1(ref: TextSpans, hyp: TextSpans) -> float:
-    """Return the micro F1 of `hyp` against `ref`, 0 when no span matches.
+    """Return the micro F1 of `hyp` against `ref`: 1 when neither side has a span, 0 when no span matches.
 
     Raises:
-        ContentFault: if the spans lie over different texts, or neither side has a span.
+        ContentFault: if the spans lie over different texts.
     """
     _worker.require_same("text", ref.text, hyp.text)
     expected, found = _triples(ref), _triples(hyp)
     if not expected and not found:
-        raise ContentFault("neither side has a span to score")
+        return 1.0
     correct = sum((expected & found).values())
     n_ref, n_hyp = sum(expected.values()), sum(found.values())
     return 0.0 if correct == 0 else 2.0 * correct / (n_ref + n_hyp)
@@ -55,7 +54,7 @@ def score(inputs: Mapping[str, Any], params: object) -> Metric:  # noqa: ARG001 
     """Return the `span_f1` of `inputs["hypothesis"]` against `inputs["reference"]`."""
     ref: TextSpans = inputs["reference"]
     hyp: TextSpans = inputs["hypothesis"]
-    return Metric(name="span_f1", value=f1(ref, hyp), unit="ratio", items=len(ref.start) + len(hyp.start))
+    return Metric(name="span_f1", value=f1(ref, hyp), unit="ratio", items=max(1, len(ref.start) + len(hyp.start)))
 
 
 def handle(state: FakeFaults, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
