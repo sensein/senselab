@@ -63,6 +63,7 @@ class Observations(Formatted):
     backend: NonEmptyStr
     sha: NonEmptyStr
     job: NonEmptyStr
+    backend_params: dict[str, Any] = {}
     items: tuple[ObservedItem, ...]
 
 
@@ -161,6 +162,7 @@ def measure(  # noqa: PLR0913 - what one measurement job fixes
     repeats: int,
     sha: str,
     job: str,
+    backend_params: Mapping[str, Any] | None = None,
     split_of: Any,
 ) -> Observations:
     """Run the calibration items of `items` alone and in one batch, `repeats` times each.
@@ -186,6 +188,7 @@ def measure(  # noqa: PLR0913 - what one measurement job fixes
         backend=backend,
         sha=sha,
         job=job,
+        backend_params=dict(backend_params or {}),
         items=tuple(ObservedItem(id=i, split=CALIBRATION, runs=tuple(r)) for i, r in runs.items() if r),
     )
 
@@ -282,17 +285,14 @@ def write_profile(profile: ToleranceProfile, out: Path) -> Path:
     return path
 
 
-def _wired(port_type: str, value: object) -> object:
-    """Return the wire form of an item input as the call path would bind it: text held, audio read from its path."""
-    from senselab_core.kernel.signals import PlainText  # noqa: PLC0415 - only a real measurement needs the runtime
-    from senselab_core.kernel.wire import wire_form  # noqa: PLC0415
-    from senselab_core.runtime.audio_io import READER, open_audio  # noqa: PLC0415
+def _wired(port: str, port_type: str, value: object) -> object:
+    """Return the wire form of an item input as the call path binds it."""
+    from senselab_core.kernel.wire import wire_form  # noqa: PLC0415 - only a real measurement needs the runtime
+    from senselab_core.runtime.audio_io import READER  # noqa: PLC0415
+    from senselab_core.runtime.call import bind_input  # noqa: PLC0415
 
-    if port_type == "Text" and isinstance(value, str):
-        value = PlainText(content=value)
-    elif isinstance(value, str | Path) and port_type in ("Audio", "RegularSeries"):
-        value = open_audio(value)
-    return wire_form(value, READER) if isinstance(value, Frozen) else value
+    bound = bind_input(port, port_type, value)[1]
+    return wire_form(bound, READER) if isinstance(bound, Frozen) else bound
 
 
 def _measure_cli(args: argparse.Namespace) -> None:
@@ -309,13 +309,13 @@ def _measure_cli(args: argparse.Namespace) -> None:
     spec = packaged().registry.spec(bench.task)
     backend = next(b for b in packaged().registry.backends(bench.task) if b.name == args.backend)
     wired = {
-        item.id: {p: _wired(spec.inputs[p], v) for p, v in item.inputs.items()}
+        item.id: {p: _wired(p, spec.inputs[p], v) for p, v in item.inputs.items()}
         for item in harness.ADAPTERS[bench.adapter]().items(files, bench.items, args.work)
         if harness.split_of(item.id) == CALIBRATION
     }
     params = {
         **spec.params.model_validate(bench.params).model_dump(mode="json"),
-        "backend_params": backend.params().model_dump(mode="json"),
+        "backend_params": backend.params.model_validate(args.backend_params).model_dump(mode="json"),
     }
     workers = RealWorkers(ExecutionProfile.load(args.execution))
     try:
@@ -326,10 +326,11 @@ def _measure_cli(args: argparse.Namespace) -> None:
             task=bench.task,
             backend=args.backend,
             device=workers.device,
-            stack=backend.stack,
+            stack=backend.stack + "".join(f" {k}={v}" for k, v in sorted(args.backend_params.items())),
             repeats=args.repeats,
             sha=args.sha,
             job=args.job,
+            backend_params=params["backend_params"],
             split_of=harness.split_of,
         )
     finally:
@@ -352,6 +353,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     m.add_argument("--benchmark", required=True)
     m.add_argument("--backend", required=True)
     m.add_argument("--execution", default="orcd")
+    m.add_argument("--backend-params", type=json.loads, default={}, help="JSON of the backend's params, e.g. the engine")
     m.add_argument("--repeats", type=int, default=3)
     m.add_argument("--sha", required=True)
     m.add_argument("--job", required=True)
