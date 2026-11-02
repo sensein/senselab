@@ -134,6 +134,7 @@ markers = [
   "large_model: loads a large model"
 ]
 timeout = 900
+timeout_method = "thread"
 
 [tool.mypy]
 ignore_missing_imports = true
