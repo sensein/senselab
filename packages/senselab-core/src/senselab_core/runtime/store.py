@@ -37,6 +37,7 @@ The output identity is `"output:" + identity_digest("output@3", encoded form)`.
 """
 
 import errno
+import functools
 import io
 import logging
 import os
@@ -1016,6 +1017,7 @@ class ResultStore:
         Raises:
             ValueError: if `policy` is not a `ReusePolicy` value.
             StoreUnavailable: a candidate could not be read; nothing was quarantined.
+            StoreFormatRetired: a candidate is in a retired format and no other candidate is served; it is left.
 
         An object of the wrong kind at a directory of the store on the way to `key` is quarantined and the
         key reads as absent.
@@ -1056,14 +1058,10 @@ class ResultStore:
         allowed = _POLICY_ORDER[: _POLICY_ORDER.index(policy) + 1]
         current = context.fingerprint()
         candidates: list[tuple[int, bool, str, ExecutionContext]] = []
+        retired: list[StoreFormatRetired] = []
         for name in names:
-            try:
-                stored = _read_context(base / name, name)
-            except StoreFormatUnknown as err:
-                logger.info("store entry %s is another version's and is not served: %s", base / name, err)
-                continue
-            except CorruptEntryError:
-                self._set_aside(base / name, digest=d, fingerprint=name)
+            stored = self._readable(base, d, name, functools.partial(_read_context, base / name, name), retired)
+            if stored is None:
                 continue
             rank = next(
                 (
@@ -1076,14 +1074,32 @@ class ResultStore:
             if rank is not None:
                 candidates.append((rank, name != current, name, stored))
         for rank, _, name, read_context in sorted(candidates, key=lambda c: c[:3]):
-            try:
-                identity, outputs, stored = _read_result(base / name, digest=d, fingerprint=name, context=read_context)
-            except StoreFormatUnknown as err:
-                logger.info("store entry %s is another version's and is not served: %s", base / name, err)
+            read = self._readable(
+                base,
+                d,
+                name,
+                lambda: _read_result(base / name, digest=d, fingerprint=name, context=read_context),
+                retired,
+            )
+            if read is None:
                 continue
-            except CorruptEntryError:
-                self._set_aside(base / name, digest=d, fingerprint=name)
-                continue
+            identity, outputs, stored = read
             self._reseal(base_dir, name)
             return StoredResult(outputs=outputs, output_identity=identity, context=stored, policy_used=allowed[rank])
+        if retired:
+            raise retired[0]
+        return None
+
+    def _readable(
+        self, base: Path, d: str, name: str, read: Callable[[], T], retired: list[StoreFormatRetired]
+    ) -> T | None:
+        """Return `read()`, or None for another version's entry, a retired one (kept) or a corrupt one (set aside)."""
+        try:
+            return read()
+        except StoreFormatRetired as err:
+            retired.append(err)
+        except StoreFormatUnknown as err:
+            logger.info("store entry %s is another version's and is not served: %s", base / name, err)
+        except CorruptEntryError:
+            self._set_aside(base / name, digest=d, fingerprint=name)
         return None

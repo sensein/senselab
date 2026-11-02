@@ -62,3 +62,17 @@ def test_a_retired_entry_raises_and_stays(tmp_path: Path, member: str) -> None:
         s.get(k, c, ReusePolicy.EXACT)
     assert info.value.found == retired
     assert entry.is_dir() and not (tmp_path / QUARANTINE_DIR).exists()
+
+
+@pytest.mark.logic
+def test_a_retired_sibling_does_not_hide_a_readable_entry(tmp_path: Path) -> None:
+    """Under one key, a readable entry is served past a retired one, which stays where it is."""
+    s, k = ResultStore(tmp_path), store_key()
+    linux, mac = store_context(platform="linux"), store_context(platform="macos")
+    s.put(k, {"y": 1}, linux)
+    s.put(k, {"y": 2}, mac)
+    retired = entry_dir(tmp_path, k, mac)
+    rewrite_json(retired / "result.json", lambda r: r.update(format="result@1.0"))
+    got = s.get(k, mac, ReusePolicy.TOLERANT)
+    assert got is not None and got.outputs == {"y": 1}
+    assert retired.is_dir() and not (tmp_path / QUARANTINE_DIR).exists()
