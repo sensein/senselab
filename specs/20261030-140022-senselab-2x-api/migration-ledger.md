@@ -262,15 +262,6 @@ An earlier count of 32 included four `dict.update` calls fed by `str()` (`cohort
 | `src/senselab/utils/work_pool.py:286` | `Item.payload_digest` | idempotence key of a work-pool item | `identity_digest` under a registered work-item tag |
 | `src/senselab/utils/work_pool.py:1315` | `pool_tag` | eight-hex pool name in Slurm job names, from the resolved root path | a label, not a key: `identity_digest` under a registered label tag |
 
-## Modules allowed to import a digest module (H-R19, H9e)
-
-The import contract `digests-are-tagged` (`.importlinter`, ADR-006) forbids `senselab_worker`,
-`senselab_core` and the seven 2.x scripts to import `hashlib`, `hmac` and the other digest modules,
-outside `senselab_worker.digest`. There are no script allowances: the 1.x scripts are outside the
-contracts and excluded from ruff (H-R53), as are the 1.x modules under `src/` (ADR-009). A 1.x module
-that imports a digest module fails the contract when its modify commit lands in `packages/`, and the
-H-R20 table above names its replacement.
-
 ## Name-based digests in 1.x (H9e, H-R36)
 
 These 1.x sites compute a name-based digest outside the digest module. They are migration debt like the

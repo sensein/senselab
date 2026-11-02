@@ -138,3 +138,12 @@ Rulings H-R56 and H-R57 ([`rulings.md`](../rulings.md)); tags in ADR-006.
   inputs of one content on different anchors are refused (`AmbiguousClock`) (R-114, H-R59, P2-66). Chunked identity
   is verified per chunk on read and on `check` (ADR-005 amendment; R-109, P2-21). A local model's identity leaves out
   `.git`, `.hg` and `.svn` directories at any depth; every other file counts (R-118, P2-22) (Phase 2 Task 11b).
+
+## Amendment 2026-11-02: tolerance profiles are keyed by task and backend
+
+- A backend can serve more than one task, and its agreement differs by task. A tolerance profile is therefore
+  keyed by task and backend, never by backend alone; one profile per `(task, backend)` pair, each with its
+  derivation (P2-41).
+- A profile is measured on the calibration split and judged on the held-out split; a failure is a finding and no
+  bound is refitted to it (P2-41).
+- The `equivalent` policy above reads the profile of the call's own task and backend.

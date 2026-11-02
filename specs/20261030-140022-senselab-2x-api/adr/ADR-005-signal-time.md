@@ -50,3 +50,13 @@ Phase 2.
   does not touch is caught by the next read that touches it, or by `check` of a stamp this process took (its ctime).
   The stamp change bumps the signal wire formats to `recording@2.0`, `audio@2.0` and `regular-group@2.0` (ADR-006).
   This closes the note above (R-109, P2-21; Phase 2 Task 11b).
+
+## Amendment 2026-11-02: NaN in signals (H-R38)
+
+This states in the ADR a rule that `design.md` §2 held alone (R-130).
+
+- No signal holds an infinite sample.
+- A regular group, audio included, refuses NaN when built and when decoded: a NaN in audio is a producer defect
+  (0/0 on silence).
+- An irregular group holds NaN as its missing-sample marker (pose and physiological dropouts), as the one quiet
+  NaN of ADR-006. `Events.value` admits NaN.

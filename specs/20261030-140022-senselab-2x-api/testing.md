@@ -244,3 +244,17 @@ The dataset choices per task and modality are in [`benchmarks.md`](benchmarks.md
 Toy fixtures in the repository versus versioned data pulled from public sources follow
 [`docs.md`](docs.md) (data policy). The same manifest and fetch serve use-case tests, benchmarks
 and docs.
+
+## Amendments 2026-11-02 (Phase 2 spec pass)
+
+- **Tolerance profiles are keyed by task and backend** (§4, cross-context equivalence; ADR-002 amendment
+  2026-11-02). A backend serving two tasks has two profiles. The limits tier writes each to its own
+  `(task, backend)` profile.
+- **Parity of speaker labels is taken under the optimal one-to-one mapping** (§4, parity tests; decided in
+  Phase 2). Diarization labels are arbitrary names, so a permutation of
+  them is not a difference. The 2.x and 1.x labels are matched by the assignment that maximises agreement, as in
+  DER scoring; a speaker left unmatched on either side is a mismatch. A label-assignment regression that a
+  permutation-blind comparison would mask is still caught by the unmatched count.
+- **Format migrations** (§3, "every reader has a test that reads the previous major format"): before the first 2.x
+  release a major bump has no previous-major reader, and the test is that the retired format is refused with a
+  typed error naming the migration statement (ADR-006 amendment, P2-44).

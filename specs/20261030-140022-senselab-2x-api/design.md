@@ -165,6 +165,9 @@ The summary below follows that model.
   SSD, 2026-10-31): one full hash per read, about 0.5 s per GB, whatever the window. This conflicts with
   ADR-005's "never hashed whole" (A I-5, R-109). Decoding and stamping moved out of the kernel (F3); the
   conflict with ADR-005 stays open as R-109, in Phase 2.
+  Amended 2026-11-02 (P2-21): the stamp carries per-chunk digests on the `content_identity` grid and a read
+  verifies only the chunks it touches, so the `cp -p` guarantee holds and the file is never hashed whole on a read
+  (ADR-005 amendment 2026-11-01). R-109 is closed.
 - **A recording's anchor is not its identity.** A recording placed on a session clock carries that
   clock's name, so validation does not tie `anchor.clock_id` to `identity`; the anchor is part of the
   value's canonical digest, not of its content identity.
@@ -173,6 +176,8 @@ The summary below follows that model.
   irregular group holds NaN as its missing-sample marker (pose and physiological dropouts), as the one
   quiet NaN of ADR-006. `Events.value` admits NaN. Label arrays of strings are held at the width of
   their longest string, so two label columns holding the same strings are one value.
+  Amended 2026-11-02: the NaN rule is a signal-model decision and is stated in ADR-005 (amendment 2026-11-02),
+  which governs; this paragraph restates it.
 - **One timeline.** Every timed result is a `Span{start_ns, end_ns, clock_id}`. A `TimeMap`
   (offset plus drift, with uncertainty) relates clocks. It comes from metadata or a synchronisation
   task, and is a declared input.
@@ -250,6 +255,13 @@ class CrisperWhisperCt2: ...
 
 - **Stacks:** `transformers`, `vllm`, `vllm-omni`, `nemo`, `ct2`, `mlx`, `onnx`, `speechbrain`,
   `pyannote`, `dsp`. A task can have one backend per stack for the same model.
+  - Amended 2026-11-02 (owner correction of 2026-11-01, Phase 2 plan Task 14): a backend is a code path and a
+    model is a catalogue entry (§4.3). A backend accepts any model of its family and a model names no backend:
+    `models` in the example above is an optional list of the catalogue models the backend is known to serve, not a
+    binding of one model to one backend. The example's one-backend-per-model reading is superseded. A backend
+    declares `name` and `version`, both required (P2-47). Two models that one code path runs (HF Whisper and
+    CrisperWhisper's transformers engine) are two catalogue entries, not two backends; an engine choice inside one
+    code path (`ct2` or `transformers`) is a backend param that enters the key.
 - **Env kinds, all locked (P-25):**
   - `Env.host()`: in-process, in the locked senselab venv. It is allowed only when that lock
     covers the backend.
@@ -701,21 +713,20 @@ principles and the engineering checklist and compacted before it is committed. N
   serialisation) plus a runtime (planner, executors, store, provenance, observability), with the
   layering enforced by import-linter (ADR-009).
 
-**Reconciling concurrent 1.x work (P-39).** 1.x development continues on `alpha` after the
-Phase 0 freeze tag. Those changes are ported, not lost.
-- `migration-ledger.md` records, per area (task module, workflow, utility), the last `alpha`
-  commit whose 1.x changes have been reconciled into 2.x, and how each change was handled:
-  ported (with the 2.x commit), folded into a profile, or dropped with a reason.
-- A **reconciliation task** lists commits on `alpha` since an area's ledger mark that touch its
-  1.x paths (`git log <mark>..alpha -- <paths>`). For each one it ports the behaviour change,
-  adds a parity or benchmark case where it changed outputs, and advances the mark.
-- It runs:
+**Reconciling concurrent 1.x work (P-39)** (amended 2026-11-02, D-6, P2-35). 1.x development continues on
+`alpha` after the Phase 0 freeze tag. 2.x does not port each `alpha` change as it lands: `src/` is the 1.x pool, and
+it is refreshed by merging `alpha`.
+- `migration-ledger.md` records, per area (task module, workflow, utility), the last `alpha` commit merged into the
+  pool.
+- Before a use case moves, `alpha` is merged into the 2.x line and the area's mark is set to the merged commit. The
+  rename-only `git mv` commit then moves the files as they stand on `alpha`, so every 1.x change to them arrives
+  with the move. The modify commit ports the behaviour onto the kernel and runtime, and adds a parity or benchmark
+  case where a 1.x change altered outputs.
+- The merge also runs:
   - at the start of every phase;
-  - before a use case is migrated;
-  - before any 1.x module is deleted, which is not allowed while its ledger mark lags `alpha`;
+  - before any 1.x module is deleted, which is not allowed while its mark lags `alpha`;
   - after any 1.x fix that a running campaign depends on.
-- Campaigns that need a 1.x fix move to a newer pinned 1.x commit. The freeze tag is only the
-  starting mark.
+- Campaigns that need a 1.x fix move to a newer pinned 1.x commit. The freeze tag is only the starting mark.
 
 **Consolidation inventory (P-37).** These are the known duplicates in 1.x. Each phase removes the
 ones it touches, and Phase 5's exit requires the list to be empty. Each consolidation keeps one
@@ -791,8 +802,9 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
   - the `benchmarks/scale` ladder and the catalogue resource tables (P-7, P-33).
 - The pydra gate is decided at the start of this phase (section 4.9). Owners of the pydra PRs
   (proposal 0001, nipype/pydra#891): **Phase 2 owns the gate prerequisites**, which must be
-  working on the branch before Phase 3 starts: D1, E1, F1, F2, G1, K1, K2. **Phase 3 owns the
-  rest**: A0, A1, A2, B1, B2, C, D2, E2, G2, H0, H, I, J1, J2. The gate decision is Phase 3's
+  working on the branch before Phase 3 starts: A1, D1, E1, F1, F2, G1, K1, K2 (amended 2026-11-02, P2-39: F1
+  depends on A1 in the proposal, so A1 moves from Phase 3 to Phase 2). **Phase 3 owns the
+  rest**: A0, A2, B1, B2, C, D2, E2, G2, H0, H, I, J1, J2. The gate decision is Phase 3's
   first task. The dates are the owner's to set; none is set yet.
 - Exit:
   - a 1,000-record BIDS `.map` runs on a laptop and on ORCD, with plans differing only in
@@ -943,3 +955,6 @@ R-n in [`review-register.md`](review-register.md).
   1.x rewire or 1.x tests (D-6, D-7, §6.1, §6.2, §8).
 - 2026-11-01: triage's tasks and pipelines port; its decision layer is superseded (H-R52, §6.2).
 - 2026-11-01: a model's key is its weights' digest and its source is context; decoding and stamping live in `runtime/audio_io`; every 2.x CI job except `worker-floor` installs with `uv sync --locked` (H-R56, H-R57; ADR-002, ADR-009).
+- 2026-11-02: Phase 2 spec pass: §6.1 reconciles `alpha` by merge (D-6, P2-35); A1 is a Phase 2 gate prerequisite
+  (P2-39); the source-stamp conflict is closed (P2-21); backends are code paths and models are catalogue entries
+  (Task 14 correction, P2-47).
