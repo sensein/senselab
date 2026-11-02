@@ -11,7 +11,8 @@ import numpy
 import yaml
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
-from senselab_core.kernel.formats import TOLERANCE_FORMAT, FormatTag, Formatted
+from senselab_core.kernel.formats import TOLERANCE_FORMAT, FormatTag, Formatted, readable
+from senselab_core.kernel.results import Intervals
 
 Folder = TypeVar("Folder", Path, Traversable)
 
@@ -84,14 +85,15 @@ def _numeric(value: object) -> bool:
     if isinstance(value, (bool, str)):
         return False
     try:
-        numpy.asarray(value, dtype=float)
+        return numpy.asarray(value).dtype.kind in "biuf"
     except (TypeError, ValueError):
         return False
-    return True
 
 
 def flatten(value: object, prefix: str = "") -> Fields:
     """Return the leaves of `value` by dotted path: numbers and arrays as float lists, anything else as its JSON."""
+    if isinstance(value, numpy.ndarray) and not _numeric(value):
+        return flatten(value.tolist(), prefix)
     if isinstance(value, Mapping):
         out: Fields = {}
         for key in sorted(value, key=str):
@@ -107,8 +109,8 @@ def flatten(value: object, prefix: str = "") -> Fields:
     return {prefix: json.dumps(value, sort_keys=True, default=str)}
 
 
-_LABEL = re.compile(r"turns\.label\[(\d+)\]")
-_TIMES = ("turns.start_ns", "turns.end_ns")
+INTERVALS_FORMAT = Intervals.model_fields["format"].default
+"""The format of the labelled spans whose labels `relabel_turns` maps."""
 
 
 def best_assignment(weights: Sequence[Sequence[float]]) -> list[tuple[int, int]]:
@@ -147,33 +149,54 @@ def best_assignment(weights: Sequence[Sequence[float]]) -> list[tuple[int, int]]
     return sorted((match[j] - 1, j - 1) for j in range(1, size + 1) if match[j] - 1 < n and j - 1 < m)
 
 
-def relabel_turns(expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str]) -> Fields:
-    """Return `actual` with its speaker labels renamed to `expected`'s by the one-to-one map of most shared time.
+def _intervals(fields: Mapping[str, list[float] | str]) -> set[str]:
+    """Return the path prefixes under which `fields` hold a flattened `Intervals`."""
+    found = set()
+    for path, value in fields.items():
+        prefix, _, leaf = path.rpartition(".")
+        if leaf == "format" and isinstance(value, str) and readable(INTERVALS_FORMAT, json.loads(value)):
+            found.add(prefix)
+    return found
 
-    Speaker labels are arbitrary per run, so turns are compared under the mapping DER scores under. A label with
-    no counterpart (no shared time) is renamed to one no reference label can equal. `actual` is unchanged where
-    either side has no turns.
-    """
+
+def _relabel_one(
+    expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str], prefix: str
+) -> Fields:
+    label = re.compile(re.escape(f"{prefix}.label") + r"\[(\d+)\]")
+    times = (f"{prefix}.start_ns", f"{prefix}.end_ns")
 
     def keys(fields: Mapping[str, object]) -> list[str]:
-        found = [(int(m.group(1)), k) for k in fields if (m := _LABEL.fullmatch(k))]
+        found = [(int(m.group(1)), k) for k in fields if (m := label.fullmatch(k))]
         return [k for _, k in sorted(found)]
 
     ek, ak = keys(expected), keys(actual)
-    if not ek or not ak or any(t not in expected or t not in actual for t in _TIMES):
+    if not ek or not ak or any(t not in expected or t not in actual for t in times):
         return dict(actual)
     elabel = [json.loads(str(expected[k])) for k in ek]
     alabel = [json.loads(str(actual[k])) for k in ak]
     rows, cols = sorted(set(elabel)), sorted(set(alabel))
     overlap = [[0.0] * len(cols) for _ in rows]
-    spans = [[list(f[t]) for t in _TIMES] for f in (expected, actual)]
+    spans = [[list(f[t]) for t in times] for f in (expected, actual)]
     for i, (es, ee) in enumerate(zip(*spans[0], strict=True)):
         for j, (a_s, a_e) in enumerate(zip(*spans[1], strict=True)):
             overlap[rows.index(elabel[i])][cols.index(alabel[j])] += max(0.0, min(ee, a_e) - max(es, a_s))
     mapped = {cols[c]: rows[r] for r, c in best_assignment(overlap) if overlap[r][c] > 0}
     out = dict(actual)
-    for k, label in zip(ak, alabel, strict=True):
-        out[k] = json.dumps(mapped.get(label, f"<unmatched:{label}>"))
+    for k, name in zip(ak, alabel, strict=True):
+        out[k] = json.dumps(mapped.get(name, f"<unmatched:{name}>"))
+    return out
+
+
+def relabel_turns(expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str]) -> Fields:
+    """Return `actual` with the labels of each flattened `Intervals` renamed to `expected`'s by most shared time.
+
+    An `Intervals` is found by its `format` leaf on either side, under any path. Labels are arbitrary per run, so
+    spans are compared under the one-to-one mapping DER scores under. A label with no counterpart (no shared time)
+    is renamed to one no reference label can equal. `actual` is unchanged where either side has no spans.
+    """
+    out = dict(actual)
+    for prefix in sorted(_intervals(expected) | _intervals(actual)):
+        out = _relabel_one(expected, out, prefix)
     return out
 
 

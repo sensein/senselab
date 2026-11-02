@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import numpy
 import pytest
 import yaml
 from senselab_core.kernel.formats import TOLERANCE_FORMAT
@@ -168,14 +169,18 @@ class Diarizer:
         """Return two turns per item, labelled A/B or B/A."""
         self.calls += 1
         labels = ["A", "B"] if self.calls % 2 else ["B", "A"]
-        turns = {"start_ns": [0, 10], "end_ns": [10, 15], "label": labels}
-        return [{"id": i["id"], "outputs": {"turns": turns}} for i in items]
+        intervals = importlib.import_module("senselab_core.kernel.results").Intervals
+        wire = importlib.import_module("senselab_core.kernel.wire")
+        reader = importlib.import_module("senselab_core.runtime.audio_io").READER
+        turns = intervals(start_ns=[0, 10], end_ns=[10, 15], label=numpy.array(labels), clock_id="c")
+        return [{"id": i["id"], "outputs": {"turns": wire.wire_form(turns, reader)}} for i in items]
 
 
 @pytest.mark.logic
 def test_label_permutation_derives_no_spread() -> None:
-    """Runs differing only by a permutation of speaker labels derive zero spread on every label field."""
+    """Runs of a real `Intervals` differing only by a permutation of labels derive zero spread on every label."""
     ids = _ids("calibration", 2)
     obs = [_observe(Diarizer(), "cpu", ids), _observe(Diarizer(), "cuda", ids)]  # type: ignore[arg-type]
     labels = [f for f in tol.derive(obs, split_of).fields if f.path.startswith("turns.label")]
-    assert labels and all(f.tolerance == 0.0 for f in labels)
+    assert [f.path for f in labels] == ["turns.label[0]", "turns.label[1]"]
+    assert all(f.tolerance == 0.0 for f in labels)
