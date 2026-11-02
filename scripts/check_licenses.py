@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Callable, NamedTuple
 
 import yaml
+from senselab_core.runtime.envs import lock_pins
 from senselab_core.runtime.licenses import allows, ids_of, parse_expression
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -256,16 +257,6 @@ def fetch_pypi(name: str, version: str) -> PypiDist | None:
         raise
 
 
-def lock_pins(path: Path) -> dict[str, str]:
-    """The ``name -> version`` pins of an env lock file, markers ignored."""
-    pins = {}
-    for line in path.read_text().splitlines():
-        match = re.match(r"([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;]+)", line)
-        if match:
-            pins[_norm(match[1])] = match[2]
-    return pins
-
-
 def host_pins(lock: Path = LOCK) -> dict[str, str]:
     """The ``name -> version`` pins of the runtime closure of senselab in `uv.lock`, the repository's own packages apart."""
     packages = {_norm(p["name"]): p for p in tomllib.loads(lock.read_text())["package"]}
@@ -324,7 +315,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     policy = load_policy()
     if args.lock or args.host:
-        pins = lock_pins(ENV_LOCKS / f"{args.lock}.txt") if args.lock else host_pins()
+        pins = lock_pins((ENV_LOCKS / f"{args.lock}.txt").read_text()) if args.lock else host_pins()
         scan = (
             metadata.distributions(path=[str(args.site)])
             if args.site

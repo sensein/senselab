@@ -266,7 +266,7 @@ def test_lock_pins_are_read_with_names_normalised_and_markers_dropped(tmp_path: 
     """Each ``name==version`` line is a pin; comments, hashes and markers are not."""
     path = tmp_path / "toy.txt"
     path.write_text(_LOCK)
-    assert lic.lock_pins(path) == {"alpha": "1.0", "beta": "2.1", "gamma-pkg": "0.3"}
+    assert lic.lock_pins(path.read_text()) == {"alpha": "1.0", "beta": "2.1", "gamma-pkg": "0.3"}
 
 
 def test_a_lock_is_read_from_the_installed_metadata_when_the_version_matches_else_fetched() -> None:

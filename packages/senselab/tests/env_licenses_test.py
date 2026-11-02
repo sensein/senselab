@@ -24,7 +24,7 @@ RECORDS = yaml.safe_load(lic.ENV_LICENSES.read_text())
 @pytest.mark.parametrize("env", sorted(p.stem for p in LOCKS.glob("*.txt")))
 def test_every_locked_package_has_a_record_at_its_pinned_version(env: str) -> None:
     """A lock and its records cover the same packages at the same versions, so a bump without a re-read fails."""
-    pins = lic.lock_pins(LOCKS / f"{env}.txt")
+    pins = lic.lock_pins((LOCKS / f"{env}.txt").read_text())
     have = {name: entry["version"] for name, entry in RECORDS["envs"][env].items()}
     assert have == pins
 

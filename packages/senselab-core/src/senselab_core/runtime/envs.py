@@ -705,6 +705,11 @@ def _resolved(annotated: str) -> dict[str, tuple[str, set[str]]]:
     return out
 
 
+def lock_pins(text: str) -> dict[str, str]:
+    """Return the ``normalised name -> version`` pins of lock text; markers, hashes and comments are not read."""
+    return {_normalize(m[1]): m[4] for line in text.splitlines() if (m := _LOCK_LINE.match(line))}
+
+
 def _torch_only(packages: dict[str, tuple[str, set[str]]]) -> list[str]:
     """Names left out of a lock body: torch, torchaudio, what only they pull in, and triton under torch."""
     family = {n for n in packages if n in TORCH_PACKAGES}
