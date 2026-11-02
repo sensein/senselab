@@ -21,6 +21,9 @@ PROVENANCE_FORMAT = "provenance@3.0"
 LABELS_FORMAT = "labels@1.0"
 """The format of a run's private label map, `<run>/private/labels@1.json` (ADR-007)."""
 
+BENCHMARK_RESULT_FORMAT = "benchmark-result@1.0"
+"""The format of a benchmark run's result document, `<run>/result.json`."""
+
 FormatTag = Annotated[str, StringConstraints(pattern=FORMAT_PATTERN)]
 """`<name>@<major>.<minor>`."""
 

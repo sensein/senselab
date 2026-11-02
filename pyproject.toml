@@ -77,6 +77,9 @@ profiling = [
   "scalene>=2.2",
   "nbconvert>=7"
 ]
+benchmarks = [
+  "pyarrow>=18"
+]
 
 [tool.uv.workspace]
 members = ["packages/senselab-*"]
