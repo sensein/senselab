@@ -295,28 +295,45 @@ def _wired(port: str, port_type: str, value: object) -> object:
     return wire_form(bound, READER) if isinstance(bound, Frozen) else bound
 
 
-def _measure_cli(args: argparse.Namespace) -> None:
-    """Run `args.backend` over the calibration items of benchmark `args.benchmark` of `args.suite`."""
-    from senselab_core.runtime.call import packaged  # noqa: PLC0415 - only a real measurement needs the runtime
+def prepare(  # noqa: PLR0913 - what picks one benchmark's items and params
+    suite: Path,
+    benchmark: str,
+    backend_name: str,
+    backend_params: Mapping[str, Any],
+    data_cache: Path,
+    work: Path,
+    split: str,
+) -> tuple[Any, Any, dict[str, dict[str, object]], dict[str, Any]]:
+    """Return (benchmark, backend spec, wired inputs of the `split` items by id, call params) for one benchmark."""
+    from senselab_core.runtime.call import packaged  # noqa: PLC0415 - only a real run needs the runtime
     from senselab_core.runtime.fetch import DataManifest, fetch  # noqa: PLC0415
-    from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415
-    from senselab_core.testing.workers import RealWorkers  # noqa: PLC0415
 
     harness = _harness()
-    [bench] = [b for b in harness.Suite.load(args.suite).benchmarks if b.name == args.benchmark]
+    [bench] = [b for b in harness.Suite.load(suite).benchmarks if b.name == benchmark]
     manifest = DataManifest.load(ROOT / "benchmarks" / "manifests" / f"{bench.manifest}.yaml")
-    files = fetch(manifest, cache_root=args.data_cache)
+    files = fetch(manifest, cache_root=data_cache)
     spec = packaged().registry.spec(bench.task)
-    backend = next(b for b in packaged().registry.backends(bench.task) if b.name == args.backend)
+    backend = next(b for b in packaged().registry.backends(bench.task) if b.name == backend_name)
     wired = {
         item.id: {p: _wired(p, spec.inputs[p], v) for p, v in item.inputs.items()}
-        for item in harness.ADAPTERS[bench.adapter]().items(files, bench.items, args.work)
-        if harness.split_of(item.id) == CALIBRATION
+        for item in harness.ADAPTERS[bench.adapter]().items(files, bench.items, work, bench.max_seconds)
+        if harness.split_of(item.id) == split
     }
     params = {
         **spec.params.model_validate(bench.params).model_dump(mode="json"),
-        "backend_params": backend.params.model_validate(args.backend_params).model_dump(mode="json"),
+        "backend_params": backend.params.model_validate(backend_params).model_dump(mode="json"),
     }
+    return bench, backend, wired, params
+
+
+def _measure_cli(args: argparse.Namespace) -> None:
+    """Run `args.backend` over the calibration items of benchmark `args.benchmark` of `args.suite`."""
+    from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - only a real run needs the runtime
+    from senselab_core.testing.workers import RealWorkers  # noqa: PLC0415
+
+    bench, backend, wired, params = prepare(
+        args.suite, args.benchmark, args.backend, args.backend_params, args.data_cache, args.work, CALIBRATION
+    )
     workers = RealWorkers(ExecutionProfile.load(args.execution))
     try:
         observations = measure(
@@ -331,7 +348,7 @@ def _measure_cli(args: argparse.Namespace) -> None:
             sha=args.sha,
             job=args.job,
             backend_params=params["backend_params"],
-            split_of=harness.split_of,
+            split_of=_harness().split_of,
         )
     finally:
         workers.close()
@@ -353,7 +370,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     m.add_argument("--benchmark", required=True)
     m.add_argument("--backend", required=True)
     m.add_argument("--execution", default="orcd")
-    m.add_argument("--backend-params", type=json.loads, default={}, help="JSON of the backend's params, e.g. the engine")
+    m.add_argument(
+        "--backend-params", type=json.loads, default={}, help="JSON of the backend's params, e.g. the engine"
+    )
     m.add_argument("--repeats", type=int, default=3)
     m.add_argument("--sha", required=True)
     m.add_argument("--job", required=True)
