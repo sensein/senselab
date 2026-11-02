@@ -56,3 +56,4 @@ The authority for the full review. Quoted as the owner wrote them; nothing parap
 47. "there will be many vllm server paths or vllm-omni server paths. if it's a task that can be reused keep it. or a pipeline that can be reused."
 48. "R-186 - we should not be determining whether two things are equivalent beyond standard numpy metrics (exact, equal within some tolerance, etc) and hashing . definitely know config settings to set thresholds or numbers. won't output hashes change if outputs change, and then we need to know what in the output changed, and that's an entity specific hashing requirement."
 49. "also tolerances can be evaluated through benchmarks in the future."
+50. "ask a subagent to investigate why any pydra job takes 20 mins to run. the principles associated with senselab refactor should generally apply to pydra as well."
