@@ -263,6 +263,33 @@ def test_bench_cli_runs_toy_suite(tmp_path: Path, capsys: pytest.CaptureFixture[
 
 
 @pytest.mark.logic
+def test_bench_cli_names_each_not_placeable_benchmark_on_stderr(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A skipped benchmark is one stderr line naming it and the reason; the exit code stays 0."""
+    from senselab.text.tasks.pii_spans import transformers_backend  # noqa: F401, PLC0415 - declares the backend
+
+    use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, REGISTRY))
+    suite = tmp_path / "gpu.yaml"
+    suite.write_text(
+        "format: benchmark-suite@1.0\nname: gpu\nbenchmarks:\n"
+        "  - {name: gretel-pii, adapter: gretel_pii, items: 2, task: pii_spans, metric: span_f1}\n"
+    )
+    args = ["bench", "run", str(suite), "--benchmarks", str(BENCHMARKS), "--out", str(tmp_path / "out")]
+    code = main([*args, "--execution", str(_cpu_profile(tmp_path))])
+    captured = capsys.readouterr()
+    assert code == 0
+    [line] = captured.err.strip().splitlines()
+    assert line.startswith("senselab: not placeable: gretel-pii: ") and "cuda" in line
+
+
+def _cpu_profile(tmp_path: Path) -> Path:
+    path = tmp_path / "cpu.yaml"
+    path.write_text("devices: [cpu]\n")
+    return path
+
+
+@pytest.mark.logic
 def test_bench_cli_reports_unknown_suite(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A suite file that is not a `benchmark-suite@1.0` is one error line and exit code 1."""
     bad = tmp_path / "bad.yaml"

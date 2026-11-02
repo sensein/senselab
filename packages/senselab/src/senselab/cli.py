@@ -63,6 +63,9 @@ def run_bench(args: argparse.Namespace) -> int:
     except (ValueError, FetchError, OSError) as err:
         print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
         return 1
+    for entry in harness.load_result(run / "result.json").entries:
+        if entry.not_placeable is not None:
+            print(f"senselab: not placeable: {entry.benchmark}: {entry.not_placeable}", file=sys.stderr)
     print(run / "result.json")
     return 0
 
