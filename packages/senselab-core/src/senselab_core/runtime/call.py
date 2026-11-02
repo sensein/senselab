@@ -27,7 +27,15 @@ from senselab_worker.model_cache import ModelCache, ModelKey
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, value_digest
-from senselab_core.kernel.declare import REGISTRY, BackendSpec, Registry, TaskParams, TaskSpec, kernel_types
+from senselab_core.kernel.declare import (
+    REGISTRY,
+    BackendSpec,
+    DuplicateDeclaration,
+    Registry,
+    TaskParams,
+    TaskSpec,
+    kernel_types,
+)
 from senselab_core.kernel.identity import (
     DEFAULT_REUSE_POLICY,
     ExecutionContext,
@@ -205,7 +213,8 @@ _PACKAGED = Packaged(Catalogue(entries=()), _no_env)
 PACKAGES_GROUP = "senselab.packages"
 """The entry-point group of declaring packages; each entry names a module that calls `use_packaged` on import."""
 
-_STATE = {"registered": False, "discovered": False}
+_STATE = {"registered": False, "discovered": False, "loading": False, "attempted": False, "uses": 0}
+_DISCOVERY = threading.RLock()
 
 
 def use_packaged(packaged: Packaged) -> Packaged:
@@ -213,19 +222,69 @@ def use_packaged(packaged: Packaged) -> Packaged:
     global _PACKAGED  # noqa: PLW0603 - the process-wide counterpart of REGISTRY
     previous, _PACKAGED = _PACKAGED, packaged
     _STATE["registered"] = True
+    _STATE["uses"] += 1
     return previous
 
 
 def packaged() -> Packaged:
     """Return what `run_call` reads: the catalogue and env opener last given to `use_packaged`.
 
-    When no package has been registered, the first call loads every entry point of `PACKAGES_GROUP`, once.
+    When no package has been registered, the first call loads every entry point of `PACKAGES_GROUP` under a lock,
+    and every concurrent first call waits for it. A load that fails raises `PackageLoadError` naming the entry
+    point, leaves discovery undone and is retried by the next call.
+
+    Raises:
+        PackageLoadError: an entry point fails to load, or two of them declare the same task or backend or both
+            register packaged declarations.
     """
-    if not _STATE["registered"] and not _STATE["discovered"]:
+    if _STATE["discovered"]:
+        return _PACKAGED
+    with _DISCOVERY:
+        if _STATE["discovered"] or _STATE["loading"]:
+            return _PACKAGED
+        if not _STATE["registered"] or _STATE["attempted"]:
+            _STATE["attempted"] = True
+            _STATE["loading"] = True
+            try:
+                _load_entry_points()
+            finally:
+                _STATE["loading"] = False
         _STATE["discovered"] = True
-        for entry in entry_points(group=PACKAGES_GROUP):
-            entry.load()
     return _PACKAGED
+
+
+class PackageLoadError(RuntimeError):
+    """An entry point of `PACKAGES_GROUP` failed to load, or collides with another."""
+
+
+def _declared() -> dict[tuple[str, ...], None]:
+    registry = REGISTRY
+    keys: dict[tuple[str, ...], None] = {(t.name,): None for t in registry.tasks()}
+    keys.update({(t.name, b.name): None for t in registry.tasks() for b in registry.backends(t.name)})
+    return keys
+
+
+def _load_entry_points() -> None:
+    owners: dict[tuple[str, ...], str] = {k: "a declaration made before discovery" for k in _declared()}
+    registering: str | None = None
+    for entry in entry_points(group=PACKAGES_GROUP):
+        uses = _STATE["uses"]
+        name = f"{entry.name} = {entry.value}"
+        try:
+            entry.load()
+        except DuplicateDeclaration as error:
+            existing = error.existing
+            key = (existing.name,) if isinstance(existing, TaskSpec) else (existing.task, existing.name)
+            raise PackageLoadError(
+                f"entry point {name!r} redeclares {'/'.join(key)!r}, declared by {owners.get(key, 'another package')}"
+            ) from error
+        except Exception as error:
+            raise PackageLoadError(f"entry point {name!r} failed to load: {type(error).__name__}: {error}") from error
+        owners.update({k: name for k in _declared() if k not in owners})
+        if _STATE["uses"] > uses:
+            if registering is not None:
+                raise PackageLoadError(f"entry points {registering!r} and {name!r} both register packaged declarations")
+            registering = name
 
 
 def run_call(

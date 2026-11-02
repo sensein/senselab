@@ -58,7 +58,7 @@ _NS_PER_S = 10**9
 SignalArray = Annotated[
     numpy.ndarray,
     BeforeValidator(lambda v: require_finite(as_numeric_array(v, 2), "signal samples", nan_is_missing=True)),
-    ArrayForm(("number",), 2, None, "Shape (channels, samples); a null marks a missing sample."),
+    ArrayForm(("number", "null"), 2, None, "Shape (channels, samples); a null marks a missing sample."),
 ]
 """A frozen integer or float array of shape `(channels, samples)`: no infinite sample; a NaN marks a missing one.
 

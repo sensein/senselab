@@ -3,6 +3,7 @@
 import importlib.util
 import inspect
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -530,3 +531,74 @@ def test_a_fresh_process_finds_the_packaged_tasks_without_importing_senselab() -
     code = "from senselab_core.runtime.call import packaged; print(sorted(packaged().registry._tasks))"
     run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True, timeout=120)  # noqa: S603
     assert "'wer'" in run.stdout and "'speech_to_text'" in run.stdout
+
+
+def _child(tmp_path: Path, entries: dict[str, str], script: str) -> subprocess.CompletedProcess[str]:
+    """Run `script` in a fresh interpreter where `entries` (module name to source) are entry points of the group."""
+    info = tmp_path / "extra-0.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text("Metadata-Version: 2.1\nName: extra\nVersion: 0\n")
+    (info / "entry_points.txt").write_text("[senselab.packages]\n" + "".join(f"{name} = {name}\n" for name in entries))
+    for name, source in entries.items():
+        (tmp_path / f"{name}.py").write_text(source)
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(tmp_path), *sys.path])}
+    return subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=120, check=False
+    )  # noqa: S603
+
+
+_DECLARE = (
+    "from senselab_core.kernel.declare import REGISTRY, TaskParams, TaskSpec\n"
+    "REGISTRY.add_task(TaskSpec(name='dup.t', version='1', kind='transform', inputs={'a': 'json'},"
+    " outputs={'b': 'sha256'}, params=TaskParams))\n"
+)
+
+
+@pytest.mark.logic
+def test_concurrent_first_calls_all_see_the_full_registry() -> None:
+    """Eight threads making the first `packaged()` call all find the packaged tasks, not an empty registry."""
+    code = (
+        "import threading\n"
+        "from senselab_core.runtime.call import packaged\n"
+        "gate = threading.Barrier(8)\n"
+        "seen = []\n"
+        "def first():\n"
+        "    gate.wait()\n"
+        "    seen.append('speech_to_text' in packaged().registry._tasks)\n"
+        "threads = [threading.Thread(target=first) for _ in range(8)]\n"
+        "[t.start() for t in threads]\n"
+        "[t.join() for t in threads]\n"
+        "print(seen)\n"
+    )
+    run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True, timeout=120)  # noqa: S603
+    assert run.stdout.strip() == str([True] * 8)
+
+
+@pytest.mark.logic
+def test_a_failed_entry_point_is_named_and_retried(tmp_path: Path) -> None:
+    """A load that fails raises naming the entry point, and the next call tries again rather than going quiet."""
+    script = (
+        "from senselab_core.runtime.call import packaged\n"
+        "for _ in range(2):\n"
+        "    try:\n        packaged()\n    except Exception as e:\n        print(type(e).__name__, e)\n"
+    )
+    run = _child(tmp_path, {"boom": "raise ImportError('no such thing')"}, script)
+    lines = run.stdout.splitlines()
+    assert len(lines) == 2 and all("boom = boom" in line and "PackageLoadError" in line for line in lines)
+
+
+@pytest.mark.logic
+def test_two_packages_declaring_one_task_refuse_naming_both(tmp_path: Path) -> None:
+    """A second entry point redeclaring a task raises naming both entry points, never overriding."""
+    script = (
+        "from senselab_core.runtime.call import packaged\ntry:\n    packaged()\nexcept Exception as e:\n    print(e)\n"
+    )
+    run = _child(tmp_path, {"pkg_a": _DECLARE, "pkg_b": _DECLARE}, script)
+    assert "pkg_b = pkg_b" in run.stdout and "pkg_a = pkg_a" in run.stdout and "'dup.t'" in run.stdout
+
+
+@pytest.mark.logic
+def test_signal_samples_admit_null() -> None:
+    """Samples of a signal may be missing, so the items of its array schema admit null."""
+    group = describe("signal.resample")["inputs"]["$defs"]["Audio"]["properties"]["groups"]
+    assert "null" in json.dumps(group) and '"null"]' in json.dumps(group)
