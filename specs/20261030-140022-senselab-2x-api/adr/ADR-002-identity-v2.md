@@ -193,3 +193,13 @@ Rulings P2-23, P2-43, P2-60, P2-83, P2-89 (Phase 2 Task 21; R-112, R-155). This 
   P2-89; Phase 2 Task 21).
 - 2026-11-03: the profile a verify comparison reads is `tolerance@2.0`, whose fields name index-free paths (ADR-006
   amendment 2026-11-03; Phase 2 Task 22f).
+
+## Amendment 2026-11-02: the producers of batch formation and chunk grid (Phase 2 Task 34a)
+
+- `run_call` derives the placement's `batch_formation` and `chunk_grid` from the request it sends
+  (`runtime.keys.request_components`): every request holds one item, so the batch formation is `single`, and the chunk
+  grid is the backend's declared `BackendSpec.chunk_grid` (a grid that is a backend param is keyed as a param). A
+  backend that declares either output-affecting therefore always has a value for the key (R-187).
+- The backend contract gains `output_affecting_produced`: every declared output-affecting component has a value from
+  `request_components`, and a backend that is not batch-invariant declares `batch_formation` output-affecting.
+  `speech_to_text/transformers` now declares it, so its keys carry `batch_formation: single`.

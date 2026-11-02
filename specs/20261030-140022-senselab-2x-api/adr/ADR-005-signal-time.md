@@ -60,3 +60,10 @@ This states in the ADR a rule that `design.md` §2 held alone (R-130).
   (0/0 on silence).
 - An irregular group holds NaN as its missing-sample marker (pose and physiological dropouts), as the one quiet
   NaN of ADR-006. `Events.value` admits NaN.
+
+## Amendment 2026-11-02: decoded samples and their stamp (Phase 2 Task 34a)
+
+- Held samples and a file's stamp are exclusive unless the reader issues both: `RegularGroup.decoded_from(group,
+  reader)` decodes a source group and holds the samples with the stamp and `decoded`, their `npy@1` digest. Only such
+  a group is identified as its file is; validation checks the held samples still have `decoded`. Otherwise a held
+  group's identity comes from its samples (R-171). Signal wire formats `@2.1` (ADR-006).

@@ -87,7 +87,7 @@ findings are in [`reviews/phase1-reattack/canon.md`](../reviews/phase1-reattack/
   `digests-are-tagged` forbids hash modules everywhere except the digest module, and `raw-digest-owners`
   names the few owners allowed to hash bytes already in memory.
 
-  **Registered identity tags:** `logical-key@6`, `output@3`, `context@3`, `content-root@2`, `audio@3`,
+  **Registered identity tags:** `logical-key@6`, `output@3`, `context@3`, `content-root@2`, `audio@4`,
   `weights@3`, `value@2`, `provenance-id@4`, `data-manifest@3`, `worker-runtime@1`, `fake-output@1`,
   `contract-probe@1`, `prov-activity@1`, `prov-node@1`, `wheel-set@1`, `env-lock@1`, `vllm-config@1`, `source@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a
   `format:` line in a packaged YAML file or in a store entry): `equivalence@2.0`, `equivalence-evidence@1.0`, `retry-policy@1.0`, `catalogue@1.0`, `spdx-licenses@1.0`, and
@@ -282,3 +282,31 @@ Phase 2 Task 22f.
   `senselab:verifies` (Phase 2 Task 21).
 - 2026-11-03: `tolerance@1.0` → `tolerance@2.0` (index-free field paths); `tolerance-observations@1.0` → `@2.0`
   carrying `flatten@2`; stale observations refused by name (Phase 2 Task 22f).
+
+## Amendment 2026-11-02: exit adversarial findings, group A (Phase 2 Task 34a)
+
+- `audio@3` → `audio@4`: a held audio's identity covers its channels (`ChannelInfo` of each channel) beside its
+  samples and rate, so two audios differing only in channel names or units no longer share an identity (R-181). A
+  stamped audio's identity stays its file's content root (ADR-005 amendment 2026-11-01).
+- `recording@2.0`, `audio@2.0` and `regular-group@2.0` → `@2.1`: a regular group gains `decoded`, the `npy@1` digest
+  of the samples a reader decoded from its stamped file. Held samples carry a file's stamp only as
+  `RegularGroup.decoded_from` builds them, and must still have that digest; any other held group with a stamp is
+  refused, so a transform that copies a decoded group with new samples cannot keep the file's identity (R-171). The
+  change is additive: an `@2.0` form reads as before, except a held group with a stamp and no `decoded`, which only the
+  host's wire wrote and which is now refused. `decoded` stays out of a recording's identity.
+- **One format gate** (R-172): `kernel.formats.check(written, found, retired)` returns `accepted` (the written
+  name and major, any minor), `retired` (a `<name>@<major>` in the reader's retired set), `unknown` (any other tag,
+  such as a later major) or `malformed` (not a tag). The store, the wire and the label map read through it. In the
+  result store only `malformed` is corruption: a retired member raises `StoreFormatRetired`, naming the migration
+  statement, and an `unknown` one, or a later minor of `execution-context@2` with fields this version does not know
+  (the fingerprint covers every field, so they cannot be ignored), raises `StoreFormatUnknown`; `get` skips the
+  latter, and neither is quarantined. `result@1` and `execution-context@1` are the retired store formats. Provenance
+  is not yet on the gate (R-190, Task 34b's file).
+- `tolerance@2.0` → `@2.1`: a profile's derivation states its `coverage` (R-186). A field's tolerance, the largest
+  spread over n calibration items, is a distribution-free one-sided upper tolerance bound covering a fraction
+  `attained = (1 - confidence)^(1/n)` of items with probability `confidence`; the profile records the packaged
+  `target` and `confidence` and `required_items = ceil(ln(1 - confidence) / ln(target))`, and validation refuses a
+  stated coverage its item count does not give. New data format `tolerance-coverage@1.0`
+  (`runtime/data/tolerance_coverage.yaml`: target 0.95, confidence 0.95, so 59 items), each value with its derivation.
+  An `@2.0` profile reads as before, with no stated coverage. The 12-item `speech_to_text/transformers` and
+  `diarize/pyannote` profiles state 0.779 when regenerated; reaching the target is a re-measurement.

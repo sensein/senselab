@@ -65,3 +65,9 @@ exporter's tests require it.
   directory in a free-text attribute, is not detected. It belongs to the writer; `modelSource` is the one such
   attribute core refuses a path in. A per-run `senselab:fileLabel` sits inside a content-addressed node, so the same
   `content:` entity labelled differently in two runs conflicts in a cross-run union; export stays per run.
+
+## Amendment 2026-11-02: catalogue metadata binds to the pinned revision (Phase 2 Task 34a)
+
+- A catalogue entry's license, placement and resources describe `(id, revision)`, not `id`. A model reference that
+  resolves to the entry's revision carries them; one that resolves to any other commit (`org/model@main` after the
+  repository moved) carries `license: None`, unverified, and is placed as an uncatalogued model (R-176).

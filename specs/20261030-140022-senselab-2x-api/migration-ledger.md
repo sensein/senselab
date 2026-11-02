@@ -254,8 +254,8 @@ An earlier count of 32 included four `dict.update` calls fed by `str()` (`cohort
 | `src/senselab/utils/reproduce/sandbox.py:413` | `_sha` | sha of a sandbox environment mapping | `identity_digest` under the run-env tag |
 | `src/senselab/utils/reproduce/source.py:345` | `patch_set_sha256` | digest of a patch set | `identity_digest` under a registered patch-set tag |
 | `src/senselab/utils/subprocess_venv.py:262` | `venv_environment` | `dependencies_digest` over a venv's full distribution listing | done (Task 9a1): `identity_digest("wheel-set@1", …)` as `EnvHandle.wheel_set` in `runtime/envs.py` |
-| `src/senselab/utils/tasks/cached_inference.py:353` | `audio_signature` | audio identity: `str(sampling_rate)` into a hash update | `ContentIdentity` of the audio (`audio@3` over the canonical `.npy`) |
-| `src/senselab/utils/tasks/cached_inference.py:355` | `audio_signature` | audio identity: `str(shape)` into the same hash | as the row above: one `audio@3` identity |
+| `src/senselab/utils/tasks/cached_inference.py:353` | `audio_signature` | audio identity: `str(sampling_rate)` into a hash update | `ContentIdentity` of the audio (`audio@4` over the canonical `.npy`, the rate and the channels; `@4` adds the channels, R-181) |
+| `src/senselab/utils/tasks/cached_inference.py:355` | `audio_signature` | audio identity: `str(shape)` into the same hash | as the row above: one `audio@4` identity |
 | `src/senselab/utils/uv_tools.py:88` | `requirements_sha256` | digest of a requirements set with its header fields | not ported in Task 9a1 (moved and removed); the lock header's tagged digest is Task 9a2's |
 | `src/senselab/utils/venv_worker.py:116` | `_digest` | short digest of a worker call payload (`default=str`) | the worker wire's canonical form: `identity_digest("value@2", …)` with non-JSON values refused |
 | `src/senselab/utils/vllm_server.py:476` | `_path_label` | path digest shown in an error message instead of the name, a label only | a label, not a key: `identity_digest` under a registered label tag, or `sha256_bytes` of the path's UTF-8 |
@@ -271,15 +271,23 @@ mark, since 2.x does not lint `src/`.
 
 | Site | Name | What it is | 2.x replacement |
 |---|---|---|---|
-| `src/senselab/audio/data_structures/audio.py:187` | `uuid.uuid3` | `Audio.generate_id`, a name-based UUID of `str(self.waveform)` (a truncated tensor repr) and the rate | `identity_digest` over the content identity (`audio@3`) |
+| `src/senselab/audio/data_structures/audio.py:187` | `uuid.uuid3` | `Audio.generate_id`, a name-based UUID of `str(self.waveform)` (a truncated tensor repr) and the rate | `identity_digest` over the content identity (`audio@4`, which covers the channels since R-181) |
 | `src/senselab/video/data_structures/video.py:201-202` | `uuid.uuid3` | `Video.generate_id`, a name-based UUID of `str(self.frames)`, the frame rate and the audio id | a registered identity over the frames' `npy_digest` |
 | `src/senselab/utils/constants.py:5` | `uuid.uuid3` | `SENSELAB_NAMESPACE`, the namespace of the two ids above | removed with them |
 
 ## Retired wire formats
 
-2.x reads the signal wire formats `recording@2.0`, `audio@2.0` and `regular-group@2.0` (ADR-006). Their `@1`
+2.x reads the signal wire formats `recording@2`, `audio@2` and `regular-group@2` (written `@2.1`, ADR-006). Their `@1`
 forms, whose source stamps carry no chunk digests, are retired with no converter (P2-44): `from_wire_form` refuses
 them with `WireFormatRetired`. Migrating a value is re-reading its source file (`open_audio`) or recomputing it; a
 stored output in an `@1` form is recomputed after its store entry is removed (Phase 2 Task 11b).
 
 - `pii-review-vllm` lock (1.x `redaction_review_vllm`): not ported; superseded by `Env.server("vllm-server")` (Task 17b).
+
+## Retired store formats
+
+2.x reads `result@2` and `execution-context@2` store members, any minor. `result@1` and `execution-context@1` are
+retired with no converter (P2-44): a store read raises `StoreFormatRetired`, naming the member, and leaves the entry in
+place. Migrating it is removing the entry and recomputing it under this version. An entry written in a later major, or
+a later minor whose context carries fields this version does not know, is another version's: it is skipped, never
+quarantined (Phase 2 Task 34a).
