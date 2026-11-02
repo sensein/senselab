@@ -29,6 +29,7 @@ from senselab_core.runtime.tolerance import (
     Value,
     flatten,
     index_free,
+    stale_flatten,
     numeric_gap,
     relabel_turns,
     tolerance_profile_path,
@@ -346,11 +347,8 @@ def load_observations(path: Path) -> Observations:
         ToleranceError: the file is of another format or flatten; it names the file.
     """
     raw = json.loads(path.read_text("utf-8"))
-    if raw.get("flatten") != FLATTEN_VERSION or raw.get("format") != TOLERANCE_OBSERVATIONS_FORMAT:
-        raise ToleranceError(
-            f"{path}: written by {raw.get('flatten', 'flatten@1')} as {raw.get('format')}, generate reads"
-            f" {FLATTEN_VERSION} as {TOLERANCE_OBSERVATIONS_FORMAT}; re-measure it"
-        )
+    if (stale := stale_flatten(raw, TOLERANCE_OBSERVATIONS_FORMAT)) is not None:
+        raise ToleranceError(f"{path}: {stale}; re-measure it")
     return Observations.model_validate(raw)
 
 

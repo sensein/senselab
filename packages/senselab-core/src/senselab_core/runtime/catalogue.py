@@ -15,6 +15,7 @@ from pydantic import field_validator, model_validator
 from senselab_worker.digest import COMMIT_HEX, SHA256_HEX
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
+from senselab_core.kernel.declare import BackendSpec
 from senselab_core.kernel.formats import FormatTag, Formatted
 from senselab_core.kernel.identity import ModelRef
 from senselab_core.kernel.license import License
@@ -131,6 +132,19 @@ class Catalogue(Formatted):
             if task in e.default_for:
                 return e
         raise UnknownModel(f"the catalogue names no default model for task {task!r}")
+
+    def backend_entry(self, backend: BackendSpec) -> "CatalogueEntry | None":
+        """Return the entry `backend` runs: its first declared model, else its task's default, else None.
+
+        Raises:
+            UnknownModel: the backend's first declared model is not in the catalogue.
+        """
+        if backend.models:
+            return self.entry(backend.models[0])
+        try:
+            return self.default(backend.task)
+        except UnknownModel:
+            return None
 
     def sources(self) -> tuple[str, ...]:
         """Return the sorted hub organisations of the entries."""

@@ -114,6 +114,13 @@ FLATTEN_VERSION = "flatten@2"
 _INDEX = re.compile(r"\[\d+\]")
 
 
+def stale_flatten(raw: Mapping[str, object], fmt: str) -> str | None:
+    """Return why a file of flattened fields is not of format `fmt` and `FLATTEN_VERSION`, or None when it is."""
+    if raw.get("format") == fmt and raw.get("flatten") == FLATTEN_VERSION:
+        return None
+    return f"written by {raw.get('flatten', 'flatten@1')} as {raw.get('format')}, read {FLATTEN_VERSION} as {fmt}"
+
+
 def index_free(path: str) -> str:
     """Return `path` with every `[n]` as `[*]`: the form a tolerance field names, pooled over every index."""
     return _INDEX.sub("[*]", path)

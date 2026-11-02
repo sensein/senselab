@@ -21,7 +21,16 @@ from typing import Any
 import numpy
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.formats import PARITY_OUTPUTS_FORMAT, PARITY_REFERENCE_FORMAT, FormatTag, Formatted
-from senselab_core.runtime.tolerance import INTERVALS_FORMAT, Fields, ToleranceProfile, Value, flatten, within
+from senselab_core.runtime.tolerance import (
+    FLATTEN_VERSION,
+    INTERVALS_FORMAT,
+    Fields,
+    ToleranceProfile,
+    Value,
+    flatten,
+    stale_flatten,
+    within,
+)
 from senselab_core.runtime.tolerance import load_profile as read_profile_file
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +55,7 @@ class ParityReference(Formatted):
     """The 1.x outputs of one backend's held-out items, from the `alpha` commit `alpha_sha`."""
 
     format: FormatTag = PARITY_REFERENCE_FORMAT
+    flatten: NonEmptyStr
     task: NonEmptyStr
     backend: NonEmptyStr
     alpha_sha: NonEmptyStr
@@ -65,6 +75,7 @@ class ParityOutputs(Formatted):
     """The 2.x outputs of one backend's held-out items on one stack and device."""
 
     format: FormatTag = PARITY_OUTPUTS_FORMAT
+    flatten: NonEmptyStr
     task: NonEmptyStr
     backend: NonEmptyStr
     stack: NonEmptyStr
@@ -158,7 +169,34 @@ def convert(directory: Path, *, task: str, backend: str, alpha_sha: str, job: st
     if wrong:
         raise ParityError(f"records of another task than {task!r}: {wrong}")
     items = tuple(ReferenceItem(id=i, split=HELDOUT, fields=project(r)) for i, r in records.items())
-    return ParityReference(task=task, backend=backend, alpha_sha=alpha_sha, job=job, items=items)
+    return ParityReference(
+        flatten=FLATTEN_VERSION, task=task, backend=backend, alpha_sha=alpha_sha, job=job, items=items
+    )
+
+
+def load_reference(path: Path) -> ParityReference:
+    """Read a 1.x reference file of the current format and flatten.
+
+    Raises:
+        ParityError: it is of another format or flatten; it names the file.
+    """
+    return ParityReference.model_validate(_current(path, PARITY_REFERENCE_FORMAT))
+
+
+def load_outputs(path: Path) -> ParityOutputs:
+    """Read a 2.x outputs file of the current format and flatten.
+
+    Raises:
+        ParityError: it is of another format or flatten; it names the file.
+    """
+    return ParityOutputs.model_validate(_current(path, PARITY_OUTPUTS_FORMAT))
+
+
+def _current(path: Path, fmt: str) -> dict[str, Any]:
+    raw: dict[str, Any] = json.loads(path.read_text("utf-8"))
+    if (stale := stale_flatten(raw, fmt)) is not None:
+        raise ParityError(f"{path}: {stale}; regenerate it")
+    return raw
 
 
 def load_profile(path: Path) -> ToleranceProfile:
@@ -220,6 +258,7 @@ def run(  # noqa: PLR0913 - what one 2.x parity run fixes
                 if "outputs" in result:
                     seen[result["id"]][batch] = flatten(result["outputs"])
     return ParityOutputs(
+        flatten=FLATTEN_VERSION,
         task=task,
         backend=backend,
         stack=stack,
@@ -238,7 +277,7 @@ def _items_cli(args: argparse.Namespace) -> None:
     tol = tolerance_module()
     bench, items = tol.load_items(args.suite, args.benchmark, args.data_cache, args.work, HELDOUT)
     _, backend = tol.resolve(bench.task, args.backend)
-    entry = packaged().catalogue.entry(backend.models[0]) if backend.models else None
+    entry = packaged().catalogue.backend_entry(backend)
     document = {
         "task": bench.task,
         "model": None if entry is None else {"id": entry.id, "revision": entry.revision},

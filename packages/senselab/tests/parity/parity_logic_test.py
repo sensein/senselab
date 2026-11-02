@@ -82,7 +82,15 @@ def test_converter_reads_1x_output_files(tmp_path: Path) -> None:
     _records(emb, "speaker_embeddings", ids, {"vector": [[0.5, 1.5]]})
     kwargs = {"backend": "b", "alpha_sha": "f" * 40, "job": "9"}
     ref = par.convert(asr, task="speech_to_text", **kwargs)
-    assert ref.format == PARITY_REFERENCE_FORMAT and ref.alpha_sha == "f" * 40
+    assert ref.format == PARITY_REFERENCE_FORMAT and ref.alpha_sha == "f" * 40 and ref.flatten == "flatten@2"
+    written = tmp_path / "reference.json"
+    written.write_text(ref.model_dump_json(), "utf-8")
+    assert par.load_reference(written) == ref
+    stale = tmp_path / "stale.json"
+    stale.write_text(ref.model_dump_json().replace('"flatten@2"', '"flatten@1"'), "utf-8")
+    with pytest.raises(par.ParityError, match="flatten@1") as raised:
+        par.load_reference(stale)
+    assert str(stale) in str(raised.value)
     assert {i.id for i in ref.items} == set(ids)
     fields = ref.items[0].fields
     assert fields["transcript.segments[0].text"] == '"hello"'

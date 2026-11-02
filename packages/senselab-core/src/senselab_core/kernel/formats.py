@@ -34,9 +34,9 @@ EQUIVALENCE_FORMAT = "equivalence@2.0"
 EQUIVALENCE_EVIDENCE_FORMAT = "equivalence-evidence@1.0"
 """The format of one verify-sampling comparison, a record in the result store."""
 
-PARITY_REFERENCE_FORMAT = "parity-reference@1.0"
+PARITY_REFERENCE_FORMAT = "parity-reference@2.0"
 """The format of the 1.x outputs of the held-out items of one backend, `benchmarks/parity_reference.py convert`."""
-PARITY_OUTPUTS_FORMAT = "parity-outputs@1.0"
+PARITY_OUTPUTS_FORMAT = "parity-outputs@2.0"
 """The format of the 2.x outputs of the held-out items of one backend and stack, `parity_reference.py run`."""
 
 FormatTag = Annotated[str, StringConstraints(pattern=FORMAT_PATTERN)]

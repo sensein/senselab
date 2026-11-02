@@ -1,14 +1,12 @@
 """Backend workers on their catalogue models, each started as `run_call` starts it: in its env, or over its server."""
 
 from collections.abc import Mapping
-from contextlib import suppress
 from typing import Any
 
 from senselab_worker.faults import FaultClass
 
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
 from senselab_core.runtime.call import packaged, start_server_worker, stop_servers
-from senselab_core.runtime.catalogue import UnknownModel
 from senselab_core.runtime.hardware import probe_hardware
 from senselab_core.runtime.in_process import InProcessWorker
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -66,13 +64,7 @@ class RealWorkers:
         backend = found[0]
         self.close()
         init: dict[str, Any] = {"device": self.device, "faults": dict(faults or {})}
-        catalogue = packaged().catalogue
-        entry = None
-        if backend.models:
-            entry = catalogue.entry(backend.models[0])
-        else:
-            with suppress(UnknownModel):
-                entry = catalogue.default(task)
+        entry = packaged().catalogue.backend_entry(backend)
         if entry is not None:
             init["model"] = {"source": "hf", "id": entry.id, "identity": entry.revision}
         env = packaged().open_env(backend, self.profile)

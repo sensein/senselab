@@ -34,10 +34,7 @@ DIRECTORY = Path(os.environ["SENSELAB_PARITY_DIR"]) if "SENSELAB_PARITY_DIR" in 
 def _outputs() -> list[Any]:
     if DIRECTORY is None:
         return []
-    return [
-        par.ParityOutputs.model_validate_json(p.read_text("utf-8"))
-        for p in sorted((DIRECTORY / "outputs").glob("*.json"))
-    ]
+    return [par.load_outputs(p) for p in sorted((DIRECTORY / "outputs").glob("*.json"))]
 
 
 OUTPUTS = _outputs()
@@ -71,7 +68,7 @@ def test_matches_1x_reference(output: Any) -> None:  # noqa: ANN401
     reference = DIRECTORY / "reference" / output.task / f"{output.backend}.json"  # type: ignore[operator]
     if not reference.exists():
         pytest.skip(f"no 1.x reference for {output.task} backend {output.backend}")
-    ref = par.ParityReference.model_validate_json(reference.read_text("utf-8"))
+    ref = par.load_reference(reference)
     profile = par.load_profile(tolerance_profile_path(PROFILES, output.task, output.backend))
     found = par.compare_items({i.id: i.fields for i in ref.items}, _batch(output, "1"), profile)
     assert not found, found

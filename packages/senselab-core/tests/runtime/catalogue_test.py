@@ -170,3 +170,16 @@ def test_backend_license_refuses_missing_and_empty_records() -> None:
         backend_license(FAKE, {"a": _lic("MIT"), "b": None})
     with pytest.raises(ValueError, match="no lock records"):
         backend_license(FAKE, {})
+
+
+@pytest.mark.logic
+def test_backend_entry_is_the_first_model_else_the_task_default() -> None:
+    """A backend runs its first declared model, else its task's catalogue default, else no model."""
+    catalogue = Catalogue.load(_text(_entry("org/declared"), _entry("org/default", extra="default_for: [t]")))
+    backend = FAKE.model_copy(update={"task": "t"})
+    declared = backend.model_copy(update={"models": ("org/declared",)})
+    assert catalogue.backend_entry(declared) == catalogue.entry("org/declared")
+    assert catalogue.backend_entry(backend) == catalogue.entry("org/default")
+    assert Catalogue.load(_text(_entry())).backend_entry(backend) is None
+    with pytest.raises(UnknownModel):
+        Catalogue.load(_text(_entry())).backend_entry(backend.model_copy(update={"models": ("org/absent",)}))

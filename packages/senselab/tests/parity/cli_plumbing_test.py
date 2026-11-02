@@ -4,6 +4,8 @@ Every import and line of the real path runs: suite load, item preparation and in
 `measure`, `generate`, `items`, `run`. A break in any of them fails here, not on the cluster.
 """
 
+import importlib
+import importlib.util
 import json
 import subprocess
 import sys
@@ -101,8 +103,58 @@ def test_cli_measure_generate_items_run_end_to_end(tmp_path: Path) -> None:
         outputs,
     )
     ran: dict[str, Any] = json.loads(outputs.read_text("utf-8"))
+    assert (ran["format"], ran["flatten"]) == ("parity-outputs@2.0", "flatten@2")
+    assert _parity().load_outputs(outputs).items
+    stale = tmp_path / "stale-outputs.json"
+    stale.write_text(json.dumps({**ran, "format": "parity-outputs@1.0"}), "utf-8")
+    with pytest.raises(_parity().ParityError, match="re-?generate it") as raised:
+        _parity().load_outputs(stale)
+    assert str(stale) in str(raised.value)
     assert {i["id"] for i in ran["items"]} == set(document["items"])
     assert all(set(i["batches"]) == {"1", "N"} and i["split"] == "heldout" for i in ran["items"])
+
+
+def _parity() -> Any:  # noqa: ANN401
+    """The parity script, loaded once in this process."""
+    if "parity_reference_cli_test" not in sys.modules:
+        spec = importlib.util.spec_from_file_location(
+            "parity_reference_cli_test", ROOT / "benchmarks" / "parity_reference.py"
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+    return sys.modules["parity_reference_cli_test"]
+
+
+@pytest.mark.logic
+def test_cli_items_records_the_task_default_model(tmp_path: Path) -> None:
+    """`items` for a backend that declares no model (speech_to_text `transformers`) records the task's default."""
+    suite = tmp_path / "asr.yaml"
+    entry = {"name": "asr", "adapter": "echo_payloads", "items": 12, "task": "speech_to_text", "metric": "none"}
+    suite.write_text(yaml.safe_dump({"format": "benchmark-suite@1.0", "name": "asr", "benchmarks": [entry]}))
+    items = tmp_path / "items.json"
+    _cli(
+        "benchmarks/parity_reference.py",
+        "items",
+        "--suite",
+        suite,
+        "--benchmark",
+        "asr",
+        "--backend",
+        "transformers",
+        "--data-cache",
+        tmp_path / "data",
+        "--work",
+        tmp_path / "work",
+        "--out",
+        items,
+    )
+    importlib.import_module("senselab")
+    packaged = importlib.import_module("senselab_core.runtime.call").packaged
+    default = packaged().catalogue.default("speech_to_text")
+    document = json.loads(items.read_text("utf-8"))
+    assert document["model"] == {"id": default.id, "revision": default.revision}
 
 
 @pytest.mark.logic
