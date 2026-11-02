@@ -214,6 +214,12 @@ def _real_state(faults: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
     return hf.load({"model": model, "device": "cuda" if torch.cuda.is_available() else "cpu", "faults": faults or {}})
 
 
+def _timed(result: dict[str, Any]) -> list[tuple[Any, ...]]:
+    """Return a result's segments and words as `(text, span, child texts)`, without confidences."""
+    segments = result["outputs"]["transcript"]["segments"]
+    return [(g["text"], g["span"], [(w["text"], w["span"]) for w in g["children"]]) for g in segments]
+
+
 def _tone(seconds: float, rate: int = 16000, *, gain: float = 0.3) -> Audio:
     t = numpy.arange(max(1, round(seconds * rate))) / rate
     return Audio.from_array((gain * numpy.sin(2 * numpy.pi * 220 * t)).astype(numpy.float32), rate)
@@ -222,13 +228,16 @@ def _tone(seconds: float, rate: int = 16000, *, gain: float = 0.3) -> Audio:
 @pytest.mark.env
 @pytest.mark.model
 def test_transformers_backend_content_fault_isolated_with_real_weights() -> None:
-    """On the pinned model a content fault on one item leaves its batch-mates' transcripts unchanged and is typed."""
+    """On the pinned model a content fault on one item is typed and leaves its batch-mates' text and spans unchanged.
+
+    The backend is declared non-batch-invariant, so confidences are not compared.
+    """
     items = [{"id": i, "inputs": {"audio": _tone(1.0 + n)}} for n, i in enumerate("abc")]
     clean = hf.handle(_real_state(), items, PARAMS)
     faulted = hf.handle(_real_state({"fail_items": ["b"]}), items, PARAMS)
     assert all("outputs" in r for r in clean)
     assert isinstance(faulted[1]["error"], ContentFault)
-    assert (faulted[0], faulted[2]) == (clean[0], clean[2])
+    assert [_timed(faulted[i]) for i in (0, 2)] == [_timed(clean[i]) for i in (0, 2)]
 
 
 @pytest.mark.limits
