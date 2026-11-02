@@ -6,13 +6,14 @@ opens.
 """
 
 import atexit
+import contextlib
 import functools
 import importlib
 import logging
 import platform
 import sysconfig
 import threading
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from importlib.metadata import entry_points
@@ -603,6 +604,7 @@ def _hardware() -> HardwareInfo:
 
 
 _POOL: dict[tuple[str, ...], InProcessWorker | WorkerClient] = {}
+_HELD: dict[tuple[str, ...], threading.Lock] = {}
 _CACHES: dict[int | None, ModelCache] = {}
 _POOL_LOCK = threading.Lock()
 _SERVERS: dict[tuple[str, str, str], VllmServer] = {}
@@ -700,13 +702,15 @@ def _execute(  # noqa: PLR0913 - the call and everything placing it
     if model is not None:
         init["model"] = {"source": model.ref.source, "id": model.ref.id, "identity": model.identity}
     params = {**call.params.model_dump(mode="json"), "backend_params": placement.backend_params.model_dump(mode="json")}
-    if server is not None:
-        worker: InProcessWorker | WorkerClient = _server_worker(backend, init, server)
-    else:
-        worker = _worker(backend, env, init, model, profile.model_cache_budget_bytes)
     if backend.env.kind != "host":
         inputs = {port: wire_form(v, READER) if isinstance(v, Frozen) else v for port, v in inputs.items()}
-    [result] = worker.run([{"id": ITEM_ID, "inputs": inputs}], params)
+    held: contextlib.AbstractContextManager[InProcessWorker | WorkerClient] = (
+        contextlib.nullcontext(_server_worker(backend, init, server))
+        if server is not None
+        else _checked_out(backend, env, init, model, profile.model_cache_budget_bytes)
+    )
+    with held as worker:
+        [result] = worker.run([{"id": ITEM_ID, "inputs": inputs}], params)
     if "error" in result:
         raise CallFailed(result["error"])
     return {port: wire_form(v, READER) if isinstance(v, Frozen) else v for port, v in result["outputs"].items()}
@@ -737,28 +741,39 @@ def _decoded(spec: TaskSpec, outputs: Mapping[str, object]) -> dict[str, object]
     return decoded
 
 
-def _worker(
+@contextlib.contextmanager
+def _checked_out(
     backend: BackendSpec, env: EnvHandle, init: dict[str, Any], model: ResolvedModel | None, budget: int | None
-) -> InProcessWorker | WorkerClient:
-    """Return the pooled worker for this backend, env, init and (in process) budget; a dead one is closed, replaced."""
+) -> Iterator[InProcessWorker | WorkerClient]:
+    """Hold the pooled worker for this backend, env, init and (in process) budget; another call waits for it.
+
+    A dead pooled worker is closed and replaced.
+    """
     host = backend.env.kind == "host"
     pool_key = (backend.env.kind, env.python, backend.worker, jcs_dumps(init).decode(), str(budget) if host else "")
     with _POOL_LOCK:
+        held = _HELD.setdefault(pool_key, threading.Lock())
+    with held:
         worker = _POOL.get(pool_key)
-        if isinstance(worker, InProcessWorker) or (worker is not None and worker.alive):
-            return worker
-        if worker is not None:
-            worker.close()
-        if host:
-            identity = model.identity if model is not None else value_digest("backend", {"name": backend.name})
-            key: ModelKey = (backend.name, identity, init["device"], PRECISION)
-            worker = InProcessWorker(
-                backend.worker, init=init, key=key, cache=_cache(budget), size_of=_size_of(backend.worker, budget)
-            )
-        else:
-            worker = WorkerClient(env.python, backend.worker, init=init)
-        _POOL[pool_key] = worker
-        return worker
+        if not (isinstance(worker, InProcessWorker) or (worker is not None and worker.alive)):
+            if worker is not None:
+                worker.close()
+            worker = _new_worker(backend, env, init, model, budget)
+            with _POOL_LOCK:
+                _POOL[pool_key] = worker
+        yield worker
+
+
+def _new_worker(
+    backend: BackendSpec, env: EnvHandle, init: dict[str, Any], model: ResolvedModel | None, budget: int | None
+) -> InProcessWorker | WorkerClient:
+    if backend.env.kind != "host":
+        return WorkerClient(env.python, backend.worker, init=init)
+    identity = model.identity if model is not None else value_digest("backend", {"name": backend.name})
+    key: ModelKey = (backend.name, identity, init["device"], PRECISION)
+    return InProcessWorker(
+        backend.worker, init=init, key=key, cache=_cache(budget), size_of=_size_of(backend.worker, budget)
+    )
 
 
 def _cache(budget: int | None) -> ModelCache:
