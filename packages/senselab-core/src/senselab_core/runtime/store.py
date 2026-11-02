@@ -8,7 +8,7 @@ Layout under `root`:
     the encoded outputs and their output identity;
   - `context.json`: JCS JSON with `format: "execution-context@2.0"` and the context's fields;
   - `<sha256>.npy`: each array output in canonical `.npy`, named by the sha256 of its bytes.
-- `equivalence-evidence@1/<d>.json`: one verify-sampling comparison (`EquivalenceEvidence`), JSON named by
+- `equivalence-evidence@2/<d>.json`: one verify-sampling comparison (`EquivalenceEvidence`), JSON named by
   `d`, its canonical digest.
 - `tmp/<uuid>/`: a writer's staging directory, committed by renaming it onto the entry.
 - `quarantine/<uuid>`: entries that failed verification, and objects of the wrong kind found at a path
@@ -70,7 +70,6 @@ from senselab_core.kernel.identity import (
     OutputIdentity,
     ReusePolicy,
     acceptable,
-    numerics_key,
 )
 from senselab_core.runtime.equivalence import EQUIVALENCE, EquivalenceEvidence
 from senselab_core.runtime.equivalence import split as split_class
@@ -94,7 +93,7 @@ logger = logging.getLogger("senselab")
 
 STORE_DIR = "store@4"
 STAGING_DIR = "tmp"
-EVIDENCE_DIR = "equivalence-evidence@1"
+EVIDENCE_DIR = "equivalence-evidence@2"
 EVIDENCE_NAME = re.compile(r"[0-9a-f]{64}\.json")
 QUARANTINE_DIR = "quarantine"
 RESULT_FORMAT = "result@2.0"
@@ -257,7 +256,7 @@ def _decode(value: object, entry: Path, sizes: Mapping[str, int] | None = None) 
 
 
 def _equivalence_digest(table: Equivalence) -> str:
-    """Return the `value_digest` of an equivalence table, each class as its sorted fingerprints."""
+    """Return the `value_digest` of an equivalence table, each class as its sorted members."""
     fields = {backend: {name: sorted(members) for name, members in cls.items()} for backend, cls in table.items()}
     return value_digest("equivalence", {"classes": fields})
 
@@ -270,6 +269,19 @@ def key_record(key: LogicalKey) -> object:
 def context_record(context: ExecutionContext) -> dict[str, object]:
     """Return `context` as an `execution-context@2.0` record: its format tag and its fields."""
     return {"format": CONTEXT_FORMAT, **context.model_dump(mode="json")}
+
+
+def agent_record(key: LogicalKey, context: ExecutionContext) -> kprov.Record:
+    """Return the software agent that computes `key` in `context`.
+
+    It carries `senselab:envLock`, so an env at another lock is another agent, and, for a call with a model,
+    `senselab:modelSource`: `hf:<id>@<commit>` for a hub model, else `url` or `local`.
+    """
+    attributes: dict[str, object] = {"senselab:envLock": context.env_lock}
+    if key.model is not None and context.model_source is not None:
+        hub = context.model_source == "hf"
+        attributes["senselab:modelSource"] = f"hf:{key.model.id}@{key.model.identity}" if hub else context.model_source
+    return kprov.agent(core_vocabulary(), types=["senselab:SoftwareAgent"], attributes=attributes)
 
 
 def _result_entity(identity: OutputIdentity) -> kprov.Record:
@@ -549,10 +561,10 @@ class ResultStore:
 
     Provenance: a `put` adds the result entity, `output:<hex>`; a `get` hit adds a `senselab:Reuse` activity that
     used it (or, with `record=False`, leaves that to `record_reuse`), carrying the key, the current and stored
-    contexts, the admitting policy and, under `equivalent`, the equivalence table's `value_digest`. The store writes
-    no execution activity.
+    contexts, the admitting policy, the agent that computed the result and, under `equivalent`, the equivalence
+    table's `value_digest`, associated with the current context's agent. The store writes no execution activity.
 
-    Splits: a disagreeing `EquivalenceEvidence` takes its two numerics classes out of the class holding both
+    Splits: a disagreeing `EquivalenceEvidence` takes its two members out of the class holding both
     (`equivalence.split`). It is persisted as the evidence record, and every store over the same root applies
     the recorded disagreements to its table when it first reads the table.
 
@@ -595,7 +607,7 @@ class ResultStore:
 
     def _split(self, evidence: EquivalenceEvidence) -> None:
         if not evidence.agree:
-            a, b = numerics_key(evidence.stored.numerics), numerics_key(evidence.current.numerics)
+            a, b = evidence.stored.member(), evidence.current.member()
             self._equivalence = split_class(self._equivalence, evidence.backend, a, b)
 
     def add_evidence(self, evidence: EquivalenceEvidence) -> None:
@@ -927,8 +939,14 @@ class ResultStore:
         started: datetime,
         attributes: Mapping[str, object] | None = None,
     ) -> None:
-        """Add the `senselab:Reuse` activity of serving `hit` for `key` in `current`, `attributes` beside its own."""
+        """Add the `senselab:Reuse` activity of serving `hit` for `key` in `current`, `attributes` beside its own.
+
+        The activity is associated with the agent of `current` and names the agent that computed `hit`
+        (`senselab:storedAgent`), so a result served across env locks records both.
+        """
+        agent, stored_agent = agent_record(key, current), agent_record(key, hit.context)
         own: dict[str, object] = {
+            "senselab:storedAgent": stored_agent.id,
             **(attributes or {}),
             "senselab:logicalKey": key_record(key),
             "senselab:context": context_record(current),
@@ -942,10 +960,11 @@ class ResultStore:
             types=["senselab:Reuse"],
             attributes=own,
             used=[kprov.Usage(hit.output_identity)],
+            associations=[kprov.Association(agent.id, node_id=key.task)],
             started=started,
             ended=datetime.now(timezone.utc),
         )
-        self.provenance.add(_result_entity(hit.output_identity), reuse)
+        self.provenance.add(_result_entity(hit.output_identity), agent, stored_agent, reuse)
 
     def get(
         self,

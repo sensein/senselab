@@ -936,10 +936,14 @@ def _register_runtime_samples() -> None:
 
 def _register_tolerance_samples() -> None:
     sides = (
-        EvidenceSide(fingerprint="a" * 64, numerics={"device_kind": "cpu"}),
-        EvidenceSide(fingerprint="b" * 64, numerics={"device_kind": "cuda", "gpu_architecture": "sm_90"}),
+        EvidenceSide(fingerprint="a" * 64, numerics={"device_kind": "cpu"}, env_lock="lock-1"),
+        EvidenceSide(
+            fingerprint="b" * 64, numerics={"device_kind": "cuda", "gpu_architecture": "sm_90"}, env_lock="lock-2"
+        ),
     )
-    register_samples(EvidenceSide, lambda: sides, invalid_updates=[{"fingerprint": "main"}, {"numerics": {"k": 1}}])
+    register_samples(
+        EvidenceSide, lambda: sides, invalid_updates=[{"fingerprint": "main"}, {"numerics": {"k": 1}}, {"env_lock": ""}]
+    )
     register_samples(
         EquivalenceEvidence,
         lambda: [
@@ -964,7 +968,7 @@ def _register_tolerance_samples() -> None:
                 run="slurm-2",
             ),
         ],
-        invalid_updates=[{"format": "equivalence-evidence@2.0"}, {"key": "short"}, {"run": ""}],
+        invalid_updates=[{"format": "equivalence-evidence@1.0"}, {"key": "short"}, {"run": ""}],
     )
     spreads = (AxisSpread(axis="repeat", spread=0.0, pairs=3), AxisSpread(axis="device", spread=0.5, pairs=2))
     register_samples(AxisSpread, lambda: spreads, invalid_updates=[{"axis": ""}, {"pairs": "many"}])

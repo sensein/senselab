@@ -4,7 +4,7 @@
         {
             "@id": "senselab:",
             "@type": "owl:Ontology",
-            "owl:versionInfo": "senselab-vocab@1.1"
+            "owl:versionInfo": "senselab-vocab@1.2"
         },
         {
             "@id": "senselab:Run",
@@ -196,6 +196,28 @@
                 "@id": "xsd:string"
             },
             "rdfs:comment": "The canonical digest of the equivalence-evidence record a sampled call's execution produced."
+        },
+        {
+            "@id": "senselab:envLock",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Agent"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The sha of the env lock the agent ran in; an env at another lock is another agent."
+        },
+        {
+            "@id": "senselab:storedAgent",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The @id of the agent that computed the result a reuse served."
         }
     ]
 }

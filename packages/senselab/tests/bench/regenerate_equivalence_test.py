@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from senselab_core.kernel.identity import numerics_key
+from senselab_core.kernel.identity import member_key
 from senselab_core.runtime.equivalence import EquivalenceEvidence, EvidenceSide, parse_equivalence
 from senselab_core.runtime.store import ResultStore
 
@@ -34,8 +34,8 @@ def test_regenerate_reads_every_store(tmp_path: Path) -> None:
                 task="t",
                 backend="b",
                 key=str(n) * 64,
-                stored=EvidenceSide(fingerprint="a" * 64, numerics=a),
-                current=EvidenceSide(fingerprint="b" * 64, numerics=b),
+                stored=EvidenceSide(fingerprint="a" * 64, numerics=a, env_lock="l"),
+                current=EvidenceSide(fingerprint="b" * 64, numerics=b, env_lock="l"),
                 mismatched=(),
                 tolerance="c" * 64,
                 run=f"slurm-{n}",
@@ -43,6 +43,7 @@ def test_regenerate_reads_every_store(tmp_path: Path) -> None:
         )
     script = _script()
     out = script.regenerate([tmp_path / "0", tmp_path / "1"], tmp_path / "equivalence.yaml")
-    assert parse_equivalence(out.read_text()) == {"b": {"class-0": frozenset({numerics_key(cpu), numerics_key(gpu)})}}
+    expected = {"b": {"class-0": frozenset({member_key(cpu, "l"), member_key(gpu, "l")})}}
+    assert parse_equivalence(out.read_text()) == expected
     script.main(["regenerate", "--out", str(tmp_path / "empty.yaml")])
     assert parse_equivalence((tmp_path / "empty.yaml").read_text()) == {}

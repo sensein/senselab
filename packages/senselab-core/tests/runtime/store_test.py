@@ -25,7 +25,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from planted_objects_fixture import ARRAY_CORRUPTIONS, bounded, store_key, swap_subsets
 from senselab_core.kernel import prov
-from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ReusePolicy, numerics_key
+from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ReusePolicy, member_key
 from senselab_core.runtime import store as store_module
 from senselab_core.runtime.equivalence import EQUIVALENCE
 from senselab_core.runtime.provenance import ProvStore
@@ -136,7 +136,9 @@ def test_cross_context_follows_policy(tmp_path: Path) -> None:
 def test_equivalence_class_admits_under_equivalent(tmp_path: Path) -> None:
     """A measured equivalence class admits a cross-context result under `equivalent`, not `exact`."""
     linux, mac = _ctx(device="cpu"), _ctx(device="mps")
-    table = {"hf": {"c": frozenset({numerics_key(linux.numerics), numerics_key(mac.numerics)})}}
+    table = {
+        "hf": {"c": frozenset({member_key(linux.numerics, linux.env_lock), member_key(mac.numerics, mac.env_lock)})}
+    }
     s, k = ResultStore(tmp_path, equivalence=table), store_key()
     s.put(k, {"y": 1}, linux)
     assert ResultStore(tmp_path).get(k, mac, ReusePolicy.EQUIVALENT) is None
@@ -156,7 +158,12 @@ def test_get_without_a_policy_applies_the_default_equivalent(tmp_path: Path) -> 
     linux, mac, gpu = _ctx(device="cpu"), _ctx(device="mps"), _ctx(device="cuda")
     s, k = (
         ResultStore(
-            tmp_path, equivalence={"hf": {"c": frozenset({numerics_key(linux.numerics), numerics_key(mac.numerics)})}}
+            tmp_path,
+            equivalence={
+                "hf": {
+                    "c": frozenset({member_key(linux.numerics, linux.env_lock), member_key(mac.numerics, mac.env_lock)})
+                }
+            },
         ),
         store_key(),
     )
@@ -464,9 +471,11 @@ def test_store_writes_entity_and_reuse_only(tmp_path: Path, caplog: pytest.LogCa
             "senselab:context": {"format": "execution-context@2.0", **current.model_dump(mode="json")},
             "senselab:storedContext": {"format": "execution-context@2.0", **linux.model_dump(mode="json")},
             "senselab:reusePolicy": policy,
+            "senselab:storedAgent": store_module.agent_record(k, linux).id,
         }
         for current, policy in [(linux, "exact"), (mac, "tolerant")]
     ]
+    assert [a.id for a in provenance.agents()] == [store_module.agent_record(k, linux).id]
     provenance.write(tmp_path)
     assert ProvStore.read(tmp_path).records() == provenance.records()
     assert ResultStore(tmp_path).provenance.records() == []

@@ -21,7 +21,7 @@ from senselab_core.kernel.identity import (
     ReusePolicy,
     UnpinnedModel,
     acceptable,
-    numerics_key,
+    member_key,
 )
 from senselab_core.kernel.license import License
 from senselab_worker.digest import identity_digest
@@ -397,7 +397,7 @@ def _cpu(device: str) -> ExecutionContext:
 def test_equivalent_reuses_within_a_measured_class() -> None:
     """Two contexts whose numerics classes are in one of the backend's classes are equivalent; `exact` refuses them."""
     c1, c2, c3 = _cpu("cpu"), _cpu("cuda"), _cpu("mps")
-    table = {"b": {"c": frozenset({numerics_key(c1.numerics), numerics_key(c2.numerics)})}}
+    table = {"b": {"c": frozenset({member_key(c1.numerics, c1.env_lock), member_key(c2.numerics, c2.env_lock)})}}
     assert acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="b", equivalence=table) and acceptable(
         c2, c1, ReusePolicy.EQUIVALENT, backend="b", equivalence=table
     )
@@ -410,7 +410,7 @@ def test_equivalent_reuses_within_a_measured_class() -> None:
 def test_equivalence_is_scoped_to_its_backend() -> None:
     """A class measured for backend A does not make the same contexts equivalent for backend B."""
     c1, c2 = _cpu("cpu"), _cpu("cuda")
-    table = {"A": {"c": frozenset({numerics_key(c1.numerics), numerics_key(c2.numerics)})}}
+    table = {"A": {"c": frozenset({member_key(c1.numerics, c1.env_lock), member_key(c2.numerics, c2.env_lock)})}}
     assert acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="A", equivalence=table)
     assert not acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="B", equivalence=table)
 
@@ -424,9 +424,10 @@ def test_the_kernel_default_equivalence_is_empty() -> None:
 
 
 @pytest.mark.logic
-def test_numerics_key_is_order_free() -> None:
-    """A numerics class is one string whatever the order of its mapping."""
-    assert numerics_key({"a": "1", "b": "2"}) == numerics_key({"b": "2", "a": "1"}) == '{"a":"1","b":"2"}'
+def test_member_key_is_order_free() -> None:
+    """A member, a numerics class in an env lock, is one string whatever the order of its mapping."""
+    expected = '{"env_lock":"l","numerics":{"a":"1","b":"2"}}'
+    assert member_key({"a": "1", "b": "2"}, "l") == member_key({"b": "2", "a": "1"}, "l") == expected
 
 
 # Model references

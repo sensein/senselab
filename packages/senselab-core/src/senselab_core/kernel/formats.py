@@ -9,7 +9,7 @@ from senselab_core.kernel._base import Frozen
 
 FORMAT_PATTERN = r"^[a-z0-9_.-]+@\d+\.\d+$"
 
-SENSELAB_VOCAB_FORMAT = "senselab-vocab@1.1"
+SENSELAB_VOCAB_FORMAT = "senselab-vocab@1.2"
 """The format of a `senselab:` vocabulary document, carried as its ontology node's `owl:versionInfo` (ADR-010)."""
 PROV_ACTIVITY_TAG = "prov-activity@1"
 """The identity tag of a PROV activity: its compact JSON-LD node without `@id`."""
@@ -29,9 +29,9 @@ TOLERANCE_FORMAT = "tolerance@2.0"
 TOLERANCE_OBSERVATIONS_FORMAT = "tolerance-observations@2.0"
 """The format of one measurement job's output, the input of `scripts/generate_tolerance.py generate`."""
 
-EQUIVALENCE_FORMAT = "equivalence@2.0"
+EQUIVALENCE_FORMAT = "equivalence@3.0"
 """The format of the measured equivalence classes, `runtime/data/equivalence.yaml`."""
-EQUIVALENCE_EVIDENCE_FORMAT = "equivalence-evidence@1.0"
+EQUIVALENCE_EVIDENCE_FORMAT = "equivalence-evidence@2.0"
 """The format of one verify-sampling comparison, a record in the result store."""
 
 PARITY_REFERENCE_FORMAT = "parity-reference@2.0"

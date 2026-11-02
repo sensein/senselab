@@ -2,7 +2,7 @@
 
 `sample` runs the held-out items of one suite benchmark through `run_call` under `--reuse` and `--verify`, against
 `--store`, and prints how many calls executed, were reused and were verified. `regenerate` reads the
-`equivalence-evidence@1.0` records of every store named and writes `equivalence@2.0`; the table is never hand-edited.
+`equivalence-evidence@2.0` records of every store named and writes `equivalence@3.0`; the table is never hand-edited.
 """
 
 import argparse
