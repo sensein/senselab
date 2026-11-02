@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel
 from senselab_core.kernel._base import Frozen
-from senselab_core.kernel.declare import REGISTRY, Env
+from senselab_core.kernel.declare import Env
 from senselab_core.kernel.results import Metric
 from senselab_core.kernel.wire import from_wire_form, wire_form
 from senselab_worker.fake import FakeFaults
@@ -27,7 +27,6 @@ HOST_BACKEND: dict[str, Any] = {
     "devices": ("cpu",),
     "env": Env.host(),
     "requirements": ("numpy",),
-    "registry": REGISTRY,
 }
 """The declaration fields every metric backend shares; each adds `task`, `name` and `worker`."""
 

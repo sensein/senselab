@@ -1,7 +1,8 @@
 """`run_call`: one task call resolved, placed, keyed, served from the result store or executed, and recorded.
 
-A declaring package hands `run_call` its catalogue, how its backends' envs open and the registry of its tasks
-(`REGISTRY`) with `use_packaged`, on import. Until one does, the catalogue is empty and no env opens.
+A declaring package hands `run_call` its catalogue, how its backends' envs open and its tasks and backends through
+the `register` function its `PACKAGES_GROUP` entry point names. Until one does, the catalogue is empty and no env
+opens.
 """
 
 import atexit
@@ -9,7 +10,6 @@ import functools
 import importlib
 import logging
 import platform
-import sys
 import sysconfig
 import threading
 from collections.abc import Callable, Iterable, Mapping
@@ -212,9 +212,13 @@ _PACKAGED = Packaged(Catalogue(entries=()), _no_env)
 
 
 PACKAGES_GROUP = "senselab.packages"
-"""The entry-point group of declaring packages; each entry names a module that calls `use_packaged` on import."""
+"""The entry-point group of declaring packages; each entry names a `register(registry) -> Packaged | None` function.
 
-_STATE = {"registered": False, "discovered": False, "loading": False, "attempted": False, "uses": 0}
+`register` declares the package's tasks and backends in `registry` and returns its `Packaged`, or None when it
+declares only. Importing the package declares nothing.
+"""
+
+_STATE = {"registered": False, "discovered": False, "loading": False, "attempted": False}
 _DISCOVERY = threading.RLock()
 
 
@@ -223,20 +227,20 @@ def use_packaged(packaged: Packaged) -> Packaged:
     global _PACKAGED  # noqa: PLW0603 - the process-wide counterpart of REGISTRY
     previous, _PACKAGED = _PACKAGED, packaged
     _STATE["registered"] = True
-    _STATE["uses"] += 1
     return previous
 
 
 def packaged() -> Packaged:
     """Return what `run_call` reads: the catalogue and env opener last given to `use_packaged`.
 
-    When no package has been registered, the first call loads every entry point of `PACKAGES_GROUP` under a lock,
-    and every concurrent first call waits for it. A load that fails raises `PackageLoadError` naming the entry
-    point, leaves discovery undone and is retried by the next call.
+    When no package has been registered, the first call calls every entry point's `register` under a lock, each
+    over a staging copy of `REGISTRY`, and every concurrent first call waits for it. The declarations and the
+    `Packaged` are merged only when every entry point succeeds; a failure raises `PackageLoadError` naming the
+    entry point, changes nothing and is retried by the next call.
 
     Raises:
-        PackageLoadError: an entry point fails to load, or two of them declare the same task or backend or both
-            register packaged declarations.
+        PackageLoadError: an entry point fails to load or register, or two of them declare the same task or backend
+            or both return a `Packaged`.
     """
     if _STATE["discovered"]:
         return _PACKAGED
@@ -258,41 +262,31 @@ class PackageLoadError(RuntimeError):
     """An entry point of `PACKAGES_GROUP` failed to load, or collides with another."""
 
 
-def _declared() -> dict[tuple[str, ...], None]:
-    registry = REGISTRY
+def _declared(registry: Registry) -> dict[tuple[str, ...], None]:
     keys: dict[tuple[str, ...], None] = {(t.name,): None for t in registry.tasks()}
     keys.update({(t.name, b.name): None for t in registry.tasks() for b in registry.backends(t.name)})
     return keys
 
 
 def _load_entry_points() -> None:
-    owners: dict[tuple[str, ...], str] = {k: "a declaration made before discovery" for k in _declared()}
-    registering: str | None = None
+    staging = Registry()
+    staging.restore(REGISTRY.snapshot())
+    owners: dict[tuple[str, ...], str] = {k: "a declaration made before discovery" for k in _declared(staging)}
+    found: tuple[str, Packaged] | None = None
     for entry in entry_points(group=PACKAGES_GROUP):
-        uses = _STATE["uses"]
         name = f"{entry.name} = {entry.value}"
-        before = (REGISTRY.snapshot(), _PACKAGED, bool(_STATE["registered"]), set(sys.modules))
         try:
-            entry.load()
+            result = entry.load()(staging)
         except Exception as error:
-            _roll_back(entry.value, before)
             raise _load_error(name, error, owners) from error
-        owners.update({k: name for k in _declared() if k not in owners})
-        if _STATE["uses"] > uses:
-            if registering is not None:
-                raise PackageLoadError(f"entry points {registering!r} and {name!r} both register packaged declarations")
-            registering = name
-
-
-def _roll_back(value: str, before: tuple[Any, Packaged, bool, set[str]]) -> None:
-    """Undo a failed load: its declarations, its `use_packaged` and the modules of its top-level package."""
-    global _PACKAGED  # noqa: PLW0603 - the process-wide counterpart of REGISTRY
-    snapshot, previous, registered, modules = before
-    REGISTRY.restore(snapshot)
-    _PACKAGED, _STATE["registered"] = previous, int(registered)
-    top = value.split(":", maxsplit=1)[0].split(".", maxsplit=1)[0]
-    for module in [m for m in sys.modules if m not in modules and (m == top or m.startswith(top + "."))]:
-        del sys.modules[module]
+        owners.update({k: name for k in _declared(staging) if k not in owners})
+        if result is not None:
+            if found is not None:
+                raise PackageLoadError(f"entry points {found[0]!r} and {name!r} both return a Packaged")
+            found = (name, result)
+    REGISTRY.restore(staging.snapshot())
+    if found is not None:
+        use_packaged(found[1])
 
 
 def _load_error(name: str, error: Exception, owners: dict[tuple[str, ...], str]) -> PackageLoadError:

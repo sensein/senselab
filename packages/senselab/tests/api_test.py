@@ -533,14 +533,22 @@ def test_a_fresh_process_finds_the_packaged_tasks_without_importing_senselab() -
     assert "'wer'" in run.stdout and "'speech_to_text'" in run.stdout
 
 
+_SENSELAB_ENTRY = "senselab = senselab._api.packaged:register\n"
+
+
 def _child(
-    tmp_path: Path, entries: dict[str, str], script: str, files: dict[str, str] | None = None
+    tmp_path: Path, entries: dict[str, str], script: str, files: dict[str, str] | None = None, then: str = ""
 ) -> subprocess.CompletedProcess[str]:
-    """Run `script` in a fresh interpreter where `entries` (module name to source) are entry points of the group."""
-    info = tmp_path / "extra-0.dist-info"
+    """Run `script` in a fresh interpreter where each of `entries` (module name to source) names its `register`.
+
+    The entry points are those of a distribution named `senselab`, which shadows the installed one; `then` is the
+    entry-point lines after them.
+    """
+    info = tmp_path / "senselab-0.dist-info"
     info.mkdir()
-    (info / "METADATA").write_text("Metadata-Version: 2.1\nName: extra\nVersion: 0\n")
-    (info / "entry_points.txt").write_text("[senselab.packages]\n" + "".join(f"{name} = {name}\n" for name in entries))
+    (info / "METADATA").write_text("Metadata-Version: 2.1\nName: senselab\nVersion: 0\n")
+    lines = "".join(f"{name} = {name}:register\n" for name in entries)
+    (info / "entry_points.txt").write_text("[senselab.packages]\n" + lines + then)
     for name, source in {**entries, **(files or {})}.items():
         path = tmp_path / (name.replace(".", "/") + ".py")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -553,8 +561,9 @@ def _child(
 
 
 _DECLARE = (
-    "from senselab_core.kernel.declare import REGISTRY, TaskParams, TaskSpec\n"
-    "REGISTRY.add_task(TaskSpec(name='dup.t', version='1', kind='transform', inputs={'a': 'json'},"
+    "from senselab_core.kernel.declare import TaskParams, TaskSpec\n"
+    "def register(registry):\n"
+    "    registry.add_task(TaskSpec(name='dup.t', version='1', kind='transform', inputs={'a': 'json'},"
     " outputs={'b': 'sha256'}, params=TaskParams))\n"
 )
 
@@ -589,7 +598,7 @@ def test_a_failed_entry_point_is_named_and_retried(tmp_path: Path) -> None:
     )
     run = _child(tmp_path, {"boom": "raise ImportError('no such thing')"}, script)
     lines = run.stdout.splitlines()
-    assert len(lines) == 2 and all("boom = boom" in line and "PackageLoadError" in line for line in lines)
+    assert len(lines) == 2 and all("boom = boom:register" in line and "PackageLoadError" in line for line in lines)
 
 
 @pytest.mark.logic
@@ -599,7 +608,8 @@ def test_two_packages_declaring_one_task_refuse_naming_both(tmp_path: Path) -> N
         "from senselab_core.runtime.call import packaged\ntry:\n    packaged()\nexcept Exception as e:\n    print(e)\n"
     )
     run = _child(tmp_path, {"pkg_a": _DECLARE, "pkg_b": _DECLARE}, script)
-    assert "pkg_b = pkg_b" in run.stdout and "pkg_a = pkg_a" in run.stdout and "'dup.t'" in run.stdout
+    assert "pkg_b = pkg_b:register" in run.stdout and "pkg_a = pkg_a:register" in run.stdout
+    assert "'dup.t'" in run.stdout
 
 
 @pytest.mark.logic
@@ -614,8 +624,9 @@ def test_a_load_that_fails_after_declaring_is_rolled_back_and_retried_cleanly(tm
     """The failed load's declaration is undone; the retry loads once, so the registry holds each task once."""
     marker = tmp_path / "failed-once"
     entry = (
-        f"import halfway.decl\nimport os\nif not os.path.exists({str(marker)!r}):\n"
-        f"    open({str(marker)!r}, 'w').close()\n    raise ImportError('late failure')\n"
+        "import os\nimport halfway.decl\ndef register(registry):\n    halfway.decl.register(registry)\n"
+        f"    if not os.path.exists({str(marker)!r}):\n"
+        f"        open({str(marker)!r}, 'w').close()\n        raise ImportError('late failure')\n"
     )
     script = (
         "from senselab_core.runtime.call import packaged\n"
@@ -625,3 +636,21 @@ def test_a_load_that_fails_after_declaring_is_rolled_back_and_retried_cleanly(tm
     )
     run = _child(tmp_path, {"halfway.entry": entry}, script, {"halfway.decl": _DECLARE})
     assert run.stdout.splitlines() == ["first PackageLoadError", "second 1 True"], run.stderr
+
+
+@pytest.mark.logic
+def test_a_failed_plugin_that_imported_senselab_leaves_its_declarations_to_the_retry(tmp_path: Path) -> None:
+    """A plugin that imports `senselab` and then fails costs nothing: the retry finds the packaged tasks."""
+    marker = tmp_path / "failed-once"
+    plugin = (
+        "import os\nimport senselab\ndef register(registry):\n"
+        f"    if not os.path.exists({str(marker)!r}):\n"
+        f"        open({str(marker)!r}, 'w').close()\n        raise ImportError('late failure')\n"
+    )
+    script = (
+        "from senselab_core.runtime.call import packaged\n"
+        "try:\n    packaged()\nexcept Exception as e:\n    print('first', type(e).__name__)\n"
+        "print('second', 'speech_to_text' in packaged().registry._tasks, len(packaged().catalogue.entries) > 0)\n"
+    )
+    run = _child(tmp_path, {"aaa_plug": plugin}, script, then=_SENSELAB_ENTRY)
+    assert run.stdout.splitlines() == ["first PackageLoadError", "second True True"], run.stderr

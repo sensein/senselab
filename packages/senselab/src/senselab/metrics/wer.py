@@ -8,7 +8,7 @@ word of the other side (`white paper`, `whitepaper`) costs nothing. The value is
 from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
-from senselab_core.kernel.declare import REGISTRY, TaskParams, backend, task
+from senselab_core.kernel.declare import TaskParams, backend, task
 from senselab_core.kernel.results import Metric, Transcript
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault
@@ -27,7 +27,7 @@ class WerParams(TaskParams):
     normalise: Literal["open_asr", "none"] = "open_asr"
 
 
-@task(name="wer", version="1", kind="transform", registry=REGISTRY)
+@task(name="wer", version="1", kind="transform")
 class Wer:
     """Score a hypothesis transcript against a reference: the word error rate, over the reference's words."""
 

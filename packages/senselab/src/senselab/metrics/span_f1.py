@@ -8,7 +8,7 @@ from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 
-from senselab_core.kernel.declare import REGISTRY, TaskParams, backend, task
+from senselab_core.kernel.declare import TaskParams, backend, task
 from senselab_core.kernel.results import Metric, TextSpans
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault
@@ -19,7 +19,7 @@ WORKER_MODULE = "senselab.metrics.span_f1"
 load = _worker.load
 
 
-@task(name="span_f1", version="1", kind="transform", registry=REGISTRY)
+@task(name="span_f1", version="1", kind="transform")
 class SpanF1:
     """Score hypothesis text spans against reference spans: exact-match micro F1."""
 

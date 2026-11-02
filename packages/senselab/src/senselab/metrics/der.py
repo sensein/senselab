@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy
 from pydantic import Field
-from senselab_core.kernel.declare import REGISTRY, TaskParams, backend, task
+from senselab_core.kernel.declare import TaskParams, backend, task
 from senselab_core.kernel.results import Intervals, Metric
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault
@@ -30,7 +30,7 @@ class DerParams(TaskParams):
     skip_overlap: bool = False
 
 
-@task(name="der", version="1", kind="transform", registry=REGISTRY)
+@task(name="der", version="1", kind="transform")
 class Der:
     """Score hypothesis speaker turns against reference turns: the diarization error rate."""
 

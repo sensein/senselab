@@ -41,7 +41,7 @@ torch = ["torch>=2.4", "transformers>=5.8"]
 senselab = "senselab.cli:main"
 
 [project.entry-points."senselab.packages"]
-senselab = "senselab._api.packaged"
+senselab = "senselab._api.packaged:register"
 
 [dependency-groups]
 dev = [

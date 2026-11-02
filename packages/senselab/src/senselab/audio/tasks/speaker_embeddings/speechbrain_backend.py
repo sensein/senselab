@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from senselab_core.kernel.declare import REGISTRY, Env, backend
+from senselab_core.kernel.declare import Env, backend
 
 from senselab.audio.tasks.speaker_embeddings.speechbrain import MODEL_ID, WORKER_MODULE
 
@@ -23,7 +23,6 @@ _WORKER_SOURCES = {
     worker=WORKER_MODULE,
     worker_sources=_WORKER_SOURCES,
     devices=("cuda", "mps", "cpu"),
-    registry=REGISTRY,
     load_stub={"stub": True, "device": "cpu"},
     batch_invariant=True,
 )
