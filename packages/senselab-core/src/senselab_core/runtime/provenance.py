@@ -134,7 +134,8 @@ def pathless(name: str, operation: Callable[[], T]) -> T:
         return operation()
     except (OSError, WrongKindError, LeaseUnavailable) as err:
         logger.warning("%s failed: %s", name, err)
-        raise RunIOError(err) from None
+        failure = RunIOError(err)
+    raise failure
 
 
 class ProvStore:
@@ -279,6 +280,7 @@ class ProvStore:
         """
         directory = Path(run) / PROV_DIR
         documents: dict[str, bytes] = {}
+        failure: MalformedDocument | None = None
         try:
             for path in sorted(directory.iterdir()) if directory.is_dir() else []:
                 if TEMPORARY_NAME.fullmatch(path.name):
@@ -289,9 +291,12 @@ class ProvStore:
                 try:
                     documents[path.name] = path.read_bytes()
                 except OSError as err:
-                    raise MalformedDocument(writer, f"the document cannot be read ({type(err).__name__})") from None
+                    failure = MalformedDocument(writer, f"the document cannot be read ({type(err).__name__})")
+                    break
         except OSError as err:
-            raise MalformedDocument(None, f"{PROV_DIR}/ cannot be read ({type(err).__name__})") from None
+            failure = MalformedDocument(None, f"{PROV_DIR}/ cannot be read ({type(err).__name__})")
+        if failure is not None:
+            raise failure
         return documents
 
     @classmethod
@@ -353,10 +358,13 @@ def _declared_format(data: bytes) -> str | None:
 
 
 def _writer_nodes(writer: str, data: bytes) -> list[tuple[str, bytes]]:
+    failure: MalformedDocument | None = None
     try:
         doc = jcs_loads(data)
     except ValueError:
-        raise MalformedDocument(writer, "the document is not canonical JSON") from None
+        failure = MalformedDocument(writer, "the document is not canonical JSON")
+    if failure is not None:
+        raise failure
     graph = doc.get("@graph") if isinstance(doc, dict) else None
     if not (isinstance(doc, dict) and doc.keys() == _DOCUMENT_KEYS and isinstance(graph, list)):
         raise MalformedDocument(
@@ -375,6 +383,14 @@ def _writer_nodes(writer: str, data: bytes) -> list[tuple[str, bytes]]:
     return out
 
 
+def _depth_refusal(depth: int) -> str | None:
+    try:
+        require_depth(depth)
+    except ValueError as err:
+        return str(err)
+    return None
+
+
 class _Rebuild:
     """Rebuild a union of raw nodes through the record builders, checking each against its bytes."""
 
@@ -387,6 +403,15 @@ class _Rebuild:
     def all(self) -> list[kprov.Record]:
         return [self.record(node_id, node_id) for node_id in sorted(self.nodes)]
 
+    def checked_build(self, node_id: str, node: dict[str, Any], writer: str) -> kprov.Record:
+        try:
+            return self.build(node_id, node)
+        except (DanglingReference, MalformedDocument):
+            raise
+        except _REBUILD_ERRORS as err:
+            refused = type(err).__name__
+        raise MalformedDocument(writer, f"{node_id} is not what the builders write ({refused})")
+
     def record(self, node_id: str, named_by: str) -> kprov.Record:
         if node_id in self.done:
             return self.done[node_id]
@@ -395,20 +420,11 @@ class _Rebuild:
         raw, writer = self.nodes[node_id]
         if node_id in self.pending:
             raise MalformedDocument(writer, f"{node_id} names itself through its attributes")
-        try:
-            require_depth(len(self.pending) + 1)
-        except ValueError as err:
-            raise MalformedDocument(writer, f"{node_id}: attribute references: {err}") from None
+        if (too_deep := _depth_refusal(len(self.pending) + 1)) is not None:
+            raise MalformedDocument(writer, f"{node_id}: attribute references: {too_deep}")
         self.pending.add(node_id)
         node = cast("dict[str, Any]", jcs_loads(raw))
-        try:
-            rebuilt = self.build(node_id, node)
-        except (DanglingReference, MalformedDocument):
-            raise
-        except _REBUILD_ERRORS as err:
-            raise MalformedDocument(
-                writer, f"{node_id} is not what the builders write ({type(err).__name__})"
-            ) from None
+        rebuilt = self.checked_build(node_id, node, writer)
         if rebuilt.jcs != raw:
             raise MalformedDocument(writer, f"{node_id} differs from its rebuild")
         for target in sorted({ref["@id"] for key in _ENDPOINT_KEYS for ref in node.get(key, [])}):

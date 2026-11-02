@@ -270,6 +270,7 @@ def test_a_node_the_builders_would_not_write_is_refused(tmp_path: Path, edit: An
     with pytest.raises(MalformedDocument) as caught:
         ProvStore.read(run, VOCAB)
     assert caught.value.writer == store.writer
+    assert caught.value.__context__ is None
     assert "sub-01" not in str(caught.value)
     assert str(tmp_path) not in str(caught.value)
 
@@ -311,8 +312,9 @@ def test_a_document_that_is_not_canonical_is_refused(tmp_path: Path) -> None:
     path = _document_path(run, store)
     assert jcs_loads(path.read_bytes())["format"] == PROVENANCE_FORMAT == "provenance@3.0"  # type: ignore[index]
     path.write_bytes(path.read_bytes() + b"\n")
-    with pytest.raises(MalformedDocument, match="canonical"):
+    with pytest.raises(MalformedDocument, match="canonical") as caught:
         ProvStore.read(run, VOCAB)
+    assert caught.value.__context__ is None
     for document, refusal in [
         ({"@context": "https://example.org/other", "format": PROVENANCE_FORMAT, "@graph": []}, "@context"),
         ({"@context": CONTEXT_URL, "@graph": []}, "format"),
@@ -378,6 +380,7 @@ def test_an_unreadable_document_is_refused_without_its_path(tmp_path: Path) -> N
     finally:
         _document_path(run, store).chmod(0o600)
     assert caught.value.writer == store.writer
+    assert caught.value.__context__ is None
     assert str(tmp_path) not in str(caught.value)
 
 
@@ -388,8 +391,9 @@ def test_attribute_references_nest_no_deeper_than_the_canonical_depth(tmp_path: 
         address = "content:" + f"{i:064x}"
         chain.append(prov.entity(address, VOCAB, types=["senselab:File"], attributes={"senselab:waveform": chain[-1]}))
     run = _run(tmp_path, ProvStore(chain))
-    with pytest.raises(MalformedDocument, match="deeper than 64"):
+    with pytest.raises(MalformedDocument, match="deeper than 64") as caught:
         ProvStore.read(run, VOCAB)
+    assert caught.value.__context__ is None
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork")
