@@ -27,7 +27,7 @@ from senselab_core.kernel.identity import (
     ModelRef,
     OutputIdentity,
     ReusePolicy,
-    numerics_key,
+    member_key,
 )
 from senselab_core.kernel.results import Intervals, Metric, Transcript, TranscriptNode, Trials
 from senselab_core.kernel.signals import Audio, PlainText
@@ -289,6 +289,7 @@ def test_model_source_recorded(store: ResultStore) -> None:
     assert result.key.model is not None and (result.key.model.id, result.key.model.identity) == (TOY, REVISION)
     [agent] = store.provenance.agents()
     assert agent.node()["senselab:modelSource"] == f"hf:{TOY}@{REVISION}"
+    assert prov.literal_value(agent.node()["senselab:envLock"]) == result.context.env_lock
     [execution] = _executions(store)
     assert execution.node()["prov:wasAssociatedWith"] == [{"@id": agent.id}]
     modelless = run_call(
@@ -551,7 +552,13 @@ def _elsewhere(tmp_path: Path, value: object, equivalence: Equivalence = NO_EQUI
 
 
 def _class(here: Result) -> Equivalence:
-    return {"fake-alpha": {"c": frozenset({numerics_key(here.context.numerics), numerics_key(GPU)})}}
+    return {
+        "fake-alpha": {
+            "c": frozenset(
+                {member_key(here.context.numerics, here.context.env_lock), member_key(GPU, here.context.env_lock)}
+            )
+        }
+    }
 
 
 @pytest.mark.logic
@@ -562,6 +569,28 @@ def test_unmeasured_equivalent_is_exact(tmp_path: Path) -> None:
     _, measured = _elsewhere(tmp_path / "m", "from the gpu", _class(here))
     served = run_call(_call("v"), execution=_profile("alpha"), store=measured)
     assert served.reused is ReusePolicy.EQUIVALENT and served.outputs == {"value": "from the gpu"}
+
+
+@pytest.mark.logic
+def test_another_env_lock_is_served_only_when_the_run_asks_for_what_is_available(tmp_path: Path) -> None:
+    """`exact` and `equivalent` refuse another env lock's unmeasured result; `tolerant` serves it, naming both agents.
+
+    The `equivalent` store holds a class measured within the caller's lock, which does not reach the other lock.
+    """
+    here = run_call(_call("v"), execution=_profile("alpha"), store=ResultStore(tmp_path / "here"))
+    other = ExecutionContext.model_validate({**here.context.model_dump(), "env_lock": "another-lock"})
+    for policy in ReusePolicy:
+        store = ResultStore(tmp_path / policy.value, equivalence=_class(here))
+        store.put(here.key, {"value": "from another lock"}, other)
+        served = run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(policy))
+        assert served.reused is (ReusePolicy.TOLERANT if policy is ReusePolicy.TOLERANT else None), policy
+    assert served.context.env_lock == "another-lock" and served.outputs == {"value": "from another lock"}
+    locks = {a.id: prov.literal_value(a.node()["senselab:envLock"]) for a in store.provenance.agents()}
+    [reuse] = [a.node() for a in _activities(store) if "senselab:Reuse" in a.types()]
+    assert locks[str(prov.literal_value(reuse["senselab:storedAgent"]))] == "another-lock"
+    assert reuse["prov:wasAssociatedWith"] == [{"@id": next(i for i, lock in locks.items() if lock != "another-lock")}]
+    assert set(locks.values()) == {"another-lock", here.context.env_lock}
+    assert prov.literal_value(reuse["senselab:reusePolicy"]) == "tolerant"
 
 
 @pytest.mark.logic

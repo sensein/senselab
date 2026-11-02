@@ -295,12 +295,12 @@ class ReusePolicy(str, Enum):
 DEFAULT_REUSE_POLICY = ReusePolicy.EQUIVALENT
 
 Equivalence = Mapping[str, Mapping[str, frozenset[str]]]
-"""Measured equivalence classes: backend name to class name to the numerics classes in it, each as `numerics_key`."""
+"""Measured equivalence classes: backend name to class name to its members, each a `member_key`."""
 
 
-def numerics_key(numerics: Mapping[str, str]) -> str:
-    """Return a numerics class as one string, the JCS text of its mapping: how an equivalence class names a member."""
-    return jcs_dumps(dict(numerics)).decode()
+def member_key(numerics: Mapping[str, str], env_lock: str) -> str:
+    """Return an equivalence class member, a numerics class in one env lock, as the JCS text of both."""
+    return jcs_dumps({"env_lock": env_lock, "numerics": dict(numerics)}).decode()
 
 
 NO_EQUIVALENCE: Equivalence = FrozenMapping({})
@@ -318,8 +318,9 @@ def acceptable(
     """Return whether a result `backend` computed in `stored` may be reused in `current` under `policy`.
 
     `policy` is coerced with `ReusePolicy(policy)`. `exact` needs equal fingerprints; `equivalent`
-    also accepts two contexts whose numerics classes (`numerics_key`) are in one of the backend's classes in
-    `equivalence`; `tolerant` accepts any context.
+    also accepts two contexts whose (numerics class, env lock) members (`member_key`) are in one of the backend's
+    classes in `equivalence`; both keep a result to its env lock unless a class measured that pair. `tolerant`
+    accepts any context.
 
     Raises:
         ValueError: if `policy` is not a `ReusePolicy` value.
@@ -332,7 +333,7 @@ def acceptable(
         case ReusePolicy.EXACT:
             return a == b
         case ReusePolicy.EQUIVALENT:
-            na, nb = numerics_key(stored.numerics), numerics_key(current.numerics)
+            na, nb = member_key(stored.numerics, stored.env_lock), member_key(current.numerics, current.env_lock)
             return a == b or any(na in members and nb in members for members in equivalence.get(backend, {}).values())
         case _:
             assert_never(policy)

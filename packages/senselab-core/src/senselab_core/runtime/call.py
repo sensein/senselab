@@ -47,7 +47,6 @@ from senselab_core.kernel.identity import (
     OutputIdentity,
     ResolvedModel,
     ReusePolicy,
-    numerics_key,
     text_identity_fields,
 )
 from senselab_core.kernel.signals import PlainText, Recording, text_identity
@@ -65,7 +64,7 @@ from senselab_core.runtime.models import resolve
 from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.runtime.revision import PROCESS_RESOLVER, cache_root, run_id
-from senselab_core.runtime.store import ResultStore, StoredResult, context_record, key_record
+from senselab_core.runtime.store import ResultStore, StoredResult, agent_record, context_record, key_record
 from senselab_core.runtime.store import output_identity as store_output_identity
 from senselab_core.runtime.tolerance import NoToleranceProfile, ToleranceProfile, flatten, read_profile, within
 from senselab_core.runtime.vllm_server import (
@@ -323,7 +322,7 @@ def run_call(
     backends share one `ModelCache` per budget). A server backend's context carries the attestation its lock,
     model and settings declare; its `VllmServer` starts on the first call the store does not serve, must attest
     exactly that, serves every later call of that env and model, and stops at exit.
-    An execution writes one activity, associated with an agent carrying `senselab:modelSource`, recording the key,
+    An execution writes one activity, associated with its agent (`agent_record`, env lock included), recording the key,
     the context and the profile's digest; a store hit writes none (the store records its reuse). An execution whose
     `put` finds different outputs another writer committed first is served those, as a reuse, and writes no
     execution activity. An output on a port declared as a kernel type is stored as its wire form and returned as the
@@ -405,7 +404,7 @@ def run_call(
         return _served(spec, stored, key, placement, anchors)
     store.provenance.add(
         *(kprov.entity(i, core_vocabulary()) for i in identities.values()),
-        *_execution(key, context, profile, identities, output_identity, model, started, attributes),
+        *_execution(key, context, profile, identities, output_identity, started, attributes),
     )
     return Result(decoded, output_identity, key, context, placement, None)
 
@@ -469,7 +468,7 @@ def _verify(  # noqa: PLR0913 - the hit, its recomputation and the profile judgi
 ) -> str:
     """Compare a sampled hit with its recomputation within `profile`, record the evidence and return its digest.
 
-    A disagreement splits the store's class of the two numerics classes (`ResultStore.add_evidence`) and is logged.
+    A disagreement splits the store's class of the two members (`ResultStore.add_evidence`) and is logged.
     """
     mismatched = within(flatten(hit.outputs), flatten(outputs), profile)
     stored, current = EvidenceSide.of(hit.context), EvidenceSide.of(context)
@@ -488,8 +487,8 @@ def _verify(  # noqa: PLR0913 - the hit, its recomputation and the profile judgi
         logger.warning(
             "verify: %s on %s disagrees with its result from %s beyond its tolerance in %s",
             key.backend,
-            numerics_key(current.numerics),
-            numerics_key(stored.numerics),
+            current.member(),
+            stored.member(),
             ", ".join(mismatched),
         )
     return evidence.canonical_digest()
@@ -855,7 +854,6 @@ def _execution(  # noqa: PLR0913 - one execution's records
     profile: ExecutionProfile,
     inputs: Mapping[str, InputIdentity],
     output: OutputIdentity,
-    model: ResolvedModel | None,
     started: datetime,
     attributes: Mapping[str, object],
 ) -> tuple[kprov.Record, kprov.Record]:
@@ -863,17 +861,9 @@ def _execution(  # noqa: PLR0913 - one execution's records
 
     `attributes` are recorded on the activity beside the key, the context and the profile's digest.
     """
-    vocabulary = core_vocabulary()
-    source: str | None = None if model is None else model.ref.source
-    if model is not None and model.ref.source == "hf":
-        source = f"hf:{model.ref.id}@{model.identity}"
-    agent = kprov.agent(
-        vocabulary,
-        types=["senselab:SoftwareAgent"],
-        attributes={} if source is None else {"senselab:modelSource": source},
-    )
+    agent = agent_record(key, context)
     activity = kprov.activity(
-        vocabulary,
+        core_vocabulary(),
         attributes={
             **attributes,
             "senselab:logicalKey": key_record(key),
