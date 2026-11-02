@@ -474,8 +474,7 @@ def _data_group(seed: int = 0) -> RegularGroup:
 def _decoded_group() -> RegularGroup:
     """Samples held with the stamp of the file they were decoded from."""
     source = audio_io.source_group(_channels(2, "audio", "FS"), _RATE, _wav("stereo", 2))
-    data = source.read(reader=READER)
-    return RegularGroup(channels=source.channels, sampling_rate=_RATE, data=data, source_stamp=source.source_stamp)
+    return RegularGroup.decoded_from(source, READER)
 
 
 def _irregular(seed: int = 0) -> IrregularGroup:
@@ -609,6 +608,7 @@ def _register_kernel_samples() -> None:
             {"channels": ()},
             {"data": numpy.zeros((3, 4))},
             {"data": numpy.zeros((2, 4), dtype=numpy.complex64)},
+            {"decoded": "0" * 64},
         ],
     )
     register_samples(

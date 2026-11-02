@@ -2,8 +2,8 @@
 
 A value's wire form is its `model_dump()` with `format` set to its registered tag (`WIRE_FORMATS`): nested
 values are objects, arrays stay arrays (the worker codec sends them as `.npy` files), tuples are lists. A
-regular group read from a file travels as its decoded samples with the file's stamp, so it keeps the file's
-identity and no path reaches a worker.
+regular group read from a file travels as `RegularGroup.decoded_from` builds it, its decoded samples with the file's
+stamp, so it keeps the file's identity and no path reaches a worker.
 """
 
 from collections.abc import Mapping
@@ -32,7 +32,7 @@ _FORMATTED: tuple[type[Formatted], ...] = (
     Trials,
     Metric,
 )
-_SIGNALS: dict[str, type[Frozen]] = {"recording@2.0": Recording, "audio@2.0": Audio, "regular-group@2.0": RegularGroup}
+_SIGNALS: dict[str, type[Frozen]] = {"recording@2.1": Recording, "audio@2.1": Audio, "regular-group@2.1": RegularGroup}
 WIRE_FORMATS: Mapping[str, type[Frozen]] = FrozenMapping(_SIGNALS | {_tag(t): t for t in _FORMATTED})
 """The wire format of every kernel value a port may carry, by tag; a `Formatted` type's tag is its own format."""
 
@@ -81,10 +81,11 @@ def wire_form(value: Frozen, reader: SourceReader | None = None) -> dict[str, An
 
 
 def _held(group: RegularGroup, reader: SourceReader | None) -> dict[str, Any]:
-    form = group.model_dump()
-    if group.source is not None:
-        form.update(data=group.read(reader=reader), source=None)
-    return form
+    if group.source is None:
+        return group.model_dump()
+    if reader is None:
+        raise ValueError(f"{group.source} is a source group; read it through a SourceReader")
+    return RegularGroup.decoded_from(group, reader).model_dump()
 
 
 def from_wire_form(form: Mapping[str, Any]) -> Frozen:
