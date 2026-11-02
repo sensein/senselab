@@ -35,6 +35,7 @@ from senselab_core.runtime.worker_client import (
     WorkerFatal,
     WorkerLost,
 )
+from senselab_core.testing.interpreter import source_tree_python
 from senselab_worker import codec, runtime_identity
 from senselab_worker.canonical import MAX_DEPTH, canonical_npy_bytes
 from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_LINE_BYTES, LineTooLarge, to_wire
@@ -46,6 +47,8 @@ from senselab_worker.model_cache import ModelCache
 FAKE = "senselab_worker.fake"
 SCRIPTED = Path(__file__).parent / "scripted_worker_fixture.py"
 posix_only = pytest.mark.skipif(os.name == "nt", reason="stands in for the interpreter with a shell script")
+
+PYTHON = source_tree_python()
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +90,7 @@ def array_parent(tmp_path: Path) -> Iterator[Path]:
 @pytest.fixture
 def worker(array_parent: Path) -> Iterator[WorkerClient]:
     """A client over the fake worker."""
-    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent)
+    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent)
     yield client
     client.close()
     assert not client.alive
@@ -100,7 +103,7 @@ SMALL_LINE_BYTES = 2048
 @pytest.fixture
 def small_line_worker(array_parent: Path) -> Iterator[WorkerClient]:
     """A client over the fake worker whose lines are limited to `SMALL_LINE_BYTES`."""
-    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent, max_line_bytes=SMALL_LINE_BYTES)
+    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent, max_line_bytes=SMALL_LINE_BYTES)
     yield client
     client.close()
     assert not client.alive
@@ -243,7 +246,7 @@ def test_max_line_bytes_out_of_range_is_refused(array_parent: Path) -> None:
     """A line limit must be a positive int no larger than the worker's own."""
     for bad in (0, MAX_LINE_BYTES + 1, 2048.0, True):
         with pytest.raises(ValueError, match="max_line_bytes"):
-            WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent, max_line_bytes=bad)  # type: ignore[arg-type]
+            WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent, max_line_bytes=bad)  # type: ignore[arg-type]
 
 
 @pytest.mark.logic
@@ -307,7 +310,7 @@ def test_malformed_requests_are_refused_on_the_host(worker: WorkerClient, items:
 def test_handshake_mismatch_refuses(array_parent: Path) -> None:
     """A worker whose runtime differs from the expected one is refused, naming both."""
     with pytest.raises(ProtocolMismatch) as info:
-        WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent, expect_runtime="0" * 64)
+        WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent, expect_runtime="0" * 64)
     assert "0" * 64 in str(info.value) and runtime_identity() in str(info.value)
     assert classify(info.value) is FaultClass.INFRASTRUCTURE and isinstance(info.value, RuntimeError)
 
@@ -339,7 +342,7 @@ def test_exit_before_hello_is_worker_lost(array_parent: Path, body: str, code: i
 def test_unusable_backend_is_worker_fatal(array_parent: Path, module: str, error_type: str) -> None:
     """A backend module that cannot be imported, or lacks `load`, fails the load."""
     with pytest.raises(WorkerFatal) as info:
-        WorkerClient(sys.executable, module, init={}, array_parent=array_parent)
+        WorkerClient(PYTHON, module, init={}, array_parent=array_parent)
     assert info.value.error["type"] == error_type
 
 
@@ -364,7 +367,7 @@ def test_no_array_file_remains_when_params_fail_to_encode(worker: WorkerClient) 
 def test_load_failure_is_worker_fatal(array_parent: Path, init: dict[str, Any]) -> None:
     """A `fatal` during load raises `WorkerFatal`, an infrastructure fault carrying the error."""
     with pytest.raises(WorkerFatal) as info:
-        WorkerClient(sys.executable, FAKE, init=init, array_parent=array_parent)
+        WorkerClient(PYTHON, FAKE, init=init, array_parent=array_parent)
     assert info.value.error["fault"] == "content"
     assert classify(info.value) is FaultClass.INFRASTRUCTURE
 
@@ -373,13 +376,13 @@ def test_load_failure_is_worker_fatal(array_parent: Path, init: dict[str, Any]) 
 def test_reserved_init_key_is_refused(array_parent: Path) -> None:
     """`array_dir` in `init` is reserved."""
     with pytest.raises(ValueError):
-        WorkerClient(sys.executable, FAKE, init={"array_dir": "x"}, array_parent=array_parent)
+        WorkerClient(PYTHON, FAKE, init={"array_dir": "x"}, array_parent=array_parent)
 
 
 @pytest.mark.logic
 def test_crash_mid_batch_is_worker_lost(array_parent: Path) -> None:
     """A worker that dies mid-request raises `WorkerLost` and is discarded."""
-    client = WorkerClient(sys.executable, FAKE, init={"faults": {"crash_after": 1}}, array_parent=array_parent)
+    client = WorkerClient(PYTHON, FAKE, init={"faults": {"crash_after": 1}}, array_parent=array_parent)
     with pytest.raises(WorkerLost) as info:
         client.run([{"id": "a", "inputs": {}}, {"id": "b", "inputs": {}}], {})
     assert classify(info.value) is FaultClass.INFRASTRUCTURE and info.value.__notes__
@@ -393,7 +396,7 @@ def test_crash_mid_batch_is_worker_lost(array_parent: Path) -> None:
 @pytest.mark.logic
 def test_request_timeout_is_resource_and_kills_the_worker(array_parent: Path) -> None:
     """A request past its timeout raises `TimeoutError` and the worker is killed."""
-    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent, request_timeout=0.5)
+    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent, request_timeout=0.5)
     with pytest.raises(TimeoutError) as info:
         client.run([{"id": "a", "inputs": {}}], {"faults": {"latency_s": 60}})
     assert classify(info.value) is FaultClass.RESOURCE and not client.alive
@@ -403,7 +406,7 @@ def test_request_timeout_is_resource_and_kills_the_worker(array_parent: Path) ->
 @pytest.mark.logic
 def test_close_is_idempotent_and_context_managed(array_parent: Path) -> None:
     """`close` may be called twice; the client is a context manager."""
-    with WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent) as client:
+    with WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent) as client:
         assert client.alive
     client.close()
     assert not client.alive
@@ -633,7 +636,7 @@ def test_forking_backend_leaves_no_survivor(tmp_path: Path, backends_importable:
     """A timed-out request and `close()` end within their bound and leave no grandchild running."""
     pid_file = tmp_path / "pids"
     client = WorkerClient(
-        sys.executable, "backends.forking_backend_fixture", init={"pid_file": str(pid_file)}, request_timeout=2
+        PYTHON, "backends.forking_backend_fixture", init={"pid_file": str(pid_file)}, request_timeout=2
     )
     pgid = client.hello["pid"]
     t0 = time.monotonic()
@@ -654,7 +657,7 @@ def test_timeout_returns_though_a_grandchild_holds_stderr(tmp_path: Path, backen
     """
     pid_file = tmp_path / "pids"
     init = {"pid_file": str(pid_file), "spawn_at_load": True}
-    client = WorkerClient(sys.executable, "backends.forking_backend_fixture", init=init, request_timeout=2)
+    client = WorkerClient(PYTHON, "backends.forking_backend_fixture", init=init, request_timeout=2)
     assert len(recorded_pids(pid_file)) == 2
     t0 = time.monotonic()
     with pytest.raises(TimeoutError):
@@ -667,7 +670,7 @@ def test_timeout_returns_though_a_grandchild_holds_stderr(tmp_path: Path, backen
 @pytest.mark.logic
 def test_backend_child_cannot_read_requests(backends_importable: None) -> None:
     """Children started with the default stdin read nothing, and every request reaches the worker."""
-    with WorkerClient(sys.executable, "backends.stdin_reading_backend_fixture", init={}, request_timeout=10) as c:
+    with WorkerClient(PYTHON, "backends.stdin_reading_backend_fixture", init={}, request_timeout=10) as c:
         for i in range(3):
             assert c.run([{"id": str(i), "inputs": {}}], {})[0]["outputs"] == {"stdin_bytes": 0}
 
@@ -678,7 +681,7 @@ def test_client_deletes_only_what_it_created(tmp_path: Path) -> None:
     parent = tmp_path / "p"
     parent.mkdir()
     (parent / "thesis.txt").write_text("x")
-    with WorkerClient(sys.executable, FAKE, init={}, array_parent=parent) as c:
+    with WorkerClient(PYTHON, FAKE, init={}, array_parent=parent) as c:
         (c.array_dir / "notes.md").write_text("y")
         c.run(ITEMS, {})
     assert (parent / "thesis.txt").exists() and (c.array_dir / "notes.md").exists()
@@ -693,7 +696,7 @@ def test_files_beside_the_array_dir_survive_runs_and_close(tmp_path: Path) -> No
     (parent / "thesis.txt").write_text("t")
     (parent / "notes.md").write_text("n")
     before = listing(parent)
-    with WorkerClient(sys.executable, FAKE, init={"faults": {}}, array_parent=parent) as c:
+    with WorkerClient(PYTHON, FAKE, init={"faults": {}}, array_parent=parent) as c:
         assert c.array_dir.parent == parent.absolute() and c.array_dir.name.startswith("senselab-arrays-")
         c.run(ITEMS, {})
         c.run(ITEMS, {"w": numpy.ones(3)})
@@ -714,7 +717,7 @@ def test_concurrent_run_is_refused(array_parent: Path, backends_importable: None
     with (
         gate() as g,
         WorkerClient(
-            sys.executable,
+            PYTHON,
             "backends.slow_reader_backend_fixture",
             init={"gate_port": g.port},
             array_parent=array_parent,
@@ -743,7 +746,7 @@ def test_backend_subdir_in_array_dir_does_not_fail_runs(tmp_path: Path, backends
     parent = tmp_path / "parent"
     parent.mkdir()
     with WorkerClient(
-        sys.executable, "backends.subdir_backend_fixture", init={"victim": str(victim)}, array_parent=parent
+        PYTHON, "backends.subdir_backend_fixture", init={"victim": str(victim)}, array_parent=parent
     ) as c:
         for _ in range(3):
             assert c.run(ITEMS, {})[0]["outputs"] == {"made": ARRAY_LIKE}
@@ -757,15 +760,15 @@ def test_backend_subdir_in_array_dir_does_not_fail_runs(tmp_path: Path, backends
 def test_a_worker_is_started_isolated_from_the_callers_environment(
     tmp_path: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A worker runs under `-I` in its interpreter's directory with the allowlist only; numerics variables are kept."""
+    """A worker runs under `-I` in its interpreter's directory with the declared families only."""
     monkeypatch.setenv("PYTHONSTARTUP", str(tmp_path / "startup.py"))
     monkeypatch.setenv("SENSELAB_AMBIENT", "1")
     monkeypatch.setenv("OMP_NUM_THREADS", "3")
     monkeypatch.chdir(tmp_path)
-    with WorkerClient(sys.executable, "backends.environ_backend_fixture", init={}, array_parent=tmp_path) as c:
+    with WorkerClient(PYTHON, "backends.environ_backend_fixture", init={}, array_parent=tmp_path) as c:
         [result] = c.run([{"id": "i", "inputs": {}}], {})
     started = result["outputs"]
-    assert started["isolated"] == 1 and started["cwd"] == str(Path(os.path.abspath(sys.executable)).parent)
+    assert started["isolated"] == 1 and os.path.realpath(started["cwd"]) == os.path.realpath(Path(PYTHON).parent)
     assert started["environ"]["OMP_NUM_THREADS"] == "3"
     assert not {"PYTHONSTARTUP", "SENSELAB_AMBIENT", "PYTHONPATH"} & set(started["environ"])
 
@@ -776,7 +779,7 @@ def test_one_array_in_every_items_outputs_is_read_once(tmp_path: Path, backends_
     """Results naming one array file are one read-only array; an array in one result alone stays writable."""
     a = numpy.linspace(0, 1, 2048)
     items = [{"id": f"i{n}", "inputs": {"w": a, "own": numpy.full(4, n)}} for n in range(copies)]
-    with WorkerClient(sys.executable, "backends.echo_inputs_backend_fixture", init={}, array_parent=tmp_path) as c:
+    with WorkerClient(PYTHON, "backends.echo_inputs_backend_fixture", init={}, array_parent=tmp_path) as c:
         out = c.run(items, {})
     shared = [r["outputs"]["w"] for r in out]
     assert all(w is shared[0] for w in shared) and not shared[0].flags.writeable
@@ -791,9 +794,7 @@ def test_backend_subdir_leaves_runs_and_the_worker_usable(
     """A backend directory not named like an array is left in place and logged; runs succeed."""
     with (
         caplog.at_level(logging.WARNING),
-        WorkerClient(
-            sys.executable, "backends.subdir_backend_fixture", init={"subdir": "scratch"}, array_parent=tmp_path
-        ) as c,
+        WorkerClient(PYTHON, "backends.subdir_backend_fixture", init={"subdir": "scratch"}, array_parent=tmp_path) as c,
     ):
         for _ in range(3):
             assert c.run(ITEMS, {})[0]["outputs"] == {"made": "scratch"}
@@ -812,7 +813,7 @@ def _wait_stopped(pid: int) -> None:
 def test_send_to_wedged_worker_respects_deadline(array_parent: Path, backends_importable: None) -> None:
     """An 8 MB request to a worker that has stopped reading times out at `request_timeout`."""
     client = WorkerClient(
-        sys.executable, "backends.slow_reader_backend_fixture", init={}, array_parent=array_parent, request_timeout=2
+        PYTHON, "backends.slow_reader_backend_fixture", init={}, array_parent=array_parent, request_timeout=2
     )
     client.run([{"id": "a", "inputs": {}}], {"mode": "stop_reading"})
     _wait_stopped(client.hello["pid"])
@@ -855,8 +856,9 @@ _LEFT_AT_EXIT = """
 import logging, sys
 from pathlib import Path
 from senselab_core.runtime.worker_client import WorkerClient
+from senselab_core.testing.interpreter import source_tree_python as python
 logging.basicConfig(level=logging.WARNING, format="LOG %(levelname)s %(message)s")
-c = WorkerClient(sys.executable, "senselab_worker.fake", init={{}}, array_parent=Path(sys.argv[1]))
+c = WorkerClient(python(), "senselab_worker.fake", init={{}}, array_parent=Path(sys.argv[1]))
 {body}
 print(c._proc.pid, flush=True)
 """
@@ -882,7 +884,7 @@ def test_a_client_left_open_at_interpreter_exit_finalises_at_once_and_quietly(ar
 @pytest.mark.logic
 def test_leaked_client_is_closed_with_a_resource_warning(array_parent: Path) -> None:
     """A client dropped without `close` warns, stops its worker and removes its directory."""
-    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent)
+    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent)
     pgid = client.hello["pid"]
     with pytest.warns(ResourceWarning):
         del client
@@ -926,7 +928,7 @@ def test_late_close_after_the_leader_was_reaped_elsewhere_sends_no_signal(
     array_parent: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Once the leader is reaped outside the client its pid may be reused, so `close()` signals nothing."""
-    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent)
+    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent)
     pid = client.hello["pid"]
     os.kill(pid, signal.SIGKILL)
     os.waitpid(pid, 0)
@@ -938,7 +940,7 @@ def test_late_close_after_the_leader_was_reaped_elsewhere_sends_no_signal(
 @pytest.mark.logic
 def test_idle_crash_keeps_the_leader_unreaped_until_close(array_parent: Path) -> None:
     """A leader that dies while idle stays a zombie, holding its pid and group id, until `close()` reaps it."""
-    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent)
+    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent)
     pid = client.hello["pid"]
     os.kill(pid, signal.SIGKILL)
     end = time.monotonic() + STOPPED_WAIT_S
@@ -955,7 +957,7 @@ def test_graceful_close_leaves_sigterm_its_own_grace(
 ) -> None:
     """A worker that ignores the stop line gets SIGTERM with `graces.term` of the stop window left."""
     client = WorkerClient(
-        sys.executable,
+        PYTHON,
         "backends.slow_reader_backend_fixture",
         init={},
         array_parent=array_parent,
@@ -994,7 +996,7 @@ def _probe_fails(monkeypatch: pytest.MonkeyPatch, how: str) -> list[float]:
 
 def _close_after_an_idle_crash_with_failing_ps(array_parent: Path, monkeypatch: pytest.MonkeyPatch, how: str) -> float:
     """Crash an idle worker, make `ps` fail as `how`, close; assert nothing was signalled; return `close()`'s time."""
-    client = WorkerClient(sys.executable, FAKE, init={}, array_parent=array_parent)
+    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent)
     pid = client.hello["pid"]
     os.kill(pid, signal.SIGKILL)
     end = time.monotonic() + STOPPED_WAIT_S
@@ -1044,7 +1046,7 @@ def _time_out_a_forking_worker_with_failing_ps(
     """Time out a hung forking worker with `ps` failing as `how`; assert `ps` was not asked; return `run`'s time."""
     pid_file = tmp_path / "pids"
     client = WorkerClient(
-        sys.executable,
+        PYTHON,
         "backends.forking_backend_fixture",
         init={"pid_file": str(pid_file)},
         array_parent=array_parent,
@@ -1218,7 +1220,7 @@ def test_host_and_isolated_share_handle(array_parent: Path) -> None:
     host = InProcessWorker(
         FAKE_SPEC.worker, init=dict(FAKE_SPEC.load_stub), key=FAKE_KEY, cache=ModelCache(1), size_of=_one_byte
     )
-    with WorkerClient(sys.executable, isolated.worker, init=dict(isolated.load_stub), array_parent=array_parent) as w:
+    with WorkerClient(PYTHON, isolated.worker, init=dict(isolated.load_stub), array_parent=array_parent) as w:
         remote = w.run(items, params)
     local = host.run(items, params)
 

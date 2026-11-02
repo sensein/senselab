@@ -1,46 +1,53 @@
-"""The one launch environment of every process senselab starts: isolated mode, an allowlist, a fixed cwd, a digest."""
+"""The one launch environment of every process senselab starts: isolated, declared families, fixed cwd, digested."""
 
-import json
+import functools
 import os
-import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 from senselab_worker.digest import identity_digest
 
+from senselab_core.runtime.storage import load_policy_values
+
 LAUNCH_TAG = "launch-env@1"
-"""The `identity_digest` tag of a launch: its numerics variables, its declared variables and its import paths."""
+"""The `identity_digest` tag of a launch: its recorded ambient variables and its declared variables."""
 
-PASSED = (
-    "PATH",
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "LANG",
-    "LC_ALL",
-    "LC_CTYPE",
-    "TMPDIR",
-    "TZ",
-    "SSL_CERT_FILE",
-    "REQUESTS_CA_BUNDLE",
-    "XDG_CACHE_HOME",
-    "HF_HOME",
-    "HF_HUB_CACHE",
-    "HF_TOKEN",
-)
-"""Ambient variables a launched process inherits without their reaching the digest: plumbing and credentials."""
-
-NUMERICS_PREFIXES = ("CUDA_", "CUBLAS_", "CUDNN_", "NCCL_", "VLLM_", "TORCH_", "PYTORCH_", "OMP_", "MKL_", "OPENBLAS_")
-"""Prefixes of ambient variables a launched process inherits and the digest records: they can change its numerics."""
+LAUNCH_ENVIRONMENT_FORMAT = "launch-environment@1.0"
+"""The format of `data/launch_environment.yaml`, the families of ambient variables a launched process inherits."""
 
 ISOLATED = {"PYTHONNOUSERSITE": "1", "PYTHONSAFEPATH": "1"}
 """Set on every launch: a console script, which runs without `-I`, gets no user site and no script directory."""
 
-_BOOT = (
-    "import json, runpy, sys; sys.path[:0] = json.loads(sys.argv.pop(1));"
-    " runpy.run_module(sys.argv.pop(1), run_name='__main__', alter_sys=True)"
-)
+
+@dataclass(frozen=True)
+class Family:
+    """Ambient variables passed together: by exact name or by prefix; `recorded` ones enter the launch digest."""
+
+    names: frozenset[str]
+    prefixes: tuple[str, ...]
+    recorded: bool
+
+    def holds(self, name: str) -> bool:
+        """Return whether `name` is one of this family's variables."""
+        return name in self.names or name.startswith(self.prefixes)
+
+
+@functools.cache
+def launch_environment() -> tuple[dict[str, Family], Family]:
+    """Return the packaged families by name, and the `never` family no launch passes.
+
+    Raises:
+        ValueError: the file lacks its format, an entry or an entry's derivation.
+    """
+    values = load_policy_values("senselab_core.runtime", "launch_environment.yaml", LAUNCH_ENVIRONMENT_FORMAT)
+    entries = cast("dict[str, dict[str, Any]]", values)
+    families = {
+        name: Family(frozenset(v["names"]), tuple(v["prefixes"]), bool(v.get("recorded", False)))
+        for name, v in entries.items()
+    }
+    return families, families.pop("never")
 
 
 @dataclass(frozen=True)
@@ -49,23 +56,19 @@ class Launch:
 
     Attributes:
         python: The interpreter.
-        variables: The process's whole environment: the allowlisted ambient variables, `ISOLATED` and the declared.
+        variables: The process's whole environment: the ambient variables of a family, `ISOLATED` and the declared.
         cwd: Its working directory, the interpreter's directory.
-        paths: Import roots prepended to its `sys.path`: this process's when `python` is this interpreter, else none.
-        digest: `identity_digest(LAUNCH_TAG, ...)` of its numerics and declared variables and its paths.
+        digest: `identity_digest(LAUNCH_TAG, ...)` of its recorded ambient variables and its declared variables.
     """
 
     python: str
     variables: Mapping[str, str]
     cwd: Path
-    paths: tuple[str, ...]
     digest: str
 
     def module(self, module: str, *args: str) -> list[str]:
-        """Return the argv running `module` as `__main__` under `-I`, with `paths` prepended."""
-        if not self.paths:
-            return [self.python, "-I", "-m", module, *args]
-        return [self.python, "-I", "-c", _BOOT, json.dumps(list(self.paths)), module, *args]
+        """Return the argv running `module` as `__main__` under `-I`."""
+        return [self.python, "-I", "-m", module, *args]
 
     @staticmethod
     def script(script: str | os.PathLike[str], *args: str) -> list[str]:
@@ -74,16 +77,22 @@ class Launch:
 
 
 def launch(python: str | os.PathLike[str], declared: Mapping[str, str] | None = None) -> Launch:
-    """Return the launch of `python` with `declared` set over the allowlisted ambient variables."""
-    ambient = os.environ
-    numerics = {k: v for k, v in ambient.items() if k.startswith(NUMERICS_PREFIXES)}
-    recorded = {**numerics, **(declared or {})}
+    """Return the launch of `python` with `declared` set over the ambient variables its families pass."""
+    families, never = launch_environment()
+    passed: dict[str, str] = {}
+    ambient: dict[str, str] = {}
+    for name, value in os.environ.items():
+        family = next((f for f in families.values() if f.holds(name)), None)
+        if family is None or never.holds(name):
+            continue
+        passed[name] = value
+        if family.recorded:
+            ambient[name] = value
+    recorded = {**ambient, **(declared or {})}
     python = os.path.abspath(python)
-    paths = tuple(p for p in sys.path if p) if python == os.path.abspath(sys.executable) else ()
     return Launch(
         python=python,
-        variables={**{k: ambient[k] for k in PASSED if k in ambient}, **ISOLATED, **recorded},
+        variables={**passed, **ISOLATED, **recorded},
         cwd=Path(python).parent,
-        paths=paths,
-        digest=identity_digest(LAUNCH_TAG, [sorted([k, v] for k, v in recorded.items()), list(paths)]),
+        digest=identity_digest(LAUNCH_TAG, sorted([k, v] for k, v in recorded.items())),
     )

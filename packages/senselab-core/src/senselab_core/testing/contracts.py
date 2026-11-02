@@ -51,6 +51,7 @@ from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime.keys import Call, Placement, build_key
 from senselab_core.runtime.licenses import backend_license, check_license
 from senselab_core.runtime.worker_client import WorkerClient
+from senselab_core.testing.interpreter import source_tree_python
 
 Case = Callable[[], None]
 P = TypeVar("P", bound=BaseModel)
@@ -530,7 +531,7 @@ def _run_worker(
     backend: BackendSpec, init: dict[str, Any], items: list[dict[str, Any]], params: dict[str, Any], scratch: Path
 ) -> list[dict[str, Any]]:
     with WorkerClient(
-        sys.executable,
+        source_tree_python(),
         backend.worker,
         init=init,
         array_parent=scratch,

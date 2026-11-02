@@ -16,6 +16,7 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.vllm_server import VllmStartError
 from senselab_core.runtime.worker_client import WorkerClient
+from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.workers import RealWorkers, run_alone
 from senselab_worker.faults import FaultClass
 
@@ -60,7 +61,7 @@ def env_python(tmp_path: Path) -> Iterator[Path]:
     python = tmp_path / "env" / "bin" / "python"
     python.parent.mkdir(parents=True)
     record = f"import json, sys; json.dump(sys.argv[1:], open({str(tmp_path / 'argv.json')!r}, 'w'))"
-    python.write_text(f'#!/bin/sh\n"{sys.executable}" -c "{record}" "$@"\nexec "{sys.executable}" "$@"\n')
+    python.write_text(f'#!/bin/sh\n"{sys.executable}" -c "{record}" "$@"\nexec "{source_tree_python()}" "$@"\n')
     python.chmod(python.stat().st_mode | stat.S_IXUSR)
     registry = Registry()
     registry.add_task(fake.ECHO)

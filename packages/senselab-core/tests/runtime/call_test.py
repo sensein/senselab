@@ -6,7 +6,6 @@ import json
 import os
 import platform
 import signal
-import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -53,7 +52,10 @@ from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.tolerance import NoToleranceProfile, read_profile, tolerance_profile_path
 from senselab_core.runtime.worker_client import ConcurrentUse, WorkerClient
+from senselab_core.testing.interpreter import source_tree_python
 from senselab_worker.faults import InfrastructureFault
+
+PYTHON = source_tree_python()
 
 TOY = "toyorg/toy"
 REVISION = "a" * 40
@@ -171,7 +173,7 @@ entries:
 def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
     """Every env is the running interpreter: the declared test seam of the fake stack; nothing is built."""
     return EnvHandle(
-        python=sys.executable,
+        python=PYTHON,
         python_version=platform.python_version(),
         lock_sha="1" * 64,
         wheel_set="2" * 64,
