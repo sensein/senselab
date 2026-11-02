@@ -20,6 +20,7 @@ from senselab_core.kernel.declare import (
 from senselab_core.kernel.identity import ModelRef
 from senselab_core.kernel.wire import WireFormatRetired
 from senselab_core.runtime.call import AmbiguousClock, CallFailed, OutputTypeMismatch, Result, TaskCall, run_call
+from senselab_core.runtime.licenses import LicenseRefused
 from senselab_core.runtime.locks import LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.models import ModelResolutionError
 from senselab_core.runtime.profiles import NoBackend, NoDevice, UnlistedSource
@@ -89,6 +90,11 @@ ERROR_CODES: tuple[tuple[type[Exception], str, str], ...] = (
     (WorkerFatal, "worker_failed", "the worker stopped; this is a fault of the host, not of the input"),
     (WorkerLost, "worker_failed", "the worker stopped; this is a fault of the host, not of the input"),
     (ProtocolError, "worker_failed", "the worker broke its protocol; report the backend"),
+    (
+        LicenseRefused,
+        "license_refused",
+        "the run config's license policy refuses this backend's licenses; change the policy or choose another backend",
+    ),
     (ValueError, "invalid_call", "see the message for the value to correct"),
 )
 """Each error `run_call` documents, with its envelope code and fix; the first row an error is an instance of wins."""
