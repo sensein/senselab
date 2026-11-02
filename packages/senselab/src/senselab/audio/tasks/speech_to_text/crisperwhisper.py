@@ -22,7 +22,7 @@ from typing import Any, Literal, get_args
 import numpy
 from senselab_worker.fake import FakeFaults
 
-from senselab.item_faults import init_model, mono_samples
+from senselab.item_faults import NS_PER_S, clamp_ns, init_model, mono_samples
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.crisperwhisper"
 MODEL_ID = "nyralabs/CrisperWhisper2.0_turbo"
@@ -35,7 +35,6 @@ LONGFORM_STRATEGY = "continuation"
 DEFAULT_LANGUAGE = "en"
 COMPUTE_TYPES = {"cuda": "float16", "mps": "float16", "cpu": "float32"}
 _INIT_KEYS = frozenset({"stub", "model", "device", "faults", "array_dir"})
-_NS_PER_S = 1_000_000_000
 
 
 @dataclass(frozen=True)
@@ -103,7 +102,7 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
         try:
             samples, clock_id = mono_samples(item, state.faults, EXPECTED_RATE, "crisperwhisper")
             decoded = engine.transcribe(samples, language, tuning["max_new_tokens"])
-            duration_ns = round(samples.size / EXPECTED_RATE * _NS_PER_S)
+            duration_ns = round(samples.size / EXPECTED_RATE * NS_PER_S)
             results.append({"outputs": {"transcript": transcript(decoded, timestamps, clock_id, duration_ns)}})
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
             results.append({"error": exc})
@@ -136,8 +135,7 @@ def transcript(decoded: Decoded, timestamps: str, clock_id: str, duration_ns: in
     floor = 0
     children = []
     for (word, start, end), confidence in zip(decoded.words, decoded.confidences):
-        begin = min(duration_ns, max(floor, round(start * _NS_PER_S)))
-        stop = min(duration_ns, max(begin, round(end * _NS_PER_S)))
+        begin, stop = clamp_ns(start, end, floor, duration_ns)
         children.append(_node(word, _span(begin, stop, clock_id), confidence, []))
         floor = stop
     whole = _span(children[0]["span"]["start_ns"], children[-1]["span"]["end_ns"], clock_id)

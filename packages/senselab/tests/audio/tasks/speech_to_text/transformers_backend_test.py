@@ -125,7 +125,7 @@ def test_capture_leaves_a_generate_that_refuses_the_flags_untouched() -> None:
 def test_stub_handle_returns_a_transcript_wire_form_per_item() -> None:
     """The result is the wire form of a transcript on the audio's own clock."""
     audio = _audio()
-    [result] = _run([{"id": "a", "inputs": {"audio": audio}}])
+    [result] = _run([{"id": "a", "inputs": {"audio": wire_form(audio)}}])
     out = from_wire_form(result["outputs"]["transcript"])
     assert out.segments[0].span.clock_id == audio.anchor.clock_id  # type: ignore[attr-defined]
     assert wire_form(out) == result["outputs"]["transcript"]
@@ -138,14 +138,14 @@ def test_stub_handle_returns_a_transcript_wire_form_per_item() -> None:
 )
 def test_unsupported_audio_is_a_content_fault_without_a_gap(audio: Audio, fault: type, text: str) -> None:
     """Stereo or a wrong rate fails that item as a typed content fault."""
-    [result] = _run([{"id": "a", "inputs": {"audio": audio}}])
+    [result] = _run([{"id": "a", "inputs": {"audio": wire_form(audio)}}])
     assert isinstance(result["error"], fault) and text in str(result["error"])
 
 
 @pytest.mark.logic
 def test_faults_stay_with_their_item() -> None:
     """A content fault and an out of memory on two items leave the third unchanged and are typed."""
-    items = [{"id": i, "inputs": {"audio": _audio(1600 + n)}} for n, i in enumerate("abc")]
+    items = [{"id": i, "inputs": {"audio": wire_form(_audio(1600 + n))}} for n, i in enumerate("abc")]
     clean = _run(items)
     faulted = _run(items, faults={"fail_items": ["a"], "oom_items": ["b"]})
     assert isinstance(faulted[0]["error"], ContentFault) and isinstance(faulted[1]["error"], ResourceFault)
@@ -165,7 +165,7 @@ def test_a_pipeline_failure_is_isolated_by_rerunning_items_alone() -> None:
             return hf.StubPipeline()(inputs, **kwargs)
 
     state = hf.State(Picky(), 16000, FakeFaults())
-    items = [{"id": i, "inputs": {"audio": _audio(n)}} for i, n in (("a", 1600), ("b", 1700), ("c", 1800))]
+    items = [{"id": i, "inputs": {"audio": wire_form(_audio(n))}} for i, n in (("a", 1600), ("b", 1700), ("c", 1800))]
     out = hf.handle(state, items, PARAMS)
     assert "outputs" in out[0] and "outputs" in out[2]
     assert (error_record(out[1]["error"])["fault"], error_record(out[1]["error"])["gap"]) == ("infrastructure", True)
@@ -235,7 +235,7 @@ def test_transformers_backend_content_fault_isolated_with_real_weights() -> None
 
     The backend is declared non-batch-invariant, so confidences are not compared.
     """
-    items = [{"id": i, "inputs": {"audio": _tone(1.0 + n)}} for n, i in enumerate("abc")]
+    items = [{"id": i, "inputs": {"audio": wire_form(_tone(1.0 + n))}} for n, i in enumerate("abc")]
     clean = hf.handle(_real_state(), items, PARAMS)
     faulted = hf.handle(_real_state({"fail_items": ["b"]}), items, PARAMS)
     assert all("outputs" in r for r in clean)
@@ -256,7 +256,7 @@ def test_transformers_backend_edge_inputs_with_real_weights() -> None:
         **{f"rate-{r}": _tone(1.0, r) for r in (8000, 11025, 22050, 32000, 44100, 48000)},
     }
     for name, audio in cases.items():
-        [result] = hf.handle(state, [{"id": name, "inputs": {"audio": audio}}], PARAMS)
+        [result] = hf.handle(state, [{"id": name, "inputs": {"audio": wire_form(audio)}}], PARAMS)
         if "error" in result:
             assert isinstance(result["error"], (ContentFault, ResourceFault)), (name, result["error"])
             assert audio.sampling_rate != 16000 or name == "one-sample", name
@@ -284,3 +284,11 @@ def test_torch_extra_is_the_backends_requirements() -> None:
     extra = tomllib.loads((root / "pyproject.toml").read_text("utf-8"))["project"]["optional-dependencies"]["torch"]
     (spec,) = [b for b in REGISTRY.backends("speech_to_text") if b.name == "transformers"]
     assert set(extra) <= set(spec.requirements)
+
+
+@pytest.mark.logic
+def test_a_chunk_ending_past_the_audio_is_clamped_to_its_extent() -> None:
+    """A pipeline chunk (1.0 s, 9.0 s) of a 2 s recording ends at 2 s, as the other backend's spans do."""
+    out = {"text": "late", "chunks": [{"text": "late", "timestamp": (1.0, 9.0)}]}
+    (word,) = hf.transcript(out, "word", CLOCK, 2 * 10**9).segments[0].children
+    assert (word.span.start_ns, word.span.end_ns) == (10**9, 2 * 10**9)  # type: ignore[union-attr]

@@ -17,9 +17,7 @@ from senselab_core.kernel.declare import REGISTRY, BackendParams, Env, backend
 from senselab_core.kernel.results import Transcript, TranscriptNode
 from senselab_core.kernel.time import Span
 from senselab_core.kernel.wire import wire_form
-from senselab_core.runtime.audio_io import READER
 from senselab_worker.fake import FakeFaults
-from senselab_worker.faults import ContentFault
 
 from senselab._api.declarations import SpeechToTextParams
 from senselab.audio.tasks.speech_to_text.token_confidence import (
@@ -28,12 +26,11 @@ from senselab.audio.tasks.speech_to_text.token_confidence import (
     special_token_ids,
     word_confidences,
 )
-from senselab.item_faults import init_model, raise_injected
+from senselab.item_faults import NS_PER_S, clamp_ns, init_model, mono_samples
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.huggingface"
 EXPECTED_RATE = 16_000
 _INIT_KEYS = frozenset({"stub", "model", "device", "faults", "array_dir"})
-_NS_PER_S = 1_000_000_000
 
 
 class TransformersParams(BackendParams):
@@ -159,21 +156,8 @@ class _Prepared:
 
 
 def _prepare(state: State, item: dict[str, Any]) -> _Prepared:
-    raise_injected(item["id"], state.faults)
-    samples, rate, clock_id = _audio(item["inputs"]["audio"])
-    if samples.shape[0] != 1:
-        raise ContentFault(f"whisper takes mono audio, got {samples.shape[0]} channels")
-    if rate != state.sampling_rate:
-        raise ContentFault(f"whisper takes {state.sampling_rate} Hz audio, got {rate} Hz; resample it first")
-    return _Prepared(samples[0].astype(numpy.float32), clock_id, round(samples.shape[1] / rate * _NS_PER_S))
-
-
-def _audio(value: object) -> tuple[numpy.ndarray, float, str]:
-    """Return `(samples (channels, n), sampling_rate, clock_id)` of an `Audio` or its wire form."""
-    if isinstance(value, dict):
-        group = value["groups"]["audio"]
-        return numpy.asarray(group["data"]), float(group["sampling_rate"]), str(value["anchor"]["clock_id"])
-    return value.read(reader=READER), float(value.sampling_rate), str(value.anchor.clock_id)  # type: ignore[attr-defined]
+    samples, clock_id = mono_samples(item, state.faults, state.sampling_rate, "whisper")
+    return _Prepared(samples, clock_id, round(samples.size / state.sampling_rate * NS_PER_S))
 
 
 def _transcribe(
@@ -214,15 +198,10 @@ def _block(blocks: list[dict[str, Any]], count: int, index: int) -> dict[str, An
     return None
 
 
-def _ns(seconds: float) -> int:
-    return max(0, round(seconds * _NS_PER_S))
-
-
 def _span(stamp: Sequence[float | None], clock_id: str, floor_ns: int, duration_ns: int) -> Span:
     """Return the span of a pipeline `(start, end)` in seconds; a missing start is `floor_ns`, an end the audio end."""
-    start = floor_ns if stamp[0] is None else _ns(stamp[0])
-    end = duration_ns if stamp[1] is None else _ns(stamp[1])
-    return Span(start_ns=start, end_ns=max(start, end), clock_id=clock_id)
+    start, end = clamp_ns(stamp[0], stamp[1], floor_ns, duration_ns)
+    return Span(start_ns=start, end_ns=end, clock_id=clock_id)
 
 
 def transcript(  # noqa: PLR0913 - the pipeline output, its level, the audio's clock and length, and the confidence

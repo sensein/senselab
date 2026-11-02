@@ -8,6 +8,18 @@ from senselab_worker.digest import COMMIT_HEX
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault, ResourceFault
 
+NS_PER_S = 1_000_000_000
+
+
+def clamp_ns(start_s: float | None, end_s: float | None, floor_ns: int, duration_ns: int) -> tuple[int, int]:
+    """Return `(start, end)` in ns of a timed stamp in seconds, inside `[floor_ns, duration_ns]` and ordered.
+
+    A missing start is `floor_ns`; a missing end is `duration_ns`.
+    """
+    start = min(duration_ns, max(floor_ns, floor_ns if start_s is None else round(start_s * NS_PER_S)))
+    end = min(duration_ns, max(start, duration_ns if end_s is None else round(end_s * NS_PER_S)))
+    return start, end
+
 
 def raise_injected(item_id: str, faults: FakeFaults) -> None:
     """Raise the content or resource fault `faults` injects for `item_id`, if any."""
