@@ -1,4 +1,9 @@
 {
+    "provenance": {
+        "repo": "huggingface/open_asr_leaderboard",
+        "commit": "edd68424736537b6d0191be325ae3605c33de284",
+        "path": "normalizer/english_abbreviations.py"
+    },
     "english_spelling_normalizer": {
         "ok": "okay",
         "kay": "okay",
