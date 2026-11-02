@@ -26,6 +26,7 @@ from senselab_core.runtime.tolerance import (
     FieldTolerance,
     ToleranceProfile,
     flatten,
+    relabel_turns,
     tolerance_profile_path,
 )
 
@@ -146,6 +147,8 @@ def _spread(a: list[float] | str, b: list[float] | str) -> tuple[float, bool]:
 def derive(observations: Sequence[Observations], split_of: Any) -> ToleranceProfile:
     """Return the profile of the observations of one backend, every item checked to be a calibration item.
 
+    Speaker turns of two runs are compared under `relabel_turns`.
+
     Raises:
         ToleranceError: an item is held out or was not recorded as calibration, the observations are of
             different backends, or no two runs differ along exactly one axis.
@@ -172,8 +175,9 @@ def derive(observations: Sequence[Observations], split_of: Any) -> ToleranceProf
             differing = [x for x in AXES if getattr(a, x) != getattr(b, x)]
             if len(differing) != 1:
                 continue
-            for path in a.fields.keys() & b.fields.keys():
-                value, bad_shape = _spread(a.fields[path], b.fields[path])
+            b_fields = relabel_turns(a.fields, b.fields)
+            for path in a.fields.keys() & b_fields.keys():
+                value, bad_shape = _spread(a.fields[path], b_fields[path])
                 kinds[path] = "exact" if isinstance(a.fields[path], str) else "numeric"
                 shapes[path] = shapes.get(path, 0) + bad_shape
                 spreads.setdefault(path, {}).setdefault(differing[0], []).append(value)
