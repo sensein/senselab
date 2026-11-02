@@ -231,4 +231,4 @@ def render(evidence: Iterable[EquivalenceEvidence]) -> str:
             numerics = [json.loads(m) for m in sorted(group)]
             backends[backend][f"class-{n}"] = {"numerics": numerics, "derivation": derivation}
     document = {"format": EQUIVALENCE_FORMAT, "backends": backends}
-    return HEADER + yaml.safe_dump(document, sort_keys=False)
+    return HEADER + yaml.safe_dump(document, sort_keys=False, width=float("inf"))

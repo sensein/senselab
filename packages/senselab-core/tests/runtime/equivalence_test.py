@@ -36,10 +36,11 @@ from senselab_core.runtime.tolerance import (
 
 
 @pytest.mark.logic
-def test_no_measured_equivalence_is_packaged() -> None:
-    """The packaged table, read from `runtime/data/equivalence.yaml`, holds no class until evidence is regenerated."""
-    assert dict(load_equivalence()) == {}
-    assert dict(EQUIVALENCE) == {}
+def test_packaged_equivalence_is_the_data_file_and_every_class_pairs_contexts() -> None:
+    """`EQUIVALENCE` is the table read from `runtime/data/equivalence.yaml`; each class holds two or more contexts."""
+    assert EQUIVALENCE == load_equivalence()
+    for classes in EQUIVALENCE.values():
+        assert all(len(members) >= 2 for members in classes.values())
 
 
 @pytest.mark.logic
