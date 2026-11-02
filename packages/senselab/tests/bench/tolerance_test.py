@@ -110,8 +110,8 @@ def test_measure_refuses_fewer_items_than_declared() -> None:
 @pytest.mark.logic
 def test_every_adapter_items_are_split_by_id(tmp_path: Path) -> None:
     """The gretel adapter's items are cut to the split, calibration and held-out disjoint and together the pool."""
+    pa = pytest.importorskip("pyarrow")
     pq = importlib.import_module("pyarrow.parquet")
-    pa = importlib.import_module("pyarrow")
     rows = {
         "index": list(range(40)),
         "language": ["en"] * 40,

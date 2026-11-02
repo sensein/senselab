@@ -16,7 +16,7 @@ from senselab_core.kernel.identity import ExecutionContext
 from senselab_core.kernel.results import TextSpans
 from senselab_core.kernel.signals import PlainText
 from senselab_core.kernel.wire import from_wire_form
-from senselab_core.runtime.hardware import HardwareInfo
+from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.keys import Call, build_key
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.testing.contracts import BASE_CONTEXT, contract_cases
@@ -26,7 +26,13 @@ from senselab_worker.faults import ContentFault, FaultClass, ResourceFault
 
 LOCK_RECORDS = packaged_lock_records("senselab")
 
-HOST = HardwareInfo(cpu_count=1, memory_bytes=1, gpus=(), apple_silicon=False, platform="linux-x86_64")
+HOST = HardwareInfo(
+    cpu_count=1,
+    memory_bytes=1,
+    gpus=(GpuInfo(name="H100", memory_bytes=80 * 2**30, driver=None, index=0, uuid="GPU-0", compute_capability="9.0"),),
+    apple_silicon=False,
+    platform="linux-x86_64",
+)
 PROFILE = packaged_profile().model_dump(mode="json")
 PARAMS: dict[str, Any] = {"profile": PROFILE, "family": None, "backend_params": {}}
 NAMES = [c["name"] for c in PROFILE["categories"]]
