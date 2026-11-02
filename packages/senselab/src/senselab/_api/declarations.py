@@ -3,7 +3,7 @@
 from typing import Literal
 
 from pydantic import Field
-from senselab_core.kernel.declare import REGISTRY, ParamsOrdered, TaskParams, task
+from senselab_core.kernel.declare import ParamsOrdered, TaskParams, task
 from senselab_core.kernel.results import Embedding, Intervals, TextSpans, Transcript
 from senselab_core.kernel.signals import Audio, Text
 
@@ -24,7 +24,7 @@ DECLARATION_MODULES: tuple[str, ...] = (
     "senselab.text.tasks.pii_spans.transformers_backend",
     "senselab.text.tasks.pii_spans.vllm_backend",
 )
-"""Importable modules declaring tasks and backends in `senselab_core.kernel.declare.REGISTRY`, in declaration order."""
+"""Importable modules whose classes are decorated as tasks and backends, in declaration order."""
 
 
 class SpeechToTextParams(TaskParams):
@@ -34,7 +34,7 @@ class SpeechToTextParams(TaskParams):
     timestamps: Literal["word", "segment", "none"] = "word"
 
 
-@task(name="speech_to_text", version="1", kind="transform", registry=REGISTRY)
+@task(name="speech_to_text", version="1", kind="transform")
 class SpeechToText:
     """Transcribe mono speech to a `Transcript`: segments, each dividing into words when `timestamps` is `word`."""
 
@@ -56,7 +56,6 @@ class DiarizeParams(TaskParams):
     version="1",
     kind="transform",
     constraints=(ParamsOrdered(low="min_speakers", high="max_speakers"),),
-    registry=REGISTRY,
 )
 class Diarize:
     """Find who speaks when in mono speech: speaker turns as `Intervals`, labelled by speaker, ordered by start."""
@@ -66,7 +65,7 @@ class Diarize:
     Params = DiarizeParams
 
 
-@task(name="speaker_embeddings", version="1", kind="transform", registry=REGISTRY)
+@task(name="speaker_embeddings", version="1", kind="transform")
 class SpeakerEmbeddings:
     """Embed mono speech as one speaker `Embedding`, in the space of the model that produced it."""
 
@@ -96,7 +95,7 @@ class PiiSpansParams(TaskParams):
     family: str | None = Field(default=None, description="The task family selecting guidance from the profile.")
 
 
-@task(name="pii_spans", version="1", kind="transform", registry=REGISTRY)
+@task(name="pii_spans", version="1", kind="transform")
 class PiiSpans:
     """Find the spans of a text that identify a person: `TextSpans` labelled by category, each with a score."""
 

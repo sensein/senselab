@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy
 from pydantic import Field
-from senselab_core.kernel.declare import REGISTRY, BackendParams, Env, backend
+from senselab_core.kernel.declare import BackendParams, Env, backend
 from senselab_core.kernel.results import Transcript, TranscriptNode
 from senselab_core.kernel.time import Span
 from senselab_core.kernel.wire import wire_form
@@ -55,7 +55,6 @@ class TransformersParams(BackendParams):
     env=Env.host(),
     requirements=("transformers>=5.8", "torch>=2.4", "numpy"),
     params=TransformersParams,
-    registry=REGISTRY,
 )
 class Transformers:
     """The transformers ASR pipeline over the pinned catalogue model it is called with, one model per process."""

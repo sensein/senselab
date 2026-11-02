@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from pydantic import Field
-from senselab_core.kernel.declare import REGISTRY, BackendParams, Env, backend
+from senselab_core.kernel.declare import BackendParams, Env, backend
 
 from senselab.audio.tasks.speech_to_text.crisperwhisper import (
     DEFAULT_ENGINE,
@@ -39,7 +39,6 @@ class CrisperWhisperParams(BackendParams):
     devices=("cuda", "mps", "cpu"),
     env=Env.isolated("crisperwhisper"),
     params=CrisperWhisperParams,
-    registry=REGISTRY,
 )
 class CrisperWhisper:
     """The CrisperWhisper library, verbatim with word timestamps, over the one model it accepts."""

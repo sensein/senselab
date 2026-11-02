@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from senselab_core.kernel.declare import REGISTRY, Env, backend
+from senselab_core.kernel.declare import Env, backend
 
 from senselab.text.tasks.pii_spans.transformers import MODEL_ID, WORKER_MODULE
 
@@ -24,7 +24,6 @@ _WORKER_SOURCES = {
     worker=WORKER_MODULE,
     worker_sources=_WORKER_SOURCES,
     devices=("cuda",),
-    registry=REGISTRY,
     load_stub={"stub": True, "device": "cpu"},
     batch_invariant=True,
 )

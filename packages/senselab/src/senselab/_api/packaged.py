@@ -1,13 +1,16 @@
-"""The packaged catalogue, env locks and tolerance profiles, handed to `run_call` when `senselab` is imported."""
+"""The packaged catalogue, env locks and tolerance profiles, and the `register` the `senselab.packages` entry names."""
 
+import importlib
 from importlib import resources
 from pathlib import Path
 
-from senselab_core.kernel.declare import BackendSpec
-from senselab_core.runtime.call import Packaged, use_packaged
+from senselab_core.kernel.declare import BackendSpec, Registry, declare_module
+from senselab_core.runtime.call import Packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle, ensure_env
 from senselab_core.runtime.profiles import ExecutionProfile
+
+from senselab._api.declarations import DECLARATION_MODULES
 
 _DATA = resources.files("senselab").joinpath("data")
 CATALOGUE = Catalogue.load(_DATA.joinpath("catalogue.yaml").read_text("utf-8"))
@@ -45,4 +48,14 @@ def open_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:
 
 
 PACKAGED = Packaged(CATALOGUE, open_env, tolerance=_DATA.joinpath("tolerance"))
-use_packaged(PACKAGED)
+
+
+def register(registry: Registry) -> Packaged:
+    """Declare the tasks and backends of `DECLARATION_MODULES` in `registry` and return `PACKAGED`.
+
+    Raises:
+        As `declare_module`.
+    """
+    for name in DECLARATION_MODULES:
+        declare_module(registry, importlib.import_module(name))
+    return PACKAGED

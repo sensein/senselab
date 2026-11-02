@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import numpy
-from senselab_core.kernel.declare import REGISTRY, InputsAgree, TaskParams, backend, task
+from senselab_core.kernel.declare import InputsAgree, TaskParams, backend, task
 from senselab_core.kernel.results import Metric
 from senselab_core.kernel.signals import RegularSeries
 from senselab_core.runtime.audio_io import READER
@@ -26,7 +26,7 @@ SAME = tuple(
 )
 
 
-@task(name="resample_error", version="1", kind="transform", constraints=SAME, registry=REGISTRY)
+@task(name="resample_error", version="1", kind="transform", constraints=SAME)
 class ResampleError:
     """Score a resampled series against its reference: the relative RMS error."""
 

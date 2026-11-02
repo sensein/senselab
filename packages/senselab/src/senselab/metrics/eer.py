@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import numpy
-from senselab_core.kernel.declare import REGISTRY, TaskParams, backend, task
+from senselab_core.kernel.declare import TaskParams, backend, task
 from senselab_core.kernel.results import Metric, Trials
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault
@@ -20,7 +20,7 @@ WORKER_MODULE = "senselab.metrics.eer"
 load = _worker.load
 
 
-@task(name="eer", version="1", kind="transform", registry=REGISTRY)
+@task(name="eer", version="1", kind="transform")
 class Eer:
     """Score speaker-verification trials: the equal error rate of the cosine similarity of each pair."""
 

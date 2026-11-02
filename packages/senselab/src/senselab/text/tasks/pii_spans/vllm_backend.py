@@ -3,7 +3,7 @@
 from importlib import resources
 
 import yaml
-from senselab_core.kernel.declare import REGISTRY, Env, ServerConfig, backend
+from senselab_core.kernel.declare import Env, ServerConfig, backend
 
 from senselab.text.tasks.pii_spans.engine import MODEL_ID
 from senselab.text.tasks.pii_spans.vllm import WORKER_MODULE
@@ -35,7 +35,6 @@ def server_config() -> ServerConfig:
     models=(MODEL_ID,),
     worker=WORKER_MODULE,
     devices=("cuda",),
-    registry=REGISTRY,
     load_stub={"stub": True, "device": "cpu"},
     server=server_config(),
     batch_invariant=True,

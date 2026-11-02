@@ -14,7 +14,7 @@ from typing import Any
 import numpy
 import yaml
 from pydantic import Field
-from senselab_core.kernel.declare import REGISTRY, Env, TaskParams, backend, task
+from senselab_core.kernel.declare import Env, TaskParams, backend, task
 from senselab_core.kernel.signals import RegularSeries
 from senselab_core.runtime.audio_io import READER
 from senselab_worker.fake import FakeFaults
@@ -63,7 +63,6 @@ class Resample:
     devices=("cpu",),
     env=Env.host(),
     requirements=("numpy", "pyyaml"),
-    registry=REGISTRY,
 )
 class NumpySinc:
     """Kaiser-windowed sinc over the reduced ratio `target / rate`, in numpy alone."""

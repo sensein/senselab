@@ -445,7 +445,7 @@ class Registry:
 
 
 REGISTRY = Registry()
-"""The process-wide registry; modules declaring tasks and backends add to it on import."""
+"""The process-wide registry: what discovery merges the declaring packages' `register` calls into."""
 
 
 PORT_PROTOCOLS: tuple[type, ...] = (RegularSeries, Text)
@@ -470,9 +470,16 @@ C = TypeVar("C", bound=type)
 
 
 def task(  # noqa: PLR0913 - a task declares its name, version, kind, constraints and registry
-    *, name: str, version: str, kind: TaskKind, constraints: tuple[Constraint, ...] = (), registry: Registry = REGISTRY
+    *,
+    name: str,
+    version: str,
+    kind: TaskKind,
+    constraints: tuple[Constraint, ...] = (),
+    registry: Registry | None = None,
 ) -> Callable[[C], C]:
-    """Declare the decorated class as a task in `registry` and set its `spec` to the `TaskSpec`.
+    """Set the decorated class's `spec` to its `TaskSpec`, and declare it in `registry` when one is given.
+
+    A package declares such classes in the registry its `register` is given, with `declare_module`.
 
     The class holds `inputs` and `outputs`, each mapping port names to kernel value types (a port protocol, a
     `Recording` or a `Formatted` result), and may hold `Params`, a `TaskParams` subclass (`TaskParams` when absent).
@@ -491,7 +498,8 @@ def task(  # noqa: PLR0913 - a task declares its name, version, kind, constraint
             params=getattr(cls, "Params", TaskParams),
             constraints=constraints,
         )
-        registry.add_task(spec)
+        if registry is not None:
+            registry.add_task(spec)
         cls.spec = spec  # type: ignore[attr-defined]
         return cls
 
@@ -512,8 +520,8 @@ def _port_types(cls: type, ports: str) -> dict[str, str]:
     return {p: t.__name__ for p, t in declared.items()}
 
 
-def backend(*, name: str, version: str, registry: Registry = REGISTRY, **fields: Any) -> Callable[[C], C]:  # noqa: ANN401
-    """Declare the decorated class as backend `name` of its task in `registry`; set its `spec` to the `BackendSpec`.
+def backend(*, name: str, version: str, registry: Registry | None = None, **fields: Any) -> Callable[[C], C]:  # noqa: ANN401
+    """Set the decorated class's `spec` to backend `name`'s `BackendSpec`, and declare it in `registry` when given.
 
     `fields` are the other `BackendSpec` fields.
 
@@ -524,11 +532,28 @@ def backend(*, name: str, version: str, registry: Registry = REGISTRY, **fields:
     spec = BackendSpec(name=name, version=version, **fields)
 
     def declare(cls: C) -> C:
-        registry.add_backend(spec)
+        if registry is not None:
+            registry.add_backend(spec)
         cls.spec = spec  # type: ignore[attr-defined]
         return cls
 
     return declare
+
+
+def declare_module(registry: Registry, module: types.ModuleType) -> None:
+    """Declare in `registry` every task, then every backend, that a class defined in `module` was decorated as.
+
+    Raises:
+        NonCanonicalParams, UnknownTask, DuplicateDeclaration: as `Registry.add_task` and `Registry.add_backend`.
+    """
+    defined = [o for o in vars(module).values() if isinstance(o, type) and o.__module__ == module.__name__]
+    specs = [o.__dict__.get("spec") for o in defined]
+    for spec in specs:
+        if isinstance(spec, TaskSpec):
+            registry.add_task(spec)
+    for spec in specs:
+        if isinstance(spec, BackendSpec):
+            registry.add_backend(spec)
 
 
 SCHEMA_DIALECT: str = GenerateJsonSchema.schema_dialect
