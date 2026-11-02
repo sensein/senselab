@@ -349,6 +349,16 @@ class Registry:
             )
         backends[spec.name] = spec
 
+    def snapshot(self) -> tuple[dict[str, TaskSpec], dict[str, dict[str, BackendSpec]]]:
+        """Return a copy of the declarations, for `restore`."""
+        return dict(self._tasks), {t: dict(b) for t, b in self._backends.items()}
+
+    def restore(self, snapshot: tuple[dict[str, TaskSpec], dict[str, dict[str, BackendSpec]]]) -> None:
+        """Make the declarations those `snapshot` took, dropping any declared since."""
+        tasks, backends = snapshot
+        self._tasks = dict(tasks)
+        self._backends = {t: dict(b) for t, b in backends.items()}
+
     def tasks(self) -> list[TaskSpec]:
         """Return the declared tasks."""
         return list(self._tasks.values())

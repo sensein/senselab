@@ -533,14 +533,19 @@ def test_a_fresh_process_finds_the_packaged_tasks_without_importing_senselab() -
     assert "'wer'" in run.stdout and "'speech_to_text'" in run.stdout
 
 
-def _child(tmp_path: Path, entries: dict[str, str], script: str) -> subprocess.CompletedProcess[str]:
+def _child(
+    tmp_path: Path, entries: dict[str, str], script: str, files: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run `script` in a fresh interpreter where `entries` (module name to source) are entry points of the group."""
     info = tmp_path / "extra-0.dist-info"
     info.mkdir()
     (info / "METADATA").write_text("Metadata-Version: 2.1\nName: extra\nVersion: 0\n")
     (info / "entry_points.txt").write_text("[senselab.packages]\n" + "".join(f"{name} = {name}\n" for name in entries))
-    for name, source in entries.items():
-        (tmp_path / f"{name}.py").write_text(source)
+    for name, source in {**entries, **(files or {})}.items():
+        path = tmp_path / (name.replace(".", "/") + ".py")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source)
+        (path.parent / "__init__.py").touch()
     env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(tmp_path), *sys.path])}
     return subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=120, check=False
@@ -602,3 +607,21 @@ def test_signal_samples_admit_null() -> None:
     """Samples of a signal may be missing, so the items of its array schema admit null."""
     group = describe("signal.resample")["inputs"]["$defs"]["Audio"]["properties"]["groups"]
     assert "null" in json.dumps(group) and '"null"]' in json.dumps(group)
+
+
+@pytest.mark.logic
+def test_a_load_that_fails_after_declaring_is_rolled_back_and_retried_cleanly(tmp_path: Path) -> None:
+    """The failed load's declaration is undone; the retry loads once, so the registry holds each task once."""
+    marker = tmp_path / "failed-once"
+    entry = (
+        f"import halfway.decl\nimport os\nif not os.path.exists({str(marker)!r}):\n"
+        f"    open({str(marker)!r}, 'w').close()\n    raise ImportError('late failure')\n"
+    )
+    script = (
+        "from senselab_core.runtime.call import packaged\n"
+        "try:\n    packaged()\nexcept Exception as e:\n    print('first', type(e).__name__)\n"
+        "names = [t.name for t in packaged().registry.tasks()]\n"
+        "print('second', names.count('dup.t'), len(names) == len(set(names)))\n"
+    )
+    run = _child(tmp_path, {"halfway.entry": entry}, script, {"halfway.decl": _DECLARE})
+    assert run.stdout.splitlines() == ["first PackageLoadError", "second 1 True"], run.stderr

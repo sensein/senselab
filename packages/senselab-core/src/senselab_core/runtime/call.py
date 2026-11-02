@@ -9,6 +9,7 @@ import functools
 import importlib
 import logging
 import platform
+import sys
 import sysconfig
 import threading
 from collections.abc import Callable, Iterable, Mapping
@@ -270,21 +271,38 @@ def _load_entry_points() -> None:
     for entry in entry_points(group=PACKAGES_GROUP):
         uses = _STATE["uses"]
         name = f"{entry.name} = {entry.value}"
+        before = (REGISTRY.snapshot(), _PACKAGED, bool(_STATE["registered"]), set(sys.modules))
         try:
             entry.load()
-        except DuplicateDeclaration as error:
-            existing = error.existing
-            key = (existing.name,) if isinstance(existing, TaskSpec) else (existing.task, existing.name)
-            raise PackageLoadError(
-                f"entry point {name!r} redeclares {'/'.join(key)!r}, declared by {owners.get(key, 'another package')}"
-            ) from error
         except Exception as error:
-            raise PackageLoadError(f"entry point {name!r} failed to load: {type(error).__name__}: {error}") from error
+            _roll_back(entry.value, before)
+            raise _load_error(name, error, owners) from error
         owners.update({k: name for k in _declared() if k not in owners})
         if _STATE["uses"] > uses:
             if registering is not None:
                 raise PackageLoadError(f"entry points {registering!r} and {name!r} both register packaged declarations")
             registering = name
+
+
+def _roll_back(value: str, before: tuple[Any, Packaged, bool, set[str]]) -> None:
+    """Undo a failed load: its declarations, its `use_packaged` and the modules of its top-level package."""
+    global _PACKAGED  # noqa: PLW0603 - the process-wide counterpart of REGISTRY
+    snapshot, previous, registered, modules = before
+    REGISTRY.restore(snapshot)
+    _PACKAGED, _STATE["registered"] = previous, int(registered)
+    top = value.split(":", maxsplit=1)[0].split(".", maxsplit=1)[0]
+    for module in [m for m in sys.modules if m not in modules and (m == top or m.startswith(top + "."))]:
+        del sys.modules[module]
+
+
+def _load_error(name: str, error: Exception, owners: dict[tuple[str, ...], str]) -> PackageLoadError:
+    if isinstance(error, DuplicateDeclaration):
+        existing = error.existing
+        key = (existing.name,) if isinstance(existing, TaskSpec) else (existing.task, existing.name)
+        return PackageLoadError(
+            f"entry point {name!r} redeclares {'/'.join(key)!r}, declared by {owners.get(key, 'another package')}"
+        )
+    return PackageLoadError(f"entry point {name!r} failed to load: {type(error).__name__}: {error}")
 
 
 def run_call(
