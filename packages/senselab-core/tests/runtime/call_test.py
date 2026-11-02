@@ -135,6 +135,16 @@ TEST_REGISTRY = Registry()
 for _task in (TASK, AUDIO_TASK, PAIR_TASK, CLOCKED_TASK, TRANSCRIBE_TASK, TRIALS_TASK, fake.ECHO):
     TEST_REGISTRY.add_task(_task)
 TEST_REGISTRY.add_backend(_backend("fake-alpha", "alpha", Env.host()))
+TEST_REGISTRY.add_backend(
+    BackendSpec(
+        **{
+            **_backend("fake-batched", "batched", Env.host()).model_dump(),
+            "batch_invariant": False,
+            "output_affecting": ("batch_formation", "chunk_grid"),
+            "chunk_grid": "whole-item",
+        }
+    )
+)
 TEST_REGISTRY.add_backend(_backend("fake-beta", "beta", Env.host()))
 TEST_REGISTRY.add_backend(_backend("fake-isolated", "isolated", Env.isolated("fake")))
 TEST_REGISTRY.add_backend(fake.FAKE)
@@ -152,8 +162,8 @@ entries:
 - id: {TOY}
   revision: {REVISION}
   tasks: [{TASK.name}]
-  backends: [fake-alpha, fake-beta, fake-isolated]
-  stacks: [alpha, beta, isolated]
+  backends: [fake-alpha, fake-batched, fake-beta, fake-isolated]
+  stacks: [alpha, batched, beta, isolated]
   default_for: [{TASK.name}]
   license:
     expression: MIT
@@ -215,6 +225,13 @@ def test_catalogue_metadata_binds_to_the_pinned_revision() -> None:
     other = "b" * 40
     model, entry = call_module._resolve_model(TASK, ModelRef.parse(f"{TOY}@{other}"), _profile("alpha"), CATALOGUE)
     assert model is not None and (model.identity, model.license, entry) == (other, None, None)
+
+
+@pytest.mark.logic
+def test_declared_batch_formation_and_chunk_grid_are_produced(store: ResultStore) -> None:
+    """A backend declaring batch formation and chunk grid runs, keyed by one-item requests on its chunk grid."""
+    result = run_call(_call(), execution=_profile("batched"), store=store)
+    assert (result.key.batch_formation, result.key.chunk_grid) == ("single", "whole-item")
 
 
 @pytest.mark.logic

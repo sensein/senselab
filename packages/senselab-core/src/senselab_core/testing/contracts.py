@@ -48,7 +48,7 @@ from senselab_core.kernel.results import Intervals, TextSpans, Transcript, Trans
 from senselab_core.kernel.signals import PlainText
 from senselab_core.kernel.time import Span
 from senselab_core.kernel.wire import wire_form
-from senselab_core.runtime.keys import Call, Placement, build_key
+from senselab_core.runtime.keys import Call, Placement, build_key, request_components
 from senselab_core.runtime.licenses import backend_license, check_license
 from senselab_core.runtime.worker_client import WorkerClient
 
@@ -245,6 +245,7 @@ def _backend_cases(
 ) -> list[tuple[str, Callable[[TaskSpec, BackendSpec], None]]]:
     cases: list[tuple[str, Callable[[TaskSpec, BackendSpec], None]]] = [
         ("key_deterministic", functools.partial(_key_deterministic, build)),
+        ("output_affecting_produced", _output_affecting_produced),
     ]
     for f in LogicalKey.model_fields:
         if f in OUTPUT_AFFECTING and f not in backend.output_affecting:
@@ -261,6 +262,15 @@ def _backend_cases(
     cases.append(("content_fault_isolated", _content_fault_isolated))
     cases.append(("backend_license", functools.partial(_backend_license, lock_records)))
     return cases
+
+
+def _output_affecting_produced(task: TaskSpec, backend: BackendSpec) -> None:
+    produced: dict[str, object] = dict(request_components(backend))
+    missing = [c for c in backend.output_affecting if produced[c] is None]
+    assert not missing, f"{backend.name!r} declares {missing} output-affecting, and run_call produces no value for it"
+    assert backend.batch_invariant or "batch_formation" in backend.output_affecting, (
+        f"{backend.name!r} is not batch-invariant and does not declare batch_formation output-affecting"
+    )
 
 
 def _backend_license(lock_records: LockRecords | None, task: TaskSpec, backend: BackendSpec) -> None:

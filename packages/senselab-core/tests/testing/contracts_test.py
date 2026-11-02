@@ -39,6 +39,7 @@ def test_fake_cases_are_listed_by_name() -> None:
         "fake.echo::params_round_trip",
         "fake.echo::params_reject_unknown",
         "fake::key_deterministic",
+        "fake::output_affecting_produced",
         "fake::key_independent_of_hash_seed",
         "fake::content_fault_isolated",
     }
@@ -113,6 +114,26 @@ def test_a_defective_task_fails_its_case(task: dict[str, Any], case: str) -> Non
     """Each task-level contract fails on the defect it guards."""
     with pytest.raises((AssertionError, ValueError)):
         _case(_registry(task), case)()
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "backend",
+    [
+        {"batch_invariant": False},
+        {"batch_invariant": False, "output_affecting": ("batch_formation", "chunk_grid")},
+    ],
+    ids=["batch_dependent_undeclared", "chunk_grid_without_producer"],
+)
+def test_an_output_affecting_component_needs_a_producer(backend: dict[str, Any]) -> None:
+    """A batch-dependent backend declares its batch formation, and a declared chunk grid is one run_call can name."""
+    case = _case(_registry({}, backend), "fake::output_affecting_produced")
+    with pytest.raises(AssertionError):
+        case()
+    _case(
+        _registry({}, {**backend, "output_affecting": ("batch_formation", "chunk_grid"), "chunk_grid": "30s"}),
+        "fake::output_affecting_produced",
+    )()
 
 
 @pytest.mark.logic

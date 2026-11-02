@@ -50,6 +50,7 @@ class TransformersParams(BackendParams):
     worker=WORKER_MODULE,
     load_stub={"stub": True, "device": "cpu"},
     batch_invariant=False,
+    output_affecting=("batch_formation",),
     devices=("cuda", "cpu"),
     env=Env.host(),
     requirements=("transformers>=5.8", "torch>=2.4", "numpy"),

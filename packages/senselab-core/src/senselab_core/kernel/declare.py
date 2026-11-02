@@ -306,7 +306,8 @@ class BackendSpec(Frozen):
     this process and is given the running server (`load` takes it in `init["server"]`); `requirements` the
     requirement strings a host backend needs from the senselab lock (`ensure_env` refuses an `Env.host()` backend
     unless that lock covers each). `output_affecting` names the components of `OUTPUT_AFFECTING` that change this
-    backend's outputs and so enter its logical key, held sorted and once each.
+    backend's outputs and so enter its logical key, held sorted and once each; `chunk_grid` names the grid its worker
+    cuts an item into when that grid is not a backend param.
     """
 
     task: NonEmptyStr
@@ -325,6 +326,7 @@ class BackendSpec(Frozen):
     params: type[BackendParams] = BackendParams
     server: ServerConfig | None = None
     requirements: tuple[NonEmptyStr, ...] = ()
+    chunk_grid: NonEmptyStr | None = None
 
     @field_validator("output_affecting")
     @classmethod

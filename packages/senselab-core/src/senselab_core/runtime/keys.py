@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import TypedDict
 
 from senselab_core.kernel.declare import BackendParams, BackendSpec, TaskParams, TaskSpec, key_for
 from senselab_core.kernel.identity import (
@@ -22,6 +23,22 @@ class Call:
     inputs: Mapping[str, InputIdentity]
     model: ResolvedModel | None = None
     profile_slices: Mapping[str, ProfileSliceIdentity] = field(default_factory=dict)
+
+
+SINGLE_ITEM = "single"
+"""The batch formation of a request holding one item, the only request `run_call` sends."""
+
+
+class RequestComponents(TypedDict):
+    """The batch formation and chunk grid of the requests `run_call` sends a backend."""
+
+    batch_formation: str
+    chunk_grid: str | None
+
+
+def request_components(backend: BackendSpec) -> RequestComponents:
+    """Return the batch formation and chunk grid of the requests `run_call` sends `backend`."""
+    return {"batch_formation": SINGLE_ITEM, "chunk_grid": backend.chunk_grid}
 
 
 @dataclass(frozen=True)
