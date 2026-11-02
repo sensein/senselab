@@ -128,6 +128,14 @@ def test_embed_windows_makes_one_task_call_per_window_in_order() -> None:
         embed_windows(_tone(0.5), task)
 
 
+@pytest.mark.logic
+def test_checkpoint_paths_outside_the_pinned_snapshot_are_named() -> None:
+    """A path still addressed to the hub repo, as the packaged `hyperparams.yaml` leaves it, is outside the snapshot."""
+    snapshot = "/cache/models--speechbrain--spkrec-ecapa-voxceleb/snapshots/" + "a" * 40
+    paths = {"embedding_model": f"{snapshot}/embedding_model.ckpt", "hub": f"{sb.MODEL_ID}/embedding_model.ckpt"}
+    assert sb.unpinned_paths(paths, snapshot) == {"hub": f"{sb.MODEL_ID}/embedding_model.ckpt"}
+
+
 @pytest.mark.contract
 def test_backend_serves_the_ecapa_model_and_declares_its_isolated_env() -> None:
     """One isolated backend `speechbrain` over the catalogue's default `speaker_embeddings` model."""

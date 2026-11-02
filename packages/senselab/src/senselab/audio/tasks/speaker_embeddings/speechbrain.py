@@ -32,19 +32,36 @@ class StubModel:
         return numpy.random.default_rng(seed).standard_normal(STUB_DIMENSION).astype(numpy.float32)
 
 
+def unpinned_paths(paths: Mapping[str, str], snapshot: str) -> dict[str, str]:
+    """Return the checkpoint paths of `paths` that do not lie under the directory `snapshot`."""
+    root = snapshot.rstrip("/") + "/"
+    return {name: path for name, path in paths.items() if not str(path).startswith(root)}
+
+
 class Encoder:
     """The SpeechBrain speaker encoder, loaded from the pinned commit of the model onto one device."""
 
     def __init__(self, model: Mapping[str, Any], device: str) -> None:
-        """Download the snapshot at the model's commit and build the classifier from that local copy."""
+        """Download the snapshot at the model's commit and build the classifier from that local copy.
+
+        Raises:
+            RuntimeError: when a checkpoint path of the classifier lies outside the snapshot.
+        """
         from huggingface_hub import snapshot_download  # noqa: PLC0415 - loads when the encoder is built
         from speechbrain.inference.speaker import EncoderClassifier  # noqa: PLC0415 - as above
 
         snapshot = snapshot_download(str(model["id"]), revision=str(model["identity"]))
         self.device = device
+        self._scratch = tempfile.TemporaryDirectory(prefix="speechbrain-")
         self.classifier = EncoderClassifier.from_hparams(
-            source=snapshot, savedir=tempfile.mkdtemp(prefix="speechbrain-"), run_opts={"device": device}
+            source=snapshot,
+            savedir=self._scratch.name,
+            run_opts={"device": device},
+            overrides={"pretrained_path": snapshot},
         )
+        stray = unpinned_paths(self.classifier.hparams.pretrainer.paths, snapshot)
+        if stray:
+            raise RuntimeError(f"checkpoints load from outside the pinned snapshot {snapshot}: {stray}")
 
     def embed(self, samples: numpy.ndarray) -> numpy.ndarray:
         """Return the 1-D embedding of `samples` as float32."""
