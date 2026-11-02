@@ -16,8 +16,10 @@ from senselab_core.kernel.results import Intervals
 
 Folder = TypeVar("Folder", Path, Traversable)
 
-Fields = dict[str, list[float] | str]
-"""An output's leaves by dotted path: numbers and arrays as float lists, anything else as its JSON."""
+Value = list[float | None] | str
+"""One output leaf: numbers as a float list, a None where a value is absent, or anything else as its JSON."""
+Fields = dict[str, Value]
+"""An output's leaves by dotted path."""
 
 
 class NoToleranceProfile(LookupError):
@@ -149,7 +151,7 @@ def best_assignment(weights: Sequence[Sequence[float]]) -> list[tuple[int, int]]
     return sorted((match[j] - 1, j - 1) for j in range(1, size + 1) if match[j] - 1 < n and j - 1 < m)
 
 
-def _intervals(fields: Mapping[str, list[float] | str]) -> set[str]:
+def _intervals(fields: Mapping[str, Value]) -> set[str]:
     """Return the path prefixes under which `fields` hold a flattened `Intervals`."""
     found = set()
     for path, value in fields.items():
@@ -159,9 +161,7 @@ def _intervals(fields: Mapping[str, list[float] | str]) -> set[str]:
     return found
 
 
-def _relabel_one(
-    expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str], prefix: str
-) -> Fields:
+def _relabel_one(expected: Mapping[str, Value], actual: Mapping[str, Value], prefix: str) -> Fields:
     label = re.compile(re.escape(f"{prefix}.label") + r"\[(\d+)\]")
     times = (f"{prefix}.start_ns", f"{prefix}.end_ns")
 
@@ -179,7 +179,8 @@ def _relabel_one(
     spans = [[list(f[t]) for t in times] for f in (expected, actual)]
     for i, (es, ee) in enumerate(zip(*spans[0], strict=True)):
         for j, (a_s, a_e) in enumerate(zip(*spans[1], strict=True)):
-            overlap[rows.index(elabel[i])][cols.index(alabel[j])] += max(0.0, min(ee, a_e) - max(es, a_s))
+            if None not in (es, ee, a_s, a_e):
+                overlap[rows.index(elabel[i])][cols.index(alabel[j])] += max(0.0, min(ee, a_e) - max(es, a_s))
     mapped = {cols[c]: rows[r] for r, c in best_assignment(overlap) if overlap[r][c] > 0}
     out = dict(actual)
     for k, name in zip(ak, alabel, strict=True):
@@ -187,7 +188,7 @@ def _relabel_one(
     return out
 
 
-def relabel_turns(expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str]) -> Fields:
+def relabel_turns(expected: Mapping[str, Value], actual: Mapping[str, Value]) -> Fields:
     """Return `actual` with the labels of each flattened `Intervals` renamed to `expected`'s by most shared time.
 
     An `Intervals` is found by its `format` leaf on either side, under any path. Labels are arbitrary per run, so
@@ -200,12 +201,23 @@ def relabel_turns(expected: Mapping[str, list[float] | str], actual: Mapping[str
     return out
 
 
-def within(
-    expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str], profile: ToleranceProfile
-) -> dict[str, str]:
+def numeric_gap(a: Sequence[float | None], b: Sequence[float | None]) -> float | None:
+    """Return the largest absolute difference of two equal-length numeric leaves, 0 when empty.
+
+    A None agrees only with a None at the same position; a None against a number returns None, a disagreement
+    and never a distance.
+    """
+    if any((x is None) != (y is None) for x, y in zip(a, b, strict=True)):
+        return None
+    pairs = [(x, y) for x, y in zip(a, b, strict=True) if x is not None and y is not None]
+    return max((abs(x - y) for x, y in pairs), default=0.0)
+
+
+def within(expected: Mapping[str, Value], actual: Mapping[str, Value], profile: ToleranceProfile) -> dict[str, str]:
     """Return, by path of `expected`, why `actual` differs from it beyond `profile`; empty when they agree.
 
-    Speaker turns are compared under `relabel_turns`. A path differs when `actual` lacks it, its shape differs,
+    Speaker turns are compared under `relabel_turns`. A path differs when `actual` lacks it, its shape differs, a
+    None stands against a number (`numeric_gap`),
     the profile has no tolerance for it, or the difference exceeds the profile's tolerance (an exact field must be
     equal).
     """
@@ -223,6 +235,8 @@ def within(
                 out[path] = f"{a!r} != {b!r}"
         elif len(a) != len(b):
             out[path] = f"{len(a)} values against {len(b)}"
-        elif a and (gap := float(numpy.max(numpy.abs(numpy.asarray(a) - numpy.asarray(b))))) > bound[path]:
+        elif (gap := numeric_gap(a, b)) is None:
+            out[path] = "a None against a number"
+        elif gap > bound[path]:
             out[path] = f"difference {gap:g} exceeds tolerance {bound[path]:g}"
     return out

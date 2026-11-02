@@ -2,6 +2,7 @@
 
 import importlib
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -184,3 +185,65 @@ def test_label_permutation_derives_no_spread() -> None:
     labels = [f for f in tol.derive(obs, split_of).fields if f.path.startswith("turns.label")]
     assert [f.path for f in labels] == ["turns.label[0]", "turns.label[1]"]
     assert all(f.tolerance == 0.0 for f in labels)
+
+
+def _asr_observations(device: str, span: list[float | None]) -> Any:  # noqa: ANN401
+    """A speech_to_text observation as the ORCD jobs wrote it: `timestamps: none` leaves each span `[null]`."""
+    runs = [
+        {
+            "repeat": 0,
+            "device": device,
+            "stack": "transformers",
+            "batch": batch,
+            "fields": {
+                "transcript.format": '"transcript@1.0"',
+                "transcript.segments[0].span": span,
+                "transcript.segments[0].text": '"HELLO WORLD"',
+                "transcript.segments[0].confidence": [0.9],
+            },
+        }
+        for batch in ("1", "N")
+    ]
+    document = {
+        "format": "tolerance-observations@1.0",
+        "task": "speech_to_text",
+        "backend": "transformers",
+        "sha": "a" * 40,
+        "job": "7",
+        "items": [{"id": _ids("calibration", 1)[0], "split": "calibration", "runs": runs}],
+    }
+    return tol.Observations.model_validate_json(json.dumps(document))
+
+
+@pytest.mark.logic
+def test_real_shaped_asr_observation_validates() -> None:
+    """A `[null]` span and a JSON-encoded text string validate, the None kept as None."""
+    [item] = _asr_observations("cpu", [None]).items
+    assert item.runs[0].fields["transcript.segments[0].span"] == [None]
+    assert item.runs[0].fields["transcript.segments[0].text"] == '"HELLO WORLD"'
+
+
+@pytest.mark.logic
+def test_null_spans_derive_zero_spread() -> None:
+    """Two runs whose spans are both `[null]` derive zero spread on the span, with no shape mismatch."""
+    profile = tol.derive([_asr_observations("cpu", [None]), _asr_observations("cuda", [None])], split_of)
+    [span] = [f for f in profile.fields if f.path == "transcript.segments[0].span"]
+    assert span.tolerance == 0.0 and span.shape_mismatches == 0 and profile.findings == ()
+
+
+@pytest.mark.logic
+def test_none_against_a_float_disagrees() -> None:
+    """A None against a number is a disagreement in derive and in `within`, never a numeric distance."""
+    profile = tol.derive([_asr_observations("cpu", [None]), _asr_observations("cuda", [1.5])], split_of)
+    [span] = [f for f in profile.fields if f.path == "transcript.segments[0].span"]
+    assert span.shape_mismatches > 0 and span.tolerance == 0.0
+    assert "transcript.segments[0].span: 2 pairs differ in shape" in profile.findings
+    loose = tol.ToleranceProfile.model_validate(
+        {**profile.model_dump(mode="json"), "fields": [{**span.model_dump(mode="json"), "tolerance": 1e9}]}
+    )
+    within = importlib.import_module("senselab_core.runtime.tolerance").within
+    expected = {"transcript.segments[0].span": [None]}
+    assert within(expected, {"transcript.segments[0].span": [1.5]}, loose) == {
+        "transcript.segments[0].span": "a None against a number"
+    }
+    assert within(expected, {"transcript.segments[0].span": [None]}, loose) == {}

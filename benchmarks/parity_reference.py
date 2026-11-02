@@ -22,7 +22,7 @@ import numpy
 import yaml
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.formats import PARITY_OUTPUTS_FORMAT, PARITY_REFERENCE_FORMAT, FormatTag, Formatted
-from senselab_core.runtime.tolerance import INTERVALS_FORMAT, Fields, ToleranceProfile, flatten, within
+from senselab_core.runtime.tolerance import INTERVALS_FORMAT, Fields, ToleranceProfile, Value, flatten, within
 
 ROOT = Path(__file__).resolve().parents[1]
 HELDOUT = "heldout"
@@ -171,9 +171,7 @@ def load_profile(path: Path) -> ToleranceProfile:
     return profile
 
 
-def compare(
-    expected: Mapping[str, list[float] | str], actual: Mapping[str, list[float] | str], profile: ToleranceProfile
-) -> list[str]:
+def compare(expected: Mapping[str, Value], actual: Mapping[str, Value], profile: ToleranceProfile) -> list[str]:
     """Return `within(expected, actual, profile)` as `<path>: <why>` lines."""
     return [f"{path}: {why}" for path, why in within(expected, actual, profile).items()]
 

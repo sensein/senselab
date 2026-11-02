@@ -16,7 +16,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Protocol
 
-import numpy
 import yaml
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.formats import TOLERANCE_OBSERVATIONS_FORMAT, FormatTag, Formatted
@@ -25,7 +24,10 @@ from senselab_core.runtime.tolerance import (
     Derivation,
     FieldTolerance,
     ToleranceProfile,
+    Fields,
+    Value,
     flatten,
+    numeric_gap,
     relabel_turns,
     tolerance_profile_path,
 )
@@ -48,7 +50,7 @@ class Run(Frozen):
     device: NonEmptyStr
     stack: NonEmptyStr
     batch: NonEmptyStr
-    fields: dict[str, list[float] | str]
+    fields: Fields
 
 
 class ObservedItem(Frozen):
@@ -135,13 +137,15 @@ def measure(  # noqa: PLR0913 - what one measurement job fixes
     )
 
 
-def _spread(a: list[float] | str, b: list[float] | str) -> tuple[float, bool]:
-    """Return (spread, shapes differ): the largest absolute difference, or 0/1 for strings."""
+def _spread(a: Value, b: Value) -> tuple[float, bool]:
+    """Return (spread, shapes differ): the largest absolute difference, or 0/1 for strings.
+
+    Two numeric leaves differ in shape when their lengths differ or a None stands against a number (`numeric_gap`).
+    """
     if isinstance(a, str) or isinstance(b, str):
         return float(a != b), False
-    if len(a) != len(b):
-        return 0.0, True
-    return float(numpy.max(numpy.abs(numpy.asarray(a) - numpy.asarray(b)))) if a else 0.0, False
+    gap = numeric_gap(a, b) if len(a) == len(b) else None
+    return (0.0, True) if gap is None else (gap, False)
 
 
 def derive(observations: Sequence[Observations], split_of: Any) -> ToleranceProfile:
