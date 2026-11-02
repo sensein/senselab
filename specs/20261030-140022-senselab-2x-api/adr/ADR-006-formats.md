@@ -89,7 +89,7 @@ findings are in [`reviews/phase1-reattack/canon.md`](../reviews/phase1-reattack/
 
   **Registered identity tags:** `logical-key@6`, `output@3`, `context@3`, `content-root@2`, `audio@4`,
   `weights@3`, `value@2`, `provenance-id@4`, `data-manifest@3`, `worker-runtime@1`, `fake-output@1`,
-  `contract-probe@1`, `prov-activity@1`, `prov-node@1`, `wheel-set@1`, `env-lock@1`, `vllm-config@1`, `source@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a
+  `contract-probe@1`, `prov-activity@1`, `prov-node@1`, `wheel-set@1`, `env-lock@1`, `env-overlay@1`, `launch-env@1`, `vllm-config@1`, `source@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a
   `format:` line in a packaged YAML file or in a store entry): `equivalence@2.0`, `equivalence-evidence@1.0`, `retry-policy@1.0`, `catalogue@1.0`, `spdx-licenses@1.0`, and
   `execution-context@2.0` in a store entry's `context.json`; `env-record@1.0`, an env root's `<name>[-<tag>].json`; `senselab-vocab@1.1`, a vocabulary document's
   `owl:versionInfo` (ADR-010).
@@ -248,6 +248,16 @@ Phase 2 Task 22f.
   `source-digests@1`: `data/source_digests.yaml`, written at a release, mapping `task:<name>` and
   `backend:<task>/<name>` to `version` and `digest`; before the first release the baseline is the tree at the
   merge-base with `2.x` (P2-54, Phase 2 Task 19).
+- 2026-11-02: identity tag `env-overlay@1`, the digest of an env's overlay: the worker runtime identity and each
+  worker module's `[dotted name, file@1 digest]`, sorted. A built env is named by it beside its lock and torch index,
+  so an env is never changed once published; another overlay is another build (R-179, Phase 2 Task 34).
+- 2026-11-02: identity tag `launch-env@1`, the digest of how a worker or server process is started: its ambient
+  variables of a recorded family with its declared variables, sorted `[name, value]` pairs. The context records it as
+  `driver.launch_env`. Data format `launch-environment@1.0`: `data/launch_environment.yaml`, the families of ambient
+  variables a launched process inherits (linker, TLS, proxy, Hugging Face, GPU, threads, locale, process; GPU and
+  threads recorded) and the `never` family (`PYTHON*`, `VIRTUAL_ENV`, `CONDA_*`), each with its derivation. A server's
+  attestation adds the observed `served_model` and names its observed entries in `driver.observed` (R-178, Phase 2
+  Task 34).
 
 ## Amendment 2026-11-01: kernel types of the Phase 2 tasks and their wire forms
 
