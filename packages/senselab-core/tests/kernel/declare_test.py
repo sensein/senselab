@@ -19,6 +19,7 @@ from senselab_core.kernel.declare import (
     Env,
     NonCanonicalParams,
     Registry,
+    ServerConfig,
     TaskParams,
     TaskSpec,
     UnknownTask,
@@ -193,6 +194,26 @@ def test_backend_params_validated_per_backend() -> None:
             _backend(name="bad", params=create_model("_Generated", __base__=BackendParams, field=(set[str], ...)))
         )
     assert [b.name for b in registry.backends("t.measure")] == ["beam", "chunk"]
+
+
+@pytest.mark.logic
+def test_server_backend_declares_its_engine_configuration_and_no_worker_sources() -> None:
+    """`server` is declared by an `Env.server` backend and by no other, and a server backend places no sources."""
+    server = ServerConfig(settings={"max_model_len": 1}, startup_timeout_s=5)
+    assert _backend(env=Env.server("e"), server=server).server == server
+    with pytest.raises(ValidationError, match="declares `server`"):
+        _backend(env=Env.server("e"))
+    with pytest.raises(ValidationError, match="declares `server`"):
+        _backend(env=Env.isolated("e"), server=server)
+    with pytest.raises(ValidationError, match="no worker sources"):
+        _backend(
+            env=Env.server("e"),
+            server=server,
+            worker_sources={"senselab_worker.fake": "x.py"},
+            worker="senselab_worker.fake",
+        )
+    with pytest.raises(ValidationError):
+        ServerConfig(settings={}, startup_timeout_s=0)
 
 
 @pytest.mark.logic

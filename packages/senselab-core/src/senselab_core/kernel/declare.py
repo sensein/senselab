@@ -200,6 +200,17 @@ class Env(Frozen):
         return cls(kind="server", name=name)
 
 
+class ServerConfig(Frozen):
+    """How a server backend's engine runs.
+
+    `settings` are the keys `vllm_server.server_args` reads; `startup_timeout_s` is the seconds the engine has to
+    become healthy.
+    """
+
+    settings: Params
+    startup_timeout_s: float = Field(gt=0)
+
+
 TunableValue = bool | int | float | str
 Tunables = Annotated[
     Mapping[str, tuple[TunableValue, ...]],
@@ -224,14 +235,15 @@ class BackendSpec(Frozen):
     `models` are the catalogue models it serves; `env` where it runs; `batch_invariant` whether an
     item's outputs are independent of its batch-mates; `tunables` the declared values of each
     tunable; `worker` the module serving `load(init)` and `handle(state, items, params)`; `worker_sources` the
-    source file of each module of an isolated or server backend's worker, by dotted name, `worker` among them (empty
-    for a host backend and for a worker the runtime itself provides), which `ensure_env` places in the env;
+    source file of each module of an isolated backend's worker, by dotted name, `worker` among them (empty
+    for a host or server backend and for a worker the runtime itself provides), which `ensure_env` places in the env;
     `load_stub` the `init` under which `load` builds the fake stack's model in place of weights,
     taking `faults` (the fields of `senselab_worker.fake.FakeFaults`) beside it; `params` its
-    `BackendParams` model; `requirements` the requirement strings a host backend needs from the senselab lock
-    (`ensure_env` refuses an `Env.host()` backend unless that lock covers each). `output_affecting` names the
-    components of `OUTPUT_AFFECTING` that change this backend's outputs and so enter its logical key, held sorted
-    and once each.
+    `BackendParams` model; `server` the engine configuration of an `Env.server` backend, whose `worker` module runs in
+    this process and is given the running server (`load` takes it in `init["server"]`); `requirements` the
+    requirement strings a host backend needs from the senselab lock (`ensure_env` refuses an `Env.host()` backend
+    unless that lock covers each). `output_affecting` names the components of `OUTPUT_AFFECTING` that change this
+    backend's outputs and so enter its logical key, held sorted and once each.
     """
 
     task: NonEmptyStr
@@ -248,6 +260,7 @@ class BackendSpec(Frozen):
     worker_sources: StrMap = FrozenMapping({})
     load_stub: Params
     params: type[BackendParams] = BackendParams
+    server: ServerConfig | None = None
     requirements: tuple[NonEmptyStr, ...] = ()
 
     @field_validator("output_affecting")
@@ -271,6 +284,14 @@ class BackendSpec(Frozen):
             raise ValueError(f"worker_sources must hold the worker module {self.worker!r}")
         if self.worker_sources and self.env.kind == "host":
             raise ValueError("a host backend runs in the senselab venv and places no worker sources")
+        return self
+
+    @model_validator(mode="after")
+    def _check_server(self) -> "BackendSpec":
+        if (self.env.kind == "server") != (self.server is not None):
+            raise ValueError("a server backend declares `server`, and no other backend does")
+        if self.env.kind == "server" and self.worker_sources:
+            raise ValueError("a server backend's worker runs in the senselab venv and places no worker sources")
         return self
 
     @model_validator(mode="after")

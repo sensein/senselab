@@ -48,6 +48,7 @@ from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.runtime.revision import cache_root
 from senselab_core.runtime.store import ResultStore, context_record, key_record
 from senselab_core.runtime.store import output_identity as store_output_identity
+from senselab_core.runtime.vllm_server import StaleAttestation, VllmServer
 from senselab_core.runtime.vocabulary import core_vocabulary
 from senselab_core.runtime.worker_client import WorkerClient
 
@@ -198,11 +199,14 @@ def run_call(
     The model is the catalogue's pin for a catalogue model at that revision (the task's catalogue default when the
     call names none), else `resolve()`d. `resolve_execution` places the call under `execution`; the backend's env
     opens through the packaged opener and its worker is reused across calls (one model per worker process; host
-    backends share one `ModelCache` per budget). An execution writes one activity, associated with an agent carrying
-    `senselab:modelSource`, recording the key, the context and the profile's digest; a store hit writes none (the
-    store records its reuse). An execution whose `put` finds different outputs another writer committed first is
-    served those, as a reuse, and writes no execution activity. An output on a port declared as a kernel type is
-    stored as its wire form and returned as the kernel value, read by `from_wire_form`. Outputs are stored on the
+    backends share one `ModelCache` per budget). A server backend's `VllmServer` starts on the first call that
+    needs it (even one a store would serve, since its attestation is part of the context the store matches),
+    serves every later call of that env and model, and stops at exit; the context carries its attestation.
+    An execution writes one activity, associated with an agent carrying `senselab:modelSource`, recording the key,
+    the context and the profile's digest; a store hit writes none (the store records its reuse). An execution whose
+    `put` finds different outputs another writer committed first is served those, as a reuse, and writes no
+    execution activity. An output on a port declared as a kernel type is stored as its wire form and returned as the
+    kernel value, read by `from_wire_form`. Outputs are stored on the
     clocks their recording inputs' identities name and served re-bound (`rebind`) to the caller's anchors, so the key
     holds no anchor and one entry serves one content under every anchor. `None` means the packaged
     default: the `laptop` profile, `RunConfig()` and the store under `cache_root()/results`.
@@ -212,9 +216,9 @@ def run_call(
         AmbiguousClock: two recording inputs of one content carry different anchors.
         WireFormatRetired: a stored output is in a retired wire format.
         UnlistedSource, NoBackend, NoDevice: as `resolve_execution`.
-        NotImplementedError: the backend runs in an `Env.server` env.
-        ValueError: an input has no reader for its port's type or, for an isolated backend, no wire form; or the
-            backend params do not validate.
+        ValueError: an input has no reader for its port's type or, for an isolated or server backend, no wire form;
+            the backend params do not validate; or a server backend got no model.
+        VllmStartError, LeaseTimeout, LeaseUnavailable: a server backend's server did not start.
         CallFailed: the backend failed the item.
         OutputTypeMismatch: an output of a kernel-typed port is not a wire form of its declared type.
         WorkerFatal, WorkerLost, ProtocolError: as the worker reports them.
@@ -230,12 +234,11 @@ def run_call(
     placement = resolve_execution(spec, entry, profile, hardware, _PACKAGED.registry, _PACKAGED.catalogue)
     backend = placement.backend
     placement = replace(placement, backend_params=backend.params.model_validate(dict(call.backend_params)))
-    if backend.env.kind == "server":
-        raise NotImplementedError(f"backend {backend.name!r} runs in a server env, which run_call does not open")
     bound = {port: _bind(port, spec.inputs[port], value) for port, value in call.inputs.items()}
     env = _PACKAGED.open_env(backend, profile)
+    server = _server(backend, env, model, profile) if backend.env.kind == "server" else None
     context = ExecutionContext(
-        **env.context_fields(),
+        **(env if server is None else server).context_fields(),
         platform=sysconfig.get_platform(),
         numerics=numerics_class(hardware, placement.device, PRECISION),
         decoder=next((d for _, _, d in bound.values() if d is not None), None),
@@ -251,7 +254,9 @@ def run_call(
         outputs = _rebound(_decoded(spec, hit.outputs), anchors)
         return Result(outputs, hit.output_identity, key, hit.context, placement, hit.policy_used)
     started = datetime.now(timezone.utc)
-    computed = _execute(call, placement, env, model, {port: value for port, (_, value, _) in bound.items()}, profile)
+    computed = _execute(
+        call, placement, env, model, {port: value for port, (_, value, _) in bound.items()}, profile, server
+    )
     decoded = _decoded(spec, computed)
     on_identity_clocks = _rebound(decoded, [(reader, stored) for stored, reader in anchors])
     outputs = {
@@ -345,6 +350,40 @@ def _hardware() -> HardwareInfo:
 _POOL: dict[tuple[str, ...], InProcessWorker | WorkerClient] = {}
 _CACHES: dict[int | None, ModelCache] = {}
 _POOL_LOCK = threading.Lock()
+_SERVERS: dict[tuple[str, str, str], VllmServer] = {}
+_SERVER_LOCK = threading.Lock()
+
+
+def _server(backend: BackendSpec, env: EnvHandle, model: ResolvedModel | None, profile: ExecutionProfile) -> VllmServer:
+    """Return the running server of this backend, env and model, starting it (or replacing a dead one) if needed.
+
+    Raises:
+        ValueError: the call has no model, or it is not pinned.
+    """
+    if model is None or backend.server is None:
+        raise ValueError(f"backend {backend.name!r} serves a model through a server, and the call resolved none")
+    key = (env.python, backend.name, model.identity)
+    root = profile.env_root("server")
+    with _SERVER_LOCK:
+        server = _SERVERS.get(key)
+        if server is not None:
+            try:
+                server.context_fields()
+                return server
+            except StaleAttestation:
+                server.stop()
+        server = VllmServer(
+            env,
+            model,
+            backend.server.settings,
+            start_lock_dir=root / "locks",
+            startup_timeout_s=backend.server.startup_timeout_s,
+            start_margin_s=profile.envs.server_start_margin_s,
+            log_dir=root / "logs",
+        )
+        server.__enter__()
+        _SERVERS[key] = server
+        return server
 
 
 def _execute(  # noqa: PLR0913 - the call and everything placing it
@@ -354,10 +393,12 @@ def _execute(  # noqa: PLR0913 - the call and everything placing it
     model: ResolvedModel | None,
     inputs: dict[str, object],
     profile: ExecutionProfile,
+    server: VllmServer | None,
 ) -> dict[str, object]:
     """Run the call's one item on the backend's worker with the task params and `backend_params` beside them.
 
-    A host worker is handed kernel values as they are; an isolated one, their wire forms (`wire_form`). The outputs
+    A host worker is handed kernel values as they are; an isolated or server one, their wire forms (`wire_form`).
+    A server backend's worker runs in this process and is given `server` as `init["server"]`. The outputs
     are returned as the store holds them: a kernel value a host backend returns, as its wire form.
     """
     backend = placement.backend
@@ -365,8 +406,17 @@ def _execute(  # noqa: PLR0913 - the call and everything placing it
     if model is not None:
         init["model"] = {"source": model.ref.source, "id": model.ref.id, "identity": model.identity}
     params = {**call.params.model_dump(mode="json"), "backend_params": placement.backend_params.model_dump(mode="json")}
-    worker = _worker(backend, env, init, model, profile.model_cache_budget_bytes)
-    if isinstance(worker, WorkerClient):
+    if server is not None:
+        worker: InProcessWorker | WorkerClient = InProcessWorker(
+            backend.worker,
+            init={**init, "server": server},
+            key=(backend.name, init["model"]["identity"], placement.device, PRECISION),
+            cache=ModelCache(2**63 - 1),
+            size_of=lambda _: 0,
+        )
+    else:
+        worker = _worker(backend, env, init, model, profile.model_cache_budget_bytes)
+    if backend.env.kind != "host":
         inputs = {port: wire_form(v, READER) if isinstance(v, Frozen) else v for port, v in inputs.items()}
     [result] = worker.run([{"id": ITEM_ID, "inputs": inputs}], params)
     if "error" in result:
@@ -445,6 +495,9 @@ def _close_workers() -> None:
         if isinstance(worker, WorkerClient):
             worker.close()
     _POOL.clear()
+    for server in _SERVERS.values():
+        server.stop()
+    _SERVERS.clear()
 
 
 def _execution(  # noqa: PLR0913 - one execution's records

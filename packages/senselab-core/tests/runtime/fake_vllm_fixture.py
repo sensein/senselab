@@ -1,9 +1,10 @@
 """A stand-in `vllm` executable: run as `python fake_vllm_fixture.py serve <model> --flag=value ...`; loads nothing.
 
 It serves `/health`, `/version` (`FAKE_VLLM_VERSION`, default `0.31.0`), `/v1/models` (root: the model argument,
-or `FAKE_VLLM_ROOT`) and `POST /v1/chat/completions` (the reply names `FAKE_VLLM_REPLY_MODEL`, default the model)
-on `127.0.0.1:<--port>`. It forks one child into its process group, as vLLM's engine process is, and writes
-`<pid>.json` (`argv`, `pgid`, `pids`) into `FAKE_VLLM_DIR`. `FAKE_VLLM_EXIT` makes it exit 1 before listening.
+or `FAKE_VLLM_ROOT`) and `POST /v1/chat/completions` (the reply names `FAKE_VLLM_REPLY_MODEL`, default the model,
+and its text is `FAKE_VLLM_CONTENT`, default `ok`) on `127.0.0.1:<--port>`. It forks one child into its process
+group, as vLLM's engine process is, and writes `<pid>.json` (`argv`, `pgid`, `pids`) into `FAKE_VLLM_DIR`.
+`FAKE_VLLM_EXIT` makes it exit 1 before listening.
 """
 
 import json
@@ -47,7 +48,14 @@ class Handler(BaseHTTPRequestHandler):
         """Answer a chat request."""
         self.rfile.read(int(self.headers["Content-Length"]))
         served = os.environ.get("FAKE_VLLM_REPLY_MODEL", model)
-        self.reply({"model": served, "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}}]})
+        self.reply(
+            {
+                "model": served,
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": os.environ.get("FAKE_VLLM_CONTENT", "ok")}}
+                ],
+            }
+        )
 
 
 if os.environ.get("FAKE_VLLM_EXIT"):

@@ -54,7 +54,7 @@ from senselab_worker.canonical import canonical_npy_bytes
 import senselab_core.kernel
 import senselab_core.runtime
 from senselab_core.kernel._base import Frozen, FrozenMapping, digest_of
-from senselab_core.kernel.declare import BackendSpec, Env, TaskParams, TaskSpec
+from senselab_core.kernel.declare import BackendSpec, Env, ServerConfig, TaskParams, TaskSpec
 from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ModelRef, ResolvedModel
 from senselab_core.kernel.license import License
@@ -740,6 +740,14 @@ def _register_kernel_samples() -> None:
         lambda: [Env.host(), Env.isolated("e"), Env.server("e")],
         invalid_updates=[{"kind": "other"}, {"name": "../e"}, {"name": ""}],
     )
+    register_samples(
+        ServerConfig,
+        lambda: [
+            ServerConfig(settings={"max_model_len": 4096, "limit_mm_per_prompt": {"image": 0}}, startup_timeout_s=60),
+            ServerConfig(settings={}, startup_timeout_s=0.5),
+        ],
+        invalid_updates=[{"startup_timeout_s": 0}, {"settings": 1}],
+    )
     backend = {"task": "t", "version": "1", "stack": "fake", "worker": "w", "load_stub": {}}
     register_samples(
         BackendSpec,
@@ -756,9 +764,18 @@ def _register_kernel_samples() -> None:
                 tunables={"dtype": ("float16", "int8")},
                 output_affecting=("batch_formation", "chunk_grid"),
             ),
+            BackendSpec(
+                **backend,
+                name="d",
+                env=Env.server("e"),
+                devices=("cuda",),
+                batch_invariant=True,
+                server=ServerConfig(settings={"max_num_seqs": 2}, startup_timeout_s=60),
+            ),
         ],
         invalid_updates=[
             {"devices": ()},
+            {"server": {"settings": {}, "startup_timeout_s": 0}},
             {"output_affecting": ("bogus",)},
             {"env": "host"},
             {"tunables": {"d": ()}},
