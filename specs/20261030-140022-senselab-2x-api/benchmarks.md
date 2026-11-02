@@ -55,7 +55,7 @@ under ND/NC/DUA terms.
 
 | Task | Benchmark | Size | Metric | Licence / access | Smoke |
 |---|---|---|---|---|---|
-| PII detection | gretelai/synthetic_pii_finance_multilingual ([HF](https://huggingface.co/datasets/gretelai/synthetic_pii_finance_multilingual)) | 29 PII types, 7 languages | span-level precision/recall/F1 (exact + partial), per-type recall | Apache-2.0 tag (README not read) | 200 docs |
+| PII detection | gretelai/synthetic_pii_finance_multilingual ([HF](https://huggingface.co/datasets/gretelai/synthetic_pii_finance_multilingual)) | 29 PII types, 7 languages | span-level precision/recall/F1 (exact + partial), per-type recall | Apache-2.0, README read 2026-11-01 at commit 7b844d16: "All data in this generated dataset is Apache 2.0 licensed and can be used for any purpose that is not harmful." Synthetic documents; spans labelled by a NER library and spot-checked, so some labels are wrong. Per-item outputs publishable (verified). Smoke: first 200 docs of `data/test` by item-id digest | 200 docs |
 | PII detection | ai4privacy pii-masking-300k ([HF](https://huggingface.co/datasets/ai4privacy/pii-masking-300k)) | 225k rows, 6 languages | same | **custom `license.md`, could not be read (404)**. Treat as restricted until read. | — |
 | PII (clinical) | n2c2 2014 de-identification ([n2c2](https://n2c2.dbmi.hms.harvard.edu/data-sets)) | 288 patients, 2-5 records each | token- and entity-level F1, PHI recall | DUA, per-person portal access | — |
 | Sentiment | TweetEval sentiment ([card](https://huggingface.co/datasets/cardiffnlp/tweet_eval)) | test 12,284 | macro-recall (official), macro-F1 | sentiment subset CC BY 3.0 + Twitter ToS; other subsets differ | 500 tweets |
