@@ -169,17 +169,18 @@ def test_packaged_profile_loads_with_a_derivation_per_key(name: str) -> None:
 
 
 @pytest.mark.logic
-def test_env_root_expands_scratch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The orcd roots sit under `$SCRATCH`; an unset variable is an error, not a literal path."""
-    monkeypatch.setenv("SCRATCH", str(tmp_path))
-    assert ExecutionProfile.load("orcd").env_root("isolated") == tmp_path / "senselab-2x-venvs"
-    monkeypatch.delenv("SCRATCH")
+def test_env_root_expands_home_and_refuses_unset_variable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The orcd roots sit under `~/orcd/scratch`, which needs no variable; an unset variable is an error."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("SCRATCH", raising=False)
+    root = tmp_path / "orcd" / "scratch" / "senselab-2x-venvs"
+    assert ExecutionProfile.load("orcd").env_root("isolated") == root
+    assert ExecutionProfile.load("orcd").env_root("server") == root / "servers"
     with pytest.raises(ValueError, match="not set"):
-        ExecutionProfile.load("orcd").env_root("isolated")
+        ExecutionProfile.load("orcd", {"env_roots": {"isolated": "$SENSELAB_UNSET_ROOT/v"}}).env_root("isolated")
     registry = _registry(_backend("b1", "one", env=Env.isolated("x")))
-    monkeypatch.setenv("SCRATCH", str(tmp_path))
     placed = resolve_execution(TASK, _entry(), ExecutionProfile.load("orcd"), NO_GPU, registry, CAT)
-    assert placed.env_root == str(tmp_path / "senselab-2x-venvs") and "isolated:x" in placed.explain()
+    assert placed.env_root == str(root) and "isolated:x" in placed.explain()
 
 
 @pytest.mark.logic
