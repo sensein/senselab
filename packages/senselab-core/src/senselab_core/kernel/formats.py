@@ -1,6 +1,8 @@
 """Format tags carried by every persisted artifact."""
 
 import re
+from collections.abc import Collection
+from enum import Enum
 from typing import Annotated
 
 from pydantic import ConfigDict, StringConstraints, model_validator
@@ -55,6 +57,33 @@ def readable(written: str, found: object) -> bool:
         and re.fullmatch(FORMAT_PATTERN, found) is not None
         and _name_and_major(found) == _name_and_major(written)
     )
+
+
+class FormatVerdict(str, Enum):
+    """What a reader of one format makes of the tag a record declares (`check`)."""
+
+    ACCEPTED = "accepted"
+    """The written format's name and major: the reader reads it, ignoring fields of a later minor."""
+    RETIRED = "retired"
+    """A retired `<name>@<major>`: refused with the migration statement, never treated as corrupt."""
+    UNKNOWN = "unknown"
+    """Another format tag, such as a later major: version skew, not corruption."""
+    MALFORMED = "malformed"
+    """Not a format tag at all: the record is corrupt."""
+
+
+def check(written: str, found: object, retired: Collection[str] = ()) -> FormatVerdict:
+    """Return the verdict of a reader of `written` on a record declaring `found`, `retired` as `<name>@<major>`."""
+    if not isinstance(found, str) or re.fullmatch(FORMAT_PATTERN, found) is None:
+        return FormatVerdict.MALFORMED
+    if readable(written, found):
+        return FormatVerdict.ACCEPTED
+    return FormatVerdict.RETIRED if "@".join(_name_and_major(found)) in retired else FormatVerdict.UNKNOWN
+
+
+def later_minor(written: str, found: str) -> bool:
+    """Whether `found`, of `written`'s name and major, is a later minor than `written`."""
+    return int(found.rsplit(".", 1)[1]) > int(written.rsplit(".", 1)[1])
 
 
 class Formatted(Frozen):

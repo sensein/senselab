@@ -24,8 +24,11 @@ Every directory below `root` is reached through `StorageDir`, so no symlink belo
 A symlink or a non-directory where a directory of the store belongs is moved into the quarantine and the
 directory is made again; one that cannot be moved raises `WrongKindError`, naming it and its owner.
 
-Only a completed read that fails verification moves an entry. An `OSError` while reading or
-writing is raised as `StoreUnavailable` (`StorageFull` for `ENOSPC` and `EDQUOT`) and changes nothing.
+Only a completed read that fails verification moves an entry. A member's format is judged by `formats.check`: a
+retired format raises `StoreFormatRetired`, another version's format (a later major, or a later minor's context
+fields) `StoreFormatUnknown`, and neither moves the entry; only a malformed one is corruption.
+An `OSError` while reading or writing is raised as `StoreUnavailable` (`StorageFull` for `ENOSPC` and `EDQUOT`)
+and changes nothing.
 
 Outputs are a mapping of JSON values (what `canonical_scalar` accepts, in exact `list`, `tuple` and
 `str`-keyed `dict` containers) and plain numpy arrays, nested to any depth. In the encoded form each
@@ -41,7 +44,7 @@ import re
 import stat
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,6 +65,7 @@ from senselab_worker.digest import SHA256_HEX, identity_digest
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel._base import value_digest
+from senselab_core.kernel.formats import FormatVerdict, check, later_minor
 from senselab_core.kernel.identity import (
     DEFAULT_REUSE_POLICY,
     Equivalence,
@@ -99,6 +103,10 @@ EVIDENCE_NAME = re.compile(r"[0-9a-f]{64}\.json")
 QUARANTINE_DIR = "quarantine"
 RESULT_FORMAT = "result@2.0"
 CONTEXT_FORMAT = "execution-context@2.0"
+RETIRED_STORE_FORMATS = frozenset({"result@1", "execution-context@1"})
+"""Store member formats 2.x no longer reads, as `<name>@<major>`."""
+STORE_MIGRATION_STATEMENT = "specs/20261030-140022-senselab-2x-api/migration-ledger.md#retired-store-formats"
+"""Where the statement on retired store formats is: they are not read; recomputing under this version migrates."""
 ARRAY_TAG = ARRAY_TOKEN
 COMMIT_ATTEMPTS = 3
 """How many times `put` stages and renames before giving up on a target that keeps turning out corrupt."""
@@ -118,6 +126,35 @@ class CorruptEntryError(ValueError):
 
 class MisfiledEntryError(CorruptEntryError):
     """A store entry whose stored key or context does not match the address it was read from."""
+
+
+class StoreFormatRetired(ValueError):
+    """A store member in a retired format (`RETIRED_STORE_FORMATS`); the entry is left in place.
+
+    Attributes:
+        found: The format tag the member declares.
+    """
+
+    def __init__(self, path: Path, found: str) -> None:
+        """Name the member, its format and the migration statement."""
+        super().__init__(
+            f"{path} declares the retired format {found}; it is not read, and migrating it is removing the entry and"
+            f" recomputing it under this version. See {STORE_MIGRATION_STATEMENT}"
+        )
+        self.found = found
+
+
+class StoreFormatUnknown(ValueError):
+    """A store member in a format this version does not read, written by another version; the entry is left in place.
+
+    Attributes:
+        found: The format tag the member declares.
+    """
+
+    def __init__(self, path: Path, found: str, reason: str) -> None:
+        """Name the member, its format and why this version cannot read it."""
+        super().__init__(f"{path} declares {found}, which this version does not read: {reason}")
+        self.found = found
 
 
 @dataclass(frozen=True)
@@ -277,13 +314,23 @@ def _result_entity(identity: OutputIdentity) -> kprov.Record:
     return kprov.entity(identity, core_vocabulary())
 
 
-def _read_object(entry: Path, name: str, fmt: str) -> dict[str, Any]:
+def _read_object(entry: Path, name: str, fmt: str, fields: Collection[str] | None = None) -> dict[str, Any]:
+    """Return the member's record without its format; with `fields`, a later minor's other fields are skew."""
     path = entry / name
     record = jcs_loads(_read_member(entry, name))
     if not isinstance(record, dict):
         raise CorruptEntryError(f"corrupt store entry: {path} is not a JSON object")
-    if record.pop("format", None) != fmt:
+    found = record.pop("format", None)
+    verdict = check(fmt, found, RETIRED_STORE_FORMATS)
+    if verdict is FormatVerdict.RETIRED:
+        raise StoreFormatRetired(path, found)
+    if verdict is FormatVerdict.UNKNOWN:
+        raise StoreFormatUnknown(path, found, f"this version reads {fmt} and its minors")
+    if verdict is FormatVerdict.MALFORMED:
         raise CorruptEntryError(f"corrupt store entry: {path} is not {fmt}")
+    unknown = sorted(record.keys() - set(fields or record))
+    if unknown and later_minor(fmt, found):
+        raise StoreFormatUnknown(path, found, f"fields {unknown} of a later minor enter the fingerprint")
     return record
 
 
@@ -291,7 +338,7 @@ def _guarded(entry: Path, read: Callable[[], T]) -> T:
     """Run `read`; a failed verification is `CorruptEntryError`, an `OSError` is a storage fault."""
     try:
         return read()
-    except CorruptEntryError:
+    except (CorruptEntryError, StoreFormatRetired, StoreFormatUnknown):
         raise
     except OSError as err:
         raise storage_fault(err, entry) from err
@@ -301,7 +348,8 @@ def _guarded(entry: Path, read: Callable[[], T]) -> T:
 
 def _stored_context(entry: Path) -> ExecutionContext:
     _require_directory(entry)
-    return ExecutionContext.model_validate(_read_object(entry, "context.json", CONTEXT_FORMAT))
+    record = _read_object(entry, "context.json", CONTEXT_FORMAT, ExecutionContext.model_fields)
+    return ExecutionContext.model_validate(record)
 
 
 def _stored_address(
@@ -1011,6 +1059,9 @@ class ResultStore:
         for name in names:
             try:
                 stored = _read_context(base / name, name)
+            except StoreFormatUnknown as err:
+                logger.info("store entry %s is another version's and is not served: %s", base / name, err)
+                continue
             except CorruptEntryError:
                 self._set_aside(base / name, digest=d, fingerprint=name)
                 continue
@@ -1027,6 +1078,9 @@ class ResultStore:
         for rank, _, name, read_context in sorted(candidates, key=lambda c: c[:3]):
             try:
                 identity, outputs, stored = _read_result(base / name, digest=d, fingerprint=name, context=read_context)
+            except StoreFormatUnknown as err:
+                logger.info("store entry %s is another version's and is not served: %s", base / name, err)
+                continue
             except CorruptEntryError:
                 self._set_aside(base / name, digest=d, fingerprint=name)
                 continue

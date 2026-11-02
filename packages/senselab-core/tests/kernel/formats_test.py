@@ -2,7 +2,7 @@
 
 import pytest
 from pydantic import ValidationError
-from senselab_core.kernel.formats import FormatTag, Formatted
+from senselab_core.kernel.formats import FormatTag, Formatted, FormatVerdict, check
 
 
 class _Thing(Formatted):
@@ -47,3 +47,23 @@ def test_subclass_with_malformed_default_is_refused_at_definition() -> None:
 
         class _Bad(Formatted):
             format: FormatTag = "Bad"
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("found", "verdict"),
+    [
+        ("result@2.0", FormatVerdict.ACCEPTED),
+        ("result@2.7", FormatVerdict.ACCEPTED),
+        ("result@1.0", FormatVerdict.RETIRED),
+        ("result@1.4", FormatVerdict.RETIRED),
+        ("result@3.0", FormatVerdict.UNKNOWN),
+        ("other@2.0", FormatVerdict.UNKNOWN),
+        ("result@2", FormatVerdict.MALFORMED),
+        (None, FormatVerdict.MALFORMED),
+        (2, FormatVerdict.MALFORMED),
+    ],
+)
+def test_one_format_gate(found: object, verdict: FormatVerdict) -> None:
+    """A reader of `result@2.0` with `result@1` retired: its minors accepted, other tags skew, non-tags corrupt."""
+    assert check("result@2.0", found, {"result@1"}) is verdict
