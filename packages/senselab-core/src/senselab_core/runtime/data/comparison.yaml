@@ -18,7 +18,7 @@ types:
       producer: exact
       guideline: exact
       uncertainty: {close: value}
-  audio@2:
+  audio@3:
     fields: &recording
       format: exact
       identity: exact
@@ -53,9 +53,9 @@ types:
       value: {close: value}
       unit: exact
       items: exact
-  recording@2:
+  recording@3:
     fields: *recording
-  regular-group@2:
+  regular-group@3:
     fields:
       format: exact
       data: {close: samples}

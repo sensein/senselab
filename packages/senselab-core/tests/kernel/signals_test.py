@@ -290,6 +290,11 @@ def test_float32_pcm_conversion_is_bit_identical_to_float64(dtype: str) -> None:
     assert held.read()[0].tobytes() == expected.tobytes()
 
 
+def _file_identity(content: str, count: int) -> str:
+    channels = [c.model_dump() for c in audio_channels(count)]
+    return "content:" + identity_digest("audio-file@1", {"content": content, "channels": channels})
+
+
 def _stamp(frames: int = 8, channels: int = 2) -> SourceStamp:
     return SourceStamp(
         size=1,
@@ -324,7 +329,7 @@ def test_a_source_group_validates_without_its_file(tmp_path: Path) -> None:
     missing = tmp_path / "absent.wav"
     group = RegularGroup(channels=audio_channels(2), sampling_rate=RATE, source=missing, source_stamp=_stamp())
     audio = Audio.from_group(group)
-    assert audio.identity == "content:" + "c" * 64 and group.frames == 8
+    assert audio.identity == _file_identity("c" * 64, 2) and group.frames == 8
     with pytest.raises(ValidationError, match="stamp"):
         RegularGroup(channels=audio_channels(2), sampling_rate=RATE, source=missing)
     with pytest.raises(ValidationError, match="channels"):
@@ -375,7 +380,7 @@ def test_samples_carry_their_files_stamp_only_as_decoded_from_it(tmp_path: Path)
     samples = numpy.arange(16, dtype=numpy.float32).reshape(2, 8) / 16
     source = RegularGroup(channels=audio_channels(2), sampling_rate=RATE, source=tmp_path / "a", source_stamp=_stamp())
     decoded = RegularGroup.decoded_from(source, _Reader(samples))
-    assert Audio.from_group(decoded).identity == "content:" + "c" * 64
+    assert Audio.from_group(decoded).identity == _file_identity("c" * 64, 2)
     assert copy.deepcopy(decoded) == decoded and decoded.read().tolist() == samples.tolist()
     zeros = numpy.zeros((2, 8), dtype=numpy.float32)
     with pytest.raises(ValidationError, match="decoded_from"):

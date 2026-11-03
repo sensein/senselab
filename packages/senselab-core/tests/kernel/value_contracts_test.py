@@ -37,6 +37,7 @@ from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER, open_audio, source_group
 from senselab_core.testing.values import frozen_types, registered_types, value_cases
 from senselab_worker.canonical import canonical_npy_bytes
+from senselab_worker.digest import identity_digest
 
 
 @pytest.mark.contract
@@ -623,7 +624,9 @@ def test_a_nested_unsealed_or_subclass_instance_is_validated_again(tmp_path: Pat
         RegularGroup, **{**dict(group.__dict__), "source_stamp": forged_stamp}
     )
     forged = Audio(groups={"audio": planted}, anchor=real.anchor)
-    assert forged.identity == "content:" + "0" * 64
+    assert forged.identity == "content:" + identity_digest(
+        "audio-file@1", {"content": "0" * 64, "channels": [c.model_dump() for c in group.channels]}
+    )
     forged_group = forged.groups["audio"]
     assert isinstance(forged_group, RegularGroup) and forged_group.source_stamp is not None
     with pytest.raises(StaleSource):

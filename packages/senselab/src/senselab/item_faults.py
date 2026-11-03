@@ -39,7 +39,7 @@ def mono_samples(item: dict[str, Any], faults: FakeFaults, rate: int, who: str) 
 
 
 def wire_audio(wire: Mapping[str, Any]) -> tuple[numpy.ndarray, float, str]:
-    """Return `(samples (channels, n), sampling_rate, clock_id)` of an `audio@2.0` wire form."""
+    """Return `(samples (channels, n), sampling_rate, clock_id)` of an `audio@3.0` wire form."""
     group = wire["groups"]["audio"]
     return numpy.asarray(group["data"]), float(group["sampling_rate"]), str(wire["anchor"]["clock_id"])
 

@@ -90,7 +90,9 @@ def test_unknown_or_retired_tags_are_refused() -> None:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("tag", ["recording@1.0", "audio@1.0", "regular-group@1.3"])
+@pytest.mark.parametrize(
+    "tag", ["recording@1.0", "audio@1.0", "regular-group@1.3", "recording@2.1", "audio@2.1", "regular-group@2.1"]
+)
 def test_retired_signal_forms_name_their_format_and_migration(tag: str) -> None:
     """A signal wire form of a retired major is refused with a typed error naming it and the migration statement."""
     form = wire_form(Audio.from_array(numpy.zeros(4, dtype=numpy.float32), 8_000))

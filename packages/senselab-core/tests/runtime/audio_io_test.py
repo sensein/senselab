@@ -16,9 +16,10 @@ import numpy
 import pytest
 import soundfile
 from pydantic import ValidationError
-from senselab_core.kernel.signals import Audio, ChannelInfo, Recording, RegularGroup, StaleSource, audio_channels
+from senselab_core.kernel.signals import Audio, ChannelInfo, RegularGroup, StaleSource, audio_channels
 from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER, open_audio, source_group, stamp
+from senselab_worker.digest import identity_digest
 from senselab_worker.hashing import content_identity
 
 RATE = 8_000
@@ -48,11 +49,15 @@ def read_spy(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[int]]:
 
 
 @pytest.mark.logic
-def test_audio_identity_is_raw_bytes(tmp_path: Path) -> None:
-    """A file-backed audio's identity is the content identity root of its bytes."""
+def test_audio_identity_is_bytes_and_layout(tmp_path: Path) -> None:
+    """A file-backed audio's identity covers the content identity root of its bytes and its channel layout."""
     p = write_wav(tmp_path)
     a = open_audio(p)
-    assert a.identity == "content:" + content_identity(p)["root"]
+    root = content_identity(p)["root"]
+    layout = [c.model_dump() for c in audio_channels(2)]
+    assert a.identity == "content:" + identity_digest("audio-file@1", {"content": root, "channels": layout})
+    named = tuple(c.model_copy(update={"name": f"mic{i}"}) for i, c in enumerate(audio_channels(2)))
+    assert Audio.from_group(source_group(named, RATE, p)).identity != a.identity
     group = a.groups["audio"]
     assert isinstance(group, RegularGroup) and group.sampling_rate == RATE and len(group.channels) == 2
     assert group.frames == RATE and a.anchor.clock_id == a.identity
@@ -236,7 +241,7 @@ def test_copies_of_a_source_recording_do_not_read_the_file(tmp_path: Path, open_
     a = open_audio(p)
     assert open_spy.count(f"open:{p}") == 1 and len(open_spy) == 2, open_spy
     open_spy.clear()
-    r = Recording.model_validate(a.model_dump())
+    r = Audio.model_validate(a.model_dump())
     copies = [copy.copy(a), copy.deepcopy(a), pickle.loads(pickle.dumps(a)), a.model_copy(), copy.deepcopy(r)]
     assert open_spy == []
     assert all(c.identity == a.identity for c in copies)

@@ -32,11 +32,13 @@ _FORMATTED: tuple[type[Formatted], ...] = (
     Trials,
     Metric,
 )
-_SIGNALS: dict[str, type[Frozen]] = {"recording@2.1": Recording, "audio@2.1": Audio, "regular-group@2.1": RegularGroup}
+_SIGNALS: dict[str, type[Frozen]] = {"recording@3.0": Recording, "audio@3.0": Audio, "regular-group@3.0": RegularGroup}
 WIRE_FORMATS: Mapping[str, type[Frozen]] = FrozenMapping(_SIGNALS | {_tag(t): t for t in _FORMATTED})
 """The wire format of every kernel value a port may carry, by tag; a `Formatted` type's tag is its own format."""
 
-RETIRED_WIRE_FORMATS = frozenset({"recording@1", "audio@1", "regular-group@1"})
+RETIRED_WIRE_FORMATS = frozenset(
+    {"recording@1", "audio@1", "regular-group@1", "recording@2", "audio@2", "regular-group@2"}
+)
 """Wire formats 2.x no longer reads, as `<name>@<major>`."""
 WIRE_MIGRATION_STATEMENT = "specs/20261030-140022-senselab-2x-api/migration-ledger.md#retired-wire-formats"
 """Where the statement on retired wire formats is: they are not read; re-reading the source migrates."""

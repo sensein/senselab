@@ -306,9 +306,7 @@ class Recording(Frozen):
     """Named channel groups sharing one clock, anchored by `anchor`; `groups` is read-only.
 
     `identity` is derived from the content by validation: omitted, it is filled in; supplied, it must
-    equal the derived one. A recording of one stamped group (a source group, or samples held with the
-    stamp of the file they were decoded from) is identified by `content:` and the content identity root of
-    the file. Otherwise it is `content:` and `value_digest(IDENTITY_TYPE, {"groups": ...})`, each stamped
+    equal the derived one. It is `content:` and `value_digest(IDENTITY_TYPE, {"groups": ...})`, each stamped
     group standing as its channels, rate and content identity root.
     `IDENTITY_TYPE` is a declared token, so moving, renaming or subclassing the class keeps identities.
     """
@@ -349,9 +347,6 @@ class Recording(Frozen):
         Raises:
             ValueError: if `groups` is not a layout this type holds.
         """
-        values = list(groups.values())
-        if len(values) == 1 and isinstance(values[0], RegularGroup) and values[0].source_stamp is not None:
-            return "content:" + _source_root(values[0])
         fields = {name: _group_content(g) for name, g in groups.items()}
         return "content:" + value_digest(cls.IDENTITY_TYPE, {"groups": fields})
 
@@ -399,7 +394,8 @@ class Audio(Recording):
     Held samples are float32 (`AUDIO_DTYPE`). An in-memory audio's identity is `"content:" +
     identity_digest("audio@4", {"npy": npy_digest("npy@1", <the (channels, samples) data>),
     "sampling_rate": rate, "channels": <each ChannelInfo's model_dump()>})`; a stamped one's (file-backed, or held
-    with its file's stamp) is `content:` and the root of the file's content identity.
+    with its file's stamp) is `"content:" + identity_digest("audio-file@1", {"content": <the root of the file's content
+    identity>, "channels": <each ChannelInfo's model_dump()>})`, so relabelled channels are another identity.
     """
 
     if TYPE_CHECKING:
@@ -422,7 +418,8 @@ class Audio(Recording):
         """
         group = _audio_group(groups)
         if group.source_stamp is not None or group.data is None:
-            return "content:" + _source_root(group)
+            file_fields = {"content": _source_root(group), "channels": [c.model_dump() for c in group.channels]}
+            return "content:" + identity_digest("audio-file@1", file_fields)
         npy = held_npy_digest(group.data)
         channels = [c.model_dump() for c in group.channels]
         fields = {"npy": npy, "sampling_rate": group.sampling_rate, "channels": channels}

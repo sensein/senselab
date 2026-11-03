@@ -86,7 +86,7 @@ def _regular_series(item: str, port: str) -> dict[str, Any]:
     phase = int(identity_digest("contract-probe@1", [item, port])[:8], 16) % 1000
     data = numpy.sin(2.0 * numpy.pi * (numpy.arange(800) + phase) / 40.0).astype(numpy.float32)[None, :]
     return {
-        "format": "regular-group@2.1",
+        "format": "regular-group@3.0",
         "channels": [{"name": "ch0", "type": "audio", "units": "FS", "placement": None, "reference": None}],
         "sampling_rate": 16000.0,
         "data": data,
@@ -103,7 +103,7 @@ def _audio(item: str, port: str) -> dict[str, Any]:
     fields = {"npy": npy_digest("npy@1", data), "sampling_rate": 16000.0, "channels": group["channels"]}
     identity = "content:" + identity_digest("audio@4", fields)
     return {
-        "format": "audio@2.1",
+        "format": "audio@3.0",
         "groups": {"audio": group},
         "anchor": {"clock_id": identity, "absolute_start_ns": None},
         "identity": identity,

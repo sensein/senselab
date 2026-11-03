@@ -168,7 +168,7 @@ def load(init: dict[str, Any]) -> FakeFaults:
 
 
 def handle(state: FakeFaults, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return one `{"outputs": {"series": <regular-group@2.0 wire form>}}` per item, or its error."""
+    """Return one `{"outputs": {"series": <regular-group@3.0 wire form>}}` per item, or its error."""
     target = ResampleParams.model_validate({k: v for k, v in params.items() if k != "backend_params"}).target_rate
     results: list[dict[str, Any]] = []
     for item in items:
@@ -187,7 +187,7 @@ def _resampled(value: object, target: int) -> dict[str, Any]:
         raise ContentFault(f"sampling rate {rate} Hz is not a whole number of Hz")
     out = resample_array(samples, int(rate), target)
     return {
-        "format": "regular-group@2.0",
+        "format": "regular-group@3.0",
         "channels": channels,
         "sampling_rate": float(target),
         "data": out.astype(samples.dtype if samples.dtype in (numpy.float32, numpy.float64) else numpy.float64),
