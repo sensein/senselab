@@ -3,7 +3,7 @@ warnings.filterwarnings("ignore")
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
-T="/Users/satra/.claude/jobs/295c3f8a/tmp/"
+T="${AGENT_SCRATCH}/"
 d=np.load(T+"stage1.npz"); h=np.load(T+"hear.npz"); y=np.load(T+"yamnet.npz")
 fs=int(d["fs"]); dur=float(d["dur"]); x=d["x"]; xp=d["xp"]; Edb=d["Edb"]; t=d["t"]
 hl=[str(l) for l in h["labels"]]; HR=h["R"]; cen=h["centres"]
@@ -78,5 +78,5 @@ cb.set_label("YAMNet presence probability",fontsize=8)
 fig.text(.5,.005,"spans from the envelope alone, floor set by YAMNet Silence: peaks >= floor+18 dB, onset at peak-15 dB, "
   "offset at 0.7 of event range, 120 ms hangover. HeAR shown for Cough and Breathe only. No labels used.",
   ha="center",fontsize=9,c="#7a4a00")
-fig.savefig("/Users/satra/Downloads/preprocess_derivatives.png",dpi=115,bbox_inches="tight")
+fig.savefig("${LOCAL_INPUT}/preprocess_derivatives.png",dpi=115,bbox_inches="tight")
 print(f"floor {floor:.2f} dB | {len(sp)} spans: "+", ".join(f"{a:.2f}-{b:.2f}" for a,b in sp))

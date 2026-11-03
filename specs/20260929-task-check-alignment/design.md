@@ -1,6 +1,6 @@
 # Task checks aligned with what each task asks
 
-Owner, 2026-09-29, after the audit in `/orcd/scratch/bcs/002/satra/tmp_task_audit/`
+Owner, 2026-09-29, after the audit in `${ORCD_GROUP_SCRATCH}/tmp_task_audit/`
 (`family_gate_audit.csv`, `undetermined_paths.csv`, `harvard_sample.jsonl`). Four fix groups were
 approved: what an undecided gate means (A), the read-aloud alignment (B), the voice tasks (C), and
 items, counts and speakers (D). The reviewer's result cache (E) and the viewer's theme and keyboard
@@ -411,7 +411,7 @@ Readings before v5 carry no part and never flag; the scheduled full re-review on
 
 ## L. Prompt v6: time expressions, named identifiers, the vocabulary cue, tolerant quotes (2026-10-01)
 
-Measured on r9 before the change (`/orcd/scratch/bcs/002/satra/tmp_consist/`): decoding is greedy and
+Measured on r9 before the change (`${ORCD_GROUP_SCRATCH}/tmp_consist/`): decoding is greedy and
 ten v4 recordings re-read twice gave ten identical readings, so the variation is not sampling. It is
 missing rules: 122 of 1,089 DATE_TIME phrases and 68 of 1,170 LOCATION phrases were released in some
 recordings and kept in others ("today" 87/47, "last two weeks" 147/11, Florida 107/5), about equally

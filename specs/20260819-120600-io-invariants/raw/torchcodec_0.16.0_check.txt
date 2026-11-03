@@ -34,7 +34,7 @@ FFmpeg version 9:
 Traceback (most recent call last):
   File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1516, in load_library
     ctypes.CDLL(path)
-  File "/Users/satra/.local/share/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
+  File "${XDG_DATA_HOME}/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
     self._handle = _dlopen(self._name, mode)
                    ^^^^^^^^^^^^^^^^^^^^^^^^^
 OSError: dlopen(/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core9.dylib, 0x0006): Library not loaded: @rpath/libavutil.61.dylib
@@ -54,7 +54,7 @@ FFmpeg version 8:
 Traceback (most recent call last):
   File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1516, in load_library
     ctypes.CDLL(path)
-  File "/Users/satra/.local/share/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
+  File "${XDG_DATA_HOME}/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
     self._handle = _dlopen(self._name, mode)
                    ^^^^^^^^^^^^^^^^^^^^^^^^^
 OSError: dlopen(/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core8.dylib, 0x0006): Library not loaded: @rpath/libavutil.60.dylib
@@ -74,7 +74,7 @@ FFmpeg version 7:
 Traceback (most recent call last):
   File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1516, in load_library
     ctypes.CDLL(path)
-  File "/Users/satra/.local/share/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
+  File "${XDG_DATA_HOME}/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
     self._handle = _dlopen(self._name, mode)
                    ^^^^^^^^^^^^^^^^^^^^^^^^^
 OSError: dlopen(/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core7.dylib, 0x0006): Library not loaded: @rpath/libavutil.59.dylib
@@ -94,7 +94,7 @@ FFmpeg version 6:
 Traceback (most recent call last):
   File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1516, in load_library
     ctypes.CDLL(path)
-  File "/Users/satra/.local/share/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
+  File "${XDG_DATA_HOME}/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
     self._handle = _dlopen(self._name, mode)
                    ^^^^^^^^^^^^^^^^^^^^^^^^^
 OSError: dlopen(/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core6.dylib, 0x0006): Library not loaded: @rpath/libavutil.58.dylib
@@ -114,7 +114,7 @@ FFmpeg version 5:
 Traceback (most recent call last):
   File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1516, in load_library
     ctypes.CDLL(path)
-  File "/Users/satra/.local/share/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
+  File "${XDG_DATA_HOME}/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
     self._handle = _dlopen(self._name, mode)
                    ^^^^^^^^^^^^^^^^^^^^^^^^^
 OSError: dlopen(/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core5.dylib, 0x0006): Library not loaded: @rpath/libavutil.57.dylib
@@ -134,7 +134,7 @@ FFmpeg version 4:
 Traceback (most recent call last):
   File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1516, in load_library
     ctypes.CDLL(path)
-  File "/Users/satra/.local/share/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
+  File "${XDG_DATA_HOME}/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
     self._handle = _dlopen(self._name, mode)
                    ^^^^^^^^^^^^^^^^^^^^^^^^^
 OSError: dlopen(/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core4.dylib, 0x0006): Library not loaded: @rpath/libavutil.56.dylib

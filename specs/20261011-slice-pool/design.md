@@ -1,13 +1,13 @@
 # slice_pool: a worker pool over a stage's slices
 
 Owner-approved 2026-10-11 for the r36 round of the r18d triage campaign on ORCD. This directory is a copy of the
-run-tree tool (`/orcd/scratch/bcs/002/satra/r18d_20261010/pool/`) and of the r36 chain built on it. It is not
+run-tree tool (`${ORCD_GROUP_SCRATCH}/r18d_20261010/pool/`) and of the r36 chain built on it. It is not
 package code.
 
 ## Problem
 
 Every sliced stage submitted one array task per slice (128-task arrays). A multi-partition array counts against
-the MaxSubmitPU of every partition it lists (pi_satra 256, ou_bcs_low 256, ou_bcs_normal 256, mit_preemptable
+the MaxSubmitPU of every partition it lists (${CPU_PARTITION} 256, ou_bcs_low 256, ou_bcs_normal 256, mit_preemptable
 448, mit_normal 448, ou_bcs_high 4). Submitting a chain up front therefore capped out at about 256 tasks, and
 a slice whose task died stayed missing until someone resubmitted that index by hand.
 
@@ -29,7 +29,7 @@ job (66 jobs at the default worker counts), whatever the slice counts are.
 
 ## Atomicity
 
-`/orcd/scratch/bcs/002` is **NFS v4.2** (`fstor003.ib:/data1`), not Lustre. Two primitives are atomic there,
+`${ORCD_SCRATCH_ROOT}/bcs/002` is **NFS v4.2** (`fstor003.ib:/data1`), not Lustre. Two primitives are atomic there,
 because both are a single server-side operation that fails with `EEXIST`/`ENOTEMPTY` when the name is taken:
 `mkdir`, and `rename(2)` of a directory onto a name that is absent or names a non-empty directory. NFS 4.1+
 sessions give exactly-once semantics, so a retransmitted create does not report a false `EEXIST` to its winner.

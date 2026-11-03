@@ -1,11 +1,11 @@
 import numpy as np, soundfile as sf, warnings, sys
 warnings.filterwarnings("ignore")
-sys.path.insert(0,"/Users/satra/software/sensein/senselab/.claude/worktrees/design/specs/20260817-triage-workflow-dag")
+sys.path.insert(0,"specs/20260817-triage-workflow-dag")
 from labels import label
 from scipy.signal import resample_poly
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_diarization import diarize_audios
-y,sr=sf.read("/Users/satra/Downloads/streaming-audio-2026-07-30T04-21-56-487Z.wav",dtype="float32",always_2d=True)
+y,sr=sf.read("${LOCAL_INPUT}/streaming-audio-2026-07-30T04-21-56-487Z.wav",dtype="float32",always_2d=True)
 x=resample_poly(y.mean(axis=1),16000,sr).astype(np.float32); fs=16000
 SPAN=(11.75,13.16)              # the speech span PREPROCESS proposes
 LAB=label("speech")

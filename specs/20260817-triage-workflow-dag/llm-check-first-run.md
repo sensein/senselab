@@ -1,6 +1,6 @@
 # The LLM re-read, run for the first time
 
-2026-09-19, on ORCD `pi_satra`. `redaction.llm_check` had never executed against a model: every
+2026-09-19, on ORCD `${CPU_PARTITION}`. `redaction.llm_check` had never executed against a model: every
 test stubs `review_redacted_text` or calls `parse_completion` directly. This is what it does when it
 is switched on over real recordings.
 
@@ -10,12 +10,12 @@ attempt, with no change to production code. Nothing here required a fix to make 
 
 No transcript, no detected string and no model reasoning appears in this document. Counts,
 categories, shapes and timings only; the illustrations are synthetic. The run's own outputs stay on
-ORCD scratch under `/orcd/scratch/bcs/002/satra/llmcheck_20260919/`.
+ORCD scratch under `${ORCD_GROUP_SCRATCH}/llmcheck_20260919/`.
 
 ## What it took to get there
 
 Neither checkpoint is gated. Both were fetched unauthenticated, with no `HF_TOKEN`, into
-`HF_HOME=/orcd/scratch/bcs/002/satra/hf`:
+`HF_HOME=${ORCD_GROUP_SCRATCH}/hf`:
 
 | checkpoint | size | resolved commit | staged in |
 | --- | --- | --- | --- |
@@ -27,7 +27,7 @@ Neither checkpoint is gated. Both were fetched unauthenticated, with no `HF_TOKE
 the graph carries transformers 5.5.4 and torch 2.11.0+cu130 — a different stack, which is what the
 isolation is for.
 
-Hardware: `pi_satra` holds `node2803` with 4× H100 80 GB HBM3 and `node3805` with 8× A100 80 GB
+Hardware: `${CPU_PARTITION}` holds `node2803` with 4× H100 80 GB HBM3 and `node3805` with 8× A100 80 GB
 PCIe. **Both card types are 80 GB.** Every number below that says "GPU" was measured on an H100.
 
 ## The four questions
@@ -276,7 +276,7 @@ overnight one.
 ## Reproducing
 
 ```
-/orcd/scratch/bcs/002/satra/llmcheck_20260919/
+${ORCD_GROUP_SCRATCH}/llmcheck_20260919/
   stage.sbatch     one checkpoint, resolved and staged
   screen.sbatch    detector cascade over stored consensus transcripts, to pick a sample
   pipeline.sbatch  scripts/triage_audio.py per recording with llm_on.yaml

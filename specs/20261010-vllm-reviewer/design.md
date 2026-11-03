@@ -2,7 +2,7 @@
 
 ## Why
 
-Measured on one H100 over the 246 reviewer requests of `/orcd/scratch/bcs/002/satra/bench_reviewer_20261009`
+Measured on one H100 over the 246 reviewer requests of `${ORCD_GROUP_SCRATCH}/bench_reviewer_20261009`
 (`bench.sbatch`, `bench.py`, `compare.py`, `venv_vllm.sh`; requests templated to token ids with the Gemma
 tokenizer at 52f3f65b, greedy, 1,024 new tokens, the checkpoint's `generation_config.json` stop ids):
 
@@ -78,4 +78,4 @@ three and falls back to two; the corpus template takes `SERVERS` and sets 0.90 /
   request: 1.17x". The corpus template's `SERVERS` default is 2.
 - Readings, reproducibility across the two copies, the second opinion and the fold: pending at the time of
   writing (`$W/report-25496477.json`, `$W/logs/vllm-smoke-25496477.out`, W =
-  `/orcd/scratch/bcs/002/satra/vllm_smoke_20261010`).
+  `${ORCD_GROUP_SCRATCH}/vllm_smoke_20261010`).

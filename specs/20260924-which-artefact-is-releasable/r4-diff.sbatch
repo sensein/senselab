@@ -6,16 +6,16 @@
 #SBATCH --mem=8G
 #SBATCH --time=2:00:00
 #SBATCH --array=0-63
-#SBATCH --output=/orcd/scratch/bcs/002/satra/triage_r4_20260924/logs/%x-%A_%a.out
-#SBATCH --chdir=/orcd/scratch/bcs/002/satra/triage_r4_20260924
+#SBATCH --output=${ORCD_GROUP_SCRATCH}/triage_r4_20260924/logs/%x-%A_%a.out
+#SBATCH --chdir=${ORCD_GROUP_SCRATCH}/triage_r4_20260924
 # One differential row per recording, read out of the replayed store, which carries both the old
 # decision and the new one with the invalidation edge between them. Read-only over both trees.
 set -euo pipefail
-source /orcd/scratch/bcs/002/satra/triage_design_20260919/env_common.sh
-export SENSELAB_REPO=/orcd/scratch/bcs/002/satra/senselab-r4
+source ${ORCD_GROUP_SCRATCH}/triage_design_20260919/env_common.sh
+export SENSELAB_REPO=${ORCD_GROUP_SCRATCH}/senselab-r4
 export CUDA_VISIBLE_DEVICES=""
-R=/orcd/scratch/bcs/002/satra/triage_r4_20260924
-M=/orcd/scratch/bcs/002/satra/triage_r3_20260923/replay_manifest.jsonl
+R=${ORCD_GROUP_SCRATCH}/triage_r4_20260924
+M=${ORCD_GROUP_SCRATCH}/triage_r3_20260923/replay_manifest.jsonl
 cd "$SENSELAB_REPO"
 uv run --no-sync python -u scripts/triage_replay_diff.py rows \
     "$M" \

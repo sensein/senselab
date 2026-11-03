@@ -17,7 +17,7 @@ page's reader)::
 Open ``index.html`` from ``file://`` to see quantised spectrograms. To hear the audio, serve the
 corpus root from the cluster and tunnel to it, then open http://localhost:8765/review/index.html::
 
-    python3 scripts/triage_review_serve.py CORPUS --port 8765 --source-root /orcd/data/...   # cluster
+    python3 scripts/triage_review_serve.py CORPUS --port 8765 --source-root ${ORCD_DATA_ROOT}/...   # cluster
     ssh -N -L 8765:<node>:8765 orcd                                                         # laptop
 
 A listen set is a page over only the recordings an owner was asked to label, with their own question and

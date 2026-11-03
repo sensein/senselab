@@ -3,7 +3,7 @@
 
     uv run python specs/20260817-triage-workflow-dag/runs/b2ai-v2/make_enrollment.py \
         --subject sub-SUBJ04 \
-        --dir /orcd/data/.../sub-SUBJ04/ \
+        --dir ${ORCD_DATA_ROOT}/.../sub-SUBJ04/ \
         --out enrollment/sub-SUBJ04.yaml
 
     # which files the source policy would enrol from, without loading a model

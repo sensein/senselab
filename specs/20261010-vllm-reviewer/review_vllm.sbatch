@@ -14,7 +14,7 @@
 # Followed by second_opinion.sbatch (afterok on this array), then scripts/extend_refold.py.
 
 #SBATCH --job-name=review-p14-vllm
-#SBATCH --partition=pi_satra,ou_bcs_low,mit_preemptable
+#SBATCH --partition=${CPU_PARTITION},ou_bcs_low,mit_preemptable
 #SBATCH --exclude=node2119,node2621,node3002,node1702
 #SBATCH --gres=gpu:h100:1
 #SBATCH --cpus-per-task=8
@@ -23,7 +23,7 @@
 #SBATCH --requeue
 
 set -uo pipefail
-S=/orcd/scratch/bcs/002/satra
+S=${ORCD_GROUP_SCRATCH}
 BASE="${BASE:?BASE must be the run directory}"
 SHA="${SENSELAB_SHA:?SENSELAB_SHA must be the pinned commit}"
 SLICES="${SLICES:?SLICES must be the array size}"

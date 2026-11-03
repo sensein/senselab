@@ -6,7 +6,7 @@ from scipy.signal import resample_poly, hilbert, butter, filtfilt, find_peaks
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification.api import classify_audios
 from torchaudio.pipelines import SQUIM_OBJECTIVE
-y,sr=sf.read("/Users/satra/Downloads/streaming-audio-2026-07-30T04-21-56-487Z.wav",dtype="float32",always_2d=True)
+y,sr=sf.read("${LOCAL_INPUT}/streaming-audio-2026-07-30T04-21-56-487Z.wav",dtype="float32",always_2d=True)
 x=resample_poly(y.mean(axis=1),16000,sr).astype(np.float64); fs=16000
 SP=label("speech"); a_,b_=SP["span_lo"],SP["span_hi"]
 sig=(x[int(a_*fs):int(b_*fs)]**2).mean()

@@ -983,8 +983,8 @@ Extract reads it with `review_page.records.transcripts`.
 
 ## Review page: raw recordings outside the corpus root (2026-10-08)
 
-A replay copy's `recording` stream points at the raw file in place (`/orcd/data/...`), outside the
-scan root, so the page built `audio_base + /orcd/...` and nothing played; earlier listening pages
+A replay copy's `recording` stream points at the raw file in place (`${ORCD_DATA_ROOT}/...`), outside the
+scan root, so the page built `audio_base + ${ORCD_DATA_ROOT}/...` and nothing played; earlier listening pages
 needed hand-made symlinks. An absolute stream path now goes through a source route
 (`--source-base`, default `/_source`): the page fetches `/_source/<absolute path>`, and
 `scripts/triage_review_serve.py` (standard library only) serves the corpus root plus that route,
@@ -1117,7 +1117,7 @@ transcript panel says so once above the text.
 ### r18 dry estimate (before the re-fold)
 
 Read under r27 over all 7,436 r18 stores whose recording-vectors row has a PII finding (stores without
-one cannot change), job 25333020, `/orcd/scratch/bcs/002/satra/r18b_20261008/dryrun/`:
+one cannot change), job 25333020, `${ORCD_GROUP_SCRATCH}/r18b_20261008/dryrun/`:
 
 - **Propagation.** 76 recordings keep a name masked at one occurrence while another occurrence of the
   same token is unmasked (305 words): 66 now `redacted`, 10 `withheld`. 21 of them have an occurrence
@@ -1475,7 +1475,7 @@ removed speech is what makes it usable.
 - Time per session is unchanged: 31-137 s for 21-47 recordings on 4 CPUs.
 
 Every non-match of the nine sessions (stem, start, end) is in
-`/orcd/scratch/bcs/002/satra/cohort_20261010/out_v5/cohort_nonmatch_listen.tsv` for spot-checking.
+`${ORCD_GROUP_SCRATCH}/cohort_20261010/out_v5/cohort_nonmatch_listen.tsv` for spot-checking.
 
 ### Participant enrollment across sessions (owner, 2026-10-10)
 
@@ -2312,7 +2312,7 @@ session background as its floor and the regions re-read against it.
 
 200 BIDS sessions drawn with seed 0 from `manifest_r18.jsonl`, 7,142 recordings
 (`scripts/measure_session_background.py`, 40 CPU tasks; rows and `summary.json` under
-`/orcd/scratch/bcs/002/satra/sessbg_20261010/`). No store was written.
+`${ORCD_GROUP_SCRATCH}/sessbg_20261010/`). No store was written.
 
 - **Coverage.** 199 of 200 sessions have a session background; one has no qualifying speech task. Members per
   session: median 15.5 (p5 5, p95 34). 3,607 of 3,728 lexical recordings carry foreground.
@@ -2478,7 +2478,7 @@ on the plain stream and embedded once on the enrollment's grid (2.0 s windows, 1
 - `speech.target_match_cosine` (0.231, fitted on 1.0 s pieces) is now only the enrollment's leave-one-out cut.
 
 **Fit** (r34 stores, read-only, code 451a2942, jobs 25588983 and 25592012;
-`/orcd/scratch/bcs/002/satra/r18d_20261010/speaker_fit/`). Every participant (1,527; 62,550 recordings): ECAPA
+`${ORCD_GROUP_SCRATCH}/r18d_20261010/speaker_fit/`). Every participant (1,527; 62,550 recordings): ECAPA
 window sets and means for each enrollment span and each pool. Within = a target pool against its participant's
 enrollment with the recording left out (session, else other sessions); cross = against another participant's
 session enrollment, that participant holding a recording of the same family with a pooled duration within 25%

@@ -72,5 +72,5 @@ symlink to the function, so a symlinked directory left in the copy is counted ra
 
 Measured once on 2026-10-02 (job 24662424, 16 CPUs, 64 threads) with the staged version of the same
 walk, over the r9 tree and its copy: source 2,221,738 files and 1,404,319,166,145 bytes followed in
-77 s, copy the same counts in 388 s, 0 symlinks, 0 of 62,550 stores mentioning `/orcd/scratch`. The
+77 s, copy the same counts in 388 s, 0 symlinks, 0 of 62,550 stores mentioning `${ORCD_SCRATCH_ROOT}`. The
 serial passes it replaced had run for over three hours without finishing.

@@ -167,7 +167,7 @@ test('a consensus word lists every model reading', () => {
 test('a stream under the corpus root goes through audio_base, one outside it through the source route', () => {
   const build = { audio_base: '../', source_base: '/_source' }
   assert.equal(R.streamUrl('sub-a/ses-1/run/streams/plain.flac', build), '../sub-a/ses-1/run/streams/plain.flac')
-  assert.equal(R.streamUrl('/orcd/data/b2ai/sub a.wav', build), '/_source/orcd/data/b2ai/sub%20a.wav')
+  assert.equal(R.streamUrl('${ORCD_DATA_ROOT}/b2ai/sub a.wav', build), '/_source/orcd/data/b2ai/sub%20a.wav')
 })
 
 test('the time window zooms about a point and pans, staying inside the recording', () => {

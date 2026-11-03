@@ -48,7 +48,7 @@ base = base.replace("export OPENBLAS_NUM_THREADS=8", "export OPENBLAS_NUM_THREAD
 base = base.replace("export MKL_NUM_THREADS=8", "export MKL_NUM_THREADS=4")
 
 plans = [
-    ("pi2", "#SBATCH --partition=pi_satra\n", chunks[0]),
+    ("pi2", "#SBATCH --partition=${CPU_PARTITION}\n", chunks[0]),
     ("ou2", "#SBATCH --partition=ou_bcs_normal\n#SBATCH --qos=normal\n", chunks[1]),
     ("pre2", "#SBATCH --partition=mit_preemptable\n", chunks[2]),
 ]

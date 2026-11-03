@@ -14,7 +14,7 @@
 set -uo pipefail
 LANE=${1:?lane}; I=${2:?slice index}; N=${3:?slice count}
 case "$LANE" in review|opinion) export R36_GPU=1 ;; esac
-source /orcd/scratch/bcs/002/satra/r18d_20261010/common_r36.sh
+source ${ORCD_GROUP_SCRATCH}/r18d_20261010/common_r36.sh
 export SENSELAB_RUN_ID="slurm-${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-local}}"
 echo "=== host $(hostname) commit $HEAD_SHA $LANE slice $I/$N attempt ${POOL_ATTEMPT:-?} $(date -Is)"
 case "$LANE" in
@@ -35,7 +35,7 @@ bypass)
   $PY -u scripts/extend_second_opinion.py $NB/rows.jsonl --slice-index "$I" --slice-count "$N" \
     --config "$CONFIG" --hints "$HINTS" --log-dir "$NB/opinion" \
     --ollama-binary "$S/ollama-models-flash/ollama-0.35.1/bin/ollama" --ollama-models "$S/ollama-models-flash/models" \
-    --verified-dir /orcd/data/satra/002/models/ollama-senselab/verified
+    --verified-dir ${ORCD_DATA}/models/ollama-senselab/verified
   rc_opinion=$?
   if [ -e "$SENSELAB_VLLM_LOG_DIR" ] && [ -n "$(ls -A "$SENSELAB_VLLM_LOG_DIR" 2>/dev/null)" ]; then
     echo "SERVER: a vLLM server started for a no-words row: $SENSELAB_VLLM_LOG_DIR"; rc_review=9
@@ -82,7 +82,7 @@ YAML
   $PY -u scripts/extend_second_opinion.py $B/rows.jsonl --slice-index "$I" --slice-count "$N" \
     --config "$CFG" --hints "$HINTS" --log-dir "$B/opinion" \
     --ollama-binary "$S/ollama-models-flash/ollama-0.35.1/bin/ollama" --ollama-models "$S/ollama-models-flash/models" \
-    --verified-dir /orcd/data/satra/002/models/ollama-senselab/verified
+    --verified-dir ${ORCD_DATA}/models/ollama-senselab/verified
   rc=$?
   rm -f "$CFG"
   ;;

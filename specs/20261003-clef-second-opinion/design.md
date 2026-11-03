@@ -63,5 +63,5 @@ The pilot (below) is the first measurement.
 ## Staging
 
 Ollama 0.35.1 or later and the pinned store live under
-`/orcd/data/satra/002/models/ollama-senselab/`, beside the 0.35.0 binary and the Nimble blobs,
+`${ORCD_DATA}/models/ollama-senselab/`, beside the 0.35.0 binary and the Nimble blobs,
 which are kept.

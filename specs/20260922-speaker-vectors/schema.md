@@ -145,12 +145,12 @@ uv run python scripts/triage_speaker_vectors.py --merge DIR
 ```
 
 `CORPUS_ROOT` is a tree of finished run directories. **For the production artefact it is the
-replayed tree**, `/orcd/scratch/bcs/002/satra/triage_replay_20260922/out`, because task extent is
+replayed tree**, `${ORCD_GROUP_SCRATCH}/triage_replay_20260922/out`, because task extent is
 one of the things the replay moves; every measurement in `design.md` was taken on the design
 tree, which is the same shape and is what validated the reading path.
 
-The staged submission is `/orcd/scratch/bcs/002/satra/speaker_vectors_20260922/production.sbatch`
-(64 shards on `pi_satra`, output to `.../replay_vectors/`, checkout pinned by a commit check that
+The staged submission is `${ORCD_GROUP_SCRATCH}/speaker_vectors_20260922/production.sbatch`
+(64 shards on `${CPU_PARTITION}`, output to `.../replay_vectors/`, checkout pinned by a commit check that
 exits 74 on a mismatch).
 
 **Submit it only after the replay array has finished every slice.** Sharding is by subject, so a

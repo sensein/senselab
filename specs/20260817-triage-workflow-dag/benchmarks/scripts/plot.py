@@ -2,11 +2,11 @@ import numpy as np, warnings, torch
 warnings.filterwarnings("ignore")
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-d=np.load("/Users/satra/.claude/jobs/295c3f8a/tmp/stage1.npz")
-h=np.load("/Users/satra/.claude/jobs/295c3f8a/tmp/hear.npz")
+d=np.load("${AGENT_SCRATCH}/stage1.npz")
+h=np.load("${AGENT_SCRATCH}/hear.npz")
 fs=int(d["fs"]); dur=float(d["dur"]); x=d["x"]; xp=d["xp"]
 import numpy as _np
-spans=_np.load("/Users/satra/.claude/jobs/295c3f8a/tmp/spans_v2b.npy"); Edb=d["Edb"]; floor=float(d["floor"]); t=d["t"]
+spans=_np.load("${AGENT_SCRATCH}/spans_v2b.npy"); Edb=d["Edb"]; floor=float(d["floor"]); t=d["t"]
 labels=[str(l) for l in h["labels"]]; R=h["R"]; cen=h["centres"]
 
 # level + squim on the PLAIN signal, as the spec requires
@@ -60,7 +60,7 @@ cb.set_label("HeAR presence probability (independent, not a distribution)",fonts
 fig.text(0.5,0.008,"shaded = event spans from the envelope alone: peaks >= floor+18 dB, onset peak-anchored at peak-15 dB, "
   "offset at 0.7 of event range with a 120 ms hangover. No labels used.",
   ha="center",fontsize=9,color="#7a4a00")
-fig.savefig("/Users/satra/Downloads/preprocess_derivatives_v2.png",dpi=115,bbox_inches="tight")
-print("wrote /Users/satra/Downloads/preprocess_derivatives_v2.png")
+fig.savefig("${LOCAL_INPUT}/preprocess_derivatives_v2.png",dpi=115,bbox_inches="tight")
+print("wrote ${LOCAL_INPUT}/preprocess_derivatives_v2.png")
 print(f"spans: "+", ".join(f"{s:.2f}-{e:.2f}s" for s,e,_ in spans))
 print("HeAR peak windows:", {l:f"{cen[np.nanargmax(R[i])]+0.25:.2f}s@{R[i].max():.2f}" for i,l in enumerate(labels) if R[i].max()>0.5})
