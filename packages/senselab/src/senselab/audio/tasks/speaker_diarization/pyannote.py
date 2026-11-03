@@ -24,8 +24,8 @@ _INIT_KEYS = frozenset({"stub", "model", "device", "array_dir"})
 _HINTS = ("num_speakers", "min_speakers", "max_speakers")
 _BACKEND_PARAMS = ("exclusive",)
 _NS_PER_S = 1_000_000_000
-SEGMENTATION_RECEPTIVE_FIELD = 991
-MIN_INPUT_NS = SEGMENTATION_RECEPTIVE_FIELD * _NS_PER_S // EXPECTED_RATE
+SEGMENTATION_RECEPTIVE_FIELD_SAMPLES = 991
+MIN_INPUT_NS = SEGMENTATION_RECEPTIVE_FIELD_SAMPLES * _NS_PER_S // EXPECTED_RATE
 
 Turns = list[tuple[str, float, float]]
 

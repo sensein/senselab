@@ -22,7 +22,7 @@ from typing import Any, Literal, get_args
 import numpy
 from senselab_worker.fake import injected
 
-from senselab.item_faults import NS_PER_S, clamp_ns, init_model, mono_samples
+from senselab.item_faults import NS_PER_S, WHISPER_MIN_INPUT_NS, clamp_ns, init_model, mono_samples
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.crisperwhisper"
 MODEL_ID = "nyralabs/CrisperWhisper2.0_turbo"
@@ -31,8 +31,7 @@ ENGINES: tuple[Engine, ...] = get_args(Engine)
 DEFAULT_ENGINE: Engine = "transformers"
 MAX_NEW_TOKENS = 256
 EXPECTED_RATE = 16_000
-WHISPER_N_FFT = 400
-MIN_INPUT_NS = WHISPER_N_FFT * NS_PER_S // EXPECTED_RATE
+MIN_INPUT_NS = WHISPER_MIN_INPUT_NS
 LONGFORM_STRATEGY = "continuation"
 DEFAULT_LANGUAGE = "en"
 COMPUTE_TYPES = {"cuda": "float16", "mps": "float16", "cpu": "float32"}

@@ -18,6 +18,7 @@ from senselab_core.runtime.vllm_server import VllmStartError
 from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.workers import RealWorkers, run_alone
+from senselab_worker.fake import FAULT_KEY
 from senselab_worker.faults import FaultClass
 
 pytestmark = pytest.mark.logic
@@ -89,7 +90,7 @@ def test_worker_runs_in_the_opened_env_on_the_catalogue_pin(env_python: Path, tm
     workers = RealWorkers(ExecutionProfile.load())
     worker = workers(fake.ECHO.name, "fake-isolated")
     assert isinstance(worker, WorkerClient)
-    faulted = {"_fault": {"fail_items": ["b"]}}
+    faulted = {FAULT_KEY: {"fail_items": ["b"]}}
     results = worker.run([{"id": i, "inputs": {"payload": i}} for i in "ab"], faulted)
     alone = run_alone(worker, {i: {"id": i, "inputs": {"payload": i}} for i in "ab"}, faulted)
     workers.close()

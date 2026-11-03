@@ -28,10 +28,19 @@ from senselab.audio.tasks.speech_to_text.token_confidence import (
     special_token_ids,
     word_confidences,
 )
-from senselab.item_faults import NS_PER_S, clamp_ns, init_model, mono_check, raise_injected, wire_audio
+from senselab.item_faults import (
+    NS_PER_S,
+    WHISPER_MIN_INPUT_NS,
+    clamp_ns,
+    init_model,
+    mono_check,
+    raise_injected,
+    wire_audio,
+)
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.huggingface"
 EXPECTED_RATE = 16_000
+MIN_INPUT_NS = WHISPER_MIN_INPUT_NS
 _INIT_KEYS = frozenset({"stub", "model", "device", "array_dir"})
 
 
@@ -51,6 +60,7 @@ class TransformersParams(BackendParams):
     worker=WORKER_MODULE,
     load_stub={"stub": True, "device": "cpu"},
     batch_invariant=False,
+    min_input_ns=MIN_INPUT_NS,
     output_affecting=("batch_formation",),
     devices=("cuda", "cpu"),
     env=Env.host(),
@@ -164,7 +174,7 @@ def _prepare(state: State, item: dict[str, Any], faults: FakeFaults) -> _Prepare
         samples, rate, clock_id = wire_audio(value)
     else:
         samples, rate, clock_id = value.read(reader=READER), float(value.sampling_rate), str(value.anchor.clock_id)
-    samples, clock_id = mono_check(samples, rate, clock_id, state.sampling_rate, "whisper")
+    samples, clock_id = mono_check(samples, rate, clock_id, state.sampling_rate, "whisper", MIN_INPUT_NS)
     return _Prepared(samples, clock_id, round(samples.size / state.sampling_rate * NS_PER_S))
 
 

@@ -97,7 +97,7 @@ def _regular_series(item: str, port: str, frames: int = 800) -> dict[str, Any]:
     return {
         "format": "regular-group@3.0",
         "channels": [{"name": "ch0", "type": "audio", "units": "FS", "placement": None, "reference": None}],
-        "sampling_rate": 16000.0,
+        "sampling_rate": float(AUDIO_RATE),
         "data": data,
         "source": None,
         "source_stamp": None,
@@ -109,7 +109,7 @@ def _audio(item: str, port: str, frames: int = AUDIO_FRAMES) -> dict[str, Any]:
     """Return the wire form of the audio whose one mono group is `_regular_series`'s, anchored on its identity."""
     group = {k: v for k, v in _regular_series(item, port, frames).items() if k != "format"}
     data = group["data"]
-    fields = {"npy": npy_digest("npy@1", data), "sampling_rate": 16000.0, "channels": group["channels"]}
+    fields = {"npy": npy_digest("npy@1", data), "sampling_rate": float(AUDIO_RATE), "channels": group["channels"]}
     identity = "content:" + identity_digest("audio@4", fields)
     return {
         "format": "audio@3.0",

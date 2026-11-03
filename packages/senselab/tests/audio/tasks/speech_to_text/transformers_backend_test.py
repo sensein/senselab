@@ -16,6 +16,7 @@ from senselab_core.kernel.signals import Audio
 from senselab_core.kernel.wire import from_wire_form, wire_form
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.testing.contracts import contract_cases
+from senselab_worker.fake import FAULT_KEY
 from senselab_worker.faults import ContentFault, ResourceFault, error_record
 
 LOCK_RECORDS = packaged_lock_records("senselab")
@@ -42,7 +43,7 @@ def _audio(samples: int = 1600, rate: int = 16000, channels: int = 1) -> Audio:
 
 def _run(items: list[dict[str, Any]], params: dict[str, Any] = PARAMS, faults: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
     state = hf.load({"stub": True, "device": "cpu"})
-    return hf.handle(state, items, {**params, **({"_fault": faults} if faults else {})})
+    return hf.handle(state, items, {**params, **({FAULT_KEY: faults} if faults else {})})
 
 
 @pytest.mark.logic
@@ -139,6 +140,14 @@ def test_unsupported_audio_is_a_content_fault_without_a_gap(audio: Audio, fault:
     """Stereo or a wrong rate fails that item as a typed content fault."""
     [result] = _run([{"id": "a", "inputs": {"audio": audio}}])
     assert isinstance(result["error"], fault) and text in str(result["error"])
+
+
+@pytest.mark.logic
+def test_input_below_the_declared_minimum_is_a_content_fault() -> None:
+    """The front end shared with crisperwhisper sets the minimum: one sample under 25 ms fails, 25 ms transcribes."""
+    n = hf.MIN_INPUT_NS * hf.EXPECTED_RATE // 1_000_000_000
+    short, ok = _run([{"id": "s", "inputs": {"audio": _audio(n - 1)}}, {"id": "o", "inputs": {"audio": _audio(n)}}])
+    assert n == 400 and isinstance(short["error"], ContentFault) and "outputs" in ok
 
 
 @pytest.mark.logic
@@ -248,7 +257,7 @@ def test_transformers_backend_content_fault_isolated_with_real_weights() -> None
     items = [{"id": i, "inputs": {"audio": _tone(1.0 + n)}} for n, i in enumerate("abc")]
     state = _real_state()
     clean = hf.handle(state, items, PARAMS)
-    faulted = hf.handle(state, items, {**PARAMS, "_fault": {"fail_items": ["b"]}})
+    faulted = hf.handle(state, items, {**PARAMS, FAULT_KEY: {"fail_items": ["b"]}})
     assert all("outputs" in r for r in clean)
     assert isinstance(faulted[1]["error"], ContentFault)
     assert [_timed(faulted[i]) for i in (0, 2)] == [_timed(clean[i]) for i in (0, 2)]

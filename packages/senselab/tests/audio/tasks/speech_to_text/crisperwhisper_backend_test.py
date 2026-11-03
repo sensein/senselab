@@ -18,6 +18,7 @@ from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile, NoBackend, resolve_execution
 from senselab_core.testing.contracts import contract_cases
 from senselab_core.testing.workers import RealWorkers, run_alone
+from senselab_worker.fake import FAULT_KEY
 from senselab_worker.faults import ContentFault, FaultClass, ResourceFault
 
 LOCK_RECORDS = packaged_lock_records("senselab")
@@ -39,7 +40,7 @@ def _item(name: str, audio: Audio) -> dict[str, Any]:
 
 def _run(items: list[dict[str, Any]], engine: str = "transformers", faults: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
     state = cw.load({"stub": True, "device": "cpu"})
-    params = {**PARAMS, "backend_params": {"engine": engine}, **({"_fault": faults} if faults else {})}
+    params = {**PARAMS, "backend_params": {"engine": engine}, **({FAULT_KEY: faults} if faults else {})}
     return cw.handle(state, items, params)
 
 
@@ -183,7 +184,7 @@ def test_content_fault_isolated_with_real_weights(real_worker: RealWorkers, engi
     params = {**PARAMS, "backend_params": {"engine": engine}}
     worker = real_worker("speech_to_text", "crisperwhisper")
     clean = worker.run(items, params)
-    faulted = worker.run(items, {**params, "_fault": {"fail_items": ["b"]}})
+    faulted = worker.run(items, {**params, FAULT_KEY: {"fail_items": ["b"]}})
     assert all("outputs" in r for r in clean)
     assert faulted[1]["error"]["fault"] is FaultClass.CONTENT
     assert (faulted[0], faulted[2]) == (clean[0], clean[2])

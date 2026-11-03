@@ -134,6 +134,7 @@ markers = [
   "slow: long-running",
   "large_model: loads a large model"
 ]
+# tests outside packages/; each tier under packages/ takes its budget from packages/senselab/tests/data/tier_budgets.yaml
 timeout = 900
 timeout_method = "thread"
 

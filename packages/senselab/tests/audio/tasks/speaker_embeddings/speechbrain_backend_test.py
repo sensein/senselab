@@ -23,6 +23,7 @@ from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.testing.contracts import contract_cases
 from senselab_core.testing.workers import RealWorkers, run_alone
+from senselab_worker.fake import FAULT_KEY
 from senselab_worker.faults import ContentFault, FaultClass, ResourceFault
 
 LOCK_RECORDS = packaged_lock_records("senselab")
@@ -43,7 +44,7 @@ def _item(name: str, audio: Audio) -> dict[str, Any]:
 
 def _run(items: list[dict[str, Any]], faults: dict[str, Any] | None = None, **params: Any) -> Any:  # noqa: ANN401
     state = sb.load({"stub": True, "device": "cpu"})
-    return sb.handle(state, items, {**PARAMS, **params, **({"_fault": faults} if faults else {})})
+    return sb.handle(state, items, {**PARAMS, **params, **({FAULT_KEY: faults} if faults else {})})
 
 
 def _vector(result: dict[str, Any]) -> numpy.ndarray:
@@ -246,7 +247,7 @@ def test_content_fault_isolated_with_real_weights(real_worker: RealWorkers) -> N
     items = [_item(i, _tone(2.0 + n)) for n, i in enumerate("abc")]
     worker = real_worker("speaker_embeddings", "speechbrain")
     clean = worker.run(items, PARAMS)
-    faulted = worker.run(items, {**PARAMS, "_fault": {"fail_items": ["b"]}})
+    faulted = worker.run(items, {**PARAMS, FAULT_KEY: {"fail_items": ["b"]}})
     assert all("outputs" in r for r in clean) and faulted[1]["error"]["fault"] is FaultClass.CONTENT
     assert numpy.array_equal(_vector(faulted[0]), _vector(clean[0]))
     assert numpy.array_equal(_vector(faulted[2]), _vector(clean[2]))

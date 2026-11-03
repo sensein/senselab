@@ -40,7 +40,7 @@ from senselab_worker import codec, runtime_identity
 from senselab_worker.canonical import MAX_DEPTH, canonical_npy_bytes
 from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_LINE_BYTES, LineTooLarge, to_wire
 from senselab_worker.digest import identity_digest
-from senselab_worker.fake import EXIT_CRASH
+from senselab_worker.fake import EXIT_CRASH, FAULT_KEY
 from senselab_worker.faults import FaultClass, ProtocolError, ValueTooLarge, classify
 from senselab_worker.model_cache import ModelCache
 
@@ -136,7 +136,7 @@ def _value(inputs: dict[str, Any], params: dict[str, Any]) -> str:
 @pytest.mark.logic
 def test_one_item_failure_isolated(worker: WorkerClient) -> None:
     """One failing item leaves its batch-mates' outputs intact."""
-    out = worker.run([{"id": "a", "inputs": {}}, {"id": "b", "inputs": {}}], {"_fault": {"fail_items": ["b"]}})
+    out = worker.run([{"id": "a", "inputs": {}}, {"id": "b", "inputs": {}}], {FAULT_KEY: {"fail_items": ["b"]}})
     assert out[0] == {"id": "a", "outputs": {"value": _value({}, {})}}
     assert out[1]["error"]["fault"] == "content" and out[1]["error"]["fault"] is FaultClass.CONTENT
 
@@ -144,7 +144,7 @@ def test_one_item_failure_isolated(worker: WorkerClient) -> None:
 @pytest.mark.logic
 def test_oom_is_resource_fault(worker: WorkerClient) -> None:
     """An out-of-memory error in one item is a resource fault for that item."""
-    out = worker.run([{"id": "a", "inputs": {}}, {"id": "b", "inputs": {}}], {"_fault": {"oom_items": ["a"]}})
+    out = worker.run([{"id": "a", "inputs": {}}, {"id": "b", "inputs": {}}], {FAULT_KEY: {"oom_items": ["a"]}})
     assert (out[0]["error"]["type"], out[0]["error"]["fault"]) == ("OutOfMemoryError", FaultClass.RESOURCE)
     assert "outputs" in out[1]
 
@@ -384,7 +384,7 @@ def test_crash_mid_batch_is_worker_lost(array_parent: Path) -> None:
     """A worker that dies mid-request raises `WorkerLost` and is discarded."""
     client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent)
     with pytest.raises(WorkerLost) as info:
-        client.run([{"id": "a", "inputs": {}}, {"id": "b", "inputs": {}}], {"_fault": {"crash_after": 1}})
+        client.run([{"id": "a", "inputs": {}}, {"id": "b", "inputs": {}}], {FAULT_KEY: {"crash_after": 1}})
     assert classify(info.value) is FaultClass.INFRASTRUCTURE and info.value.__notes__
     assert info.value.returncode == EXIT_CRASH and str(EXIT_CRASH) in str(info.value)
     assert not client.alive and list(array_parent.iterdir()) == []
@@ -398,7 +398,7 @@ def test_request_timeout_is_resource_and_kills_the_worker(array_parent: Path) ->
     """A request past its timeout raises `TimeoutError` and the worker is killed."""
     client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent, request_timeout=0.5)
     with pytest.raises(TimeoutError) as info:
-        client.run([{"id": "a", "inputs": {}}], {"_fault": {"latency_s": 60}})
+        client.run([{"id": "a", "inputs": {}}], {FAULT_KEY: {"latency_s": 60}})
     assert classify(info.value) is FaultClass.RESOURCE and not client.alive
     client.close()
 
@@ -562,7 +562,7 @@ def test_serve_is_total_through_a_real_worker(worker: WorkerClient) -> None:
     """One case of the serve fuzz property over a real worker: typed, oversize and unprintable faults stay per item."""
     ids = ["fail", "oom", "big", "mute", "ok"]
     faults = {"fail_items": ["fail"], "oom_items": ["oom"], "oversize_items": ["big"], "unprintable_items": ["mute"]}
-    out = worker.run([{"id": i, "inputs": {}} for i in ids], {"_fault": faults})
+    out = worker.run([{"id": i, "inputs": {}} for i in ids], {FAULT_KEY: faults})
     assert [r["id"] for r in out] == ids
     summary = [(r["error"]["type"], r["error"]["fault"], r["error"]["gap"]) for r in out[:4]]
     assert summary == [
@@ -1216,7 +1216,7 @@ def test_host_and_isolated_share_handle(array_parent: Path) -> None:
     """
     isolated = FAKE_SPEC.model_copy(update={"env": Env.isolated("fake")})
     items = [{"id": i, "inputs": {"payload": i, "signal": numpy.arange(4.0)}} for i in "abc"]
-    params = {"salt": "s", "_fault": {"fail_items": ["b"], "oom_items": ["c"]}}
+    params = {"salt": "s", FAULT_KEY: {"fail_items": ["b"], "oom_items": ["c"]}}
     host = InProcessWorker(
         FAKE_SPEC.worker, init=dict(FAKE_SPEC.load_stub), key=FAKE_KEY, cache=ModelCache(1), size_of=_one_byte
     )

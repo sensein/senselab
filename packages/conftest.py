@@ -24,6 +24,24 @@ def tier_budgets() -> dict[str, float]:
     return {tier: float(row["budget_s"]) for tier, row in document["tiers"].items()}
 
 
+@pytest.fixture(scope="session")
+def tier_names() -> frozenset[str]:
+    """The five tier marker names."""
+    return TIERS
+
+
+@pytest.fixture(scope="session")
+def budgets_file() -> Path:
+    """The file holding each tier's time budget."""
+    return BUDGETS
+
+
+@pytest.fixture(scope="session")
+def tier_budget_s() -> dict[str, float]:
+    """The time budget in seconds of one test of each tier."""
+    return tier_budgets()
+
+
 def _apply_budgets(items: list[pytest.Item]) -> None:
     if not items:
         return

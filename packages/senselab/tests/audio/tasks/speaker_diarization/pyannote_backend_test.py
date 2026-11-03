@@ -1,5 +1,6 @@
 """The `pyannote` backend of `diarize`: its turns, faults, model and the isolated worker's contract."""
 
+import subprocess
 from typing import Any
 
 import numpy
@@ -13,11 +14,13 @@ from senselab_core.kernel.declare import REGISTRY
 from senselab_core.kernel.results import Intervals
 from senselab_core.kernel.signals import Audio
 from senselab_core.kernel.wire import from_wire_form, wire_form
+from senselab_core.runtime.call import packaged
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.testing.contracts import contract_cases
 from senselab_core.testing.workers import RealWorkers, run_alone
+from senselab_worker.fake import FAULT_KEY
 from senselab_worker.faults import ContentFault, FaultClass, ResourceFault
 
 LOCK_RECORDS = packaged_lock_records("senselab")
@@ -44,7 +47,7 @@ def _same(a: dict[str, Any], b: dict[str, Any]) -> bool:
 
 def _run(items: list[dict[str, Any]], faults: dict[str, Any] | None = None, **params: Any) -> Any:  # noqa: ANN401
     state = pa.load({"stub": True, "device": "cpu"})
-    return pa.handle(state, items, {**PARAMS, **params, **({"_fault": faults} if faults else {})})
+    return pa.handle(state, items, {**PARAMS, **params, **({FAULT_KEY: faults} if faults else {})})
 
 
 @pytest.mark.contract
@@ -152,7 +155,7 @@ def test_content_fault_isolated_with_real_weights(real_worker: RealWorkers) -> N
     items = [_item(i, _tone(2.0 + n)) for n, i in enumerate("abc")]
     worker = real_worker("diarize", "pyannote")
     clean = worker.run(items, PARAMS)
-    faulted = worker.run(items, {**PARAMS, "_fault": {"fail_items": ["b"]}})
+    faulted = worker.run(items, {**PARAMS, FAULT_KEY: {"fail_items": ["b"]}})
     assert all("outputs" in r for r in clean) and faulted[1]["error"]["fault"] is FaultClass.CONTENT
     assert _same(faulted[0], clean[0]) and _same(faulted[2], clean[2])
 
@@ -173,3 +176,22 @@ def test_edge_inputs_with_real_weights(real_worker: RealWorkers, exclusive: bool
     }
     outputs = run_alone(worker, {n: _item(n, a) for n, a in cases.items()}, params)
     assert all(isinstance(from_wire_form(o["turns"]), Intervals) for o in outputs.values())
+
+
+@pytest.mark.env
+@pytest.mark.model
+def test_declared_minimum_is_the_loaded_models_receptive_field(real_worker: RealWorkers) -> None:
+    """In the backend's env, the segmentation model's receptive field is `SEGMENTATION_RECEPTIVE_FIELD_SAMPLES`."""
+    (spec,) = REGISTRY.backends("diarize")
+    entry = CATALOGUE.entry(pa.MODEL_ID)
+    python = packaged().open_env(spec, real_worker.profile).python
+    code = (
+        "import os, sys\n"
+        "from pyannote.audio import Pipeline\n"
+        "p = Pipeline.from_pretrained(sys.argv[1], revision=sys.argv[2], token=os.environ.get('HF_TOKEN'))\n"
+        "print(p._segmentation.model.receptive_field_size(num_frames=1))\n"
+    )
+    done = subprocess.run(
+        [python, "-c", code, entry.id, entry.revision], capture_output=True, text=True, check=True, timeout=1200
+    )
+    assert int(done.stdout.split()[-1]) == pa.SEGMENTATION_RECEPTIVE_FIELD_SAMPLES

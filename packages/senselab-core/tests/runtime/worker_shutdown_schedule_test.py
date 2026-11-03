@@ -26,6 +26,7 @@ from senselab_core.runtime.worker_client import (
     WorkerLost,
 )
 from senselab_core.testing.interpreter import source_tree_python
+from senselab_worker.fake import FAULT_KEY
 from shutdown_schedule_fixture import (
     CASE_BOUND_S,
     KINDS,
@@ -192,7 +193,7 @@ def test_every_death_carries_its_exit_code(parent: Path, how: str) -> None:
         assert code == EXIT_CRASH and f"exit code {EXIT_CRASH}" in message
         assert client_code == EXIT_CRASH
         return
-    params = {} if how == "idle_sigkill" else {"_fault": {"crash_after": 0}}
+    params = {} if how == "idle_sigkill" else {FAULT_KEY: {"crash_after": 0}}
     client = WorkerClient(PYTHON, FAKE, init={}, array_parent=parent)
     try:
         expected = EXIT_CRASH
