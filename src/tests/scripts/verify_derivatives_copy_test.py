@@ -18,7 +18,7 @@ cli = importlib.util.module_from_spec(_spec)
 sys.modules["verify_derivatives_copy_under_test"] = cli
 _spec.loader.exec_module(cli)
 
-NEEDLE = "/cluster/scratch"
+NEEDLE = "/orcd/scratch"
 
 
 def _trees(root: Path) -> tuple[Path, Path]:
