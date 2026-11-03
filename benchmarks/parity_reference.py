@@ -429,7 +429,7 @@ def run(  # noqa: PLR0913 - what one 2.x parity run fixes
 
 
 def _items_cli(args: argparse.Namespace) -> None:
-    """Write the held-out items (path or text inputs, as strings), the task params, and the pin of `args.backend`."""
+    """Write the held-out items (inputs as strings), the task and backend params, and the pin of `args.backend`."""
     from senselab_core.runtime.call import packaged  # noqa: PLC0415 - only a real export needs the runtime
 
     bench, items = load_items(args.suite, args.benchmark, args.data_cache, args.work, HELDOUT)
@@ -438,6 +438,7 @@ def _items_cli(args: argparse.Namespace) -> None:
     document = {
         "task": bench.task,
         "params": spec.params.model_validate(bench.params).model_dump(mode="json"),
+        "backend_params": backend.params.model_validate(args.backend_params).model_dump(mode="json"),
         "model": None if entry is None else {"id": entry.id, "revision": entry.revision},
         "items": {i.id: {k: str(v) for k, v in i.inputs.items()} for i in items},
     }
@@ -523,6 +524,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     i = sub.add_parser("items")
     common(i)
+    i.add_argument("--backend-params", type=json.loads, default={})
     i.set_defaults(func=_items_cli)
     c = sub.add_parser("convert")
     c.add_argument("records", type=Path)
