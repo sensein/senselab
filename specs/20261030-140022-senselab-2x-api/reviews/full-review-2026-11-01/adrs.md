@@ -243,7 +243,7 @@ and ADR-004's plan hash, which do not exist until Phase 3/4. See I-3 for the seq
   from ADR-007 "Keys and identities are hashes and carry no identifiers" (`S/adr/ADR-007-trust-privacy.md:22`).
 - **What the branch does:** `ModelRef` parses `local:<path>` with `id` = the path verbatim (`K/identity.py:56-57`).
   `key_identity()` copies `ref.id` into `ModelIdentity.id` (`K/identity.py:160`), which enters the key
-  (`K/identity.py:222,232`). The same weights at `/home/a/m` and `/scratch/b/m`, or behind two mirror URLs, get two
+  (`K/identity.py:222,232`). The same weights at `/home/user/m` and `/scratch/b/m`, or behind two mirror URLs, get two
   keys, and a key can carry a username or participant directory.
 - **Kind:** deviation.
 - **Correction:** for `local` and `url`, the key's model identity should carry only `source` and the weight
