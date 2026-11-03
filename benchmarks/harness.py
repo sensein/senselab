@@ -121,6 +121,10 @@ class Adapter(Protocol):
 
     split_unit: SplitUnit
 
+    def unit_of(self, item_id: str) -> str:
+        """Return the id of the split unit of the item `item_id`."""
+        ...
+
     def items(self, files: Mapping[str, Path], count: int, work: Path, seconds: float | None) -> list[Item]:
         """Return `count` items; any file the task reads is written under `work`, cut to `seconds` when given."""
         ...
@@ -134,6 +138,9 @@ class _PerItem:
     """Scores each item's output alone: `metric_inputs(item, outputs)`."""
 
     split_unit: SplitUnit = "item"
+
+    def unit_of(self, item_id: str) -> str:
+        return item_id
 
     def scoring(self, items: Sequence[Item], outputs: Mapping[str, Mapping[str, Any]]) -> list[Scoring]:
         return [Scoring(i.id, i.split, self.metric_inputs(i, outputs[i.id])) for i in items if i.id in outputs]
@@ -204,6 +211,9 @@ class LibriSpeechTrials:
     split_unit: SplitUnit = "speaker"
     per_speaker = 5
 
+    def unit_of(self, item_id: str) -> str:
+        return item_id.split("-")[0]
+
     def items(self, files: Mapping[str, Path], count: int, work: Path, seconds: float | None) -> list[Item]:
         tar_path = _libri(files)
         _, audio = _read_tar(tar_path)
@@ -218,7 +228,7 @@ class LibriSpeechTrials:
             chosen += _by_digest(by_speaker[speaker])[: self.per_speaker]
         chosen = chosen[:count]
         paths = _extract(tar_path, {u: members[u] for u in chosen}, work)
-        return [Item(u, {"audio": paths[u]}, u.split("-")[0], u.split("-")[0]) for u in chosen]
+        return [Item(u, {"audio": paths[u]}, self.unit_of(u), self.unit_of(u)) for u in chosen]
 
     def scoring(self, items: Sequence[Item], outputs: Mapping[str, Mapping[str, Any]]) -> list[Scoring]:
         scored: list[Scoring] = []

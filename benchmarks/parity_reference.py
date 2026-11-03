@@ -18,7 +18,7 @@ import importlib.util
 import json
 import math
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from itertools import combinations
 from pathlib import Path
 from types import ModuleType
@@ -198,9 +198,19 @@ def prepare(  # noqa: PLR0913 - what picks one benchmark's items and params
     return bench, backend, wired, params
 
 
-def require_heldout(ids: Sequence[str]) -> None:
-    """Raise ParityError if any of `ids` is not a held-out item."""
-    other = sorted(i for i in ids if split_of(i) != HELDOUT)
+def unit_of_benchmark(suite: Path, benchmark: str) -> Callable[[str], str]:
+    """Return the benchmark's adapter's `unit_of`: the split unit an item id belongs to."""
+    [bench] = [b for b in harness().Suite.load(suite).benchmarks if b.name == benchmark]
+    return harness().ADAPTERS[bench.adapter]().unit_of  # type: ignore[no-any-return]
+
+
+def _own_unit(item_id: str) -> str:
+    return item_id
+
+
+def require_heldout(ids: Sequence[str], unit_of: Callable[[str], str] = _own_unit) -> None:
+    """Raise ParityError if the split unit (`unit_of(id)`, the id itself by default) of any of `ids` is not held out."""
+    other = sorted(i for i in ids if split_of(unit_of(i)) != HELDOUT)
     if other:
         raise ParityError(f"parity runs on held-out items only; not held out: {other}")
 
@@ -252,14 +262,22 @@ def project(record: Mapping[str, Any]) -> Fields:
     return flatten(shaped)
 
 
-def convert(directory: Path, *, task: str, backend: str, alpha_sha: str, job: str) -> ParityReference:
+def convert(  # noqa: PLR0913 - what one 1.x record directory is converted under
+    directory: Path,
+    *,
+    task: str,
+    backend: str,
+    alpha_sha: str,
+    job: str,
+    unit_of: Callable[[str], str] = _own_unit,
+) -> ParityReference:
     """Read the `<id>.json` files `parity_reference_1x.py` wrote under `directory`.
 
     Raises:
         ParityError: a file holds a calibration item or a record of another task.
     """
     records = {p.stem: json.loads(p.read_text("utf-8")) for p in sorted(directory.glob("*.json"))}
-    require_heldout(list(records))
+    require_heldout(list(records), unit_of)
     wrong = sorted(i for i, r in records.items() if r.get("task") != task)
     if wrong:
         raise ParityError(f"records of another task than {task!r}: {wrong}")
@@ -309,13 +327,20 @@ def compare_items(
     expected: Mapping[str, Fields],
     actual: Mapping[str, Fields],
     thresholds: Thresholds,
+    unit_of: Callable[[str], str] = _own_unit,
 ) -> dict[str, list[str]]:
     """Return per-item differences over held-out items; an item `actual` lacks is a difference.
 
     Raises:
         ParityError: an item is not a held-out item.
     """
-    require_heldout(list(expected))
+    require_heldout(list(expected), unit_of)
+    return _differences(expected, actual, thresholds)
+
+
+def _differences(
+    expected: Mapping[str, Fields], actual: Mapping[str, Fields], thresholds: Thresholds
+) -> dict[str, list[str]]:
     return {
         i: found
         for i in expected
@@ -331,12 +356,18 @@ def decide(outputs: ParityOutputs, reference: ParityReference | None, thresholds
     """
     if outputs.not_placeable is not None:
         raise ParityError(f"{outputs.backend} was not run on {outputs.device}: {outputs.not_placeable}")
+    recorded = [(i.id, i.split) for i in outputs.items] + [
+        (i.id, i.split) for i in (reference.items if reference else ())
+    ]
+    other = sorted(i for i, split in recorded if split != HELDOUT)
+    if other:
+        raise ParityError(f"parity runs on held-out items only; not held out: {other}")
     alone = {i.id: i.batches["1"] for i in outputs.items if "1" in i.batches}
     if reference is not None:
-        against, found = "reference", compare_items({i.id: i.fields for i in reference.items}, alone, thresholds)
+        against, found = "reference", _differences({i.id: i.fields for i in reference.items}, alone, thresholds)
     else:
         together = {i.id: i.batches["N"] for i in outputs.items if "N" in i.batches}
-        against, found = "batch", compare_items(alone, together, thresholds)
+        against, found = "batch", _differences(alone, together, thresholds)
     return ParityComparison(
         task=outputs.task,
         backend=outputs.backend,
@@ -395,6 +426,7 @@ def run(  # noqa: PLR0913 - what one 2.x parity run fixes
     items: Mapping[str, Mapping[str, Any]],
     params: dict[str, Any],
     *,
+    unit_of: Callable[[str], str] = _own_unit,
     task: str,
     backend: str,
     stack: str,
@@ -409,7 +441,7 @@ def run(  # noqa: PLR0913 - what one 2.x parity run fixes
     Raises:
         ParityError: `items` holds a calibration item.
     """
-    require_heldout(list(items))
+    require_heldout(list(items), unit_of)
     seen: dict[str, dict[str, Fields]] = {i: {} for i in items}
     for batch, groups in ((SINGLE, [[i] for i in items]), (MANY, [list(items)])):
         for group in groups:
@@ -469,7 +501,14 @@ def _items_cli(args: argparse.Namespace) -> None:
 
 
 def _convert_cli(args: argparse.Namespace) -> None:
-    reference = convert(args.records, task=args.task, backend=args.backend, alpha_sha=args.alpha_sha, job=args.job)
+    reference = convert(
+        args.records,
+        task=args.task,
+        backend=args.backend,
+        alpha_sha=args.alpha_sha,
+        job=args.job,
+        unit_of=unit_of_benchmark(args.suite, args.benchmark),
+    )
     out = reference_path(args.parity_dir, args.task, args.backend)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(reference.model_dump_json(indent=1), "utf-8")
@@ -520,6 +559,7 @@ def _run_cli(args: argparse.Namespace) -> None:
                 sha=args.sha,
                 job=args.job,
                 claims_batch_invariance=args.claim_batch_invariance,
+                unit_of=unit_of_benchmark(args.suite, args.benchmark),
             )
     finally:
         workers.close()
@@ -553,6 +593,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     i.set_defaults(func=_items_cli)
     c = sub.add_parser("convert")
     c.add_argument("records", type=Path)
+    c.add_argument("--suite", type=Path, default=ROOT / "benchmarks" / "suites" / "smoke.yaml")
+    c.add_argument("--benchmark", required=True)
     c.add_argument("--task", required=True)
     c.add_argument("--backend", required=True)
     c.add_argument("--alpha-sha", required=True)

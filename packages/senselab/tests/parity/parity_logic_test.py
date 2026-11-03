@@ -311,10 +311,9 @@ def test_convert_writes_the_reference_where_the_parity_test_reads_it(tmp_path: P
     records = tmp_path / "rec"
     records.mkdir()
     _records(records, "speaker_embeddings", ids, {"vector": [1.0]})
-    par.main(
-        ["convert", str(records), "--task", "speaker_embeddings", "--backend", "speechbrain", "--alpha-sha", "f" * 40,
-         "--job", "1", "--parity-dir", str(tmp_path / "p")]
-    )  # fmt: skip
+    argv = ["convert", str(records), "--benchmark", "librispeech-speaker-trials", "--task", "speaker_embeddings"]
+    argv += ["--backend", "speechbrain", "--alpha-sha", "f" * 40, "--job", "1", "--parity-dir", str(tmp_path / "p")]
+    par.main(argv)
     assert par.load_reference(par.reference_path(tmp_path / "p", "speaker_embeddings", "speechbrain")).items
 
 
@@ -366,3 +365,18 @@ def test_run_takes_its_backend_params_from_the_items_file_it_was_made_for(tmp_pa
     run += [str(tmp_path), "--out", str(tmp_path / "o.json"), "--sha", "a" * 40, "--job", "1", "--items", str(items)]
     with pytest.raises(par.ParityError, match="backend 'transformers'; this run is of 'crisperwhisper'"):
         par.main(run)
+
+
+@pytest.mark.logic
+def test_heldout_follows_the_adapters_split_unit() -> None:
+    """Utterances of a held-out speaker pass `require_heldout` though their own ids hash to either split."""
+    unit_of = par.harness().LibriSpeechTrials().unit_of
+    held = next(s for s in (f"{n}" for n in range(200)) if par.split_of(s) == "heldout")
+    cal = next(s for s in (f"{n}" for n in range(200)) if par.split_of(s) == "calibration")
+    ids = [f"{held}-1-{n:04d}" for n in range(8)]
+    assert len({par.split_of(i) for i in ids}) == 2
+    par.require_heldout(ids, unit_of)
+    with pytest.raises(par.ParityError, match="held-out items only"):
+        par.require_heldout([*ids, f"{cal}-1-0000"], unit_of)
+    with pytest.raises(par.ParityError, match="held-out items only"):
+        par.require_heldout(ids)
