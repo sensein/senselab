@@ -2,7 +2,8 @@
 
 Runs under the pinned `alpha` checkout in its own locked env; it imports 1.x senselab and nothing from 2.x.
 Writes one `<item id>.json` per item under `--out`: `{"task", "lines": [ScriptLine fields]}` for speech_to_text and
-diarize, `{"task", "vector": [...]}` for speaker_embeddings. `parity_reference.py convert` reads them.
+diarize, `{"task", "vector": [...]}` for speaker_embeddings, each item embedded alone. `parity_reference.py convert`
+reads them.
 
     python parity_reference_1x.py --items items.json --out records/ [--device cpu|cuda]
 """
@@ -53,10 +54,14 @@ def produce(
         from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
         from senselab.utils.data_structures import SpeechBrainModel
 
-        vectors = extract_speaker_embeddings_from_audios(
-            audios, SpeechBrainModel(path_or_uri=model["id"], revision=model["revision"]), device=where
-        )
-        return {i: {"task": task, "vector": v.flatten().tolist()} for i, v in zip(ids, vectors, strict=True)}
+        encoder = SpeechBrainModel(path_or_uri=model["id"], revision=model["revision"])
+        return {
+            i: {
+                "task": task,
+                "vector": extract_speaker_embeddings_from_audios([a], encoder, device=where)[0].flatten().tolist(),
+            }
+            for i, a in zip(ids, audios, strict=True)
+        }
     raise SystemExit(f"no 1.x reference for task {task!r}")
 
 
