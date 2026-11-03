@@ -3,7 +3,7 @@
 Status: draft. Principles: P-30 (tiers; benchmarks separate), P-21 (no rationale in code), P-29
 (local plus cluster within shared limits), P-28 (no identifiers), P-22 (Python range).
 The 3.10 tree walk (`ownership.py`) is exercised only by `worker-floor (3.10)` in CI; a developer on the
-pinned `.python-version` (3.12) does not run that path locally.
+pinned `.python-version` (3.13) does not run that path locally.
 
 ## 1. What the 1.x suite tells us
 
