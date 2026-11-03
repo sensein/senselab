@@ -18,7 +18,7 @@ import importlib.util
 import json
 import math
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from itertools import combinations
 from pathlib import Path
 from types import ModuleType
@@ -204,12 +204,8 @@ def unit_of_benchmark(suite: Path, benchmark: str) -> Callable[[str], str]:
     return harness().ADAPTERS[bench.adapter]().unit_of  # type: ignore[no-any-return]
 
 
-def _own_unit(item_id: str) -> str:
-    return item_id
-
-
-def require_heldout(ids: Sequence[str], unit_of: Callable[[str], str] = _own_unit) -> None:
-    """Raise ParityError if the split unit (`unit_of(id)`, the id itself by default) of any of `ids` is not held out."""
+def require_heldout(ids: Sequence[str], unit_of: Callable[[str], str]) -> None:
+    """Raise ParityError if the split unit (`unit_of(id)`) of any of `ids` is not held out."""
     other = sorted(i for i in ids if split_of(unit_of(i)) != HELDOUT)
     if other:
         raise ParityError(f"parity runs on held-out items only; not held out: {other}")
@@ -269,7 +265,7 @@ def convert(  # noqa: PLR0913 - what one 1.x record directory is converted under
     backend: str,
     alpha_sha: str,
     job: str,
-    unit_of: Callable[[str], str] = _own_unit,
+    unit_of: Callable[[str], str],
 ) -> ParityReference:
     """Read the `<id>.json` files `parity_reference_1x.py` wrote under `directory`.
 
@@ -323,29 +319,33 @@ def compare(expected: Mapping[str, Value], actual: Mapping[str, Value], threshol
     return [f"{d.path}: {d.detail} ({d.rule}{f' {d.threshold}' if d.threshold else ''})" for d in found.differences]
 
 
+def require_recorded_heldout(items: Iterable[ReferenceItem | OutputItem]) -> None:
+    """Raise ParityError if any of `items` records a split other than held out."""
+    other = sorted(i.id for i in items if i.split != HELDOUT)
+    if other:
+        raise ParityError(f"parity runs on held-out items only; not held out: {other}")
+
+
 def compare_items(
-    expected: Mapping[str, Fields],
-    actual: Mapping[str, Fields],
-    thresholds: Thresholds,
-    unit_of: Callable[[str], str] = _own_unit,
-) -> dict[str, list[str]]:
-    """Return per-item differences over held-out items; an item `actual` lacks is a difference.
-
-    Raises:
-        ParityError: an item is not a held-out item.
-    """
-    require_heldout(list(expected), unit_of)
-    return _differences(expected, actual, thresholds)
-
-
-def _differences(
     expected: Mapping[str, Fields], actual: Mapping[str, Fields], thresholds: Thresholds
 ) -> dict[str, list[str]]:
+    """Return per-item differences of the items of `expected`; an item `actual` lacks is a difference."""
     return {
         i: found
         for i in expected
         if (found := compare(expected[i], actual[i], thresholds) if i in actual else ["item has no output"])
     }
+
+
+def compare_stacks(a: ParityOutputs, b: ParityOutputs, thresholds: Thresholds) -> dict[str, list[str]]:
+    """Return the differences of the alone-per-item outputs of `a` against `b`.
+
+    Raises:
+        ParityError: an item of either is not a held-out item.
+    """
+    require_recorded_heldout([*a.items, *b.items])
+    alone = [{i.id: i.batches["1"] for i in o.items if "1" in i.batches} for o in (a, b)]
+    return compare_items(alone[0], alone[1], thresholds)
 
 
 def decide(outputs: ParityOutputs, reference: ParityReference | None, thresholds: Thresholds) -> ParityComparison:
@@ -356,18 +356,13 @@ def decide(outputs: ParityOutputs, reference: ParityReference | None, thresholds
     """
     if outputs.not_placeable is not None:
         raise ParityError(f"{outputs.backend} was not run on {outputs.device}: {outputs.not_placeable}")
-    recorded = [(i.id, i.split) for i in outputs.items] + [
-        (i.id, i.split) for i in (reference.items if reference else ())
-    ]
-    other = sorted(i for i, split in recorded if split != HELDOUT)
-    if other:
-        raise ParityError(f"parity runs on held-out items only; not held out: {other}")
+    require_recorded_heldout([*outputs.items, *(reference.items if reference else ())])
     alone = {i.id: i.batches["1"] for i in outputs.items if "1" in i.batches}
     if reference is not None:
-        against, found = "reference", _differences({i.id: i.fields for i in reference.items}, alone, thresholds)
+        against, found = "reference", compare_items({i.id: i.fields for i in reference.items}, alone, thresholds)
     else:
         together = {i.id: i.batches["N"] for i in outputs.items if "N" in i.batches}
-        against, found = "batch", _differences(alone, together, thresholds)
+        against, found = "batch", compare_items(alone, together, thresholds)
     return ParityComparison(
         task=outputs.task,
         backend=outputs.backend,
@@ -426,7 +421,7 @@ def run(  # noqa: PLR0913 - what one 2.x parity run fixes
     items: Mapping[str, Mapping[str, Any]],
     params: dict[str, Any],
     *,
-    unit_of: Callable[[str], str] = _own_unit,
+    unit_of: Callable[[str], str],
     task: str,
     backend: str,
     stack: str,

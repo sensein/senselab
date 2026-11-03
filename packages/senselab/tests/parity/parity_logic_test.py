@@ -26,6 +26,9 @@ def _load(name: str, path: Path) -> Any:  # noqa: ANN401
 par = _load("parity_reference_under_test", ROOT / "benchmarks" / "parity_reference.py")
 
 
+_OWN = lambda item_id: item_id  # noqa: E731 - the item is its own split unit
+
+
 def _ids(split: str, n: int) -> list[str]:
     found: list[str] = []
     k = 0
@@ -60,7 +63,7 @@ def test_converter_reads_1x_output_files(tmp_path: Path) -> None:
         {"lines": [{"speaker": "B", "start": 1.0, "end": 2.0}, {"speaker": "A", "start": 0.0, "end": 0.5}]},
     )
     _records(emb, "speaker_embeddings", ids, {"vector": [[0.5, 1.5]]})
-    kwargs = {"backend": "b", "alpha_sha": "f" * 40, "job": "9"}
+    kwargs = {"backend": "b", "alpha_sha": "f" * 40, "job": "9", "unit_of": _OWN}
     ref = par.convert(asr, task="speech_to_text", **kwargs)
     assert ref.format == PARITY_REFERENCE_FORMAT and ref.alpha_sha == "f" * 40 and ref.flatten == "flatten@2"
     written = tmp_path / "reference.json"
@@ -98,10 +101,10 @@ def test_converter_refuses_unreadable_records(tmp_path: Path) -> None:
     ids = _ids("heldout", 1)
     _records(tmp_path, "diarize", ids, {"lines": []})
     with pytest.raises(par.ParityError, match="another task"):
-        par.convert(tmp_path, task="speech_to_text", backend="b", alpha_sha="f" * 40, job="1")
+        par.convert(tmp_path, task="speech_to_text", backend="b", alpha_sha="f" * 40, job="1", unit_of=_OWN)
     _records(tmp_path, "diarize", ids, {"other": 1})
     with pytest.raises(par.ParityError, match="not one the converter reads"):
-        par.convert(tmp_path, task="diarize", backend="b", alpha_sha="f" * 40, job="1")
+        par.convert(tmp_path, task="diarize", backend="b", alpha_sha="f" * 40, job="1", unit_of=_OWN)
 
 
 @pytest.mark.logic
@@ -110,7 +113,7 @@ def test_parity_uses_heldout_only(tmp_path: Path) -> None:
     cal, held = _ids("calibration", 2), _ids("heldout", 2)
     _records(tmp_path, "speaker_embeddings", cal[:1], {"vector": [1.0]})
     with pytest.raises(par.ParityError, match="held-out items only"):
-        par.convert(tmp_path, task="speaker_embeddings", backend="b", alpha_sha="f" * 40, job="1")
+        par.convert(tmp_path, task="speaker_embeddings", backend="b", alpha_sha="f" * 40, job="1", unit_of=_OWN)
 
     class Worker:
         def run(self, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:  # noqa: ARG002
@@ -124,13 +127,17 @@ def test_parity_uses_heldout_only(tmp_path: Path) -> None:
         "model": None,
         "sha": "a" * 40,
         "job": "1",
+        "unit_of": _OWN,
     }
     with pytest.raises(par.ParityError, match="held-out items only"):
         par.run(Worker(), {cal[0]: {}}, {}, **kwargs)
     out = par.run(Worker(), {held[0]: {}, held[1]: {}}, {}, **kwargs)
     assert out.format == PARITY_OUTPUTS_FORMAT and set(out.items[0].batches) == {"1", "N"}
+    refused = par.ParityOutputs.model_validate(
+        {**out.model_dump(), "items": [{"id": cal[0], "split": "calibration", "batches": {}}]}
+    )
     with pytest.raises(par.ParityError, match="held-out items only"):
-        par.compare_items({cal[0]: {"embedding.vector": [1.0]}}, {}, THRESHOLDS)
+        par.compare_stacks(refused, out, THRESHOLDS)
 
 
 @pytest.mark.logic
@@ -379,4 +386,29 @@ def test_heldout_follows_the_adapters_split_unit() -> None:
     with pytest.raises(par.ParityError, match="held-out items only"):
         par.require_heldout([*ids, f"{cal}-1-0000"], unit_of)
     with pytest.raises(par.ParityError, match="held-out items only"):
-        par.require_heldout(ids)
+        par.require_heldout(ids, _OWN)
+
+
+@pytest.mark.logic
+def test_cross_stack_speaker_embeddings_of_one_heldout_speaker_agree() -> None:
+    """Held-out utterances of one speaker compare across stacks though their ids hash to either split."""
+    held = next(str(n) for n in range(200) if par.split_of(str(n)) == "heldout")
+    ids = [f"{held}-1-{n:04d}" for n in range(8)]
+    assert len({par.split_of(i) for i in ids}) == 2
+    fields = {"embedding.format": '"embedding@1.0"', "embedding.vector": [1.0, 2.0]}
+
+    def stack(name: str) -> Any:  # noqa: ANN401
+        items = tuple(par.OutputItem(id=i, split="heldout", batches={"1": fields}) for i in ids)
+        return par.ParityOutputs(
+            flatten=par.FLATTEN_VERSION,
+            task="speaker_embeddings",
+            backend=name,
+            stack=name,
+            device="cpu",
+            model="m",
+            sha="a" * 40,
+            job="1",
+            items=items,
+        )
+
+    assert par.compare_stacks(stack("a"), stack("b"), THRESHOLDS) == {}

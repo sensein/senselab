@@ -16,9 +16,10 @@ from typing import Any, Literal
 import numpy
 import pytest
 from senselab.cli import main
-from senselab.metrics import der, eer, wer  # noqa: F401 - declares the `wer` task and backend in REGISTRY
+from senselab.metrics import der, eer, span_f1, wer  # noqa: F401 - declares the `wer` task and backend in REGISTRY
 from senselab_core.kernel.declare import REGISTRY, BackendSpec, Env, Registry, TaskSpec
-from senselab_core.kernel.results import Embedding, Intervals, Metric, Transcript, TranscriptNode, Trials
+from senselab_core.kernel.results import Embedding, Intervals, Metric, TextSpans, Transcript, TranscriptNode, Trials
+from senselab_core.kernel.signals import PlainText
 from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime import fake_backend as fake
 from senselab_core.runtime.call import Packaged, use_packaged
@@ -479,16 +480,57 @@ def test_der_aggregate_is_ratio_of_sums() -> None:
     assert (heldout.value, heldout.rows) == (None, 0)
 
 
+def _cosine_trials(*pairs: tuple[float, bool]) -> Trials:
+    return Trials(
+        first=numpy.array([[1.0, 0.0]] * len(pairs)),
+        second=numpy.array([[c, numpy.sqrt(1.0 - c * c)] for c, _ in pairs]),
+        same=numpy.array([same for _, same in pairs]),
+        space="m",
+    )
+
+
 @pytest.mark.logic
 def test_eer_aggregates_pooled_trials() -> None:
-    """EER carries no numerator or denominator; a split's EER is the one of its pooled trials."""
-    first = numpy.array([[1.0, 0.0]] * 4)
-    second = numpy.array([[1.0, 0.0], [0.0, 1.0], [0.9, 0.1], [0.2, 0.9]])
-    trials = Trials(first=first, second=second, same=numpy.array([True, False, True, False]), space="m")
-    metric = eer.score({"trials": trials}, None)
-    assert (metric.numerator, metric.denominator) == (None, None)
-    [calibration, _] = harness._aggregate((_row("pooled:calibration", "calibration", metric),))
-    assert (calibration.value, calibration.items) == (metric.value, metric.items)
+    """EER carries no parts; a split's EER is the one of all its trials pooled, not the mean of per-group EERs."""
+    separated = _cosine_trials((0.9, True), (0.8, True), (0.1, False), (0.2, False))
+    inverted = _cosine_trials((0.2, True), (0.7, False))
+    pooled = _cosine_trials((0.9, True), (0.8, True), (0.1, False), (0.2, False), (0.2, True), (0.7, False))
+    per_group = [eer.score({"trials": t}, None) for t in (separated, inverted)]
+    metric = eer.score({"trials": pooled}, None)
+    assert [m.value for m in per_group] == [0.0, 1.0] and metric.value == pytest.approx(1 / 3)
+    assert all((m.numerator, m.denominator) == (None, None) for m in (*per_group, metric))
+    [calibration, heldout] = harness._aggregate((_row("pooled:calibration", "calibration", metric),))
+    assert (calibration.value, calibration.items, heldout.rows) == (metric.value, metric.items, 0)
+
+
+@pytest.mark.logic
+def test_empty_span_f1_documents_add_nothing_to_the_pooled_ratio() -> None:
+    """Ten documents with no entities and one with two missed spans pool to 0, and nothing to score pools to 1."""
+    nothing = span_f1.score({"reference": _spans(), "hypothesis": _spans()}, None)
+    missed = span_f1.score({"reference": _spans((0, 3, "p"), (4, 8, "p")), "hypothesis": _spans()}, None)
+    assert (nothing.value, nothing.numerator, nothing.denominator) == (1.0, 0.0, 0.0)
+    rows = tuple(_row(f"d{n}", "calibration", nothing) for n in range(10)) + (_row("m", "calibration", missed),)
+    assert harness._aggregate(rows)[0].value == 0.0
+    assert harness._aggregate(rows[:10])[0].value == 1.0
+
+
+@pytest.mark.logic
+def test_a_split_mixing_ratio_and_plain_rows_is_refused() -> None:
+    """Rows of one split either all carry ratio parts or none does."""
+    ratio = Metric(name="wer", value=0.5, unit="ratio", items=2, numerator=1, denominator=2)
+    plain = Metric(name="eer", value=0.5, unit="ratio", items=2)
+    with pytest.raises(harness.MixedRatios, match="mix ratio parts"):
+        harness._aggregate((_row("a", "calibration", ratio), _row("b", "calibration", plain)))
+
+
+def _spans(*rows: tuple[int, int, str]) -> TextSpans:
+    text = PlainText(content="Ada Lovelace met Charles Babbage")
+    return TextSpans.over(
+        text,
+        start=numpy.array([s for s, _, _ in rows], dtype=numpy.int64),
+        end=numpy.array([e for _, e, _ in rows], dtype=numpy.int64),
+        label=numpy.array([lab for _, _, lab in rows], dtype=str),
+    )
 
 
 def _speaker_tar(path: Path, speakers: int, per_speaker: int) -> Path:
@@ -539,6 +581,19 @@ def test_malformed_reference_is_item_fault(tmp_path: Path) -> None:
     ):
         item = harness.gretel_item("bad", text, spans)
         assert item.fault == "ContentFault (content): 1 of 1 reference spans lie outside the text of 15 chars"
+
+    unreadable = [
+        '[{"start": 0, "label": "n"}]',
+        '[{"start": "0", "end": 2, "label": "n"}]',
+        "not json",
+        '[{"start": 0.5, "end": 2, "label": "n"}]',
+        "[3]",
+    ]
+    for spans in unreadable:
+        item = harness.gretel_item("odd", text, spans)
+        assert item.fault is not None and item.fault.startswith(
+            "ContentFault (content): the reference spans are unreadable"
+        )
 
     class Malformed:
         split_unit: Literal["item"] = "item"

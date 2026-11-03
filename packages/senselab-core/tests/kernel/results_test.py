@@ -160,9 +160,15 @@ def test_metric_names_value_unit_and_items() -> None:
 
 @pytest.mark.logic
 def test_metric_ratio_parts_come_together() -> None:
-    """A metric carries its numerator and denominator both or neither, over a positive denominator."""
+    """A metric carries its numerator and denominator both or neither; a zero denominator has a zero numerator."""
     m = Metric(name="wer", value=0.5, unit="1", items=2, numerator=1, denominator=2)
     assert (m.numerator, m.denominator) == (1.0, 2.0)
-    for bad in ({"numerator": 1.0}, {"denominator": 2.0}, {"numerator": 1.0, "denominator": 0.0}):
+    assert Metric(name="f", value=1.0, unit="1", items=1, numerator=0, denominator=0).denominator == 0.0
+    for bad in (
+        {"numerator": 1.0},
+        {"denominator": 2.0},
+        {"numerator": 1.0, "denominator": 0.0},
+        {"numerator": 0.0, "denominator": -1.0},
+    ):
         with pytest.raises(ValidationError):
             Metric.model_validate({"name": "wer", "value": 0.5, "unit": "1", "items": 2, **bad})

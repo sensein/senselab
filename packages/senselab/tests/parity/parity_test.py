@@ -102,7 +102,7 @@ def test_cross_stack_agreement() -> None:
     if not pairs:
         pytest.skip("no task and model was run on two stacks")
     for a, b in pairs:
-        found = par.compare_items(_batch(a, "1"), _batch(b, "1"), THRESHOLDS)
+        found = par.compare_stacks(a, b, THRESHOLDS)
         assert not found, (a.stack, b.stack, THRESHOLDS.canonical_digest(), found)
 
 

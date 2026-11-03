@@ -315,19 +315,19 @@ def pii_spans(raw: str | Sequence[Any]) -> list[dict[str, Any]]:
 
 
 def gretel_item(uid: str, content: str, raw_spans: str | Sequence[Any]) -> Item:
-    """Return the item of one gretel document; a reference span outside `0 <= start <= end <= len` is its fault."""
+    """Return the item of one gretel document; a reference span that is unreadable or outside the text is its fault."""
     text = PlainText(content=content)
-    spans = pii_spans(raw_spans)
-    bad = [s for s in spans if not 0 <= s["start"] <= s["end"] <= len(content)]
+    bad: list[Any]
+    try:
+        spans = pii_spans(raw_spans)
+        bad = [s for s in spans if not _span_within(s, len(content))]
+        message = f"{len(bad)} of {len(spans)} reference spans lie outside the text of {len(content)} chars"
+    except (KeyError, TypeError, ValueError) as err:
+        spans, bad, message = [], [None], f"the reference spans are unreadable ({type(err).__name__})"
     if bad:
-        fault = _fault_text(
-            {
-                "type": "ContentFault",
-                "fault": "content",
-                "message": f"{len(bad)} of {len(spans)} reference spans lie outside the text of {len(content)} chars",
-            }
+        return Item(
+            uid, {"text": text}, fault=_fault_text({"type": "ContentFault", "fault": "content", "message": message})
         )
-        return Item(uid, {"text": text}, fault=fault)
     reference = TextSpans.over(
         text,
         start=numpy.array([s["start"] for s in spans], dtype=numpy.int64),
@@ -335,6 +335,13 @@ def gretel_item(uid: str, content: str, raw_spans: str | Sequence[Any]) -> Item:
         label=numpy.array([s["label"] for s in spans], dtype=str),
     )
     return Item(uid, {"text": text}, reference)
+
+
+def _span_within(span: Mapping[str, Any], length: int) -> bool:
+    start, end, _ = span["start"], span["end"], span["label"]
+    if type(start) is not int or type(end) is not int:
+        raise TypeError("a span position is not an integer")
+    return 0 <= start <= end <= length
 
 
 class GretelPii(_PerItem):
@@ -396,6 +403,10 @@ ADAPTERS: Mapping[str, Callable[[], Adapter]] = {
 
 class BenchmarkResultRetired(ValueError):
     """A `result.json` is of a retired `benchmark-result` format."""
+
+
+class MixedRatios(ValueError):
+    """The rows of one split mix results with ratio parts and results without."""
 
 
 class SuiteError(ValueError):
@@ -475,8 +486,8 @@ class Row(Frozen):
 class Aggregate(Frozen):
     """A split's value over its rows: the sum of their numerators over the sum of their denominators.
 
-    Rows without a ratio (a pooled metric, or one that is not a ratio of sums) give the mean of their values
-    weighted by their `items`.
+    A split whose summed denominator is 0 (nothing to score) is 1.0. Rows without a ratio (a pooled metric, or one
+    that is not a ratio of sums) give the mean of their values weighted by their `items`.
     """
 
     split: NonEmptyStr
@@ -536,8 +547,12 @@ def _aggregate(rows: Sequence[Row]) -> tuple[Aggregate, ...]:
         mine = [r for r in rows if r.split == split]
         scored = [r for r in mine if r.value is not None and r.items]
         weight = sum(r.items or 0 for r in scored)
-        if scored and all(r.numerator is not None and r.denominator is not None for r in scored):
-            value: float | None = sum(r.numerator or 0.0 for r in scored) / sum(r.denominator or 0.0 for r in scored)
+        ratios = {r.numerator is not None for r in scored}
+        if len(ratios) > 1:
+            raise MixedRatios(f"split {split}: rows {sorted(r.label for r in scored)} mix ratio parts and none")
+        if ratios == {True}:
+            denominator = sum(r.denominator or 0.0 for r in scored)
+            value: float | None = sum(r.numerator or 0.0 for r in scored) / denominator if denominator else 1.0
         else:
             value = sum((r.value or 0.0) * (r.items or 0) for r in scored) / weight if weight else None
         out.append(
@@ -712,6 +727,7 @@ __all__ = [
     "Benchmark",
     "BenchmarkResult",
     "BenchmarkResultRetired",
+    "MixedRatios",
     "Suite",
     "SuiteError",
     "load_result",

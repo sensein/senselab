@@ -43,7 +43,7 @@ def _triples(spans: TextSpans) -> Counter[tuple[int, int, str]]:
 def f1_parts(ref: TextSpans, hyp: TextSpans) -> tuple[float, float]:
     """Return `(2 * correct, reference spans + hypothesis spans)`, the parts of the micro F1 of `hyp` against `ref`.
 
-    Neither side having a span is a perfect score, `(1, 1)`.
+    Neither side having a span is `(0, 0)`: a perfect score that adds nothing to a pooled ratio.
 
     Raises:
         ContentFault: if the spans lie over different texts.
@@ -51,7 +51,7 @@ def f1_parts(ref: TextSpans, hyp: TextSpans) -> tuple[float, float]:
     _worker.require_same("text", ref.text, hyp.text)
     expected, found = _triples(ref), _triples(hyp)
     if not expected and not found:
-        return 1.0, 1.0
+        return 0.0, 0.0
     correct = sum((expected & found).values())
     return 2.0 * correct, float(sum(expected.values()) + sum(found.values()))
 
@@ -63,7 +63,7 @@ def score(inputs: Mapping[str, Any], params: object) -> Metric:  # noqa: ARG001 
     numerator, denominator = f1_parts(ref, hyp)
     return Metric(
         name="span_f1",
-        value=numerator / denominator,
+        value=numerator / denominator if denominator else 1.0,
         unit="ratio",
         items=max(1, len(ref.start) + len(hyp.start)),
         numerator=numerator,
