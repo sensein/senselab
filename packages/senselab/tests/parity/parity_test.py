@@ -1,7 +1,8 @@
 """Parity on the held-out split, from the files an ORCD campaign produced under `$SENSELAB_PARITY_DIR`.
 
-`reference/<task>/<backend>.json` is `parity-reference@3.0` (1.x, converted); `outputs/*.json` is `parity-outputs@2.0`
-(2.x, one per backend, stack and device). Outputs are compared by kernel type under the thresholds of the run config
+`reference/<task>/<backend>.json` is `parity-reference@3.0` (1.x, converted); `outputs/*.json` is `parity-outputs@3.0`
+(2.x, one per backend, stack and device; a backend the node could not place is `not_placeable` and counts as not run
+there, never as a pass). Outputs are compared by kernel type under the thresholds of the run config
 at `$SENSELAB_PARITY_CONFIG`, merged over the packaged one as `parity_reference.py compare --config` merges it; each
 decision against the 1.x reference and each batch-invariance decision is written as a `parity-comparison@1.0` record
 under `comparisons/`, carrying the thresholds' digest. A failure is a finding.
@@ -48,6 +49,10 @@ def _name(o: Any) -> str:  # noqa: ANN401
     return f"{o.task}-{o.backend}-{o.stack}-{o.device}".replace(" ", "_")
 
 
+def _ran(outputs: list[Any]) -> list[Any]:
+    return [o for o in outputs if o.not_placeable is None]
+
+
 def _need_outputs() -> None:
     if DIRECTORY is None:
         pytest.skip("no parity campaign: SENSELAB_PARITY_DIR is unset")
@@ -79,7 +84,9 @@ def test_outputs_present() -> None:
 @pytest.mark.model
 @pytest.mark.parametrize("output", OUTPUTS, ids=_name)
 def test_matches_1x_reference(output: Any) -> None:  # noqa: ANN401
-    """2.x alone-per-item outputs agree with the 1.x reference."""
+    """2.x alone-per-item outputs agree with the 1.x reference; a backend not placeable on the device is skipped."""
+    if output.not_placeable is not None:
+        pytest.skip(f"{output.backend} not run on {output.device}: {output.not_placeable}")
     reference = DIRECTORY / "reference" / output.task / f"{output.backend}.json"  # type: ignore[operator]
     if not reference.exists():
         pytest.skip(f"no 1.x reference for {output.task} backend {output.backend}")
@@ -94,7 +101,7 @@ def test_cross_stack_agreement() -> None:
     _need_outputs()
     pairs = [
         (a, b)
-        for a, b in combinations(OUTPUTS, 2)
+        for a, b in combinations(_ran(OUTPUTS), 2)
         if (a.task, a.backend) == (b.task, b.backend) and a.stack != b.stack and a.device == b.device
     ]
     if not pairs:
@@ -109,7 +116,7 @@ def test_cross_stack_agreement() -> None:
 def test_claimed_batch_invariance() -> None:
     """A run that claims batch invariance has its one-request outputs agree with its alone outputs."""
     _need_outputs()
-    claimed = [o for o in OUTPUTS if o.claims_batch_invariance]
+    claimed = [o for o in _ran(OUTPUTS) if o.claims_batch_invariance]
     if not claimed:
         pytest.skip("no port claims batch invariance")
     for o in claimed:

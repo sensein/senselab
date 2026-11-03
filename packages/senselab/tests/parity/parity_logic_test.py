@@ -242,3 +242,22 @@ def test_a_parity_decision_records_the_thresholds_of_its_run_config(tmp_path: Pa
     assert not packaged.agree and packaged.thresholds == Thresholds.load().canonical_digest()
     assert mine.agree and mine.thresholds == Thresholds.load(config).canonical_digest()
     assert mine.format == "parity-comparison@1.0" and mine.against == "reference"
+
+
+@pytest.mark.logic
+def test_a_backend_the_profile_cannot_place_is_not_run_and_never_passes() -> None:
+    """A cpu-only backend under a cuda-only profile has a placement gap, is recorded unrun, and `decide` refuses it."""
+    importlib.import_module("senselab")
+    importlib.import_module("senselab_core.runtime.fake_backend")
+    profiles = importlib.import_module("senselab_core.runtime.profiles")
+    laptop = profiles.ExecutionProfile.load("laptop")
+    _, backend = par.resolve("fake.echo", "fake")
+    assert par.placement_gap("fake.echo", None, backend, laptop.model_copy(update={"devices": ("cpu",)})) is None
+    gap = par.placement_gap("fake.echo", None, backend, laptop.model_copy(update={"devices": ("cuda",)}))
+    assert gap is not None and "'fake'" in gap
+    out = par.ParityOutputs(
+        flatten="flatten@2", task="fake.echo", backend="fake", stack=backend.stack, device="cpu", sha="a" * 40,
+        job="1", not_placeable=gap, items=(),
+    )  # fmt: skip
+    with pytest.raises(par.ParityError, match="was not run on cpu"):
+        par.decide(out, None, THRESHOLDS)

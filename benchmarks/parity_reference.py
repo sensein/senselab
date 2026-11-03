@@ -3,7 +3,8 @@
 Subcommands, in the order a campaign runs them:
 `items` (2.x env, no model) writes the held-out items and model pin for `parity_reference_1x.py`;
 `convert` turns that script's output files into `parity-reference@1.0`;
-`run` runs a 2.x backend over the same items and writes `parity-outputs@2.0`;
+`run` runs a 2.x backend over the same items and writes `parity-outputs@3.0`; a backend the profile cannot place on
+this node is recorded as `not_placeable` with no outputs, never run;
 `compare` writes `parity-comparison@1.0`: a run's outputs against the 1.x reference, or alone against one request,
 by each kernel type's comparison (`runtime.compare`) under the thresholds of `--config`, a run config merged over the
 packaged one (`Thresholds.load`), whose digest the record carries. `packages/senselab/tests/parity` asserts the same.
@@ -80,7 +81,11 @@ class OutputItem(Frozen):
 
 
 class ParityOutputs(Formatted):
-    """The 2.x outputs of one backend's held-out items on one stack and device."""
+    """The 2.x outputs of one backend's held-out items on one stack and device.
+
+    `not_placeable` is why the profile could not place the backend on this node, when it could not: no items were
+    run and the record says nothing about parity on `device`.
+    """
 
     format: FormatTag = PARITY_OUTPUTS_FORMAT
     flatten: NonEmptyStr
@@ -91,6 +96,7 @@ class ParityOutputs(Formatted):
     sha: NonEmptyStr
     job: NonEmptyStr
     claims_batch_invariance: bool = False
+    not_placeable: str | None = None
     items: tuple[OutputItem, ...]
 
 
@@ -317,8 +323,10 @@ def decide(outputs: ParityOutputs, reference: ParityReference | None, thresholds
     """Return the parity decision on `outputs`: alone against `reference`, or with none, one request against alone.
 
     Raises:
-        ParityError: an item is not a held-out item.
+        ParityError: `outputs` is a backend that was not placeable, or an item is not a held-out item.
     """
+    if outputs.not_placeable is not None:
+        raise ParityError(f"{outputs.backend} was not run on {outputs.device}: {outputs.not_placeable}")
     alone = {i.id: i.batches["1"] for i in outputs.items if "1" in i.batches}
     if reference is not None:
         against, found = "reference", compare_items({i.id: i.fields for i in reference.items}, alone, thresholds)
@@ -334,6 +342,23 @@ def decide(outputs: ParityOutputs, reference: ParityReference | None, thresholds
         thresholds=thresholds.canonical_digest(),
         mismatches=found,
     )
+
+
+def placement_gap(task: str, model: str | None, backend: Any, profile: Any) -> str | None:  # noqa: ANN401
+    """Return why `profile` cannot place `backend` of `task` on `model` on this node, or None when it can.
+
+    The same check the harness reports as "not placeable" (`placement_of`), with `profile`'s stack preference for
+    `task` narrowed to the backend's stack; a placement on a different backend is a gap too.
+    """
+    from senselab_core.runtime.call import TaskCall, placement_of  # noqa: PLC0415 - needs the runtime
+    from senselab_core.runtime.profiles import NoBackend, NoDevice  # noqa: PLC0415
+
+    narrowed = profile.model_copy(update={"stack_preferences": {**profile.stack_preferences, task: (backend.stack,)}})
+    try:
+        placed = placement_of(task, TaskCall.parse_model(model), narrowed)
+    except (NoDevice, NoBackend) as err:
+        return " ".join(str(err).split())
+    return None if placed.backend.name == backend.name else f"the profile places {task!r} on {placed.backend.name!r}"
 
 
 def run(  # noqa: PLR0913 - what one 2.x parity run fixes
@@ -403,20 +428,36 @@ def _run_cli(args: argparse.Namespace) -> None:
     bench, backend, wired, params = prepare(
         args.suite, args.benchmark, args.backend, args.backend_params, args.data_cache, args.work, HELDOUT
     )
-    workers = RealWorkers(ExecutionProfile.load(args.execution))
+    profile = ExecutionProfile.load(args.execution)
+    workers = RealWorkers(profile)
+    stack = backend.stack + "".join(f" {k}={v}" for k, v in sorted(args.backend_params.items()))
+    gap = placement_gap(bench.task, bench.model, backend, profile)
     try:
-        outputs = run(
-            workers(bench.task, args.backend),
-            wired,
-            params,
-            task=bench.task,
-            backend=args.backend,
-            stack=backend.stack + "".join(f" {k}={v}" for k, v in sorted(args.backend_params.items())),
-            device=workers.device,
-            sha=args.sha,
-            job=args.job,
-            claims_batch_invariance=args.claim_batch_invariance,
-        )
+        if gap is not None:
+            outputs = ParityOutputs(
+                flatten=FLATTEN_VERSION,
+                task=bench.task,
+                backend=args.backend,
+                stack=stack,
+                device=workers.device,
+                sha=args.sha,
+                job=args.job,
+                not_placeable=gap,
+                items=(),
+            )
+        else:
+            outputs = run(
+                workers(bench.task, args.backend),
+                wired,
+                params,
+                task=bench.task,
+                backend=args.backend,
+                stack=stack,
+                device=workers.device,
+                sha=args.sha,
+                job=args.job,
+                claims_batch_invariance=args.claim_batch_invariance,
+            )
     finally:
         workers.close()
     args.out.parent.mkdir(parents=True, exist_ok=True)
