@@ -216,3 +216,10 @@ Source: bids-standard/BEP028_BIDSprov, `bep028spec.md` at master 162bea57 (2026-
 - **Core terms added** (`senselab-vocab@1.2`): `senselab:envLock` (`prov:Agent`, `xsd:string`),
   `senselab:license` (`prov:Agent`, `rdf:JSON`), `senselab:storedAgent` (`prov:Activity`, `xsd:string`).
   `senselab:context` and `senselab:storedContext` are `execution-context@3.0` records.
+
+## Amendment 2026-11-02: the thresholds of a verify decision are recorded (P2-95; Phase 2 Task 34e)
+
+- **Core term added** (`senselab-vocab@1.3`): `senselab:verifyThresholds` (`prov:Activity`, `xsd:string`), the
+  canonical digest of the comparison thresholds of the run config the call ran under. Every reuse and execution
+  activity carries it beside `senselab:verifyFraction` and `senselab:verifySampling`; a sampled execution's
+  `senselab:verifies` evidence record holds the same digest.

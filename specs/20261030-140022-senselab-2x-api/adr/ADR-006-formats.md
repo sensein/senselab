@@ -325,3 +325,20 @@ Phase 2 Task 22f.
   `execution-context@2.0` → `@3.0` (`env_license`); `store@4` → `store@5`; `senselab-vocab@1.1` → `@1.2`
   (`senselab:envLock`, `senselab:license`, `senselab:storedAgent`); `execution-context@2` joins the retired store
   formats (P2-92, P2-93; Phase 2 Task 34d).
+- 2026-11-02: new data formats `comparison@1.0` (`runtime/data/comparison.yaml`, how each kernel type's fields
+  compare) and `run-config@1.0` (`runtime/data/run_config.yaml`, the named comparison thresholds, each with its
+  derivation); `equivalence-evidence@2.0` → `@3.0` (`thresholds`, a digest, replaces `tolerance`), under
+  `equivalence-evidence@3/`; `parity-reference@2.0` → `@3.0` (each 1.x projection carries its kernel value's
+  `format` leaf); new `parity-comparison@1.0` (`parity_reference.py compare --config`: one parity decision, its
+per-item differences and the digest of the thresholds it was made under); `senselab-vocab@1.2` → `@1.3`
+(`senselab:verifyThresholds`). Retired with nothing to read them:
+  `tolerance@2` (and `@1`), `tolerance-observations@2` (and `@1`) and `tolerance-coverage@1` (P2-95; Phase 2 Task
+  34e).
+
+## Amendment 2026-11-02: the data formats list (P2-95; Phase 2 Task 34e)
+
+Restates the **Data formats** list of the 2026-10-31 amendment, which this supersedes: `equivalence@3.0`,
+`equivalence-evidence@3.0`, `retry-policy@1.0`, `catalogue@1.0`, `spdx-licenses@1.0`, `comparison@1.0`,
+`run-config@1.0`, and `execution-context@3.0` in a store entry's `context.json`; `env-record@1.0`, an env root's
+`<name>[-<tag>].json`; `senselab-vocab@1.3`, a vocabulary document's `owl:versionInfo` (ADR-010). The tolerance
+profile formats (`tolerance@`, `tolerance-observations@`, `tolerance-coverage@`) are retired and not listed.

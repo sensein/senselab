@@ -241,3 +241,43 @@ Ruling P2-93 (owner item 46). Phase 2 Task 34d.
   refused) is the only thing that refuses a call for its license: a refused env or model license raises
   `LicenseRefused` before the env opens, and a stored result whose env license the policy refuses is not served.
   A subject with no license record is refused when a policy is named. With no policy, no license refuses a call.
+
+## Amendment 2026-11-02: agreement is a standard comparison under configured thresholds
+
+Ruling P2-95 (owner items 48, 49). Phase 2 Task 34e. Supersedes, in the amendments above, every statement that a
+comparison is judged within a backend's tolerance profile, that a sampled hit's backend needs a profile
+(`NoToleranceProfile`), that `Packaged.tolerance` hands `run_call` a folder of profiles, and that a class derivation
+names tolerance profile digests.
+
+- **Three comparisons only.** Two outputs agree when their hashes are equal, or leaf by leaf when each leaf is equal
+  (`exact`) or within `numpy.isclose` of a named threshold (`close`, `|actual - expected| <= atol + rtol *
+  |expected|`). `runtime.compare.compare` short-circuits on equal hashes and otherwise returns `Comparison`: agree,
+  the field-level differences (path, rule, threshold name and bounds, both sides summarised, and why) and the
+  thresholds' canonical digest.
+- **Each kernel type declares how its fields compare,** as data: `runtime/data/comparison.yaml`
+  (`comparison@1.0`), keyed by `<name>@<major>` of every wire format, each field an index-free path pattern with
+  `exact` or `{close: <threshold>}`. A kernel value is found by its `format` leaf under any path; a leaf under a type
+  with no rule for it, or on one side only, is a difference; a leaf outside any kernel value is exact. Identities and
+  text are exact. `Intervals` declares `match_labels`, so its labels are compared after the optimal one-to-one
+  time-overlap map (P2-89), the one relabelling there is.
+  A kernel value whose type has no entry in the table is refused (`UndeclaredComparison`, naming its format tag),
+  never compared as exact.
+- **Thresholds are run config values,** never fitted. `runtime/data/run_config.yaml` (`run-config@1.0`) holds
+  `thresholds`, each `{rtol, atol, derivation}`; `Thresholds.load(override)` deep-merges a user's run config (a
+  mapping or YAML) over it and refuses an unknown name with the closest one. `RunConfig.thresholds` defaults to the
+  packaged ones. The packaged defaults (`time_ns`, `probability`, `score`, `embedding`, `samples`, `value`) cite the
+  ORCD measurements taken for the retired profiles as evidence for the written value. A benchmark may later evaluate
+  which thresholds suit a backend; it informs a default and never sets one at run time.
+- **Verify sampling** compares a sampled hit with its recomputation under `run.thresholds`; nothing is read before
+  execution and no backend lacks what verification needs. `EquivalenceEvidence` records `thresholds`, the digest,
+  in place of `tolerance` (`equivalence-evidence@3.0`, under the store's `equivalence-evidence@3/`); a class
+  derivation names the threshold digests. Every activity a call writes records `senselab:verifyThresholds` (ADR-010
+  amendment of this date).
+- **Parity uses the same thresholds.** `parity_reference.py compare --config` and the parity tests
+  (`$SENSELAB_PARITY_CONFIG`) load the run config through `Thresholds.load`; each decision is a
+  `parity-comparison@1.0` record carrying the thresholds' digest.
+- **Retired:** the tolerance profiles (`senselab/data/tolerance/`), `scripts/generate_tolerance.py` (`measure`,
+  `generate`), `runtime.tolerance` with its coverage policy, `NoToleranceProfile` and its envelope row, and R-186's
+  coverage target.
+- 2026-11-02: per-type comparison as data, thresholds in the run config, verify evidence by thresholds digest;
+  tolerance profiles retired (P2-95; Phase 2 Task 34e).
