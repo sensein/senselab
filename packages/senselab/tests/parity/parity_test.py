@@ -1,7 +1,8 @@
 """Parity on the held-out split, from the files an ORCD campaign produced under `$SENSELAB_PARITY_DIR`.
 
-`reference/<task>/<backend>.json` is `parity-reference@1.0` (1.x, converted); `outputs/*.json` is `parity-outputs@1.0`
-(2.x, one per backend, stack and device). Bounds are the packaged `tolerance@2.0` profiles. A failure is a finding.
+`reference/<task>/<backend>.json` is `parity-reference@3.0` (1.x, converted); `outputs/*.json` is `parity-outputs@2.0`
+(2.x, one per backend, stack and device). Outputs are compared by kernel type under the packaged run config's
+thresholds, whose digest every failure names. A failure is a finding.
 """
 
 import importlib.util
@@ -12,10 +13,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from senselab_core.runtime.tolerance import tolerance_profile_path
+from senselab_core.runtime.compare import Thresholds
 
 ROOT = Path(__file__).resolve().parents[4]
-PROFILES = ROOT / "packages" / "senselab" / "src" / "senselab" / "data" / "tolerance"
+THRESHOLDS = Thresholds.load()
 
 
 def _load() -> Any:  # noqa: ANN401
@@ -64,20 +65,19 @@ def test_outputs_present() -> None:
 @pytest.mark.model
 @pytest.mark.parametrize("output", OUTPUTS, ids=_name)
 def test_matches_1x_reference(output: Any) -> None:  # noqa: ANN401
-    """2.x alone-per-item outputs equal the 1.x reference within the backend's tolerance profile."""
+    """2.x alone-per-item outputs agree with the 1.x reference."""
     reference = DIRECTORY / "reference" / output.task / f"{output.backend}.json"  # type: ignore[operator]
     if not reference.exists():
         pytest.skip(f"no 1.x reference for {output.task} backend {output.backend}")
     ref = par.load_reference(reference)
-    profile = par.load_profile(tolerance_profile_path(PROFILES, output.task, output.backend))
-    found = par.compare_items({i.id: i.fields for i in ref.items}, _batch(output, "1"), profile)
-    assert not found, found
+    found = par.compare_items({i.id: i.fields for i in ref.items}, _batch(output, "1"), THRESHOLDS)
+    assert not found, (THRESHOLDS.canonical_digest(), found)
 
 
 @pytest.mark.limits
 @pytest.mark.model
 def test_cross_stack_agreement() -> None:
-    """Outputs of one backend on different stacks, each device alike, agree within the backend's profile."""
+    """Outputs of one backend on different stacks, each device alike, agree."""
     _need_outputs()
     pairs = [
         (a, b)
@@ -87,20 +87,18 @@ def test_cross_stack_agreement() -> None:
     if not pairs:
         pytest.skip("no backend was run on two stacks")
     for a, b in pairs:
-        profile = par.load_profile(tolerance_profile_path(PROFILES, a.task, a.backend))
-        found = par.compare_items(_batch(a, "1"), _batch(b, "1"), profile)
-        assert not found, (a.stack, b.stack, found)
+        found = par.compare_items(_batch(a, "1"), _batch(b, "1"), THRESHOLDS)
+        assert not found, (a.stack, b.stack, THRESHOLDS.canonical_digest(), found)
 
 
 @pytest.mark.limits
 @pytest.mark.model
 def test_claimed_batch_invariance() -> None:
-    """A run that claims batch invariance has its one-request outputs equal its alone outputs within the profile."""
+    """A run that claims batch invariance has its one-request outputs agree with its alone outputs."""
     _need_outputs()
     claimed = [o for o in OUTPUTS if o.claims_batch_invariance]
     if not claimed:
         pytest.skip("no port claims batch invariance")
     for o in claimed:
-        profile = par.load_profile(tolerance_profile_path(PROFILES, o.task, o.backend))
-        found = par.compare_items(_batch(o, "1"), _batch(o, "N"), profile)
-        assert not found, (_name(o), found)
+        found = par.compare_items(_batch(o, "1"), _batch(o, "N"), THRESHOLDS)
+        assert not found, (_name(o), THRESHOLDS.canonical_digest(), found)

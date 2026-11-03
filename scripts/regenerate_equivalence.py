@@ -1,8 +1,9 @@
 """Sample verify evidence into a result store, and regenerate `runtime/data/equivalence.yaml` from stores' evidence.
 
-`sample` runs the held-out items of one suite benchmark through `run_call` under `--reuse` and `--verify`, against
-`--store`, and prints how many calls executed, were reused and were verified. `regenerate` reads the
-`equivalence-evidence@2.0` records of every store named and writes `equivalence@3.0`; the table is never hand-edited.
+`sample` runs the held-out items of one suite benchmark through `run_call` under `--reuse` and `--verify`, compared
+under the thresholds of `--config` (a run config merged over the packaged one), against `--store`, and prints how many
+calls executed, were reused and were verified. `regenerate` reads the `equivalence-evidence@3.0` records of every
+store named and writes `equivalence@3.0`; the table is never hand-edited.
 """
 
 import argparse
@@ -39,13 +40,14 @@ def regenerate(stores: Sequence[Path], out: Path) -> Path:
 def _sample_cli(args: argparse.Namespace) -> None:
     from senselab_core.kernel.identity import ReusePolicy  # noqa: PLC0415 - only a real run needs the runtime
     from senselab_core.runtime.call import RunConfig, TaskCall, run_call  # noqa: PLC0415
+    from senselab_core.runtime.compare import Thresholds  # noqa: PLC0415
     from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415
 
     bench, items = _tolerance_script().load_items(args.suite, args.benchmark, args.data_cache, args.work, HELDOUT)
     store = ResultStore(args.store)
     before = len(store.evidence())
     profile = ExecutionProfile.load(args.execution)
-    run = RunConfig(reuse=ReusePolicy(args.reuse), verify=args.verify)
+    run = RunConfig(reuse=ReusePolicy(args.reuse), verify=args.verify, thresholds=Thresholds.load(args.config))
     executed = reused = 0
     for item in items:
         call = TaskCall.model_validate({"task": bench.task, "inputs": dict(item.inputs), "params": bench.params})
@@ -76,6 +78,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     s.add_argument("--store", type=Path, required=True)
     s.add_argument("--reuse", default="equivalent")
     s.add_argument("--verify", type=float, default=0.0)
+    s.add_argument("--config", type=Path, help="a run config YAML whose thresholds are merged over the packaged ones")
     s.add_argument("--data-cache", type=Path, required=True)
     s.add_argument("--work", type=Path, required=True)
     s.set_defaults(func=_sample_cli)

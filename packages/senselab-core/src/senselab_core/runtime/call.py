@@ -55,7 +55,7 @@ from senselab_core.kernel.time import TimeAnchor, TimeMap, rebind
 from senselab_core.kernel.wire import WireFormatRetired, from_wire_form, wire_form
 from senselab_core.runtime.audio_io import DECODER, READER, open_audio
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
-from senselab_core.runtime.compare import Thresholds, flatten
+from senselab_core.runtime.compare import Thresholds, compare
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import SAMPLING, EquivalenceEvidence, EvidenceSide, sampled
 from senselab_core.runtime.hardware import HardwareInfo, numerics_class, probe_hardware
@@ -69,7 +69,6 @@ from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.runtime.revision import PROCESS_RESOLVER, cache_root, run_id
 from senselab_core.runtime.store import ResultStore, StoredResult, agent_record, context_record, key_record
 from senselab_core.runtime.store import output_identity as store_output_identity
-from senselab_core.runtime.tolerance import NoToleranceProfile, ToleranceProfile, read_profile, within
 from senselab_core.runtime.vllm_server import (
     Attestation,
     AttestationMismatch,
@@ -356,14 +355,14 @@ def run_call(
     stored as its wire form and returned as the kernel value, read by `from_wire_form`. Outputs are stored on the clocks
     their recording inputs' identities name and served re-bound (`rebind`) to the caller's anchors, so the key holds no
     anchor and one entry serves one content under every anchor. A cross-context hit among the fraction `run.verify`
-    (`sampled`) is not served: the backend's tolerance profile is read, the call executes, and the outputs are compared
-    with the stored result before anything is stored; the comparison is recorded as `EquivalenceEvidence` (a
+    (`sampled`) is not served: the call executes, and the outputs are compared with the stored result under
+    `run.thresholds` (`compare`) before anything is stored; the comparison is recorded as `EquivalenceEvidence` (a
     disagreement splits the store's class and is logged), then the outputs are stored and the execution activity names
     the evidence (`senselab:verifies`). The context and its agent record the env's code license (`env_license`). Only
     `run.licenses` refuses a license: a refused env or model license raises before anything opens, and a result from a
-    refused env is not served. Every activity a call writes records `senselab:verifyFraction` and
-    `senselab:verifySampling`. `None` means the packaged default: the `laptop` profile, `RunConfig()` and the store
-    under `cache_root()/results`.
+    refused env is not served. Every activity a call writes records `senselab:verifyFraction`,
+    `senselab:verifySampling` and `senselab:verifyThresholds`. `None` means the packaged default: the `laptop`
+    profile, `RunConfig()` and the store under `cache_root()/results`.
 
     Raises:
         UnknownTask, InconsistentInputs: the task is not declared; the inputs contradict a constraint it declares.
@@ -377,7 +376,6 @@ def run_call(
         CallFailed: the backend failed the item.
         OutputTypeMismatch: an output of a kernel-typed port is not a wire form of its declared type.
         WorkerFatal, WorkerLost, ProtocolError: as the worker reports them.
-        NoToleranceProfile: a sampled hit's backend has no tolerance profile.
         LicenseRefused: `run.licenses` refuses the license of the backend's env or of the model.
     """
     profile = execution if execution is not None else ExecutionProfile.load()
@@ -412,7 +410,6 @@ def run_call(
     if hit is not None and not check:
         store.record_reuse(key, context, hit, looked, _verify_attributes(run))
         return _served(spec, hit, key, placement, anchors)
-    tolerance = _tolerance(key) if check else None
     started = datetime.now(timezone.utc)
     server = _server(backend, env, model, profile, expected) if expected is not None else None
     computed = _execute(
@@ -420,8 +417,8 @@ def run_call(
     )
     decoded, outputs = _as_stored(spec, computed, anchors)
     attributes = _verify_attributes(run)
-    if hit is not None and tolerance is not None:
-        attributes["senselab:verifies"] = _verify(store, key, hit, context, outputs, tolerance)
+    if hit is not None and check:
+        attributes["senselab:verifies"] = _verify(store, key, hit, context, outputs, run.thresholds)
     output_identity = store.put(key, outputs, context)
     if output_identity != store_output_identity(outputs):
         looked = datetime.now(timezone.utc)
@@ -505,35 +502,28 @@ def _served(
 
 
 def _verify_attributes(run: RunConfig) -> dict[str, object]:
-    """Return the verify settings a call's activity records: the fraction and how hits are sampled."""
-    return {"senselab:verifyFraction": float(run.verify), "senselab:verifySampling": SAMPLING}
+    """Return the verify settings a call's activity records: the fraction, how hits are sampled, the thresholds."""
+    return {
+        "senselab:verifyFraction": float(run.verify),
+        "senselab:verifySampling": SAMPLING,
+        "senselab:verifyThresholds": run.thresholds.canonical_digest(),
+    }
 
 
-def _tolerance(key: LogicalKey) -> ToleranceProfile:
-    """Return the tolerance profile of the key's backend.
-
-    Raises:
-        NoToleranceProfile: the backend has none, or no package names a folder of profiles.
-    """
-    folder = packaged().tolerance
-    if folder is None:
-        raise NoToleranceProfile(f"no package names a folder of tolerance profiles for {key.backend!r}")
-    return read_profile(folder, key.task, key.backend)
-
-
-def _verify(  # noqa: PLR0913 - the hit, its recomputation and the profile judging them
+def _verify(  # noqa: PLR0913 - the hit, its recomputation and the thresholds judging them
     store: ResultStore,
     key: LogicalKey,
     hit: StoredResult,
     context: ExecutionContext,
     outputs: dict[str, object],
-    profile: ToleranceProfile,
+    thresholds: Thresholds,
 ) -> str:
-    """Compare a sampled hit with its recomputation within `profile`, record the evidence and return its digest.
+    """Compare a sampled hit with its recomputation under `thresholds`, record the evidence and return its digest.
 
-    A disagreement splits the store's class of the two members (`ResultStore.add_evidence`) and is logged.
+    A disagreement splits the store's class of the two members (`ResultStore.add_evidence`) and is logged with the
+    paths that differ, never their values.
     """
-    mismatched = within(flatten(hit.outputs), flatten(outputs), profile)
+    comparison = compare(hit.outputs, outputs, thresholds)
     stored, current = EvidenceSide.of(hit.context), EvidenceSide.of(context)
     evidence = EquivalenceEvidence(
         task=key.task,
@@ -541,18 +531,18 @@ def _verify(  # noqa: PLR0913 - the hit, its recomputation and the profile judgi
         key=key.digest(),
         stored=stored,
         current=current,
-        mismatched=tuple(mismatched),
-        tolerance=profile.canonical_digest(),
+        mismatched=comparison.paths,
+        thresholds=comparison.thresholds,
         run=run_id(),
     )
     store.add_evidence(evidence)
-    if mismatched:
+    if not comparison.agree:
         logger.warning(
-            "verify: %s on %s disagrees with its result from %s beyond its tolerance in %s",
+            "verify: %s on %s disagrees with its result from %s in %s",
             key.backend,
             current.member(),
             stored.member(),
-            ", ".join(mismatched),
+            ", ".join(comparison.paths),
         )
     return evidence.canonical_digest()
 

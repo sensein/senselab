@@ -1,11 +1,11 @@
-"""Held-out parity of 2.x with 1.x: export the items, convert 1.x outputs, run 2.x, and compare within a profile.
+"""Held-out parity of 2.x with 1.x: export the items, convert 1.x outputs, run 2.x, and compare them.
 
 Subcommands, in the order a campaign runs them:
 `items` (2.x env, no model) writes the held-out items and model pin for `parity_reference_1x.py`;
 `convert` turns that script's output files into `parity-reference@1.0`;
 `run` runs a 2.x backend over the same items and writes `parity-outputs@1.0`.
-`compare` is what `packages/senselab/tests/parity` asserts. Calibration items are refused everywhere and a bound is
-never written here: the bound is the backend's `tolerance@2.0` profile.
+`compare` is what `packages/senselab/tests/parity` asserts: each kernel type's comparison (`runtime.compare`) under
+the run config's thresholds. Calibration items are refused everywhere.
 """
 
 import argparse
@@ -21,17 +21,17 @@ from typing import Any
 import numpy
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.formats import PARITY_OUTPUTS_FORMAT, PARITY_REFERENCE_FORMAT, FormatTag, Formatted
-from senselab_core.runtime.tolerance import (
+from senselab_core.kernel.results import Embedding, Intervals, Transcript
+from senselab_core.runtime.compare import (
     FLATTEN_VERSION,
-    INTERVALS_FORMAT,
     Fields,
-    ToleranceProfile,
+    Thresholds,
     Value,
+    compare_fields,
     flatten,
+    index_free,
     stale_flatten,
-    within,
 )
-from senselab_core.runtime.tolerance import load_profile as read_profile_file
 
 ROOT = Path(__file__).resolve().parents[1]
 HELDOUT = "heldout"
@@ -114,11 +114,15 @@ def require_heldout(ids: Sequence[str]) -> None:
         raise ParityError(f"parity runs on held-out items only; not held out: {other}")
 
 
+def _tag(kind: type[Formatted]) -> str:
+    return str(kind.model_fields["format"].default)
+
+
 def _turns(lines: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     turns = sorted((round(float(ln["start"]) * NS), round(float(ln["end"]) * NS), str(ln["speaker"])) for ln in lines)
     return {
         "turns": {
-            "format": INTERVALS_FORMAT,
+            "format": _tag(Intervals),
             "start_ns": [s for s, _, _ in turns],
             "end_ns": [max(s, e) for s, e, _ in turns],
             "label": [label for _, _, label in turns],
@@ -129,16 +133,16 @@ def _turns(lines: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 def _transcript(lines: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     text = " ".join(str(ln["text"]).strip() for ln in lines).strip()
     if not text:
-        return {"transcript": {"segments": []}}
+        return {"transcript": {"format": _tag(Transcript), "segments": []}}
     segment: dict[str, Any] = {"text": text}
     logprob = lines[0].get("avg_logprob") if len(lines) == 1 else None
     if logprob is not None:
         segment["confidence"] = min(1.0, math.exp(float(logprob)))
-    return {"transcript": {"segments": [segment]}}
+    return {"transcript": {"format": _tag(Transcript), "segments": [segment]}}
 
 
 def _embedding(vector: Sequence[Any]) -> dict[str, Any]:
-    return {"embedding": {"vector": numpy.asarray(vector, dtype=float).ravel().tolist()}}
+    return {"embedding": {"format": _tag(Embedding), "vector": numpy.asarray(vector, dtype=float).ravel().tolist()}}
 
 
 def project(record: Mapping[str, Any]) -> Fields:
@@ -199,27 +203,23 @@ def _current(path: Path, fmt: str) -> dict[str, Any]:
     return raw
 
 
-def load_profile(path: Path) -> ToleranceProfile:
-    """Read a profile as the runtime does (`runtime.tolerance.load_profile`), refusing one not from calibration."""
-    tol = tolerance_module()
-    profile = read_profile_file(path)
-    held = sorted(i for i in profile.derivation.items if split_of(i) != tol.CALIBRATION)
-    if profile.derivation.split != tol.CALIBRATION or held:
-        raise ParityError(f"{path.name} is not a calibration-only profile; held-out items: {held}")
-    return profile
+def compare(expected: Mapping[str, Value], actual: Mapping[str, Value], thresholds: Thresholds) -> list[str]:
+    """Return how `actual` differs from `expected` (`compare_fields`), as `<path>: <detail> (<rule>)` lines.
 
-
-def compare(expected: Mapping[str, Value], actual: Mapping[str, Value], profile: ToleranceProfile) -> list[str]:
-    """Return `within(expected, actual, profile)` as `<path>: <why>` lines."""
-    return [f"{path}: {why}" for path, why in within(expected, actual, profile).items()]
+    Only the leaves of `actual` whose index-free path `expected` holds are compared: a field 1.x never wrote is not
+    judged, and an extra segment or turn still is.
+    """
+    held = {index_free(p) for p in expected}
+    found = compare_fields(expected, {p: v for p, v in actual.items() if index_free(p) in held}, thresholds)
+    return [f"{d.path}: {d.detail} ({d.rule}{f' {d.threshold}' if d.threshold else ''})" for d in found.differences]
 
 
 def compare_items(
     expected: Mapping[str, Fields],
     actual: Mapping[str, Fields],
-    profile: ToleranceProfile,
+    thresholds: Thresholds,
 ) -> dict[str, list[str]]:
-    """Return per-item mismatches over held-out items; an item `actual` lacks is a mismatch.
+    """Return per-item differences over held-out items; an item `actual` lacks is a difference.
 
     Raises:
         ParityError: an item is not a held-out item.
@@ -228,7 +228,7 @@ def compare_items(
     return {
         i: found
         for i in expected
-        if (found := compare(expected[i], actual[i], profile) if i in actual else ["item has no output"])
+        if (found := compare(expected[i], actual[i], thresholds) if i in actual else ["item has no output"])
     }
 
 

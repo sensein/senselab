@@ -17,7 +17,7 @@ from senselab_core.runtime.equivalence import (
     sampled,
     split,
 )
-from senselab_core.runtime.store import CorruptEntryError, ResultStore
+from senselab_core.runtime.store import EVIDENCE_DIR, CorruptEntryError, ResultStore
 
 
 @pytest.mark.logic
@@ -127,7 +127,7 @@ def _evidence(  # noqa: PLR0913 - one comparison's sides
         stored=EvidenceSide(fingerprint="f" * 64, numerics=a, env_lock=locks[0]),
         current=EvidenceSide(fingerprint="f" * 64, numerics=b, env_lock=locks[1]),
         mismatched=() if agree else ("value",),
-        tolerance="p" * 64,
+        thresholds="e" * 64,
         run="slurm-1",
     )
 
@@ -217,7 +217,7 @@ def test_evidence_record_named_by_its_digest(tmp_path: Path) -> None:
     """A record whose bytes no longer digest to its name is refused, not read."""
     store = ResultStore(tmp_path)
     store.add_evidence(_evidence("b", CPU, CUDA))
-    [path] = (tmp_path / "equivalence-evidence@2").iterdir()
+    [path] = (tmp_path / EVIDENCE_DIR).iterdir()
     path.chmod(0o600)
     path.write_text(path.read_text().replace("slurm-1", "slurm-2"))
     with pytest.raises(CorruptEntryError):

@@ -958,7 +958,7 @@ def _register_tolerance_samples() -> None:
                 stored=sides[0],
                 current=sides[1],
                 mismatched=(),
-                tolerance="d" * 64,
+                thresholds="d" * 64,
                 run="slurm-1",
             ),
             EquivalenceEvidence(
@@ -968,11 +968,11 @@ def _register_tolerance_samples() -> None:
                 stored=sides[1],
                 current=sides[0],
                 mismatched=("value",),
-                tolerance="d" * 64,
+                thresholds="d" * 64,
                 run="slurm-2",
             ),
         ],
-        invalid_updates=[{"format": "equivalence-evidence@1.0"}, {"key": "short"}, {"run": ""}],
+        invalid_updates=[{"format": "equivalence-evidence@2.0"}, {"key": "short"}, {"run": ""}, {"thresholds": "p"}],
     )
     bounds = (Threshold(rtol=0.0, atol=0.5), Threshold(rtol=1e-6, atol=0.0))
     register_samples(Threshold, lambda: bounds, invalid_updates=[{"rtol": -1.0}, {"atol": float("inf")}])

@@ -37,7 +37,7 @@ def test_regenerate_reads_every_store(tmp_path: Path) -> None:
                 stored=EvidenceSide(fingerprint="a" * 64, numerics=a, env_lock="l"),
                 current=EvidenceSide(fingerprint="b" * 64, numerics=b, env_lock="l"),
                 mismatched=(),
-                tolerance="c" * 64,
+                thresholds="c" * 64,
                 run=f"slurm-{n}",
             )
         )

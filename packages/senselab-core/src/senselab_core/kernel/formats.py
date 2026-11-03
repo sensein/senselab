@@ -11,7 +11,7 @@ from senselab_core.kernel._base import Frozen
 
 FORMAT_PATTERN = r"^[a-z0-9_.-]+@\d+\.\d+$"
 
-SENSELAB_VOCAB_FORMAT = "senselab-vocab@1.2"
+SENSELAB_VOCAB_FORMAT = "senselab-vocab@1.3"
 """The format of a `senselab:` vocabulary document, carried as its ontology node's `owl:versionInfo` (ADR-010)."""
 PROV_ACTIVITY_TAG = "prov-activity@1"
 """The identity tag of a PROV activity: its compact JSON-LD node without `@id`."""
@@ -33,10 +33,10 @@ TOLERANCE_OBSERVATIONS_FORMAT = "tolerance-observations@2.0"
 
 EQUIVALENCE_FORMAT = "equivalence@3.0"
 """The format of the measured equivalence classes, `runtime/data/equivalence.yaml`."""
-EQUIVALENCE_EVIDENCE_FORMAT = "equivalence-evidence@2.0"
+EQUIVALENCE_EVIDENCE_FORMAT = "equivalence-evidence@3.0"
 """The format of one verify-sampling comparison, a record in the result store."""
 
-PARITY_REFERENCE_FORMAT = "parity-reference@2.0"
+PARITY_REFERENCE_FORMAT = "parity-reference@3.0"
 """The format of the 1.x outputs of the held-out items of one backend, `benchmarks/parity_reference.py convert`."""
 PARITY_OUTPUTS_FORMAT = "parity-outputs@2.0"
 """The format of the 2.x outputs of the held-out items of one backend and stack, `parity_reference.py run`."""

@@ -4,7 +4,7 @@
         {
             "@id": "senselab:",
             "@type": "owl:Ontology",
-            "owl:versionInfo": "senselab-vocab@1.2"
+            "owl:versionInfo": "senselab-vocab@1.3"
         },
         {
             "@id": "senselab:Run",
@@ -185,6 +185,17 @@
                 "@id": "xsd:string"
             },
             "rdfs:comment": "How a cross-context hit is chosen for verification: the value-digest tag over the key digest and the two context fingerprints."
+        },
+        {
+            "@id": "senselab:verifyThresholds",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The canonical digest of the comparison thresholds of the run config the call ran under."
         },
         {
             "@id": "senselab:verifies",

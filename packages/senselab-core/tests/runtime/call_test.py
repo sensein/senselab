@@ -48,12 +48,12 @@ from senselab_core.runtime.call import (
 )
 from senselab_core.runtime.call import packaged as packaged_now
 from senselab_core.runtime.catalogue import Catalogue
+from senselab_core.runtime.compare import Thresholds
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import SAMPLING
 from senselab_core.runtime.licenses import LicensePolicy, LicenseRefused, license_record
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
-from senselab_core.runtime.tolerance import NoToleranceProfile, read_profile, tolerance_profile_path
 from senselab_core.runtime.worker_client import ConcurrentUse, WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_worker.faults import InfrastructureFault
@@ -524,26 +524,6 @@ def test_one_content_under_two_anchors_is_refused(store: ResultStore) -> None:
 GPU = {"device_kind": "cuda", "precision": "default", "gpu_architecture": "sm_90"}
 
 
-@pytest.fixture
-def profiles(tmp_path: Path) -> Iterator[Path]:
-    """A fixture `tolerance@2.0` profile of `fake-alpha`: its one output, `value`, must be equal."""
-    folder = tmp_path / "tolerance"
-    path = tolerance_profile_path(folder, TASK.name, "fake-alpha")
-    path.parent.mkdir(parents=True)
-    profile = {
-        "format": "tolerance@2.0",
-        "task": TASK.name,
-        "backend": "fake-alpha",
-        "derivation": {"shas": ["0" * 40], "jobs": ["1"], "split": "calibration", "items": ["i"], "contexts": ["cpu"]},
-        "fields": [{"path": "value", "kind": "exact", "spreads": [], "tolerance": 0.0}],
-        "findings": [],
-    }
-    path.write_text(json.dumps(profile), "utf-8")
-    previous = use_packaged(dataclasses.replace(packaged_now(), tolerance=folder))
-    yield folder
-    use_packaged(previous)
-
-
 def _elsewhere(tmp_path: Path, value: object, equivalence: Equivalence = NO_EQUIVALENCE) -> tuple[Result, ResultStore]:
     """Return a call's result here, and a store holding `value` for its key computed on a GPU instead."""
     here = run_call(_call("v"), execution=_profile("alpha"), store=ResultStore(tmp_path / "here"))
@@ -596,8 +576,8 @@ def test_another_env_lock_is_served_only_when_the_run_asks_for_what_is_available
 
 
 @pytest.mark.logic
-def test_verify_agreement_adds_evidence(tmp_path: Path, profiles: Path) -> None:
-    """A sampled cross-context hit is recomputed and, agreeing within the profile, adds evidence; `verify: 0` none."""
+def test_verify_agreement_adds_evidence(tmp_path: Path) -> None:
+    """A sampled cross-context hit is recomputed and, agreeing, adds evidence with its thresholds; `verify: 0` none."""
     here, _ = _elsewhere(tmp_path, None)
     _, store = _elsewhere(tmp_path / "s", here.outputs["value"])
     served = run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(ReusePolicy.TOLERANT))
@@ -608,12 +588,12 @@ def test_verify_agreement_adds_evidence(tmp_path: Path, profiles: Path) -> None:
     [evidence] = store.evidence()
     assert evidence.agree and (evidence.backend, evidence.key) == ("fake-alpha", here.key.digest())
     assert (evidence.stored.numerics, evidence.current.numerics) == (GPU, here.context.numerics)
-    assert evidence.tolerance == read_profile(profiles, TASK.name, "fake-alpha").canonical_digest()
+    assert evidence.thresholds == RunConfig().thresholds.canonical_digest()
 
 
 @pytest.mark.logic
-def test_verify_disagreement_splits_class(tmp_path: Path, profiles: Path, caplog: pytest.LogCaptureFixture) -> None:  # noqa: ARG001 - the fixture installs the profile
-    """A sampled hit beyond the profile is recorded as disagreeing, splits the store's class and is logged."""
+def test_verify_disagreement_splits_class(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A sampled hit that differs is recorded as disagreeing, splits the store's class and is logged."""
     here, _ = _elsewhere(tmp_path, None)
     _, store = _elsewhere(tmp_path / "s", "not what the cpu computes", _class(here))
     result = run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(verify=1.0))
@@ -626,17 +606,34 @@ def test_verify_disagreement_splits_class(tmp_path: Path, profiles: Path, caplog
 
 
 @pytest.mark.logic
-def test_verify_without_a_profile_raises(tmp_path: Path) -> None:
-    """A sampled hit of a backend with no tolerance profile raises before anything is executed, stored or recorded."""
-    here, store = _elsewhere(tmp_path, "x")
-    with pytest.raises(NoToleranceProfile):
-        run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(ReusePolicy.TOLERANT, 1.0))
-    assert store.get(here.key, here.context, ReusePolicy.EXACT, record=False) is None
-    assert _activities(store) == [] and store.evidence() == []
+def test_verify_compares_under_the_run_configs_thresholds(tmp_path: Path) -> None:
+    """A recomputation within the packaged `embedding` bound agrees; under a run config's tighter bound it differs."""
+    call = TaskCall.model_validate({"task": TRIALS_TASK.name, "inputs": {"text": "pairs"}})
+    here_store = ResultStore(tmp_path / "here")
+    here = run_call(call, execution=_profile(), store=here_store)
+    stored = here_store.get(here.key, here.context, ReusePolicy.EXACT, record=False)
+    assert stored is not None
+    form = dict(stored.outputs["trials"])  # type: ignore[call-overload]
+    nudged: dict[str, object] = {"trials": {**form, "first": numpy.asarray(form["first"]) + 0.05}}
+    gpu = ExecutionContext.model_validate({**here.context.model_dump(), "numerics": GPU})
+    tight = Thresholds.load({"thresholds": {"embedding": {"atol": 0.01}}})
+    found = {}
+    for name, run in (
+        ("packaged", RunConfig(ReusePolicy.TOLERANT, 1.0)),
+        ("tight", RunConfig(ReusePolicy.TOLERANT, 1.0, thresholds=tight)),
+    ):
+        store = ResultStore(tmp_path / name)
+        store.put(here.key, nudged, gpu)
+        assert run_call(call, execution=_profile(), store=store, run=run).reused is None
+        [found[name]] = store.evidence()
+        [execution] = _activities(store)
+        assert prov.literal_value(execution.node()["senselab:verifyThresholds"]) == run.thresholds.canonical_digest()
+    assert found["packaged"].agree and found["packaged"].thresholds == Thresholds.load().canonical_digest()
+    assert found["tight"].mismatched == ("trials.first",) and found["tight"].thresholds == tight.canonical_digest()
 
 
 @pytest.mark.logic
-def test_sampled_hit_records_an_execution_not_a_reuse(tmp_path: Path, profiles: Path) -> None:  # noqa: ARG001 - the fixture installs the profile
+def test_sampled_hit_records_an_execution_not_a_reuse(tmp_path: Path) -> None:
     """A sampled hit records one execution naming its evidence; a served hit one reuse; both record the fraction."""
     here, store = _elsewhere(tmp_path, None)
     _, store = _elsewhere(tmp_path / "s", here.outputs["value"])

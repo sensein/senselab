@@ -1,4 +1,4 @@
-"""Parity logic on synthetic data: the 1.x converter, held-out only, the comparison within a profile."""
+"""Parity logic on synthetic data: the 1.x converter, held-out only, and the per-type comparison."""
 
 import ast
 import importlib.util
@@ -8,9 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 from senselab_core.kernel.formats import PARITY_OUTPUTS_FORMAT, PARITY_REFERENCE_FORMAT
-from senselab_core.runtime.tolerance import ToleranceProfileRetired
+from senselab_core.runtime.compare import Threshold, Thresholds, flatten
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -42,32 +41,13 @@ def _records(directory: Path, task: str, ids: list[str], record: dict[str, Any])
         (directory / f"{i}.json").write_text(json.dumps({"task": task, **record}), "utf-8")
 
 
-def _profile(
-    tmp_path: Path, items: list[str], tolerances: dict[str, tuple[str, float]], split: str = "calibration"
-) -> Path:
-    document = {
-        "format": "tolerance@2.0",
-        "task": "t",
-        "backend": "b",
-        "derivation": {
-            "shas": ["a" * 40],
-            "jobs": ["1"],
-            "split": split,
-            "items": items,
-            "contexts": ["cpu/s/batch-1"],
-        },
-        "fields": [{"path": p, "kind": k, "spreads": [], "tolerance": t} for p, (k, t) in tolerances.items()],
-        "findings": [],
-    }
-    path = tmp_path / "b.yaml"
-    path.write_text(yaml.safe_dump(document), "utf-8")
-    return path
+THRESHOLDS = Thresholds.load({"thresholds": {"embedding": {"rtol": 0.0, "atol": 0.25}}})
+EXACT = Thresholds(by_name={n: Threshold(rtol=0.0, atol=0.0) for n in THRESHOLDS.by_name})
 
 
 @pytest.mark.logic
 def test_converter_reads_1x_output_files(tmp_path: Path) -> None:
-    """Each task's 1.x records become the 2.x-keyed flattened fields, in a `parity-reference@1.0`."""
-    flatten = par.tolerance_module().flatten
+    """Each task's 1.x records become the 2.x-keyed flattened fields, each kernel value with its format."""
     ids = _ids("heldout", 2)
     asr, dia, emb = tmp_path / "asr", tmp_path / "dia", tmp_path / "emb"
     for d in (asr, dia, emb):
@@ -93,7 +73,7 @@ def test_converter_reads_1x_output_files(tmp_path: Path) -> None:
     assert str(stale) in str(raised.value)
     assert {i.id for i in ref.items} == set(ids)
     fields = ref.items[0].fields
-    assert fields["transcript.segments[0].text"] == '"hello"'
+    assert fields["transcript.segments[0].text"] == '"hello"' and fields["transcript.format"] == '"transcript@1.0"'
     assert fields["transcript.segments[0].confidence"][0] == pytest.approx(0.9048374, abs=1e-6)
     turns = par.convert(dia, task="diarize", **kwargs).items[0].fields
     assert turns == flatten(
@@ -106,7 +86,10 @@ def test_converter_reads_1x_output_files(tmp_path: Path) -> None:
             }
         }
     )
-    assert par.convert(emb, task="speaker_embeddings", **kwargs).items[0].fields == {"embedding.vector": [0.5, 1.5]}
+    assert par.convert(emb, task="speaker_embeddings", **kwargs).items[0].fields == {
+        "embedding.format": '"embedding@1.0"',
+        "embedding.vector": [0.5, 1.5],
+    }
 
 
 @pytest.mark.logic
@@ -123,7 +106,7 @@ def test_converter_refuses_unreadable_records(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_parity_uses_heldout_only(tmp_path: Path) -> None:
-    """Calibration items are refused by the converter, the 2.x run and the comparison; so is a held-out profile."""
+    """Calibration items are refused by the converter, the 2.x run and the comparison."""
     cal, held = _ids("calibration", 2), _ids("heldout", 2)
     _records(tmp_path, "speaker_embeddings", cal[:1], {"vector": [1.0]})
     with pytest.raises(par.ParityError, match="held-out items only"):
@@ -138,30 +121,24 @@ def test_parity_uses_heldout_only(tmp_path: Path) -> None:
         par.run(Worker(), {cal[0]: {}}, {}, **kwargs)
     out = par.run(Worker(), {held[0]: {}, held[1]: {}}, {}, **kwargs)
     assert out.format == PARITY_OUTPUTS_FORMAT and set(out.items[0].batches) == {"1", "N"}
-    profile = par.load_profile(_profile(tmp_path, cal, {"embedding.vector": ("numeric", 0.0)}))
     with pytest.raises(par.ParityError, match="held-out items only"):
-        par.compare_items({cal[0]: {"embedding.vector": [1.0]}}, {}, profile)
-    with pytest.raises(par.ParityError, match="not a calibration-only profile"):
-        par.load_profile(_profile(tmp_path, held, {"embedding.vector": ("numeric", 0.0)}))
-    with pytest.raises(par.ParityError, match="not a calibration-only profile"):
-        par.load_profile(_profile(tmp_path, cal, {"embedding.vector": ("numeric", 0.0)}, split="heldout"))
+        par.compare_items({cal[0]: {"embedding.vector": [1.0]}}, {}, THRESHOLDS)
 
 
 @pytest.mark.logic
-def test_compare_judges_by_the_profile(tmp_path: Path) -> None:
-    """Within tolerance passes; beyond it, a shape change, a missing or unprofiled path, an unequal string fail."""
-    cal, held = _ids("calibration", 1), _ids("heldout", 1)[0]
-    profile = par.load_profile(
-        _profile(tmp_path, cal, {"v": ("numeric", 0.25), "t": ("exact", 0.0), "c": ("numeric", 0.0)})
-    )
-    expected = {"v": [1.0, 2.0], "t": '"a"', "c": [1.0]}
-    assert par.compare(expected, {"v": [1.2, 2.0], "t": '"a"', "c": [1.0]}, profile) == []
-    found = par.compare(expected, {"v": [1.3, 2.0], "t": '"b"', "c": [1.0, 1.0]}, profile)
-    assert [f.split(":")[0] for f in found] == ["c", "t", "v"]
-    assert "exceeds tolerance 0.25" in found[2] and "2 values" not in found[2]
-    assert par.compare({"v": [1.0], "x": [1.0]}, {"v": [1.0]}, profile) == ["x: missing from the compared output"]
-    assert par.compare({"x": [1.0]}, {"x": [1.0]}, profile) == ["x: the profile has no tolerance for it"]
-    assert par.compare_items({held: expected}, {}, profile) == {held: ["item has no output"]}
+def test_compare_judges_by_each_types_rule_and_threshold() -> None:
+    """Within the threshold passes; beyond it, a shape change, a missing path or unequal text fails, naming the rule.
+
+    A 2.x field 1.x never wrote is not judged.
+    """
+    held = _ids("heldout", 1)[0]
+    expected = {"e.format": '"embedding@1.0"', "e.vector": [1.0, 2.0], "t": '"a"', "c": [1.0]}
+    assert par.compare(expected, {**expected, "e.vector": [1.2, 2.0], "e.space": '"m"'}, THRESHOLDS) == []
+    found = par.compare(expected, {**expected, "e.vector": [1.3, 2.0], "t": '"b"', "c": [1.0, 1.0]}, THRESHOLDS)
+    assert [f.split(":")[0] for f in found] == ["c", "e.vector", "t"]
+    assert "atol 0.25" in found[1] and found[1].endswith("(close embedding)") and found[2].endswith("(exact)")
+    assert par.compare({**expected, "x": [1.0]}, expected, THRESHOLDS) == ["x: present on one side only (missing)"]
+    assert par.compare_items({held: expected}, {}, THRESHOLDS) == {held: ["item has no output"]}
 
 
 @pytest.mark.logic
@@ -178,9 +155,8 @@ def test_reference_producer_imports_no_2x() -> None:
 
 
 @pytest.mark.logic
-def test_diarization_labels_compared_under_best_mapping(tmp_path: Path) -> None:
+def test_diarization_labels_compared_under_best_mapping() -> None:
     """A speaker-label permutation alone is no mismatch; a turn moved in time or a merged speaker is."""
-    flatten = par.tolerance_module().flatten
 
     def turns(start: list[int], end: list[int], label: list[str]) -> dict[str, Any]:
         flat: dict[str, Any] = flatten(
@@ -188,10 +164,7 @@ def test_diarization_labels_compared_under_best_mapping(tmp_path: Path) -> None:
         )
         return flat
 
-    cal = _ids("calibration", 1)
-    paths = {"turns.start_ns": 0.0, "turns.end_ns": 0.0, "turns.label[*]": 0.0}
-    kinds = {p: ("exact" if "label" in p else "numeric", t) for p, t in paths.items()}
-    profile = par.load_profile(_profile(tmp_path, cal, {**kinds, "turns.format": ("exact", 0.0)}))
+    profile = EXACT
     ref = turns([0, 10, 20], [10, 20, 30], ["SPEAKER_00", "SPEAKER_01", "SPEAKER_00"])
     swapped = turns([0, 10, 20], [10, 20, 30], ["SPEAKER_01", "SPEAKER_00", "SPEAKER_01"])
     assert par.compare(ref, swapped, profile) == []
@@ -222,9 +195,8 @@ def test_real_script_path_resolves_every_suite_task() -> None:
 
 
 @pytest.mark.logic
-def test_diarization_speaker_without_counterpart_is_a_mismatch(tmp_path: Path) -> None:
+def test_diarization_speaker_without_counterpart_is_a_mismatch() -> None:
     """An extra or a missing speaker never reads as a match, even when its name equals a mapped one."""
-    flatten = par.tolerance_module().flatten
 
     def turns(label: list[str]) -> dict[str, Any]:
         flat: dict[str, Any] = flatten(
@@ -232,24 +204,9 @@ def test_diarization_speaker_without_counterpart_is_a_mismatch(tmp_path: Path) -
         )
         return flat
 
-    paths = {
-        "turns.format": "exact",
-        "turns.start_ns": "numeric",
-        "turns.end_ns": "numeric",
-        "turns.label[*]": "exact",
-    }
-    profile = par.load_profile(_profile(tmp_path, _ids("calibration", 1), {p: (k, 0.0) for p, k in paths.items()}))
+    profile = EXACT
     one = turns(["SPEAKER_00", "SPEAKER_00"])
     two = turns(["SPEAKER_01", "SPEAKER_00"])
     assert par.compare(one, two, profile)
     assert par.compare(two, one, profile)
     assert par.compare(two, turns(["SPEAKER_00", "SPEAKER_01"]), profile) == []
-
-
-@pytest.mark.logic
-def test_parity_refuses_a_retired_profile(tmp_path: Path) -> None:
-    """Parity reads profiles through the runtime's loader, so a `tolerance@1.0` profile is refused as retired."""
-    path = _profile(tmp_path, _ids("calibration", 1), {"v": ("numeric", 0.0)})
-    path.write_text(path.read_text("utf-8").replace("tolerance@2.0", "tolerance@1.0"), "utf-8")
-    with pytest.raises(ToleranceProfileRetired, match="regenerate"):
-        par.load_profile(path)
