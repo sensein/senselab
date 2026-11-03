@@ -62,3 +62,5 @@ The authority for the full review. Quoted as the owner wrote them; nothing parap
 53. "the whole point of pydra is cf or parallel, why is serial (which uses a very different pattern) being used"
 54. "we should also optimize the matrix of python so that 3.13 becomes default and the rest 3.11 - 3.15 run when merging a release tagged PR."
 55. "senselab should single python default to the google colab default python (it is provided in their release notes)"
+56. "all PRs should get fast tier automatically to any branch." (pydra CI: `pull_request` on every base; full tier required only into `main`.)
+57. "paths can be scrubbed. add to a principle to separately create a gitignored file that can contain references, but anything that can be merged into a commit (such as a spec) should not contain path or content of file references." (P-28 amended 2026-11-03.)

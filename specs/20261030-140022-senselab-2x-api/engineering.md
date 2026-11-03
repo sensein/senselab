@@ -153,9 +153,17 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
 - **Statement**: No participant, subject or session identifier, no personal path and no site
   credential enters the repository, a spec, a test fixture, a commit message or a PR. Examples use
   synthetic identifiers.
-- **Source**: owner, 2026-10-30: "ensure no identifiers leak in".
-- **Check**: the pre-commit identifier hook passes, and reviewers check prose, which the hook may
-  not cover.
+- **Amended 2026-11-03**: nothing that can be committed (code, specs, tests, data files, commit
+  messages, PRs) contains a local path or the content of a referenced local file. Local values live
+  in a gitignored `references.local.yaml` at the repository root; tracked text uses only placeholder
+  names (`${ORCD_GROUP_SCRATCH}`, `${CPU_PARTITION}`, `${AGENT_SCRATCH}`, …), which the committed
+  `references.example.yaml` lists without values. A repository-relative path is not a local path.
+  Synthetic examples (`/home/x/a.wav`) stay synthetic.
+- **Source**: owner, 2026-10-30: "ensure no identifiers leak in"; owner, 2026-11-03: "separately create
+  a gitignored file that can contain references, but anything that can be merged into a commit (such
+  as a spec) should not contain path or content of file references".
+- **Check**: the pre-commit identifier and local-path hooks pass, and reviewers check prose, which the
+  hooks may not cover.
 
 <a id="p-29"></a>
 ### P-29 Fast test cycles locally and on the cluster, within shared limits
