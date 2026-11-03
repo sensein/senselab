@@ -1,7 +1,7 @@
 r"""Serve a triage review page and the audio it plays, including raw recordings outside the corpus.
 
 The page addresses a stream under the corpus root by its relative path, and a stream outside it (a
-raw recording read in place, such as ``${ORCD_DATA_ROOT}/...``) by its absolute path under ``/_source``.
+raw recording read in place, such as ``/orcd/data/...``) by its absolute path under ``/_source``.
 This server serves the corpus root as a static tree and answers ``/_source/<absolute path>`` from the
 filesystem, only for files under one of the ``--source-root`` directories. Files are served with single
 byte ranges (``206 Partial Content``), which an ``<audio>`` element needs to seek::

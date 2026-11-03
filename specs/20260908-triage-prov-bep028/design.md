@@ -65,7 +65,7 @@ In the process that wrote the file, immediately after the write, via
 The decisive measurement: of the 21 path-carrying entities in the battery run, **8 name files that
 no longer exist** on the machine doing the conversion — `streams/preemphasised.flac`,
 `streams/normalized.flac`, and the six `derivatives/*.npz` — and a ninth, the input recording, sits
-at an absolute `${ORCD_DATA_ROOT}/...` path that does not resolve locally. That run executed on ORCD and
+at an absolute `/orcd/data/...` path that does not resolve locally. That run executed on ORCD and
 only part of it was retrieved. A read-time digest would have been unavailable for 9 of 21 files and,
 worse, would have described the files *as they are now* rather than as the pipeline used them. That
 distinction is the entire point of recording a digest.
@@ -244,7 +244,7 @@ Not naming — these are things the specification cannot represent.
    edge at serialization time would be fabrication. The gap is in the store, not in BEP028.
 6. **`AtLocation` is specified as a "relative path to the file on disk"; the input recording's is
    absolute.** `admit.py:95` records `str(source.resolve())`, which for the battery run is an
-   `${ORCD_DATA_ROOT}/...` path outside any dataset. We keep it absolute because it is true. A relative
+   `/orcd/data/...` path outside any dataset. We keep it absolute because it is true. A relative
    path would need a root the graph does not name.
 7. **BEP028's `ChecksumAlgorithm` is not coerced to an IRI.** Its schema says `format: uri`, but the
    context maps it to `spdx:ChecksumAlgorithm` with no `"@type": "@id"`, so

@@ -29,7 +29,7 @@ job (66 jobs at the default worker counts), whatever the slice counts are.
 
 ## Atomicity
 
-`${ORCD_SCRATCH_ROOT}/bcs/002` is **NFS v4.2** (`fstor003.ib:/data1`), not Lustre. Two primitives are atomic there,
+`/orcd/scratch/bcs/002` is **NFS v4.2** (`fstor003.ib:/data1`), not Lustre. Two primitives are atomic there,
 because both are a single server-side operation that fails with `EEXIST`/`ENOTEMPTY` when the name is taken:
 `mkdir`, and `rename(2)` of a directory onto a name that is absent or names a non-empty directory. NFS 4.1+
 sessions give exactly-once semantics, so a retransmitted create does not report a false `EEXIST` to its winner.

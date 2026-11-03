@@ -2387,7 +2387,7 @@ second_opinion.timeout_s: 300
 
 second_opinion.load_timeout_s: 1200
   The load on server start, before the first request. Clef 27B's pilot load (one job, weights on the
-  ${ORCD_DATA_ROOT} capacity tier) took 129 s. In the 2026-10-03 full run, 13 slices exceeded the earlier
+  /orcd/data capacity tier) took 129 s. In the 2026-10-03 full run, 13 slices exceeded the earlier
   fixed 300 s, among them four started together on one A100 node reading the same 17 GB; 1200 s
   covers that contention with margin, and a server that cannot load in 20 minutes ends its slice.
 

@@ -179,7 +179,7 @@ model-neutral `second_opinion_*` columns, parquet schema 18 (`4266c2db`); load t
 request, not `/api/generate` (`af416ba0`); `second_opinion.load_timeout_s` 1200 (`72a45e6e`). Run:
 Clef over the 15,113 review recordings from `senselab-r13`/`senselab-r14`, then a full re-fold and
 `recording_vectors_r11` (local `~/Downloads/recording_vectors_20261003_r11/`). 13 slices first failed
-on the 300 s model load, with weights read from the ${ORCD_DATA_ROOT} capacity tier by several slices per
+on the 300 s model load, with weights read from the /orcd/data capacity tier by several slices per
 node; the store is now copied to flash at `${ORCD_GROUP_SCRATCH}/ollama-models-flash/`.
 
 Result: 15,111 answered, 2 nothing to read. Release unchanged (60,297 / 1,140 / 1,081 / 32); flagged
@@ -239,7 +239,7 @@ carries an extent or a reason. Task-audio cuts: plain 60,560, enhanced 60,559, r
 without a cut are exactly those without an extent.
 
 Derivatives: every run root copied with symlinks followed — 2,221,738 files and 1,404,319,166,145 bytes
-on both sides, 0 symlinks, 0 of 62,550 stores naming `${ORCD_SCRATCH_ROOT}`, checked by
+on both sides, 0 symlinks, 0 of 62,550 stores naming `/orcd/scratch`, checked by
 `scripts/verify_derivatives_copy.py` (threaded walk, `senselab.utils.fastio`; ~8 min where serial `find`
 and `grep -r` passes ran over 3 h). The earlier ~200 MB gap was `du` counting directory sizes.
 `tmp_deriv/finalize_r10.sbatch` rewrites the top level (parquet, summary, dictionary, viewer, review page,

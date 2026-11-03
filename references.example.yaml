@@ -9,6 +9,4 @@ XDG_DATA_HOME:            # per-user data directory
 ORCD_GROUP_SCRATCH:       # shared group scratch directory on the compute cluster
 ORCD_DATA:                # shared group data directory on the compute cluster
 ORCD_PERSONAL_SCRATCH:    # personal scratch directory on the compute cluster
-ORCD_SCRATCH_ROOT:        # top of the cluster scratch filesystem
-ORCD_DATA_ROOT:           # top of the cluster data filesystem
 CPU_PARTITION:            # scheduler partition used for CPU jobs

@@ -983,8 +983,8 @@ Extract reads it with `review_page.records.transcripts`.
 
 ## Review page: raw recordings outside the corpus root (2026-10-08)
 
-A replay copy's `recording` stream points at the raw file in place (`${ORCD_DATA_ROOT}/...`), outside the
-scan root, so the page built `audio_base + ${ORCD_DATA_ROOT}/...` and nothing played; earlier listening pages
+A replay copy's `recording` stream points at the raw file in place (`/orcd/data/...`), outside the
+scan root, so the page built `audio_base + /orcd/data/...` and nothing played; earlier listening pages
 needed hand-made symlinks. An absolute stream path now goes through a source route
 (`--source-base`, default `/_source`): the page fetches `/_source/<absolute path>`, and
 `scripts/triage_review_serve.py` (standard library only) serves the corpus root plus that route,
