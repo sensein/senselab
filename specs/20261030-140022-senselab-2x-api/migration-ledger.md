@@ -7,15 +7,16 @@ in the same PR as the reconciliation. A 1.x module may be deleted only when its 
 Base: the design branch was cut from `alpha` at `19834fdd`. No commits had landed on `alpha`
 since then as of 2026-10-30. P-39 reconciliation at Phase 2 start (2026-11-01): `origin/alpha` is `22d2c103`, already merged into `2x/phase-2` at `90615bac`. Four commits landed since `19834fdd` (`078471b3`, `1101ca0d`, `e4b7f087`, merge `22d2c103`); all touch only `.github/` CI and `src/tests/scripts/docs_deploy_test.py`, so none touches an area Phase 2 ports (Tasks 13-17) and no port-task rows are added.
 P-39 reconciliation at Phase 2 exit (2026-11-02): `origin/alpha` is `36aa9615`, merged into `2x/phase-2`. Of the commits since `22d2c103`, only `48ea265d` (uv-managed interpreters) touches an area Phase 2 ported, and `envs.py` already carries it, so no port-task row is added.
+P-39 reconciliation at Phase 3 start (2026-11-03): `origin/alpha` is `d5b1b20a`, merged into `2x/phase-3` by merge commit `06aea676`. Eight commits since `36aa9615` (PR #626, scrub of local paths and personal partitions). Under `src`, `scripts`, `tutorials` only `ef423730`, `666fd4e0`, `781a9af0`, `3eac1c48`, `597bb7fb`, `033e47c5`, `7b8fa8fd` land; none touches an area Phase 2 ported, so no port-task row is added. One merge conflict, in `.pre-commit-config.yaml` (both sides added hooks), kept both; `src/` carries no edit. The new `local-paths` hook flagged five synthetic example paths in the 2.x spec dir, rewritten to the generic `user` account.
 
 | Area (1.x paths) | Where | Mark | Reconciled changes (commit → 2.x handling) |
 |---|---|---|---|
-| `src/senselab/audio/tasks/` | on alpha | `36aa9615` | — (no change under this area since `19834fdd`) |
-| `src/senselab/video/tasks/`, `src/senselab/text/tasks/` | on alpha | `36aa9615` | — (no change under this area since `19834fdd`) |
-| `src/senselab/audio/workflows/audio_analysis/` | on alpha | `36aa9615` | — (no change under this area since `19834fdd`) |
-| `src/senselab/audio/workflows/triage/` | on alpha | `36aa9615` | — (no change under this area since `19834fdd`) |
-| `src/senselab/utils/` | on alpha | `36aa9615` | — (no change under this area since `19834fdd`) |
-| `scripts/` (1.x scripts), `tutorials/` | on alpha | `36aa9615` | — (no change under this area since `19834fdd`) |
+| `src/senselab/audio/tasks/` | on alpha | `d5b1b20a` | — (no change under this area since `19834fdd`) |
+| `src/senselab/video/tasks/`, `src/senselab/text/tasks/` | on alpha | `d5b1b20a` | — (no change under this area since `19834fdd`) |
+| `src/senselab/audio/workflows/audio_analysis/` | on alpha | `d5b1b20a` | — (no change under this area since `19834fdd`) |
+| `src/senselab/audio/workflows/triage/` | on alpha | `d5b1b20a` | `ef423730` (placeholder in `data/breath_pattern.yaml`, a comment only) → none; triage is not ported |
+| `src/senselab/utils/` | on alpha | `d5b1b20a` | — (no change under this area since `19834fdd`) |
+| `scripts/` (1.x scripts), `tutorials/` | on alpha | `d5b1b20a` | `666fd4e0`, `781a9af0`, `3eac1c48`, `597bb7fb` (new `scripts/check_local_paths.py` and its `local-paths` hook) → kept as merged, passing on the 2.x tree; `ef423730`, `033e47c5`, `7b8fa8fd` (`scripts/triage_review_serve.py` placeholder) → none, 1.x script only |
 
 "On alpha": the module is developed on `alpha`, and its copy under `src/` on the 2.x line is the
 source pool it ports from (ADR-009). No 1.x module has moved into `packages/` yet.
