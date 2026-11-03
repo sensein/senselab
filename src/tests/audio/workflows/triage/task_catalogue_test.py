@@ -37,6 +37,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     mode_of,
 )
 from senselab.audio.workflows.triage.nodes.gates import Pattern
+from senselab.audio.workflows.triage.profile_template import values_to_supply, write_template
 from senselab.audio.workflows.triage.task_catalogue import (
     DECLARED_TASK,
     DEFINES_A_CUE_WORD,
@@ -427,33 +428,29 @@ tasks:
 """
 """A made-up lab corpus: two tasks under its own names, none of them B2AI's."""
 
-LAB_OWN_FILES = (
-    "cohort_stage.yaml",
-    "decision_reasons.yaml",
-    "discard_contested.yaml",
-    "discard_replaced_task.yaml",
-    "quality_join.yaml",
-    "session_background.yaml",
-    "task_extent.yaml",
-    "task_minimum_duration.yaml",
-    "task_speech.yaml",
-    "time_release.yaml",
-)
-"""The data files holding a dataset's own values: policy, corpus statistics, per-task values (plan step 5c)."""
 
-
-def _drop(document: dict, *path: str) -> None:
+def _set(document: dict, path: list[str], value: Any) -> None:  # noqa: ANN401 -- a YAML value
     *parents, last = path
     for part in parents:
-        document = document.get(part) or {}
-    document.pop(last, None)
+        document = document.setdefault(part, {})
+    document[last] = value
+
+
+def _b2ai_value(relative: str, path: list[str]) -> Any:  # noqa: ANN401 -- a YAML value
+    document = yaml.safe_load(
+        (B2AI_PROFILE / ("config.yaml" if relative == "config/default.yaml" else relative)).read_text()
+    )
+    for part in path:
+        document = document[part]
+    return document
 
 
 def _lab_profile(root: Path) -> Path:
-    """Write the lab corpus's profile: it extends senselab's reference profile and supplies only its own values.
+    """The lab corpus's profile, written from senselab's template and filled in by hand (plan step 5, check 4).
 
-    Its task list is its own. Its policy and corpus statistics are B2AI's, copied for the test (a real dataset sets
-    its policy and fits its statistics, plan step 10); every entry that names a B2AI task is left out.
+    The template extends senselab's reference profile, so it asks only for the lab's own values. The lab writes its
+    own task list; its policy and statistics are B2AI's here, a stand-in for the choices a real dataset makes and the
+    statistics it fits (step 10). No entry names a B2AI task.
 
     Args:
         root: Where the profile directory goes.
@@ -461,29 +458,19 @@ def _lab_profile(root: Path) -> Path:
     Returns:
         The profile directory.
     """
-    root.mkdir()
+    write_template(root, name="lab-corpus")
     (root / "tasks.yaml").write_text(LAB_TASKS)
     (root / "airway_event_tokens.yaml").write_text("version: 3\ncough: [cough]\n")
-    for name in LAB_OWN_FILES:
-        document = yaml.safe_load((B2AI_PROFILE / name).read_text()) or {}
-        _drop(document, "short_response", "family_median_s")
-        _drop(document, "families")
-        _drop(document, "non_task")
-        (root / name).write_text(yaml.safe_dump(document))
-    config = yaml.safe_load((B2AI_PROFILE / "config.yaml").read_text()) or {}
-    _drop(config, "verdict", "gates")
-    _drop(config, "verdict", "cohort_conditions")
-    config.setdefault("verdict", {})["cohort_conditions"] = None
-    config["branch"]["phoneme_place_classes"]["alveolar"] = ["t", "d"]
-    (root / "config.yaml").write_text(yaml.safe_dump(config))
-    manifest = {
-        "name": "lab-corpus",
-        "version": "1",
-        "extends": "senselab:adult_clinical_speech",
-        "config": "config.yaml",
-        "files": {f: f for f in ("tasks.yaml", "airway_event_tokens.yaml", *LAB_OWN_FILES)},
-    }
-    (root / "profile.yaml").write_text(yaml.safe_dump(manifest))
+    for name in ("discard_contested.yaml", "time_release.yaml"):
+        shutil.copy(B2AI_PROFILE / name, root / name)
+    for relative, entries in values_to_supply().items():
+        target = root / ("config.yaml" if relative == "config/default.yaml" else relative)
+        document = yaml.safe_load(target.read_text()) or {}
+        for entry in entries:
+            path = [str(part) for part in entry["path"]]
+            value = ["t", "d"] if path[-1] == "alveolar" else _b2ai_value(relative, path)
+            _set(document, path, value)
+        target.write_text(yaml.safe_dump(document))
     return root
 
 
@@ -512,7 +499,7 @@ class TestADatasetThatIsNotB2AI:
     """
 
     def test_its_profile_is_all_a_run_needs(self, lab_corpus: TriageConfig) -> None:
-        """It extends senselab's reference profile, names no B2AI task, and the run's start check finds nothing."""
+        """Written from the template and filled in, it names no B2AI task and the run's start check finds nothing."""
         assert missing_dataset_values(lab_corpus.values) == []
         assert set(task_list()) == {"hum-a-note", "read-the-card"}
 

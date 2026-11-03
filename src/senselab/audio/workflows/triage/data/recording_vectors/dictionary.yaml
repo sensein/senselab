@@ -148,7 +148,7 @@ columns:
 
   declared_family:
     units: none
-    description: The task the recording's hint declares, by its name in the dataset's task list, e.g. `story-recall-v2`.
+    description: The task the recording's hint declares, by its name in the dataset's task list, e.g. `read-the-card`.
     computation: >-
       The fold's `declared_family`: the task ADMIT recorded from the hint (`declared_task`); for a store written
       before ADMIT recorded the task, the task id with its trailing index dropped.

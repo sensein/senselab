@@ -270,6 +270,24 @@ class TestSenselabShipsNoFittedValue:
             shipped = [entry["path"] for entry in entries if self._value(document, entry["path"]) is not None]
             assert shipped == [], relative
 
+    def test_senselab_data_names_no_dataset_task(self) -> None:
+        """No key or value of a packaged data file is a B2AI task name (the vendored registry moves in step 7)."""
+        tasks = set(yaml.safe_load((B2AI_TRIAGE_PROFILE / "tasks.yaml").read_text())["tasks"])
+
+        def strings(node: Any) -> list[str]:  # noqa: ANN401 -- a YAML value
+            if isinstance(node, dict):
+                return [str(key) for key in node] + [text for value in node.values() for text in strings(value)]
+            if isinstance(node, list):
+                return [text for value in node for text in strings(value)]
+            return [node] if isinstance(node, str) else []
+
+        named = {
+            str(path.relative_to(PACKAGED_DATA)): sorted(set(strings(yaml.safe_load(path.read_text()))) & tasks)
+            for path in sorted(PACKAGED_DATA.rglob("*.yaml"))
+            if "b2ai_task_registry" not in path.parts
+        }
+        assert {path: names for path, names in named.items() if names} == {}
+
     def test_the_reference_and_b2ai_profiles_supply_every_required_value(self) -> None:
         """With B2AI's profile (which extends the reference profile) active, the start check finds nothing missing."""
         assert missing_dataset_values(load_triage_config().values) == []

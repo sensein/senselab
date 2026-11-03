@@ -1,0 +1,9 @@
+# When a breath or cough task's no-event discard (no_breath_captured, no_cough_captured) is flagged
+# discard_contested instead: AIRWAY's own event detector found at least this many events of the task's kind, and for
+# a breath task the breath train itself rose at least train_rise_db_min over the floor.
+version: 2
+instructed_fraction:       # fraction (0-1) of the task's instructed count, rounded up
+uncounted_events_min:      # count: for a cough task whose instruction names no count
+breath:
+  uncounted_events_min:    # count: for a breath task whose instruction names no count
+  train_rise_db_min:       # dB: the breath train's median burst rise over the floor
