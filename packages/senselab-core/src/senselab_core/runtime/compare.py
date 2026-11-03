@@ -166,9 +166,13 @@ def _packaged_thresholds() -> dict[str, dict[str, object]]:
 
 @dataclass(frozen=True)
 class Rule:
-    """How one field compares: `exact`, or `close` within the threshold named `threshold`."""
+    """How one field compares: `exact`, `close` within the threshold named `threshold`, or `optional`.
 
-    kind: Literal["exact", "close"]
+    `optional` marks the parent of an optional nested value (`span: Span | None`): absent it is one `[None]` leaf,
+    present it is the leaves below it, so None against None agrees and None against a value differs at the parent.
+    """
+
+    kind: Literal["exact", "close", "optional"]
     threshold: str | None = None
 
 
@@ -190,11 +194,13 @@ def _pattern(text: str) -> re.Pattern[str]:
 
 
 def _rule(where: str, raw: object) -> Rule:
-    if raw == "exact":
-        return Rule("exact")
+    if raw in ("exact", "optional"):
+        return Rule(raw)
     if isinstance(raw, Mapping) and set(raw) == {"close"} and isinstance(raw["close"], str) and raw["close"]:
         return Rule("close", raw["close"])
-    raise ValueError(f"{COMPARISON_FORMAT} {where}: a rule is 'exact' or {{close: <threshold name>}}, got {raw!r}")
+    raise ValueError(
+        f"{COMPARISON_FORMAT} {where}: a rule is 'exact', 'optional' or {{close: <threshold name>}}, got {raw!r}"
+    )
 
 
 def parse_comparisons(text: str) -> Mapping[str, TypeComparison]:
@@ -231,12 +237,18 @@ COMPARISONS: Mapping[str, TypeComparison] = parse_comparisons(
 
 
 class UndeclaredComparison(LookupError):
-    """A kernel value whose type declares no comparison; `tag` is its format tag."""
+    """A kernel type, or a path of one, that declares no comparison; `tag` is its format tag, `path` the path if any."""
 
-    def __init__(self, tag: str) -> None:
-        """Name the format tag."""
-        super().__init__(f"kernel type {tag!r} declares no comparison in {COMPARISON_FORMAT}")
+    def __init__(self, tag: str, path: str | None = None) -> None:
+        """Name the format tag and the path."""
+        what = (
+            f"kernel type {tag!r} declares no comparison"
+            if path is None
+            else f"{tag!r} declares no comparison for {path!r}"
+        )
+        super().__init__(f"{what} in {COMPARISON_FORMAT}")
         self.tag = tag
+        self.path = path
 
 
 Comparisons = Mapping[str, TypeComparison]
@@ -380,7 +392,7 @@ class Difference(Frozen):
     """
 
     path: str
-    rule: Literal["exact", "close", "missing", "undeclared"]
+    rule: Literal["exact", "close", "optional", "missing"]
     threshold: str | None
     bound: Threshold | None
     expected: str
@@ -470,7 +482,7 @@ def _close(a: Value, b: Value, bound: Threshold) -> str | None:
     )
 
 
-def _judge(path: str, a: Value | None, b: Value | None, rule: Rule | None, thresholds: Thresholds) -> Difference | None:
+def _judge(path: str, a: Value | None, b: Value | None, rule: Rule, thresholds: Thresholds) -> Difference | None:
     if a is None or b is None:
         return Difference(
             path=path,
@@ -482,18 +494,6 @@ def _judge(path: str, a: Value | None, b: Value | None, rule: Rule | None, thres
             absolute=None,
             relative=None,
             detail="present on one side only",
-        )
-    if rule is None:
-        return Difference(
-            path=path,
-            rule="undeclared",
-            threshold=None,
-            bound=None,
-            expected=_summary(a),
-            actual=_summary(b),
-            absolute=None,
-            relative=None,
-            detail="its type declares no comparison",
         )
     bound = thresholds.by_name[rule.threshold] if rule.threshold is not None else None
     why = _close(a, b, bound) if bound is not None else _exact(a, b)
@@ -513,6 +513,31 @@ def _judge(path: str, a: Value | None, b: Value | None, rule: Rule | None, thres
     )
 
 
+def _optional_gaps(
+    expected: Mapping[str, Value], actual: Mapping[str, Value], rules: Mapping[str, Rule]
+) -> dict[str, Difference]:
+    """Return a difference per `optional` parent that is a `[None]` leaf on one side and nested leaves on the other."""
+    out = {}
+    for path, rule in rules.items():
+        if rule.kind != "optional" or (path in expected) == (path in actual):
+            continue
+        absent, present = (expected, actual) if path in expected else (actual, expected)
+        if absent[path] != [None] or not any(k.startswith(f"{path}.") for k in present):
+            continue
+        out[path] = Difference(
+            path=path,
+            rule="optional",
+            threshold=None,
+            bound=None,
+            expected="absent" if absent is expected else "present",
+            actual="absent" if absent is actual else "present",
+            absolute=None,
+            relative=None,
+            detail="absent on one side, present on the other",
+        )
+    return out
+
+
 def compare_fields(
     expected: Mapping[str, Value],
     actual: Mapping[str, Value],
@@ -523,10 +548,12 @@ def compare_fields(
 
     A leaf under a kernel value (found by its `format` leaf) is judged by its type's first matching rule in
     `comparisons` (default `COMPARISONS`); any other leaf is exact. Labels a type matches are mapped first
-    (`relabel`). A leaf on one side only, or under a type that declares no rule for it, is a difference.
+    (`relabel`). Equal leaves agree before any rule is looked up. A leaf on one side only is a difference; an
+    `optional` parent absent on one side and present on the other is one difference at the parent.
 
     Raises:
-        UndeclaredComparison: a kernel value's type has no entry in `comparisons`.
+        UndeclaredComparison: a kernel value's type has no entry in `comparisons`, or a leaf that differs lies under
+            a type that declares no rule for its path.
         KeyError: a rule names a threshold `thresholds` lacks.
     """
     table = COMPARISONS if comparisons is None else comparisons
@@ -536,15 +563,30 @@ def compare_fields(
         return Comparison(agree=True, differences=(), thresholds=digest)
     actual = relabel(expected, actual, table)
     prefixes = sorted(typed, key=len, reverse=True)
-    found = []
-    for path in sorted(expected.keys() | actual.keys()):
-        owner = _owner(path, prefixes)
-        if owner is None:
-            rule: Rule | None = Rule("exact")
-        else:
-            rule = table[typed[owner]].rule(path[len(owner) + 1 :] if owner else path)
-        if (difference := _judge(path, expected.get(path), actual.get(path), rule, thresholds)) is not None:
+    paths = sorted(expected.keys() | actual.keys())
+    owners = {p: _owner(p, prefixes) for p in paths}
+    rules: dict[str, Rule] = {}
+    for path in paths:
+        owner = owners[path]
+        found_rule = (
+            Rule("exact") if owner is None else table[typed[owner]].rule(path[len(owner) + 1 :] if owner else path)
+        )
+        if found_rule is None:
+            if expected.get(path) == actual.get(path):
+                continue
+            raise UndeclaredComparison(typed[owner or ""], path)
+        rules[path] = found_rule
+    gaps = _optional_gaps(expected, actual, rules)
+    found = list(gaps.values())
+    for path in paths:
+        if path not in rules or path in gaps or any(path.startswith(f"{p}.") for p in gaps):
+            continue
+        a, b = expected.get(path), actual.get(path)
+        if a is not None and a == b:
+            continue
+        if (difference := _judge(path, a, b, rules[path], thresholds)) is not None:
             found.append(difference)
+    found.sort(key=lambda d: d.path)
     return Comparison(agree=not found, differences=tuple(found), thresholds=digest)
 
 

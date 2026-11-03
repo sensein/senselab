@@ -2,7 +2,9 @@ format: comparison@1.0
 # How each field of a kernel type's wire form compares, by the type's `<name>@<major>`. A field is `exact` (equal
 # values) or `{close: <threshold>}`, numpy `isclose` within the run config's threshold of that name. Field patterns
 # are index-free paths below the type's own `format` leaf, `*` matching any characters; the first match wins.
-# `match_labels` names the label, start and end columns compared under the optimal one-to-one label map.
+# `optional` marks the parent of an optional nested value (`span: Span | None`): absent it is one `[None]` leaf that
+# agrees with itself and differs from the value's leaves. `match_labels` names the label, start and end columns
+# compared under the optimal one-to-one label map.
 types:
   annotation@1:
     fields:
@@ -85,6 +87,7 @@ types:
       format: exact
       '*text': exact
       '*confidence': {close: probability}
+      '*span': optional
       '*span.start_ns': {close: time_ns}
       '*span.end_ns': {close: time_ns}
       '*span.clock_id': exact

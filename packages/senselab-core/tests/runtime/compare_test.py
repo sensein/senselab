@@ -151,15 +151,42 @@ def test_close_on_non_finite_absent_and_shape(a: list[float | None], b: list[flo
 
 
 @pytest.mark.logic
-def test_a_leaf_on_one_side_or_undeclared_is_a_difference() -> None:
-    """A missing or added leaf is a difference, as is a leaf its type declares no rule for; plain leaves are exact."""
+def test_a_leaf_on_one_side_is_a_difference_and_an_undeclared_path_is_refused() -> None:
+    """A missing or added leaf is a difference, plain leaves are exact, a differing path with no rule raises."""
     expected: Fields = {"e.format": '"embedding@1.0"', "e.vector": [1.0], "e.extra": [1.0], "plain": [1.0]}
-    found = compare_fields(expected, {**expected, "e.extra": [2.0], "added": '"x"', "plain": [1.1]}, THRESHOLDS)
-    assert {d.path: d.rule for d in found.differences} == {
-        "added": "missing",
-        "e.extra": "undeclared",
-        "plain": "exact",
-    }
+    same: Fields = {**expected, "added": '"x"', "plain": [1.1]}
+    found = compare_fields(expected, same, THRESHOLDS)
+    assert {d.path: d.rule for d in found.differences} == {"added": "missing", "plain": "exact"}
+    assert compare_fields(expected, dict(expected), THRESHOLDS).agree
+    with pytest.raises(UndeclaredComparison, match="'embedding@1'.*'e.extra'") as raised:
+        compare_fields(expected, {**expected, "e.extra": [2.0]}, THRESHOLDS)
+    assert (raised.value.tag, raised.value.path) == ("embedding@1", "e.extra")
+
+
+def _node(span: bool) -> Fields:
+    timed = {"start_ns": 0, "end_ns": 5_000_000, "clock_id": "c"}
+    node: dict[str, object] = {"text": "hi", "span": timed if span else None, "confidence": 0.5, "children": []}
+    return flatten({"t": {"format": "transcript@1.0", "segments": [node]}})
+
+
+@pytest.mark.logic
+def test_an_optional_parent_agrees_when_absent_on_both_sides_and_differs_against_a_value() -> None:
+    """Two untimed nodes agree; untimed against timed differs once at the parent; timed nodes compare times."""
+    assert _node(False)["t.segments[0].span"] == [None]
+    assert compare_fields(_node(False), _node(False), THRESHOLDS).agree
+    found = compare_fields(_node(False), _node(True), THRESHOLDS)
+    [difference] = found.differences
+    assert (difference.path, difference.rule, difference.expected, difference.actual) == (
+        "t.segments[0].span",
+        "optional",
+        "absent",
+        "present",
+    )
+    [reverse] = compare_fields(_node(True), _node(False), THRESHOLDS).differences
+    assert (reverse.expected, reverse.actual) == ("present", "absent")
+    later: Fields = {**_node(True), "t.segments[0].span.end_ns": [9_000_000.0]}
+    [moved] = compare_fields(_node(True), later, THRESHOLDS).differences
+    assert (moved.path, moved.rule, moved.threshold) == ("t.segments[0].span.end_ns", "close", "time_ns")
 
 
 def _turns(labels: list[str], ends: list[int] | None = None) -> Fields:
