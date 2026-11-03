@@ -1,12 +1,14 @@
 """Time anchors, clock maps and spans."""
 
 from fractions import Fraction
+from typing import ClassVar
 
 import numpy
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
+from senselab_core.kernel._base import Frozen, Nanoseconds, NonEmptyStr
 from senselab_core.kernel.results import Events, Intervals, Transcript, TranscriptNode
 from senselab_core.kernel.time import Span, TimeAnchor, TimeMap, rebind
 
@@ -152,3 +154,23 @@ def test_rebind_moves_every_clock_relative_field() -> None:
         rebind(stored, stored, reader, shift)
     with pytest.raises(ValueError, match="not 'a' to 'b'"):
         rebind(other, stored, reader, TimeMap(source="b", target="a", offset_ns=0))
+
+
+class _Timed(Frozen):
+    """A value on a clock with one clock-relative time and one duration."""
+
+    clock_fields: ClassVar[tuple[str, ...]] = ("start_ns",)
+
+    start_ns: Nanoseconds
+    duration_ns: Nanoseconds
+    clock_id: NonEmptyStr
+
+
+@pytest.mark.logic
+def test_rebind_leaves_duration_fields() -> None:
+    """A re-bind shifts only the declared clock fields; a `*_ns` duration is not a time on the clock."""
+    stored, reader = TimeAnchor(clock_id="a", absolute_start_ns=None), TimeAnchor(clock_id="b", absolute_start_ns=7)
+    out = rebind(
+        _Timed(start_ns=10, duration_ns=4, clock_id="a"), stored, reader, TimeMap(source="a", target="b", offset_ns=100)
+    )
+    assert (out.start_ns, out.duration_ns, out.clock_id) == (110, 4, "b")

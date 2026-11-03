@@ -1,7 +1,7 @@
 """Result types: annotations, embeddings, intervals, events, transcripts, text spans, trials and metrics."""
 
 from collections.abc import Iterator
-from typing import Annotated
+from typing import Annotated, ClassVar
 
 import numpy
 from pydantic import BeforeValidator, Field, Strict, model_validator
@@ -96,6 +96,7 @@ class Intervals(Formatted):
     """Columnar labelled spans `[start_ns[i], end_ns[i])` on `clock_id`."""
 
     format: FormatTag = "intervals@1.0"
+    clock_fields: ClassVar[tuple[str, ...]] = ("start_ns", "end_ns")
 
     start_ns: NsArray
     end_ns: NsArray
@@ -114,6 +115,7 @@ class Events(Formatted):
     """Columnar labelled instants `time_ns[i]` on `clock_id`, with an optional numeric `value` per event."""
 
     format: FormatTag = "events@1.0"
+    clock_fields: ClassVar[tuple[str, ...]] = ("time_ns",)
 
     time_ns: NsArray
     label: LabelArray

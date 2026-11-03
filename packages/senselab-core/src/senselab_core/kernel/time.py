@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from fractions import Fraction
-from typing import Annotated, TypeVar, cast
+from typing import Annotated, ClassVar, TypeVar, cast
 
 import numpy
 from pydantic import Field, model_validator
@@ -61,6 +61,8 @@ class TimeMap(Formatted):
 class Span(Frozen):
     """The half-open interval `[start_ns, end_ns)` on `clock_id`; `end_ns >= start_ns`."""
 
+    clock_fields: ClassVar[tuple[str, ...]] = ("start_ns", "end_ns")
+
     start_ns: Nanoseconds
     end_ns: Nanoseconds
     clock_id: NonEmptyStr
@@ -79,7 +81,7 @@ def rebind(output: T, stored_anchor: TimeAnchor, reader_anchor: TimeAnchor, time
     """Return `output` with every clock-relative field on the stored anchor's clock moved to the reader's.
 
     Walking kernel values, tuples and mappings, a value whose `clock_id` is `stored_anchor.clock_id` gets the
-    reader's `clock_id` and each of its `*_ns` fields (integers or integer arrays) mapped by `timemap`; a
+    reader's `clock_id` and each of its `clock_fields` (integers or integer arrays) mapped by `timemap`; a
     `TimeAnchor` naming the stored clock becomes `reader_anchor`. Anything else is returned as it is.
 
     Raises:
@@ -103,7 +105,7 @@ def _rebound(value: object, anchor: TimeAnchor, timemap: TimeMap) -> object:
         fields = {name: getattr(value, name) for name in type(value).model_fields}
         moved = {name: _rebound(v, anchor, timemap) for name, v in fields.items()}
         if fields.get("clock_id") == timemap.source:
-            moved = {name: _mapped(v, timemap) if name.endswith("_ns") else v for name, v in moved.items()}
+            moved = {name: _mapped(v, timemap) if name in type(value).clock_fields else v for name, v in moved.items()}
             moved["clock_id"] = timemap.target
         return value if all(moved[n] is fields[n] for n in fields) else type(value).model_validate(moved)
     if isinstance(value, tuple | Mapping):

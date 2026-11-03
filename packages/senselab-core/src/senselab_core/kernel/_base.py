@@ -5,7 +5,7 @@ import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Annotated, Any, NoReturn, Self, TypeVar
+from typing import Annotated, Any, ClassVar, NoReturn, Self, TypeVar
 
 import numpy
 from pydantic import (
@@ -246,6 +246,9 @@ class Frozen(BaseModel):
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True, extra="forbid", hide_input_in_errors=True)
+
+    clock_fields: ClassVar[tuple[str, ...]] = ()
+    """The fields a re-bind to another clock shifts; a type with a `clock_id` names its clock-relative times here."""
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source: type[BaseModel], handler: GetCoreSchemaHandler) -> Any:  # noqa: ANN401

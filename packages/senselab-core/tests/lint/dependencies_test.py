@@ -66,7 +66,7 @@ def undeclared_imports(graph: grimp.ImportGraph, roots: set[str], allowed: set[s
     return externals - allowed - set(sys.stdlib_module_names)
 
 
-REPOSITORY_ROOTS = {"scripts"}
+REPOSITORY_ROOTS = {"benchmarks", "scripts"}
 """Root packages outside ``packages/``: the repository scripts, whose 2.x modules the digest contract covers."""
 
 
