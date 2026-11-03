@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy
 from senselab_worker.fake import FakeFaults
+from senselab_worker.faults import ContentFault
 
 from senselab.item_faults import init_model, mono_samples
 
@@ -21,7 +22,19 @@ WORKER_MODULE = "senselab.audio.tasks.speaker_embeddings.speechbrain"
 MODEL_ID = "speechbrain/spkrec-ecapa-voxceleb"
 EXPECTED_RATE = 16_000
 STUB_DIMENSION = 192
+FBANK_HOP_SAMPLES = 160
+ENCODER_KERNELS_DILATIONS = ((5, 1), (3, 2), (3, 3), (3, 4), (1, 1))
 _INIT_KEYS = frozenset({"stub", "model", "device", "faults", "array_dir"})
+
+
+def min_samples() -> int:
+    """Return the shortest input, in samples, the frontend and encoder accept.
+
+    The centred STFT gives `n // FBANK_HOP_SAMPLES + 1` frames; each encoder convolution reflect-pads
+    `dilation * (kernel - 1) // 2` per side and needs strictly more frames than that.
+    """
+    frames = max(d * (k - 1) // 2 for k, d in ENCODER_KERNELS_DILATIONS) + 1
+    return (frames - 1) * FBANK_HOP_SAMPLES
 
 
 class StubModel:
@@ -117,6 +130,8 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
     for item in items:
         try:
             samples, _ = mono_samples(item, state.faults, EXPECTED_RATE, "speechbrain")
+            if samples.shape[0] < min_samples():
+                raise ContentFault(f"speechbrain needs at least {min_samples()} samples, got {samples.shape[0]}")
             vector = state.model.embed(samples)
             results.append(
                 {"outputs": {"embedding": {"format": "embedding@1.0", "vector": vector, "space": state.space}}}

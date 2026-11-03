@@ -80,6 +80,15 @@ def test_unsupported_audio_is_a_content_fault(audio: Audio, text: str) -> None:
 
 
 @pytest.mark.logic
+def test_input_shorter_than_the_frontend_minimum_is_a_content_fault() -> None:
+    """One sample under the minimum fails as a content fault naming it; the minimum itself embeds."""
+    n = sb.min_samples()
+    short, ok = _run([_item("s", _tone((n - 1) / 16000)), _item("o", _tone(n / 16000))])
+    assert n == 640 and isinstance(short["error"], ContentFault) and str(n) in str(short["error"])
+    assert _vector(ok).shape == (sb.STUB_DIMENSION,)
+
+
+@pytest.mark.logic
 def test_faults_stay_with_their_item() -> None:
     """A content fault and an out of memory leave the third item unchanged, typed, never a gap."""
     items = [_item(i, _tone(1.0 + n / 10)) for n, i in enumerate("abc")]
