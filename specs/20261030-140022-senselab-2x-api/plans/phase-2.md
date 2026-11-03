@@ -66,7 +66,7 @@ D-7). pydra: `~/software/nipype/pydra-ext`, per-PR branches merged into `enh/exe
 - **GitHub CI** (ruling P2-33, superseding P2-28): logic, contract, and limits that need no model and no subprocess
   venv. No model weights load and no backend env is built in GitHub CI; no model runs there for review either.
 - **ORCD** (ruling P2-33): every model-backed, venv-backed or GPU tier and every use case, submitted by an agent from
-  a pinned SHA: CPU on partition `pi_satra`, node `node3805`; GPU on typed H100 (`--gres=gpu:h100:1`); never
+  a pinned SHA: CPU on the group's private partition (`$CPU_PARTITION`, one pinned node `$CPU_NODE`); GPU on typed H100 (`--gres=gpu:h100:1`); never
   `node2803`; never a login or remote-control node. Each orcd step uses the job shape below.
 - **Local machine** (owner items 27, 28, ruling P2-85): logic and contract tests only, in the existing `.venv`, run
   with `uv run --no-sync`, scoped to the changed files, serial. **No `uv sync` locally**, no new venvs, no model
@@ -102,11 +102,11 @@ D-7). pydra: `~/software/nipype/pydra-ext`, per-PR branches merged into `enh/exe
 - **Checkout:** a fresh clone from GitHub per campaign at the pushed SHA under test
   (`$SCRATCH/senselab-2x/<sha>/`), never another scratch checkout, never reset while jobs run from it. `git log
   origin/2x/phase-2..HEAD` is empty before `sbatch`. The SHA is written into the job name and the job log.
-- **CPU:** `#SBATCH -p pi_satra -w node3805 -c 8 --mem=32G -t 02:00:00`.
+- **CPU:** `#SBATCH -p $CPU_PARTITION -w $CPU_NODE -c 8 --mem=32G -t 02:00:00`.
 - **GPU:** `#SBATCH --gres=gpu:h100:1 -c 8 --mem=64G -t 04:00:00 --exclude=node2803`, on the partition the
   `orcd-remote` skill reports for typed H100 under this account.
 - **Environment:** `PATH="$HOME/.local/bin:$PATH"`; `LD_LIBRARY_PATH="$HOME/ffmpeg/lib:${LD_LIBRARY_PATH:-}"`;
-  `HF_HOME=/orcd/data/satra/002/huggingface`; `HF_TOKEN` from `~/.cache/huggingface/token`;
+  `HF_HOME=$SHARED_HF_HOME` (the group's shared Hugging Face cache); `HF_TOKEN` from `~/.cache/huggingface/token`;
   `SENSELAB_RUN_ID=slurm-$SLURM_JOB_ID`; `SENSELAB_CACHE=$SCRATCH/senselab-2x-cache`;
   `UV_CACHE_DIR=$SCRATCH/uv-cache`; execution profile `orcd` (env roots under `$SCRATCH/senselab-2x-venvs`).
 - **Steps:** `uv sync --locked --all-extras --group test` as its own step, then `uv run --no-sync pytest <scope> -m
