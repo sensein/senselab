@@ -67,3 +67,10 @@ This states in the ADR a rule that `design.md` §2 held alone (R-130).
   reader)` decodes a source group and holds the samples with the stamp and `decoded`, their `npy@1` digest. Only such
   a group is identified as its file is; validation checks the held samples still have `decoded`. Otherwise a held
   group's identity comes from its samples (R-171). Signal wire formats `@2.1` (ADR-006).
+
+## Amendment 2026-11-03: the channel layout is in a source's identity (Phase 3 Task 2)
+
+- Supersedes the 2026-11-01 amendment's "their root, which stays the recording's identity". A file-backed audio's
+  identity is `"content:" + identity_digest("audio-file@1", {content: <root>, channels: <layout>})`, and a
+  `Recording` of one stamped group takes the groups digest. Every file-backed audio takes a new identity, clock id and
+  cache keys (ADR-006 amendment 2026-11-03).

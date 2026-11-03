@@ -87,7 +87,7 @@ findings are in [`reviews/phase1-reattack/canon.md`](../reviews/phase1-reattack/
   `digests-are-tagged` forbids hash modules everywhere except the digest module, and `raw-digest-owners`
   names the few owners allowed to hash bytes already in memory.
 
-  **Registered identity tags:** `logical-key@6`, `output@3`, `context@3`, `content-root@2`, `audio@4`,
+  **Registered identity tags:** `logical-key@6`, `output@3`, `context@3`, `content-root@2`, `audio@4`, `audio-file@1`,
   `weights@3`, `value@2`, `provenance-id@4`, `data-manifest@3`, `worker-runtime@1`, `fake-output@1`,
   `contract-probe@1`, `prov-activity@1`, `prov-node@1`, `wheel-set@1`, `env-lock@1`, `env-overlay@1`, `launch-env@1`, `vllm-config@1`, `source@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a
   `format:` line in a packaged YAML file or in a store entry): `equivalence@2.0`, `equivalence-evidence@1.0`, `retry-policy@1.0`, `catalogue@1.0`, `spdx-licenses@1.0`, and
@@ -342,3 +342,18 @@ Restates the **Data formats** list of the 2026-10-31 amendment, which this super
 `run-config@1.0`, and `execution-context@3.0` in a store entry's `context.json`; `env-record@1.0`, an env root's
 `<name>[-<tag>].json`; `senselab-vocab@1.3`, a vocabulary document's `owl:versionInfo` (ADR-010). The tolerance
 profile formats (`tolerance@`, `tolerance-observations@`, `tolerance-coverage@`) are retired and not listed.
+
+## Amendment 2026-11-03: core carry-overs (Phase 3 Task 2)
+
+- `recording@2.1`, `audio@2.1` and `regular-group@2.1` → `@3.0`: a source stamp's `channels` is the channel layout
+  (each `ChannelInfo`) the stamp was taken under, not a count; non-additive, so a major. `@2` is retired.
+- New identity tag `audio-file@1`: a file-backed audio's identity is `"content:" + identity_digest("audio-file@1",
+  {content: <root>, channels: <layout>})` (R-201). Every file-backed audio therefore takes a new identity, and so a
+  new clock id and new cache keys, not only a relabelled one. A `Recording` of one stamped group no longer takes the
+  file's content root: it takes the groups digest (`value_digest(IDENTITY_TYPE, {"groups": ...})`).
+- Supersedes the 2026-11-02 amendment's "a stamped audio's identity stays its file's content root", and the 2026-10-31
+  line that a held group with the file's stamp "is identified as the file is, by the stamp's content root": it is
+  identified by `audio-file@1` over that root and the layout.
+- `labels@1.0` → `labels@2.0`: the run's private label map is canonical JSON (JCS), read strictly. `labels@1` is
+  retired and refused as such.
+- `comparison@1.0` keys `recording@2`, `audio@2` and `regular-group@2` become `@3`.
