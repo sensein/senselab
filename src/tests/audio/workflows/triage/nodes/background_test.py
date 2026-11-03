@@ -27,6 +27,7 @@ from senselab.audio.workflows.triage.nodes.branches import declared_task_family
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.audio.workflows.triage.task_events import generic_view, generic_view_of
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import record_task
 
 RATE = 16000
 
@@ -52,13 +53,15 @@ def _breaths(seconds: float, room_db: float, seed: int) -> np.ndarray:
 
 
 def test_background_reads_the_family_every_stage_reads() -> None:
-    """A store from before ADMIT recorded identity still names its family, the same one the branches read."""
+    """The task ADMIT recorded is the family, the same one the branches read; a store without it names none."""
     store = ProvStore(run_id="old")
     store.entity(
         prov_type="stream",
         extent=(0.0, 1.0),
         attributes={"name": "recording", "path": "/data/sub-a_ses-b_task-respiration-and-cough-fivebreaths-2.wav"},
     )
+    assert declared_family(store) is declared_task_family(store) is None
+    record_task(store, "respiration-and-cough-fivebreaths", variant={"index": "2", "route": "mouth"}, take=2)
     assert declared_family(store) == declared_task_family(store) == "respiration-and-cough-fivebreaths"
 
 

@@ -146,6 +146,17 @@ class AudioHints(BaseModel):
         instructions: What the participant was told to do, verbatim, or None.
         speech_type: What kind of speech the task asks for, as the corpus names it (``read``,
             ``recall``, ``free``, ``non-lexical`` ...), or None.
+        task: The task the recording was asked to perform, by its name in the dataset's task list, or None.
+            Named exactly: nothing derives it from a file name.
+        task_variant: The task's declared variants, e.g. ``{"route": "mouth"}`` for a breathing task done
+            through the mouth; empty where the task has none.
+        task_take: Which take of the task this is, counting from 1, where the protocol repeats it; or None.
+        item_category: The category a word-generation task asked for (``Animals``), where it names one per
+            recording; or None. It names one of the categories the task's entry in the task list gives.
+        item_category_from: Where the dataset read ``item_category`` (``instructions``, a questionnaire field), for
+            the record; or None.
+        task_description: What the task asks for, given inline for a dataset with no task list: a mapping in the
+            task list's ``expects`` form (``pattern`` and any other fields). None where ``task`` names an entry.
         metadata: Escape hatch for corpus-specific extras that do not deserve a typed field.
     """
 
@@ -156,4 +167,10 @@ class AudioHints(BaseModel):
     target_speaker: Optional[TargetSpeakerEmbedding] = None
     instructions: Optional[str] = None
     speech_type: Optional[str] = None
+    task: Optional[str] = None
+    task_variant: dict[str, str] = Field(default_factory=dict)
+    task_take: Optional[int] = None
+    item_category: Optional[str] = None
+    item_category_from: Optional[str] = None
+    task_description: Optional[dict[str, Any]] = None
     metadata: dict[str, Any] = Field(default_factory=dict)

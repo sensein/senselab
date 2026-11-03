@@ -21,6 +21,7 @@ from senselab.audio.workflows.triage.nodes.background import (
 )
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import record_task
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 RATE = 16000
@@ -88,7 +89,8 @@ def test_an_own_floor_already_written_is_not_written_again(tmp_path: Path) -> No
     assert floor_cli.process(rows)[0]["status"] == "skipped"
 
 
-def _speech_run(root: Path, stem: str, seed: int) -> dict[str, str]:
+def _speech_run(root: Path, stem: str, seed: int, *, task: str) -> dict[str, str]:
+    """One finished run under ``stem``, its ``task`` recorded as ADMIT records the hint's (``record_task``)."""
     rng = np.random.default_rng(seed)
     t = np.arange(6 * RATE) / RATE
     speech = (np.sin(2 * np.pi * 150.0 * t) * 0.05 * ((t % 2.0) < 1.0)).astype(np.float32)
@@ -106,6 +108,7 @@ def _speech_run(root: Path, stem: str, seed: int) -> dict[str, str]:
         extent=None,
         attributes={"name": "recording", "path": f"/data/{stem}.wav", **identity.as_attributes()},
     )
+    record_task(store, task)
     windows = [{"start": float(a), "end": float(a) + 1.0, "label_scores": [{"Speech": 0.9}]} for a in (0, 2, 4)]
     (run_root / "run" / "enhanced_yamnet.json").write_text(json.dumps(windows))
     store.entity(
@@ -120,9 +123,9 @@ def _speech_run(root: Path, stem: str, seed: int) -> dict[str, str]:
 def test_the_session_pass_writes_each_speech_residual_and_the_session_background(tmp_path: Path) -> None:
     """Two speech tasks and a breath task: each store gains its reading; the session background has the two."""
     rows = [
-        _speech_run(tmp_path, "sub-a_ses-1_task-rainbow-passage", 1),
-        _speech_run(tmp_path, "sub-a_ses-1_task-free-speech-1", 2),
-        _speech_run(tmp_path, "sub-a_ses-1_task-breath-sounds", 3),
+        _speech_run(tmp_path, "sub-a_ses-1_task-rainbow-passage", 1, task="rainbow-passage"),
+        _speech_run(tmp_path, "sub-a_ses-1_task-free-speech-1", 2, task="free-speech"),
+        _speech_run(tmp_path, "sub-a_ses-1_task-breath-sounds", 3, task="breath-sounds"),
     ]
     floor_cli.process(rows)
     out = session_cli.process_session("sub-a/ses-1", rows)

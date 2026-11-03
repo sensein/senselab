@@ -93,13 +93,13 @@ class ReplacedTaskInputs:
 
 
 def _in_kinds(family: str, block: Mapping[str, Any]) -> bool:
-    from senselab.audio.workflows.triage.routing_analysis.families import DECLARED_KIND  # noqa: PLC0415
+    from senselab.audio.workflows.triage.task_catalogue import is_kind  # noqa: PLC0415
 
     if family in set(block.get("families") or ()):
         return True
     if family in set(block.get("exclude") or ()):
         return False
-    return any(family in DECLARED_KIND[str(kind)] for kind in block.get("kinds") or ())
+    return any(is_kind(family, str(kind)) for kind in block.get("kinds") or ())
 
 
 def rule_family(family: str | None, params: Mapping[str, Any] | None = None) -> str | None:

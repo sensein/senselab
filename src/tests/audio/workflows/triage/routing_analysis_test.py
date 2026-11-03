@@ -37,12 +37,7 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
     evidence_blocks,
     load_detector_profile,
 )
-from senselab.audio.workflows.triage.routing_analysis.families import (
-    SYLLABLE_REPETITION,
-    declared_kinds,
-    task_family,
-    task_id_of,
-)
+from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
 from senselab.audio.workflows.triage.routing_analysis.features import (
     PHONATION_ENTITY_KEYS,
     PHONATION_SUMMARY_KEYS,
@@ -293,17 +288,6 @@ def test_task_id_reads_the_bids_entity() -> None:
     """The task id comes from the stem's trailing ``task-`` entity, lowercased."""
     assert task_id_of("sub-A_ses-B_task-Prolonged-Vowel") == "prolonged-vowel"
     assert task_id_of("sub-A_ses-B") == "unknown"
-
-
-def test_declared_kinds_partition_the_families() -> None:
-    """Airway carries a breath/cough sub-kind, because the two are detected by different evidence."""
-    assert declared_kinds("respiration-and-cough-fivebreaths") == frozenset({"airway", "breath"})
-    assert declared_kinds("respiration-and-cough-cough") == frozenset({"airway", "cough"})
-    assert declared_kinds("respiration-and-cough-v2-hardcough") == frozenset({"airway", "cough"})
-    assert declared_kinds("voluntary-cough") == frozenset({"airway", "cough"})
-    assert declared_kinds("maximum-phonation-time") == frozenset({"voice", "sustained"})
-    assert declared_kinds("harvard-sentences-list") == frozenset({"speech", "lexical_speech"})
-    assert declared_kinds("diadochokinesis-ka") == frozenset({"speech"})
 
 
 def test_extract_counts_live_words_by_outcome(tmp_path: Path) -> None:
@@ -1700,16 +1684,16 @@ class TestFamiliesExcludedFromAReferenceByConstruction:
         ]
 
     def test_the_lexical_speech_standard_holds_out_the_syllable_repetition_families(self) -> None:
-        """Diadochokinesis is speech; it sits outside ``LEXICAL_SPEECH`` only by construction."""
+        """Diadochokinesis is speech; it sits outside the lexical speech kind only by construction."""
         reference = next(r for r in REFERENCE_STANDARDS if r.name == "declared_lexical_speech")
-        assert reference.excluded_by_construction == SYLLABLE_REPETITION
+        assert reference.excluded_by_construction == "syllable_repetition"
         assert "syllable-repetition" in reference.scored_population()
 
     def test_every_other_standard_holds_out_nothing(self) -> None:
         """An exclusion is declared, never inferred, so no other standard acquires one silently."""
         for reference in REFERENCE_STANDARDS:
             if reference.name != "declared_lexical_speech":
-                assert reference.excluded_by_construction == frozenset()
+                assert reference.excluded_by_construction is None
                 assert reference.scored_population() == reference.population_description
 
     def test_exactly_the_named_families_leave_the_population(self, tmp_path: Path) -> None:

@@ -1,18 +1,22 @@
-"""Summarise the r37 words/speaker measurement (fold.py's rows) into results.json. No transcript text."""
+"""Summarise the r37 words/speaker measurement (fold.py's rows) into results.json. No transcript text.
+
+The task kinds come from the B2AI task list (the triage test profile), as triage reads them since plan step 4.
+"""
 
 import collections
 import glob
 import json
 import statistics
 import sys
+from pathlib import Path
 
+from senselab.audio.workflows.triage.dataset_profile import activate_profile, load_profile
 from senselab.audio.workflows.triage.decision import reason_of
-from senselab.audio.workflows.triage.routing_analysis.families import (
-    AIRWAY_ELICITING,
-    SYLLABLE_REPETITION,
-    VOICE_ELICITING,
-)
+from senselab.audio.workflows.triage.task_catalogue import is_kind
 from senselab.audio.workflows.triage.task_speech import item_set_family, narrative_family
+
+B2AI_PROFILE = Path(__file__).resolve().parents[3] / "src/tests/audio/workflows/triage/profiles/bridge2ai_voice_adult"
+activate_profile(load_profile(B2AI_PROFILE))
 
 rows = [json.loads(line) for f in sorted(glob.glob(sys.argv[1])) for line in open(f)]
 labels = json.load(open(sys.argv[2]))
@@ -24,11 +28,11 @@ R["ok"] = len(ok)
 
 
 def group(family):
-    if family in VOICE_ELICITING:
+    if is_kind(family, "voice"):
         return "voice"
-    if family in AIRWAY_ELICITING:
+    if is_kind(family, "airway"):
         return "airway"
-    if family in SYLLABLE_REPETITION:
+    if is_kind(family, "syllable_repetition"):
         return "ddk"
     if item_set_family(family):
         return "item_set"

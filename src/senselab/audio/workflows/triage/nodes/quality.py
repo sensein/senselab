@@ -34,7 +34,7 @@ from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfi
 from senselab.audio.workflows.triage.ddk_task import DDK_READING
 from senselab.audio.workflows.triage.nodes.airway_task import BREATH_READING, COUGH_READING
 from senselab.audio.workflows.triage.nodes.background import SESSION_FLOOR, SPEECH_RESIDUAL
-from senselab.audio.workflows.triage.nodes.branches import SPEECH_EXPECTATIONS, declared_task_family
+from senselab.audio.workflows.triage.nodes.branches import declared_task_family
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
     find_measurement,
@@ -56,7 +56,7 @@ from senselab.audio.workflows.triage.quality_join import (
     separate_gates,
     stream_agreement,
 )
-from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
+from senselab.audio.workflows.triage.task_catalogue import LEXICAL_SPEECH_KIND, is_kind
 from senselab.audio.workflows.triage.task_events import generic_view, generic_view_of
 from senselab.audio.workflows.triage.task_speech import TASK_SPEECH_READING
 from senselab.audio.workflows.triage.vocabulary import (
@@ -267,7 +267,7 @@ def spoken_task_words(store: ProvStore) -> list[Span]:
         task's speech reading names as outside the task; empty for every other family, whose own sound is its events.
     """
     family = declared_task_family(store)
-    if not family or family not in SPEECH_EXPECTATIONS or family in SYLLABLE_REPETITION:
+    if not is_kind(family, LEXICAL_SPEECH_KIND):
         return []
     reading = find_measurement(store, TASK_SPEECH_READING)
     off_task = {str(i) for i in (reading.attributes.get("word_ids") or ())} if reading is not None else set()

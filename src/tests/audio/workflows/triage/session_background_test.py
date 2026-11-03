@@ -32,6 +32,7 @@ from senselab.audio.workflows.triage.session_background import (
 )
 from senselab.audio.workflows.triage.vocabulary import _speech_quality_items
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import record_task
 
 RATE = 16000
 SPEECH = [(1.0, 2.0), (3.0, 4.0), (5.0, 6.0)]
@@ -159,13 +160,15 @@ def test_the_switch_decides_which_floor_a_non_speech_task_reads() -> None:
     assert np.array_equal(reading.floor.band_db, band)
 
 
-def _store(tmp_path: Path, stem: str, room_db: float, seed: int) -> ProvStore:
+def _store(tmp_path: Path, stem: str, room_db: float, seed: int, *, task: str) -> ProvStore:
+    """One recording's store under ``stem``, its ``task`` recorded as ADMIT records the hint's (``record_task``)."""
     plain, enhanced, residual = _task(room_db, seed)
     store = ProvStore(run_id=stem)
     for name, samples in (("recording", plain), ("plain", plain), ("enhanced", enhanced), ("residual", residual)):
         path = tmp_path / f"{stem}_{name}.wav" if name != "recording" else tmp_path / f"{stem}.wav"
         soundfile.write(path, samples.astype(np.float32), RATE, subtype="FLOAT")
         store.entity(prov_type="stream", extent=None, attributes={"name": name, "path": str(path)})
+    record_task(store, task)
     windows = [{"start": a, "end": b, "label_scores": [{"Speech": 0.9}]} for a, b in SPEECH] + [
         {"start": 6.5, "end": 7.0, "label_scores": [{"Silence": 0.9}]}
     ]
@@ -180,8 +183,8 @@ def _store(tmp_path: Path, stem: str, room_db: float, seed: int) -> ProvStore:
 
 def test_session_writes_the_reading_and_background_reads_the_reference(tmp_path: Path) -> None:
     """SESSION writes each recording's reading and the session background; BACKGROUND records which floor it used."""
-    speech = _store(tmp_path, "sub-a_ses-1_task-rainbow-passage", -60.0, 1)
-    breath = _store(tmp_path, "sub-a_ses-1_task-breath-sounds", -60.0, 2)
+    speech = _store(tmp_path, "sub-a_ses-1_task-rainbow-passage", -60.0, 1, task="rainbow-passage")
+    breath = _store(tmp_path, "sub-a_ses-1_task-breath-sounds", -60.0, 2, task="breath-sounds")
     readings = [write_speech_residual(store, tmp_path) for store in (speech, breath)]
     assert readings[0]["family"] == "rainbow-passage" and readings[1]["kind"] == "airway"
     for store in (speech, breath):

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 import numpy as np
 import pytest
 
+from senselab.audio.workflows.triage import cohort_stage
 from senselab.audio.workflows.triage.cohort_fold import (
     COHORT_READING,
     KEY_OTHER_SPEAKER_IN_SESSION,
@@ -576,3 +578,19 @@ def test_recordings_declaring_no_session_are_no_session_to_the_condition_checks(
     assert blocks[undeclared_session("sub-a")]["session"] is None
     assert blocks[undeclared_session("sub-a")]["other_sessions"] is None
     assert blocks["sub-a/ses-1"]["other_sessions"] is None
+
+
+def test_the_cohort_key_follows_the_task_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A task's kinds decide its cohort readings, so changing an entry's branch or description changes the key."""
+    members = [_facts("sub-a_ses-1_task-rainbow-passage", "rainbow-passage")]
+
+    def key() -> str:
+        return cohort_stage.cohort_key(group="sub-a", members=members, quantiles_sha256=None, enrollment_config={})
+
+    before = key()
+    assert key() == before
+    tasks = dict(cohort_stage.task_list())
+    entry = tasks["rainbow-passage"]
+    tasks["rainbow-passage"] = dataclasses.replace(entry, branch="VOICE")
+    monkeypatch.setattr(cohort_stage, "task_list", lambda: tasks)
+    assert key() != before

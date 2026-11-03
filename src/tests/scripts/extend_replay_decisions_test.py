@@ -63,6 +63,7 @@ from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.common import find_measurement, software_agent, write_stream, write_verdict
 from senselab.audio.workflows.triage.nodes.preprocess import STIMULUS_MEASUREMENT, write_stimulus_alignment
 from senselab.audio.workflows.triage.stimulus import StimulusAlignment
+from senselab.audio.workflows.triage.task_catalogue import TASK_FROM
 from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, Outcome
 from senselab.utils.prov_store import ProvStore
 
@@ -697,6 +698,22 @@ class TestTheReplayChecksTheRunsRecord:
             check_replay_inputs(store, root, load_triage_config(), hint=None, hint_given=False)
         accepted = check_replay_inputs(store, root, load_triage_config(), hint=None, hint_given=False, no_hint=True)
         assert (accepted.hint, accepted.changed) == (None, None)
+
+    def test_a_store_that_recorded_no_task_is_refused_without_hints_or_no_hint(self, tmp_path: Path) -> None:
+        """A store from before ADMIT recorded the task: its recorded hint names none, so every branch would detect."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        _seed_run(root, hint=HINT_COUGH)
+        store = read_store(root)
+        for stream in store.entities("stream"):
+            stream.attributes.pop(TASK_FROM, None)
+        for activity in store.activities("ADMIT"):
+            activity.parameters.pop(TASK_FROM, None)
+        with pytest.raises(ReplayRefused, match="records no task"):
+            check_replay_inputs(store, root, load_triage_config(), hint=None, hint_given=False)
+        given = check_replay_inputs(store, root, load_triage_config(), hint=HINT_COUGH, hint_given=True)
+        assert given.hint_from == HINT_GIVEN
+        none = check_replay_inputs(store, root, load_triage_config(), hint=None, hint_given=False, no_hint=True)
+        assert none.hint is None
 
     def test_a_given_hint_that_differs_is_accepted_and_named(self, tmp_path: Path) -> None:
         """The caller's correction wins; the fields it moved are recorded."""

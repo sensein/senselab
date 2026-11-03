@@ -20,11 +20,12 @@ import yaml
 
 from senselab.audio.workflows.triage.background_model import BandFrames, background_model_parameters, band_frames
 from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
-from senselab.audio.workflows.triage.routing_analysis.families import (
-    AIRWAY_ELICITING,
-    LEXICAL_SPEECH,
-    SYLLABLE_REPETITION,
-    VOICE_ELICITING,
+from senselab.audio.workflows.triage.task_catalogue import (
+    AIRWAY_KIND,
+    LEXICAL_SPEECH_KIND,
+    SYLLABLE_REPETITION_KIND,
+    VOICE_KIND,
+    is_kind,
 )
 
 SESSION_BACKGROUND_PATH = Path(__file__).parent / "data" / "session_background.yaml"
@@ -40,13 +41,8 @@ SPEECH_RESIDUAL_SOURCE = "speech_residual"
 
 FRAME_SETS = ("whole", "speech", "non_speech")
 
-KINDS: dict[str, frozenset[str]] = {
-    "lexical_speech": LEXICAL_SPEECH,
-    "airway": AIRWAY_ELICITING,
-    "voice": VOICE_ELICITING,
-    "syllable_repetition": SYLLABLE_REPETITION,
-}
-"""The declared kinds ``decides_kinds`` names, by their families."""
+KINDS: tuple[str, ...] = (LEXICAL_SPEECH_KIND, AIRWAY_KIND, VOICE_KIND, SYLLABLE_REPETITION_KIND)
+"""The task kinds ``decides_kinds`` may name, each read off the task list (:func:`is_kind`)."""
 
 Signal = tuple[np.ndarray, int]
 Span = tuple[float, float]
@@ -71,7 +67,7 @@ def kind_of(family: str | None) -> str | None:
     Returns:
         ``lexical_speech``, ``airway``, ``voice`` or ``syllable_repetition``; None for any other family.
     """
-    return next((kind for kind, families in KINDS.items() if family in families), None)
+    return next((kind for kind in KINDS if is_kind(family, kind)), None)
 
 
 def _round(value: float | None, digits: int = 2) -> float | None:
@@ -176,7 +172,7 @@ def speech_residual_of(
         "lexical_words_n": int(lexical_words_n),
         "enhanced_speech_max": _round(enhanced_speech_max, 3),
         "foreground": bool(foreground),
-        "member": bool(foreground and family in LEXICAL_SPEECH),
+        "member": bool(foreground and is_kind(family, LEXICAL_SPEECH_KIND)),
         "speech_s": round(float(in_speech.sum() * hop), 3),
         "non_speech_s": round(float(out_speech.sum() * hop), 3),
         "band_edges_hz": [float(e) for e in bg["band_edges_hz"] if e <= rate / 2.0],

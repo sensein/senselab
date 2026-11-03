@@ -12,12 +12,6 @@ stimulus:
   residue:
     cue_families: [productive-vocabulary]
   task_lexicons: [cinderella-story, animal-fluency, random-item-generation, random-item-generation-v2]
-airway:
-  route_by_task_index:
-    1: nose
-    2: mouth
-    3: nose
-    4: mouth
 diarization:
   streams: [enhanced]        # narrowed 2026-09-20 after the corpus run
 speech:

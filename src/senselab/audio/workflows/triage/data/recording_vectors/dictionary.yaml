@@ -148,12 +148,24 @@ columns:
 
   declared_family:
     units: none
-    description: The task family the recording's stem declares, e.g. `story-recall-v2`.
+    description: The task the recording's hint declares, by its name in the dataset's task list, e.g. `story-recall-v2`.
     computation: >-
-      The fold's `declared_family`: the task family read off the `recording` stream's stem by
-      `declared_task`, which drops the trailing task index.
-    source: [recording_vectors.py:extract, nodes/verdict.py:verdict]
-    null_means: The store holds no `recording` stream to read a stem from (ADMIT failed), or the stem declares no task.
+      The fold's `declared_family`: the task ADMIT recorded from the hint (`declared_task`); for a store written
+      before ADMIT recorded the task, the task id with its trailing index dropped.
+    source: [recording_vectors.py:extract, nodes/verdict.py:verdict, live_evidence.py:declared_task_of]
+    null_means: Nothing declares a task.
+
+  declared_task_source:
+    units: none
+    values: [task_list, hint_description, not_in_task_list, none]
+    description: What describes the declared task.
+    computation: >-
+      The `task_from` attribute of ADMIT's record (the latest live `recording` stream, or ADMIT's activity where
+      it refused the recording): `task_list` where the dataset's task list has an entry of that name,
+      `hint_description` where the hint described the task itself, `not_in_task_list` where it names a task the
+      list lacks, `none` where the hint declares no task.
+    source: [recording_vectors.py:view_task, task_catalogue.py:resolve_task]
+    null_means: The run records no task (a store written before ADMIT recorded one).
 
   release:
     units: none
