@@ -347,7 +347,7 @@ def test_task_ports_may_name_protocols() -> None:
     @task(name="t.pii", version="1", kind="transform", registry=registry)
     class _Pii:
         inputs = {"text": Text, "series": RegularSeries}
-        outputs = {"spans": TextSpans, "metric": Metric}
+        outputs: dict[str, type] = {"spans": TextSpans, "metric": Metric}
 
     assert _Pii.spec.inputs == {"text": "Text", "series": "RegularSeries"}  # type: ignore[attr-defined]
     assert {"Text", "RegularSeries"} <= kernel_types().keys()
