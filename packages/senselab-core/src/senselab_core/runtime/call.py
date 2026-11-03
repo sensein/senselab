@@ -599,7 +599,7 @@ def _resolve_model(
             default = catalogue.default(spec.name)
         except UnknownModel:
             return None, None
-        ref = ModelRef.parse(f"{default.id}@{default.revision}")
+        ref = default.ref
     entry = next((e for e in catalogue.entries if e.id == ref.id), None) if ref.source == "hf" else None
     if entry is not None and ref.ref == entry.revision:
         return ResolvedModel(ref=ref, identity=entry.revision, license=entry.license), entry

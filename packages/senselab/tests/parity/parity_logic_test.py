@@ -279,11 +279,12 @@ def test_a_backend_runs_its_own_model_not_the_benchmarks_default() -> None:
     catalogue = importlib.import_module("senselab_core.runtime.call").packaged().catalogue
     _, crisper = par.resolve("speech_to_text", "crisperwhisper")
     _, other = par.resolve("speech_to_text", "transformers")
-    own = catalogue.backend_entry(crisper).id
-    assert own != "openai/whisper-large-v3-turbo"
-    assert par.model_of("openai/whisper-large-v3-turbo", crisper, catalogue) == own
+    own = catalogue.backend_entry(crisper).ref
+    turbo = f"openai/whisper-large-v3-turbo@{'a' * 40}"
+    assert own.id != "openai/whisper-large-v3-turbo"
+    assert par.model_of(turbo, crisper, catalogue) == own
     assert par.model_of(None, crisper, catalogue) == own
-    assert par.model_of("openai/whisper-large-v3-turbo", other, catalogue) == "openai/whisper-large-v3-turbo"
+    assert str(par.model_of(turbo, other, catalogue)) == turbo
 
 
 @pytest.mark.logic
@@ -315,3 +316,25 @@ def test_convert_writes_the_reference_where_the_parity_test_reads_it(tmp_path: P
          "--job", "1", "--parity-dir", str(tmp_path / "p")]
     )  # fmt: skip
     assert par.load_reference(par.reference_path(tmp_path / "p", "speaker_embeddings", "speechbrain")).items
+
+
+@pytest.mark.logic
+def test_every_parity_call_validates_with_a_pinned_model() -> None:
+    """The `TaskCall` for each backend of each smoke benchmark validates; a bare model id does not."""
+    importlib.import_module("senselab")
+    call = importlib.import_module("senselab_core.runtime.call")
+    catalogue = call.packaged().catalogue
+    suite = par.harness().Suite.load(ROOT / "benchmarks" / "suites" / "smoke.yaml")
+    built = 0
+    for bench in suite.benchmarks:
+        if bench.task.startswith("signal."):
+            continue
+        for backend in call.packaged().registry.backends(bench.task):
+            ref = par.model_of(bench.model, backend, catalogue)
+            task_call = call.TaskCall.model_validate({"task": bench.task, "inputs": {}, "params": {}, "model": ref})
+            assert task_call.model == ref
+            built += 1
+            if ref is not None:
+                with pytest.raises(ValueError, match="explicit revision"):
+                    call.TaskCall.parse_model(ref.id)
+    assert built >= 4

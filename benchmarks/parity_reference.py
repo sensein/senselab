@@ -346,7 +346,7 @@ def decide(outputs: ParityOutputs, reference: ParityReference | None, thresholds
     )
 
 
-def placement_gap(task: str, model: str | None, backend: Any, profile: Any) -> str | None:  # noqa: ANN401
+def placement_gap(task: str, model: Any, backend: Any, profile: Any) -> str | None:  # noqa: ANN401
     """Return why `profile` cannot place `backend` of `task` on `model` on this node, or None when it can.
 
     The same check the harness reports as "not placeable" (`placement_of`), with `profile`'s stack preference for
@@ -363,12 +363,15 @@ def placement_gap(task: str, model: str | None, backend: Any, profile: Any) -> s
     return None if placed.backend.name == backend.name else f"the profile places {task!r} on {placed.backend.name!r}"
 
 
-def model_of(bench_model: str | None, backend: Any, catalogue: Any) -> str | None:  # noqa: ANN401
-    """Return the model id `backend` runs: the benchmark's when the backend serves it, else the backend's own entry."""
-    if bench_model is not None and (not backend.models or bench_model in backend.models):
-        return bench_model
+def model_of(bench_model: str | None, backend: Any, catalogue: Any) -> Any:  # noqa: ANN401
+    """Return the pinned `ModelRef` `backend` runs: the benchmark's when the backend serves it, else its own entry's."""
+    from senselab_core.runtime.call import TaskCall  # noqa: PLC0415 - needs the runtime
+
+    ref = TaskCall.parse_model(bench_model)
+    if ref is not None and (not backend.models or ref.id in backend.models):
+        return ref
     entry = catalogue.backend_entry(backend)
-    return None if entry is None else str(entry.id)
+    return None if entry is None else entry.ref
 
 
 def reference_path(parity_dir: Path, task: str, backend: str) -> Path:
@@ -460,8 +463,9 @@ def _run_cli(args: argparse.Namespace) -> None:
     stack = backend.stack + "".join(f" {k}={v}" for k, v in sorted(args.backend_params.items()))
     from senselab_core.runtime.call import packaged  # noqa: PLC0415
 
-    model = model_of(bench.model, backend, packaged().catalogue)
-    gap = placement_gap(bench.task, model, backend, profile)
+    ref = model_of(bench.model, backend, packaged().catalogue)
+    model = None if ref is None else str(ref)
+    gap = placement_gap(bench.task, ref, backend, profile)
     try:
         if gap is not None:
             outputs = ParityOutputs(

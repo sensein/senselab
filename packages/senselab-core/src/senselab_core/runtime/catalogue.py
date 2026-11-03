@@ -84,9 +84,14 @@ class CatalogueEntry(Frozen):
             raise ValueError("resource tables stay empty until the scale ladder produces them")
         return v
 
+    @property
+    def ref(self) -> ModelRef:
+        """The pinned reference `<id>@<revision>` of this entry."""
+        return ModelRef.parse(f"{self.id}@{self.revision}")
+
     @model_validator(mode="after")
     def _check_entry(self) -> "CatalogueEntry":
-        ModelRef.parse(f"{self.id}@{self.revision}")
+        _ = self.ref
         if not set(self.default_for) <= set(self.tasks):
             raise ValueError(f"{self.id}: default_for {sorted(set(self.default_for) - set(self.tasks))} not in tasks")
         return self
