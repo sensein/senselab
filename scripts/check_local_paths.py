@@ -26,7 +26,7 @@ _GENERIC_ACCOUNTS = r"(?:user|runner|ec2-user)(?![\w-])"
 _NOT_PART_OF_WORD = r"(?<![\w~.$}-])"
 
 PATTERNS: dict[str, re.Pattern[str]] = {
-    "user home path": re.compile(rf"{_NOT_PART_OF_WORD}/(?:Users|home)/(?!{_GENERIC_ACCOUNTS})\w[\w.-]*"),
+    "user home path": re.compile(rf"{_NOT_PART_OF_WORD}(?<![A-Za-z]:)/(?:Users|home)/(?!{_GENERIC_ACCOUNTS})\w[\w.-]*"),
     "Windows user home path": re.compile(
         rf"(?<![\w])[A-Za-z]:[\\/]+Users[\\/]+(?!{_GENERIC_ACCOUNTS})\w[\w.-]*", re.IGNORECASE
     ),
