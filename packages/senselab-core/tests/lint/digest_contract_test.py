@@ -53,13 +53,21 @@ def _lint_imports(
     alerting: str = "none",
     contracts: tuple[str, ...] = (CONTRACT, RAW_CONTRACT),
 ) -> subprocess.CompletedProcess[str]:
-    """Run the repository's `contracts` (the two digest by default), alone, over `base`, without packages above core."""
+    """Run the repository's `contracts` (the two digest by default), alone, over `base`.
+
+    Packages above core and roots that `base` neither holds nor packages are left out of the root packages.
+    """
     parser = configparser.ConfigParser()
     parser.read(IMPORTLINTER)
     config = configparser.ConfigParser()
     config["importlinter"] = dict(parser["importlinter"])
     above = _lines(parser[ABOVE_CORE_CONTRACT]["forbidden_modules"])
-    roots = [r for r in _lines(parser["importlinter"]["root_packages"]) if r not in above]
+    packaged = {d.name for d in (REPO / "packages").glob("*/src/*") if d.is_dir()}
+    roots = [
+        r
+        for r in _lines(parser["importlinter"]["root_packages"])
+        if r not in above and (r in packaged or (base / r).is_dir())
+    ]
     config["importlinter"]["root_packages"] = "\n".join(roots)
     for name in contracts:
         config[name] = {**parser[name], "unmatched_ignore_imports_alerting": alerting}
