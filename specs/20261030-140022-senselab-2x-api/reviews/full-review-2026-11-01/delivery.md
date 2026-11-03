@@ -9,7 +9,7 @@ Counts: Critical 0, Important 6, Minor 7.
 - Items 30/31: #621 merged into `2.x` (2f32aa8e); #620 merged into alpha. `2.x` carries `2x-tests.yaml`, `2x-docs-preview.yaml`, the namespaced `docs-deploy.sh`, `fetch-1x-freeze.sh`, `check-2x-packages.sh`. `.github` on `2x/phase-1` differs from `2.x` only by `publish.yaml` and a trimmed `2x-tests.yaml`.
 - Separation: `tests.yaml` and `docs-preview.yaml` use `branches-ignore: [2.x, senselab-2x-api, 2x/**]`; the 2x workflows trigger only on those bases. Previews are namespaced (`/senselab/2x/pr-N/`), and cleanup of one namespace cannot touch the other (`docs-deploy.sh`).
 - `2x/phase-1` contains `2.x` and `senselab-2x-api`. No 2.x PR targets alpha: #617 -> 2.x, #619 -> senselab-2x-api. #618, #612, #613, #608, #609 and #607 are triage PRs stacked on alpha, which is the 1.x line.
-- Leakage in the 2.x tree: `git grep` of `packages/`, `scripts/` (2.x ones), `.github`, CLAUDE.md, README and the 2.x spec dir shows no participant ids, personal paths or emails. The `/home/x/a.wav` strings are synthetic test inputs. The only emails are the three author emails in `pyproject.toml`, which are public authorship.
+- Leakage in the 2.x tree: `git grep` of `packages/`, `scripts/` (2.x ones), `.github`, CLAUDE.md, README and the 2.x spec dir shows no participant ids, personal paths or emails. The `/home/user/a.wav` strings are synthetic test inputs. The only emails are the three author emails in `pyproject.toml`, which are public authorship.
 
 ## Important
 

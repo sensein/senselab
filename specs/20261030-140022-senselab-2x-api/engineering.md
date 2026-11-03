@@ -158,7 +158,7 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   in a gitignored `references.local.yaml` at the repository root; tracked text uses only placeholder
   names (`${ORCD_GROUP_SCRATCH}`, `${CPU_PARTITION}`, `${AGENT_SCRATCH}`, …), which the committed
   `references.example.yaml` lists without values. A repository-relative path is not a local path.
-  Synthetic examples (`/home/x/a.wav`) stay synthetic.
+  Synthetic examples (`/home/user/a.wav`) stay synthetic.
 - **Source**: owner, 2026-10-30: "ensure no identifiers leak in"; owner, 2026-11-03: "separately create
   a gitignored file that can contain references, but anything that can be merged into a commit (such
   as a spec) should not contain path or content of file references".
