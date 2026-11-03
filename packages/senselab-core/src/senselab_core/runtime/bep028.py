@@ -13,8 +13,9 @@ import unicodedata
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
-from senselab_worker.canonical import jcs_dumps
+from senselab_worker.canonical import jcs_dumps, jcs_loads
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.formats import LABELS_FORMAT, FormatVerdict, check
@@ -39,7 +40,6 @@ LABELS_NAME = "labels@1.json"
 LABELS_MODE = 0o600
 """The mode of the label map and of its lease."""
 _LABELS_FILE = re.compile(re.escape(LABELS_NAME))
-_ENTITY_ID = re.compile(r"(content|output):[0-9a-f]{64}")
 _KINDS = {"prov:Entity", "prov:Activity", "prov:Agent"}
 
 
@@ -61,7 +61,7 @@ def _read_labels(directory: StorageDir) -> dict[str, tuple[str, list[str]]]:
     if data is None:
         return {}
     try:
-        record = json.loads(data)
+        record: Any = jcs_loads(data)
         labels = record["labels"]
         valid = (
             check(LABELS_FORMAT, record["format"]) is FormatVerdict.ACCEPTED
@@ -71,7 +71,7 @@ def _read_labels(directory: StorageDir) -> dict[str, tuple[str, list[str]]]:
                 and isinstance(v, dict)
                 and v.keys() == {"address", "paths"}
                 and isinstance(v["address"], str)
-                and _ENTITY_ID.fullmatch(v["address"])
+                and kprov.ENTITY_ID.fullmatch(v["address"])
                 and isinstance(v["paths"], list)
                 and all(isinstance(p, str) for p in v["paths"])
                 for k, v in labels.items()
@@ -106,7 +106,7 @@ class LabelMap:
         """
         items = list(files)
         for address, _ in items:
-            if not _ENTITY_ID.fullmatch(address):
+            if not kprov.ENTITY_ID.fullmatch(address):
                 raise ValueError("a file's address is a content: or output: address")
         return pathless("assigning file labels", lambda: self._assign(items))
 
@@ -128,8 +128,8 @@ class LabelMap:
                     labels[label][1].append(path)
                 assigned.append(label)
             record = {k: {"address": a, "paths": p} for k, (a, p) in labels.items()}
-            body = json.dumps({"format": LABELS_FORMAT, "labels": record}, sort_keys=True, indent=2)
-            private.write_atomically(LABELS_NAME, body.encode(), grammar=_LABELS_FILE, mode=LABELS_MODE)
+            body = jcs_dumps({"format": LABELS_FORMAT, "labels": record})
+            private.write_atomically(LABELS_NAME, body, grammar=_LABELS_FILE, mode=LABELS_MODE)
             return assigned
 
     def paths(self) -> dict[str, list[str]]:

@@ -1,5 +1,6 @@
 """Export redaction and the BEP028 profile: no document, export or provenance error holds a path."""
 
+import json
 import os
 import re
 import shutil
@@ -348,3 +349,13 @@ def _failures(base: Path, run: Path) -> list[str]:
         (unreadable / PROV_DIR).chmod(0o700)
     assert os.fspath(run) not in "".join(texts)
     return texts
+
+
+def test_label_map_is_jcs(tmp_path: Path) -> None:
+    """The map on disk is canonical JSON: re-serialising what it parses to gives its bytes back."""
+    run, _ = _run(tmp_path, "sub-01/a.wav", "sub-02/b.wav")
+    data = (run / PRIVATE_DIR / LABELS_NAME).read_bytes()
+    assert jcs_dumps(jcs_loads(data)) == data
+    (run / PRIVATE_DIR / LABELS_NAME).write_bytes(json.dumps(jcs_loads(data), indent=2).encode())
+    with pytest.raises(ValueError, match="labels@1.0"):
+        LabelMap(run).paths()

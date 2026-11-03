@@ -71,8 +71,10 @@ LITERAL_RANGES = frozenset(
 
 _RANGES_OF: Mapping[type, str] = {bool: "xsd:boolean", str: "xsd:string", datetime: "xsd:dateTime"}
 _NUMERIC_RANGES = frozenset({"xsd:integer", "xsd:double", "xsd:decimal"})
-_ENTITY_ID = re.compile(r"(content|output):[0-9a-f]{64}")
-_AGENT_ID = re.compile(r"agent:[0-9a-f]{64}")
+ENTITY_ID = re.compile(r"(content|output):[0-9a-f]{64}")
+"""The grammar of an entity `@id`."""
+AGENT_ID = re.compile(r"agent:[0-9a-f]{64}")
+"""The grammar of an agent `@id`."""
 NODE_ID = re.compile(r"(content|output|activity|agent|environment):[0-9a-f]{64}")
 """The grammar of every node `@id` a document holds."""
 _TERM = re.compile(r"senselab:[A-Za-z][A-Za-z0-9_]*")
@@ -491,7 +493,7 @@ def entity(
     """
     b = _Builder(vocabulary)
     t = b.types("prov:Entity", types)
-    return b.record({"@id": _checked(_ENTITY_ID, address, "address"), "@type": t, **b.attributes(t, attributes or {})})
+    return b.record({"@id": _checked(ENTITY_ID, address, "address"), "@type": t, **b.attributes(t, attributes or {})})
 
 
 def environment(vocabulary: Vocabulary, attributes: Mapping[str, object]) -> Record:
@@ -546,13 +548,13 @@ def activity(  # noqa: PLR0913 - keyword-only, one argument per PROV relation
     times = {"prov:startedAtTime": started, "prov:endedAtTime": ended}
     node.update({k: b.scalar(v, "xsd:dateTime", k) for k, v in times.items() if v is not None})
     usages, generations, assocs = list(used), list(generated), list(associations)
-    _put(node, "prov:used", [{"@id": _checked(_ENTITY_ID, u.entity, "used")} for u in usages])
+    _put(node, "prov:used", [{"@id": _checked(ENTITY_ID, u.entity, "used")} for u in usages])
     _put(node, "prov:qualifiedUsage", [_qualified(b, "prov:Usage", u) for u in usages if u.port or u.time])
-    _put(node, "prov:generated", [{"@id": _checked(_ENTITY_ID, g.entity, "generated")} for g in generations])
+    _put(node, "prov:generated", [{"@id": _checked(ENTITY_ID, g.entity, "generated")} for g in generations])
     reverse = [_qualified(b, "prov:Generation", g) for g in generations if g.port or g.time]
     if reverse:
         node["@reverse"] = {"prov:activity": _sorted_unique(reverse)}
-    _put(node, "prov:wasAssociatedWith", [{"@id": _checked(_AGENT_ID, a.agent, "associations")} for a in assocs])
+    _put(node, "prov:wasAssociatedWith", [{"@id": _checked(AGENT_ID, a.agent, "associations")} for a in assocs])
     _put(node, "prov:qualifiedAssociation", [_association(b, a) for a in assocs])
     return b.record(_addressed("activity:", PROV_ACTIVITY_TAG, node))
 
