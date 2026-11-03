@@ -49,6 +49,8 @@ def _name(o: Any) -> str:  # noqa: ANN401
 
 
 def _need_outputs() -> None:
+    if DIRECTORY is None:
+        pytest.skip("no parity campaign: SENSELAB_PARITY_DIR is unset")
     if not OUTPUTS:
         pytest.fail("no parity outputs: set SENSELAB_PARITY_DIR to a directory with outputs/*.json")
 
