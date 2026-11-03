@@ -36,9 +36,9 @@ floor:
 spans:
   transition_window_ms: 30             # how long it must stay within k_db of the floor; onset and offset alike
   min_duration_ms: 50                  # discard an amplitude proposal shorter than this
-  min_separation_ms: 30                # merge proposals closer than this; must track transition_window_ms
+  min_separation_ms:                   # profile value (data/profile_values.yaml)
   k_db: 6.0                            # rise over floor to open a span, and the level a walk stops at
-  continuity_cut_percentile: 5.0       # lowest N% of continuity-trace samples BY RANK are the change points
+  continuity_cut_percentile:           # profile value (data/profile_values.yaml)
   continuity_min_duration_ms: 300      # continuity events are long; the only length filter on that source
 
 # Clip detection, and how per-period plateaus are coalesced into one event.
@@ -92,8 +92,8 @@ gammatone:
 
 # YAMNet's whole-file silence and coverage readings, and its label-space size.
 yamnet:
-  silence_threshold: 0.5               # Silence score at or above this marks a window silent
-  coverage_threshold: 0.5              # fraction of the file that must read silent to call it empty
+  silence_threshold:                   # profile value (data/profile_values.yaml)
+  coverage_threshold:                  # profile value (data/profile_values.yaml)
   top_k: 521                           # full label space; a SIZE, not a threshold
   keep_worker_resident: true           # hold the loaded model across recordings, not just within one
 
@@ -107,9 +107,9 @@ hear:
 # raw `<classifier>_scores` derivative is persisted regardless, by its own earlier step.
 windows:
   yamnet:
-    default_threshold: 0.2             # owner-directed: score a label needs to join a window's set
-    label_thresholds:                  # per-label overrides of that default
-    label_top_k: 4                     # owner-directed: how many labels of a window are eligible at all
+    default_threshold:                 # profile value (data/profile_values.yaml)
+    label_thresholds:                  # profile value (data/profile_values.yaml)
+    label_top_k:                       # profile value (data/profile_values.yaml)
   ast:
     # AST is REPORTING-ONLY: no ruleset gate reads it, no branch reads it, and TAXONOMY's label
     # summary comes off the raw scores. So these three govern a window fold nothing consumes, and
@@ -121,9 +121,9 @@ windows:
     hop_s: 10.24                       # non-overlapping until a hop is fitted; a null here stopped AST running
     top_k: 527                         # AudioSet's full label space; a size, not a threshold
   hear:
-    default_threshold: 0.2             # as yamnet; the same pair governs both
-    label_thresholds:                  # as above
-    label_top_k: 4                     # as above
+    default_threshold:                 # profile value (data/profile_values.yaml)
+    label_thresholds:                  # profile value (data/profile_values.yaml)
+    label_top_k:                       # profile value (data/profile_values.yaml)
     hop_s: 2.0                         # non-overlapping 2 s windows; a null here stopped HeAR running
 
 # Praat's settings for PREPROCESS's F0 and formant tracks. The sustained-phonation and glide
@@ -140,7 +140,7 @@ words:
   # Cough-like renderings a recognizer emits as ordinary words; PREPROCESS brackets each one. One
   # flat list, and only the cough set is measured; see the derivation in
   # `specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`.
-  onomatopoeic_tokens: [cough, coughs, coughing, 咳, 呵, ahem, hack, khh, kof, cof]
+  onomatopoeic_tokens:                  # profile value (data/profile_values.yaml)
 
 # The consensus word stream aligned against what the recording declared it expected
 # (`hints.expected_speech`). One key: where a declared prompt is divided into structure units.
@@ -149,12 +149,12 @@ words:
 stimulus:
   sentence_terminators: .?!            # characters closing a structure unit inside one prompt; orthographic, not fitted
   near_match:                          # how far a transcript token may be from a stimulus token and still be it
-    exact_below: 5                     # a normalised token shorter than this must match the stimulus exactly
-    two_edits_from: 8                  # this long or longer may differ by two edits; between the two, by one
+    exact_below:                       # profile value (data/profile_values.yaml)
+    two_edits_from:                    # profile value (data/profile_values.yaml)
   residue:                             # which transcript words reach the PII pathway; see specs/20260925-lexical-only-pii-pathway/
-    variant_similarity_min: 0.66       # least 1 - edits/longer length at which a word is a reading of a stimulus word
-    insertion_window: 3                # stimulus words either side an inserted word may repeat, restart or split
-    train_repetitions_min: 3           # recurrences that make a token a syllable train in a syllable task
+    variant_similarity_min:            # profile value (data/profile_values.yaml)
+    insertion_window:                  # profile value (data/profile_values.yaml)
+    train_repetitions_min:             # profile value (data/profile_values.yaml)
 
 # The declared task ALWAYS adds a route to its own branch. That route needs no key here: the task is
 # the one the hint declares, recorded by ADMIT, and its task list entry names the branch
@@ -183,8 +183,8 @@ phonation:
   silence_threshold: 0.1               # Praat's silence threshold
   periods_per_window: 4.5              # Praat's periods_per_window
   period_doubling_factor: 2.0          # the definition of period doubling; an identity, not a threshold
-  hnr_floor_interval_db:               # near-edge HNR interval; Praat calibrates no dB floor, so this needs a measurement
-  rms_floor_interval:                  # near-edge RMS interval, same
+  hnr_floor_interval_db:               # profile value (data/profile_values.yaml)
+  rms_floor_interval:                  # profile value (data/profile_values.yaml)
 
 # Praat's settings for PREPROCESS's whole-file feature set over the `enhanced` stream. The forty
 # scalars it returns become the `praat_features` measurement's own attributes.
@@ -237,17 +237,17 @@ diarization:
 voice:
   hint_tags: [phonation, humming, sustained-vowel, voice]  # unread as of v2; hints route through routing.hint_branch_map alone
   f0_search_range_hz: [50.0, 600.0]    # wide [min, max] the per-recording range is derived from
-  f0_range_by_population:              # per declared age and sex, replacing the derived range
-  f0_range_ratio_max:                  # largest F0 ratio a single production may span
-  task_duration_ranges:                # expected duration per declared task
+  f0_range_by_population:              # profile value (data/profile_values.yaml)
+  f0_range_ratio_max:                  # profile value (data/profile_values.yaml)
+  task_duration_ranges:                # profile value (data/profile_values.yaml)
 
 # SPEECH's enrollment, separation, diarization and non-target settings.
 speech:
   second_diarizer:                     # which model corroborates pyannote's speaker count
   target_match_cosine: 0.25            # similarity at or above which a speaker or run is the enrolled target. SpeechBrain's own verification default for spkrec-ecapa-voxceleb; B2AI's profile fits 0.231
-  secondary_exclusive_min_s: 1.0       # exclusive second-voice time in a task extent under which it holds no turn; specs/20261012-r37-words-speaker/design.md
-  speech_test_stoi_floor:              # STOI floor for a speech span to pass quality
-  speech_test_si_sdr_floor:            # SI-SDR floor, same
+  secondary_exclusive_min_s:           # profile value (data/profile_values.yaml)
+  speech_test_stoi_floor:              # profile value (data/profile_values.yaml)
+  speech_test_si_sdr_floor:            # profile value (data/profile_values.yaml)
   hint_tags: [speech, read-speech]     # unread as of v2; hints route through routing.hint_branch_map alone
   enrollment_model:                    # speaker-embedding model AND resolved commit enrollment is computed with
     model_id: speechbrain/spkrec-ecapa-voxceleb
@@ -255,9 +255,9 @@ speech:
   separation_backend: MossFormer2_SS_16K  # which separator runs on overlapping speech
   separation_sound_class:              # the sound class that separator is asked for
   nontarget:                           # what marks a diarized speaker as not the target
-    level_db:                          # level difference from the target
-    tilt_db_per_octave:                # spectral tilt difference
-    d_to_r_db:                         # direct-to-reverberant ratio difference
+    level_db:                          # profile value (data/profile_values.yaml)
+    tilt_db_per_octave:                # profile value (data/profile_values.yaml)
+    d_to_r_db:                         # profile value (data/profile_values.yaml)
 
 # Operating points the three branches' expectation matching reads, shared by AIRWAY, SPEECH and
 # VOICE so no two can hold cuts that drift. Every numeric key here is null:
@@ -277,8 +277,8 @@ branch:
   event_min_s: 0.05                    # shortest extent the event walk reports
   voiced_strength_min: 0.45            # pitch strength at or above which a frame counts as voiced
   f0_spread_window_s: 0.5              # window the worst local F0 spread is taken over
-  sweep_smoothing_frames: 7            # median filter over voiced pitch frames before the sweep's monotone run is found
-  sweep_reversal_tolerance_semitones: 2.0  # how far the smoothed pitch may go back on itself inside one sweep
+  sweep_smoothing_frames:              # profile value (data/profile_values.yaml)
+  sweep_reversal_tolerance_semitones:      # profile value (data/profile_values.yaml)
   pause_min_s: 0.25                    # gap between words that is a pause rather than coarticulation
   run_gap_max_s: 0.5                   # largest gap two lexical words may straddle and stay one run
   echo_ngram_n: 3                      # n of the n-gram the prompt-echo overlap is measured over
@@ -297,7 +297,7 @@ branch:
   # override adding one is admitted. A template position scores this class's summed posterior mass.
   phoneme_place_classes:
     labial: [p, b]
-    alveolar: [t, d, r]
+    alveolar:                           # profile value (data/profile_values.yaml)
     velar: [k, g]
   # vowel class -> the phonemes that ARE that class. A total partition of the ten ARPAbet vowels:
   # height, with rhoticity carried as its own class rather than folded into a height. Diphthongs
@@ -318,19 +318,19 @@ verdict:
   unmeasured_points_flag: true         # a reporting node that could not read an operating point it wanted flags
   # REVIEW's reading annotates; these decide what the annotation means.
   llm_redaction_flags: true            # a reading proposing a redaction is a triage flag ground
-  llm_redaction_withholds: false       # UNFITTED. a reading of residue withholds a recording REDACT passed
-  llm_reset_redactions: true           # owner, 2026-09-27: a reading's release entries unmask exactly the words they name
-  condition_categories: [CONDITION]    # owner, 2026-10-03 (policy v7): a listed health condition is never masked and never withholds
-  cohort_conditions:   # dataset profile: names a cohort_conditions/<name>.yaml the profile supplies (B2AI: bridge2ai_voice_adult_2026-09-04).  data/cohort_conditions profile: which listed conditions the study recruits for
-  person_name_review_flags: true       # owner, 2026-10-03 (policy v7): a masked person's name flags for a human's review of name tags
-  trim_protected_categories: [PERSON, NAME, LOCATION, LOC]  # owner, 2026-09-27: a marked word written as a proper noun is never trimmed
-  llm_second_speaker_flags: true       # owner, 2026-09-27: a reading that heard more than one speaker flags the recording for review
-  llm_contradiction_flags: true        # owner, 2026-09-28: a flagged reading that names no words flags the recording for review
-  llm_instructions_spoken_flags: true  # owner, 2026-10-01: a reading quoting the task's instructions spoken in the recording flags for review
-  uncomputed_reading_flags: true       # owner, 2026-09-29: a conformance reading that should exist and does not flags for review
-  second_opinion_disagreement_flags: true  # owner, 2026-10-01: a confident second-opinion disagreement with the reviewer flags for review
-  second_opinion_confident_yes: 0.8    # UNFITTED: kept from the Nimble pilot (owner, 2026-10-02); see config-derivations.md, verdict
-  second_opinion_confident_no: 0.2     # UNFITTED: kept from the Nimble pilot (owner, 2026-10-02); see config-derivations.md, verdict
+  llm_redaction_withholds:             # profile value (data/profile_values.yaml)
+  llm_reset_redactions:                # profile value (data/profile_values.yaml)
+  condition_categories:                # profile value (data/profile_values.yaml)
+  cohort_conditions:   # profile value (data/profile_values.yaml)
+  person_name_review_flags:            # profile value (data/profile_values.yaml)
+  trim_protected_categories:                                # profile value (data/profile_values.yaml)
+  llm_second_speaker_flags:            # profile value (data/profile_values.yaml)
+  llm_contradiction_flags:             # profile value (data/profile_values.yaml)
+  llm_instructions_spoken_flags:       # profile value (data/profile_values.yaml)
+  uncomputed_reading_flags:            # profile value (data/profile_values.yaml)
+  second_opinion_disagreement_flags:       # profile value (data/profile_values.yaml)
+  second_opinion_confident_yes:        # profile value (data/profile_values.yaml)
+  second_opinion_confident_no:         # profile value (data/profile_values.yaml)
   # declared task family -> flag gates its own instruction makes inapplicable. Empty: owner, 2026-09-30,
   # any voice other than the participant's is flagged, whether or not the instructions expect it.
   flag_gate_exemptions: {}
@@ -340,8 +340,8 @@ verdict:
   # declared task family -> whether a non-conformance on it flags, overriding conformance_flags.
   # Data, not schema: a campaign names its own families. Empty ships no family excepted.
   conformance_flags_by_family: {}
-  min_contrast_db:                     # spectral-balance difference two effort levels must differ by to be a contrast
-  tilt_max_db_per_octave:              # spectral tilt below which a recording reads as occluded
+  min_contrast_db:                     # profile value (data/profile_values.yaml)
+  tilt_max_db_per_octave:              # profile value (data/profile_values.yaml)
   level_min_dbfs:                      # level below which a recording carries no production at all
   # Every gate, in three layers. A gate says what reading is good enough; an instrument setting,
   # which stays in `branch:`, says how the reading is taken. A bound resolves most-specific-first
@@ -374,46 +374,46 @@ verdict:
       GLIDE:                             # a pitch sweep, whose purpose is that pitch moves
         production_min_s: 0.5            # shortest carrier a production may be found in
         voiced_fraction_min: 0.5         # flag: fraction of voiced frames the carrier should reach
-        glide_extent_min_semitones: 6.0  # UNFITTED. pitch the glide must travel in its declared direction
+        glide_extent_min_semitones:      # profile value (data/profile_values.yaml)
       ORDERED_TOKENS:                    # a prescribed token sequence
         expected_tokens_matched_min: 1   # prescribed tokens the recording must realise
         content_omission_fraction_max: 0.0  # a sentence: any content word unread fails; function-word drops do not
-        dominant_speaker_share_min: 0.9  # exclusive share: the dominant voice over itself plus time another voice holds the extent alone
+        dominant_speaker_share_min:      # profile value (data/profile_values.yaml)
         repeat_overlap_min: 0.5          # overlap at which an alignment covers the sequence twice
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       FREE_RESPONSE:                     # a task prescribing no words
         response_min_s: 0.5              # shortest extent that counts as a response at all
-        dominant_speaker_share_min: 0.9  # exclusive share: the dominant voice over itself plus time another voice holds the extent alone
+        dominant_speaker_share_min:      # profile value (data/profile_values.yaml)
         echo_overlap_max: 0.5            # prompt n-gram overlap above which a response echoes its prompt
         verbatim_overlap_max: 0.5        # source content overlap above which a recall is verbatim
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       ITEM_LIST:                         # a list of items
         items_min: 1                     # items the recording must carry
-        dominant_speaker_share_min: 0.9  # exclusive share: the dominant voice over itself plus time another voice holds the extent alone
+        dominant_speaker_share_min:      # profile value (data/profile_values.yaml)
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       EVENT_SERIES:                      # a counted series of airway events
-        score_min: 0.2                   # classifier raw score at or above which a label is present
+        score_min:                       # profile value (data/profile_values.yaml)
         events_min: 1                    # events of the instruction's own kind the walk must find
-        instructed_count_min_fraction: 0.5  # UNFITTED: events found over the count the instruction spoke
+        instructed_count_min_fraction:      # profile value (data/profile_values.yaml)
         interval_max_s: 2.0              # largest inter-onset interval a series called quick may show
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       EVENT_ALTERNATION:                 # coughs alternating with breath
-        score_min: 0.2                   # classifier raw score at or above which a label is present
+        score_min:                       # profile value (data/profile_values.yaml)
         events_min: 1                    # events of the instruction's own kind the walk must find
-        instructed_count_min_fraction: 0.5  # UNFITTED: events found over the count the instruction spoke
+        instructed_count_min_fraction:      # profile value (data/profile_values.yaml)
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       SOUND_COVERAGE:                    # a breath held over a declared extent, decided on detected breath events
-        score_min: 0.2                   # classifier raw score at or above which a label is present
+        score_min:                       # profile value (data/profile_values.yaml)
         events_min: 1                    # breath events the walk must find; the HeAR coverage is context only
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       SYLLABLE_TRAIN:                    # one syllable repeated
         train_min_s: 1.0                 # shortest carrier that can hold a train
         rate_prominence_min: 2.0         # modulation peak over its band mean that makes a rate readable
-        dominant_speaker_share_min: 0.9  # exclusive share: the dominant voice over itself plus time another voice holds the extent alone
+        dominant_speaker_share_min:      # profile value (data/profile_values.yaml)
       SYLLABLE_SEQUENCE:                 # a syllable sequence repeated
         train_min_s: 1.0                 # shortest carrier that can hold a train
         rate_prominence_min: 2.0         # modulation peak over its band mean that makes a rate readable
-        dominant_speaker_share_min: 0.9  # exclusive share: the dominant voice over itself plus time another voice holds the extent alone
+        dominant_speaker_share_min:      # profile value (data/profile_values.yaml)
       PER_SENTENCE: {}                   # no row reaches this group; no gate is configured for it
       EFFORT: {}                         # no row reaches this group; no gate is configured for it
     # Per-family overrides, each one applied key by key over its group's entry. **Ships empty**:
@@ -426,7 +426,7 @@ verdict:
 # The label consolidation. TAXONOMY runs no models: it consolidates PREPROCESS's stored scores.
 taxonomy:
   speech_labels:                       # which classifier labels SPEECH reads as acoustic speech evidence
-  consolidation_floor: 0.2             # owner-directed: consolidation drops a label under this, every classifier
+  consolidation_floor:                 # profile value (data/profile_values.yaml)
   # The one classifier-ontology profile this run reads: AIRWAY's corroboration, the airway
   # closure below, and the consensus taxonomy's label identity all go through it.
   classifier_ontology_profile:        # path to a profile; null takes the packaged latest
@@ -436,7 +436,7 @@ taxonomy:
   # Naming a second root widens both at once.
   airway_ontology_roots: [Respiratory sounds]
   # Bracketed consensus tokens that ARE an airway event. [uh] and [um] are fillers, not airway.
-  airway_bracket_tokens: [breath, cough, throatclearing, sniff]
+  airway_bracket_tokens:                # profile value (data/profile_values.yaml)
   # The family taxonomy ruleset: which branches a recording's own content routes it to, and which
   # family set each branch is scored against. Each operating point and the firing spread it came
   # from are in `specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`, keyed by gate name.
@@ -457,44 +457,44 @@ taxonomy:
       SPEECH:
       VOICE:
     branch_gates:                       # branch -> gates, any one of which routes it, on any recording
-      AIRWAY: [airway.breath, airway.cough, airway.bracketed_event, airway.ppg_silent_fraction]
+      AIRWAY:                           # profile value (data/profile_values.yaml)
       SPEECH: [speech.lexical]
-      VOICE: [voice.sustained, voice.glide, voice.chant]
+      VOICE:                            # profile value (data/profile_values.yaml)
     branch_flags:                       # branch -> gates that ANNOTATE it; a flag never routes anything
       AIRWAY: []
       SPEECH: [speech.transcript_agreement]
       VOICE: []
     emptiness:                          # the bypass, consulted only when no branch gate fired
-      active_s_max: 0.0                 # seconds of activity BACKGROUND may read over the floor in a recording that carried nothing
+      active_s_max:                     # profile value (data/profile_values.yaml)
     gates:                              # gate -> the one number it reads, the comparison, and the cut
       speech.lexical:
         feature: [words, lexical]       # live consensus words that are not bracketed, any outcome
         op: at_least                    # fires at or above the threshold
-        threshold: 2                    # lexical words that route SPEECH; the artifact boundary, unswept in J
+        threshold:                      # profile value (data/profile_values.yaml)
       speech.transcript_agreement:
         feature: [words, agreement]     # live consensus words carrying the agreement outcome
         op: at_least
-        threshold: 3                    # agreed words that FLAG doubt about what was said; routes nothing
+        threshold:                      # profile value (data/profile_values.yaml)
       voice.sustained:
         feature: [span_longest, amplitude]   # longest live amplitude span, in seconds
         op: at_least
-        threshold: 3.0                  # seconds of held phonation that route VOICE
+        threshold:                      # profile value (data/profile_values.yaml)
       voice.glide:
         feature: [peak_set, plain, yamnet, singing]   # YAMNet singing-subtree union peak, plain stream
         op: at_least
-        threshold:                      # dataset profile: union score that routes VOICE, a sweep over the corpus (B2AI: 0.05)
+        threshold:                      # profile value (data/profile_values.yaml)
       voice.chant:
         feature: [peak_label, plain, yamnet, Chant]   # YAMNet Chant peak, plain stream
         op: at_least
-        threshold:                      # dataset profile: chant score that routes VOICE (B2AI: 0.02)
+        threshold:                      # profile value (data/profile_values.yaml)
       airway.breath:
         feature: [residual, energy_fraction]   # residual energy as a fraction of the plain stream
         op: at_least
-        threshold:                      # dataset profile: residual fraction that routes AIRWAY (B2AI: 0.10)
+        threshold:                      # profile value (data/profile_values.yaml)
       airway.cough:
         feature: [span_label_set_stat, yamnet.cough_labels.peak_over_floor_db_max]  # loudest cough-labelled span
         op: at_least
-        threshold:                      # dataset profile: dB over floor that routes AIRWAY; gain-dependent (B2AI: 50.0, unswept)
+        threshold:                      # profile value (data/profile_values.yaml)
       airway.bracketed_event:
         feature: [bracketed_set, airway]   # typed bracketed consensus tokens in taxonomy.airway_bracket_tokens
         op: at_least
@@ -502,15 +502,15 @@ taxonomy:
       airway.ppg_silent_fraction:
         feature: [ppg, silent_fraction]   # posteriorgram frames whose argmax phoneme is <silent>
         op: at_least
-        threshold:                      # dataset profile: silent frame fraction that routes AIRWAY (B2AI: 0.757)
+        threshold:                      # profile value (data/profile_values.yaml)
 
 # SQUIM and disruption tolerances. Every key in this section is currently read by nothing in
 # `src/senselab`: the gate they describe is unimplemented.
 quality:
-  stoi_floor:                          # STOI below which a span fails on quality
-  pesq_floor:                          # PESQ below which a span fails on quality
-  disruption_clipped_s_max:            # clipped seconds a span may carry and still pass
-  disruption_dropout_s_max:            # dropout seconds a span may carry and still pass
+  stoi_floor:                          # profile value (data/profile_values.yaml)
+  pesq_floor:                          # profile value (data/profile_values.yaml)
+  disruption_clipped_s_max:            # profile value (data/profile_values.yaml)
+  disruption_dropout_s_max:            # profile value (data/profile_values.yaml)
   clip_contradiction_margin: 0.005     # fraction above a clip's own level an unclipped sample must reach; PREPROCESS withdraws on it, QUALITY audits on it
   clip_edge_guard_samples: 3           # samples each side of a clip span excluded as that run's own decay; PREPROCESS applies it
 
@@ -525,13 +525,13 @@ disruptions:
 # The detector set a PII scan is required to have run.
 pii:
   required_detectors: [gliner, presidio, rules]   # the pii_detection module's own detector set
-  name_words_max: 1                    # owner, 2026-09-28: a name, place or organisation finding of two or more words keeps only its proper nouns
+  name_words_max:                      # profile value (data/profile_values.yaml)
 
 # What a released transcript replaces, and by how much padding.
 redaction:
   padding_ms: 250                      # outward pad on a redacted extent; a convention, not a fit
-  name_approvals: {}                   # owner, 2026-10-03 (policy v7): recording file stem -> person names a human approved for release
-  fill: silence                        # what replaces redacted audio: silence, noise or bleep
+  name_approvals:                      # profile value (data/profile_values.yaml)
+  fill:                                # profile value (data/profile_values.yaml)
   bleep_hz: 1000.0                     # tone frequency when fill is bleep
   llm_check:                           # an instruction-tuned LLM reads the redacted transcript back
     enabled: false                     # off; a run with a GPU turns it on

@@ -50,6 +50,11 @@ PACKAGED_DATA = Path(__file__).parent / "data"
 MANIFEST = "profile.yaml"
 """The file that makes a directory a dataset profile."""
 
+PACKAGED_PROFILES = Path(__file__).parent / "profiles"
+"""Profiles senselab ships, opt-in and by name: a profile builds on one with ``extends: senselab:<name>``."""
+
+SENSELAB_PROFILE = "senselab:"
+
 DATASET_PATHS = frozenset(
     {
         "airway_event_tokens.yaml",
@@ -126,7 +131,8 @@ class DatasetProfile:
         files: Data path to the file or directory the profile supplies for it.
         config: The profile's config override, or None.
         provenance: Whatever the profile says about where its values came from.
-        digest: Hash of the manifest and of every byte of every file it supplies.
+        digest: Hash of the manifest, of every byte of every file it supplies, and of the profile it extends.
+        base: The profile it builds on (``extends``), or None.
     """
 
     name: str
@@ -136,9 +142,10 @@ class DatasetProfile:
     config: Path | None = None
     provenance: Mapping[str, Any] = field(default_factory=dict)
     digest: str = ""
+    base: "DatasetProfile | None" = None
 
-    def resolve(self, relative: str) -> Path | None:
-        """Where the profile supplies a data path, or None when it does not supply it.
+    def supplies(self, relative: str) -> Path | None:
+        """Where this profile itself, not the one it extends, supplies a data path, or None.
 
         Args:
             relative: A path under ``data/``, e.g. ``task_lexicon/categories/animals.yaml``.
@@ -150,6 +157,24 @@ class DatasetProfile:
         if not parts or parts[0] not in self.files:
             return None
         return self.files[parts[0]].joinpath(*parts[1:])
+
+    def resolve(self, relative: str) -> Path | None:
+        """Where the profile, or the nearest profile it extends, supplies a data path; None when none does.
+
+        Args:
+            relative: A path under ``data/``.
+
+        Returns:
+            The supplied path, or None.
+        """
+        own = self.supplies(relative)
+        if own is not None:
+            return own
+        return self.base.resolve(relative) if self.base is not None else None
+
+    def chain(self) -> tuple["DatasetProfile", ...]:
+        """This profile and those it extends, the outermost base first: the order their values are merged in."""
+        return (*(self.base.chain() if self.base is not None else ()), self)
 
 
 def _relative(name: object, where: str) -> str:
@@ -169,11 +194,37 @@ def _file_digests(path: Path) -> list[tuple[str, str]]:
     ]
 
 
-def load_profile(directory: str | Path) -> DatasetProfile:
-    """Read and check a dataset profile.
+def profile_directory(reference: str, *, relative_to: Path | None = None) -> Path:
+    """The directory a profile reference names: ``senselab:<name>`` for a profile senselab ships, else a path.
 
     Args:
-        directory: The profile directory, holding :data:`MANIFEST`.
+        reference: ``senselab:<name>``, or a directory path.
+        relative_to: The directory a relative path is read from (the extending profile's).
+
+    Returns:
+        The directory.
+
+    Raises:
+        ValueError: If ``senselab:<name>`` names no profile senselab ships.
+    """
+    if reference.startswith(SENSELAB_PROFILE):
+        name = reference[len(SENSELAB_PROFILE) :]
+        target = PACKAGED_PROFILES / name
+        shipped = sorted(path.name for path in PACKAGED_PROFILES.iterdir() if (path / MANIFEST).is_file())
+        if not name or "/" in name or not (target / MANIFEST).is_file():
+            raise ValueError(f"senselab ships no profile {name!r}; it ships {shipped}")
+        return target
+    path = Path(reference)
+    return path if path.is_absolute() or relative_to is None else relative_to / path
+
+
+def load_profile(directory: str | Path, *, _seen: tuple[Path, ...] = ()) -> DatasetProfile:
+    """Read and check a dataset profile, and the profile it extends.
+
+    Args:
+        directory: The profile directory, holding :data:`MANIFEST`, or ``senselab:<name>`` for a profile senselab
+            ships.
+        _seen: The profiles already being loaded in this chain, to refuse a cycle.
 
     Returns:
         The profile, with its digest.
@@ -181,10 +232,12 @@ def load_profile(directory: str | Path) -> DatasetProfile:
     Raises:
         ValueError: If the manifest lacks a name or version, lists a path outside :data:`SUPPLIABLE_PATHS` (an
             engine file, a file inside a directory instead of the directory, or a typo), names a path that
-            leaves its directory, supplies a file where a directory belongs or the reverse, or lists something
-            that does not exist.
+            leaves its directory, supplies a file where a directory belongs or the reverse, lists something
+            that does not exist, or extends a profile that extends it.
     """
-    root = Path(directory).resolve()
+    root = (profile_directory(directory) if isinstance(directory, str) else Path(directory)).resolve()
+    if root in _seen:
+        raise ValueError(f"profile {root} extends itself through {[str(path) for path in _seen]}")
     manifest_path = root / MANIFEST
     if not manifest_path.is_file():
         raise ValueError(f"{root} is not a dataset profile: it has no {MANIFEST}")
@@ -214,7 +267,14 @@ def load_profile(directory: str | Path) -> DatasetProfile:
         config = root / _relative(manifest["config"], f"{manifest_path} config")
         if not config.is_file():
             raise ValueError(f"{manifest_path}: config names {config}, which does not exist")
+    base = None
+    if manifest.get("extends") not in (None, ""):
+        if not isinstance(manifest["extends"], str):
+            raise ValueError(f"{manifest_path}: extends names one profile, senselab:<name> or a path")
+        base = load_profile(profile_directory(manifest["extends"], relative_to=root), _seen=(*_seen, root))
     hasher = hashlib.sha256(manifest_path.read_bytes())
+    if base is not None:
+        hasher.update(f"\0extends\0{base.name}\0{base.version}\0{base.digest}".encode())
     for relative in sorted(files):
         for member, digest in _file_digests(files[relative]):
             hasher.update(f"\0{relative}\0{member}\0{digest}".encode())
@@ -228,6 +288,7 @@ def load_profile(directory: str | Path) -> DatasetProfile:
         config=config,
         provenance=dict(manifest.get("provenance") or {}),
         digest=hasher.hexdigest()[:16],
+        base=base,
     )
 
 
@@ -373,10 +434,11 @@ def data_values(relative: str) -> Any:  # noqa: ANN401 -- a YAML document
         relative: A path under ``data/``, e.g. ``breath_pattern.yaml`` or ``speaker_vector_profile/2026-09-22.yaml``.
 
     Returns:
-        For a value file (:data:`MERGED_PATHS`), the packaged values with the profile's copy and then the run's
-        ``data`` section merged over them (:func:`merge_values`); for a replaced file, the profile's copy whole
-        where it supplies one, else the packaged file, and the run's section whole where it names one; for a
-        dataset path, the profile's copy with the run's section merged over it; for any other file, the packaged
+        For a value file (:data:`MERGED_PATHS`), the packaged values with each profile's copy merged over them,
+        the profile it extends first, then the run's ``data`` section (:func:`merge_values`); for a replaced file,
+        the nearest profile's copy whole where one supplies it, else the packaged file, and the run's section whole
+        where it names one; for a dataset path, the nearest profile's copy with the run's section merged over it;
+        for any other file, the packaged
         file.
 
     Raises:
@@ -388,10 +450,11 @@ def data_values(relative: str) -> Any:  # noqa: ANN401 -- a YAML document
     run = _RUN_DATA.get(relative)
     if top in MERGED_PATHS:
         values = _load(PACKAGED_DATA / relative)
-        supplied = _ACTIVE.resolve(relative) if _ACTIVE is not None else None
         fixed = FIXED_KEYS.get(relative, frozenset())
-        if supplied is not None:
-            values = merge_values(values, _load(supplied), where=f"{relative}:", fixed=fixed)
+        for layer in _ACTIVE.chain() if _ACTIVE is not None else ():
+            supplied = layer.supplies(relative)
+            if supplied is not None:
+                values = merge_values(values, _load(supplied), where=f"{relative}:", fixed=fixed)
         return merge_values(values, run, where=f"{relative}:", fixed=fixed) if run is not None else values
     if top in REPLACED_PATHS:
         return run if run is not None else _load(data_path(relative))
@@ -437,25 +500,35 @@ REQUIRED_DATASET_PATHS = (
 )
 """Dataset paths every run reads; a profile must supply them."""
 
-REQUIRED_CONFIG_VALUES: tuple[tuple[str, ...], ...] = tuple(
-    ("taxonomy", "ruleset", "gates", gate, "threshold")
-    for gate in ("voice.glide", "voice.chant", "airway.breath", "airway.cough", "airway.ppg_silent_fraction")
-)
-"""Config values senselab ships unset because only a corpus can give them: the classifier-score routing gates."""
+PROFILE_VALUES_FILE = "profile_values.yaml"
+"""The packaged list of every value senselab leaves to a dataset profile, its kind and whether a run needs it."""
 
-REQUIRED_DATA_VALUES: Mapping[str, tuple[tuple[str, ...], ...]] = {
-    "breath_pattern.yaml": (("veto", "active_fraction_min"),),
-    "cohort_stage.yaml": (
-        ("participant", "consistency_cosine_min"),
-        ("condition", "hot_rms_dbfs_min"),
-        ("condition", "clipped_fraction_min"),
-        ("condition", "shift_level_db_min"),
-        ("condition", "shift_snr_db_min"),
-        ("shared_nonmatch", "fraction_min"),
-    ),
-    "task_extent.yaml": (("count_in", "gap_max_s"), ("atypical", "cough_event_s_max"), ("atypical", "ddk_rate_hz")),
-}
-"""Values in defaulted files that senselab ships unset (corpus quantiles and fences); a profile's copy sets them."""
+CONFIG_FILE = "config/default.yaml"
+"""How :data:`PROFILE_VALUES_FILE` names the configuration's values."""
+
+
+def profile_values() -> dict[str, list[dict[str, Any]]]:
+    """Every value senselab leaves to a profile: ``{data file: [{path, kind, required}, ...]}``.
+
+    A ``path`` is the list of keys from the file's top (a key may itself hold a dot, as the routing gates'
+    ``voice.glide``).
+
+    Returns:
+        The list, as :data:`PROFILE_VALUES_FILE` holds it.
+    """
+    return dict((yaml.safe_load((PACKAGED_DATA / PROFILE_VALUES_FILE).read_text()) or {}).get("values") or {})
+
+
+def required_profile_values() -> dict[str, tuple[tuple[str, ...], ...]]:
+    """The profile values a run needs, by data file, each as its key path.
+
+    Returns:
+        ``{data file: (key path, ...)}``; the configuration's under :data:`CONFIG_FILE`.
+    """
+    return {
+        relative: tuple(tuple(str(part) for part in entry["path"]) for entry in entries if entry.get("required"))
+        for relative, entries in profile_values().items()
+    }
 
 
 def _lookup(node: Any, path: tuple[str, ...]) -> Any:  # noqa: ANN401 -- a YAML value
@@ -482,10 +555,10 @@ def missing_dataset_values(config_values: Mapping[str, Any]) -> list[str]:
                 missing.append(f"{relative} (the profile lists it, but the file is absent)")
         except DatasetDataMissing:
             missing.append(relative)
-    missing += [f"config {'.'.join(path)}" for path in REQUIRED_CONFIG_VALUES if _lookup(config_values, path) is None]
-    for relative, paths in REQUIRED_DATA_VALUES.items():
-        document = data_values(relative)
-        missing += [f"{relative} {'.'.join(path)}" for path in paths if _lookup(document, path) is None]
+    for relative, paths in required_profile_values().items():
+        document = config_values if relative == CONFIG_FILE else data_values(relative)
+        where = "config" if relative == CONFIG_FILE else relative
+        missing += [f"{where} {'.'.join(path)}" for path in paths if _lookup(document, path) is None]
     return missing
 
 

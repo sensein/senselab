@@ -11,4 +11,4 @@ schema_version: '1'
 # 0.213 at 1.0 s; 0.176 against 0.196 at 0.75 s, where they still overlap).
 # What was swept, the AUC and d-prime curves, and why the tail of the distribution rather than its
 # mean decides this: specs/20260922-speaker-vectors/design.md.
-min_extent_s: 1.0
+min_extent_s:                           # profile value (data/profile_values.yaml)

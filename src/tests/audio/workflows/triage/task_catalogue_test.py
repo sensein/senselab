@@ -15,8 +15,6 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage import task_catalogue
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import (
-    PACKAGED_DATA,
-    REQUIRED_DATA_VALUES,
     DatasetDataMissing,
     deactivate_profile,
     missing_dataset_values,
@@ -429,23 +427,33 @@ tasks:
 """
 """A made-up lab corpus: two tasks under its own names, none of them B2AI's."""
 
-LAB_CONFIG = """
-taxonomy:
-  ruleset:
-    gates:
-      voice.glide: {threshold: 0.05}
-      voice.chant: {threshold: 0.02}
-      airway.breath: {threshold: 0.10}
-      airway.cough: {threshold: 50.0}
-      airway.ppg_silent_fraction: {threshold: 0.757}
-"""
+LAB_OWN_FILES = (
+    "cohort_stage.yaml",
+    "decision_reasons.yaml",
+    "discard_contested.yaml",
+    "discard_replaced_task.yaml",
+    "quality_join.yaml",
+    "session_background.yaml",
+    "task_extent.yaml",
+    "task_minimum_duration.yaml",
+    "task_speech.yaml",
+    "time_release.yaml",
+)
+"""The data files holding a dataset's own values: policy, corpus statistics, per-task values (plan step 5c)."""
+
+
+def _drop(document: dict, *path: str) -> None:
+    *parents, last = path
+    for part in parents:
+        document = document.get(part) or {}
+    document.pop(last, None)
 
 
 def _lab_profile(root: Path) -> Path:
-    """Write the lab corpus's profile: its task list, and the other files every run needs, naming none of B2AI's tasks.
+    """Write the lab corpus's profile: it extends senselab's reference profile and supplies only its own values.
 
-    The task-independent fitted values (the time words, the contested-discard fractions, the corpus quantiles a
-    defaulted file leaves unset) are taken from B2AI's profile; nothing in them names a task.
+    Its task list is its own. Its policy and corpus statistics are B2AI's, copied for the test (a real dataset sets
+    its policy and fits its statistics, plan step 10); every entry that names a B2AI task is left out.
 
     Args:
         root: Where the profile directory goes.
@@ -455,24 +463,26 @@ def _lab_profile(root: Path) -> Path:
     """
     root.mkdir()
     (root / "tasks.yaml").write_text(LAB_TASKS)
-    (root / "config.yaml").write_text(LAB_CONFIG)
     (root / "airway_event_tokens.yaml").write_text("version: 3\ncough: [cough]\n")
-    for name in ("discard_contested.yaml", "time_release.yaml"):
-        shutil.copy(B2AI_PROFILE / name, root / name)
-    for name, paths in REQUIRED_DATA_VALUES.items():
-        document = yaml.safe_load((PACKAGED_DATA / name).read_text()) or {}
-        fitted = yaml.safe_load((B2AI_PROFILE / name).read_text())
-        for path in paths:
-            node, value = document, fitted
-            for part in path:
-                value = value[part]
-            for part in path[:-1]:
-                node = node.setdefault(part, {})
-            node[path[-1]] = value
+    for name in LAB_OWN_FILES:
+        document = yaml.safe_load((B2AI_PROFILE / name).read_text()) or {}
+        _drop(document, "short_response", "family_median_s")
+        _drop(document, "families")
+        _drop(document, "non_task")
         (root / name).write_text(yaml.safe_dump(document))
-    files = ["tasks.yaml", "airway_event_tokens.yaml", *REQUIRED_DATA_VALUES]
-    files += ["discard_contested.yaml", "time_release.yaml"]
-    manifest = {"name": "lab-corpus", "version": "1", "config": "config.yaml", "files": {f: f for f in files}}
+    config = yaml.safe_load((B2AI_PROFILE / "config.yaml").read_text()) or {}
+    _drop(config, "verdict", "gates")
+    _drop(config, "verdict", "cohort_conditions")
+    config.setdefault("verdict", {})["cohort_conditions"] = None
+    config["branch"]["phoneme_place_classes"]["alveolar"] = ["t", "d"]
+    (root / "config.yaml").write_text(yaml.safe_dump(config))
+    manifest = {
+        "name": "lab-corpus",
+        "version": "1",
+        "extends": "senselab:adult_clinical_speech",
+        "config": "config.yaml",
+        "files": {f: f for f in ("tasks.yaml", "airway_event_tokens.yaml", *LAB_OWN_FILES)},
+    }
     (root / "profile.yaml").write_text(yaml.safe_dump(manifest))
     return root
 
@@ -502,7 +512,7 @@ class TestADatasetThatIsNotB2AI:
     """
 
     def test_its_profile_is_all_a_run_needs(self, lab_corpus: TriageConfig) -> None:
-        """No B2AI task is named anywhere, and the run's start check finds nothing missing."""
+        """It extends senselab's reference profile, names no B2AI task, and the run's start check finds nothing."""
         assert missing_dataset_values(lab_corpus.values) == []
         assert set(task_list()) == {"hum-a-note", "read-the-card"}
 

@@ -7,7 +7,6 @@
 # "Phrases instead of items", "The reviewer reads the phrases").
 version: 6
 words_min: 1           # owner, 2026-10-10 (k = 1): this many such words in a non-lexical family is speech_in_task
-utterance_gap_s: 0.3   # owner, 2026-10-10: a pause at least this long between two consensus words ends an utterance
 phrase_words_min: 3    # owner, 2026-10-10: an utterance of at least this many lexical words, holding a closed-class word, is a phrase
 
 # Lexical tasks read as voice tasks name their words in the task list (tasks.yaml, voice_reading_text).

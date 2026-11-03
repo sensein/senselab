@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml  # type: ignore[import-untyped]
@@ -21,6 +22,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     deactivate_profile,
     load_profile,
     missing_dataset_values,
+    profile_values,
     require_dataset_values,
 )
 from tests.conftest import B2AI_TRIAGE_PROFILE
@@ -248,3 +250,82 @@ class TestEveryValueIsOverridable:
         override.write_text("resample:\n  target_hz: 22050\n")
         with pytest.raises(ValueError, match="fixed"):
             load_triage_config(override)
+
+
+class TestSenselabShipsNoFittedValue:
+    """Plan step 5c: every value fitted on a dataset or chosen by its owner is a profile's, and senselab ships none."""
+
+    @staticmethod
+    def _value(document: Any, path: list[str]) -> Any:  # noqa: ANN401 -- a YAML value
+        for part in path:
+            if not isinstance(document, dict) or part not in document:
+                return None
+            document = document[part]
+        return document
+
+    def test_every_profile_value_is_empty_in_senselab(self) -> None:
+        """Senselab's packaged files and config leave each listed value empty, so no run inherits one unknowingly."""
+        for relative, entries in profile_values().items():
+            document = yaml.safe_load((PACKAGED_DATA / relative).read_text()) or {}
+            shipped = [entry["path"] for entry in entries if self._value(document, entry["path"]) is not None]
+            assert shipped == [], relative
+
+    def test_the_reference_and_b2ai_profiles_supply_every_required_value(self) -> None:
+        """With B2AI's profile (which extends the reference profile) active, the start check finds nothing missing."""
+        assert missing_dataset_values(load_triage_config().values) == []
+
+    def test_the_reference_profile_alone_leaves_only_a_datasets_own_values(self, without_triage_profile: None) -> None:
+        """Extending the reference profile, a dataset supplies its task list, policy, statistics and per-task values."""
+        config = load_triage_config(profile="senselab:adult_clinical_speech")
+        missing = missing_dataset_values(config.values)
+        kinds = {
+            (relative, tuple(entry["path"])): entry["kind"]
+            for relative, entries in profile_values().items()
+            for entry in entries
+        }
+        values = [item for item in missing if " " in item]
+        assert {item.split()[0] for item in missing if " " not in item} == {
+            "airway_event_tokens.yaml",
+            "discard_contested.yaml",
+            "tasks.yaml",
+            "time_release.yaml",
+        }
+        for item in values:
+            where, dotted = item.split(" ", 1)
+            relative = "config/default.yaml" if where == "config" else where
+            kind = next(k for (r, path), k in kinds.items() if r == relative and ".".join(path) == dotted)
+            assert kind in {"a", "b", "d"}, item
+        deactivate_profile()
+
+    def test_a_profile_may_extend_a_shipped_one_and_override_it(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """The extending profile's value wins over the reference's, and the digest covers the chain."""
+        root = _profile(
+            tmp_path / "p",
+            {
+                "name": "d",
+                "version": "1",
+                "extends": "senselab:adult_clinical_speech",
+                "files": {"cough_pattern.yaml": "c.yaml"},
+            },
+            {"c.yaml": "measure:\n  rise_db: 9.0\n"},
+        )
+        profile = load_profile(root)
+        assert profile.base is not None and profile.base.name == "adult-clinical-speech"
+        activate_profile(profile)
+        values = data_values("cough_pattern.yaml")["measure"]
+        assert values["rise_db"] == 9.0
+        assert values["peak_db"] is not None, "inherited from the reference profile"
+
+    def test_a_profile_extending_itself_is_refused(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """A cycle in `extends` names the chain."""
+        root = _profile(tmp_path / "loop", {"name": "loop", "version": "1", "extends": "."})
+        with pytest.raises(ValueError, match="extends itself"):
+            load_profile(root)
+
+    def test_an_unknown_shipped_profile_is_refused(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """`senselab:<name>` must name a profile senselab ships."""
+        root = _profile(tmp_path / "p", {"name": "d", "version": "1", "extends": "senselab:children"})
+        with pytest.raises(ValueError, match="ships no profile"):
+            load_profile(root)

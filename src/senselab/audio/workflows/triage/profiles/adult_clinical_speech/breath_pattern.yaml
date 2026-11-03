@@ -34,31 +34,18 @@
 #     only once events are found.
 version: 1
 measure:
-  breath_band_hz: [150.0, 2500.0]
   flatness_band_hz: [150.0, 4000.0]
-  smooth_s: 0.05
-  floor_percentile: 10.0
   rise_db: 8.0
   flatness_min: 0.08
-  voicing_strength_min: 0.45
   merge_gap_s: 0.25
-  event_s: [0.3, 4.0]
   event_trim_db: 10.0         # an event's span is the frames within this of its own peak
-  voiced_fraction_max: 0.5
-  period_s: [2.0, 8.0]
   autocorr_min: 0.25
-  interval_s: [0.4, 8.0]
   interval_share_min: 0.5
 # The breathing-over-syllabic modulation ratio and the active span of the same spectrogram's subband
 # envelopes; the active span feeds the little-activity veto. Derivation in
 # specs/20261005-breathing-pattern/design.md ("Modulation cycles").
 modulation:
-  band_edges_hz: [150.0, 300.0, 500.0, 800.0, 1300.0, 2000.0, 3000.0, 4000.0]
-  fs_mod: 20.0                 # envelope rate, Hz
-  breath_band_hz: [0.1, 1.2]   # breathing-rate modulation
-  syllabic_band_hz: [2.0, 8.0] # syllabic-rate modulation (speech)
   reference_band_hz: [0.05, 8.0]
-  floor_percentile: 10.0
   active_rise_db: 8.0
   min_duration_s: 4.0          # shortest recording read
 # Vetoes on the measure: a breath the measure finds stands unless the task extent holds speech or too
@@ -67,13 +54,7 @@ modulation:
 # extent"). Noise and silence no longer veto; the classifier scores are recorded for context only.
 veto:
   speech_words_min: 5          # speech words inside the task extent at or above: speech
-  active_fraction_min: 0.36    # active span over the task extent (the file where the extent is under min_duration_s) below: too little
-  noise_labels: [Vehicle, Car, Engine, Mechanical fan, White noise]   # recorded as context
-# The breath train (measure_breath_train): bursts of coherent broadband rise over denoised subband
-# envelopes, grouped into the run that is the task; its hull is the breath-task extent and its bursts
-# are the counted phases (breaths = phases / 2, rounded half up). Fallbacks: the measure's events,
-# padded; then AIRWAY's own hull. Fitted on the owner's 56 annotated figures (2026-10-06); derivation,
-# with the owner's words, in specs/20261005-breathing-pattern/design.md ("The breath train").
+  active_fraction_min: 0.36    # dataset profile (B2AI: 0.36, fitted on 56 listened recordings): active span over the task extent (the file where the extent is under min_duration_s) below: too little
 train:
   band_edges_hz: [150.0, 300.0, 500.0, 800.0, 1300.0, 2000.0, 3000.0, 4000.0, 5500.0, 7500.0]
   fs_mod: 20.0                 # envelope rate, Hz
@@ -120,4 +101,3 @@ review:
   cycle_cv_min: 0.45
   irregular_rise_db_max: 12.5
   weak_rise_db_max: 8.0
-  veto_reviews: [little_activity]

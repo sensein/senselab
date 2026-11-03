@@ -1,0 +1,9 @@
+# Speech outside the task (task_speech.py): the lexical consensus words, over the whole file, that are not
+# the task's own content. A non-lexical (airway, voice) family's own content is its declared task text and
+# the recognisers' misreadings of its events (task_content.yaml v3). An item-set family's
+# (a task whose entry lists categories, tasks.yaml) speech is split into utterances at pauses, and each utterance
+# is an item or a phrase; the share of phrases is evidence only, because the reviewer decides what is a
+# phrase. Derivation: specs/20261007-task-events-in-background/design.md ("Speech outside the task",
+# "Phrases instead of items", "The reviewer reads the phrases").
+version: 6
+utterance_gap_s: 0.3   # owner, 2026-10-10: a pause at least this long between two consensus words ends an utterance

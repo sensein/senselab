@@ -198,3 +198,16 @@ def _loaded_b2ai_profile() -> Any:  # noqa: ANN401 -- a DatasetProfile, imported
     from senselab.audio.workflows.triage.dataset_profile import load_profile
 
     return load_profile(B2AI_TRIAGE_PROFILE)
+
+
+def activate_b2ai_profile_for_collection() -> None:
+    """Make B2AI's profile active while test modules are imported, for those that read triage values at import.
+
+    senselab ships no dataset values (plan step 5c), so a module-level ``task_events_parameters()`` or
+    ``load_triage_config()`` reads B2AI's through its profile. Each test then sets its own profile through
+    :func:`b2ai_triage_profile`.
+    """
+    from senselab.audio.workflows.triage import dataset_profile
+
+    dataset_profile.deactivate_profile()
+    dataset_profile.activate_profile(_loaded_b2ai_profile())

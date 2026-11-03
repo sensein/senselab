@@ -1,0 +1,135 @@
+# The triage workflow configuration. One file, versioned.
+#
+# No number appears in the code. A value here is either declared -- with its derivation written
+# down -- or `null`, meaning nobody has measured it and reading it raises. There is no third state:
+# a default chosen to make a signature tidy is an unmeasured decision with a public interface.
+#
+# Each section and key below carries a short description of what it governs. The measurements, the
+# failures that drove each choice and the rejected alternatives live in
+# `specs/20260817-triage-workflow-dag/config-derivations.md`, keyed by these same section names.
+# They used to sit here in a `derivation:` key, which was a config *value* rather than a comment:
+# the loader hashes the merged mapping, so 50 kB of English was inside `config_hash` and correcting
+# a word of it made two behaviourally identical runs report different identities. `config_hash` now
+# names the parameters. These `#` comments are not hashed, so they can be corrected freely.
+spans:
+  min_separation_ms: 30                # merge proposals closer than this; must track transition_window_ms
+  continuity_cut_percentile: 5.0       # lowest N% of continuity-trace samples BY RANK are the change points
+yamnet:
+  silence_threshold: 0.5               # Silence score at or above this marks a window silent
+  coverage_threshold: 0.5              # fraction of the file that must read silent to call it empty
+windows:
+  yamnet:
+    default_threshold: 0.2             # owner-directed: score a label needs to join a window's set
+    label_top_k: 4                     # owner-directed: how many labels of a window are eligible at all
+  hear:
+    default_threshold: 0.2             # as yamnet; the same pair governs both
+    label_top_k: 4                     # as above
+words:
+  # Cough-like renderings a recognizer emits as ordinary words; PREPROCESS brackets each one. One
+  # flat list, and only the cough set is measured; see the derivation in
+  # `specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`.
+  onomatopoeic_tokens: [cough, coughs, coughing, 咳, 呵, ahem, hack, khh, kof, cof]
+
+# The consensus word stream aligned against what the recording declared it expected
+# (`hints.expected_speech`). One key: where a declared prompt is divided into structure units.
+# The alignment itself needs no cut -- realised, substituted and absent are the aligner's own
+# outcomes -- and every operating point the consumers want is a branch decision over this output.
+stimulus:
+  near_match:                          # how far a transcript token may be from a stimulus token and still be it
+    exact_below: 5                     # a normalised token shorter than this must match the stimulus exactly
+    two_edits_from: 8                  # this long or longer may differ by two edits; between the two, by one
+  residue:                             # which transcript words reach the PII pathway; see specs/20260925-lexical-only-pii-pathway/
+    variant_similarity_min: 0.66       # least 1 - edits/longer length at which a word is a reading of a stimulus word
+    insertion_window: 3                # stimulus words either side an inserted word may repeat, restart or split
+    train_repetitions_min: 3           # recurrences that make a token a syllable train in a syllable task
+
+# The declared task ALWAYS adds a route to its own branch. That route needs no key here: the task is
+# the one the hint declares, recorded by ADMIT, and its task list entry names the branch
+# (`taxonomy.ruleset.reference_family_set` below names each branch's task kind). This block is the OPTIONAL second,
+# caller-supplied declaration source, and it is additive in the same direction: it adds routes and
+# removes none. Null, because populating it would invent a tag vocabulary nobody fitted. The
+# derivation is in `specs/20260817-triage-workflow-dag/config-derivations.md`.
+speech:
+  secondary_exclusive_min_s: 1.0       # exclusive second-voice time in a task extent under which it holds no turn; specs/20261012-r37-words-speaker/design.md
+branch:
+  # Instrument settings only: each says how a reading is taken, never whether one is good enough.
+  # Every gate — what reading is good enough — is in `verdict.gates`, keyed by family, group or
+  # nothing, resolved in that order. Every
+  # value here is a conventional starting point reasoned from the instrument's physics or from the
+  # task instruction, NOT fitted against the corpus; the reasoning for each is in
+  # specs/20260817-triage-workflow-dag/config-derivations.md.
+  sweep_smoothing_frames: 7            # median filter over voiced pitch frames before the sweep's monotone run is found
+  sweep_reversal_tolerance_semitones: 2.0  # how far the smoothed pitch may go back on itself inside one sweep
+
+# What VERDICT does with what the reporting nodes report. A branch reports and VERDICT decides, so
+# every threshold that turns a reading into a judgement about the recording is here and none is in
+# `branch:`. Derivations in specs/20260817-triage-workflow-dag/config-derivations.md.
+verdict:
+  second_opinion_confident_yes: 0.8    # UNFITTED: kept from the Nimble pilot (owner, 2026-10-02); see config-derivations.md, verdict
+  second_opinion_confident_no: 0.2     # UNFITTED: kept from the Nimble pilot (owner, 2026-10-02); see config-derivations.md, verdict
+  # declared task family -> flag gates its own instruction makes inapplicable. Empty: owner, 2026-09-30,
+  # any voice other than the participant's is flagged, whether or not the instructions expect it.
+  gates:
+    # Genuinely universal only. Nothing is: `gap_off_task_min_s` reaches six of the twelve groups
+    # and no other gate reaches more than three, so shipping any of them here would be a default
+    # with nine exclusions rather than a shared rule.
+    # Gate bounds per task group, keyed by the `Pattern` each expectation row declares.
+    by_group:
+      GLIDE:                             # a pitch sweep, whose purpose is that pitch moves
+        glide_extent_min_semitones: 6.0  # UNFITTED. pitch the glide must travel in its declared direction
+      ORDERED_TOKENS:                    # a prescribed token sequence
+        dominant_speaker_share_min: 0.9  # exclusive share: the dominant voice over itself plus time another voice holds the extent alone
+      FREE_RESPONSE:                     # a task prescribing no words
+        dominant_speaker_share_min: 0.9  # exclusive share: the dominant voice over itself plus time another voice holds the extent alone
+      ITEM_LIST:                         # a list of items
+        dominant_speaker_share_min: 0.9  # exclusive share: the dominant voice over itself plus time another voice holds the extent alone
+      EVENT_SERIES:                      # a counted series of airway events
+        score_min: 0.2                   # classifier raw score at or above which a label is present
+        instructed_count_min_fraction: 0.5  # UNFITTED: events found over the count the instruction spoke
+      EVENT_ALTERNATION:                 # coughs alternating with breath
+        score_min: 0.2                   # classifier raw score at or above which a label is present
+        instructed_count_min_fraction: 0.5  # UNFITTED: events found over the count the instruction spoke
+      SOUND_COVERAGE:                    # a breath held over a declared extent, decided on detected breath events
+        score_min: 0.2                   # classifier raw score at or above which a label is present
+      SYLLABLE_TRAIN:                    # one syllable repeated
+        dominant_speaker_share_min: 0.9  # exclusive share: the dominant voice over itself plus time another voice holds the extent alone
+      SYLLABLE_SEQUENCE:                 # a syllable sequence repeated
+        dominant_speaker_share_min: 0.9  # exclusive share: the dominant voice over itself plus time another voice holds the extent alone
+taxonomy:
+  consolidation_floor: 0.2             # owner-directed: consolidation drops a label under this, every classifier
+  # The one classifier-ontology profile this run reads: AIRWAY's corroboration, the airway
+  # closure below, and the consensus taxonomy's label identity all go through it.
+  # Bracketed consensus tokens that ARE an airway event. [uh] and [um] are fillers, not airway.
+  airway_bracket_tokens: [breath, cough, throatclearing, sniff]
+  # The family taxonomy ruleset: which branches a recording's own content routes it to, and which
+  # family set each branch is scored against. Each operating point and the firing spread it came
+  # from are in `specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`, keyed by gate name.
+  ruleset:
+    # branch -> the family set it is SCORED against, AND the family -> branch mapping the declared
+    # task routes through: a recording whose family is a positive here routes to that branch whatever
+    # its gates read. It still skips no gate and rewrites no route state. SPEECH's set is wide on
+    # purpose: it carries the diadochokinesis families, whose syllable trains carry no lexical word
+    # and would never clear `speech.lexical`, and SPEECH is where the PII scan runs.
+    branch_gates:                       # branch -> gates, any one of which routes it, on any recording
+      AIRWAY: [airway.breath, airway.cough, airway.bracketed_event, airway.ppg_silent_fraction]
+      VOICE: [voice.sustained, voice.glide, voice.chant]
+    gates:
+      speech.lexical:
+        threshold: 2                    # lexical words that route SPEECH; the artifact boundary, unswept in J
+      speech.transcript_agreement:
+        threshold: 3                    # agreed words that FLAG doubt about what was said; routes nothing
+      voice.sustained:
+        threshold: 3.0                  # seconds of held phonation that route VOICE
+      voice.glide:
+        threshold: 0.05                 # dataset profile: union score that routes VOICE, a sweep over the corpus (B2AI: 0.05)
+      voice.chant:
+        threshold: 0.02                 # dataset profile: chant score that routes VOICE (B2AI: 0.02)
+      airway.breath:
+        threshold: 0.1                  # dataset profile: residual fraction that routes AIRWAY (B2AI: 0.10)
+      airway.cough:
+        threshold: 50.0                 # dataset profile: dB over floor that routes AIRWAY; gain-dependent (B2AI: 50.0, unswept)
+      airway.ppg_silent_fraction:
+        threshold: 0.757                # dataset profile: silent frame fraction that routes AIRWAY (B2AI: 0.757)
+
+# SQUIM and disruption tolerances. Every key in this section is currently read by nothing in
+# `src/senselab`: the gate they describe is unimplemented.

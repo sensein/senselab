@@ -246,8 +246,9 @@ def load_triage_config(
     if loaded is None:
         loaded = active_profile()
     values = yaml.safe_load(_DEFAULT.read_text())
-    if loaded is not None and loaded.config is not None:
-        values = _merge(values, yaml.safe_load(loaded.config.read_text()) or {})
+    for layer in loaded.chain() if loaded is not None else ():
+        if layer.config is not None:
+            values = _merge(values, yaml.safe_load(layer.config.read_text()) or {})
     if override is not None:
         values = _merge(values, yaml.safe_load(Path(override).read_text()) or {})
     _validate(values)

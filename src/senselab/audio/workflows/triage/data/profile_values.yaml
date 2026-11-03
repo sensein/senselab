@@ -1,0 +1,409 @@
+# Every value senselab leaves to a dataset profile (plan step 5c), by data file: its key path, its kind, and whether
+# a run needs it. A run whose profile, with the profiles it extends, leaves a required value empty is refused before
+# any node runs, naming every one (dataset_profile.missing_dataset_values).
+#   kind: a  decide: the dataset's policy (release, review, redaction; which features are on)
+#         b  computed from the dataset's own recordings (a percentile, a fence, a median): step 10 fits them
+#         c  needs listening or labelled recordings: detector tuning and model cut-offs; senselab's
+#            adult_clinical_speech profile carries a set fitted on Bridge2AI-Voice adult
+#         d  per task
+#   required: false where the value switches a feature off or nothing reads it yet, so it may stay empty.
+version: 1
+values:
+  asr_degenerate.yaml:
+  - {path: ["chars_min"], kind: c, required: true}
+  - {path: ["repeats_min"], kind: c, required: true}
+  - {path: ["unit_chars_max"], kind: c, required: true}
+  background_model.yaml:
+  - {path: ["activity", "band_fraction"], kind: c, required: true}
+  - {path: ["activity", "bridge_s"], kind: c, required: true}
+  - {path: ["activity", "margin_db"], kind: c, required: true}
+  - {path: ["activity", "min_s"], kind: c, required: true}
+  - {path: ["disruptions", "merge_s"], kind: c, required: true}
+  - {path: ["floor", "pad_s"], kind: c, required: true}
+  - {path: ["floor", "quiet_min_s"], kind: c, required: true}
+  - {path: ["floor", "residual_gap_db"], kind: c, required: true}
+  - {path: ["hum", "line_db"], kind: c, required: true}
+  - {path: ["hum", "lines_min"], kind: c, required: true}
+  - {path: ["hum", "neighbourhood_hz"], kind: c, required: true}
+  - {path: ["impulse", "attack_max_ms"], kind: c, required: true}
+  - {path: ["impulse", "duration_max_ms"], kind: c, required: true}
+  - {path: ["impulse", "onset_db"], kind: c, required: true}
+  - {path: ["impulse", "peak_db"], kind: c, required: true}
+  - {path: ["phonation_db"], kind: c, required: true}
+  - {path: ["session", "gap_db"], kind: c, required: true}
+  - {path: ["session", "members_min"], kind: c, required: true}
+  - {path: ["shutoff", "below_floor_db"], kind: c, required: true}
+  - {path: ["shutoff", "bridge_s"], kind: c, required: true}
+  - {path: ["shutoff", "drop_db"], kind: c, required: true}
+  - {path: ["shutoff", "drop_s"], kind: c, required: true}
+  - {path: ["shutoff", "flat_db"], kind: c, required: true}
+  - {path: ["shutoff", "min_s"], kind: c, required: true}
+  background_speech.yaml:
+  - {path: ["event_pad_s"], kind: c, required: true}
+  - {path: ["f0_range_hz"], kind: c, required: true}
+  - {path: ["floor_frame_s"], kind: c, required: true}
+  - {path: ["floor_percentile"], kind: c, required: true}
+  - {path: ["harmonic_band_hz"], kind: c, required: true}
+  - {path: ["harmonic_rise_db"], kind: c, required: true}
+  - {path: ["harmonicity_min"], kind: c, required: true}
+  - {path: ["leakage_corr_min"], kind: c, required: true}
+  - {path: ["own_share_max"], kind: c, required: true}
+  - {path: ["residual_rise_db"], kind: c, required: true}
+  - {path: ["run_gap_s"], kind: c, required: true}
+  - {path: ["run_min_s"], kind: c, required: true}
+  - {path: ["run_voiced_min_s"], kind: c, required: true}
+  - {path: ["speech_min"], kind: c, required: true}
+  - {path: ["thinned_db"], kind: c, required: true}
+  breath_pattern.yaml:
+  - {path: ["measure", "autocorr_min"], kind: c, required: true}
+  - {path: ["measure", "event_trim_db"], kind: c, required: true}
+  - {path: ["measure", "flatness_band_hz"], kind: c, required: true}
+  - {path: ["measure", "flatness_min"], kind: c, required: true}
+  - {path: ["measure", "interval_share_min"], kind: c, required: true}
+  - {path: ["measure", "merge_gap_s"], kind: c, required: true}
+  - {path: ["measure", "rise_db"], kind: c, required: true}
+  - {path: ["modulation", "active_rise_db"], kind: c, required: true}
+  - {path: ["modulation", "min_duration_s"], kind: c, required: true}
+  - {path: ["modulation", "reference_band_hz"], kind: c, required: true}
+  - {path: ["review", "cycle_cv_min"], kind: c, required: true}
+  - {path: ["review", "irregular_rise_db_max"], kind: c, required: true}
+  - {path: ["review", "min_phases"], kind: c, required: true}
+  - {path: ["review", "weak_rise_db_max"], kind: c, required: true}
+  - {path: ["train", "band_edges_hz"], kind: c, required: true}
+  - {path: ["train", "burst_s"], kind: c, required: true}
+  - {path: ["train", "coherence_min"], kind: c, required: true}
+  - {path: ["train", "coherence_window_s"], kind: c, required: true}
+  - {path: ["train", "continue_db"], kind: c, required: true}
+  - {path: ["train", "distance_quick_s"], kind: c, required: true}
+  - {path: ["train", "distance_s"], kind: c, required: true}
+  - {path: ["train", "edge_min_s"], kind: c, required: true}
+  - {path: ["train", "envelope_smooth_s"], kind: c, required: true}
+  - {path: ["train", "flatness_min"], kind: c, required: true}
+  - {path: ["train", "floor_percentile"], kind: c, required: true}
+  - {path: ["train", "fs_mod"], kind: c, required: true}
+  - {path: ["train", "gap_cycles"], kind: c, required: true}
+  - {path: ["train", "gap_min_s"], kind: c, required: true}
+  - {path: ["train", "noise_percentile"], kind: c, required: true}
+  - {path: ["train", "noise_subtract"], kind: c, required: true}
+  - {path: ["train", "pad_s"], kind: c, required: true}
+  - {path: ["train", "prominence_min"], kind: c, required: true}
+  - {path: ["train", "prominence_range_frac"], kind: c, required: true}
+  - {path: ["train", "rise_floor_db"], kind: c, required: true}
+  - {path: ["train", "rise_z"], kind: c, required: true}
+  - {path: ["train", "smooth_s"], kind: c, required: true}
+  - {path: ["train", "speech_bridge_cycles"], kind: c, required: true}
+  - {path: ["train", "speech_gap_s"], kind: c, required: true}
+  - {path: ["train", "speech_link_s"], kind: c, required: true}
+  - {path: ["train", "speech_words_min"], kind: c, required: true}
+  - {path: ["train", "steady_f0_cv_max"], kind: c, required: true}
+  - {path: ["train", "steady_min_s"], kind: c, required: true}
+  - {path: ["train", "steady_strength_min"], kind: c, required: true}
+  - {path: ["train", "template_corr_min"], kind: c, required: true}
+  - {path: ["train", "tonal_db"], kind: c, required: true}
+  - {path: ["train", "tonal_halfwidth_bins"], kind: c, required: true}
+  - {path: ["train", "voice_gap_s"], kind: c, required: true}
+  - {path: ["train", "voiced_max"], kind: c, required: true}
+  - {path: ["train", "weak_prominence_frac"], kind: c, required: true}
+  - {path: ["train", "word_spread_max_s"], kind: c, required: true}
+  - {path: ["veto", "active_fraction_min"], kind: c, required: true}
+  - {path: ["veto", "speech_words_min"], kind: c, required: true}
+  cohort_stage.yaml:
+  - {path: ["checks", "recording_duration_outlier", "duration_ratio_max"], kind: a, required: true}
+  - {path: ["checks", "recording_duration_outlier", "extent_fraction_min"], kind: a, required: true}
+  - {path: ["comparison", "cosine_min", "default"], kind: c, required: true}
+  - {path: ["comparison", "cosine_min", "task_text"], kind: a, required: false}
+  - {path: ["comparison", "pooled_min_s"], kind: c, required: true}
+  - {path: ["condition", "clipped_fraction_min"], kind: b, required: true}
+  - {path: ["condition", "hot_rms_dbfs_min"], kind: b, required: true}
+  - {path: ["condition", "shift_level_db_min"], kind: b, required: true}
+  - {path: ["condition", "shift_snr_db_min"], kind: b, required: true}
+  - {path: ["enrollment", "leave_one_out_min"], kind: c, required: true}
+  - {path: ["enrollment", "single_speaker_recordings_min"], kind: c, required: true}
+  - {path: ["non_target_voice", "cosine_min"], kind: c, required: true}
+  - {path: ["non_target_voice", "recurring_min"], kind: c, required: true}
+  - {path: ["participant", "consistency_cosine_min"], kind: b, required: true}
+  - {path: ["shared_nonmatch", "fraction_min"], kind: b, required: true}
+  - {path: ["speech", "score_min"], kind: c, required: true}
+  config/default.yaml:
+  - {path: ["branch", "phoneme_place_classes", "alveolar"], kind: d, required: true}
+  - {path: ["branch", "sweep_reversal_tolerance_semitones"], kind: c, required: true}
+  - {path: ["branch", "sweep_smoothing_frames"], kind: c, required: true}
+  - {path: ["phonation", "hnr_floor_interval_db"], kind: c, required: false}
+  - {path: ["phonation", "rms_floor_interval"], kind: c, required: false}
+  - {path: ["pii", "name_words_max"], kind: a, required: true}
+  - {path: ["quality", "disruption_clipped_s_max"], kind: c, required: false}
+  - {path: ["quality", "disruption_dropout_s_max"], kind: c, required: false}
+  - {path: ["quality", "pesq_floor"], kind: c, required: false}
+  - {path: ["quality", "stoi_floor"], kind: c, required: false}
+  - {path: ["redaction", "fill"], kind: a, required: true}
+  - {path: ["redaction", "name_approvals"], kind: a, required: true}
+  - {path: ["spans", "continuity_cut_percentile"], kind: c, required: true}
+  - {path: ["spans", "min_separation_ms"], kind: c, required: true}
+  - {path: ["speech", "nontarget", "d_to_r_db"], kind: c, required: false}
+  - {path: ["speech", "nontarget", "level_db"], kind: c, required: false}
+  - {path: ["speech", "nontarget", "tilt_db_per_octave"], kind: c, required: false}
+  - {path: ["speech", "secondary_exclusive_min_s"], kind: c, required: true}
+  - {path: ["speech", "speech_test_si_sdr_floor"], kind: c, required: false}
+  - {path: ["speech", "speech_test_stoi_floor"], kind: c, required: false}
+  - {path: ["stimulus", "near_match", "exact_below"], kind: c, required: true}
+  - {path: ["stimulus", "near_match", "two_edits_from"], kind: c, required: true}
+  - {path: ["stimulus", "residue", "insertion_window"], kind: c, required: true}
+  - {path: ["stimulus", "residue", "train_repetitions_min"], kind: c, required: true}
+  - {path: ["stimulus", "residue", "variant_similarity_min"], kind: c, required: true}
+  - {path: ["taxonomy", "airway_bracket_tokens"], kind: c, required: true}
+  - {path: ["taxonomy", "consolidation_floor"], kind: c, required: true}
+  - {path: ["taxonomy", "ruleset", "branch_gates", "AIRWAY"], kind: c, required: true}
+  - {path: ["taxonomy", "ruleset", "branch_gates", "VOICE"], kind: c, required: true}
+  - {path: ["taxonomy", "ruleset", "emptiness", "active_s_max"], kind: a, required: true}
+  - {path: ["taxonomy", "ruleset", "gates", "airway.breath", "threshold"], kind: c, required: true}
+  - {path: ["taxonomy", "ruleset", "gates", "airway.cough", "threshold"], kind: c, required: true}
+  - {path: ["taxonomy", "ruleset", "gates", "airway.ppg_silent_fraction", "threshold"], kind: c, required: true}
+  - {path: ["taxonomy", "ruleset", "gates", "speech.lexical", "threshold"], kind: c, required: true}
+  - {path: ["taxonomy", "ruleset", "gates", "speech.transcript_agreement", "threshold"], kind: c, required: true}
+  - {path: ["taxonomy", "ruleset", "gates", "voice.chant", "threshold"], kind: c, required: true}
+  - {path: ["taxonomy", "ruleset", "gates", "voice.glide", "threshold"], kind: c, required: true}
+  - {path: ["taxonomy", "ruleset", "gates", "voice.sustained", "threshold"], kind: c, required: true}
+  - {path: ["verdict", "cohort_conditions"], kind: a, required: false}
+  - {path: ["verdict", "condition_categories"], kind: a, required: true}
+  - {path: ["verdict", "gates", "by_group", "EVENT_ALTERNATION", "instructed_count_min_fraction"], kind: c, required: true}
+  - {path: ["verdict", "gates", "by_group", "EVENT_ALTERNATION", "score_min"], kind: c, required: true}
+  - {path: ["verdict", "gates", "by_group", "EVENT_SERIES", "instructed_count_min_fraction"], kind: c, required: true}
+  - {path: ["verdict", "gates", "by_group", "EVENT_SERIES", "score_min"], kind: c, required: true}
+  - {path: ["verdict", "gates", "by_group", "FREE_RESPONSE", "dominant_speaker_share_min"], kind: c, required: true}
+  - {path: ["verdict", "gates", "by_group", "GLIDE", "glide_extent_min_semitones"], kind: c, required: true}
+  - {path: ["verdict", "gates", "by_group", "ITEM_LIST", "dominant_speaker_share_min"], kind: c, required: true}
+  - {path: ["verdict", "gates", "by_group", "ORDERED_TOKENS", "dominant_speaker_share_min"], kind: c, required: true}
+  - {path: ["verdict", "gates", "by_group", "SOUND_COVERAGE", "score_min"], kind: c, required: true}
+  - {path: ["verdict", "gates", "by_group", "SYLLABLE_SEQUENCE", "dominant_speaker_share_min"], kind: c, required: true}
+  - {path: ["verdict", "gates", "by_group", "SYLLABLE_TRAIN", "dominant_speaker_share_min"], kind: c, required: true}
+  - {path: ["verdict", "llm_contradiction_flags"], kind: a, required: true}
+  - {path: ["verdict", "llm_instructions_spoken_flags"], kind: a, required: true}
+  - {path: ["verdict", "llm_redaction_withholds"], kind: a, required: true}
+  - {path: ["verdict", "llm_reset_redactions"], kind: a, required: true}
+  - {path: ["verdict", "llm_second_speaker_flags"], kind: a, required: true}
+  - {path: ["verdict", "min_contrast_db"], kind: c, required: false}
+  - {path: ["verdict", "person_name_review_flags"], kind: a, required: true}
+  - {path: ["verdict", "second_opinion_confident_no"], kind: c, required: true}
+  - {path: ["verdict", "second_opinion_confident_yes"], kind: c, required: true}
+  - {path: ["verdict", "second_opinion_disagreement_flags"], kind: a, required: true}
+  - {path: ["verdict", "tilt_max_db_per_octave"], kind: c, required: false}
+  - {path: ["verdict", "trim_protected_categories"], kind: a, required: true}
+  - {path: ["verdict", "uncomputed_reading_flags"], kind: a, required: true}
+  - {path: ["voice", "f0_range_by_population"], kind: c, required: false}
+  - {path: ["voice", "f0_range_ratio_max"], kind: c, required: false}
+  - {path: ["voice", "task_duration_ranges"], kind: d, required: false}
+  - {path: ["windows", "hear", "default_threshold"], kind: c, required: true}
+  - {path: ["windows", "hear", "label_thresholds"], kind: c, required: false}
+  - {path: ["windows", "hear", "label_top_k"], kind: c, required: true}
+  - {path: ["windows", "yamnet", "default_threshold"], kind: c, required: true}
+  - {path: ["windows", "yamnet", "label_thresholds"], kind: c, required: false}
+  - {path: ["windows", "yamnet", "label_top_k"], kind: c, required: true}
+  - {path: ["words", "onomatopoeic_tokens"], kind: c, required: true}
+  - {path: ["yamnet", "coverage_threshold"], kind: c, required: true}
+  - {path: ["yamnet", "silence_threshold"], kind: c, required: true}
+  cough_pattern.yaml:
+  - {path: ["extent", "post_s"], kind: c, required: true}
+  - {path: ["extent", "pre_s"], kind: c, required: true}
+  - {path: ["measure", "attach_s"], kind: c, required: true}
+  - {path: ["measure", "band_rise_db"], kind: c, required: true}
+  - {path: ["measure", "coherence_min"], kind: c, required: true}
+  - {path: ["measure", "floor_percentile"], kind: c, required: true}
+  - {path: ["measure", "gap_db"], kind: c, required: true}
+  - {path: ["measure", "gap_lookback_s"], kind: c, required: true}
+  - {path: ["measure", "inhale_bridge_s"], kind: c, required: true}
+  - {path: ["measure", "inhale_db"], kind: c, required: true}
+  - {path: ["measure", "inhale_extend_db"], kind: c, required: true}
+  - {path: ["measure", "inhale_gap_s"], kind: c, required: true}
+  - {path: ["measure", "inhale_max_s"], kind: c, required: true}
+  - {path: ["measure", "inhale_min_s"], kind: c, required: true}
+  - {path: ["measure", "min_event_s"], kind: c, required: true}
+  - {path: ["measure", "min_gap_s"], kind: c, required: true}
+  - {path: ["measure", "peak_db"], kind: c, required: true}
+  - {path: ["measure", "peak_window_s"], kind: c, required: true}
+  - {path: ["measure", "restart_rise_fraction"], kind: c, required: true}
+  - {path: ["measure", "rise_db"], kind: c, required: true}
+  - {path: ["measure", "rise_s"], kind: c, required: true}
+  - {path: ["measure", "smooth_s"], kind: c, required: true}
+  - {path: ["measure", "tail_db"], kind: c, required: true}
+  - {path: ["measure", "train_drop_db"], kind: c, required: true}
+  - {path: ["measure", "word_pad_s"], kind: c, required: true}
+  - {path: ["review", "coherence_margin"], kind: c, required: true}
+  - {path: ["review", "rise_margin_db"], kind: c, required: true}
+  decision_reasons.yaml:
+  - {path: ["release_audible_share_min"], kind: a, required: true}
+  - {path: ["reviewed_releases"], kind: a, required: true}
+  - {path: ["second_opinion_not_free_withholds"], kind: a, required: true}
+  discard_replaced_task.yaml:
+  - {path: ["background", "enabled"], kind: a, required: true}
+  - {path: ["background", "event_over_background_db_max"], kind: c, required: false}
+  - {path: ["enabled"], kind: a, required: true}
+  - {path: ["non_lexical", "extent_fraction_max"], kind: c, required: true}
+  - {path: ["non_lexical", "free_speech_words_per_s"], kind: b, required: true}
+  - {path: ["non_lexical", "talk_fraction_min"], kind: c, required: true}
+  - {path: ["short_response", "fraction_max"], kind: c, required: true}
+  quality_join.yaml:
+  - {path: ["abut_s"], kind: c, required: true}
+  - {path: ["capture", "level_rel_db_max"], kind: c, required: true}
+  - {path: ["faults", "clip", "decides"], kind: a, required: true}
+  - {path: ["faults", "clip", "min_s"], kind: c, required: true}
+  - {path: ["faults", "discontinuity", "decides"], kind: c, required: true}
+  - {path: ["faults", "discontinuity", "min_s"], kind: c, required: true}
+  - {path: ["faults", "dropout", "decides"], kind: a, required: true}
+  - {path: ["faults", "dropout", "min_s"], kind: c, required: true}
+  - {path: ["faults", "gate", "decides"], kind: c, required: true}
+  - {path: ["faults", "gate", "min_s"], kind: c, required: true}
+  - {path: ["faults", "shutoff", "abut_s"], kind: c, required: true}
+  - {path: ["faults", "shutoff", "before_s"], kind: c, required: true}
+  - {path: ["faults", "shutoff", "decides"], kind: c, required: true}
+  - {path: ["faults", "shutoff", "event_kinds"], kind: c, required: true}
+  - {path: ["faults", "shutoff", "min_s"], kind: c, required: true}
+  - {path: ["faults", "shutoff", "sounding_db"], kind: c, required: true}
+  - {path: ["interference", "impulse", "decides"], kind: c, required: true}
+  - {path: ["streams", "decides"], kind: c, required: true}
+  - {path: ["streams", "lost_fraction"], kind: c, required: true}
+  - {path: ["streams", "snr_low_db"], kind: c, required: true}
+  session_background.yaml:
+  - {path: ["decides"], kind: a, required: true}
+  - {path: ["foreground", "enhanced_speech_min"], kind: c, required: true}
+  - {path: ["foreground", "lexical_words_min"], kind: c, required: true}
+  - {path: ["foreground", "speech_frames_min_s"], kind: c, required: true}
+  - {path: ["session", "members_min"], kind: c, required: true}
+  speaker_vector_profile/2026-09-22.yaml:
+  - {path: ["min_extent_s"], kind: c, required: true}
+  task_content.yaml:
+  - {path: ["agreed_run_min"], kind: c, required: true}
+  - {path: ["overlap", "min_share"], kind: c, required: true}
+  - {path: ["overlap", "pad_s"], kind: c, required: true}
+  task_events.yaml:
+  - {path: ["breath", "gap_cycles"], kind: c, required: true}
+  - {path: ["breath", "gap_min_s"], kind: c, required: true}
+  - {path: ["breath", "recover_voiced_max"], kind: c, required: true}
+  - {path: ["cough", "gap_s"], kind: c, required: true}
+  - {path: ["ddk", "cycle_band_hz"], kind: c, required: true}
+  - {path: ["ddk", "events_min", "cycle"], kind: c, required: true}
+  - {path: ["ddk", "events_min", "syllable"], kind: c, required: true}
+  - {path: ["ddk", "gap_s"], kind: c, required: true}
+  - {path: ["ddk", "identity_absent_max"], kind: c, required: true}
+  - {path: ["ddk", "identity_min"], kind: c, required: true}
+  - {path: ["ddk", "identity_pad_s"], kind: c, required: true}
+  - {path: ["ddk", "nucleus_prominence_db"], kind: c, required: true}
+  - {path: ["ddk", "nucleus_spacing_s"], kind: c, required: true}
+  - {path: ["ddk", "rhythm_agreement"], kind: c, required: true}
+  - {path: ["ddk", "rhythm_prominence_min_db"], kind: c, required: true}
+  - {path: ["ddk", "skip_log"], kind: c, required: true}
+  - {path: ["ddk", "syllable_max_s"], kind: c, required: true}
+  - {path: ["ddk", "syllable_min_s"], kind: c, required: true}
+  - {path: ["ddk", "unvoiced_db"], kind: c, required: true}
+  - {path: ["decision", "snr_high_db"], kind: c, required: true}
+  - {path: ["decision", "snr_low_db"], kind: c, required: true}
+  - {path: ["entangle_abut_s"], kind: c, required: true}
+  - {path: ["extent", "count_weight"], kind: c, required: true}
+  - {path: ["extent", "position_weight"], kind: c, required: true}
+  - {path: ["extent", "speech_gap_s"], kind: c, required: true}
+  - {path: ["extent", "speech_score_min"], kind: c, required: true}
+  - {path: ["extent", "speech_words_min"], kind: c, required: true}
+  - {path: ["impulse_margin_db"], kind: c, required: true}
+  - {path: ["inhale", "back_max_s"], kind: c, required: true}
+  - {path: ["inhale", "margin_db"], kind: c, required: true}
+  - {path: ["local", "percentile"], kind: c, required: true}
+  - {path: ["local", "window_s"], kind: c, required: true}
+  - {path: ["rhythm", "prominence_min_db"], kind: c, required: true}
+  - {path: ["voice", "gap_s"], kind: c, required: true}
+  task_extent.yaml:
+  - {path: ["atypical", "cough_event_s_max"], kind: b, required: true}
+  - {path: ["atypical", "ddk_rate_hz"], kind: b, required: true}
+  - {path: ["completeness", "onset_tolerance_s"], kind: c, required: true}
+  - {path: ["completeness", "reviews"], kind: a, required: true}
+  - {path: ["completeness", "voice_hold_min_s"], kind: c, required: true}
+  - {path: ["continuity", "enabled"], kind: c, required: true}
+  - {path: ["continuity", "gap_max_s"], kind: c, required: true}
+  - {path: ["continuity", "runs_max"], kind: c, required: true}
+  - {path: ["continuity", "semitones"], kind: c, required: true}
+  - {path: ["continuity", "tail_s"], kind: c, required: true}
+  - {path: ["continuity", "voiced_min_s"], kind: c, required: true}
+  - {path: ["count_in", "enabled"], kind: c, required: true}
+  - {path: ["count_in", "gap_max_s"], kind: b, required: true}
+  - {path: ["edges", "bridge_s"], kind: c, required: true}
+  - {path: ["edges", "enabled"], kind: c, required: true}
+  - {path: ["edges", "margin_db"], kind: c, required: true}
+  - {path: ["edges", "max_s"], kind: c, required: true}
+  - {path: ["growth", "cross_speech"], kind: c, required: true}
+  - {path: ["growth", "diarized_turn_min_s"], kind: c, required: true}
+  - {path: ["growth", "enabled"], kind: c, required: true}
+  - {path: ["growth", "gap_floor_s"], kind: c, required: true}
+  - {path: ["growth", "k"], kind: c, required: true}
+  - {path: ["modulation", "enabled"], kind: c, required: true}
+  - {path: ["modulation", "margin_db"], kind: c, required: true}
+  - {path: ["modulation", "prominence_db"], kind: c, required: true}
+  - {path: ["modulation", "rate_hz"], kind: c, required: true}
+  - {path: ["parts", "enabled"], kind: c, required: true}
+  - {path: ["parts", "gap_max_s"], kind: c, required: true}
+  - {path: ["parts", "hold_min_s"], kind: c, required: true}
+  - {path: ["parts", "voiced_fraction_min"], kind: c, required: true}
+  - {path: ["stimulus_edges", "enabled"], kind: c, required: true}
+  - {path: ["trim", "airway", "pad_s"], kind: c, required: true}
+  - {path: ["trim", "ddk", "agreed_run_min"], kind: c, required: true}
+  - {path: ["trim", "ddk", "edge_duration_ratio"], kind: c, required: true}
+  - {path: ["trim", "ddk", "kept_share_min"], kind: c, required: true}
+  - {path: ["trim", "ddk", "margin_intervals"], kind: c, required: true}
+  - {path: ["trim", "enabled"], kind: c, required: true}
+  - {path: ["trim", "voice", "onset_voiced_s"], kind: c, required: true}
+  task_minimum_duration.yaml:
+  - {path: ["default_s"], kind: a, required: true}
+  task_speech.yaml:
+  - {path: ["phrase_words_min"], kind: a, required: true}
+  - {path: ["utterance_gap_s"], kind: c, required: true}
+  - {path: ["words_min"], kind: a, required: true}
+  task_squim.yaml:
+  - {path: ["no_value_branches"], kind: c, required: true}
+  voice_phonation.yaml:
+  - {path: ["band_hz"], kind: c, required: true}
+  - {path: ["break_min_s"], kind: c, required: true}
+  - {path: ["extent_min_s"], kind: c, required: true}
+  - {path: ["f0", "fold_semitones"], kind: c, required: true}
+  - {path: ["f0", "fold_window_s"], kind: c, required: true}
+  - {path: ["f0", "harmonics"], kind: c, required: true}
+  - {path: ["f0", "octave_db"], kind: c, required: true}
+  - {path: ["f0", "range_hz"], kind: c, required: true}
+  - {path: ["f0", "spread_window_s"], kind: c, required: true}
+  - {path: ["floor_smooth_s"], kind: c, required: true}
+  - {path: ["glide", "jump_max_semitones"], kind: c, required: true}
+  - {path: ["glide", "range_min_semitones"], kind: c, required: true}
+  - {path: ["glide", "smoothing_frames"], kind: c, required: true}
+  - {path: ["glide", "voiced_min_s"], kind: c, required: true}
+  - {path: ["hum", "disagreement_s"], kind: c, required: true}
+  - {path: ["hum", "enhanced_drop_db"], kind: c, required: true}
+  - {path: ["hum", "harmonics_max"], kind: c, required: true}
+  - {path: ["hum", "line_db"], kind: c, required: true}
+  - {path: ["hum", "lines_min"], kind: c, required: true}
+  - {path: ["hum", "lock_fraction_min"], kind: c, required: true}
+  - {path: ["hum", "neighbourhood_hz"], kind: c, required: true}
+  - {path: ["hum", "tolerance_hz"], kind: c, required: true}
+  - {path: ["inhale", "gap_s"], kind: c, required: true}
+  - {path: ["inhale", "max_s"], kind: c, required: true}
+  - {path: ["inhale", "min_s"], kind: c, required: true}
+  - {path: ["inhale", "rise_db"], kind: c, required: true}
+  - {path: ["merge_db"], kind: c, required: true}
+  - {path: ["merge_gap_max_s"], kind: c, required: true}
+  - {path: ["merge_voiced_fraction_min"], kind: c, required: true}
+  - {path: ["phonation_db"], kind: c, required: true}
+  - {path: ["review", "floor_margin_db"], kind: c, required: true}
+  - {path: ["review", "glide_margin_semitones"], kind: c, required: true}
+  - {path: ["segment_min_s"], kind: c, required: true}
+  - {path: ["shutoff", "below_floor_db"], kind: c, required: true}
+  - {path: ["shutoff", "bridge_s"], kind: c, required: true}
+  - {path: ["shutoff", "drop_db"], kind: c, required: true}
+  - {path: ["shutoff", "drop_s"], kind: c, required: true}
+  - {path: ["shutoff", "flat_db"], kind: c, required: true}
+  - {path: ["shutoff", "flat_window_s"], kind: c, required: true}
+  - {path: ["shutoff", "gap_s"], kind: c, required: true}
+  - {path: ["shutoff", "min_s"], kind: c, required: true}
+  - {path: ["speech", "run_min_s"], kind: c, required: true}
+  - {path: ["speech", "voiced_fraction_min"], kind: c, required: true}
+  - {path: ["speech_word_max_s"], kind: c, required: true}
+  - {path: ["voiced_rise_db"], kind: c, required: true}
+  word_timing.yaml:
+  - {path: ["arbitration", "disagreement_s"], kind: c, required: true}
+  - {path: ["arbitration", "held_voicing_bridge_s"], kind: c, required: true}
+  - {path: ["arbitration", "held_voicing_min_s"], kind: c, required: true}
+  - {path: ["point_width_s"], kind: c, required: true}

@@ -5,22 +5,9 @@ enabled: false                     # owner, 2026-10-12: off until a sample of th
 
 background:                        # r37 round 2: the task's events against the recording's background (task_events.background_reading)
   enabled: false                   # read beside the other rules; off until its own listen stratum is labelled
-  kinds: [airway]
-  event_over_background_db_max:        # TO FIT: specs/20261012-r37-extents/design.md, "Events against background"
-
 non_lexical:                       # airway, voice, and the lexical families read as a voice task
-  kinds: [airway, voice]
-  voice_read: true                 # a word task the task list reads for its voice (voice_reading_text)
   free_speech_words_per_s: 2.03    # median consensus words per second over free-speech, picture-description and open-response recordings, r36
-  talk_fraction_min: 0.25          # talk outside the task at this share of that rate or more
-  extent_fraction_max: 0.5         # a task extent under this share of the recording is weak
-
-lexical:                           # lexical speech, less the word tasks read for their voice
-  kinds: [lexical_speech]
-  voice_read: false                # less the word tasks read for their voice
-
 short_response:                    # free-response families: a response under fraction_max of the family median
-  fraction_max: 0.1
   family_median_s:                 # median gate response_min_s reading per family, r36 (n in brackets)
     cinderella-story: 91.92        # [258]
     free-speech: 26.75             # [3073]

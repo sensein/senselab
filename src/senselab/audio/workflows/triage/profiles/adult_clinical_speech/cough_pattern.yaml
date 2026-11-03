@@ -4,10 +4,8 @@
 # with the owner's words, is in specs/20261006-cough-pattern/design.md.
 version: 1
 measure:
-  band_edges_hz: [150.0, 300.0, 500.0, 800.0, 1300.0, 2000.0, 3000.0, 4000.0, 5500.0, 7800.0]
   smooth_s: 0.015              # per-band moving median
   floor_percentile: 10.0       # recording's own floor, over frames that are not digital silence
-  digital_silence_db: -100.0   # summed band power at or below: digital silence
   rise_s: 0.1                  # window the rise is read over
   rise_db: 12.0                # broadband rise at or above: a candidate onset
   band_rise_db: 8.0            # a band rising this far counts towards coherence

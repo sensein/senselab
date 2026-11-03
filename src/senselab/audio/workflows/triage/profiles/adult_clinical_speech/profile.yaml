@@ -1,0 +1,30 @@
+# The reference profile for adult clinical speech recordings: how senselab's detectors and models are tuned for
+# them. senselab ships it, opt-in; no run reads it unless its profile names it (`extends: senselab:adult_clinical_speech`).
+# It holds the values a dataset of the same kind would reuse: detector settings tuned by listening, model cut-offs
+# swept against labels, and placeholders not yet fitted. Every one was set on Bridge2AI-Voice adult recordings;
+# each value's derivation is in the comment beside it and in specs/20261022-triage-dataset-profile/plan.md, step 5.
+# A dataset's own policy, corpus statistics and per-task values are not here: they are its own profile's.
+name: adult-clinical-speech
+version: '2026-11-03'
+provenance:
+  fitted_on: Bridge2AI-Voice adult release, bids_adult_2026_09_04 (62,550 recordings), triage campaigns r8 to r37 and the owner's listening sessions
+  moved_from: senselab's packaged triage data at 83cca5371 (plan step 5c)
+config: config.yaml
+files:
+  asr_degenerate.yaml: asr_degenerate.yaml
+  background_model.yaml: background_model.yaml
+  background_speech.yaml: background_speech.yaml
+  breath_pattern.yaml: breath_pattern.yaml
+  cohort_stage.yaml: cohort_stage.yaml
+  cough_pattern.yaml: cough_pattern.yaml
+  discard_replaced_task.yaml: discard_replaced_task.yaml
+  quality_join.yaml: quality_join.yaml
+  session_background.yaml: session_background.yaml
+  speaker_vector_profile: speaker_vector_profile
+  task_content.yaml: task_content.yaml
+  task_events.yaml: task_events.yaml
+  task_extent.yaml: task_extent.yaml
+  task_speech.yaml: task_speech.yaml
+  task_squim.yaml: task_squim.yaml
+  voice_phonation.yaml: voice_phonation.yaml
+  word_timing.yaml: word_timing.yaml

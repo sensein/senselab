@@ -254,7 +254,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         scope = args.session_scope
-        driver_config(args)
+        driver_config(args, require_values=False)
         if args.recordings is not None:
             build_hint = load_hint_builder(args.hints) if args.hints is not None else None
             records = records_before_run(read_recording_list(args.recordings), build_hint)

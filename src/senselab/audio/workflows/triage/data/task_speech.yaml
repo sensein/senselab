@@ -6,9 +6,9 @@
 # phrase. Derivation: specs/20261007-task-events-in-background/design.md ("Speech outside the task",
 # "Phrases instead of items", "The reviewer reads the phrases").
 version: 6
-words_min: 1           # owner, 2026-10-10 (k = 1): this many such words in a non-lexical family is speech_in_task
-utterance_gap_s: 0.3   # owner, 2026-10-10: a pause at least this long between two consensus words ends an utterance
-phrase_words_min: 3    # owner, 2026-10-10: an utterance of at least this many lexical words, holding a closed-class word, is a phrase
+words_min:             # profile value (data/profile_values.yaml)
+utterance_gap_s:       # profile value (data/profile_values.yaml)
+phrase_words_min:      # profile value (data/profile_values.yaml)
 
 # Lexical families read as voice tasks, each with its declared task text. Owner, 2026-10-11: "loudness should
 # be treated as voice tasks beyond the hey hey (similar to one two three ah in phonation)". As with the
