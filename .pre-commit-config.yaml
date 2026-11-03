@@ -111,3 +111,7 @@ repos:
     name: No research-participant identifiers in tracked files.
     entry: python scripts/check_participant_ids.py
     language: python
+  - id: local-paths
+    name: No local paths or personal Slurm partitions in tracked files.
+    entry: python scripts/check_local_paths.py
+    language: python
