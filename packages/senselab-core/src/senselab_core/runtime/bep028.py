@@ -73,7 +73,7 @@ def _read_labels(directory: StorageDir) -> dict[str, tuple[str, list[str]]]:
         return {}
     try:
         declared = json.loads(data).get("format")
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, RecursionError):
         declared = None
     if check(LABELS_FORMAT, declared, RETIRED_LABELS_FORMATS) is FormatVerdict.RETIRED:
         raise LabelMapRetired(str(declared))

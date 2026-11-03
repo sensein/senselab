@@ -16,7 +16,7 @@ import numpy
 import pytest
 import soundfile
 from pydantic import ValidationError
-from senselab_core.kernel.signals import Audio, ChannelInfo, RegularGroup, StaleSource, audio_channels
+from senselab_core.kernel.signals import Audio, ChannelInfo, Recording, RegularGroup, StaleSource, audio_channels
 from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER, open_audio, source_group, stamp
 from senselab_worker.digest import identity_digest
@@ -241,10 +241,19 @@ def test_copies_of_a_source_recording_do_not_read_the_file(tmp_path: Path, open_
     a = open_audio(p)
     assert open_spy.count(f"open:{p}") == 1 and len(open_spy) == 2, open_spy
     open_spy.clear()
-    r = Audio.model_validate(a.model_dump())
-    copies = [copy.copy(a), copy.deepcopy(a), pickle.loads(pickle.dumps(a)), a.model_copy(), copy.deepcopy(r)]
+    r = Recording(groups=a.groups, anchor=a.anchor)
+    copies = [
+        copy.copy(a),
+        copy.deepcopy(a),
+        pickle.loads(pickle.dumps(a)),
+        a.model_copy(),
+        copy.deepcopy(Audio.model_validate(a.model_dump())),
+        copy.deepcopy(r),
+        pickle.loads(pickle.dumps(r)),
+        Recording.model_validate(r.model_dump()),
+    ]
     assert open_spy == []
-    assert all(c.identity == a.identity for c in copies)
+    assert all(c.identity == a.identity for c in copies[:5]) and all(c.identity == r.identity for c in copies[5:])
 
 
 @pytest.mark.logic

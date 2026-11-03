@@ -370,3 +370,13 @@ def test_a_retired_label_map_is_refused_not_corrupt(tmp_path: Path) -> None:
     with pytest.raises(LabelMapRetired, match="labels@1.0") as caught:
         LabelMap(run).paths()
     assert caught.value.found == "labels@1.0"
+
+
+def test_a_deeply_nested_label_map_is_refused_typed(tmp_path: Path) -> None:
+    """A retired map nested past the parser's depth is refused as retired, not as an untyped recursion failure."""
+    run, _ = _run(tmp_path, "a.wav")
+    depth = 100_000
+    body = '{"format": "labels@1.0", "labels": ' + "[" * depth + "]" * depth + "}"
+    (run / PRIVATE_DIR / LABELS_NAME).write_text(body)
+    with pytest.raises(ValueError, match="labels@2.0"):
+        LabelMap(run).paths()
