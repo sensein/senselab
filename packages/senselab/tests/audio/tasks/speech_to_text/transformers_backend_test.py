@@ -213,14 +213,19 @@ def test_backend_is_a_host_backend_the_senselab_lock_covers() -> None:
 
 
 def _real_state(faults: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
-    """Load the catalogue's default `speech_to_text` model by its pinned commit, on CUDA when present."""
+    """Load the catalogue's default `speech_to_text` model by its pinned commit on CUDA; skip the test without it.
+
+    The default is Whisper large, which a CPU does not run in bounded time.
+    """
     from senselab._api.packaged import CATALOGUE
 
     torch = importlib.import_module("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("the default speech_to_text model is Whisper large: real weights need a GPU")
 
     entry = CATALOGUE.default("speech_to_text")
     model = {"source": "hf", "id": entry.id, "identity": entry.revision}
-    return hf.load({"model": model, "device": "cuda" if torch.cuda.is_available() else "cpu", "faults": faults or {}})
+    return hf.load({"model": model, "device": "cuda", "faults": faults or {}})
 
 
 def _timed(result: dict[str, Any]) -> list[tuple[Any, ...]]:
@@ -297,7 +302,7 @@ def test_a_chunk_ending_past_the_audio_is_clamped_to_its_extent() -> None:
     """A pipeline chunk (1.0 s, 9.0 s) of a 2 s recording ends at 2 s, as the other backend's spans do."""
     out = {"text": "late", "chunks": [{"text": "late", "timestamp": (1.0, 9.0)}]}
     (word,) = hf.transcript(out, "word", CLOCK, 2 * 10**9).segments[0].children
-    assert (word.span.start_ns, word.span.end_ns) == (10**9, 2 * 10**9)  # type: ignore[union-attr]
+    assert (word.span.start_ns, word.span.end_ns) == (10**9, 2 * 10**9)
 
 
 @pytest.mark.logic
