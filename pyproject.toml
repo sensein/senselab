@@ -72,6 +72,7 @@ test = [
   "grimp",
   "jsonschema",
   "hypothesis",
+  "pyld>=3",
   "scipy>=1.11"
 ]
 docs = [

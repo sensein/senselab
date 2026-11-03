@@ -197,3 +197,11 @@ def test_an_import_missing_from_the_test_group_is_found(tmp_path: Path) -> None:
     assert imports["a_test.py"] == {"os", "helper", "httpx", "grimp"}
     bad = undeclared_by_module(imports, {"grimp"} | local_modules(tmp_path))
     assert bad == {"a_test.py": {"httpx"}}
+
+
+@pytest.mark.contract
+def test_the_root_groups_install_what_the_tests_and_benchmarks_import() -> None:
+    """`uv sync --group test` installs pyld, which the core prov tests import; `--group benchmarks` installs pyarrow."""
+    groups = tomllib.loads((REPO / "pyproject.toml").read_text())["dependency-groups"]
+    declared = {g: {_normalise(re.split(r"[\s<>=!~;\[]", spec, maxsplit=1)[0]) for spec in groups[g]} for g in groups}
+    assert "pyld" in declared["test"] and "pyarrow" in declared["benchmarks"]
