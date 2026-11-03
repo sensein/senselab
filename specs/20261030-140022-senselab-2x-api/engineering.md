@@ -60,7 +60,7 @@ The PR template carries this checklist. Pre-commit and CI check what they can.
   parameters, strategies or backends, with no caller-specific branches (P-37).
 - [ ] The scale ladder passes for touched modules; per-item cost is flat (P-33).
 - [ ] New boundaries have bad-input, fault and property tests; there is no special-casing (P-34).
-- [ ] No identifiers; tests are scoped and serial (P-28, P-29).
+- [ ] No identifiers, no local paths and no content copied from a referenced local file in any committed text: code, specs, tests, data, commit messages, PR bodies; placeholders instead (P-28). Tests are scoped and serial (P-29).
 - [ ] Every new task, backend or profile is declared, so contract tests cover it (P-30).
 - [ ] The PR records the implementer and reviewer models, and they differ (P-40).
 - [ ] The ledger mark is current for any 1.x area touched (P-39).
@@ -158,12 +158,14 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   in a gitignored `references.local.yaml` at the repository root; tracked text uses only placeholder
   names (`${ORCD_GROUP_SCRATCH}`, `${CPU_PARTITION}`, `${AGENT_SCRATCH}`, …), which the committed
   `references.example.yaml` lists without values. A repository-relative path is not a local path.
-  Synthetic examples (`/home/user/a.wav`) stay synthetic.
+  Synthetic examples use the generic account (`/home/user/a.wav`).
 - **Source**: owner, 2026-10-30: "ensure no identifiers leak in"; owner, 2026-11-03: "separately create
   a gitignored file that can contain references, but anything that can be merged into a commit (such
   as a spec) should not contain path or content of file references".
-- **Check**: the pre-commit identifier and local-path hooks pass, and reviewers check prose, which the
-  hooks may not cover.
+- **Check**: the review checklist item for P-28, applied to every change by its reviewer. A hook is
+  only a generic backstop and names nothing specific to one developer, machine or cluster: the
+  participant-id hook, and a home-directory check (`/Users/<name>/`, `/home/<name>/`,
+  `C:\Users\<name>\`, the generic accounts excepted).
 
 <a id="p-29"></a>
 ### P-29 Fast test cycles locally and on the cluster, within shared limits
