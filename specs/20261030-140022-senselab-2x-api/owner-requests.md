@@ -65,3 +65,4 @@ The authority for the full review. Quoted as the owner wrote them; nothing parap
 56. "all PRs should get fast tier automatically to any branch." (pydra CI: `pull_request` on every base; full tier required only into `main`.)
 57. "paths can be scrubbed. add to a principle to separately create a gitignored file that can contain references, but anything that can be merged into a commit (such as a spec) should not contain path or content of file references." (P-28 amended 2026-11-03.)
 58. "regarding atomicity, isn't a mkdir inside a cache directory atomic across filesystems? and couldn't two directories be sufficient to maintain a heartbeat with mkdir + rmdir?" — "yes, amend" (ADR-003 amended 2026-11-03).
+59. "the heartbeat setting should be in pydra, right?" (P3-53: pydra owns the job-lease heartbeat; senselab configures it.)

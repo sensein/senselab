@@ -588,6 +588,8 @@ failure; the executor owns execution, release, retries and fault effects.
 - **Fail, `NativeRunner`:** a ready-set loop over `kernel.graph.order` with per-element readiness, using the same
   `Executor` calls.
 
+- **Job-lease heartbeat (P3-53):** under Route A pydra holds and renews each job's lease (Task 45); `PydraRunner` passes the execution profile's `lease.stale_after_s` and `lease.renew_fraction` (data, with derivations, bounded by the root's measured attribute delay, Task 16) to pydra's `LeaseSettings`; senselab does not renew job leases itself.
+
 - [ ] **Step 1: Failing tests (fake stack; `core-pydra` CI under Route A, local under the fallback):**
   `test_map_node_submits_one_fragment_per_batch`, `test_errored_element_fails_only_its_descendants`,
   `test_gather_waits_for_every_element`, `test_inprocess_and_pool_give_same_store` (a fake-substrate `Pool` from Task 14
@@ -742,7 +744,7 @@ rulings P3-33, P3-34, P3-36. **Depends on:** Task 13.
 `run_plan` with a `Pool`), tests.
 
 **Interfaces:**
-- `Epoch(run_dir)`: `take() -> int` (the next epoch by `O_EXCL` link of `epoch/<n>`), `current() -> int`.
+- `Epoch(run_dir)`: `take() -> int` (the next epoch by `mkdir epoch/<n>`, ADR-003 amendment 2026-11-03), `current() -> int`.
 - `Pool(run_dir, *, queues: QueueSet, store: ResultStore, events: EventLog, profile: ExecutionProfile, substrate:
   Substrate, epoch: int)`: an `Executor`. `submit(fragment)` reads `Epoch.current()` and raises `StaleCoordinator` when
   a newer epoch exists, then puts the fragment on its queue; `results(handle)` reads outcomes from the store and
@@ -1027,7 +1029,7 @@ it in Phase 3 (P3-52).
 | 42 | **A2** batched polling, arrays | sonnet / opus | one `squeue --me` per poll cycle; `sbatch --array` for split states through the tuple path; ORCD Slurm test of 100 elements | A1 |
 | 43 | **B1** benchmarks | sonnet / opus | proposal 0001's scripts in `benchmark.py`; per-item cold and cached cost printed for `debug` and `cf` | — |
 | 44 | **B2** cheap submission | opus / fresh sonnet | no re-pickle for in-process workers; `_job.pklz` only for remote and failed jobs; one `scandir` per cache root per round; targets < 0.5 ms cold and < 0.1 ms cached per trivial item, measured by B1 on an idle node | B1 |
-| 45 | **C** leases and atomic commit inside the store | opus / fable (lease proof) | the job runs in `<checksum>/` under an ADR-003 lease (amendment 2026-11-03): a directory taken by `mkdir` with the holder's token, kept alive by beat directories from a renewer independent of the job (a long job that writes nothing keeps its lease), broken by rename aside once its age on the storage clock passes `stale_after`, no pid-liveness takeover (P3-48); every path stays inside the lease or the target's directory, so nothing crosses a filesystem; result committed by write-then-rename; `clean_stale_locks` becomes lease expiry; tests: two-process race, a job running past `stale_after` that writes nothing keeps its lease, SIGKILL then takeover after `stale_after`, a root without atomic `mkdir` refused, read-only shared cache. The same PR amends proposal 0001 §3.3, and the senselab spec commit for this task amends `pydra-extension-points.md` §5's "a lease with a heartbeat" line to match | D1 |
+| 45 | **C** leases and atomic commit inside the store | opus / fable (lease proof) | the job runs in `<checksum>/` under an ADR-003 lease (amendment 2026-11-03): a directory taken by `mkdir` with the holder's token, kept alive by beat directories from a renewer independent of the job (a long job that writes nothing keeps its lease), broken by rename aside once its age on the storage clock passes `stale_after`, no pid-liveness takeover (P3-48); the heartbeat is pydra's: `stale_after` and `renew_fraction` are a pydra setting (`Submitter(lease=LeaseSettings(stale_after=, renew_fraction=))`, store-level default documented) so pydra keeps its own job leases alive without senselab; every path stays inside the lease or the target's directory, so nothing crosses a filesystem; result committed by write-then-rename; `clean_stale_locks` becomes lease expiry; tests: two-process race, a job running past `stale_after` that writes nothing keeps its lease, SIGKILL then takeover after `stale_after`, a root without atomic `mkdir` refused, read-only shared cache. The same PR amends proposal 0001 §3.3, and the senselab spec commit for this task amends `pydra-extension-points.md` §5's "a lease with a heartbeat" line to match | D1 |
 | 46 | **D2** `PortableStore` | opus / fresh sonnet | JSON for scalars and attrs records, `.npy` arrays, files as files, pickle only for unregistered types; versioned layout `tasks-v<N>/`; no reader of an older layout (owner item 52) | D1 |
 | 47 | **E2** partial `State` refactor | opus, effort higher / fresh opus | per-element readiness for the re-split case; the full splitter/combiner matrix and `debug`/`cf` parity | E1a, E1b |
 | 48 | **G2** `Venv` environment and runner | sonnet / opus | `Venv(path= \| python=, lock=)`; same-version tasks cloudpickled, others by import reference with `PortableStore` inputs; a `__main__`/closure function raises a clear error; uv-managed interpreters only | D2, G1 |
@@ -1178,6 +1180,10 @@ them. A ruling that changes an ADR decision takes effect only through the dated 
   item 58): a directory taken by `mkdir`, renewed by beat directories (the heartbeat), takeover once its age on the
   storage clock passes `stale_after`, no pid-liveness takeover, in place of proposal 0001 §3.3's "owner, host, pid,
   heartbeat, TTL takeover" (owner item 50). Task 45 amends the proposal and `pydra-extension-points.md` §5.
+- **P3-53** ruling (owner, 2026-11-03: "the heartbeat setting should be in pydra"): the job-lease heartbeat lives in
+  pydra (Task 45, `LeaseSettings`), configured by senselab's execution profile through `PydraRunner` (Task 9b);
+  senselab's own leases (queue items, coordinator epoch, service registry; Tasks 12–17) keep the same ADR-003
+  directory protocol in senselab core.
 - **P3-49** ruling: The spike and Task 9b assert that no `_result.pklz` is written; `_job.pklz` may remain until B2
   and D2 land, and its absence is not claimed in Phase 3.
 - **P3-50** ruling: A node's `backend_params` are keyed by backend name; only the placed backend's entry reaches its
