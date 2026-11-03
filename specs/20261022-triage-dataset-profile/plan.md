@@ -390,24 +390,102 @@ follows it. What changed is recorded. Replay refuses only where a change is almo
    - a refold with a changed hint: refused;
    - prompts added: the alignment is rebuilt.
 
-## Step 4 — tasks and families as data
+## Step 4 — what each recording was asked to contain (agreed 2026-11-02)
 
-**Framing amendment (2026-10-30 review).** The task id carries several meanings in one string: the trailing index is
-a repetition, a protocol variant (B2AI's airway route, `nodes/airway.py:598`) or a stimulus selector (a Harvard
-list), and the engine decodes it (`families.py:13`). In this step the hint declares them apart: the protocol item
-(kind and family), its variant attributes (such as the route), the stimulus (`expected_speech`) and a repetition
-index; B2AI's hint builder maps its tokens onto these. "One take per task per session" becomes an expectation a
-profile declares, not a uniqueness rule. The family-keyed lexicons and `voice_task_text` are a second carrier of the
-stimulus beside `expected_speech`; a family that holds different stimuli would read the wrong words, so the hint's
-stimulus is the one source.
+**What this step is for.** Today senselab knows B2AI's tasks by name. It cuts the trailing number off a task id
+(`respiration-and-cough-fivebreaths-2` becomes `respiration-and-cough-fivebreaths`) and uses that name to look up
+everything: which analysis runs (speech, voice or airway), what the recording should contain, and which word lists
+apply. A dataset that does not name its tasks B2AI's way gets none of it. After this step senselab knows no task by
+name: the dataset says, for each recording, what it was asked to contain, and senselab analyses that.
 
-- The three `*_EXPECTATIONS` tables and the `families.py` sets load from `tasks.yaml` and `families.yaml`
-  through accessors. The about 40 reads by name change to those accessors.
-- `CINDERELLA_CAST`, `STROOP_COLOURS`, `REPETITION_ALLOWED_CATEGORIES` and `data/task_lexicon/` move to
-  `lexicons/`.
-- The DDK dispatch moves from family sets to `Pattern` (`nodes/speech.py:1622`, `:1774`).
-- The B2AI rows become a test-fixture profile. `nodes/branches_test.py:471-480` checks them through the
-  loader.
+**Example: one B2AI recording.** `…_task-respiration-and-cough-fivebreaths-2.wav` is the second five-breaths
+recording, done through the mouth.
+
+| | Today | After this step |
+|---|---|---|
+| Which task | senselab cuts `-2` off the file name | B2AI's hint says: task `respiration-and-cough-fivebreaths`, take 2 |
+| What it asks for (five breaths, an inhale first) | a row in senselab's code | an entry in B2AI's task list |
+| Nose or mouth | senselab maps the `2` to mouth with a table in B2AI's profile | B2AI's hint says: route mouth |
+| Which analysis (airway, breath sounds) | senselab looks the name up in hand-written lists | worked out from the entry: an airway task about breath sounds |
+
+What triage reports for B2AI does not change; only who supplies the information.
+
+**1. What senselab keeps.** The description of what a task asks for (today's `Expectation`: the pattern, the words
+or count, the duration, the route, whether repeats are allowed, the vocabulary), the analyses that read it, and the
+meaning of each kind of task. senselab ships no task.
+
+**2. The task list, and how a recording points into it.** The dataset profile holds a task list: one entry per task,
+under a name the dataset chooses, saying which analysis (SPEECH, VOICE or AIRWAY) reads it and what it asks for.
+Each recording's hint names its entry exactly, in new typed fields of `AudioHints`: the task, its variant (B2AI's
+route) and its take number. senselab never derives the task from a file name and never decodes the number. A hint may
+instead carry the whole description itself, for a dataset with no task list. ADMIT records what it resolved (the
+entry, its analysis, the description applied and its digest, the variant and the take), and every stage, replay and
+refold read that record. A recording whose task the list lacks, or that names none, gets the default treatment and is
+reported by the identity check (as B2AI's `audio-check`, which should never have been triaged).
+
+**3. Kinds are worked out, not listed.** Today nine hand-written lists say which tasks are speech, syllable
+repetition, words and sentences, voice, pitch glides, held vowels, airway, coughs and breaths. They are replaced by
+rules over each entry: speech, voice and airway are the analysis that reads it; syllable repetition is a syllable
+pattern; glides are the glide pattern; held vowels are the other voice tasks; coughs and breaths are the airway sound
+the entry names. What a rule cannot work out is a field of the entry: B2AI's `loudness` is a word task that is also
+read for its voice ("hey"), today's `voice_task_text`. Settings that already name kinds keep their names.
+
+Checked 2026-11-02 on the 48 descriptions senselab applies to B2AI: every worked-out grouping equals today's list
+(speech 31, syllable repetition 10, words and sentences 21, voice 6, glides 3, held vowels 3, airway 11, coughs 3,
+breaths 8). Four descriptions senselab holds but never applies (voice readings of `loudness`, `loudness-v2`,
+`cape-v-sentences`, `cape-v-sentences-v2`) would move those tasks into voice; decision (user, 2026-11-02): they stay
+speech tasks as today, and the unused voice descriptions are carried on the same entries marked not used.
+
+**4. Word lists.** A task's own words belong to its entry: the Cinderella characters and the Stroop colours leave
+senselab's code for B2AI's entries, and an entry names its lexicon file. For word-generation tasks ("name as many
+animals as you can") the hint declares the recording's category, and the entry lists the categories it allows, each
+with its word list and whether repeating a word is a mistake. senselab keeps only the kinds of category rule (a
+fixed list, "starts with a letter", numbers); the number words become a profile list, since today they are English
+only and B2AI has Spanish participants. The three readers of a task's words (the PII residue, REDACT's exemption, the
+mask plan) read them through the recorded task.
+
+**5. What B2AI provides.** A task list (about 48 entries: today's rows and word lists, moved), and, per recording in
+its hint, the task, the take, the route where the protocol fixes one, the category for word-generation tasks and the
+text to be read. B2AI's hint builder works these out from its file names, sidecars and questionnaire; it moves to
+b2aiprep in step 7. This step absorbs part of step 6's first item: the task id is no longer decoded by senselab.
+
+**6. Checks.**
+1. Before code: the worked-out groupings equal today's lists (done, above).
+2. The full test suite.
+3. Five real recordings (breaths, "pa-pa-pa", the rainbow passage, free speech, a cough), old code against new, each
+   pair on one machine: decisions identical; the only new output is the recorded task description.
+4. The 192 stored adult runs, replayed under old and new code on scratch copies: decisions identical.
+5. All 70,520 adult recordings through the identity check with B2AI's hints: every task is found in B2AI's task list
+   except `audio-check`.
+6. A small made-up dataset that is not B2AI (two tasks, other names, no BIDS-like file names): senselab triages it
+   from its own task list. A test, not a SLURM run.
+
+Checks 1, 3 and 4 must show no difference on B2AI; any difference goes to the user, not explained away.
+
+**Results (2026-11-02; old code 6fc1c8011, new code snapshot 9d524ecc8; each side its own B2AI profile and hints
+written by its own builder; outputs under the triage scratch environment's `s4/`).**
+1. Done before code, above.
+2. The wide suite (triage, scripts, the two redaction test files): 4,266 passed, 20 skipped, 1 failed; the failure was
+   the viewer's copy of the table schema number (30, now 31), fixed and rebuilt; the viewer and table tests then pass.
+3. Five recordings, each pair on one node (node2803): decisions identical (fivebreaths review/as_is; pa, rainbow,
+   free speech, cough pass/as_is). The only differing store entity is the `recording` stream, and on it only the
+   recorded task (`declared_task`, `task_from`, `task_branch`, `task_expects` and its digest, `task_variant`,
+   `task_take`, `item_category`) and the hint's new fields (`task`, `task_variant`, `task_take`) with the hint digests.
+4. The 192 stored runs, replayed in place on two fresh private copies, slice by slice on one node, base then new: 192
+   ok on both, 192 decisions identical, the same 8 needing the reviewer again. Differences: the recorded task and the
+   hint fields as in check 3 on every run; and on 59 PII scans and 6 separations the result cache's `hit` flag, with
+   identical cache keys on both sides (the base half computed, the new half read what the base half had just cached).
+5. 70,520 recordings: passed; every task is in B2AI's task list except `audio-check` (4,202) and `audio-check-v2`
+   (3,768), as in step 3c; no other finding.
+6. `task_catalogue_test.py` `TestADatasetThatIsNotB2AI`: a two-task lab corpus (`hum-a-note`, `read-the-card`) with
+   plain clip names passes the run's start check; the real ADMIT node records each hint's task; each branch aligns its
+   own task and detects the other; a B2AI task name means nothing to it; its identity check reports only an unlisted
+   task.
+
+Found, not changed in this step: `airway_event_requirements.yaml` and `airway_event_tokens.yaml` are hand-written lists
+of B2AI's cough and breath tasks, repeating the kinds the task list now gives (step 5); a task described inline in the
+hint is recorded, but branch selection, expected names and categories still look the task up in the task list by
+name, so an inline description alone gets each branch's detect mode.
 
 ## Step 5 — fitted values and policy
 
