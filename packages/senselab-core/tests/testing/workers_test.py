@@ -82,15 +82,16 @@ def env_python(tmp_path: Path) -> Iterator[Path]:
 
 
 def test_worker_runs_in_the_opened_env_on_the_catalogue_pin(env_python: Path, tmp_path: Path) -> None:
-    """The worker is launched by the env's python, not this process; faults reach it; `close` stops it.
+    """The worker is launched by the env's python, not this process; faults reach it per request; `close` stops it.
 
     `run_alone` keeps the outputs of the items that succeed and lets a content fault pass.
     """
     workers = RealWorkers(ExecutionProfile.load())
-    worker = workers(fake.ECHO.name, "fake-isolated", {"fail_items": ["b"]})
+    worker = workers(fake.ECHO.name, "fake-isolated")
     assert isinstance(worker, WorkerClient)
-    results = worker.run([{"id": i, "inputs": {"payload": i}} for i in "ab"], {})
-    alone = run_alone(worker, {i: {"id": i, "inputs": {"payload": i}} for i in "ab"}, {})
+    faulted = {"_fault": {"fail_items": ["b"]}}
+    results = worker.run([{"id": i, "inputs": {"payload": i}} for i in "ab"], faulted)
+    alone = run_alone(worker, {i: {"id": i, "inputs": {"payload": i}} for i in "ab"}, faulted)
     workers.close()
     assert "outputs" in results[0] and results[1]["error"]["fault"] is FaultClass.CONTENT and list(alone) == ["a"]
     assert fake.WORKER_MODULE in json.loads((tmp_path / "argv.json").read_text()) and not worker.alive
@@ -102,7 +103,7 @@ def test_starting_a_worker_stops_the_one_before(env_python: Path) -> None:  # no
     """Two models never share the device: the second start stops the first worker."""
     workers = RealWorkers(ExecutionProfile.load())
     first = workers(fake.ECHO.name, "fake-isolated")
-    second = workers(fake.ECHO.name, "fake-isolated", {"fail_items": ["b"]})
+    second = workers(fake.ECHO.name, "fake-isolated")
     assert isinstance(first, WorkerClient) and isinstance(second, WorkerClient)
     assert not first.alive and second.alive and workers.started == [second]
     workers.close()

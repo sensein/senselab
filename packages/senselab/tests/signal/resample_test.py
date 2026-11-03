@@ -131,9 +131,7 @@ def test_channel_order_and_gain_invariance(pair: tuple[int, int], seed: int, gai
 def test_handle_returns_a_regular_group_wire_form() -> None:
     """A worker result is the wire form of a regular group at the target rate, channels kept."""
     group = RegularGroup(channels=audio_channels(2), sampling_rate=16000.0, data=numpy.zeros((2, 160), numpy.float32))
-    [result] = rs.handle(
-        rs.load({}), [{"id": "a", "inputs": {"series": group}}], {"target_rate": 8000, "backend_params": {}}
-    )
+    [result] = rs.handle(None, [{"id": "a", "inputs": {"series": group}}], {"target_rate": 8000, "backend_params": {}})
     out: Any = from_wire_form(result["outputs"]["series"])
     assert isinstance(out, RegularGroup) and out.sampling_rate == 8000.0
     assert out.channels == group.channels and out.frames == 80 and out.read().dtype == numpy.float32
@@ -143,7 +141,7 @@ def test_handle_returns_a_regular_group_wire_form() -> None:
 def test_a_non_integer_input_rate_is_a_content_fault() -> None:
     """A rate with no whole-Hz ratio fails that item, not the batch."""
     group = RegularGroup(channels=audio_channels(1), sampling_rate=16000.5, data=numpy.zeros((1, 16), numpy.float32))
-    [result] = rs.handle(rs.load({}), [{"id": "a", "inputs": {"series": group}}], {"target_rate": 8000})
+    [result] = rs.handle(None, [{"id": "a", "inputs": {"series": group}}], {"target_rate": 8000})
     assert "error" in result
 
 

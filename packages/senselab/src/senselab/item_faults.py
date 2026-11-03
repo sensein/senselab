@@ -29,13 +29,16 @@ def raise_injected(item_id: str, faults: FakeFaults) -> None:
         raise ResourceFault(f"injected out of memory for item {item_id}")
 
 
-def mono_samples(item: dict[str, Any], faults: FakeFaults, rate: int, who: str) -> tuple[numpy.ndarray, str]:
+def mono_samples(
+    item: dict[str, Any], faults: FakeFaults, rate: int, who: str, min_input_ns: int | None = None
+) -> tuple[numpy.ndarray, str]:
     """Return the item's mono float32 samples and its clock id, or raise its content or resource fault.
 
-    The item's audio is a wire form. `who` names the backend in the message; `rate` is the sampling rate it takes.
+    The item's audio is a wire form. `who` names the backend in the message; `rate` is the sampling rate it takes and
+    `min_input_ns` the shortest input it accepts, its declared `BackendSpec.min_input_ns`.
     """
     raise_injected(item["id"], faults)
-    return mono_check(*wire_audio(item["inputs"]["audio"]), rate, who)
+    return mono_check(*wire_audio(item["inputs"]["audio"]), rate, who, min_input_ns)
 
 
 def wire_audio(wire: Mapping[str, Any]) -> tuple[numpy.ndarray, float, str]:
@@ -44,19 +47,26 @@ def wire_audio(wire: Mapping[str, Any]) -> tuple[numpy.ndarray, float, str]:
     return numpy.asarray(group["data"]), float(group["sampling_rate"]), str(wire["anchor"]["clock_id"])
 
 
-def mono_check(
-    samples: numpy.ndarray, sampling_rate: float, clock_id: str, rate: int, who: str
+def mono_check(  # noqa: PLR0913 - the audio's three parts, the rate and name the backend takes, and its minimum
+    samples: numpy.ndarray, sampling_rate: float, clock_id: str, rate: int, who: str, min_input_ns: int | None = None
 ) -> tuple[numpy.ndarray, str]:
-    """Return the mono float32 samples and clock id, or raise a content fault for stereo or a rate other than `rate`."""
+    """Return the mono float32 samples and clock id, or raise a content fault.
+
+    The fault is for stereo, a rate other than `rate`, or fewer than `min_input_ns` of audio.
+    """
     if samples.shape[0] != 1:
         raise ContentFault(f"{who} takes mono audio, got {samples.shape[0]} channels")
     if sampling_rate != rate:
         raise ContentFault(f"{who} takes {rate} Hz audio, got {sampling_rate} Hz; resample it first")
+    if min_input_ns is not None and samples.shape[1] * NS_PER_S < min_input_ns * rate:
+        raise ContentFault(
+            f"{who} needs at least {min_input_ns} ns of audio, got {samples.shape[1] * NS_PER_S // rate}"
+        )
     return samples[0].astype(numpy.float32), clock_id
 
 
-def init_model(init: Mapping[str, Any], keys: Collection[str], who: str) -> tuple[FakeFaults, Mapping[str, Any] | None]:
-    """Return the faults and the pinned hub model a worker's `init` names; the model is None under `"stub": True`.
+def init_model(init: Mapping[str, Any], keys: Collection[str], who: str) -> Mapping[str, Any] | None:
+    """Return the pinned hub model a worker's `init` names; None under `"stub": True`.
 
     `keys` are the init keys the backend `who` takes.
 
@@ -67,14 +77,13 @@ def init_model(init: Mapping[str, Any], keys: Collection[str], who: str) -> tupl
     unknown = sorted(init.keys() - set(keys))
     if unknown:
         raise ValueError(f"{who} init takes only {sorted(keys)}, got {unknown}")
-    faults = FakeFaults.from_json(init.get("faults", {}))
     model = init.get("model")
     if init.get("stub"):
         if model is not None:
             raise ValueError(f"{who} init takes `stub` or `model`, not both")
-        return faults, None
+        return None
     if not isinstance(model, dict) or model.get("source") != "hf":
         raise ValueError(f"{who} loads a hub model, got {model!r}")
     if not COMMIT_HEX.fullmatch(str(model.get("identity"))):
         raise ValueError(f"a model is loaded by its 40-hex commit, never a ref: {model.get('identity')!r}")
-    return faults, model
+    return model

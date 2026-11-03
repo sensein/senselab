@@ -11,7 +11,6 @@ from typing import Any
 import numpy
 from senselab_core.kernel.declare import TaskParams, backend, task
 from senselab_core.kernel.results import Metric, Trials
-from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault
 
 from senselab.metrics import _worker
@@ -74,6 +73,6 @@ def score(inputs: Mapping[str, Any], params: object) -> Metric:  # noqa: ARG001 
     )
 
 
-def handle(state: FakeFaults, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+def handle(state: None, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
     """Return one `metric@2.0` wire form per item, or its fault."""
     return _worker.serve(state, items, params, TaskParams, score)

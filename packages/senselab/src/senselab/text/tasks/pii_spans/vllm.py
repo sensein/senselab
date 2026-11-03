@@ -13,7 +13,7 @@ from senselab.text.tasks.pii_spans.engine import MAX_NEW_TOKENS, State, StubMode
 __all__ = ["WORKER_MODULE", "ServerModel", "handle", "load"]
 
 WORKER_MODULE = "senselab.text.tasks.pii_spans.vllm"
-_INIT_KEYS = frozenset({"stub", "model", "device", "faults", "array_dir", "server"})
+_INIT_KEYS = frozenset({"stub", "model", "device", "array_dir", "server"})
 SAMPLING = {"temperature": 0, "max_tokens": MAX_NEW_TOKENS}
 
 
@@ -40,16 +40,16 @@ class ServerModel:
 def load(init: Mapping[str, Any]) -> State:
     """Return the worker's state from `init`.
 
-    `init` holds `model` (`{"source": "hf", "id", "identity"}`) and `server`, or `"stub": True`; it may hold `device`,
-    `faults`, the fields of `FakeFaults`, and `array_dir`.
+    `init` holds `model` (`{"source": "hf", "id", "identity"}`) and `server`, or `"stub": True`;
+    it may hold `device` and `array_dir`.
 
     Raises:
         ValueError: on an unknown key, a model that is not a pinned hub commit, both `stub` and `model`, or a model
             without a `server`.
     """
-    faults, model = init_model(init, _INIT_KEYS, "vllm")
+    model = init_model(init, _INIT_KEYS, "vllm")
     if model is None:
-        return State(faults, StubModel())
+        return State(StubModel())
     if init.get("server") is None:
         raise ValueError("vllm init takes the running `server` beside `model`")
-    return State(faults, ServerModel(init["server"]))
+    return State(ServerModel(init["server"]))

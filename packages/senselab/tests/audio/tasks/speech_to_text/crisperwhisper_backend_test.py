@@ -18,7 +18,6 @@ from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile, NoBackend, resolve_execution
 from senselab_core.testing.contracts import contract_cases
 from senselab_core.testing.workers import RealWorkers, run_alone
-from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault, FaultClass, ResourceFault
 
 LOCK_RECORDS = packaged_lock_records("senselab")
@@ -39,8 +38,9 @@ def _item(name: str, audio: Audio) -> dict[str, Any]:
 
 
 def _run(items: list[dict[str, Any]], engine: str = "transformers", faults: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
-    state = cw.load({"stub": True, "device": "cpu", "faults": faults or {}})
-    return cw.handle(state, items, {**PARAMS, "backend_params": {"engine": engine}})
+    state = cw.load({"stub": True, "device": "cpu"})
+    params = {**PARAMS, "backend_params": {"engine": engine}, **({"_fault": faults} if faults else {})}
+    return cw.handle(state, items, params)
 
 
 @pytest.mark.contract
@@ -71,7 +71,7 @@ def test_engine_param_selects_the_engine_that_decodes() -> None:
             return self.stub.transcribe(samples, language, max_new_tokens)
 
     log: list[str] = []
-    state = cw.State(None, "cpu", FakeFaults(), {e: Engine(e, log) for e in cw.ENGINES})
+    state = cw.State(None, "cpu", {e: Engine(e, log) for e in cw.ENGINES})
     params = {"language": "de", "timestamps": "none", "backend_params": {"engine": "ct2", "max_new_tokens": 9}}
     cw.handle(state, [_item("a", _tone())], params)
     assert log == ["ct2:de:9"]
@@ -111,6 +111,15 @@ def test_unsupported_audio_is_a_content_fault(audio: Audio, text: str) -> None:
 
 
 @pytest.mark.logic
+def test_input_below_the_declared_minimum_is_a_content_fault() -> None:
+    """One sample under the declared minimum fails as a content fault; the minimum itself transcribes."""
+    n = cw.MIN_INPUT_NS * cw.EXPECTED_RATE // 1_000_000_000
+    short, ok = _run([_item("s", _tone((n - 1) / 16000)), _item("o", _tone(n / 16000))])
+    assert n == 400 and cw.MIN_INPUT_NS == 25_000_000 and isinstance(short["error"], ContentFault)
+    assert "outputs" in ok
+
+
+@pytest.mark.logic
 def test_faults_stay_with_their_item() -> None:
     """A content fault and an out of memory leave the third item unchanged, typed, never a gap."""
     items = [_item(i, _tone(1.0 + n / 10)) for n, i in enumerate("abc")]
@@ -134,6 +143,7 @@ def test_backend_serves_only_the_crisperwhisper_model_and_declares_its_isolated_
     """One backend, isolated, over the one catalogue model that names it; Whisper models are not served by it."""
     (spec,) = [b for b in REGISTRY.backends("speech_to_text") if b.name == "crisperwhisper"]
     assert spec.models == (cw.MODEL_ID,) and spec.env.kind == "isolated" and spec.env.name == "crisperwhisper"
+    assert spec.min_input_ns == cw.MIN_INPUT_NS
     assert spec.params.model_fields["engine"].default == cw.DEFAULT_ENGINE and spec.batch_invariant
     entry = CATALOGUE.entry(cw.MODEL_ID)
     assert list(entry.backends) == ["crisperwhisper"] and list(entry.stacks) == [spec.stack]
@@ -171,8 +181,9 @@ def test_content_fault_isolated_with_real_weights(real_worker: RealWorkers, engi
     """On the pinned model, in its env, each engine isolates a content fault: batch-mates' transcripts are unchanged."""
     items = [_item(i, _tone(1.0 + n)) for n, i in enumerate("abc")]
     params = {**PARAMS, "backend_params": {"engine": engine}}
-    clean = real_worker("speech_to_text", "crisperwhisper").run(items, params)
-    faulted = real_worker("speech_to_text", "crisperwhisper", {"fail_items": ["b"]}).run(items, params)
+    worker = real_worker("speech_to_text", "crisperwhisper")
+    clean = worker.run(items, params)
+    faulted = worker.run(items, {**params, "_fault": {"fail_items": ["b"]}})
     assert all("outputs" in r for r in clean)
     assert faulted[1]["error"]["fault"] is FaultClass.CONTENT
     assert (faulted[0], faulted[2]) == (clean[0], clean[2])

@@ -13,10 +13,9 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy
-from senselab_worker.fake import FakeFaults
-from senselab_worker.faults import ContentFault
+from senselab_worker.fake import injected
 
-from senselab.item_faults import init_model, mono_samples
+from senselab.item_faults import NS_PER_S, init_model, mono_samples
 
 WORKER_MODULE = "senselab.audio.tasks.speaker_embeddings.speechbrain"
 MODEL_ID = "speechbrain/spkrec-ecapa-voxceleb"
@@ -24,17 +23,11 @@ EXPECTED_RATE = 16_000
 STUB_DIMENSION = 192
 FBANK_HOP_SAMPLES = 160
 ENCODER_KERNELS_DILATIONS = ((5, 1), (3, 2), (3, 3), (3, 4), (1, 1))
-_INIT_KEYS = frozenset({"stub", "model", "device", "faults", "array_dir"})
+_INIT_KEYS = frozenset({"stub", "model", "device", "array_dir"})
 
 
-def min_samples() -> int:
-    """Return the shortest input, in samples, the frontend and encoder accept.
-
-    The centred STFT gives `n // FBANK_HOP_SAMPLES + 1` frames; each encoder convolution reflect-pads
-    `dilation * (kernel - 1) // 2` per side and needs strictly more frames than that.
-    """
-    frames = max(d * (k - 1) // 2 for k, d in ENCODER_KERNELS_DILATIONS) + 1
-    return (frames - 1) * FBANK_HOP_SAMPLES
+MIN_INPUT_FRAMES = max(d * (k - 1) // 2 for k, d in ENCODER_KERNELS_DILATIONS) + 1
+MIN_INPUT_NS = (MIN_INPUT_FRAMES - 1) * FBANK_HOP_SAMPLES * NS_PER_S // EXPECTED_RATE
 
 
 class StubModel:
@@ -96,26 +89,25 @@ class Encoder:
 
 @dataclass(frozen=True)
 class State:
-    """A loaded backend: the model (a stub or the encoder), the space its vectors live in, and the faults to inject."""
+    """A loaded backend: the model (a stub or the encoder) and the space its vectors live in."""
 
     model: Any  # noqa: ANN401 - a StubModel or an Encoder
     space: str
-    faults: FakeFaults
 
 
 def load(init: dict[str, Any]) -> State:
     """Return the worker's state from `init`.
 
     `init` holds `model` (`{"source": "hf", "id", "identity"}`, `identity` a 40-hex commit) and `device`, or
-    `"stub": True`; it may hold `faults`, the fields of `FakeFaults`, and `array_dir`.
+    `"stub": True`; it may hold `array_dir`.
 
     Raises:
         ValueError: on an unknown key, a model that is not a pinned hub commit, or both `stub` and `model`.
     """
-    faults, model = init_model(init, _INIT_KEYS, "speechbrain")
+    model = init_model(init, _INIT_KEYS, "speechbrain")
     if model is None:
-        return State(StubModel(), f"stub:{MODEL_ID}", faults)
-    return State(Encoder(model, str(init.get("device", "cpu"))), f"{model['id']}@{model['identity']}", faults)
+        return State(StubModel(), f"stub:{MODEL_ID}")
+    return State(Encoder(model, str(init.get("device", "cpu"))), f"{model['id']}@{model['identity']}")
 
 
 def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -126,12 +118,11 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
     """
     if params.get("backend_params"):
         raise ValueError(f"unknown backend params {sorted(params['backend_params'])}; known: []")
+    faults = injected(params)
     results: list[dict[str, Any]] = []
     for item in items:
         try:
-            samples, _ = mono_samples(item, state.faults, EXPECTED_RATE, "speechbrain")
-            if samples.shape[0] < min_samples():
-                raise ContentFault(f"speechbrain needs at least {min_samples()} samples, got {samples.shape[0]}")
+            samples, _ = mono_samples(item, faults, EXPECTED_RATE, "speechbrain", MIN_INPUT_NS)
             vector = state.model.embed(samples)
             results.append(
                 {"outputs": {"embedding": {"format": "embedding@1.0", "vector": vector, "space": state.space}}}

@@ -289,6 +289,30 @@ def test_contract_cases_load_the_declared_stub() -> None:
         _case(_registry({}, {**worker, "load_stub": {"model": "weights"}}), "fake::content_fault_isolated")()
 
 
+@pytest.mark.contract
+@pytest.mark.usefixtures("stub_worker_importable")
+def test_fault_injection_per_request_one_load(tmp_path: Path) -> None:
+    """`content_fault_isolated` runs its clean and its faulted request on one load of the worker."""
+    log = tmp_path / "loads"
+    registry = _registry(
+        {}, {"worker": "load_log_worker_fixture", "stack": "torch", "load_stub": {"load_log": str(log)}}
+    )
+    _case(registry, "fake::content_fault_isolated")()
+    assert log.read_text().splitlines() == ["load"]
+
+
+@pytest.mark.contract
+def test_a_declared_minimum_the_worker_does_not_enforce_fails_its_case() -> None:
+    """A backend declaring `min_input_ns` whose worker accepts shorter audio fails `input_below_declared_minimum`."""
+    case = "fake::input_below_declared_minimum_is_content_fault"
+    registry = _registry({"inputs": {"audio": "Audio"}}, {"min_input_ns": 1_000_000})
+    with pytest.raises(AssertionError, match="were not refused"):
+        _case(registry, case)()
+    with pytest.raises(AssertionError, match="no Audio input"):
+        _case(_registry({}, {"min_input_ns": 1_000_000}), case)()
+    assert case not in dict(contract_cases(_registry({})))
+
+
 @pytest.mark.logic
 def test_importing_the_contracts_module_registers_nothing() -> None:
     """Only importing the fake stack declares `fake.echo`; the contracts module alone leaves REGISTRY empty."""

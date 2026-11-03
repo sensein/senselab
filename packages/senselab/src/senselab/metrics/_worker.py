@@ -12,12 +12,12 @@ from senselab_core.kernel._base import Frozen
 from senselab_core.kernel.declare import Env
 from senselab_core.kernel.results import Metric
 from senselab_core.kernel.wire import from_wire_form, wire_form
-from senselab_worker.fake import FakeFaults
+from senselab_worker.fake import injected, without_fault
 from senselab_worker.faults import ContentFault
 
 from senselab.item_faults import raise_injected
 
-_INIT_KEYS = frozenset({"array_dir", "faults", "device", "model"})
+_INIT_KEYS = frozenset({"array_dir", "device", "model"})
 
 HOST_BACKEND: dict[str, Any] = {
     "version": "1",
@@ -34,8 +34,8 @@ Scorer = Callable[[Mapping[str, Any], Any], Metric]
 """A metric: the item's inputs by port and the validated params, to the `Metric`."""
 
 
-def load(init: dict[str, Any]) -> FakeFaults:
-    """Return the worker's state, the faults to inject; `init` may hold `array_dir`, `faults`, `device` and `model`.
+def load(init: dict[str, Any]) -> None:
+    """Check `init`, which may hold `array_dir`, `device` and `model`; a metric backend holds no state.
 
     Raises:
         ValueError: on any other key.
@@ -43,18 +43,18 @@ def load(init: dict[str, Any]) -> FakeFaults:
     unknown = sorted(init.keys() - _INIT_KEYS)
     if unknown:
         raise ValueError(f"a metric backend's init takes only {sorted(_INIT_KEYS)}, got {unknown}")
-    return FakeFaults.from_json(init.get("faults", {}))
 
 
 def serve(
-    state: FakeFaults, items: list[dict[str, Any]], params: dict[str, Any], model: type[BaseModel], score: Scorer
+    state: None, items: list[dict[str, Any]], params: dict[str, Any], model: type[BaseModel], score: Scorer
 ) -> list[dict[str, Any]]:
     """Return one `{"outputs": {"metric": <metric@2.0 wire form>}}` per item, or its fault."""
-    validated = model.model_validate({k: v for k, v in params.items() if k != "backend_params"})
+    faults = injected(params)
+    validated = model.model_validate({k: v for k, v in without_fault(params).items() if k != "backend_params"})
     results: list[dict[str, Any]] = []
     for item in items:
         try:
-            raise_injected(item["id"], state)
+            raise_injected(item["id"], faults)
             inputs = {port: _kernel(value) for port, value in item["inputs"].items()}
             results.append({"outputs": {"metric": wire_form(score(inputs, validated))}})
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault

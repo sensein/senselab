@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy
-from senselab_worker.fake import FakeFaults
+from senselab_worker.fake import injected
 from senselab_worker.faults import ContentFault
 
 from senselab.item_faults import raise_injected
@@ -127,9 +127,8 @@ class StubModel:
 
 @dataclass(frozen=True)
 class State:
-    """A loaded backend: the model (a stub or the generator) and the faults to inject."""
+    """A loaded backend: the model, a stub or the generator."""
 
-    faults: FakeFaults
     model: Any  # noqa: ANN401 - a StubModel or a Generator
 
 
@@ -145,10 +144,11 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
         raise ValueError(f"unknown backend params {sorted(params['backend_params'])}; known: []")
     profile = params["profile"]
     names = [c["name"] for c in profile["categories"]]
+    faults = injected(params)
     results: list[dict[str, Any]] = []
     for item in items:
         try:
-            raise_injected(item["id"], state.faults)
+            raise_injected(item["id"], faults)
             text = item["inputs"]["text"]
             completion = state.model.generate(build_prompt(profile, text["content"], params.get("family")))
             spans = parse_completion(completion, text["content"], names)

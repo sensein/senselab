@@ -17,7 +17,7 @@ from senselab_core.kernel.declare import Env, TaskParams, backend, task
 from senselab_core.kernel.signals import RegularSeries
 from senselab_core.runtime.audio_io import READER
 from senselab_core.runtime.config import load_yaml
-from senselab_worker.fake import FakeFaults
+from senselab_worker.fake import injected, without_fault
 from senselab_worker.faults import ContentFault
 
 WORKER_MODULE = "senselab.signal.resample"
@@ -25,7 +25,7 @@ _DESIGN: dict[str, Any] = load_yaml(resources.files("senselab").joinpath("signal
 _STOPBAND_DB: float = float(_DESIGN["stopband_attenuation_db"])
 _TRANSITION: float = float(_DESIGN["transition_fraction"])
 _MAX_BLOCK: int = int(_DESIGN["max_block_elements"])
-_INIT_KEYS = frozenset({"array_dir", "faults", "device", "model"})
+_INIT_KEYS = frozenset({"array_dir", "device", "model"})
 _KAISER_HIGH_DB = 50.0
 _KAISER_LOW_DB = 21.0
 
@@ -155,8 +155,8 @@ def _series(value: object) -> tuple[list[dict[str, Any]], float, numpy.ndarray]:
     return [c.model_dump() for c in value.channels], float(value.sampling_rate), value.read(reader=READER)  # type: ignore[attr-defined]
 
 
-def load(init: dict[str, Any]) -> FakeFaults:
-    """Return the worker's state, the faults to inject; `init` may hold `array_dir`, `faults`, `device` and `model`.
+def load(init: dict[str, Any]) -> None:
+    """Check `init`, which may hold `array_dir`, `device` and `model`; the backend holds no state.
 
     Raises:
         ValueError: on any other key.
@@ -164,16 +164,18 @@ def load(init: dict[str, Any]) -> FakeFaults:
     unknown = sorted(init.keys() - _INIT_KEYS)
     if unknown:
         raise ValueError(f"numpy-sinc init takes only {sorted(_INIT_KEYS)}, got {unknown}")
-    return FakeFaults.from_json(init.get("faults", {}))
 
 
-def handle(state: FakeFaults, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+def handle(state: None, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
     """Return one `{"outputs": {"series": <regular-group@3.0 wire form>}}` per item, or its error."""
-    target = ResampleParams.model_validate({k: v for k, v in params.items() if k != "backend_params"}).target_rate
+    target = ResampleParams.model_validate(
+        {k: v for k, v in without_fault(params).items() if k != "backend_params"}
+    ).target_rate
+    faults = injected(params)
     results: list[dict[str, Any]] = []
     for item in items:
         try:
-            if item["id"] in state.fail_items:
+            if item["id"] in faults.fail_items:
                 raise ContentFault(f"injected failure for item {item['id']}")
             results.append({"outputs": {"series": _resampled(item["inputs"]["series"], target)}})
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's error

@@ -43,8 +43,8 @@ def _item(name: str, content: str) -> dict[str, Any]:
 
 
 def _run(items: list[dict[str, Any]], faults: dict[str, Any] | None = None, **params: Any) -> Any:  # noqa: ANN401
-    state = worker.load({"stub": True, "device": "cpu", "faults": faults or {}})
-    return worker.handle(state, items, {**PARAMS, **params})
+    state = worker.load({"stub": True, "device": "cpu"})
+    return worker.handle(state, items, {**PARAMS, **params, **({"_fault": faults} if faults else {})})
 
 
 def _spans(result: dict[str, Any]) -> TextSpans:
@@ -236,10 +236,11 @@ def test_pii_spans_transformers_finds_the_identifying_span_with_real_weights(rea
     """On the pinned model a name and a number are covered by spans; a content fault leaves batch-mates unchanged."""
     text = "My name is Margaret Hollis and you can reach me on 617-555-0142."
     items = [_item("a", text), _item("b", text), _item("c", "The sky is blue today.")]
-    clean = real_worker("pii_spans", "transformers").run(items, PARAMS)
+    pii = real_worker("pii_spans", "transformers")
+    clean = pii.run(items, PARAMS)
     covered = {text[a:b] for a, b in zip(_spans(clean[0]).start, _spans(clean[0]).end, strict=True)}
     assert any("Hollis" in c for c in covered) and any("555-0142" in c for c in covered), covered
-    faulted = real_worker("pii_spans", "transformers", {"fail_items": ["b"]}).run(items, PARAMS)
+    faulted = pii.run(items, {**PARAMS, "_fault": {"fail_items": ["b"]}})
     assert faulted[1]["error"]["fault"] is FaultClass.CONTENT
     assert numpy.array_equal(_spans(faulted[0]).start, _spans(clean[0]).start)
     assert numpy.array_equal(_spans(faulted[2]).start, _spans(clean[2]).start)

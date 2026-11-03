@@ -16,7 +16,6 @@ from senselab_core.kernel.signals import Audio
 from senselab_core.kernel.wire import from_wire_form, wire_form
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.testing.contracts import contract_cases
-from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault, ResourceFault, error_record
 
 LOCK_RECORDS = packaged_lock_records("senselab")
@@ -42,8 +41,8 @@ def _audio(samples: int = 1600, rate: int = 16000, channels: int = 1) -> Audio:
 
 
 def _run(items: list[dict[str, Any]], params: dict[str, Any] = PARAMS, faults: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
-    state = hf.load({"stub": True, "device": "cpu", "faults": faults or {}})
-    return hf.handle(state, items, params)
+    state = hf.load({"stub": True, "device": "cpu"})
+    return hf.handle(state, items, {**params, **({"_fault": faults} if faults else {})})
 
 
 @pytest.mark.logic
@@ -164,7 +163,7 @@ def test_a_pipeline_failure_is_isolated_by_rerunning_items_alone() -> None:
                 raise RuntimeError("bad window")
             return hf.StubPipeline()(inputs, **kwargs)
 
-    state = hf.State(Picky(), 16000, FakeFaults())
+    state = hf.State(Picky(), 16000)
     items = [{"id": i, "inputs": {"audio": _audio(n)}} for i, n in (("a", 1600), ("b", 1700), ("c", 1800))]
     out = hf.handle(state, items, PARAMS)
     assert "outputs" in out[0] and "outputs" in out[2]
@@ -212,7 +211,7 @@ def test_backend_is_a_host_backend_the_senselab_lock_covers() -> None:
     assert lock is not None and host_lock_gaps(lock, spec.requirements) == []
 
 
-def _real_state(faults: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
+def _real_state() -> Any:  # noqa: ANN401
     """Load the catalogue's default `speech_to_text` model by its pinned commit on CUDA; skip the test without it.
 
     The default is Whisper large, which a CPU does not run in bounded time.
@@ -225,7 +224,7 @@ def _real_state(faults: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
 
     entry = CATALOGUE.default("speech_to_text")
     model = {"source": "hf", "id": entry.id, "identity": entry.revision}
-    return hf.load({"model": model, "device": "cuda", "faults": faults or {}})
+    return hf.load({"model": model, "device": "cuda"})
 
 
 def _timed(result: dict[str, Any]) -> list[tuple[Any, ...]]:
@@ -247,8 +246,9 @@ def test_transformers_backend_content_fault_isolated_with_real_weights() -> None
     The backend is declared non-batch-invariant, so confidences are not compared.
     """
     items = [{"id": i, "inputs": {"audio": _tone(1.0 + n)}} for n, i in enumerate("abc")]
-    clean = hf.handle(_real_state(), items, PARAMS)
-    faulted = hf.handle(_real_state({"fail_items": ["b"]}), items, PARAMS)
+    state = _real_state()
+    clean = hf.handle(state, items, PARAMS)
+    faulted = hf.handle(state, items, {**PARAMS, "_fault": {"fail_items": ["b"]}})
     assert all("outputs" in r for r in clean)
     assert isinstance(faulted[1]["error"], ContentFault)
     assert [_timed(faulted[i]) for i in (0, 2)] == [_timed(clean[i]) for i in (0, 2)]

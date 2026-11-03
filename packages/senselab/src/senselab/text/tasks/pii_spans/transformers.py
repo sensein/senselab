@@ -13,7 +13,7 @@ from senselab.text.tasks.pii_spans.engine import MAX_NEW_TOKENS, MODEL_ID, State
 __all__ = ["MODEL_ID", "WORKER_MODULE", "Generator", "handle", "load"]
 
 WORKER_MODULE = "senselab.text.tasks.pii_spans.transformers"
-_INIT_KEYS = frozenset({"stub", "model", "device", "faults", "array_dir"})
+_INIT_KEYS = frozenset({"stub", "model", "device", "array_dir"})
 
 
 class Generator:
@@ -47,12 +47,12 @@ def load(init: dict[str, Any]) -> State:
     """Return the worker's state from `init`.
 
     `init` holds `model` (`{"source": "hf", "id", "identity"}`, `identity` a 40-hex commit) and `device`, or
-    `"stub": True`; it may hold `faults`, the fields of `FakeFaults`, and `array_dir`.
+    `"stub": True`; it may hold `array_dir`.
 
     Raises:
         ValueError: on an unknown key, a model that is not a pinned hub commit, or both `stub` and `model`.
     """
-    faults, model = init_model(init, _INIT_KEYS, "transformers")
+    model = init_model(init, _INIT_KEYS, "transformers")
     if model is None:
-        return State(faults, StubModel())
-    return State(faults, Generator(model, str(init.get("device", "cpu"))))
+        return State(StubModel())
+    return State(Generator(model, str(init.get("device", "cpu"))))

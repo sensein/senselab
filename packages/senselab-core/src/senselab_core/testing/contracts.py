@@ -20,6 +20,7 @@ and the result against the license table; it is skipped when no `lock_records` i
 `__module__` and `__qualname__`, so they must be defined at module level.
 """
 
+import contextlib
 import functools
 import importlib
 import json
@@ -30,7 +31,7 @@ import tempfile
 import typing
 import unittest
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any, TypeVar
@@ -38,6 +39,7 @@ from typing import Any, TypeVar
 import numpy
 from pydantic import BaseModel, ValidationError
 from senselab_worker.digest import identity_digest, npy_digest
+from senselab_worker.fake import FAULT_KEY
 from senselab_worker.faults import FaultClass
 
 from senselab_core.kernel._base import thawed
@@ -81,10 +83,17 @@ WORKER_TIMEOUT_S = 60
 """How long `content_fault_isolated` gives a worker to load its stub, and then to answer one request."""
 
 
-def _regular_series(item: str, port: str) -> dict[str, Any]:
-    """Return the wire form of a one-channel regular group of 800 samples, its phase set by the item and port."""
+AUDIO_RATE = 16_000
+"""The sampling rate of the contract audio."""
+
+AUDIO_FRAMES = 1_600
+"""The length of the contract audio, 100 ms: above the declared minimum of every audio backend."""
+
+
+def _regular_series(item: str, port: str, frames: int = 800) -> dict[str, Any]:
+    """Return the wire form of a one-channel regular group of `frames` samples, its phase set by the item and port."""
     phase = int(identity_digest("contract-probe@1", [item, port])[:8], 16) % 1000
-    data = numpy.sin(2.0 * numpy.pi * (numpy.arange(800) + phase) / 40.0).astype(numpy.float32)[None, :]
+    data = numpy.sin(2.0 * numpy.pi * (numpy.arange(frames) + phase) / 40.0).astype(numpy.float32)[None, :]
     return {
         "format": "regular-group@3.0",
         "channels": [{"name": "ch0", "type": "audio", "units": "FS", "placement": None, "reference": None}],
@@ -96,9 +105,9 @@ def _regular_series(item: str, port: str) -> dict[str, Any]:
     }
 
 
-def _audio(item: str, port: str) -> dict[str, Any]:
+def _audio(item: str, port: str, frames: int = AUDIO_FRAMES) -> dict[str, Any]:
     """Return the wire form of the audio whose one mono group is `_regular_series`'s, anchored on its identity."""
-    group = {k: v for k, v in _regular_series(item, port).items() if k != "format"}
+    group = {k: v for k, v in _regular_series(item, port, frames).items() if k != "format"}
     data = group["data"]
     fields = {"npy": npy_digest("npy@1", data), "sampling_rate": 16000.0, "channels": group["channels"]}
     identity = "content:" + identity_digest("audio@4", fields)
@@ -174,7 +183,7 @@ WIRE_INPUTS: Mapping[str, Callable[[str, str], object]] = {
 """Per input port type, the wire value `content_fault_isolated` sends for an item id and port."""
 
 FAULTED_ITEM = "b"
-"""The item `content_fault_isolated` makes the stub model fail, through `init["faults"]`."""
+"""The item `content_fault_isolated` makes the stub model fail, through the request's `_fault` param."""
 
 
 BASE_CONTEXT: Mapping[str, Any] = {
@@ -267,6 +276,8 @@ def _backend_cases(
         ("key_independent_of_hash_seed", functools.partial(_key_independent_of_hash_seed, build, hash_seed_timeout_s))
     )
     cases.append(("content_fault_isolated", _content_fault_isolated))
+    if backend.min_input_ns is not None:
+        cases.append(("input_below_declared_minimum_is_content_fault", _input_below_minimum))
     cases.append(("backend_license", functools.partial(_backend_license, lock_records)))
     return cases
 
@@ -526,16 +537,39 @@ def _content_fault_isolated(task: TaskSpec, backend: BackendSpec) -> None:
         {"id": i, "inputs": {port: WIRE_INPUTS[t](i, port) for port, t in task.inputs.items()}} for i in ("a", "b", "c")
     ]
     params = probe_params(task).model_dump(mode="json")
-    stub = thawed(backend.load_stub)
     with tempfile.TemporaryDirectory(prefix="senselab-contract-") as scratch:
-        clean = _run_worker(backend, {**stub, "faults": {}}, items, params, Path(scratch))
-        faulted = _run_worker(backend, {**stub, "faults": {"fail_items": [FAULTED_ITEM]}}, items, params, Path(scratch))
+        with _stub_worker(backend, Path(scratch)) as w:
+            clean = w.run(items, params)
+            faulted = w.run(items, {**params, FAULT_KEY: {"fail_items": [FAULTED_ITEM]}})
         assert not any(Path(scratch).iterdir()), "the worker's array directory was left behind"
     assert all("outputs" in r for r in clean), f"a fault-free run failed: {clean}"
     assert faulted[1].get("error", {}).get("fault") is FaultClass.CONTENT, f"item b did not fail as content: {faulted}"
     assert _comparable((faulted[0], faulted[2])) == _comparable((clean[0], clean[2])), (
         "a content fault on b changed its batch-mates"
     )
+
+
+def _input_below_minimum(task: TaskSpec, backend: BackendSpec) -> None:
+    """Run the backend's worker on its load stub: audio one sample under `min_input_ns` is a content fault.
+
+    Audio of exactly `min_input_ns` is accepted.
+    """
+    assert backend.min_input_ns is not None
+    ports = [p for p, t in task.inputs.items() if t == "Audio"]
+    assert ports, f"{backend.name!r} declares min_input_ns but {task.name!r} takes no Audio input"
+    minimum = -(-backend.min_input_ns * AUDIO_RATE // 1_000_000_000)
+    assert minimum > 1, f"min_input_ns {backend.min_input_ns} is under two samples at {AUDIO_RATE} Hz"
+
+    def item(frames: int) -> dict[str, Any]:
+        inputs = {p: WIRE_INPUTS[t]("a", p) for p, t in task.inputs.items()}
+        return {"id": "a", "inputs": inputs | {p: _audio("a", p, frames) for p in ports}}
+
+    params = probe_params(task).model_dump(mode="json")
+    with tempfile.TemporaryDirectory(prefix="senselab-contract-") as scratch, _stub_worker(backend, Path(scratch)) as w:
+        [short] = w.run([item(minimum - 1)], params)
+        [enough] = w.run([item(minimum)], params)
+    assert short.get("error", {}).get("fault") is FaultClass.CONTENT, f"{minimum - 1} samples were not refused: {short}"
+    assert "outputs" in enough, f"{minimum} samples, the declared minimum, were refused: {enough}"
 
 
 def _comparable(value: object) -> object:
@@ -549,15 +583,15 @@ def _comparable(value: object) -> object:
     return value
 
 
-def _run_worker(
-    backend: BackendSpec, init: dict[str, Any], items: list[dict[str, Any]], params: dict[str, Any], scratch: Path
-) -> list[dict[str, Any]]:
+@contextlib.contextmanager
+def _stub_worker(backend: BackendSpec, scratch: Path) -> Iterator[WorkerClient]:
+    """Yield the backend's worker, loaded once on its stub with arrays under `scratch`; stop it on exit."""
     with WorkerClient(
         source_tree_python(),
         backend.worker,
-        init=init,
+        init=thawed(backend.load_stub),
         array_parent=scratch,
         load_timeout=WORKER_TIMEOUT_S,
         request_timeout=WORKER_TIMEOUT_S,
     ) as worker:
-        return worker.run(items, params)
+        yield worker

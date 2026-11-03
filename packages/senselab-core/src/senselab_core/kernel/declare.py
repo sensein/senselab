@@ -300,14 +300,14 @@ class BackendSpec(Frozen):
     tunable; `worker` the module serving `load(init)` and `handle(state, items, params)`; `worker_sources` the
     source file of each module of an isolated backend's worker, by dotted name, `worker` among them (empty
     for a host or server backend and for a worker the runtime itself provides), which `ensure_env` places in the env;
-    `load_stub` the `init` under which `load` builds the fake stack's model in place of weights,
-    taking `faults` (the fields of `senselab_worker.fake.FakeFaults`) beside it; `params` its
+    `load_stub` the `init` under which `load` builds the fake stack's model in place of weights; `params` its
     `BackendParams` model; `server` the engine configuration of an `Env.server` backend, whose `worker` module runs in
     this process and is given the running server (`load` takes it in `init["server"]`); `requirements` the
     requirement strings a host backend needs from the senselab lock (`ensure_env` refuses an `Env.host()` backend
     unless that lock covers each). `output_affecting` names the components of `OUTPUT_AFFECTING` that change this
     backend's outputs and so enter its logical key, held sorted and once each; `chunk_grid` names the grid its worker
-    cuts an item into when that grid is not a backend param.
+    cuts an item into when that grid is not a backend param; `min_input_ns` the shortest audio, in ns, it accepts, which
+    its worker refuses shorter than with a `ContentFault` before the model runs (`None` for no minimum).
     """
 
     task: NonEmptyStr
@@ -327,6 +327,7 @@ class BackendSpec(Frozen):
     server: ServerConfig | None = None
     requirements: tuple[NonEmptyStr, ...] = ()
     chunk_grid: NonEmptyStr | None = None
+    min_input_ns: int | None = Field(default=None, gt=0)
 
     @field_validator("output_affecting")
     @classmethod

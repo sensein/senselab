@@ -4,7 +4,7 @@ from pathlib import Path
 
 from senselab_core.kernel.declare import BackendParams, Env, backend
 
-from senselab.audio.tasks.speaker_diarization.pyannote import MODEL_ID, WORKER_MODULE
+from senselab.audio.tasks.speaker_diarization.pyannote import MIN_INPUT_NS, MODEL_ID, WORKER_MODULE
 
 _HERE = Path(__file__).parent
 _WORKER_SOURCES = {
@@ -32,6 +32,7 @@ class PyannoteParams(BackendParams):
     worker=WORKER_MODULE,
     load_stub={"stub": True, "device": "cpu"},
     worker_sources=_WORKER_SOURCES,
+    min_input_ns=MIN_INPUT_NS,
 )
 class Pyannote:
     """The pyannote.audio diarization pipeline over the pinned catalogue model it is called with."""

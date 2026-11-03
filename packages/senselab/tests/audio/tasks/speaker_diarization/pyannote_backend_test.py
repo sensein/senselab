@@ -43,8 +43,8 @@ def _same(a: dict[str, Any], b: dict[str, Any]) -> bool:
 
 
 def _run(items: list[dict[str, Any]], faults: dict[str, Any] | None = None, **params: Any) -> Any:  # noqa: ANN401
-    state = pa.load({"stub": True, "device": "cpu", "faults": faults or {}})
-    return pa.handle(state, items, {**PARAMS, **params})
+    state = pa.load({"stub": True, "device": "cpu"})
+    return pa.handle(state, items, {**PARAMS, **params, **({"_fault": faults} if faults else {})})
 
 
 @pytest.mark.contract
@@ -85,6 +85,14 @@ def test_unsupported_audio_is_a_content_fault(audio: Audio, text: str) -> None:
 
 
 @pytest.mark.logic
+def test_input_below_the_declared_minimum_is_a_content_fault() -> None:
+    """One sample under the declared minimum fails as a content fault; the minimum itself is diarized."""
+    n = -(-pa.MIN_INPUT_NS * pa.EXPECTED_RATE // 1_000_000_000)
+    short, ok = _run([_item("s", _tone((n - 1) / 16000)), _item("o", _tone(n / 16000))])
+    assert n == 991 and isinstance(short["error"], ContentFault) and "outputs" in ok
+
+
+@pytest.mark.logic
 def test_faults_stay_with_their_item() -> None:
     """A content fault and an out of memory leave the third item unchanged, typed, never a gap."""
     items = [_item(i, _tone(1.0 + n / 10)) for n, i in enumerate("abc")]
@@ -115,6 +123,7 @@ def test_backend_serves_the_community_model_and_declares_its_isolated_env() -> N
     """One isolated backend `pyannote` over the catalogue's default `diarize` model, placed by its worker sources."""
     (spec,) = REGISTRY.backends("diarize")
     assert spec.name == "pyannote" and spec.models == (pa.MODEL_ID,) and spec.batch_invariant
+    assert spec.min_input_ns == pa.MIN_INPUT_NS
     assert spec.env.kind == "isolated" and spec.env.name == "pyannote" and spec.worker in spec.worker_sources
     entry = CATALOGUE.entry(pa.MODEL_ID)
     assert list(entry.backends) == ["pyannote"] and list(entry.stacks) == [spec.stack] and entry.license.gated
@@ -141,8 +150,9 @@ def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract c
 def test_content_fault_isolated_with_real_weights(real_worker: RealWorkers) -> None:
     """On the pinned model, in its env, a content fault leaves batch-mates' turns unchanged."""
     items = [_item(i, _tone(2.0 + n)) for n, i in enumerate("abc")]
-    clean = real_worker("diarize", "pyannote").run(items, PARAMS)
-    faulted = real_worker("diarize", "pyannote", {"fail_items": ["b"]}).run(items, PARAMS)
+    worker = real_worker("diarize", "pyannote")
+    clean = worker.run(items, PARAMS)
+    faulted = worker.run(items, {**PARAMS, "_fault": {"fail_items": ["b"]}})
     assert all("outputs" in r for r in clean) and faulted[1]["error"]["fault"] is FaultClass.CONTENT
     assert _same(faulted[0], clean[0]) and _same(faulted[2], clean[2])
 

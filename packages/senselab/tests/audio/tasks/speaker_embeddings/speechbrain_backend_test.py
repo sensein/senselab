@@ -42,8 +42,8 @@ def _item(name: str, audio: Audio) -> dict[str, Any]:
 
 
 def _run(items: list[dict[str, Any]], faults: dict[str, Any] | None = None, **params: Any) -> Any:  # noqa: ANN401
-    state = sb.load({"stub": True, "device": "cpu", "faults": faults or {}})
-    return sb.handle(state, items, {**PARAMS, **params})
+    state = sb.load({"stub": True, "device": "cpu"})
+    return sb.handle(state, items, {**PARAMS, **params, **({"_fault": faults} if faults else {})})
 
 
 def _vector(result: dict[str, Any]) -> numpy.ndarray:
@@ -81,10 +81,10 @@ def test_unsupported_audio_is_a_content_fault(audio: Audio, text: str) -> None:
 
 @pytest.mark.logic
 def test_input_shorter_than_the_frontend_minimum_is_a_content_fault() -> None:
-    """One sample under the minimum fails as a content fault naming it; the minimum itself embeds."""
-    n = sb.min_samples()
+    """One sample under the declared minimum fails as a content fault; the minimum itself embeds."""
+    n = sb.MIN_INPUT_NS * 16000 // 1_000_000_000
     short, ok = _run([_item("s", _tone((n - 1) / 16000)), _item("o", _tone(n / 16000))])
-    assert n == 640 and isinstance(short["error"], ContentFault) and str(n) in str(short["error"])
+    assert n == 640 and sb.MIN_INPUT_NS == 40_000_000 and isinstance(short["error"], ContentFault)
     assert _vector(ok).shape == (sb.STUB_DIMENSION,)
 
 
@@ -215,6 +215,7 @@ def test_backend_serves_the_ecapa_model_and_declares_its_isolated_env() -> None:
     """One isolated backend `speechbrain` over the catalogue's default `speaker_embeddings` model."""
     (spec,) = REGISTRY.backends("speaker_embeddings")
     assert spec.name == "speechbrain" and spec.models == (sb.MODEL_ID,) and spec.batch_invariant
+    assert spec.min_input_ns == sb.MIN_INPUT_NS
     assert spec.env.kind == "isolated" and spec.env.name == "speechbrain" and spec.worker in spec.worker_sources
     entry = CATALOGUE.entry(sb.MODEL_ID)
     assert list(entry.backends) == ["speechbrain"] and list(entry.stacks) == [spec.stack]
@@ -243,8 +244,9 @@ def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract c
 def test_content_fault_isolated_with_real_weights(real_worker: RealWorkers) -> None:
     """On the pinned model, in its env, a content fault leaves batch-mates' vectors unchanged."""
     items = [_item(i, _tone(2.0 + n)) for n, i in enumerate("abc")]
-    clean = real_worker("speaker_embeddings", "speechbrain").run(items, PARAMS)
-    faulted = real_worker("speaker_embeddings", "speechbrain", {"fail_items": ["b"]}).run(items, PARAMS)
+    worker = real_worker("speaker_embeddings", "speechbrain")
+    clean = worker.run(items, PARAMS)
+    faulted = worker.run(items, {**PARAMS, "_fault": {"fail_items": ["b"]}})
     assert all("outputs" in r for r in clean) and faulted[1]["error"]["fault"] is FaultClass.CONTENT
     assert numpy.array_equal(_vector(faulted[0]), _vector(clean[0]))
     assert numpy.array_equal(_vector(faulted[2]), _vector(clean[2]))

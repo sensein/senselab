@@ -396,10 +396,10 @@ def crash_with_a_late_exit_notification(parent: str) -> tuple[int | None, str, i
         return wait
 
     with _substituted("module:_wait_exit", late):
-        client = WorkerClient(PYTHON, FAKE, init={"faults": {"crash_after": 0}}, array_parent=Path(parent))
+        client = WorkerClient(PYTHON, FAKE, init={}, array_parent=Path(parent))
         try:
             try:
-                client.run([{"id": "a", "inputs": {}}], {})
+                client.run([{"id": "a", "inputs": {}}], {"_fault": {"crash_after": 0}})
             except WorkerLost as lost:
                 return lost.returncode, str(lost), client.returncode
             raise AssertionError("the crash did not surface as WorkerLost")

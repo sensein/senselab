@@ -41,7 +41,7 @@ def test_run_fake_injects_declared_faults() -> None:
 @pytest.mark.logic
 def test_fake_worker_process_has_exited_on_exit(tmp_path: Path) -> None:
     """Leaving `fake_worker`, which `run_fake` runs inside, reaps the worker process and removes its array dir."""
-    with fake_worker(FakeFaults(), array_parent=tmp_path) as client:
+    with fake_worker(array_parent=tmp_path) as client:
         client.run([{"id": "a", "inputs": {"payload": "x"}}], {})
         assert client.returncode is None
     assert client.returncode is not None

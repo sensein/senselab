@@ -13,17 +13,19 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy
-from senselab_worker.fake import FakeFaults
+from senselab_worker.fake import injected
 
 from senselab.item_faults import init_model, mono_samples
 
 WORKER_MODULE = "senselab.audio.tasks.speaker_diarization.pyannote"
 MODEL_ID = "pyannote/speaker-diarization-community-1"
 EXPECTED_RATE = 16_000
-_INIT_KEYS = frozenset({"stub", "model", "device", "faults", "array_dir"})
+_INIT_KEYS = frozenset({"stub", "model", "device", "array_dir"})
 _HINTS = ("num_speakers", "min_speakers", "max_speakers")
 _BACKEND_PARAMS = ("exclusive",)
 _NS_PER_S = 1_000_000_000
+SEGMENTATION_RECEPTIVE_FIELD = 991
+MIN_INPUT_NS = SEGMENTATION_RECEPTIVE_FIELD * _NS_PER_S // EXPECTED_RATE
 
 Turns = list[tuple[str, float, float]]
 
@@ -71,25 +73,24 @@ class Pipeline:
 
 @dataclass(frozen=True)
 class State:
-    """A loaded backend: the model (a stub or the pipeline) and the faults to inject."""
+    """A loaded backend: the model, a stub or the pipeline."""
 
     model: Any  # noqa: ANN401 - a StubModel or a Pipeline
-    faults: FakeFaults
 
 
 def load(init: dict[str, Any]) -> State:
     """Return the worker's state from `init`.
 
     `init` holds `model` (`{"source": "hf", "id", "identity"}`, `identity` a 40-hex commit) and `device`, or
-    `"stub": True`; it may hold `faults`, the fields of `FakeFaults`, and `array_dir`.
+    `"stub": True`; it may hold `array_dir`.
 
     Raises:
         ValueError: on an unknown key, a model that is not a pinned hub commit, or both `stub` and `model`.
     """
-    faults, model = init_model(init, _INIT_KEYS, "pyannote")
+    model = init_model(init, _INIT_KEYS, "pyannote")
     if model is None:
-        return State(StubModel(), faults)
-    return State(Pipeline(model, str(init.get("device", "cpu"))), faults)
+        return State(StubModel())
+    return State(Pipeline(model, str(init.get("device", "cpu"))))
 
 
 def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -105,10 +106,11 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
         raise ValueError(f"unknown backend params {unknown}; known: {list(_BACKEND_PARAMS)}")
     exclusive = bool(params.get("backend_params", {}).get("exclusive", True))
     hints = {key: params.get(key) for key in _HINTS}
+    faults = injected(params)
     results: list[dict[str, Any]] = []
     for item in items:
         try:
-            samples, clock_id = mono_samples(item, state.faults, EXPECTED_RATE, "pyannote")
+            samples, clock_id = mono_samples(item, faults, EXPECTED_RATE, "pyannote", MIN_INPUT_NS)
             turns = state.model.diarize(samples, hints, exclusive)
             results.append(
                 {"outputs": {"turns": intervals(turns, clock_id, round(samples.size / EXPECTED_RATE * _NS_PER_S))}}

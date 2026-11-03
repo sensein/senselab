@@ -8,6 +8,7 @@ from senselab_core.kernel.declare import BackendParams, Env, backend
 from senselab.audio.tasks.speech_to_text.crisperwhisper import (
     DEFAULT_ENGINE,
     MAX_NEW_TOKENS,
+    MIN_INPUT_NS,
     MODEL_ID,
     WORKER_MODULE,
     Engine,
@@ -40,6 +41,7 @@ class CrisperWhisperParams(BackendParams):
     devices=("cuda", "mps", "cpu"),
     env=Env.isolated("crisperwhisper"),
     params=CrisperWhisperParams,
+    min_input_ns=MIN_INPUT_NS,
 )
 class CrisperWhisper:
     """The CrisperWhisper library, verbatim with word timestamps, over the one model it accepts."""

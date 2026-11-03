@@ -14,7 +14,6 @@ from pydantic import Field
 from senselab_core.kernel.declare import InputsAgree, TaskParams, backend, task
 from senselab_core.kernel.results import Intervals, Metric
 from senselab_core.runtime.compare import best_assignment
-from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault
 
 from senselab.metrics import _worker
@@ -128,6 +127,6 @@ def score(inputs: Mapping[str, Any], params: DerParams) -> Metric:
     )
 
 
-def handle(state: FakeFaults, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+def handle(state: None, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
     """Return one `metric@2.0` wire form per item, or its fault."""
     return _worker.serve(state, items, params, DerParams, score)

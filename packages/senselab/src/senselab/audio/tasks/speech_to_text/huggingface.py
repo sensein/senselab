@@ -18,7 +18,7 @@ from senselab_core.kernel.results import Transcript, TranscriptNode
 from senselab_core.kernel.time import Span
 from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime.audio_io import READER
-from senselab_worker.fake import FakeFaults
+from senselab_worker.fake import FakeFaults, injected, without_fault
 
 from senselab._api.declarations import SpeechToTextParams
 from senselab.audio.tasks.speech_to_text.token_confidence import (
@@ -31,7 +31,7 @@ from senselab.item_faults import NS_PER_S, clamp_ns, init_model, mono_check, rai
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.huggingface"
 EXPECTED_RATE = 16_000
-_INIT_KEYS = frozenset({"stub", "model", "device", "faults", "array_dir"})
+_INIT_KEYS = frozenset({"stub", "model", "device", "array_dir"})
 
 
 class TransformersParams(BackendParams):
@@ -62,11 +62,10 @@ class Transformers:
 
 @dataclass(frozen=True)
 class State:
-    """A loaded backend: the pipeline, the sampling rate it takes and the faults to inject."""
+    """A loaded backend: the pipeline and the sampling rate it takes."""
 
     pipe: Any
     sampling_rate: int
-    faults: FakeFaults
 
 
 class StubPipeline:
@@ -104,14 +103,14 @@ def load(init: dict[str, Any]) -> State:
     """Return the worker's state from `init`.
 
     `init` holds `model` (`{"source": "hf", "id", "identity"}`, `identity` a 40-hex commit) and `device`, or
-    `"stub": True` for the stub pipeline; it may hold `faults`, the fields of `FakeFaults`, and `array_dir`.
+    `"stub": True` for the stub pipeline; it may hold `array_dir`.
 
     Raises:
         ValueError: on an unknown key, a model that is not a pinned hub commit, or both `stub` and `model`.
     """
-    faults, model = init_model(init, _INIT_KEYS, "transformers")
+    model = init_model(init, _INIT_KEYS, "transformers")
     if model is None:
-        return State(StubPipeline(), EXPECTED_RATE, faults)
+        return State(StubPipeline(), EXPECTED_RATE)
     from transformers import pipeline  # noqa: PLC0415 - the framework loads in `load` only
 
     pipe = pipeline(
@@ -120,7 +119,7 @@ def load(init: dict[str, Any]) -> State:
         revision=str(model["identity"]),
         device=init.get("device", "cpu"),
     )
-    return State(pipe, int(pipe.feature_extractor.sampling_rate), faults)  # type: ignore[union-attr]
+    return State(pipe, int(pipe.feature_extractor.sampling_rate))  # type: ignore[union-attr]
 
 
 def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -128,13 +127,14 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
 
     Items that pass the checks run in one pipeline call; if it raises, each runs alone so a fault stays with its item.
     """
-    task = SpeechToTextParams.model_validate({k: v for k, v in params.items() if k != "backend_params"})
+    task = SpeechToTextParams.model_validate({k: v for k, v in without_fault(params).items() if k != "backend_params"})
+    faults = injected(params)
     tuning = TransformersParams.model_validate(params.get("backend_params", {}))
     results: list[dict[str, Any] | None] = [None] * len(items)
     ready: list[tuple[int, _Prepared]] = []
     for index, item in enumerate(items):
         try:
-            ready.append((index, _prepare(state, item)))
+            ready.append((index, _prepare(state, item, faults)))
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
             results[index] = {"error": exc}
     try:
@@ -156,8 +156,8 @@ class _Prepared:
     duration_ns: int
 
 
-def _prepare(state: State, item: dict[str, Any]) -> _Prepared:
-    raise_injected(item["id"], state.faults)
+def _prepare(state: State, item: dict[str, Any], faults: FakeFaults) -> _Prepared:
+    raise_injected(item["id"], faults)
     value = item["inputs"]["audio"]
     if isinstance(value, dict):
         samples, rate, clock_id = wire_audio(value)

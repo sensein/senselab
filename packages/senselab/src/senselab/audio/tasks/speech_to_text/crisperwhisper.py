@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal, get_args
 
 import numpy
-from senselab_worker.fake import FakeFaults
+from senselab_worker.fake import injected
 
 from senselab.item_faults import NS_PER_S, clamp_ns, init_model, mono_samples
 
@@ -30,10 +30,12 @@ ENGINES: tuple[Engine, ...] = get_args(Engine)
 DEFAULT_ENGINE: Engine = "transformers"
 MAX_NEW_TOKENS = 256
 EXPECTED_RATE = 16_000
+WHISPER_N_FFT = 400
+MIN_INPUT_NS = WHISPER_N_FFT * NS_PER_S // EXPECTED_RATE
 LONGFORM_STRATEGY = "continuation"
 DEFAULT_LANGUAGE = "en"
 COMPUTE_TYPES = {"cuda": "float16", "mps": "float16", "cpu": "float32"}
-_INIT_KEYS = frozenset({"stub", "model", "device", "faults", "array_dir"})
+_INIT_KEYS = frozenset({"stub", "model", "device", "array_dir"})
 
 
 @dataclass(frozen=True)
@@ -58,11 +60,10 @@ class StubModel:
 
 @dataclass
 class State:
-    """A loaded backend: the pinned model, the device, the faults to inject and the engines built so far."""
+    """A loaded backend: the pinned model, the device and the engines built so far."""
 
     model: Mapping[str, Any] | None
     device: str
-    faults: FakeFaults
     engines: dict[str, Any] = field(default_factory=dict)
 
 
@@ -70,16 +71,16 @@ def load(init: dict[str, Any]) -> State:
     """Return the worker's state from `init`.
 
     `init` holds `model` (`{"source": "hf", "id", "identity"}`, `identity` a 40-hex commit) and `device`, or
-    `"stub": True`; it may hold `faults`, the fields of `FakeFaults`, and `array_dir`.
+    `"stub": True`; it may hold `array_dir`.
 
     Raises:
         ValueError: on an unknown key, a model that is not a pinned hub commit, or both `stub` and `model`.
     """
     device = str(init.get("device", "cpu"))
-    faults, model = init_model(init, _INIT_KEYS, "crisperwhisper")
+    model = init_model(init, _INIT_KEYS, "crisperwhisper")
     if model is None:
-        return State(None, device, faults, {engine: StubModel() for engine in ENGINES})
-    return State(model, device, faults)
+        return State(None, device, {engine: StubModel() for engine in ENGINES})
+    return State(model, device)
 
 
 def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -96,10 +97,11 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
         raise ValueError(f"timestamps is word, segment or none, got {timestamps!r}")
     language = str(params.get("language") or DEFAULT_LANGUAGE)
     engine = _engine(state, tuning["engine"])
+    faults = injected(params)
     results: list[dict[str, Any]] = []
     for item in items:
         try:
-            samples, clock_id = mono_samples(item, state.faults, EXPECTED_RATE, "crisperwhisper")
+            samples, clock_id = mono_samples(item, faults, EXPECTED_RATE, "crisperwhisper", MIN_INPUT_NS)
             decoded = engine.transcribe(samples, language, tuning["max_new_tokens"])
             duration_ns = round(samples.size / EXPECTED_RATE * NS_PER_S)
             results.append({"outputs": {"transcript": transcript(decoded, timestamps, clock_id, duration_ns)}})

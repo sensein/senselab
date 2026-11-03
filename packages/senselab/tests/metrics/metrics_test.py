@@ -276,13 +276,12 @@ class _NoParams(BaseModel):
 def test_a_scorer_bug_is_infrastructure_with_a_gap_not_a_content_fault() -> None:
     """A bare `RuntimeError` out of a scorer is infrastructure with `gap: true`, never the item's content."""
     from senselab.metrics._worker import serve
-    from senselab_worker.fake import FakeFaults
     from senselab_worker.faults import error_record
 
     def broken(inputs: Any, params: Any) -> Any:  # noqa: ANN401
         raise RuntimeError("CUDA error: device-side assert triggered")
 
-    [result] = serve(FakeFaults.from_json({}), [{"id": "a", "inputs": {}}], {}, _NoParams, broken)
+    [result] = serve(None, [{"id": "a", "inputs": {}}], {}, _NoParams, broken)
     record = error_record(result["error"])
     assert (record["fault"], record["gap"]) == ("infrastructure", True)
 

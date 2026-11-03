@@ -49,10 +49,10 @@ class RealWorkers:
         self.started: list[WorkerClient] = []
         self.serving = False
 
-    def __call__(self, task: str, name: str, faults: Mapping[str, Any] | None = None) -> WorkerClient | InProcessWorker:
+    def __call__(self, task: str, name: str) -> WorkerClient | InProcessWorker:
         """Stop the workers started before, then return a started worker of backend `name` of `task`.
 
-        `faults` (the `FakeFaults` fields) go in its init.
+        Faults are injected per request, by `params["_fault"]`.
 
         Raises:
             ValueError: `task` has no backend `name`.
@@ -63,7 +63,7 @@ class RealWorkers:
             raise ValueError(f"{task!r} has no backend {name!r}")
         backend = found[0]
         self.close()
-        init: dict[str, Any] = {"device": self.device, "faults": dict(faults or {})}
+        init: dict[str, Any] = {"device": self.device}
         entry = packaged().catalogue.backend_entry(backend)
         if entry is not None:
             init["model"] = {"source": "hf", "id": entry.id, "identity": entry.revision}

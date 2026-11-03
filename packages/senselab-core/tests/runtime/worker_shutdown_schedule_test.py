@@ -192,8 +192,8 @@ def test_every_death_carries_its_exit_code(parent: Path, how: str) -> None:
         assert code == EXIT_CRASH and f"exit code {EXIT_CRASH}" in message
         assert client_code == EXIT_CRASH
         return
-    init = {} if how == "idle_sigkill" else {"faults": {"crash_after": 0}}
-    client = WorkerClient(PYTHON, FAKE, init=init, array_parent=parent)
+    params = {} if how == "idle_sigkill" else {"_fault": {"crash_after": 0}}
+    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=parent)
     try:
         expected = EXIT_CRASH
         if how == "idle_sigkill":
@@ -201,7 +201,7 @@ def test_every_death_carries_its_exit_code(parent: Path, how: str) -> None:
             _await_exit(client)
             expected = -signal.SIGKILL
         with pytest.raises(WorkerLost) as lost:
-            client.run([{"id": "a", "inputs": {}}], {})
+            client.run([{"id": "a", "inputs": {}}], params)
         assert lost.value.returncode == expected and f"exit code {expected}" in str(lost.value)
         assert client.returncode == expected
     finally:
