@@ -668,45 +668,33 @@ failure; the executor owns execution, release, retries and fault effects.
 ### Task 12: Lease renewal (R-111)
 
 **Model:** opus implements (leases); fable reviews (lease protocol proof, roster rule). **Tier:** logic; limits on
-ORCD (cross-node NFS). **Implements:** ADR-003 (D-2 amendment), H-R40 (no modification in place), `execution.md` §3.2,
+ORCD (cross-node NFS). **Implements:** ADR-003 (amendment 2026-11-03), H-R40 (no modification in place), `execution.md` §3.2,
 R-111; ruling P3-30. **Depends on:** Task 2.
 
 **Files:** `runtime/locks.py`, `packages/senselab-core/tests/runtime/{locks,locks_timing}_test.py`, the cross-node
 probe beside the Phase 1 NFS checks.
 
-**Interfaces** (against the code as it stands: `Lease` holds no descriptor; `_try_take` links a private fsynced
-temporary at `<name>.lease` and closes it; a breaker's `_take_aside` renames the lease name aside, tests it by
-`(st_dev, st_ino, st_mtime_ns)` and links it back if it was not the judged file):
-- `Lease.renew() -> None`, by the holder only:
-  1. read the record at the lease name; if it carries the holder's token, go on; if the name is missing or carries
-     another token, wait one `POLL_S` and read once more, because a breaker's `_take_aside` window links a lease it did
-     not judge back; if it still does not carry the token, raise `LeaseLost`;
-  2. write the same identity (same token) to a fresh private temporary (`open_new` with `O_EXCL | O_NOFOLLOW`,
-     fsync), exactly as `_try_take` does;
-  3. `rename` the temporary over the lease name (atomic), so the lease is a new file with a new inode and mtime; a
-     breaker that judged the old `(dev, ino, mtime)` finds `_is` false and does not break it;
-  4. read the record at the name again; if it does not carry the token, raise `LeaseLost` (another taker won a race
-     after step 1; the overlap is duplicate work, within ADR-003's idempotence).
-  Nothing is modified in place (D-2, H-R40).
-- `Lease.keep_alive() -> ContextManager[LeaseState]`: a renewer thread owned by the lease, not by the work it
-  guards, calls `renew()` every `pool.lease_renew_fraction × stale_after` (data, with a derivation; the fraction
-  leaves room for clock skew and attribute-cache delay) for as long as the holder runs, so a task that writes nothing
-  to the cache still keeps its lease. This renewal is the heartbeat; what D-2 removed was an in-place heartbeat file
-  and pid-liveness takeover. A failed or late renewal sets `LeaseState.lost`; the holder then stops renewing and does
-  not commit as owner (its content-addressed result may still be committed by rename, which is idempotent).
-- Every temporary and staging directory is created in the directory of its target, so `link` and `rename` never cross
-  a filesystem (`EXDEV` is a `LeaseUnavailable`, never a copy). A lease's age is read by a fresh `stat` against the
-  storage clock (a probe file's mtime), never the node clock.
+**Interfaces** (ADR-003 amendment 2026-11-03, owner item 58: the lease becomes a directory; this task replaces
+`_try_take`'s `O_EXCL` link and `_take_aside`'s `(dev, ino, mtime)` judgement):
+- **Take:** `mkdir <name>.lease`, then `mkdir <name>.lease/<token>`; an `EEXIST` on the second with the holder's own
+  token is its own (lost NFS reply). Every path is inside `<name>.lease`, so nothing crosses a filesystem.
+- `Lease.keep_alive() -> ContextManager[LeaseState]`: a renewer thread owned by the lease, independent of the work,
+  creates `<token>/beat-<n+1>` and removes `<token>/beat-<n>` every `pool.lease_renew_fraction × stale_after` (data,
+  with a derivation; bounded by the root's measured attribute delay, Task 16). This is the heartbeat; a task that
+  writes nothing keeps its lease. A beat `mkdir` failing with `ENOENT` sets `LeaseState.lost`; the holder stops and
+  does not commit as owner (a content-addressed result committed by rename stays idempotent).
+- **Judge and break:** the lease's age is a fresh `stat` of `<token>/` against the storage clock (a probe
+  directory's mtime), never the node clock; past `stale_after` a breaker renames `<name>.lease` aside and takes its
+  own. **Release:** rename aside, then remove.
+- No file is written or rewritten under the lease (D-2, H-R40); no pid-liveness takeover.
 
 - [ ] **Step 1: Failing tests (local):** `test_keep_alive_renews_while_the_work_writes_nothing`,
-  `test_keep_alive_stops_and_marks_lost_when_renewal_fails`, `test_staging_never_crosses_a_filesystem` (`EXDEV`
-  injected at the `os` boundary), `test_renewed_lease_survives_stale_bound` (storage-clock time advanced at the
-  `os` boundary), `test_dead_holder_lease_broken_after_bound`, `test_renew_after_break_raises_lease_lost`,
-  `test_renew_during_breaker_aside_window_keeps_lease` (a planted pause inside `_take_aside` at the `os` boundary),
-  `test_breaker_judging_old_identity_does_not_break_renewed_lease`, `test_renew_never_writes_the_held_file` (the held
-  inode's bytes and mode unchanged).
+  `test_beat_after_break_marks_lost` (`ENOENT` on the beat), `test_lost_mkdir_reply_with_own_token_is_held`
+  (`EEXIST` injected at the `os` boundary), `test_dead_holder_lease_broken_after_bound`,
+  `test_breaker_never_breaks_a_beating_lease` (storage-clock time advanced at the `os` boundary),
+  `test_no_file_is_written_under_the_lease`, `test_root_without_atomic_mkdir_is_refused`.
 - [ ] **Step 2: Implement; Step 3 (local):** `uv run --no-sync pytest packages/senselab-core/tests/runtime/locks_test.py -m "logic or contract"`.
-- [ ] **Step 4:** Review and compact, commit `feat(core): leases renew by renaming a fresh lease over the held one`;
+- [ ] **Step 4:** Review and compact, commit `feat(core): a lease is a directory, renewed by beats`;
   push; CI green. Spec commit: ADR-003 amendment (renewal); close R-111.
 - [ ] **Step 5 (orcd, three CPU nodes on the shared filesystem, at that SHA):** a holder on node A renews past
   `stale_after` while B and C try to break it; then A is SIGKILLed and B takes it within one bound. Recorded beside the
@@ -850,11 +838,11 @@ modify `runtime/storage.py` (`probe_capabilities`), `runtime/planner.py` (probe 
 - `scale(queues: QueueSet, substrate: Substrate, profile: ExecutionProfile) -> None`: per class, target workers =
   min(queue depth ÷ `pool.quantum_items`, `max_workers`, QOS CPU cap ÷ cpus per task), called by the coordinator each
   round.
-- `probe_capabilities(root: Path) -> StorageCapabilities{atomic_rename, rename_over_open, exclusive_link,
-  link_reply_confirmed, server_clock, attribute_delay_s}`, measured on the root itself (not assumed from its
-  filesystem type), so NFS v3/v4, Lustre, GPFS, SMB and local disks are each judged by what they do; a store with no
-  rename (an object store) fails `atomic_rename`. A plan whose store or run directory fails it is refused with
-  `StorageUnsupported` naming the missing primitive; `attribute_delay_s` bounds the lease renew fraction (Task 12).
+- `probe_capabilities(root: Path) -> StorageCapabilities{atomic_mkdir, directory_rename, dir_mtime_server_clock,
+  atomic_rename, attribute_delay_s}`, measured on the root itself (not assumed from its filesystem type), so NFS
+  v3/v4, Lustre, GPFS, SMB and local disks are each judged by what they do; a store with no directories (an object
+  store) fails `atomic_mkdir`. A plan whose store or run directory fails it is refused with `StorageUnsupported`
+  naming the missing primitive; `attribute_delay_s` bounds the lease renew fraction (Task 12).
 - A pool runs only where its store is reachable from every substrate (P3-39).
 
 - [ ] **Step 1: Failing tests (local, fake `sbatch` on `PATH`):** `test_scale_bounded_by_qos_cap`,
@@ -1039,7 +1027,7 @@ it in Phase 3 (P3-52).
 | 42 | **A2** batched polling, arrays | sonnet / opus | one `squeue --me` per poll cycle; `sbatch --array` for split states through the tuple path; ORCD Slurm test of 100 elements | A1 |
 | 43 | **B1** benchmarks | sonnet / opus | proposal 0001's scripts in `benchmark.py`; per-item cold and cached cost printed for `debug` and `cf` | — |
 | 44 | **B2** cheap submission | opus / fresh sonnet | no re-pickle for in-process workers; `_job.pklz` only for remote and failed jobs; one `scandir` per cache root per round; targets < 0.5 ms cold and < 0.1 ms cached per trivial item, measured by B1 on an idle node | B1 |
-| 45 | **C** leases and atomic commit inside the store | opus / fable (lease proof) | the job runs in `<checksum>/` under a lease with ADR-003 semantics: `O_EXCL` link, broken when its age on the storage clock passes `stale_after`, renewed periodically by renaming a fresh lease over the held one from a renewer independent of the job (the heartbeat; a long job that writes nothing keeps its lease), no in-place heartbeat file and no pid-liveness takeover (P3-48); every temporary and staging path is in the target's directory, so no `link` or `rename` crosses a filesystem; result committed by write-then-rename; `clean_stale_locks` becomes lease expiry; tests: two-process race, a job running past `stale_after` that writes nothing keeps its lease, SIGKILL then takeover after `stale_after`, `EXDEV` refused, read-only shared cache. The same PR amends proposal 0001 §3.3, and the senselab spec commit for this task amends `pydra-extension-points.md` §5's "a lease with a heartbeat" line to match | D1 |
+| 45 | **C** leases and atomic commit inside the store | opus / fable (lease proof) | the job runs in `<checksum>/` under an ADR-003 lease (amendment 2026-11-03): a directory taken by `mkdir` with the holder's token, kept alive by beat directories from a renewer independent of the job (a long job that writes nothing keeps its lease), broken by rename aside once its age on the storage clock passes `stale_after`, no pid-liveness takeover (P3-48); every path stays inside the lease or the target's directory, so nothing crosses a filesystem; result committed by write-then-rename; `clean_stale_locks` becomes lease expiry; tests: two-process race, a job running past `stale_after` that writes nothing keeps its lease, SIGKILL then takeover after `stale_after`, a root without atomic `mkdir` refused, read-only shared cache. The same PR amends proposal 0001 §3.3, and the senselab spec commit for this task amends `pydra-extension-points.md` §5's "a lease with a heartbeat" line to match | D1 |
 | 46 | **D2** `PortableStore` | opus / fresh sonnet | JSON for scalars and attrs records, `.npy` arrays, files as files, pickle only for unregistered types; versioned layout `tasks-v<N>/`; no reader of an older layout (owner item 52) | D1 |
 | 47 | **E2** partial `State` refactor | opus, effort higher / fresh opus | per-element readiness for the re-split case; the full splitter/combiner matrix and `debug`/`cf` parity | E1a, E1b |
 | 48 | **G2** `Venv` environment and runner | sonnet / opus | `Venv(path= \| python=, lock=)`; same-version tasks cloudpickled, others by import reference with `PortableStore` inputs; a `__main__`/closure function raises a clear error; uv-managed interpreters only | D2, G1 |
@@ -1146,11 +1134,10 @@ them. A ruling that changes an ADR decision takes effect only through the dated 
   built.
 - **P3-29** ruling: `resume` re-checks the manifest's stamps and refuses a changed input; a changed dataset is a new
   plan.
-- **P3-30** controller ruling (supersedes the planner's; corrected 2026-11-03, owner): Renewal never modifies a lease
-  in place (D-2, H-R40): the holder checks its token, writes a new lease file with the same token and atomically
-  renames it over the held one, then checks the token again. Renewal is periodic and runs from a renewer owned by the
-  lease (`Lease.keep_alive`), independent of the work, so it is the heartbeat; D-2 removed only the in-place heartbeat
-  file and pid-liveness takeover. The breaker's aside window is tolerated by one re-read before `LeaseLost`.
+- **P3-30** controller ruling (corrected 2026-11-03, owner item 58): A lease is a directory taken by `mkdir` with the
+  holder's token; renewal is the heartbeat, beat directories created and removed by a renewer owned by the lease
+  (`Lease.keep_alive`), independent of the work; nothing is written or rewritten under the lease (D-2, H-R40); no
+  pid-liveness takeover (ADR-003 amendment 2026-11-03).
 - **P3-31** ruling: `work_pool.py` is not moved, because 1.x `reproduce` modules and tests still import it (R-128,
   ADR-009: a 1.x module goes when its last use case moves); `execution/queue.py` and `execution/substrates.py` are
   rewritten from the ADR-003 design with it as the named source.
@@ -1187,10 +1174,10 @@ them. A ruling that changes an ADR decision takes effect only through the dated 
 - **P3-46** ruling: Where design §4.8 (I-3, I-4), §6.2 and `testing.md` §4 say "measured tolerance", Phase 3 uses P2-95
   type comparisons under run-config thresholds; Task 22 amends the text.
 - **P3-47** ruling: The docs example for Phase 3 is the LibriSpeech BIDS `.map`.
-- **P3-48** ruling (owner attention, revised): pydra's C uses ADR-003 lease semantics: takeover once the lease's age on
-  the storage clock passes `stale_after`, periodic renewal by renaming a fresh lease over the held one (the heartbeat, from a renewer
-  independent of the job), no in-place heartbeat file and no pid-liveness takeover, in place of proposal 0001 §3.3's "owner, host, pid, heartbeat, TTL takeover" (owner item 50).
-  Task 45 amends the proposal and `pydra-extension-points.md` §5's heartbeat line.
+- **P3-48** ruling (owner attention, revised 2026-11-03): pydra's C uses ADR-003 leases as amended 2026-11-03 (owner
+  item 58): a directory taken by `mkdir`, renewed by beat directories (the heartbeat), takeover once its age on the
+  storage clock passes `stale_after`, no pid-liveness takeover, in place of proposal 0001 §3.3's "owner, host, pid,
+  heartbeat, TTL takeover" (owner item 50). Task 45 amends the proposal and `pydra-extension-points.md` §5.
 - **P3-49** ruling: The spike and Task 9b assert that no `_result.pklz` is written; `_job.pklz` may remain until B2
   and D2 land, and its absence is not claimed in Phase 3.
 - **P3-50** ruling: A node's `backend_params` are keyed by backend name; only the placed backend's entry reaches its
