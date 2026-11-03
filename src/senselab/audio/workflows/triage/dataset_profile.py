@@ -54,6 +54,7 @@ DATASET_PATHS = frozenset(
         "discard_contested.yaml",
         "evaluation",
         "task_lexicon",
+        "tasks.yaml",
         "time_release.yaml",
     }
 )
@@ -296,6 +297,7 @@ REQUIRED_DATASET_PATHS = (
     "airway_event_requirements.yaml",
     "airway_event_tokens.yaml",
     "discard_contested.yaml",
+    "tasks.yaml",
     "time_release.yaml",
 )
 """Dataset paths every run reads; a profile must supply them."""

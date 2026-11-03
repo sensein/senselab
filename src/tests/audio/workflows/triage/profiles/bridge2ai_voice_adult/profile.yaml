@@ -33,5 +33,6 @@ files:
   task_lexicon: task_lexicon
   task_minimum_duration.yaml: task_minimum_duration.yaml
   task_speech.yaml: task_speech.yaml
+  tasks.yaml: tasks.yaml
   time_release.yaml: time_release.yaml
   word_timing.yaml: word_timing.yaml

@@ -23,6 +23,7 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.hint_record import hint_attributes
 from senselab.audio.workflows.triage.identity import identity_of
 from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
+from senselab.audio.workflows.triage.task_catalogue import task_attributes
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import ProvStore, file_attributes, file_digest
 
@@ -58,7 +59,8 @@ def admit(
         store: The provenance store.
         source: The recording, as supplied.
         config: The triage configuration. Unread.
-        hint: What the recording was declared to contain. Read for the identity it declares, and recorded.
+        hint: What the recording was declared to contain. Read for the identity and the task it declares, and
+            recorded.
         run_dir: The run directory. Unused.
 
     Returns:
@@ -68,7 +70,7 @@ def admit(
         TypeError: If ``source`` is not a path or a string. Nothing is recorded.
     """
     source = Path(source)
-    declared = {**identity_of(source.stem, hint).as_attributes(), **hint_attributes(hint)}
+    declared = {**identity_of(source.stem, hint).as_attributes(), **hint_attributes(hint), **task_attributes(hint)}
     activity_id = store.activity(node=NODE, step=None, parameters={"audio_file": str(source), **declared})
     agent_id = software_agent(store)
     store.was_associated_with(activity_id, agent_id)

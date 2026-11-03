@@ -16,7 +16,7 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
     detector_value,
     sweep_points,
 )
-from senselab.audio.workflows.triage.routing_analysis.families import declared_kinds, task_family, task_id_of
+from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
 from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
     bracket_type,
@@ -140,7 +140,6 @@ __all__ = [
     "bracket_type",
     "bucket_augmentation",
     "bucket_coverage",
-    "declared_kinds",
     "detector_value",
     "disagreements",
     "draw_gate_matrix",

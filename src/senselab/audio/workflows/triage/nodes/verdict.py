@@ -112,7 +112,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
 )
 from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
 from senselab.audio.workflows.triage.quality_join import QUALITY_JOIN
-from senselab.audio.workflows.triage.routing_analysis.families import LEXICAL_SPEECH, SYLLABLE_REPETITION
+from senselab.audio.workflows.triage.task_catalogue import LEXICAL_SPEECH_KIND, SYLLABLE_PATTERNS, is_kind
 from senselab.audio.workflows.triage.task_extent import STIMULUS_EXTENT_CHECK, task_extent_parameters
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.task_speech import (
@@ -619,7 +619,7 @@ def _task_evidence(
     speech = EXPECTATIONS["SPEECH"].get(declared_family or "") if "SPEECH" in owners else None
     ddk_mode: str | None = None
     ddk: dict[str, Any] | None = None
-    if speech is not None and declared_family in SYLLABLE_REPETITION:
+    if speech is not None and speech.pattern in SYLLABLE_PATTERNS:
         ddk_mode = CYCLE if speech.pattern == Pattern.SYLLABLE_SEQUENCE else SYLLABLE
         ddk, missing = _speech_ddk_reading(store)
         absent = missing if ddk is not None or missing else absent
@@ -784,7 +784,7 @@ def _speech_before_task(store: ProvStore, declared_family: str | None) -> dict[s
     Returns:
         The reading; empty for any other family, where no task extent stands, or where no word precedes it.
     """
-    if declared_family not in LEXICAL_SPEECH or non_lexical_family(declared_family):
+    if not is_kind(declared_family, LEXICAL_SPEECH_KIND) or non_lexical_family(declared_family):
         return {}
     extents = [span.extent for span in standing_task_extents(live_entities(store, "span")) if span.extent is not None]
     if not extents:

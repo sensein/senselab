@@ -108,11 +108,12 @@ WINDOW_RUN_BOUNDARIES = "hear_window_run"
 TASK_EXTENT = "task_extent"
 """The role of the one span covering the part of the recording that serves the task."""
 
+ROUTE_VARIANT = "route"
+"""The ``AudioHints.task_variant`` key a recording declares its route under (``nose`` or ``mouth``)."""
+
 ACTIVITY_ENVELOPE = "activity_envelope"
 """``extent_from`` on a ``task_extent`` taken over the amplitude spans because no event was placed."""
 
-ROUTE_INDEX_KEY = "airway.route_by_task_index"
-"""The config key mapping a task's trailing index to the route its instruction prescribes."""
 
 INSTRUMENT_ABSENT = "event_instrument"
 """The measurement name recording that a derivative a mode needs never reached the store."""
@@ -583,21 +584,23 @@ def lexical_intrusions(store: ProvStore) -> list[Finding]:
 
 
 def declared_route(expectation: Expectation, store: ProvStore, params: BranchParams) -> str | None:
-    """The route the instruction prescribes, from the row or from the task's trailing index.
+    """The route the instruction prescribes: the task's, or the recording's where the task declares it per recording.
 
     Args:
         expectation: The row.
         store: The provenance store.
-        params: The operating points, whose config carries the index map.
+        params: The operating points. Unread.
 
     Returns:
-        The declared route, or None when neither carrier names one.
+        The declared route, or None when neither the task nor the recording's hint names one.
     """
-    if not expectation.route_from_index:
+    if not expectation.route_per_recording:
         return expectation.declared_route
-    routes = {str(index): str(route) for index, route in (params.config.require(ROUTE_INDEX_KEY) or {}).items()}
-    segment = declared_task_id(store).rsplit("-", 1)[-1]
-    return routes.get(segment)
+    from senselab.audio.workflows.triage.task_catalogue import recorded_task  # noqa: PLC0415
+
+    task = recorded_task(store)
+    route = task.variant.get(ROUTE_VARIANT) if task is not None else None
+    return str(route) if route else None
 
 
 def route_findings(
@@ -615,7 +618,7 @@ def route_findings(
         The declared route and the findings — nothing at all for a row that declares no route.
     """
     route = declared_route(expectation, store, params)
-    if route is None and not expectation.route_from_index:
+    if route is None and not expectation.route_per_recording:
         return None, []
     return route, [
         count("declared_route", None, route),

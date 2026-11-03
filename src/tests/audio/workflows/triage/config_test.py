@@ -222,26 +222,27 @@ class TestDatasetProfileLayer:
 class TestOverridesMayExtendADataMap:
     """A schema key is a name the code reads; a data-map key is a value the data supplies."""
 
-    def test_a_new_route_index_entry_is_accepted(self, tmp_path: Path) -> None:
-        """A campaign numbering its breathing trials differently must not have to edit the package."""
+    def test_a_new_entry_is_accepted(self, tmp_path: Path) -> None:
+        """A campaign adding a gate value for one pattern group must not have to edit the package."""
         override = tmp_path / "o.yaml"
-        override.write_text("airway:\n  route_by_task_index:\n    5: nose\n")
+        override.write_text("verdict:\n  gates:\n    by_group:\n      EVENT_SERIES:\n        events_max: 9\n")
         cfg = load_triage_config(override)
-        assert cfg.require("airway.route_by_task_index")[5] == "nose"
+        assert cfg.require("verdict.gates.by_group.EVENT_SERIES")["events_max"] == 9
 
     def test_the_packaged_entries_of_a_non_null_data_map_survive_the_addition(self, tmp_path: Path) -> None:
         """An additive override that silently dropped a packaged entry would disable it."""
+        packaged = dict(load_triage_config().require("verdict.gates.by_group.EVENT_SERIES"))
         override = tmp_path / "o.yaml"
-        override.write_text("airway:\n  route_by_task_index:\n    5: nose\n")
-        resolved = load_triage_config(override).require("airway.route_by_task_index")
-        assert resolved == {1: "nose", 2: "mouth", 3: "nose", 4: "mouth", 5: "nose"}
+        override.write_text("verdict:\n  gates:\n    by_group:\n      EVENT_SERIES:\n        events_max: 9\n")
+        resolved = load_triage_config(override).require("verdict.gates.by_group.EVENT_SERIES")
+        assert resolved == {**packaged, "events_max": 9}
 
     def test_an_existing_entry_is_replaced_not_merged(self, tmp_path: Path) -> None:
         """The value under a data-map key is data; the override replaces what it names."""
         override = tmp_path / "o.yaml"
-        override.write_text("airway:\n  route_by_task_index:\n    1: mouth\n")
-        resolved = load_triage_config(override).require("airway.route_by_task_index")
-        assert resolved[1] == "mouth"
+        override.write_text("verdict:\n  gates:\n    by_group:\n      EVENT_SERIES:\n        score_min: 0.7\n")
+        resolved = load_triage_config(override).require("verdict.gates.by_group.EVENT_SERIES")
+        assert resolved["score_min"] == 0.7
 
     def test_a_null_data_map_still_takes_a_whole_mapping(self, tmp_path: Path) -> None:
         """The control: the paths that ship null must keep accepting the mapping that fills them."""

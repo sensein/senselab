@@ -6,7 +6,7 @@ Two kinds of task have a defined content, so speech outside it can be read:
   bracketed, not a vocalisation (:func:`~senselab.audio.workflows.triage.residue.is_non_lexical`) -- that is
   neither the voice family's declared task text nor a recogniser's misreading of the task's own events
   (:func:`~senselab.audio.workflows.triage.task_content.task_content_ids`) is speech outside the task. A
-  lexical family declared in ``data/task_speech.yaml`` ``voice_task_text`` (``loudness``) is read the same way,
+  lexical task whose task-list entry names a ``voice_reading_text`` (``loudness``) is read the same way,
   its declared words standing for the voice family's task text (:func:`lexical_voice_family`).
 - An item-set family (fluency, item generation) asks for a list of open-vocabulary items. Its lexical words are
   split into utterances at pauses (:func:`utterances`) and each utterance is an item or a phrase
@@ -38,6 +38,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_measurement,
 )
 from senselab.audio.workflows.triage.residue import is_function_word, is_non_lexical, token_key
+from senselab.audio.workflows.triage.task_catalogue import voice_reading_text
 from senselab.audio.workflows.triage.task_content import task_content_ids, task_content_parameters, task_events
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -62,18 +63,15 @@ def task_speech_parameters() -> dict[str, Any]:
 
 
 def voice_task_text(family: str | None) -> tuple[str, ...] | None:
-    """The declared task text of a lexical family read as a voice task (``task_speech.yaml`` ``voice_task_text``).
+    """The words a word task is also read for its voice over (the task list's ``voice_reading_text``).
 
     Args:
-        family: The declared family, or None.
+        family: The declared task, or None.
 
     Returns:
-        The family's task-text words; None for a family not declared there.
+        The words; None for a task not read so.
     """
-    table = task_speech_parameters().get("voice_task_text") or {}
-    if not family or family not in table:
-        return None
-    return tuple(str(word) for word in table[family] or ())
+    return voice_reading_text(family)
 
 
 def lexical_voice_family(family: str | None) -> bool:
@@ -83,7 +81,7 @@ def lexical_voice_family(family: str | None) -> bool:
         family: The declared family, or None.
 
     Returns:
-        True for a family under ``task_speech.yaml`` ``voice_task_text``.
+        True for a task whose task-list entry names a ``voice_reading_text``.
     """
     return voice_task_text(family) is not None
 
@@ -517,10 +515,9 @@ def category_member_ids(words: Sequence[Entity], family: str | None, hint: Audio
     """
     if not item_set_family(family):
         return set()
-    from senselab.audio.workflows.triage.nodes.branches import item_category  # noqa: PLC0415
-    from senselab.audio.workflows.triage.task_lexicon import category_members  # noqa: PLC0415
+    from senselab.audio.workflows.triage.task_lexicon import category_members, recording_category  # noqa: PLC0415
 
-    positions = category_members(item_category(str(family), hint), [str(w.attributes.get("text") or "") for w in words])
+    positions = category_members(recording_category(family, hint), [str(w.attributes.get("text") or "") for w in words])
     return {words[i].id for i in positions}
 
 

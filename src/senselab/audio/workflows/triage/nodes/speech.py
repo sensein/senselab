@@ -119,7 +119,6 @@ from senselab.audio.workflows.triage.nodes.ddk import (
 )
 from senselab.audio.workflows.triage.nodes.redact import category_family
 from senselab.audio.workflows.triage.residue import is_content_word, is_non_lexical, residue_rule, task_residue
-from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.speaker_share import speakers_within
 from senselab.audio.workflows.triage.stimulus import (
     LexicalWord,
@@ -127,6 +126,12 @@ from senselab.audio.workflows.triage.stimulus import (
     StimulusAlignment,
     align_stimulus,
     near_match,
+)
+from senselab.audio.workflows.triage.task_catalogue import (
+    SYLLABLE_PATTERNS,
+    SYLLABLE_REPETITION_KIND,
+    is_kind,
+    item_category_rule,
 )
 from senselab.audio.workflows.triage.task_extent import STIMULUS_EXTENT_CHECK, enabled, extent_check
 from senselab.audio.workflows.triage.task_lexicon import category_members, task_lexicon
@@ -150,8 +155,6 @@ SEPARABLE_SOURCES = 2
 SEPARATED_PREFIX = "separated_"
 """The stem prefix of each separated source stream, ``separated_<index>``."""
 NONTARGET_LEGS = ("level_db", "tilt_db_per_octave", "d_to_r_db")
-REPETITION_ALLOWED_CATEGORIES = ("Letters", "Numbers")
-"""The `random-item-generation` categories whose own instruction permits repeating an item."""
 
 
 def diarization_measurement(stream: str) -> str:
@@ -1521,17 +1524,21 @@ def _speech_item_list(
     """
     points = params
     category, category_from = item_category_of(task_family, hint)
+    rule = item_category_rule(task_family, category)
     findings: list[Finding] = []
     repetition_allowed: bool | None
     if expectation.repetition_from_category:
         if category is None:
             repetition_allowed = None
             findings.append(unviable("repetition_rule", "no category is declared for this recording"))
+        elif rule is None:
+            repetition_allowed = None
+            findings.append(unviable("repetition_rule", f"the task's entry lists no category {category!r}"))
         else:
-            repetition_allowed = category in REPETITION_ALLOWED_CATEGORIES
+            repetition_allowed = rule.repetition_allowed
     else:
         repetition_allowed = bool(expectation.repetition_allowed)
-    members = category_members(category, [word_text(word) for word in lexical_words(store)])
+    members = category_members(rule, [word_text(word) for word in lexical_words(store)])
 
     items = lexical_words(store)
     components: list[Proposal] = []
@@ -1619,7 +1626,7 @@ def align_speech(
     if expectation is None:
         raise KeyError(f"{task_family} is not a SPEECH family; the caller owes detect_speech")
     params.bind(expectation.pattern, task_family)
-    if task_family in SYLLABLE_REPETITION:
+    if expectation.pattern in SYLLABLE_PATTERNS:
         return align_ddk(expectation, store, params, reads=reads)
     if expectation.pattern is Pattern.ORDERED_TOKENS:
         return _speech_ordered(expectation, store, hint, params)
@@ -1771,7 +1778,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
 
     result = dispatch(NODE, store, params, hint, align=_align, detect=detect_speech)
     expectation_findings = [*result.deviations, *params.record()]
-    syllable = syllable_detail(result) if declared_family in SYLLABLE_REPETITION and mode == "align" else {}
+    syllable = syllable_detail(result) if is_kind(declared_family, SYLLABLE_REPETITION_KIND) and mode == "align" else {}
     if syllable:
         if reads.envelope is None:
             notes.append(NO_ENVELOPE)

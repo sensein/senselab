@@ -36,7 +36,7 @@ families:
       The participant answers an open question about their own life. The question's own words are task
       content; the answer is about the speaker and is judged as usual, places, people and dates included.
 # What kind of task each declared family is, as both the reviewer and the second opinion are told it.
-# A family matches a nature as it matches a guidance entry above. Families: routing_analysis/families.py
+# A family matches a nature as it matches a guidance entry above. Families: the dataset profile's task list (tasks.yaml)
 # and the B2AI registry's speech_type. Rules: specs/20261007-task-events-in-background/design.md.
 natures:
   - nature: open_response

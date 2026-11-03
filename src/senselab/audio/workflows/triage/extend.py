@@ -122,6 +122,7 @@ from senselab.audio.workflows.triage.run import (
     _attempt_artifacts,
     drive_decisions,
 )
+from senselab.audio.workflows.triage.task_catalogue import task_attributes
 from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, QUALITY, REDACTION_LLM_ANNOTATION
 from senselab.audio.workflows.triage.word_arbitration import arbitrate_words
 from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
@@ -1200,6 +1201,7 @@ def record_replayed_hint(store: ProvStore, hint: AudioHints | None, *, software:
         **entity.attributes,
         **identity_of(stem, hint).as_attributes(),
         **hint_attributes(hint),
+        **task_attributes(hint),
         "replaces": entity.id,
     }
     activity = store.activity(node=REPLAY_NODE, step=IDENTITY_RECORDED_STEP, parameters={"replaces": entity.id})

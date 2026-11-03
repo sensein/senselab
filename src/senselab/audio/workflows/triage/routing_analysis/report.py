@@ -31,10 +31,10 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
     detector_value,
     sweep_points,
 )
-from senselab.audio.workflows.triage.routing_analysis.families import DECLARED_KIND, SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures
 from senselab.audio.workflows.triage.routing_analysis.labels import CLASSIFIERS, TRACKED_LABELS, peak_key
 from senselab.audio.workflows.triage.routing_analysis.tables import COMPRESSION, ROW_GROUP_ROWS
+from senselab.audio.workflows.triage.task_catalogue import SYLLABLE_REPETITION_KIND, is_kind
 
 DISAGREEMENT_CAP = 200
 """How many individual disagreements are listed per family and direction."""
@@ -150,8 +150,8 @@ class ReferenceStandard:
         population: Which recordings are scored at all, or None for the whole corpus. A standard
             that separates two declared families scores only within their union.
         population_description: What the restricted population is, in one phrase.
-        excluded_by_construction: Families the positive set leaves out by construction although
-            their content is what the branch is for. Every function here drops them from the
+        excluded_by_construction: The task kind whose families the positive set leaves out by construction
+            although their content is what the branch is for, or None. Every function here drops them from the
             population rather than counting them as negatives.
         exclusion_description: What the excluded families are, in one phrase.
     """
@@ -163,7 +163,7 @@ class ReferenceStandard:
     predicate: Callable[[RecordingFeatures], bool]
     population: Callable[[RecordingFeatures], bool] | None = None
     population_description: str = "the whole corpus"
-    excluded_by_construction: frozenset[str] = frozenset()
+    excluded_by_construction: str | None = None
     exclusion_description: str = "nothing"
 
     def excludes(self, record: RecordingFeatures) -> bool:
@@ -173,9 +173,9 @@ class ReferenceStandard:
             record: The recording.
 
         Returns:
-            True when the family is in :attr:`excluded_by_construction`.
+            True when the family is of the kind :attr:`excluded_by_construction` names.
         """
-        return record.family in self.excluded_by_construction
+        return self.excluded_by_construction is not None and is_kind(record.family, self.excluded_by_construction)
 
     def scored_population(self) -> str:
         """The population phrase, naming the construction exclusion when there is one.
@@ -192,14 +192,14 @@ def _declared(kind: str) -> Callable[[RecordingFeatures], bool]:
     """A predicate reading the task declaration for one kind.
 
     Args:
-        kind: ``speech``, ``airway`` or ``voice``.
+        kind: A task kind (:data:`~senselab.audio.workflows.triage.task_catalogue.KINDS`).
 
     Returns:
-        A predicate true when the recording's family is one that kind's instructions elicit.
+        A predicate true when the task list makes the recording's family of that kind.
     """
 
     def predicate(features: RecordingFeatures) -> bool:
-        return features.family in DECLARED_KIND[kind]
+        return is_kind(features.family, kind)
 
     return predicate
 
@@ -225,7 +225,7 @@ REFERENCE_STANDARDS: tuple[ReferenceStandard, ...] = (
         is_proxy=True,
         description="the declared task family asks for words, excluding syllable-repetition tasks",
         predicate=_declared("lexical_speech"),
-        excluded_by_construction=SYLLABLE_REPETITION,
+        excluded_by_construction=SYLLABLE_REPETITION_KIND,
         exclusion_description="the syllable-repetition families",
     ),
     ReferenceStandard(
@@ -247,7 +247,7 @@ REFERENCE_STANDARDS: tuple[ReferenceStandard, ...] = (
         kind="ddk",
         is_proxy=True,
         description="the declared task family asks for one syllable repeated as fast as possible",
-        predicate=lambda features: features.family in SYLLABLE_REPETITION,
+        predicate=_declared(SYLLABLE_REPETITION_KIND),
     ),
     ReferenceStandard(
         name="declared_cough_vs_breath",
@@ -255,7 +255,7 @@ REFERENCE_STANDARDS: tuple[ReferenceStandard, ...] = (
         is_proxy=True,
         description="the declared task family asks for a cough rather than for breathing",
         predicate=_declared("cough"),
-        population=lambda features: features.family in DECLARED_KIND["airway"],
+        population=_declared("airway"),
         population_description="the declared airway families only",
     ),
     ReferenceStandard(
@@ -271,7 +271,7 @@ REFERENCE_STANDARDS: tuple[ReferenceStandard, ...] = (
         is_proxy=True,
         description="the declared task family asks for a pitch sweep rather than a held vowel",
         predicate=_declared("glide"),
-        population=lambda features: features.family in DECLARED_KIND["voice"],
+        population=_declared("voice"),
         population_description="the declared voice families only",
     ),
 )
@@ -682,7 +682,7 @@ def disagreements(records: Iterable[RecordingFeatures]) -> dict[str, Any]:
     silent: dict[str, dict[str, Any]] = {}
     for record in records:
         agreed = record.words.get("agreement", 0) >= 1
-        declared_speech = record.family in DECLARED_KIND["speech"]
+        declared_speech = is_kind(record.family, "speech")
         if agreed and not declared_speech:
             bucket = spoke.setdefault(record.family, {"n": 0, "cases": []})
         elif declared_speech and not agreed:

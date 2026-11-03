@@ -20,9 +20,10 @@ from senselab.audio.workflows.triage.identity_check import (
     NO_RECORDED_IDENTITY,
     SESSION_UNDER_TWO_PARTICIPANTS,
     STEM_DISAGREES,
-    UNKNOWN_TASK_FAMILY,
+    TASK_NOT_DESCRIBED,
     UNREADABLE_IDENTITY,
 )
+from senselab.audio.workflows.triage.task_catalogue import FROM_TASK_LIST
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "check_identity.py"
@@ -52,7 +53,18 @@ def _recordings(tmp_path: Path, lines: list[str]) -> Path:
 
 def _table(tmp_path: Path, rows: list[dict[str, Any]]) -> Path:
     """A corpus table carrying the identity columns, plus one the check must not need."""
-    columns = ("stem", "run_dir", "participant", "session", "task", "participant_from", "session_from", "task_from")
+    columns = (
+        "stem",
+        "run_dir",
+        "participant",
+        "session",
+        "task",
+        "participant_from",
+        "session_from",
+        "task_from",
+        "declared_family",
+        "declared_task_source",
+    )
     data = {name: [row.get(name) for row in rows] for name in columns}
     data["verdict"] = ["release"] * len(rows)
     path = tmp_path / "recording_vectors.parquet"
@@ -61,10 +73,12 @@ def _table(tmp_path: Path, rows: list[dict[str, Any]]) -> Path:
 
 
 def _row(stem: str, run_dir: str, participant: str | None, session: str | None, task: str | None) -> dict[str, Any]:
-    """A corpus-table row whose identity was read off the stem."""
+    """A corpus-table row whose identity was read off the stem, and whose declared task the task list describes."""
     named = participant is not None or session is not None or task is not None
     source = FROM_STEM if named else None
     return {
+        "declared_family": task,
+        "declared_task_source": FROM_TASK_LIST if task else None,
         "stem": stem,
         "run_dir": run_dir,
         "participant": participant,
@@ -84,7 +98,8 @@ class TestBeforeARun:
     """``--recordings``: the identity ADMIT would record, from the stem and the hint."""
 
     def test_a_clean_list_passes(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-        """Distinct BIDS stems of known tasks, no hints: exit 0, every count zero."""
+        """Distinct BIDS stems, each hint declaring a task the task list describes: exit 0, every count zero."""
+        hints = _hints(tmp_path, "    return (AudioHints(task=path.stem.split('task-')[1].rstrip('-1')),)\n")
         listing = _recordings(
             tmp_path,
             [
@@ -95,7 +110,7 @@ class TestBeforeARun:
             ],
         )
         out = tmp_path / "report.json"
-        assert cli.main(["--recordings", str(listing), "--out", str(out)]) == 0
+        assert cli.main(["--recordings", str(listing), "--hints", str(hints), "--out", str(out)]) == 0
         report = _report(out)
         assert report["mode"] == "recordings"
         assert report["recordings"] == 2
@@ -150,7 +165,28 @@ class TestBeforeARun:
         assert counts[UNREADABLE_IDENTITY] == 1
         assert counts[DUPLICATE_STEM] == 1, "clip_one is in /a and /b"
         assert counts[DUPLICATE_IDENTITY] == 1, "unnamed recordings are keyed by stem, and clip_one is twice"
-        assert counts[UNKNOWN_TASK_FAMILY] == 1, "no stem names a task"
+        assert counts[TASK_NOT_DESCRIBED] == 1, "no hint declares a task"
+
+    def test_the_task_is_the_hints_resolved_against_the_task_list(self, tmp_path: Path) -> None:
+        """A task the list lacks is reported under its name; the stem's task id is never read for it."""
+        hints = _hints(
+            tmp_path, "    return (AudioHints(task='humming' if 'x' in path.stem else 'rainbow-passage'),)\n"
+        )
+        listing = _recordings(
+            tmp_path, ["/c/sub-1_ses-1_task-x.wav", "/c/sub-1_ses-1_task-y.wav", "/c/sub-1_ses-1_task-humming.wav"]
+        )
+        out = tmp_path / "report.json"
+        assert cli.main(["--recordings", str(listing), "--hints", str(hints), "--out", str(out)]) == 0
+        (finding,) = [each for each in _report(out)["findings"] if each["check"] == TASK_NOT_DESCRIBED]
+        assert (finding["key"], finding["stems"]) == ("humming", ["sub-1_ses-1_task-x"])
+
+    def test_an_inline_description_that_cannot_be_resolved_is_refused(self, tmp_path: Path) -> None:
+        """ADMIT would stop the run on it, so the check refuses the recording."""
+        hints = _hints(tmp_path, "    return (AudioHints(task='hum', task_description={'pattern': 'sustained'}),)\n")
+        listing = _recordings(tmp_path, ["/c/sub-1_ses-1_task-hum.wav"])
+        out = tmp_path / "report.json"
+        assert cli.main(["--recordings", str(listing), "--hints", str(hints), "--out", str(out)]) == 1
+        assert _report(out)["counts"][UNREADABLE_IDENTITY] == 1
 
     def test_hints_with_a_table_are_refused(self, tmp_path: Path) -> None:
         """A finished run's identity is the one it recorded, so no hint applies."""
@@ -209,6 +245,15 @@ class TestAfterARun:
         (finding,) = _report(out)["findings"]
         assert finding["check"] == STEM_DISAGREES
         assert finding["detail"]["fields"] == {"participant": {"declared": "sub-7", "stem": "sub-1"}}
+
+    def test_a_run_from_before_the_task_record_is_reported(self, tmp_path: Path) -> None:
+        """An empty ``declared_task_source`` is a run that records no task: listed, not refused."""
+        row = _row("sub-1_ses-1_task-rainbow-passage", "r", "sub-1", "ses-1", "rainbow-passage")
+        row["declared_task_source"] = None
+        out = tmp_path / "report.json"
+        assert cli.main(["--table", str(_table(tmp_path, [row])), "--out", str(out)]) == 0
+        (finding,) = _report(out)["findings"]
+        assert (finding["check"], finding["key"]) == (TASK_NOT_DESCRIBED, "(no task recorded)")
 
     def test_a_table_without_identity_columns_is_exit_2(self, tmp_path: Path) -> None:
         """A corpus table from before identity columns cannot be checked; rebuild it."""

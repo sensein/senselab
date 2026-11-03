@@ -47,6 +47,7 @@ from senselab.audio.workflows.triage.nodes.speech import speech
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
 from senselab.audio.workflows.triage.nodes.verdict import verdict
 from senselab.audio.workflows.triage.nodes.voice import voice
+from senselab.audio.workflows.triage.task_catalogue import resolve_task
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
     GRAPH_ORDER,
@@ -508,6 +509,7 @@ def run_triage(
     """
     require_dataset_values(config.values)
     source = Path(source)
+    resolve_task(hint)
     layout = prepare_run_layout(Path(out_dir), source.stem, identity_of(source.stem, hint))
     store = ProvStore(run_id=layout.root.name)
     outcomes: dict[str, NodeOutcome] = {}

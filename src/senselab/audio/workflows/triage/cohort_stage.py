@@ -69,8 +69,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_measurement,
 )
 from senselab.audio.workflows.triage.residue import is_non_lexical
-from senselab.audio.workflows.triage.routing_analysis import families as family_sets
-from senselab.audio.workflows.triage.routing_analysis.families import DECLARED_KIND, LEXICAL_SPEECH
+from senselab.audio.workflows.triage.task_catalogue import LEXICAL_SPEECH_KIND, is_kind, task_list
 from senselab.audio.workflows.triage.task_content import task_content_ids, task_events
 from senselab.audio.workflows.triage.task_lexicon import declared_names_lexicon
 from senselab.audio.workflows.triage.task_speech import (
@@ -343,7 +342,7 @@ def target_rule(family: str) -> str:
     rule = (table.get("families") or {}).get(family)
     if rule is None:
         rule = next(
-            (value for kind, value in (table.get("kinds") or {}).items() if family in DECLARED_KIND[str(kind)]),
+            (value for kind, value in (table.get("kinds") or {}).items() if is_kind(family, str(kind))),
             table["default"],
         )
     if rule not in TARGET_RULES:
@@ -352,15 +351,15 @@ def target_rule(family: str) -> str:
 
 
 def lexical_task(family: str) -> bool:
-    """Whether a family is a lexical speech task for COHORT: in ``LEXICAL_SPEECH`` and not read as a voice task.
+    """Whether a family is a lexical speech task for COHORT: of the lexical speech kind and not read as a voice task.
 
     Args:
         family: The declared task family.
 
     Returns:
-        True for a lexical speech family other than one under ``task_speech.yaml`` ``voice_task_text``.
+        True for a lexical speech family other than one under a task list entry with ``voice_reading_text``.
     """
-    return family in LEXICAL_SPEECH and not lexical_voice_family(family)
+    return is_kind(family, LEXICAL_SPEECH_KIND) and not lexical_voice_family(family)
 
 
 def speech_outside_task(store: ProvStore, family: str) -> list[Entity]:
@@ -474,7 +473,7 @@ def spells_task_syllables(text: str, family: str) -> bool:
 
 def _task_syllables(family: str) -> tuple[str, ...]:
     for set_name, syllables in (cohort_parameters()["non_task"].get("task_syllables") or {}).items():
-        if family in getattr(family_sets, str(set_name), frozenset()):
+        if is_kind(family, str(set_name)):
             return tuple(sorted({str(s).lower() for s in syllables}, key=len, reverse=True))
     return ()
 
@@ -960,7 +959,7 @@ def enrollment_candidates(
     params = dict(parameters if parameters is not None else cohort_parameters()["enrollment"])
     out = []
     for facts, loader in members:
-        if facts.family not in DECLARED_KIND[str(params["families"])] or lexical_voice_family(facts.family):
+        if not is_kind(facts.family, str(params["families"])) or lexical_voice_family(facts.family):
             continue
         spans = enrollment_spans(facts, min_s=min_s, lexical_gap_s=lexical_gap_s)
         if spans.spans:
@@ -1811,7 +1810,7 @@ def run_checks(facts: RecordingFacts, artefact: Mapping[str, Any] | None) -> dic
     out: dict[str, dict[str, Any]] = {}
     for name, bounds in cohort_parameters()["checks"].items():
         kinds = bounds.get("kinds")
-        if kinds and not any(facts.family in DECLARED_KIND[str(kind)] for kind in kinds):
+        if kinds and not any(is_kind(facts.family, str(kind)) for kind in kinds):
             out[name] = {"status": NOT_APPLICABLE}
             continue
         if artefact is None:
@@ -1850,7 +1849,10 @@ def cohort_key(
         {
             "version": cohort_parameters()["version"],
             "parameters": cohort_parameters(),
-            "voice_task_text": task_speech_parameters().get("voice_task_text"),
+            "voice_task_text": {
+                name: list(entry.voice_reading_text) for name, entry in task_list().items() if entry.voice_reading_text
+            }
+            or None,
             "group": group,
             "members": sorted(dataclasses.astuple(facts) for facts in members),
             "quantiles": quantiles_sha256,

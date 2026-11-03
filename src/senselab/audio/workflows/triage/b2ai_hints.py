@@ -19,8 +19,8 @@ from typing import Any
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.data_structures.audio_hints import ExpectedSpeech
 from senselab.audio.workflows.triage.identity import PARTICIPANT_KEY, SESSION_KEY, TASK_TOKEN_KEY, identity_from_stem
-from senselab.audio.workflows.triage.nodes.branches import ITEM_CATEGORY_FROM_KEY, ITEM_CATEGORY_KEY
-from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
+from senselab.audio.workflows.triage.task_catalogue import task_list
 from senselab.audio.workflows.triage.task_registry import prompt_ref, questionnaire_field, task_text
 
 SIDECAR_SUFFIXES = ("_recording-metadata.json", "_acoustictask-metadata.json")
@@ -97,6 +97,69 @@ def read_sidecars(wav: Path) -> dict[str, Any]:
     return merged
 
 
+ROUTE_BY_TAKE = {1: "nose", 2: "mouth", 3: "nose", 4: "mouth"}
+"""B2AI's breathing protocol: the take of a task whose route is declared per recording (five breaths) names the
+route, 1 and 3 through the nose, 2 and 4 through the mouth. Moved from triage's ``airway.route_by_task_index``."""
+
+
+def b2ai_task(task_id: str) -> tuple[str | None, dict[str, str], int | None]:
+    """The task, variant and take B2AI's task id declares, as a hint names them.
+
+    B2AI names a task by its id less the trailing numeric index (``respiration-and-cough-fivebreaths-2`` is task
+    ``respiration-and-cough-fivebreaths``); the index is kept verbatim as the ``index`` variant. For a task whose
+    route is declared per recording, the index is its take, and the take names the route (:data:`ROUTE_BY_TAKE`).
+
+    Args:
+        task_id: The task id, lower-cased with its trailing index, or ``unknown``.
+
+    Returns:
+        The task's name (None for ``unknown``), its variant and its take (None where the index is not one).
+    """
+    if task_id == UNKNOWN_TASK:
+        return None, {}, None
+    task = task_family(task_id)
+    index = task_id[len(task) :].lstrip("-")
+    variant: dict[str, str] = {"index": index} if index else {}
+    entry = task_list().get(task)
+    take = int(index) if index.isdigit() and entry is not None and entry.expects.route_per_recording else None
+    if take is not None and take in ROUTE_BY_TAKE:
+        variant["route"] = ROUTE_BY_TAKE[take]
+    return task, variant, take
+
+
+CATEGORY_LINE = re.compile(r"Category:\s*([^.\n]+)")
+"""Where B2AI's instructions speak a per-recording category: ``Category: Country names.``"""
+
+ITEM_CATEGORY_KEY = "item_category"
+"""The hint ``metadata`` key the questionnaire's category is kept under."""
+
+ITEM_CATEGORY_FROM_KEY = "item_category_from"
+"""The hint ``metadata`` key naming where :data:`ITEM_CATEGORY_KEY` was read."""
+
+CATEGORY_FROM_INSTRUCTIONS = "instructions"
+"""``AudioHints.item_category_from`` where the instructions speak the category."""
+
+
+def recording_category(instructions: str | None, metadata: dict[str, Any]) -> tuple[str | None, str | None]:
+    """The category a B2AI word-generation recording asked for, and where it was read.
+
+    Args:
+        instructions: The recording's instructions, which may speak the category (:data:`CATEGORY_LINE`).
+        metadata: The hint's metadata, which may carry the questionnaire's (:data:`ITEM_CATEGORY_KEY`).
+
+    Returns:
+        ``(category, source)``: the instructions' category, else the questionnaire's; ``(None, None)`` where
+        neither names one.
+    """
+    found = CATEGORY_LINE.search(instructions) if instructions else None
+    if found:
+        return found.group(1).strip(), CATEGORY_FROM_INSTRUCTIONS
+    declared = str(metadata.get(ITEM_CATEGORY_KEY) or "").strip()
+    if declared:
+        return declared, str(metadata.get(ITEM_CATEGORY_FROM_KEY) or "metadata")
+    return None, None
+
+
 def build_hint(wav: Path) -> tuple[AudioHints | None, dict[str, Any]]:
     """The hint for one recording, and a record of what was declared and where it came from.
 
@@ -135,10 +198,17 @@ def build_hint(wav: Path) -> tuple[AudioHints | None, dict[str, Any]]:
     joined = questionnaire_field(ref, bids_root_of(wav), fields.get("acoustic_task_id"))
     if joined is not None and str((ref or {}).get("field") or "").endswith(CATEGORY_FIELD_SUFFIX):
         metadata[ITEM_CATEGORY_KEY], metadata[ITEM_CATEGORY_FROM_KEY] = joined[0], f"questionnaire:{joined[1]}"
+    task, variant, take = b2ai_task(stem_identity.task_id)
+    category, category_from = recording_category(text.instructions, metadata)
     hint = AudioHints(
         expected_speech=prompts,
         instructions=text.instructions,
         speech_type=text.speech_type,
+        task=task,
+        task_variant=variant,
+        task_take=take,
+        item_category=category,
+        item_category_from=category_from,
         metadata=metadata,
     )
     record = {

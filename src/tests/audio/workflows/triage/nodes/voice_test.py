@@ -17,7 +17,6 @@ import numpy as np
 import pytest
 import soundfile
 
-from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import voice as voice_module
 from senselab.audio.workflows.triage.nodes.branches import (
@@ -45,7 +44,7 @@ from senselab.audio.workflows.triage.nodes.voice import (
     voice,
 )
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.conftest import declare_hint_identity
+from tests.audio.workflows.triage.conftest import record_task
 from tests.audio.workflows.triage.nodes.conftest import gated_conformance, gated_flags, readings_of
 
 HOP_S = 0.01
@@ -57,14 +56,15 @@ CONTINUITY_RATE = 100.0
 RATE = 16000
 """The ``plain`` stream's sampling rate in the fixtures, in Hz."""
 
-MPT_STEM = "sub-abc_ses-1_task-maximum-phonation-time"
-PROLONGED_STEM = "sub-abc_ses-1_task-prolonged-vowel"
-GLIDE_UP_STEM = "sub-abc_ses-1_task-glides-low-to-high"
-GLIDE_DOWN_STEM = "sub-abc_ses-1_task-glides-high-to-low"
-COUGH_STEM = "sub-abc_ses-1_task-voluntary-cough"
-LOUDNESS_STEM = "sub-abc_ses-1_task-loudness"
-CAPEV_STEM = "sub-abc_ses-1_task-cape-v-sentences"
-HARVARD_STEM = "sub-abc_ses-1_task-harvard-sentences-list"
+MPT_TASK = "maximum-phonation-time"
+PROLONGED_TASK = "prolonged-vowel"
+GLIDE_UP_TASK = "glides-low-to-high"
+GLIDE_DOWN_TASK = "glides-high-to-low"
+COUGH_TASK = "voluntary-cough"
+LOUDNESS_TASK = "loudness"
+CAPEV_TASK = "cape-v-sentences"
+HARVARD_TASK = "harvard-sentences-list"
+"""The B2AI tasks the fixtures declare, by their names in the profile's task list."""
 
 SETTINGS = {
     "voiced_strength_min": 0.5,
@@ -257,7 +257,8 @@ def _wobble_tracks(
 def seed(
     tmp_path: Path,
     *,
-    stem: str | None = MPT_STEM,
+    task: str | None = MPT_TASK,
+    recording: bool = True,
     duration_s: float = 20.0,
     amplitude: tuple[tuple[float, float], ...] = ((2.0, 18.0),),
     tracks: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
@@ -272,7 +273,9 @@ def seed(
 
     Args:
         tmp_path: The run directory.
-        stem: The ``recording`` stream's BIDS stem, or None to omit the stream.
+        task: The task ADMIT records the hint naming (``record_task``), also written into the ``recording``
+            stream's BIDS stem, which no stage reads; None records no task, at a path that is not a BIDS stem.
+        recording: Whether to write the ``recording`` stream at all.
         duration_s: The recording's duration.
         amplitude: The extents PREPROCESS's ``amplitude`` spans cover.
         tracks: ``(times_s, f0_hz, strength)``; None makes the whole of each amplitude span voiced.
@@ -297,12 +300,15 @@ def seed(
             extent=(0.0, len(plain) / RATE),
             attributes={"name": "plain", "path": "streams/plain.flac", "sampling_rate": RATE},
         )
-    if stem is not None:
+    if recording:
+        path = f"sub-abc_ses-1_task-{task}.wav" if task is not None else "not-a-bids-stem.wav"
         ids["recording"] = store.entity(
             prov_type="stream",
             extent=(0.0, duration_s),
-            attributes={"name": "recording", "path": f"{stem}.wav", "sampling_rate": 16000},
+            attributes={"name": "recording", "path": path, "sampling_rate": 16000},
         )
+        if task is not None:
+            ids["recording"] = record_task(store, task)
     for start, end in amplitude:
         ids["amplitude"].append(
             store.entity(
@@ -433,32 +439,32 @@ class TestTheModeIsSelectedByTheDeclaredFamily:
 
     def test_a_voice_family_reaches_the_align_arm(self, tmp_path: Path) -> None:
         """``maximum-phonation-time`` is one of VOICE's six in-family rows."""
-        store, _ = seed(tmp_path, stem=MPT_STEM)
+        store, _ = seed(tmp_path, task=MPT_TASK)
         assert mode_of("VOICE", store) == ("align", "maximum-phonation-time")
 
     def test_another_branchs_family_reaches_the_detect_arm(self, tmp_path: Path) -> None:
         """A cough task is AIRWAY's; VOICE marks its speciality and evaluates nothing."""
-        store, _ = seed(tmp_path, stem=COUGH_STEM)
+        store, _ = seed(tmp_path, task=COUGH_TASK)
         assert mode_of("VOICE", store) == ("detect", "voluntary-cough")
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
         assert result.report.node == "VOICE"
 
     def test_the_detect_arm_evaluates_no_task(self, tmp_path: Path) -> None:
         """It takes no reading a conformance gate reads, so VERDICT can answer nothing about it."""
-        store, _ = seed(tmp_path, stem=COUGH_STEM)
+        store, _ = seed(tmp_path, task=COUGH_TASK)
         result = detect_voice(store, params(), run_dir=tmp_path)
         assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) == UNDETERMINED
 
     def test_the_detect_arm_still_proposes_the_phonation_it_finds(self, tmp_path: Path) -> None:
         """Sustained phonation occurs inside sentence reading and free speech; it is marked there."""
-        store, _ = seed(tmp_path, stem=HARVARD_STEM)
+        store, _ = seed(tmp_path, task=HARVARD_TASK)
         result = detect_voice(store, params(), run_dir=tmp_path)
         assert [proposal.role for proposal in result.components] == [PHONATION_ROLE]
         assert result.components[0].attributes["evaluates_no_task"] is True
 
     def test_no_derivable_task_family_takes_the_detect_arm(self, tmp_path: Path) -> None:
-        """A path that is not a BIDS stem names no family, and None is the safe arm."""
-        store, _ = seed(tmp_path, stem="not-a-bids-stem")
+        """A recording whose hint names no task declares no family, and None is the safe arm."""
+        store, _ = seed(tmp_path, task=None)
         assert mode_of("VOICE", store) == ("detect", None)
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
         assert result.report.conformance == UNDETERMINED
@@ -466,31 +472,31 @@ class TestTheModeIsSelectedByTheDeclaredFamily:
 
     def test_an_absent_recording_entity_takes_the_detect_arm(self, tmp_path: Path) -> None:
         """No carrier at all is the same safe arm, not an error."""
-        store, _ = seed(tmp_path, stem=None)
+        store, _ = seed(tmp_path, recording=False)
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
         assert result.report.conformance == UNDETERMINED
 
-    def test_the_recorded_hint_carrier_selects_the_mode_before_the_path_does(self, tmp_path: Path) -> None:
-        """``task_token``, as ADMIT records it, is the clean route and is read first."""
-        store, _ = seed(tmp_path, stem=COUGH_STEM)
-        declare_hint_identity(store, AudioHints(metadata={"task_token": "glides-low-to-high"}))
+    def test_the_recorded_task_selects_the_mode_and_the_path_does_not(self, tmp_path: Path) -> None:
+        """The task ADMIT recorded from the hint is read; the path's ``task-`` entity never is."""
+        store, _ = seed(tmp_path, task=COUGH_TASK)
+        record_task(store, "glides-low-to-high")
         assert mode_of("VOICE", store) == ("align", "glides-low-to-high")
 
 
 class TestThePendingDeclarationRowsTakeTheDetectArm:
-    """``loudness`` and ``cape-v-sentences`` are LEXICAL_SPEECH, so out of family for VOICE."""
+    """``loudness`` and ``cape-v-sentences`` are lexical speech tasks, so out of family for VOICE."""
 
-    @pytest.mark.parametrize("stem", [LOUDNESS_STEM, CAPEV_STEM])
-    def test_a_pending_declaration_family_never_reaches_align(self, tmp_path: Path, stem: str) -> None:
+    @pytest.mark.parametrize("task", [LOUDNESS_TASK, CAPEV_TASK])
+    def test_a_pending_declaration_family_never_reaches_align(self, tmp_path: Path, task: str) -> None:
         """The four rows are deliberately out of EXPECTATIONS; changing that is a families decision."""
-        store, _ = seed(tmp_path, stem=stem)
+        store, _ = seed(tmp_path, task=task)
         mode, family = mode_of("VOICE", store)
         assert mode == "detect"
         assert family in {"loudness", "cape-v-sentences"}
 
     def test_align_voice_refuses_a_family_it_has_no_row_for(self, tmp_path: Path) -> None:
         """The caller owes detect_voice; reaching align is the caller's error, not a silent pass."""
-        store, _ = seed(tmp_path, stem=LOUDNESS_STEM)
+        store, _ = seed(tmp_path, task=LOUDNESS_TASK)
         with pytest.raises(KeyError):
             align_voice("loudness", store, None, params(), run_dir=tmp_path)
 
@@ -515,7 +521,7 @@ class TestAnAbsentInstrumentIsUndetermined:
 
     def test_absent_tracks_make_the_glide_arm_undetermined(self, tmp_path: Path) -> None:
         """The same rule on the other in-family matcher."""
-        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, write_tracks=False)
+        store, _ = seed(tmp_path, task=GLIDE_UP_TASK, write_tracks=False)
         result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
         assert gated_conformance(result, Pattern.GLIDE, settings=config()) == UNDETERMINED
 
@@ -551,7 +557,7 @@ class TestEveryProposalNamesItsEvidence:
 
     def test_the_detect_arms_span_is_derived_from_the_same_evidence(self, tmp_path: Path) -> None:
         """The two modes share the qualifier, so they share the derivation."""
-        store, ids = seed(tmp_path, stem=COUGH_STEM)
+        store, ids = seed(tmp_path, task=COUGH_TASK)
         voice(store, "plain", config(), None, run_dir=tmp_path)
         span = voice_spans(store)[0]
         assert ids["amplitude"][0] in store.derived_from(span.id)
@@ -560,7 +566,7 @@ class TestEveryProposalNamesItsEvidence:
         """A count-in's evidence is lexical, so its derivation is the words."""
         store, _ = seed(
             tmp_path,
-            stem=PROLONGED_STEM,
+            task=PROLONGED_TASK,
             amplitude=((6.0, 18.0),),
             tracks=_tracks(20.0, [(6.0, 18.0)]),
             words=(("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 2.2, 2.8)),
@@ -577,7 +583,7 @@ class TestTheCountInIsItsOwnSpan:
         """Every Praat scalar today is taken over count-in plus silence plus vowel."""
         store, _ = seed(
             tmp_path,
-            stem=PROLONGED_STEM,
+            task=PROLONGED_TASK,
             amplitude=((6.0, 18.0),),
             tracks=_tracks(20.0, [(6.0, 18.0)]),
             words=(("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 2.2, 2.8)),
@@ -589,7 +595,7 @@ class TestTheCountInIsItsOwnSpan:
         """The instruction prescribes three; two realised leaves one omitted."""
         store, _ = seed(
             tmp_path,
-            stem=PROLONGED_STEM,
+            task=PROLONGED_TASK,
             amplitude=((6.0, 18.0),),
             tracks=_tracks(20.0, [(6.0, 18.0)]),
             words=(("one", 1.0, 1.4), ("two", 1.6, 2.0)),
@@ -623,7 +629,7 @@ class TestTheAperiodicCaseNoLongerErrorsTheNode:
 
     def test_an_aperiodic_recording_out_of_family_also_completes(self, tmp_path: Path) -> None:
         """The detect arm carries the same property on the 14,332 out-of-family recordings."""
-        store, _ = seed(tmp_path, stem=COUGH_STEM, tracks=_tracks(20.0, []))
+        store, _ = seed(tmp_path, task=COUGH_TASK, tracks=_tracks(20.0, []))
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
         assert result.report.conformance == UNDETERMINED
 
@@ -677,7 +683,7 @@ class TestTheNodeWritesWhatItFound:
 
     def test_the_report_names_the_mode_and_the_conformance_value(self, tmp_path: Path) -> None:
         """Conformance is the branch's answer and belongs in the record, not only in the return."""
-        store, _ = seed(tmp_path, stem=COUGH_STEM)
+        store, _ = seed(tmp_path, task=COUGH_TASK)
         voice(store, "plain", config(), None, run_dir=tmp_path)
         report = find_branch_report(store, "VOICE")
         assert report is not None
@@ -692,7 +698,7 @@ class TestARulesetLabelledSpanIsContestedNotRewritten:
         """The object of a contest is a PREPROCESS span, never VOICE's own proposal."""
         store, _ = seed(
             tmp_path,
-            stem=COUGH_STEM,
+            task=COUGH_TASK,
             amplitude=(),
             tracks=_tracks(20.0, []),
             span_labels=((3.0, 6.0, "phonation"),),
@@ -705,7 +711,7 @@ class TestARulesetLabelledSpanIsContestedNotRewritten:
         """The discriminating half: it qualified, so there is nothing to contest."""
         store, _ = seed(
             tmp_path,
-            stem=COUGH_STEM,
+            task=COUGH_TASK,
             amplitude=(),
             tracks=_tracks(20.0, [(3.0, 15.0)]),
             span_labels=((3.0, 15.0, "phonation"),),
@@ -782,7 +788,7 @@ class TestADiscardedCarrierIsReportedRatherThanVanishing:
 
     def test_the_rejection_names_the_gate_and_the_value_it_read(self, tmp_path: Path) -> None:
         """Without this the store cannot separate an absent production from a discarded one."""
-        store, _ = seed(tmp_path, stem=COUGH_STEM, continuity=0.1)
+        store, _ = seed(tmp_path, task=COUGH_TASK, continuity=0.1)
         result = detect_voice(store, params(), run_dir=tmp_path)
         rejected = [finding for finding in result.deviations if finding.name == "carrier_rejected"]
         assert [finding.evidence["value"] for finding in rejected] == ["continuity_min"]
@@ -792,7 +798,7 @@ class TestADiscardedCarrierIsReportedRatherThanVanishing:
 
     def test_the_rejection_is_a_measurement_and_not_a_deviation(self, tmp_path: Path) -> None:
         """It is a reading of this branch's instrument, not a departure by the speaker."""
-        store, _ = seed(tmp_path, stem=COUGH_STEM, continuity=0.1)
+        store, _ = seed(tmp_path, task=COUGH_TASK, continuity=0.1)
         result = detect_voice(store, params(), run_dir=tmp_path)
         rejected = [finding for finding in result.deviations if finding.name == "carrier_rejected"]
         assert {finding.kind for finding in rejected} == {"measure"}
@@ -806,7 +812,7 @@ class TestAQualityGateDoesNotDecideThatTheProductionNeverHappened:
         """Nothing declared this recording to hold a held vowel, so steadiness is what separates one."""
         store, _ = seed(
             tmp_path,
-            stem=COUGH_STEM,
+            task=COUGH_TASK,
             amplitude=((2.0, 18.0),),
             tracks=_wobble_tracks(20.0, (2.0, 18.0), 120.0, 6.0),
         )
@@ -900,7 +906,7 @@ class TestTheAlignArmReadsThePhonationAttempt:
         """A held vowel in a rising-glide task travels nowhere and reads as held."""
         store, _ = seed(
             tmp_path,
-            stem=GLIDE_UP_STEM,
+            task=GLIDE_UP_TASK,
             duration_s=6.0,
             amplitude=(),
             write_tracks=False,

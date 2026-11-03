@@ -73,6 +73,7 @@ from senselab.audio.workflows.triage.vocabulary import (
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan
 from senselab.text.tasks.pii_detection.api import scan_for_pii as real_scan_for_pii
 from senselab.utils.prov_store import Entity, ProvStore
+from tests.audio.workflows.triage.conftest import record_task
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 SR = 16000
@@ -168,6 +169,7 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
     readings: dict[int, dict[str, str]] | None = None,
     haystacks: dict[int, str] | None = None,
     recording_stem: str = "plain",
+    task: str | None = None,
 ) -> None:
     """Write the store PREPROCESS and SPEECH leave for REDACT, with ``tmp_path`` as the run dir.
 
@@ -180,8 +182,12 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
     so its hull can reach past its derived extent. ``residue`` names, by index, the words the scan's
     residue holds; every word when None. ``readings`` gives a word, by index, each source's surface;
     ``haystacks`` gives a finding, by index, the text it was read off. ``recording_stem`` names the
-    recording's file, which declares its task.
+    recording's file. ``task`` is the task ADMIT records the hint naming (``record_task``), None for none; it
+    also names the file (``sub-x_ses-y_task-<task>``) where ``recording_stem`` is left ``plain``. No stage reads a
+    task off the file name.
     """
+    if task is not None and recording_stem == "plain":
+        recording_stem = f"sub-x_ses-y_task-{task}"
     ends = [_word_extent(i)[1] for i in range(len(words))] + [float(extent[1]) for _c, extent, *_r in findings]
     duration_s = max([5.0, *(end + 1.0 for end in ends)])
     rng = np.random.default_rng(0)
@@ -202,6 +208,8 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
             attributes={"name": name, "path": path, "sampling_rate": SR, "channels": 1},
         )
         store.was_generated_by(stream_id, pre)
+    if task is not None:
+        record_task(store, task)
 
     consensus = store.activity(node="PREPROCESS", step="consensus", parameters={})
     store.was_associated_with(consensus, software)
@@ -3163,7 +3171,7 @@ class TestADecisionHoldsForEveryOccurrenceOfAToken:
         assert plan.final == []
 
 
-_DDK_STEM = "sub-x_ses-y_task-diadochokinesis-v2-buttercup"
+_DDK_TASK = "diadochokinesis-v2-buttercup"
 
 
 def _ddk_reading(store: ProvStore, events: Sequence[tuple[float, float]], decision: str = "present") -> None:
@@ -3208,7 +3216,7 @@ class TestTheTaskSOwnEventsAreNeverMasked:
             findings=[("PERSON", _word_extent(3))],
             readings=self._READINGS,
             haystacks={0: "asr_qwen"},
-            recording_stem=_DDK_STEM,
+            task=_DDK_TASK,
         )
 
     def test_redact_plans_no_mask_over_the_task_s_events(
@@ -3266,7 +3274,7 @@ class TestTheTaskSOwnEventsAreNeverMasked:
             findings=[("PERSON", _word_extent(3)), ("PERSON", _word_extent(5))],
             readings=self._READINGS,
             haystacks={0: "asr_qwen"},
-            recording_stem=_DDK_STEM,
+            task=_DDK_TASK,
         )
         _ddk_reading(store, self._EVENTS)
         _stub_pii(monkeypatch, findings=[])
@@ -3293,7 +3301,7 @@ class TestTheTaskSOwnEventsAreNeverMasked:
             tmp_path,
             words=list(self._WORDS),
             findings=[("PERSON", _word_extent(3))],
-            recording_stem="sub-x_ses-y_task-free-speech-1",
+            task="free-speech",
         )
         _ddk_reading(store, self._EVENTS)
         _stub_pii(monkeypatch, findings=[])
@@ -3313,7 +3321,7 @@ class TestTheTaskContentGroundIsTheEventsAlone:
             tmp_path,
             words=["then", "cinderella's", "coach", "left"],
             findings=[("PERSON", _word_extent(1))],
-            recording_stem="sub-x_ses-y_task-cinderella-story",
+            task="cinderella-story",
         )
         _stub_pii(monkeypatch, findings=[])
         redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))

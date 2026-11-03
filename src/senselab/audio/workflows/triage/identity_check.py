@@ -15,7 +15,9 @@ and the corpus passes group runs by them. :func:`check_identities` reads one
   label that cannot name a folder). Refused.
 * :data:`DUPLICATE_STEM` -- one stem in more than one place. Corpus passes key runs by place and stem, so this is
   reported, not refused.
-* :data:`UNKNOWN_TASK_FAMILY` -- a task whose family no branch's expectation table knows (:func:`triage_families`).
+* :data:`TASK_NOT_DESCRIBED` -- a recording whose declared task neither the dataset's task list nor its hint
+  describes (:func:`~senselab.audio.workflows.triage.task_catalogue.resolve_task`), one finding per task: a task the
+  list lacks, a recording that declares no task, or a finished run that records none. Nothing is read off a file name.
 * :data:`STEM_DISAGREES` -- a BIDS-like stem whose entities name another participant, session or task than the one
   declared. The declared one wins.
 * :data:`NO_RECORDED_IDENTITY` -- a finished run that records no identity.
@@ -34,8 +36,8 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, NamedTuple
 
 from senselab.audio.workflows.triage.identity import RecordingIdentity
-from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS, VOICE_EXPECTATIONS_PENDING_DECLARATION
 from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK
+from senselab.audio.workflows.triage.task_catalogue import FROM_HINT_DESCRIPTION, FROM_TASK_LIST, NO_TASK
 
 SESSION_SCOPE_PARTICIPANT = "participant"
 SESSION_SCOPE_GLOBAL = "global"
@@ -49,7 +51,7 @@ SESSION_UNDER_TWO_PARTICIPANTS = "session_under_two_participants"
 DUPLICATE_IDENTITY = "duplicate_identity"
 UNREADABLE_IDENTITY = "unreadable_identity"
 DUPLICATE_STEM = "duplicate_stem"
-UNKNOWN_TASK_FAMILY = "unknown_task_family"
+TASK_NOT_DESCRIBED = "task_not_described"
 STEM_DISAGREES = "stem_disagrees"
 NO_RECORDED_IDENTITY = "no_recorded_identity"
 """The checks, by the name a finding and the report's counts carry."""
@@ -63,11 +65,19 @@ CHECK_LEVELS: dict[str, str] = {
     DUPLICATE_IDENTITY: REFUSE,
     UNREADABLE_IDENTITY: REFUSE,
     DUPLICATE_STEM: REPORT,
-    UNKNOWN_TASK_FAMILY: REPORT,
+    TASK_NOT_DESCRIBED: REPORT,
     STEM_DISAGREES: REPORT,
     NO_RECORDED_IDENTITY: REPORT,
 }
 """Every check and its level, in the order the report lists them."""
+
+NO_TASK_DECLARED = "(no task declared)"
+NO_TASK_RECORDED = "(no task recorded)"
+"""The :data:`TASK_NOT_DESCRIBED` keys of a recording whose hint names no task, and of a run from before ADMIT recorded
+the task."""
+
+DESCRIBED = frozenset({FROM_TASK_LIST, FROM_HINT_DESCRIPTION})
+"""The task sources a recording can be analysed against: an entry of the task list, or the hint's own description."""
 
 _FIELDS = ("participant", "session", "task_id")
 
@@ -82,6 +92,9 @@ class IdentityRecord(NamedTuple):
         stem_identity: What its stem alone names (:func:`~senselab.audio.workflows.triage.identity.identity_from_stem`),
             or None to skip :data:`STEM_DISAGREES` for it.
         error: Why its identity could not be built, or None.
+        task: The task its hint declares, by name, or None.
+        task_source: What describes that task (``ResolvedTask.source``: the task list, the hint, neither, or no task
+            declared), or None where the run records no task.
     """
 
     stem: str
@@ -89,6 +102,8 @@ class IdentityRecord(NamedTuple):
     identity: RecordingIdentity | None
     stem_identity: RecordingIdentity | None = None
     error: str | None = None
+    task: str | None = None
+    task_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -97,7 +112,7 @@ class IdentityFinding:
 
     Attributes:
         check: The check's name, a key of :data:`CHECK_LEVELS`.
-        key: What the finding is about: a session label, an identity, a stem or a task family.
+        key: What the finding is about: a session label, an identity, a stem or a task.
         stems: The recordings' stems, one per recording involved.
         locations: Their locations, in the same order.
         detail: Anything further the check names, e.g. the participants a session falls under.
@@ -174,15 +189,23 @@ class IdentityReport:
         }
 
 
-def triage_families() -> frozenset[str]:
-    """Every task family triage knows: the keys of each branch's expectation table.
+def undescribed_task(record: IdentityRecord) -> str | None:
+    """The :data:`TASK_NOT_DESCRIBED` key a recording falls under, or None where its task is described.
+
+    Args:
+        record: The recording.
 
     Returns:
-        The families of :data:`~senselab.audio.workflows.triage.nodes.branches.EXPECTATIONS` and of the VOICE
-        families awaiting a declaration.
+        The task's name where the task list lacks it, :data:`NO_TASK_DECLARED` where the hint names none,
+        :data:`NO_TASK_RECORDED` where the run records no task; None for a task the list or the hint describes.
     """
-    known = {family for table in EXPECTATIONS.values() for family in table}
-    return frozenset(known | set(VOICE_EXPECTATIONS_PENDING_DECLARATION))
+    if record.task_source in DESCRIBED:
+        return None
+    if record.task_source is None:
+        return NO_TASK_RECORDED
+    if record.task_source == NO_TASK or not record.task:
+        return NO_TASK_DECLARED
+    return record.task
 
 
 def identity_key(record: IdentityRecord) -> tuple[str | None, ...]:
@@ -230,7 +253,6 @@ def check_identities(
     records: Iterable[IdentityRecord | tuple[Any, ...]],
     *,
     session_scope: str,
-    known_families: Iterable[str],
 ) -> IdentityReport:
     """Check a corpus's identities.
 
@@ -238,7 +260,6 @@ def check_identities(
         records: One :class:`IdentityRecord` (or a tuple of its fields) per recording.
         session_scope: :data:`SESSION_SCOPES`: whether the corpus's session identifiers are unique within their
             participant or across the corpus.
-        known_families: The task families triage knows (:func:`triage_families`).
 
     Returns:
         The report: every finding, its counts, and whether any is refused.
@@ -248,13 +269,12 @@ def check_identities(
     """
     if session_scope not in SESSION_SCOPES:
         raise ValueError(f"session_scope must be one of {', '.join(SESSION_SCOPES)}; received {session_scope!r}")
-    known = frozenset(known_families)
     rows = [record if isinstance(record, IdentityRecord) else IdentityRecord(*record) for record in records]
 
     sessions: dict[str, dict[str, list[IdentityRecord]]] = defaultdict(lambda: defaultdict(list))
     by_key: dict[tuple[str | None, ...], list[IdentityRecord]] = defaultdict(list)
     by_stem: dict[str, list[IdentityRecord]] = defaultdict(list)
-    by_family: dict[str, list[IdentityRecord]] = defaultdict(list)
+    by_task: dict[str, list[IdentityRecord]] = defaultdict(list)
     findings: dict[str, list[IdentityFinding]] = {check: [] for check in CHECK_LEVELS}
 
     for record in rows:
@@ -271,8 +291,9 @@ def check_identities(
             continue
         if identity.participant is not None and identity.session is not None:
             sessions[identity.session][identity.participant].append(record)
-        if identity.task_family not in known:
-            by_family[identity.task_family].append(record)
+        undescribed = undescribed_task(record)
+        if undescribed is not None:
+            by_task[undescribed].append(record)
         if record.stem_identity is not None:
             disagree = _stem_disagreement(identity, record.stem_identity)
             if disagree:
@@ -296,8 +317,8 @@ def check_identities(
     for stem, chosen in by_stem.items():
         if len({record.location for record in chosen}) > 1:
             findings[DUPLICATE_STEM].append(_finding(DUPLICATE_STEM, stem, chosen))
-    for family, chosen in sorted(by_family.items()):
-        findings[UNKNOWN_TASK_FAMILY].append(_finding(UNKNOWN_TASK_FAMILY, family, chosen))
+    for task, chosen in sorted(by_task.items()):
+        findings[TASK_NOT_DESCRIBED].append(_finding(TASK_NOT_DESCRIBED, task, chosen))
 
     return IdentityReport(
         session_scope=session_scope,

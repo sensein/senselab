@@ -19,31 +19,45 @@ from senselab.audio.workflows.triage.identity_check import (
     SESSION_SCOPES,
     SESSION_UNDER_TWO_PARTICIPANTS,
     STEM_DISAGREES,
-    UNKNOWN_TASK_FAMILY,
+    TASK_NOT_DESCRIBED,
     UNREADABLE_IDENTITY,
     IdentityRecord,
     check_identities,
     identity_key,
-    triage_families,
+)
+from senselab.audio.workflows.triage.task_catalogue import (
+    FROM_HINT_DESCRIPTION,
+    FROM_TASK_LIST,
+    NO_TASK,
+    NOT_IN_TASK_LIST,
 )
 
-KNOWN = frozenset({"rainbow-passage", "harvard-sentences-list"})
 
-
-def _record(stem: str, location: str | None = None) -> IdentityRecord:
-    """A recording whose identity is read off its stem, as a run with no hint declares it."""
-    return IdentityRecord(stem, location or f"/corpus/{stem}.wav", identity_of(stem), identity_from_stem(stem))
+def _record(
+    stem: str, location: str | None = None, *, task: str = "listed", task_source: str | None = FROM_TASK_LIST
+) -> IdentityRecord:
+    """A recording whose identity is read off its stem, its declared task one the task list describes by default."""
+    return IdentityRecord(
+        stem,
+        location or f"/corpus/{stem}.wav",
+        identity_of(stem),
+        identity_from_stem(stem),
+        task=task,
+        task_source=task_source,
+    )
 
 
 def _declared(stem: str, participant: str | None, session: str | None, task_id: str) -> IdentityRecord:
-    """A recording whose hint declares every field."""
+    """A recording whose hint declares every field, and a task the task list describes."""
     sources = {"participant": FROM_HINT, "session": FROM_HINT, "task_id": FROM_HINT}
     identity = RecordingIdentity(participant, session, task_id, sources)
-    return IdentityRecord(stem, f"/corpus/{stem}.wav", identity, identity_from_stem(stem))
+    return IdentityRecord(
+        stem, f"/corpus/{stem}.wav", identity, identity_from_stem(stem), task="listed", task_source=FROM_TASK_LIST
+    )
 
 
 def _check(records: list[IdentityRecord], scope: str):  # noqa: ANN202 -- an IdentityReport
-    return check_identities(records, session_scope=scope, known_families=KNOWN)
+    return check_identities(records, session_scope=scope)
 
 
 @pytest.mark.parametrize("scope", SESSION_SCOPES)
@@ -140,21 +154,51 @@ def test_a_stem_in_two_folders_is_reported_not_refused(scope: str) -> None:
 
 
 @pytest.mark.parametrize("scope", SESSION_SCOPES)
-def test_an_unknown_task_family_is_reported_per_family(scope: str) -> None:
-    """A task no expectation table knows is listed under its family, every recording of it named."""
+def test_a_task_the_task_list_lacks_is_reported_per_task(scope: str) -> None:
+    """A declared task nothing describes is listed under its name, every recording of it named."""
     report = _check(
         [
-            _record("sub-1_ses-1_task-humming-1"),
-            _record("sub-1_ses-1_task-humming-2"),
+            _record("sub-1_ses-1_task-humming-1", task="humming", task_source=NOT_IN_TASK_LIST),
+            _record("sub-1_ses-1_task-humming-2", task="humming", task_source=NOT_IN_TASK_LIST),
             _record("sub-1_ses-1_task-rainbow-passage"),
         ],
         scope,
     )
-    assert report.counts[UNKNOWN_TASK_FAMILY] == 1
-    assert report.recordings_involved[UNKNOWN_TASK_FAMILY] == 2
+    assert report.counts[TASK_NOT_DESCRIBED] == 1
+    assert report.recordings_involved[TASK_NOT_DESCRIBED] == 2
     (finding,) = report.findings
     assert finding.key == "humming"
     assert finding.level == REPORT
+    assert not report.refused
+
+
+@pytest.mark.parametrize("scope", SESSION_SCOPES)
+def test_the_task_is_the_declared_one_never_the_stems(scope: str) -> None:
+    """A stem naming a task the list lacks is no finding when the hint declares a described task, and vice versa."""
+    report = _check(
+        [
+            _record("sub-1_ses-1_task-humming-1", task="rainbow-passage", task_source=FROM_TASK_LIST),
+            _record("sub-1_ses-1_task-rainbow-passage", task="hum", task_source=FROM_HINT_DESCRIPTION),
+            _record("sub-2_ses-2_task-rainbow-passage", task="humming", task_source=NOT_IN_TASK_LIST),
+        ],
+        scope,
+    )
+    assert [(finding.key, finding.stems) for finding in report.findings] == [
+        ("humming", ("sub-2_ses-2_task-rainbow-passage",))
+    ]
+
+
+@pytest.mark.parametrize("scope", SESSION_SCOPES)
+def test_no_task_declared_and_no_task_recorded_are_reported(scope: str) -> None:
+    """A hint naming no task, and a run from before ADMIT recorded one, each have their own key."""
+    report = _check(
+        [
+            _record("sub-1_ses-1_task-a", task=None, task_source=NO_TASK),
+            _record("sub-1_ses-1_task-b", task=None, task_source=None),
+        ],
+        scope,
+    )
+    assert sorted(finding.key for finding in report.findings) == ["(no task declared)", "(no task recorded)"]
     assert not report.refused
 
 
@@ -199,9 +243,11 @@ def test_the_report_is_json_and_tuples_are_accepted() -> None:
     """``as_dict`` round-trips through JSON; a plain tuple reads as a record."""
     stem = "sub-1_ses-1_task-rainbow-passage"
     report = check_identities(
-        [(stem, "/a", identity_of(stem), None), (stem, "/b", identity_of(stem), None)],
+        [
+            (stem, "/a", identity_of(stem), None, None, "rainbow-passage", FROM_TASK_LIST),
+            (stem, "/b", identity_of(stem), None, None, "rainbow-passage", FROM_TASK_LIST),
+        ],
         session_scope=SESSION_SCOPE_PARTICIPANT,
-        known_families=KNOWN,
     )
     payload = json.loads(json.dumps(report.as_dict()))
     assert payload["refused"] is True
@@ -214,14 +260,7 @@ def test_the_report_is_json_and_tuples_are_accepted() -> None:
 def test_an_unknown_scope_is_refused() -> None:
     """Only the two scopes the configuration accepts."""
     with pytest.raises(ValueError, match="session_scope"):
-        check_identities([], session_scope="site", known_families=KNOWN)
-
-
-def test_triage_knows_every_expectation_tables_families() -> None:
-    """Every branch's table, and the VOICE families awaiting a declaration."""
-    families = triage_families()
-    assert {"rainbow-passage", "loudness"} <= families
-    assert "humming" not in families
+        check_identities([], session_scope="site")
 
 
 @pytest.mark.parametrize("scope", SESSION_SCOPES)
