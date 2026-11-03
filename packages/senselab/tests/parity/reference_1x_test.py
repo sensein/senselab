@@ -84,7 +84,43 @@ ITEMS = {f"u{k}": {"audio": f"/data/u{k}.flac"} for k in range(3)}
 @pytest.mark.logic
 def test_speaker_embeddings_embed_each_item_alone(tmp_path: Path) -> None:
     """Every item is one 1.x call over that item alone, so no item is padded to another's length."""
-    calls, records = _produce(tmp_path, {"task": "speaker_embeddings", "model": MODEL, "items": ITEMS})
+    calls, records = _produce(tmp_path, {"task": "speaker_embeddings", "params": {}, "model": MODEL, "items": ITEMS})
     assert sorted(c["audios"][0] for c in calls) == sorted(i["audio"] for i in ITEMS.values())
     assert all(len(c["audios"]) == 1 for c in calls)
     assert {i: r["vector"] for i, r in records.items()} == {i: [1.0] for i in ITEMS}
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("params", "expected"),
+    [
+        ({"language": None, "timestamps": "none"}, {"language": None, "kwargs": {"return_timestamps": False}}),
+        (
+            {"language": "en", "timestamps": "segment"},
+            {"language": "Language:en", "kwargs": {"return_timestamps": True}},
+        ),
+        ({"language": None, "timestamps": "word"}, {"language": None, "kwargs": {"return_timestamps": "word"}}),
+    ],
+)
+def test_speech_to_text_decodes_under_the_benchmark_params(
+    tmp_path: Path, params: dict[str, Any], expected: dict[str, Any]
+) -> None:
+    """The 1.x call is given the benchmark's language and timestamp mode, not 1.x's own defaults."""
+    calls, records = _produce(tmp_path, {"task": "speech_to_text", "params": params, "model": MODEL, "items": ITEMS})
+    assert [{k: c[k] for k in ("language", "kwargs")} for c in calls] == [expected]
+    assert set(records) == set(ITEMS)
+
+
+@pytest.mark.logic
+def test_a_param_the_1x_call_is_not_given_is_refused(tmp_path: Path) -> None:
+    """A task param with no 1.x counterpart stops the run instead of being dropped."""
+    document = {"task": "speaker_embeddings", "params": {"pooling": "mean"}, "model": MODEL, "items": ITEMS}
+    (tmp_path / "items.json").write_text(json.dumps(document), "utf-8")
+    done = subprocess.run(  # noqa: S603 - the repo's own script under this interpreter
+        [sys.executable, str(PRODUCER), "--items", str(tmp_path / "items.json"), "--out", str(tmp_path / "out")],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert done.returncode != 0 and "not given the params ['pooling']" in done.stderr

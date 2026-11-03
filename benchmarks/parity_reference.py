@@ -429,14 +429,15 @@ def run(  # noqa: PLR0913 - what one 2.x parity run fixes
 
 
 def _items_cli(args: argparse.Namespace) -> None:
-    """Write the held-out items (path or text inputs, as strings) and the model pin of `args.backend`."""
+    """Write the held-out items (path or text inputs, as strings), the task params, and the pin of `args.backend`."""
     from senselab_core.runtime.call import packaged  # noqa: PLC0415 - only a real export needs the runtime
 
     bench, items = load_items(args.suite, args.benchmark, args.data_cache, args.work, HELDOUT)
-    _, backend = resolve(bench.task, args.backend)
+    spec, backend = resolve(bench.task, args.backend)
     entry = packaged().catalogue.backend_entry(backend)
     document = {
         "task": bench.task,
+        "params": spec.params.model_validate(bench.params).model_dump(mode="json"),
         "model": None if entry is None else {"id": entry.id, "revision": entry.revision},
         "items": {i.id: {k: str(v) for k, v in i.inputs.items()} for i in items},
     }

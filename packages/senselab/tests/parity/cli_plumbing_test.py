@@ -113,7 +113,7 @@ def _parity() -> Any:  # noqa: ANN401
 
 @pytest.mark.logic
 def test_cli_items_records_the_task_default_model(tmp_path: Path) -> None:
-    """`items` for a backend that declares no model (speech_to_text `transformers`) records the task's default."""
+    """`items` for a model-free backend (speech_to_text `transformers`) records the default model and the params."""
     suite = tmp_path / "asr.yaml"
     entry = {"name": "asr", "adapter": "echo_payloads", "items": 12, "task": "speech_to_text", "metric": "none"}
     suite.write_text(yaml.safe_dump({"format": "benchmark-suite@1.0", "name": "asr", "benchmarks": [entry]}))
@@ -139,3 +139,4 @@ def test_cli_items_records_the_task_default_model(tmp_path: Path) -> None:
     default = packaged().catalogue.default("speech_to_text")
     document = json.loads(items.read_text("utf-8"))
     assert document["model"] == {"id": default.id, "revision": default.revision}
+    assert document["params"] == {"language": None, "timestamps": "word"}

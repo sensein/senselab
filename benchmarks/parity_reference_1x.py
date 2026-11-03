@@ -1,9 +1,9 @@
 """Standalone 1.x reference producer: run the 1.x task over the held-out items `parity_reference.py items` wrote.
 
 Runs under the pinned `alpha` checkout in its own locked env; it imports 1.x senselab and nothing from 2.x.
-Writes one `<item id>.json` per item under `--out`: `{"task", "lines": [ScriptLine fields]}` for speech_to_text and
-diarize, `{"task", "vector": [...]}` for speaker_embeddings, each item embedded alone. `parity_reference.py convert`
-reads them.
+Each 1.x call is given the 2.x task params of the items file. Writes one `<item id>.json` per item under `--out`:
+`{"task", "lines": [ScriptLine fields]}` for speech_to_text and diarize, `{"task", "vector": [...]}` for
+speaker_embeddings, each item embedded alone. `parity_reference.py convert` reads them.
 
     python parity_reference_1x.py --items items.json --out records/ [--device cpu|cuda]
 """
@@ -28,10 +28,37 @@ def _lines(lines: list[Any]) -> list[dict[str, Any]]:
     return [{k: getattr(line, k, None) for k in ("text", "speaker", "start", "end", "avg_logprob")} for line in lines]
 
 
+TIMESTAMPS = {"none": False, "segment": True, "word": "word"}
+"""1.x `return_timestamps` of each 2.x `timestamps`."""
+TASK_PARAMS = {
+    "speech_to_text": {"language", "timestamps"},
+    "diarize": {"num_speakers", "min_speakers", "max_speakers"},
+    "speaker_embeddings": set(),
+}
+"""The 2.x task params each task's 1.x call is given."""
+
+
+def call_params(task: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Return the 1.x keyword arguments of the 2.x task `params`, `language` still an ISO code.
+
+    Raises:
+        SystemExit: `params` holds a param the 1.x call is not given, or `task` has no 1.x reference.
+    """
+    if task not in TASK_PARAMS:
+        raise SystemExit(f"no 1.x reference for task {task!r}")
+    dropped = sorted(set(params) - TASK_PARAMS[task])
+    if dropped:
+        raise SystemExit(f"the 1.x {task} call is not given the params {dropped}")
+    if task == "speech_to_text":
+        return {"language": params["language"], "return_timestamps": TIMESTAMPS[params["timestamps"]]}
+    return dict(params)
+
+
 def produce(
-    task: str, model: dict[str, str], items: dict[str, dict[str, str]], device: str
+    task: str, params: dict[str, Any], model: dict[str, str], items: dict[str, dict[str, str]], device: str
 ) -> dict[str, dict[str, Any]]:
-    """Return one output record per item id."""
+    """Return one output record per item id, the 1.x call given the 2.x task `params`."""
+    kwargs = call_params(task, params)
     from senselab.utils.data_structures import DeviceType, HFModel
 
     where = DeviceType(device)
@@ -39,15 +66,23 @@ def produce(
     ids = list(items)
     if task == "speech_to_text":
         from senselab.audio.tasks.speech_to_text import transcribe_audios
+        from senselab.utils.data_structures import Language
 
-        lines = transcribe_audios(audios, HFModel(path_or_uri=model["id"], revision=model["revision"]), device=where)
+        code = kwargs.pop("language")
+        lines = transcribe_audios(
+            audios,
+            HFModel(path_or_uri=model["id"], revision=model["revision"]),
+            language=None if code is None else Language(language_code=code),
+            device=where,
+            **kwargs,
+        )
         return {i: {"task": task, "lines": _lines([line])} for i, line in zip(ids, lines, strict=True)}
     if task == "diarize":
         from senselab.audio.tasks.speaker_diarization import diarize_audios
         from senselab.utils.data_structures import PyannoteAudioModel
 
         found = diarize_audios(
-            audios, PyannoteAudioModel(path_or_uri=model["id"], revision=model["revision"]), device=where
+            audios, PyannoteAudioModel(path_or_uri=model["id"], revision=model["revision"]), device=where, **kwargs
         )
         return {i: {"task": task, "lines": _lines(lines)} for i, lines in zip(ids, found, strict=True)}
     if task == "speaker_embeddings":
@@ -74,7 +109,8 @@ def main() -> None:
     args = parser.parse_args()
     document = json.loads(args.items.read_text("utf-8"))
     args.out.mkdir(parents=True, exist_ok=True)
-    for item_id, record in produce(document["task"], document["model"], document["items"], args.device).items():
+    found = produce(document["task"], document["params"], document["model"], document["items"], args.device)
+    for item_id, record in found.items():
         (args.out / f"{item_id}.json").write_text(json.dumps(record), "utf-8")
 
 
