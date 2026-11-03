@@ -28,9 +28,9 @@ from senselab.audio.tasks.speech_to_text.token_confidence import (
     special_token_ids,
     word_confidences,
 )
+from senselab.audio.tasks.speech_to_text.whisper_frontend import MIN_INPUT_NS
 from senselab.item_faults import (
     NS_PER_S,
-    WHISPER_MIN_INPUT_NS,
     clamp_ns,
     init_model,
     mono_check,
@@ -40,7 +40,6 @@ from senselab.item_faults import (
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.huggingface"
 EXPECTED_RATE = 16_000
-MIN_INPUT_NS = WHISPER_MIN_INPUT_NS
 _INIT_KEYS = frozenset({"stub", "model", "device", "array_dir"})
 
 

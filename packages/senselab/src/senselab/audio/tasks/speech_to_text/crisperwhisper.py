@@ -22,7 +22,8 @@ from typing import Any, Literal, get_args
 import numpy
 from senselab_worker.fake import injected
 
-from senselab.item_faults import NS_PER_S, WHISPER_MIN_INPUT_NS, clamp_ns, init_model, mono_samples
+from senselab.audio.tasks.speech_to_text.whisper_frontend import MIN_INPUT_NS
+from senselab.item_faults import NS_PER_S, clamp_ns, init_model, mono_samples
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.crisperwhisper"
 MODEL_ID = "nyralabs/CrisperWhisper2.0_turbo"
@@ -31,11 +32,12 @@ ENGINES: tuple[Engine, ...] = get_args(Engine)
 DEFAULT_ENGINE: Engine = "transformers"
 MAX_NEW_TOKENS = 256
 EXPECTED_RATE = 16_000
-MIN_INPUT_NS = WHISPER_MIN_INPUT_NS
 LONGFORM_STRATEGY = "continuation"
 DEFAULT_LANGUAGE = "en"
 COMPUTE_TYPES = {"cuda": "float16", "mps": "float16", "cpu": "float32"}
 _INIT_KEYS = frozenset({"stub", "model", "device", "array_dir"})
+DIAGNOSTICS_KEY = "_diagnostics"
+"""The request param that adds the `diagnostics` output (windows decoded, chunks reported) to each item's outputs."""
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,8 @@ class Decoded:
     words: list[tuple[str, float, float]]
     confidences: list[float | None]
     mean: float | None
+    windows: int = 0
+    chunks: int | None = None
 
 
 class StubModel:
@@ -104,7 +108,10 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
             samples, clock_id = mono_samples(item, faults, EXPECTED_RATE, "crisperwhisper", MIN_INPUT_NS)
             decoded = engine.transcribe(samples, language, tuning["max_new_tokens"])
             duration_ns = round(samples.size / EXPECTED_RATE * NS_PER_S)
-            results.append({"outputs": {"transcript": transcript(decoded, timestamps, clock_id, duration_ns)}})
+            outputs: dict[str, Any] = {"transcript": transcript(decoded, timestamps, clock_id, duration_ns)}
+            if params.get(DIAGNOSTICS_KEY):
+                outputs["diagnostics"] = {"windows": decoded.windows, "chunks": decoded.chunks}
+            results.append({"outputs": outputs})
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
             results.append({"error": exc})
     return results
@@ -226,6 +233,7 @@ class Library:
         def decode(token: int) -> str:
             return str(engine.tokenizer.decode([token]))
 
+        captured = windows
         chunks = getattr(result, "chunks", None) or []
         kept = [len(chunk.text.split()) for chunk in chunks]
         if len(windows) > 1 or kept:
@@ -242,7 +250,7 @@ class Library:
             if len(scored) == len(words) and (not kept or sum(kept) == len(words)):
                 confidences = list(scored)
                 mean = None if merged["avg_logprob"] is None else math.exp(merged["avg_logprob"])
-        return Decoded(words, confidences, mean)
+        return Decoded(words, confidences, mean, len(captured), len(chunks) if chunks else None)
 
 
 def _converted(snapshot: str, identity: str, compute: str) -> str:

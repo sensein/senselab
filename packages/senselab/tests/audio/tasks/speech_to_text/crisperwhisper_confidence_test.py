@@ -181,6 +181,7 @@ def test_overlap_dropped_ids_not_scored(kind: str) -> None:
     assert decoded.mean == pytest.approx(float(numpy.exp(logprob[:2].mean())), rel=1e-5)
     assert decoded.confidences == pytest.approx([float(numpy.exp(logprob[:2].sum()))], rel=1e-5)
     assert fed == ([PROMPT, GEN[:1]] if kind == "ct2" else [PROMPT + GEN[:1]])
+    assert (decoded.windows, decoded.chunks) == (1, 1)
 
 
 @pytest.mark.logic

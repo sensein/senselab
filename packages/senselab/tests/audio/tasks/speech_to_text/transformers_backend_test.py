@@ -11,6 +11,7 @@ from senselab.audio.tasks.speech_to_text.token_confidence import (
     merge_confidence_blocks,
     word_confidences,
 )
+from senselab.audio.tasks.speech_to_text.whisper_frontend import MIN_INPUT_NS
 from senselab_core.kernel.declare import REGISTRY
 from senselab_core.kernel.signals import Audio
 from senselab_core.kernel.wire import from_wire_form, wire_form
@@ -145,7 +146,7 @@ def test_unsupported_audio_is_a_content_fault_without_a_gap(audio: Audio, fault:
 @pytest.mark.logic
 def test_input_below_the_declared_minimum_is_a_content_fault() -> None:
     """The front end shared with crisperwhisper sets the minimum: one sample under 25 ms fails, 25 ms transcribes."""
-    n = hf.MIN_INPUT_NS * hf.EXPECTED_RATE // 1_000_000_000
+    n = MIN_INPUT_NS * hf.EXPECTED_RATE // 1_000_000_000
     short, ok = _run([{"id": "s", "inputs": {"audio": _audio(n - 1)}}, {"id": "o", "inputs": {"audio": _audio(n)}}])
     assert n == 400 and isinstance(short["error"], ContentFault) and "outputs" in ok
 

@@ -1,7 +1,9 @@
 """The `crisperwhisper` backend of `speech_to_text`: its engines, model, faults and the isolated worker's imports."""
 
 import importlib
+import io
 import json
+import tarfile
 from pathlib import Path
 from typing import Any
 
@@ -12,11 +14,12 @@ from senselab.audio.tasks.speech_to_text import crisperwhisper as cw
 from senselab.audio.tasks.speech_to_text import (
     crisperwhisper_backend,  # noqa: F401 - declares the backend
 )
-from senselab.signal.resample import resample_array
+from senselab.audio.tasks.speech_to_text.whisper_frontend import MIN_INPUT_NS
 from senselab_core.kernel.declare import REGISTRY
 from senselab_core.kernel.results import Transcript
 from senselab_core.kernel.signals import Audio
 from senselab_core.kernel.wire import from_wire_form, wire_form
+from senselab_core.runtime.fetch import DataManifest, default_cache_root, fetch
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile, NoBackend, resolve_execution
@@ -118,10 +121,21 @@ def test_unsupported_audio_is_a_content_fault(audio: Audio, text: str) -> None:
 @pytest.mark.logic
 def test_input_below_the_declared_minimum_is_a_content_fault() -> None:
     """One sample under the declared minimum fails as a content fault; the minimum itself transcribes."""
-    n = cw.MIN_INPUT_NS * cw.EXPECTED_RATE // 1_000_000_000
+    n = MIN_INPUT_NS * cw.EXPECTED_RATE // 1_000_000_000
     short, ok = _run([_item("s", _tone((n - 1) / 16000)), _item("o", _tone(n / 16000))])
-    assert n == 400 and cw.MIN_INPUT_NS == 25_000_000 and isinstance(short["error"], ContentFault)
+    assert n == 400 and MIN_INPUT_NS == 25_000_000 and isinstance(short["error"], ContentFault)
     assert "outputs" in ok
+
+
+@pytest.mark.logic
+def test_diagnostics_are_an_output_only_when_requested() -> None:
+    """`diagnostics` (windows decoded, chunks reported) is added by the reserved request param and absent otherwise."""
+    state = cw.load({"stub": True, "device": "cpu"})
+    item = _item("a", _tone())
+    [plain] = cw.handle(state, [item], PARAMS)
+    [asked] = cw.handle(state, [item], {**PARAMS, cw.DIAGNOSTICS_KEY: True})
+    assert set(plain["outputs"]) == {"transcript"}
+    assert asked["outputs"]["diagnostics"] == {"windows": 0, "chunks": None}
 
 
 @pytest.mark.logic
@@ -148,7 +162,7 @@ def test_backend_serves_only_the_crisperwhisper_model_and_declares_its_isolated_
     """One backend, isolated, over the one catalogue model that names it; Whisper models are not served by it."""
     (spec,) = [b for b in REGISTRY.backends("speech_to_text") if b.name == "crisperwhisper"]
     assert spec.models == (cw.MODEL_ID,) and spec.env.kind == "isolated" and spec.env.name == "crisperwhisper"
-    assert spec.min_input_ns == cw.MIN_INPUT_NS
+    assert spec.min_input_ns == MIN_INPUT_NS
     assert spec.params.model_fields["engine"].default == cw.DEFAULT_ENGINE and spec.batch_invariant
     entry = CATALOGUE.entry(cw.MODEL_ID)
     assert list(entry.backends) == ["crisperwhisper"] and list(entry.stacks) == [spec.stack]
@@ -212,25 +226,45 @@ def test_edge_inputs_with_real_weights(real_worker: RealWorkers, engine: str) ->
     assert all(from_wire_form(o["transcript"]) is not None for o in outputs.values())
 
 
-SPEECH = Path(__file__).parents[6] / "src" / "tests" / "data_for_testing" / "english_conversation_higgs_audio_v2.wav"
+MANIFEST = Path(__file__).parents[6] / "benchmarks" / "manifests" / "librispeech-test-clean.yaml"
+LONG_FORM_SECONDS = 35
+
+
+def _long_speech() -> Audio:
+    """Return consecutive LibriSpeech test-clean utterances of one chapter, over `LONG_FORM_SECONDS`, as one audio.
+
+    The archive is fetched through the data cache (`$SENSELAB_DATA_CACHE`) by its hash-pinned manifest.
+    """
+    soundfile = importlib.import_module("soundfile")
+    archive = fetch(DataManifest.load(MANIFEST), cache_root=default_cache_root())["test-clean.tar.gz"]
+    chapter, parts = None, []
+    with tarfile.open(archive, "r|gz") as tar:
+        for member in tar:
+            if not member.name.endswith(".flac"):
+                continue
+            if chapter is None:
+                chapter = Path(member.name).parent
+            if Path(member.name).parent != chapter:
+                break
+            handle = tar.extractfile(member)
+            assert handle is not None
+            samples, rate = soundfile.read(io.BytesIO(handle.read()), dtype="float32")
+            assert rate == cw.EXPECTED_RATE
+            parts.append(samples)
+            if sum(len(p) for p in parts) > LONG_FORM_SECONDS * rate:
+                return Audio.from_array(numpy.concatenate(parts)[None, :], rate)
+    raise AssertionError("the first chapter of test-clean holds less than the long-form length")
 
 
 @pytest.mark.env
 @pytest.mark.model
 @pytest.mark.parametrize("engine", cw.ENGINES)
 def test_long_form_decode_is_scored_with_real_weights(real_worker: RealWorkers, engine: str) -> None:
-    """A real speech item over 30 s has several windows, and its chunks match them: every confidence is present.
-
-    A mismatch between the library's chunks and the captured windows, or between the kept words and the words, leaves
-    the segment and word confidences None, so present confidences mean the counts matched.
-    """
-    soundfile = importlib.import_module("soundfile")
-    samples, rate = soundfile.read(SPEECH, dtype="float32")
-    speech = numpy.tile(resample_array(samples[None, :], rate, cw.EXPECTED_RATE), (1, 2))
-    assert speech.shape[1] > 30 * cw.EXPECTED_RATE
-    item = _item("long", Audio.from_array(speech, cw.EXPECTED_RATE))
-    params = {**PARAMS, "backend_params": {"engine": engine}}
-    [result] = real_worker("speech_to_text", "crisperwhisper").run([item], params)
+    """A real speech item over 30 s has several windows and as many chunks, and every confidence is present."""
+    params = {**PARAMS, "backend_params": {"engine": engine}, cw.DIAGNOSTICS_KEY: True}
+    [result] = real_worker("speech_to_text", "crisperwhisper").run([_item("long", _long_speech())], params)
+    diagnostics = result["outputs"]["diagnostics"]
+    assert diagnostics["windows"] >= 2 and diagnostics["chunks"] == diagnostics["windows"], diagnostics
     transcript = from_wire_form(result["outputs"]["transcript"])
     assert isinstance(transcript, Transcript)
     [segment] = transcript.segments

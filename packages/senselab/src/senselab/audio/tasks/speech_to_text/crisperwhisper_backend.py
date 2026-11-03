@@ -8,16 +8,16 @@ from senselab_core.kernel.declare import BackendParams, Env, backend
 from senselab.audio.tasks.speech_to_text.crisperwhisper import (
     DEFAULT_ENGINE,
     MAX_NEW_TOKENS,
-    MIN_INPUT_NS,
     MODEL_ID,
     WORKER_MODULE,
     Engine,
 )
+from senselab.audio.tasks.speech_to_text.whisper_frontend import MIN_INPUT_NS
 
 _HERE = Path(__file__).parent
 _WORKER_SOURCES = {
     f"{__package__}.{name}": str(_HERE / f"{name}.py")
-    for name in ("crisperwhisper", "token_confidence", "window_confidence")
+    for name in ("crisperwhisper", "token_confidence", "whisper_frontend", "window_confidence")
 } | {"senselab.item_faults": str(_HERE.parents[2] / "item_faults.py")}
 
 

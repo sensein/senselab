@@ -9,9 +9,6 @@ from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault, ResourceFault
 
 NS_PER_S = 1_000_000_000
-WHISPER_N_FFT = 400
-WHISPER_RATE = 16_000
-WHISPER_MIN_INPUT_NS = WHISPER_N_FFT * NS_PER_S // WHISPER_RATE
 
 
 def clamp_ns(start_s: float | None, end_s: float | None, floor_ns: int, duration_ns: int) -> tuple[int, int]:
