@@ -247,8 +247,8 @@ class Frozen(BaseModel):
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True, extra="forbid", hide_input_in_errors=True)
 
-    clock_fields: ClassVar[tuple[str, ...]] = ()
-    """The fields a re-bind to another clock shifts; a type with a `clock_id` names its clock-relative times here."""
+    clock_fields: ClassVar[tuple[str, ...] | None] = None
+    """The fields a re-bind to another clock shifts; a type with a `clock_id` must declare them (`()` for none)."""
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source: type[BaseModel], handler: GetCoreSchemaHandler) -> Any:  # noqa: ANN401
@@ -265,8 +265,17 @@ class Frozen(BaseModel):
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
-        """Hold the subclass's config as a read-only mapping."""
+        """Hold the subclass's config as a read-only mapping, and require a clock type to declare its clock fields.
+
+        Raises:
+            TypeError: if a type with a `clock_id` field has no `clock_fields`, or names one that is not a field.
+        """
         super().__pydantic_init_subclass__(**kwargs)
+        unknown = [name for name in cls.clock_fields or () if name not in cls.model_fields]
+        if unknown or ("clock_id" in cls.model_fields and cls.clock_fields is None):
+            raise TypeError(
+                f"{cls.__name__}: clock_fields must name its clock-relative fields, got {unknown or 'none declared'}"
+            )
         cls.model_config = MappingProxyType(dict(cls.model_config))  # type: ignore[assignment]
 
     def _derived(self) -> Mapping[str, object]:

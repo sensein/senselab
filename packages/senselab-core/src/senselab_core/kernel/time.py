@@ -24,6 +24,8 @@ from senselab_core.kernel.formats import FormatTag, Formatted
 class TimeAnchor(Frozen):
     """Ties `clock_id` to absolute time: its zero is `absolute_start_ns` since the Unix epoch, if known."""
 
+    clock_fields: ClassVar[tuple[str, ...]] = ()
+
     clock_id: NonEmptyStr
     absolute_start_ns: Nanoseconds | None
 
@@ -105,7 +107,10 @@ def _rebound(value: object, anchor: TimeAnchor, timemap: TimeMap) -> object:
         fields = {name: getattr(value, name) for name in type(value).model_fields}
         moved = {name: _rebound(v, anchor, timemap) for name, v in fields.items()}
         if fields.get("clock_id") == timemap.source:
-            moved = {name: _mapped(v, timemap) if name in type(value).clock_fields else v for name, v in moved.items()}
+            moved = {
+                name: _mapped(v, timemap) if name in (type(value).clock_fields or ()) else v
+                for name, v in moved.items()
+            }
             moved["clock_id"] = timemap.target
         return value if all(moved[n] is fields[n] for n in fields) else type(value).model_validate(moved)
     if isinstance(value, tuple | Mapping):

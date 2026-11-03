@@ -174,3 +174,20 @@ def test_rebind_leaves_duration_fields() -> None:
         _Timed(start_ns=10, duration_ns=4, clock_id="a"), stored, reader, TimeMap(source="a", target="b", offset_ns=100)
     )
     assert (out.start_ns, out.duration_ns, out.clock_id) == (110, 4, "b")
+
+
+@pytest.mark.logic
+def test_a_clock_type_declares_its_clock_fields() -> None:
+    """A type with a `clock_id` and no clock fields, or a clock field that is not a field, is refused at definition."""
+    with pytest.raises(TypeError, match="clock_fields"):
+
+        class _Silent(Frozen):
+            onset_ns: Nanoseconds
+            clock_id: NonEmptyStr
+
+    with pytest.raises(TypeError, match="clock_fields"):
+
+        class _Misspelt(Frozen):
+            clock_fields: ClassVar[tuple[str, ...]] = ("onest_ns",)
+            onset_ns: Nanoseconds
+            clock_id: NonEmptyStr
