@@ -1,0 +1,12 @@
+format: default-python@1.0
+# The one interpreter every 2.x CI job and `.python-version` use; the other supported versions run nightly and on PRs
+# labelled full-matrix.
+
+default:
+  value: '3.13'
+  derivation: >-
+    The owner's ruling: senselab has a single default Python, the Google Colab default runtime Python. Colab runtime
+    2026.10 ships Python 3.13.18; the upgrade went live on 2026-08-25 (googlecolab/colabtools#6081).
+  source: https://research.google.com/colaboratory/runtime-version-faq.html
+  runtime: '2026.10'
+  runtime_python: 3.13.18

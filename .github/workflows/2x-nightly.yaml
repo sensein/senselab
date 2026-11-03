@@ -36,6 +36,6 @@ jobs:
     - name: Install the core distributions alone, from uv.lock
       env:
         UV_PROJECT_ENVIRONMENT: .core
-      run: uv sync --locked --no-editable --python 3.12 --package senselab-core --group test
+      run: uv sync --locked --no-editable --python 3.13 --package senselab-core --group test
     - name: Run the limits tier that needs no model
       run: .core/bin/pytest packages -m "limits and not model" -p no:cacheprovider

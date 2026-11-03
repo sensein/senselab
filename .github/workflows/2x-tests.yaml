@@ -1,7 +1,8 @@
 name: 2x-tests
 
 on:
-  # The 2.x line only. 1.x branches (alpha, main) run tests.yaml.
+  # The 2.x line only. Python 3.13 (scripts/data/default_python.yaml) on every run; the full matrix runs nightly and on
+  # PRs labelled full-matrix. 1.x branches (alpha, main) run tests.yaml.
   push:
     branches: [2.x, senselab-2x-api, 2x/**]
   pull_request:
@@ -51,7 +52,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
-        python-version: '3.12'
+        python-version: '3.13'
     - name: Install dependencies with uv
       run: uv sync --locked --all-extras --group dev
     - name: Fetch the 1.x freeze branch
@@ -67,7 +68,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.14']
+        python-version: ${{ (inputs.ref != '' || contains(github.event.pull_request.labels.*.name, 'full-matrix')) && fromJSON('["3.11","3.12","3.13","3.14"]') || fromJSON('["3.13"]') }}
     steps:
     - uses: actions/checkout@v5
       with:
@@ -102,7 +103,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.14']
+        python-version: ${{ (inputs.ref != '' || contains(github.event.pull_request.labels.*.name, 'full-matrix')) && fromJSON('["3.11","3.12","3.13","3.14"]') || fromJSON('["3.13"]') }}
     steps:
     - uses: actions/checkout@v5
       with:
@@ -140,7 +141,7 @@ jobs:
     - name: Install the core distributions alone, from uv.lock
       env:
         UV_PROJECT_ENVIRONMENT: .core
-      run: uv sync --locked --no-editable --python 3.12 --package senselab-core --group test
+      run: uv sync --locked --no-editable --python 3.13 --package senselab-core --group test
     - name: Run the limits tier
       run: .core/bin/pytest packages -m "limits and not model" -p no:cacheprovider
 
@@ -160,7 +161,7 @@ jobs:
     - name: Install the core distributions alone, from uv.lock
       env:
         UV_PROJECT_ENVIRONMENT: .core
-      run: uv sync --locked --no-editable --python 3.12 --package senselab-core --group test
+      run: uv sync --locked --no-editable --python 3.13 --package senselab-core --group test
     - name: Check the source digests
       run: .core/bin/python scripts/check_source_digests.py
 
@@ -180,7 +181,7 @@ jobs:
     - name: Check the models in the PR body
       env:
         PR_BODY: ${{ github.event.pull_request.body }}
-      run: uv run --no-project --python 3.12 python scripts/check_pr_models.py
+      run: uv run --no-project --python 3.13 python scripts/check_pr_models.py
 
   core-env:
     needs: detect
@@ -198,7 +199,7 @@ jobs:
     - name: Install the core distributions alone, from uv.lock
       env:
         UV_PROJECT_ENVIRONMENT: .core
-      run: uv sync --locked --no-editable --python 3.12 --package senselab-core --group test
+      run: uv sync --locked --no-editable --python 3.13 --package senselab-core --group test
     - name: Run the release gate tests, which build and create venvs
       run: .core/bin/pytest packages/senselab-core/tests/release_gate_test.py -m "env and not slow and not model" -p no:cacheprovider
 
@@ -220,7 +221,7 @@ jobs:
     - name: Install the root distribution and its dependencies, from uv.lock
       env:
         UV_PROJECT_ENVIRONMENT: .licenses
-      run: uv sync --locked --no-editable --python 3.12 --package senselab --no-default-groups
+      run: uv sync --locked --no-editable --python 3.13 --package senselab --no-default-groups
     - name: Check the licenses
       run: .licenses/bin/python scripts/check_licenses.py --json licenses.json
     - name: Keep the license table
