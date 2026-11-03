@@ -188,6 +188,14 @@ class TestBeforeARun:
         assert cli.main(["--recordings", str(listing), "--hints", str(hints), "--out", str(out)]) == 1
         assert _report(out)["counts"][UNREADABLE_IDENTITY] == 1
 
+    @pytest.mark.usefixtures("without_triage_profile")
+    def test_hints_with_no_profile_stop_the_check(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """A hint's task needs a task list to resolve against; without one nothing is checked (exit 2)."""
+        hints = _hints(tmp_path, "    return (AudioHints(task='rainbow-passage'),)\n")
+        listing = _recordings(tmp_path, ["/c/sub-1_ses-1_task-a.wav", "/c/sub-1_ses-1_task-b.wav"])
+        assert cli.main(["--recordings", str(listing), "--hints", str(hints)]) == 2
+        assert "tasks.yaml" in capsys.readouterr().err
+
     def test_hints_with_a_table_are_refused(self, tmp_path: Path) -> None:
         """A finished run's identity is the one it recorded, so no hint applies."""
         table = _table(tmp_path, [_row("a", "a", None, None, None)])
@@ -252,6 +260,18 @@ class TestAfterARun:
         row["declared_task_source"] = None
         out = tmp_path / "report.json"
         assert cli.main(["--table", str(_table(tmp_path, [row])), "--out", str(out)]) == 0
+        (finding,) = _report(out)["findings"]
+        assert (finding["check"], finding["key"]) == (TASK_NOT_DESCRIBED, "(no task recorded)")
+
+    def test_a_table_from_before_the_task_columns_is_checked(self, tmp_path: Path) -> None:
+        """A schema-30 table has no declared-task columns: its identities are checked and its runs record no task."""
+        row = _row("sub-1_ses-1_task-rainbow-passage", "r", "sub-1", "ses-1", "rainbow-passage")
+        del row["declared_family"], row["declared_task_source"]
+        columns = ("stem", "run_dir", "participant", "session", "task", "participant_from", "session_from", "task_from")
+        path = tmp_path / "old.parquet"
+        pq.write_table(pa.table({name: pa.array([row[name]], type=pa.string()) for name in columns}), path)
+        out = tmp_path / "report.json"
+        assert cli.main(["--table", str(path), "--out", str(out)]) == 0
         (finding,) = _report(out)["findings"]
         assert (finding["check"], finding["key"]) == (TASK_NOT_DESCRIBED, "(no task recorded)")
 

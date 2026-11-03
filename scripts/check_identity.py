@@ -15,9 +15,12 @@ without it every identity is read off the stem and no recording declares a task.
 against the task list of ``--profile`` (the dataset profile), as ADMIT resolves it. No store is opened.
 
 ``--table`` checks a finished corpus: the ``recording_vectors`` parquet, of which only ``stem``, ``run_dir``,
-``participant``, ``session``, ``task`` and their ``*_from`` columns, ``declared_family`` and ``declared_task_source``
-are read. A row whose ``*_from`` columns are all empty is a run that records no identity; one whose
-``declared_task_source`` is empty is a run that records no task.
+``participant``, ``session``, ``task`` and their ``*_from`` columns are read, and ``declared_family`` and
+``declared_task_source`` where the table has them. A row whose ``*_from`` columns are all empty is a run that records
+no identity; one whose ``declared_task_source`` is empty or absent is a run that records no task.
+
+Each hint's task is resolved against the active profile's task list, so ``--recordings`` with ``--hints`` needs
+``--profile``; without one the check stops (exit 2) rather than refusing every recording.
 
 The checks and their levels are in :mod:`senselab.audio.workflows.triage.identity_check`. ``--session-scope``
 says where the corpus's session identifiers are unique: within their participant (the default, as BIDS ``ses-1``) or
@@ -39,6 +42,7 @@ from typing import Any, Callable
 
 import pyarrow.parquet as pq
 
+from senselab.audio.workflows.triage.dataset_profile import DatasetDataMissing
 from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config, load_hint_builder
 from senselab.audio.workflows.triage.identity import (
     ROW_PARTICIPANT,
@@ -67,17 +71,12 @@ SOURCE_KEY = "source"
 
 DECLARED_TASK_COLUMN = "declared_family"
 DECLARED_TASK_SOURCE_COLUMN = "declared_task_source"
-TABLE_COLUMNS = (
-    "stem",
-    "run_dir",
-    ROW_PARTICIPANT,
-    ROW_SESSION,
-    ROW_TASK,
-    *ROW_SOURCES.values(),
-    DECLARED_TASK_COLUMN,
-    DECLARED_TASK_SOURCE_COLUMN,
-)
-"""The corpus-table columns the check reads; no other column is read."""
+TABLE_COLUMNS = ("stem", "run_dir", ROW_PARTICIPANT, ROW_SESSION, ROW_TASK, *ROW_SOURCES.values())
+"""The corpus-table columns the check needs; no other column is read but :data:`TASK_COLUMNS`."""
+
+TASK_COLUMNS = (DECLARED_TASK_COLUMN, DECLARED_TASK_SOURCE_COLUMN)
+"""The declared-task columns, read where the table has them (schema 31 on); a table without them is one whose runs
+record no task."""
 
 PRIVATE_FILE_MODE = 0o600
 SHOWN_PER_CHECK = 5
@@ -158,6 +157,8 @@ def records_before_run(recordings: list[Path], build_hint: Callable[[Path], Any]
         except IdentityLabelError as error:
             records.append(IdentityRecord(stem, str(wav), None, parsed, str(error)))
             continue
+        except DatasetDataMissing:
+            raise
         except (OSError, ValueError, LookupError, TypeError) as error:
             records.append(IdentityRecord(stem, str(wav), None, parsed, f"hint: {describe_exception(error)}"))
             continue
@@ -181,7 +182,7 @@ def records_after_run(table: Path) -> list[IdentityRecord]:
     missing = [column for column in TABLE_COLUMNS if column not in present]
     if missing:
         raise ValueError(f"{table} carries no {', '.join(missing)}; rebuild it from a current corpus pass")
-    rows = pq.read_table(table, columns=list(TABLE_COLUMNS)).to_pylist()
+    rows = pq.read_table(table, columns=[*TABLE_COLUMNS, *(c for c in TASK_COLUMNS if c in present)]).to_pylist()
     records: list[IdentityRecord] = []
     for row in rows:
         stem = str(row.get("stem") or "")

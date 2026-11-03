@@ -1843,16 +1843,17 @@ def cohort_key(
         enrollment_config: The model, its commit, the cut and the floor.
 
     Returns:
-        A digest of those, the parameters file and the parameters version.
+        A digest of those, the parameters file and its version, and the task list: each task's branch, description
+        and voice-read words, from which its kinds (enrollment, target rule, checks, task syllables) are worked out.
     """
     return _digest(
         {
             "version": cohort_parameters()["version"],
             "parameters": cohort_parameters(),
-            "voice_task_text": {
-                name: list(entry.voice_reading_text) for name, entry in task_list().items() if entry.voice_reading_text
-            }
-            or None,
+            "tasks": {
+                name: [entry.branch, entry.expects.as_mapping(), list(entry.voice_reading_text or ())]
+                for name, entry in sorted(task_list().items())
+            },
             "group": group,
             "members": sorted(dataclasses.astuple(facts) for facts in members),
             "quantiles": quantiles_sha256,

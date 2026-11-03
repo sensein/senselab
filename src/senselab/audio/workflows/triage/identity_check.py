@@ -15,9 +15,11 @@ and the corpus passes group runs by them. :func:`check_identities` reads one
   label that cannot name a folder). Refused.
 * :data:`DUPLICATE_STEM` -- one stem in more than one place. Corpus passes key runs by place and stem, so this is
   reported, not refused.
-* :data:`TASK_NOT_DESCRIBED` -- a recording whose declared task neither the dataset's task list nor its hint
-  describes (:func:`~senselab.audio.workflows.triage.task_catalogue.resolve_task`), one finding per task: a task the
-  list lacks, a recording that declares no task, or a finished run that records none. Nothing is read off a file name.
+* :data:`TASK_NOT_DESCRIBED` -- a recording whose declared task the dataset's task list does not describe
+  (:func:`~senselab.audio.workflows.triage.task_catalogue.resolve_task`), one finding per key: a task the list lacks,
+  a task described only inline in the hint (recorded, but no branch reads an inline description yet, so each branch
+  takes its out-of-family mode), a recording that declares no task, or a finished run that records none. Nothing is
+  read off a file name.
 * :data:`STEM_DISAGREES` -- a BIDS-like stem whose entities name another participant, session or task than the one
   declared. The declared one wins.
 * :data:`NO_RECORDED_IDENTITY` -- a finished run that records no identity.
@@ -76,8 +78,12 @@ NO_TASK_RECORDED = "(no task recorded)"
 """The :data:`TASK_NOT_DESCRIBED` keys of a recording whose hint names no task, and of a run from before ADMIT recorded
 the task."""
 
-DESCRIBED = frozenset({FROM_TASK_LIST, FROM_HINT_DESCRIPTION})
-"""The task sources a recording can be analysed against: an entry of the task list, or the hint's own description."""
+HINT_ONLY_SUFFIX = " (described only in the hint)"
+"""Appended to the :data:`TASK_NOT_DESCRIBED` key of a task described inline in its hint and absent from the list."""
+
+DESCRIBED = frozenset({FROM_TASK_LIST})
+"""The task sources the branches analyse a recording against: an entry of the task list. A hint's inline description
+is recorded but read by no branch yet, so it is reported (:data:`HINT_ONLY_SUFFIX`)."""
 
 _FIELDS = ("participant", "session", "task_id")
 
@@ -196,13 +202,16 @@ def undescribed_task(record: IdentityRecord) -> str | None:
         record: The recording.
 
     Returns:
-        The task's name where the task list lacks it, :data:`NO_TASK_DECLARED` where the hint names none,
-        :data:`NO_TASK_RECORDED` where the run records no task; None for a task the list or the hint describes.
+        The task's name where the task list lacks it, with :data:`HINT_ONLY_SUFFIX` where the hint describes it
+        inline; :data:`NO_TASK_DECLARED` where the hint names none, :data:`NO_TASK_RECORDED` where the run records no
+        task; None for a task the list describes.
     """
     if record.task_source in DESCRIBED:
         return None
     if record.task_source is None:
         return NO_TASK_RECORDED
+    if record.task_source == FROM_HINT_DESCRIPTION:
+        return f"{record.task or '(unnamed)'}{HINT_ONLY_SUFFIX}"
     if record.task_source == NO_TASK or not record.task:
         return NO_TASK_DECLARED
     return record.task

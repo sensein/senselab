@@ -174,11 +174,10 @@ def test_a_task_the_task_list_lacks_is_reported_per_task(scope: str) -> None:
 
 @pytest.mark.parametrize("scope", SESSION_SCOPES)
 def test_the_task_is_the_declared_one_never_the_stems(scope: str) -> None:
-    """A stem naming a task the list lacks is no finding when the hint declares a described task, and vice versa."""
+    """A stem naming a task the list lacks is no finding when the hint declares a listed task, and vice versa."""
     report = _check(
         [
             _record("sub-1_ses-1_task-humming-1", task="rainbow-passage", task_source=FROM_TASK_LIST),
-            _record("sub-1_ses-1_task-rainbow-passage", task="hum", task_source=FROM_HINT_DESCRIPTION),
             _record("sub-2_ses-2_task-rainbow-passage", task="humming", task_source=NOT_IN_TASK_LIST),
         ],
         scope,
@@ -186,6 +185,24 @@ def test_the_task_is_the_declared_one_never_the_stems(scope: str) -> None:
     assert [(finding.key, finding.stems) for finding in report.findings] == [
         ("humming", ("sub-2_ses-2_task-rainbow-passage",))
     ]
+
+
+@pytest.mark.parametrize("scope", SESSION_SCOPES)
+def test_a_task_described_only_in_its_hint_is_reported(scope: str) -> None:
+    """No branch reads an inline description yet, so the recording would take every branch's out-of-family mode."""
+    report = _check(
+        [
+            _record("sub-1_ses-1_task-a", task="hum", task_source=FROM_HINT_DESCRIPTION),
+            _record("sub-1_ses-1_task-b", task=None, task_source=FROM_HINT_DESCRIPTION),
+        ],
+        scope,
+    )
+    assert sorted(finding.key for finding in report.findings) == [
+        "(unnamed) (described only in the hint)",
+        "hum (described only in the hint)",
+    ]
+    assert {finding.check for finding in report.findings} == {TASK_NOT_DESCRIBED}
+    assert not report.refused
 
 
 @pytest.mark.parametrize("scope", SESSION_SCOPES)
