@@ -964,3 +964,4 @@ R-n in [`review-register.md`](review-register.md).
   (P2-39); the source-stamp conflict is closed (P2-21); backends are code paths and models are catalogue entries
   (P2-90, P2-47).
 - 2026-11-03: the pydra gate passed at `0c1bbcd9` (Route A, §4.9); K2 was delivered in Phase 3 Task 0, not Phase 2 (P3-1, §4.9, §6.2; `reviews/phase3-gate/evidence.md`).
+- 2026-11-03: a lease is a directory taken by `mkdir`, renewed by beat directories (ADR-003, owner item 58).

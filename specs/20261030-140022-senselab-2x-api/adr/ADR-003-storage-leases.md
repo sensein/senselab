@@ -169,6 +169,32 @@ Phase 2 Task 9b; rulings P2-14, P2-38.
   A dead server's port reused by another server of the same model would pass; the window is narrow and the
   version and root are not re-probed per reply.
 
+## Amendment 2026-11-03: a lease is a directory, renewed by beats (owner item 58)
+
+Replaces the lease primitive of the D-2 amendment. Everything else in it stands: a lease is stale when its age
+on the storage clock passes `stale_after`, a holder owns it by its uuid token, nothing is modified in place,
+waits are bounded, and correctness rests on idempotence.
+
+- **Primitive.** `mkdir` is atomic within one filesystem on local disks, every NFS version, SMB, NTFS, Lustre and
+  GPFS. `O_EXCL` hard links are not available on SMB, NTFS or some FUSE mounts, and a rename over an open file
+  fails on Windows. No operation is atomic across two filesystems, so every path below is inside the lease's own
+  directory.
+- **Take.** `mkdir <name>.lease`, then `mkdir <name>.lease/<token>`. The token in the path tells a holder that a
+  `mkdir` answered `EEXIST` after a lost NFS reply was its own.
+- **Renew (the heartbeat).** A renewer owned by the lease, independent of the work it guards, creates
+  `<token>/beat-<n+1>` and removes `<token>/beat-<n>` every `renew_fraction × stale_after`. Each entry change sets
+  the directory's mtime on the server, so the last beat has a storage-clock time and no file is rewritten. A beat
+  whose `mkdir` fails with `ENOENT` means the lease was broken: the holder stops and does not commit as owner.
+- **Judge and break.** A breaker reads the lease's age by a fresh `stat` of `<token>/` against the storage clock
+  (a probe directory's mtime). Past `stale_after`, it renames `<name>.lease` aside (one atomic rename within the
+  parent) and takes its own. Beats have new names each time, so inode reuse needs no `(dev, ino, mtime)` check.
+- **Release.** The holder renames the lease aside and removes it.
+- **Bounds.** The renew fraction leaves room for clock skew and the measured attribute-cache delay of the root;
+  a root that cannot `mkdir` atomically, rename a directory, or give a server-clock mtime is refused with
+  `StorageUnsupported` (the storage probe). Object stores have no directories and are refused.
+- **Services.** A registry entry `{identity, endpoint}` lives under a lease kept alive by its server's renewer;
+  the beats are its liveness, so it carries no separate heartbeat field.
+
 ## Amendment log
 
 - 2026-10-31: paths, kinds and entry binding under a storage root (R-100, R-101; H9b).
@@ -176,3 +202,4 @@ Phase 2 Task 9b; rulings P2-14, P2-38.
 - 2026-11-01: locks are leases by rename and `O_EXCL` (D-2).
 - 2026-11-01: one transient classifier (`faults.is_transient`); retry takes a `RetryPolicy` from data; no ambient retry knob (F1, F3).
 - 2026-11-01: services are process-scoped in Phase 2; the leased registry and `svc` pool worker arrive with lease renewal in Phase 3 (P2-14, P2-38; Task 9b).
+- 2026-11-03: a lease is a directory taken by `mkdir` with the holder's token, renewed by beat directories from a renewer independent of the work; replaces the `O_EXCL` link (owner item 58).
