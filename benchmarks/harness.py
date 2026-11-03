@@ -1,9 +1,10 @@
-"""The benchmark harness: suites run through `run_call`, scored by metric tasks, written as `benchmark-result@1`.
+"""The benchmark harness: suites run through `run_call`, scored by metric tasks, written as `benchmark-result@2`.
 
 A suite (`suites/<name>.yaml`, `benchmark-suite@1.0`) lists benchmarks; each names a data manifest in `manifests/`
 (`data-manifest@2.0`, fetched by `senselab_core.runtime.fetch`, the engine behind `senselab data fetch`), an adapter
 that turns the fetched files into items, the task to run per item and the metric task to score with. Every item
-belongs to `calibration` or `heldout` by the digest of its id. Each run writes `<out>/<run id>/result.json` and the
+belongs to `calibration` or `heldout` by the digest of its adapter's split unit: its own id, its speaker or its
+recording. Each run writes `<out>/<run id>/result.json` and the
 PROV documents of every call under `<out>/<run id>/prov/`.
 """
 
@@ -18,12 +19,19 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, BinaryIO, Protocol
+from typing import Any, BinaryIO, Literal, Protocol
 
 import numpy
 import soundfile
 from senselab_core.kernel._base import Frozen, NonEmptyStr
-from senselab_core.kernel.formats import BENCHMARK_RESULT_FORMAT, FormatTag, Formatted
+from senselab_core.kernel.formats import (
+    BENCHMARK_RESULT_FORMAT,
+    RETIRED_BENCHMARK_RESULT_FORMATS,
+    FormatTag,
+    Formatted,
+    FormatVerdict,
+    check,
+)
 from senselab_core.kernel.identity import ExecutionContext
 from senselab_core.kernel.results import Embedding, Intervals, Metric, TextSpans, Transcript, TranscriptNode, Trials
 from senselab_core.kernel.signals import PlainText
@@ -37,6 +45,7 @@ from senselab_core.testing.synth import tone
 SUITE_FORMAT = "benchmark-suite@1.0"
 SPLITS = ("calibration", "heldout")
 POOLED = "pooled:"
+SplitUnit = Literal["item", "speaker", "recording"]
 
 
 class _Once(logging.Filter):
@@ -65,9 +74,9 @@ def log_each_warning_once() -> None:
         handler.addFilter(once)
 
 
-def split_of(item_id: str) -> str:
-    """Return `calibration` or `heldout` by the parity of the first byte of the sha256 of `item_id`."""
-    return SPLITS[hashlib.sha256(item_id.encode()).digest()[0] % 2]
+def split_of(unit_id: str) -> str:
+    """Return `calibration` or `heldout` by the parity of the first byte of the sha256 of `unit_id`."""
+    return SPLITS[hashlib.sha256(unit_id.encode()).digest()[0] % 2]
 
 
 def _by_digest(ids: Sequence[str]) -> list[str]:
@@ -77,11 +86,22 @@ def _by_digest(ids: Sequence[str]) -> list[str]:
 
 @dataclass(frozen=True)
 class Item:
-    """One benchmark item: its id, the task's inputs and what the adapter keeps for scoring."""
+    """One benchmark item: its id, the task's inputs and what the adapter keeps for scoring.
+
+    `unit` is the id of the adapter's split unit the item belongs to (its own id when None). `fault` is why the
+    item cannot be scored, when its reference is malformed: the item is not run and is a fault row.
+    """
 
     id: str
     inputs: Mapping[str, Any]
     reference: Any = None
+    unit: str | None = None
+    fault: str | None = None
+
+    @property
+    def split(self) -> str:
+        """The split of the item's unit."""
+        return split_of(self.unit or self.id)
 
 
 @dataclass(frozen=True)
@@ -94,7 +114,12 @@ class Scoring:
 
 
 class Adapter(Protocol):
-    """Turns fetched files into items, and a task's outputs into metric inputs."""
+    """Turns fetched files into items, and a task's outputs into metric inputs.
+
+    `split_unit` is what an item's split follows: the `item`, the `speaker` it is of or the `recording` it is in.
+    """
+
+    split_unit: SplitUnit
 
     def items(self, files: Mapping[str, Path], count: int, work: Path, seconds: float | None) -> list[Item]:
         """Return `count` items; any file the task reads is written under `work`, cut to `seconds` when given."""
@@ -108,8 +133,10 @@ class Adapter(Protocol):
 class _PerItem:
     """Scores each item's output alone: `metric_inputs(item, outputs)`."""
 
+    split_unit: SplitUnit = "item"
+
     def scoring(self, items: Sequence[Item], outputs: Mapping[str, Mapping[str, Any]]) -> list[Scoring]:
-        return [Scoring(i.id, split_of(i.id), self.metric_inputs(i, outputs[i.id])) for i in items if i.id in outputs]
+        return [Scoring(i.id, i.split, self.metric_inputs(i, outputs[i.id])) for i in items if i.id in outputs]
 
     def metric_inputs(self, item: Item, output: Mapping[str, Any]) -> Mapping[str, Any]:
         raise NotImplementedError
@@ -174,6 +201,7 @@ class LibriSpeechAsr(_PerItem):
 class LibriSpeechTrials:
     """LibriSpeech test-clean utterances of a few speakers, embedded; pairs within a split are the trials."""
 
+    split_unit: SplitUnit = "speaker"
     per_speaker = 5
 
     def items(self, files: Mapping[str, Path], count: int, work: Path, seconds: float | None) -> list[Item]:
@@ -190,12 +218,12 @@ class LibriSpeechTrials:
             chosen += _by_digest(by_speaker[speaker])[: self.per_speaker]
         chosen = chosen[:count]
         paths = _extract(tar_path, {u: members[u] for u in chosen}, work)
-        return [Item(u, {"audio": paths[u]}, u.split("-")[0]) for u in chosen]
+        return [Item(u, {"audio": paths[u]}, u.split("-")[0], u.split("-")[0]) for u in chosen]
 
     def scoring(self, items: Sequence[Item], outputs: Mapping[str, Mapping[str, Any]]) -> list[Scoring]:
         scored: list[Scoring] = []
         for split in SPLITS:
-            ran = [i for i in items if i.id in outputs and split_of(i.id) == split]
+            ran = [i for i in items if i.id in outputs and i.split == split]
             pairs = [(a, b) for n, a in enumerate(ran) for b in ran[n + 1 :]]
             if not pairs:
                 continue
@@ -241,6 +269,8 @@ def _clip_turns(turns: Iterable[tuple[float, float, str]], seconds: float | None
 class VoxConverseDiarization(_PerItem):
     """VoxConverse test recordings of the first shard, diarized; the metric reads the reference and hypothesis turns."""
 
+    split_unit: SplitUnit = "recording"
+
     def items(self, files: Mapping[str, Path], count: int, work: Path, seconds: float | None) -> list[Item]:
         [shard] = files.values()
         work.mkdir(parents=True, exist_ok=True)
@@ -254,7 +284,7 @@ class VoxConverseDiarization(_PerItem):
             turns = _clip_turns(
                 zip(row["timestamps_start"], row["timestamps_end"], row["speakers"], strict=True), seconds
             )
-            items.append(Item(uid, {"audio": target}, turns))
+            items.append(Item(uid, {"audio": target}, turns, uid))
         return items
 
     def metric_inputs(self, item: Item, output: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -274,6 +304,29 @@ def pii_spans(raw: str | Sequence[Any]) -> list[dict[str, Any]]:
     return [json.loads(s) if isinstance(s, str) else dict(s) for s in parsed]
 
 
+def gretel_item(uid: str, content: str, raw_spans: str | Sequence[Any]) -> Item:
+    """Return the item of one gretel document; a reference span outside `0 <= start <= end <= len` is its fault."""
+    text = PlainText(content=content)
+    spans = pii_spans(raw_spans)
+    bad = [s for s in spans if not 0 <= s["start"] <= s["end"] <= len(content)]
+    if bad:
+        fault = _fault_text(
+            {
+                "type": "ContentFault",
+                "fault": "content",
+                "message": f"{len(bad)} of {len(spans)} reference spans lie outside the text of {len(content)} chars",
+            }
+        )
+        return Item(uid, {"text": text}, fault=fault)
+    reference = TextSpans.over(
+        text,
+        start=numpy.array([s["start"] for s in spans], dtype=numpy.int64),
+        end=numpy.array([s["end"] for s in spans], dtype=numpy.int64),
+        label=numpy.array([s["label"] for s in spans], dtype=str),
+    )
+    return Item(uid, {"text": text}, reference)
+
+
 class GretelPii(_PerItem):
     """Gretel synthetic finance documents of the test split; the metric reads reference and hypothesis spans."""
 
@@ -283,18 +336,10 @@ class GretelPii(_PerItem):
             f"{r['language']}-{r['index']}": r
             for r in _parquet_rows(parquet, ["index", "language", "generated_text", "pii_spans"])
         }
-        items = []
-        for uid in _by_digest(list(rows))[:count]:
-            text = PlainText(content=rows[uid]["generated_text"])
-            spans = [s for s in pii_spans(rows[uid]["pii_spans"]) if 0 <= s["start"] <= s["end"] <= len(text.content)]
-            reference = TextSpans.over(
-                text,
-                start=numpy.array([s["start"] for s in spans], dtype=numpy.int64),
-                end=numpy.array([s["end"] for s in spans], dtype=numpy.int64),
-                label=numpy.array([s["label"] for s in spans], dtype=str),
-            )
-            items.append(Item(uid, {"text": text}, reference))
-        return items
+        return [
+            gretel_item(uid, rows[uid]["generated_text"], rows[uid]["pii_spans"])
+            for uid in _by_digest(list(rows))[:count]
+        ]
 
     def metric_inputs(self, item: Item, output: Mapping[str, Any]) -> Mapping[str, Any]:
         return {"reference": item.reference, "hypothesis": output["spans"]}
@@ -337,6 +382,10 @@ ADAPTERS: Mapping[str, Callable[[], Adapter]] = {
     "echo_payloads": EchoPayloads,
 }
 """The adapter classes a suite may name."""
+
+
+class BenchmarkResultRetired(ValueError):
+    """A `result.json` is of a retired `benchmark-result` format."""
 
 
 class SuiteError(ValueError):
@@ -407,12 +456,18 @@ class Row(Frozen):
     value: float | None = None
     unit: str | None = None
     items: int | None = None
+    numerator: float | None = None
+    denominator: float | None = None
     fault: str | None = None
     calls: tuple[CallRecord, ...] = ()
 
 
 class Aggregate(Frozen):
-    """A split's mean of its rows' values, weighted by their `items`."""
+    """A split's value over its rows: the sum of their numerators over the sum of their denominators.
+
+    Rows without a ratio (a pooled metric, or one that is not a ratio of sums) give the mean of their values
+    weighted by their `items`.
+    """
 
     split: NonEmptyStr
     value: float | None
@@ -471,7 +526,10 @@ def _aggregate(rows: Sequence[Row]) -> tuple[Aggregate, ...]:
         mine = [r for r in rows if r.split == split]
         scored = [r for r in mine if r.value is not None and r.items]
         weight = sum(r.items or 0 for r in scored)
-        value = sum((r.value or 0.0) * (r.items or 0) for r in scored) / weight if weight else None
+        if scored and all(r.numerator is not None and r.denominator is not None for r in scored):
+            value: float | None = sum(r.numerator or 0.0 for r in scored) / sum(r.denominator or 0.0 for r in scored)
+        else:
+            value = sum((r.value or 0.0) * (r.items or 0) for r in scored) / weight if weight else None
         out.append(
             Aggregate(
                 split=split, value=value, items=weight, rows=len(mine), faults=sum(r.fault is not None for r in mine)
@@ -494,13 +552,16 @@ def _run_benchmark(  # noqa: PLR0913 - the benchmark and everything it runs unde
     outputs: dict[str, Mapping[str, Any]] = {}
     rows: list[Row] = []
     for item in items:
+        if item.fault is not None:
+            rows.append(Row(label=item.id, split=item.split, fault=item.fault))
+            continue
         call = TaskCall.model_validate(
             {"task": bench.task, "inputs": item.inputs, "params": bench.params, "model": bench.model}
         )
         try:
             result = run_call(call, execution=execution, store=store)
         except CallFailed as err:
-            rows.append(Row(label=item.id, split=split_of(item.id), fault=_fault_text(err.error)))
+            rows.append(Row(label=item.id, split=item.split, fault=_fault_text(err.error)))
             continue
         outputs[item.id] = result.outputs
         records[item.id] = _record(bench.task, result)
@@ -520,7 +581,7 @@ def _run_benchmark(  # noqa: PLR0913 - the benchmark and everything it runs unde
         own = [
             records[i.id]
             for i in items
-            if i.id in records and (split_of(i.id) == scoring.split if pooled else i.id == scoring.label)
+            if i.id in records and (i.split == scoring.split if pooled else i.id == scoring.label)
         ]
         rows.append(
             Row(
@@ -529,6 +590,8 @@ def _run_benchmark(  # noqa: PLR0913 - the benchmark and everything it runs unde
                 value=metric.value,
                 unit=metric.unit,
                 items=metric.items,
+                numerator=metric.numerator,
+                denominator=metric.denominator,
                 calls=(*own, _record(bench.metric, scored)),
             )
         )
@@ -620,8 +683,28 @@ def run_suite(  # noqa: PLR0913 - the suite and where everything it reads and wr
 
 
 def load_result(path: Path) -> BenchmarkResult:
-    """Read a `result.json`; a tag of another major version is refused."""
+    """Read a `result.json`.
+
+    Raises:
+        BenchmarkResultRetired: the document is of a retired format.
+        pydantic.ValidationError: the document is of another format or does not validate.
+    """
+    found = json.loads(path.read_text("utf-8")).get("format")
+    if check(BENCHMARK_RESULT_FORMAT, found, RETIRED_BENCHMARK_RESULT_FORMATS) is FormatVerdict.RETIRED:
+        raise BenchmarkResultRetired(
+            f"{path.name} is {found}, retired: run the suite again to write {BENCHMARK_RESULT_FORMAT}"
+        )
     return BenchmarkResult.model_validate_json(path.read_text("utf-8"))
 
 
-__all__ = ["ADAPTERS", "Benchmark", "BenchmarkResult", "Suite", "SuiteError", "load_result", "run_suite", "split_of"]
+__all__ = [
+    "ADAPTERS",
+    "Benchmark",
+    "BenchmarkResult",
+    "BenchmarkResultRetired",
+    "Suite",
+    "SuiteError",
+    "load_result",
+    "run_suite",
+    "split_of",
+]

@@ -145,6 +145,19 @@ def test_metric_carries_name_unit_and_items() -> None:
 
 
 @pytest.mark.logic
+def test_ratio_metrics_carry_their_parts_and_eer_carries_none() -> None:
+    """WER, DER and span F1 return the numerator and denominator of their value; EER is not a ratio of sums."""
+    wer_metric = _score(wer, {"reference": transcript("red green blue black"), "hypothesis": transcript("red green")})
+    assert (wer_metric.numerator, wer_metric.denominator) == (2, 4)
+    der_metric = _score(der, {"reference": turns(("A", 0, 10)), "hypothesis": turns(("x", 0, 5))})
+    assert (der_metric.numerator, der_metric.denominator) == (5.0, 10.0)
+    f1_metric = _score(span_f1, {"reference": spans((0, 3, "p"), (4, 8, "p")), "hypothesis": spans((0, 3, "p"))})
+    assert (f1_metric.numerator, f1_metric.denominator) == (2.0, 3.0)
+    eer_metric = _score(eer, {"trials": trials([0.9, 0.1], [True, False])})
+    assert (eer_metric.numerator, eer_metric.denominator) == (None, None)
+
+
+@pytest.mark.logic
 def test_span_f1_of_no_spans_against_no_spans_is_one_over_one_item() -> None:
     """A text with no entities that the model also leaves clean is a correct result, not a fault."""
     metric = _score(span_f1, {"reference": spans(), "hypothesis": spans()})

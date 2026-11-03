@@ -63,5 +63,5 @@ def score(inputs: Mapping[str, Any], params: object) -> Metric:  # noqa: ARG001 
 
 
 def handle(state: FakeFaults, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return one `metric@1.0` wire form per item, or its fault."""
+    """Return one `metric@2.0` wire form per item, or its fault."""
     return _worker.serve(state, items, params, TaskParams, score)

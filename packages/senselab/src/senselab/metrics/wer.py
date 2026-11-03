@@ -90,9 +90,12 @@ def score(inputs: Mapping[str, Any], params: WerParams) -> Metric:
     hyp = _words(inputs["hypothesis"], params.normalise)
     if not ref:
         raise ContentFault("the reference has no words to score against")
-    return Metric(name="wer", value=edit_distance(ref, hyp) / len(ref), unit="ratio", items=len(ref))
+    errors = edit_distance(ref, hyp)
+    return Metric(
+        name="wer", value=errors / len(ref), unit="ratio", items=len(ref), numerator=errors, denominator=len(ref)
+    )
 
 
 def handle(state: FakeFaults, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return one `metric@1.0` wire form per item, or its fault."""
+    """Return one `metric@2.0` wire form per item, or its fault."""
     return _worker.serve(state, items, params, WerParams, score)

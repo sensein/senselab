@@ -82,8 +82,8 @@ def _in_collar(ref: Intervals, mid: numpy.ndarray, collar: float) -> numpy.ndarr
     return near
 
 
-def diarization_error_rate(ref: Intervals, hyp: Intervals, params: DerParams) -> float:
-    """Return the DER of `hyp` against `ref`.
+def diarization_error(ref: Intervals, hyp: Intervals, params: DerParams) -> tuple[float, float]:
+    """Return the seconds of error of `hyp` against `ref` and the seconds of reference speech scored.
 
     Raises:
         ContentFault: if the clocks differ or the reference has no speech.
@@ -111,20 +111,23 @@ def diarization_error_rate(ref: Intervals, hyp: Intervals, params: DerParams) ->
     missed = numpy.maximum(n_ref - n_hyp, 0) * width
     false_alarm = numpy.maximum(n_hyp - n_ref, 0) * width
     confusion = (numpy.minimum(n_ref, n_hyp) - correct) * width
-    return float((missed.sum() + false_alarm.sum() + confusion.sum()) / total)
+    return float(missed.sum() + false_alarm.sum() + confusion.sum()), total
 
 
 def score(inputs: Mapping[str, Any], params: DerParams) -> Metric:
     """Return the `der` of `inputs["hypothesis"]` against `inputs["reference"]`."""
     ref: Intervals = inputs["reference"]
+    errors, speech = diarization_error(ref, inputs["hypothesis"], params)
     return Metric(
         name="der",
-        value=diarization_error_rate(ref, inputs["hypothesis"], params),
+        value=errors / speech,
         unit="ratio",
         items=max(len(ref.label), 1),
+        numerator=errors,
+        denominator=speech,
     )
 
 
 def handle(state: FakeFaults, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return one `metric@1.0` wire form per item, or its fault."""
+    """Return one `metric@2.0` wire form per item, or its fault."""
     return _worker.serve(state, items, params, DerParams, score)

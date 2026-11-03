@@ -49,7 +49,7 @@ def load(init: dict[str, Any]) -> FakeFaults:
 def serve(
     state: FakeFaults, items: list[dict[str, Any]], params: dict[str, Any], model: type[BaseModel], score: Scorer
 ) -> list[dict[str, Any]]:
-    """Return one `{"outputs": {"metric": <metric@1.0 wire form>}}` per item, or its fault."""
+    """Return one `{"outputs": {"metric": <metric@2.0 wire form>}}` per item, or its fault."""
     validated = model.model_validate({k: v for k, v in params.items() if k != "backend_params"})
     results: list[dict[str, Any]] = []
     for item in items:

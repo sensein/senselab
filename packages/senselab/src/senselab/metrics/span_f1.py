@@ -40,8 +40,10 @@ def _triples(spans: TextSpans) -> Counter[tuple[int, int, str]]:
     return Counter(zip(spans.start.tolist(), spans.end.tolist(), (str(x) for x in spans.label.tolist())))
 
 
-def f1(ref: TextSpans, hyp: TextSpans) -> float:
-    """Return the micro F1 of `hyp` against `ref`: 1 when neither side has a span, 0 when no span matches.
+def f1_parts(ref: TextSpans, hyp: TextSpans) -> tuple[float, float]:
+    """Return `(2 * correct, reference spans + hypothesis spans)`, the parts of the micro F1 of `hyp` against `ref`.
+
+    Neither side having a span is a perfect score, `(1, 1)`.
 
     Raises:
         ContentFault: if the spans lie over different texts.
@@ -49,19 +51,26 @@ def f1(ref: TextSpans, hyp: TextSpans) -> float:
     _worker.require_same("text", ref.text, hyp.text)
     expected, found = _triples(ref), _triples(hyp)
     if not expected and not found:
-        return 1.0
+        return 1.0, 1.0
     correct = sum((expected & found).values())
-    n_ref, n_hyp = sum(expected.values()), sum(found.values())
-    return 0.0 if correct == 0 else 2.0 * correct / (n_ref + n_hyp)
+    return 2.0 * correct, float(sum(expected.values()) + sum(found.values()))
 
 
 def score(inputs: Mapping[str, Any], params: object) -> Metric:  # noqa: ARG001 - the task takes no params
     """Return the `span_f1` of `inputs["hypothesis"]` against `inputs["reference"]`."""
     ref: TextSpans = inputs["reference"]
     hyp: TextSpans = inputs["hypothesis"]
-    return Metric(name="span_f1", value=f1(ref, hyp), unit="ratio", items=max(1, len(ref.start) + len(hyp.start)))
+    numerator, denominator = f1_parts(ref, hyp)
+    return Metric(
+        name="span_f1",
+        value=numerator / denominator,
+        unit="ratio",
+        items=max(1, len(ref.start) + len(hyp.start)),
+        numerator=numerator,
+        denominator=denominator,
+    )
 
 
 def handle(state: FakeFaults, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return one `metric@1.0` wire form per item, or its fault."""
+    """Return one `metric@2.0` wire form per item, or its fault."""
     return _worker.serve(state, items, params, TaskParams, score)

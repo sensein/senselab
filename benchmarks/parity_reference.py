@@ -165,7 +165,7 @@ def load_items(suite: Path, benchmark: str, data_cache: Path, work: Path, split:
         )
     )
     items = harness().ADAPTERS[bench.adapter]().items(files, bench.items, work, bench.max_seconds)
-    return bench, [i for i in items if split_of(i.id) == split]
+    return bench, [i for i in items if i.split == split]
 
 
 def _wired(port: str, port_type: str, value: object) -> object:

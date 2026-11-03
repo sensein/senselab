@@ -7,16 +7,18 @@ import json
 import logging
 import platform
 import sys
+import tarfile
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Literal
 
+import numpy
 import pytest
 from senselab.cli import main
-from senselab.metrics import wer  # noqa: F401 - declares the `wer` task and backend in REGISTRY
+from senselab.metrics import der, eer, wer  # noqa: F401 - declares the `wer` task and backend in REGISTRY
 from senselab_core.kernel.declare import REGISTRY, BackendSpec, Env, Registry, TaskSpec
-from senselab_core.kernel.results import Transcript, TranscriptNode
+from senselab_core.kernel.results import Embedding, Intervals, Metric, Transcript, TranscriptNode, Trials
 from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime import fake_backend as fake
 from senselab_core.runtime.call import Packaged, use_packaged
@@ -440,3 +442,134 @@ def test_pii_spans_transformers_backend_is_cuda_only() -> None:
 
     [spec] = [b for b in REGISTRY.backends("pii_spans") if b.name == "transformers"]
     assert spec.devices == ("cuda",)
+
+
+def _row(label: str, split: str, metric: Metric) -> Any:  # noqa: ANN401
+    return harness.Row(
+        label=label,
+        split=split,
+        value=metric.value,
+        unit=metric.unit,
+        items=metric.items,
+        numerator=metric.numerator,
+        denominator=metric.denominator,
+    )
+
+
+def _turns(*rows: tuple[str, float, float]) -> Intervals:
+    return Intervals(
+        start_ns=[round(s * 1e9) for _, s, _ in rows],
+        end_ns=[round(e * 1e9) for _, _, e in rows],
+        label=numpy.array([lab for lab, _, _ in rows]),
+        clock_id="c",
+    )
+
+
+@pytest.mark.logic
+def test_der_aggregate_is_ratio_of_sums() -> None:
+    """A split's DER is its summed error seconds over its summed reference seconds, not a mean weighted by turns."""
+    params = der.DerParams()
+    short = der.score({"reference": _turns(("A", 0, 1)), "hypothesis": _turns(("x", 5, 6))}, params)
+    long = der.score(
+        {"reference": _turns(("A", 0, 50), ("B", 50, 99)), "hypothesis": _turns(("x", 0, 50), ("y", 50, 99))}, params
+    )
+    rows = (_row("short", "calibration", short), _row("long", "calibration", long))
+    [calibration, heldout] = harness._aggregate(rows)
+    assert calibration.value == pytest.approx(2.0 / 100.0)
+    assert (heldout.value, heldout.rows) == (None, 0)
+
+
+@pytest.mark.logic
+def test_eer_aggregates_pooled_trials() -> None:
+    """EER carries no numerator or denominator; a split's EER is the one of its pooled trials."""
+    first = numpy.array([[1.0, 0.0]] * 4)
+    second = numpy.array([[1.0, 0.0], [0.0, 1.0], [0.9, 0.1], [0.2, 0.9]])
+    trials = Trials(first=first, second=second, same=numpy.array([True, False, True, False]), space="m")
+    metric = eer.score({"trials": trials}, None)
+    assert (metric.numerator, metric.denominator) == (None, None)
+    [calibration, _] = harness._aggregate((_row("pooled:calibration", "calibration", metric),))
+    assert (calibration.value, calibration.items) == (metric.value, metric.items)
+
+
+def _speaker_tar(path: Path, speakers: int, per_speaker: int) -> Path:
+    with tarfile.open(path, "w:gz") as tar:
+        for speaker in range(speakers):
+            for n in range(per_speaker):
+                data = b"flac"
+                member = tarfile.TarInfo(f"LibriSpeech/test-clean/{speaker}/1/{speaker}-1-{n:04d}.flac")
+                member.size = len(data)
+                tar.addfile(member, io.BytesIO(data))
+    return path
+
+
+@pytest.mark.logic
+def test_trials_split_by_speaker(tmp_path: Path) -> None:
+    """The trials adapter's split unit is the speaker: one speaker's utterances share a split, and so do its trials."""
+    adapter = harness.LibriSpeechTrials()
+    assert adapter.split_unit == "speaker" and harness.VoxConverseDiarization().split_unit == "recording"
+    tar_path = _speaker_tar(tmp_path / "a.tar.gz", speakers=12, per_speaker=5)
+    items = adapter.items({"tar": tar_path}, 60, tmp_path / "work", None)
+    by_speaker: dict[str, set[str]] = {}
+    for item in items:
+        by_speaker.setdefault(item.reference, set()).add(item.split)
+        assert item.split == harness.split_of(item.reference)
+    assert len(by_speaker) == 12 and all(len(splits) == 1 for splits in by_speaker.values())
+    assert any(len({harness.split_of(i.id) for i in items if i.reference == sp}) == 2 for sp in by_speaker)
+    outputs = {
+        i.id: {"embedding": Embedding(vector=numpy.array([1.0, float(n)]), space="m")} for n, i in enumerate(items)
+    }
+    scored = adapter.scoring(items, outputs)
+    assert {s.label for s in scored} == {"pooled:calibration", "pooled:heldout"}
+    for scoring in scored:
+        assert len(scoring.inputs["trials"].same) == sum(
+            1 for a in items for b in items if a.id < b.id and a.split == b.split == scoring.split
+        )
+
+
+@pytest.mark.logic
+def test_malformed_reference_is_item_fault(tmp_path: Path) -> None:
+    """A reference span outside the text makes its item a counted fault row; the item is not run."""
+    text = "Ada met Babbage"
+    sound = harness.gretel_item("ok", text, '[{"start": 0, "end": 3, "label": "name"}]')
+    assert sound.fault is None and sound.reference is not None
+    for spans in (
+        '[{"start": 0, "end": 99, "label": "n"}]',
+        '[{"start": 5, "end": 2, "label": "n"}]',
+        '[{"start": -1, "end": 2, "label": "n"}]',
+    ):
+        item = harness.gretel_item("bad", text, spans)
+        assert item.fault == "ContentFault (content): 1 of 1 reference spans lie outside the text of 15 chars"
+
+    class Malformed:
+        split_unit: Literal["item"] = "item"
+
+        def items(self, files: Mapping[str, Path], count: int, work: Path, seconds: float | None) -> list[Any]:  # noqa: ARG002
+            return [harness.gretel_item(f"d{n}", text, '[{"start": 0, "end": 99, "label": "n"}]') for n in range(count)]
+
+        def scoring(self, items: Sequence[Any], outputs: Mapping[str, Mapping[str, Any]]) -> list[Any]:  # noqa: ARG002
+            return []
+
+    suite = harness.Suite("m", (harness.Benchmark(name="m", adapter="m", items=3, task=TRANSCRIBE.name, metric="wer"),))
+    run = harness.run_suite(
+        suite,
+        execution=ExecutionProfile.load("laptop", {"devices": ["cpu"]}),
+        manifests=tmp_path,
+        data_cache=tmp_path / "data",
+        out=tmp_path / "out",
+        run_id="r1",
+        adapters={"m": Malformed},
+    )
+    [entry] = harness.load_result(run / "result.json").entries
+    assert [(r.label, r.value) for r in entry.rows] == [("d0", None), ("d1", None), ("d2", None)]
+    assert all("1 of 1 reference spans" in (r.fault or "") for r in entry.rows)
+    assert sum(a.faults for a in entry.aggregates) == 3
+
+
+@pytest.mark.logic
+def test_benchmark_result1_is_refused(tmp_path: Path) -> None:
+    """A `benchmark-result@1` document is refused as retired; the current format is the one written."""
+    old = tmp_path / "result.json"
+    old.write_text(json.dumps({"format": "benchmark-result@1.0", "suite": "s"}), "utf-8")
+    with pytest.raises(harness.BenchmarkResultRetired, match="benchmark-result@2.0"):
+        harness.load_result(old)
+    assert harness.BenchmarkResult.model_fields["format"].default == "benchmark-result@2.0"
