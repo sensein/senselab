@@ -18,7 +18,7 @@ import soundfile
 from pydantic import ValidationError
 from senselab_core.kernel.signals import Audio, ChannelInfo, Recording, RegularGroup, StaleSource, audio_channels
 from senselab_core.runtime import audio_io
-from senselab_core.runtime.audio_io import READER, open_audio, source_group
+from senselab_core.runtime.audio_io import READER, open_audio, source_group, stamp
 from senselab_worker.hashing import content_identity
 
 RATE = 8_000
@@ -86,7 +86,7 @@ def test_file_group_refuses_a_layout_the_file_does_not_have(tmp_path: Path) -> N
     """A source-backed group's channel count and rate must match the file header."""
     p = write_wav(tmp_path)
     ch = (ChannelInfo(name="a", type="audio", units="FS"),)
-    with pytest.raises(ValidationError, match="channels"):
+    with pytest.raises(ValueError, match="channels"):
         source_group(ch, RATE, p)
     two = (ch[0], ChannelInfo(name="b", type="audio", units="FS"))
     with pytest.raises(ValidationError, match="rate"):
@@ -373,3 +373,18 @@ def test_check_of_another_process_stamp_reads_the_header_chunks_only(tmp_path: P
     out = subprocess.run([sys.executable, "-c", child], capture_output=True, text=True, timeout=60, check=True)
     reads = int(out.stdout.strip())
     assert 0 < reads and reads * CHUNK < p.stat().st_size // 8
+
+
+@pytest.mark.logic
+def test_stamp_pins_channel_layout(tmp_path: Path) -> None:
+    """A stamp records its channel layout through a decode, and a re-stamp under another layout is another stamp."""
+    p = write_wav(tmp_path)
+    group = open_audio(p).group
+    named = tuple(c.model_copy(update={"name": f"mic{i}"}) for i, c in enumerate(group.channels))
+    restamped = stamp(p, channels=named)
+    assert group.source_stamp is not None and restamped.channels == named != group.source_stamp.channels
+    assert restamped.canonical_digest() != group.source_stamp.canonical_digest()
+    decoded = RegularGroup.decoded_from(source_group(named, RATE, p, restamped), READER)
+    assert decoded.source_stamp == restamped and decoded.channels == named
+    with pytest.raises(ValidationError, match="channel layout"):
+        RegularGroup(channels=group.channels, sampling_rate=RATE, source=p, source_stamp=restamped)

@@ -96,12 +96,17 @@ def _header(f: soundfile.SoundFile) -> str:
 
 @contextmanager
 def _opened(
-    path: str | os.PathLike[str], chunk_size: int = DEFAULT_CHUNK_SIZE
+    path: str | os.PathLike[str],
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    channels: tuple[ChannelInfo, ...] | None = None,
 ) -> Iterator[tuple[soundfile.SoundFile, SourceStamp, int]]:
     """Open `path` once and yield the sound file, the stamp of that open file (content read in full) and its ctime.
 
+    The stamp records `channels`, or audio channels of the file's count when None.
+
     Raises:
         StaleSource: if the file's stat fields changed while its content was read.
+        ValueError: if `channels` is not as many as the file's.
     """
     with open(path, "rb") as raw:
         st = os.fstat(raw.fileno())
@@ -111,13 +116,15 @@ def _opened(
         if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (st.st_size, st.st_mtime_ns, st.st_ctime_ns):
             raise StaleSource(f"{path} changed while it was read")
         with soundfile.SoundFile(raw) as f:
+            if channels is not None and len(channels) != f.channels:
+                raise ValueError(f"{len(channels)} channels declared, {f.channels} channels in the file")
             stamp = SourceStamp(
                 size=st.st_size,
                 mtime_ns=st.st_mtime_ns,
                 inode=st.st_ino,
                 device=st.st_dev,
                 frames=f.frames,
-                channels=f.channels,
+                channels=audio_channels(f.channels) if channels is None else channels,
                 sampling_rate=f.samplerate,
                 header=_header(f),
                 chunk_size=chunk_size,
@@ -127,17 +134,23 @@ def _opened(
             yield f, stamp, st.st_ctime_ns
 
 
-def stamp(path: str | os.PathLike[str], *, chunk_size: int = DEFAULT_CHUNK_SIZE) -> SourceStamp:
+def stamp(
+    path: str | os.PathLike[str],
+    *,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    channels: tuple[ChannelInfo, ...] | None = None,
+) -> SourceStamp:
     """Open the sound file at `path`, read every byte and its header, and return its current stamp.
 
-    `chunk_size` is the grid its content is hashed on. The stamp is remembered, so `check` of it at this
-    path is an `os.stat`.
+    `chunk_size` is the grid its content is hashed on; `channels` the layout the stamp records (audio channels of
+    the file's count when None). The stamp is remembered, so `check` of it at this path is an `os.stat`.
 
     Raises:
         StaleSource: if the file changed while it was read.
         soundfile.LibsndfileError: if the file is not a sound file.
+        ValueError: if `channels` is not as many as the file's.
     """
-    with _opened(path, chunk_size) as (_, taken, ctime_ns):
+    with _opened(path, chunk_size, channels) as (_, taken, ctime_ns):
         pass
     _remember(path, taken, ctime_ns)
     return taken
@@ -283,7 +296,7 @@ def source_group(
         ValueError: if the file's header does not match `channels` and `sampling_rate`.
     """
     if recorded is None:
-        recorded = stamp(path)
+        recorded = stamp(path, channels=channels)
     else:
         check(recorded, path)
     return RegularGroup(channels=channels, sampling_rate=sampling_rate, source=Path(path), source_stamp=recorded)
@@ -300,4 +313,4 @@ def open_audio(path: str | os.PathLike[str]) -> Audio:
         soundfile.LibsndfileError: if the file is not a sound file.
     """
     taken = stamp(path)
-    return Audio.from_group(source_group(audio_channels(taken.channels), taken.sampling_rate, path, taken))
+    return Audio.from_group(source_group(taken.channels, taken.sampling_rate, path, taken))

@@ -76,11 +76,22 @@ class StaleSource(RuntimeError):
 Hex64 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
 
+class ChannelInfo(Frozen):
+    """One channel: its name, signal type (`audio`, `ecg`, ...), units, and optional placement and reference."""
+
+    name: NonEmptyStr
+    type: NonEmptyStr
+    units: NonEmptyStr
+    placement: str | None = None
+    reference: str | None = None
+
+
 class SourceStamp(Frozen):
     """What a source file was when a reader opened it: its stat fields, a digest of its sound header, and its content.
 
     `header` is `value_digest("soundfile.info", {frames, channels, samplerate, format, subtype})`;
-    `frames`, `channels` and `sampling_rate` repeat the header fields a group's layout is checked against.
+    `frames` and `sampling_rate` repeat header fields a group's layout is checked against; `channels` is the channel
+    layout the stamp was taken under, so a stamp of the same file under another layout is another stamp.
     `chunks` are the sha256 of each consecutive `chunk_size`-byte chunk of the file and `content` their root, as
     `content_identity` gives them; `content` is the identity root of a recording of that file. A windowed read
     verifies only the chunks it touches. Stamps are taken and checked by a `SourceReader`
@@ -92,7 +103,7 @@ class SourceStamp(Frozen):
     inode: int = Field(ge=0)
     device: int = Field(ge=0)
     frames: int = Field(ge=0)
-    channels: int = Field(ge=1)
+    channels: tuple[ChannelInfo, ...] = Field(min_length=1)
     sampling_rate: Rate
     header: NonEmptyStr
     chunk_size: int = Field(ge=1)
@@ -118,16 +129,6 @@ class SourceReader(Protocol):
         ...
 
 
-class ChannelInfo(Frozen):
-    """One channel: its name, signal type (`audio`, `ecg`, ...), units, and optional placement and reference."""
-
-    name: NonEmptyStr
-    type: NonEmptyStr
-    units: NonEmptyStr
-    placement: str | None = None
-    reference: str | None = None
-
-
 def _check_channels(channels: tuple[ChannelInfo, ...], rows: int) -> None:
     names = [c.name for c in channels]
     if len(set(names)) != len(names):
@@ -145,7 +146,7 @@ class RegularGroup(Frozen):
     """Channels sampled together at one rate, held in `data` `(channels, samples)` or read from the sound file `source`.
 
     Exactly one of `data` and `source` is given. A source group carries `source_stamp`, the stamp a
-    `SourceReader` took of the file; validation reads no file. The stamp's header must match the
+    `SourceReader` took of the file; validation reads no file. The stamp's layout and rate must match the
     declared channel count and rate. Samples are decoded only by `read` through a reader, which
     checks the file still has the stamp, content included. A held group carries a file's stamp only as
     `decoded_from` builds it: with `decoded`, the `npy@1` digest of the samples the reader decoded, which
@@ -168,18 +169,20 @@ class RegularGroup(Frozen):
             raise ValueError("a source group carries the stamp a reader took of its file")
         if self.decoded is not None and (self.data is None or stamp is None):
             raise ValueError("`decoded` belongs only to held samples carrying their file's stamp")
+        if stamp is not None and stamp.channels != self.channels:
+            raise ValueError("declared channels differ from the channel layout the stamp was taken under")
         if stamp is not None and stamp.sampling_rate != self.sampling_rate:
             raise ValueError(f"declared rate {self.sampling_rate} Hz, file rate {stamp.sampling_rate} Hz")
         if self.data is not None:
             require_finite(self.data, "a regular group's samples")
-            if stamp is not None and self.data.shape != (stamp.channels, stamp.frames):
+            if stamp is not None and self.data.shape != (len(stamp.channels), stamp.frames):
                 raise ValueError(f"held samples {self.data.shape} are not the stamped file's channels and frames")
             if stamp is not None and self.decoded != held_npy_digest(self.data):
                 raise ValueError("held samples carry a file's stamp only as decoded from it (`decoded_from`)")
             rows = self.data.shape[0]
         else:
             assert stamp is not None
-            rows = stamp.channels
+            rows = len(stamp.channels)
         _check_channels(self.channels, rows)
         return self
 
