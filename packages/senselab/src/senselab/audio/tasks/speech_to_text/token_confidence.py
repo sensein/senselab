@@ -1,9 +1,8 @@
 """Per-token ASR confidence: the log-probability of each decoded token, read off the decoder's own logits.
 
 `capture_token_confidence` wraps `pipe.model.generate` for one call and scores its raw logits;
-`capture_ct2_token_confidence` re-scores each window a CTranslate2 Whisper engine decodes with the same raw-logit
-definition; `word_confidences` turns the scored tokens into one probability per word. `torch`, `numpy` and
-`ctranslate2` are imported only where logits are scored, so importing this module loads no framework.
+`word_confidences` turns the scored tokens into one probability per word. `torch` is imported only where logits
+are scored, so importing this module loads no framework.
 """
 
 from __future__ import annotations
@@ -18,10 +17,7 @@ if TYPE_CHECKING:
     import torch
 
 __all__ = [
-    "capture_ct2_token_confidence",
     "capture_token_confidence",
-    "ct2_host",
-    "ct2_teacher_logits",
     "merge_confidence_blocks",
     "token_confidence_from_logits",
     "special_token_ids",
@@ -32,8 +28,6 @@ _CONTROL_TOKEN = re.compile(r"<\|.*\|>")
 """A control token's text: language, task and timestamp markers, which no word contains."""
 _LOGIT_DIMS = 2
 _BLOCK_KEYS = ("avg_logprob", "tokens", "token_logprob")
-CT2_DECODES = ("generate_with_repair", "generate_with_repair_and_attention")
-"""The ct2 engine methods that decode one window, each `(features, prompt_tokens, ...)` returning its ids first."""
 
 
 def special_token_ids(pipe: Any) -> Optional[set[int]]:  # noqa: ANN401 - a transformers pipeline
@@ -255,86 +249,3 @@ def _get(obj: Any, key: str) -> Any:  # noqa: ANN401 - ModelOutput is dict-like 
     if value is None and isinstance(obj, dict):
         value = obj.get(key)
     return value
-
-
-def ct2_host(view: Any) -> Any:  # noqa: ANN401 - a ctranslate2 StorageView in, a numpy array out
-    """Return `view` as a float32 numpy array on the host."""
-    import ctranslate2  # noqa: PLC0415 - loads only where ct2 logits are scored
-    import numpy  # noqa: PLC0415 - as above
-
-    return numpy.array(view.to(ctranslate2.DataType.float32).to_device(ctranslate2.Device.cpu))
-
-
-def ct2_teacher_logits(
-    model: Any,  # noqa: ANN401 - a ctranslate2 Whisper model with the fork's `prefill` and `forward_batch`
-    features: Any,  # noqa: ANN401 - the window's StorageView
-    prompt_tokens: Sequence[int],
-    gen_ids: Sequence[int],
-    host: Callable[[Any], Any] = ct2_host,
-) -> Any:  # noqa: ANN401 - a numpy array
-    """Return the raw logits `(len(gen_ids), vocab)` with which `model` predicts each of `gen_ids` after the prompt.
-
-    `prefill` gives the row predicting `gen_ids[0]`; `forward_batch` over `gen_ids[:-1]` gives the rest. `host`
-    turns a returned view into a float32 numpy array.
-
-    Raises:
-        ValueError: if the model returns a row count other than `len(gen_ids)`.
-    """
-    import numpy  # noqa: PLC0415 - loads only where ct2 logits are scored
-
-    state, first = model.prefill(features, list(prompt_tokens))
-    views = [first] + ([model.forward_batch(state, list(gen_ids[:-1]))] if len(gen_ids) > 1 else [])
-    arrays = [numpy.asarray(host(v), dtype=numpy.float32) for v in views]
-    rows = numpy.concatenate(
-        [arrays[0].reshape(-1, arrays[0].shape[-1])[-1:]] + [a.reshape(-1, a.shape[-1]) for a in arrays[1:]]
-    )
-    if rows.shape[0] != len(gen_ids):
-        raise ValueError(f"{rows.shape[0]} logit rows for {len(gen_ids)} generated tokens")
-    return rows
-
-
-@contextlib.contextmanager
-def capture_ct2_token_confidence(
-    engine: Any,  # noqa: ANN401 - a crisperwhisper CT2Engine
-    *,
-    special_token_ids: Optional[set[int]] = None,
-    host: Callable[[Any], Any] = ct2_host,
-) -> Iterator[list[dict[str, Any]]]:
-    """Wrap the `CT2_DECODES` of `engine` for the block, scoring each decoded window by `ct2_teacher_logits`.
-
-    Yields a list that accumulates one `token_confidence_from_logits` block per window, in call order; the wrappers
-    return what the caller would have received and are removed on exit.
-    """
-    import torch  # noqa: PLC0415 - torch loads only where logits are scored
-
-    captured: list[dict[str, Any]] = []
-    originals = {name: getattr(engine, name) for name in CT2_DECODES}
-    own = {name for name in CT2_DECODES if name in vars(engine)}
-
-    def _wrap(original: Callable[..., Any]) -> Callable[..., Any]:
-        def _decode(features: Any, prompt_tokens: Sequence[int], *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-            result = original(features, prompt_tokens, *args, **kwargs)
-            ids = [int(t) for t in (result[0] if isinstance(result, tuple) else result)]
-            if ids:
-                rows = ct2_teacher_logits(engine.model, features, prompt_tokens, ids, host)
-                captured.extend(
-                    token_confidence_from_logits(
-                        logits=[torch.from_numpy(row) for row in rows],
-                        sequences=torch.tensor([ids]),
-                        special_token_ids=special_token_ids,
-                    )
-                )
-            return result
-
-        return _decode
-
-    for name, original in originals.items():
-        setattr(engine, name, _wrap(original))
-    try:
-        yield captured
-    finally:
-        for name, original in originals.items():
-            if name in own:
-                setattr(engine, name, original)
-            else:
-                delattr(engine, name)

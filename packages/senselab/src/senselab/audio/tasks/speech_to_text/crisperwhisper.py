@@ -163,7 +163,7 @@ def _engine(state: State, name: str) -> Any:  # noqa: ANN401 - a StubModel or a 
 
 
 class Library:
-    """The CrisperWhisper library on one engine, loaded from the pinned snapshot; `host` reads a ct2 logits view."""
+    """The CrisperWhisper library on one engine, loaded from the pinned snapshot of the model."""
 
     def __init__(self, model: Mapping[str, Any], device: str, engine: str) -> None:
         """Build the library model; `ct2` converts the snapshot once per model commit and compute type.
@@ -174,8 +174,6 @@ class Library:
         from crisperwhisper import CrisperWhisperModel  # noqa: PLC0415 - the library loads in the engine only
         from huggingface_hub import snapshot_download  # noqa: PLC0415 - as above
 
-        from senselab.audio.tasks.speech_to_text.token_confidence import ct2_host  # noqa: PLC0415 - as above
-
         if engine == "ct2" and device == "mps":
             raise ValueError("the ct2 engine runs on cuda or cpu, not mps")
         compute = COMPUTE_TYPES[device]
@@ -185,35 +183,33 @@ class Library:
         if device == "mps":
             _disable_deferred_stop_check()
         self.engine = engine
-        self.host = ct2_host
         self.model = CrisperWhisperModel(path, backend=engine, device=device, compute_type=compute)
 
     def transcribe(self, samples: numpy.ndarray, language: str, max_new_tokens: int) -> Decoded:
         """Return the decode of `samples`, with its mean and word confidences.
 
-        Both engines score the decoded tokens by raw-logit log-probability, excluding the engine's
-        `all_special_ids`.
+        Both engines teacher-force each window's final ids once and score them by raw-logit log-probability,
+        excluding the engine's `all_special_ids`.
         """
         import soundfile  # noqa: PLC0415 - loads in the engine only
 
         from senselab.audio.tasks.speech_to_text.token_confidence import (  # noqa: PLC0415 - as above
-            capture_ct2_token_confidence,
-            capture_token_confidence,
             merge_confidence_blocks,
             word_confidences,
+        )
+        from senselab.audio.tasks.speech_to_text.window_confidence import (  # noqa: PLC0415 - as above
+            capture_windows,
+            ct2_teacher_logits,
+            transformers_teacher_logits,
+            window_confidence,
         )
 
         engine = self.model._engine
         special = {int(i) for i in engine.all_special_ids} or None
-        scoring = (
-            capture_ct2_token_confidence(engine, special_token_ids=special, host=self.host)
-            if self.engine == "ct2"
-            else capture_token_confidence(engine, special_token_ids=special)
-        )
         with tempfile.TemporaryDirectory(prefix="senselab-crisperwhisper-") as scratch:
             wav = Path(scratch) / "audio.wav"
             soundfile.write(str(wav), samples, EXPECTED_RATE, subtype="FLOAT")
-            with scoring as blocks:
+            with capture_windows(engine) as windows:
                 result = self.model.transcribe(
                     str(wav),
                     language=language,
@@ -221,6 +217,8 @@ class Library:
                     longform_strategy=LONGFORM_STRATEGY,
                     max_new_tokens=max_new_tokens,
                 )
+        teacher = ct2_teacher_logits if self.engine == "ct2" else transformers_teacher_logits
+        blocks = window_confidence(engine, windows, teacher, special)
         words = [(str(w.word or w.text), float(w.start), float(w.end)) for w in getattr(result, "words", None) or []]
         confidences: list[float | None] = [None] * len(words)
         mean = None
