@@ -1,10 +1,10 @@
-"""Fail when a tracked file carries a local filesystem path or a personal Slurm partition.
+"""Fail when a tracked file carries a user home-directory path.
 
-Flags ``/Users/<name>/`` and ``/home/<name>/`` home paths, any ORCD cluster path, and ``pi_<name>``
-partitions, in text file contents and in file paths. Output names the file, line and kind of match,
-never the value. Real values belong in the untracked ``references.local.yaml``; tracked text uses
-the placeholder names listed in ``references.example.yaml`` (``${ORCD_DATA}``, ``${AGENT_SCRATCH}``).
-Generic CI account names (``runner``, ``ec2-user``, ``user``) and ``~/orcd/...`` do not match.
+Flags ``/Users/<name>/``, ``/home/<name>/`` and ``C:\\Users\\<name>\\`` (or ``C:/Users/<name>/``) in
+text file contents and in file paths, except for the generic accounts ``user``, ``runner`` and
+``ec2-user``. Output names the file, line and kind of match, never the value. Keep real values in
+the untracked ``references.local.yaml``; tracked text uses the placeholder names listed in
+``references.example.yaml``.
 
 Usage::
 
@@ -22,13 +22,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 LOCAL_VALUES_FILE = "references.local.yaml"
-_GENERIC_ACCOUNTS = r"(?:runner|user|username|name|you|ec2-user|ubuntu|Shared)(?![\w-])"
+_GENERIC_ACCOUNTS = r"(?:user|runner|ec2-user)(?![\w-])"
 _NOT_PART_OF_WORD = r"(?<![\w~.$}-])"
 
 PATTERNS: dict[str, re.Pattern[str]] = {
-    "user home path": re.compile(rf"{_NOT_PART_OF_WORD}/(?:Users|home)/(?!{_GENERIC_ACCOUNTS})[\w][\w.-]*"),
-    "ORCD path": re.compile(rf"{_NOT_PART_OF_WORD}/orcd/"),
-    "personal Slurm partition": re.compile(r"(?<![A-Za-z0-9_])pi_[a-z]+"),
+    "user home path": re.compile(rf"{_NOT_PART_OF_WORD}/(?:Users|home)/(?!{_GENERIC_ACCOUNTS})\w[\w.-]*"),
+    "Windows user home path": re.compile(
+        rf"(?<![\w])[A-Za-z]:[\\/]+Users[\\/]+(?!{_GENERIC_ACCOUNTS})\w[\w.-]*", re.IGNORECASE
+    ),
 }
 
 

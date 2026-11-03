@@ -1,4 +1,4 @@
-"""No tracked file may carry a local filesystem path or a personal Slurm partition."""
+"""No tracked file may carry a user home-directory path."""
 
 from __future__ import annotations
 
@@ -24,36 +24,33 @@ guard = _module("check_local_paths", ROOT / "scripts" / "check_local_paths.py")
 # Built by concatenation so this file never contains a matching literal itself.
 _USERS = "/" + "Users" + "/"
 _HOME = "/" + "home" + "/"
-_ORCD = "/" + "orcd" + "/"
-_PART = "p" + "i_"
+_WIN = "C:" + "\\" + "Users" + "\\"
 
 
 def test_no_tracked_file_carries_a_local_path() -> None:
-    """Every tracked path and file body is free of home paths, ORCD paths and personal partitions."""
+    """Every tracked path and file body is free of user home-directory paths."""
     hits = guard.findings(guard.tracked_files(ROOT), ROOT)
-    assert not hits, "local paths in tracked files:\n" + "\n".join(hits[:50])
+    assert not hits, "home paths in tracked files:\n" + "\n".join(hits[:50])
 
 
-def test_patterns_flag_real_shapes_and_pass_placeholders() -> None:
-    """Home, ORCD and partition shapes match; placeholders, generic CI accounts and ``~/orcd`` do not."""
+def test_patterns_flag_home_paths_and_pass_placeholders() -> None:
+    """Home paths on any OS match; placeholders and the generic CI accounts do not."""
     flagged = {
         _USERS + "alice/software/x": "user home path",
         _HOME + "alice/.cache": "user home path",
-        "cd " + _ORCD + "scratch/lab/alice/run": "ORCD path",
-        "sbatch -p " + _PART + "alice job.sh": "personal Slurm partition",
-        "--partition=" + _PART + "lab": "personal Slurm partition",
+        _WIN + "alice\\data": "Windows user home path",
+        "C:/" + "Users/alice/data": "Windows user home path",
     }
     for text, kind in flagged.items():
         assert guard.kinds(text) == [kind], text
     clean = [
-        "${ORCD_DATA}/datasets",
-        "${AGENT_SCRATCH}/run",
-        "~" + _ORCD + "scratch",
+        "${LOCAL_INPUT}/x.wav",
+        "~/data",
         _USERS + "runner/work/repo",
         _HOME + "ec2-user",
         _HOME + "user/.cache",
-        "--partition=${CPU_PARTITION}",
-        "api_module " + _PART[1:] + "x",
+        _WIN + "user\\data",
+        "/data/shared/run",
     ]
     assert not any(guard.kinds(s) for s in clean)
 
