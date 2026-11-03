@@ -12,18 +12,16 @@ from importlib import resources
 from typing import Any
 
 import numpy
-import yaml
 from pydantic import Field
 from senselab_core.kernel.declare import Env, TaskParams, backend, task
 from senselab_core.kernel.signals import RegularSeries
 from senselab_core.runtime.audio_io import READER
+from senselab_core.runtime.config import load_yaml
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault
 
 WORKER_MODULE = "senselab.signal.resample"
-_DESIGN: dict[str, Any] = yaml.safe_load(
-    resources.files("senselab").joinpath("signal/data/resample.yaml").read_text("utf-8")
-)
+_DESIGN: dict[str, Any] = load_yaml(resources.files("senselab").joinpath("signal/data/resample.yaml"), "resample.yaml")
 _STOPBAND_DB: float = float(_DESIGN["stopband_attenuation_db"])
 _TRANSITION: float = float(_DESIGN["transition_fraction"])
 _MAX_BLOCK: int = int(_DESIGN["max_block_elements"])

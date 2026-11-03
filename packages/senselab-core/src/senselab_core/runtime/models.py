@@ -7,11 +7,11 @@ from importlib import resources
 from pathlib import Path
 from types import MappingProxyType
 
-import yaml
 from senselab_worker.digest import SHA256_HEX, file_digest
 from senselab_worker.hashing import weights_identity
 
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
+from senselab_core.runtime.config import ConfigError, load_yaml
 from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver, resolve_revision
 
 WEIGHTS_FORMAT = "weights@1.0"
@@ -46,8 +46,11 @@ def parse_weights(text: str) -> Mapping[str, str]:
         WeightsManifestError: on a wrong format, a missing or non-mapping `weights`, or an entry
             that is not a 64-hex sha256 string.
     """
-    doc = yaml.safe_load(text)
-    if not isinstance(doc, dict) or doc.get("format") != WEIGHTS_FORMAT:
+    try:
+        doc = load_yaml(text, "weights.yaml")
+    except ConfigError as err:
+        raise WeightsManifestError(str(err)) from err
+    if doc.get("format") != WEIGHTS_FORMAT:
         raise WeightsManifestError(f"weights.yaml must carry format {WEIGHTS_FORMAT!r}")
     weights = doc.get("weights")
     if not isinstance(weights, dict):

@@ -5,9 +5,9 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-import yaml
 from senselab_core.kernel.declare import REGISTRY, Registry
 from senselab_core.runtime.catalogue import Catalogue
+from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.fetch import DataManifest
 
 from senselab._api.describe import describe
@@ -244,7 +244,7 @@ result = senselab.speech_to_text("path/to/an/extracted/utterance.flac", timestam
 
 def _smoke_tasks(root: Path | None) -> set[str]:
     suites = sorted((root / "benchmarks" / "suites").glob("*.yaml")) if root else []
-    return {b["task"] for s in suites for b in yaml.safe_load(s.read_text("utf-8")).get("benchmarks", ())}
+    return {b["task"] for s in suites for b in load_yaml(s, "benchmark suite").get("benchmarks", ())}
 
 
 def task_states(registry: Registry = REGISTRY, ledger: str = "", root: Path | None = None) -> list[dict[str, Any]]:

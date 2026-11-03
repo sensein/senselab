@@ -15,13 +15,13 @@ from importlib import resources
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-import yaml
 from pydantic import Field
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.declare import BackendSpec, Registry, TaskSpec
 from senselab_core.kernel.formats import FormatTag, Formatted
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
+from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.network import Network
@@ -143,10 +143,7 @@ class ExecutionProfile(Formatted):
 
 
 def _read(source: Any) -> dict[str, Any]:  # noqa: ANN401 - a Path or a package resource
-    raw = yaml.safe_load(source.read_text("utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError("a profile is a mapping")
-    return raw
+    return load_yaml(source, "profile")
 
 
 def _merge(base: Mapping[str, Any], top: Mapping[str, Any]) -> dict[str, Any]:

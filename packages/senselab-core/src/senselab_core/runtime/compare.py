@@ -18,12 +18,12 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import numpy
-import yaml
 from pydantic import Field
 
 from senselab_core.kernel._base import FiniteFloat, Frozen, value_digest
 from senselab_core.kernel.formats import FORMAT_PATTERN
 from senselab_core.kernel.wire import WIRE_FORMATS
+from senselab_core.runtime.config import load_yaml
 
 COMPARISON_FORMAT = "comparison@1.0"
 
@@ -113,7 +113,7 @@ class Thresholds(Frozen):
                 is not a finite non-negative number.
         """
         merged = {name: dict(bound) for name, bound in _packaged_thresholds().items()}
-        raw = _read_yaml(override) if isinstance(override, Path) else dict(override or {})
+        raw = load_yaml(override, "run config") if isinstance(override, Path) else dict(override or {})
         _known("run config key", set(raw) - {"format"}, {"thresholds"})
         given = raw.get("thresholds") or {}
         _known("threshold", set(given), set(merged))
@@ -124,13 +124,6 @@ class Thresholds(Frozen):
 
 
 RUN_CONFIG_FORMAT = "run-config@1.0"
-
-
-def _read_yaml(path: Path) -> dict[str, Any]:
-    raw = yaml.safe_load(path.read_text("utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError(f"a run config is a mapping, {path} is not")
-    return raw
 
 
 def _number(v: object) -> object:
@@ -145,14 +138,8 @@ def _known(what: str, given: set[str], known: set[str]) -> None:
 
 @functools.cache
 def _packaged_thresholds() -> dict[str, dict[str, object]]:
-    raw = yaml.safe_load(
-        resources.files("senselab_core.runtime").joinpath("data", "run_config.yaml").read_text("utf-8")
-    )
-    if (
-        not isinstance(raw, dict)
-        or raw.get("format") != RUN_CONFIG_FORMAT
-        or not isinstance(raw.get("thresholds"), dict)
-    ):
+    raw = load_yaml(resources.files("senselab_core.runtime").joinpath("data", "run_config.yaml"), "run_config.yaml")
+    if raw.get("format") != RUN_CONFIG_FORMAT or not isinstance(raw.get("thresholds"), dict):
         raise ValueError(f"run_config.yaml must carry format {RUN_CONFIG_FORMAT!r} and 'thresholds'")
     out = {}
     for name, entry in raw["thresholds"].items():
@@ -211,8 +198,8 @@ def parse_comparisons(text: str) -> Mapping[str, TypeComparison]:
     Raises:
         ValueError: the document is not of that format and form.
     """
-    raw = yaml.safe_load(text)
-    if not isinstance(raw, dict) or raw.get("format") != COMPARISON_FORMAT or not isinstance(raw.get("types"), dict):
+    raw = load_yaml(text, "comparison table")
+    if raw.get("format") != COMPARISON_FORMAT or not isinstance(raw.get("types"), dict):
         raise ValueError(f"a comparison table is a mapping of format {COMPARISON_FORMAT!r} and 'types'")
     out = {}
     for name, entry in raw["types"].items():

@@ -22,13 +22,13 @@ from typing import Any, BinaryIO, Protocol
 
 import numpy
 import soundfile
-import yaml
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.formats import BENCHMARK_RESULT_FORMAT, FormatTag, Formatted
 from senselab_core.kernel.identity import ExecutionContext
 from senselab_core.kernel.results import Embedding, Intervals, Metric, TextSpans, Transcript, TranscriptNode, Trials
 from senselab_core.kernel.signals import PlainText
 from senselab_core.runtime.call import CallFailed, Result, TaskCall, placement_of, run_call
+from senselab_core.runtime.config import ConfigError, load_yaml
 from senselab_core.runtime.fetch import DataManifest, fetch
 from senselab_core.runtime.profiles import ExecutionProfile, NoDevice
 from senselab_core.runtime.store import ResultStore
@@ -376,8 +376,11 @@ class Suite:
         Raises:
             SuiteError: the file is not a suite of that format or an entry lacks a required key.
         """
-        data = yaml.safe_load(path.read_text("utf-8"))
-        if not isinstance(data, dict) or data.get("format") != SUITE_FORMAT or "benchmarks" not in data:
+        try:
+            data = load_yaml(path, "benchmark suite")
+        except ConfigError as err:
+            raise SuiteError(str(err)) from err
+        if data.get("format") != SUITE_FORMAT or "benchmarks" not in data:
             raise SuiteError(f"{path.name} is not a {SUITE_FORMAT} suite: it needs `format` and `benchmarks`")
         try:
             return cls(str(data["name"]), tuple(Benchmark(**entry) for entry in data["benchmarks"]))

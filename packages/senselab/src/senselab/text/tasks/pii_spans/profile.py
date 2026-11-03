@@ -3,9 +3,9 @@
 from functools import cache
 from importlib import resources
 
-import yaml
 from pydantic import Field
 from senselab_core.kernel.declare import DeclaredParams
+from senselab_core.runtime.config import load_yaml
 
 SLICE_FORMAT = "profile-slice@1.0"
 SLICE_FILE = "pii_spans.yaml"
@@ -40,7 +40,7 @@ def packaged_profile() -> PiiProfile:
     Raises:
         ValueError: if the file is not a `profile-slice@1.0` of this slice.
     """
-    raw = yaml.safe_load(resources.files("senselab").joinpath("data", "profiles", SLICE_FILE).read_text("utf-8"))
+    raw = load_yaml(resources.files("senselab").joinpath("data", "profiles", SLICE_FILE), SLICE_FILE)
     if raw.get("format") != SLICE_FORMAT or raw.get("slice") != "pii_spans":
         raise ValueError(f"{SLICE_FILE} is not a {SLICE_FORMAT} of slice pii_spans: {raw.get('format')!r}")
     return PiiProfile.model_validate({k: v for k, v in raw.items() if k not in {"format", "slice"}})

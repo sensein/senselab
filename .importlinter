@@ -3,6 +3,7 @@ root_packages =
     senselab_worker
     senselab_core
     senselab
+    benchmarks
     scripts
 include_external_packages = True
 
@@ -160,3 +161,16 @@ ignore_imports =
     senselab_worker.codec -> senselab_worker._raw_digest
     senselab_worker.hashing -> senselab_worker._raw_digest
     senselab_core.runtime.store -> senselab_worker._raw_digest
+
+[importlinter:contract:one-yaml-loader]
+name = only senselab_core.runtime.config imports yaml
+type = forbidden
+source_modules =
+    senselab_core
+    senselab
+    benchmarks
+forbidden_modules =
+    yaml
+allow_indirect_imports = True
+ignore_imports =
+    senselab_core.runtime.config -> yaml

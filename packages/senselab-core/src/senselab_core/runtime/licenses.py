@@ -14,10 +14,9 @@ from functools import cache
 from importlib import resources
 from typing import Any, Literal, NamedTuple
 
-import yaml
-
 from senselab_core.kernel.declare import BackendSpec
 from senselab_core.kernel.license import License, require_license
+from senselab_core.runtime.config import load_yaml
 
 SPDX_TABLE_FORMAT = "spdx-licenses@1.0"
 _TOKEN = re.compile(r"\(|\)|[^\s()]+")
@@ -110,10 +109,10 @@ def spdx_table() -> Mapping[str, Flags]:
     Raises:
         ValueError: if the file lacks its format, a group lacks a derivation, or a group's flags are not valid.
     """
-    raw = yaml.safe_load(
-        resources.files("senselab_core.runtime").joinpath("data", "spdx_licenses.yaml").read_text("utf-8")
+    raw = load_yaml(
+        resources.files("senselab_core.runtime").joinpath("data", "spdx_licenses.yaml"), "spdx_licenses.yaml"
     )
-    if not isinstance(raw, dict) or raw.get("format") != SPDX_TABLE_FORMAT:
+    if raw.get("format") != SPDX_TABLE_FORMAT:
         raise ValueError(f"spdx_licenses.yaml must carry format {SPDX_TABLE_FORMAT!r}")
     table: dict[str, Flags] = {}
     for group in raw["groups"]:
@@ -234,8 +233,8 @@ def lock_records_from(text: str) -> LockRecords:
     Raises:
         ValueError: if the format is not ``env-licenses@1.0``, or (from the provider) a backend's env has no records.
     """
-    raw = yaml.safe_load(text)
-    if not isinstance(raw, dict) or raw.get("format") != ENV_LICENSES_FORMAT:
+    raw = load_yaml(text, "env licenses")
+    if raw.get("format") != ENV_LICENSES_FORMAT:
         raise ValueError(f"env licenses must carry format {ENV_LICENSES_FORMAT!r}")
     envs = raw["envs"]
 

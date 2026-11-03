@@ -31,7 +31,6 @@ from http.client import HTTPMessage
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Annotated, Any, BinaryIO, Literal, NamedTuple
 
-import yaml
 from pydantic import Field, ValidationError, field_validator, model_validator
 from senselab_worker.canonical import is_portable, jcs_dumps
 from senselab_worker.digest import SHA256_HEX, file_digest, identity_digest
@@ -39,6 +38,7 @@ from senselab_worker.digest import SHA256_HEX, file_digest, identity_digest
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.license import License
 from senselab_core.kernel.prov import Record, Vocabulary
+from senselab_core.runtime.config import ConfigError, load_yaml
 from senselab_core.runtime.network import Network, Offline, offline
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
@@ -201,13 +201,9 @@ class DataManifest(Frozen):
     def load(cls, path: Path) -> "DataManifest":
         """Read and validate the manifest at `path`; raise `ManifestError` naming the file and the cause."""
         try:
-            raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-        except OSError as err:
-            raise ManifestError(f"cannot read manifest {path}: {err}") from err
-        except yaml.YAMLError as err:
-            raise ManifestError(f"manifest {path} is not valid YAML: {err}") from err
-        if not isinstance(raw, dict):
-            raise ManifestError(f"manifest {path} must be a mapping with format {MANIFEST_FORMAT!r}")
+            raw = load_yaml(Path(path), "manifest")
+        except ConfigError as err:
+            raise ManifestError(str(err)) from err
         try:
             return cls.model_validate(raw)
         except ValidationError as err:

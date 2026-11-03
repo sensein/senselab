@@ -2,8 +2,8 @@
 
 from importlib import resources
 
-import yaml
 from senselab_core.kernel.declare import Env, ServerConfig, backend
+from senselab_core.runtime.config import load_yaml
 
 from senselab.text.tasks.pii_spans.engine import MODEL_ID
 from senselab.text.tasks.pii_spans.vllm import WORKER_MODULE
@@ -18,9 +18,7 @@ def server_config() -> ServerConfig:
     Raises:
         ValueError: if the file is not a `server-settings@1.0`.
     """
-    raw = yaml.safe_load(
-        resources.files("senselab").joinpath("data", "server_settings", SETTINGS_FILE).read_text("utf-8")
-    )
+    raw = load_yaml(resources.files("senselab").joinpath("data", "server_settings", SETTINGS_FILE), SETTINGS_FILE)
     if raw.get("format") != SETTINGS_FORMAT:
         raise ValueError(f"{SETTINGS_FILE} is not a {SETTINGS_FORMAT}: {raw.get('format')!r}")
     return ServerConfig(settings=raw["settings"], startup_timeout_s=raw["startup_timeout_s"])

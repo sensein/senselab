@@ -30,11 +30,11 @@ from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Protocol, Self, runtime_checkable
 
-import yaml
 from pydantic import Field, StrictBool
 from senselab_worker.ownership import UUID_HEX, remove_owned
 
 from senselab_core.kernel._base import Frozen
+from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.faults import is_transient
 
 logger = logging.getLogger("senselab")
@@ -97,8 +97,8 @@ def load_policy_values(package: str, file_name: str, policy_format: str) -> dict
         ValueError: if the file lacks `format: <policy_format>`, or an entry is not exactly a `value` and a
             non-empty `derivation`.
     """
-    raw = yaml.safe_load(resources.files(package).joinpath("data", file_name).read_text("utf-8"))
-    if not isinstance(raw, dict) or raw.pop("format", None) != policy_format:
+    raw = load_yaml(resources.files(package).joinpath("data", file_name), file_name)
+    if raw.pop("format", None) != policy_format:
         raise ValueError(f"{file_name} must carry format {policy_format!r}")
     values = {}
     for name, entry in raw.items():

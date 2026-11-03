@@ -31,13 +31,13 @@ from pathlib import Path
 from typing import Any, Literal
 
 import senselab_worker
-import yaml
 from packaging.requirements import InvalidRequirement, Requirement
 from pydantic import ValidationError
 from senselab_worker.digest import file_digest, identity_digest
 
 from senselab_core.kernel.declare import Env
 from senselab_core.kernel.formats import FormatTag, Formatted
+from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.hardware import _run
 from senselab_core.runtime.locks import TIMEOUT_S, Lease
 from senselab_core.runtime.network import Network, require_online
@@ -519,7 +519,7 @@ def read_lock_inputs(path: Path) -> dict[str, LockInputs]:
         EnvLockError: the format is not `LOCK_INPUTS_FORMAT`, or an env lacks `python`, `requirements` or
             `exclude_newer`.
     """
-    raw = yaml.safe_load(Path(path).read_text("utf-8"))
+    raw = load_yaml(Path(path), "env lock inputs")
     if raw.get("format") != LOCK_INPUTS_FORMAT:
         raise EnvLockError(f"{path}: format is {raw.get('format')!r}, not {LOCK_INPUTS_FORMAT!r}")
     quarantined = tuple(raw["quarantine"]["value"])

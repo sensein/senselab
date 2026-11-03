@@ -10,7 +10,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import yaml
 from pydantic import field_validator, model_validator
 from senselab_worker.digest import COMMIT_HEX, SHA256_HEX
 
@@ -19,20 +18,11 @@ from senselab_core.kernel.declare import BackendSpec
 from senselab_core.kernel.formats import FormatTag, Formatted
 from senselab_core.kernel.identity import ModelRef
 from senselab_core.kernel.license import License
+from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.licenses import license_record
 
 CATALOGUE_FORMAT = "catalogue@1.0"
 _FLAGS = ("commercial_use", "copyleft", "attribution")
-
-
-class _TextDates(yaml.SafeLoader):
-    """A safe loader that leaves `2026-11-01` a string."""
-
-
-_TextDates.yaml_implicit_resolvers = {
-    k: [(tag, rx) for tag, rx in v if tag != "tag:yaml.org,2002:timestamp"]
-    for k, v in yaml.SafeLoader.yaml_implicit_resolvers.items()
-}
 
 
 class UnknownModel(KeyError):
@@ -118,11 +108,7 @@ class Catalogue(Formatted):
     @classmethod
     def load(cls, text_or_path: str | Path) -> "Catalogue":
         """Return the catalogue in YAML `text_or_path`: the text itself, or the file when given a `Path`."""
-        text = text_or_path.read_text("utf-8") if isinstance(text_or_path, Path) else text_or_path
-        raw = yaml.load(text, Loader=_TextDates)  # noqa: S506 - a SafeLoader subclass
-        if not isinstance(raw, dict):
-            raise ValueError("a catalogue is a mapping with format and entries")
-        return cls.model_validate(raw)
+        return cls.model_validate(load_yaml(text_or_path, "catalogue"))
 
     def entry(self, model_id: str) -> CatalogueEntry:
         """Return the entry for `model_id`, or raise `UnknownModel`."""
