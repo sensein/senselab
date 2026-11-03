@@ -850,8 +850,11 @@ modify `runtime/storage.py` (`probe_capabilities`), `runtime/planner.py` (probe 
 - `scale(queues: QueueSet, substrate: Substrate, profile: ExecutionProfile) -> None`: per class, target workers =
   min(queue depth ÷ `pool.quantum_items`, `max_workers`, QOS CPU cap ÷ cpus per task), called by the coordinator each
   round.
-- `probe_capabilities(root: Path) -> StorageCapabilities{atomic_rename, exclusive_link, server_clock}`; a plan whose
-  store or run directory fails it is refused with `StorageUnsupported` naming the missing primitive.
+- `probe_capabilities(root: Path) -> StorageCapabilities{atomic_rename, rename_over_open, exclusive_link,
+  link_reply_confirmed, server_clock, attribute_delay_s}`, measured on the root itself (not assumed from its
+  filesystem type), so NFS v3/v4, Lustre, GPFS, SMB and local disks are each judged by what they do; a store with no
+  rename (an object store) fails `atomic_rename`. A plan whose store or run directory fails it is refused with
+  `StorageUnsupported` naming the missing primitive; `attribute_delay_s` bounds the lease renew fraction (Task 12).
 - A pool runs only where its store is reachable from every substrate (P3-39).
 
 - [ ] **Step 1: Failing tests (local, fake `sbatch` on `PATH`):** `test_scale_bounded_by_qos_cap`,
