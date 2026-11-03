@@ -116,7 +116,15 @@ def test_parity_uses_heldout_only(tmp_path: Path) -> None:
         def run(self, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:  # noqa: ARG002
             return [{"id": i["id"], "outputs": {"embedding": {"vector": [1.0]}}} for i in items]
 
-    kwargs: dict[str, Any] = {"task": "t", "backend": "b", "stack": "s", "device": "cpu", "sha": "a" * 40, "job": "1"}
+    kwargs: dict[str, Any] = {
+        "task": "t",
+        "backend": "b",
+        "stack": "s",
+        "device": "cpu",
+        "model": None,
+        "sha": "a" * 40,
+        "job": "1",
+    }
     with pytest.raises(par.ParityError, match="held-out items only"):
         par.run(Worker(), {cal[0]: {}}, {}, **kwargs)
     out = par.run(Worker(), {held[0]: {}, held[1]: {}}, {}, **kwargs)
@@ -229,6 +237,7 @@ def test_a_parity_decision_records_the_thresholds_of_its_run_config(tmp_path: Pa
         backend="b",
         stack="s",
         device="cpu",
+        model=None,
         sha="a" * 40,
         job="2",
         items=(
@@ -256,8 +265,53 @@ def test_a_backend_the_profile_cannot_place_is_not_run_and_never_passes() -> Non
     gap = par.placement_gap("fake.echo", None, backend, laptop.model_copy(update={"devices": ("cuda",)}))
     assert gap is not None and "'fake'" in gap
     out = par.ParityOutputs(
-        flatten="flatten@2", task="fake.echo", backend="fake", stack=backend.stack, device="cpu", sha="a" * 40,
-        job="1", not_placeable=gap, items=(),
+        flatten="flatten@2", task="fake.echo", backend="fake", stack=backend.stack, device="cpu", model=None,
+        sha="a" * 40, job="1", not_placeable=gap, items=(),
     )  # fmt: skip
     with pytest.raises(par.ParityError, match="was not run on cpu"):
         par.decide(out, None, THRESHOLDS)
+
+
+@pytest.mark.logic
+def test_a_backend_runs_its_own_model_not_the_benchmarks_default() -> None:
+    """`crisperwhisper` serves its own model, so a benchmark pinned to another model does not apply to it."""
+    importlib.import_module("senselab")
+    catalogue = importlib.import_module("senselab_core.runtime.call").packaged().catalogue
+    _, crisper = par.resolve("speech_to_text", "crisperwhisper")
+    _, other = par.resolve("speech_to_text", "transformers")
+    own = catalogue.backend_entry(crisper).id
+    assert own != "openai/whisper-large-v3-turbo"
+    assert par.model_of("openai/whisper-large-v3-turbo", crisper, catalogue) == own
+    assert par.model_of(None, crisper, catalogue) == own
+    assert par.model_of("openai/whisper-large-v3-turbo", other, catalogue) == "openai/whisper-large-v3-turbo"
+
+
+@pytest.mark.logic
+def test_cross_stack_pairs_are_one_task_and_model_whatever_the_backend() -> None:
+    """PII on transformers and on vllm pair; another model, another device or the same stack do not."""
+
+    def out(backend: str, stack: str, model: str | None, device: str = "cuda") -> Any:  # noqa: ANN401
+        return par.ParityOutputs(
+            flatten="flatten@2", task="pii_spans", backend=backend, stack=stack, device=device, model=model,
+            sha="a" * 40, job="1", items=(),
+        )  # fmt: skip
+
+    a, b = out("transformers", "transformers", "m"), out("vllm", "vllm", "m")
+    assert par.same_model_pairs([a, b]) == [(a, b)]
+    assert par.same_model_pairs([a, out("t2", "transformers", "m")]) == []
+    assert par.same_model_pairs([a, out("x", "vllm", "n")]) == []
+    assert par.same_model_pairs([a, out("y", "y", "m", "cpu")]) == []
+
+
+@pytest.mark.logic
+def test_convert_writes_the_reference_where_the_parity_test_reads_it(tmp_path: Path) -> None:
+    """`convert` names the file from task and backend under `--parity-dir`; the test reads the same path."""
+    ids = _ids("heldout", 1)
+    records = tmp_path / "rec"
+    records.mkdir()
+    _records(records, "speaker_embeddings", ids, {"vector": [1.0]})
+    par.main(
+        ["convert", str(records), "--task", "speaker_embeddings", "--backend", "speechbrain", "--alpha-sha", "f" * 40,
+         "--job", "1", "--parity-dir", str(tmp_path / "p")]
+    )  # fmt: skip
+    assert par.load_reference(par.reference_path(tmp_path / "p", "speaker_embeddings", "speechbrain")).items

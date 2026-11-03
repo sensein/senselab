@@ -17,6 +17,7 @@ import json
 import math
 import sys
 from collections.abc import Mapping, Sequence
+from itertools import combinations
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -81,7 +82,7 @@ class OutputItem(Frozen):
 
 
 class ParityOutputs(Formatted):
-    """The 2.x outputs of one backend's held-out items on one stack and device.
+    """The 2.x outputs of one backend's held-out items on one stack and device, from `model` (None: model-free).
 
     `not_placeable` is why the profile could not place the backend on this node, when it could not: no items were
     run and the record says nothing about parity on `device`.
@@ -93,6 +94,7 @@ class ParityOutputs(Formatted):
     backend: NonEmptyStr
     stack: NonEmptyStr
     device: NonEmptyStr
+    model: NonEmptyStr | None
     sha: NonEmptyStr
     job: NonEmptyStr
     claims_batch_invariance: bool = False
@@ -361,6 +363,28 @@ def placement_gap(task: str, model: str | None, backend: Any, profile: Any) -> s
     return None if placed.backend.name == backend.name else f"the profile places {task!r} on {placed.backend.name!r}"
 
 
+def model_of(bench_model: str | None, backend: Any, catalogue: Any) -> str | None:  # noqa: ANN401
+    """Return the model id `backend` runs: the benchmark's when the backend serves it, else the backend's own entry."""
+    if bench_model is not None and (not backend.models or bench_model in backend.models):
+        return bench_model
+    entry = catalogue.backend_entry(backend)
+    return None if entry is None else str(entry.id)
+
+
+def reference_path(parity_dir: Path, task: str, backend: str) -> Path:
+    """Return where the 1.x reference of `backend` for `task` lives under a campaign directory."""
+    return parity_dir / "reference" / task / f"{backend}.json"
+
+
+def same_model_pairs(outputs: Sequence[ParityOutputs]) -> list[tuple[ParityOutputs, ParityOutputs]]:
+    """Return the pairs of runs of one task and model on different stacks and one device, whatever the backends."""
+    return [
+        (a, b)
+        for a, b in combinations(outputs, 2)
+        if (a.task, a.model, a.device) == (b.task, b.model, b.device) and a.stack != b.stack
+    ]
+
+
 def run(  # noqa: PLR0913 - what one 2.x parity run fixes
     worker: Any,  # noqa: ANN401
     items: Mapping[str, Mapping[str, Any]],
@@ -370,6 +394,7 @@ def run(  # noqa: PLR0913 - what one 2.x parity run fixes
     backend: str,
     stack: str,
     device: str,
+    model: str | None,
     sha: str,
     job: str,
     claims_batch_invariance: bool = False,
@@ -392,6 +417,7 @@ def run(  # noqa: PLR0913 - what one 2.x parity run fixes
         backend=backend,
         stack=stack,
         device=device,
+        model=model,
         sha=sha,
         job=job,
         claims_batch_invariance=claims_batch_invariance,
@@ -417,8 +443,9 @@ def _items_cli(args: argparse.Namespace) -> None:
 
 def _convert_cli(args: argparse.Namespace) -> None:
     reference = convert(args.records, task=args.task, backend=args.backend, alpha_sha=args.alpha_sha, job=args.job)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(reference.model_dump_json(indent=1), "utf-8")
+    out = reference_path(args.parity_dir, args.task, args.backend)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(reference.model_dump_json(indent=1), "utf-8")
 
 
 def _run_cli(args: argparse.Namespace) -> None:
@@ -431,7 +458,10 @@ def _run_cli(args: argparse.Namespace) -> None:
     profile = ExecutionProfile.load(args.execution)
     workers = RealWorkers(profile)
     stack = backend.stack + "".join(f" {k}={v}" for k, v in sorted(args.backend_params.items()))
-    gap = placement_gap(bench.task, bench.model, backend, profile)
+    from senselab_core.runtime.call import packaged  # noqa: PLC0415
+
+    model = model_of(bench.model, backend, packaged().catalogue)
+    gap = placement_gap(bench.task, model, backend, profile)
     try:
         if gap is not None:
             outputs = ParityOutputs(
@@ -440,6 +470,7 @@ def _run_cli(args: argparse.Namespace) -> None:
                 backend=args.backend,
                 stack=stack,
                 device=workers.device,
+                model=model,
                 sha=args.sha,
                 job=args.job,
                 not_placeable=gap,
@@ -454,6 +485,7 @@ def _run_cli(args: argparse.Namespace) -> None:
                 backend=args.backend,
                 stack=stack,
                 device=workers.device,
+                model=model,
                 sha=args.sha,
                 job=args.job,
                 claims_batch_invariance=args.claim_batch_invariance,
@@ -493,7 +525,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     c.add_argument("--backend", required=True)
     c.add_argument("--alpha-sha", required=True)
     c.add_argument("--job", required=True)
-    c.add_argument("--out", type=Path, required=True)
+    c.add_argument(
+        "--parity-dir", type=Path, required=True, help="the campaign directory; writes reference/<task>/<backend>.json"
+    )
     c.set_defaults(func=_convert_cli)
     r = sub.add_parser("run")
     common(r)

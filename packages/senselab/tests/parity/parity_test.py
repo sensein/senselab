@@ -11,7 +11,6 @@ under `comparisons/`, carrying the thresholds' digest. A failure is a finding.
 import importlib.util
 import os
 import sys
-from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +86,7 @@ def test_matches_1x_reference(output: Any) -> None:  # noqa: ANN401
     """2.x alone-per-item outputs agree with the 1.x reference; a backend not placeable on the device is skipped."""
     if output.not_placeable is not None:
         pytest.skip(f"{output.backend} not run on {output.device}: {output.not_placeable}")
-    reference = DIRECTORY / "reference" / output.task / f"{output.backend}.json"  # type: ignore[operator]
+    reference = par.reference_path(DIRECTORY, output.task, output.backend)
     if not reference.exists():
         pytest.skip(f"no 1.x reference for {output.task} backend {output.backend}")
     decision = _decided(output, par.load_reference(reference))
@@ -97,15 +96,11 @@ def test_matches_1x_reference(output: Any) -> None:  # noqa: ANN401
 @pytest.mark.limits
 @pytest.mark.model
 def test_cross_stack_agreement() -> None:
-    """Outputs of one backend on different stacks, each device alike, agree."""
+    """Outputs of one task and model on different stacks, each device alike, agree, whatever the backends."""
     _need_outputs()
-    pairs = [
-        (a, b)
-        for a, b in combinations(_ran(OUTPUTS), 2)
-        if (a.task, a.backend) == (b.task, b.backend) and a.stack != b.stack and a.device == b.device
-    ]
+    pairs = par.same_model_pairs(_ran(OUTPUTS))
     if not pairs:
-        pytest.skip("no backend was run on two stacks")
+        pytest.skip("no task and model was run on two stacks")
     for a, b in pairs:
         found = par.compare_items(_batch(a, "1"), _batch(b, "1"), THRESHOLDS)
         assert not found, (a.stack, b.stack, THRESHOLDS.canonical_digest(), found)

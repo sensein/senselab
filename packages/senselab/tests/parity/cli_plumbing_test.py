@@ -78,7 +78,7 @@ def test_cli_items_run_compare_end_to_end(tmp_path: Path) -> None:
         outputs,
     )
     ran: dict[str, Any] = json.loads(outputs.read_text("utf-8"))
-    assert (ran["format"], ran["flatten"]) == ("parity-outputs@3.0", "flatten@2")
+    assert (ran["format"], ran["flatten"]) == ("parity-outputs@4.0", "flatten@2")
     assert _parity().load_outputs(outputs).items
     stale = tmp_path / "stale-outputs.json"
     stale.write_text(json.dumps({**ran, "format": "parity-outputs@1.0"}), "utf-8")
