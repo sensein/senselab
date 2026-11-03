@@ -1184,6 +1184,15 @@ them. A ruling that changes an ADR decision takes effect only through the dated 
   pydra (Task 45, `LeaseSettings`), configured by senselab's execution profile through `PydraRunner` (Task 9b);
   senselab's own leases (queue items, coordinator epoch, service registry; Tasks 12–17) keep the same ADR-003
   directory protocol in senselab core.
+- **P3-54** ruling (superseded 2026-11-03 by owner item 60): the static-or-error rule for closures and globals is
+  withdrawn. pydra's function checksum follows the adopted design (`.superpowers` review of 2026-11-03, owner item 60):
+  the key carries the code part at a `code_hash` tier (`function`, `module`, `user`; default `user`, user code
+  inferred from install paths with an override) with closure and global values hashed by the ordinary value rules
+  and library objects by qualified name; interpreter, platform, environment and the versions of packages a task
+  reaches are recorded and compared by `reuse` (`exact`, `consistent` default, `any`); `version=` replaces the code
+  part only. Delivered as #906 (closures only) and four follow-up pydra PRs: a version-neutral AST encoding with
+  docstring stripping; global values and the tiers; the dependency record and the `consistent` default; `version=`
+  with the source guard.
 - **P3-49** ruling: The spike and Task 9b assert that no `_result.pklz` is written; `_job.pklz` may remain until B2
   and D2 land, and its absence is not claimed in Phase 3.
 - **P3-50** ruling: A node's `backend_params` are keyed by backend name; only the placed backend's entry reaches its
