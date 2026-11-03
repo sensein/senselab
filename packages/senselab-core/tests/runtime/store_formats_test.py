@@ -76,3 +76,17 @@ def test_a_retired_sibling_does_not_hide_a_readable_entry(tmp_path: Path) -> Non
     got = s.get(k, mac, ReusePolicy.TOLERANT)
     assert got is not None and got.outputs == {"y": 1}
     assert retired.is_dir() and not (tmp_path / QUARANTINE_DIR).exists()
+
+
+@pytest.mark.logic
+def test_a_stored_execution_context_2_is_refused_as_retired(tmp_path: Path) -> None:
+    """An entry whose context is `execution-context@2.0`, written before the env license was context, is refused."""
+    s, k, c = ResultStore(tmp_path), store_key(), store_context()
+    s.put(k, {"y": 1}, c)
+    entry = entry_dir(tmp_path, k, c)
+    rewrite_json(entry / "context.json", lambda r: r.update(format="execution-context@2.0"))
+    for policy in ReusePolicy:
+        with pytest.raises(StoreFormatRetired, match=STORE_MIGRATION_STATEMENT) as info:
+            s.get(k, c, policy)
+        assert info.value.found == "execution-context@2.0"
+    assert entry.is_dir() and not (tmp_path / QUARANTINE_DIR).exists()
