@@ -6,6 +6,7 @@ from typing import Any
 import numpy
 import pytest
 from senselab.audio.tasks.speech_to_text import crisperwhisper as cw
+from senselab.audio.tasks.speech_to_text.token_confidence import word_prefix
 from senselab.audio.tasks.speech_to_text.window_confidence import (
     Window,
     capture_windows,
@@ -46,6 +47,21 @@ class Result:
     words = [Word("hello", 0.0, 0.4), Word("there", 0.4, 0.8)]
 
 
+class Chunk:
+    """One window's share of a long-form result: the text of the words that survive the merge."""
+
+    def __init__(self, text: str) -> None:
+        """Hold the surviving `text`."""
+        self.text = text
+
+
+class MergedResult(Result):
+    """A long-form result whose only window kept `hello`: `there` is re-covered by the next window."""
+
+    words = [Word("hello", 0.0, 0.4)]
+    chunks: list[Chunk] = [Chunk("hello")]
+
+
 class CT2Model:
     """Teacher forcing over `LOGITS`, row `k` predicting position `k`."""
 
@@ -77,7 +93,7 @@ class HFModel:
         torch = importlib.import_module("torch")
         fed = decoder_input_ids[0].tolist()
         self.fed.append(fed)
-        stale = numpy.full((len(fed) - len(GEN), VOCAB), 50.0, dtype=numpy.float32)
+        stale = numpy.full((len(PROMPT) - 1, VOCAB), 50.0, dtype=numpy.float32)
         logits = torch.from_numpy(numpy.concatenate([stale, LOGITS[: len(fed) - len(PROMPT) + 1]])[None])
         return type("Out", (), {"logits": logits})()
 
@@ -115,9 +131,10 @@ class Engine:
 class CrisperWhisper:
     """The library model: one window, its ids replaced by `GEN` after fallback or early-EOT recovery."""
 
-    def __init__(self, kind: str, case: str) -> None:
-        """Hold the engine the library would build."""
+    def __init__(self, kind: str, case: str, result: type[Result] = Result) -> None:
+        """Hold the engine the library would build, and the `result` it returns."""
         self._engine = Engine(kind, case)
+        self._result = result
 
     def transcribe(self, path: str, **kwargs: Any) -> Result:  # noqa: ANN401
         """Decode one window, replacing its ids where the library would, and return its words."""
@@ -125,12 +142,12 @@ class CrisperWhisper:
         ids, _ = self._engine.generate_with_repair_and_attention(features, PROMPT, max_length=8)
         if ids != GEN:
             assert self._engine.cross_attention_for_tokens(features, PROMPT, GEN) == "recaptured"
-        return Result()
+        return self._result()
 
 
-def _transcribe(kind: str, case: str) -> tuple[cw.Decoded, list[list[int]]]:
+def _transcribe(kind: str, case: str, merged: bool = False) -> tuple[cw.Decoded, list[list[int]]]:
     library = cw.Library.__new__(cw.Library)
-    library.engine, library.model = kind, CrisperWhisper(kind, case)
+    library.engine, library.model = kind, CrisperWhisper(kind, case, MergedResult if merged else Result)
     return library.transcribe(numpy.zeros(160), "en", 8), library.model._engine.model.fed
 
 
@@ -151,6 +168,39 @@ def test_confidence_is_of_the_final_ids_on_both_engines(kind: str, case: str) ->
     assert decoded.mean == pytest.approx(mean, rel=1e-5)
     assert decoded.confidences == pytest.approx(words, rel=1e-5)
     assert fed == ([PROMPT, GEN[:-1]] if kind == "ct2" else [PROMPT + GEN[:-1]])
+
+
+@pytest.mark.env
+@pytest.mark.parametrize("kind", ["ct2", "transformers"])
+def test_overlap_dropped_ids_not_scored(kind: str) -> None:
+    """Ids of words the window merge drops are not teacher-forced, in the mean or in any word's confidence."""
+    pytest.importorskip("torch")
+    decoded, fed = _transcribe(kind, "clean", merged=True)
+    shifted = LOGITS - LOGITS.max(axis=1, keepdims=True)
+    logprob = shifted[range(len(GEN)), GEN] - numpy.log(numpy.exp(shifted).sum(axis=1))
+    assert decoded.mean == pytest.approx(float(numpy.exp(logprob[:2].mean())), rel=1e-5)
+    assert decoded.confidences == pytest.approx([float(numpy.exp(logprob[:2].sum()))], rel=1e-5)
+    assert fed == ([PROMPT, GEN[:1]] if kind == "ct2" else [PROMPT + GEN[:1]])
+
+
+@pytest.mark.logic
+def test_word_prefix_ends_after_the_last_kept_words_own_tokens() -> None:
+    """The prefix of one word is `he` + `llo`; of none is empty; of every word is all the ids, end token included."""
+    decode, special = Tokenizer().decode, {EOT, 4}
+    assert [word_prefix(GEN, n, lambda t: decode([t]), special) for n in (0, 1, 2)] == [0, 2, len(GEN)]
+
+
+@pytest.mark.logic
+def test_chunks_that_do_not_match_the_windows_leave_the_decode_unscored() -> None:
+    """A result with more chunks than captured windows cannot say which ids survive, so none is scored."""
+
+    class Lost(MergedResult):
+        chunks: list[Chunk] = [Chunk("hello"), Chunk("there")]
+
+    library = cw.Library.__new__(cw.Library)
+    library.engine, library.model = "ct2", CrisperWhisper("ct2", "clean", Lost)
+    decoded = library.transcribe(numpy.zeros(160), "en", 8)
+    assert decoded.mean is None and decoded.confidences == [None]
 
 
 @pytest.mark.logic

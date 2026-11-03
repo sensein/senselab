@@ -204,6 +204,7 @@ class Library:
         from senselab.audio.tasks.speech_to_text.window_confidence import (  # noqa: PLC0415 - as above
             capture_windows,
             ct2_teacher_logits,
+            surviving_windows,
             transformers_teacher_logits,
             window_confidence,
         )
@@ -222,6 +223,13 @@ class Library:
                     max_new_tokens=max_new_tokens,
                 )
         teacher = ct2_teacher_logits if self.engine == "ct2" else transformers_teacher_logits
+
+        def decode(token: int) -> str:
+            return str(engine.tokenizer.decode([token]))
+
+        kept = [len(chunk.text.split()) for chunk in getattr(result, "chunks", None) or []]
+        if kept:
+            windows = surviving_windows(windows, kept, decode, special) if len(kept) == len(windows) else []
         blocks = window_confidence(engine, windows, teacher, special)
         words = [(str(w.word or w.text), float(w.start), float(w.end)) for w in getattr(result, "words", None) or []]
         confidences: list[float | None] = [None] * len(words)
@@ -233,7 +241,7 @@ class Library:
                 scored = word_confidences(
                     merged["tokens"],
                     merged["token_logprob"],
-                    lambda token: str(engine.tokenizer.decode([token])),
+                    decode,
                     special,
                 )
                 if len(scored) == len(words):

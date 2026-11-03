@@ -22,6 +22,7 @@ __all__ = [
     "token_confidence_from_logits",
     "special_token_ids",
     "word_confidences",
+    "word_prefix",
 ]
 
 _CONTROL_TOKEN = re.compile(r"<\|.*\|>")
@@ -62,6 +63,38 @@ def merge_confidence_blocks(blocks: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _word_tokens(tokens: Sequence[int], decode: Callable[[int], str], excluded: set[int]) -> Iterator[tuple[int, bool]]:
+    """Yield `(index, starts_a_word)` of each token that belongs to a word."""
+    started = False
+    for index, token in enumerate(tokens):
+        if token in excluded:
+            continue
+        text = decode(token)
+        if _CONTROL_TOKEN.fullmatch(text.strip()):
+            continue
+        yield index, text.startswith(" ") or not started
+        started = True
+
+
+def word_prefix(
+    tokens: Sequence[int],
+    words: int,
+    decode: Callable[[int], str],
+    special_token_ids: Optional[set[int]] = None,
+) -> int:
+    """Return how many leading `tokens` make up the first `words` words, by the rule `word_confidences` groups by.
+
+    Tokens that belong to no word after the last kept word's own tokens are not part of the prefix; `len(tokens)`
+    when there are no more than `words` words.
+    """
+    count = 0
+    for index, starts in _word_tokens(tokens, decode, special_token_ids or set()):
+        count += starts
+        if count > words:
+            return index
+    return len(tokens)
+
+
 def word_confidences(
     tokens: Sequence[int],
     token_logprob: Sequence[float],
@@ -87,17 +120,11 @@ def word_confidences(
     """
     if len(tokens) != len(token_logprob):
         raise ValueError(f"{len(tokens)} tokens but {len(token_logprob)} log-probabilities")
-    excluded = special_token_ids or set()
     sums: list[float] = []
-    for token, logprob in zip(tokens, token_logprob):
-        if token in excluded:
-            continue
-        text = decode(token)
-        if _CONTROL_TOKEN.fullmatch(text.strip()):
-            continue
-        if text.startswith(" ") or not sums:
+    for index, starts in _word_tokens(tokens, decode, special_token_ids or set()):
+        if starts:
             sums.append(0.0)
-        sums[-1] += logprob
+        sums[-1] += token_logprob[index]
     return [min(1.0, math.exp(total)) for total in sums]
 
 

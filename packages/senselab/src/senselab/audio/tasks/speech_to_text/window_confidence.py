@@ -10,15 +10,16 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Optional
 
-from senselab.audio.tasks.speech_to_text.token_confidence import token_confidence_from_logits
+from senselab.audio.tasks.speech_to_text.token_confidence import token_confidence_from_logits, word_prefix
 
 __all__ = [
     "Window",
     "capture_windows",
     "ct2_teacher_logits",
+    "surviving_windows",
     "transformers_teacher_logits",
     "window_confidence",
 ]
@@ -87,6 +88,25 @@ def capture_windows(engine: Any) -> Iterator[list[Window]]:  # noqa: ANN401 - a 
                 setattr(engine, name, original)
             else:
                 delattr(engine, name)
+
+
+def surviving_windows(
+    windows: Sequence[Window],
+    kept_words: Sequence[int],
+    decode: Callable[[int], str],
+    special_token_ids: Optional[set[int]] = None,
+) -> list[Window]:
+    """Return `windows` cut to the ids of the first `kept_words[i]` words of window `i`, the words the merge keeps.
+
+    Raises:
+        ValueError: if `kept_words` does not give one count per window.
+    """
+    if len(kept_words) != len(windows):
+        raise ValueError(f"{len(kept_words)} kept-word counts for {len(windows)} windows")
+    return [
+        replace(w, ids=w.ids[: word_prefix(w.ids, kept, decode, special_token_ids)])
+        for w, kept in zip(windows, kept_words)
+    ]
 
 
 def _host(view: Any) -> Any:  # noqa: ANN401 - a ctranslate2 StorageView or a numpy array in, a numpy array out
