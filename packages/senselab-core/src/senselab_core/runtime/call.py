@@ -17,9 +17,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from importlib.metadata import entry_points
-from importlib.resources.abc import Traversable
 from os import PathLike
-from pathlib import Path
 from typing import Annotated, Any, Literal, get_type_hints
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, PlainSerializer, ValidationInfo, model_validator
@@ -210,7 +208,7 @@ EnvOpener = Callable[[BackendSpec, ExecutionProfile], EnvHandle]
 
 @dataclass(frozen=True)
 class Packaged:
-    """What a declaring package hands `run_call`: catalogue, env opener, registry, tolerance profiles, lock records.
+    """What a declaring package hands `run_call`: catalogue, env opener, registry and lock records.
 
     `lock_records` gives each backend's env-lock package license records, from which `env_license` derives.
     """
@@ -218,7 +216,6 @@ class Packaged:
     catalogue: Catalogue
     open_env: EnvOpener
     registry: Registry = REGISTRY
-    tolerance: Path | Traversable | None = None
     lock_records: LockRecords | None = None
 
 

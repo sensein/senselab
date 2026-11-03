@@ -1,7 +1,7 @@
-"""The measurement and parity CLIs end to end, as subprocesses, on the model-free `fake.echo` task.
+"""The parity CLI end to end, as subprocesses, on the model-free `fake.echo` task.
 
 Every import and line of the real path runs: suite load, item preparation and input binding, the real worker client,
-`measure`, `generate`, `items`, `run`. A break in any of them fails here, not on the cluster.
+`items`, `run`, and the comparison of the run's outputs. A break in any of them fails here, not on the cluster.
 """
 
 import importlib
@@ -45,8 +45,8 @@ def _cli(script: str, *args: str | Path, ok: bool = True) -> str:
 
 
 @pytest.mark.logic
-def test_cli_measure_generate_items_run_end_to_end(tmp_path: Path) -> None:
-    """`measure`, `generate`, `items` and `run` complete, and the generated profile judges the run's outputs."""
+def test_cli_items_run_compare_end_to_end(tmp_path: Path) -> None:
+    """`items` and `run` complete, and the run's alone and one-request outputs agree under the packaged thresholds."""
     common: list[str | Path] = [
         "--suite",
         SUITE,
@@ -57,31 +57,6 @@ def test_cli_measure_generate_items_run_end_to_end(tmp_path: Path) -> None:
         "--data-cache",
         tmp_path / "data",
     ]
-    measured = tmp_path / "obs.json"
-    _cli(
-        "scripts/generate_tolerance.py",
-        "measure",
-        *common,
-        "--execution",
-        "laptop",
-        "--repeats",
-        "2",
-        "--sha",
-        "a" * 40,
-        "--job",
-        "1",
-        "--work",
-        tmp_path / "work",
-        "--out",
-        measured,
-    )
-    observed: dict[str, Any] = json.loads(measured.read_text("utf-8"))
-    assert observed["backend"] == "fake"
-    assert observed["items"], "no calibration item ran"
-    _cli("scripts/generate_tolerance.py", "generate", measured, "--out", tmp_path / "profiles")
-    profile = yaml.safe_load((tmp_path / "profiles" / "fake.echo" / "fake.yaml").read_text("utf-8"))
-    assert profile["derivation"]["split"] == "calibration" and profile["fields"]
-
     items = tmp_path / "items.json"
     _cli("benchmarks/parity_reference.py", "items", *common, "--work", tmp_path / "work", "--out", items)
     document = json.loads(items.read_text("utf-8"))
@@ -112,6 +87,10 @@ def test_cli_measure_generate_items_run_end_to_end(tmp_path: Path) -> None:
     assert str(stale) in str(raised.value)
     assert {i["id"] for i in ran["items"]} == set(document["items"])
     assert all(set(i["batches"]) == {"1", "N"} and i["split"] == "heldout" for i in ran["items"])
+    loaded = _parity().load_outputs(outputs)
+    alone, together = ({i.id: i.batches[b] for i in loaded.items} for b in ("1", "N"))
+    thresholds = importlib.import_module("senselab_core.runtime.compare").Thresholds.load()
+    assert _parity().compare_items(alone, together, thresholds) == {}
 
 
 def _parity() -> Any:  # noqa: ANN401
@@ -155,38 +134,3 @@ def test_cli_items_records_the_task_default_model(tmp_path: Path) -> None:
     default = packaged().catalogue.default("speech_to_text")
     document = json.loads(items.read_text("utf-8"))
     assert document["model"] == {"id": default.id, "revision": default.revision}
-
-
-@pytest.mark.logic
-def test_cli_measure_fails_when_the_split_is_smaller_than_declared(tmp_path: Path) -> None:
-    """A suite declaring more calibration items than its split holds fails `measure` and writes no observations."""
-    suite = tmp_path / "thin.yaml"
-    entry = {"name": "echo", "adapter": "echo_payloads", "items": 12, "min_calibration": 50, "task": "fake.echo"}
-    suite.write_text(
-        yaml.safe_dump({"format": "benchmark-suite@1.0", "name": "thin", "benchmarks": [{**entry, "metric": "none"}]})
-    )
-    out = tmp_path / "obs.json"
-    error = _cli(
-        "scripts/generate_tolerance.py",
-        "measure",
-        "--suite",
-        suite,
-        "--benchmark",
-        "echo",
-        "--backend",
-        "fake",
-        "--execution",
-        "laptop",
-        "--sha",
-        "a" * 40,
-        "--job",
-        "1",
-        "--data-cache",
-        tmp_path / "data",
-        "--work",
-        tmp_path / "work",
-        "--out",
-        out,
-        ok=False,
-    )
-    assert "are declared" in error and not out.exists()

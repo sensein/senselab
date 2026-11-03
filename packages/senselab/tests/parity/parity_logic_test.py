@@ -177,8 +177,7 @@ def test_diarization_labels_compared_under_best_mapping() -> None:
 @pytest.mark.logic
 def test_real_script_path_resolves_every_suite_task() -> None:
     """The script's own task lookup, for one benchmark of each task of the smoke suite, finds the task and backend."""
-    tol = par.tolerance_module()
-    suite = tol._harness().Suite.load(ROOT / "benchmarks" / "suites" / "smoke.yaml")
+    suite = par.harness().Suite.load(ROOT / "benchmarks" / "suites" / "smoke.yaml")
     seen: dict[str, Any] = {}
     for bench in suite.benchmarks:
         seen.setdefault(bench.task, bench)
@@ -190,7 +189,7 @@ def test_real_script_path_resolves_every_suite_task() -> None:
         if task.startswith("signal."):
             continue
         backend = packaged().registry.backends(task)[0].name
-        spec, found = tol.resolve(bench.task, backend)
+        spec, found = par.resolve(bench.task, backend)
         assert spec.name == task and found.name == backend
 
 

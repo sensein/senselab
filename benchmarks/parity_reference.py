@@ -95,16 +95,68 @@ def _load(name: str, path: Path) -> ModuleType:
     return module
 
 
-def tolerance_module() -> ModuleType:
-    """Return `scripts/generate_tolerance.py`, the owner of item preparation and the calibration split."""
-    return sys.modules.get("generate_tolerance") or _load(
-        "generate_tolerance", ROOT / "scripts" / "generate_tolerance.py"
-    )
+def harness() -> ModuleType:
+    """Return `benchmarks/harness.py`, the owner of the suites, the adapters and the item split."""
+    return sys.modules.get("benchmark_harness") or _load("benchmark_harness", ROOT / "benchmarks" / "harness.py")
 
 
 def split_of(item_id: str) -> str:
     """Return `calibration` or `heldout` as the harness splits ids."""
-    return str(tolerance_module()._harness().split_of(item_id))
+    return str(harness().split_of(item_id))
+
+
+def resolve(task: str, backend_name: str) -> tuple[Any, Any]:
+    """Return (task spec, backend spec) of the packaged declarations."""
+    from senselab_core.runtime.call import packaged  # noqa: PLC0415 - needs the runtime
+
+    backend = next(b for b in packaged().registry.backends(task) if b.name == backend_name)
+    return packaged().registry.spec(task), backend
+
+
+def load_items(suite: Path, benchmark: str, data_cache: Path, work: Path, split: str) -> tuple[Any, list[Any]]:
+    """Return (benchmark, its adapter items of `split`), the data fetched into `data_cache`, files under `work`."""
+    from senselab_core.runtime.fetch import DataManifest, fetch  # noqa: PLC0415 - only a real run needs the runtime
+
+    [bench] = [b for b in harness().Suite.load(suite).benchmarks if b.name == benchmark]
+    files = (
+        {}
+        if bench.manifest is None
+        else fetch(
+            DataManifest.load(ROOT / "benchmarks" / "manifests" / f"{bench.manifest}.yaml"), cache_root=data_cache
+        )
+    )
+    items = harness().ADAPTERS[bench.adapter]().items(files, bench.items, work, bench.max_seconds)
+    return bench, [i for i in items if split_of(i.id) == split]
+
+
+def _wired(port: str, port_type: str, value: object) -> object:
+    """Return the wire form of an item input as the call path binds it."""
+    from senselab_core.kernel.wire import wire_form  # noqa: PLC0415 - only a real run needs the runtime
+    from senselab_core.runtime.audio_io import READER  # noqa: PLC0415
+    from senselab_core.runtime.call import bind_input  # noqa: PLC0415
+
+    bound = bind_input(port, port_type, value)[1]
+    return wire_form(bound, READER) if isinstance(bound, Frozen) else bound
+
+
+def prepare(  # noqa: PLR0913 - what picks one benchmark's items and params
+    suite: Path,
+    benchmark: str,
+    backend_name: str,
+    backend_params: Mapping[str, Any],
+    data_cache: Path,
+    work: Path,
+    split: str,
+) -> tuple[Any, Any, dict[str, dict[str, object]], dict[str, Any]]:
+    """Return (benchmark, backend spec, wired inputs of the `split` items by id, call params) for one benchmark."""
+    bench, items = load_items(suite, benchmark, data_cache, work, split)
+    spec, backend = resolve(bench.task, backend_name)
+    wired = {i.id: {p: _wired(p, spec.inputs[p], v) for p, v in i.inputs.items()} for i in items}
+    params = {
+        **spec.params.model_validate(bench.params).model_dump(mode="json"),
+        "backend_params": backend.params.model_validate(backend_params).model_dump(mode="json"),
+    }
+    return bench, backend, wired, params
 
 
 def require_heldout(ids: Sequence[str]) -> None:
@@ -274,9 +326,8 @@ def _items_cli(args: argparse.Namespace) -> None:
     """Write the held-out items (path or text inputs, as strings) and the model pin of `args.backend`."""
     from senselab_core.runtime.call import packaged  # noqa: PLC0415 - only a real export needs the runtime
 
-    tol = tolerance_module()
-    bench, items = tol.load_items(args.suite, args.benchmark, args.data_cache, args.work, HELDOUT)
-    _, backend = tol.resolve(bench.task, args.backend)
+    bench, items = load_items(args.suite, args.benchmark, args.data_cache, args.work, HELDOUT)
+    _, backend = resolve(bench.task, args.backend)
     entry = packaged().catalogue.backend_entry(backend)
     document = {
         "task": bench.task,
@@ -297,7 +348,7 @@ def _run_cli(args: argparse.Namespace) -> None:
     from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - only a real run needs the runtime
     from senselab_core.testing.workers import RealWorkers  # noqa: PLC0415
 
-    bench, backend, wired, params = tolerance_module().prepare(
+    bench, backend, wired, params = prepare(
         args.suite, args.benchmark, args.backend, args.backend_params, args.data_cache, args.work, HELDOUT
     )
     workers = RealWorkers(ExecutionProfile.load(args.execution))

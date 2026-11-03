@@ -347,8 +347,7 @@ class SuiteError(ValueError):
 class Benchmark:
     """One suite entry; `manifest` is None for an adapter that makes its own data.
 
-    `items` is the pool, of which each split takes the share its ids fall in; `min_calibration` is the fewest
-    calibration items a tolerance measurement may run on.
+    `items` is the pool, of which each split takes the share its ids fall in.
     """
 
     name: str
@@ -359,7 +358,6 @@ class Benchmark:
     manifest: str | None = None
     model: str | None = None
     max_seconds: float | None = None
-    min_calibration: int = 1
     params: Mapping[str, Any] = field(default_factory=dict)
     metric_params: Mapping[str, Any] = field(default_factory=dict)
 

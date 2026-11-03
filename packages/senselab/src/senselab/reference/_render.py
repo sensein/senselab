@@ -2,8 +2,6 @@
 
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from importlib import resources
-from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +9,6 @@ import yaml
 from senselab_core.kernel.declare import REGISTRY, Registry
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.fetch import DataManifest
-from senselab_core.runtime.tolerance import tolerance_profile_path
 
 from senselab._api.describe import describe
 from senselab._api.packaged import CATALOGUE
@@ -250,24 +247,11 @@ def _smoke_tasks(root: Path | None) -> set[str]:
     return {b["task"] for s in suites for b in yaml.safe_load(s.read_text("utf-8")).get("benchmarks", ())}
 
 
-def tolerance_dir() -> Traversable:
-    """Return the folder `scripts/generate_tolerance.py` writes profiles to, `<task>/<backend>.yaml` under it."""
-    return resources.files("senselab").joinpath("data", "tolerance")
-
-
-def _has_tolerance(registry: Registry, task: str, folder: Traversable) -> bool:
-    backends = registry.backends(task)
-    return bool(backends) and all(tolerance_profile_path(folder, task, b.name).is_file() for b in backends)
-
-
-def task_states(
-    registry: Registry = REGISTRY, ledger: str = "", root: Path | None = None, tolerance: Traversable | None = None
-) -> list[dict[str, Any]]:
-    """Return each declared task's state: `{task, declared, implemented, ported, benchmarked, parity}`.
+def task_states(registry: Registry = REGISTRY, ledger: str = "", root: Path | None = None) -> list[dict[str, Any]]:
+    """Return each declared task's state: `{task, declared, implemented, ported, benchmarked}`.
 
     Declared: in `registry`. Implemented: a backend is declared. Ported: a row of the ledger's moved-in-Phase-2 table
     names the task by name. Benchmarked: a benchmark suite names it.
-    Parity: every backend has a tolerance profile in `tolerance`, the folder the generator writes (the packaged one).
     """
     moved = " ".join(" ".join(r.values()) for r in _specs.moved_in_phase(ledger, 2))
     benchmarked = _smoke_tasks(root)
@@ -278,7 +262,6 @@ def task_states(
             "implemented": bool(registry.backends(s.name)),
             "ported": re.search(rf"[`/]{re.escape(s.name)}[`/]", moved) is not None,
             "benchmarked": s.name in benchmarked,
-            "parity": _has_tolerance(registry, s.name, tolerance or tolerance_dir()),
         }
         for s in registry.tasks()
     ]
@@ -299,13 +282,9 @@ def status_page(registry: Registry = REGISTRY, root: Path | None = None) -> str:
         _specs.read_spec(n, root) for n in ("migration-ledger.md", "review-register.md", "design.md", "STATE.md")
     )
     tasks = table(
-        ["Task", "Declared", "Implemented", "Ported", "Benchmarked", "At parity"],
+        ["Task", "Declared", "Implemented", "Ported", "Benchmarked"],
         [
-            (
-                f"`{t['task']}`",
-                *(_mark(t[k]) for k in ("declared", "implemented", "ported", "benchmarked")),
-                "measured" if t["parity"] else "not measured",
-            )
+            (f"`{t['task']}`", *(_mark(t[k]) for k in ("declared", "implemented", "ported", "benchmarked")))
             for t in task_states(registry, ledger, root)
         ],
     )
@@ -337,8 +316,7 @@ What 2.x has built so far. Generated from the declarations and the spec files of
 ## Tasks
 
 A task is declared when its declaration is in the registry, implemented when a backend is declared, ported when
-the ledger lists the 1.x module it came from, benchmarked when a benchmark suite runs it, and at parity when every
-backend has a measured tolerance profile.
+the ledger lists the 1.x module it came from, and benchmarked when a benchmark suite runs it.
 
 {tasks}
 

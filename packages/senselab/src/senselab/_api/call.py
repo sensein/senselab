@@ -24,7 +24,6 @@ from senselab_core.runtime.licenses import LicenseRefused
 from senselab_core.runtime.locks import LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.models import ModelResolutionError
 from senselab_core.runtime.profiles import NoBackend, NoDevice, UnlistedSource
-from senselab_core.runtime.tolerance import NoToleranceProfile
 from senselab_core.runtime.vllm_server import AttestationMismatch, VllmStartError
 from senselab_core.runtime.worker_client import WorkerFatal, WorkerLost
 from senselab_worker.faults import FaultClass, ProtocolError
@@ -82,11 +81,6 @@ ERROR_CODES: tuple[tuple[type[Exception], str, str], ...] = (
     (AttestationMismatch, "attestation_mismatch", "start the server as the backend declares it"),
     (LeaseTimeout, "resource_busy", "retry when the other holder of the resource has finished"),
     (LeaseUnavailable, "resource_busy", "retry when the other holder of the resource has finished"),
-    (
-        NoToleranceProfile,
-        "no_tolerance_profile",
-        "add a tolerance profile for the backend, or turn sampled verification off",
-    ),
     (WorkerFatal, "worker_failed", "the worker stopped; this is a fault of the host, not of the input"),
     (WorkerLost, "worker_failed", "the worker stopped; this is a fault of the host, not of the input"),
     (ProtocolError, "worker_failed", "the worker broke its protocol; report the backend"),

@@ -22,8 +22,8 @@ TABLE = ROOT / "packages" / "senselab-core" / "src" / "senselab_core" / "runtime
 HELDOUT = "heldout"
 
 
-def _tolerance_script() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("generate_tolerance", ROOT / "scripts" / "generate_tolerance.py")
+def _parity_script() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("parity_reference", ROOT / "benchmarks" / "parity_reference.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -43,7 +43,7 @@ def _sample_cli(args: argparse.Namespace) -> None:
     from senselab_core.runtime.compare import Thresholds  # noqa: PLC0415
     from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415
 
-    bench, items = _tolerance_script().load_items(args.suite, args.benchmark, args.data_cache, args.work, HELDOUT)
+    bench, items = _parity_script().load_items(args.suite, args.benchmark, args.data_cache, args.work, HELDOUT)
     store = ResultStore(args.store)
     before = len(store.evidence())
     profile = ExecutionProfile.load(args.execution)
@@ -66,13 +66,11 @@ def _regenerate_cli(args: argparse.Namespace) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Command line: `sample` one context into a store, `regenerate` the table from stores.
-
-    """
+    """Command line: `sample` one context into a store, `regenerate` the table from stores."""
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(required=True)
     s = sub.add_parser("sample")
-    s.add_argument("--suite", type=Path, default=ROOT / "benchmarks" / "suites" / "tolerance.yaml")
+    s.add_argument("--suite", type=Path, default=ROOT / "benchmarks" / "suites" / "equivalence.yaml")
     s.add_argument("--benchmark", required=True)
     s.add_argument("--execution", default="orcd")
     s.add_argument("--store", type=Path, required=True)

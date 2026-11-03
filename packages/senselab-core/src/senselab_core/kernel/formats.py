@@ -26,11 +26,6 @@ LABELS_FORMAT = "labels@1.0"
 BENCHMARK_RESULT_FORMAT = "benchmark-result@1.0"
 """The format of a benchmark run's result document, `<run>/result.json`."""
 
-TOLERANCE_FORMAT = "tolerance@2.1"
-"""The format of a backend's tolerance profile, `senselab/data/tolerance/<task>/<backend>.yaml`."""
-TOLERANCE_OBSERVATIONS_FORMAT = "tolerance-observations@2.0"
-"""The format of one measurement job's output, the input of `scripts/generate_tolerance.py generate`."""
-
 EQUIVALENCE_FORMAT = "equivalence@3.0"
 """The format of the measured equivalence classes, `runtime/data/equivalence.yaml`."""
 EQUIVALENCE_EVIDENCE_FORMAT = "equivalence-evidence@3.0"

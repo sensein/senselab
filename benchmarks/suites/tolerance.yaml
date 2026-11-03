@@ -1,8 +1,0 @@
-format: benchmark-suite@1.0
-name: tolerance
-benchmarks:
-- {name: librispeech-asr, manifest: librispeech-test-clean, adapter: librispeech_asr, items: 28, min_calibration: 10, task: speech_to_text, params: {timestamps: none}, metric: wer}
-- {name: voxconverse-diarization, manifest: voxconverse-test-mirror, adapter: voxconverse_diarization, items: 40, min_calibration: 10, max_seconds: 60, task: diarize, metric: der}
-- {name: librispeech-speaker-trials, manifest: librispeech-test-clean, adapter: librispeech_trials, items: 40, min_calibration: 10, task: speaker_embeddings, metric: eer}
-- {name: gretel-pii, manifest: gretel-synthetic-pii, adapter: gretel_pii, items: 40, min_calibration: 10, task: pii_spans, metric: span_f1}
-- {name: synthetic-tones, adapter: synthetic_tones, items: 40, min_calibration: 10, task: signal.resample, params: {target_rate: 16000}, metric: resample_error}

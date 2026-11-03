@@ -207,20 +207,3 @@ def test_scrub_removes_ids_and_their_parentheses() -> None:
 def test_open_items_count_by_owner_phase() -> None:
     """Open items are counted by owner phase and name no row."""
     assert _specs.open_by_phase(REGISTER) == {"Phase 3": 1, "unassigned": 1}
-
-
-@pytest.mark.logic
-def test_parity_reads_the_tolerance_folder(tmp_path: Path) -> None:
-    """A task is at parity when every backend has a profile in the folder, and not before."""
-    before = {s["task"]: s["parity"] for s in _render.task_states(REGISTRY, "", None, tmp_path)}
-    assert not any(before.values())
-    for backend in REGISTRY.backends("diarize"):
-        (tmp_path / "other.task").mkdir(exist_ok=True)
-        (tmp_path / "other.task" / f"{backend.name}.yaml").write_text("x: 1\n")
-    wrong_key = {s["task"]: s["parity"] for s in _render.task_states(REGISTRY, "", None, tmp_path)}
-    assert not wrong_key["diarize"], "a profile of another task's folder does not count"
-    for backend in REGISTRY.backends("diarize"):
-        (tmp_path / "diarize").mkdir(exist_ok=True)
-        (tmp_path / "diarize" / f"{backend.name}.yaml").write_text("x: 1\n")
-    after = {s["task"]: s["parity"] for s in _render.task_states(REGISTRY, "", None, tmp_path)}
-    assert after["diarize"] and not after["wer"]
