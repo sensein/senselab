@@ -1,6 +1,8 @@
 """The `speechbrain` backend of `speaker_embeddings`: its vectors, faults, model and the isolated worker's contract."""
 
+import os
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -127,6 +129,30 @@ def test_embed_windows_makes_one_task_call_per_window_in_order() -> None:
     assert all(c.frames == 16000 for c in calls) and all(w.embedding.space.endswith(sb.MODEL_ID) for w in windows)
     with pytest.raises(ValueError, match="shorter"):
         embed_windows(_tone(0.5), task)
+
+
+@pytest.mark.logic
+def test_snapshot_files_that_are_links_into_blobs_are_pinned(tmp_path: Path) -> None:
+    """In a hub cache layout a snapshot file is a symlink into `blobs/`; the link and its target both pass."""
+    repo = tmp_path / "models--speechbrain--spkrec-ecapa-voxceleb"
+    snapshot = repo / "snapshots" / ("a" * 40)
+    snapshot.mkdir(parents=True)
+    (repo / "blobs").mkdir()
+    (repo / "blobs" / "b1").write_bytes(b"w")
+    (snapshot / "embedding_model.ckpt").symlink_to("../../blobs/b1")
+    other = tmp_path / "models--other--repo"
+    (other / "blobs").mkdir(parents=True)
+    (other / "blobs" / "c1").write_bytes(b"w")
+    (tmp_path / "elsewhere.ckpt").write_bytes(b"w")
+    link = str(snapshot / "embedding_model.ckpt")
+    paths = {
+        "link": link,
+        "target": os.path.realpath(link),
+        "foreign_blob": str(other / "blobs" / "c1"),
+        "elsewhere": str(tmp_path / "elsewhere.ckpt"),
+        "hub": f"{sb.MODEL_ID}/embedding_model.ckpt",
+    }
+    assert set(sb.unpinned_paths(paths, str(snapshot))) == {"foreign_blob", "elsewhere", "hub"}
 
 
 @pytest.mark.logic

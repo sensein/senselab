@@ -6,6 +6,7 @@ length. Imports are stdlib, numpy and `senselab_worker`; `torch` and the library
 """
 
 import hashlib
+import os
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -33,9 +34,17 @@ class StubModel:
 
 
 def unpinned_paths(paths: Mapping[str, str], snapshot: str) -> dict[str, str]:
-    """Return the checkpoint paths of `paths` that do not lie under the directory `snapshot`."""
+    """Return the checkpoint paths of `paths` outside the directory `snapshot` and its repo's `blobs/`.
+
+    A Hugging Face snapshot file is a symlink into `../../blobs/`, so a path may be given as the link or as its target.
+    """
     root = snapshot.rstrip("/") + "/"
-    return {name: path for name, path in paths.items() if not str(path).startswith(root)}
+    blobs = os.path.realpath(os.path.join(snapshot, os.pardir, os.pardir, "blobs")) + os.sep
+    return {
+        name: path
+        for name, path in paths.items()
+        if not (str(path).startswith(root) or os.path.realpath(str(path)).startswith(blobs))
+    }
 
 
 class Encoder:
