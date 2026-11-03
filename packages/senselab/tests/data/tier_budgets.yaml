@@ -1,0 +1,30 @@
+# The wall-clock budget of one test, per tier, in seconds (packages/conftest.py applies it as a timeout mark).
+# Each tier carries `derivation`: the measurement the number comes from. `measured_s` is the slowest test of the
+# tier in the last measured run, null until that run is made.
+tiers:
+  logic:
+    budget_s: 900
+    measured_s:
+    derivation: >-
+      The single ceiling pyproject.toml set for every test before budgets were per tier. To be replaced by the
+      measured CPU run of the tier, ORCD, at the commit that introduced this file.
+  contract:
+    budget_s: 900
+    measured_s:
+    derivation: >-
+      As logic; the contract cases that start a worker are the slowest of the tier.
+  limits:
+    budget_s: 900
+    measured_s:
+    derivation: >-
+      As logic; the measured run is the CPU one, then the H100 one, of the `limits and model` selection.
+  usecase:
+    budget_s: 900
+    measured_s:
+    derivation: >-
+      As logic; no usecase test is selected by the carry-over run, so it keeps the former ceiling.
+  env:
+    budget_s: 900
+    measured_s:
+    derivation: >-
+      As logic; the measured run is the CPU one, then the H100 one, of the `env and model` selection.

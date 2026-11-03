@@ -3,14 +3,19 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 HOOK = Path(__file__).resolve().parents[3] / "conftest.py"
+BUDGETS = HOOK.parent / "senselab" / "tests" / "data" / "tier_budgets.yaml"
 MARKERS = "[pytest]\nmarkers =\n    logic\n    contract\n    limits\n    usecase\n    env\n    network\n    model\n"
 
 
 def _project(pytester: pytest.Pytester, body: str) -> None:
     pytester.makeini(MARKERS)
     pytester.makeconftest(HOOK.read_text())
+    budgets = pytester.path / "senselab" / "tests" / "data" / "tier_budgets.yaml"
+    budgets.parent.mkdir(parents=True, exist_ok=True)
+    budgets.write_text(BUDGETS.read_text())
     pytester.makepyfile(test_sample=body)
 
 
@@ -77,3 +82,20 @@ def test_model_goes_only_with_a_tier_that_runs_on_orcd(pytester: pytest.Pytester
     assert "test_sample.py::test_l" in result.stderr.str() and "test_sample.py::test_c" in result.stderr.str()
     _project(pytester, "import pytest\n\n@pytest.mark.env\n@pytest.mark.model\ndef test_e():\n    pass\n")
     assert pytester.runpytest().ret == pytest.ExitCode.OK
+
+
+@pytest.mark.logic
+def test_each_test_gets_its_tiers_budget_unless_it_sets_its_own(pytester: pytest.Pytester) -> None:
+    """A test is marked `timeout(<its tier's budget_s>)`; a test with its own `timeout` mark keeps it."""
+    _project(
+        pytester,
+        "import pytest\n\n@pytest.mark.logic\ndef test_a(request):\n"
+        "    assert request.node.get_closest_marker('timeout').args == (BUDGET,)\n\n"
+        "@pytest.mark.logic\n@pytest.mark.timeout(5)\ndef test_b(request):\n"
+        "    assert request.node.get_closest_marker('timeout').args == (5,)\n",
+    )
+    (pytester.path / "test_sample.py").write_text(
+        f"BUDGET = {yaml.safe_load(BUDGETS.read_text())['tiers']['logic']['budget_s']}.0\n"
+        + (pytester.path / "test_sample.py").read_text()
+    )
+    pytester.runpytest().assert_outcomes(passed=2)
