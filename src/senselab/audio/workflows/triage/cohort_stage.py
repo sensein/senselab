@@ -54,7 +54,7 @@ from senselab.audio.workflows.triage.cohort_fold import (
     UNAVAILABLE,
 )
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.decision import PASS, REVIEW
 from senselab.audio.workflows.triage.identity import declared_session_key, is_undeclared_session
 from senselab.audio.workflows.triage.live_evidence import declared_task_of, recording_stem
@@ -137,7 +137,7 @@ def cohort_parameters() -> dict[str, Any]:
     Returns:
         The parsed file.
     """
-    return dict(yaml.safe_load(data_path("cohort_stage.yaml").read_text(encoding="utf-8")))
+    return dict(data_values("cohort_stage.yaml"))
 
 
 def _digest(payload: object) -> str:

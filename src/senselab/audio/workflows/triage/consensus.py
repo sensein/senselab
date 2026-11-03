@@ -17,7 +17,7 @@ from typing import Any, Literal, Mapping, Sequence, cast
 import yaml
 
 from senselab.audio.workflows.audio_analysis.harmonize import harmonize_transcripts, normalise_token
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 
 __all__ = [
     "ALGORITHM",
@@ -207,7 +207,7 @@ def word_timing_parameters() -> dict[str, Any]:
     Returns:
         ``point_width_s``, the width a point span is read over.
     """
-    document = yaml.safe_load(data_path("word_timing.yaml").read_text()) or {}
+    document = data_values("word_timing.yaml")
     return {"point_width_s": float(document["point_width_s"])}
 
 
@@ -218,7 +218,7 @@ def arbitration_parameters() -> dict[str, float]:
     Returns:
         ``disagreement_s``, ``held_voicing_min_s``, ``held_voicing_bridge_s`` and ``voiced_strength_min``.
     """
-    document = yaml.safe_load(data_path("word_timing.yaml").read_text()) or {}
+    document = data_values("word_timing.yaml")
     return {key: float(value) for key, value in dict(document["arbitration"]).items()}
 
 
@@ -281,7 +281,7 @@ def degenerate_parameters() -> dict[str, Any]:
     Returns:
         ``chars_min``, ``unit_chars_max`` and ``repeats_min``.
     """
-    document = yaml.safe_load(data_path("asr_degenerate.yaml").read_text()) or {}
+    document = data_values("asr_degenerate.yaml")
     return {
         "chars_min": int(document["chars_min"]),
         "unit_chars_max": int(document["unit_chars_max"]),

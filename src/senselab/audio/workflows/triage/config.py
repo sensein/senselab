@@ -31,6 +31,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     activate_profile,
     active_profile,
     load_profile,
+    set_run_data,
 )
 
 _DEFAULT = Path(__file__).parent / "data" / "config" / "default.yaml"
@@ -73,6 +74,13 @@ DATA_MAP_PATHS = frozenset(
 
 Every other mapping is schema and an override may only change keys it already has.
 """
+
+FIXED_PATHS = frozenset({"resample.target_hz"})
+"""Dotted paths no override may change: the 16 kHz working rate every model triage runs is native at."""
+
+DATA_SECTION = "data"
+"""The configuration's ``data`` section: per data file, the values a profile's or run's override changes, merged by
+:func:`~senselab.audio.workflows.triage.dataset_profile.data_values` over the file's packaged values."""
 
 
 class UnknownConfigKey(ValueError):
@@ -174,8 +182,17 @@ def _merge(base: dict[str, Any], over: dict[str, Any], trail: str = "") -> dict[
     out = deepcopy(base)
     for key, value in over.items():
         where = f"{trail}.{key}" if trail else key
+        if where == DATA_SECTION:
+            if not isinstance(value, dict):
+                raise ValueError(f"configuration key {where!r} is a mapping of data file to the values it changes")
+            out[key] = {**out[key]}
+            for relative, values in value.items():
+                out[key][relative] = _deep(out[key].get(relative), values)
+            continue
         if key not in out:
             raise ValueError(f"unknown configuration key {where!r}; overrides may not introduce keys")
+        if where in FIXED_PATHS and value != out[key]:
+            raise ValueError(f"configuration key {where!r} is fixed at {out[key]!r}; an override may not change it")
         if where in DATA_MAP_PATHS and isinstance(value, dict):
             out[key] = {**out[key], **deepcopy(value)} if isinstance(out[key], dict) else deepcopy(value)
             continue
@@ -184,6 +201,13 @@ def _merge(base: dict[str, Any], over: dict[str, Any], trail: str = "") -> dict[
         else:
             out[key] = value
     return out
+
+
+def _deep(base: Any, over: Any) -> Any:  # noqa: ANN401 -- YAML values
+    """Merge two data-section entries; the data file's own rules are applied when it is read."""
+    if isinstance(base, dict) and isinstance(over, dict):
+        return {**base, **{key: _deep(base.get(key), value) for key, value in over.items()}}
+    return deepcopy(over)
 
 
 def _validate(values: dict[str, Any]) -> None:
@@ -228,6 +252,7 @@ def load_triage_config(
         values = _merge(values, yaml.safe_load(Path(override).read_text()) or {})
     _validate(values)
     hashed = json.dumps(values, sort_keys=True, default=str)
+    set_run_data(values.get(DATA_SECTION))
     if loaded is not None:
         activate_profile(loaded)
         hashed += f"\0profile\0{loaded.name}\0{loaded.version}\0{loaded.digest}"

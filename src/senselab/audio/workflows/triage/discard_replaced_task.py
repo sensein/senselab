@@ -24,7 +24,7 @@ from typing import Any
 
 import yaml
 
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 
 PARAMETERS_PATH = Path(__file__).parent / "data" / "discard_replaced_task.yaml"
 
@@ -45,7 +45,7 @@ def parameters() -> dict[str, Any]:
     Returns:
         The parsed file.
     """
-    return dict(yaml.safe_load(data_path("discard_replaced_task.yaml").read_text(encoding="utf-8")))
+    return dict(data_values("discard_replaced_task.yaml"))
 
 
 def enabled(params: Mapping[str, Any] | None = None) -> bool:

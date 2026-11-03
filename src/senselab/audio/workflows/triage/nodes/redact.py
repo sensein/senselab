@@ -49,7 +49,7 @@ from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
 from senselab.audio.workflows.triage.cohort import COHORT, CONDITION_KINDS, OTHER, load_cohort_profile
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.nodes.branches import (
     branch_params,
     declared_carrier,
@@ -1276,7 +1276,7 @@ def _families() -> dict[str, str]:
     Returns:
         ``{category: family}``, upper-cased; each family maps to itself.
     """
-    raw = yaml.safe_load(data_path("pii_category_families.yaml").read_text()) or {}
+    raw = data_values("pii_category_families.yaml")
     table: dict[str, str] = {}
     for family, members in (raw.get("families") or {}).items():
         for member in [family, *(members or ())]:
@@ -1304,7 +1304,7 @@ def name_families() -> frozenset[str]:
     Returns:
         ``name_families`` from ``data/pii_category_families.yaml``, upper-cased.
     """
-    raw = yaml.safe_load(data_path("pii_category_families.yaml").read_text()) or {}
+    raw = data_values("pii_category_families.yaml")
     return frozenset(str(family).upper() for family in raw.get("name_families") or ())
 
 
@@ -1337,7 +1337,7 @@ def _time_release() -> dict[str, frozenset[str]]:
     Returns:
         ``{list name: words}``.
     """
-    raw = yaml.safe_load(data_path("time_release.yaml").read_text()) or {}
+    raw = data_values("time_release.yaml")
     return {str(key): frozenset(str(word).lower() for word in value or ()) for key, value in raw.items()}
 
 

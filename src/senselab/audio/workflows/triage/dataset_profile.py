@@ -1,16 +1,21 @@
 """A dataset profile: the data a dataset supplies for triage, and how triage finds it.
 
-Triage reads its data files by their path under ``data/``. They come in three kinds:
+Triage reads its data files by their path under ``data/``. They come in four kinds:
 
-- **Engine** files are schemas, vocabularies and settings about no dataset. They are always the packaged copy.
-- **Dataset** paths (:data:`DATASET_PATHS`) hold what only a dataset can say: its task requirements, cohort
-  conditions, lexicons and corpus-fitted distributions. senselab ships none of them; a profile supplies them,
-  and without one :func:`data_path` raises :class:`DatasetDataMissing`.
-- **Defaulted** files (:data:`DEFAULTED_PATHS`) are packaged with values defensible for any dataset. A profile may
-  supply its own complete copy, which is then read instead.
+- **Dataset** paths (:data:`DATASET_PATHS`) hold what only a dataset can say: its task list, cohort conditions,
+  lexicons and corpus-fitted distributions. senselab ships none of them; a profile supplies them, and without one
+  :func:`data_path` raises :class:`DatasetDataMissing`.
+- **Value** files (:data:`MERGED_PATHS`) hold senselab's parameters. A profile's copy holds only the values it
+  changes and is merged over the packaged file key by key (:func:`data_values`); a key the packaged file does not
+  have is refused, except inside a mapping the packaged file leaves empty, and the keys of :data:`FIXED_KEYS` may
+  not change.
+- **Replaced** files (:data:`REPLACED_PATHS`) are word lists and model vocabularies: a profile's copy is read whole
+  instead of the packaged one.
+- **Fixed** files (every other packaged file) define senselab's outputs (the corpus-table dictionary, the evidence
+  descriptions, the triage table's columns). They are always the packaged copy.
 
-A file comes from the profile or from the package, never from both: a profile supplies a listed path whole (a
-directory with everything in it), and a path inside a supplied directory resolves inside the profile.
+A run's configuration may carry a ``data`` section, ``{data path: values}``, applied over the profile by the same
+rules (:func:`set_run_data`); ``load_triage_config`` sets it, and the configuration hash covers it.
 
 A dataset profile is a directory holding ``profile.yaml`` and the files it supplies::
 
@@ -59,15 +64,19 @@ DATASET_PATHS = frozenset(
 )
 """Data paths only a dataset profile supplies; senselab ships no copy."""
 
-DEFAULTED_PATHS = frozenset(
+MERGED_PATHS = frozenset(
     {
         "asr_degenerate.yaml",
+        "background_model.yaml",
+        "background_speech.yaml",
         "breath_pattern.yaml",
         "cohort_stage.yaml",
         "cough_pattern.yaml",
         "decision_reasons.yaml",
+        "disagreement_profile",
         "discard_replaced_task.yaml",
         "quality_join.yaml",
+        "review_page.yaml",
         "session_background.yaml",
         "speaker_vector_profile",
         "task_content.yaml",
@@ -75,10 +84,28 @@ DEFAULTED_PATHS = frozenset(
         "task_extent.yaml",
         "task_minimum_duration.yaml",
         "task_speech.yaml",
+        "task_squim.yaml",
+        "voice_phonation.yaml",
         "word_timing.yaml",
     }
 )
-"""Data paths packaged with dataset-neutral defaults, which a profile may supply its own copy of."""
+"""senselab's value files: a profile or run changes any of their values, one at a time (:func:`data_values`)."""
+
+REPLACED_PATHS = frozenset(
+    {"classifier_ontology", "function_words_es.yaml", "pii_category_families.yaml", "temporal_words.yaml"}
+)
+"""Word lists and model vocabularies a profile replaces whole (another language, other models)."""
+
+DEFAULTED_PATHS = MERGED_PATHS | REPLACED_PATHS
+"""Data paths senselab packages that a profile may change: merged or replaced."""
+
+FIXED_KEYS: Mapping[str, frozenset[str]] = {
+    "decision_reasons.yaml": frozenset({"precedence", "meaning", "keys", "annotations", "release_keys", "prefixes"}),
+}
+"""Keys of a value file that define senselab's output vocabulary, so no profile or run may change them. Every
+file's ``version`` / ``schema_version`` may be restated but not changed."""
+
+_VERSION_KEYS = frozenset({"version", "schema_version"})
 
 SUPPLIABLE_PATHS = DATASET_PATHS | DEFAULTED_PATHS
 """Every path a profile may list. Anything else is an engine file, a typo, or a file no loader reads."""
@@ -266,11 +293,119 @@ def data_path(relative: str) -> Path:
     return PACKAGED_DATA / relative
 
 
+_RUN_DATA: dict[str, Any] = {}
+_RUN_DATA_DIGEST = ""
+
+
+def set_run_data(data: Mapping[str, Any] | None) -> None:
+    """Set the run's ``data`` section: per data path, the values the run changes (:func:`data_values`).
+
+    Args:
+        data: ``{data path: mapping}``, e.g. ``{"breath_pattern.yaml": {"train": {"distance_s": 0.5}}}``; None or
+            empty clears it.
+
+    Raises:
+        ValueError: If a path is not one a profile may supply (:data:`SUPPLIABLE_PATHS`), or its values are not a
+            mapping.
+    """
+    global _RUN_DATA, _RUN_DATA_DIGEST
+    held = {str(relative): values for relative, values in (data or {}).items()}
+    for relative, values in held.items():
+        top = PurePosixPath(relative).parts[0] if relative else ""
+        if top not in SUPPLIABLE_PATHS or not relative.endswith((".yaml", ".yml")):
+            raise ValueError(
+                f"the run's data section names {relative!r}; it may name the YAML files of {sorted(SUPPLIABLE_PATHS)}"
+            )
+        if not isinstance(values, Mapping):
+            raise ValueError(f"the run's data section for {relative!r} is not a mapping")
+    _RUN_DATA = held
+    _RUN_DATA_DIGEST = hashlib.sha256(repr(sorted(held.items())).encode()).hexdigest() if held else ""
+
+
+def run_data() -> dict[str, Any]:
+    """The run's ``data`` section (:func:`set_run_data`)."""
+    return dict(_RUN_DATA)
+
+
+def merge_values(base: Any, over: Any, *, where: str, fixed: frozenset[str] = frozenset()) -> Any:  # noqa: ANN401
+    """Merge a value file's override over its packaged values, key by key.
+
+    Args:
+        base: The packaged values at this level.
+        over: The override at this level.
+        where: ``<file>:<dotted key>`` of this level, for messages.
+        fixed: Top-level keys that may not change (:data:`FIXED_KEYS`).
+
+    Returns:
+        The merged values. A list or a scalar is replaced whole; a mapping is merged.
+
+    Raises:
+        ValueError: On a key the packaged mapping does not have (unless it leaves that mapping empty), a fixed key
+            or a version changed.
+    """
+    if not isinstance(over, Mapping) or not isinstance(base, Mapping):
+        return over
+    out = dict(base)
+    top = ":" not in where or where.endswith(":")
+    for key, value in over.items():
+        here = f"{where}{key}" if where.endswith(":") else f"{where}.{key}"
+        if top and (key in _VERSION_KEYS or key in fixed):
+            if key in base and value != base[key]:
+                raise ValueError(f"{here} is fixed: {base[key]!r} may not become {value!r}")
+            continue
+        if key not in base:
+            if base:
+                raise ValueError(f"{here} is not a key senselab's file has; an override may not introduce keys")
+            out[key] = value
+            continue
+        out[key] = merge_values(base[key], value, where=here)
+    return out
+
+
+def _load(path: Path) -> Any:  # noqa: ANN401 -- a YAML document
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def data_values(relative: str) -> Any:  # noqa: ANN401 -- a YAML document
+    """A YAML data file's values: senselab's, the active profile's and the run's, by the file's kind.
+
+    Args:
+        relative: A path under ``data/``, e.g. ``breath_pattern.yaml`` or ``speaker_vector_profile/2026-09-22.yaml``.
+
+    Returns:
+        For a value file (:data:`MERGED_PATHS`), the packaged values with the profile's copy and then the run's
+        ``data`` section merged over them (:func:`merge_values`); for a replaced file, the profile's copy whole
+        where it supplies one, else the packaged file, and the run's section whole where it names one; for a
+        dataset path, the profile's copy with the run's section merged over it; for any other file, the packaged
+        file.
+
+    Raises:
+        DatasetDataMissing: For a dataset path no active profile supplies.
+        ValueError: Where an override breaks :func:`merge_values`'s rules.
+    """
+    parts = PurePosixPath(relative).parts
+    top = parts[0] if parts else ""
+    run = _RUN_DATA.get(relative)
+    if top in MERGED_PATHS:
+        values = _load(PACKAGED_DATA / relative)
+        supplied = _ACTIVE.resolve(relative) if _ACTIVE is not None else None
+        fixed = FIXED_KEYS.get(relative, frozenset())
+        if supplied is not None:
+            values = merge_values(values, _load(supplied), where=f"{relative}:", fixed=fixed)
+        return merge_values(values, run, where=f"{relative}:", fixed=fixed) if run is not None else values
+    if top in REPLACED_PATHS:
+        return run if run is not None else _load(data_path(relative))
+    if top in DATASET_PATHS:
+        values = _load(data_path(relative))
+        return merge_values(values, run, where=f"{relative}:") if run is not None else values
+    return _load(PACKAGED_DATA / relative)
+
+
 _R = TypeVar("_R")
 
 
 def profile_cache(func: Callable[..., _R]) -> Callable[..., _R]:
-    """Cache a loader's result per active profile, so a later profile is never served an earlier one's data.
+    """Cache a loader's result per active profile and run data section, so neither is served another's data.
 
     Args:
         func: A loader taking hashable positional arguments.
@@ -280,12 +415,14 @@ def profile_cache(func: Callable[..., _R]) -> Callable[..., _R]:
     """
 
     @functools.lru_cache(maxsize=None)
-    def cached(profile_key: tuple[str, str] | None, *args: Any) -> _R:  # noqa: ANN401 -- the loader's own arguments
+    def cached(profile_key: tuple[str, str, str], *args: Any) -> _R:  # noqa: ANN401 -- the loader's own arguments
         return func(*args)
 
     @functools.wraps(func)
     def wrapper(*args: Any) -> _R:  # noqa: ANN401 -- the loader's own arguments
-        key = (str(_ACTIVE.root), _ACTIVE.digest) if _ACTIVE is not None else None
+        key = (
+            (str(_ACTIVE.root), _ACTIVE.digest, _RUN_DATA_DIGEST) if _ACTIVE is not None else ("", "", _RUN_DATA_DIGEST)
+        )
         return cached(key, *args)
 
     wrapper.cache_clear = cached.cache_clear  # type: ignore[attr-defined]
@@ -347,7 +484,7 @@ def missing_dataset_values(config_values: Mapping[str, Any]) -> list[str]:
             missing.append(relative)
     missing += [f"config {'.'.join(path)}" for path in REQUIRED_CONFIG_VALUES if _lookup(config_values, path) is None]
     for relative, paths in REQUIRED_DATA_VALUES.items():
-        document = yaml.safe_load(data_path(relative).read_text()) or {}
+        document = data_values(relative)
         missing += [f"{relative} {'.'.join(path)}" for path in paths if _lookup(document, path) is None]
     return missing
 

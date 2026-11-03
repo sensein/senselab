@@ -24,6 +24,7 @@ import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.dataset_profile import data_values, profile_cache
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
 from senselab.audio.workflows.triage.nodes.common import (
     find_measurement,
@@ -70,14 +71,14 @@ ScorerFactory = Callable[[], Scorer]
 """Builds a :data:`Scorer`; called only once a window is to be read."""
 
 
-@functools.cache
+@profile_cache
 def task_squim_parameters() -> dict[str, Any]:
     """The parameters of ``data/task_squim.yaml``.
 
     Returns:
         The parsed mapping.
     """
-    return dict(yaml.safe_load(PARAMETERS_PATH.read_text(encoding="utf-8")) or {})
+    return dict(data_values("task_squim.yaml"))
 
 
 @dataclass(frozen=True)

@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.nodes.branches import AIRWAY_EXPECTATIONS, VOICE_EXPECTATIONS
 from senselab.audio.workflows.triage.nodes.common import (
     consensus_words,
@@ -59,7 +59,7 @@ def task_speech_parameters() -> dict[str, Any]:
     Returns:
         The parsed mapping.
     """
-    return dict(yaml.safe_load(data_path("task_speech.yaml").read_text()) or {})
+    return dict(data_values("task_speech.yaml"))
 
 
 def voice_task_text(family: str | None) -> tuple[str, ...] | None:

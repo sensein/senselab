@@ -29,7 +29,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import yaml
 
-from senselab.audio.workflows.triage.dataset_profile import data_path
+from senselab.audio.workflows.triage.dataset_profile import PACKAGED_DATA, data_values, profile_cache
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures, value_stats
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     AT_LEAST,
@@ -86,13 +86,13 @@ def _bundled_profile_path() -> Path:
     Raises:
         FileNotFoundError: If the package ships no profile.
     """
-    bundled = sorted(data_path("disagreement_profile").glob("*.yaml"))
+    bundled = sorted((PACKAGED_DATA / "disagreement_profile").glob("*.yaml"))
     if not bundled:
-        raise FileNotFoundError(f"no disagreement profile in {data_path('disagreement_profile')}")
+        raise FileNotFoundError(f"no disagreement profile in {PACKAGED_DATA / 'disagreement_profile'}")
     return bundled[-1]
 
 
-@lru_cache(maxsize=None)
+@profile_cache
 def load_disagreement_profile(path: str | None = None) -> dict[str, Any]:
     """Load and validate a disagreement profile.
 
@@ -109,7 +109,11 @@ def load_disagreement_profile(path: str | None = None) -> dict[str, Any]:
     resolved = _bundled_profile_path() if path is None else Path(path)
     if not resolved.exists():
         raise FileNotFoundError(f"disagreement profile not found: {resolved}")
-    profile: dict[str, Any] = yaml.safe_load(resolved.read_text())
+    profile: dict[str, Any] = (
+        dict(data_values(f"disagreement_profile/{resolved.name}"))
+        if path is None
+        else yaml.safe_load(resolved.read_text())
+    )
     if str(profile.get("schema_version")) != PROFILE_VERSION:
         raise ValueError(f"{resolved}: schema_version is not {PROFILE_VERSION}: {profile.get('schema_version')!r}")
     band = profile.get("near_threshold_band")

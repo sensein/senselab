@@ -578,3 +578,8 @@ task_audio:
 # The presentation form the summary is written in.
 report:
   format: pdf                          # pdf or png
+
+# Per data file, the values a profile's config or a run's override changes in senselab's packaged value files, merged
+# key by key (dataset_profile.data_values): {breath_pattern.yaml: {train: {distance_s: 0.5}}}. A profile may equally
+# supply a partial copy of the file. Empty: senselab's packaged values.
+data: {}

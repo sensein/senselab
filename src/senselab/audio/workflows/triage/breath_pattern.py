@@ -24,7 +24,7 @@ from scipy.signal import find_peaks
 
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.triage.background_speech import background_speech_parameters
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words, live_entities, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
 from senselab.audio.workflows.triage.task_events import (
@@ -134,7 +134,7 @@ def modulation_parameters() -> ModulationParameters:
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(data_path("breath_pattern.yaml").read_text()) or {})["modulation"]
+    held = data_values("breath_pattern.yaml")["modulation"]
 
     def pair(key: str) -> tuple[float, float]:
         low, high = held[key]
@@ -159,7 +159,7 @@ def breath_pattern_parameters() -> BreathPatternParameters:
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(data_path("breath_pattern.yaml").read_text()) or {})["measure"]
+    held = data_values("breath_pattern.yaml")["measure"]
 
     def pair(key: str) -> tuple[float, float]:
         low, high = held[key]
@@ -306,7 +306,7 @@ def train_parameters() -> TrainParameters:
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(data_path("breath_pattern.yaml").read_text()) or {})["train"]
+    held = data_values("breath_pattern.yaml")["train"]
     ints = {"tonal_halfwidth_bins", "speech_words_min"}
     values: dict[str, Any] = {}
     for name, value in held.items():
@@ -346,7 +346,7 @@ def review_parameters() -> ReviewParameters:
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(data_path("breath_pattern.yaml").read_text()) or {})["review"]
+    held = data_values("breath_pattern.yaml")["review"]
     return ReviewParameters(
         min_phases=int(held["min_phases"]),
         cycle_cv_min=float(held["cycle_cv_min"]),
@@ -513,7 +513,7 @@ def veto_parameters() -> VetoParameters:
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(data_path("breath_pattern.yaml").read_text()) or {})["veto"]
+    held = data_values("breath_pattern.yaml")["veto"]
     return VetoParameters(
         speech_words_min=int(held["speech_words_min"]),
         active_fraction_min=float(held["active_fraction_min"]),

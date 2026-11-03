@@ -39,7 +39,7 @@ from senselab.audio.tasks.redaction.api import apply_redactions
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.cohort_fold import COHORT_NODE, COHORT_READING
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.ddk_task import CYCLE, DDK_READING, SYLLABLE
 from senselab.audio.workflows.triage.live_evidence import declared_task_of
 from senselab.audio.workflows.triage.nodes.airway import EVENTS_FOUND as AIRWAY_EVENTS_FOUND
@@ -332,7 +332,7 @@ TASK_MINIMUM_DURATION_PATH = Path(__file__).parents[1] / "data" / "task_minimum_
 @profile_cache
 def _task_minimum_durations() -> tuple[float, dict[str, float]]:
     """``data/task_minimum_duration.yaml``: the default minimum and the per-family ones, in seconds."""
-    document = yaml.safe_load(data_path("task_minimum_duration.yaml").read_text()) or {}
+    document = data_values("task_minimum_duration.yaml")
     families = {str(name): float(value) for name, value in (document.get("families") or {}).items()}
     return float(document["default_s"]), families
 
@@ -340,7 +340,7 @@ def _task_minimum_durations() -> tuple[float, dict[str, float]]:
 @profile_cache
 def _discard_contested() -> dict[str, Any]:
     """The dataset profile's ``discard_contested.yaml``, as written."""
-    return yaml.safe_load(data_path("discard_contested.yaml").read_text()) or {}
+    return data_values("discard_contested.yaml")
 
 
 def contest_events_min(instructed: int | None, event: str = "cough") -> int:
@@ -394,7 +394,7 @@ def minimum_duration_s(declared_family: str | None) -> float | None:
 @profile_cache
 def _airway_event_tokens() -> dict[str, frozenset[str]]:
     """Per airway event kind, the bracketed tokens naming it (the profile's ``airway_event_tokens.yaml``)."""
-    document = yaml.safe_load(data_path("airway_event_tokens.yaml").read_text()) or {}
+    document = data_values("airway_event_tokens.yaml")
     return {
         str(kind): frozenset(str(token).casefold() for token in tokens or ())
         for kind, tokens in document.items()
