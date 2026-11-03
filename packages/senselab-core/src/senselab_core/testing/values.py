@@ -947,6 +947,35 @@ def _register_comparison_samples() -> None:
     register_samples(
         EvidenceSide, lambda: sides, invalid_updates=[{"fingerprint": "main"}, {"numerics": {"k": 1}}, {"env_lock": ""}]
     )
+    differences = (
+        Difference(
+            path="value",
+            rule="close",
+            threshold="value",
+            bound=Threshold(rtol=1e-6, atol=1e-9),
+            expected="[1.0]",
+            actual="[1.5]",
+            absolute=0.5,
+            relative=0.5,
+            detail="1 of 1 values beyond rtol 1e-06 atol 1e-09, largest |difference| 0.5",
+        ),
+        Difference(
+            path="span",
+            rule="optional",
+            threshold=None,
+            bound=None,
+            expected="absent",
+            actual="present",
+            absolute=None,
+            relative=None,
+            detail="absent on one side, present on the other",
+        ),
+    )
+    register_samples(
+        Difference,
+        lambda: differences,
+        invalid_updates=[{"rule": "undeclared"}, {"absolute": float("inf")}, {"path": 1}],
+    )
     register_samples(
         EquivalenceEvidence,
         lambda: [

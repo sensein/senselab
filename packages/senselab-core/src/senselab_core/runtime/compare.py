@@ -194,8 +194,10 @@ def _pattern(text: str) -> re.Pattern[str]:
 
 
 def _rule(where: str, raw: object) -> Rule:
-    if raw in ("exact", "optional"):
-        return Rule(raw)
+    if raw == "exact":
+        return Rule("exact")
+    if raw == "optional":
+        return Rule("optional")
     if isinstance(raw, Mapping) and set(raw) == {"close"} and isinstance(raw["close"], str) and raw["close"]:
         return Rule("close", raw["close"])
     raise ValueError(
