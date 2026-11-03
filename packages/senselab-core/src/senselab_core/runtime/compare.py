@@ -309,6 +309,8 @@ def best_assignment(weights: Sequence[Sequence[float]]) -> list[tuple[int, int]]
             if math.isclose(total, best, rel_tol=1e-12, abs_tol=1e-12):
                 chosen.append((i, j))
                 break
+    if len(chosen) != wanted:
+        raise ValueError(f"no optimal assignment of {wanted} pairs found in the weights")
     return chosen
 
 

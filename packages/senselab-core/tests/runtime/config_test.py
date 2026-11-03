@@ -22,6 +22,8 @@ def test_one_yaml_loader_refuses_duplicates_and_keeps_text_dates(tmp_path: Path)
 @pytest.mark.logic
 def test_loader_refuses_unreadable_and_non_mapping(tmp_path: Path) -> None:
     """A missing file, invalid YAML and a list are each a `ConfigError`."""
-    for source in (tmp_path / "absent.yaml", "a: [", "- 1\n"):
+    binary = tmp_path / "binary.yaml"
+    binary.write_bytes(b"\xff\xfe\x00")
+    for source in (tmp_path / "absent.yaml", binary, "a: [", "- 1\n"):
         with pytest.raises(ConfigError):
             load_yaml(source, "doc")

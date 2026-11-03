@@ -18,7 +18,7 @@ from typing import Any
 from senselab_worker.canonical import jcs_dumps, jcs_loads
 
 from senselab_core.kernel import prov as kprov
-from senselab_core.kernel.formats import LABELS_FORMAT, FormatVerdict, check
+from senselab_core.kernel.formats import LABELS_FORMAT, RETIRED_LABELS_FORMATS, FormatVerdict, check
 from senselab_core.runtime.locks import Lease
 from senselab_core.runtime.provenance import (
     FILE_LABEL,
@@ -56,10 +56,27 @@ class ProfileViolation(ValueError):
         self.violations = violations
 
 
+class LabelMapRetired(ValueError):
+    """A label map in a retired format; a run keeps its private paths only in the current one, so re-run it."""
+
+    def __init__(self, found: str) -> None:
+        """Name the declared format."""
+        super().__init__(
+            f"the label map declares the retired format {found}; it is not read, re-run under this version"
+        )
+        self.found = found
+
+
 def _read_labels(directory: StorageDir) -> dict[str, tuple[str, list[str]]]:
     data = directory.read_regular(LABELS_NAME)
     if data is None:
         return {}
+    try:
+        declared = json.loads(data).get("format")
+    except (ValueError, AttributeError):
+        declared = None
+    if check(LABELS_FORMAT, declared, RETIRED_LABELS_FORMATS) is FormatVerdict.RETIRED:
+        raise LabelMapRetired(str(declared))
     try:
         record: Any = jcs_loads(data)
         labels = record["labels"]
@@ -101,7 +118,7 @@ class LabelMap:
         """Return the label of each `(content address, path)`, recording the path under it, under one lease.
 
         Raises:
-            ValueError: an address is not a `content:` or `output:` address, or the map on disk is not `labels@1`.
+            ValueError: an address is not a `content:` or `output:` address, or the map on disk is not `labels@2`.
             RunIOError: the map cannot be read or written; the error names no path.
         """
         items = list(files)
@@ -136,7 +153,7 @@ class LabelMap:
         """Return `{label: paths}` of the map, empty when the run has none.
 
         Raises:
-            ValueError: the map on disk is not `labels@1`.
+            ValueError: the map on disk is not `labels@2`, or is `LabelMapRetired`.
             RunIOError: the map cannot be read; the error names no path.
         """
 

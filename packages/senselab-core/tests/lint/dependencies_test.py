@@ -67,7 +67,7 @@ def undeclared_imports(graph: grimp.ImportGraph, roots: set[str], allowed: set[s
 
 
 REPOSITORY_ROOTS = {"benchmarks", "scripts"}
-"""Root packages outside ``packages/``: the repository scripts, whose 2.x modules the digest contract covers."""
+"""Root packages outside ``packages/``: the benchmark harness and the repository scripts."""
 
 
 @pytest.mark.logic

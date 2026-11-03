@@ -21,7 +21,13 @@ from typing import Any, TypeVar, cast
 from senselab_worker.canonical import jcs_dumps, jcs_loads, require_depth
 
 from senselab_core.kernel import prov as kprov
-from senselab_core.kernel.formats import FORMAT_PATTERN, PROVENANCE_FORMAT, FormatVerdict, check, readable
+from senselab_core.kernel.formats import (
+    FORMAT_PATTERN,
+    PROVENANCE_FORMAT,
+    RETIRED_PROVENANCE_FORMATS,
+    FormatVerdict,
+    check,
+)
 from senselab_core.runtime.locks import LeaseUnavailable
 from senselab_core.runtime.storage import TEMPORARY_NAME, WrongKindError, write_atomically
 from senselab_core.runtime.vocabulary import core_vocabulary
@@ -319,7 +325,10 @@ class ProvStore:
         for name, data in sorted(documents.items()):
             writer = name.removesuffix(".jsonld") if WRITER_DOCUMENT.fullmatch(name) else None
             found = _declared_format(data)
-            if found is not None and check(PROVENANCE_FORMAT, found) is not FormatVerdict.ACCEPTED:
+            if (
+                found is not None
+                and check(PROVENANCE_FORMAT, found, RETIRED_PROVENANCE_FORMATS) is not FormatVerdict.ACCEPTED
+            ):
                 raise ProvenanceFormatRefused(found)
             if writer is None:
                 raise MalformedDocument(None, f"{PROV_DIR}/ holds a file that is not a writer's document")
@@ -376,7 +385,7 @@ def _writer_nodes(writer: str, data: bytes) -> list[tuple[str, bytes]]:
         raise MalformedDocument(
             writer, f"a document is {{'@context': {kprov.CONTEXT_URL!r}, 'format': ..., '@graph': [...]}}"
         )
-    if not readable(PROVENANCE_FORMAT, doc["format"]):
+    if check(PROVENANCE_FORMAT, doc["format"]) is not FormatVerdict.ACCEPTED:
         raise MalformedDocument(writer, f"a document's format is {PROVENANCE_FORMAT}")
     if doc["@context"] != kprov.CONTEXT_URL:
         raise MalformedDocument(writer, f"a document's @context is {kprov.CONTEXT_URL}")

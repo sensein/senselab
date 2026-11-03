@@ -19,6 +19,7 @@ from senselab_core.runtime.bep028 import (
     LABELS_NAME,
     PRIVATE_DIR,
     LabelMap,
+    LabelMapRetired,
     ProfileViolation,
     check_profile,
     export,
@@ -115,8 +116,8 @@ def test_label_map_is_private(tmp_path: Path) -> None:
 def test_a_label_map_that_is_not_labels1_is_refused(tmp_path: Path) -> None:
     """A foreign or damaged map is refused with an error that names no path."""
     run, _ = _run(tmp_path, "a.wav")
-    (run / PRIVATE_DIR / LABELS_NAME).write_text('{"format": "labels@2.0", "labels": {}}')
-    with pytest.raises(ValueError, match="labels@1.0") as caught:
+    (run / PRIVATE_DIR / LABELS_NAME).write_text('{"format": "labels@3.0", "labels": {}}')
+    with pytest.raises(ValueError, match="labels@2.0") as caught:
         LabelMap(run).paths()
     assert str(run) not in str(caught.value)
 
@@ -357,5 +358,15 @@ def test_label_map_is_jcs(tmp_path: Path) -> None:
     data = (run / PRIVATE_DIR / LABELS_NAME).read_bytes()
     assert jcs_dumps(jcs_loads(data)) == data
     (run / PRIVATE_DIR / LABELS_NAME).write_bytes(json.dumps(jcs_loads(data), indent=2).encode())
-    with pytest.raises(ValueError, match="labels@1.0"):
+    with pytest.raises(ValueError, match="labels@2.0"):
         LabelMap(run).paths()
+
+
+def test_a_retired_label_map_is_refused_not_corrupt(tmp_path: Path) -> None:
+    """A `labels@1.0` map, indented as it was written, is refused as retired, whatever else is wrong with it."""
+    run, _ = _run(tmp_path, "a.wav")
+    body = json.dumps({"format": "labels@1.0", "labels": {}}, indent=2)
+    (run / PRIVATE_DIR / LABELS_NAME).write_text(body)
+    with pytest.raises(LabelMapRetired, match="labels@1.0") as caught:
+        LabelMap(run).paths()
+    assert caught.value.found == "labels@1.0"

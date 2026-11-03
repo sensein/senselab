@@ -20,6 +20,10 @@ class ConfigError(ValueError):
         self.message = message
 
 
+class _DuplicateKeys(yaml.YAMLError):
+    """A mapping that holds one key twice."""
+
+
 class _Loader(yaml.SafeLoader):
     """A safe loader that leaves `2026-11-01` a string and refuses a mapping holding one key twice."""
 
@@ -34,7 +38,7 @@ def _unique_mapping(loader: _Loader, node: yaml.MappingNode, deep: bool = False)
     keys = [loader.construct_object(k, deep=deep) for k, _ in node.value]
     repeated = sorted({str(k) for k in keys if keys.count(k) > 1})
     if repeated:
-        raise yaml.YAMLError(f"duplicate keys {repeated}")
+        raise _DuplicateKeys(f"duplicate keys {repeated}")
     return loader.construct_mapping(node, deep=deep)
 
 
@@ -57,10 +61,12 @@ def load_yaml(source: str | Path | Traversable, what: str) -> dict[str, Any]:
         label = str(source)
         try:
             text = source.read_text("utf-8")
-        except OSError as err:
+        except (OSError, UnicodeDecodeError) as err:
             raise ConfigError(what, label, f"cannot be read: {err}") from err
     try:
         raw = yaml.load(text, Loader=_Loader)  # noqa: S506 - a SafeLoader subclass
+    except _DuplicateKeys as err:
+        raise ConfigError(what, label, str(err)) from err
     except yaml.YAMLError as err:
         raise ConfigError(what, label, f"is not valid YAML: {err}") from err
     if not isinstance(raw, dict):

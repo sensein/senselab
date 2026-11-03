@@ -20,8 +20,13 @@ PROV_NODE_TAG = "prov-node@1"
 PROVENANCE_FORMAT = "provenance@3.0"
 """The format of a PROV-O JSON-LD provenance document, carried as its top-level `format` (ADR-010)."""
 
-LABELS_FORMAT = "labels@1.0"
-"""The format of a run's private label map, `<run>/private/labels@1.json` (ADR-007)."""
+RETIRED_PROVENANCE_FORMATS = frozenset({"provenance@1", "provenance@2"})
+"""Provenance formats 2.x no longer reads, as `<name>@<major>`."""
+
+LABELS_FORMAT = "labels@2.0"
+"""The format of a run's private label map, canonical JSON in `<run>/private/labels@1.json` (ADR-007)."""
+RETIRED_LABELS_FORMATS = frozenset({"labels@1"})
+"""Label-map formats 2.x no longer reads, as `<name>@<major>`."""
 
 BENCHMARK_RESULT_FORMAT = "benchmark-result@1.0"
 """The format of a benchmark run's result document, `<run>/result.json`."""
