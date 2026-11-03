@@ -368,3 +368,10 @@ def test_nvenc_backend_meets_the_contract(tmp_path: Path) -> None:
         _make(tmp_path / "src.mp4", size="640x360"), tmp_path / "o.mp4", backend="h264_nvenc", allow_copy=False
     )
     assert result.provenance["backend"] == "h264_nvenc" and result.ok, result.provenance["check"]
+
+
+def test_max_seconds_truncates_and_still_verifies(tmp_path: Path) -> None:
+    """A truncated (sample) encode keeps the first seconds of video and audio and passes verification."""
+    result = standardize_video_encoding(_make(tmp_path / "src.mp4", seconds=6), tmp_path / "o.mp4", max_seconds=2)
+    assert result.ok, result.provenance["check"]
+    assert result.provenance["mode"] == "reencode" and abs(result.provenance["check"]["frames"] - 60) <= 1

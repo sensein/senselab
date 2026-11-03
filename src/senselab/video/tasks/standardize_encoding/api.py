@@ -715,7 +715,10 @@ def standardize_video_encoding(
             "audio_rate": audio_rate,
             "audio_channels": audio_channels,
         }
-        prov["check"] = verify_output(pts, tmp, ffprobe_bin, keyint, audio, expect) if verify else {}
+        audio_ref = audio
+        if audio and max_seconds:  # a truncated encode keeps only the first seconds of audio
+            audio_ref = {**audio, "duration": min(audio["duration"] or 0.0, max_seconds)}
+        prov["check"] = verify_output(pts, tmp, ffprobe_bin, keyint, audio_ref, expect) if verify else {}
         os.replace(tmp, dst)
         prov["output"] = {"size": dst.stat().st_size, **file_hashes(dst)}
         prov["output"]["size_ratio"] = prov["output"]["size"] / src_size
