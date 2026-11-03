@@ -537,5 +537,5 @@ def _values(value: object) -> list[dict[str, object]]:
 def test_literal_value_refuses_without_echoing(kind: str) -> None:
     """A literal the builders do not write is a `ValueError` whose message does not echo it."""
     with pytest.raises(ValueError, match="not a literal") as caught:
-        literal_value({"@value": "/home/someone/sub-01.wav", "@type": kind})
+        literal_value({"@value": "/home/user/sub-01.wav", "@type": kind})
     assert "sub-01" not in str(caught.value)

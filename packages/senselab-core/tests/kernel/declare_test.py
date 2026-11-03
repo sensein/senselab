@@ -493,7 +493,7 @@ def test_key_for_puts_the_pinned_model_identity_into_the_key() -> None:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("bad", ["/home/x/a.wav", "a" * 64, SLICE])
+@pytest.mark.parametrize("bad", ["/home/user/a.wav", "a" * 64, SLICE])
 def test_key_for_refuses_untyped_inputs(bad: str) -> None:
     """An input that is a path, bare hex or another kind of identity is refused."""
     with pytest.raises(ValidationError):

@@ -197,7 +197,7 @@ def test_model_copy_revalidates_and_redigests() -> None:
         {"model": {"id": "org/name", "identity": "main"}},
         {"model": {"id": None, "identity": COMMIT}},
         {"model": {"source": "hf", "id": "org/name", "identity": COMMIT}},
-        {"inputs": {"a": "/home/x/a.wav"}},
+        {"inputs": {"a": "/home/user/a.wav"}},
         {"inputs": {"a": "f" * 64}},
         {"inputs": {"a": "content:" + "F" * 64}},
         {"inputs": {"a": "content:" + "f" * 63}},
@@ -246,7 +246,7 @@ def test_model_identity_names_a_hub_repo_and_never_a_source() -> None:
     """A hub identity carries its repo id; url and local weights carry only their digest, and one key for both."""
     with pytest.raises(ValidationError):
         ModelIdentity.model_validate({"source": "local", "id": None, "identity": SHA256})
-    local = ResolvedModel(ref=ModelRef.parse("local:/home/alice/m"), identity=SHA256)
+    local = ResolvedModel(ref=ModelRef.parse("local:/home/user/m"), identity=SHA256)
     url = ResolvedModel(ref=ModelRef.parse(f"url:https://x.org/m#sha256={SHA256}"), identity=SHA256)
     assert local.key_identity() == url.key_identity() == ModelIdentity(id=None, identity=SHA256)
 

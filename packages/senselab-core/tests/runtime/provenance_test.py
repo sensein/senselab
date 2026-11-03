@@ -218,11 +218,11 @@ def _drop_qualified_time(doc: dict[str, Any]) -> None:
 
 
 def _out_of_range(doc: dict[str, Any]) -> None:
-    doc["@graph"][-1]["senselab:loudness"] = "/home/someone/sub-01_task-read.wav"
+    doc["@graph"][-1]["senselab:loudness"] = "/home/user/sub-01_task-read.wav"
 
 
 def _path_id(doc: dict[str, Any]) -> None:
-    doc["@graph"][-1]["@id"] = "/home/someone/sub-01_task-read.wav"
+    doc["@graph"][-1]["@id"] = "/home/user/sub-01_task-read.wav"
 
 
 def _unknown_term(doc: dict[str, Any]) -> None:
@@ -230,11 +230,11 @@ def _unknown_term(doc: dict[str, Any]) -> None:
 
 
 def _unqualified_agent(doc: dict[str, Any]) -> None:
-    doc["@graph"][0]["prov:wasAssociatedWith"].append({"@id": "/home/someone/sub-01_task-read.wav"})
+    doc["@graph"][0]["prov:wasAssociatedWith"].append({"@id": "/home/user/sub-01_task-read.wav"})
 
 
 def _decimal_not_a_number(doc: dict[str, Any]) -> None:
-    doc["@graph"][-1]["senselab:notATerm"] = {"@value": "/home/someone/sub-01_task-read.wav", "@type": "xsd:decimal"}
+    doc["@graph"][-1]["senselab:notATerm"] = {"@value": "/home/user/sub-01_task-read.wav", "@type": "xsd:decimal"}
 
 
 def _extra_key(doc: dict[str, Any]) -> None:

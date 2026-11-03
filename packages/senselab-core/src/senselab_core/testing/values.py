@@ -714,7 +714,7 @@ def _register_kernel_samples() -> None:
     register_samples(
         LogicalKey,
         lambda: [_key(), _key("u")],
-        invalid_updates=[{"model": "main"}, {"inputs": {"a": "/home/x.wav"}}, {"params": {"x": float("nan")}}],
+        invalid_updates=[{"model": "main"}, {"inputs": {"a": "/home/user/x.wav"}}, {"params": {"x": float("nan")}}],
     )
     register_samples(
         ExecutionContext,

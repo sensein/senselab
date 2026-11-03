@@ -247,7 +247,9 @@ def test_export_refuses_a_bids_subject_that_was_never_recorded(tmp_path: Path) -
         export(run, tmp_path / "out")
 
 
-@pytest.mark.parametrize("source", ["/home/u/models/m", "~/m", "./m", "../m", "C:\\m", "a\\b", "org/model", "hf:../m"])
+@pytest.mark.parametrize(
+    "source", ["/home/user/models/m", "~/m", "./m", "../m", "C:\\m", "a\\b", "org/model", "hf:../m"]
+)
 def test_a_local_path_is_not_a_model_source(source: str) -> None:
     """`senselab:modelSource` is a source kind and an identity; a local path is refused at the store boundary."""
     with pytest.raises(ValueError, match="never a local path"):
