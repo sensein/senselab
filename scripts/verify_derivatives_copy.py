@@ -2,7 +2,7 @@
 """Check that a derivatives copy holds what its source tree holds: one threaded pass per tree.
 
     uv run python scripts/verify_derivatives_copy.py --src SRC --dst DST \
-        [--threads 64] [--needle /orcd/scratch] [--json OUT]
+        [--threads 64] [--needle TEXT] [--json OUT]
 
 ``SRC`` is walked following symlinks, as ``find -L`` would, so a run root whose streams link into
 an earlier tree is counted at its targets. ``DST`` is walked without following them, and only the
@@ -164,7 +164,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--src", type=Path, required=True, help="The source tree, walked following symlinks")
     parser.add_argument("--dst", type=Path, required=True, help="The copy; only its sub-* entries are counted")
     parser.add_argument("--threads", type=int, default=64, help="Size of each walk's thread pool")
-    parser.add_argument("--needle", default="/orcd/scratch", help="Text whose presence in a store is counted")
+    needle_default = os.environ.get("SENSELAB_VERIFY_NEEDLE")
+    parser.add_argument(
+        "--needle",
+        default=needle_default,
+        required=needle_default is None,
+        help="Text whose presence in a store is counted (default: $SENSELAB_VERIFY_NEEDLE)",
+    )
     parser.add_argument("--json", type=Path, default=None, help="Also write both tallies and the match here")
     return parser
 
