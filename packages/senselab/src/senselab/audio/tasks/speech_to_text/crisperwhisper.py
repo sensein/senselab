@@ -6,7 +6,6 @@ builds the engine `backend_params["engine"]` names (`ct2` or `transformers`) on 
 `torch`, `soundfile` and `huggingface_hub` load inside the engine.
 """
 
-import contextlib
 import hashlib
 import importlib.metadata
 import math
@@ -164,7 +163,7 @@ def _engine(state: State, name: str) -> Any:  # noqa: ANN401 - a StubModel or a 
 
 
 class Library:
-    """The CrisperWhisper library on one engine, loaded from the pinned snapshot of the model."""
+    """The CrisperWhisper library on one engine, loaded from the pinned snapshot; `host` reads a ct2 logits view."""
 
     def __init__(self, model: Mapping[str, Any], device: str, engine: str) -> None:
         """Build the library model; `ct2` converts the snapshot once per model commit and compute type.
@@ -175,6 +174,8 @@ class Library:
         from crisperwhisper import CrisperWhisperModel  # noqa: PLC0415 - the library loads in the engine only
         from huggingface_hub import snapshot_download  # noqa: PLC0415 - as above
 
+        from senselab.audio.tasks.speech_to_text.token_confidence import ct2_host  # noqa: PLC0415 - as above
+
         if engine == "ct2" and device == "mps":
             raise ValueError("the ct2 engine runs on cuda or cpu, not mps")
         compute = COMPUTE_TYPES[device]
@@ -184,23 +185,30 @@ class Library:
         if device == "mps":
             _disable_deferred_stop_check()
         self.engine = engine
+        self.host = ct2_host
         self.model = CrisperWhisperModel(path, backend=engine, device=device, compute_type=compute)
 
     def transcribe(self, samples: numpy.ndarray, language: str, max_new_tokens: int) -> Decoded:
-        """Return the decode of `samples`, with word confidences on the transformers engine."""
+        """Return the decode of `samples`, with its mean and word confidences.
+
+        Both engines score the decoded tokens by raw-logit log-probability, excluding the engine's
+        `all_special_ids`.
+        """
         import soundfile  # noqa: PLC0415 - loads in the engine only
 
         from senselab.audio.tasks.speech_to_text.token_confidence import (  # noqa: PLC0415 - as above
+            capture_ct2_token_confidence,
             capture_token_confidence,
             merge_confidence_blocks,
-            special_token_ids,
             word_confidences,
         )
 
-        engine = getattr(self.model, "_engine", None) if self.engine == "transformers" else None
-        special = special_token_ids(engine)
-        scoring: contextlib.AbstractContextManager[list[dict[str, Any]]] = (
-            capture_token_confidence(engine, special_token_ids=special) if engine else contextlib.nullcontext([])
+        engine = self.model._engine
+        special = {int(i) for i in engine.all_special_ids} or None
+        scoring = (
+            capture_ct2_token_confidence(engine, special_token_ids=special, host=self.host)
+            if self.engine == "ct2"
+            else capture_token_confidence(engine, special_token_ids=special)
         )
         with tempfile.TemporaryDirectory(prefix="senselab-crisperwhisper-") as scratch:
             wav = Path(scratch) / "audio.wav"
@@ -223,7 +231,7 @@ class Library:
                 scored = word_confidences(
                     merged["tokens"],
                     merged["token_logprob"],
-                    lambda token: str(self.model._engine.tokenizer.decode([token])),
+                    lambda token: str(engine.tokenizer.decode([token])),
                     special,
                 )
                 if len(scored) == len(words):
