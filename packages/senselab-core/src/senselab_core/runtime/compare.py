@@ -23,6 +23,7 @@ from pydantic import Field
 
 from senselab_core.kernel._base import FiniteFloat, Frozen, value_digest
 from senselab_core.kernel.formats import FORMAT_PATTERN
+from senselab_core.kernel.wire import WIRE_FORMATS
 
 COMPARISON_FORMAT = "comparison@1.0"
 
@@ -229,7 +230,21 @@ COMPARISONS: Mapping[str, TypeComparison] = parse_comparisons(
 """The packaged per-type comparisons, by `<name>@<major>`."""
 
 
-def _type_of(leaf: Value | None) -> str | None:
+class UndeclaredComparison(LookupError):
+    """A kernel value whose type declares no comparison; `tag` is its format tag."""
+
+    def __init__(self, tag: str) -> None:
+        """Name the format tag."""
+        super().__init__(f"kernel type {tag!r} declares no comparison in {COMPARISON_FORMAT}")
+        self.tag = tag
+
+
+Comparisons = Mapping[str, TypeComparison]
+"""Per-type comparisons by `<name>@<major>`, as `parse_comparisons` returns them."""
+_KERNEL_TYPES = frozenset(t.split(".", 1)[0] for t in WIRE_FORMATS)
+
+
+def _type_of(leaf: Value | None, comparisons: Comparisons) -> str | None:
     if not isinstance(leaf, str):
         return None
     try:
@@ -239,18 +254,27 @@ def _type_of(leaf: Value | None) -> str | None:
     if not isinstance(tag, str) or re.fullmatch(FORMAT_PATTERN, tag) is None:
         return None
     key = tag.split(".", 1)[0]
-    return key if key in COMPARISONS else None
+    if key in comparisons:
+        return key
+    if key in _KERNEL_TYPES:
+        raise UndeclaredComparison(tag)
+    return None
 
 
-def typed_values(fields: Mapping[str, Value]) -> dict[str, str]:
+def typed_values(fields: Mapping[str, Value], comparisons: Comparisons | None = None) -> dict[str, str]:
     """Return the path prefixes holding a kernel value's wire form, each with its type's `<name>@<major>`.
 
-    A kernel value is found by its `format` leaf under any path; the root's prefix is `""`.
+    A kernel value is found by its `format` leaf under any path; the root's prefix is `""`. `comparisons` defaults to
+    `COMPARISONS`.
+
+    Raises:
+        UndeclaredComparison: a kernel value's type has no entry in `comparisons`.
     """
+    table = COMPARISONS if comparisons is None else comparisons
     out = {}
     for path, leaf in fields.items():
         prefix, _, name = path.rpartition(".")
-        if name == "format" and (kind := _type_of(leaf)) is not None:
+        if name == "format" and (kind := _type_of(leaf, table)) is not None:
             out[prefix] = kind
     return out
 
@@ -328,17 +352,20 @@ def _relabel_one(
     return out
 
 
-def relabel(expected: Mapping[str, Value], actual: Mapping[str, Value]) -> Fields:
+def relabel(
+    expected: Mapping[str, Value], actual: Mapping[str, Value], comparisons: Comparisons | None = None
+) -> Fields:
     """Return `actual` with the labels of each kernel value that declares `match_labels` renamed to `expected`'s.
 
     Labels are arbitrary per run, so they are mapped one to one by most shared time (the map DER scores under); a
     label with no counterpart (no shared time) is renamed to one no expected label equals. `actual` is unchanged
     where either side has no labelled spans.
     """
+    table = COMPARISONS if comparisons is None else comparisons
     out = dict(actual)
-    typed = typed_values(expected) | typed_values(actual)
+    typed = typed_values(expected, table) | typed_values(actual, table)
     for prefix, kind in sorted(typed.items()):
-        columns = COMPARISONS[kind].match_labels
+        columns = table[kind].match_labels
         if columns is not None:
             out = _relabel_one(expected, out, prefix, columns)
     return out
@@ -430,21 +457,28 @@ def _judge(path: str, a: Value | None, b: Value | None, rule: Rule | None, thres
     return Difference(path, rule.kind, rule.threshold, bound, _summary(a), _summary(b), why)
 
 
-def compare_fields(expected: Mapping[str, Value], actual: Mapping[str, Value], thresholds: Thresholds) -> Comparison:
+def compare_fields(
+    expected: Mapping[str, Value],
+    actual: Mapping[str, Value],
+    thresholds: Thresholds,
+    comparisons: Comparisons | None = None,
+) -> Comparison:
     """Return whether flattened outputs agree, leaf by leaf under each kernel type's declared comparison.
 
-    A leaf under a kernel value (found by its `format` leaf) is judged by its type's first matching rule; any other
-    leaf is exact. Labels a type matches are mapped first (`relabel`). A leaf on one side only, or under a type that
-    declares no rule for it, is a difference.
+    A leaf under a kernel value (found by its `format` leaf) is judged by its type's first matching rule in
+    `comparisons` (default `COMPARISONS`); any other leaf is exact. Labels a type matches are mapped first
+    (`relabel`). A leaf on one side only, or under a type that declares no rule for it, is a difference.
 
     Raises:
+        UndeclaredComparison: a kernel value's type has no entry in `comparisons`.
         KeyError: a rule names a threshold `thresholds` lacks.
     """
+    table = COMPARISONS if comparisons is None else comparisons
     digest = thresholds.canonical_digest()
+    typed = typed_values(expected, table) | typed_values(actual, table)
     if expected == actual:
         return Comparison(agree=True, differences=(), thresholds=digest)
-    actual = relabel(expected, actual)
-    typed = typed_values(expected) | typed_values(actual)
+    actual = relabel(expected, actual, table)
     prefixes = sorted(typed, key=len, reverse=True)
     found = []
     for path in sorted(expected.keys() | actual.keys()):
@@ -452,21 +486,32 @@ def compare_fields(expected: Mapping[str, Value], actual: Mapping[str, Value], t
         if owner is None:
             rule: Rule | None = Rule("exact")
         else:
-            rule = COMPARISONS[typed[owner]].rule(path[len(owner) + 1 :] if owner else path)
+            rule = table[typed[owner]].rule(path[len(owner) + 1 :] if owner else path)
         if (difference := _judge(path, expected.get(path), actual.get(path), rule, thresholds)) is not None:
             found.append(difference)
     return Comparison(agree=not found, differences=tuple(found), thresholds=digest)
 
 
-def compare(expected: Mapping[str, object], actual: Mapping[str, object], thresholds: Thresholds) -> Comparison:
+def compare(
+    expected: Mapping[str, object],
+    actual: Mapping[str, object],
+    thresholds: Thresholds,
+    comparisons: Comparisons | None = None,
+) -> Comparison:
     """Return whether two outputs agree: equal hashes agree at once; otherwise `compare_fields` of their leaves.
 
+    Every kernel value in either output must have a comparison in `comparisons`, equal hashes or not.
+
     Raises:
+        UndeclaredComparison: a kernel value's type has no entry in `comparisons` (default `COMPARISONS`).
         KeyError: a rule names a threshold `thresholds` lacks.
     """
+    leaves = flatten(expected), flatten(actual)
+    for side in leaves:
+        typed_values(side, comparisons)
     try:
         if value_digest("output", dict(expected)) == value_digest("output", dict(actual)):
             return Comparison(agree=True, differences=(), thresholds=thresholds.canonical_digest())
     except ValueError:
         pass
-    return compare_fields(flatten(expected), flatten(actual), thresholds)
+    return compare_fields(*leaves, thresholds, comparisons)

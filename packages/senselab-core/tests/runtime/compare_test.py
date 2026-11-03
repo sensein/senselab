@@ -17,6 +17,7 @@ from senselab_core.runtime.compare import (
     Fields,
     Threshold,
     Thresholds,
+    UndeclaredComparison,
     UnknownThreshold,
     best_assignment,
     compare,
@@ -238,3 +239,17 @@ def test_a_negative_bound_is_refused() -> None:
     """A bound is a finite non-negative number."""
     with pytest.raises(ValueError, match="greater than or equal"):
         Thresholds.load({"thresholds": {"time_ns": {"atol": -1}}})
+
+
+@pytest.mark.logic
+def test_a_kernel_type_without_a_comparison_is_refused() -> None:
+    """A kernel value whose type the table does not declare raises naming its tag, equal outputs or not."""
+    without = {k: v for k, v in COMPARISONS.items() if k != "embedding@1"}
+    outputs = {"embedding": wire_form(samples_of(WIRE_FORMATS["embedding@1.0"])[0], READER)}
+    with pytest.raises(UndeclaredComparison, match="embedding@1.0") as raised:
+        compare(outputs, dict(outputs), THRESHOLDS, without)
+    assert raised.value.tag == "embedding@1.0"
+    with pytest.raises(UndeclaredComparison, match="embedding@1.0"):
+        compare_fields(flatten(outputs), flatten(outputs), THRESHOLDS, without)
+    plain: Fields = {"x.format": '"mine@1.0"', "x.v": [1.0]}
+    assert compare_fields(plain, dict(plain), THRESHOLDS, without).agree
