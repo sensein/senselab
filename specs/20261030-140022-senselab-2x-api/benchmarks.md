@@ -226,6 +226,11 @@ CC0 / ODbL sets.
 
 Spot-checked against the sources: ESC-50 is CC BY-NC 3.0, but its ESC-10 subset is CC BY 3.0, so it is a permissive option for the open smoke suite; PTB-XL is CC BY 4.0; VoxConverse is CC BY 4.0, with video copyright kept by the original owners.
 
+## Amendment 2026-11-03: parity references and segment confidence
+
+- A 1.x reference is produced under the benchmark's own task and backend params, read from the items file that `run` also reads; a param 1.x cannot take stops the run. Each speaker-embedding item is encoded alone, because 1.x zero-pads a batch to its longest item.
+- Segment confidence is the mean, over a window's final emitted ids, of each chosen token's log-softmax over raw logits, excluding special ids. CrisperWhisper excludes the library's set (every `<|..|>` token including timestamps, the `[verbatim_N]`/`[intended_N]` tags and the prompt markers); the `transformers` backend and 1.x exclude the HF tokenizer's `all_special_ids`, which does not mark timestamp tokens special. The two definitions agree when no timestamp tokens are decoded.
+
 ## Amendment 2026-11-02: a benchmark whose backend cannot be placed is reported, not run (P2-88)
 
 - The harness resolves each benchmark's backend against the run's device (the backend's declared devices and the
