@@ -13,6 +13,7 @@ import numpy
 from pydantic import Field
 from senselab_core.kernel.declare import InputsAgree, TaskParams, backend, task
 from senselab_core.kernel.results import Intervals, Metric
+from senselab_core.runtime.compare import best_assignment
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault
 
@@ -47,48 +48,6 @@ class Der:
 @backend(task="der", name="numpy-der", worker=WORKER_MODULE, **_worker.HOST_BACKEND)
 class NumpyDer:
     """Elementary-segment accounting with a Hungarian speaker matching, in numpy."""
-
-
-def assign(gain: numpy.ndarray) -> list[tuple[int, int]]:  # noqa: C901 - the Hungarian algorithm is one routine
-    """Return the `(row, column)` pairs of the one-to-one matching that maximises the summed `gain`.
-
-    The Hungarian algorithm over the negated, square-padded matrix.
-    """
-    n = max(gain.shape)
-    cost = numpy.zeros((n, n))
-    cost[: gain.shape[0], : gain.shape[1]] = -gain
-    u, v = numpy.zeros(n + 1), numpy.zeros(n + 1)
-    owner = [0] * (n + 1)
-    for i in range(1, n + 1):
-        owner[0] = i
-        j0 = 0
-        minv = numpy.full(n + 1, numpy.inf)
-        used = [False] * (n + 1)
-        way = [0] * (n + 1)
-        while True:
-            used[j0] = True
-            i0, delta, j1 = owner[j0], numpy.inf, 0
-            for j in range(1, n + 1):
-                if not used[j]:
-                    cur = cost[i0 - 1, j - 1] - u[i0] - v[j]
-                    if cur < minv[j]:
-                        minv[j], way[j] = cur, j0
-                    if minv[j] < delta:
-                        delta, j1 = minv[j], j
-            for j in range(n + 1):
-                if used[j]:
-                    u[owner[j]] += delta
-                    v[j] -= delta
-                else:
-                    minv[j] -= delta
-            j0 = j1
-            if owner[j0] == 0:
-                break
-        while j0:
-            j1 = way[j0]
-            owner[j0] = owner[j1]
-            j0 = j1
-    return [(owner[j] - 1, j - 1) for j in range(1, n + 1) if owner[j] - 1 < gain.shape[0] and j - 1 < gain.shape[1]]
 
 
 def _scored_edges(ref: Intervals, hyp: Intervals, params: DerParams) -> numpy.ndarray:
@@ -147,7 +106,7 @@ def diarization_error_rate(ref: Intervals, hyp: Intervals, params: DerParams) ->
     together = (a[:, None, :] & b[None, :, :]) * width if len(ref_labels) and len(hyp_labels) else None
     correct = numpy.zeros(len(width))
     if together is not None:
-        for r, h in assign(together.sum(axis=2)):
+        for r, h in best_assignment(together.sum(axis=2).tolist()):
             correct += (a[r] & b[h]) * 1.0
     missed = numpy.maximum(n_ref - n_hyp, 0) * width
     false_alarm = numpy.maximum(n_hyp - n_ref, 0) * width

@@ -10,6 +10,7 @@ from senselab_core.kernel.declare import REGISTRY
 from senselab_core.kernel.results import Intervals, Metric, TextSpans, Transcript, TranscriptNode, Trials
 from senselab_core.kernel.signals import PlainText, RegularGroup, audio_channels
 from senselab_core.kernel.wire import from_wire_form
+from senselab_core.runtime import compare
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.testing.contracts import contract_cases
 
@@ -271,3 +272,10 @@ def test_a_scorer_bug_is_infrastructure_with_a_gap_not_a_content_fault() -> None
     [result] = serve(FakeFaults.from_json({}), [{"id": "a", "inputs": {}}], {}, _NoParams, broken)
     record = error_record(result["error"])
     assert (record["fault"], record["gap"]) == ("infrastructure", True)
+
+
+@pytest.mark.logic
+def test_der_uses_core_assignment() -> None:
+    """`der` matches speakers with core's `best_assignment`; it carries no assignment routine of its own."""
+    assert vars(der)["best_assignment"] is compare.best_assignment
+    assert "assign" not in vars(der)

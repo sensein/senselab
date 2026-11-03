@@ -286,10 +286,38 @@ def _owner(path: str, prefixes: Sequence[str]) -> str | None:
 
 
 def best_assignment(weights: Sequence[Sequence[float]]) -> list[tuple[int, int]]:
-    """Return the one-to-one (row, column) pairs of largest total weight (Hungarian method), one per row or column.
+    """Return the one-to-one (row, column) pairs of largest total weight, as many as the smaller side.
 
-    Pairs are as many as the smaller side; with a tie any optimum is returned.
+    With a tie it returns the optimum whose sorted `(row, column)` sequence is lexically smallest.
     """
+    n, m = len(weights), len(weights[0]) if weights else 0
+    wanted = min(n, m)
+    best = _total(weights, _hungarian(weights))
+    chosen: list[tuple[int, int]] = []
+    for i in range(n):
+        if len(chosen) == wanted:
+            break
+        used = {c for _, c in chosen}
+        free = [j for j in range(m) if j not in used]
+        for j in free:
+            rest_rows = list(range(i + 1, n))
+            rest_cols = [c for c in free if c != j]
+            if min(len(rest_rows), len(rest_cols)) != wanted - len(chosen) - 1:
+                continue
+            sub = [[weights[r][c] for c in rest_cols] for r in rest_rows]
+            total = _total(weights, chosen) + weights[i][j] + _total(sub, _hungarian(sub))
+            if math.isclose(total, best, rel_tol=1e-12, abs_tol=1e-12):
+                chosen.append((i, j))
+                break
+    return chosen
+
+
+def _total(weights: Sequence[Sequence[float]], pairs: Sequence[tuple[int, int]]) -> float:
+    return math.fsum(weights[i][j] for i, j in pairs)
+
+
+def _hungarian(weights: Sequence[Sequence[float]]) -> list[tuple[int, int]]:
+    """Return one optimal assignment of `weights` (Hungarian method), as many pairs as the smaller side."""
     n, m = len(weights), len(weights[0]) if weights else 0
     size = max(n, m)
     top = max((w for row in weights for w in row), default=0.0)

@@ -298,3 +298,22 @@ def test_a_kernel_type_without_a_comparison_is_refused() -> None:
         compare_fields(flatten(outputs), flatten(outputs), THRESHOLDS, without)
     plain: Fields = {"x.format": '"mine@1.0"', "x.v": [1.0]}
     assert compare_fields(plain, dict(plain), THRESHOLDS, without).agree
+
+
+@pytest.mark.logic
+def test_best_assignment_tie_break_is_pinned() -> None:
+    """Among equal optima the lexically smallest sorted `(row, column)` sequence is returned."""
+    rng = numpy.random.default_rng(1)
+    for n, m in ((2, 2), (3, 3), (2, 3), (3, 2), (4, 4)):
+        for _ in range(20):
+            weights = rng.integers(0, 3, size=(n, m)).astype(float).tolist()
+            k = min(n, m)
+            optima = [
+                sorted(zip(rows, cols, strict=True))
+                for rows in itertools.combinations(range(n), k)
+                for cols in itertools.permutations(range(m), k)
+            ]
+            best = max(sum(weights[r][c] for r, c in o) for o in optima)
+            expected = min(o for o in optima if sum(weights[r][c] for r, c in o) == best)
+            assert best_assignment(weights) == expected
+    assert best_assignment([[1.0, 1.0], [1.0, 1.0]]) == [(0, 0), (1, 1)]
