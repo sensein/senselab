@@ -430,18 +430,22 @@ def run(  # noqa: PLR0913 - what one 2.x parity run fixes
     )
 
 
-def recorded_backend_params(document: Mapping[str, Any], benchmark: str, backend: str, ids: Sequence[str]) -> Any:  # noqa: ANN401
-    """Return the backend params an `items` document records, for a run of `backend` on `benchmark` over `ids`.
+def recorded_backend_params(document: Mapping[str, Any], benchmark: str, backend: str) -> Any:  # noqa: ANN401
+    """Return the backend params an `items` document records, for a run of `backend` on `benchmark`.
 
     Raises:
-        ParityError: the document is of another benchmark or backend, or of other items.
+        ParityError: the document is of another benchmark or backend.
     """
     for key, value in (("benchmark", benchmark), ("backend", backend)):
         if document.get(key) != value:
             raise ParityError(f"the items file is of {key} {document.get(key)!r}; this run is of {value!r}")
+    return document["backend_params"]
+
+
+def require_recorded_items(document: Mapping[str, Any], ids: Sequence[str]) -> None:
+    """Raise ParityError unless the `items` document holds exactly the items `ids`."""
     if sorted(document["items"]) != sorted(ids):
         raise ParityError(f"the items file holds {sorted(document['items'])}; this run holds {sorted(ids)}")
-    return document["backend_params"]
 
 
 def _items_cli(args: argparse.Namespace) -> None:
@@ -476,10 +480,11 @@ def _run_cli(args: argparse.Namespace) -> None:
     from senselab_core.testing.workers import RealWorkers  # noqa: PLC0415
 
     document = json.loads(args.items.read_text("utf-8"))
+    tuning = recorded_backend_params(document, args.benchmark, args.backend)
     bench, backend, wired, params = prepare(
-        args.suite, args.benchmark, args.backend, document["backend_params"], args.data_cache, args.work, HELDOUT
+        args.suite, args.benchmark, args.backend, tuning, args.data_cache, args.work, HELDOUT
     )
-    tuning = recorded_backend_params(document, args.benchmark, args.backend, list(wired))
+    require_recorded_items(document, list(wired))
     profile = ExecutionProfile.load(args.execution)
     workers = RealWorkers(profile)
     stack = backend.stack + "".join(f" {k}={v}" for k, v in sorted(tuning.items()))

@@ -42,19 +42,20 @@ class Window:
 def capture_windows(engine: Any) -> Iterator[list[Window]]:  # noqa: ANN401 - a crisperwhisper engine
     """Wrap the `DECODES` and `REPLACES` of `engine` for the block, recording each window's final ids.
 
-    A decode records a window; a `REPLACES` call on the same `features` replaces that window's ids (coverage
+    A decode records a window; a `REPLACES` call on the same `features` and prompt replaces that window's ids (coverage
     fallback, early-EOT recovery). Yields the windows in decode order. The wrappers return what the caller would
     have received and are removed on exit.
     """
     windows: list[Window] = []
-    index: dict[int, int] = {}
+    index: dict[tuple[int, tuple[int, ...]], int] = {}
 
     def _record(features: Any, prompt_tokens: Sequence[int], ids: Sequence[int]) -> None:  # noqa: ANN401
         window = Window(features, [int(t) for t in prompt_tokens], [int(t) for t in ids])
-        if id(features) in index:
-            windows[index[id(features)]] = window
+        key = (id(features), tuple(window.prompt_tokens))
+        if key in index:
+            windows[index[key]] = window
         else:
-            index[id(features)] = len(windows)
+            index[key] = len(windows)
             windows.append(window)
 
     def _decode(original: Callable[..., Any]) -> Callable[..., Any]:

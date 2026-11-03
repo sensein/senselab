@@ -166,6 +166,18 @@ def test_windows_keep_decode_order_and_the_engine_is_left_as_it_was() -> None:
 
 
 @pytest.mark.logic
+def test_two_modes_on_shared_features_are_two_windows() -> None:
+    """Two prompts decoded on one `features` stay two windows; a replacement updates only its own prompt's."""
+    engine = Engine("ct2", "fallback")
+    shared, verbatim, intended = object(), [4, 0], [4, 1]
+    with capture_windows(engine) as windows:
+        engine.generate_with_repair(shared, verbatim)
+        engine.generate_with_repair(shared, intended)
+        engine.cross_attention_for_tokens(shared, intended, GEN)
+    assert windows == [Window(shared, verbatim, DECODED["fallback"]), Window(shared, intended, GEN)]
+
+
+@pytest.mark.logic
 def test_special_ids_are_scored_but_left_out_of_the_mean() -> None:
     """The end token has a log-probability in the block and no weight in `avg_logprob`."""
     engine = Engine("ct2", "clean")

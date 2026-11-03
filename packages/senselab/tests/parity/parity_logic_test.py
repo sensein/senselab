@@ -341,7 +341,7 @@ def test_every_parity_call_validates_with_a_pinned_model() -> None:
 
 
 @pytest.mark.logic
-def test_run_takes_its_backend_params_from_the_items_file_it_was_made_for() -> None:
+def test_run_takes_its_backend_params_from_the_items_file_it_was_made_for(tmp_path: Path) -> None:
     """The items file is the one source of the backend params; one of another benchmark, backend or items is refused."""
     ids = _ids("heldout", 2)
     document = {
@@ -350,11 +350,19 @@ def test_run_takes_its_backend_params_from_the_items_file_it_was_made_for() -> N
         "items": dict.fromkeys(ids, {}),
         "backend_params": {"b": 2},
     }
-    assert par.recorded_backend_params(document, "asr", "transformers", ids[::-1]) == {"b": 2}
-    for benchmark, backend, held, named in (
-        ("other", "transformers", ids, "benchmark 'asr'; this run is of 'other'"),
-        ("asr", "crisperwhisper", ids, "backend 'transformers'; this run is of 'crisperwhisper'"),
-        ("asr", "transformers", ids[:1], "this run holds"),
+    assert par.recorded_backend_params(document, "asr", "transformers") == {"b": 2}
+    par.require_recorded_items(document, ids[::-1])
+    for benchmark, backend, named in (
+        ("other", "transformers", "benchmark 'asr'; this run is of 'other'"),
+        ("asr", "crisperwhisper", "backend 'transformers'; this run is of 'crisperwhisper'"),
     ):
         with pytest.raises(par.ParityError, match=named):
-            par.recorded_backend_params(document, benchmark, backend, held)
+            par.recorded_backend_params(document, benchmark, backend)
+    with pytest.raises(par.ParityError, match="this run holds"):
+        par.require_recorded_items(document, ids[:1])
+    items = tmp_path / "items.json"
+    items.write_text(json.dumps({**document, "backend_params": {"not_a_crisperwhisper_param": 1}}), "utf-8")
+    run = ["run", "--benchmark", "asr", "--backend", "crisperwhisper", "--data-cache", str(tmp_path), "--work"]
+    run += [str(tmp_path), "--out", str(tmp_path / "o.json"), "--sha", "a" * 40, "--job", "1", "--items", str(items)]
+    with pytest.raises(par.ParityError, match="backend 'transformers'; this run is of 'crisperwhisper'"):
+        par.main(run)
