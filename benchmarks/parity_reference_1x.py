@@ -1,8 +1,8 @@
 """Standalone 1.x reference producer: run the 1.x task over the held-out items `parity_reference.py items` wrote.
 
 Runs under the pinned `alpha` checkout in its own locked env; it imports 1.x senselab and nothing from 2.x.
-Each 1.x call is given the 2.x task and backend params of the items file; `parity_reference.py items` and `run` take
-the same `--backend-params`. Writes one `<item id>.json` per item under `--out`: `{"task", "lines": [ScriptLine
+Each 1.x call is given the 2.x task and backend params of the items file, the file `parity_reference.py run` also
+reads them from. Writes one `<item id>.json` per item under `--out`: `{"task", "lines": [ScriptLine
 fields]}` for speech_to_text and diarize, `{"task", "vector": [...]}` for speaker_embeddings, each item embedded
 alone. `parity_reference.py convert` reads them.
 

@@ -74,6 +74,8 @@ def test_cli_items_run_compare_end_to_end(tmp_path: Path) -> None:
         "2",
         "--work",
         tmp_path / "work",
+        "--items",
+        items,
         "--out",
         outputs,
     )

@@ -1,10 +1,12 @@
 """Held-out parity of 2.x with 1.x: export the items, convert 1.x outputs, run 2.x, and compare them.
 
 Subcommands, in the order a campaign runs them:
-`items` (2.x env, no model) writes the held-out items and model pin for `parity_reference_1x.py`;
+`items` (2.x env, no model) writes the held-out items, task and backend params and model pin for
+`parity_reference_1x.py`;
 `convert` turns that script's output files into `parity-reference@1.0`;
-`run` runs a 2.x backend over the same items and writes `parity-outputs@3.0`; a backend the profile cannot place on
-this node is recorded as `not_placeable` with no outputs, never run;
+`run` runs a 2.x backend over the same items, under the backend params of that `items` file, and writes
+`parity-outputs@3.0`; a backend the profile cannot place on this node is recorded as `not_placeable` with no outputs,
+never run;
 `compare` writes `parity-comparison@1.0`: a run's outputs against the 1.x reference, or alone against one request,
 by each kernel type's comparison (`runtime.compare`) under the thresholds of `--config`, a run config merged over the
 packaged one (`Thresholds.load`), whose digest the record carries. `packages/senselab/tests/parity` asserts the same.
@@ -428,6 +430,20 @@ def run(  # noqa: PLR0913 - what one 2.x parity run fixes
     )
 
 
+def recorded_backend_params(document: Mapping[str, Any], benchmark: str, backend: str, ids: Sequence[str]) -> Any:  # noqa: ANN401
+    """Return the backend params an `items` document records, for a run of `backend` on `benchmark` over `ids`.
+
+    Raises:
+        ParityError: the document is of another benchmark or backend, or of other items.
+    """
+    for key, value in (("benchmark", benchmark), ("backend", backend)):
+        if document.get(key) != value:
+            raise ParityError(f"the items file is of {key} {document.get(key)!r}; this run is of {value!r}")
+    if sorted(document["items"]) != sorted(ids):
+        raise ParityError(f"the items file holds {sorted(document['items'])}; this run holds {sorted(ids)}")
+    return document["backend_params"]
+
+
 def _items_cli(args: argparse.Namespace) -> None:
     """Write the held-out items (inputs as strings), the task and backend params, and the pin of `args.backend`."""
     from senselab_core.runtime.call import packaged  # noqa: PLC0415 - only a real export needs the runtime
@@ -436,6 +452,8 @@ def _items_cli(args: argparse.Namespace) -> None:
     spec, backend = resolve(bench.task, args.backend)
     entry = packaged().catalogue.backend_entry(backend)
     document = {
+        "benchmark": bench.name,
+        "backend": args.backend,
         "task": bench.task,
         "params": spec.params.model_validate(bench.params).model_dump(mode="json"),
         "backend_params": backend.params.model_validate(args.backend_params).model_dump(mode="json"),
@@ -457,12 +475,14 @@ def _run_cli(args: argparse.Namespace) -> None:
     from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - only a real run needs the runtime
     from senselab_core.testing.workers import RealWorkers  # noqa: PLC0415
 
+    document = json.loads(args.items.read_text("utf-8"))
     bench, backend, wired, params = prepare(
-        args.suite, args.benchmark, args.backend, args.backend_params, args.data_cache, args.work, HELDOUT
+        args.suite, args.benchmark, args.backend, document["backend_params"], args.data_cache, args.work, HELDOUT
     )
+    tuning = recorded_backend_params(document, args.benchmark, args.backend, list(wired))
     profile = ExecutionProfile.load(args.execution)
     workers = RealWorkers(profile)
-    stack = backend.stack + "".join(f" {k}={v}" for k, v in sorted(args.backend_params.items()))
+    stack = backend.stack + "".join(f" {k}={v}" for k, v in sorted(tuning.items()))
     from senselab_core.runtime.call import packaged  # noqa: PLC0415
 
     ref = model_of(bench.model, backend, packaged().catalogue)
@@ -539,7 +559,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     r = sub.add_parser("run")
     common(r)
     r.add_argument("--execution", default="orcd")
-    r.add_argument("--backend-params", type=json.loads, default={})
+    r.add_argument("--items", type=Path, required=True, help="the `items` file; its backend params are the run's")
     r.add_argument("--claim-batch-invariance", action="store_true")
     r.add_argument("--sha", required=True)
     r.add_argument("--job", required=True)

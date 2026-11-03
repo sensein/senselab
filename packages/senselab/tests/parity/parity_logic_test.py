@@ -338,3 +338,23 @@ def test_every_parity_call_validates_with_a_pinned_model() -> None:
                 with pytest.raises(ValueError, match="explicit revision"):
                     call.TaskCall.parse_model(ref.id)
     assert built >= 4
+
+
+@pytest.mark.logic
+def test_run_takes_its_backend_params_from_the_items_file_it_was_made_for() -> None:
+    """The items file is the one source of the backend params; one of another benchmark, backend or items is refused."""
+    ids = _ids("heldout", 2)
+    document = {
+        "benchmark": "asr",
+        "backend": "transformers",
+        "items": dict.fromkeys(ids, {}),
+        "backend_params": {"b": 2},
+    }
+    assert par.recorded_backend_params(document, "asr", "transformers", ids[::-1]) == {"b": 2}
+    for benchmark, backend, held, named in (
+        ("other", "transformers", ids, "benchmark 'asr'; this run is of 'other'"),
+        ("asr", "crisperwhisper", ids, "backend 'transformers'; this run is of 'crisperwhisper'"),
+        ("asr", "transformers", ids[:1], "this run holds"),
+    ):
+        with pytest.raises(par.ParityError, match=named):
+            par.recorded_backend_params(document, benchmark, backend, held)
