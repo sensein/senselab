@@ -487,11 +487,131 @@ of B2AI's cough and breath tasks, repeating the kinds the task list now gives (s
 hint is recorded, but branch selection, expected names and categories still look the task up in the task list by
 name, so an inline description alone gets each branch's detect mode.
 
-## Step 5 — fitted values and policy
+## Step 5 — fitted values and policy (agreed 2026-11-03)
 
-- The family-keyed packaged YAMLs and the owner-policy keys in `default.yaml` move into the B2AI profile.
-- The packaged maps keyed by task are left with no dataset entries.
-- The neutral defaults follow open question 1.
+**What this step is for.** senselab still ships numbers that were tuned on B2AI recordings or chosen by B2AI's data
+owner. A new dataset inherits them without knowing it. After this step senselab ships the method, and the profile
+ships every number that comes from data or from a decision. This answers open question 1 of `design.md`.
+
+**Why not neutral defaults.** Most of these values only mean something for the data they were tuned on: the cough
+detector's 25 settings come from the owner listening to 15 B2AI coughs. A dataset that wants this kind of triage has
+to listen to and tune its own data anyway. A default that looks neutral but is really B2AI's runs silently untuned.
+senselab carries no "borrowed from B2AI" defaults and no B2AI warnings (user, 2026-11-03).
+
+**1. Settings that name tasks** (agreed 2026-11-03).
+- *Repeating the task list:* eight lists in B2AI's profile equal what its task list already says, task for task
+  (checked 2026-11-03): the breath and cough tasks of `airway_event_requirements.yaml`, the cough tasks of
+  `airway_event_tokens.yaml`, `stimulus.task_lexicons`, `open_vocabulary_families`, the two loudness lists of
+  `discard_replaced_task.yaml`, and the task-text comparison of `cohort_stage.yaml`. senselab works them out from
+  the task list; the lists are deleted.
+- *Facts about a task:* five become fields of the task's entry: a cue word the participant defines
+  (`cue_families`), someone may say the sentence first (`model_speaker_families`), quiet breathing the classifier
+  does not hear is no flag (`hint_mismatch_exempt_families`), breaths close together (`quick_families`), never
+  trimmed at the edges (`exclude_families` of the DDK trim).
+- *Numbers measured per task on B2AI:* the per-task gate bounds, response-length medians and minimum durations stay
+  in B2AI's profile, keyed by task name; senselab ships them empty.
+- The PII task guidance names tasks too; it is step 6.
+
+**2. Where each value lives.** One rule, read off each value's written derivation, so no value is decided by taste:
+- *The profile supplies* every value fitted on recordings, set by listening, chosen by the owner (release, review
+  and redaction policy), taken as a task norm only from B2AI's own recordings, or with no written derivation.
+  senselab ships none of them; a run whose profile lacks any is refused, with one message naming every missing
+  value (the step-2 mechanism, extended).
+- *senselab keeps* values set by the signal, task norms with a published source (a clinical DDK rate band), and its
+  own design choices (window lengths, model pins).
+- A data file that holds both kinds is split: the fitted part becomes profile data, the rest stays packaged.
+- The four packaged files a profile cannot replace today (`voice_phonation.yaml`, `background_model.yaml`,
+  `background_speech.yaml`, `task_squim.yaml`) follow the same rule.
+- Cases the rule cannot settle (e.g. classifier cut-offs the owner chose without a fit, a model cut fitted on the
+  model vendor's corpus) go to the user with a recommendation.
+- *Settled 2026-11-03* (user took all three recommendations):
+  - values reasoned from the task's own wording or from anatomy ("sustained" is at least half a second, breathing
+    is 0.1-1.2 Hz) are not B2AI's and stay in senselab;
+  - a value with no written derivation stays in senselab when it is a processing setting (window, hop, frame,
+    smoothing, the percentile a floor is estimated at), marked "derivation owed", and goes to the profile when it
+    is a detection threshold;
+  - of the unclear cases: classifier cut-offs the owner chose without a fit, values B2AI's own counts decided (the
+    airway bracket words, which gates route AIRWAY and VOICE, `r` admitted for "buttercup", the breath flatness
+    0.08, the YAMNet silence and coverage cuts) and owner decisions go to the profile; fits on general data (the
+    speaker cut-off 0.25, SpeechBrain's own default; the discontinuity factor), design the owner directed (the AST
+    10 s window, the hops, the Praat multipliers) and principles (a presence threshold of 1) stay in senselab.
+- *Result:* of 685 values, 378 go to the profile and 306 stay in senselab (39 of them "derivation owed"); 16 kHz is
+  fixed. Two agents sorted them independently and agreed on 515; the 170 differences are settled above. The tables
+  are kept in the triage scratch environment (`s5/step5_final.tsv`, with both agents' evidence per value).
+- Ten places where `specs/20260817-triage-workflow-dag/config-derivations.md` contradicts the shipped value or its
+  comment are corrected in this step (e.g. the speaker cut-off it gives as 0.231, B2AI's; `diarization.streams`;
+  senselab's minimum task length of 0.5 s, which is B2AI's cough floor, while B2AI's own default is 1.0 s).
+
+**3. Everything senselab keeps is overridable** (user, 2026-11-03): a profile or run override can change any
+packaged value, one value at a time rather than by copying the whole file. Two exceptions stay fixed: the 16 kHz
+working rate the models rely on, and files that define the output format (the corpus table's column dictionary,
+the decision-reason vocabulary), since readers of the outputs depend on them.
+
+**4. A reference profile, and profiles that build on one** (user, 2026-11-03). Moving every value to B2AI's profile
+alone would make senselab configurable in form only: about 230 of the values are detector settings tuned by
+listening to B2AI recordings (breath, cough, voice phonation, background, task events and extent), which describe the
+sounds and the recording setup more than B2AI, and no second dataset would re-listen its way to them. It would copy
+B2AI's profile, and B2AI's profile would become everyone's hidden default. Instead:
+- A profile may name another to build on (`extends:`). It inherits that profile's values and supplies only its own;
+  a value file merges senselab's packaged values, then the extended profile's, then its own, then the run's.
+- senselab ships a **reference profile**, "adult clinical speech recordings, fitted on Bridge2AI-Voice adult 2026":
+  the detector tuning and the model cut-offs fitted on labelled or listened recordings. It is named and opt-in; no
+  run uses it unless its profile says so, and it records what it was fitted on.
+- B2AI's profile extends it and supplies what is B2AI's own: its task list, the owner's policy, its cohort
+  conditions, and the values computed from its own corpus (percentiles, fences, per-task medians).
+- A new dataset of the same kind extends the reference profile, sets its policy, fits its corpus values from a pilot
+  (step 10), and overrides the few detector values its recordings need.
+
+**5. How a dataset gets each value.** Every profile value is one of four, and the per-value entries and the template
+are ordered by it: (a) *decide* (policy switches); (b) *compute from a pilot run* (percentiles, fences, medians:
+step 10 fits them); (c) *needs listening* (detector tuning; inherited from the reference profile); (d) *per task*.
+
+*Sorted 2026-11-03* (user agreed): of the 378 profile values, 336 are (c) and go to the reference profile; 42 are
+B2AI's own: 30 (a) policy, 10 (b) corpus statistics (the cohort condition fences and consistency floor, the
+free-speech word rate, the count-in gap, the cough and DDK atypical bounds) and 2 (d) per task (the per-task
+duration ranges, the alveolar `r` admitted for "buttercup"). Two sorts agreed on 327; the check's answer was taken on
+the 19 they placed differently (unfitted placeholders and the recognizer's word duration are (c), listening-round
+extent numbers are (c), three owner switches are (a)); of 32 unclear values, the owner's unfitted classifier cut-offs,
+the sweeps against the corpus's own labels (routing gates, speaker-similarity floor, speaker minimum extent), the
+extent feature switches, the never-fitted detector numbers and SQUIM's skipped branches are (c), and the release
+audible-share minimum and the default minimum task length are B2AI's. Step 10 refits the 10 (b) values, B2AI's
+per-task response medians and, on request, the sweep values. The assignment with both sorts' evidence:
+`s5/step5_assignment.tsv` in the triage scratch environment.
+
+**6. Help for a new dataset.** Each profile value gets a short entry in senselab: what it means, its unit, which of
+(a)-(d) it is, and how to fit it. A command writes a template profile with every required value blank beside its
+entry, extending the reference profile or another profile the dataset chooses; that choice is recorded in the new
+profile, not warned about by senselab.
+
+**7. Decided for 5c** (user, 2026-11-03): B2AI's copies hold only its own values and the few places it deliberately
+differs from senselab or the reference profile (D1); a profile value is required where B2AI's runs use it today and
+optional where it is empty today and B2AI leaves it empty, i.e. it switches a feature off or nothing reads it (D2);
+the start-of-run check guards every entry point senselab ships, and a library caller runs it itself (D3).
+
+**8. Checks.**
+1. The split: every value's place follows its derivation; an independent agent re-derives it (done before code),
+   and so does each profile value's place, reference or B2AI.
+2. The full test suite, including a test that a profile missing a required value is refused, naming it.
+3. B2AI unchanged: its profile and the reference profile it extends supply every moved value, so five fresh
+   paired runs and the 192 replayed runs give
+   identical decisions and stores (the step-4 procedure).
+4. The made-up dataset of step 4 runs from a template filled in by hand.
+5. senselab's packaged data names no task and holds no B2AI-fitted value: a test over every packaged file.
+
+**Results (2026-11-03; old code 140e446f8 = step 4 with its review fixes, new code 32616ea9d = 5a-5c; each side
+its own B2AI profile, hints written by each tree's builder, which were identical; outputs under the triage scratch
+environment's `s5/`).**
+1. The split: two independent sorts agreed on 515 of 685 values, then on 327 of the 378 profile values' kinds; the
+   rest were settled with the user (sections 2 and 5).
+2. The wide suite after 5c: 4,292 passed, 20 skipped; after 5d: see the 5d commit.
+3. Five recordings, each pair on one node: decisions identical, no store entity differs; run.json differs only in
+   the config hash and the profile record, which now names the profile it extends (adult-clinical-speech). The 192
+   stored runs, replayed in place on fresh private copies, slice by slice on one node: 192 ok, 192 decisions
+   identical, no store entity differs. Before any run, every value B2AI's runs read (25 value files and the
+   config) was compared with its value before 5c: identical.
+4. The made-up lab corpus's profile is written from the template and filled in by hand (task_catalogue_test).
+5. `dataset_profile_test`: no packaged value file or config holds a listed profile value, and no packaged data file
+   names a B2AI task (the vendored task registry, which moves in step 7, aside).
 
 ## Step 6 — inputs outside triage
 
@@ -530,10 +650,46 @@ name, so an inline description alone gets each branch's detect mode.
 - **"Cohort" names two things:** the COHORT corpus stage (`cohort_stage.py`) and the recruited study cohort
   (`cohort.py`, `verdict.cohort_conditions`). One is renamed.
 
+## Step 10 — values fitted from a pilot run (added 2026-11-03; after step 5)
+
+**What it is for.** The values of kind (b) are statistics of a dataset's own recordings: a percentile of a reading, a
+fence around a distribution, a per-task median. They need no listening, so a dataset should not have to work them
+out by hand. A `fit` command reads a pilot corpus's table (the corpus table a first run writes) and writes those
+values into the dataset's profile, recording what it read and when. The values the step-5 entries name as (b) are its
+scope; the procedure for each is the derivation the B2AI value records today (e.g. the cohort condition fences, the
+DDK rate band from r36's 2.5th-97.5th percentiles, the per-task response medians).
+
+**Checks.** On the B2AI corpus table the command reproduces B2AI's (b) values at their recorded precision (B2AI
+rounded the count-in gap up to 3.0 s from a 2.9 s percentile); on the
+made-up dataset it writes a profile its run accepts.
+
+## Step 11 — a workflow defined by configuration (added 2026-11-03; after step 5; walkthrough first)
+
+**What it is for.** Steps 1-5 make what triage reads a dataset's (its tasks, its tuned values, its policy), but not
+the shape of the workflow: every recording goes through the same stages (ADMIT, PREPROCESS, routing, the SPEECH,
+VOICE and AIRWAY branches, REDACT, the corpus passes, COHORT, VERDICT), and a dataset can only switch a few features
+off with policy flags. So the values a dataset must supply follow B2AI's workflow, not the stages it runs: the
+made-up lab corpus of step 4, which has no DDK task and no recruited conditions, still has to set DDK and cohort
+values (found in step 5c). The question is how far the workflow itself becomes configuration:
+1. *Stages on and off.* A profile or run names the stages it runs; each profile value names the stage that reads it
+   (`data/profile_values.yaml` gains `stage:`), and a value is required only where its stage runs.
+2. *Named components.* A stage's implementation is chosen by name (a breath detector, a classifier, a recognizer
+   ensemble), so a dataset can swap one without forking senselab.
+3. *A dataset's own graph.* The stages and their order are configuration (a node registry; listed under "Not in
+   scope" in `design.md` until now).
+
+Depth 1 is the proposal to start from; 2 and 3 are weighed in the walkthrough, against what a second dataset would
+need. The step is designed topic by topic with the user before any code, as steps 3-5 were.
+
+**Checks (to be settled in the walkthrough).** B2AI, running every stage, is unchanged; the made-up lab corpus runs
+without its unused stages and is not asked for their values.
+
 ## After this plan
 
 - **A pediatric profile:** the first second protocol.
 - **senselab's data folder holds no dataset data:** checked by a test that fails if a packaged data file
   names a dataset's tasks.
-- **Fitting a new dataset's values programmatically:** a follow-up issue. It needs train/test split
-  support in senselab.
+- **Fitting the rest programmatically:** step 10 fits the statistics of a pilot run; fitting the listened detector
+  values (kind (c)) needs labelled recordings and train/test split support in senselab, a follow-up issue.
+- **A shared store of dataset profiles** (user, 2026-11-03): a separate project where datasets publish and copy
+  profiles. Out of scope until there is a second dataset.
