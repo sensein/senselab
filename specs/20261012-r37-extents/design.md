@@ -125,7 +125,7 @@ verdict (`failed`, named in `why`) and is absent like any missing derivative; a 
 
 Every owning branch's reading taken in memory twice, all switches off and all on, over the 62,550 r36
 stores (`manifest_r34.jsonl`), at f2a806af on a fresh clone; CPU array on ORCD; nothing written to a store.
-Scratch: `/orcd/scratch/bcs/002/satra/r18d_20261010/extent_r37/` (`measure.py`, `analyse.py`,
+Scratch: `${ORCD_GROUP_SCRATCH}/r18d_20261010/extent_r37/` (`measure.py`, `analyse.py`,
 `analysis_n.txt`). 50,158 recordings carry an extent this work owns; 0 errors. Switched off, every extent
 equals the stored one except 140 coughs with no cough event, whose stored extent is AIRWAY's own fallback
 span. No decision or decision input moved.

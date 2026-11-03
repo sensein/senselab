@@ -17,7 +17,7 @@ could see.
 
 ## Sizing, measured on the finished corpus
 
-Swept `/orcd/scratch/bcs/002/satra/triage_design_20260919/run/out/**/store.jsonl` read-only in a
+Swept `${ORCD_GROUP_SCRATCH}/triage_design_20260919/run/out/**/store.jsonl` read-only in a
 `mit_quicktest` job (32 procs, 81 s wall). Counts are of live assertions — not invalidated, with a
 `wasGeneratedBy` edge to a branch activity — grouped by the producing node, the assertion's `verb`
 and its `deviation_type`/`claim`.

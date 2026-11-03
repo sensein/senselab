@@ -36,7 +36,7 @@ mints spans in its own family and never edits a span another node proposed, so e
 something to say about is a span it names its own evidence for.
 
 Every corpus figure below was measured on 2026-09-15 over
-`/orcd/data/satra/002/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04` — 2,005 subjects,
+`${ORCD_DATA}/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04` — 2,005 subjects,
 70,520 wav — read-only, by
 [`runs/corpus-instructions/scan_instructions.py`](runs/corpus-instructions/scan_instructions.py),
 and is reported over the **62,547** triaged recordings that remain once `audio-check` and
@@ -268,7 +268,7 @@ that 15 families were undeclared, and that all 16 declared `*-v2` families had z
 spelled the version marker with capitals and parentheses — `task-Respiration-and-cough-(v2)-HardCough`.
 The authoritative tree does not spell them that way, and the copy has been retired.
 
-Measured over `/orcd/data/satra/002/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04`
+Measured over `${ORCD_DATA}/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04`
 (2,005 subjects, 70,520 wav, 70,946 `_recording-metadata.json`, 21,725 `_acoustictask-metadata.json`)
 on 2026-09-15:
 
@@ -4313,7 +4313,7 @@ the ones the decision simplifies. **Recorded, not done: this document changes no
 ## Appendix — the instruction per family, verbatim
 
 Read from `<stem>_recording-metadata.json` under
-`/orcd/data/satra/002/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04`, 2026-09-15, over
+`${ORCD_DATA}/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04`, 2026-09-15, over
 all 2,005 subjects. **All 48 declared families appear**; none is inferred from a sibling. The
 bracketed number is how many English recording *sidecars* carry that exact string; the family's own
 count is the corpus profile's, which counts *wav*. A few sidecars have no wav — 426 tree-wide, 255

@@ -7,7 +7,7 @@ filesystem, only for files under one of the ``--source-root`` directories. Files
 byte ranges (``206 Partial Content``), which an ``<audio>`` element needs to seek::
 
     python3 scripts/triage_review_serve.py CORPUS --port 8765 --bind "$(hostname)" \
-        --source-root /orcd/data/satra/002/datasets/b2ai
+        --source-root ${ORCD_DATA}/datasets/b2ai
 
 Standard library only, so it runs under any ``python3`` on a compute node.
 """

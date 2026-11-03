@@ -8,7 +8,7 @@ import os, subprocess, warnings
 import numpy as np, soundfile as sf, torchaudio
 from torchcodec.decoders import AudioDecoder
 warnings.filterwarnings("ignore")
-W = "/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work5"; os.makedirs(W, exist_ok=True)
+W = "${AGENT_SCRATCH}/io-audit/work5"; os.makedirs(W, exist_ok=True)
 SR = 22050
 
 def hr(t): print("\n" + "=" * 112 + f"\n## {t}\n" + "=" * 112)

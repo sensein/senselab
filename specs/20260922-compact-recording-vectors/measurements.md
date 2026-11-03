@@ -1,9 +1,9 @@
 # What the first build measured
 
 The 2026-09-19 corpus run, scanned on 2026-09-22 at commit `e55e8d2d` in the pinned checkout
-`/orcd/scratch/bcs/002/satra/senselab-rvec`, 32 Slurm tasks over
-`/orcd/scratch/bcs/002/satra/triage_design_20260919/run/out`, merged to
-`/orcd/scratch/bcs/002/satra/recording_vectors_20260922/recording_vectors.parquet` (mode 600, in a
+`${ORCD_GROUP_SCRATCH}/senselab-rvec`, 32 Slurm tasks over
+`${ORCD_GROUP_SCRATCH}/triage_design_20260919/run/out`, merged to
+`${ORCD_GROUP_SCRATCH}/recording_vectors_20260922/recording_vectors.parquet` (mode 600, in a
 mode-700 tree).
 
 ## Size

@@ -16,7 +16,7 @@ import torchaudio
 from torchcodec.decoders import AudioDecoder
 
 warnings.filterwarnings("ignore")
-W = "/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work3"
+W = "${AGENT_SCRATCH}/io-audit/work3"
 SR = 22050
 
 
@@ -183,7 +183,7 @@ for fname, (f, fsr) in FILES.items():
     print(f"  {fname:<14} " + " | ".join(row))
 
 hr("B8. senselab Audio: does its offset/duration path inherit the mp3 defect? (uses torchcodec range)")
-sys.path.insert(0, "/Users/satra/software/sensein/senselab/src")
+sys.path.insert(0, "src")
 from senselab.audio.data_structures.audio import Audio  # noqa: E402
 
 for fname, (f, fsr) in FILES.items():

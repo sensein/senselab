@@ -1278,7 +1278,7 @@ value IS is the decision to pay for separation, and that has a measured price ra
 
 The trigger is not this key: separation runs only where the diarizer counted more than one speaker
 on the enhanced stream, which over the 62,392 recordings of the replayed run at
-/orcd/scratch/bcs/002/satra/triage_replay_20260922/out/ is 2,305 recordings -- 5.32% of the 43,335
+${ORCD_GROUP_SCRATCH}/triage_replay_20260922/out/ is 2,305 recordings -- 5.32% of the 43,335
 SPEECH ran on, 3.69% of the corpus -- carrying 22.22 h of audio (mean 34.7 s, median 24.7 s).
 2,303 of those hold exactly 2 speakers and are separable; 2 hold 3 and are reported rather than
 decomposed, because the checkpoint fixes n_sources at 2.
@@ -1826,7 +1826,7 @@ verdict.second_opinion_confident_no: 0.2
   and kept unchanged when Clef 27B replaced Nimble (owner, 2026-10-02: leave the thresholds). Clef's
   probability distribution is unmeasured, so nothing below says where its answers fall. A disagreement is p >= yes with the reviewer saying no, or p <= no with the reviewer
   saying yes. The proposal comes from the 20-recording pilot (2026-09-30, nimble:9b blob
-  bbf1d6fc..., /orcd/scratch/bcs/002/satra/tmp_nimble/pilot_out.json). Its probabilities are
+  bbf1d6fc..., ${ORCD_GROUP_SCRATCH}/tmp_nimble/pilot_out.json). Its probabilities are
   bimodal: of the 60 compared answers (three questions x 20), 50 are <= 0.10, six are >= 0.84, and
   the other four are 0.103, 0.34, 0.36 and 0.75. Both cuts fall in gaps, so a shift of +/-0.04
   moves no pilot recording. Under 0.8/0.2 three pilot recordings flag:
@@ -1970,7 +1970,7 @@ verdict.gates.by_group.dominant_speaker_share_min: 0.9          [ORDERED_TOKENS,
   genuine examiner turn of 2 s in the same task reads 0.90 and sits on the bound.
 
   The distribution IS measured, over the 38,980 SPEECH recordings of the replayed corpus at
-  /orcd/scratch/bcs/002/satra/triage_replay_20260922/out/ that carry both a task extent and an
+  ${ORCD_GROUP_SCRATCH}/triage_replay_20260922/out/ that carry both a task extent and an
   enhanced diarization. p10, p25 and p50 are all exactly 1.00: on nine SPEECH recordings in ten,
   one voice holds every attributed second of the task. Below each candidate bound:
 
@@ -2316,7 +2316,7 @@ so leaving it off costs nothing that the detector cascade was doing. What its an
 
   engine transformers -- the venv worker above stays the default so a run that turns the reviewer on
   needs nothing new. vllm is owner-approved (2026-10-10) for corpus passes: measured on one H100 over
-  246 reviewer requests (/orcd/scratch/bcs/002/satra/bench_reviewer_20261009), vLLM 0.31.0 at
+  246 reviewer requests (${ORCD_GROUP_SCRATCH}/bench_reviewer_20261009), vLLM 0.31.0 at
   concurrency 1 answered 246/246 with token ids identical across two runs, at 3.7x the transformers
   worker's throughput (0.179 against 0.049 calls/s); at concurrency 32 it was not reproducible, with
   or without VLLM_BATCH_INVARIANT, so one request at a time is part of the engine's identity.

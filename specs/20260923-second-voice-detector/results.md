@@ -1,8 +1,8 @@
 # Results
 
 Everything below was measured on ORCD, pinned checkout `0f7997bc` at
-`/orcd/scratch/bcs/002/satra/senselab-secondvoice`, work directory
-`/orcd/scratch/bcs/002/satra/secondvoice_20260923`. Timings are from an idle H100 (node2803)
+`${ORCD_GROUP_SCRATCH}/senselab-secondvoice`, work directory
+`${ORCD_GROUP_SCRATCH}/secondvoice_20260923`. Timings are from an idle H100 (node2803)
 or A100 (node3805) allocation; the laptop figures taken earlier are discarded because the
 machine was under load 17–25 and they are upper bounds at best.
 

@@ -47,7 +47,7 @@ On the 23 recordings the owner listened to, the measure read every one as heard:
 ten confirmed breathing, single on 7c169ccc (one long breath where three were asked) and 517381e9
 (the burst in speech), none on the silent ones and on the quiet 9d16c147.
 
-In-memory re-fold (VERDICT only, r9 stores, nothing written; /orcd/scratch/bcs/002/satra/tmp_bpest/):
+In-memory re-fold (VERDICT only, r9 stores, nothing written; ${ORCD_GROUP_SCRATCH}/tmp_bpest/):
 
 - Labelled 22: all as heard. 7c169ccc flags `task_mismatch`; the ten silent ones and 517381e9 discard
   (`no_breath_captured`, or `too_short_for_task` for the two sub-second fragments); nine of the ten
@@ -78,7 +78,7 @@ The reading (`measure_modulation`) takes the same stored pre-emphasised `spectro
 seven subbands over 150-4000 Hz, log envelopes at 20 Hz, their modulation spectra, and the energy in
 the breathing band (0.1-1.2 Hz) against the syllabic band (2-8 Hz) speech occupies. It counts peaks of
 the breathing-band component inside the span where the broadband envelope stays 8 dB above its floor.
-Prototype and its evaluation: /orcd/scratch/bcs/002/satra/breath_modspec/.
+Prototype and its evaluation: ${ORCD_GROUP_SCRATCH}/breath_modspec/.
 
 What it decides:
 
@@ -92,7 +92,7 @@ What it decides:
   coherence and surrogate tests of the prototype decide nothing: silent recordings passed them.
 
 Effect, in memory on the 22 labelled and the 300-sample rows against 8f229ee0
-(/orcd/scratch/bcs/002/satra/tmp_modest/): every labelled recording as heard, 39ba8784 now passing on
+(${ORCD_GROUP_SCRATCH}/tmp_modest/): every labelled recording as heard, 39ba8784 now passing on
 its cycles; `task_mismatch` 46 → 34 rows, 9 cleared on cycles (1ba3214d, 3c6a97e9, 670e8db6 among
 them) and 3 discarded by the speech guard; 8 more recordings discard by the speech guard (7 of them
 passed before, with 4-6 events at -1.2 to +2.7 dB). Those eight are unlabelled and want listening.
@@ -247,7 +247,7 @@ measured and dropped:
   (5/7/9 dB, 0.15/0.3 active) left about 25 of them speech-vetoed. Without labels on those, keeping
   breathing is the safer error.
 
-**Measured** (in-memory re-fold of the r15 stores, 1,074 rows, 0 errors; `/orcd/scratch/bcs/002/satra/tmp_bxt/`):
+**Measured** (in-memory re-fold of the r15 stores, 1,074 rows, 0 errors; `${ORCD_GROUP_SCRATCH}/tmp_bxt/`):
 the label fit is 53 of 56, the same three as before, with 0 decisions changed against `1a73d8d0`.
 
 | Set | Source | Median extent, old → new |
@@ -311,7 +311,7 @@ stays 0.25 s; the events' spans are instead trimmed to the frames within 10 dB o
 (`event_trim_db`), which is display and extent only and changes no count.
 
 **Measured** (in-memory re-fold of the r15 stores at the overlaid src, 1,074 rows, 0 errors;
-`/orcd/scratch/bcs/002/satra/tmp_qb/`), against the previous re-fold (`tmp_bxt/estimate.jsonl`):
+`${ORCD_GROUP_SCRATCH}/tmp_qb/`), against the previous re-fold (`tmp_bxt/estimate.jsonl`):
 
 | Set | Label fit | Decisions to/from discard | task_mismatch cleared / new | Review band (of kept) |
 |---|---|---|---|---|
@@ -409,7 +409,7 @@ Three changes (`train` keys `word_spread_max_s`, `speech_bridge_cycles`):
   phases, 3 breaths, 1.4–8.1 s, matching the instruction.
 
 **Measured** (`breath_pattern_of` before at fix/policy-v8 36c3cf23 and after, on stored inputs;
-scripts in the job's `tmp/bt/`, the ORCD sample in `/orcd/scratch/bcs/002/satra/breathmod_20261006/`):
+scripts in the job's `tmp/bt/`, the ORCD sample in `${ORCD_GROUP_SCRATCH}/breathmod_20261006/`):
 
 | Set | n | Kept / label agreement | Review band | Readings changed |
 |---|---|---|---|---|

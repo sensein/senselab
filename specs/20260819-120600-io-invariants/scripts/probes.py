@@ -10,7 +10,7 @@ import torchaudio
 from torchcodec.decoders import AudioDecoder
 from torchcodec.encoders import AudioEncoder
 
-W = "/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work2"
+W = "${AGENT_SCRATCH}/io-audit/work2"
 os.makedirs(W, exist_ok=True)
 SR = 22050
 
@@ -182,7 +182,7 @@ for name, p in vids.items():
 # ---------------------------------------------------------------- 6. senselab end-to-end
 hr("6. senselab Audio: save_to_file / load round-trip (uses torchcodec when available)")
 import sys
-sys.path.insert(0, "/Users/satra/software/sensein/senselab/src")
+sys.path.insert(0, "src")
 from senselab.audio.data_structures.audio import Audio  # noqa: E402
 
 for sig_name, arr in {

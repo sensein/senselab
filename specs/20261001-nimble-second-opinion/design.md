@@ -47,12 +47,12 @@ right while being wrong.
 
 ### Durable location (proposed, not yet executed)
 
-The pilot store lives in scratch: `/orcd/scratch/bcs/002/satra/tmp_nimble/{ol,models}`, 2.1 GB of
-binary and 8.9 GB of models. The group model store `/orcd/data/satra/002/models` is already where
+The pilot store lives in scratch: `${ORCD_GROUP_SCRATCH}/tmp_nimble/{ol,models}`, 2.1 GB of
+binary and 8.9 GB of models. The group model store `${ORCD_DATA}/models` is already where
 other weights live, but its `blobs/` directory is not group-writable. The proposal is a
 self-contained subtree:
 
-    /orcd/data/satra/002/models/ollama-senselab/
+    ${ORCD_DATA}/models/ollama-senselab/
         bin/ollama          # 0.35.0, with its lib/
         models/             # OLLAMA_MODELS: manifests/registry.ollama.ai/library/nimble/latest, blobs/
         verified/           # verify_pin markers

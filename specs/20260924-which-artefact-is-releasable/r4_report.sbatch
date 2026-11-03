@@ -1,15 +1,15 @@
 #!/bin/bash
 #SBATCH --job-name=r4-report
-#SBATCH --partition=pi_satra
+#SBATCH --partition=${CPU_PARTITION}
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
 #SBATCH --time=0:30:00
-#SBATCH --output=/orcd/scratch/bcs/002/satra/triage_r4_20260924/REPORT.txt
+#SBATCH --output=${ORCD_GROUP_SCRATCH}/triage_r4_20260924/REPORT.txt
 #SBATCH --open-mode=truncate
 set -euo pipefail
-source /orcd/scratch/bcs/002/satra/triage_design_20260919/env_common.sh
-R=/orcd/scratch/bcs/002/satra/triage_r4_20260924
-A=/orcd/scratch/bcs/002/satra/axes_census
+source ${ORCD_GROUP_SCRATCH}/triage_design_20260919/env_common.sh
+R=${ORCD_GROUP_SCRATCH}/triage_r4_20260924
+A=${ORCD_GROUP_SCRATCH}/axes_census
 echo "=== r4 replay, $(date -Is)"
 echo "slice files: $(ls $R/rows/slices 2>/dev/null | wc -l) of 240"
 echo "--- rows (must read 62548) ---"

@@ -14,7 +14,7 @@ description: "Task list for scene-aware presence axis + improved utterance uncer
 ## Format: `[ID] [P?] [Story] Description with file path`
 
 - **[P]**: parallelizable (different files, no incomplete-task dependency)
-- Absolute repo root: `/Users/satra/software/sensein/senselab`
+- Absolute repo root: `.`
 
 ---
 

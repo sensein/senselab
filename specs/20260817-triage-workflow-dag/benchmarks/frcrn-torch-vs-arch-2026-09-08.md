@@ -119,7 +119,7 @@ established cluster figure of "~1.000."
 
 - **Within one environment, across repeats: exact.** Every cell's two repeats are bit-identical
   (`signal_energy_fraction` equal to 16 decimal places in the raw JSON) for all three files.
-- **Across two different physical x86_64 nodes (node3805, a `pi_satra` GPU-class node used CPU-only;
+- **Across two different physical x86_64 nodes (node3805, a `${CPU_PARTITION}` GPU-class node used CPU-only;
   node1623, a plain `mit_quicktest` CPU node): identical**, confirming the x86_64 result is not an
   artifact of one specific machine.
 - **Torch 2.13 vs. 2.14, same architecture: identical** on both architectures — torch version changes
@@ -136,7 +136,7 @@ torch, exactly what `enhance_audios` calls) — via
 | production venv | torch | Breath signal_frac | HardCough signal_frac | ThreeBreaths signal_frac |
 |---|---|---|---|---|
 | local (`~/.cache/senselab/venvs/clearvoice-cpu`) | 2.14.0, arm64 | 0.09691 | 0.98754 | 0.00052 |
-| cluster (`/orcd/scratch/bcs/002/satra/senselab-venvs/clearvoice-cpu`) | 2.14.0+cpu, x86_64 | 0.09690 | 0.98754 | 0.00052 |
+| cluster (`${ORCD_GROUP_SCRATCH}/senselab-venvs/clearvoice-cpu`) | 2.14.0+cpu, x86_64 | 0.09690 | 0.98754 | 0.00052 |
 
 **The current production cluster venv also nulls `Breath` and `ThreeBreaths` today** — matching the
 current production *local* venv almost exactly (0.09691 vs. 0.09690; both cells' `gain_db` 7.54–7.55,
@@ -163,8 +163,8 @@ that venv nulls these files today. There is no lost pre-rebuild environment to r
 Two further facts close off the remaining environmental explanations. The battery ran on
 `mit_preemptable` with `billing=8,cpu=8,mem=32G` and no `gres=gpu`, so it was **CPU**, like every cell
 in the 2x2 — device is not the untested axis. And `clearvoice-cpu` under
-`/orcd/scratch/bcs/002/satra/senselab-venvs` is the only clearvoice venv on the cluster; the second
-venv root (`/orcd/scratch/orcd/013/satra/senselab-venvs`) holds only `crisperwhisper`, `hear`,
+`${ORCD_GROUP_SCRATCH}/senselab-venvs` is the only clearvoice venv on the cluster; the second
+venv root (`${ORCD_PERSONAL_SCRATCH}/senselab-venvs`) holds only `crisperwhisper`, `hear`,
 `pii-detection`, `qwen-asr` and `yamnet`, so the battery cannot have used a different one.
 
 ### What the divergence is actually between
@@ -322,8 +322,8 @@ uv run python specs/20260817-triage-workflow-dag/benchmarks/scripts/frcrn_torch_
   --repeats 2 --out-dir /tmp/frcrn_arm64_214 --out-json /tmp/frcrn_arm64_214/result.json
 
 # Cluster (x86_64), both torch versions in one job:
-sbatch --partition=pi_satra --cpus-per-task=8 --mem=32G --time=2:00:00 \
-  --chdir=/orcd/scratch/bcs/002/satra/frcrn-torch-arch-20260908 \
+sbatch --partition=${CPU_PARTITION} --cpus-per-task=8 --mem=32G --time=2:00:00 \
+  --chdir=${ORCD_GROUP_SCRATCH}/frcrn-torch-arch-20260908 \
   specs/20260817-triage-workflow-dag/benchmarks/scripts/frcrn_cluster_job_2026_09_08.sh
 
 # Actual production venv, either machine:
@@ -333,6 +333,6 @@ uv run python specs/20260817-triage-workflow-dag/benchmarks/scripts/frcrn_produc
 ```
 
 Raw JSON for every cell in this report (7 environments) is preserved under
-`/orcd/scratch/bcs/002/satra/frcrn-torch-arch-20260908/results/` on the cluster and
+`${ORCD_GROUP_SCRATCH}/frcrn-torch-arch-20260908/results/` on the cluster and
 `/tmp/frcrn_local_2x2/`, `/tmp/frcrn_prod_check_local/` locally; not copied into the repo (large,
 reproducible from the commands above).

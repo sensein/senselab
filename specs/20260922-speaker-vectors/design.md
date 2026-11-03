@@ -7,7 +7,7 @@ What a task extent is, and how much of the corpus has one: `coverage.md`. The pa
 decodes: `schema.md`. This file is the decisions and the measurements behind them.
 
 All measurements below are on the finished design corpus,
-`/orcd/scratch/bcs/002/satra/triage_design_20260919/run/out`, at senselab `f3da4081`, with
+`${ORCD_GROUP_SCRATCH}/triage_design_20260919/run/out`, at senselab `f3da4081`, with
 `speechbrain/spkrec-ecapa-voxceleb` at commit `0f99f2d0ebe89ac095bcc5903c4dd8f72b367286`.
 
 ---
@@ -250,7 +250,7 @@ materially worse absolute numbers. Three extents is not enough; six is workable.
 
 ## D-8. What the pipeline does on the replayed tree at full supply
 
-Job `23473979`, slice 0 of 512 of `/orcd/scratch/bcs/002/satra/triage_replay_20260922/out` while
+Job `23473979`, slice 0 of 512 of `${ORCD_GROUP_SCRATCH}/triage_replay_20260922/out` while
 that tree was still being written. Six subjects, and unlike the smoke set these carry their whole
 extent supply, so this is the first run of the production path at the shape the artefact will
 actually have.
@@ -284,7 +284,7 @@ rests on, and it is the first thing to check against the replayed census rather 
 
 ## D-9. The replay mints two task extents on 3,309 recordings, and the pooling unit moves
 
-Census of the replayed tree, `/orcd/scratch/bcs/002/satra/triage_replay_20260922/out`, job
+Census of the replayed tree, `${ORCD_GROUP_SCRATCH}/triage_replay_20260922/out`, job
 `23474063`, taken while the tree was still being written — 62,356 recordings readable, 5 without
 a store.
 

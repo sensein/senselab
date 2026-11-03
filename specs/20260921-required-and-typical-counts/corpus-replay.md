@@ -7,7 +7,7 @@ before, to the recording.
 ## How it was measured
 
 [`corpus-replay.py`](corpus-replay.py), run over the finished 2026-09-19 corpus run at
-`/orcd/scratch/bcs/002/satra/triage_design_20260919/run/` — read-only, nothing under that tree was
+`${ORCD_GROUP_SCRATCH}/triage_design_20260919/run/` — read-only, nothing under that tree was
 written. Each pass loads a recording's `store.jsonl` and its PREPROCESS derivatives, re-runs the
 **one branch that owns the declared family** in its in-family mode, and records both what that
 task's conformance is and every `measure` finding it wrote, as a name-to-value mapping. No model is
@@ -119,7 +119,7 @@ change and both are present identically on both sides, which is why the A/B move
 
 ```bash
 # both sides, 64 tasks each, read-only over the run tree
-cd /orcd/scratch/bcs/002/satra/counts-replay
+cd ${ORCD_GROUP_SCRATCH}/counts-replay
 REPLAY_SIDE=old sbatch --array=0-63 replay.sbatch
 REPLAY_SIDE=new sbatch --array=0-63 replay.sbatch
 REPLAY_OUT=out python corpus-replay-report.py

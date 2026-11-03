@@ -3,7 +3,7 @@
 # Submit this script as a bounded array after generating TRIAGE_RERENDER_LIST.
 
 #SBATCH --job-name=triage-report
-#SBATCH --partition=pi_satra
+#SBATCH --partition=${CPU_PARTITION}
 #SBATCH --time=0:20:00
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=12G

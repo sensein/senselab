@@ -16058,7 +16058,7 @@
     "format_name": "ogg"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__q16.ogg': Error : unknown error in flac decoder."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__q16.ogg': Error : unknown error in flac decoder."
    },
    "size_bytes": 4339,
    "decode": {
@@ -16101,10 +16101,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__q16.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__q16.ogg': Error : unknown error in flac decoder."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__q16.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__q16.ogg': Error : unknown error in flac decoder."
     },
     "librosa.load": {
      "ref_shape": [
@@ -16167,7 +16167,7 @@
     "format_name": "ogg"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__f32.ogg': Error : unknown error in flac decoder."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__f32.ogg': Error : unknown error in flac decoder."
    },
    "size_bytes": 6305,
    "decode": {
@@ -16210,10 +16210,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__f32.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__f32.ogg': Error : unknown error in flac decoder."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__f32.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__f32.ogg': Error : unknown error in flac decoder."
     },
     "librosa.load": {
      "ref_shape": [
@@ -16276,7 +16276,7 @@
     "format_name": "ogg"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__oor.ogg': Error : unknown error in flac decoder."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__oor.ogg': Error : unknown error in flac decoder."
    },
    "size_bytes": 7147,
    "decode": {
@@ -16319,10 +16319,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__oor.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__oor.ogg': Error : unknown error in flac decoder."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__oor.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__oor.ogg': Error : unknown error in flac decoder."
     },
     "librosa.load": {
      "ref_shape": [
@@ -16385,7 +16385,7 @@
     "format_name": "ogg"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__q16_stereo.ogg': Error : unknown error in flac decoder."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__q16_stereo.ogg': Error : unknown error in flac decoder."
    },
    "size_bytes": 8824,
    "decode": {
@@ -16428,10 +16428,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__q16_stereo.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__q16_stereo.ogg': Error : unknown error in flac decoder."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__q16_stereo.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchcodec_AudioEncoder__q16_stereo.ogg': Error : unknown error in flac decoder."
     },
     "librosa.load": {
      "ref_shape": [
@@ -16496,7 +16496,7 @@
     "format_name": "ogg"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchaudio_save__q16.ogg': Error : unknown error in flac decoder."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchaudio_save__q16.ogg': Error : unknown error in flac decoder."
    },
    "size_bytes": 4339,
    "decode": {
@@ -16539,10 +16539,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchaudio_save__q16.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchaudio_save__q16.ogg': Error : unknown error in flac decoder."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchaudio_save__q16.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchaudio_save__q16.ogg': Error : unknown error in flac decoder."
     },
     "librosa.load": {
      "ref_shape": [
@@ -16607,7 +16607,7 @@
     "format_name": "ogg"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchaudio_save__f32.ogg': Error : unknown error in flac decoder."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchaudio_save__f32.ogg': Error : unknown error in flac decoder."
    },
    "size_bytes": 6305,
    "decode": {
@@ -16650,10 +16650,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchaudio_save__f32.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchaudio_save__f32.ogg': Error : unknown error in flac decoder."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchaudio_save__f32.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchaudio_save__f32.ogg': Error : unknown error in flac decoder."
     },
     "librosa.load": {
      "ref_shape": [
@@ -16718,7 +16718,7 @@
     "format_name": "ogg"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchaudio_save__oor.ogg': Error : unknown error in flac decoder."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchaudio_save__oor.ogg': Error : unknown error in flac decoder."
    },
    "size_bytes": 7147,
    "decode": {
@@ -16761,10 +16761,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchaudio_save__oor.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchaudio_save__oor.ogg': Error : unknown error in flac decoder."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchaudio_save__oor.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchaudio_save__oor.ogg': Error : unknown error in flac decoder."
     },
     "librosa.load": {
      "ref_shape": [
@@ -16829,7 +16829,7 @@
     "format_name": "ogg"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchaudio_save__q16_stereo.ogg': Error : unknown error in flac decoder."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchaudio_save__q16_stereo.ogg': Error : unknown error in flac decoder."
    },
    "size_bytes": 8824,
    "decode": {
@@ -16872,10 +16872,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchaudio_save__q16_stereo.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchaudio_save__q16_stereo.ogg': Error : unknown error in flac decoder."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/ogg_vorbis__torchaudio_save__q16_stereo.ogg': Error : unknown error in flac decoder."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/ogg_vorbis__torchaudio_save__q16_stereo.ogg': Error : unknown error in flac decoder."
     },
     "librosa.load": {
      "ref_shape": [
@@ -17714,7 +17714,7 @@
    "sr_in": 22050,
    "ch_in": 1,
    "write": "FAIL",
-   "write_error": "RuntimeError: Failed to save audio to /Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/opus__torchaudio_save__q16.opus: validateSampleRate, /Users/runner/work/torchcodec/torchcodec/meta-pytorch/torchcodec/src/torchcodec/_core/Encoder.cpp:65, invalid sample rate=22050. Supported sample rate values are: 48000, 24000, 16000, 12000, 8000",
+   "write_error": "RuntimeError: Failed to save audio to ${AGENT_SCRATCH}/io-audit/work/opus__torchaudio_save__q16.opus: validateSampleRate, /Users/runner/work/torchcodec/torchcodec/meta-pytorch/torchcodec/src/torchcodec/_core/Encoder.cpp:65, invalid sample rate=22050. Supported sample rate values are: 48000, 24000, 16000, 12000, 8000",
    "write_warnings": [
     "UserWarning: The 'format' parameter is not used by TorchCodec AudioEncoder. Format is determined by the file extension."
    ]
@@ -17727,7 +17727,7 @@
    "sr_in": 22050,
    "ch_in": 1,
    "write": "FAIL",
-   "write_error": "RuntimeError: Failed to save audio to /Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/opus__torchaudio_save__f32.opus: validateSampleRate, /Users/runner/work/torchcodec/torchcodec/meta-pytorch/torchcodec/src/torchcodec/_core/Encoder.cpp:65, invalid sample rate=22050. Supported sample rate values are: 48000, 24000, 16000, 12000, 8000",
+   "write_error": "RuntimeError: Failed to save audio to ${AGENT_SCRATCH}/io-audit/work/opus__torchaudio_save__f32.opus: validateSampleRate, /Users/runner/work/torchcodec/torchcodec/meta-pytorch/torchcodec/src/torchcodec/_core/Encoder.cpp:65, invalid sample rate=22050. Supported sample rate values are: 48000, 24000, 16000, 12000, 8000",
    "write_warnings": [
     "UserWarning: The 'format' parameter is not used by TorchCodec AudioEncoder. Format is determined by the file extension."
    ]
@@ -17740,7 +17740,7 @@
    "sr_in": 22050,
    "ch_in": 1,
    "write": "FAIL",
-   "write_error": "RuntimeError: Failed to save audio to /Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/opus__torchaudio_save__oor.opus: validateSampleRate, /Users/runner/work/torchcodec/torchcodec/meta-pytorch/torchcodec/src/torchcodec/_core/Encoder.cpp:65, invalid sample rate=22050. Supported sample rate values are: 48000, 24000, 16000, 12000, 8000",
+   "write_error": "RuntimeError: Failed to save audio to ${AGENT_SCRATCH}/io-audit/work/opus__torchaudio_save__oor.opus: validateSampleRate, /Users/runner/work/torchcodec/torchcodec/meta-pytorch/torchcodec/src/torchcodec/_core/Encoder.cpp:65, invalid sample rate=22050. Supported sample rate values are: 48000, 24000, 16000, 12000, 8000",
    "write_warnings": [
     "UserWarning: The 'format' parameter is not used by TorchCodec AudioEncoder. Format is determined by the file extension."
    ]
@@ -17753,7 +17753,7 @@
    "sr_in": 22050,
    "ch_in": 2,
    "write": "FAIL",
-   "write_error": "RuntimeError: Failed to save audio to /Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/opus__torchaudio_save__q16_stereo.opus: validateSampleRate, /Users/runner/work/torchcodec/torchcodec/meta-pytorch/torchcodec/src/torchcodec/_core/Encoder.cpp:65, invalid sample rate=22050. Supported sample rate values are: 48000, 24000, 16000, 12000, 8000",
+   "write_error": "RuntimeError: Failed to save audio to ${AGENT_SCRATCH}/io-audit/work/opus__torchaudio_save__q16_stereo.opus: validateSampleRate, /Users/runner/work/torchcodec/torchcodec/meta-pytorch/torchcodec/src/torchcodec/_core/Encoder.cpp:65, invalid sample rate=22050. Supported sample rate values are: 48000, 24000, 16000, 12000, 8000",
    "write_warnings": [
     "UserWarning: The 'format' parameter is not used by TorchCodec AudioEncoder. Format is determined by the file extension."
    ]
@@ -17766,7 +17766,7 @@
    "sr_in": 22050,
    "ch_in": 1,
    "write": "FAIL",
-   "write_error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/opus__soundfile_write__q16.opus': Error : Opus only supports sample rates of 8000, 12000, 16000, 24000, and 48000.",
+   "write_error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/opus__soundfile_write__q16.opus': Error : Opus only supports sample rates of 8000, 12000, 16000, 24000, and 48000.",
    "write_warnings": []
   },
   {
@@ -17777,7 +17777,7 @@
    "sr_in": 22050,
    "ch_in": 1,
    "write": "FAIL",
-   "write_error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/opus__soundfile_write__f32.opus': Error : Opus only supports sample rates of 8000, 12000, 16000, 24000, and 48000.",
+   "write_error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/opus__soundfile_write__f32.opus': Error : Opus only supports sample rates of 8000, 12000, 16000, 24000, and 48000.",
    "write_warnings": []
   },
   {
@@ -17788,7 +17788,7 @@
    "sr_in": 22050,
    "ch_in": 1,
    "write": "FAIL",
-   "write_error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/opus__soundfile_write__oor.opus': Error : Opus only supports sample rates of 8000, 12000, 16000, 24000, and 48000.",
+   "write_error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/opus__soundfile_write__oor.opus': Error : Opus only supports sample rates of 8000, 12000, 16000, 24000, and 48000.",
    "write_warnings": []
   },
   {
@@ -17799,7 +17799,7 @@
    "sr_in": 22050,
    "ch_in": 2,
    "write": "FAIL",
-   "write_error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/opus__soundfile_write__q16_stereo.opus': Error : Opus only supports sample rates of 8000, 12000, 16000, 24000, and 48000.",
+   "write_error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/opus__soundfile_write__q16_stereo.opus': Error : Opus only supports sample rates of 8000, 12000, 16000, 24000, and 48000.",
    "write_warnings": []
   },
   {
@@ -20664,7 +20664,7 @@
     "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchcodec_AudioEncoder__q16.m4a': Format not recognised."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchcodec_AudioEncoder__q16.m4a': Format not recognised."
    },
    "size_bytes": 2009,
    "decode": {
@@ -20707,10 +20707,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchcodec_AudioEncoder__q16.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchcodec_AudioEncoder__q16.m4a': Format not recognised."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchcodec_AudioEncoder__q16.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchcodec_AudioEncoder__q16.m4a': Format not recognised."
     },
     "librosa.load": {
      "ref_shape": [
@@ -20773,7 +20773,7 @@
     "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchcodec_AudioEncoder__f32.m4a': Format not recognised."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchcodec_AudioEncoder__f32.m4a': Format not recognised."
    },
    "size_bytes": 2018,
    "decode": {
@@ -20816,10 +20816,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchcodec_AudioEncoder__f32.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchcodec_AudioEncoder__f32.m4a': Format not recognised."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchcodec_AudioEncoder__f32.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchcodec_AudioEncoder__f32.m4a': Format not recognised."
     },
     "librosa.load": {
      "ref_shape": [
@@ -20882,7 +20882,7 @@
     "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchcodec_AudioEncoder__oor.m4a': Format not recognised."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchcodec_AudioEncoder__oor.m4a': Format not recognised."
    },
    "size_bytes": 2042,
    "decode": {
@@ -20925,10 +20925,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchcodec_AudioEncoder__oor.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchcodec_AudioEncoder__oor.m4a': Format not recognised."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchcodec_AudioEncoder__oor.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchcodec_AudioEncoder__oor.m4a': Format not recognised."
     },
     "librosa.load": {
      "ref_shape": [
@@ -20991,7 +20991,7 @@
     "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchcodec_AudioEncoder__q16_stereo.m4a': Format not recognised."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchcodec_AudioEncoder__q16_stereo.m4a': Format not recognised."
    },
    "size_bytes": 2474,
    "decode": {
@@ -21034,10 +21034,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchcodec_AudioEncoder__q16_stereo.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchcodec_AudioEncoder__q16_stereo.m4a': Format not recognised."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchcodec_AudioEncoder__q16_stereo.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchcodec_AudioEncoder__q16_stereo.m4a': Format not recognised."
     },
     "librosa.load": {
      "ref_shape": [
@@ -21102,7 +21102,7 @@
     "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchaudio_save__q16.m4a': Format not recognised."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchaudio_save__q16.m4a': Format not recognised."
    },
    "size_bytes": 2009,
    "decode": {
@@ -21145,10 +21145,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchaudio_save__q16.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchaudio_save__q16.m4a': Format not recognised."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchaudio_save__q16.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchaudio_save__q16.m4a': Format not recognised."
     },
     "librosa.load": {
      "ref_shape": [
@@ -21213,7 +21213,7 @@
     "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchaudio_save__f32.m4a': Format not recognised."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchaudio_save__f32.m4a': Format not recognised."
    },
    "size_bytes": 2018,
    "decode": {
@@ -21256,10 +21256,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchaudio_save__f32.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchaudio_save__f32.m4a': Format not recognised."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchaudio_save__f32.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchaudio_save__f32.m4a': Format not recognised."
     },
     "librosa.load": {
      "ref_shape": [
@@ -21324,7 +21324,7 @@
     "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchaudio_save__oor.m4a': Format not recognised."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchaudio_save__oor.m4a': Format not recognised."
    },
    "size_bytes": 2042,
    "decode": {
@@ -21367,10 +21367,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchaudio_save__oor.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchaudio_save__oor.m4a': Format not recognised."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchaudio_save__oor.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchaudio_save__oor.m4a': Format not recognised."
     },
     "librosa.load": {
      "ref_shape": [
@@ -21435,7 +21435,7 @@
     "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchaudio_save__q16_stereo.m4a': Format not recognised."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchaudio_save__q16_stereo.m4a': Format not recognised."
    },
    "size_bytes": 2474,
    "decode": {
@@ -21478,10 +21478,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchaudio_save__q16_stereo.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchaudio_save__q16_stereo.m4a': Format not recognised."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__torchaudio_save__q16_stereo.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__torchaudio_save__q16_stereo.m4a': Format not recognised."
     },
     "librosa.load": {
      "ref_shape": [
@@ -21588,7 +21588,7 @@
     "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__ffmpeg_cli__q16.m4a': Format not recognised."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__ffmpeg_cli__q16.m4a': Format not recognised."
    },
    "size_bytes": 2009,
    "decode": {
@@ -21631,10 +21631,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__ffmpeg_cli__q16.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__ffmpeg_cli__q16.m4a': Format not recognised."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__ffmpeg_cli__q16.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__ffmpeg_cli__q16.m4a': Format not recognised."
     },
     "librosa.load": {
      "ref_shape": [
@@ -21697,7 +21697,7 @@
     "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__ffmpeg_cli__f32.m4a': Format not recognised."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__ffmpeg_cli__f32.m4a': Format not recognised."
    },
    "size_bytes": 2018,
    "decode": {
@@ -21740,10 +21740,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__ffmpeg_cli__f32.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__ffmpeg_cli__f32.m4a': Format not recognised."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__ffmpeg_cli__f32.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__ffmpeg_cli__f32.m4a': Format not recognised."
     },
     "librosa.load": {
      "ref_shape": [
@@ -21806,7 +21806,7 @@
     "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__ffmpeg_cli__oor.m4a': Format not recognised."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__ffmpeg_cli__oor.m4a': Format not recognised."
    },
    "size_bytes": 2042,
    "decode": {
@@ -21849,10 +21849,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__ffmpeg_cli__oor.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__ffmpeg_cli__oor.m4a': Format not recognised."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__ffmpeg_cli__oor.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__ffmpeg_cli__oor.m4a': Format not recognised."
     },
     "librosa.load": {
      "ref_shape": [
@@ -21915,7 +21915,7 @@
     "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
    },
    "sf_info": {
-    "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__ffmpeg_cli__q16_stereo.m4a': Format not recognised."
+    "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__ffmpeg_cli__q16_stereo.m4a': Format not recognised."
    },
    "size_bytes": 2474,
    "decode": {
@@ -21958,10 +21958,10 @@
      "warnings": []
     },
     "soundfile.read(f32)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__ffmpeg_cli__q16_stereo.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__ffmpeg_cli__q16_stereo.m4a': Format not recognised."
     },
     "soundfile.read(f64)": {
-     "error": "LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work/m4a_aac__ffmpeg_cli__q16_stereo.m4a': Format not recognised."
+     "error": "LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work/m4a_aac__ffmpeg_cli__q16_stereo.m4a': Format not recognised."
     },
     "librosa.load": {
      "ref_shape": [

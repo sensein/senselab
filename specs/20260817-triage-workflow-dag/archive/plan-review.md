@@ -136,7 +136,7 @@ implementation, not the benchmark."
 Three problems, each independently fatal to the step:
 
 1. **The path is machine-local.** `benchmarks/scripts/floor.py:3-4` loads
-   `/Users/satra/.claude/jobs/295c3f8a/tmp/stage1.npz` and `.../yamnet.npz`, and `:39` writes back
+   `${AGENT_SCRATCH}/stage1.npz` and `.../yamnet.npz`, and `:39` writes back
    into the same job scratch dir. Thirteen of the sixteen scripts under `benchmarks/scripts/` do the
    same. No other host, and no future session, can run this.
 2. **It is not the span producer, and it uses a different rule.** `floor.py:20-37` is a *floor

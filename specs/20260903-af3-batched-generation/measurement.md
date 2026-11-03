@@ -1,6 +1,6 @@
 # Audio Flamingo 3: batched generation, and what it leaves of the vLLM gap
 
-Measured 2026-09-03 on ORCD, H100 80GB HBM3, node2803, partition `pi_satra`, model SHA
+Measured 2026-09-03 on ORCD, H100 80GB HBM3, node2803, partition `${CPU_PARTITION}`, model SHA
 `7d4bae64ee29878af6504ae6f6bb3e40492838ad`, transformers 5.5.4 / torch 2.14.0+cu130, attention
 `sdpa` (flash-attn is unavailable on this cluster). Job 21903328, commit `cf2f0672`.
 

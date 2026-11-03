@@ -6,8 +6,8 @@
 #SBATCH --time=6:00:00
 #SBATCH --requeue
 #SBATCH --array=140-239%128
-#SBATCH --output=/orcd/scratch/bcs/002/satra/triage_r4_20260924/logs/%x-%A_%a.out
-#SBATCH --chdir=/orcd/scratch/bcs/002/satra/triage_r4_20260924
+#SBATCH --output=${ORCD_GROUP_SCRATCH}/triage_r4_20260924/logs/%x-%A_%a.out
+#SBATCH --chdir=${ORCD_GROUP_SCRATCH}/triage_r4_20260924
 # 62,548 recordings over 240 slices of ~261, the same manifest and the same sources r3 replayed.
 # 240 and not the 400 r3 used: the first submission went to ou_bcs_normal, whose partition QOS caps
 # submits at 256 whatever --qos says. That partition then ran 14 of 160 for twelve minutes against
@@ -16,16 +16,16 @@
 # The driver skips a store already carrying this configuration's replay marker, so a preempted
 # slice is resumable by resubmission over the same roots.
 set -euo pipefail
-source /orcd/scratch/bcs/002/satra/triage_design_20260919/env_common.sh
-export SENSELAB_REPO=/orcd/scratch/bcs/002/satra/senselab-r4
+source ${ORCD_GROUP_SCRATCH}/triage_design_20260919/env_common.sh
+export SENSELAB_REPO=${ORCD_GROUP_SCRATCH}/senselab-r4
 export TRIAGE_EXPECTED_COMMIT=84ebb3b5107b1176ef9f01f305156d578bf4ffb9
 export CUDA_VISIBLE_DEVICES=""
 export OMP_NUM_THREADS=8
 export OPENBLAS_NUM_THREADS=8
 export MKL_NUM_THREADS=8
-C=/orcd/scratch/bcs/002/satra/triage_design_20260919
-R=/orcd/scratch/bcs/002/satra/triage_r4_20260924
-M=/orcd/scratch/bcs/002/satra/triage_r3_20260923/replay_manifest.jsonl
+C=${ORCD_GROUP_SCRATCH}/triage_design_20260919
+R=${ORCD_GROUP_SCRATCH}/triage_r4_20260924
+M=${ORCD_GROUP_SCRATCH}/triage_r3_20260923/replay_manifest.jsonl
 sleep $(( (SLURM_ARRAY_TASK_ID * 7) % 120 ))
 cd "$SENSELAB_REPO"
 HEAD_SHA=$(git rev-parse HEAD)
