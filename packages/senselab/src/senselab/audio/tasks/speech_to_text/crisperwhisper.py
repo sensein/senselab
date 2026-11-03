@@ -2,10 +2,11 @@
 
 `load` takes the pinned model in `init["model"]` (or `"stub": True` for the stub model) and builds nothing; `handle`
 builds the engine `backend_params["engine"]` names (`ct2` or `transformers`) on first use and answers one
-`transcript@1.0` wire form, or one typed fault, per item. Imports are stdlib, numpy and `senselab_worker`; the library,
+`transcript@2.0` wire form, or one typed fault, per item. Imports are stdlib, numpy and `senselab_worker`; the library,
 `torch`, `soundfile` and `huggingface_hub` load inside the engine.
 """
 
+import functools
 import hashlib
 import importlib.metadata
 import math
@@ -84,7 +85,7 @@ def load(init: dict[str, Any]) -> State:
 
 
 def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return one `{"outputs": {"transcript": <transcript@1.0 wire form>}}` per item, or its typed fault.
+    """Return one `{"outputs": {"transcript": <transcript@2.0 wire form>}}` per item, or its typed fault.
 
     `params` holds the task's `language` and `timestamps` and `backend_params` (`engine`, `max_new_tokens`).
 
@@ -121,18 +122,19 @@ def _backend_params(given: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def transcript(decoded: Decoded, timestamps: str, clock_id: str, duration_ns: int) -> dict[str, Any]:
-    """Return the `transcript@1.0` wire form of `decoded` at the `timestamps` level.
+    """Return the `transcript@2.0` wire form of `decoded` at the `timestamps` level.
 
     `word` gives one segment dividing into words, `segment` the same segment without words, `none` one untimed
     segment; no words give no segment. A word missing a time starts where the previous ended; spans are integer ns
     clamped to `duration_ns`.
     """
+    doc = functools.partial(_doc, extent_ns=duration_ns, clock_id=clock_id)
     text = " ".join(w for w, _, _ in decoded.words).strip()
     if not text:
-        return _doc([])
+        return doc([])
     mean = None if decoded.mean is None else min(1.0, decoded.mean)
     if timestamps == "none":
-        return _doc([_node(text, None, mean, [])])
+        return doc([_node(text, None, mean, [])])
     floor = 0
     children = []
     for (word, start, end), confidence in zip(decoded.words, decoded.confidences):
@@ -140,11 +142,11 @@ def transcript(decoded: Decoded, timestamps: str, clock_id: str, duration_ns: in
         children.append(_node(word, _span(begin, stop, clock_id), confidence, []))
         floor = stop
     whole = _span(children[0]["span"]["start_ns"], children[-1]["span"]["end_ns"], clock_id)
-    return _doc([_node(text, whole, mean, children if timestamps == "word" else [])])
+    return doc([_node(text, whole, mean, children if timestamps == "word" else [])])
 
 
-def _doc(segments: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"format": "transcript@1.0", "segments": segments}
+def _doc(segments: list[dict[str, Any]], *, extent_ns: int, clock_id: str) -> dict[str, Any]:
+    return {"format": "transcript@2.0", "segments": segments, "extent_ns": extent_ns, "clock_id": clock_id}
 
 
 def _span(start_ns: int, end_ns: int, clock_id: str) -> dict[str, Any]:

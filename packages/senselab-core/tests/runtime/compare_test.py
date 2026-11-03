@@ -166,7 +166,7 @@ def test_a_leaf_on_one_side_is_a_difference_and_an_undeclared_path_is_refused() 
 def _node(span: bool) -> Fields:
     timed = {"start_ns": 0, "end_ns": 5_000_000, "clock_id": "c"}
     node: dict[str, object] = {"text": "hi", "span": timed if span else None, "confidence": 0.5, "children": []}
-    return flatten({"t": {"format": "transcript@1.0", "segments": [node]}})
+    return flatten({"t": {"format": "transcript@2.0", "segments": [node]}})
 
 
 @pytest.mark.logic

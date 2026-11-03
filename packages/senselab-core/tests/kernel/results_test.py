@@ -107,18 +107,36 @@ def _word(text: str, start: object, end: object, clock: str = "c", confidence: f
 def test_transcript_word_spans_are_ns() -> None:
     """Word spans are integer nanoseconds on one clock; confidence is optional and lies in [0, 1]."""
     words = (_word("hello", 0, 400_000_000, confidence=0.9), _word("there", numpy.int64(500_000_000), 900_000_000))
-    t = Transcript(segments=(TranscriptNode(text="hello there", children=words),))
+    t = Transcript(segments=(TranscriptNode(text="hello there", children=words),), extent_ns=900_000_000, clock_id="c")
     leaf = t.segments[0].children[1]
     assert leaf.span is not None and type(leaf.span.start_ns) is int and leaf.confidence is None
-    assert t.format == "transcript@1.0"
+    assert t.format == "transcript@2.0"
     for start in (0.5, "0", True):
         with pytest.raises(ValidationError):
             _word("x", start, 10)
     with pytest.raises(ValidationError):
         _word("x", 0, 10, confidence=1.5)
     with pytest.raises(ValidationError, match="clock"):
-        Transcript(segments=(TranscriptNode(text="a b", children=(_word("a", 0, 1), _word("b", 1, 2, "d"))),))
+        Transcript(
+            segments=(TranscriptNode(text="a b", children=(_word("a", 0, 1), _word("b", 1, 2, "d"))),),
+            extent_ns=2,
+            clock_id="c",
+        )
     assert Transcript(segments=(TranscriptNode(text="untimed"),)).segments[0].span is None
+
+
+@pytest.mark.logic
+def test_transcript_span_past_extent_refused() -> None:
+    """A span ending after the declared extent is refused, as is a timed transcript with no extent or half of one."""
+    words = (_word("hello", 0, 400_000_000), _word("there", 500_000_000, 900_000_000))
+    node = TranscriptNode(text="hello there", children=words)
+    assert Transcript(segments=(node,), extent_ns=900_000_000, clock_id="c").extent_ns == 900_000_000
+    with pytest.raises(ValidationError, match="past the declared extent_ns 899999999"):
+        Transcript(segments=(node,), extent_ns=899_999_999, clock_id="c")
+    with pytest.raises(ValidationError, match="declares its extent_ns"):
+        Transcript(segments=(node,))
+    with pytest.raises(ValidationError, match="together"):
+        Transcript(segments=(), extent_ns=1)
 
 
 @pytest.mark.logic

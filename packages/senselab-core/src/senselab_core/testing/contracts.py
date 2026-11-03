@@ -133,7 +133,7 @@ def _transcript(item: str, port: str) -> dict[str, Any]:
     """Return the wire form of a one-segment transcript, its last word set by the item and port."""
     span = Span(start_ns=0, end_ns=1_000_000_000, clock_id="contract-clock")
     node = TranscriptNode(text=f"{item} spoke twice then {_digits(item, port) % 7}", span=span)
-    return wire_form(Transcript(segments=(node,)))
+    return wire_form(Transcript(segments=(node,), extent_ns=1_000_000_000, clock_id="contract-clock"))
 
 
 def _intervals(item: str, port: str) -> dict[str, Any]:

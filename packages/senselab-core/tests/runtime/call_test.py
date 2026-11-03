@@ -365,7 +365,9 @@ def test_isolated_outputs_are_read_as_their_declared_types(store: ResultStore) -
     A refused output is not stored.
     """
     span = Span(start_ns=0, end_ns=400_000_000, clock_id="c")
-    transcript = Transcript(segments=(TranscriptNode(text="hi", span=span, confidence=0.5),))
+    transcript = Transcript(
+        segments=(TranscriptNode(text="hi", span=span, confidence=0.5),), extent_ns=span.end_ns, clock_id="c"
+    )
     profile = _profile(stack_preferences={TRANSCRIBE_TASK.name: ["isolated"]})
 
     def transcribe(output: Frozen, text: str) -> Result:

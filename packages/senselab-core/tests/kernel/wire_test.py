@@ -10,8 +10,9 @@ import soundfile
 from senselab_core.kernel._base import Frozen
 from senselab_core.kernel.declare import kernel_types
 from senselab_core.kernel.formats import Formatted
-from senselab_core.kernel.results import Metric, TextSpans, Transcript, Trials
+from senselab_core.kernel.results import Metric, TextSpans, Transcript, TranscriptNode, Trials
 from senselab_core.kernel.signals import Audio, PlainText, Recording, RegularGroup
+from senselab_core.kernel.time import Span
 from senselab_core.kernel.wire import (
     WIRE_FORMATS,
     WIRE_MIGRATION_STATEMENT,
@@ -96,6 +97,16 @@ def test_metric1_refused() -> None:
     assert form["format"] == "metric@2.0" and from_wire_form(form).model_dump() == form
     with pytest.raises(WireFormatRetired, match=WIRE_MIGRATION_STATEMENT):
         from_wire_form({**form, "format": "metric@1.0"})
+
+
+@pytest.mark.logic
+def test_transcript1_refused() -> None:
+    """A `transcript@1` wire form, which declares no extent, is refused as retired; `transcript@2` is read."""
+    node = TranscriptNode(text="hi", span=Span(start_ns=0, end_ns=5, clock_id="c"))
+    form = wire_form(Transcript(segments=(node,), extent_ns=5, clock_id="c"))
+    assert form["format"] == "transcript@2.0" and from_wire_form(form).model_dump() == form
+    with pytest.raises(WireFormatRetired, match=WIRE_MIGRATION_STATEMENT):
+        from_wire_form({**form, "format": "transcript@1.0"})
 
 
 @pytest.mark.logic

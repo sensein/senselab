@@ -45,7 +45,7 @@ def _run(items: list[dict[str, Any]], engine: str = "transformers", faults: dict
 
 @pytest.mark.contract
 def test_two_engines_one_output_schema() -> None:
-    """Both engines answer the same `transcript@1.0` shape on the audio's own clock."""
+    """Both engines answer the same `transcript@2.0` shape on the audio's own clock."""
     audio = _tone()
     wires = {e: _run([_item("a", audio)], e)[0]["outputs"]["transcript"] for e in cw.ENGINES}
     for wired in wires.values():

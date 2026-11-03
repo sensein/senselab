@@ -5,6 +5,7 @@
 `transformers` and `torch` are imported only inside `load` and the confidence engine's scoring.
 """
 
+import functools
 import hashlib
 import math
 from collections.abc import Callable, Mapping, Sequence
@@ -123,7 +124,7 @@ def load(init: dict[str, Any]) -> State:
 
 
 def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return one `{"outputs": {"transcript": <transcript@1.0 wire form>}}` per item, or its typed fault.
+    """Return one `{"outputs": {"transcript": <transcript@2.0 wire form>}}` per item, or its typed fault.
 
     Items that pass the checks run in one pipeline call; if it raises, each runs alone so a fault stays with its item.
     """
@@ -227,13 +228,14 @@ def transcript(  # noqa: PLR0913 - the pipeline output, its level, the audio's c
     `exp(avg_logprob)` as its confidence; each word carries its tokens' joint probability when the captured tokens
     divide into exactly the pipeline's words, and none otherwise.
     """
+    over = functools.partial(Transcript, extent_ns=duration_ns, clock_id=clock_id)
     text = str(output.get("text", "")).strip()
     if not text:
-        return Transcript(segments=())
+        return over(segments=())
     chunks = [c for c in output.get("chunks") or [] if str(c["text"]).strip()]
     mean = None if block is None or block.get("avg_logprob") is None else min(1.0, math.exp(block["avg_logprob"]))
     if timestamps == "none" or not chunks:
-        return Transcript(segments=(TranscriptNode(text=text, confidence=mean),))
+        return over(segments=(TranscriptNode(text=text, confidence=mean),))
     timed: list[tuple[str, Span]] = []
     floor = 0
     for chunk in chunks:
@@ -242,11 +244,11 @@ def transcript(  # noqa: PLR0913 - the pipeline output, its level, the audio's c
         floor = span.end_ns
     if timestamps == "segment":
         segments = tuple(TranscriptNode(text=t, span=s, confidence=mean if len(timed) == 1 else None) for t, s in timed)
-        return Transcript(segments=segments)
+        return over(segments=segments)
     scores = _word_scores(block, decode, special_token_ids, len(timed))
     words = tuple(TranscriptNode(text=t, span=s, confidence=c) for (t, s), c in zip(timed, scores))
     whole = Span(start_ns=timed[0][1].start_ns, end_ns=timed[-1][1].end_ns, clock_id=clock_id)
-    return Transcript(segments=(TranscriptNode(text=text, span=whole, confidence=mean, children=words),))
+    return over(segments=(TranscriptNode(text=text, span=whole, confidence=mean, children=words),))
 
 
 def _word_scores(

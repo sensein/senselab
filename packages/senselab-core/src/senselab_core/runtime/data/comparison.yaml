@@ -85,9 +85,11 @@ types:
       offset_ns: {close: time_ns}
       drift_ppm: {close: value}
       uncertainty_ns: {close: time_ns}
-  transcript@1:
+  transcript@2:
     fields:
       format: exact
+      extent_ns: {close: time_ns}
+      clock_id: exact
       '*text': exact
       '*confidence': {close: probability}
       '*span': optional

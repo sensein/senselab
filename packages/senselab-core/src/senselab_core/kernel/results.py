@@ -11,6 +11,7 @@ from senselab_core.kernel._base import (
     FiniteFloat,
     Frozen,
     LabelArray,
+    Nanoseconds,
     NonEmptyStr,
     NsArray,
     as_int64_array,
@@ -165,17 +166,31 @@ class TranscriptNode(Frozen):
 
 
 class Transcript(Formatted):
-    """A tree of transcript nodes: `segments`, in order, each dividing into words; every span is on one clock."""
+    """A tree of transcript nodes: `segments`, in order, each dividing into words, over a recorded extent.
 
-    format: FormatTag = "transcript@1.0"
+    `extent_ns` is the end, on `clock_id`, of the recording the transcript covers; every span is on `clock_id` and
+    ends no later than `extent_ns`. A transcript with no span may declare neither.
+    """
+
+    format: FormatTag = "transcript@2.0"
+    clock_fields: ClassVar[tuple[str, ...]] = ("extent_ns",)
 
     segments: tuple[TranscriptNode, ...]
+    extent_ns: Nanoseconds | None = None
+    clock_id: NonEmptyStr | None = None
 
     @model_validator(mode="after")
-    def _one_clock(self) -> "Transcript":
-        clocks = {n.span.clock_id for s in self.segments for n in s.nodes() if n.span is not None}
-        if len(clocks) > 1:
-            raise ValueError(f"a transcript's spans lie on one clock, got {sorted(clocks)}")
+    def _spans_within_extent(self) -> "Transcript":
+        if (self.extent_ns is None) != (self.clock_id is None):
+            raise ValueError("a transcript declares extent_ns and clock_id together, or neither")
+        spans = [n.span for s in self.segments for n in s.nodes() if n.span is not None]
+        if spans and self.extent_ns is None:
+            raise ValueError("a transcript with timed spans declares its extent_ns and clock_id")
+        for span in spans:
+            if span.clock_id != self.clock_id:
+                raise ValueError(f"a span on clock {span.clock_id!r} in a transcript on clock {self.clock_id!r}")
+            if self.extent_ns is not None and span.end_ns > self.extent_ns:
+                raise ValueError(f"a span ends at {span.end_ns} ns, past the declared extent_ns {self.extent_ns}")
         return self
 
 

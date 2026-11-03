@@ -76,7 +76,7 @@ def test_converter_reads_1x_output_files(tmp_path: Path) -> None:
     assert str(stale) in str(raised.value)
     assert {i.id for i in ref.items} == set(ids)
     fields = ref.items[0].fields
-    assert fields["transcript.segments[0].text"] == '"hello"' and fields["transcript.format"] == '"transcript@1.0"'
+    assert fields["transcript.segments[0].text"] == '"hello"' and fields["transcript.format"] == '"transcript@2.0"'
     assert fields["transcript.segments[0].confidence"][0] == pytest.approx(0.9048374, abs=1e-6)
     turns = par.convert(dia, task="diarize", **kwargs).items[0].fields
     assert turns == flatten(
