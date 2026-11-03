@@ -1,0 +1,29 @@
+{
+  "tiers": {
+    "logic": {
+      "budget_s": 900,
+      "measured_s": null,
+      "derivation": "Not in the measured selection; keeps the single ceiling pyproject.toml set for every test before budgets were per tier."
+    },
+    "contract": {
+      "budget_s": 900,
+      "measured_s": null,
+      "derivation": "Not in the measured selection; keeps the former single ceiling."
+    },
+    "limits": {
+      "budget_s": 700,
+      "measured_s": 229.67,
+      "derivation": "Slowest limits test of the `(env or limits) and model` selection on a CPU node: crisperwhisper edge inputs with the transformers engine, 229.67 s (ORCD job 27822081 at 1448c4a1; 227.16 s as the slowest of job 27820309 at 41cf7964; H100 job 27822086 at most 29.62 s). Budget is three times the CPU measurement rounded up to 100 s, so load on a shared node does not fail a passing test while a hang still ends in minutes."
+    },
+    "usecase": {
+      "budget_s": 900,
+      "measured_s": null,
+      "derivation": "Not in the measured selection; keeps the former single ceiling."
+    },
+    "env": {
+      "budget_s": 600,
+      "measured_s": 173.72,
+      "derivation": "Slowest env test of the same selection on a CPU node: crisperwhisper content-fault isolation with the transformers engine, 173.72 s (ORCD job 27822081 at 1448c4a1; H100 job 27822086 at most 29.62 s). Budget is three times the CPU measurement rounded up to 100 s, as for limits."
+    }
+  }
+}

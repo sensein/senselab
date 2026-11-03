@@ -190,9 +190,10 @@ def test_word_prefix_ends_after_the_last_kept_words_own_tokens() -> None:
     assert [word_prefix(GEN, n, lambda t: decode([t]), special) for n in (0, 1, 2)] == [0, 2, len(GEN)]
 
 
-@pytest.mark.logic
+@pytest.mark.env
 def test_chunks_that_do_not_match_the_windows_leave_the_decode_unscored() -> None:
     """A result with more chunks than captured windows cannot say which ids survive, so none is scored."""
+    pytest.importorskip("torch")
 
     class Lost(MergedResult):
         chunks: list[Chunk] = [Chunk("hello"), Chunk("there")]

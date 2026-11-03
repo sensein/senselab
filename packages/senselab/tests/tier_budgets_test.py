@@ -1,15 +1,15 @@
 """The per-tier time budgets: held as data with a derivation each, and applied to every test by its tier."""
 
+import json
 from pathlib import Path
 
 import pytest
-import yaml
 
 
 @pytest.mark.logic
 def test_every_tier_has_a_positive_budget_and_a_derivation(budgets_file: Path, tier_names: frozenset[str]) -> None:
     """The file names exactly the five tiers, each with a positive `budget_s` and a written `derivation`."""
-    tiers = yaml.safe_load(budgets_file.read_text())["tiers"]
+    tiers = json.loads(budgets_file.read_text())["tiers"]
     assert set(tiers) == tier_names
     for tier, row in tiers.items():
         assert row["budget_s"] > 0 and str(row["derivation"]).strip(), tier

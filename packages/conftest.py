@@ -2,25 +2,25 @@
 
 The `model` sub-marker (loads weights or needs a backend env, ORCD only) goes with `limits`, `usecase` or `env`.
 A `gpu` test is skipped on a host with no GPU. A test with no `timeout` mark gets its tier's budget from
-`senselab/tests/data/tier_budgets.yaml`.
+`senselab/tests/data/tier_budgets.json`.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
-import yaml
 
 TIERS = frozenset({"logic", "contract", "limits", "usecase", "env"})
 MODEL_TIERS = frozenset({"limits", "usecase", "env"})
 PACKAGES = Path(__file__).resolve().parent
-BUDGETS = PACKAGES / "senselab" / "tests" / "data" / "tier_budgets.yaml"
+BUDGETS = PACKAGES / "senselab" / "tests" / "data" / "tier_budgets.json"
 
 
 def tier_budgets() -> dict[str, float]:
-    """Return the time budget in seconds of one test of each tier, from `tier_budgets.yaml`."""
-    document = yaml.safe_load(BUDGETS.read_text())
+    """Return the time budget in seconds of one test of each tier, from `tier_budgets.json`."""
+    document = json.loads(BUDGETS.read_text())
     return {tier: float(row["budget_s"]) for tier, row in document["tiers"].items()}
 
 

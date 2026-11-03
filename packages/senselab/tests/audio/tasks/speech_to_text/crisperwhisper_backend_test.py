@@ -1,6 +1,8 @@
 """The `crisperwhisper` backend of `speech_to_text`: its engines, model, faults and the isolated worker's imports."""
 
+import importlib
 import json
+from pathlib import Path
 from typing import Any
 
 import numpy
@@ -10,7 +12,9 @@ from senselab.audio.tasks.speech_to_text import crisperwhisper as cw
 from senselab.audio.tasks.speech_to_text import (
     crisperwhisper_backend,  # noqa: F401 - declares the backend
 )
+from senselab.signal.resample import resample_array
 from senselab_core.kernel.declare import REGISTRY
+from senselab_core.kernel.results import Transcript
 from senselab_core.kernel.signals import Audio
 from senselab_core.kernel.wire import from_wire_form, wire_form
 from senselab_core.runtime.hardware import HardwareInfo
@@ -206,3 +210,29 @@ def test_edge_inputs_with_real_weights(real_worker: RealWorkers, engine: str) ->
     }
     outputs = run_alone(worker, {n: _item(n, a) for n, a in cases.items()}, params)
     assert all(from_wire_form(o["transcript"]) is not None for o in outputs.values())
+
+
+SPEECH = Path(__file__).parents[6] / "src" / "tests" / "data_for_testing" / "english_conversation_higgs_audio_v2.wav"
+
+
+@pytest.mark.env
+@pytest.mark.model
+@pytest.mark.parametrize("engine", cw.ENGINES)
+def test_long_form_decode_is_scored_with_real_weights(real_worker: RealWorkers, engine: str) -> None:
+    """A real speech item over 30 s has several windows, and its chunks match them: every confidence is present.
+
+    A mismatch between the library's chunks and the captured windows, or between the kept words and the words, leaves
+    the segment and word confidences None, so present confidences mean the counts matched.
+    """
+    soundfile = importlib.import_module("soundfile")
+    samples, rate = soundfile.read(SPEECH, dtype="float32")
+    speech = numpy.tile(resample_array(samples[None, :], rate, cw.EXPECTED_RATE), (1, 2))
+    assert speech.shape[1] > 30 * cw.EXPECTED_RATE
+    item = _item("long", Audio.from_array(speech, cw.EXPECTED_RATE))
+    params = {**PARAMS, "backend_params": {"engine": engine}}
+    [result] = real_worker("speech_to_text", "crisperwhisper").run([item], params)
+    transcript = from_wire_form(result["outputs"]["transcript"])
+    assert isinstance(transcript, Transcript)
+    [segment] = transcript.segments
+    assert segment.confidence is not None and len(segment.children) > 10
+    assert all(word.confidence is not None for word in segment.children)
