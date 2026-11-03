@@ -283,6 +283,10 @@ forms, whose source stamps carry no chunk digests, are retired with no converter
 them with `WireFormatRetired`. Migrating a value is re-reading its source file (`open_audio`) or recomputing it; a
 stored output in an `@1` form is recomputed after its store entry is removed (Phase 2 Task 11b).
 
+`metric@1` is retired likewise (Phase 3 Task 3): `Metric` of `metric@2` carries the numerator and denominator of its
+ratio. A stored metric output is recomputed. A `benchmark-result@1` `result.json` is refused with
+`BenchmarkResultRetired`; the suite is run again to write `benchmark-result@2`.
+
 - `pii-review-vllm` lock (1.x `redaction_review_vllm`): not ported; superseded by `Env.server("vllm-server")` (Task 17b).
 
 ## Retired store formats

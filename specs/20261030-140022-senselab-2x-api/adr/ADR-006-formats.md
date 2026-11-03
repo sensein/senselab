@@ -357,3 +357,22 @@ profile formats (`tolerance@`, `tolerance-observations@`, `tolerance-coverage@`)
 - `labels@1.0` → `labels@2.0`: the run's private label map is canonical JSON (JCS), read strictly. `labels@1` is
   retired and refused as such.
 - `comparison@1.0` keys `recording@2`, `audio@2` and `regular-group@2` become `@3`.
+
+## Amendment 2026-11-03: benchmark carry-overs (Phase 3 Task 3)
+
+- `metric@1.0` → `metric@2.0`: `Metric` adds `numerator` and `denominator` (finite floats, the denominator not
+  negative, both set or both absent; a zero denominator has a zero numerator) beside `value`; non-additive for a reader
+  that aggregates, so a major (P3-10). `metric@1` is retired: `from_wire_form` refuses it with `WireFormatRetired`.
+  `comparison@1.0` keys `metric@1` becomes `metric@2`. `Metric` also carries an optional `empty_value`, the metric's
+  declared value for nothing to
+  score, allowed only with the ratio parts. `span_f1` of two empty span sets is `(0, 0)` with value and `empty_value`
+  1.0, so it adds nothing to a pooled ratio.
+- `benchmark-result@1.0` → `benchmark-result@2.0`: a row carries `numerator` and `denominator`. A split's aggregate is
+  the sum of its rows' numerators over the sum of their denominators; when that denominator is 0 the aggregate is
+  absent (None) unless the metric
+  declares an `empty_value` (P3-55). A split whose
+  rows carry no ratio parts (EER, a pooled metric, `resample_error`) aggregates as the `items`-weighted mean of its
+  values; a split mixing the two is refused with `MixedRatios`. `benchmark-result@1` is retired and refused with
+  `BenchmarkResultRetired`.
+- Data formats list (2026-11-02 amendment): adds `metric@2.0`, a kernel value's wire form, and `benchmark-result@2.0`,
+  a benchmark run's `result.json`.

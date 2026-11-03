@@ -1204,6 +1204,9 @@ them. A ruling that changes an ADR decision takes effect only through the dated 
 - **P3-52** ruling: Route A uses senselab's own queues through `ExecutorWorker`; pydra's I (Task 51) is a generic
   plugin informed by Task 13's design and is not a senselab dependency in Phase 3, so the queue protocol has one
   senselab implementation.
+- **P3-55** ruling: A split whose summed denominator is 0 has no defined value: the aggregate is absent (None), unless
+  the metric declares an empty-case value (`Metric.empty_value`). Span F1 declares 1.0, since nothing expected and nothing
+  found is perfect agreement; error rates such as WER and DER declare none, since 1.0 would mean total error.
 
 **Low pre-flight findings not changed, with reasons.** None remains open: each low finding is fixed in its task or
 covered by a ruling above (X17 by P3-2, X18 by P3-40, X19 in Task 2, X20 in Task 0, X21 in Task 0 Step 2, X22 by P3-49,
