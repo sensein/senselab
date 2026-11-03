@@ -12,7 +12,6 @@ provenance:
   fitted_on: triage campaigns r8 to r37 and the owner's listening sessions, per each file's derivation comments
 config: config.yaml
 files:
-  airway_event_requirements.yaml: airway_event_requirements.yaml
   airway_event_tokens.yaml: airway_event_tokens.yaml
   asr_degenerate.yaml: asr_degenerate.yaml
   breath_pattern.yaml: breath_pattern.yaml

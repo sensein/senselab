@@ -69,7 +69,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_measurement,
 )
 from senselab.audio.workflows.triage.residue import is_non_lexical
-from senselab.audio.workflows.triage.task_catalogue import LEXICAL_SPEECH_KIND, is_kind, task_list
+from senselab.audio.workflows.triage.task_catalogue import LEXICAL_SPEECH_KIND, is_kind, task_list, voice_reading_text
 from senselab.audio.workflows.triage.task_content import task_content_ids, task_events
 from senselab.audio.workflows.triage.task_lexicon import declared_names_lexicon
 from senselab.audio.workflows.triage.task_speech import (
@@ -333,13 +333,14 @@ def target_rule(family: str) -> str:
         family: The declared task family.
 
     Returns:
-        One of :data:`TARGET_RULES`: the family's own entry, else its declared kind's, else the default.
+        One of :data:`TARGET_RULES`: ``voice_read``'s rule for a word task the task list reads for its voice, else
+        its declared kind's, else the default.
 
     Raises:
         ValueError: Where the configured rule is not one of :data:`TARGET_RULES`.
     """
     table = cohort_parameters()["comparison"]["target"]
-    rule = (table.get("families") or {}).get(family)
+    rule = table.get("voice_read") if voice_reading_text(family) is not None else None
     if rule is None:
         rule = next(
             (value for kind, value in (table.get("kinds") or {}).items() if is_kind(family, str(kind))),

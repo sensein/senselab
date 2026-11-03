@@ -10,6 +10,21 @@
 # and its `number_words`; initial_letter: its `letter`), and `repetition_allowed` where the category's own instruction
 # permits saying an item twice (Letters, Numbers: senselab's REPETITION_ALLOWED_CATEGORIES before step 4). The ten are
 # B2AI's questionnaire field random_item_generation_category, as its phenotype table spells them.
+# `traits` (step 5a; each moved from a senselab list that named these tasks):
+#   defines_a_cue_word      productive-vocabulary: its stimulus is a cue word the participant defines (stimulus.residue.cue_families)
+#   model_speaker_allowed   "you can have someone else say the sentence first and you just repeat it after them"
+#                           (verdict.model_speaker_families)
+#   quiet_to_the_classifier owner, 2026-09-29: quiet breathing the classifier does not hear is no flag
+#                           (verdict.hint_mismatch_exempt_families)
+#   quick_breaths           the quick-breath tasks, read at breath_pattern.yaml distance_quick_s (train.quick_families)
+#   spans_the_recording     the buttercup word spans the recording: its syllable train is never trimmed
+#                           (task_extent.yaml trim.ddk.exclude_families)
+# Breath and cough tasks are decided on detected events of their own kind, as the profile's
+# airway_event_requirements.yaml listed them until step 5a: derivation owner, 2026-10-05, after listening to ten
+# breath recordings with gain-lifted copies and HeAR/YAMNet readings ("yes do fix 1", "discard quiet ones");
+# breath then on the breathing-pattern measure (specs/20261005-breathing-pattern/design.md), cough on the
+# cough-onset measure (2026-10-06, specs/20261006-cough-pattern/design.md). Word tasks whose entry names a lexicon
+# or categories read them (stimulus.task_lexicons), and tasks with categories are open-vocabulary (owner, 2026-10-10).
 # Moved unchanged from senselab's packaged tables (step 4 of specs/20261022-triage-dataset-profile/plan.md).
 x-number-words: &number_words [zero, one, two, three, four, five, six, seven, eight, nine, ten, eleven, twelve, thirteen,
   fourteen, fifteen, sixteen, seventeen, eighteen, nineteen, twenty, thirty, forty, fifty, sixty, seventy, eighty,
@@ -29,13 +44,16 @@ version: 1
 tasks:
   harvard-sentences-list:
     branch: SPEECH
+    traits: [model_speaker_allowed]
     expects: {pattern: ordered_tokens, token_source: stimulus_text}
   cape-v-sentences:
     branch: SPEECH
+    traits: [model_speaker_allowed]
     expects: {pattern: ordered_tokens, token_source: stimulus_text}
     unused_voice_reading: {pattern: per_sentence, token_source: stimulus_text}
   cape-v-sentences-v2:
     branch: SPEECH
+    traits: [model_speaker_allowed]
     expects: {pattern: ordered_tokens, token_source: stimulus_text}
     unused_voice_reading: {pattern: per_sentence, token_source: stimulus_text}
   rainbow-passage:
@@ -102,6 +120,7 @@ tasks:
       - [source_overlap, '`stimulus_text` is empty on all 258; the source is a physical storybook']
   productive-vocabulary:
     branch: SPEECH
+    traits: [defines_a_cue_word]
     expects:
       pattern: free_response
       token_source: stimulus_text
@@ -182,12 +201,14 @@ tasks:
       sequence: [p, ah, t, ah, k, ah]
   diadochokinesis-buttercup:
     branch: SPEECH
+    traits: [spans_the_recording]
     expects:
       pattern: syllable_sequence
       required_count: {value: 10, unit: repetitions}
       sequence: [b, ah, t, er, k, ah, p]
   diadochokinesis-v2-buttercup:
     branch: SPEECH
+    traits: [spans_the_recording]
     expects:
       pattern: syllable_sequence
       declared_duration_s: 5.0
@@ -264,6 +285,7 @@ tasks:
       - [route, as `fivebreaths`]
   respiration-and-cough-threequickbreaths:
     branch: AIRWAY
+    traits: [quick_breaths]
     expects:
       pattern: event_series
       required_count: {value: 3, unit: events}
@@ -271,6 +293,7 @@ tasks:
       timed_intervals: true
   respiration-and-cough-v2-threebreaths:
     branch: AIRWAY
+    traits: [quick_breaths]
     expects:
       pattern: event_series
       required_count: {value: 3, unit: events}
@@ -278,9 +301,11 @@ tasks:
       timed_intervals: true
   respiration-and-cough-breath:
     branch: AIRWAY
+    traits: [quiet_to_the_classifier]
     expects: {pattern: sound_coverage, declared_duration_s: 30.0, label_set: breath}
   respiration-and-cough-v2-breath:
     branch: AIRWAY
+    traits: [quiet_to_the_classifier]
     expects:
       pattern: sound_coverage
       declared_duration_s: 20.0

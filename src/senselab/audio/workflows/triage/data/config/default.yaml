@@ -155,8 +155,6 @@ stimulus:
     variant_similarity_min: 0.66       # least 1 - edits/longer length at which a word is a reading of a stimulus word
     insertion_window: 3                # stimulus words either side an inserted word may repeat, restart or split
     train_repetitions_min: 3           # recurrences that make a token a syllable train in a syllable task
-    cue_families: []    # dataset profile (B2AI: [productive-vocabulary]).  free-response families whose stimulus is a cue word the participant defines; a reading of it is task content
-  task_lexicons: []    # dataset profile (B2AI: cinderella-story, animal-fluency, random-item-generation[-v2]).  families whose packaged lexicon, and item category's, is task content
 
 # The declared task ALWAYS adds a route to its own branch. That route needs no key here: the task is
 # the one the hint declares, recorded by ADMIT, and its task list entry names the branch
@@ -333,13 +331,9 @@ verdict:
   second_opinion_disagreement_flags: true  # owner, 2026-10-01: a confident second-opinion disagreement with the reviewer flags for review
   second_opinion_confident_yes: 0.8    # UNFITTED: kept from the Nimble pilot (owner, 2026-10-02); see config-derivations.md, verdict
   second_opinion_confident_no: 0.2     # UNFITTED: kept from the Nimble pilot (owner, 2026-10-02); see config-derivations.md, verdict
-  hint_mismatch_exempt_families: []  # dataset profile (B2AI: the two breath families).  owner, 2026-09-29: quiet breathing the classifier does not hear is no flag
   # declared task family -> flag gates its own instruction makes inapplicable. Empty: owner, 2026-09-30,
   # any voice other than the participant's is flagged, whether or not the instructions expect it.
   flag_gate_exemptions: {}
-  # families whose session instructions permit someone to say the sentence first ("you can have someone
-  # else say the sentence first and you just repeat it after them"); the speaker gate's ground says so.
-  model_speaker_families: []   # dataset profile (B2AI: harvard-sentences-list, cape-v-sentences[-v2])
   # The branches for which finding the subject IS evaluating the task, so an out-of-family result
   # is a covariate on the detector rather than a reading of the recording. DDK only: a rapid
   # alternating train does not occur incidentally, where breath, phonation and lexical content all do.

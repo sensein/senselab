@@ -8,10 +8,6 @@ windows:
   hear:
     default_threshold: 0.2   # as yamnet
     label_top_k: 4
-stimulus:
-  residue:
-    cue_families: [productive-vocabulary]
-  task_lexicons: [cinderella-story, animal-fluency, random-item-generation, random-item-generation-v2]
 diarization:
   streams: [enhanced]        # narrowed 2026-09-20 after the corpus run
 speech:
@@ -30,8 +26,6 @@ verdict:
   second_opinion_disagreement_flags: true
   second_opinion_confident_yes: 0.8
   second_opinion_confident_no: 0.2
-  hint_mismatch_exempt_families: [respiration-and-cough-breath, respiration-and-cough-v2-breath]
-  model_speaker_families: [harvard-sentences-list, cape-v-sentences, cape-v-sentences-v2]
   gates:
     by_family:
       rainbow-passage:

@@ -51,9 +51,7 @@ comparison:
     default: none                       # owner, 2026-10-11: airway, voice and DDK have no target comparison
     kinds:
       lexical_speech: speech            # task kind -> rule
-    families:
-      loudness: task_text               # owner, 2026-10-11: compared on its "hey" only (tasks.yaml voice_reading_text)
-      loudness-v2: task_text            # owner, 2026-10-11
+    voice_read: task_text               # a word task read for its voice (tasks.yaml voice_reading_text): its task text (owner, 2026-10-11, loudness)
 
 # Speech the enhancer removed: speech-classified on `from` and not on `kept`. A removed region holding a
 # word of speech outside the task joins the non-task pool. Labels and score as data/background_speech.yaml

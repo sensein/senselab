@@ -63,9 +63,12 @@ def test_a_trimmed_train_keeps_one_onset_interval_beyond_its_trimmed_edge() -> N
 
 
 def test_buttercup_is_never_trimmed() -> None:
-    """Change 2: the family's task word spans the recording, so no edge or speech trim applies."""
-    assert "diadochokinesis-buttercup" in task_extent_parameters()["trim"]["ddk"]["exclude_families"]
-    assert "diadochokinesis-v2-buttercup" in task_extent_parameters()["trim"]["ddk"]["exclude_families"]
+    """Change 2: the family's task word spans the recording, so no edge or speech trim applies (its task list trait)."""
+    from senselab.audio.workflows.triage.task_catalogue import SPANS_THE_RECORDING, has_trait
+
+    assert has_trait("diadochokinesis-buttercup", SPANS_THE_RECORDING)
+    assert has_trait("diadochokinesis-v2-buttercup", SPANS_THE_RECORDING)
+    assert not has_trait("diadochokinesis-pataka", SPANS_THE_RECORDING)
 
 
 def test_a_weak_breaths_edges_run_out_to_its_envelope() -> None:

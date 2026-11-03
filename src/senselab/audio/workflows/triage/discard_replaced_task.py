@@ -93,12 +93,16 @@ class ReplacedTaskInputs:
 
 
 def _in_kinds(family: str, block: Mapping[str, Any]) -> bool:
-    from senselab.audio.workflows.triage.task_catalogue import is_kind  # noqa: PLC0415
+    """Whether a rule's block reads a task: by its kinds, and ``voice_read`` for a word task read for its voice.
 
-    if family in set(block.get("families") or ()):
-        return True
-    if family in set(block.get("exclude") or ()):
-        return False
+    A block's ``voice_read: true`` adds the tasks the task list reads for their voice (``voice_reading_text``),
+    ``false`` removes them, and no key leaves them to the kinds.
+    """
+    from senselab.audio.workflows.triage.task_catalogue import is_kind, voice_reading_text  # noqa: PLC0415
+
+    voice_read = block.get("voice_read")
+    if voice_read is not None and voice_reading_text(family) is not None:
+        return bool(voice_read)
     return any(is_kind(family, str(kind)) for kind in block.get("kinds") or ())
 
 

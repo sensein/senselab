@@ -47,7 +47,6 @@ MANIFEST = "profile.yaml"
 
 DATASET_PATHS = frozenset(
     {
-        "airway_event_requirements.yaml",
         "airway_event_tokens.yaml",
         "cohort_conditions",
         "detector_profile",
@@ -294,7 +293,6 @@ def profile_cache(func: Callable[..., _R]) -> Callable[..., _R]:
 
 
 REQUIRED_DATASET_PATHS = (
-    "airway_event_requirements.yaml",
     "airway_event_tokens.yaml",
     "discard_contested.yaml",
     "tasks.yaml",

@@ -204,7 +204,7 @@ columns:
       Why the recording was discarded: ADMIT could not measure it (`unmeasurable`); it is shorter than
       its declared family's minimum in data/task_minimum_duration.yaml (`too_short_for_task`); the
       ruleset found it empty and the declared task's own branch did not say the task was performed
-      (`acoustically_empty`); a breath family of data/airway_event_requirements.yaml whose
+      (`acoustically_empty`); a breath task (its kind in the task list) whose
       breathing-pattern measure (data/breath_pattern.yaml), reading every input, found no breath
       (counted families) or no alternating pattern (sustained families) (`no_breath_captured`); a cough
       family whose cough-onset measure (data/cough_pattern.yaml), reading every input, found no cough
@@ -466,7 +466,7 @@ columns:
     units: count
     description: >-
       Task words among the words a mask's findings name -- outside the residue, or in the task lexicon
-      (`stimulus.task_lexicons`, the declared names) -- which no mask covers.
+      (the task list entry's lexicon and categories, the declared names) -- which no mask covers.
     computation: The ledger's `counts.task_words_n`, summed over masks.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.

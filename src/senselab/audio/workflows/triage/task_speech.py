@@ -38,7 +38,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_measurement,
 )
 from senselab.audio.workflows.triage.residue import is_function_word, is_non_lexical, token_key
-from senselab.audio.workflows.triage.task_catalogue import voice_reading_text
+from senselab.audio.workflows.triage.task_catalogue import generates_items, voice_reading_text
 from senselab.audio.workflows.triage.task_content import task_content_ids, task_content_parameters, task_events
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -102,15 +102,15 @@ def non_lexical_family(family: str | None) -> bool:
 
 
 def item_set_family(family: str | None) -> bool:
-    """Whether a declared family elicits open-vocabulary items (``task_content.yaml`` ``open_vocabulary_families``).
+    """Whether a declared task elicits open-vocabulary items: its task list entry lists categories.
 
     Args:
-        family: The declared family, or None.
+        family: The declared task, or None.
 
     Returns:
-        True for a fluency or item-generation family.
+        True for a fluency or item-generation task.
     """
-    return bool(family) and family in set(task_content_parameters().get("open_vocabulary_families") or ())
+    return generates_items(family)
 
 
 def narrative_family(family: str | None) -> bool:

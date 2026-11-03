@@ -44,7 +44,25 @@ TASKS_FILE = "tasks.yaml"
 TASKS_VERSION = 1
 """The task list format this module reads."""
 
-_ENTRY_KEYS = frozenset({"branch", "expects", "unused_voice_reading", "voice_reading_text", "lexicon", "categories"})
+_ENTRY_KEYS = frozenset(
+    {"branch", "expects", "unused_voice_reading", "voice_reading_text", "lexicon", "categories", "traits"}
+)
+
+DEFINES_A_CUE_WORD = "defines_a_cue_word"
+MODEL_SPEAKER_ALLOWED = "model_speaker_allowed"
+QUIET_TO_THE_CLASSIFIER = "quiet_to_the_classifier"
+QUICK_BREATHS = "quick_breaths"
+SPANS_THE_RECORDING = "spans_the_recording"
+TRAITS = (DEFINES_A_CUE_WORD, MODEL_SPEAKER_ALLOWED, QUIET_TO_THE_CLASSIFIER, QUICK_BREATHS, SPANS_THE_RECORDING)
+"""What an entry may say about its task beyond its description (plan step 5a):
+
+* ``defines_a_cue_word``: the stimulus is a cue word the participant defines, so a word reading as it is task content.
+* ``model_speaker_allowed``: the instructions let someone say the item first; the speaker gate's flag says so.
+* ``quiet_to_the_classifier``: the sound is too quiet for the sound classifier to hear, so its branch not finding the
+  declared sound is no flag.
+* ``quick_breaths``: breaths close together; the breath train is read at the quick spacing.
+* ``spans_the_recording``: the task's own word fills the recording, so its syllable train is never trimmed.
+"""
 
 LIST_RULE = "list"
 LETTERS_RULE = "letters"
@@ -177,6 +195,7 @@ class TaskEntry:
             the words the voice is read over; None for every other task.
         lexicon: The profile data file listing the task's own words and phrases (``task_lexicon/...``), or None.
         categories: For a word-generation task, the categories a recording may ask for, by name; empty otherwise.
+        traits: What the entry says about its task beyond its description, each one of :data:`TRAITS`.
     """
 
     name: str
@@ -186,6 +205,7 @@ class TaskEntry:
     voice_reading_text: tuple[str, ...] | None = None
     lexicon: str | None = None
     categories: Mapping[str, ItemCategory] = field(default_factory=dict)
+    traits: frozenset[str] = frozenset()
 
 
 def expectation_of(description: Mapping[str, Any], where: str) -> Expectation:
@@ -254,6 +274,9 @@ def read_task_list(text: str, source: str) -> dict[str, TaskEntry]:
         categories = entry.get("categories") or {}
         if not isinstance(categories, Mapping):
             raise ValueError(f"{where}: categories is a mapping of category name to its rule")
+        traits = entry.get("traits") or []
+        if not isinstance(traits, list) or not set(traits) <= set(TRAITS):
+            raise ValueError(f"{where}: traits is a list of {', '.join(TRAITS)}")
         out[str(name)] = TaskEntry(
             name=str(name),
             branch=str(entry["branch"]),
@@ -262,6 +285,7 @@ def read_task_list(text: str, source: str) -> dict[str, TaskEntry]:
             voice_reading_text=None if text is None else tuple(text),
             lexicon=lexicon,
             categories={str(key): _item_category(str(key), value, where) for key, value in categories.items()},
+            traits=frozenset(str(trait) for trait in traits),
         )
     return out
 
@@ -418,6 +442,51 @@ def item_category_rule(task: str | None, category: str | None) -> ItemCategory |
     """
     entry = task_list().get(task) if task else None
     return entry.categories.get(category) if entry is not None and category else None
+
+
+def has_trait(task: str | None, trait: str) -> bool:
+    """Whether a task's entry says a trait of it (:data:`TRAITS`).
+
+    Args:
+        task: The task's name, or None.
+        trait: One of :data:`TRAITS`.
+
+    Returns:
+        True where the task is in the list and its entry names the trait.
+
+    Raises:
+        KeyError: If ``trait`` is not one of :data:`TRAITS`.
+    """
+    if trait not in TRAITS:
+        raise KeyError(f"{trait!r} is not a task trait triage knows: {', '.join(TRAITS)}")
+    entry = task_list().get(task) if task else None
+    return entry is not None and trait in entry.traits
+
+
+def has_own_words(task: str | None) -> bool:
+    """Whether a task's entry names its own words: a lexicon file, or word-generation categories.
+
+    Args:
+        task: The task's name, or None.
+
+    Returns:
+        True where the entry names either.
+    """
+    entry = task_list().get(task) if task else None
+    return entry is not None and (entry.lexicon is not None or bool(entry.categories))
+
+
+def generates_items(task: str | None) -> bool:
+    """Whether a task asks for items of a category (a word-generation task): its entry lists categories.
+
+    Args:
+        task: The task's name, or None.
+
+    Returns:
+        True where the entry lists any category.
+    """
+    entry = task_list().get(task) if task else None
+    return entry is not None and bool(entry.categories)
 
 
 def task_lexicon_file(task: str | None) -> str | None:

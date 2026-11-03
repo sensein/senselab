@@ -41,13 +41,22 @@ from senselab.audio.workflows.triage.nodes.branches import (
 from senselab.audio.workflows.triage.nodes.gates import Pattern
 from senselab.audio.workflows.triage.task_catalogue import (
     DECLARED_TASK,
+    DEFINES_A_CUE_WORD,
     FROM_HINT_DESCRIPTION,
     FROM_TASK_LIST,
     KINDS,
+    MODEL_SPEAKER_ALLOWED,
     NO_TASK,
     NOT_IN_TASK_LIST,
+    QUICK_BREATHS,
+    QUIET_TO_THE_CLASSIFIER,
+    SPANS_THE_RECORDING,
     TASK_EXPECTS_DIGEST,
     TASKS_BY_KIND,
+    TRAITS,
+    generates_items,
+    has_own_words,
+    has_trait,
     is_kind,
     kinds_of,
     read_task_list,
@@ -55,6 +64,7 @@ from senselab.audio.workflows.triage.task_catalogue import (
     resolve_task,
     task_attributes,
     task_list,
+    voice_reading_text,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import ProvStore
@@ -239,6 +249,7 @@ class TestTheTaskList:
             (_WORDS.format(category="{rule: letters, number_words: [one]}"), "number_words"),
             (_WORDS.format(category="{rule: letters, repetition_allowed: sometimes}"), "true or false"),
             (_WORDS.format(category="{rule: letters, language: en}"), "language"),
+            ("version: 1\ntasks:\n  a: {branch: VOICE, expects: {pattern: sustained}, traits: [loud]}\n", "traits"),
         ],
     )
     def test_a_malformed_list_is_refused(self, text: str, message: str) -> None:
@@ -311,6 +322,39 @@ class TestKinds:
         assert "airway" in TASKS_BY_KIND
         assert "coughing" not in TASKS_BY_KIND
         assert tuple(TASKS_BY_KIND) == KINDS
+
+
+class TestTraits:
+    """What an entry says about its task beyond its description (plan step 5a)."""
+
+    def test_the_b2ai_entries_carry_the_five_traits_senselab_listed_by_hand(self) -> None:
+        """Each trait is on exactly the tasks the deleted senselab and profile lists named."""
+        named = {trait: {name for name in task_list() if has_trait(name, trait)} for trait in TRAITS}
+        assert named == {
+            DEFINES_A_CUE_WORD: {"productive-vocabulary"},
+            MODEL_SPEAKER_ALLOWED: {"harvard-sentences-list", "cape-v-sentences", "cape-v-sentences-v2"},
+            QUIET_TO_THE_CLASSIFIER: {"respiration-and-cough-breath", "respiration-and-cough-v2-breath"},
+            QUICK_BREATHS: {"respiration-and-cough-threequickbreaths", "respiration-and-cough-v2-threebreaths"},
+            SPANS_THE_RECORDING: {"diadochokinesis-buttercup", "diadochokinesis-v2-buttercup"},
+        }
+
+    def test_an_unknown_trait_is_refused(self) -> None:
+        """A trait triage does not know is a mistake, not a no."""
+        with pytest.raises(KeyError):
+            has_trait("productive-vocabulary", "defines_a_word")
+
+    def test_the_lists_the_task_list_now_works_out_equal_the_deleted_ones(self) -> None:
+        """The eight lists B2AI's profile held before step 5a, task for task."""
+        listed_words = {"cinderella-story", "animal-fluency", "random-item-generation", "random-item-generation-v2"}
+        assert {name for name in task_list() if has_own_words(name)} == listed_words
+        assert {name for name in task_list() if generates_items(name)} == listed_words - {"cinderella-story"}
+        assert {name for name in task_list() if voice_reading_text(name)} == {"loudness", "loudness-v2"}
+        assert TASKS_BY_KIND["cough"] == {
+            "respiration-and-cough-cough",
+            "respiration-and-cough-v2-hardcough",
+            "voluntary-cough",
+        }
+        assert len(TASKS_BY_KIND["breath"]) == 8
 
 
 class TestTheTaskAHintDeclares:
@@ -412,8 +456,7 @@ def _lab_profile(root: Path) -> Path:
     root.mkdir()
     (root / "tasks.yaml").write_text(LAB_TASKS)
     (root / "config.yaml").write_text(LAB_CONFIG)
-    (root / "airway_event_requirements.yaml").write_text("version: 1\nbreath: []\ncough: []\n")
-    (root / "airway_event_tokens.yaml").write_text("version: 2\ncough: [cough]\nfamilies: {}\n")
+    (root / "airway_event_tokens.yaml").write_text("version: 3\ncough: [cough]\n")
     for name in ("discard_contested.yaml", "time_release.yaml"):
         shutil.copy(B2AI_PROFILE / name, root / name)
     for name, paths in REQUIRED_DATA_VALUES.items():
@@ -427,7 +470,7 @@ def _lab_profile(root: Path) -> Path:
                 node = node.setdefault(part, {})
             node[path[-1]] = value
         (root / name).write_text(yaml.safe_dump(document))
-    files = ["tasks.yaml", "airway_event_requirements.yaml", "airway_event_tokens.yaml", *REQUIRED_DATA_VALUES]
+    files = ["tasks.yaml", "airway_event_tokens.yaml", *REQUIRED_DATA_VALUES]
     files += ["discard_contested.yaml", "time_release.yaml"]
     manifest = {"name": "lab-corpus", "version": "1", "config": "config.yaml", "files": {f: f for f in files}}
     (root / "profile.yaml").write_text(yaml.safe_dump(manifest))
