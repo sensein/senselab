@@ -61,3 +61,4 @@ The authority for the full review. Quoted as the owner wrote them; nothing parap
 52. "i'm still worried 902 is changing the intent of tests as a workflow system that could be running on multiple nodes with many parallel processes. also not clear where slurm.tar is coming from. it seems that pr should run full tests before being merged into main. do b - regarding cache invalidation, we don't need the next release to be compatible with prior caches. pydra is still alpha, so changes could break things."
 53. "the whole point of pydra is cf or parallel, why is serial (which uses a very different pattern) being used"
 54. "we should also optimize the matrix of python so that 3.13 becomes default and the rest 3.11 - 3.15 run when merging a release tagged PR."
+55. "senselab should single python default to the google colab default python (it is provided in their release notes)"
