@@ -193,3 +193,7 @@ repos:
     entry: uv run --frozen --no-sync python scripts/check_spec_ids.py
     language: system
     files: ^packages/
+  - id: local-paths
+    name: No user home-directory paths in tracked files.
+    entry: python scripts/check_local_paths.py
+    language: python

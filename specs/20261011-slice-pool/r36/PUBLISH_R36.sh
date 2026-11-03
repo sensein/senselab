@@ -7,7 +7,7 @@
 # and the review page. finalize asserts one config hash and the r36 commit on every decision row.
 # g_verify_r36.sbatch is an optional re-verify of out/ against the published copy: sbatch g_verify_r36.sbatch
 set -euo pipefail
-W=/orcd/scratch/bcs/002/satra/r18d_20261010
+W=${ORCD_GROUP_SCRATCH}/r18d_20261010
 R36=$W/r36
 cd $W
 MODE=${1:?build or publish}
@@ -15,15 +15,15 @@ DEP=${2:+--dependency=afterany:$2}
 grep -q R36_COMMIT_PLACEHOLDER common_r36.sh && { echo "common_r36.sh still has the placeholder: r36 was never submitted" >&2; exit 2; }
 case "$MODE" in
 build)
-  PY=/orcd/scratch/bcs/002/satra/senselab-r28/.venv/bin/python
+  PY=${ORCD_GROUP_SCRATCH}/senselab-r28/.venv/bin/python
   mkdir -p $R36/recording_vectors && chmod 700 $R36/recording_vectors
   [ -d $R36/pools/rvec ] && mv $R36/pools/rvec $R36/pools/rvec.before.$(date +%Y%m%dT%H%M%S)
   $PY $W/pool/slice_pool.py init $R36/pools/rvec --name r36-w-rvec --slices 64 -- bash $W/r36_slice.sh rvec {i} {n} >&2
   A=$($PY $W/pool/slice_pool.py submit $R36/pools/rvec --workers 64 ${2:+--after $2} --name r36-w-rvec \
-    -- --exclude=node2119,node2621,node3002,node1702,node3804 --requeue --partition=pi_satra,ou_bcs_low,mit_preemptable \
+    -- --exclude=node2119,node2621,node3002,node1702,node3804 --requeue --partition=${CPU_PARTITION},ou_bcs_low,mit_preemptable \
        --cpus-per-task=2 --mem=24G --time=12:00:00)
   G=$(sbatch --parsable --dependency=afterany:$A --wrap="$PY $W/pool/slice_pool.py gate --check-only $R36/pools/rvec" \
-    --job-name=r36-gate-rvec --partition=pi_satra,ou_bcs_low --time=0:10:00 --mem=1G --output=$R36/logs/%x-%j.out)
+    --job-name=r36-gate-rvec --partition=${CPU_PARTITION},ou_bcs_low --time=0:10:00 --mem=1G --output=$R36/logs/%x-%j.out)
   B=$(sbatch --parsable --dependency=afterok:$G f_merge_r36.sbatch)
   C=$(sbatch --parsable --dependency=afterany:$B f_check_r36.sbatch)
   D=$(sbatch --parsable --dependency=afterany:$B f_table_r36.sbatch)

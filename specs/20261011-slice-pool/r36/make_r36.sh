@@ -3,7 +3,7 @@
 # The sliced lanes (replay, bypass, review, opinion, cohort, refold, task_audio, rvec) are not sbatch files: they are
 # slice_pool lanes of r36_slice.sh, chained by r36_link.sbatch.
 set -euo pipefail
-W=/orcd/scratch/bcs/002/satra/r18d_20261010
+W=${ORCD_GROUP_SCRATCH}/r18d_20261010
 cd $W
 conv() {  # $1 r35 template, $2 r36 output
   sed -e 's/\$R35/$R36/g' -e 's/\${R35/${R36/g' -e 's/common_r35\.sh/common_r36.sh/g' -e 's/job-name=r35-/job-name=r36-/' \
@@ -24,9 +24,9 @@ grep -q '"rows_replay", "rows_cohort"' f_check_r36.sbatch
 sed -i -e 's#rm -rf "\${R34:?}/review_stage"#rm -rf "${R36:?}/review_stage"#' -e 's#r18d/r35 triage review#r18d/r36 triage review#' g_review_page_r36.sbatch
 grep -q 'rm -rf "${R36:?}/review_stage"' g_review_page_r36.sbatch
 # f_finalize: the description names r36 and what it did
-/orcd/scratch/bcs/002/satra/senselab-r28/.venv/bin/python - <<'PY'
+${ORCD_GROUP_SCRATCH}/senselab-r28/.venv/bin/python - <<'PY'
 import re
-p = "/orcd/scratch/bcs/002/satra/r18d_20261010/f_finalize_r36.sbatch"
+p = "${ORCD_GROUP_SCRATCH}/r18d_20261010/f_finalize_r36.sbatch"
 s = open(p).read()
 old_head = 'f"r18d/r35 at {commit[:8]}'
 old_tail = "the whole corpus re-folded at r35, task audio,"

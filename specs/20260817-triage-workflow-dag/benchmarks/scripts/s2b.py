@@ -5,7 +5,7 @@ Use localgate.py, which implements the current rule.
 
 import numpy as np
 from scipy.signal import find_peaks
-d=np.load("/Users/satra/.claude/jobs/295c3f8a/tmp/stage1.npz")
+d=np.load("${AGENT_SCRATCH}/stage1.npz")
 Edb=d["Edb"]; floor=float(d["floor"]); fs=int(d["fs"])
 pk,_=find_peaks(Edb,height=floor+18.0,distance=int(0.150*fs))
 out=[]
@@ -22,5 +22,5 @@ out.sort(); m=[]
 for s0,e0,pd in out:
     if m and s0<=m[-1][1]: m[-1]=[m[-1][0],max(m[-1][1],e0),max(m[-1][2],pd)]
     else: m.append([s0,e0,pd])
-np.save("/Users/satra/.claude/jobs/295c3f8a/tmp/spans_v2b.npy",np.array(m))
+np.save("${AGENT_SCRATCH}/spans_v2b.npy",np.array(m))
 print(f"{len(m)} spans, {sum(e-s for s,e,_ in m):.2f} s covered")

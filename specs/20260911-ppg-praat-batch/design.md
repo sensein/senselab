@@ -139,7 +139,7 @@ uv run python scripts/extend_ppg_praat.py MANIFEST --slice-index I --slice-count
     [--batch-size 500] [--device cpu] [--log-dir DIR] [--config OVERRIDE.yaml]
 ```
 
-Input is the manifest at `/orcd/scratch/bcs/002/satra/ppg_20260911/manifest.jsonl`, 60,202 rows, one
+Input is the manifest at `${ORCD_GROUP_SCRATCH}/ppg_20260911/manifest.jsonl`, 60,202 rows, one
 JSON object per line carrying `stem`, `enhanced`, `family`, `duration_s` and `lexical`. **Those
 60,202 rows are not the corpus** — 2,376 of the 62,578 stores on disk are absent from this manifest
 and hold neither measurement; see *The manifest is not the corpus* below before quoting either

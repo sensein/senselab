@@ -1,7 +1,7 @@
 import json
 from collections import OrderedDict
 
-d = json.load(open("/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/matrix.json"))
+d = json.load(open("${AGENT_SCRATCH}/io-audit/matrix.json"))
 R = d["results"]
 
 ENC = ["torchcodec.AudioEncoder", "torchaudio.save", "soundfile.write", "ffmpeg-cli"]

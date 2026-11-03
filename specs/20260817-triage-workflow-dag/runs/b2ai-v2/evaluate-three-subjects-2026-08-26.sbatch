@@ -7,7 +7,7 @@
 #     sbatch --array=0-27%2 evaluate-three-subjects-2026-08-26.sbatch
 
 #SBATCH --job-name=triage-pr567
-#SBATCH --partition=pi_satra
+#SBATCH --partition=${CPU_PARTITION}
 #SBATCH --time=1:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
@@ -28,7 +28,7 @@ export PATH="$HOME/.local/bin:$PATH"
 export UV_PROJECT_ENVIRONMENT="$REPO_DIR/.venv"
 export UV_CACHE_DIR="$SCRATCH/uv-cache"
 export LD_LIBRARY_PATH="$SCRATCH/miniforge/lib:${LD_LIBRARY_PATH:-}"
-export HF_HOME=/orcd/data/satra/002/huggingface
+export HF_HOME=${ORCD_DATA}/huggingface
 export HF_HUB_CACHE="$HF_HOME/hub"
 export SENSELAB_CACHE="$SCRATCH/senselab-cache"
 export SENSELAB_VENV_CACHE="$SCRATCH/senselab-venvs"

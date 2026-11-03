@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=r36-link
-#SBATCH --partition=pi_satra,ou_bcs_low
+#SBATCH --partition=${CPU_PARTITION},ou_bcs_low
 #SBATCH --exclude=node2119,node2621,node3002,node1702,node3804
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=1:00:00
 #SBATCH --no-requeue
-#SBATCH --output=/orcd/scratch/bcs/002/satra/r18d_20261010/r36/logs/%x-%j.out
+#SBATCH --output=${ORCD_GROUP_SCRATCH}/r18d_20261010/r36/logs/%x-%j.out
 # The r36 chain, one link per job (R36_LINK via --export). Each link runs afterany on the worker array(s) of the pool
 # it gates, checks that pool with `slice_pool.py gate` (complete -> go on; incomplete -> resubmit its workers once and
 # queue this same link again after them; incomplete after that -> the pool writes `halted` and the chain stops), then
@@ -24,7 +24,7 @@
 # A link that already ran (marker in $R36/chain/) exits without submitting anything.
 # Stopping or re-slicing by hand: CANCEL_R36.sh (links first, then workers), never the other way round.
 set -euo pipefail
-source /orcd/scratch/bcs/002/satra/r18d_20261010/common_r36.sh
+source ${ORCD_GROUP_SCRATCH}/r18d_20261010/common_r36.sh
 unset CUDA_VISIBLE_DEVICES   # common_r36 hides GPUs; --export=ALL must not carry that into the GPU workers
 cd $W
 R36_LINK=${R36_LINK:?R36_LINK must name a link}
@@ -105,7 +105,7 @@ replay)
   gate_all replay
   $PY - <<'PY'
 import collections, glob, json, os
-R36 = "/orcd/scratch/bcs/002/satra/r18d_20261010/r36"
+R36 = "${ORCD_GROUP_SCRATCH}/r18d_20261010/r36"
 review, last = {}, {}
 for path in sorted(glob.glob(f"{R36}/rows_replay/slices/*.jsonl")):
     for line in open(path):

@@ -38,7 +38,7 @@ Total 10,358,336 recording-seconds, 2,877 task-hours, over a 51.72 h array windo
 routed-branch profiles, timed with the corpus driver's own instrumentation. No node was skipped and
 no node was cheaper for having run before. 2,285.4 s originally, 2,607.4 s re-run — 1.14 overall,
 per recording between 0.90 and 1.61, a spread dominated by node heterogeneity rather than by reuse:
-the twelve originally ran on ten different `mit_preemptable` nodes and the re-run on one `pi_satra`
+the twelve originally ran on ten different `mit_preemptable` nodes and the re-run on one `${CPU_PARTITION}`
 node whose load average was 19 at the start and 21 at the end, shared with the corpus array's last
 slice and with the second probe below. PREPROCESS was 93.9% of the re-run, against 90.4%
 corpus-wide.
@@ -159,7 +159,7 @@ not be replayed without carrying it in the manifest.
 
 The table above is read off the code. It was then run: all twelve probe recordings — three duration
 strata across four routed-branch profiles — were re-entered at TAXONOMY against their finished
-stores on `pi_satra`, and every node either completed or was skipped by routing. Zero node errors,
+stores on `${CPU_PARTITION}`, and every node either completed or was skipped by routing. Zero node errors,
 and both REPORT products rendered on all twelve. The replayed graph cost 0.8 s to 35.6 s per
 recording, 162.8 s in total, against 2,288 s for the same twelve through the full graph — 14.1
 times cheaper on these recordings, against the 10.4 the corpus-wide node table predicts.
@@ -204,7 +204,7 @@ symlink. REDACT's write into the mirror therefore resolved through the link and 
 in the corpus tree — the exact outcome `--out-root` exists to prevent.
 
 **Measured after the 2026-09-22 corpus replay, in the window after it began: 17,924 `redacted.flac`
-files under `/orcd/scratch/bcs/002/satra/triage_design_20260919/run/out/` were overwritten.** That
+files under `${ORCD_GROUP_SCRATCH}/triage_design_20260919/run/out/` were overwritten.** That
 is exactly the count of recordings where REDACT ran. Stores and every other stream were untouched —
 0 in the same window — so the damage is confined to a derived, regenerable artefact, and the design
 run's redacted audio is in any case superseded by the replay's own REDACT output. It is not being
@@ -297,7 +297,7 @@ and belongs in a second, GPU-partitioned driver, for three reasons.
 **Concurrency.** The replay is CPU-only and sized by `MaxTRESPU cpu=1024` on `mit_preemptable` —
 128 concurrent tasks at 8 CPUs, which is the ceiling the corpus run itself hit (measured maximum
 instantaneous concurrency 132, p95 128). The GPU ceiling on the same partition is
-`gres/gpu=4` per user, and on `pi_satra` the group pool is `gres/gpu=6`. Folding the LLM check into
+`gres/gpu=4` per user, and on `${CPU_PARTITION}` the group pool is `gres/gpu=6`. Folding the LLM check into
 the replay would put all 62,548 recordings behind a 4-to-6-way GPU gate instead of a 128-way CPU
 one, for the benefit of the 21% that need it.
 

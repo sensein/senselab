@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=audiolm
-#SBATCH --partition=pi_satra
+#SBATCH --partition=${CPU_PARTITION}
 #SBATCH --gres=gpu:h100:2
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
@@ -12,7 +12,7 @@ POOL="$(readlink -f ~/orcd/pool)"
 export SCRATCH POOL
 export PATH="$HOME/.local/bin:$PATH"
 export LD_LIBRARY_PATH="$SCRATCH/miniforge/lib:${LD_LIBRARY_PATH:-}"
-export HF_HOME=/orcd/data/satra/002/huggingface
+export HF_HOME=${ORCD_DATA}/huggingface
 export HF_HUB_CACHE="$HF_HOME/hub"
 export HF_TOKEN="$(cat ~/.cache/huggingface/token)"
 export UV_CACHE_DIR="$POOL/uv-cache"          # SCRATCH is at 98% of its 1M inode cap

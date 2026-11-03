@@ -45,7 +45,7 @@ def spans_local(Edb, K=18.0, drop=15.0, frac=.7, hang_ms=120, min_ms=50):
         if mg and s0<=mg[-1][1]: mg[-1][1]=max(mg[-1][1],e0)
         else: mg.append([s0,e0])
     return mg
-LAB="/Users/satra/Downloads/streaming-audio-2026-07-30T04-21-56-487Z.wav"
+LAB="${LOCAL_INPUT}/streaming-audio-2026-07-30T04-21-56-487Z.wav"
 sp=label("speech"); a_,b_=sp["span_lo"],sp["span_hi"]
 def report(tag,x,K=18.):
     Edb=envdbfs(x); mg=spans_local(Edb,K=K)

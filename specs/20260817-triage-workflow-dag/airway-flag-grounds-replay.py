@@ -6,7 +6,7 @@ import os
 from concurrent.futures import ProcessPoolExecutor
 from typing import Any
 
-BASE = "/orcd/scratch/bcs/002/satra/triage_design_20260919/airwaygrounds"
+BASE = "${ORCD_GROUP_SCRATCH}/triage_design_20260919/airwaygrounds"
 MIN = 0.2
 # branch.label_sets, and the packaged profile's corroboration set for each head
 HEAR = {"cough": ("Cough",), "breath": ("Breathe",)}

@@ -1,13 +1,13 @@
 # Validation on ORCD
 
-Job 25503998 (`pi_satra`, node2803, Intel Xeon Platinum 8462Y+, 8 CPUs, 48 GB, shared node at a load
+Job 25503998 (`${CPU_PARTITION}`, node2803, Intel Xeon Platinum 8462Y+, 8 CPUs, 48 GB, shared node at a load
 average of 17–24, with probes 25504160, 25504383 and 25505119 on the same node for part of it). The
 working tree of this change (branch tip d3f259fd plus the commits that add `venv_worker`) ran the
 r18d driver, instrumented (`preprocess_driver_r30.py`), over 20 recordings from
 `r18d_20261010/rerun_manifest.jsonl` that already had complete r18d rows, chosen at the 20 duration
 quantiles (0.3 s to 119.6 s, 484 s in all). `SENSELAB_RESULT_CACHE=off`, so every model computed;
 `SENSELAB_RUN_ID=slurm-25497192`, so every model resolved to the commit r18d used. Output went to
-`/orcd/scratch/bcs/002/satra/r30_validate/run/`, never the staging tree.
+`${ORCD_GROUP_SCRATCH}/r30_validate/run/`, never the staging tree.
 
 ## Outputs against r18d staging
 

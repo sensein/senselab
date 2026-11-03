@@ -1,9 +1,9 @@
 # Corpus speech census — the 2026-09-08 triage run over 62,578 recordings
 
-What the provenance stores under `/orcd/scratch/bcs/002/satra/triage_full_20260908/out/` actually
+What the provenance stores under `${ORCD_GROUP_SCRATCH}/triage_full_20260908/out/` actually
 hold, read on 2026-09-19. The scan scripts are on ORCD scratch at
-`/orcd/scratch/bcs/002/satra/checks_20260916/census/`; their outputs, including everything derived
-from transcript text, are under `/orcd/scratch/bcs/002/satra/checks_20260916/pii_census/` (mode 700).
+`${ORCD_GROUP_SCRATCH}/checks_20260916/census/`; their outputs, including everything derived
+from transcript text, are under `${ORCD_GROUP_SCRATCH}/checks_20260916/pii_census/` (mode 700).
 
 **Read the first section before any number below it.** The run this census reads did not run the
 branches, so three of the things the census was asked for are not in the stores at all, and one of
@@ -33,7 +33,7 @@ them was measured afresh rather than read.
 ## 0. What ran, and what therefore cannot be answered from these stores
 
 Every one of the 62,578 recordings named in
-`/orcd/scratch/bcs/002/satra/clipfix_20260913/manifest_all.jsonl` has a `run/store.jsonl`; all
+`${ORCD_GROUP_SCRATCH}/clipfix_20260913/manifest_all.jsonl` has a `run/store.jsonl`; all
 62,578 parse; none errored. Counting the nodes that have at least one activity in a store:
 
 | node | recordings with an activity |
@@ -50,7 +50,7 @@ Every one of the 62,578 recordings named in
 | VERDICT | **0** |
 
 This is not attrition. The run's own driver says so in its first line —
-`/orcd/scratch/bcs/002/satra/triage_full_20260908/driver.py`:
+`${ORCD_GROUP_SCRATCH}/triage_full_20260908/driver.py`:
 
 > ADMIT + PREPROCESS + TAXONOMY + figure over ONE recording, then verify the store. […] **Branches
 > are not run.**
@@ -275,7 +275,7 @@ The detected strings are **not in this document and not in the repository**, and
 to either — the repository is shared and its history is permanent, and this document is meant to
 circulate. They live in two places:
 
-- `/orcd/scratch/bcs/002/satra/checks_20260916/pii_census/` on ORCD scratch (mode 700):
+- `${ORCD_GROUP_SCRATCH}/checks_20260916/pii_census/` on ORCD scratch (mode 700):
   `pii_detail.jsonl` (every finding with its surface, recording, family and haystack) and
   `pii_surfaces_by_spread.jsonl` (each distinct surface with the number of recordings it was
   detected in — the file to start from when judging the detector), plus `pii_summary.json` and
@@ -285,7 +285,7 @@ circulate. They live in two places:
 ### 1c. Language, and where the CJK glyphs come from
 
 The BIDS sidecars at
-`/orcd/data/satra/002/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04/` carry `language`
+`${ORCD_DATA}/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04/` carry `language`
 per recording. All 62,578 recordings have a `_recording-metadata.json`; 9,772 also have an
 `_acoustictask-metadata.json` and 52,806 do not.
 
@@ -749,7 +749,7 @@ Listed so none of it is mistaken for a null result.
    `routing`'s and `routing` never ran. "No lexical content" is a different claim.
 6. **Why 635 recordings have no diarization and 2,319 have no QUALITY activity.** The stores record
    the absence, not a reason. The run logs under
-   `/orcd/scratch/bcs/002/satra/triage_full_20260908/logs/` were not read for this census.
+   `${ORCD_GROUP_SCRATCH}/triage_full_20260908/logs/` were not read for this census.
 7. **Why 266 QUALITY flag verdicts were invalidated with no replacement.** Observed, unexplained.
 8. **Whether the 71 recordings with a substantive second speaker contain a clinician, a family
    member, a television, or the participant twice.** Nothing was listened to.
@@ -819,7 +819,7 @@ Listed so none of it is mistaken for a null result.
 ## 6. How this was produced
 
 All compute via `sbatch` to `mit_preemptable`; nothing ran on the ORCD login node. Scripts on ORCD
-scratch at `/orcd/scratch/bcs/002/satra/checks_20260916/census/`:
+scratch at `${ORCD_GROUP_SCRATCH}/checks_20260916/census/`:
 
 | script | what it does | job |
 |---|---|---|
@@ -837,7 +837,7 @@ scratch at `/orcd/scratch/bcs/002/satra/checks_20260916/census/`:
 | `cjk.py` | which transcripts carry CJK codepoints, and from which backend | 16 procs |
 | `verify_text.py`, `verify_text2.py` | whether the reconstructed haystack matches the store's own `consensus_transcript.text` | 16 procs |
 
-Outputs under `/orcd/scratch/bcs/002/satra/checks_20260916/pii_census/` (mode 700). The corpus was
+Outputs under `${ORCD_GROUP_SCRATCH}/checks_20260916/pii_census/` (mode 700). The corpus was
 read and not written.
 
 ---

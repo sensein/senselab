@@ -18,7 +18,7 @@
 # 7c169ccc and 517381e9, no_breathing on the silent ones. AIRWAY's detector passed 517381e9; HeAR
 # Breathe at 0.2 passed three silent recordings and Clef 27B on plain spectrograms called six of the
 # ten silent ones alternating_breaths. On 100 random breath-family recordings the measure read 71
-# alternating, 16 none, 11 single, 2 irregular (pilot: /orcd/scratch/bcs/002/satra/breath_pattern/).
+# alternating, 16 none, 11 single, 2 irregular (pilot: ${ORCD_GROUP_SCRATCH}/breath_pattern/).
 # The values are the pilot's, chosen from the anatomy of a breath and not fitted to the labels:
 #   - breath_band_hz: inhale/exhale turbulence energy sits below ~2.5 kHz; above 150 Hz leaves out
 #     mains hum and handling rumble.
