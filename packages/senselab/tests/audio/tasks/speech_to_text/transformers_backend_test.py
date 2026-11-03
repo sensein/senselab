@@ -302,7 +302,7 @@ def test_a_chunk_ending_past_the_audio_is_clamped_to_its_extent() -> None:
     """A pipeline chunk (1.0 s, 9.0 s) of a 2 s recording ends at 2 s, as the other backend's spans do."""
     out = {"text": "late", "chunks": [{"text": "late", "timestamp": (1.0, 9.0)}]}
     (word,) = hf.transcript(out, "word", CLOCK, 2 * 10**9).segments[0].children
-    assert (word.span.start_ns, word.span.end_ns) == (10**9, 2 * 10**9)
+    assert (word.span.start_ns, word.span.end_ns) == (10**9, 2 * 10**9)  # type: ignore[union-attr]
 
 
 @pytest.mark.logic
