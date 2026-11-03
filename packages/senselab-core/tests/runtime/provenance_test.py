@@ -352,6 +352,16 @@ def test_provenance2_refused(tmp_path: Path, name: str, lines: list[dict[str, ob
     assert str(tmp_path) not in str(caught.value) and name not in str(caught.value)
 
 
+def test_indented_retired_provenance_is_refused_not_malformed(tmp_path: Path) -> None:
+    """A retired document written indented over many lines is a format refusal, not a malformed document."""
+    run = _run(tmp_path, ProvStore(_entities()))
+    name = f"{'c' * 32}.jsonld"
+    (run / PROV_DIR / name).write_text('{\n  "format": "provenance@2.0",\n  "record": "format"\n}\n', "utf-8")
+    with pytest.raises(ProvenanceFormatRefused) as caught:
+        ProvStore.read(run, VOCAB)
+    assert caught.value.found == "provenance@2.0"
+
+
 def test_add_is_all_or_nothing() -> None:
     """An `add` that meets a conflict adds none of its records."""
     store = ProvStore([prov.entity(OUTPUT, VOCAB, attributes={"senselab:label": "a"})])

@@ -21,7 +21,7 @@ from typing import Any, TypeVar, cast
 from senselab_worker.canonical import jcs_dumps, jcs_loads, require_depth
 
 from senselab_core.kernel import prov as kprov
-from senselab_core.kernel.formats import FORMAT_PATTERN, PROVENANCE_FORMAT, readable
+from senselab_core.kernel.formats import FORMAT_PATTERN, PROVENANCE_FORMAT, FormatVerdict, check, readable
 from senselab_core.runtime.locks import LeaseUnavailable
 from senselab_core.runtime.storage import TEMPORARY_NAME, WrongKindError, write_atomically
 from senselab_core.runtime.vocabulary import core_vocabulary
@@ -261,7 +261,7 @@ class ProvStore:
         write are skipped.
 
         Raises:
-            ProvenanceFormatRefused: on a file in `prov/` whose first line declares a format other than `provenance@3`.
+            ProvenanceFormatRefused: on a file in `prov/` that declares a format other than `provenance@3`.
             MalformedDocument: on a file in `prov/` that is not a writer's document or cannot be read, a document
                 of another shape, a node that differs from its rebuild, a `senselab:fileLabel` that is not
                 `file-<n>`, a local path as `senselab:modelSource`, or attribute references nested too deep.
@@ -308,7 +308,7 @@ class ProvStore:
         endpoint and every record an attribute names must be a node of the union.
 
         Raises:
-            ProvenanceFormatRefused: on a document whose first line declares a format other than `provenance@3`.
+            ProvenanceFormatRefused: on a document that declares a format other than `provenance@3`.
             MalformedDocument: on a file that is not a writer's document, a document of another shape, a node
                 that differs from its rebuild, a `senselab:fileLabel` that is not `file-<n>`, or attribute
                 references nested deeper than `MAX_DEPTH`.
@@ -319,7 +319,7 @@ class ProvStore:
         for name, data in sorted(documents.items()):
             writer = name.removesuffix(".jsonld") if WRITER_DOCUMENT.fullmatch(name) else None
             found = _declared_format(data)
-            if found is not None and not readable(PROVENANCE_FORMAT, found):
+            if found is not None and check(PROVENANCE_FORMAT, found) is not FormatVerdict.ACCEPTED:
                 raise ProvenanceFormatRefused(found)
             if writer is None:
                 raise MalformedDocument(None, f"{PROV_DIR}/ holds a file that is not a writer's document")
@@ -348,13 +348,19 @@ def _boundary_problem(record: kprov.Record) -> str | None:
 
 
 def _declared_format(data: bytes) -> str | None:
-    """Return the format tag a file's first line declares as a JSON object's `format`, None if it declares none."""
-    try:
-        first = json.loads(data.partition(b"\n")[0])
-    except (ValueError, RecursionError):
-        return None
-    found = first.get("format") if isinstance(first, dict) else None
-    return found if isinstance(found, str) and re.fullmatch(FORMAT_PATTERN, found) else None
+    """Return the format tag a file declares as a JSON object's `format`, None if it declares none.
+
+    The whole file is read as one JSON document, so an indented one declares its format; a JSON-lines file declares
+    it on its first line.
+    """
+    for candidate in (data, data.partition(b"\n")[0]):
+        try:
+            document = json.loads(candidate)
+        except (ValueError, RecursionError):
+            continue
+        found = document.get("format") if isinstance(document, dict) else None
+        return found if isinstance(found, str) and re.fullmatch(FORMAT_PATTERN, found) else None
+    return None
 
 
 def _writer_nodes(writer: str, data: bytes) -> list[tuple[str, bytes]]:
