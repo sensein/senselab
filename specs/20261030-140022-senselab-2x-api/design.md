@@ -450,7 +450,7 @@ typed error at the boundary naming the attribute path and the type (H-R29, H-R30
 - **Version pinning.** pydra changes are used from the branch through `[tool.uv.sources]`, with
   the commit pinned in `uv.lock`, and released in 1.0 alphas.
 - **Decision gate at the start of Phase 3.** It decides only the default executor, not the format.
-  If E1, D1, F2 (with F1), K1 and K2 (with G1) are not working on the branch, senselab builds its own graph runner behind the
+  (Amended 2026-11-03, P3-1: K2 was delivered inside the gate, as Phase 3 Task 0; the gate passed, Route A.) If E1, D1, F2 (with F1), K1 and K2 (with G1) are not working on the branch, senselab builds its own graph runner behind the
   same `Executor` protocol: 2–4k lines, 3–5
   person-weeks, reusing `reproduce/dag.py` and `audio_analysis/contracts.py:991`
   `unrolled_contracts`.
@@ -807,7 +807,7 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
   - the `benchmarks/scale` ladder and the catalogue resource tables (P-7, P-33).
 - The pydra gate is decided at the start of this phase (section 4.9). Owners of the pydra PRs
   (proposal 0001, nipype/pydra#891): **Phase 2 owns the gate prerequisites**, which must be
-  working on the branch before Phase 3 starts: A1, D1, E1, F1, F2, G1, K1, K2 (amended 2026-11-02, P2-39: F1
+  working on the branch before Phase 3 starts: A1, D1, E1, F1, F2, G1, K1, K2 (amended 2026-11-03, P3-1: K2 moved into Phase 3 Task 0; amended 2026-11-02, P2-39: F1
   depends on A1 in the proposal, so A1 moves from Phase 3 to Phase 2). **Phase 3 owns the
   rest**: A0, A2, B1, B2, C, D2, E2, G2, H0, H, I, J1, J2. The gate decision is Phase 3's
   first task. The dates are the owner's to set; none is set yet.
@@ -963,3 +963,4 @@ R-n in [`review-register.md`](review-register.md).
 - 2026-11-02: Phase 2 spec pass: §6.1 reconciles `alpha` by merge (D-6, P2-35); A1 is a Phase 2 gate prerequisite
   (P2-39); the source-stamp conflict is closed (P2-21); backends are code paths and models are catalogue entries
   (P2-90, P2-47).
+- 2026-11-03: the pydra gate passed at `0c1bbcd9` (Route A, §4.9); K2 was delivered in Phase 3 Task 0, not Phase 2 (P3-1, §4.9, §6.2; `reviews/phase3-gate/evidence.md`).

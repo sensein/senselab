@@ -63,7 +63,8 @@ PR - clarify the decisions"):
 | 0: freeze marker | done |
 | 1: kernel, worker runtime, identity, store, data fetch | T0–T15a done. Hardening done: H1–H8 (H8a–c), the H9 series (H9a–f, H9-compat, H9-collect, H9-cleanup, H9-ci), H10, **H11a** and **H11b** (including fix round 1). 2.x CI first fully green at `97b617c5`; Linux CI green after D-2 fix round 1 (`b76681a9`). Full review done 2026-11-01; its decisions are applied. **Phase 1 done 2026-11-01** at `195406b7`: CI green, exit adversarial round fixed (R-135..R-159), ORCD full packages suite and release gate green, cross-node NFS lock checks (a)-(f) pass. |
 | 2: tasks, backends, benchmarks, parity, ADR-010 | **done 2026-11-03** at `79b417a8`, except the pydra gate prerequisite K2, which was not delivered and moves to Phase 3 Task 0 (P3-1) (`2x/phase-2`): CI green; exit adversarial round fixed (R-168..R-195, groups A–E); ORCD verify A–D agree (equivalence classes from runs p2cmd-27735057, p2cmd-27735059); parity at `75a1c65c` 8 passed, 9 skipped (jobs 27748712..27748718), CrisperWhisper ct2 against transformers within 4e-6 on cpu and 4e-4 on H100 float16 |
-| 3–5 | not started |
+| 3: plans and executors | in progress. Plan `plans/phase-3.md` (41 tasks). **Task 0 gate passed 2026-11-03 at pydra `0c1bbcd9`: Route A** (`reviews/phase3-gate/evidence.md`; CI 41606617714, ORCD 27757266) |
+| 4–5 | not started |
 | pydra PRs (A0…K2) | Phase 2 prerequisites (D1, G1, K1, A1, F1, F2, E1a, E1b) merged into `enh/execution-extensions` and closed; CI speed #902 open for review; workflow-cache fix #903. #891 carries the branch to `main` as a draft |
 
 ## Next actions, in order
@@ -134,6 +135,7 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
 
 ## Log
 
+- **2026-11-03 (Phase 3 gate):** K2 delivered as nipype/pydra#905 (Task 40); the gate passed at `0c1bbcd9` on all four criteria, so Task 9b builds `PydraRunner` (Route A). Fixes found on the way: #903 workflow-construction cache keyed by class, #904 cf workers never forked.
 - **2026-11-03 (Phase 2 done):** parity compared against 1.x for the first time (34i/34j) and found three differences: the 1.x embedding reference was one zero-padded batch, the 1.x ASR reference decoded with word timestamps, and the CrisperWhisper ct2 engine reported no confidence. Task 34k (`3ef57813..75a1c65c`) fixed all three; confidence is computed once per window on its final ids, by teacher forcing, on both engines. The 1.x producer takes its params from the items file, and `run` refuses an items file of another benchmark, backend or items. Rows R-196..R-201.
 - **2026-11-01 (final review, docs fixes):** the pydra environment fold corrected to ADR-002; as-built detail
   removed from ADR-003 and ADR-009; register rows R-132..R-134 added (prose review inert, config-guard tests,
