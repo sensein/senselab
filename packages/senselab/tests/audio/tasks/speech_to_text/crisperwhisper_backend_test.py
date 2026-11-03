@@ -135,7 +135,7 @@ def test_diagnostics_are_an_output_only_when_requested() -> None:
     [plain] = cw.handle(state, [item], PARAMS)
     [asked] = cw.handle(state, [item], {**PARAMS, cw.DIAGNOSTICS_KEY: True})
     assert set(plain["outputs"]) == {"transcript"}
-    assert asked["outputs"]["diagnostics"] == {"windows": 0, "chunks": None}
+    assert asked["outputs"]["diagnostics"] == {"windows": 0, "chunks": None, "detail": None}
 
 
 @pytest.mark.logic
@@ -268,5 +268,5 @@ def test_long_form_decode_is_scored_with_real_weights(real_worker: RealWorkers, 
     transcript = from_wire_form(result["outputs"]["transcript"])
     assert isinstance(transcript, Transcript)
     [segment] = transcript.segments
-    assert segment.confidence is not None and len(segment.children) > 10
-    assert all(word.confidence is not None for word in segment.children)
+    assert segment.confidence is not None and len(segment.children) > 10, diagnostics
+    assert all(word.confidence is not None for word in segment.children), diagnostics

@@ -23,6 +23,7 @@ __all__ = [
     "special_token_ids",
     "word_confidences",
     "word_prefix",
+    "word_texts",
 ]
 
 _CONTROL_TOKEN = re.compile(r"<\|.*\|>")
@@ -74,6 +75,18 @@ def _word_tokens(tokens: Sequence[int], decode: Callable[[int], str], excluded: 
             continue
         yield index, text.startswith(" ") or not started
         started = True
+
+
+def word_texts(
+    tokens: Sequence[int], decode: Callable[[int], str], special_token_ids: Optional[set[int]] = None
+) -> list[str]:
+    """Return the text of each word `word_confidences` groups `tokens` into."""
+    words: list[str] = []
+    for index, starts in _word_tokens(tokens, decode, special_token_ids or set()):
+        if starts:
+            words.append("")
+        words[-1] += decode(tokens[index])
+    return words
 
 
 def word_prefix(
