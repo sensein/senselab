@@ -128,7 +128,7 @@ def transcript(decoded: Decoded, timestamps: str, clock_id: str, duration_ns: in
     segment; no words give no segment. A word missing a time starts where the previous ended; spans are integer ns
     clamped to `duration_ns`.
     """
-    doc = functools.partial(_doc, extent_ns=duration_ns, clock_id=clock_id)
+    doc = functools.partial(_doc, extent=_span(0, duration_ns, clock_id))
     text = " ".join(w for w, _, _ in decoded.words).strip()
     if not text:
         return doc([])
@@ -145,8 +145,8 @@ def transcript(decoded: Decoded, timestamps: str, clock_id: str, duration_ns: in
     return doc([_node(text, whole, mean, children if timestamps == "word" else [])])
 
 
-def _doc(segments: list[dict[str, Any]], *, extent_ns: int, clock_id: str) -> dict[str, Any]:
-    return {"format": "transcript@2.0", "segments": segments, "extent_ns": extent_ns, "clock_id": clock_id}
+def _doc(segments: list[dict[str, Any]], *, extent: dict[str, Any]) -> dict[str, Any]:
+    return {"format": "transcript@2.0", "segments": segments, "extent": extent}
 
 
 def _span(start_ns: int, end_ns: int, clock_id: str) -> dict[str, Any]:
@@ -227,8 +227,9 @@ class Library:
         def decode(token: int) -> str:
             return str(engine.tokenizer.decode([token]))
 
-        kept = [len(chunk.text.split()) for chunk in getattr(result, "chunks", None) or []]
-        if kept:
+        chunks = getattr(result, "chunks", None) or []
+        kept = [len(chunk.text.split()) for chunk in chunks]
+        if len(windows) > 1 or kept:
             windows = surviving_windows(windows, kept, decode, special) if len(kept) == len(windows) else []
         blocks = window_confidence(engine, windows, teacher, special)
         words = [(str(w.word or w.text), float(w.start), float(w.end)) for w in getattr(result, "words", None) or []]
@@ -236,16 +237,12 @@ class Library:
         mean = None
         if blocks:
             merged = merge_confidence_blocks(blocks)
-            mean = None if merged["avg_logprob"] is None else math.exp(merged["avg_logprob"])
-            if merged["tokens"]:
-                scored = word_confidences(
-                    merged["tokens"],
-                    merged["token_logprob"],
-                    decode,
-                    special,
-                )
-                if len(scored) == len(words):
-                    confidences = list(scored)
+            scored = (
+                word_confidences(merged["tokens"], merged["token_logprob"], decode, special) if merged["tokens"] else []
+            )
+            if len(scored) == len(words) and (not kept or sum(kept) == len(words)):
+                confidences = list(scored)
+                mean = None if merged["avg_logprob"] is None else math.exp(merged["avg_logprob"])
         return Decoded(words, confidences, mean)
 
 

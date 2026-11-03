@@ -88,8 +88,10 @@ types:
   transcript@2:
     fields:
       format: exact
-      extent_ns: {close: time_ns}
-      clock_id: exact
+      extent: optional
+      extent.start_ns: {close: time_ns}
+      extent.end_ns: {close: time_ns}
+      extent.clock_id: exact
       '*text': exact
       '*confidence': {close: probability}
       '*span': optional

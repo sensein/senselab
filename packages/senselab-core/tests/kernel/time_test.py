@@ -142,14 +142,15 @@ def test_rebind_moves_every_clock_relative_field() -> None:
     stored, reader = TimeAnchor(clock_id="a", absolute_start_ns=None), TimeAnchor(clock_id="b", absolute_start_ns=7)
     shift = TimeMap(source="a", target="b", offset_ns=100)
     words = Transcript(
-        segments=(TranscriptNode(text="hi", span=Span(start_ns=1, end_ns=2, clock_id="a")),), extent_ns=5, clock_id="a"
+        segments=(TranscriptNode(text="hi", span=Span(start_ns=1, end_ns=2, clock_id="a")),),
+        extent=Span(start_ns=0, end_ns=5, clock_id="a"),
     )
     intervals = Intervals(start_ns=[0, 5], end_ns=[5, 9], label=["x", "y"], clock_id="a")
     events = Events(time_ns=[3], label=["e"], value=None, clock_id="a")
     other = Span(start_ns=0, end_ns=1, clock_id="c")
     out = rebind((words, intervals, events, other), stored, reader, shift)
     assert out[0].segments[0].span == Span(start_ns=101, end_ns=102, clock_id="b")
-    assert (out[0].extent_ns, out[0].clock_id) == (105, "b")
+    assert out[0].extent == Span(start_ns=100, end_ns=105, clock_id="b")
     assert out[1] == Intervals(start_ns=[100, 105], end_ns=[105, 109], label=["x", "y"], clock_id="b")
     assert out[2] == Events(time_ns=[103], label=["e"], value=None, clock_id="b") and out[3] is other
     assert rebind(stored, stored, reader, TimeMap(source="a", target="b", offset_ns=0)) == reader

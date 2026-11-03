@@ -203,6 +203,42 @@ def test_chunks_that_do_not_match_the_windows_leave_the_decode_unscored() -> Non
     assert decoded.mean is None and decoded.confidences == [None]
 
 
+class TwoWindows(CrisperWhisper):
+    """A long-form library model: two windows decoded, and a result that carries no chunks."""
+
+    def transcribe(self, path: str, **kwargs: Any) -> Result:  # noqa: ANN401
+        """Decode two windows and return the words of the result."""
+        for _ in range(2):
+            self._engine.generate_with_repair_and_attention(object(), PROMPT, max_length=8)
+        return self._result()
+
+
+@pytest.mark.env
+@pytest.mark.parametrize("kind", ["ct2", "transformers"])
+def test_a_multi_window_result_without_matching_chunks_is_unscored(kind: str) -> None:
+    """Two windows and no chunk text cannot say which ids survive the merge, so the decode is not scored."""
+    pytest.importorskip("torch")
+    library = cw.Library.__new__(cw.Library)
+    library.engine, library.model = kind, TwoWindows(kind, "clean")
+    decoded = library.transcribe(numpy.zeros(160), "en", 8)
+    assert decoded.mean is None and decoded.confidences == [None, None]
+    assert library.model._engine.model.fed == []
+
+
+@pytest.mark.env
+def test_a_word_count_that_disagrees_with_the_kept_words_leaves_the_mean_unscored() -> None:
+    """When the kept-word counts and the result's words differ, no word is scored and the mean is None too."""
+    pytest.importorskip("torch")
+
+    class Miscounted(Result):
+        chunks: list[Chunk] = [Chunk("hello")]
+
+    library = cw.Library.__new__(cw.Library)
+    library.engine, library.model = "ct2", CrisperWhisper("ct2", "clean", Miscounted)
+    decoded = library.transcribe(numpy.zeros(160), "en", 8)
+    assert decoded.mean is None and decoded.confidences == [None, None]
+
+
 @pytest.mark.logic
 def test_windows_keep_decode_order_and_the_engine_is_left_as_it_was() -> None:
     """A replacement updates its own window in place; the wrappers pass results through and are removed on exit."""

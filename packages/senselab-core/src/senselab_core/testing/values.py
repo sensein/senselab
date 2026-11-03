@@ -827,12 +827,15 @@ def _register_text_and_scoring_samples(span: Span) -> None:
         lambda: [
             Transcript(
                 segments=(TranscriptNode(text="call", span=span, children=(word,)),),
-                extent_ns=span.end_ns,
-                clock_id=span.clock_id,
+                extent=span,
             ),
             Transcript(segments=[]),
         ],
-        invalid_updates=[{"segments": (word, other_clock)}, {"segments": [1]}, {"extent_ns": span.end_ns - 1}],
+        invalid_updates=[
+            {"segments": (word, other_clock)},
+            {"segments": [1]},
+            {"extent": {"start_ns": 0.5, "end_ns": 1, "clock_id": "c"}},
+        ],
     )
     register_samples(
         TextSpans,

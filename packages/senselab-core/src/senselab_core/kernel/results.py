@@ -11,7 +11,6 @@ from senselab_core.kernel._base import (
     FiniteFloat,
     Frozen,
     LabelArray,
-    Nanoseconds,
     NonEmptyStr,
     NsArray,
     as_int64_array,
@@ -166,31 +165,32 @@ class TranscriptNode(Frozen):
 
 
 class Transcript(Formatted):
-    """A tree of transcript nodes: `segments`, in order, each dividing into words, over a recorded extent.
+    """A tree of transcript nodes: `segments`, in order, each dividing into words, over a recorded `extent`.
 
-    `extent_ns` is the end, on `clock_id`, of the recording the transcript covers; every span is on `clock_id` and
-    ends no later than `extent_ns`. A transcript with no span may declare neither.
+    Every span lies inside `extent`, on its clock; a transcript with no span may declare no extent.
     """
 
     format: FormatTag = "transcript@2.0"
-    clock_fields: ClassVar[tuple[str, ...]] = ("extent_ns",)
 
     segments: tuple[TranscriptNode, ...]
-    extent_ns: Nanoseconds | None = None
-    clock_id: NonEmptyStr | None = None
+    extent: Span | None = None
 
     @model_validator(mode="after")
     def _spans_within_extent(self) -> "Transcript":
-        if (self.extent_ns is None) != (self.clock_id is None):
-            raise ValueError("a transcript declares extent_ns and clock_id together, or neither")
         spans = [n.span for s in self.segments for n in s.nodes() if n.span is not None]
-        if spans and self.extent_ns is None:
-            raise ValueError("a transcript with timed spans declares its extent_ns and clock_id")
+        if spans and self.extent is None:
+            raise ValueError("a transcript with timed spans declares its extent")
         for span in spans:
-            if span.clock_id != self.clock_id:
-                raise ValueError(f"a span on clock {span.clock_id!r} in a transcript on clock {self.clock_id!r}")
-            if self.extent_ns is not None and span.end_ns > self.extent_ns:
-                raise ValueError(f"a span ends at {span.end_ns} ns, past the declared extent_ns {self.extent_ns}")
+            if self.extent is not None and span.clock_id != self.extent.clock_id:
+                raise ValueError(f"a span on clock {span.clock_id!r} in a transcript on clock {self.extent.clock_id!r}")
+            if (
+                self.extent is not None
+                and not self.extent.start_ns <= span.start_ns <= span.end_ns <= self.extent.end_ns
+            ):
+                raise ValueError(
+                    f"a span [{span.start_ns}, {span.end_ns}) lies outside the declared extent "
+                    f"[{self.extent.start_ns}, {self.extent.end_ns})"
+                )
         return self
 
 

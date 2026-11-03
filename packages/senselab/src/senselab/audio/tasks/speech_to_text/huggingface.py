@@ -228,7 +228,7 @@ def transcript(  # noqa: PLR0913 - the pipeline output, its level, the audio's c
     `exp(avg_logprob)` as its confidence; each word carries its tokens' joint probability when the captured tokens
     divide into exactly the pipeline's words, and none otherwise.
     """
-    over = functools.partial(Transcript, extent_ns=duration_ns, clock_id=clock_id)
+    over = functools.partial(Transcript, extent=Span(start_ns=0, end_ns=duration_ns, clock_id=clock_id))
     text = str(output.get("text", "")).strip()
     if not text:
         return over(segments=())

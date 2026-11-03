@@ -103,7 +103,7 @@ def test_metric1_refused() -> None:
 def test_transcript1_refused() -> None:
     """A `transcript@1` wire form, which declares no extent, is refused as retired; `transcript@2` is read."""
     node = TranscriptNode(text="hi", span=Span(start_ns=0, end_ns=5, clock_id="c"))
-    form = wire_form(Transcript(segments=(node,), extent_ns=5, clock_id="c"))
+    form = wire_form(Transcript(segments=(node,), extent=Span(start_ns=0, end_ns=5, clock_id="c")))
     assert form["format"] == "transcript@2.0" and from_wire_form(form).model_dump() == form
     with pytest.raises(WireFormatRetired, match=WIRE_MIGRATION_STATEMENT):
         from_wire_form({**form, "format": "transcript@1.0"})
