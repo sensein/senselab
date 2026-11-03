@@ -55,6 +55,7 @@ types:
       items: exact
       numerator: {close: value}
       denominator: {close: value}
+      empty_value: {close: value}
   recording@3:
     fields: *recording
   regular-group@3:

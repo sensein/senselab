@@ -479,6 +479,7 @@ class Row(Frozen):
     items: int | None = None
     numerator: float | None = None
     denominator: float | None = None
+    empty_value: float | None = None
     fault: str | None = None
     calls: tuple[CallRecord, ...] = ()
 
@@ -486,8 +487,9 @@ class Row(Frozen):
 class Aggregate(Frozen):
     """A split's value over its rows: the sum of their numerators over the sum of their denominators.
 
-    A split whose summed denominator is 0 (nothing to score) is 1.0. Rows without a ratio (a pooled metric, or one
-    that is not a ratio of sums) give the mean of their values weighted by their `items`.
+    A split whose summed denominator is 0 (nothing to score) is the `empty_value` its metric declares, else None.
+    Rows without a ratio (a pooled metric, or one that is not a ratio of sums) give the mean of their values
+    weighted by their `items`.
     """
 
     split: NonEmptyStr
@@ -552,7 +554,9 @@ def _aggregate(rows: Sequence[Row]) -> tuple[Aggregate, ...]:
             raise MixedRatios(f"split {split}: rows {sorted(r.label for r in scored)} mix ratio parts and none")
         if ratios == {True}:
             denominator = sum(r.denominator or 0.0 for r in scored)
-            value: float | None = sum(r.numerator or 0.0 for r in scored) / denominator if denominator else 1.0
+            value: float | None = (
+                sum(r.numerator or 0.0 for r in scored) / denominator if denominator else scored[0].empty_value
+            )
         else:
             value = sum((r.value or 0.0) * (r.items or 0) for r in scored) / weight if weight else None
         out.append(
@@ -617,6 +621,7 @@ def _run_benchmark(  # noqa: PLR0913 - the benchmark and everything it runs unde
                 items=metric.items,
                 numerator=metric.numerator,
                 denominator=metric.denominator,
+                empty_value=metric.empty_value,
                 calls=(*own, _record(bench.metric, scored)),
             )
         )

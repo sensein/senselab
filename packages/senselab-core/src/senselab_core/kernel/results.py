@@ -252,7 +252,8 @@ class Metric(Formatted):
 
     A ratio metric carries the `numerator` and `denominator` of its `value`, so that the aggregate over several
     results is the ratio of their sums; a metric that is not a ratio of sums carries neither. A zero denominator
-    (with a zero numerator) is a result with nothing to score, whose `value` is then the metric's own.
+    (with a zero numerator) is a result with nothing to score; `empty_value` is what the metric declares such a
+    result, and the value of an aggregate whose summed denominator is 0 (None: undefined).
     """
 
     format: FormatTag = "metric@2.0"
@@ -263,6 +264,7 @@ class Metric(Formatted):
     items: Annotated[int, Strict(), Field(ge=1)]
     numerator: FiniteFloat | None = None
     denominator: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
+    empty_value: FiniteFloat | None = None
 
     @model_validator(mode="after")
     def _ratio_parts_come_together(self) -> "Metric":
@@ -270,4 +272,6 @@ class Metric(Formatted):
             raise ValueError("a metric carries both its numerator and its denominator, or neither")
         if self.denominator == 0 and self.numerator != 0:
             raise ValueError("a metric of denominator 0 has numerator 0")
+        if self.empty_value is not None and self.denominator is None:
+            raise ValueError("a metric declares an empty value only with its numerator and denominator")
         return self

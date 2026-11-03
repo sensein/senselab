@@ -16,6 +16,7 @@ from senselab.metrics import _worker
 
 WORKER_MODULE = "senselab.metrics.span_f1"
 load = _worker.load
+EMPTY_VALUE = 1.0
 
 
 @task(
@@ -63,11 +64,12 @@ def score(inputs: Mapping[str, Any], params: object) -> Metric:  # noqa: ARG001 
     numerator, denominator = f1_parts(ref, hyp)
     return Metric(
         name="span_f1",
-        value=numerator / denominator if denominator else 1.0,
+        value=numerator / denominator if denominator else EMPTY_VALUE,
         unit="ratio",
         items=max(1, len(ref.start) + len(hyp.start)),
         numerator=numerator,
         denominator=denominator,
+        empty_value=EMPTY_VALUE,
     )
 
 

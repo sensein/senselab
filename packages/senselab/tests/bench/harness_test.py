@@ -454,6 +454,7 @@ def _row(label: str, split: str, metric: Metric) -> Any:  # noqa: ANN401
         items=metric.items,
         numerator=metric.numerator,
         denominator=metric.denominator,
+        empty_value=metric.empty_value,
     )
 
 
@@ -512,6 +513,20 @@ def test_empty_span_f1_documents_add_nothing_to_the_pooled_ratio() -> None:
     rows = tuple(_row(f"d{n}", "calibration", nothing) for n in range(10)) + (_row("m", "calibration", missed),)
     assert harness._aggregate(rows)[0].value == 0.0
     assert harness._aggregate(rows[:10])[0].value == 1.0
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("name", ["wer", "der", "eer"])
+def test_a_split_with_nothing_to_score_is_undefined_unless_the_metric_declares_a_value(name: str) -> None:
+    """Summed denominator 0 aggregates to None for a metric without an empty value; span F1 declares 1.0."""
+    ratio = name != "eer"
+    empty = Metric(
+        name=name, value=0.0, unit="ratio", items=1, **({"numerator": 0.0, "denominator": 0.0} if ratio else {})
+    )
+    [calibration, _] = harness._aggregate((_row("a", "calibration", empty), _row("b", "calibration", empty)))
+    assert (calibration.value, calibration.rows) == (None if ratio else 0.0, 2)
+    declared = span_f1.score({"reference": _spans(), "hypothesis": _spans()}, None)
+    assert harness._aggregate((_row("a", "calibration", declared),))[0].value == span_f1.EMPTY_VALUE == 1.0
 
 
 @pytest.mark.logic
