@@ -8,7 +8,7 @@ Layout under `root`:
     the encoded outputs and their output identity;
   - `context.json`: JCS JSON with `format: "execution-context@3.0"` and the context's fields;
   - `<sha256>.npy`: each array output in canonical `.npy`, named by the sha256 of its bytes.
-- `equivalence-evidence@3/<d>.json`: one verify-sampling comparison (`EquivalenceEvidence`), JSON named by
+- `equivalence-evidence@4/<d>.json`: one verify-sampling comparison (`EquivalenceEvidence`), JSON named by
   `d`, its canonical digest.
 - `tmp/<uuid>/`: a writer's staging directory, committed by renaming it onto the entry.
 - `quarantine/<uuid>`: entries that failed verification, and objects of the wrong kind found at a path
@@ -98,7 +98,7 @@ logger = logging.getLogger("senselab")
 
 STORE_DIR = "store@5"
 STAGING_DIR = "tmp"
-EVIDENCE_DIR = "equivalence-evidence@3"
+EVIDENCE_DIR = "equivalence-evidence@4"
 EVIDENCE_NAME = re.compile(r"[0-9a-f]{64}\.json")
 QUARANTINE_DIR = "quarantine"
 RESULT_FORMAT = "result@2.0"

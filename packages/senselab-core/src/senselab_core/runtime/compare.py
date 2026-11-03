@@ -371,9 +371,13 @@ def relabel(
     return out
 
 
-@dataclass(frozen=True)
-class Difference:
-    """One leaf that differs: its path, the rule and threshold that judged it, and both sides summarised."""
+class Difference(Frozen):
+    """One leaf that differs: its path, the rule and threshold that judged it, both sides and how far apart they are.
+
+    `expected` and `actual` are the values (a numeric leaf of more than `SUMMARY_VALUES` as its length and range, a
+    text leaf cut at `SUMMARY_CHARS`). `absolute` and `relative` are the largest `|actual - expected|` and
+    `|actual - expected| / |expected|` over a numeric leaf's paired values, None where undefined.
+    """
 
     path: str
     rule: Literal["exact", "close", "missing", "undeclared"]
@@ -381,6 +385,8 @@ class Difference:
     bound: Threshold | None
     expected: str
     actual: str
+    absolute: FiniteFloat | None
+    relative: FiniteFloat | None
     detail: str
 
 
@@ -409,7 +415,26 @@ def _summary(leaf: Value | None) -> str:
         return "absent"
     if isinstance(leaf, str):
         return leaf if len(leaf) <= SUMMARY_CHARS else f"{leaf[:SUMMARY_CHARS]}..."
-    return repr(leaf) if len(leaf) <= SUMMARY_VALUES else f"{len(leaf)} values"
+    if len(leaf) <= SUMMARY_VALUES:
+        return repr(leaf)
+    present = [x for x in leaf if x is not None]
+    return f"{len(leaf)} values in [{min(present):g}, {max(present):g}]" if present else f"{len(leaf)} absent values"
+
+
+def _gap(a: Value, b: Value) -> tuple[float | None, float | None]:
+    """Return the largest absolute and relative difference over the paired numbers of `a` and `b`, None if undefined."""
+    if isinstance(a, str) or isinstance(b, str) or len(a) != len(b):
+        return None, None
+    pairs = [(x, y) for x, y in zip(a, b, strict=True) if x is not None and y is not None]
+    if not pairs:
+        return None, None
+    want, got = (numpy.asarray(side, dtype=float) for side in zip(*pairs, strict=True))
+    with numpy.errstate(invalid="ignore"):
+        gap = numpy.abs(got - want)
+        nonzero = want != 0
+        absolute = float(gap.max())
+        relative = float((gap[nonzero] / numpy.abs(want[nonzero])).max()) if nonzero.any() else None
+    return tuple(x if x is not None and math.isfinite(x) else None for x in (absolute, relative))  # type: ignore[return-value]
 
 
 def _exact(a: Value, b: Value) -> str | None:
@@ -447,14 +472,45 @@ def _close(a: Value, b: Value, bound: Threshold) -> str | None:
 
 def _judge(path: str, a: Value | None, b: Value | None, rule: Rule | None, thresholds: Thresholds) -> Difference | None:
     if a is None or b is None:
-        return Difference(path, "missing", None, None, _summary(a), _summary(b), "present on one side only")
+        return Difference(
+            path=path,
+            rule="missing",
+            threshold=None,
+            bound=None,
+            expected=_summary(a),
+            actual=_summary(b),
+            absolute=None,
+            relative=None,
+            detail="present on one side only",
+        )
     if rule is None:
-        return Difference(path, "undeclared", None, None, _summary(a), _summary(b), "its type declares no comparison")
+        return Difference(
+            path=path,
+            rule="undeclared",
+            threshold=None,
+            bound=None,
+            expected=_summary(a),
+            actual=_summary(b),
+            absolute=None,
+            relative=None,
+            detail="its type declares no comparison",
+        )
     bound = thresholds.by_name[rule.threshold] if rule.threshold is not None else None
     why = _close(a, b, bound) if bound is not None else _exact(a, b)
     if why is None:
         return None
-    return Difference(path, rule.kind, rule.threshold, bound, _summary(a), _summary(b), why)
+    absolute, relative = _gap(a, b)
+    return Difference(
+        path=path,
+        rule=rule.kind,
+        threshold=rule.threshold,
+        bound=bound,
+        expected=_summary(a),
+        actual=_summary(b),
+        absolute=absolute,
+        relative=relative,
+        detail=why,
+    )
 
 
 def compare_fields(

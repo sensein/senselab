@@ -599,7 +599,7 @@ def test_verify_disagreement_splits_class(tmp_path: Path, caplog: pytest.LogCapt
     result = run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(verify=1.0))
     assert result.reused is None and result.outputs == here.outputs
     [evidence] = store.evidence()
-    assert not evidence.agree and evidence.mismatched == ("value",)
+    assert not evidence.agree and [d.path for d in evidence.mismatched] == ["value"]
     assert store.equivalence == {"fake-alpha": {}}
     assert ResultStore(store.root, equivalence=_class(here)).equivalence == {"fake-alpha": {}}
     assert "fake-alpha" in caplog.text and "value" in caplog.text and "not what" not in caplog.text
@@ -629,7 +629,14 @@ def test_verify_compares_under_the_run_configs_thresholds(tmp_path: Path) -> Non
         [execution] = _activities(store)
         assert prov.literal_value(execution.node()["senselab:verifyThresholds"]) == run.thresholds.canonical_digest()
     assert found["packaged"].agree and found["packaged"].thresholds == Thresholds.load().canonical_digest()
-    assert found["tight"].mismatched == ("trials.first",) and found["tight"].thresholds == tight.canonical_digest()
+    assert found["tight"].thresholds == tight.canonical_digest()
+    [difference] = found["tight"].mismatched
+    assert (difference.path, difference.threshold, difference.bound) == (
+        "trials.first",
+        "embedding",
+        tight.by_name["embedding"],
+    )
+    assert difference.absolute == pytest.approx(0.05) and difference.relative is not None
 
 
 @pytest.mark.logic

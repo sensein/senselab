@@ -115,6 +115,24 @@ def test_a_close_threshold_is_relative_and_absolute() -> None:
 
 
 @pytest.mark.logic
+def test_a_difference_carries_both_values_the_gap_and_the_bound() -> None:
+    """A close difference holds both sides, the largest absolute and relative gap, and the threshold key and bound."""
+    expected: Fields = {"e.format": '"embedding@1.0"', "e.space": '"s"', "e.vector": [1.0, 2.0, 0.0]}
+    [small] = compare_fields(expected, {**expected, "e.vector": [1.0, 3.0, 0.0]}, THRESHOLDS).differences
+    assert (small.path, small.rule, small.threshold, small.bound) == (
+        "e.vector",
+        "close",
+        "embedding",
+        THRESHOLDS.by_name["embedding"],
+    )
+    assert (small.expected, small.actual) == ("[1.0, 2.0, 0.0]", "[1.0, 3.0, 0.0]")
+    assert small.absolute == 1.0 and small.relative == 0.5
+    big: Fields = {**expected, "e.vector": [0.0, 1.0, 2.0, 3.0, 4.0]}
+    [wide] = compare_fields(big, {**big, "e.vector": [0.0, 1.0, 2.0, 3.0, 7.0]}, THRESHOLDS).differences
+    assert wide.expected == "5 values in [0, 4]" and wide.actual == "5 values in [0, 7]" and wide.absolute == 3.0
+
+
+@pytest.mark.logic
 @pytest.mark.parametrize(
     ("a", "b", "agree"),
     [

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 from senselab_core.kernel.identity import ExecutionContext, acceptable, member_key
+from senselab_core.runtime.compare import Difference, Threshold
 from senselab_core.runtime.equivalence import (
     EQUIVALENCE,
     HEADER,
@@ -18,6 +19,18 @@ from senselab_core.runtime.equivalence import (
     split,
 )
 from senselab_core.runtime.store import EVIDENCE_DIR, CorruptEntryError, ResultStore
+
+_DIFFERENCE = Difference(
+    path="value",
+    rule="close",
+    threshold="value",
+    bound=Threshold(rtol=1e-6, atol=1e-9),
+    expected="[1.0]",
+    actual="[2.0]",
+    absolute=1.0,
+    relative=1.0,
+    detail="1 of 1 values beyond rtol 1e-06 atol 1e-09, largest |difference| 1",
+)
 
 
 @pytest.mark.logic
@@ -126,7 +139,7 @@ def _evidence(  # noqa: PLR0913 - one comparison's sides
         key=key * 64,
         stored=EvidenceSide(fingerprint="f" * 64, numerics=a, env_lock=locks[0]),
         current=EvidenceSide(fingerprint="f" * 64, numerics=b, env_lock=locks[1]),
-        mismatched=() if agree else ("value",),
+        mismatched=() if agree else (_DIFFERENCE,),
         thresholds="e" * 64,
         run="slurm-1",
     )

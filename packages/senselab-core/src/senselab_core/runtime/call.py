@@ -528,7 +528,7 @@ def _verify(  # noqa: PLR0913 - the hit, its recomputation and the thresholds ju
         key=key.digest(),
         stored=stored,
         current=current,
-        mismatched=comparison.paths,
+        mismatched=comparison.differences,
         thresholds=comparison.thresholds,
         run=run_id(),
     )

@@ -90,7 +90,7 @@ from senselab_core.kernel.time import Span, TimeAnchor, TimeMap
 from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
-from senselab_core.runtime.compare import Threshold, Thresholds
+from senselab_core.runtime.compare import Difference, Threshold, Thresholds
 from senselab_core.runtime.envs import EnvRecord
 from senselab_core.runtime.equivalence import EquivalenceEvidence, EvidenceSide
 from senselab_core.runtime.fetch import DataFile, DataManifest
@@ -966,7 +966,19 @@ def _register_comparison_samples() -> None:
                 key="c" * 64,
                 stored=sides[1],
                 current=sides[0],
-                mismatched=("value",),
+                mismatched=(
+                    Difference(
+                        path="value",
+                        rule="close",
+                        threshold="value",
+                        bound=Threshold(rtol=1e-6, atol=1e-9),
+                        expected="[1.0]",
+                        actual="[1.5]",
+                        absolute=0.5,
+                        relative=0.5,
+                        detail="1 of 1 values beyond rtol 1e-06 atol 1e-09, largest |difference| 0.5",
+                    ),
+                ),
                 thresholds="d" * 64,
                 run="slurm-2",
             ),

@@ -2,7 +2,7 @@
 
 `sample` runs the held-out items of one suite benchmark through `run_call` under `--reuse` and `--verify`, compared
 under the thresholds of `--config` (a run config merged over the packaged one), against `--store`, and prints how many
-calls executed, were reused and were verified. `regenerate` reads the `equivalence-evidence@3.0` records of every
+calls executed, were reused and were verified. `regenerate` reads the `equivalence-evidence@4.0` records of every
 store named and writes `equivalence@3.0`; the table is never hand-edited.
 """
 
