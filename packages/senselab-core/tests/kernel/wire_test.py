@@ -82,11 +82,20 @@ def test_a_file_backed_audio_travels_as_its_samples(tmp_path: Path) -> None:
 def test_unknown_or_retired_tags_are_refused() -> None:
     """A wire form of an unregistered name or another major version is refused; a later minor is read."""
     form = wire_form(Metric(name="wer", value=0.1, unit="1", items=1))
-    later = from_wire_form({**form, "format": "metric@1.7", "added": 1})
+    later = from_wire_form({**form, "format": "metric@2.7", "added": 1})
     assert later.model_dump(exclude={"format"}) == from_wire_form(form).model_dump(exclude={"format"})
-    for tag in ("metric@2.0", "nothing@1.0", None):
+    for tag in ("metric@3.0", "nothing@1.0", None):
         with pytest.raises(ValueError, match="format"):
             from_wire_form({**form, "format": tag})
+
+
+@pytest.mark.logic
+def test_metric1_refused() -> None:
+    """A `metric@1` wire form is refused as retired, naming the migration statement; `metric@2` is read."""
+    form = wire_form(Metric(name="wer", value=0.5, unit="1", items=2, numerator=1, denominator=2))
+    assert form["format"] == "metric@2.0" and from_wire_form(form).model_dump() == form
+    with pytest.raises(WireFormatRetired, match=WIRE_MIGRATION_STATEMENT):
+        from_wire_form({**form, "format": "metric@1.0"})
 
 
 @pytest.mark.logic

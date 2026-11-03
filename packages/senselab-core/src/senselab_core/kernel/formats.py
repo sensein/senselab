@@ -28,8 +28,10 @@ LABELS_FORMAT = "labels@2.0"
 RETIRED_LABELS_FORMATS = frozenset({"labels@1"})
 """Label-map formats 2.x no longer reads, as `<name>@<major>`."""
 
-BENCHMARK_RESULT_FORMAT = "benchmark-result@1.0"
+BENCHMARK_RESULT_FORMAT = "benchmark-result@2.0"
 """The format of a benchmark run's result document, `<run>/result.json`."""
+RETIRED_BENCHMARK_RESULT_FORMATS = frozenset({"benchmark-result@1"})
+"""Result-document formats 2.x no longer reads, as `<name>@<major>`."""
 
 EQUIVALENCE_FORMAT = "equivalence@3.0"
 """The format of the measured equivalence classes, `runtime/data/equivalence.yaml`."""

@@ -248,11 +248,23 @@ class Trials(Formatted):
 
 
 class Metric(Formatted):
-    """The value of metric `name`, in `unit`, computed over `items` items."""
+    """The value of metric `name`, in `unit`, computed over `items` items.
 
-    format: FormatTag = "metric@1.0"
+    A ratio metric carries the `numerator` and `denominator` of its `value`, so that the aggregate over several
+    results is the ratio of their sums; a metric that is not a ratio of sums carries neither.
+    """
+
+    format: FormatTag = "metric@2.0"
 
     name: NonEmptyStr
     value: FiniteFloat
     unit: NonEmptyStr
     items: Annotated[int, Strict(), Field(ge=1)]
+    numerator: FiniteFloat | None = None
+    denominator: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
+
+    @model_validator(mode="after")
+    def _ratio_parts_come_together(self) -> "Metric":
+        if (self.numerator is None) != (self.denominator is None):
+            raise ValueError("a metric carries both its numerator and its denominator, or neither")
+        return self

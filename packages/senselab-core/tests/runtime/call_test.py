@@ -377,7 +377,7 @@ def test_isolated_outputs_are_read_as_their_declared_types(store: ResultStore) -
     fresh, hit = transcribe(transcript, "a"), transcribe(transcript, "a")
     assert fresh.outputs == hit.outputs == {"transcript": transcript} and hit.reused is not None
     assert fresh.key.inputs == {"text": PlainText(content="a").identity}
-    with pytest.raises(OutputTypeMismatch, match="metric@1.0"):
+    with pytest.raises(OutputTypeMismatch, match="metric@2.0"):
         transcribe(Metric(name="wer", value=0.1, unit="1", items=1), "b")
     call_module.close_workers()
     assert len(_executions(store)) == 1

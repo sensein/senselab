@@ -37,7 +37,7 @@ WIRE_FORMATS: Mapping[str, type[Frozen]] = FrozenMapping(_SIGNALS | {_tag(t): t 
 """The wire format of every kernel value a port may carry, by tag; a `Formatted` type's tag is its own format."""
 
 RETIRED_WIRE_FORMATS = frozenset(
-    {"recording@1", "audio@1", "regular-group@1", "recording@2", "audio@2", "regular-group@2"}
+    {"recording@1", "audio@1", "regular-group@1", "recording@2", "audio@2", "regular-group@2", "metric@1"}
 )
 """Wire formats 2.x no longer reads, as `<name>@<major>`."""
 WIRE_MIGRATION_STATEMENT = "specs/20261030-140022-senselab-2x-api/migration-ledger.md#retired-wire-formats"

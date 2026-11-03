@@ -152,7 +152,17 @@ def test_trials_pair_embeddings_with_a_label() -> None:
 def test_metric_names_value_unit_and_items() -> None:
     """A metric is a finite value with its unit over at least one item."""
     m = Metric(name="wer", value=0.125, unit="1", items=8)
-    assert (m.name, m.value, m.unit, m.items, m.format) == ("wer", 0.125, "1", 8, "metric@1.0")
+    assert (m.name, m.value, m.unit, m.items, m.format) == ("wer", 0.125, "1", 8, "metric@2.0")
     for bad in ({"value": float("inf")}, {"items": 0}, {"items": 1.0}, {"unit": ""}):
         with pytest.raises(ValidationError):
             Metric.model_validate({"name": "wer", "value": 0.1, "unit": "1", "items": 1, **bad})
+
+
+@pytest.mark.logic
+def test_metric_ratio_parts_come_together() -> None:
+    """A metric carries its numerator and denominator both or neither, over a positive denominator."""
+    m = Metric(name="wer", value=0.5, unit="1", items=2, numerator=1, denominator=2)
+    assert (m.numerator, m.denominator) == (1.0, 2.0)
+    for bad in ({"numerator": 1.0}, {"denominator": 2.0}, {"numerator": 1.0, "denominator": 0.0}):
+        with pytest.raises(ValidationError):
+            Metric.model_validate({"name": "wer", "value": 0.5, "unit": "1", "items": 2, **bad})

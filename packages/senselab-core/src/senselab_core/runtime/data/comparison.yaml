@@ -46,13 +46,15 @@ types:
       end_ns: {close: time_ns}
       label*: exact
       clock_id: exact
-  metric@1:
+  metric@2:
     fields:
       format: exact
       name: exact
       value: {close: value}
       unit: exact
       items: exact
+      numerator: {close: value}
+      denominator: {close: value}
   recording@3:
     fields: *recording
   regular-group@3:
