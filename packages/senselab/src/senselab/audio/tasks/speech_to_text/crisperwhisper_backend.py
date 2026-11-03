@@ -15,7 +15,8 @@ from senselab.audio.tasks.speech_to_text.crisperwhisper import (
 
 _HERE = Path(__file__).parent
 _WORKER_SOURCES = {
-    f"{__package__}.{name}": str(_HERE / f"{name}.py") for name in ("crisperwhisper", "token_confidence")
+    f"{__package__}.{name}": str(_HERE / f"{name}.py")
+    for name in ("crisperwhisper", "token_confidence", "window_confidence")
 } | {"senselab.item_faults": str(_HERE.parents[2] / "item_faults.py")}
 
 

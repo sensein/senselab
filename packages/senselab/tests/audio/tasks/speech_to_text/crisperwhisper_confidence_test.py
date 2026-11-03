@@ -140,11 +140,12 @@ def _expected() -> tuple[float, list[float]]:
     return float(numpy.exp(logprob[:3].mean())), [float(numpy.exp(logprob[:2].sum())), float(numpy.exp(logprob[2]))]
 
 
-@pytest.mark.logic
+@pytest.mark.env
 @pytest.mark.parametrize("case", list(DECODED))
 @pytest.mark.parametrize("kind", ["ct2", "transformers"])
 def test_confidence_is_of_the_final_ids_on_both_engines(kind: str, case: str) -> None:
     """Each engine scores the ids the window finally emits, after fallback or recovery, once, with the same values."""
+    pytest.importorskip("torch")
     decoded, fed = _transcribe(kind, case)
     mean, words = _expected()
     assert decoded.mean == pytest.approx(mean, rel=1e-5)
@@ -177,9 +178,10 @@ def test_two_modes_on_shared_features_are_two_windows() -> None:
     assert windows == [Window(shared, verbatim, DECODED["fallback"]), Window(shared, intended, GEN)]
 
 
-@pytest.mark.logic
+@pytest.mark.env
 def test_special_ids_are_scored_but_left_out_of_the_mean() -> None:
     """The end token has a log-probability in the block and no weight in `avg_logprob`."""
+    pytest.importorskip("torch")
     engine = Engine("ct2", "clean")
     [block] = window_confidence(engine, [Window("f", PROMPT, GEN)], ct2_teacher_logits, engine.all_special_ids)
     assert block["tokens"] == GEN and len(block["token_logprob"]) == len(GEN)
