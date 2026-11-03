@@ -87,10 +87,15 @@ def test_cli_items_run_compare_end_to_end(tmp_path: Path) -> None:
     assert str(stale) in str(raised.value)
     assert {i["id"] for i in ran["items"]} == set(document["items"])
     assert all(set(i["batches"]) == {"1", "N"} and i["split"] == "heldout" for i in ran["items"])
-    loaded = _parity().load_outputs(outputs)
-    alone, together = ({i.id: i.batches[b] for i in loaded.items} for b in ("1", "N"))
-    thresholds = importlib.import_module("senselab_core.runtime.compare").Thresholds.load()
-    assert _parity().compare_items(alone, together, thresholds) == {}
+    config = tmp_path / "run.yaml"
+    config.write_text("thresholds:\n  embedding:\n    atol: 2\n", "utf-8")
+    decided = tmp_path / "comparison.json"
+    _cli("benchmarks/parity_reference.py", "compare", outputs, "--config", config, "--out", decided)
+    record: dict[str, Any] = json.loads(decided.read_text("utf-8"))
+    thresholds = importlib.import_module("senselab_core.runtime.compare").Thresholds
+    assert record["format"] == "parity-comparison@1.0" and record["against"] == "batch"
+    assert record["mismatches"] == {}
+    assert record["thresholds"] == thresholds.load(config).canonical_digest() != thresholds.load().canonical_digest()
 
 
 def _parity() -> Any:  # noqa: ANN401

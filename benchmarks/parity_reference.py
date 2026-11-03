@@ -3,9 +3,11 @@
 Subcommands, in the order a campaign runs them:
 `items` (2.x env, no model) writes the held-out items and model pin for `parity_reference_1x.py`;
 `convert` turns that script's output files into `parity-reference@1.0`;
-`run` runs a 2.x backend over the same items and writes `parity-outputs@1.0`.
-`compare` is what `packages/senselab/tests/parity` asserts: each kernel type's comparison (`runtime.compare`) under
-the run config's thresholds. Calibration items are refused everywhere.
+`run` runs a 2.x backend over the same items and writes `parity-outputs@2.0`;
+`compare` writes `parity-comparison@1.0`: a run's outputs against the 1.x reference, or alone against one request,
+by each kernel type's comparison (`runtime.compare`) under the thresholds of `--config`, a run config merged over the
+packaged one (`Thresholds.load`), whose digest the record carries. `packages/senselab/tests/parity` asserts the same.
+Calibration items are refused everywhere.
 """
 
 import argparse
@@ -20,7 +22,13 @@ from typing import Any
 
 import numpy
 from senselab_core.kernel._base import Frozen, NonEmptyStr
-from senselab_core.kernel.formats import PARITY_OUTPUTS_FORMAT, PARITY_REFERENCE_FORMAT, FormatTag, Formatted
+from senselab_core.kernel.formats import (
+    PARITY_COMPARISON_FORMAT,
+    PARITY_OUTPUTS_FORMAT,
+    PARITY_REFERENCE_FORMAT,
+    FormatTag,
+    Formatted,
+)
 from senselab_core.kernel.results import Embedding, Intervals, Transcript
 from senselab_core.runtime.compare import (
     FLATTEN_VERSION,
@@ -84,6 +92,27 @@ class ParityOutputs(Formatted):
     job: NonEmptyStr
     claims_batch_invariance: bool = False
     items: tuple[OutputItem, ...]
+
+
+class ParityComparison(Formatted):
+    """One parity decision: a run's differences per item `against` the 1.x `reference` or its alone `batch`.
+
+    `thresholds` is the canonical digest of the thresholds the decision was made under.
+    """
+
+    format: FormatTag = PARITY_COMPARISON_FORMAT
+    task: NonEmptyStr
+    backend: NonEmptyStr
+    stack: NonEmptyStr
+    device: NonEmptyStr
+    against: NonEmptyStr
+    thresholds: NonEmptyStr
+    mismatches: dict[str, list[str]]
+
+    @property
+    def agree(self) -> bool:
+        """Whether no item differs."""
+        return not self.mismatches
 
 
 def _load(name: str, path: Path) -> ModuleType:
@@ -284,6 +313,29 @@ def compare_items(
     }
 
 
+def decide(outputs: ParityOutputs, reference: ParityReference | None, thresholds: Thresholds) -> ParityComparison:
+    """Return the parity decision on `outputs`: alone against `reference`, or with none, one request against alone.
+
+    Raises:
+        ParityError: an item is not a held-out item.
+    """
+    alone = {i.id: i.batches["1"] for i in outputs.items if "1" in i.batches}
+    if reference is not None:
+        against, found = "reference", compare_items({i.id: i.fields for i in reference.items}, alone, thresholds)
+    else:
+        together = {i.id: i.batches["N"] for i in outputs.items if "N" in i.batches}
+        against, found = "batch", compare_items(alone, together, thresholds)
+    return ParityComparison(
+        task=outputs.task,
+        backend=outputs.backend,
+        stack=outputs.stack,
+        device=outputs.device,
+        against=against,
+        thresholds=thresholds.canonical_digest(),
+        mismatches=found,
+    )
+
+
 def run(  # noqa: PLR0913 - what one 2.x parity run fixes
     worker: Any,  # noqa: ANN401
     items: Mapping[str, Mapping[str, Any]],
@@ -371,8 +423,15 @@ def _run_cli(args: argparse.Namespace) -> None:
     args.out.write_text(outputs.model_dump_json(indent=1), "utf-8")
 
 
+def _compare_cli(args: argparse.Namespace) -> None:
+    reference = None if args.reference is None else load_reference(args.reference)
+    decision = decide(load_outputs(args.outputs), reference, Thresholds.load(args.config))
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(decision.model_dump_json(indent=1), "utf-8")
+
+
 def main(argv: Sequence[str] | None = None) -> None:
-    """Command line: `items`, `convert`, `run`."""
+    """Command line: `items`, `convert`, `run`, `compare`."""
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(required=True)
 
@@ -403,6 +462,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     r.add_argument("--sha", required=True)
     r.add_argument("--job", required=True)
     r.set_defaults(func=_run_cli)
+    m = sub.add_parser("compare")
+    m.add_argument("outputs", type=Path)
+    m.add_argument("--reference", type=Path)
+    m.add_argument("--config", type=Path, help="a run config YAML whose thresholds are merged over the packaged ones")
+    m.add_argument("--out", type=Path, required=True)
+    m.set_defaults(func=_compare_cli)
     args = parser.parse_args(argv)
     args.func(args)
 

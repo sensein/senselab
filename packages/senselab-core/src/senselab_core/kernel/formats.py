@@ -35,6 +35,8 @@ PARITY_REFERENCE_FORMAT = "parity-reference@3.0"
 """The format of the 1.x outputs of the held-out items of one backend, `benchmarks/parity_reference.py convert`."""
 PARITY_OUTPUTS_FORMAT = "parity-outputs@2.0"
 """The format of the 2.x outputs of the held-out items of one backend and stack, `parity_reference.py run`."""
+PARITY_COMPARISON_FORMAT = "parity-comparison@1.0"
+"""The format of one parity decision and the thresholds it was made under, `parity_reference.py compare`."""
 
 FormatTag = Annotated[str, StringConstraints(pattern=FORMAT_PATTERN)]
 """`<name>@<major>.<minor>`."""

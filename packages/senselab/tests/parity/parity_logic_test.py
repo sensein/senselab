@@ -209,3 +209,36 @@ def test_diarization_speaker_without_counterpart_is_a_mismatch() -> None:
     assert par.compare(one, two, profile)
     assert par.compare(two, one, profile)
     assert par.compare(two, turns(["SPEAKER_00", "SPEAKER_01"]), profile) == []
+
+
+@pytest.mark.logic
+def test_a_parity_decision_records_the_thresholds_of_its_run_config(tmp_path: Path) -> None:
+    """A run config's threshold changes the decision, and the record carries that config's thresholds digest."""
+    held = _ids("heldout", 1)[0]
+    reference = par.ParityReference(
+        flatten="flatten@2",
+        task="t",
+        backend="b",
+        alpha_sha="f" * 40,
+        job="1",
+        items=(par.ReferenceItem(id=held, split="heldout", fields={"e.format": '"embedding@1.0"', "e.vector": [1.0]}),),
+    )
+    outputs = par.ParityOutputs(
+        flatten="flatten@2",
+        task="t",
+        backend="b",
+        stack="s",
+        device="cpu",
+        sha="a" * 40,
+        job="2",
+        items=(
+            par.OutputItem(id=held, split="heldout", batches={"1": {"e.format": '"embedding@1.0"', "e.vector": [1.5]}}),
+        ),
+    )
+    config = tmp_path / "run.yaml"
+    config.write_text("thresholds:\n  embedding:\n    atol: 1.0\n", "utf-8")
+    packaged = par.decide(outputs, reference, Thresholds.load())
+    mine = par.decide(outputs, reference, Thresholds.load(config))
+    assert not packaged.agree and packaged.thresholds == Thresholds.load().canonical_digest()
+    assert mine.agree and mine.thresholds == Thresholds.load(config).canonical_digest()
+    assert mine.format == "parity-comparison@1.0" and mine.against == "reference"

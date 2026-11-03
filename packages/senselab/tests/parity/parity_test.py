@@ -1,8 +1,10 @@
 """Parity on the held-out split, from the files an ORCD campaign produced under `$SENSELAB_PARITY_DIR`.
 
 `reference/<task>/<backend>.json` is `parity-reference@3.0` (1.x, converted); `outputs/*.json` is `parity-outputs@2.0`
-(2.x, one per backend, stack and device). Outputs are compared by kernel type under the packaged run config's
-thresholds, whose digest every failure names. A failure is a finding.
+(2.x, one per backend, stack and device). Outputs are compared by kernel type under the thresholds of the run config
+at `$SENSELAB_PARITY_CONFIG`, merged over the packaged one as `parity_reference.py compare --config` merges it; each
+decision against the 1.x reference and each batch-invariance decision is written as a `parity-comparison@1.0` record
+under `comparisons/`, carrying the thresholds' digest. A failure is a finding.
 """
 
 import importlib.util
@@ -16,7 +18,8 @@ import pytest
 from senselab_core.runtime.compare import Thresholds
 
 ROOT = Path(__file__).resolve().parents[4]
-THRESHOLDS = Thresholds.load()
+CONFIG = Path(os.environ["SENSELAB_PARITY_CONFIG"]) if "SENSELAB_PARITY_CONFIG" in os.environ else None
+THRESHOLDS = Thresholds.load(CONFIG)
 
 
 def _load() -> Any:  # noqa: ANN401
@@ -54,6 +57,15 @@ def _batch(o: Any, batch: str) -> dict[str, Any]:  # noqa: ANN401
     return {i.id: i.batches[batch] for i in o.items if batch in i.batches}
 
 
+def _decided(output: Any, reference: Any) -> Any:  # noqa: ANN401
+    """Return the parity decision on `output`, written under `comparisons/` beside the outputs."""
+    decision = par.decide(output, reference, THRESHOLDS)
+    record = DIRECTORY / "comparisons" / f"{_name(output)}-{decision.against}.json"  # type: ignore[operator]
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(decision.model_dump_json(indent=1), "utf-8")
+    return decision
+
+
 @pytest.mark.limits
 @pytest.mark.model
 def test_outputs_present() -> None:
@@ -69,9 +81,8 @@ def test_matches_1x_reference(output: Any) -> None:  # noqa: ANN401
     reference = DIRECTORY / "reference" / output.task / f"{output.backend}.json"  # type: ignore[operator]
     if not reference.exists():
         pytest.skip(f"no 1.x reference for {output.task} backend {output.backend}")
-    ref = par.load_reference(reference)
-    found = par.compare_items({i.id: i.fields for i in ref.items}, _batch(output, "1"), THRESHOLDS)
-    assert not found, (THRESHOLDS.canonical_digest(), found)
+    decision = _decided(output, par.load_reference(reference))
+    assert decision.agree, (decision.thresholds, decision.mismatches)
 
 
 @pytest.mark.limits
@@ -100,5 +111,5 @@ def test_claimed_batch_invariance() -> None:
     if not claimed:
         pytest.skip("no port claims batch invariance")
     for o in claimed:
-        found = par.compare_items(_batch(o, "1"), _batch(o, "N"), THRESHOLDS)
-        assert not found, (_name(o), THRESHOLDS.canonical_digest(), found)
+        decision = _decided(o, None)
+        assert decision.agree, (_name(o), decision.thresholds, decision.mismatches)
