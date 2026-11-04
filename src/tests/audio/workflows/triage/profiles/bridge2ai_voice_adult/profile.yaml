@@ -5,6 +5,7 @@
 # in specs/20261022-triage-dataset-profile/inventory.md. Kept here as a test fixture until the profile moves to
 # b2aiprep (plan step 6).
 name: bridge2ai-voice-adult
+extends: senselab:adult_clinical_speech   # the detector and model tuning it shares with any adult clinical speech dataset
 version: "2026-10-22"
 provenance:
   dataset: Bridge2AI-Voice adult release, bids_adult_2026_09_04 (62,550 recordings)
@@ -12,27 +13,18 @@ provenance:
   fitted_on: triage campaigns r8 to r37 and the owner's listening sessions, per each file's derivation comments
 config: config.yaml
 files:
-  airway_event_requirements.yaml: airway_event_requirements.yaml
   airway_event_tokens.yaml: airway_event_tokens.yaml
-  asr_degenerate.yaml: asr_degenerate.yaml
-  breath_pattern.yaml: breath_pattern.yaml
   cohort_conditions: cohort_conditions
   cohort_stage.yaml: cohort_stage.yaml
-  cough_pattern.yaml: cough_pattern.yaml
   decision_reasons.yaml: decision_reasons.yaml
   detector_profile: detector_profile
-  discard_contested.yaml: discard_contested.yaml
   discard_replaced_task.yaml: discard_replaced_task.yaml
   evaluation: evaluation
   quality_join.yaml: quality_join.yaml
   session_background.yaml: session_background.yaml
-  speaker_vector_profile: speaker_vector_profile
-  task_content.yaml: task_content.yaml
-  task_events.yaml: task_events.yaml
   task_extent.yaml: task_extent.yaml
   task_lexicon: task_lexicon
   task_minimum_duration.yaml: task_minimum_duration.yaml
   task_speech.yaml: task_speech.yaml
   tasks.yaml: tasks.yaml
   time_release.yaml: time_release.yaml
-  word_timing.yaml: word_timing.yaml

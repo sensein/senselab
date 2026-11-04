@@ -12,6 +12,39 @@ per key; the reasoning is below, keyed by the same section names, and is reprodu
 CLAUDE.md: "the measurement behind a choice, the failure that drove it and the rejected
 alternatives go in `specs/`."
 
+## Where the values live now, and corrections (2026-11-03, dataset profiles step 5c)
+
+Since `specs/20261022-triage-dataset-profile/plan.md` step 5c, senselab's packaged config holds only senselab's own
+values: those set by the signal, those with a published source, and its design choices. Every value fitted on
+Bridge2AI-Voice recordings or chosen by its owner is left empty there and supplied by a dataset profile
+(`data/profile_values.yaml` lists them): detector tuning and model cut-offs by senselab's `adult_clinical_speech`
+reference profile, the owner's policy, B2AI's corpus statistics and its per-task values by B2AI's own profile. The
+derivations below still hold for the values they derive, wherever those values now live.
+
+Where this document and the shipped values disagreed (found by the step-5 sorting, 2026-11-03), the shipped
+value is the record:
+- `speech.target_match_cosine`: senselab ships 0.25, SpeechBrain's own default for its model (a cut fitted on the
+  vendor's VoxCeleb data); B2AI's profile sets 0.231, the midpoint fitted on B2AI's speaker vectors. Below, the
+  §speech text that calls 0.231 the packaged value predates this.
+- `diarization.streams`: `[enhanced]`, narrowed on 2026-09-20 for lack of a reader of the residual stream; the
+  §diarization text giving `[enhanced, residual]` predates it.
+- `words.onomatopoeic_tokens`: a lexicon measured over 62,547 recordings (family-taxonomy-ruleset.md, "lexicon,
+  measured"), now in the reference profile; §words still calls it null.
+- `normalization` macro, micro and gain `window_s`: 0.5, 0.05 and 0.025 s are shipped; the paragraphs calling them
+  null predate them.
+- `verdict.cohort_conditions`: a dataset profile's (B2AI's names `bridge2ai_voice_adult_2026-09-04` in its own
+  `cohort_conditions/`), not a packaged file.
+- `taxonomy.ruleset.reference_family_set`: three branches (AIRWAY, SPEECH, VOICE); DDK was dissolved into SPEECH.
+- `envelope.lowpass_hz`: reasoned as the modulation bandwidth (§envelope); §normalization's "fitted derivation"
+  refers to the same reasoning, not to a fit.
+- `speech.hint_tags` and `voice.hint_tags`: unread since v2 of the hint, as their comments say.
+- The minimum task length (`task_minimum_duration.yaml` `default_s`): senselab shipped 0.5 s, which is B2AI's
+  single-cough floor; B2AI's own default is 1.0 s. It is now B2AI's value, set in its profile.
+- `taxonomy.ruleset.emptiness`: `active_s_max` replaced the retired `emptiness.peak_floor` that §routing and the
+  `verdict.level_min_dbfs` text still cite.
+- The content-omission gate is `content_omission_fraction_max`, not `omissions_max`; `branch.sweep_*` and
+  `glide_extent_min_semitones` have their derivations in specs/20260929-task-check-alignment/design.md.
+
 ## How to find a key
 
 Sections appear in the config's own order. A key's derivation is in its section; where one

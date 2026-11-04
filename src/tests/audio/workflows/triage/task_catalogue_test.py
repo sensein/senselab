@@ -15,8 +15,6 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage import task_catalogue
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import (
-    PACKAGED_DATA,
-    REQUIRED_DATA_VALUES,
     DatasetDataMissing,
     deactivate_profile,
     missing_dataset_values,
@@ -39,15 +37,25 @@ from senselab.audio.workflows.triage.nodes.branches import (
     mode_of,
 )
 from senselab.audio.workflows.triage.nodes.gates import Pattern
+from senselab.audio.workflows.triage.profile_template import values_to_supply, write_template
 from senselab.audio.workflows.triage.task_catalogue import (
     DECLARED_TASK,
+    DEFINES_A_CUE_WORD,
     FROM_HINT_DESCRIPTION,
     FROM_TASK_LIST,
     KINDS,
+    MODEL_SPEAKER_ALLOWED,
     NO_TASK,
     NOT_IN_TASK_LIST,
+    QUICK_BREATHS,
+    QUIET_TO_THE_CLASSIFIER,
+    SPANS_THE_RECORDING,
     TASK_EXPECTS_DIGEST,
     TASKS_BY_KIND,
+    TRAITS,
+    generates_items,
+    has_own_words,
+    has_trait,
     is_kind,
     kinds_of,
     read_task_list,
@@ -55,6 +63,7 @@ from senselab.audio.workflows.triage.task_catalogue import (
     resolve_task,
     task_attributes,
     task_list,
+    voice_reading_text,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import ProvStore
@@ -239,6 +248,7 @@ class TestTheTaskList:
             (_WORDS.format(category="{rule: letters, number_words: [one]}"), "number_words"),
             (_WORDS.format(category="{rule: letters, repetition_allowed: sometimes}"), "true or false"),
             (_WORDS.format(category="{rule: letters, language: en}"), "language"),
+            ("version: 1\ntasks:\n  a: {branch: VOICE, expects: {pattern: sustained}, traits: [loud]}\n", "traits"),
         ],
     )
     def test_a_malformed_list_is_refused(self, text: str, message: str) -> None:
@@ -313,6 +323,39 @@ class TestKinds:
         assert tuple(TASKS_BY_KIND) == KINDS
 
 
+class TestTraits:
+    """What an entry says about its task beyond its description (plan step 5a)."""
+
+    def test_the_b2ai_entries_carry_the_five_traits_senselab_listed_by_hand(self) -> None:
+        """Each trait is on exactly the tasks the deleted senselab and profile lists named."""
+        named = {trait: {name for name in task_list() if has_trait(name, trait)} for trait in TRAITS}
+        assert named == {
+            DEFINES_A_CUE_WORD: {"productive-vocabulary"},
+            MODEL_SPEAKER_ALLOWED: {"harvard-sentences-list", "cape-v-sentences", "cape-v-sentences-v2"},
+            QUIET_TO_THE_CLASSIFIER: {"respiration-and-cough-breath", "respiration-and-cough-v2-breath"},
+            QUICK_BREATHS: {"respiration-and-cough-threequickbreaths", "respiration-and-cough-v2-threebreaths"},
+            SPANS_THE_RECORDING: {"diadochokinesis-buttercup", "diadochokinesis-v2-buttercup"},
+        }
+
+    def test_an_unknown_trait_is_refused(self) -> None:
+        """A trait triage does not know is a mistake, not a no."""
+        with pytest.raises(KeyError):
+            has_trait("productive-vocabulary", "defines_a_word")
+
+    def test_the_lists_the_task_list_now_works_out_equal_the_deleted_ones(self) -> None:
+        """The eight lists B2AI's profile held before step 5a, task for task."""
+        listed_words = {"cinderella-story", "animal-fluency", "random-item-generation", "random-item-generation-v2"}
+        assert {name for name in task_list() if has_own_words(name)} == listed_words
+        assert {name for name in task_list() if generates_items(name)} == listed_words - {"cinderella-story"}
+        assert {name for name in task_list() if voice_reading_text(name)} == {"loudness", "loudness-v2"}
+        assert TASKS_BY_KIND["cough"] == {
+            "respiration-and-cough-cough",
+            "respiration-and-cough-v2-hardcough",
+            "voluntary-cough",
+        }
+        assert len(TASKS_BY_KIND["breath"]) == 8
+
+
 class TestTheTaskAHintDeclares:
     """A hint names its task exactly, or describes it inline; nothing is read off a file name."""
 
@@ -385,23 +428,29 @@ tasks:
 """
 """A made-up lab corpus: two tasks under its own names, none of them B2AI's."""
 
-LAB_CONFIG = """
-taxonomy:
-  ruleset:
-    gates:
-      voice.glide: {threshold: 0.05}
-      voice.chant: {threshold: 0.02}
-      airway.breath: {threshold: 0.10}
-      airway.cough: {threshold: 50.0}
-      airway.ppg_silent_fraction: {threshold: 0.757}
-"""
+
+def _set(document: dict, path: list[str], value: Any) -> None:  # noqa: ANN401 -- a YAML value
+    *parents, last = path
+    for part in parents:
+        document = document.setdefault(part, {})
+    document[last] = value
+
+
+def _b2ai_value(relative: str, path: list[str]) -> Any:  # noqa: ANN401 -- a YAML value
+    document = yaml.safe_load(
+        (B2AI_PROFILE / ("config.yaml" if relative == "config/default.yaml" else relative)).read_text()
+    )
+    for part in path:
+        document = document[part]
+    return document
 
 
 def _lab_profile(root: Path) -> Path:
-    """Write the lab corpus's profile: its task list, and the other files every run needs, naming none of B2AI's tasks.
+    """The lab corpus's profile, written from senselab's template and filled in by hand (plan step 5, check 4).
 
-    The task-independent fitted values (the time words, the contested-discard fractions, the corpus quantiles a
-    defaulted file leaves unset) are taken from B2AI's profile; nothing in them names a task.
+    The template extends senselab's reference profile, so it asks only for the lab's own values. The lab writes its
+    own task list; its policy and statistics are B2AI's here, a stand-in for the choices a real dataset makes and the
+    statistics it fits (step 10). No entry names a B2AI task.
 
     Args:
         root: Where the profile directory goes.
@@ -409,28 +458,18 @@ def _lab_profile(root: Path) -> Path:
     Returns:
         The profile directory.
     """
-    root.mkdir()
+    write_template(root, name="lab-corpus")
     (root / "tasks.yaml").write_text(LAB_TASKS)
-    (root / "config.yaml").write_text(LAB_CONFIG)
-    (root / "airway_event_requirements.yaml").write_text("version: 1\nbreath: []\ncough: []\n")
-    (root / "airway_event_tokens.yaml").write_text("version: 2\ncough: [cough]\nfamilies: {}\n")
-    for name in ("discard_contested.yaml", "time_release.yaml"):
-        shutil.copy(B2AI_PROFILE / name, root / name)
-    for name, paths in REQUIRED_DATA_VALUES.items():
-        document = yaml.safe_load((PACKAGED_DATA / name).read_text()) or {}
-        fitted = yaml.safe_load((B2AI_PROFILE / name).read_text())
-        for path in paths:
-            node, value = document, fitted
-            for part in path:
-                value = value[part]
-            for part in path[:-1]:
-                node = node.setdefault(part, {})
-            node[path[-1]] = value
-        (root / name).write_text(yaml.safe_dump(document))
-    files = ["tasks.yaml", "airway_event_requirements.yaml", "airway_event_tokens.yaml", *REQUIRED_DATA_VALUES]
-    files += ["discard_contested.yaml", "time_release.yaml"]
-    manifest = {"name": "lab-corpus", "version": "1", "config": "config.yaml", "files": {f: f for f in files}}
-    (root / "profile.yaml").write_text(yaml.safe_dump(manifest))
+    (root / "airway_event_tokens.yaml").write_text("version: 3\ncough: [cough]\n")
+    shutil.copy(B2AI_PROFILE / "time_release.yaml", root / "time_release.yaml")
+    for relative, entries in values_to_supply().items():
+        target = root / ("config.yaml" if relative == "config/default.yaml" else relative)
+        document = yaml.safe_load(target.read_text()) or {}
+        for entry in entries:
+            path = [str(part) for part in entry["path"]]
+            value = ["t", "d"] if path[-1] == "alveolar" else _b2ai_value(relative, path)
+            _set(document, path, value)
+        target.write_text(yaml.safe_dump(document))
     return root
 
 
@@ -459,7 +498,7 @@ class TestADatasetThatIsNotB2AI:
     """
 
     def test_its_profile_is_all_a_run_needs(self, lab_corpus: TriageConfig) -> None:
-        """No B2AI task is named anywhere, and the run's start check finds nothing missing."""
+        """Written from the template and filled in, it names no B2AI task and the run's start check finds nothing."""
         assert missing_dataset_values(lab_corpus.values) == []
         assert set(task_list()) == {"hum-a-note", "read-the-card"}
 

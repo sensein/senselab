@@ -29,7 +29,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import yaml
 
-from senselab.audio.workflows.triage.dataset_profile import data_path
+from senselab.audio.workflows.triage.dataset_profile import PACKAGED_DATA, active_profile, data_values, profile_cache
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures, value_stats
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     AT_LEAST,
@@ -78,21 +78,29 @@ DECIDING_CLASSES: tuple[str, ...] = tuple(member.value for member in Deciding)
 
 
 def _bundled_profile_path() -> Path:
-    """The newest bundled disagreement profile.
+    """The newest dated disagreement profile senselab or the active dataset profile chain holds.
 
     Returns:
-        The last dated profile in the bundled directory.
+        The file of that date: the profile chain's nearest copy where one supplies it, else senselab's.
 
     Raises:
-        FileNotFoundError: If the package ships no profile.
+        FileNotFoundError: If neither holds one.
     """
-    bundled = sorted(data_path("disagreement_profile").glob("*.yaml"))
-    if not bundled:
-        raise FileNotFoundError(f"no disagreement profile in {data_path('disagreement_profile')}")
-    return bundled[-1]
+    folders = [PACKAGED_DATA / "disagreement_profile"]
+    profile = active_profile()
+    folders += [
+        supplied
+        for layer in (profile.chain() if profile else ())
+        if (supplied := layer.supplies("disagreement_profile"))
+    ]
+    names = sorted({path.name for folder in folders if folder.is_dir() for path in folder.glob("*.yaml")})
+    if not names:
+        raise FileNotFoundError(f"no disagreement profile in {[str(folder) for folder in folders]}")
+    found = profile.resolve(f"disagreement_profile/{names[-1]}") if profile else None
+    return found if found is not None and found.is_file() else PACKAGED_DATA / "disagreement_profile" / names[-1]
 
 
-@lru_cache(maxsize=None)
+@profile_cache
 def load_disagreement_profile(path: str | None = None) -> dict[str, Any]:
     """Load and validate a disagreement profile.
 
@@ -109,7 +117,11 @@ def load_disagreement_profile(path: str | None = None) -> dict[str, Any]:
     resolved = _bundled_profile_path() if path is None else Path(path)
     if not resolved.exists():
         raise FileNotFoundError(f"disagreement profile not found: {resolved}")
-    profile: dict[str, Any] = yaml.safe_load(resolved.read_text())
+    profile: dict[str, Any] = (
+        dict(data_values(f"disagreement_profile/{resolved.name}"))
+        if path is None
+        else yaml.safe_load(resolved.read_text())
+    )
     if str(profile.get("schema_version")) != PROFILE_VERSION:
         raise ValueError(f"{resolved}: schema_version is not {PROFILE_VERSION}: {profile.get('schema_version')!r}")
     band = profile.get("near_threshold_band")

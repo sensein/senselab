@@ -14,7 +14,7 @@ from typing import Any
 
 import yaml
 
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import data_values, profile_cache
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +43,7 @@ def reason_vocabulary() -> dict[str, Any]:
     Returns:
         ``data/decision_reasons.yaml``, parsed.
     """
-    text = data_path("decision_reasons.yaml").read_text()
-    return dict(yaml.safe_load(text))
+    return dict(data_values("decision_reasons.yaml"))
 
 
 def reviewed_releases() -> frozenset[str]:

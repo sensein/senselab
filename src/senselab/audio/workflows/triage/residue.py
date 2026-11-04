@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Sequence
 import yaml
 
 from senselab.audio.workflows.audio_analysis.harmonize import align_pair, normalise_token
-from senselab.audio.workflows.triage.dataset_profile import data_path
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values
 from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
     SPEECH_EXPECTATIONS,
@@ -29,6 +29,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
 )
 from senselab.audio.workflows.triage.nodes.gates import Pattern
 from senselab.audio.workflows.triage.stimulus import NearMatch, near_match
+from senselab.audio.workflows.triage.task_catalogue import DEFINES_A_CUE_WORD, has_trait
 from senselab.audio.workflows.triage.task_lexicon import TaskLexicon
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -109,10 +110,7 @@ FUNCTION_WORDS = frozenset(
     hasn't haven't hadn't wouldn't couldn't shouldn't mustn't shan't
     we've they've you've we'll they'll it'll he'll she'll he'd she'd we'd they'd you'd it'd
     """.split()
-) | frozenset(
-    str(word).casefold()
-    for word in (yaml.safe_load(data_path("function_words_es.yaml").read_text()) or {}).get("words") or ()
-)
+) | frozenset(str(word).casefold() for word in data_values("function_words_es.yaml").get("words") or ())
 """Closed-class words, English and Spanish: a residue made of nothing else carries no content a detector could find."""
 
 _NUMERALS = {
@@ -169,16 +167,12 @@ class ResidueRule:
             repetition, restart, split or variant of.
         train_repetitions_min: How many times one token must recur in a syllable task's transcript
             to be read as the train whatever its spelling or script.
-        cue_families: Free-response families whose declared stimulus is a cue the participant is
-            asked to talk about -- productive vocabulary's target word -- so a word reading as the
-            cue is task content.
     """
 
     near: NearMatch
     variant_similarity_min: float
     insertion_window: int
     train_repetitions_min: int
-    cue_families: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -218,7 +212,6 @@ def residue_rule(config: "TriageConfig") -> ResidueRule:
         variant_similarity_min=float(config.require(f"{_SECTION}.variant_similarity_min")),
         insertion_window=int(config.require(f"{_SECTION}.insertion_window")),
         train_repetitions_min=int(config.require(f"{_SECTION}.train_repetitions_min")),
-        cue_families=frozenset(str(family) for family in (config.get(f"{_SECTION}.cue_families") or ())),
     )
 
 
@@ -595,7 +588,7 @@ def task_residue(
         expected = _declared_sequence(task_family, stimulus)
         flagged = _aligned_residue(keys, expected, rule) if expected else set(range(len(keys)))
         task = {index for index in range(len(keys)) if index not in flagged or index in in_vocabulary}
-    if str(task_family) in rule.cue_families and declares:
+    if has_trait(task_family, DEFINES_A_CUE_WORD) and declares:
         cues = [_key(token) for token in stimulus if _key(token)]
         task |= {
             index

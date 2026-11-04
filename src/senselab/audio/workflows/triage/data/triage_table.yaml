@@ -27,7 +27,7 @@ columns:
   description: the branch that owns the family (SPEECH, VOICE or AIRWAY), else none
   levels:
     SPEECH: speech and reading families
-    VOICE: phonation, glide and loudness families
+    VOICE: phonation and glide tasks
     AIRWAY: breathing and cough families
     none: no branch owns the declared family
 - name: source_path

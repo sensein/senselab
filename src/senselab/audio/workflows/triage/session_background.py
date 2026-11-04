@@ -19,7 +19,7 @@ import numpy as np
 import yaml
 
 from senselab.audio.workflows.triage.background_model import BandFrames, background_model_parameters, band_frames
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.task_catalogue import (
     AIRWAY_KIND,
     LEXICAL_SPEECH_KIND,
@@ -55,7 +55,7 @@ def session_background_parameters() -> dict[str, Any]:
     Returns:
         The parsed mapping.
     """
-    return dict(yaml.safe_load(data_path("session_background.yaml").read_text()) or {})
+    return dict(data_values("session_background.yaml"))
 
 
 def kind_of(family: str | None) -> str | None:

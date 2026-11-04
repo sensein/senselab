@@ -17,7 +17,7 @@ from typing import Any, Mapping, Sequence
 
 import yaml
 
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.task_events import GenericView, event_snr_db
 
 QUALITY_JOIN_PATH = Path(__file__).parent / "data" / "quality_join.yaml"
@@ -42,7 +42,7 @@ def quality_join_parameters() -> dict[str, Any]:
     Returns:
         The parsed mapping.
     """
-    return dict(yaml.safe_load(data_path("quality_join.yaml").read_text()) or {})
+    return dict(data_values("quality_join.yaml"))
 
 
 def touches(span: Span, task_spans: Sequence[Span], abut_s: float) -> bool:

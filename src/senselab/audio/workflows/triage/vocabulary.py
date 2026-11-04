@@ -48,6 +48,11 @@ from senselab.audio.workflows.triage.discard_replaced_task import (
     replaced_task,
 )
 from senselab.audio.workflows.triage.discard_replaced_task import enabled as replaced_task_enabled
+from senselab.audio.workflows.triage.task_catalogue import (
+    MODEL_SPEAKER_ALLOWED,
+    QUIET_TO_THE_CLASSIFIER,
+    has_trait,
+)
 from senselab.audio.workflows.triage.task_extent import COMPLETE as EXTENT_COMPLETE
 
 GRAPH_ORDER = (
@@ -406,8 +411,8 @@ class TaskEvidence:
             event (``[cough]`` in a cough task); 0 for every other family.
         owner_absent_inputs: The instruments, derivatives or gate readings an owning branch needed to
             look for the task and did not have; empty where every owner could look.
-        required_event: The event kind the declared airway family is decided on (``breath``), from
-            the dataset profile's ``airway_event_requirements.yaml``; None for every other family.
+        required_event: The event kind the declared airway task is decided on (``breath`` or ``cough``), its
+            kind in the task list; None for every other task.
         events_found_n: How many events of the family's own kind the owning AIRWAY branch detected,
             or None where it reported no count.
         event_kind: The declared airway family's own event kind, or None.
@@ -455,8 +460,8 @@ class TaskEvidence:
             (``task_speech.TaskSpeech``), for the verdict record; empty where none was written.
         task_speech_words_min: The speech words outside a non-lexical task at or over which the recording is
             reviewed (``data/task_speech.yaml`` ``words_min``), or None where no such reading is weighed.
-        item_set: Whether the declared family is an item-set family (``task_content.yaml``
-            ``open_vocabulary_families``), asked about phrases instead of items rather than off-task speech.
+        item_set: Whether the declared task is an item-set task (its task list entry lists categories), asked
+            about phrases instead of items rather than off-task speech.
         narrative: Whether the declared family is an open or narrative lexical family (a free response:
             story retell, free speech, picture description, open response), where an off-task aside is
             an annotation.
@@ -743,7 +748,7 @@ DISCARD_GROUNDS = (
 """Every ground a file discards on, in the order the fold tries them; an operational flag (``rerun``) is
 tried between the third and the fourth, since a missing derivative may be why the task was not found."""
 EVENT_ABSENT_GROUNDS = {"breath": NO_BREATH_CAPTURED, "cough": NO_COUGH_CAPTURED, "phonation": NO_PHONATION_CAPTURED}
-"""The discard ground for each required event kind of the dataset profile's ``airway_event_requirements.yaml``."""
+"""The discard ground for each event kind a declared task is decided on (its kind in the task list)."""
 TASK_MISMATCH = "task_mismatch"
 """Flag ground: the declared airway task's own events were detected, but not in the pattern it asked for."""
 BREATH_REVIEW_LOW_CONFIDENCE = "breath_review_low_confidence"
@@ -930,7 +935,7 @@ OTHER_SPEAKER_KINDS = ("assistant", "background", "unclear")
 """The questions whose disagreement with the reviewer can flag a recording."""
 
 MODEL_SPEAKER_PERMITTED = "the task's instructions permit a model speaker"
-"""Appended to the speaker gate's flag ground for a family in ``verdict.model_speaker_families``: the
+"""Appended to the speaker gate's flag ground for a task with the ``model_speaker_allowed`` trait: the
 instructions let someone say the sentence first, which explains the other voice without excusing it."""
 
 LLM_REDACTION_RESIDUE = "the redaction reviewer flagged residue on the redacted transcript"
@@ -1401,10 +1406,9 @@ class FoldPolicy:
             the comparison unmeasured.
         uncomputed_reading_flags: Whether a conformance gate left undecided because a reading the
             task is judged on was never computed is a flag ground of its own.
-        model_speaker_families: Declared families whose instructions permit someone to say the sentence
-            first; the speaker gate still flags them, and its ground says so.
-        hint_mismatch_exempt_families: Declared families whose branch not finding the declared sound is
-            no flag ground.
+    A task whose instructions let someone say the item first (the task list's ``model_speaker_allowed`` trait)
+    still flags at the speaker gate, and the ground says so; a task too quiet for the sound classifier
+    (``quiet_to_the_classifier``) raises no hint-mismatch flag.
     """
 
     conformance_flags: bool = True
@@ -1425,8 +1429,6 @@ class FoldPolicy:
     second_opinion_disagreement_flags: bool = False
     second_opinion_confident_yes: float | None = None
     second_opinion_confident_no: float | None = None
-    hint_mismatch_exempt_families: tuple[str, ...] = ()
-    model_speaker_families: tuple[str, ...] = ()
     conformance_flags_by_family: dict[str, bool] = field(default_factory=dict)
 
     @classmethod
@@ -1464,12 +1466,6 @@ class FoldPolicy:
             second_opinion_disagreement_flags=bool(config.get(f"{_SECTION}.second_opinion_disagreement_flags", False)),
             second_opinion_confident_yes=_optional_float(config.get(f"{_SECTION}.second_opinion_confident_yes")),
             second_opinion_confident_no=_optional_float(config.get(f"{_SECTION}.second_opinion_confident_no")),
-            hint_mismatch_exempt_families=tuple(
-                str(family) for family in (config.get(f"{_SECTION}.hint_mismatch_exempt_families") or ())
-            ),
-            model_speaker_families=tuple(
-                str(family) for family in (config.get(f"{_SECTION}.model_speaker_families") or ())
-            ),
             conformance_flags_by_family={
                 str(family): bool(flags)
                 for family, flags in (config.get(f"{_SECTION}.conformance_flags_by_family") or {}).items()
@@ -3644,7 +3640,7 @@ def fold_file_verdict(
             f"{record.get('reading')} read {record.get('value')} against {record.get('bound')}"
             + (
                 f"; {MODEL_SPEAKER_PERMITTED}"
-                if record.get("gate") == DOMINANT_SPEAKER_GATE and declared_family in rules.model_speaker_families
+                if record.get("gate") == DOMINANT_SPEAKER_GATE and has_trait(declared_family, MODEL_SPEAKER_ALLOWED)
                 else ""
             ),
             f"{PREFIX_GATE}:{record.get('gate')}",
@@ -3844,7 +3840,7 @@ def fold_file_verdict(
                 f"{PREFIX_BRANCH_SILENT}:{branch}",
                 kind,
             )
-        if hints.get(branch) == CLAIMED_NOT_FOUND and declared_family not in rules.hint_mismatch_exempt_families:
+        if hints.get(branch) == CLAIMED_NOT_FOUND and not has_trait(declared_family, QUIET_TO_THE_CLASSIFIER):
             flag(
                 branch,
                 f"hint mismatch: {branch} was declared and did not find it",

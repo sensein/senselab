@@ -290,20 +290,19 @@ class TestARecallSubtractsItsStory:
         assert residue.method == FREE and len(residue.positions) == len(said)
 
 
-def test_a_cue_family_reads_its_target_word_as_task_content() -> None:
+def test_a_cue_family_reads_its_target_word_as_task_content(monkeypatch: pytest.MonkeyPatch) -> None:
     """Productive vocabulary: the stimulus "gladiator" (and its plural) is task content; its definition is residue."""
-    import dataclasses
-
+    from senselab.audio.workflows.triage import residue as residue_module
     from senselab.audio.workflows.triage.config import load_triage_config
     from senselab.audio.workflows.triage.residue import residue_rule, task_residue
+    from senselab.audio.workflows.triage.task_catalogue import DEFINES_A_CUE_WORD, has_trait
 
     rule = residue_rule(load_triage_config())
-    assert "productive-vocabulary" in rule.cue_families
+    assert has_trait("productive-vocabulary", DEFINES_A_CUE_WORD)
     texts = ["a", "gladiator", "is", "a", "roman", "fighter", "gladiators", "fought"]
     residue = task_residue(texts, "productive-vocabulary", ["gladiator"], rule)
     kept = {texts[i] for i in residue.positions}
     assert "gladiator" not in kept and "gladiators" not in kept and "fighter" in kept
-    plain = task_residue(
-        texts, "productive-vocabulary", ["gladiator"], dataclasses.replace(rule, cue_families=frozenset())
-    )
+    monkeypatch.setattr(residue_module, "has_trait", lambda task, trait: False)
+    plain = task_residue(texts, "productive-vocabulary", ["gladiator"], rule)
     assert "gladiator" in {texts[i] for i in plain.positions}

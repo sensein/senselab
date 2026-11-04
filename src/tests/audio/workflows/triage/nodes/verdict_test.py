@@ -2098,15 +2098,14 @@ class TestTheTaskEvidenceProfiles:
         assert verdict_module.minimum_duration_s(None) is None
 
     def test_a_cough_family_reads_its_own_event_tokens_and_no_filler(self) -> None:
-        """[cough] and the Chinese [咳] name a cough task's event; [um] names none; a speech task has none."""
+        """[cough] and the Chinese [咳] name a cough task's event; [um] names none; a breath task has none."""
         tokens = verdict_module._airway_event_tokens()
-        assert {"cough", "咳"} <= tokens["respiration-and-cough-cough"]
-        assert "um" not in tokens["respiration-and-cough-cough"]
-        assert "respiration-and-cough-fivebreaths" not in tokens, "a [breath] token is context, never evidence"
-        assert "harvard-sentences-list" not in tokens
+        assert {"cough", "咳"} <= tokens["cough"]
+        assert "um" not in tokens["cough"]
+        assert "breath" not in tokens, "a [breath] token is context, never evidence"
 
     def test_every_breath_family_is_decided_on_a_detected_breath_and_no_other_family_is(self) -> None:
-        """``data/airway_event_requirements.yaml`` names the breath and the cough families and only them."""
+        """The task list's breath and cough kinds are decided on their own events, and no other task is."""
         breath = {
             "breath-sounds",
             "respiration-and-cough-breath",

@@ -1609,11 +1609,10 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
             "bound": 0.9,
             "op": "at_least",
         }
-        policy = replace(self.POLICY, model_speaker_families=("harvard-sentences-list",))
         diarized = self._fold(
             {**reading, "speakers": "one", "other_speakers": []},
             flag_gates=[gate],
-            policy=policy,
+            policy=self.POLICY,
             declared_family="harvard-sentences-list",
         )
         assert diarized.triage is Triage.REVIEW
@@ -1621,15 +1620,23 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
             "another speaker holds part of the task extent: extent_dominant_speaker_share read 0.88 against 0.9; "
             f"{MODEL_SPEAKER_PERMITTED}"
         ]
+        plain = self._fold(
+            {**reading, "speakers": "one", "other_speakers": []},
+            flag_gates=[gate],
+            policy=self.POLICY,
+            declared_family="rainbow-passage",
+        )
+        assert MODEL_SPEAKER_PERMITTED not in " ".join(reason.why for reason in plain.reasons), "rainbow has no trait"
 
     def test_the_packaged_config_exempts_no_family_from_the_speaker_gate(self) -> None:
-        """Owner, 2026-09-30: no exemption; the model-speaker families are named for the ground only."""
+        """Owner, 2026-09-30: no exemption; a model-speaker task (its task list trait) is named for the ground only."""
         from senselab.audio.workflows.triage.config import load_triage_config
         from senselab.audio.workflows.triage.nodes.verdict import flag_gate_exemptions
+        from senselab.audio.workflows.triage.task_catalogue import MODEL_SPEAKER_ALLOWED, has_trait
 
         config = load_triage_config()
         assert flag_gate_exemptions(config, "harvard-sentences-list") == ()
-        assert "harvard-sentences-list" in FoldPolicy.from_config(config).model_speaker_families
+        assert has_trait("harvard-sentences-list", MODEL_SPEAKER_ALLOWED)
 
     def test_a_flagged_reading_that_names_no_words_flags_for_review(self) -> None:
         """Owner, 2026-09-28: a judgment with no entries moves no mask and goes to a person."""

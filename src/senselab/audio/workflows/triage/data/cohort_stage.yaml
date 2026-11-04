@@ -1,6 +1,7 @@
 # COHORT: the corpus and session pass between QUALITY and VERDICT.
 # Read by `senselab.audio.workflows.triage.cohort_stage.cohort_parameters`.
-# Derivations: specs/20261007-task-events-in-background/design.md, section "Cohort stage".
+# Values left empty are a dataset profile's (data/profile_values.yaml); senselab's adult_clinical_speech profile
+# carries a set, each with its derivation.
 version: 9
 
 # Session speaker enrollment. Model, commit and match cut are `speech.enrollment_model` and
@@ -10,55 +11,55 @@ enrollment:
   families: lexical_speech          # the task kind that enrolls the participant, less the tasks with voice_reading_text (tasks.yaml) (owner, 2026-10-11)
   window_s: 2.0                     # window each span is embedded on, as the speaker vectors were fitted
   hop_s: 1.0                        # its hop
-  single_speaker_recordings_min: 2  # this many single-speaker recordings in the session: only they enroll
-  leave_one_out_min: 3              # this many enrolling recordings: one under the cut against the rest is left out
+  single_speaker_recordings_min:    # profile value (data/profile_values.yaml)
+  leave_one_out_min:                # profile value (data/profile_values.yaml)
 
 # Participant enrollment across sessions: every session's candidates pooled under the rules above.
 # Per session, the pool of the participant's other sessions is the fallback where the session has no
 # enrollment of its own, and the comparison for session_speaker_consistency.
 participant:
-  consistency_cosine_min:       # dataset profile (B2AI: 0.63, a Tukey lower fence over r18d): session vs other-sessions enrollment cosine under this is session_speaker_inconsistent; Tukey lower fence (Q1 - 1.5 IQR) over r18d, UNFITTED against labels
+  consistency_cosine_min:       # profile value (data/profile_values.yaml)
 
 # Recording condition per participant and session (level, SNR, clipping), read by cohort_fold.hot_or_clipped and
 # cohort_fold.condition_shift. Derivations: specs/20261007-task-events-in-background/cross-dataset.md, "D1".
 condition:
   snr_percentiles: {floor: 10, level: 95}  # energy-envelope percentiles read as floor and active level (recording_vectors/evaluation.yaml frame)
-  hot_rms_dbfs_min:                        # dataset profile (B2AI: -9.343, a Tukey fence over r36): a participant or session median RMS at or over this is hot; Tukey upper fence over 1,527 participant medians, r36
-  clipped_fraction_min:                    # dataset profile (B2AI: 0.475, a Tukey fence over r36): a participant or session with this share of recordings holding clip spans is clipped; Tukey upper fence, r36
-  shift_level_db_min:                      # dataset profile (B2AI: 17.783, a Tukey fence over r36): a session median level this far from the other sessions' is a condition shift; Tukey upper fence over 351 sessions, r36
-  shift_snr_db_min:                        # dataset profile (B2AI: 15.117, a Tukey fence over r36): likewise for the median envelope SNR; Tukey upper fence over 351 sessions, r36
+  hot_rms_dbfs_min:                        # profile value (data/profile_values.yaml)
+  clipped_fraction_min:                    # profile value (data/profile_values.yaml)
+  shift_level_db_min:                      # profile value (data/profile_values.yaml)
+  shift_snr_db_min:                        # profile value (data/profile_values.yaml)
 
 # The participant's non-matching speech outside the task, clustered across their recordings (cohort_stage.non_target_voices).
 non_target_voice:
-  cosine_min: 0.398    # one voice: comparison.cosine_min.default (fitted 2026-10-11, 1% cross-speaker acceptance)
-  recurring_min: 2     # recordings a cluster spans to be a recurring voice
+  cosine_min:          # profile value (data/profile_values.yaml)
+  recurring_min:       # profile value (data/profile_values.yaml)
 
 # A speaker non-match shared across a participant's recordings (cohort_fold.shared_nonmatch).
 shared_nonmatch:
   recordings_min: 3     # non-matching recordings, the fewest that can be shared beyond a pair
-  fraction_min:         # dataset profile (B2AI: 0.169, a Tukey fence over r36): share of the participant's compared recordings; Tukey upper fence over the 214 participants with any non-match, r36
+  fraction_min:         # profile value (data/profile_values.yaml)
 
 # Speaker comparison: per recording, one embedding pooled over its target speech and one over its speech
 # outside the task, each compared with the enrollment. Derivation: design.md, "Pooled speaker comparison".
 comparison:
-  pooled_min_s: 2.0                     # owner, 2026-10-11: speaker identification needs at least 2 s; a shorter pool is not_measured (too_short_for_speaker_id), and no enrollment span is shorter
+  pooled_min_s:                         # profile value (data/profile_values.yaml)
   cosine_min:                           # a pool whose mean window embedding is under this cosine to the enrollment's mean is a non-match
-    default: 0.398                      # fitted 2026-10-11 (r34, 28,330 left-out within vs 85,353 cross-speaker speech pairs): 1% cross-speaker acceptance, 0.40% within rejected; AUC 0.9996
-    task_text:                          # owner, 2026-10-11: loudness "hey" is annotation only (cosine recorded, never flags); pooled "hey" separates at AUC 0.93 / EER 14.4%, and 0.231 rejected 30% of participants' own
+    default:                            # profile value (data/profile_values.yaml)
+    task_text:                          # profile value (data/profile_values.yaml)
   diarization_stream: enhanced          # diarized segments the enrollment reads, each speaker's exclusive pieces
   lexical_gap_key: branch.run_gap_max_s # lexical words merge into one span across gaps up to this config key
   target:                               # what a family's target pool holds: speech (lexical words in the task extent), task_text (task_speech.task_text_ids words) or none
     default: none                       # owner, 2026-10-11: airway, voice and DDK have no target comparison
     kinds:
       lexical_speech: speech            # task kind -> rule
-    families: {}                        # dataset profile: family -> rule (B2AI: loudness and loudness-v2 -> task_text)
+    voice_read: task_text               # a word task read for its voice (tasks.yaml voice_reading_text): its task text
 
 # Speech the enhancer removed: speech-classified on `from` and not on `kept`. A removed region holding a
 # word of speech outside the task joins the non-task pool. Labels and score as data/background_speech.yaml
 # (owner, 2026-10-06).
 speech:
   labels: [Speech, Conversation, 'Narration, monologue', 'Male speech, man speaking', 'Female speech, woman speaking', 'Child speech, kid speaking']
-  score_min: 0.5
+  score_min:                            # profile value (data/profile_values.yaml)
   removed: {from: yamnet_scores, kept: enhanced_yamnet_scores}
 
 # Speech outside the task, by family: in a lexical speech task the lexical words outside the task extent;
@@ -75,5 +76,5 @@ checks:
     level: family
     kinds: [airway, voice]      # task kinds (task_catalogue.KINDS) the check reads
     ground: recording_duration_outlier
-    duration_ratio_max: 3.0     # longer than this times the family median duration ...
-    extent_fraction_min: 0.5    # ... with the task extent covering less than this of the recording
+    duration_ratio_max:         # profile value (data/profile_values.yaml)
+    extent_fraction_min:        # profile value (data/profile_values.yaml)

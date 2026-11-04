@@ -1,0 +1,5 @@
+# SQUIM over the task extent (task_squim.py): fixed non-overlapping windows across the recording's task
+# extent on the plain stream, read by the objective head; the medians feed q_task_squim_* and triage.tsv
+# squim_*. The design and verification are in specs/20261027-task-extent-squim/design.md.
+version: 2
+no_value_branches: [AIRWAY, VOICE]   # breath, cough and phonation families: SQUIM is a speech-quality estimate and does not describe them

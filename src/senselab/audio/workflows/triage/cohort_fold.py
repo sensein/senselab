@@ -15,7 +15,7 @@ from typing import Any
 
 import yaml
 
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.decision import ANNOTATION, PASS, REVIEW, EvidenceItem, item
 
 PARAMETERS_PATH = Path(__file__).parent / "data" / "cohort_stage.yaml"
@@ -137,7 +137,7 @@ def pool_block(reading: Mapping[str, Any] | None, pool: str) -> dict[str, Any]:
 
 @profile_cache
 def _parameters() -> dict[str, Any]:
-    return dict(yaml.safe_load(data_path("cohort_stage.yaml").read_text(encoding="utf-8")))
+    return dict(data_values("cohort_stage.yaml"))
 
 
 def non_target_voice_block(reading: Mapping[str, Any] | None) -> dict[str, Any]:

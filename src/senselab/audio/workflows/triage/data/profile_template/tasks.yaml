@@ -1,0 +1,13 @@
+# The dataset's task list: one entry per task, under the name its hints declare (AudioHints.task). An entry names the
+# branch that reads the task and what the task asks for, and may name its own words and traits. Format:
+# senselab/audio/workflows/triage/task_catalogue.py. Example (one held-vowel task and one read passage):
+#
+#   tasks:
+#     hum-a-note:
+#       branch: VOICE
+#       expects: {pattern: sustained}
+#     read-the-card:
+#       branch: SPEECH
+#       expects: {pattern: ordered_tokens, token_source: stimulus_text}
+version: 1
+tasks: {}
