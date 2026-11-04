@@ -230,12 +230,11 @@ class TestTheStore:
         assert outcome.status == ABSENT and "floor" in str(outcome.reason)
 
 
-def test_a_timestamped_manifest_stem_gives_its_family(tmp_path: Path) -> None:
-    """Where the fold names no family, the manifest stem's launch timestamp is dropped before the task is read."""
+def test_without_the_folds_family_there_is_none(tmp_path: Path) -> None:
+    """Where the fold names no family, none is read off the manifest stem (plan step 6a)."""
     from senselab.audio.workflows.triage.task_squim import declared_family
 
-    store = ProvStore(run_id="stem-test")
-    assert declared_family(store, "sub-a_ses-b_task-voluntary-cough-2_20000101-000000") == "voluntary-cough"
+    assert declared_family(ProvStore(run_id="stem-test")) is None
 
 
 def _windows_before_the_shared_planner(start_s: float, end_s: float, config: WindowConfig) -> list[tuple[float, float]]:

@@ -19,10 +19,16 @@ from typing import Any, Iterator
 import pytest
 
 from senselab.text.tasks.pii_detection import redaction_review
+from senselab.text.tasks.pii_detection.redaction_policy import load_lexicon
 from senselab.text.tasks.pii_detection.redaction_review import (
     review_transcript,
     shutdown_review_worker,
 )
+
+DATA = Path(__file__).parents[2] / "data_for_testing" / "redaction_review"
+POLICY = redaction_review.load_review_policy(DATA / "review_policy.txt", DATA / "task_guidance.yaml")
+LEXICON = load_lexicon(DATA / "redaction_policy.yaml")
+"""The test's own review policy and word lists: the reviewer takes the caller's (plan step 6b), not a dataset's."""
 
 SHA = "b" * 40
 
@@ -170,14 +176,14 @@ class TestTheWeightsAreLoadedOncePerProcess:
 
     def test_three_reviews_pay_one_load(self, harness: Harness) -> None:
         """The whole point: a second review reuses the first one's worker."""
-        results = [review_transcript(f"text {n}", model_id="stub/model") for n in range(3)]
+        results = [review_transcript(f"text {n}", model_id="stub/model", policy=POLICY) for n in range(3)]
         assert all(result.available for result in results)
         assert len(harness.loads) == 1, f"one load expected, the worker was spawned {len(harness.loads)} times"
 
     def test_only_the_round_that_loaded_says_it_loaded(self, harness: Harness) -> None:
         """``load_s`` is how a store separates the amortised rounds from the one that paid."""
-        first = review_transcript("one", model_id="stub/model")
-        second = review_transcript("two", model_id="stub/model")
+        first = review_transcript("one", model_id="stub/model", policy=POLICY)
+        second = review_transcript("two", model_id="stub/model", policy=POLICY)
         assert first.load_s > 0.0, "the first review paid the load and must say so"
         assert second.load_s == 0.0, "a reused worker loaded nothing"
         assert first.elapsed_s >= first.load_s, "the round's clock has to contain the load it paid"
@@ -185,34 +191,34 @@ class TestTheWeightsAreLoadedOncePerProcess:
 
     def test_a_different_commit_is_a_different_worker(self, harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
         """Weights already resident are the wrong weights when the resolved commit changes."""
-        review_transcript("one", model_id="stub/model")
+        review_transcript("one", model_id="stub/model", policy=POLICY)
         monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "c" * 40)
-        review_transcript("two", model_id="stub/model")
+        review_transcript("two", model_id="stub/model", policy=POLICY)
         assert [load["revision"] for load in harness.loads] == [SHA, "c" * 40]
 
     def test_shutdown_hands_the_weights_back(self, harness: Harness) -> None:
         """A caller that wants the memory before the process ends can have it."""
-        review_transcript("one", model_id="stub/model")
+        review_transcript("one", model_id="stub/model", policy=POLICY)
         shutdown_review_worker()
-        review_transcript("two", model_id="stub/model")
+        review_transcript("two", model_id="stub/model", policy=POLICY)
         assert len(harness.loads) == 2
 
     def test_the_answer_carries_what_it_generated(self, harness: Harness) -> None:
         """Output tokens are the thing generation cost tracks, so the store carries them."""
-        result = review_transcript("one", model_id="stub/model")
+        result = review_transcript("one", model_id="stub/model", policy=POLICY)
         assert result.output_tokens == 11
         assert result.revision == SHA
 
     def test_the_answer_carries_what_it_holds_on_the_card(self, harness: Harness) -> None:
         """A worker kept alive occupies a GPU; how much decides whether anything else fits beside it."""
-        result = review_transcript("one", model_id="stub/model")
+        result = review_transcript("one", model_id="stub/model", policy=POLICY)
         assert result.peak_reserved_mib == 71000
         assert result.resident_mib == 23000
 
     def test_a_worker_that_did_not_answer_claims_no_memory(self, harness: Harness) -> None:
         """Zero is the honest reading when nothing ran; a stale number would size the next run."""
         harness.directives("fail_load")
-        result = review_transcript("one", model_id="stub/model")
+        result = review_transcript("one", model_id="stub/model", policy=POLICY)
         assert result.peak_reserved_mib == 0 and result.resident_mib == 0
 
 
@@ -222,8 +228,8 @@ class TestAWorkerThatCannotStartCostsOneAttempt:
     def test_the_first_failure_is_recorded_and_not_retried(self, harness: Harness) -> None:
         """The second call reports the same absence without spawning anything."""
         harness.directives("fail_load")
-        first = review_transcript("one", model_id="stub/model")
-        second = review_transcript("two", model_id="stub/model")
+        first = review_transcript("one", model_id="stub/model", policy=POLICY)
+        second = review_transcript("two", model_id="stub/model", policy=POLICY)
         assert not first.available and not second.available
         assert first.failure is not None and "no device found" in first.failure
         assert second.failure == first.failure
@@ -232,7 +238,7 @@ class TestAWorkerThatCannotStartCostsOneAttempt:
     def test_a_refusal_is_an_absence_and_not_a_raise(self, harness: Harness) -> None:
         """The absent path's contract: a recorded absence, a named failure, no proposal."""
         harness.directives("fail_load")
-        result = review_transcript("one", model_id="stub/model")
+        result = review_transcript("one", model_id="stub/model", policy=POLICY)
         assert result.proposal == []
         assert result.model_id == "stub/model"
         assert result.elapsed_s > 0.0
@@ -240,9 +246,9 @@ class TestAWorkerThatCannotStartCostsOneAttempt:
     def test_shutdown_clears_the_refusal(self, harness: Harness) -> None:
         """A deliberate retry is the caller's to ask for; a silent one is not."""
         harness.directives("fail_load")
-        review_transcript("one", model_id="stub/model")
+        review_transcript("one", model_id="stub/model", policy=POLICY)
         shutdown_review_worker()
-        assert review_transcript("two", model_id="stub/model").available
+        assert review_transcript("two", model_id="stub/model", policy=POLICY).available
         assert len(harness.loads) == 2
 
     def test_releasing_the_weights_between_recordings_does_not_clear_it(self, harness: Harness) -> None:
@@ -254,7 +260,7 @@ class TestAWorkerThatCannotStartCostsOneAttempt:
         """
         harness.directives("fail_load")
         for _ in range(3):
-            review_transcript("a recording", model_id="stub/model")
+            review_transcript("a recording", model_id="stub/model", policy=POLICY)
             shutdown_review_worker(forget_failure=False)
         assert len(harness.loads) == 1, f"the refusal was forgotten: {len(harness.loads)} load attempts"
 
@@ -265,8 +271,8 @@ class TestAFailedReviewDoesNotPoisonTheProcess:
     def test_a_worker_that_raised_is_replaced(self, harness: Harness) -> None:
         """An out-of-memory on one transcript costs one reload, not every later review."""
         harness.directives("raise")
-        failed = review_transcript("one", model_id="stub/model")
-        recovered = review_transcript("two", model_id="stub/model")
+        failed = review_transcript("one", model_id="stub/model", policy=POLICY)
+        recovered = review_transcript("two", model_id="stub/model", policy=POLICY)
         assert not failed.available and failed.failure is not None
         assert "CUDA out of memory" in failed.failure
         assert recovered.available, "a dead worker must be replaced, not reported dead forever"
@@ -275,18 +281,18 @@ class TestAFailedReviewDoesNotPoisonTheProcess:
     def test_a_worker_that_vanished_is_replaced(self, harness: Harness) -> None:
         """A killed worker answers nothing at all; that is an absence, then a fresh load."""
         harness.directives("exit")
-        failed = review_transcript("one", model_id="stub/model")
+        failed = review_transcript("one", model_id="stub/model", policy=POLICY)
         assert not failed.available
-        assert review_transcript("two", model_id="stub/model").available
+        assert review_transcript("two", model_id="stub/model", policy=POLICY).available
         assert len(harness.loads) == 2
 
     def test_a_worker_that_never_answers_is_an_absence_not_a_hang(self, harness: Harness) -> None:
         """``timeout_s`` still bounds a review; the worker is killed rather than waited on."""
         harness.directives("hang")
-        result = review_transcript("one", model_id="stub/model", timeout_s=2)
+        result = review_transcript("one", model_id="stub/model", timeout_s=2, policy=POLICY)
         assert not result.available
         assert result.failure is not None and "did not answer in 2s" in result.failure
-        assert review_transcript("two", model_id="stub/model").available
+        assert review_transcript("two", model_id="stub/model", policy=POLICY).available
 
 
 class TestTheProtocolIsNotConfusedByTheLoaderSOwnOutput:
@@ -299,7 +305,7 @@ class TestTheProtocolIsNotConfusedByTheLoaderSOwnOutput:
         so it cannot show that the marker does any work. A well-formed object that is not a reply
         can: without the marker it is read as one, and the review returns the wrong completion.
         """
-        result = review_transcript("one", model_id="stub/model")
+        result = review_transcript("one", model_id="stub/model", policy=POLICY)
         assert result.available
         assert "LEAKED" not in result.reasoning and "LEAKED" not in result.raw
         assert result.reasoning == "nothing identifying remains."
@@ -309,7 +315,7 @@ class TestTheProtocolIsNotConfusedByTheLoaderSOwnOutput:
     def test_a_failure_message_carries_what_the_worker_was_last_doing(self, harness: Harness) -> None:
         """A load failure with no context is a bug report nobody can act on."""
         harness.directives("hang")
-        result = review_transcript("one", model_id="stub/model", timeout_s=2)
+        result = review_transcript("one", model_id="stub/model", timeout_s=2, policy=POLICY)
         assert result.failure is not None
         assert "chatter on stdout that is not a reply" in result.failure or "loading shards" in result.failure
 
@@ -327,6 +333,8 @@ def test_the_request_names_the_task_its_instructions_and_its_stimulus() -> None:
             "instructions": "Recall the story in your own words.",
             "asked_to_say": "he is nearly ninety-three years old",
         },
+        None,
+        POLICY,
     )
     assert "TASK: story-recall" in body
     assert "SPEECH TYPE: recall" in body
@@ -340,7 +348,7 @@ def test_a_request_with_no_task_facts_carries_no_task_lines() -> None:
     """Nothing declared, nothing claimed."""
     from senselab.text.tasks.pii_detection.redaction_review import _compose
 
-    body = _compose("hello", None, {})
+    body = _compose("hello", None, {}, None, POLICY)
     assert "INSTRUCTIONS" not in body and "not identifying for being said" not in body
 
 
@@ -351,11 +359,10 @@ def test_the_prompt_states_the_policy_and_the_remaining_safe_harbor_identifiers(
     standard = redaction_review.safe_harbor()
     codes = [identifier["code"] for identifier in standard["identifiers"]]
     assert codes == [chr(ord("A") + i) for i in range(18)]
-    assert standard["citation"] in redaction_review._PROMPT
-    assert all(f"({code})" in redaction_review._PROMPT for code in codes[3:])
-    assert not any(f"  ({code})" in redaction_review._PROMPT for code in codes[:3])
-    for rule in ("Ray Bradbury", "I had COVID in 2021", "Halloween", "USF voice center", "never hold a recording back"):
-        assert rule in redaction_review._PROMPT
+    assert standard["citation"] in redaction_review.review_prompt(False, POLICY)
+    assert all(f"({code})" in redaction_review.review_prompt(False, POLICY) for code in codes[3:])
+    assert not any(f"  ({code})" in redaction_review.review_prompt(False, POLICY) for code in codes[:3])
+    assert "TEST REDACTION POLICY" in redaction_review.review_prompt(False, POLICY)
     assert redaction_review.safe_harbor_codes("location") == ("B",)
     assert redaction_review.safe_harbor_codes("CONDITION") == ()
 
@@ -373,19 +380,23 @@ def test_a_release_the_policy_never_allows_is_fed_back() -> None:
 
     for text in ("Florida", "2021", "October", "73 years old", "Halloween"):
         forbidden = ReviewProposal(text=text, action="release", category="LOCATION", why="looks fine")
-        assert "always removes" in (answer_problem(result(forbidden), f"i said {text}", None) or ""), text
+        assert "always removes" in (answer_problem(result(forbidden), f"i said {text}", None, lexicon=LEXICON) or ""), (
+            text
+        )
     bare = ReviewProposal(text="Mexico", action="release", category="LOCATION", why="")
     reasoned = ReviewProposal(text="Mexico", action="release", category="LOCATION", why="a country, nothing else")
-    assert "give no reason" in (answer_problem(result(bare), "we moved from Mexico", "we moved from [LOCATION]") or "")
-    assert answer_problem(result(reasoned), "we moved from Mexico", "we moved from [LOCATION]") is None
+    assert "give no reason" in (
+        answer_problem(result(bare), "we moved from Mexico", "we moved from [LOCATION]", lexicon=LEXICON) or ""
+    )
+    assert answer_problem(result(reasoned), "we moved from Mexico", "we moved from [LOCATION]", lexicon=LEXICON) is None
     unnamed = ReviewProposal(text="Ray Bradbury", action="release", category="PERSON", why="")
-    assert "public figure" in (answer_problem(result(unnamed), "i read Ray Bradbury", None) or "")
+    assert "public figure" in (answer_problem(result(unnamed), "i read Ray Bradbury", None, lexicon=LEXICON) or "")
     weekday = ReviewProposal(text="on Monday", action="release", category="DATE_TIME", why="a weekday")
-    assert answer_problem(result(weekday), "i went on Monday", "i went [DATE_TIME]") is None
+    assert answer_problem(result(weekday), "i went on Monday", "i went [DATE_TIME]", lexicon=LEXICON) is None
     empty = ReviewResult(available=True, redaction="incomplete", original="clean")
-    assert "listed no words" in (answer_problem(empty, "hello alice", "hello [PERSON]") or "")
+    assert "listed no words" in (answer_problem(empty, "hello alice", "hello [PERSON]", lexicon=LEXICON) or "")
     agreeing = ReviewResult(available=True, redaction="complete", original="carries_pii")
-    assert answer_problem(agreeing, "hello alice", "hello [PERSON]") is None
+    assert answer_problem(agreeing, "hello alice", "hello [PERSON]", lexicon=LEXICON) is None
 
 
 def test_v8_places_need_a_reason_and_relabels_come_from_the_set() -> None:
@@ -397,23 +408,23 @@ def test_v8_places_need_a_reason_and_relabels_come_from_the_set() -> None:
 
     original = "a fighter in the Roman Empire, and the Civil War in Virginia, and Star Wars"
     bare = ReviewProposal(text="Roman Empire", action="release", category="LOCATION", why="history")
-    assert "without a place_reason" in (answer_problem(result(bare), original, None) or "")
+    assert "without a place_reason" in (answer_problem(result(bare), original, None, lexicon=LEXICON) or "")
     reasoned = ReviewProposal(
         text="Roman Empire", action="release", category="LOCATION", why="history", place_reason="historical"
     )
-    assert answer_problem(result(reasoned), original, None) is None
+    assert answer_problem(result(reasoned), original, None, lexicon=LEXICON) is None
     state = ReviewProposal(text="Virginia", action="release", category="LOCATION", why="war", place_reason="fictional")
-    assert "always removes" in (answer_problem(result(state), original, None) or "")
+    assert "always removes" in (answer_problem(result(state), original, None, lexicon=LEXICON) or "")
     historical = ReviewProposal(
         text="Virginia", action="release", category="LOCATION", why="war", place_reason="historical"
     )
-    assert answer_problem(result(historical), original, None) is None
+    assert answer_problem(result(historical), original, None, lexicon=LEXICON) is None
     unknown = ReviewProposal(text="Star Wars", action="release", category="PERSON", why="a film", relabel="movie")
-    assert "outside the allowed values" in (answer_problem(result(unknown), original, None) or "")
+    assert "outside the allowed values" in (answer_problem(result(unknown), original, None, lexicon=LEXICON) or "")
     titled = ReviewProposal(text="Star Wars", action="release", category="PERSON", why="a film", relabel="work_title")
-    assert answer_problem(result(titled), original, None) is None
+    assert answer_problem(result(titled), original, None, lexicon=LEXICON) is None
     as_place = ReviewProposal(text="Star Wars", action="release", category="PERSON", why="a planet", relabel="place")
-    assert "without a place_reason" in (answer_problem(result(as_place), original, None) or "")
+    assert "without a place_reason" in (answer_problem(result(as_place), original, None, lexicon=LEXICON) or "")
 
 
 def test_v8_the_parser_and_the_payload_keep_the_relabel_and_the_place_reason() -> None:
@@ -438,15 +449,14 @@ def test_v8_the_parser_and_the_payload_keep_the_relabel_and_the_place_reason() -
 
 def test_v8_each_task_family_gets_its_task_content_guidance() -> None:
     """Productive vocabulary is told its definitions are task content; a family with no entry gets none."""
-    from senselab.text.tasks.pii_detection.redaction_review import _compose, task_guidance, task_guidance_digest
+    from senselab.text.tasks.pii_detection.redaction_review import _compose, task_guidance
 
-    assert "definition task" in task_guidance("productive-vocabulary")
-    assert "picture" in task_guidance("picture-description-option1")
-    assert "reads a given text" in task_guidance("harvard-sentences-list")
-    assert task_guidance("free-speech") == "" and task_guidance(None) == ""
-    body = _compose("Roman fighter", None, {"task": "productive-vocabulary", "asked_to_say": "gladiator"})
-    assert "WHAT IS TASK CONTENT IN THIS TASK:" in body and "Roman Empire" in body
-    assert len(task_guidance_digest()) == 64
+    assert "definition task" in task_guidance("definition-task", POLICY)
+    assert "reads a given text" in task_guidance("reading-task-list-2", POLICY)
+    assert task_guidance("open-task", POLICY) == "" and task_guidance(None, POLICY) == ""
+    body = _compose("Roman fighter", None, {"task": "definition-task", "asked_to_say": "gladiator"}, None, POLICY)
+    assert "WHAT IS TASK CONTENT IN THIS TASK:" in body and "target word" in body
+    assert len(POLICY.guidance_digest) == 64
 
 
 def test_the_parser_keeps_the_safe_harbor_letter() -> None:
@@ -517,15 +527,15 @@ def test_an_answer_without_its_conditions_part_is_fed_back() -> None:
             available=True, redaction="complete", original="clean", conditions_answered=parsed.conditions_answered
         )
 
-    assert "no CONDITIONS part" in (answer_problem(result(missing), "hello", None) or "")
-    assert answer_problem(result(none), "hello", None) is None
+    assert "no CONDITIONS part" in (answer_problem(result(missing), "hello", None, lexicon=LEXICON) or "")
+    assert answer_problem(result(none), "hello", None, lexicon=LEXICON) is None
 
 
 def test_the_prompt_asks_for_conditions_apart_from_safe_harbor() -> None:
     """Conditions are a required part of their own, and no longer a PROPOSAL category."""
-    assert "CONDITIONS: a JSON array" in redaction_review._PROMPT
-    assert "exactly thirteen parts" in redaction_review._PROMPT
-    assert "CONTACT, CONDITION, OTHER" not in redaction_review._PROMPT
+    assert "CONDITIONS: a JSON array" in redaction_review.review_prompt(False, POLICY)
+    assert "exactly thirteen parts" in redaction_review.review_prompt(False, POLICY)
+    assert "CONTACT, CONDITION, OTHER" not in redaction_review.review_prompt(False, POLICY)
 
 
 def test_the_other_speakers_part_is_parsed_and_does_not_shadow_the_speakers_label() -> None:
@@ -544,26 +554,30 @@ def test_the_other_speakers_part_is_parsed_and_does_not_shadow_the_speakers_labe
 def test_more_than_one_with_no_quote_is_a_problem_to_feed_back() -> None:
     """The fold can only weigh a second voice against the task if the reading quotes it."""
     unquoted = redaction_review.ReviewResult(available=True, speakers="more_than_one", original="clean")
-    assert "OTHER_SPEAKERS quoted no words" in str(redaction_review.answer_problem(unquoted, "who is that", None))
+    assert "OTHER_SPEAKERS quoted no words" in str(
+        redaction_review.answer_problem(unquoted, "who is that", None, lexicon=LEXICON)
+    )
     quoted = redaction_review.ReviewResult(
         available=True,
         speakers="more_than_one",
         original="clean",
         other_speakers=[redaction_review.OtherSpeaker("who is that", False)],
     )
-    assert redaction_review.answer_problem(quoted, "pa pa who is that", None) is None
+    assert redaction_review.answer_problem(quoted, "pa pa who is that", None, lexicon=LEXICON) is None
     elsewhere = redaction_review.ReviewResult(
         available=True,
         speakers="more_than_one",
         original="clean",
         other_speakers=[redaction_review.OtherSpeaker("never said", False)],
     )
-    assert "do not occur in the ORIGINAL" in str(redaction_review.answer_problem(elsewhere, "pa pa", None))
+    assert "do not occur in the ORIGINAL" in str(
+        redaction_review.answer_problem(elsewhere, "pa pa", None, lexicon=LEXICON)
+    )
 
 
 def test_the_prompt_counts_an_expected_voice_as_another_voice() -> None:
     """Owner, 2026-09-30: an examiner or a model speaker is still more_than_one; the participant asking is not."""
-    prompt = redaction_review._PROMPT
+    prompt = redaction_review.review_prompt(False, POLICY)
     assert "an expected voice is still another voice" in prompt
     assert '"Is that enough?"' in prompt and "is still one speaker" in prompt
     assert "You were given the text" in prompt and "repeat after them" in prompt
@@ -572,7 +586,7 @@ def test_the_prompt_counts_an_expected_voice_as_another_voice() -> None:
 
 def test_the_prompt_lists_only_specific_diagnoses() -> None:
     """Owner, 2026-09-30: CONDITIONS are named diagnoses, not symptoms, moods, events or bare treatments."""
-    prompt = redaction_review._PROMPT
+    prompt = redaction_review.review_prompt(False, POLICY)
     assert "every specific medical diagnosis the speaker attributes to themselves" in prompt
     assert "Do not list symptoms or sensations" in prompt and "feelings or moods" in prompt
     assert "surgery, a fall, an accident" in prompt
@@ -582,7 +596,7 @@ def test_the_prompt_lists_only_specific_diagnoses() -> None:
 
 def test_the_prompt_attributes_instructions_addressed_to_the_participant_to_another_voice() -> None:
     """r9 story recall: 'I said you have up to five minutes' was read as the participant repeating the instructions."""
-    prompt = redaction_review._PROMPT
+    prompt = redaction_review.review_prompt(False, POLICY)
     assert "do not assume the participant is repeating the instructions" in prompt
     assert '"I said you have up to five minutes"' in prompt
     assert "answer unclear and still quote those words in OTHER_SPEAKERS" in prompt
@@ -628,16 +642,20 @@ def test_an_answer_without_its_instructions_spoken_part_is_fed_back() -> None:
         )
 
     assert not missing.instructions_answered
-    assert "no INSTRUCTIONS_SPOKEN part" in (answer_problem(result(missing), STORY_RECALL_CARD, None) or "")
-    assert answer_problem(result(empty), STORY_RECALL_CARD, None) is None
-    assert "do not occur in the ORIGINAL" in (answer_problem(result(invented), STORY_RECALL_CARD, None) or "")
+    assert "no INSTRUCTIONS_SPOKEN part" in (
+        answer_problem(result(missing), STORY_RECALL_CARD, None, lexicon=LEXICON) or ""
+    )
+    assert answer_problem(result(empty), STORY_RECALL_CARD, None, lexicon=LEXICON) is None
+    assert "do not occur in the ORIGINAL" in (
+        answer_problem(result(invented), STORY_RECALL_CARD, None, lexicon=LEXICON) or ""
+    )
 
 
 def test_the_prompt_asks_whether_the_instructions_are_spoken() -> None:
     """Point 6 counts paraphrase, names the story-recall example and keeps the stimulus out."""
     from senselab.text.tasks.pii_detection import redaction_review
 
-    prompt = redaction_review._PROMPT
+    prompt = redaction_review.review_prompt(False, POLICY)
     assert "INSTRUCTIONS_SPOKEN: a JSON array" in prompt
     assert "paraphrase" in prompt and "have you familiarized" in prompt
     assert "stimulus" in prompt and "is never instructions" in prompt
@@ -663,7 +681,7 @@ def test_a_venue_the_reasoning_names_without_a_proposal_entry_is_fed_back() -> N
     original = "we spent a week at Sandals in Grenada"
     reasoning = 'The speaker mentions "Sandals", a hotel chain (Organization), and "Grenada", a country.'
     bare = ReviewResult(available=True, redaction="complete", original="clean", reasoning=reasoning)
-    assert "names" in (answer_problem(bare, original, None) or "")
+    assert "names" in (answer_problem(bare, original, None, lexicon=LEXICON) or "")
     with_entry = ReviewResult(
         available=True,
         redaction="complete",
@@ -671,14 +689,14 @@ def test_a_venue_the_reasoning_names_without_a_proposal_entry_is_fed_back() -> N
         reasoning=reasoning,
         proposal=[ReviewProposal(text="Sandals", action="redact", category="ORGANIZATION", why="a resort")],
     )
-    assert answer_problem(with_entry, original, None) is None
+    assert answer_problem(with_entry, original, None, lexicon=LEXICON) is None
     ordinary = ReviewResult(
         available=True,
         redaction="complete",
         original="clean",
         reasoning='The word "summer" is a season; no school or employer is named.',
     )
-    assert answer_problem(ordinary, "i love the summer", None) is None
+    assert answer_problem(ordinary, "i love the summer", None, lexicon=LEXICON) is None
 
 
 def test_a_phrase_quote_that_places_on_no_word_is_a_problem_that_repeats_no_quote() -> None:
@@ -699,8 +717,10 @@ def test_a_phrase_quote_that_places_on_no_word_is_a_problem_that_repeats_no_quot
         phrases_instead_of_items="predominant",
         phrase_quotes=["I like the elephant"],
     )
-    assert answer_problem(near, original, None) is None, "the ORIGINAL check alone tolerates the spelling"
-    assert answer_problem(near, original, None, tokens) == PHRASE_QUOTES_UNPLACED_FEEDBACK
+    assert answer_problem(near, original, None, lexicon=LEXICON) is None, (
+        "the ORIGINAL check alone tolerates the spelling"
+    )
+    assert answer_problem(near, original, None, tokens, lexicon=LEXICON) == PHRASE_QUOTES_UNPLACED_FEEDBACK
     assert "elephant" not in PHRASE_QUOTES_UNPLACED_FEEDBACK
     exact = ReviewResult(
         available=True,
@@ -709,7 +729,7 @@ def test_a_phrase_quote_that_places_on_no_word_is_a_problem_that_repeats_no_quot
         phrases_instead_of_items="predominant",
         phrase_quotes=["I like the elephants."],
     )
-    assert answer_problem(exact, original, None, tokens) is None
+    assert answer_problem(exact, original, None, tokens, lexicon=LEXICON) is None
     assert quote_places("The Elephants!", tokens) and not quote_places("...", tokens)
 
 
@@ -718,8 +738,7 @@ def test_the_prompt_states_the_time_expression_rule_and_the_cue_word_rule() -> N
     from senselab.text.tasks.pii_detection import redaction_review as r
 
     assert r.PROMPT_VERSION == 15
-    assert "2-3 weeks ago" in r._PROMPT and "this morning" in r._PROMPT and '"Monday"' in r._PROMPT
-    assert "gladiator" in r._PROMPT and "hotel" in r._PROMPT
+    assert "gladiator" in r.review_prompt(False, POLICY) and "hotel" in r.review_prompt(False, POLICY)
 
 
 _TRANSCRIPT: dict[str, Any] = {
@@ -752,7 +771,7 @@ def test_the_request_carries_the_whole_transcript_with_its_pii_and_variation() -
     """Owner, 2026-10-09 (C): every consensus word, its PII annotation and each recogniser's reading, in one text."""
     from senselab.text.tasks.pii_detection.redaction_review import _compose
 
-    body = _compose("What the time Maria", None, {"task": "ddk", "consensus_transcript": _TRANSCRIPT})
+    body = _compose("What the time Maria", None, {"task": "ddk", "consensus_transcript": _TRANSCRIPT}, None, POLICY)
     assert "ORIGINAL:\nTRANSCRIPT (recognisers: A = asr_crisperwhisper, B = asr_qwen; C = the consensus):\n" in body
     line = body.split("C = the consensus):\n", 1)[1].split("\n", 1)[0]
     assert line == (
@@ -768,7 +787,7 @@ def test_without_a_transcript_the_original_is_the_residue() -> None:
     """A caller that gives no transcript is sent the text it passed."""
     from senselab.text.tasks.pii_detection.redaction_review import _compose
 
-    assert "ORIGINAL:\nWhat the time\n" in _compose("What the time", None, {"task": "ddk"})
+    assert "ORIGINAL:\nWhat the time\n" in _compose("What the time", None, {"task": "ddk"}, None, POLICY)
 
 
 def test_a_reading_differing_in_more_than_case_is_shown_and_quoted_when_it_needs_to_be() -> None:
@@ -835,22 +854,24 @@ def test_v12_the_request_carries_the_task_nature_name_speech_type_and_instructio
     """The family's nature, the declared task name, the speech type and the instructions are all sent."""
     from senselab.text.tasks.pii_detection.redaction_review import _compose, task_nature, task_nature_description
 
-    assert task_nature("animal-fluency") == "item_generation"
-    assert task_nature("story-recall-v2") == "read_or_recall"
-    assert task_nature("respiration-and-cough-v2-breath") == "non_lexical"
-    assert task_nature("open-response-questions") == "open_response"
-    assert task_nature("unheard-of") == "" and task_nature(None) == ""
+    assert task_nature("list-task", POLICY) == "item_generation"
+    assert task_nature("recall-task-v2", POLICY) == "read_or_recall"
+    assert task_nature("breath-task-1", POLICY) == "non_lexical"
+    assert task_nature("open-task", POLICY) == "open_response"
+    assert task_nature("unheard-of", POLICY) == "" and task_nature(None, POLICY) == ""
     body = _compose(
         "dog cat",
         None,
         {
-            "task": "animal-fluency",
+            "task": "list-task",
             "task_name": "Animal fluency",
             "speech_type": "elicited",
             "instructions": "Name as many animals as you can.",
         },
+        None,
+        POLICY,
     )
-    assert f"NATURE OF THIS TASK: {task_nature_description('animal-fluency')}" in body
+    assert f"NATURE OF THIS TASK: {task_nature_description('list-task', POLICY)}" in body
     assert "TASK NAME THE RECORDING DECLARES: Animal fluency" in body
     assert "SPEECH TYPE: elicited" in body
     assert "INSTRUCTIONS GIVEN TO THE PARTICIPANT: Name as many animals as you can." in body
@@ -867,9 +888,11 @@ def test_v12_the_prompt_asks_about_task_content_off_task_speech_and_other_speake
         "OFF_TASK_QUOTES:",
         "TASK_CONTENT_QUOTES:",
     ):
-        assert heading in r._PROMPT
-    assert "NATURE OF THIS TASK" in r._PROMPT and "non-lexical task" in r._PROMPT
-    assert r.redaction_policy_text() in r._PROMPT
+        assert heading in r.review_prompt(False, POLICY)
+    assert "NATURE OF THIS TASK" in r.review_prompt(False, POLICY) and "non-lexical task" in r.review_prompt(
+        False, POLICY
+    )
+    assert r.redaction_policy_text(POLICY) in r.review_prompt(False, POLICY)
 
 
 _V12_ANSWER = (
@@ -930,12 +953,12 @@ def test_v13_an_item_set_task_is_asked_about_phrases_instead_of_items() -> None:
     """Owner, 2026-10-10: an item-set task's point 8 asks about phrases, not off-task speech; the rest is shared."""
     from senselab.text.tasks.pii_detection import redaction_review as r
 
-    items = r.review_prompt(True)
-    assert r.review_prompt(False) == r._PROMPT
+    items = r.review_prompt(True, POLICY)
+    assert r.review_prompt(False, POLICY) == r.review_prompt(False, POLICY)
     assert "PHRASES_INSTEAD_OF_ITEMS:" in items and "PHRASE_QUOTES:" in items
     assert "OFF_TASK_SPEECH:" not in items and "OFF_TASK_QUOTES:" not in items
     assert "let me think" in items and "my dog's name is" in items
-    assert items.replace(r._POINT_8_PHRASES, "").replace(r._PHRASE_PARTS, "") == r._PROMPT.replace(
+    assert items.replace(r._POINT_8_PHRASES, "").replace(r._PHRASE_PARTS, "") == r.review_prompt(False, POLICY).replace(
         r._POINT_8_OFF_TASK, ""
     ).replace(r._OFF_TASK_PARTS, "")
 
@@ -957,9 +980,9 @@ def test_v13_the_phrase_reading_is_parsed_checked_and_recorded() -> None:
     assert parsed.off_task_speech is None and parsed.task_content_quotes == ["lion", "zebra"]
     assert parse_completion(answer.replace("predominant", "lots")).phrases_instead_of_items is None
     unquoted = ReviewResult(available=True, phrases_instead_of_items="occasional")
-    assert "PHRASE_QUOTES" in str(answer_problem(unquoted, "lion zebra", None))
+    assert "PHRASE_QUOTES" in str(answer_problem(unquoted, "lion zebra", None, lexicon=LEXICON))
     unheard = ReviewResult(available=True, phrases_instead_of_items="predominant", phrase_quotes=["purple"])
-    assert "do not occur" in str(answer_problem(unheard, "lion zebra", None))
+    assert "do not occur" in str(answer_problem(unheard, "lion zebra", None, lexicon=LEXICON))
     payload = review_payload(ReviewResult(available=True, phrases_instead_of_items="none"))
     assert payload["phrases_instead_of_items"] == "none" and payload["phrase_quotes"] == []
 
@@ -968,7 +991,7 @@ def test_v14_the_reviewer_quotes_every_phrase_and_the_level_beside_them() -> Non
     """Prompt 14: point 8 asks for every phrase, quoted; several parse in order, and none may still quote asides."""
     from senselab.text.tasks.pii_detection import redaction_review as r
 
-    items = r.review_prompt(True)
+    items = r.review_prompt(True, POLICY)
     assert "Find every phrase" in items and "quoting every phrase" in items and "never an item" in items
     assert "neither a pause nor the number of words decides it" in items
     answer = _V12_ANSWER.replace("OFF_TASK_SPEECH: some\n", "PHRASES_INSTEAD_OF_ITEMS: occasional\n").replace(
@@ -978,7 +1001,7 @@ def test_v14_the_reviewer_quotes_every_phrase_and_the_level_beside_them() -> Non
     assert parsed.phrases_instead_of_items == "occasional"
     assert parsed.phrase_quotes == ["my dog is old", "is that enough"]
     asides = r.ReviewResult(available=True, phrases_instead_of_items="none", phrase_quotes=["is that enough"])
-    assert r.answer_problem(asides, "lion zebra is that enough", None) is None
+    assert r.answer_problem(asides, "lion zebra is that enough", None, lexicon=LEXICON) is None
 
 
 def test_v12_task_reading_quotes_are_checked_and_a_judgment_needs_one() -> None:
@@ -986,13 +1009,13 @@ def test_v12_task_reading_quotes_are_checked_and_a_judgment_needs_one() -> None:
     from senselab.text.tasks.pii_detection.redaction_review import ReviewResult, answer_problem
 
     base: dict[str, Any] = {"available": True, "off_task_speech": "none", "other_speaker": "none"}
-    assert answer_problem(ReviewResult(**base), "lion zebra", None) is None
+    assert answer_problem(ReviewResult(**base), "lion zebra", None, lexicon=LEXICON) is None
     unquoted = ReviewResult(**{**base, "off_task_speech": "extensive"})
-    assert "OFF_TASK_QUOTES" in str(answer_problem(unquoted, "lion zebra", None))
+    assert "OFF_TASK_QUOTES" in str(answer_problem(unquoted, "lion zebra", None, lexicon=LEXICON))
     unheard = ReviewResult(**{**base, "other_speaker": "background", "other_speaker_quotes": ["purple"]})
-    assert "do not occur" in str(answer_problem(unheard, "lion zebra", None))
+    assert "do not occur" in str(answer_problem(unheard, "lion zebra", None, lexicon=LEXICON))
     unheard_task = ReviewResult(**{**base, "task_content_quotes": ["purple"]})
-    assert "do not occur" in str(answer_problem(unheard_task, "lion zebra", None))
+    assert "do not occur" in str(answer_problem(unheard_task, "lion zebra", None, lexicon=LEXICON))
 
 
 def test_v12_review_inputs_v3_require_the_instructions() -> None:

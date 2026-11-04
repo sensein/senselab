@@ -172,16 +172,16 @@ class TestStoreWrites:
         assert entity_id == stream.id
         assert audio.waveform.shape[-1] == 16000
 
-    def test_pass_records_the_stem_identity_when_no_hint_declares_one(
+    def test_pass_records_no_identity_off_the_file_name_when_no_hint_declares_one(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
     ) -> None:
-        """Without a hint the recorded identity is the stem's own reading."""
+        """Without a hint nothing is declared, whatever the file is called (plan step 6a)."""
         path = wav_writer("sub-01_ses-02_task-loudness-1.wav", _sine())
         admit(store, path, config, run_dir=tmp_path)
         [stream] = store.entities("stream")
-        assert stream.attributes[DECLARED_TASK_ID] == "loudness-1"
-        assert stream.attributes[DECLARED_SESSION] == "ses-02"
-        assert set(stream.attributes[DECLARED_FROM].values()) == {"stem"}
+        assert stream.attributes[DECLARED_TASK_ID] == "unknown"
+        assert stream.attributes[DECLARED_SESSION] is None
+        assert stream.attributes[DECLARED_FROM] == {}
 
     def test_pass_records_what_the_hint_declares(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]

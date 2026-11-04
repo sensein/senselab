@@ -1,0 +1,7 @@
+# What counts as each task's own content, as the reviewer is told it, and what kind of task each is. `families`: for
+# each entry, the task names it applies to (a name matches a task equal to it or starting with it and a hyphen) and
+# one guidance sentence, e.g. "The target word and everything that explains its meaning are task content". `natures`:
+# each task's kind, one of open_response, item_generation, read_or_recall, non_lexical, with a description of it the
+# reviewer reads. An empty list gives no guidance; every reading's cache identity carries this file's digest.
+families: []
+natures: []

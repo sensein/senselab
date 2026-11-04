@@ -15,8 +15,9 @@ import json
 import sys
 from pathlib import Path
 
+from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.extend import REPLAY_MARKER_STEP, REPLAY_NODE, live_decisions, retire_decisions
-from senselab.audio.workflows.triage.identity import identity_columns, identity_from_stem
+from senselab.audio.workflows.triage.identity import identity_columns
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
 from senselab.audio.workflows.triage.replay_diff import NO_STORE, OK
 from senselab.audio.workflows.triage.run import entity_subdir
@@ -67,7 +68,7 @@ def _corpus_run(root: Path, stem: str) -> Path:
     Returns:
         The run root.
     """
-    run_root = root / entity_subdir(identity_from_stem(stem)) / f"{stem}_{TIMESTAMP}"
+    run_root = root / entity_subdir(identity_from_name(stem)) / f"{stem}_{TIMESTAMP}"
     (run_root / "run" / "streams").mkdir(parents=True)
     (run_root / "run" / "streams" / "enhanced.flac").write_bytes(b"")
     store = ProvStore(run_id=run_root.name)
@@ -92,7 +93,7 @@ def _replay_into(corpus_run: Path, out_root: Path, stem: str, triage: Triage) ->
     Returns:
         The replayed run root.
     """
-    target = out_root / entity_subdir(identity_from_stem(stem)) / corpus_run.name
+    target = out_root / entity_subdir(identity_from_name(stem)) / corpus_run.name
     (target / "run").mkdir(parents=True)
     store = ProvStore.read_jsonl(corpus_run / "run" / "store.jsonl", run_id=f"{corpus_run.name}+replay-cafe")
     agent = software_agent(store)
@@ -124,7 +125,7 @@ def _manifest(path: Path, runs: dict[str, Path]) -> Path:
                 {
                     "stem": stem,
                     "enhanced": str(run / "run" / "streams" / "enhanced.flac"),
-                    **identity_columns(identity_from_stem(stem)),
+                    **identity_columns(identity_from_name(stem)),
                 }
             )
             + "\n"

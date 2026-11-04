@@ -9,6 +9,7 @@ from typing import Any
 import pyarrow.parquet as pq
 
 from senselab.audio.workflows.triage import decision_tables
+from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.identity import RecordingIdentity, identity_of
 from senselab.audio.workflows.triage.vocabulary import (
     ROUTED,
@@ -21,7 +22,7 @@ from senselab.audio.workflows.triage.vocabulary import (
 )
 
 STEM = "sub-SUBJ13_ses-01_task-respiration-and-cough-breath"
-RECORDED = identity_of(STEM)
+RECORDED = identity_from_name(STEM)
 """What ADMIT records for the stem when no hint declares an identity."""
 
 

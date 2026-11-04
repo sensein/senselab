@@ -11,8 +11,9 @@ from types import ModuleType
 import numpy as np
 import soundfile as sf
 
+from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.extend import read_store, write_store
-from senselab.audio.workflows.triage.identity import identity_columns, identity_from_stem
+from senselab.audio.workflows.triage.identity import identity_columns
 from senselab.audio.workflows.triage.nodes.background import (
     FLOOR_FROM_SESSION,
     OWN_FLOOR,
@@ -57,7 +58,7 @@ def _run(root: Path, stem: str, samples: np.ndarray) -> dict[str, str]:
     sf.write(streams / "plain.wav", samples, RATE, subtype="FLOAT")
     sf.write(streams / "enhanced.flac", samples, RATE)
     store = ProvStore(run_id=stem)
-    identity = identity_from_stem(stem)
+    identity = identity_from_name(stem)
     store.entity(
         prov_type="stream",
         extent=None,
@@ -102,7 +103,7 @@ def _speech_run(root: Path, stem: str, seed: int, *, task: str) -> dict[str, str
     for name, samples in (("plain", speech + room), ("enhanced", speech), ("residual", room)):
         sf.write(streams / f"{name}.wav", samples, RATE, subtype="FLOAT")
         store.entity(prov_type="stream", extent=None, attributes={"name": name, "path": f"streams/{name}.wav"})
-    identity = identity_from_stem(stem)
+    identity = identity_from_name(stem)
     store.entity(
         prov_type="stream",
         extent=None,

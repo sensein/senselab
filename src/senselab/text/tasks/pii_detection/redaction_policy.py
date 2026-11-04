@@ -1,8 +1,10 @@
 """Redaction policy v7: which transcript words are masked or released by kind, read off the words alone.
 
-The policy's lexicons are packaged in ``data/redaction_policy.yaml``. Every function here takes one
-recording's words as the recognizer wrote them, in order, and returns positions into that list, so
-the triage fold and the reviewer's own answer check read the same rule. The rules and their
+The word lists (months, holidays, number and kinship words, countries, states) are the caller's: a lexicon file
+read with :func:`load_lexicon` (triage takes it from the dataset profile; senselab's reference profile
+``adult_clinical_speech`` carries one, plan step 6b). Every function here takes one recording's words as the
+recognizer wrote them, in order, and the lexicon, and returns positions into that list, so the triage fold and the
+reviewer's own answer check read the same rule. The rules and their
 derivation are in ``specs/20261003-redaction-policy-v7/design.md``.
 """
 
@@ -12,12 +14,12 @@ import re
 import unicodedata
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import yaml
 
-POLICY_PATH = Path(__file__).parent / "data" / "redaction_policy.yaml"
-"""The packaged lexicons of the redaction policy."""
+Lexicon = Mapping[str, Any]
+"""A lexicon as :func:`load_lexicon` returns it: token lists as sets, phrases as token tuples, ``version``."""
 
 _EDGE = "\"'`.,;:!?()[]{}<>‘’“”…¿¡"
 _SENTENCE_END = (".", "?", "!", "…")
@@ -29,14 +31,21 @@ _AGE_DIGITS = re.compile(r"^\d{1,3}$")
 _HYPHEN_AGE = re.compile(r"^(\d{1,3}|[a-z]+(-[a-z]+)?)-years?-olds?$")
 
 
-@lru_cache(maxsize=1)
-def policy() -> dict[str, Any]:
-    """The packaged policy, its token lists as sets and its phrases as token tuples.
+def load_lexicon(path: str | Path) -> Lexicon:
+    """A lexicon file, its token lists as sets and its phrases as token tuples.
+
+    Args:
+        path: The YAML file (``redaction_policy.yaml``).
 
     Returns:
         ``{key: frozenset | tuple of tuples | value}``.
     """
-    raw = dict(yaml.safe_load(POLICY_PATH.read_text()) or {})
+    return _load_lexicon(str(Path(path).resolve()))
+
+
+@lru_cache(maxsize=8)
+def _load_lexicon(path: str) -> Lexicon:
+    raw = dict(yaml.safe_load(Path(path).read_text()) or {})
     table: dict[str, Any] = {}
     for key, value in raw.items():
         if key.endswith("_phrases") or key == "year_thousand_heads":
@@ -50,13 +59,16 @@ def policy() -> dict[str, Any]:
     return table
 
 
-def version() -> int:
-    """The packaged policy's ``version``, recorded on every redaction ledger.
+def version(lexicon: Lexicon) -> int:
+    """The lexicon's ``version``, recorded on every redaction ledger.
+
+    Args:
+        lexicon: :func:`load_lexicon`'s table.
 
     Returns:
         The version number.
     """
-    return int(policy()["version"])
+    return int(lexicon["version"])
 
 
 def fold(text: str) -> str:
@@ -98,42 +110,45 @@ def _phrase_runs(keys: Sequence[str], phrases: Sequence[tuple[str, ...]]) -> lis
     return sorted(runs)
 
 
-def is_number(key: str) -> bool:
+def is_number(key: str, *, lexicon: Lexicon) -> bool:
     """Whether a folded token is a number: digits, a number word, or a hyphenated pair of them.
 
     Args:
         key: A folded token (:func:`fold`).
+        lexicon: The word lists (:func:`load_lexicon`).
 
     Returns:
         True for ``73``, ``seventy``, ``seventy-three``, ``treinta``.
     """
-    words = policy()["number_words"] - {"y"}
+    words = lexicon["number_words"] - {"y"}
     if key.isdigit():
         return True
     parts = key.split("-")
     return bool(parts) and all(part in words for part in parts)
 
 
-def _number_run(keys: Sequence[str], start: int) -> int:
+def _number_run(keys: Sequence[str], start: int, lexicon: Lexicon) -> int:
     """The end of the run of number tokens beginning at ``start`` ("seventy three", "treinta y cinco")."""
     end = start
     while end < len(keys) and (
-        is_number(keys[end]) or (keys[end] == "y" and end > start and end + 1 < len(keys) and is_number(keys[end + 1]))
+        is_number(keys[end], lexicon=lexicon)
+        or (keys[end] == "y" and end > start and end + 1 < len(keys) and is_number(keys[end + 1], lexicon=lexicon))
     ):
         end += 1
     return end
 
 
-def year_positions(texts: Sequence[str]) -> set[int]:
+def year_positions(texts: Sequence[str], *, lexicon: Lexicon) -> set[int]:
     """Positions that write a year: four digits, an apostrophe and two digits, or a spelled year.
 
     Args:
         texts: The words, in order.
+        lexicon: The word lists (:func:`load_lexicon`).
 
     Returns:
         The positions.
     """
-    table = policy()
+    table = lexicon
     keys = [fold(text) for text in texts]
     raws = [str(text).strip().rstrip(".,;:!?…") for text in texts]
     found: set[int] = set()
@@ -144,32 +159,33 @@ def year_positions(texts: Sequence[str]) -> set[int]:
         nxt = keys[position + 1] if position + 1 < len(keys) else ""
         head = nxt.split("-")[0]
         if key in table["year_centuries"] and (head in table["number_words"] and head != "y" or nxt == "hundred"):
-            found.update(range(position, _number_run(keys, position + 1)))
+            found.update(range(position, _number_run(keys, position + 1, lexicon)))
             found.add(position)
         elif key == "twenty" and (nxt in table["year_twenty_followers"] or nxt.startswith("twenty-")):
-            found.update(range(position, _number_run(keys, position + 1)))
+            found.update(range(position, _number_run(keys, position + 1, lexicon)))
             found.add(position)
     for start, end in _phrase_runs(keys, table["year_thousand_heads"]):
         rest = end + 1 if end < len(keys) and keys[end] in ("and", "y") else end
-        tail = _number_run(keys, rest)
+        tail = _number_run(keys, rest, lexicon)
         before = keys[start - 1] if start else ""
         if tail > rest or before in table["year_lead"]:
             found.update(range(start, max(end, tail)))
     return found
 
 
-def month_positions(texts: Sequence[str]) -> set[int]:
+def month_positions(texts: Sequence[str], *, lexicon: Lexicon) -> set[int]:
     """Positions that name a month, and a day number or ordinal written beside one.
 
     An English month counts written with a capital, a Spanish one in any case.
 
     Args:
         texts: The words, in order.
+        lexicon: The word lists (:func:`load_lexicon`).
 
     Returns:
         The positions.
     """
-    table = policy()
+    table = lexicon
     keys = [fold(text) for text in texts]
     months = {
         position
@@ -189,16 +205,17 @@ def month_positions(texts: Sequence[str]) -> set[int]:
     return found
 
 
-def season_positions(texts: Sequence[str]) -> set[int]:
+def season_positions(texts: Sequence[str], *, lexicon: Lexicon) -> set[int]:
     """Positions that name a season.
 
     Args:
         texts: The words, in order.
+        lexicon: The word lists (:func:`load_lexicon`).
 
     Returns:
         The positions. "spring" and "fall" count only beside a season context word.
     """
-    table = policy()
+    table = lexicon
     keys = [fold(text) for text in texts]
     found: set[int] = set()
     for position, key in enumerate(keys):
@@ -212,16 +229,17 @@ def season_positions(texts: Sequence[str]) -> set[int]:
     return found
 
 
-def holiday_positions(texts: Sequence[str]) -> set[int]:
+def holiday_positions(texts: Sequence[str], *, lexicon: Lexicon) -> set[int]:
     """Positions that name a holiday, one word or a phrase of several.
 
     Args:
         texts: The words, in order.
+        lexicon: The word lists (:func:`load_lexicon`).
 
     Returns:
         The positions.
     """
-    table = policy()
+    table = lexicon
     keys = [fold(text) for text in texts]
     found = {position for position, key in enumerate(keys) if key in table["holidays"]}
     for start, end in _phrase_runs(keys, table["holiday_phrases"]):
@@ -229,7 +247,7 @@ def holiday_positions(texts: Sequence[str]) -> set[int]:
     return found
 
 
-def age_positions(texts: Sequence[str]) -> set[int]:
+def age_positions(texts: Sequence[str], *, lexicon: Lexicon) -> set[int]:
     """Positions that state an age.
 
     A number followed by a year unit and "old" ("seventy-three years old"), a hyphenated age
@@ -239,11 +257,12 @@ def age_positions(texts: Sequence[str]) -> set[int]:
 
     Args:
         texts: The words, in order.
+        lexicon: The word lists (:func:`load_lexicon`).
 
     Returns:
         The positions: the number, its unit and "old" where written; never the cue word itself.
     """
-    table = policy()
+    table = lexicon
     keys = [fold(text) for text in texts]
     raws = [str(text) for text in texts]
     found: set[int] = set()
@@ -251,9 +270,9 @@ def age_positions(texts: Sequence[str]) -> set[int]:
         if _HYPHEN_AGE.match(key):
             found.add(position)
             continue
-        if is_number(key) and (not key.isdigit() or _AGE_DIGITS.match(key)):
-            end = _number_run(keys, position)
-            if position and is_number(keys[position - 1]):
+        if is_number(key, lexicon=lexicon) and (not key.isdigit() or _AGE_DIGITS.match(key)):
+            end = _number_run(keys, position, lexicon)
+            if position and is_number(keys[position - 1], lexicon=lexicon):
                 continue
             unit = keys[end] if end < len(keys) else ""
             after = keys[end + 1] if end + 1 < len(keys) else ""
@@ -289,34 +308,45 @@ def age_positions(texts: Sequence[str]) -> set[int]:
                 found.add(position - 1)
         if key in table["birthday"] and position:
             previous = keys[position - 1]
-            if _ORDINAL_DIGITS.match(previous) or previous in table["ordinal_words"] or is_number(previous):
+            if (
+                _ORDINAL_DIGITS.match(previous)
+                or previous in table["ordinal_words"]
+                or is_number(previous, lexicon=lexicon)
+            ):
                 found |= {position - 1, position}
     return {position for position in found if position < len(keys)}
 
 
-def date_positions(texts: Sequence[str]) -> set[int]:
+def date_positions(texts: Sequence[str], *, lexicon: Lexicon) -> set[int]:
     """Every position the policy always masks as a date element or an age.
 
     Args:
         texts: The words, in order.
+        lexicon: The word lists (:func:`load_lexicon`).
 
     Returns:
         :func:`year_positions`, :func:`month_positions`, :func:`holiday_positions` and
         :func:`age_positions`, together. A season is not among them: it is released by kind.
     """
-    return year_positions(texts) | month_positions(texts) | holiday_positions(texts) | age_positions(texts)
+    return (
+        year_positions(texts, lexicon=lexicon)
+        | month_positions(texts, lexicon=lexicon)
+        | holiday_positions(texts, lexicon=lexicon)
+        | age_positions(texts, lexicon=lexicon)
+    )
 
 
-def state_positions(texts: Sequence[str]) -> set[int]:
+def state_positions(texts: Sequence[str], *, lexicon: Lexicon) -> set[int]:
     """Positions that name a state, a province or their equivalent, written as a proper noun.
 
     Args:
         texts: The words, in order.
+        lexicon: The word lists (:func:`load_lexicon`).
 
     Returns:
         The positions.
     """
-    table = policy()
+    table = lexicon
     keys = [fold(text) for text in texts]
     found: set[int] = set()
     for start, end in _phrase_runs(keys, table["state_phrases"]):
@@ -330,31 +360,33 @@ def state_positions(texts: Sequence[str]) -> set[int]:
     return found
 
 
-def is_state_word(text: str) -> bool:
+def is_state_word(text: str, *, lexicon: Lexicon) -> bool:
     """Whether one word, in any case, is a one-word state or province name.
 
     Args:
         text: A word's surface.
+        lexicon: The word lists (:func:`load_lexicon`).
 
     Returns:
         True for ``wisconsin`` or ``Florida``.
     """
     key = fold(text)
-    return bool(key) and key in policy()["states"]
+    return bool(key) and key in lexicon["states"]
 
 
-def country_runs(texts: Sequence[str]) -> list[tuple[int, int]]:
+def country_runs(texts: Sequence[str], *, lexicon: Lexicon) -> list[tuple[int, int]]:
     """Every run of words that names a country, written as a proper noun, and not part of a state's name.
 
     Args:
         texts: The words, in order.
+        lexicon: The word lists (:func:`load_lexicon`).
 
     Returns:
         ``(start, end)`` runs, in order.
     """
-    table = policy()
+    table = lexicon
     keys = [fold(text) for text in texts]
-    states = state_positions(texts)
+    states = state_positions(texts, lexicon=lexicon)
     runs = [
         (start, end)
         for start, end in _phrase_runs(keys, table["country_phrases"])
@@ -369,16 +401,17 @@ def country_runs(texts: Sequence[str]) -> list[tuple[int, int]]:
     return sorted(runs)
 
 
-def kinship_positions(texts: Sequence[str]) -> set[int]:
+def kinship_positions(texts: Sequence[str], *, lexicon: Lexicon) -> set[int]:
     """Positions that are a relationship word ("mom", "my brother", "abuela").
 
     Args:
         texts: The words, in order.
+        lexicon: The word lists (:func:`load_lexicon`).
 
     Returns:
         The positions; a hyphenated in-law ("mother-in-law") is one word.
     """
-    table = policy()
+    table = lexicon
     return {position for position, text in enumerate(texts) if fold(text).replace("-", "") in table["kinship"]}
 
 

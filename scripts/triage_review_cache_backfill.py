@@ -23,7 +23,7 @@ from collections import Counter
 from pathlib import Path
 
 from senselab.audio.workflows.triage.config import load_triage_config
-from senselab.audio.workflows.triage.extend import read_store
+from senselab.audio.workflows.triage.extend import read_store, require_recorded_identity
 from senselab.audio.workflows.triage.nodes.review import BACKFILL_SKIPPED, backfill_from_store
 
 
@@ -52,7 +52,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         for root in roots:
             try:
-                state, why = backfill_from_store(read_store(root), config)
+                store = read_store(root)
+                require_recorded_identity(store, root)
+                state, why = backfill_from_store(store, config)
             except Exception as exc:  # noqa: BLE001 — one unreadable store is a row, not the end of the pass
                 state, why, failed = "error", f"{type(exc).__name__}: {exc}", failed + 1
             states[state if state != BACKFILL_SKIPPED else f"{state}: {why.split(' is not ')[0]}"] += 1

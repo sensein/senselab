@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
+from senselab.audio.workflows.triage.b2ai_hints import task_id_of
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.consensus import vocabulary_key
 from senselab.audio.workflows.triage.dataset_profile import data_path
@@ -37,7 +38,7 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
     evidence_blocks,
     load_detector_profile,
 )
-from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
+from senselab.audio.workflows.triage.routing_analysis.families import task_family
 from senselab.audio.workflows.triage.routing_analysis.features import (
     PHONATION_ENTITY_KEYS,
     PHONATION_SUMMARY_KEYS,

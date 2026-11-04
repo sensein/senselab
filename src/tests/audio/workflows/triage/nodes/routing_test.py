@@ -15,6 +15,7 @@ from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.vocabulary import BRANCH_ROUTE_STATES, BRANCHES, RULESET_ROUTING, Outcome
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
 
 
 def _config(tmp_path: Path, entries: str) -> TriageConfig:
@@ -338,7 +339,11 @@ class TestTheDeclaredTaskIsReadOffTheStem:
         store.entity(
             prov_type="stream",
             extent=(0.0, 1.0),
-            attributes={"name": "recording", "path": "sub-01_ses-1_task-prolonged-vowel-1.wav"},
+            attributes={
+                "name": "recording",
+                "path": "sub-01_ses-1_task-prolonged-vowel-1.wav",
+                **b2ai_identity_attributes("sub-01_ses-1_task-prolonged-vowel-1.wav"),
+            },
         )
         result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
         assert "VOICE" in result.declared

@@ -20,7 +20,6 @@ from senselab.audio.workflows.triage.identity import identity_of
 from senselab.audio.workflows.triage.live_evidence import (
     EVIDENCE_PREFIX,
     UNDECLARED,
-    declared_task,
     declared_task_of,
     evaluate_live_routes,
     read_live_features,
@@ -43,6 +42,7 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     load_ruleset,
 )
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
 from tests.conftest import B2AI_TRIAGE_PROFILE
 
 STEM = "sub-01_ses-01_task-free-speech"
@@ -104,7 +104,7 @@ def _base_store(run_dir: Path) -> ProvStore:
     store.entity(
         prov_type="stream",
         extent=(0.0, 4.0),
-        attributes={"name": "recording", "path": str(run_dir.parent / f"{STEM}.wav")},
+        attributes={"name": "recording", "path": str(run_dir.parent / f"{STEM}.wav"), **b2ai_identity_attributes(STEM)},
     )
     for index, (text, outcome, bracketed) in enumerate(
         [
@@ -246,7 +246,7 @@ def _from_disk(store: ProvStore, config: TriageConfig, run_dir: Path) -> RouteEv
     path = run_dir / "store.jsonl"
     store.write_jsonl(path)
     stem = recording_stem(store)
-    task_id, family = declared_task(stem)
+    task_id, family = declared_task_of(store)
     features = extract_features(
         path,
         stem=stem,
@@ -338,8 +338,8 @@ class TestWhatTheReaderReads:
         assert features.bracketed_types == {"breath": 1}
         assert features.words["lexical"] == 3
 
-    def test_the_evaluation_carries_the_stems_own_declaration(self, config: TriageConfig, tmp_path: Path) -> None:
-        """The ``task-`` id on ADMIT's path is the declaration, resolved through the ruleset's family sets."""
+    def test_the_evaluation_carries_the_recorded_declaration(self, config: TriageConfig, tmp_path: Path) -> None:
+        """The task ADMIT recorded is the declaration, resolved through the ruleset's family sets."""
         run_dir = _run_dir(tmp_path)
         evaluation = evaluate_live_routes(_base_store(run_dir), config, run_dir=run_dir)
         assert evaluation.family == "free-speech"
@@ -357,17 +357,24 @@ class TestWhatTheReaderReads:
         assert evaluation.family == UNDECLARED
         assert evaluation.declared == ()
 
-    def test_the_declaration_is_read_off_the_stem_and_nothing_else(self) -> None:
-        """One definition, so ROUTING and VERDICT cannot disagree about whether there is a declaration."""
-        assert declared_task("sub-01_ses-01_task-prolonged-vowel-2") == ("prolonged-vowel-2", "prolonged-vowel")
-        assert declared_task("plain-run-id") == (UNDECLARED, UNDECLARED)
-        assert declared_task("") == (UNDECLARED, UNDECLARED)
+    def test_nothing_is_read_off_the_file_name(self) -> None:
+        """A BIDS-like path with no recorded identity declares nothing (plan step 6a): a replay records one."""
+        store = ProvStore(run_id="old")
+        store.entity(
+            prov_type="stream",
+            extent=(0.0, 1.0),
+            attributes={
+                "name": "recording",
+                "path": "/data/sub-01_ses-01_task-prolonged-vowel-2.wav",
+            },
+        )
+        assert declared_task_of(store) == (UNDECLARED, UNDECLARED)
 
     def test_a_hint_declaration_recorded_by_admit_is_read_before_the_stem(self) -> None:
-        """A reader holding only the store sees the task a hint declared; otherwise it reads the stem."""
+        """A reader holding only the store sees the task a hint declared; otherwise there is none."""
         hinted, unhinted = ProvStore(run_id="hinted"), ProvStore(run_id="unhinted")
         path = "/data/recording-0042.wav"
-        declared = identity_of("recording-0042", AudioHints(metadata={"task_token": "prolonged-vowel-2"}))
+        declared = identity_of(AudioHints(metadata={"task_token": "prolonged-vowel-2"}))
         hinted.entity(
             prov_type="stream",
             extent=(0.0, 1.0),
@@ -376,15 +383,21 @@ class TestWhatTheReaderReads:
         unhinted.entity(prov_type="stream", extent=(0.0, 1.0), attributes={"name": "recording", "path": path})
         assert declared_task_of(hinted) == ("prolonged-vowel-2", "prolonged-vowel")
         assert declared_task_of(unhinted) == (UNDECLARED, UNDECLARED)
-        assert declared_task_of(ProvStore(run_id="none"), "sub-01_task-loudness") == ("loudness", "loudness")
 
     def test_a_task_literally_named_unknown_declares_nothing(self) -> None:
-        """``task_id_of``'s sentinel collides with a literal ``task-unknown``; undeclared is the safe read.
+        """The undeclared sentinel collides with a declared ``unknown``; undeclared is the safe read.
 
-        No family set names ``unknown``, so such a stem could add no route either way, and reading it
+        No family set names ``unknown``, so such a declaration could add no route either way, and reading it
         as no declaration keeps the file routed by content alone rather than by a sentinel.
         """
-        assert declared_task("sub-01_ses-01_task-unknown") == (UNDECLARED, UNDECLARED)
+        store = ProvStore(run_id="literal")
+        declared = identity_of(AudioHints(metadata={"task_token": "unknown"}))
+        store.entity(
+            prov_type="stream",
+            extent=(0.0, 1.0),
+            attributes={"name": "recording", "path": "/data/r.wav", **declared.as_attributes()},
+        )
+        assert declared_task_of(store) == (UNDECLARED, UNDECLARED)
 
     def test_the_serialisation_is_removed(self, config: TriageConfig, tmp_path: Path) -> None:
         """The reduction writes into the run directory and leaves nothing behind."""

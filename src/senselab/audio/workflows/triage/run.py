@@ -541,7 +541,7 @@ def run_triage(
     require_dataset_values(config.values)
     source = Path(source)
     resolve_task(hint)
-    layout = prepare_run_layout(Path(out_dir), source.stem, identity_of(source.stem, hint))
+    layout = prepare_run_layout(Path(out_dir), source.stem, identity_of(hint))
     store = ProvStore(run_id=layout.root.name)
     outcomes: dict[str, NodeOutcome] = {}
 

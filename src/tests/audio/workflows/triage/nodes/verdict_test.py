@@ -48,6 +48,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     Triage,
 )
 from senselab.utils.prov_store import Entity, ProvStore
+from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 
@@ -143,7 +144,9 @@ def make_verdict_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Calla
         agent = software_agent(store)
         if recording_path is not None:
             store.entity(
-                prov_type="stream", extent=(0.0, 1.0), attributes={"name": "recording", "path": recording_path}
+                prov_type="stream",
+                extent=(0.0, 1.0),
+                attributes={"name": "recording", "path": recording_path, **b2ai_identity_attributes(recording_path)},
             )
         if route:
             reading = _evaluation(tuple(routed), route_state, unavailable or {}, tuple(declared), family)
@@ -1611,7 +1614,11 @@ class TestTheGatesDecideTheDeclaredTask:
         store.entity(
             prov_type="stream",
             extent=(0.0, 12.0),
-            attributes={"name": "recording", "path": f"sub-a_ses-1_task-{family}.wav"},
+            attributes={
+                "name": "recording",
+                "path": f"sub-a_ses-1_task-{family}.wav",
+                **b2ai_identity_attributes(f"sub-a_ses-1_task-{family}.wav"),
+            },
         )
         activity = store.activity(node=branch, step="seed", parameters={})
         store.was_associated_with(activity, agent)
@@ -1962,7 +1969,11 @@ class TestAnotherSpeakerInsideTheTaskExtentIsAFlag:
         store.entity(
             prov_type="stream",
             extent=(0.0, 12.0),
-            attributes={"name": "recording", "path": f"sub-a_ses-1_task-{family}.wav"},
+            attributes={
+                "name": "recording",
+                "path": f"sub-a_ses-1_task-{family}.wav",
+                **b2ai_identity_attributes(f"sub-a_ses-1_task-{family}.wav"),
+            },
         )
         activity = store.activity(node="SPEECH", step="seed", parameters={})
         store.was_associated_with(activity, agent)

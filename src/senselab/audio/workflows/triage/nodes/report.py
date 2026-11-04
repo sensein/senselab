@@ -27,6 +27,7 @@ from senselab.audio.tasks.plotting.plotting import (
     plot_aligned_panels,
 )
 from senselab.audio.workflows.triage.config import MIN_AST_HOP_S, TriageConfig
+from senselab.audio.workflows.triage.identity import declared_task_id
 from senselab.audio.workflows.triage.nodes.common import (
     BRANCH_MEASURES,
     consensus_words,
@@ -49,6 +50,7 @@ from senselab.audio.workflows.triage.nodes.figure import (
     summary_pages,
     wrap_measured,
 )
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
     GRAPH_ORDER,
@@ -85,7 +87,6 @@ _EVIDENCE_ASSERTION_VERBS = frozenset({"deviate", "contest"})
 """The assertion verbs :func:`_branch_evidence` renders: the typed findings ``write_findings`` writes."""
 _WORDS_LANE_LABEL = "consensus ASR"
 _TITLE_SEPARATOR = " · "
-_TASK_PREFIX = "task-"
 _RUN_STAMP = re.compile(r"^(\d{4})(\d{2})(\d{2})-\d{6}(?:-\d+)?$")
 _SPAN_FLAG_REASON = re.compile(r"^(?P<label>.+?) in range for span at [0-9.]+s$")
 _TIMELINE_PAGE_SECONDS = 10.0
@@ -1156,21 +1157,28 @@ def _ruleset_reading(store: ProvStore) -> dict[str, Any]:
     }
 
 
-def _task_context(run_id: str, verdict: dict[str, Any]) -> dict[str, Any]:
+def _recorded_task(store: ProvStore) -> str | None:
+    """The task id ADMIT recorded, or None where it records none (nothing is read off the file name, step 6a)."""
+    task = declared_task_id(store)
+    return None if task == UNKNOWN_TASK else task
+
+
+def _task_context(store: ProvStore, verdict: dict[str, Any]) -> dict[str, Any]:
     """The recording/task context the report puts ahead of the evidence lanes.
 
-    ``run_id`` is the only universally available task source; hints stay separate from it.
-
     Args:
-        run_id: The provenance store's run id.
+        store: The provenance store, read for the task ADMIT recorded and the run id.
         verdict: The file-level verdict, read for declared hints.
 
     Returns:
         A stable recording context mapping for the PDF and JSON.
     """
-    tokens = run_id.split("_")
-    task = next((token for token in tokens if token.startswith(_TASK_PREFIX)), None)
-    return {"task_type": task, "declared_hints": dict(verdict.get("hints") or {}), "run_label": _run_label(run_id)}
+    task = _recorded_task(store)
+    return {
+        "task_type": task,
+        "declared_hints": dict(verdict.get("hints") or {}),
+        "run_label": _run_label(store.run_id, task),
+    }
 
 
 def _timing(entity: Entity) -> dict[str, float] | None:
@@ -1356,7 +1364,7 @@ def _report_document(
 
     document: dict[str, Any] = {
         "schema_version": REPORT_SCHEMA_VERSION,
-        "recording": {**_file(store), **_task_context(store.run_id, verdict)},
+        "recording": {**_file(store), **_task_context(store, verdict)},
         "decisions": {
             "file_triage": verdict.get("triage"),
             "release": verdict.get("release"),
@@ -1434,41 +1442,41 @@ def _provenance_line(provenance: dict[str, Any]) -> str:
     )
 
 
-def _run_label(run_id: str) -> str:
-    """The run's short label: the task token it names and the date it was made on.
+def _run_label(run_id: str, task: str | None) -> str:
+    """The run's short label: the task it recorded and the date it was made on.
 
-    The runner mints a run id as ``<file stem>_<utc stamp>``. Neither the ``task-`` entity nor the
-    stamp is guaranteed, so each part is taken when it is there.
+    The runner mints a run id as ``<file stem>_<utc stamp>``; the date is read off that stamp, senselab's own.
 
     Args:
         run_id: The store's run id.
+        task: The task id ADMIT recorded, or None.
 
     Returns:
-        ``"<task token> · <YYYY-MM-DD>"``, falling back to the stem when no ``task-`` entity is in it
-        and to the whole run id when no stamp is either.
+        ``"<task> · <YYYY-MM-DD>"``, falling back to the run id without its stamp where no task is recorded, and
+        to the whole run id where it carries no stamp either.
     """
     tokens = run_id.split("_")
     stamped = _RUN_STAMP.match(tokens[-1]) if tokens else None
     stem = tokens[:-1] if stamped is not None else tokens
-    task = next((token for token in stem if token.startswith(_TASK_PREFIX)), None)
     parts = [task or "_".join(stem) or run_id]
     if stamped is not None:
         parts.append("-".join(stamped.group(1, 2, 3)))
     return _TITLE_SEPARATOR.join(parts)
 
 
-def _title(run_id: str, verdict: dict[str, Any]) -> str:
+def _title(run_id: str, task: str | None, verdict: dict[str, Any]) -> str:
     """The page's title: what was recorded, when, and what the graph decided about it.
 
     Args:
-        run_id: The store's run id, read for its task token and its date.
+        run_id: The store's run id, read for its date.
+        task: The task id ADMIT recorded, or None.
         verdict: :func:`_verdict`'s mapping.
 
     Returns:
         The title, wrapped over as many lines as it needs.
     """
     line = _TITLE_SEPARATOR.join(
-        (_run_label(run_id), f"triage: {_shown(verdict['triage'])}", f"release: {_shown(verdict['release'])}")
+        (_run_label(run_id, task), f"triage: {_shown(verdict['triage'])}", f"release: {_shown(verdict['release'])}")
     )
     return "\n".join(textwrap.wrap(line, width=_TITLE_COLUMNS, break_long_words=True, break_on_hyphens=False) or [line])
 
@@ -1540,7 +1548,7 @@ def _header(document: dict[str, Any]) -> dict[str, str]:
         document["screening"],
         document["routing"],
     )
-    task = recording.get("task_type") or "no task token declared"
+    task = recording.get("task_type") or "no task recorded"
     run_label = recording.get("run_label") or "no run label"
     hints = recording.get("declared_hints") or {}
     hint_text = "; ".join(f"{kind}={value}" for kind, value in sorted(hints.items())) or "no declared hint"
@@ -2030,7 +2038,7 @@ def report(
     json_path = summary_dir / f"{SUMMARY_STEM}.json"
     json_path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n")
 
-    title = _title(store.run_id, payload["verdict"])
+    title = _title(store.run_id, _recorded_task(store), payload["verdict"])
     summary_path = summary_dir / f"{SUMMARY_STEM}.{fmt}"
     try:
         _render(store, marks, resolved_run_dir, config, payload, title, summary_path, fmt)

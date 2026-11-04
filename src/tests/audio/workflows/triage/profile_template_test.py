@@ -42,12 +42,21 @@ class TestTheTemplate:
         manifest = yaml.safe_load((root / "profile.yaml").read_text())
         assert manifest["extends"] == REFERENCE_PROFILE
         files = set(manifest["files"])
-        assert {"tasks.yaml", "airway_event_tokens.yaml", "time_release.yaml"} <= files
-        assert "discard_contested.yaml" not in files, "the reference profile supplies it, so it is inherited"
-        assert set(REQUIRED_DATASET_PATHS) <= files | {"discard_contested.yaml"}
+        assert {
+            "tasks.yaml",
+            "airway_event_tokens.yaml",
+            "time_release.yaml",
+            "review_policy.txt",
+            "task_guidance.yaml",
+        } <= files
+        inherited = {"discard_contested.yaml", "redaction_policy.yaml"}
+        assert not inherited & files, "the reference profile supplies them, so they are inherited"
+        assert set(REQUIRED_DATASET_PATHS) <= files | inherited
         missing = missing_dataset_values(load_triage_config(profile=root).values)
         assert "tasks.yaml tasks (the task list names no task)" in missing
-        assert len([item for item in missing if item.split()[0] != "tasks.yaml"]) == 39, "the dataset files' values too"
+        assert "review_policy.txt (still the template: write your own)" in missing
+        values = [item for item in missing if item.split()[0] not in {"tasks.yaml", "review_policy.txt"}]
+        assert len(values) == 39, "the dataset files' values too"
 
     def test_each_blank_carries_its_kind(self, tmp_path: Path) -> None:
         """A dataset reads, beside each blank, how it is set."""
@@ -110,7 +119,15 @@ class TestTheTemplate:
         assert set(off).isdisjoint(values["workflow"]["stages"])
         missing = missing_dataset_values(values)
         asked = sum(len(entries) for entries in values_to_supply(off=off).values())
-        assert len([item for item in missing if item.split()[0] != "tasks.yaml"]) == asked
+        assert len([item for item in missing if item.split()[0] not in {"tasks.yaml", "review_policy.txt"}]) == asked
+
+    def test_without_review_the_reviewers_files_are_neither_written_nor_asked_for(self, tmp_path: Path) -> None:
+        """REVIEW and SECOND_OPINION off: no review policy or task guidance (plan step 6b, e)."""
+        root = write_template(tmp_path / "lab", name="lab", off=("REVIEW", "SECOND_OPINION"))
+        files = set(yaml.safe_load((root / "profile.yaml").read_text())["files"])
+        assert not {"review_policy.txt", "task_guidance.yaml"} & files
+        missing = missing_dataset_values(load_triage_config(profile=root).values)
+        assert not [item for item in missing if item.split()[0] in {"review_policy.txt", "task_guidance.yaml"}]
 
     def test_a_copy_keeps_its_own_workflow(self, tmp_path: Path) -> None:
         """Copying a profile and leaving stages off at once is refused; the copy is edited instead."""

@@ -71,6 +71,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_verdict,
 )
 from senselab.audio.workflows.triage.residue import is_content_word, is_name_homograph, is_proper_form
+from senselab.audio.workflows.triage.review_inputs import lexicon_version, redaction_lexicon
 from senselab.audio.workflows.triage.stimulus import NearMatch, near_match, split_prompts
 from senselab.audio.workflows.triage.task_content import task_content_ids, task_events
 from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, declared_names_lexicon, task_lexicon
@@ -102,8 +103,6 @@ from senselab.text.tasks.pii_detection.redaction_policy import (
     state_positions,
 )
 from senselab.text.tasks.pii_detection.redaction_policy import fold as policy_fold
-from senselab.text.tasks.pii_detection.redaction_policy import policy as policy_tables
-from senselab.text.tasks.pii_detection.redaction_policy import version as policy_version
 from senselab.text.tasks.pii_detection.redaction_review import (
     PHRASES_PREDOMINANT,
     PLACE_HISTORICAL,
@@ -1200,8 +1199,6 @@ LOCKS = (LOCK_DATE, LOCK_AGE, LOCK_PLACE, LOCK_PERSON)
 """Why the policy keeps a word masked whatever the reviewer said: a date element, an age, a place below a
 country, or a person's name awaiting a human's approval."""
 
-POLICY_VERSION = policy_version()
-"""The redaction policy the fold applies (``version`` of ``data/redaction_policy.yaml``); recorded on the ledger."""
 
 MASK_UNCHANGED = "unchanged"
 MASK_TRIMMED = "trimmed"
@@ -1749,7 +1746,7 @@ class MaskPlan:
         words = [word for mask in self.masks for word in mask.words]
         return {
             "name": PII_LEDGER,
-            "policy_version": POLICY_VERSION,
+            "policy_version": lexicon_version(),
             "language": self.language,
             "release": release,
             "release_ground": release_ground,
@@ -2208,9 +2205,13 @@ def _identifier_shaped(text: str) -> bool:
     key = policy_fold(text)
     if not key:
         return False
-    tables = policy_tables()
+    tables = redaction_lexicon()
     words = {"thousand"} | set(tables["ordinal_words"]) | set(tables["age_decades"])
-    return is_number(key) or key in words or any(is_number(piece) or piece in words for piece in key.split("-"))
+    return (
+        is_number(key, lexicon=tables)
+        or key in words
+        or any(is_number(piece, lexicon=tables) or piece in words for piece in key.split("-"))
+    )
 
 
 @dataclass(frozen=True)
@@ -2400,6 +2401,7 @@ def mask_plan(
     Returns:
         The plan.
     """
+    word_lists = redaction_lexicon()
     annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
     reading = dict(annotation.attributes) if annotation is not None else {}
     entries = list(reading.get("proposal") or ())
@@ -2510,13 +2512,15 @@ def mask_plan(
     ]
     with_task_texts = [text_of(word) for word in with_task]
     task_policy_ids = {
-        with_task[i].id for i in date_positions(with_task_texts) | state_positions(with_task_texts)
+        with_task[i].id
+        for i in date_positions(with_task_texts, lexicon=word_lists)
+        | state_positions(with_task_texts, lexicon=word_lists)
     } & task_text_ids
-    date_ids = {scan[i].id for i in date_positions(scan_texts)}
-    age_ids = {scan[i].id for i in age_positions(scan_texts)}
-    state_ids = {scan[i].id for i in state_positions(scan_texts)}
-    country_ids = {scan[i].id for start, end in country_runs(scan_texts) for i in range(start, end)}
-    kinship_ids = {scan[i].id for i in kinship_positions(scan_texts)}
+    date_ids = {scan[i].id for i in date_positions(scan_texts, lexicon=word_lists)}
+    age_ids = {scan[i].id for i in age_positions(scan_texts, lexicon=word_lists)}
+    state_ids = {scan[i].id for i in state_positions(scan_texts, lexicon=word_lists)}
+    country_ids = {scan[i].id for start, end in country_runs(scan_texts, lexicon=word_lists) for i in range(start, end)}
+    kinship_ids = {scan[i].id for i in kinship_positions(scan_texts, lexicon=word_lists)}
     always_ids = (date_ids | state_ids) - kinship_ids
 
     family_of_word: dict[str, str] = {}
@@ -2792,7 +2796,7 @@ def mask_plan(
         and word_id not in kind_cut
         and word_id not in condition_ids
         and not _identifier_shaped(text_of(by_id[word_id]))
-        and not is_state_word(text_of(by_id[word_id]))
+        and not is_state_word(text_of(by_id[word_id]), lexicon=word_lists)
     }
     keepable = {
         word_id

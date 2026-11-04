@@ -70,7 +70,7 @@ def admit(
         TypeError: If ``source`` is not a path or a string. Nothing is recorded.
     """
     source = Path(source)
-    declared = {**identity_of(source.stem, hint).as_attributes(), **hint_attributes(hint), **task_attributes(hint)}
+    declared = {**identity_of(hint).as_attributes(), **hint_attributes(hint), **task_attributes(hint)}
     activity_id = store.activity(node=NODE, step=None, parameters={"audio_file": str(source), **declared})
     agent_id = software_agent(store)
     store.was_associated_with(activity_id, agent_id)

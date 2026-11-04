@@ -501,7 +501,7 @@ def facts_of(
         The facts.
     """
     stem = recording_stem(store) or (stem or "")
-    family = declared_task_of(store, stem)[1]
+    family = declared_task_of(store)[1]
     extents = [span.extent for span in standing_task_extents(live_entities(store, "span")) if span.extent]
     hull = (min(float(e[0]) for e in extents), max(float(e[1]) for e in extents)) if extents else None
     segments: tuple[tuple[float, float, str], ...] = ()

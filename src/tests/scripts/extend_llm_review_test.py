@@ -32,6 +32,7 @@ from senselab.audio.workflows.triage.run import LOG_FILE
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, Outcome
 from senselab.text.tasks.pii_detection.redaction_review import ReviewProposal, ReviewResult
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -70,7 +71,13 @@ def _finished_run(root: Path, *, words: Sequence[str] = ("hello", "alicia")) -> 
         stream = store.entity(
             prov_type="stream",
             extent=(0.0, 5.0),
-            attributes={"name": name, "path": f"streams/{name}.flac", "sampling_rate": SR, "channels": 1},
+            attributes={
+                "name": name,
+                "path": f"streams/{name}.flac",
+                "sampling_rate": SR,
+                "channels": 1,
+                **(b2ai_identity_attributes(run_root.name) if name == "recording" else {}),
+            },
         )
         store.was_generated_by(stream, activity)
     word_ids = []
@@ -812,7 +819,7 @@ class TestResumeIsPerRowAndPerEngine:
     def test_a_reading_stands_only_under_its_prompt_and_engine(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """vLLM reads once and resumes as present; the transformers config reads again and retires it."""
+        """VLLM reads once and resumes as present; the transformers config reads again and retires it."""
         from senselab.text.tasks.pii_detection.redaction_review_vllm import engine_identity
 
         run_root = _finished_run(tmp_path / "corpus")

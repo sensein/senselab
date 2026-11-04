@@ -110,7 +110,7 @@ def replayed_root(row: dict[str, Any], out_root: Path | None) -> Path:
     finished = run_root_of(Path(str(row["enhanced"])))
     if out_root is None:
         return finished
-    identity = row_identity(row) or identity_of(str(row.get("stem") or ""))
+    identity = row_identity(row) or identity_of(None)
     return out_root / entity_subdir(identity) / finished.name
 
 

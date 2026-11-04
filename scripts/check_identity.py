@@ -9,9 +9,11 @@ r"""Check that a corpus's declared identities hold together, before a run or ove
 ``--recordings`` checks a corpus before it is run. ``LIST`` names one recording per line: its path, or a JSON
 object carrying ``source`` (the field the extend drivers' manifests carry it in); blank lines and lines starting
 with ``#`` are skipped. Each recording's identity is the one ADMIT would record,
-:func:`~senselab.audio.workflows.triage.identity.identity_of` over its stem and the hint ``--hints`` builds.
+:func:`~senselab.audio.workflows.triage.identity.identity_of` over the hint ``--hints`` builds.
 ``--hints DIR`` names a directory holding a ``hints.py`` exposing ``build_hint(wav)``, as the replay driver takes;
-without it every identity is read off the stem and no recording declares a task. Each hint's task is resolved
+without it no recording declares an identity or a task. Where that ``hints.py`` also exposes
+``identity_from_name(stem)``, the dataset's own reading of a file name, ``stem_disagrees`` compares it with what was
+declared (``--recordings``) or recorded (``--table``); senselab reads no file name itself. Each hint's task is resolved
 against the task list of ``--profile`` (the dataset profile), as ADMIT resolves it. No store is opened.
 
 ``--table`` checks a finished corpus: the ``recording_vectors`` parquet, of which only ``stem``, ``run_dir``,
@@ -43,14 +45,19 @@ from typing import Any, Callable
 import pyarrow.parquet as pq
 
 from senselab.audio.workflows.triage.dataset_profile import DatasetDataMissing
-from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config, load_hint_builder
+from senselab.audio.workflows.triage.extend import (
+    add_config_arguments,
+    driver_config,
+    load_hint_builder,
+    load_name_reader,
+)
 from senselab.audio.workflows.triage.identity import (
     ROW_PARTICIPANT,
     ROW_SESSION,
     ROW_SOURCES,
     ROW_TASK,
     IdentityLabelError,
-    identity_from_stem,
+    RecordingIdentity,
     identity_of,
     row_identity,
 )
@@ -96,7 +103,12 @@ def build_parser() -> argparse.ArgumentParser:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--recordings", type=Path, default=None, help="Recording list: one path or JSON row per line")
     source.add_argument("--table", type=Path, default=None, help="A recording_vectors parquet from a finished corpus")
-    parser.add_argument("--hints", type=Path, default=None, help="Directory holding a hints.py exposing build_hint")
+    parser.add_argument(
+        "--hints",
+        type=Path,
+        default=None,
+        help="Directory holding a hints.py exposing build_hint (and, optionally, identity_from_name)",
+    )
     parser.add_argument(
         "--session-scope",
         choices=SESSION_SCOPES,
@@ -135,12 +147,17 @@ def read_recording_list(path: Path) -> list[Path]:
     return recordings
 
 
-def records_before_run(recordings: list[Path], build_hint: Callable[[Path], Any] | None) -> list[IdentityRecord]:
+def records_before_run(
+    recordings: list[Path],
+    build_hint: Callable[[Path], Any] | None,
+    read_name: Callable[[str], RecordingIdentity] | None = None,
+) -> list[IdentityRecord]:
     """Each recording's identity as ADMIT would declare it.
 
     Args:
         recordings: The recordings' paths.
-        build_hint: The hint populator, or None to read every identity off the stem.
+        build_hint: The hint populator, or None: then no recording declares anything.
+        read_name: The dataset's file-name reader, or None to skip ``stem_disagrees``.
 
     Returns:
         One record per recording, located at its path; a hint that raises, or a label that cannot name a folder,
@@ -149,10 +166,10 @@ def records_before_run(recordings: list[Path], build_hint: Callable[[Path], Any]
     records: list[IdentityRecord] = []
     for wav in recordings:
         stem = wav.stem
-        parsed = identity_from_stem(stem)
+        parsed = read_name(stem) if read_name is not None else None
         try:
             hint = build_hint(wav)[0] if build_hint is not None else None
-            identity = identity_of(stem, hint)
+            identity = identity_of(hint)
             task = resolve_task(hint)
         except IdentityLabelError as error:
             records.append(IdentityRecord(stem, str(wav), None, parsed, str(error)))
@@ -166,11 +183,12 @@ def records_before_run(recordings: list[Path], build_hint: Callable[[Path], Any]
     return records
 
 
-def records_after_run(table: Path) -> list[IdentityRecord]:
+def records_after_run(table: Path, read_name: Callable[[str], RecordingIdentity] | None = None) -> list[IdentityRecord]:
     """Each finished run's recorded identity, from the corpus table.
 
     Args:
         table: The ``recording_vectors`` parquet.
+        read_name: The dataset's file-name reader, or None to skip ``stem_disagrees``.
 
     Returns:
         One record per row, located at its ``run_dir``; a row recording no identity carries None.
@@ -191,7 +209,7 @@ def records_after_run(table: Path) -> list[IdentityRecord]:
                 stem,
                 str(row.get("run_dir") or ""),
                 row_identity(row),
-                identity_from_stem(stem),
+                read_name(stem) if read_name is not None else None,
                 task=row.get(DECLARED_TASK_COLUMN),
                 task_source=row.get(DECLARED_TASK_SOURCE_COLUMN),
             )
@@ -246,8 +264,6 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.hints is not None and args.table is not None:
-        parser.error("--hints applies to --recordings only; a finished run's identity is the one it recorded")
     given = args.recordings if args.recordings is not None else args.table
     if not given.exists():
         print(f"ERROR: not found: {given}", file=sys.stderr)
@@ -255,11 +271,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         scope = args.session_scope
         driver_config(args, require_values=False)
+        read_name = load_name_reader(args.hints) if args.hints is not None else None
         if args.recordings is not None:
             build_hint = load_hint_builder(args.hints) if args.hints is not None else None
-            records = records_before_run(read_recording_list(args.recordings), build_hint)
+            records = records_before_run(read_recording_list(args.recordings), build_hint, read_name)
         else:
-            records = records_after_run(args.table)
+            records = records_after_run(args.table, read_name)
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2

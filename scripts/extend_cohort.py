@@ -84,6 +84,7 @@ from senselab.audio.workflows.triage.extend import (
     read_checked_store,
     read_manifest,
     read_store,
+    require_recorded_identity,
     run_root_of,
     take_slice,
     write_store,
@@ -158,7 +159,9 @@ def collect_rows(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in rows:
         try:
-            store = read_store(run_root_of(Path(row["enhanced"])))
+            run_root = run_root_of(Path(row["enhanced"]))
+            store = read_store(run_root)
+            require_recorded_identity(store, run_root)
         except (OSError, ValueError) as error:
             out.append({"stem": row["stem"], "error": describe_exception(error)})
             continue

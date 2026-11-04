@@ -63,6 +63,7 @@ from senselab.audio.workflows.triage.hint_record import (
 from senselab.audio.workflows.triage.hint_record import expected_speech_digest as prompts_digest
 from senselab.audio.workflows.triage.identity import (
     ADMIT_NODE,
+    RecordingIdentity,
     admit_record,
     identity_disagreement,
     identity_of,
@@ -870,6 +871,15 @@ class ReplayOutcome:
     review_why: str | None = None
 
 
+def _hints_module(directory: Path) -> Any:  # noqa: ANN401 -- a dataset's own module
+    spec = importlib.util.spec_from_file_location("extend_hints", directory / "hints.py")
+    if spec is None or spec.loader is None:
+        raise FileNotFoundError(f"no importable hints.py in {directory}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_hint_builder(directory: Path) -> Callable[[Path], Any]:
     """The hint populator from a directory holding ``hints.py``.
 
@@ -882,13 +892,28 @@ def load_hint_builder(directory: Path) -> Callable[[Path], Any]:
     Raises:
         FileNotFoundError: If the directory holds no importable ``hints.py``.
     """
-    spec = importlib.util.spec_from_file_location("extend_hints", directory / "hints.py")
-    if spec is None or spec.loader is None:
-        raise FileNotFoundError(f"no importable hints.py in {directory}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    builder: Callable[[Path], Any] = module.build_hint
+    builder: Callable[[Path], Any] = _hints_module(directory).build_hint
     return builder
+
+
+NAME_READER = "identity_from_name"
+"""The function a dataset's ``hints.py`` may expose that reads a recording's identity off its file stem."""
+
+
+def load_name_reader(directory: Path) -> Callable[[str], RecordingIdentity] | None:
+    """The dataset's file-name reader, where its ``hints.py`` exposes one (senselab reads no file name itself).
+
+    Args:
+        directory: The directory holding ``hints.py``.
+
+    Returns:
+        Its :data:`NAME_READER`, called with a file stem, or None where it exposes none.
+
+    Raises:
+        FileNotFoundError: If the directory holds no importable ``hints.py``.
+    """
+    reader: Callable[[str], RecordingIdentity] | None = getattr(_hints_module(directory), NAME_READER, None)
+    return reader
 
 
 def source_of(run_root: Path) -> Path:
@@ -936,6 +961,27 @@ _NO_STIMULUS_REASON = "the replay's hint declares no expected speech to align ag
 
 class ReplayRefused(ValueError):
     """A replay or re-fold its run's recorded inputs refuse; the message says why and what to pass."""
+
+
+def require_recorded_identity(store: ProvStore, run_root: Path) -> None:
+    """Refuse a corpus pass over a run that records no identity: replay it first, which records one.
+
+    A store written before ADMIT recorded identity names no task, and triage reads none off its file name (plan step
+    6a), so every stage a pass runs would read the task as unknown. Replay is the one driver that runs over such a
+    store, because it records the identity from the dataset's hint before anything reads it.
+
+    Args:
+        store: The run's store.
+        run_root: The run root, for the message.
+
+    Raises:
+        ReplayRefused: If the store records no identity.
+    """
+    if recorded_identity(store) is None:
+        raise ReplayRefused(
+            f"the run at {run_root} records no identity (written before ADMIT recorded one): replay it first "
+            "(scripts/extend_replay_decisions.py with the dataset's --hints), which records one"
+        )
 
 
 class StaleManifestRow(ReplayRefused):
@@ -1114,6 +1160,7 @@ def read_checked_store(
     """
     store = read_store(run_root, run_id=run_id)
     check_run_inputs(store, run_root, config, allow_profile_change=allow_profile_change)
+    require_recorded_identity(store, run_root)
     if row is not None:
         named, recorded = row_identity(row), recorded_identity(store)
         if named is None or recorded is None:
@@ -1216,12 +1263,9 @@ def record_replayed_hint(store: ProvStore, hint: AudioHints | None, *, software:
     entity = recording_entity(store)
     if entity is None:
         return None
-    admitted = [a for a in store.activities(ADMIT_NODE) if a.parameters.get("audio_file")]
-    source = admitted[-1].parameters["audio_file"] if admitted else entity.attributes.get("path")
-    stem = Path(str(source or "")).stem
     attributes = {
         **entity.attributes,
-        **identity_of(stem, hint).as_attributes(),
+        **identity_of(hint).as_attributes(),
         **hint_attributes(hint),
         **task_attributes(hint),
         "replaces": entity.id,

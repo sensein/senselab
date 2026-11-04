@@ -551,10 +551,12 @@ class TestTheTextIsWhatWouldBeReleased:
 
     def test_the_prompt_does_not_assert_a_redaction_happened(self) -> None:
         """Most of the population was never scanned; priming the model otherwise is a false premise."""
+        from senselab.audio.workflows.triage.review_inputs import review_policy
         from senselab.text.tasks.pii_detection import redaction_review
 
-        assert "has already been automatically redacted" not in redaction_review._PROMPT
-        assert "where an automatic redaction has already been applied" in redaction_review._PROMPT
+        prompt = redaction_review.review_prompt(False, review_policy())
+        assert "has already been automatically redacted" not in prompt
+        assert "where an automatic redaction has already been applied" in prompt
 
 
 class TestTheProposalBecomesTheAppliedRedaction:
@@ -1234,3 +1236,51 @@ class TestAReplayKeepsTheReadingItDidNotReadAgain:
         review(store, load_triage_config())
         assert held_reading(store) is None
         assert carry_reading_forward(store, load_triage_config(), None, None, software="s") == (REVIEW_NONE, None)
+
+
+def test_the_cache_key_names_the_engine() -> None:
+    """Same engine, same key; another engine or any other vLLM server argument, another key."""
+    sha = "c" * 40
+    vllm = dict(load_triage_config().require("redaction.llm_check.vllm"))
+    base = {"model_id": "m/x", "max_new_tokens": 1024, "max_iterations": 3, "engine": "vllm", "vllm": vllm}
+    key = review_module.review_cache_key("a b", None, {"task": "t"}, base, sha)
+    assert key == review_module.review_cache_key("a b", None, {"task": "t"}, dict(base), sha)
+    assert key != review_module.review_cache_key("a b", None, {"task": "t"}, {**base, "engine": "transformers"}, sha)
+    shared = {**base, "vllm": {**vllm, "gpu_memory_utilization": 0.3}}
+    assert key != review_module.review_cache_key("a b", None, {"task": "t"}, shared, sha)
+
+
+class TestBridge2AIsReviewPolicy:
+    """The B2AI profile's review policy reaches the reviewer unchanged (plan step 6b moved it out of senselab)."""
+
+    def test_its_policy_prose_is_in_the_prompt(self) -> None:
+        """B2AI's rules and examples, then the Safe Harbor identifiers senselab adds."""
+        from senselab.audio.workflows.triage.review_inputs import review_policy
+        from senselab.text.tasks.pii_detection.redaction_review import review_prompt
+
+        prompt = review_prompt(False, review_policy())
+        for rule in (
+            "Ray Bradbury",
+            "I had COVID in 2021",
+            "Halloween",
+            "USF voice center",
+            "never hold a recording back",
+        ):
+            assert rule in prompt
+        assert "45 CFR 164.514(b)(2)" in prompt
+        assert "2-3 weeks ago" in prompt and "this morning" in prompt and '"Monday"' in prompt
+
+    def test_each_task_family_gets_its_guidance_and_nature(self) -> None:
+        """Productive vocabulary's definitions are task content; animal fluency generates items."""
+        from senselab.audio.workflows.triage.review_inputs import review_policy
+        from senselab.text.tasks.pii_detection.redaction_review import task_guidance, task_nature
+
+        policy = review_policy()
+        assert "definition task" in task_guidance("productive-vocabulary", policy)
+        assert "picture" in task_guidance("picture-description-option1", policy)
+        assert "reads a given text" in task_guidance("harvard-sentences-list", policy)
+        assert task_guidance("free-speech", policy) == ""
+        assert task_nature("animal-fluency", policy) == "item_generation"
+        assert task_nature("story-recall-v2", policy) == "read_or_recall"
+        assert task_nature("respiration-and-cough-v2-breath", policy) == "non_lexical"
+        assert task_nature("open-response-questions", policy) == "open_response"

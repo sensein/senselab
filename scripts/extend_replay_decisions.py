@@ -199,8 +199,8 @@ def replay_identity(
         The given hint's identity; else the one the run records; else the stem's (a run that records none).
     """
     if hint_given:
-        return identity_of(stem, hint)
-    return recorded if recorded is not None else identity_of(stem, None)
+        return identity_of(hint)
+    return recorded if recorded is not None else identity_of(None)
 
 
 def replay_one(

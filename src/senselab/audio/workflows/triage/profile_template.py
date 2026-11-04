@@ -28,6 +28,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     PACKAGED_DATA,
     REQUIRED_DATASET_PATHS,
     SENSELAB_PROFILE,
+    STAGE_DATASET_PATHS,
     DatasetDataMissing,
     data_values,
     load_profile,
@@ -147,19 +148,24 @@ def _emit(entries: list[dict[str, Any]]) -> Iterator[str]:
     yield from walk(tree, 0)
 
 
-def _workflow_lines(reference: str | None, off: Collection[str]) -> list[str]:
-    """The ``workflow`` section a template's config carries when its workflow leaves stages off."""
+def _base_config_values(reference: str | None) -> dict[str, Any]:
+    """The configuration a template's base resolves to, leaving the active profile and run data as they were."""
     from senselab.audio.workflows.triage.config import load_triage_config  # noqa: PLC0415
 
     before, run_data = dataset_profile.active_profile(), dataset_profile.run_data()
     try:
         config = load_triage_config(profile=reference) if reference is not None else load_triage_config()
-        listed = _with_off(config.values, off)["workflow"]["stages"]
+        return dict(config.values)
     finally:
         dataset_profile.deactivate_profile()
         dataset_profile.set_run_data(run_data)
         if before is not None:
             dataset_profile.activate_profile(before)
+
+
+def _workflow_lines(reference: str | None, off: Collection[str]) -> list[str]:
+    """The ``workflow`` section a template's config carries when its workflow leaves stages off."""
+    listed = _with_off(_base_config_values(reference), off)["workflow"]["stages"]
     return [
         f"# The stages this dataset runs; {', '.join(sorted(off))} are off, and no value only they read is asked for.",
         "workflow:",
@@ -234,7 +240,9 @@ def write_template(
     workflow = _workflow_lines(reference, off) if off else []
     root.mkdir(parents=True)
     files: dict[str, str] = {}
-    for relative in REQUIRED_DATASET_PATHS:
+    running = running_stages(_with_off(_base_config_values(reference), off))
+    stage_paths = [path for path, stages in STAGE_DATASET_PATHS.items() if any(stage in running for stage in stages)]
+    for relative in (*REQUIRED_DATASET_PATHS, *stage_paths):
         skeleton = TEMPLATE_DIR / relative
         if (base is not None and base.resolve(relative) is not None) or not skeleton.is_file():
             continue
