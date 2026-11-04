@@ -5,7 +5,8 @@
     "properties": {
         "format": {
             "type": "string",
-            "pattern": "^graph@1\\.\\d+$"
+            "pattern": "^graph@1\\.\\d+$",
+            "description": "Required in a published document; a reader given none reads the document as graph@1.0."
         },
         "inputs": {
             "patternProperties": {
@@ -115,12 +116,15 @@
             "type": "array"
         },
         "outputs": {
-            "additionalProperties": {
-                "pattern": "^[A-Za-z_][A-Za-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_]*$",
-                "type": "string"
+            "patternProperties": {
+                "^[A-Za-z_][A-Za-z0-9_]*$": {
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_]*$",
+                    "type": "string"
+                }
             },
             "title": "Outputs",
-            "type": "object"
+            "type": "object",
+            "additionalProperties": false
         }
     },
     "title": "Graph",

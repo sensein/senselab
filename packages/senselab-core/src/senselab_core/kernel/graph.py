@@ -14,7 +14,7 @@ from senselab_worker.digest import identity_digest
 
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, thawed
 from senselab_core.kernel.declare import PORT_PROTOCOLS, SCHEMA_DIALECT, Registry, TaskSpec, UnknownTask, kernel_types
-from senselab_core.kernel.formats import GRAPH_FORMAT, FormatTag, Formatted
+from senselab_core.kernel.formats import GRAPH_FORMAT, FormatTag, Formatted, later_minor
 from senselab_core.kernel.identity import Params
 
 GRAPH_DIGEST_TAG = "graph@1"
@@ -29,7 +29,7 @@ _LIST = re.compile(rf"^list\[({_NAME})\]$")
 NodeId = Annotated[str, StringConstraints(pattern=rf"^{_NAME}$")]
 """A node's id: letters, digits and underscores, not starting with a digit."""
 PortName = Annotated[str, StringConstraints(pattern=rf"^{_NAME}$")]
-"""A graph input's name, of the same form as a node id."""
+"""A graph input's or output's name, of the same form as a node id."""
 PortRef = Annotated[str, StringConstraints(pattern=rf"^{_NAME}\.{_NAME}$")]
 """`<node>.<port>`, or `input.<name>` for a graph input."""
 PortType = Annotated[str, StringConstraints(pattern=rf"^({_NAME}|list\[{_NAME}\])$")]
@@ -93,7 +93,7 @@ class Graph(Formatted):
     inputs: Annotated[Mapping[PortName, PortType], AfterValidator(FrozenMapping), PlainSerializer(dict)] = _empty()
     nodes: tuple[Node, ...] = ()
     edges: tuple[Edge, ...] = ()
-    outputs: Annotated[Mapping[str, PortRef], AfterValidator(FrozenMapping), PlainSerializer(dict)] = _empty()
+    outputs: Annotated[Mapping[PortName, PortRef], AfterValidator(FrozenMapping), PlainSerializer(dict)] = _empty()
 
     @model_validator(mode="after")
     def _check_structure(self) -> "Graph":
@@ -278,9 +278,23 @@ def _cycles(graph: Graph) -> list[list[str]]:
     return cycles
 
 
+def _check_declarations(check: _Check, registry: Registry) -> None:
+    """Report graph inputs of no known port type, and nodes more than one `map` edge targets."""
+    known = set(kernel_types()) | {t for s in registry.tasks() for t in (*s.inputs.values(), *s.outputs.values())}
+    for name, declared in check.graph.inputs.items():
+        listed = _LIST.match(declared)
+        if (listed[1] if listed else declared) not in known:
+            message = f"input {name!r}: {declared} names no kernel or declared port type"
+            check.issue("type_mismatch", None, name, message)
+    maps = [split(e.target)[0] for e in check.graph.edges if e.kind == "map"]
+    for node_id in sorted({n for n in maps if maps.count(n) > 1}):
+        check.issue("type_mismatch", node_id, None, f"node {node_id!r}: more than one map edge targets it")
+
+
 def validate(graph: Graph, registry: Registry) -> list[GraphIssue]:
     """Return every issue of `graph` against the tasks declared in `registry`; an empty list is a valid graph."""
     check = _Check(graph, registry)
+    _check_declarations(check, registry)
     mapped = _mapped(graph)
     for edge in graph.edges:
         _check_edge(check, edge, mapped)
@@ -311,15 +325,23 @@ def order(graph: Graph) -> tuple[str, ...]:
 
 
 def canonical(graph: Graph) -> dict[str, Any]:
-    """Return the graph's JSON form with its nodes sorted by id and its edges by source, target and kind."""
-    form: dict[str, Any] = graph.model_dump(mode="json")
+    """Return the graph's JSON form without `format`, nodes sorted by id and edges by source, target and kind."""
+    form: dict[str, Any] = graph.model_dump(mode="json", exclude={"format"})
     form["nodes"] = sorted(form["nodes"], key=lambda n: n["id"])
     form["edges"] = sorted(form["edges"], key=lambda e: (e["source"], e["target"], e["kind"]))
     return form
 
 
 def graph_digest(graph: Graph) -> str:
-    """Return `identity_digest("graph@1", canonical(graph))`."""
+    """Return `identity_digest("graph@1", canonical(graph))`.
+
+    Raises:
+        ValueError: if the graph declares a later minor than `graph@1.0`, whose fields this reader may not hold.
+    """
+    if later_minor(GRAPH_FORMAT, graph.format):
+        raise ValueError(
+            f"a {graph.format} graph has fields a {GRAPH_FORMAT} reader does not hold; it has no digest here"
+        )
     return identity_digest(GRAPH_DIGEST_TAG, canonical(graph))
 
 
@@ -327,7 +349,12 @@ def graph_schema() -> dict[str, Any]:
     """Return the JSON Schema (2020-12) of a `graph@1` document; `format` is required and any minor of `graph@1`."""
     schema = Graph.model_json_schema(ref_template="#/$defs/{model}")
     name, major = GRAPH_FORMAT.split(".")[0].split("@")
-    schema["properties"]["format"] = {"type": "string", "pattern": rf"^{name}@{major}\.\d+$"}
+    schema["properties"]["format"] = {
+        "type": "string",
+        "pattern": rf"^{name}@{major}\.\d+$",
+        "description": f"Required in a published document; a reader given none reads the document as {GRAPH_FORMAT}.",
+    }
     schema["required"] = sorted({"format", *schema.get("required", ())})
     schema["properties"]["inputs"]["additionalProperties"] = False
+    schema["properties"]["outputs"]["additionalProperties"] = False
     return {"$schema": SCHEMA_DIALECT, "x-senselab-format": GRAPH_FORMAT, **schema}

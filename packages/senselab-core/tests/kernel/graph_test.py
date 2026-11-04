@@ -10,7 +10,7 @@ import jsonschema
 import pytest
 from pydantic import ValidationError
 from senselab_core.kernel.declare import Registry, TaskParams, TaskSpec
-from senselab_core.kernel.graph import Graph, graph_digest, graph_schema, order, validate
+from senselab_core.kernel.graph import Graph, canonical, graph_digest, graph_schema, order, validate
 
 ROOT = Path(__file__).resolve().parents[4]
 _spec = importlib.util.spec_from_file_location("generate_graph_schema", ROOT / "scripts" / "generate_graph_schema.py")
@@ -27,6 +27,7 @@ def _registry() -> Registry:
         ("speech.embed", {"audio": "Audio"}, {"embedding": "Embedding"}),
         ("speech.pool", {"embeddings": "list[Embedding]"}, {"embedding": "Embedding"}),
         ("signal.describe", {"series": "RegularSeries"}, {"note": "Annotation"}),
+        ("speech.fit_space", {"first": "Audio", "second": "Audio"}, {"events": "Events"}),
     ):
         registry.add_task(
             TaskSpec(name=name, version="1", kind="transform", inputs=inputs, outputs=outputs, params=TaskParams)
@@ -195,6 +196,7 @@ def test_graph_digest_ignores_key_order() -> None:
         {"edges": [{"source": "a.x", "target": "b.y", "kind": "route"}]},
         {"inputs": {"x": "list[list[Audio]]"}},
         {"inputs": {"a.b": "Audio"}},
+        {"outputs": {"a.b": "e.v"}},
         {"format": "graph@2.0"},
     ],
 )
@@ -228,3 +230,32 @@ def test_graph_schema_validates_2020_12() -> None:
     assert not checker.is_valid({"nodes": []})
     assert not checker.is_valid({"format": "graph@1.0", "inputs": {"a.b": "Audio"}})
     assert not checker.is_valid({"format": "graph@1.0", "edges": [{"source": "a.x", "target": "b.y", "kind": "loop"}]})
+
+
+@pytest.mark.logic
+def test_graph_digest_leaves_format_out_and_refuses_a_later_minor() -> None:
+    """The canonical form carries no `format`; a later-minor graph, whose extra fields were dropped, has no digest."""
+    content = {"nodes": [_node("a", "speech.embed")]}
+    current = Graph.model_validate({"format": "graph@1.0", **content})
+    later = Graph.model_validate({"format": "graph@1.3", "added_in_1_3": {"x": 1}, **content})
+    assert "format" not in canonical(current) and canonical(later) == canonical(current)
+    assert graph_digest(current) == graph_digest(Graph.model_validate(content))
+    with pytest.raises(ValueError, match=r"graph@1\.3"):
+        graph_digest(later)
+
+
+@pytest.mark.logic
+def test_an_input_type_must_name_a_port_type() -> None:
+    """A graph input whose type, or list element type, names no kernel or declared port type is a `type_mismatch`."""
+    graph = _graph({"x": "Bogus", "ys": "list[Bogus]", "ok": "list[Audio]"}, [], [])
+    assert _codes(graph) == [("type_mismatch", None, "x"), ("type_mismatch", None, "ys")]
+
+
+@pytest.mark.logic
+def test_two_map_edges_into_one_node_are_refused() -> None:
+    """A node with two `map` edges has no defined fan-out and is a `type_mismatch` on the node."""
+    nodes = [_node("s", "speech.fit_space")]
+    graph = _graph(
+        {"a": "list[Audio]", "b": "list[Audio]"}, nodes, [("input.a", "s.first", "map"), ("input.b", "s.second", "map")]
+    )
+    assert _codes(graph) == [("type_mismatch", "s", None)]
