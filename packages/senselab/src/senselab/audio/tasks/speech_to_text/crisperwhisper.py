@@ -13,6 +13,7 @@ import math
 import os
 import shutil
 import tempfile
+import time
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -37,7 +38,7 @@ DEFAULT_LANGUAGE = "en"
 COMPUTE_TYPES = {"cuda": "float16", "mps": "float16", "cpu": "float32"}
 _INIT_KEYS = frozenset({"stub", "model", "device", "array_dir"})
 DIAGNOSTICS_KEY = "_diagnostics"
-"""The request param that adds the `diagnostics` output (windows decoded, chunks reported) to each item's outputs."""
+"""The request param that adds the `diagnostics` output: windows, chunks and the worker's seconds per phase."""
 
 
 @dataclass(frozen=True)
@@ -49,13 +50,15 @@ class Decoded:
     mean: float | None
     windows: int = 0
     chunks: int | None = None
+    decode_s: float = 0.0
+    confidence_s: float = 0.0
 
 
 class StubModel:
     """The fake stack's model: deterministic words, evenly spaced over the audio, derived from its samples."""
 
-    def transcribe(self, samples: numpy.ndarray, language: str, max_new_tokens: int) -> Decoded:
-        """Return three words spaced over `samples`; `language` and `max_new_tokens` are unused."""
+    def transcribe(self, samples: numpy.ndarray, language: str, max_new_tokens: int, confidence: bool) -> Decoded:
+        """Return three words spaced over `samples`; `language`, `max_new_tokens` and `confidence` are unused."""
         digest = hashlib.sha256(samples.astype(numpy.float32).tobytes()).hexdigest()
         step = samples.size / EXPECTED_RATE / 3
         words = [(f"w{digest[4 * i : 4 * i + 4]}", i * step, (i + 1) * step) for i in range(3)]
@@ -90,7 +93,8 @@ def load(init: dict[str, Any]) -> State:
 def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
     """Return one `{"outputs": {"transcript": <transcript@2.0 wire form>}}` per item, or its typed fault.
 
-    `params` holds the task's `language` and `timestamps` and `backend_params` (`engine`, `max_new_tokens`).
+    `params` holds the task's `language` and `timestamps` and `backend_params` (`engine`, `max_new_tokens`,
+    `confidence`).
 
     Raises:
         ValueError: on an unknown engine or backend param, or an unknown `timestamps` level.
@@ -100,17 +104,25 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
     if timestamps not in ("word", "segment", "none"):
         raise ValueError(f"timestamps is word, segment or none, got {timestamps!r}")
     language = str(params.get("language") or DEFAULT_LANGUAGE)
+    built = time.perf_counter()
     engine = _engine(state, tuning["engine"])
+    engine_build_s = time.perf_counter() - built
     faults = injected(params)
     results: list[dict[str, Any]] = []
     for item in items:
         try:
             samples, clock_id = mono_samples(item, faults, EXPECTED_RATE, "crisperwhisper", MIN_INPUT_NS)
-            decoded = engine.transcribe(samples, language, tuning["max_new_tokens"])
+            decoded = engine.transcribe(samples, language, tuning["max_new_tokens"], tuning["confidence"])
             duration_ns = round(samples.size / EXPECTED_RATE * NS_PER_S)
             outputs: dict[str, Any] = {"transcript": transcript(decoded, timestamps, clock_id, duration_ns)}
             if params.get(DIAGNOSTICS_KEY):
-                outputs["diagnostics"] = {"windows": decoded.windows, "chunks": decoded.chunks}
+                outputs["diagnostics"] = {
+                    "windows": decoded.windows,
+                    "chunks": decoded.chunks,
+                    "decode_s": decoded.decode_s,
+                    "confidence_s": decoded.confidence_s,
+                    "engine_build_s": engine_build_s,
+                }
             results.append({"outputs": outputs})
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
             results.append({"error": exc})
@@ -118,10 +130,11 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
 
 
 def _backend_params(given: Mapping[str, Any]) -> dict[str, Any]:
-    unknown = sorted(set(given) - {"engine", "max_new_tokens"})
+    known = ["confidence", "engine", "max_new_tokens"]
+    unknown = sorted(set(given) - set(known))
     if unknown:
-        raise ValueError(f"unknown backend params {unknown}; known: ['engine', 'max_new_tokens']")
-    tuning = {"engine": DEFAULT_ENGINE, "max_new_tokens": MAX_NEW_TOKENS} | dict(given)
+        raise ValueError(f"unknown backend params {unknown}; known: {known}")
+    tuning = {"engine": DEFAULT_ENGINE, "max_new_tokens": MAX_NEW_TOKENS, "confidence": True} | dict(given)
     if tuning["engine"] not in ENGINES:
         raise ValueError(f"engine is one of {list(ENGINES)}, got {tuning['engine']!r}")
     return tuning
@@ -195,11 +208,12 @@ class Library:
         self.engine = engine
         self.model = CrisperWhisperModel(path, backend=engine, device=device, compute_type=compute)
 
-    def transcribe(self, samples: numpy.ndarray, language: str, max_new_tokens: int) -> Decoded:
-        """Return the decode of `samples`, with its mean and word confidences.
+    def transcribe(self, samples: numpy.ndarray, language: str, max_new_tokens: int, confidence: bool) -> Decoded:
+        """Return the decode of `samples`, with its mean and word confidences unless `confidence` is false.
 
         Both engines teacher-force each window's final ids once and score them by raw-logit log-probability,
-        excluding the engine's `all_special_ids`.
+        excluding the engine's `all_special_ids`. With `confidence` false that pass does not run and every
+        confidence is none.
         """
         import soundfile  # noqa: PLC0415 - loads in the engine only
 
@@ -217,6 +231,7 @@ class Library:
 
         engine = self.model._engine
         special = {int(i) for i in engine.all_special_ids} or None
+        started = time.perf_counter()
         with tempfile.TemporaryDirectory(prefix="senselab-crisperwhisper-") as scratch:
             wav = Path(scratch) / "audio.wav"
             soundfile.write(str(wav), samples, EXPECTED_RATE, subtype="FLOAT")
@@ -228,6 +243,8 @@ class Library:
                     longform_strategy=LONGFORM_STRATEGY,
                     max_new_tokens=max_new_tokens,
                 )
+        decode_s = time.perf_counter() - started
+        scoring = time.perf_counter()
         teacher = ct2_teacher_logits if self.engine == "ct2" else transformers_teacher_logits
 
         def decode(token: int) -> str:
@@ -238,7 +255,7 @@ class Library:
         kept = [len(chunk.text.split()) for chunk in chunks]
         if len(windows) > 1 or kept:
             windows = surviving_windows(windows, kept, decode, special) if len(kept) == len(windows) else []
-        blocks = window_confidence(engine, windows, teacher, special)
+        blocks = window_confidence(engine, windows, teacher, special) if confidence else []
         words = [(str(w.word or w.text), float(w.start), float(w.end)) for w in getattr(result, "words", None) or []]
         confidences: list[float | None] = [None] * len(words)
         mean = None
@@ -253,7 +270,15 @@ class Library:
             if len(scored) == len(words) and (not kept or sum(kept) == len(words)):
                 confidences = list(scored)
                 mean = None if merged["avg_logprob"] is None else math.exp(merged["avg_logprob"])
-        return Decoded(words, confidences, mean, len(captured), len(chunks) if chunks else None)
+        return Decoded(
+            words,
+            confidences,
+            mean,
+            len(captured),
+            len(chunks) if chunks else None,
+            decode_s,
+            time.perf_counter() - scoring if confidence else 0.0,
+        )
 
 
 def _converted(snapshot: str, identity: str, compute: str) -> str:

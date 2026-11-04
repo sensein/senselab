@@ -14,6 +14,7 @@ from senselab.audio.tasks.speech_to_text import crisperwhisper as cw
 from senselab.audio.tasks.speech_to_text import (
     crisperwhisper_backend,  # noqa: F401 - declares the backend
 )
+from senselab.audio.tasks.speech_to_text.crisperwhisper_backend import CrisperWhisperParams
 from senselab.audio.tasks.speech_to_text.whisper_frontend import MIN_INPUT_NS
 from senselab_core.kernel.declare import REGISTRY
 from senselab_core.kernel.results import Transcript
@@ -74,15 +75,17 @@ def test_engine_param_selects_the_engine_that_decodes() -> None:
         def __init__(self, name: str, log: list[str]) -> None:
             self.name, self.log, self.stub = name, log, cw.StubModel()
 
-        def transcribe(self, samples: numpy.ndarray, language: str, max_new_tokens: int) -> cw.Decoded:
-            self.log.append(f"{self.name}:{language}:{max_new_tokens}")
-            return self.stub.transcribe(samples, language, max_new_tokens)
+        def transcribe(
+            self, samples: numpy.ndarray, language: str, max_new_tokens: int, confidence: bool
+        ) -> cw.Decoded:
+            self.log.append(f"{self.name}:{language}:{max_new_tokens}:{confidence}")
+            return self.stub.transcribe(samples, language, max_new_tokens, confidence)
 
     log: list[str] = []
     state = cw.State(None, "cpu", {e: Engine(e, log) for e in cw.ENGINES})
     params = {"language": "de", "timestamps": "none", "backend_params": {"engine": "ct2", "max_new_tokens": 9}}
     cw.handle(state, [_item("a", _tone())], params)
-    assert log == ["ct2:de:9"]
+    assert log == ["ct2:de:9:True"]
 
 
 @pytest.mark.logic
@@ -129,13 +132,20 @@ def test_input_below_the_declared_minimum_is_a_content_fault() -> None:
 
 @pytest.mark.logic
 def test_diagnostics_are_an_output_only_when_requested() -> None:
-    """`diagnostics` (windows decoded, chunks reported) is added by the reserved request param and absent otherwise."""
+    """`diagnostics` (windows, chunks, worker seconds) is added by the reserved request param and absent otherwise."""
     state = cw.load({"stub": True, "device": "cpu"})
     item = _item("a", _tone())
     [plain] = cw.handle(state, [item], PARAMS)
     [asked] = cw.handle(state, [item], {**PARAMS, cw.DIAGNOSTICS_KEY: True})
     assert set(plain["outputs"]) == {"transcript"}
-    assert asked["outputs"]["diagnostics"] == {"windows": 0, "chunks": None}
+    assert set(asked["outputs"]["diagnostics"]) == {
+        "windows",
+        "chunks",
+        "decode_s",
+        "confidence_s",
+        "engine_build_s",
+    }
+    assert asked["outputs"]["diagnostics"]["windows"] == 0 and asked["outputs"]["diagnostics"]["chunks"] is None
 
 
 @pytest.mark.logic
@@ -270,3 +280,12 @@ def test_long_form_decode_is_scored_with_real_weights(real_worker: RealWorkers, 
     [segment] = transcript.segments
     assert segment.confidence is not None and len(segment.children) > 10, diagnostics
     assert all(word.confidence is not None for word in segment.children), diagnostics
+
+
+@pytest.mark.logic
+def test_confidence_is_a_declared_backend_param_that_defaults_on() -> None:
+    """`confidence` is in the param schema, default true, and the worker accepts it."""
+    assert CrisperWhisperParams.model_fields["confidence"].default is True
+    state = cw.load({"stub": True, "device": "cpu"})
+    params = {**PARAMS, "backend_params": {"confidence": False}}
+    assert "outputs" in cw.handle(state, [_item("a", _tone())], params)[0]

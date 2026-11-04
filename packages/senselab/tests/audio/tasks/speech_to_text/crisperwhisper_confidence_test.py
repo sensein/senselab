@@ -148,7 +148,7 @@ class CrisperWhisper:
 def _transcribe(kind: str, case: str, merged: bool = False) -> tuple[cw.Decoded, list[list[int]]]:
     library = cw.Library.__new__(cw.Library)
     library.engine, library.model = kind, CrisperWhisper(kind, case, MergedResult if merged else Result)
-    return library.transcribe(numpy.zeros(160), "en", 8), library.model._engine.model.fed
+    return library.transcribe(numpy.zeros(160), "en", 8, True), library.model._engine.model.fed
 
 
 def _expected() -> tuple[float, list[float]]:
@@ -201,7 +201,7 @@ def test_chunks_that_do_not_match_the_windows_leave_the_decode_unscored() -> Non
 
     library = cw.Library.__new__(cw.Library)
     library.engine, library.model = "ct2", CrisperWhisper("ct2", "clean", Lost)
-    decoded = library.transcribe(numpy.zeros(160), "en", 8)
+    decoded = library.transcribe(numpy.zeros(160), "en", 8, True)
     assert decoded.mean is None and decoded.confidences == [None]
 
 
@@ -222,7 +222,7 @@ def test_a_multi_window_result_without_matching_chunks_is_unscored(kind: str) ->
     pytest.importorskip("torch")
     library = cw.Library.__new__(cw.Library)
     library.engine, library.model = kind, TwoWindows(kind, "clean")
-    decoded = library.transcribe(numpy.zeros(160), "en", 8)
+    decoded = library.transcribe(numpy.zeros(160), "en", 8, True)
     assert decoded.mean is None and decoded.confidences == [None, None]
     assert library.model._engine.model.fed == []
 
@@ -237,7 +237,7 @@ def test_a_word_count_that_disagrees_with_the_kept_words_leaves_the_mean_unscore
 
     library = cw.Library.__new__(cw.Library)
     library.engine, library.model = "ct2", CrisperWhisper("ct2", "clean", Miscounted)
-    decoded = library.transcribe(numpy.zeros(160), "en", 8)
+    decoded = library.transcribe(numpy.zeros(160), "en", 8, True)
     assert decoded.mean is None and decoded.confidences == [None, None]
 
 
@@ -280,7 +280,7 @@ def test_a_non_final_window_is_cut_at_the_merge_and_each_window_is_grouped_alone
     pytest.importorskip("torch")
     library = cw.Library.__new__(cw.Library)
     library.engine, library.model = "ct2", LongFormLibrary()
-    decoded = library.transcribe(numpy.zeros(160), "en", 8)
+    decoded = library.transcribe(numpy.zeros(160), "en", 8, True)
     shifted = LOGITS - LOGITS.max(axis=1, keepdims=True)
     lp = shifted - numpy.log(numpy.exp(shifted).sum(axis=1, keepdims=True))
     first, second = lp[[0, 1], [1, 2]], lp[[0, 1], [2, 3]]
@@ -333,3 +333,17 @@ def test_ct2_teacher_logits_refuse_a_row_count_other_than_the_tokens() -> None:
     assert ct2_teacher_logits(engine, Window("f", PROMPT, GEN)).tolist() == LOGITS.tolist()
     with pytest.raises(ValueError, match="logit rows"):
         ct2_teacher_logits(engine, Window("f", PROMPT, [*GEN, 1]))
+
+
+@pytest.mark.env
+@pytest.mark.parametrize("kind", ["ct2", "transformers"])
+def test_confidence_off_skips_the_pass_and_on_is_unchanged(kind: str) -> None:
+    """Off feeds the model no teacher-forced window and leaves every confidence none; on is the scored decode."""
+    pytest.importorskip("torch")
+    library = cw.Library.__new__(cw.Library)
+    library.engine, library.model = kind, CrisperWhisper(kind, "clean")
+    off = library.transcribe(numpy.zeros(160), "en", 8, False)
+    assert library.model._engine.model.fed == []
+    assert off.mean is None and set(off.confidences) <= {None} and off.confidence_s == 0.0 and off.windows == 1
+    on, _ = _transcribe(kind, "clean")
+    assert on.mean is not None and on.words == off.words and on.confidence_s > 0.0

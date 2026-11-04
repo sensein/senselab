@@ -22,10 +22,14 @@ _WORKER_SOURCES = {
 
 
 class CrisperWhisperParams(BackendParams):
-    """Backend params of `crisperwhisper`: the `engine` that decodes and the tokens a window may generate."""
+    """Backend params of `crisperwhisper`: `engine`, `max_new_tokens` and `confidence`.
+
+    `confidence` defaults to true; false skips the confidence pass and leaves every confidence none.
+    """
 
     engine: Engine = DEFAULT_ENGINE
     max_new_tokens: int = Field(default=MAX_NEW_TOKENS, ge=1)
+    confidence: bool = True
 
 
 @backend(
