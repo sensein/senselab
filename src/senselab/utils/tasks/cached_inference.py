@@ -71,7 +71,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 26
+CACHE_SCHEMA_VERSION = 27
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -273,6 +273,9 @@ Bumped 24 → 25 when CrisperWhisper and Qwen3-ASR began running on MPS under ``
 CrisperWhisper's word chunks began carrying a confidence ``score``.
 
 Bumped 25 → 26 when the temporal stage's SQUIM rows gained ``windows_n`` and ``span_s`` (PR #616).
+
+Bumped 26 → 27 when ``resample_audios`` replaced its Butterworth + speechbrain path with a
+Kaiser-windowed sinc resampler (issue #630), changing every resampled input.
 """
 
 

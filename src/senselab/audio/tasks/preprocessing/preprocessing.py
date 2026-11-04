@@ -12,16 +12,18 @@ import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import torch
+import torchaudio.functional as taf
 from scipy import signal
 
 from senselab.audio.data_structures import Audio
 
-try:
-    from speechbrain.augment.time_domain import Resample
-
-    SPEECHBRAIN_AVAILABLE = True
-except ModuleNotFoundError:
-    SPEECHBRAIN_AVAILABLE = False
+RESAMPLE_KAISER_PARAMS: Dict[str, Any] = {
+    "lowpass_filter_width": 64,
+    "rolloff": 0.9475937167399596,
+    "resampling_method": "sinc_interp_kaiser",
+    "beta": 14.769656459379492,
+}
+"""Parameters of the anti-aliasing sinc filter used by :func:`resample_audios` (torchaudio's "kaiser_best")."""
 
 
 # ---------------------------------------------------------------------
@@ -32,10 +34,11 @@ def resample_audios(
 ) -> List[Audio]:
     """Resample a batch of `Audio` objects to a target sampling rate.
 
-    For each channel, a zero-phase IIR low-pass filter (Butterworth, SOS) is applied,
-    then resampling is performed with `speechbrain.augment.time_domain.Resample`. An audio
-    whose `sampling_rate` already equals `resample_rate` is returned unchanged (waveform
-    untouched) when `lowcut` is `None`; passing an explicit `lowcut` always applies the filter.
+    Each channel is resampled with a Kaiser-windowed sinc filter
+    (``torchaudio.functional.resample`` with :data:`RESAMPLE_KAISER_PARAMS`). For a 16 kHz target the
+    passband is flat to about 7.4 kHz (-3 dB near 7.5 kHz) and content above 8 kHz is attenuated by
+    more than 100 dB. An audio whose `sampling_rate` already equals `resample_rate` is returned
+    unchanged when `lowcut` is `None`.
 
     Args:
         audios (list[Audio]):
@@ -43,19 +46,18 @@ def resample_audios(
         resample_rate (int):
             Target sampling rate in Hz.
         lowcut (float, optional):
-            Low-pass cutoff frequency in Hz (applied before resampling). If ``None``,
-            defaults to ``resample_rate / 2 - 100`` to avoid Nyquist artifacts.
+            Cutoff in Hz of an additional zero-phase Butterworth low-pass, designed at and applied
+            to the input's own sampling rate before resampling. Applied whenever given, including
+            when the rates already match. Must lie below the input's Nyquist frequency.
         order (int, optional):
-            Butterworth filter order (default: 4).
+            Order of the `lowcut` Butterworth filter (default: 4).
 
     Returns:
         list[Audio]: Resampled `Audio` objects (sampling rate set to `resample_rate`).
 
     Raises:
-        ModuleNotFoundError:
-            If `speechbrain` is not installed.
         ValueError:
-            If provided parameters are invalid.
+            If `lowcut` is not below the input's Nyquist frequency.
 
     Example:
         >>> from senselab.audio.tasks.preprocessing import resample_audios
@@ -65,37 +67,29 @@ def resample_audios(
         >>> out[0].sampling_rate
         16000
     """
-    if not SPEECHBRAIN_AVAILABLE:
-        raise ModuleNotFoundError(
-            "`speechbrain` is not installed. Please install senselab audio dependencies using `pip install senselab`."
-        )
-
     outs: List[Audio] = []
 
     for audio in audios:
-        # Defensive copy of metadata
         md = audio.metadata.copy()
+        source_rate = audio.sampling_rate
 
-        if lowcut is None and audio.sampling_rate == resample_rate:
+        if lowcut is None and source_rate == resample_rate:
             outs.append(Audio(waveform=audio.waveform, sampling_rate=resample_rate, metadata=md))
             continue
 
-        # Design low-pass if not provided
-        _lowcut = lowcut if lowcut is not None else (resample_rate / 2 - 100.0)
-        sos = signal.butter(order, _lowcut, btype="low", output="sos", fs=resample_rate)
+        waveform = audio.waveform.detach().cpu().float()
+        if lowcut is not None:
+            if not 0 < lowcut < source_rate / 2:
+                raise ValueError(
+                    f"lowcut {lowcut} Hz must lie in (0, {source_rate / 2}) Hz for a {source_rate} Hz input"
+                )
+            sos = signal.butter(order, lowcut, btype="low", output="sos", fs=source_rate)
+            waveform = torch.from_numpy(signal.sosfiltfilt(sos, waveform.numpy(), axis=-1).copy()).float()
 
-        # Per-channel IIR (zero-phase) then resample
-        resampler = Resample(orig_freq=audio.sampling_rate, new_freq=resample_rate)
-        channels = []
-        for ch in audio.waveform:
-            # sosfiltfilt works on numpy
-            filtered = signal.sosfiltfilt(sos, ch.detach().cpu().numpy()).copy()
-            filtered_t = torch.from_numpy(filtered).float().unsqueeze(0)  # [1, T]
-            res_ch = resampler(filtered_t).squeeze(0)  # [T']
-            channels.append(res_ch)
+        if source_rate != resample_rate:
+            waveform = taf.resample(waveform, source_rate, resample_rate, **RESAMPLE_KAISER_PARAMS)
 
-        resampled_waveform = torch.stack(channels, dim=0)  # [C, T']
-        outs.append(Audio(waveform=resampled_waveform, sampling_rate=resample_rate, metadata=md))
+        outs.append(Audio(waveform=waveform, sampling_rate=resample_rate, metadata=md))
 
     return outs
 
