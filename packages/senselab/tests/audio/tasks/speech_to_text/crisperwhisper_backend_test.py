@@ -135,7 +135,7 @@ def test_diagnostics_are_an_output_only_when_requested() -> None:
     [plain] = cw.handle(state, [item], PARAMS)
     [asked] = cw.handle(state, [item], {**PARAMS, cw.DIAGNOSTICS_KEY: True})
     assert set(plain["outputs"]) == {"transcript"}
-    assert asked["outputs"]["diagnostics"] == {"windows": 0, "chunks": None, "detail": None}
+    assert asked["outputs"]["diagnostics"] == {"windows": 0, "chunks": None}
 
 
 @pytest.mark.logic

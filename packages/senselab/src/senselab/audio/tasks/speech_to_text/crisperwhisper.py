@@ -14,7 +14,7 @@ import os
 import shutil
 import tempfile
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, get_args
@@ -22,7 +22,6 @@ from typing import Any, Literal, get_args
 import numpy
 from senselab_worker.fake import injected
 
-from senselab.audio.tasks.speech_to_text.token_confidence import word_texts
 from senselab.audio.tasks.speech_to_text.whisper_frontend import MIN_INPUT_NS
 from senselab.item_faults import NS_PER_S, clamp_ns, init_model, mono_samples
 
@@ -50,7 +49,6 @@ class Decoded:
     mean: float | None
     windows: int = 0
     chunks: int | None = None
-    detail: dict[str, Any] | None = None
 
 
 class StubModel:
@@ -112,11 +110,7 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
             duration_ns = round(samples.size / EXPECTED_RATE * NS_PER_S)
             outputs: dict[str, Any] = {"transcript": transcript(decoded, timestamps, clock_id, duration_ns)}
             if params.get(DIAGNOSTICS_KEY):
-                outputs["diagnostics"] = {
-                    "windows": decoded.windows,
-                    "chunks": decoded.chunks,
-                    "detail": decoded.detail,
-                }
+                outputs["diagnostics"] = {"windows": decoded.windows, "chunks": decoded.chunks}
             results.append({"outputs": outputs})
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
             results.append({"error": exc})
@@ -259,61 +253,7 @@ class Library:
             if len(scored) == len(words) and (not kept or sum(kept) == len(words)):
                 confidences = list(scored)
                 mean = None if merged["avg_logprob"] is None else math.exp(merged["avg_logprob"])
-        detail = _word_detail(captured, kept, words, confidences, decode, special)
-        return Decoded(words, confidences, mean, len(captured), len(chunks) if chunks else None, detail)
-
-
-def _word_detail(  # noqa: PLR0913 - the windows, the kept counts, the result's words and scores, and the decoder
-    windows: Sequence[Any],
-    kept: Sequence[int],
-    words: Sequence[Any],
-    confidences: Sequence[float | None],
-    decode: Callable[[int], str],
-    special: set[int] | None,
-) -> dict[str, Any]:
-    """Return how the library's word split and the backend's differ, per window, for the `_diagnostics` output.
-
-    The library's split is `crisperwhisper.word_timing.group_tokens_into_words`; the backend's is the rule
-    `word_confidences` groups by. Each window lists its id and word counts and the first five positions where the two
-    word texts differ.
-    """
-    try:
-        from crisperwhisper.word_timing import group_tokens_into_words  # noqa: PLC0415 - as above
-    except ImportError:
-        group_tokens_into_words = None  # the stand-in library of the logic tests has no word grouping
-
-    per_window = []
-    for index, window in enumerate(windows):
-        backend = word_texts(window.ids, decode, special)
-        library = (
-            None
-            if group_tokens_into_words is None
-            else group_tokens_into_words(window.ids, [decode(t) for t in window.ids])[1]
-        )
-        differing = (
-            []
-            if library is None
-            else [
-                [i, library[i] if i < len(library) else None, backend[i].strip() if i < len(backend) else None]
-                for i in range(max(len(library), len(backend)))
-                if (library[i] if i < len(library) else None) != (backend[i].strip() if i < len(backend) else None)
-            ]
-        )
-        per_window.append(
-            {
-                "ids": len(window.ids),
-                "chunk_words": kept[index] if index < len(kept) else None,
-                "library_words": None if library is None else len(library),
-                "backend_words": len(backend),
-                "differing": differing[:5],
-            }
-        )
-    return {
-        "result_words": len(words),
-        "scored_confidences": sum(c is not None for c in confidences),
-        "kept_words": sum(kept),
-        "windows": per_window,
-    }
+        return Decoded(words, confidences, mean, len(captured), len(chunks) if chunks else None)
 
 
 def _converted(snapshot: str, identity: str, compute: str) -> str:

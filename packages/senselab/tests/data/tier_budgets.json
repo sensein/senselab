@@ -23,7 +23,7 @@
         "env": {
             "budget_s": 600,
             "measured_s": 173.72,
-            "derivation": "Slowest env test of the same selection on a CPU node: crisperwhisper content-fault isolation with the transformers engine, 173.72 s (ORCD job 27822081 at 1448c4a1; H100 job 27822086 at most 29.62 s). Budget is three times the CPU measurement rounded up to 100 s, as for limits. The cold full selection's slowest tests (CPU 225.20 s, H100 163.15 s) are not env tests of this tier's CPU maximum; 600 s is 3.5 times the slowest env measurement (173.72 s) and 2.7 times the slowest test of any tier in the full selection, so it is kept."
+            "derivation": "Slowest env test of the same selection on a CPU node: crisperwhisper content-fault isolation with the transformers engine, 173.72 s (ORCD job 27822081 at 1448c4a1; H100 job 27822086 at most 29.62 s). Budget is three times the CPU measurement rounded up to 100 s, as for limits. The cold full selection at 7e82d161 (CPU job 27825439, H100 job 27825595) has slowest tests of 225.20 s (CPU, a limits test) and 163.15 s (H100); its per-tier durations were not recorded, so `measured_s` is the slowest env test known, 173.72 s. 600 s is 3.5 times that and 2.7 times the slowest test of any tier in the full run, so it is kept."
         }
     }
 }
