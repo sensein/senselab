@@ -326,7 +326,7 @@ def redaction_policy_text(policy: ReviewPolicy) -> str:
     Returns:
         The policy text, the one source every prompt that asks what the policy removes is built from.
     """
-    return policy.text + _identifier_rule()
+    return policy.text.rstrip() + "\n\n" + _identifier_rule()
 
 
 _POINT_8_OFF_TASK = (

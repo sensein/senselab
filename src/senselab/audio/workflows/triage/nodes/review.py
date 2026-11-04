@@ -52,7 +52,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
 )
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
 from senselab.audio.workflows.triage.residue import VOCAL, is_non_lexical
-from senselab.audio.workflows.triage.review_inputs import redaction_lexicon, review_policy
+from senselab.audio.workflows.triage.review_inputs import policy_fingerprint, redaction_lexicon, review_policy
 from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, task_lexicon
 from senselab.audio.workflows.triage.task_speech import item_set_family, lexical_voice_family, non_lexical_family
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, PII_SCAN_MISSING, REDACTION_LLM_ANNOTATION, SCANNED
@@ -800,6 +800,26 @@ def reading_from_cache(payload: Mapping[str, Any]) -> tuple[_Reading, list[dict[
     return _Reading(**fields_), [dict(review) for review in payload.get("reviews") or ()]
 
 
+POLICY_FINGERPRINT = "policy_fingerprint"
+"""The cached reading's record of the policy and word lists it was read under (:func:`policy_fingerprint`)."""
+
+
+def read_under_this_policy(payload: Mapping[str, Any]) -> bool:
+    """Whether a cached reading was read under the active profile's policy and word lists.
+
+    A reading cached before the fingerprint was recorded carries none; it was read under the policy senselab held in
+    code until plan step 6, which B2AI's profile carries unchanged, so it stands.
+
+    Args:
+        payload: The cached result.
+
+    Returns:
+        False only where the reading records another fingerprint.
+    """
+    recorded = payload.get(POLICY_FINGERPRINT)
+    return recorded is None or recorded == policy_fingerprint()
+
+
 def cache_reading(key: str, reading: _Reading, reviews: Sequence[Mapping[str, Any]]) -> bool:
     """Keep one answered reading under its key; an absent one is never kept.
 
@@ -815,7 +835,11 @@ def cache_reading(key: str, reading: _Reading, reviews: Sequence[Mapping[str, An
         return False
     return result_store(
         key,
-        {"reading": asdict(reading), "reviews": [dict(review) for review in reviews]},
+        {
+            "reading": asdict(reading),
+            "reviews": [dict(review) for review in reviews],
+            POLICY_FINGERPRINT: policy_fingerprint(),
+        },
         process=REVIEW_PROCESS,
         model_id=reading.model_id,
         commit_sha=reading.revision,
@@ -977,6 +1001,8 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
         revision = _resolved(settings)
         key = None if revision is None else review_cache_key(original, redacted, context, settings, revision, placeable)
         held = None if key is None else result_lookup(key)
+        if held is not None and not read_under_this_policy(held["result"]):
+            held = None
         if held is not None:
             reading, reviews = reading_from_cache(held["result"])
             cache = {"key": key, "hit": True}

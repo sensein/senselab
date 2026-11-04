@@ -108,6 +108,7 @@ from senselab.audio.workflows.triage.nodes.review import (
     LLM_REVIEW_MEASUREMENT,
     PROMPT_VERSION,
     READ_STATES,
+    read_under_this_policy,
     reading_key,
 )
 from senselab.audio.workflows.triage.nodes.review import NODE as REVIEW_NODE
@@ -130,6 +131,7 @@ from senselab.audio.workflows.triage.workflow import off_notes, require_stage
 from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
 from senselab.utils.prov_store import CHECKSUM_KEY, MTIME_KEY, SIZE_KEY, Entity, ProvStore, file_digest
 from senselab.utils.subprocess_venv import record_venv_use
+from senselab.utils.tasks.cached_inference import result_lookup
 
 RUN_SUBDIR = "run"
 STORE_FILE = "store.jsonl"
@@ -900,20 +902,23 @@ NAME_READER = "identity_from_name"
 """The function a dataset's ``hints.py`` may expose that reads a recording's identity off its file stem."""
 
 
-def load_name_reader(directory: Path) -> Callable[[str], RecordingIdentity] | None:
-    """The dataset's file-name reader, where its ``hints.py`` exposes one (senselab reads no file name itself).
+def load_hints(directory: Path) -> tuple[Callable[[Path], Any], Callable[[str], RecordingIdentity] | None]:
+    """A dataset's ``hints.py``, run once: its hint populator and its file-name reader.
 
     Args:
         directory: The directory holding ``hints.py``.
 
     Returns:
-        Its :data:`NAME_READER`, called with a file stem, or None where it exposes none.
+        Its ``build_hint``, and its :data:`NAME_READER` (called with a file stem) or None where it exposes none;
+        senselab reads no file name itself.
 
     Raises:
         FileNotFoundError: If the directory holds no importable ``hints.py``.
     """
-    reader: Callable[[str], RecordingIdentity] | None = getattr(_hints_module(directory), NAME_READER, None)
-    return reader
+    module = _hints_module(directory)
+    builder: Callable[[Path], Any] = module.build_hint
+    reader: Callable[[str], RecordingIdentity] | None = getattr(module, NAME_READER, None)
+    return builder, reader
 
 
 def source_of(run_root: Path) -> Path:
@@ -1196,7 +1201,8 @@ def check_replay_inputs(
     store records none, unless ``no_hint``; a store that records no task (written before ADMIT recorded one),
     unless a hint is given or ``no_hint``, since its recorded hint names no task and every branch would take its
     out-of-family mode; a recorded hint that carried a ``target_speaker`` (only its digest is stored), unless a
-    hint is given; a changed hint, unless ``allow_hint_change``. Anything else is accepted and recorded on
+    hint is given; a run recording no identity whose hint declares none (plan step 6a); a changed hint, unless
+    ``allow_hint_change``. Anything else is accepted and recorded on
     :class:`ReplayInputs`.
 
     Args:
@@ -1241,6 +1247,11 @@ def check_replay_inputs(
         )
     else:
         held, hint_from = recorded_hint(store), HINT_RECORDED
+    if recorded_identity(store) is None and not identity_of(held).sources:
+        raise ReplayRefused(
+            "this run records no identity and the hint it would replay with declares none, so it would record an "
+            "identity declaring nothing (senselab reads no file name, plan step 6a): pass the dataset's --hints"
+        )
     changed = changed_fields(store, held)
     if changed and not allow_hint_change:
         raise ReplayRefused(f"the hint differs from the recorded one ({', '.join(changed)}); replay the run instead")
@@ -1250,7 +1261,9 @@ def check_replay_inputs(
 def record_replayed_hint(store: ProvStore, hint: AudioHints | None, *, software: str) -> str | None:
     """Record the replay's hint and the identity it declares as the run's, retiring the record it replaces.
 
-    The identity is read off the stem of the file ADMIT was given (its ``audio_file``), as ADMIT read it.
+    The identity is the hint's (:func:`~senselab.audio.workflows.triage.identity.identity_of`); nothing is read off
+    a file name (plan step 6a). :func:`check_replay_inputs` has already refused a run that records no identity and
+    a hint that declares none.
 
     Args:
         store: The run's store.
@@ -1503,7 +1516,8 @@ def carry_reading_forward(
 ) -> tuple[str, str | None]:
     """Re-attach a reading a replay retired, where the replayed store holds exactly what it read.
 
-    The comparison is the reading's own result-cache key against the key the replayed store's texts
+    A reading whose cache entry records another policy fingerprint (the review policy and the word lists, plan step 6)
+    is read again. The comparison is the reading's own result-cache key against the key the replayed store's texts
     and task context give under the same commit. A match writes a REVIEW activity that used the held
     annotation, copies of its rounds and of the annotation derived from them, and retires the
     replay's own unanswered annotation. Anything else leaves the replay's annotation standing.
@@ -1540,6 +1554,9 @@ def carry_reading_forward(
         return REVIEW_NEEDS_REREAD, describe_exception(error)
     if key != held_key:
         return REVIEW_NEEDS_REREAD, "the transcript texts or task context the reading read have changed"
+    cached = result_lookup(held_key)
+    if cached is not None and not read_under_this_policy(cached["result"]):
+        return REVIEW_NEEDS_REREAD, "the review policy or the redaction word lists the reading read under have changed"
     activity = store.activity(
         node=REVIEW_NODE,
         step=READING_CARRIED_STEP,

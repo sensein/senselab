@@ -1031,3 +1031,14 @@ def test_v12_review_inputs_v3_require_the_instructions() -> None:
     assert full["instructions"] and review_inputs_complete(full)
     assert not review_inputs_complete({**full, "version": 2})
     assert not review_inputs_complete({key: value for key, value in full.items() if key != "instructions"})
+
+
+def test_the_policy_and_the_safe_harbor_list_are_separate_paragraphs_however_the_file_ends(tmp_path: Path) -> None:
+    """A dataset's policy file without a trailing blank line still reads apart from the list (step-6 review 5)."""
+    (tmp_path / "review_policy.txt").write_text("POLICY. Remove names.")
+    policy = redaction_review.load_review_policy(tmp_path / "review_policy.txt", DATA / "task_guidance.yaml")
+    text = redaction_review.redaction_policy_text(policy)
+    assert (
+        text.startswith("POLICY. Remove names.\n\n")
+        and redaction_review.redaction_policy_text(POLICY).count("\n\n\n") == 0
+    )

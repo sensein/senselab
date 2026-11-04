@@ -1284,3 +1284,12 @@ class TestBridge2AIsReviewPolicy:
         assert task_nature("story-recall-v2", policy) == "read_or_recall"
         assert task_nature("respiration-and-cough-v2-breath", policy) == "non_lexical"
         assert task_nature("open-response-questions", policy) == "open_response"
+
+
+def test_a_cached_reading_stands_only_under_the_policy_it_was_read_under() -> None:
+    """The fingerprint of the policy and word lists is recorded with a reading, not in its key (step-6 review 1)."""
+    from senselab.audio.workflows.triage.review_inputs import policy_fingerprint
+
+    assert review_module.read_under_this_policy({}), "a reading cached before the fingerprint stands"
+    assert review_module.read_under_this_policy({review_module.POLICY_FINGERPRINT: policy_fingerprint()})
+    assert not review_module.read_under_this_policy({review_module.POLICY_FINGERPRINT: "0" * 64})

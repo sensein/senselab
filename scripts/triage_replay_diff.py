@@ -96,8 +96,10 @@ def replayed_root(row: dict[str, Any], out_root: Path | None) -> Path:
 
     Args:
         row: The manifest row, carrying ``stem``, ``enhanced`` and the identity columns. The root is where the
-            replay places it without a hint (:func:`extend_replay_decisions.replay_identity`): the row's identity,
-            else the stem's. A replay whose hint moved the identity placed it elsewhere, and reads as not reached.
+            replay places it without a hint (:func:`extend_replay_decisions.replay_identity`): the row's identity. A
+            row recording none is refused: a replay placed it by the hint it ran with, which the row does not hold
+            (senselab reads no file name, plan step 6a). A replay whose hint moved the identity placed it elsewhere,
+            and reads as not reached.
         out_root: The tree the replay mirrored into, or None when it replayed in place.
 
     Returns:
@@ -106,11 +108,17 @@ def replayed_root(row: dict[str, Any], out_root: Path | None) -> Path:
     Raises:
         ValueError: If ``enhanced`` is not a stream path inside a run root.
         ManifestWithoutIdentity: If the row carries no identity columns.
+        ValueError: If the row's run records no identity, and so cannot say where a mirror placed it.
     """
     finished = run_root_of(Path(str(row["enhanced"])))
     if out_root is None:
         return finished
-    identity = row_identity(row) or identity_of(None)
+    identity = row_identity(row)
+    if identity is None:
+        raise ValueError(
+            "the row's run records no identity, so where the replay placed it is unknown: "
+            "rebuild the corpus table from the replayed runs"
+        )
     return out_root / entity_subdir(identity) / finished.name
 
 

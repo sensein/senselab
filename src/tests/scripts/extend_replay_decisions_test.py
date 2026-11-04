@@ -59,7 +59,15 @@ from senselab.audio.workflows.triage.hint_record import (
     hint_digest,
 )
 from senselab.audio.workflows.triage.hint_record import expected_speech_digest as prompts_digest
-from senselab.audio.workflows.triage.identity import declared_task_id, identity_of, recording_entity
+from senselab.audio.workflows.triage.identity import (
+    DECLARED_FROM,
+    DECLARED_PARTICIPANT,
+    DECLARED_SESSION,
+    DECLARED_TASK_ID,
+    declared_task_id,
+    identity_of,
+    recording_entity,
+)
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.common import find_measurement, software_agent, write_stream, write_verdict
 from senselab.audio.workflows.triage.nodes.preprocess import STIMULUS_MEASUREMENT, write_stimulus_alignment
@@ -715,6 +723,23 @@ class TestTheReplayChecksTheRunsRecord:
         assert given.hint_from == HINT_GIVEN
         none = check_replay_inputs(store, root, load_triage_config(), hint=None, hint_given=False, no_hint=True)
         assert none.hint is None
+
+    def test_a_run_recording_no_identity_is_refused_unless_the_hint_declares_one(self, tmp_path: Path) -> None:
+        """--no-hint would record an identity declaring nothing, which every later pass accepts (step-6 review 2)."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        _seed_run(root, hint=HINT_COUGH)
+        store = read_store(root)
+        for stream in store.entities("stream"):
+            for key in (DECLARED_PARTICIPANT, DECLARED_SESSION, DECLARED_TASK_ID, DECLARED_FROM):
+                stream.attributes.pop(key, None)
+        for activity in store.activities("ADMIT"):
+            for key in (DECLARED_PARTICIPANT, DECLARED_SESSION, DECLARED_TASK_ID, DECLARED_FROM):
+                activity.parameters.pop(key, None)
+        with pytest.raises(ReplayRefused, match="records no identity"):
+            check_replay_inputs(store, root, load_triage_config(), hint=None, hint_given=False, no_hint=True)
+        declaring = AudioHints(metadata={"participant_id": "sub-01", "session_id": "ses-01", "task_token": "x"})
+        given = check_replay_inputs(store, root, load_triage_config(), hint=declaring, hint_given=True)
+        assert given.hint_from == HINT_GIVEN
 
     def test_a_given_hint_that_differs_is_accepted_and_named(self, tmp_path: Path) -> None:
         """The caller's correction wins; the fields it moved are recorded."""

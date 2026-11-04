@@ -15,6 +15,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.extend import REPLAY_MARKER_STEP, REPLAY_NODE, live_decisions, retire_decisions
 from senselab.audio.workflows.triage.identity import identity_columns
@@ -230,3 +232,11 @@ class TestReport:
         """A fold over nothing says so rather than writing a report of zeroes silently."""
         (tmp_path / "slices").mkdir()
         assert cli.main(["report", str(tmp_path / "slices")]) == 1
+
+
+def test_a_row_recording_no_identity_cannot_be_placed_in_a_mirror(tmp_path: Path) -> None:
+    """Without the row's identity, where a hinted replay placed the mirror is unknown (step-6 review 3)."""
+    row = {"stem": "r", "enhanced": str(tmp_path / "r_20260920-000000" / "run" / "streams" / "enhanced.flac")}
+    row.update(identity_columns(None))
+    with pytest.raises(ValueError, match="records no identity"):
+        cli.replayed_root(row, tmp_path / "mirror")

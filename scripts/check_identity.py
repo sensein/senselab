@@ -46,10 +46,10 @@ import pyarrow.parquet as pq
 
 from senselab.audio.workflows.triage.dataset_profile import DatasetDataMissing
 from senselab.audio.workflows.triage.extend import (
+    NAME_READER,
     add_config_arguments,
     driver_config,
-    load_hint_builder,
-    load_name_reader,
+    load_hints,
 )
 from senselab.audio.workflows.triage.identity import (
     ROW_PARTICIPANT,
@@ -271,9 +271,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         scope = args.session_scope
         driver_config(args, require_values=False)
-        read_name = load_name_reader(args.hints) if args.hints is not None else None
+        build_hint, read_name = load_hints(args.hints) if args.hints is not None else (None, None)
+        if args.hints is not None and read_name is None:
+            print(
+                f"NOTE: {args.hints}/hints.py exposes no {NAME_READER}, so stem_disagrees is not checked",
+                file=sys.stderr,
+            )
         if args.recordings is not None:
-            build_hint = load_hint_builder(args.hints) if args.hints is not None else None
             records = records_before_run(read_recording_list(args.recordings), build_hint, read_name)
         else:
             records = records_after_run(args.table, read_name)

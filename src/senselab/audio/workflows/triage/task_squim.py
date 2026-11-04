@@ -25,6 +25,7 @@ import yaml  # type: ignore[import-untyped]
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.dataset_profile import data_values, profile_cache
+from senselab.audio.workflows.triage.live_evidence import UNDECLARED, declared_task_of
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
 from senselab.audio.workflows.triage.nodes.common import (
     find_measurement,
@@ -34,8 +35,6 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_measurement,
 )
 from senselab.audio.workflows.triage.nodes.verdict import NODE as VERDICT_NODE
-from senselab.audio.workflows.triage.recording_vectors import stem_of
-from senselab.audio.workflows.triage.routing_analysis.families import task_family
 from senselab.audio.workflows.triage.task_audio import MEASUREMENT as TASK_AUDIO_MEASUREMENT
 from senselab.audio.workflows.triage.task_audio import PLAIN, sample_bounds, task_extent
 from senselab.utils.prov_store import Entity, ProvStore
@@ -182,17 +181,21 @@ def branch_of_family(family: str | None) -> str | None:
 
 
 def declared_family(store: ProvStore) -> str | None:
-    """The recording's declared family, as the fold recorded it.
+    """The recording's declared family: the fold's, else the task ADMIT recorded.
 
     Args:
         store: The run's store.
 
     Returns:
-        The family, or None where the fold records none.
+        The family, or None where neither records one (a pass over the store requires a recorded identity, plan
+        step 6a, so a verdict from before the fold recorded its family still has ADMIT's).
     """
     folded = find_verdict(store, VERDICT_NODE)
     family = None if folded is None else folded.attributes.get("declared_family")
-    return str(family) if family else None
+    if family:
+        return str(family)
+    recorded = declared_task_of(store)[1]
+    return recorded if recorded != UNDECLARED else None
 
 
 def weights_path(asset: str) -> Path:

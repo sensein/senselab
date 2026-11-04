@@ -196,7 +196,8 @@ def replay_identity(
         hint_given: Whether a hint was given (``--hints``).
 
     Returns:
-        The given hint's identity; else the one the run records; else the stem's (a run that records none).
+        The given hint's identity; else the one the run records; else an identity declaring nothing (a run that
+        records none; the replay refuses such a run unless its hint declares one).
     """
     if hint_given:
         return identity_of(hint)

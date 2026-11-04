@@ -546,6 +546,19 @@ STAGE_DATASET_PATHS: Mapping[str, tuple[str, ...]] = {
 }
 """Dataset paths only some stages read, and which: a run needs one only when one of its stages runs (step 6b)."""
 
+
+def stage_dataset_paths(running: Collection[str]) -> tuple[str, ...]:
+    """The dataset paths of :data:`STAGE_DATASET_PATHS` a run driving ``running`` needs.
+
+    Args:
+        running: The stages the run drives.
+
+    Returns:
+        The paths one of whose stages runs, in the table's order.
+    """
+    return tuple(path for path, stages in STAGE_DATASET_PATHS.items() if any(stage in running for stage in stages))
+
+
 PROFILE_VALUES_FILE = "profile_values.yaml"
 """The packaged list of every value senselab leaves to a dataset profile, its kind and whether a run needs it."""
 
@@ -618,8 +631,7 @@ def missing_dataset_values(config_values: Mapping[str, Any]) -> list[str]:
     missing = []
     off = off_notes(config_values)
     running = frozenset(stage for stage in STAGE_NAMES if stage not in off)
-    stage_paths = [path for path, stages in STAGE_DATASET_PATHS.items() if any(stage in running for stage in stages)]
-    for relative in (*REQUIRED_DATASET_PATHS, *stage_paths):
+    for relative in (*REQUIRED_DATASET_PATHS, *stage_dataset_paths(running)):
         try:
             path = data_path(relative)
         except DatasetDataMissing:

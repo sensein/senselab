@@ -17,7 +17,7 @@ import datetime
 import shutil
 import textwrap
 from pathlib import Path
-from typing import Any, Collection, Iterator, Mapping
+from typing import Any, Collection, Iterator, Mapping, Sequence
 
 import yaml  # type: ignore[import-untyped]
 
@@ -28,12 +28,12 @@ from senselab.audio.workflows.triage.dataset_profile import (
     PACKAGED_DATA,
     REQUIRED_DATASET_PATHS,
     SENSELAB_PROFILE,
-    STAGE_DATASET_PATHS,
     DatasetDataMissing,
     data_values,
     load_profile,
     needed,
     profile_values,
+    stage_dataset_paths,
 )
 from senselab.audio.workflows.triage.workflow import STAGE_NAMES, check_stages, listed_stages, running_stages
 
@@ -163,9 +163,8 @@ def _base_config_values(reference: str | None) -> dict[str, Any]:
             dataset_profile.activate_profile(before)
 
 
-def _workflow_lines(reference: str | None, off: Collection[str]) -> list[str]:
+def _workflow_lines(listed: Sequence[str], off: Collection[str]) -> list[str]:
     """The ``workflow`` section a template's config carries when its workflow leaves stages off."""
-    listed = _with_off(_base_config_values(reference), off)["workflow"]["stages"]
     return [
         f"# The stages this dataset runs; {', '.join(sorted(off))} are off, and no value only they read is asked for.",
         "workflow:",
@@ -237,12 +236,11 @@ def write_template(
     reference = _absolute(extends)
     base = load_profile(reference) if reference is not None else None
     blanks = values_to_supply(reference, off=off) if supply is None else supply
-    workflow = _workflow_lines(reference, off) if off else []
+    workflow_values = _with_off(_base_config_values(reference), off)
+    workflow = _workflow_lines(workflow_values["workflow"]["stages"], off) if off else []
     root.mkdir(parents=True)
     files: dict[str, str] = {}
-    running = running_stages(_with_off(_base_config_values(reference), off))
-    stage_paths = [path for path, stages in STAGE_DATASET_PATHS.items() if any(stage in running for stage in stages)]
-    for relative in (*REQUIRED_DATASET_PATHS, *stage_paths):
+    for relative in (*REQUIRED_DATASET_PATHS, *stage_dataset_paths(running_stages(workflow_values))):
         skeleton = TEMPLATE_DIR / relative
         if (base is not None and base.resolve(relative) is not None) or not skeleton.is_file():
             continue
