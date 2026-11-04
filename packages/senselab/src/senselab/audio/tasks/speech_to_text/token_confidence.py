@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "capture_token_confidence",
+    "generate_with_logits",
+    "logprob_block",
     "merge_confidence_blocks",
     "token_confidence_from_logits",
     "special_token_ids",
@@ -155,7 +157,6 @@ def token_confidence_from_logits(
     if steps == 0 or sequences.ndim != _LOGIT_DIMS or sequences.shape[1] < steps:
         return [dict.fromkeys(_BLOCK_KEYS) for _ in range(batch_size)]
 
-    excluded = special_token_ids or set()
     scored_ids = sequences[:, -steps:]
     scored: list[list[int]] = [[] for _ in range(batch_size)]
     chosen: list[list[float]] = [[] for _ in range(batch_size)]
@@ -169,17 +170,20 @@ def token_confidence_from_logits(
             scored[row].append(token_id)
             chosen[row].append(float(logprobs[row, token_id]))
 
-    out: list[dict[str, Any]] = []
-    for row in range(batch_size):
-        content = [p for t, p in zip(scored[row], chosen[row]) if t not in excluded]
-        out.append(
-            {
-                "avg_logprob": (sum(content) / len(content)) if content else None,
-                "tokens": scored[row] or None,
-                "token_logprob": chosen[row] or None,
-            }
-        )
-    return out
+    return [logprob_block(scored[row], chosen[row], special_token_ids) for row in range(batch_size)]
+
+
+def logprob_block(
+    tokens: Sequence[int], token_logprob: Sequence[float], special_token_ids: Optional[set[int]] = None
+) -> dict[str, Any]:
+    """Return the block of scored `tokens`: `avg_logprob` over the non-special ones, `tokens`, `token_logprob`."""
+    excluded = special_token_ids or set()
+    content = [p for t, p in zip(tokens, token_logprob) if t not in excluded]
+    return {
+        "avg_logprob": (sum(content) / len(content)) if content else None,
+        "tokens": list(tokens) or None,
+        "token_logprob": list(token_logprob) or None,
+    }
 
 
 @contextlib.contextmanager
@@ -191,9 +195,7 @@ def capture_token_confidence(
     """Wrap `pipe.model.generate` for the duration of the block to harvest per-token confidence.
 
     Yields a list that accumulates one block per generated sequence (one per transcript for a long-form call), in
-    call order. The wrapper adds `output_logits` and `return_dict_in_generate` to every generate call, returns what
-    the caller would have received without them, and is removed on exit. A backend that ignores those flags
-    contributes nothing.
+    call order. The wrapper is `generate_with_logits`. A backend that ignores its flags contributes nothing.
 
     Args:
         pipe: A transformers ASR pipeline exposing `.model.generate`.
@@ -203,13 +205,6 @@ def capture_token_confidence(
         The accumulating list of blocks.
     """
     captured: list[dict[str, Any]] = []
-    model = getattr(pipe, "model", None)
-    if model is None or not callable(getattr(model, "generate", None)):
-        yield captured
-        return
-
-    original = model.generate
-    had_own_attr = "generate" in vars(model)
 
     def _score(step_logits: Any, sequences: Any) -> list[dict[str, Any]]:  # noqa: ANN401 - tensors
         return token_confidence_from_logits(
@@ -217,6 +212,32 @@ def capture_token_confidence(
             sequences=sequences,
             special_token_ids=special_token_ids,
         )
+
+    def _record(args: tuple[Any, ...], kwargs: dict[str, Any], result: Any) -> None:  # noqa: ANN401 - a ModelOutput
+        captured.extend(_harvest(result, _score))
+
+    with generate_with_logits(getattr(pipe, "model", None), _record):
+        yield captured
+
+
+@contextlib.contextmanager
+def generate_with_logits(
+    model: Any,  # noqa: ANN401 - a transformers model
+    record: Callable[[tuple[Any, ...], dict[str, Any], Any], None],
+) -> Iterator[None]:
+    """Wrap `model.generate` for the block so every call also returns its raw logits, handed to `record`.
+
+    The wrapper adds `output_logits` and `return_dict_in_generate`, calls `record(args, kwargs, result)` with the
+    caller's arguments, and returns what the caller would have received without the flags. A model that refuses
+    the flags is called as asked and records nothing; a `record` that fails on an unexpected output records
+    nothing. The wrapper is removed on exit; a model without `generate` is left alone.
+    """
+    if model is None or not callable(getattr(model, "generate", None)):
+        yield
+        return
+
+    original = model.generate
+    had_own_attr = "generate" in vars(model)
 
     def _wrapped(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 - passthrough
         caller_wants_dict = bool(
@@ -228,15 +249,13 @@ def capture_token_confidence(
             result = original(*args, **{**kwargs, "output_logits": True, "return_dict_in_generate": True})
         except TypeError:
             return original(*args, **kwargs)
-        try:
-            captured.extend(_harvest(result, _score))
-        except (RuntimeError, ValueError, IndexError, TypeError, AttributeError, KeyError):
-            pass
+        with contextlib.suppress(RuntimeError, ValueError, IndexError, TypeError, AttributeError, KeyError):
+            record(args, kwargs, result)
         return result if caller_wants_dict else _sequences_of(result)
 
     model.generate = _wrapped
     try:
-        yield captured
+        yield
     finally:
         if had_own_attr:
             model.generate = original

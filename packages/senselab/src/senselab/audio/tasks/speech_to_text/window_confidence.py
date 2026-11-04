@@ -1,26 +1,35 @@
-"""Token confidence of a CrisperWhisper decode: each window's final ids, teacher-forced once, scored from raw logits.
+"""Token confidence of a CrisperWhisper decode: each window's final ids, scored from the decode's own computation.
 
-`capture_windows` records the ids each window finally emits; `ct2_teacher_logits` and
-`transformers_teacher_logits` give the raw logits an engine assigns those ids; `window_confidence` scores them with
-`token_confidence_from_logits`, one block per window. `torch`, `numpy` and `ctranslate2` are imported only where
-logits are scored, so importing this module loads no framework.
+`capture_windows` records the ids each window finally emits and, on ct2, the encoder output its decode used.
+On transformers, `capture_decodes` records the log-probabilities of every `generate` call and `spliced_block`
+reads a window's from them. On ct2, `ct2_window_logits` gives the raw logits of a window's ids from one decoder pass
+over the recorded encoder output, and `window_confidence` scores them, one block per window. `torch`, `numpy` and
+`ctranslate2` are imported only where logits are scored, so importing this module loads no framework.
 """
 
 from __future__ import annotations
 
 import contextlib
+import time
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
-from senselab.audio.tasks.speech_to_text.token_confidence import token_confidence_from_logits, word_prefix
+from senselab.audio.tasks.speech_to_text.token_confidence import (
+    generate_with_logits,
+    logprob_block,
+    token_confidence_from_logits,
+    word_prefix,
+)
 
 __all__ = [
+    "Decode",
     "Window",
+    "capture_decodes",
     "capture_windows",
-    "ct2_teacher_logits",
+    "ct2_window_logits",
+    "spliced_block",
     "surviving_windows",
-    "transformers_teacher_logits",
     "window_confidence",
 ]
 
@@ -28,41 +37,75 @@ DECODES = ("generate_with_repair", "generate_with_repair_and_attention")
 """The engine methods that decode one window, each `(features, prompt_tokens, ...)` returning its ids first."""
 REPLACES = "cross_attention_for_tokens"
 """The engine method `(features, prompt_tokens, gen_ids)` the library calls when it replaces a window's ids."""
+SEGMENT = "generate_greedy_with_attention"
+"""The ct2 engine method `(encoded, prompt, ...)` returning `(state, ids)` that a window decode calls per segment."""
 
 
 @dataclass(frozen=True)
 class Window:
-    """One decoded window: its encoder input, its prompt, and the ids it emits."""
+    """One decoded window: its encoder input, its prompt, the ids it emits, and its decode's encoder output if seen."""
 
     features: Any
     prompt_tokens: list[int]
     ids: list[int]
+    encoded: Any = None
+
+
+@dataclass
+class Decode:
+    """One `generate` call: its encoder input, decoder prefix and generated ids, and the log-probabilities it saw.
+
+    `own[k]` is the log-probability of `generated[k]`; `tail`, when the call has a step past its ids, is the
+    log-probability row of that step over the vocabulary.
+    """
+
+    features: Any
+    prefix: list[int]
+    generated: list[int]
+    own: list[float]
+    tail: Any = None
+
+
+@dataclass
+class Capture:
+    """What `capture_decodes` records: the calls, and the seconds spent scoring them."""
+
+    decodes: list[Decode] = field(default_factory=list)
+    scoring_s: float = 0.0
 
 
 @contextlib.contextmanager
 def capture_windows(engine: Any) -> Iterator[list[Window]]:  # noqa: ANN401 - a crisperwhisper engine
-    """Wrap the `DECODES` and `REPLACES` of `engine` for the block, recording each window's final ids.
+    """Wrap the `DECODES`, `REPLACES` and (if present) `SEGMENT` of `engine` for the block, recording each window.
 
-    A decode records a window; a `REPLACES` call on the same `features` and prompt replaces that window's ids (coverage
+    A decode records a window, with the encoder output of its first `SEGMENT` call on its own prompt; a `REPLACES`
+    call on the same `features` and prompt replaces that window's ids and keeps its encoder output (coverage
     fallback, early-EOT recovery). Yields the windows in decode order. The wrappers return what the caller would
     have received and are removed on exit.
     """
     windows: list[Window] = []
     index: dict[tuple[int, tuple[int, ...]], int] = {}
+    segments: list[tuple[Any, list[int]]] = []
 
-    def _record(features: Any, prompt_tokens: Sequence[int], ids: Sequence[int]) -> None:  # noqa: ANN401
-        window = Window(features, [int(t) for t in prompt_tokens], [int(t) for t in ids])
-        key = (id(features), tuple(window.prompt_tokens))
+    def _record(features: Any, prompt_tokens: Sequence[int], ids: Sequence[int], encoded: Any) -> None:  # noqa: ANN401
+        key = (id(features), tuple(int(t) for t in prompt_tokens))
         if key in index:
-            windows[index[key]] = window
+            old = windows[index[key]]
+            windows[index[key]] = replace(
+                old, ids=[int(t) for t in ids], encoded=encoded if old.encoded is None else old.encoded
+            )
         else:
             index[key] = len(windows)
-            windows.append(window)
+            windows.append(Window(features, list(key[1]), [int(t) for t in ids], encoded))
 
     def _decode(original: Callable[..., Any]) -> Callable[..., Any]:
         def call(features: Any, prompt_tokens: Sequence[int], *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            segments.clear()
             result = original(features, prompt_tokens, *args, **kwargs)
-            _record(features, prompt_tokens, result[0] if isinstance(result, tuple) else result)
+            prompt = [int(t) for t in prompt_tokens]
+            encoded = next((enc for enc, p in segments if p == prompt), None)
+            segments.clear()
+            _record(features, prompt, result[0] if isinstance(result, tuple) else result, encoded)
             return result
 
         return call
@@ -70,24 +113,111 @@ def capture_windows(engine: Any) -> Iterator[list[Window]]:  # noqa: ANN401 - a 
     def _replace(original: Callable[..., Any]) -> Callable[..., Any]:
         def call(features: Any, prompt_tokens: Sequence[int], gen_ids: Sequence[int]) -> Any:  # noqa: ANN401
             result = original(features, prompt_tokens, gen_ids)
-            _record(features, prompt_tokens, gen_ids)
+            _record(features, prompt_tokens, gen_ids, None)
             return result
 
         return call
 
-    wrappers = {name: _decode for name in DECODES} | {REPLACES: _replace}
-    originals = {name: getattr(engine, name) for name in wrappers}
-    own = {name for name in wrappers if name in vars(engine)}
-    for name, wrap in wrappers.items():
-        setattr(engine, name, wrap(originals[name]))
-    try:
+    def _segment(original: Callable[..., Any]) -> Callable[..., Any]:
+        def call(encoded: Any, prompt: Sequence[int], *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            segments.append((encoded, [int(t) for t in prompt]))
+            return original(encoded, prompt, *args, **kwargs)
+
+        return call
+
+    wrappers: dict[str, Callable[[Callable[..., Any]], Callable[..., Any]]] = {name: _decode for name in DECODES}
+    wrappers[REPLACES] = _replace
+    if callable(getattr(engine, SEGMENT, None)):
+        wrappers[SEGMENT] = _segment
+    with _patched(engine, wrappers):
         yield windows
+
+
+@contextlib.contextmanager
+def _patched(target: Any, wrappers: dict[str, Callable[[Callable[..., Any]], Callable[..., Any]]]) -> Iterator[None]:  # noqa: ANN401
+    originals = {name: getattr(target, name) for name in wrappers}
+    own = {name for name in wrappers if name in vars(target)}
+    for name, wrap in wrappers.items():
+        setattr(target, name, wrap(originals[name]))
+    try:
+        yield
     finally:
         for name, original in originals.items():
             if name in own:
-                setattr(engine, name, original)
+                setattr(target, name, original)
             else:
-                delattr(engine, name)
+                delattr(target, name)
+
+
+@contextlib.contextmanager
+def capture_decodes(model: Any) -> Iterator[Capture]:  # noqa: ANN401 - a transformers model
+    """Wrap `model.generate` for the block (`generate_with_logits`), recording every call as a `Decode`."""
+    capture = Capture()
+
+    def _record(args: tuple[Any, ...], kwargs: dict[str, Any], result: Any) -> None:  # noqa: ANN401 - a ModelOutput
+        import torch  # noqa: PLC0415 - torch loads only where logits are scored
+
+        started = time.perf_counter()
+        features = args[0] if args else kwargs.get("input_features")
+        given = kwargs.get("decoder_input_ids")
+        prefix = [] if given is None else [int(t) for t in given[0].tolist()]
+        sequence = [int(t) for t in result.sequences[0].tolist()]
+        generated = sequence[len(prefix) :] if sequence[: len(prefix)] == prefix else sequence
+        steps = len(result.logits)
+        mine = min(len(generated), steps)
+        if steps:
+            logprobs = torch.log_softmax(torch.stack([row[0] for row in result.logits]).float(), dim=-1)
+            at = torch.tensor(generated[:mine], dtype=torch.long, device=logprobs.device)
+            own = logprobs[torch.arange(mine, device=logprobs.device), at].tolist()
+            tail = logprobs[mine].cpu() if steps > mine else None
+            capture.decodes.append(Decode(features, prefix, generated[:mine], own, tail))
+        capture.scoring_s += time.perf_counter() - started
+
+    with generate_with_logits(model, _record):
+        yield capture
+
+
+def spliced_block(
+    window: Window, decodes: Sequence[Decode], special_token_ids: Optional[set[int]] = None
+) -> dict[str, Any] | None:
+    """Return the block of `window`'s ids read from the `decodes` on its features, or None if one id has none.
+
+    Id `j` is read from a decode whose prefix and first `k` generated ids are the window's prompt and first `j` ids:
+    `own[k]` if that decode generated id `j` there, else its `tail` row when `k` is its length. A repaired window is
+    the earlier call up to the rewind, then the later call.
+    """
+    ids, prompt = window.ids, window.prompt_tokens
+    full = prompt + ids
+    calls = [d for d in decodes if d.features is window.features]
+    values: list[float] = []
+    current: Decode | None = None
+    offset = 0
+    for j, token in enumerate(ids):
+        if current is None or not _reads(current, offset, token):
+            current, offset = _find(calls, full, len(prompt) + j, token)
+            if current is None:
+                return None
+        values.append(current.own[offset] if offset < len(current.own) else float(current.tail[token]))
+        offset += 1
+    return logprob_block(ids, values, special_token_ids)
+
+
+def _reads(decode: Decode, offset: int, token: int) -> bool:
+    if offset < len(decode.generated):
+        return decode.generated[offset] == token
+    return offset == len(decode.generated) and decode.tail is not None
+
+
+def _find(calls: Sequence[Decode], full: list[int], position: int, token: int) -> tuple[Decode | None, int]:
+    for decode in reversed(calls):
+        offset = position - len(decode.prefix)
+        if (
+            0 <= offset <= len(decode.generated)
+            and decode.prefix + decode.generated[:offset] == full[:position]
+            and _reads(decode, offset, token)
+        ):
+            return decode, offset
+    return None, 0
 
 
 def surviving_windows(
@@ -119,17 +249,19 @@ def _host(view: Any) -> Any:  # noqa: ANN401 - a ctranslate2 StorageView or a nu
     return numpy.array(view.to(ctranslate2.DataType.float32).to_device(ctranslate2.Device.cpu))
 
 
-def ct2_teacher_logits(engine: Any, window: Window) -> Any:  # noqa: ANN401 - a CT2Engine in, a numpy array out
+def ct2_window_logits(engine: Any, window: Window) -> Any:  # noqa: ANN401 - a CT2Engine in, a numpy array out
     """Return the raw logits `(len(ids), vocab)` with which the ct2 engine predicts each of the window's ids.
 
-    `prefill` of the prompt gives the row predicting `ids[0]`; `forward_batch` over `ids[:-1]` gives the rest.
+    `prefill` of the prompt on the window's recorded encoder output (its mel when none was recorded) gives the row
+    predicting `ids[0]`; `forward_batch` over `ids[:-1]` gives the rest.
 
     Raises:
         ValueError: if the model returns a row count other than `len(ids)`.
     """
     import numpy  # noqa: PLC0415 - loads only where ct2 logits are scored
 
-    state, first = engine.model.prefill(window.features, window.prompt_tokens)
+    source = window.features if window.encoded is None else window.encoded
+    state, first = engine.model.prefill(source, window.prompt_tokens)
     head = _host(first)
     rows = [head.reshape(-1, head.shape[-1])[-1:]]
     if len(window.ids) > 1:
@@ -141,32 +273,19 @@ def ct2_teacher_logits(engine: Any, window: Window) -> Any:  # noqa: ANN401 - a 
     return logits
 
 
-def transformers_teacher_logits(engine: Any, window: Window) -> Any:  # noqa: ANN401 - an engine in, a tensor out
-    """Return the raw logits `(len(ids), vocab)` with which the transformers engine predicts each of the window's ids.
-
-    One forward of `prompt + ids[:-1]`; its last `len(ids)` positions predict the ids.
-    """
-    import torch  # noqa: PLC0415 - torch loads only where logits are scored
-
-    decoder = torch.tensor([window.prompt_tokens + window.ids[:-1]], device=engine.device, dtype=torch.long)
-    with torch.no_grad():
-        out = engine.model(input_features=window.features, decoder_input_ids=decoder, use_cache=False)
-    return out.logits[0, -len(window.ids) :].float().cpu()
-
-
 def window_confidence(
     engine: Any,  # noqa: ANN401 - a crisperwhisper engine
     windows: Sequence[Window],
-    teacher_logits: Callable[[Any, Window], Any],
+    window_logits: Callable[[Any, Window], Any],
     special_token_ids: Optional[set[int]] = None,
 ) -> list[dict[str, Any]]:
-    """Return one `token_confidence_from_logits` block per window with ids, scored from `teacher_logits`."""
+    """Return one `token_confidence_from_logits` block per window with ids, scored from `window_logits`."""
     import torch  # noqa: PLC0415 - torch loads only where logits are scored
 
     blocks: list[dict[str, Any]] = []
     for window in windows:
         if window.ids:
-            logits = torch.as_tensor(teacher_logits(engine, window))
+            logits = torch.as_tensor(window_logits(engine, window))
             blocks.extend(
                 token_confidence_from_logits(
                     logits=list(logits), sequences=torch.tensor([window.ids]), special_token_ids=special_token_ids

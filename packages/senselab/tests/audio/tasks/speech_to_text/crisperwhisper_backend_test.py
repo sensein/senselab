@@ -145,6 +145,7 @@ def test_diagnostics_are_an_output_only_when_requested() -> None:
         "decode_s",
         "confidence_s",
         "engine_build_s",
+        "encode_reused",
     }
     assert asked["outputs"]["diagnostics"]["windows"] == 0 and asked["outputs"]["diagnostics"]["chunks"] is None
 
@@ -255,11 +256,12 @@ def _long_speech() -> Audio:
 @pytest.mark.model
 @pytest.mark.parametrize("engine", cw.ENGINES)
 def test_long_form_decode_is_scored_with_real_weights(real_worker: RealWorkers, engine: str) -> None:
-    """A real speech item over 30 s has several windows and as many chunks, and every confidence is present."""
+    """A real item over 30 s has several windows, as many chunks, every confidence, and no second encoder pass."""
     params = {**PARAMS, "backend_params": {"engine": engine}, cw.DIAGNOSTICS_KEY: True}
     [result] = real_worker("speech_to_text", "crisperwhisper").run([_item("long", _long_speech())], params)
     diagnostics = result["outputs"]["diagnostics"]
     assert diagnostics["windows"] >= 2 and diagnostics["chunks"] == diagnostics["windows"], diagnostics
+    assert 0 < diagnostics["encode_reused"] <= diagnostics["windows"], diagnostics
     transcript = from_wire_form(result["outputs"]["transcript"])
     assert isinstance(transcript, Transcript)
     [segment] = transcript.segments

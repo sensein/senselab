@@ -6,6 +6,7 @@ builds the engine `backend_params["engine"]` names (`ct2` or `transformers`) on 
 `torch`, `soundfile` and `huggingface_hub` load inside the engine.
 """
 
+import contextlib
 import functools
 import hashlib
 import importlib.metadata
@@ -38,7 +39,8 @@ DEFAULT_LANGUAGE = "en"
 COMPUTE_TYPES = {"cuda": "float16", "mps": "float16", "cpu": "float32"}
 _INIT_KEYS = frozenset({"stub", "model", "device", "array_dir"})
 DIAGNOSTICS_KEY = "_diagnostics"
-"""The request param that adds the `diagnostics` output: windows, chunks and the worker's seconds per phase."""
+"""The request param that adds the `diagnostics` output: windows, chunks, the worker's seconds per phase, and how
+many scored windows reused the decode's encoder pass."""
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,7 @@ class Decoded:
     chunks: int | None = None
     decode_s: float = 0.0
     confidence_s: float = 0.0
+    encode_reused: int = 0
 
 
 class StubModel:
@@ -122,6 +125,7 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
                     "decode_s": decoded.decode_s,
                     "confidence_s": decoded.confidence_s,
                     "engine_build_s": engine_build_s,
+                    "encode_reused": decoded.encode_reused,
                 }
             results.append({"outputs": outputs})
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
@@ -211,9 +215,9 @@ class Library:
     def transcribe(self, samples: numpy.ndarray, language: str, max_new_tokens: int, confidence: bool) -> Decoded:
         """Return the decode of `samples`, with its mean and word confidences unless `confidence` is false.
 
-        Both engines teacher-force each window's final ids once and score them by raw-logit log-probability,
-        excluding the engine's `all_special_ids`. With `confidence` false that pass does not run and every
-        confidence is none.
+        Each window's final ids are scored by raw-logit log-probability, excluding the engine's `all_special_ids`:
+        on `transformers` from the decode's own logits, on `ct2` from one decoder pass over the decode's own
+        encoder output. With `confidence` false no logits are recorded, nothing is scored and every confidence is none.
         """
         import soundfile  # noqa: PLC0415 - loads in the engine only
 
@@ -222,40 +226,52 @@ class Library:
             word_confidences,
         )
         from senselab.audio.tasks.speech_to_text.window_confidence import (  # noqa: PLC0415 - as above
+            Capture,
+            capture_decodes,
             capture_windows,
-            ct2_teacher_logits,
+            ct2_window_logits,
+            spliced_block,
             surviving_windows,
-            transformers_teacher_logits,
             window_confidence,
         )
 
         engine = self.model._engine
         special = {int(i) for i in engine.all_special_ids} or None
+        logits_of_decode = confidence and self.engine == "transformers"
         started = time.perf_counter()
-        with tempfile.TemporaryDirectory(prefix="senselab-crisperwhisper-") as scratch:
+        with contextlib.ExitStack() as stack, tempfile.TemporaryDirectory(prefix="senselab-crisperwhisper-") as scratch:
+            capture = stack.enter_context(capture_decodes(engine.model)) if logits_of_decode else Capture()
+            windows = stack.enter_context(capture_windows(engine))
             wav = Path(scratch) / "audio.wav"
             soundfile.write(str(wav), samples, EXPECTED_RATE, subtype="FLOAT")
-            with capture_windows(engine) as windows:
-                result = self.model.transcribe(
-                    str(wav),
-                    language=language,
-                    word_timestamps=True,
-                    longform_strategy=LONGFORM_STRATEGY,
-                    max_new_tokens=max_new_tokens,
-                )
-        decode_s = time.perf_counter() - started
+            result = self.model.transcribe(
+                str(wav),
+                language=language,
+                word_timestamps=True,
+                longform_strategy=LONGFORM_STRATEGY,
+                max_new_tokens=max_new_tokens,
+            )
+        decode_s = time.perf_counter() - started - capture.scoring_s
         scoring = time.perf_counter()
-        teacher = ct2_teacher_logits if self.engine == "ct2" else transformers_teacher_logits
 
         def decode(token: int) -> str:
             return str(engine.tokenizer.decode([token]))
 
-        captured = windows
+        captured = len(windows)
         chunks = getattr(result, "chunks", None) or []
         kept = [len(chunk.text.split()) for chunk in chunks]
         if len(windows) > 1 or kept:
             windows = surviving_windows(windows, kept, decode, special) if len(kept) == len(windows) else []
-        blocks = window_confidence(engine, windows, teacher, special) if confidence else []
+        scored_windows = [w for w in windows if w.ids]
+        blocks: list[dict[str, Any]] = []
+        encode_reused = 0
+        if logits_of_decode:
+            spliced = [spliced_block(w, capture.decodes, special) for w in scored_windows]
+            blocks = [b for b in spliced if b is not None] if all(b is not None for b in spliced) else []
+            encode_reused = len(blocks)
+        elif confidence:
+            blocks = window_confidence(engine, scored_windows, ct2_window_logits, special)
+            encode_reused = sum(w.encoded is not None for w in scored_windows)
         words = [(str(w.word or w.text), float(w.start), float(w.end)) for w in getattr(result, "words", None) or []]
         confidences: list[float | None] = [None] * len(words)
         mean = None
@@ -264,7 +280,6 @@ class Library:
             scored = [
                 c
                 for block in blocks
-                if block["tokens"]
                 for c in word_confidences(block["tokens"], block["token_logprob"], decode, special)
             ]
             if len(scored) == len(words) and (not kept or sum(kept) == len(words)):
@@ -274,10 +289,11 @@ class Library:
             words,
             confidences,
             mean,
-            len(captured),
+            captured,
             len(chunks) if chunks else None,
             decode_s,
-            time.perf_counter() - scoring if confidence else 0.0,
+            time.perf_counter() - scoring + capture.scoring_s if confidence else 0.0,
+            encode_reused if blocks else 0,
         )
 
 
