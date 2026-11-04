@@ -28,6 +28,12 @@ Popular models include:
   - [Seamless medium](https://huggingface.co/facebook/hf-seamless-m4t-medium)
   - [Seamless large](https://huggingface.co/facebook/seamless-m4t-v2-large)
 
+- **Child-speech ASR**
+  - [pasketti-word](https://huggingface.co/drivendata/pasketti-word) (DrivenData; fine-tune of Qwen3-ASR-1.7B,
+    BigCode OpenRAIL-M licence: use restrictions apply to the weights and derivatives). It is routed to the
+    Qwen3-ASR backend, so `return_timestamps=True` gives word times from the Qwen3-ForcedAligner companion.
+    Its card evaluates the vLLM backend only; the transformers backend used here is not evaluated by the authors.
+
 ## Apple silicon (MPS)
 
 CrisperWhisper 2.0 and Qwen3-ASR run on MPS when it is available (the default device is the fastest
