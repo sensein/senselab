@@ -613,16 +613,79 @@ environment's `s5/`).**
 5. `dataset_profile_test`: no packaged value file or config holds a listed profile value, and no packaged data file
    names a B2AI task (the vendored task registry, which moves in step 7, aside).
 
-## Step 6 — inputs outside triage
+## Step 6 — inputs outside triage (agreed 2026-11-04)
 
-- **File-name parsing leaves the engine** (framing review, 2026-10-30). ADMIT's default reads `sub-`/`ses-`/`task-`
-  off the stem when the hint declares nothing (`identity_from_stem`), and identity check 4 compares a BIDS-like name
-  with the hint. Both move to the hint builder (the profile); the engine's default is "nothing declared". Values
-  read off a file name are recorded as such, not as "declared".
-- `pii_detection/data/redaction_policy.yaml`, `task_guidance.yaml` and the protocol wording in
-  `redaction_review.py` become caller-supplied, and `decision_model/second_opinion.py` follows.
-- `prov_store.PROV_TYPE` accepts types registered by triage.
-- The two tests in `src/tests/text/tasks/` that import triage move under the triage tests.
+**What it is for.** senselab still assumes things about a dataset's inputs that only hold for B2AI: that a file name
+is BIDS-like, that the redaction policy and the reviewer's wording are B2AI's, and that the provenance store's record
+types are triage's. Walked through topic by topic with the user on 2026-11-04.
+
+**6a — file names.** (a) senselab reads nothing off a file name: ADMIT's identity is what the hint declares, and a
+recording declaring none records no participant or session (the run sits at the run root, as `entity_subdir`
+already allows). (b) B2AI's hint builder keeps reading `sub-`/`ses-`/`task-` off the stem (`b2ai_hints.py`), so
+B2AI's identities are unchanged. (c) A hint may say a value was read off a file name, and ADMIT records that as its
+source; B2AI's builder keeps declaring its values, so B2AI's records stay "declared" (user: "b2ai could just still
+state as declared if we declare them after generating them from the filename"). (d) The identity check's
+`stem_disagrees` takes an optional file-name parser from the dataset's hints module and runs only where there is one;
+B2AI's lives beside its hints. (e) The replay and corpus tools that fall back to the file name for a store recording
+no identity use the same optional parser, and record none without one. `identity_from_stem` leaves the engine.
+
+**6b — redaction policy and the reviewer's wording.** (a) senselab keeps the reviewer's frame (how the transcript is
+shown, what it answers), HIPAA Safe Harbor (`safe_harbor.yaml`), and the matching code. (b) The dataset supplies the
+policy prose (with its examples, USF and Vanderbilt among them), the rules of what is masked and released, and the
+task guidance (`task_guidance.yaml`); the text functions take them as arguments, triage passes them from the profile,
+and `decision_model/second_opinion.py` takes the same. B2AI's profile carries today's text unchanged. (c) For B2AI
+the reviewer's instructions are byte-identical, so no stored reading needs reading again: the 192-run replay's
+carried and needs-reread counts stay the same. (d) The word lists (months, holidays, number and kinship words,
+countries, states; English and Spanish) go to the reference profile `adult_clinical_speech`, a starting point a
+dataset may replace; the rules of what to mask stay each dataset's. (e) Dataset files name the stages that read
+them, as profile values do since step 11: the word lists REDACT, the prose and guidance REVIEW and SECOND_OPINION;
+a file is required only when one of its stages runs.
+
+**6a, refined in implementation (user, 2026-11-04).** (f) and (g): the engine's fallbacks for stores recording no
+identity (`identity.declared_task_id`, `task_squim.declared_family`, `live_evidence`) are removed, not handed a
+parser: such a store is replayed first, which records its identity from the dataset's hint (option A, "replay first
+is enough"); every corpus pass but replay refuses it, saying so (`extend.require_recorded_identity`). The report shows
+the recorded task, not the `task-` token of the run's folder name.
+
+**6b, refined (user, 2026-11-04): the redaction rules wait for a module.** The fold's rules
+(`nodes/redact.py:2505-2840`) are B2AI's (owner, 2026-10-03 to 10-09): dates and states hidden wherever they occur;
+ages, places below a country and names a detector marked locked; a country released unless the reviewer hides it;
+kinship words never hidden; the time words of `time_release.yaml` released; health conditions never held. The user
+agrees with the nine as B2AI's. They are logic, not values, so they become a redaction-policy module (a function from
+the run's words, their kinds, the detectors' marks and the reviewer's proposals to each word's decision) rather than
+switches; that is the first module of the modular-design effort (option B), and until it is built they stay in
+senselab. Step 6 still moves the data: the word lists to `adult_clinical_speech`, the reviewer's policy prose and the
+task guidance to B2AI's profile. When the module is built, `adult_clinical_speech`'s default policy is the set
+closest to HIPAA (user: "the set of rules that best matches HIPAA"): Safe Harbor, 45 CFR 164.514(b)(2), which
+releases years, states and ages under 90 where B2AI's rules hide them; the Common Rule governs consent and review,
+not which words are hidden.
+
+**6c — the store's record types.** (a) `prov_store` keeps only the general type (`artifact`); other code registers
+its own, and triage registers its fourteen, the historical `kind` among them, when its package loads. (b) Reading
+back checks against the registered types. (c) The BEP-028 exporter reads any type: it converts and decides nothing.
+(d) Triage keeps its own `Literal` for type checking, and its registration is built from it. Triage's stores do not
+change.
+
+**6d — the two text tests.** The word-rule tests stay in `src/tests/text/tasks/redaction_policy_test.py` with word
+lists of their own; "REDACT records the policy version" moves to `audio/workflows/triage/nodes/redact_test.py`. The
+vLLM engine and mocked-server tests stay in `pii_redaction_review_vllm_test.py` with inline engine settings; "the
+cache key names the engine" moves to `nodes/review_test.py`. Nothing under `src/tests/text/` imports triage.
+
+**Checks.** B2AI unchanged, as in 5e and 11e: 5 paired fresh runs, the 192-run replay (with its review carried and
+needs-reread counts), the baseline values check; the reviewer's instructions for B2AI hashed before and after; the
+suite as a SLURM job.
+
+**Results (2026-11-04, branch `refactor/triage-inputs` off dbf3b3fc6, evidence in `triage_env_2026_10_22/s6/`).**
+- B2AI's reviewer instructions are byte-identical: the policy text, both prompts, and every task's guidance, nature
+  and description, for all 48 tasks; the guidance file's digest, which every reading's cache key carries, unchanged.
+- B2AI unchanged: 5 paired fresh runs, the same decisions and every store entity the same (entity ids normalized);
+  the 192-run replay, 192/192 entity-identical and the same decisions, and the reviewer readings each side reused or
+  must read again the same (59 needing a reread, 133 with none, on both); the baseline values identical to step 11's.
+- Suite: 4,368 passed, 20 skipped (triage and scripts); the 12 failures under `src/tests/text` and `src/tests/utils`
+  fail on the base tree too.
+- Found while building it: the redaction plan's new word-list variable shadowed its task lexicon, which would have
+  changed redactions (fixed before any evidence ran); a profile's template now writes `review_policy.txt` and
+  `task_guidance.yaml` when REVIEW runs, and the start check refuses a policy file still holding the template text.
 
 ## Step 7 — hand-over to b2aiprep
 
