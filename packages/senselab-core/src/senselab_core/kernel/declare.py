@@ -456,13 +456,14 @@ PORT_PROTOCOLS: tuple[type, ...] = (RegularSeries, Text)
 def kernel_types() -> dict[str, type]:
     """Return the kernel value types a port may name, by name: every `Recording` and `Formatted` subclass and protocol.
 
-    The protocols are `PORT_PROTOCOLS`.
+    The protocols are `PORT_PROTOCOLS`. A subclass whose `port_value` is False is left out.
     """
     found: dict[str, type] = {Recording.__name__: Recording} | {p.__name__: p for p in PORT_PROTOCOLS}
     pending: list[type] = [Recording, Formatted]
     while pending:
         for sub in pending.pop().__subclasses__():
-            found[sub.__name__] = sub
+            if getattr(sub, "port_value", True):
+                found[sub.__name__] = sub
             pending.append(sub)
     return found
 
@@ -514,7 +515,11 @@ def _port_types(cls: type, ports: str) -> dict[str, str]:
     bad = {
         p: t
         for p, t in declared.items()
-        if not (isinstance(t, type) and (t in PORT_PROTOCOLS or issubclass(t, (Recording, Formatted))))
+        if not (
+            isinstance(t, type)
+            and (t in PORT_PROTOCOLS or issubclass(t, (Recording, Formatted)))
+            and getattr(t, "port_value", True)
+        )
     }
     if bad:
         raise TypeError(f"{cls.__qualname__}.{ports}: ports {sorted(bad)} are not kernel value types")

@@ -9,7 +9,7 @@ from typing import Any
 import jsonschema
 import pytest
 from pydantic import ValidationError
-from senselab_core.kernel.declare import Registry, TaskParams, TaskSpec
+from senselab_core.kernel.declare import Registry, TaskParams, TaskSpec, kernel_types, task
 from senselab_core.kernel.graph import Graph, canonical, graph_digest, graph_schema, order, validate
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -259,3 +259,16 @@ def test_two_map_edges_into_one_node_are_refused() -> None:
         {"a": "list[Audio]", "b": "list[Audio]"}, nodes, [("input.a", "s.first", "map"), ("input.b", "s.second", "map")]
     )
     assert _codes(graph) == [("type_mismatch", "s", None)]
+
+
+@pytest.mark.logic
+def test_a_graph_is_not_a_port_type() -> None:
+    """A graph is a document, not a port value: no port may name it, and a task declaring one is refused."""
+    assert "Graph" not in kernel_types()
+
+    class Planner:
+        inputs = {"graph": Graph}
+        outputs: dict[str, type] = {}
+
+    with pytest.raises(TypeError, match="not kernel value types"):
+        task(name="t.plan", version="1", kind="transform")(Planner)

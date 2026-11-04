@@ -3,7 +3,7 @@
 import re
 from collections.abc import Collection
 from enum import Enum
-from typing import Annotated
+from typing import Annotated, ClassVar
 
 from pydantic import ConfigDict, StringConstraints, model_validator
 
@@ -104,6 +104,9 @@ class Formatted(Frozen):
     model_config = ConfigDict(extra="ignore")
 
     format: FormatTag
+
+    port_value: ClassVar[bool] = True
+    """Whether a task port may name this type; a document that never flows on a port, such as a graph, sets False."""
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: object) -> None:

@@ -7,7 +7,7 @@ ordered with `order` and identified by `graph_digest`. `graph_schema` is its pub
 import heapq
 import re
 from collections.abc import Mapping
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import AfterValidator, Field, PlainSerializer, StringConstraints, model_validator
 from senselab_worker.digest import identity_digest
@@ -90,6 +90,7 @@ class Graph(Formatted):
     """
 
     format: FormatTag = GRAPH_FORMAT
+    port_value: ClassVar[bool] = False
     inputs: Annotated[Mapping[PortName, PortType], AfterValidator(FrozenMapping), PlainSerializer(dict)] = _empty()
     nodes: tuple[Node, ...] = ()
     edges: tuple[Edge, ...] = ()
