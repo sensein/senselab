@@ -8,7 +8,6 @@ import pytest
 import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.workflows.triage.config import load_triage_config
-from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER
 from senselab.audio.workflows.triage.workflow import (
     OFF_IN_WORKFLOW,
     OPTIONAL_STAGES,
@@ -28,10 +27,6 @@ def _without(*off: str) -> dict:
 
 class TestTheStageTable:
     """The table is the graph the runner has always driven."""
-
-    def test_the_table_is_the_graph_order(self) -> None:
-        """A stage added to one and not the other would run unlabelled, or be labelled and never run."""
-        assert STAGE_NAMES == GRAPH_ORDER
 
     def test_a_stage_needs_only_stages_before_it(self) -> None:
         """A need later in the order could not have run yet."""

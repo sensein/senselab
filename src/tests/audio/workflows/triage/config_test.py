@@ -182,6 +182,15 @@ class TestNamedModels:
         assert cfg.require("ast.model") == "MIT/ast-finetuned-audioset-10-10-0.4593"
         assert cfg.require("residual.enhancer.model") == "alibabasglab/FRCRN_SE_16K"
 
+    def test_an_aligner_named_in_the_options_is_the_one_recorded(self, tmp_path: Path) -> None:
+        """timestamp_model records the aligner that runs, so it must match the one the options pass."""
+        override = tmp_path / "o.yaml"
+        override.write_text(
+            "asr:\n  recognizers:\n    - {name: asr_q, model: Qwen/Qwen3-ASR-1.7B, revision: main, "
+            "timestamps: bundled_aligner, timestamp_model: a/b, options: {forced_aligner: a/b}}\n"
+        )
+        assert load_triage_config(override).require("asr.recognizers")[0]["timestamp_model"] == "a/b"
+
     def test_one_recognizer_is_a_valid_list(self, tmp_path: Path) -> None:
         """A profile replaces the whole list; the consensus runs over what is left."""
         override = tmp_path / "o.yaml"
@@ -194,13 +203,28 @@ class TestNamedModels:
         ("recognizers", "match"),
         [
             ("[]", "at least one"),
-            ("[{name: a, model: m, revision: main, timestamps: guessed}]", "timestamps"),
-            ("[{name: a, model: m, revision: main, timestamps: bundled_aligner}]", "timestamp_model"),
-            ("[{name: a, model: m, revision: main, timestamps: native, lang: en}]", "unknown keys"),
+            ("[{name: asr_a, model: m, revision: main, timestamps: guessed}]", "timestamps"),
+            ("[{name: asr_a, model: m, revision: main, timestamps: bundled_aligner}]", "timestamp_model"),
+            ("[{name: asr_a, model: m, revision: main, timestamps: native, lang: en}]", "unknown keys"),
             (
-                "[{name: a, model: m, revision: main, timestamps: native}, "
-                "{name: a, model: n, revision: main, timestamps: native}]",
+                "[{name: asr_a, model: m, revision: main, timestamps: native}, "
+                "{name: asr_a, model: n, revision: main, timestamps: native}]",
                 "twice",
+            ),
+            ("[{name: consensus_transcript, model: m, revision: main, timestamps: native}]", "must start with"),
+            (
+                "[{name: asr_q, model: Qwen/Qwen3-ASR-1.7B, revision: main, timestamps: bundled_aligner, "
+                "timestamp_model: Qwen/Qwen3-ForcedAligner-1.2B}]",
+                "not the aligner the recognizer uses",
+            ),
+            (
+                "[{name: asr_q, model: Qwen/Qwen3-ASR-1.7B, revision: main, timestamps: bundled_aligner, "
+                "timestamp_model: a/b, options: {forced_aligner: c/d}}]",
+                "not the aligner the recognizer uses",
+            ),
+            (
+                "[{name: asr_o, model: other/asr, revision: main, timestamps: bundled_aligner, timestamp_model: a/b}]",
+                "name it in options.forced_aligner",
             ),
         ],
     )

@@ -870,6 +870,15 @@ class TestTheWorkflow:
         assert result.file_verdict is not None
         assert not any("AIRWAY was asked to run" in reason.why for reason in result.file_verdict.reasons)
 
+    def test_a_refused_recording_still_says_which_stages_are_off(
+        self, graph: Callable[..., list[str]], tmp_path: Path
+    ) -> None:
+        """ADMIT refused it, so nothing ran; a stage the workflow leaves off is still noted as off (review 7)."""
+        graph(admit_outcome=Outcome.FAIL)
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", _workflow(tmp_path, "COHORT"))
+        assert result.nodes["COHORT"].note == OFF_IN_WORKFLOW
+        assert result.nodes["QUALITY"].note is None
+
     def test_without_quality_its_join_is_no_uncomputed_reading(
         self, graph: Callable[..., list[str]], tmp_path: Path
     ) -> None:

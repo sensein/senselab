@@ -298,8 +298,9 @@ def _drive_branches(
     """
     preprocessed = _attempt(outcomes, "PREPROCESS", lambda: preprocess(store, audio, config, hint, run_dir=run_dir))
     if preprocessed is None:
+        off = off_notes(config.values)
         for node in GRAPH_ORDER[GRAPH_ORDER.index("PREPROCESS") + 1 : GRAPH_ORDER.index("VERDICT")]:
-            outcomes[node] = NodeOutcome(node=node, state=RunState.SKIPPED)
+            outcomes[node] = NodeOutcome(node=node, state=RunState.SKIPPED, note=off.get(node))
         return {}
     _attempt(
         outcomes,
@@ -563,8 +564,9 @@ def run_triage(
                 enrollment=enrollment,
             )
         else:
+            off = off_notes(config.values)
             for node in GRAPH_ORDER[1:-1]:
-                outcomes[node] = NodeOutcome(node=node, state=RunState.SKIPPED)
+                outcomes[node] = NodeOutcome(node=node, state=RunState.SKIPPED, note=off.get(node))
             if admitted is not None:
                 family = declared_task_family(store)
                 for branch in BRANCHES:

@@ -624,7 +624,7 @@ def missing_dataset_values(config_values: Mapping[str, Any]) -> list[str]:
             named = None
         if named is None or not named.is_file():
             missing.append(f"cohort_conditions/{cohort}.yaml (config verdict.cohort_conditions names it)")
-    if "tasks.yaml" not in missing:
+    if not any(item == "tasks.yaml" or item.startswith("tasks.yaml (") for item in missing):
         tasks = data_values("tasks.yaml").get("tasks") or {}
         if not tasks:
             missing.append("tasks.yaml tasks (the task list names no task)")

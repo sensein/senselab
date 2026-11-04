@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -443,3 +444,19 @@ class TestValuesFollowTheWorkflow:
         assert "cohort_conditions/no_such_list.yaml (config verdict.cohort_conditions names it)" in (
             missing_dataset_values(load_triage_config(override).values)
         )
+
+    def test_a_value_every_run_reads_names_no_stage(self) -> None:
+        """redaction.fill is read when the release is settled, after VERDICT, whatever runs (step-11 review 1)."""
+        [fill] = [e for e in profile_values()["config/default.yaml"] if e["path"] == ["redaction", "fill"]]
+        assert not fill.get("stages")
+
+    def test_a_listed_task_list_that_is_absent_is_named_not_raised(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """tasks.yaml goes after the profile loaded (loading refuses it sooner): the start check names it (review 6)."""
+        root = tmp_path / "p"
+        shutil.copytree(B2AI_TRIAGE_PROFILE, root)
+        config = load_triage_config(profile=root)
+        (root / "tasks.yaml").unlink()
+        missing = missing_dataset_values(config.values)
+        assert "tasks.yaml (the profile lists it, but the file is absent)" in missing

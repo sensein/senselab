@@ -5,8 +5,8 @@ setting; a stage left off is recorded ``skipped`` with :data:`OFF_IN_WORKFLOW` a
 routing declined is, and a stage that needs one that is off is skipped with :func:`off_note`'s
 "needs" note. The stages that every later stage or the verdict reads may not be left off.
 
-This module imports nothing from the nodes, so the configuration and the profile check can read it; a test
-holds :data:`STAGES` to :data:`~senselab.audio.workflows.triage.vocabulary.GRAPH_ORDER`.
+This module imports nothing from the nodes, so the configuration and the profile check can read it;
+:data:`~senselab.audio.workflows.triage.vocabulary.GRAPH_ORDER` is :data:`STAGE_NAMES`.
 """
 
 from __future__ import annotations

@@ -9,8 +9,7 @@
 #   unit, means, fit: what the value is and how a dataset sets it (the template writes them beside each blank).
 #   required: false where the value switches a feature off or nothing reads it yet, so it may stay empty.
 #   stages: the stages that read the value, where only stages a workflow may leave off do (workflow.py); a required
-#         value is asked for only when one of them runs. No stages: read whatever runs. Assigned by the stage that
-#         owns the file or section (plan step 11d); where unsure, left without, so a run is asked for more, never less.
+#         value is asked for only when one of them runs. No stages: read whatever runs.
 version: 1
 values:
   asr_degenerate.yaml:
@@ -815,7 +814,6 @@ values:
   - path: ["redaction", "fill"]
     kind: a
     required: true
-    stages: [REDACT]
     unit: "category name (silence, noise, bleep)"
     means: "What replaces redacted audio: silence, noise or a bleep tone."
     fit: "Your release policy: whether redacted audio is replaced by silence, noise or a bleep."

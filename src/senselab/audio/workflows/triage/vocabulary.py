@@ -54,25 +54,11 @@ from senselab.audio.workflows.triage.task_catalogue import (
     has_trait,
 )
 from senselab.audio.workflows.triage.task_extent import COMPLETE as EXTENT_COMPLETE
+from senselab.audio.workflows.triage.workflow import STAGE_NAMES
 
-GRAPH_ORDER = (
-    "ADMIT",
-    "PREPROCESS",
-    "SESSION",
-    "BACKGROUND",
-    "TAXONOMY",
-    "routing",
-    "AIRWAY",
-    "SPEECH",
-    "VOICE",
-    "QUALITY",
-    "COHORT",
-    "REDACT",
-    "REVIEW",
-    "SECOND_OPINION",
-    "VERDICT",
-)
-"""The nodes the runner drives, in the order it drives them. VERDICT folds the fourteen before it.
+GRAPH_ORDER = STAGE_NAMES
+"""The nodes the runner drives, in the order it drives them: the stage table's (``workflow.STAGES``). VERDICT folds
+the fourteen before it.
 
 SECOND_OPINION reads the final mask plan -- REVIEW's reading folded with the policy and the task's exemptions --
 so it follows REVIEW; ``scripts/extend_second_opinion.py`` drives it over finished stores.

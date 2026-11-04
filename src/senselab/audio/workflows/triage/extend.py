@@ -125,7 +125,7 @@ from senselab.audio.workflows.triage.run import (
 from senselab.audio.workflows.triage.task_catalogue import task_attributes, task_from_attributes
 from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, QUALITY, REDACTION_LLM_ANNOTATION
 from senselab.audio.workflows.triage.word_arbitration import arbitrate_words
-from senselab.audio.workflows.triage.workflow import require_stage
+from senselab.audio.workflows.triage.workflow import off_notes, require_stage
 from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
 from senselab.utils.prov_store import CHECKSUM_KEY, MTIME_KEY, SIZE_KEY, Entity, ProvStore, file_digest
 from senselab.utils.subprocess_venv import record_venv_use
@@ -1473,10 +1473,13 @@ def carry_reading_forward(
 
     Returns:
         ``(state, why)``: one of :data:`REVIEW_STATES`, and the reason where it is
-        :data:`REVIEW_NEEDS_REREAD`.
+        :data:`REVIEW_NEEDS_REREAD`, or why nothing is carried where the workflow leaves REVIEW off.
     """
     if held is None:
         return REVIEW_NONE, None
+    off = off_notes(config.values).get(REVIEW_NODE)
+    if off is not None:
+        return REVIEW_NONE, f"REVIEW is {off}, so the held reading is not carried forward"
     fresh = find_measurement(store, REDACTION_LLM_ANNOTATION)
     if fresh is not None and fresh.id != held.annotation.id and fresh.attributes.get("status") in READ_STATES:
         return REVIEW_READ, None

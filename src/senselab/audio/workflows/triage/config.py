@@ -217,6 +217,17 @@ RECOGNIZER_TIMESTAMPS = ("native", "bundled_aligner")
 
 _RECOGNIZER_KEYS = frozenset({"name", "model", "revision", "timestamps", "timestamp_model", "options"})
 
+RECOGNIZER_PREFIX = "asr_"
+"""What every recognizer's name starts with: the name is its measurement's, which no other block may write."""
+
+
+def _default_aligner(model: str) -> str | None:
+    """The aligner a bundled-aligner recognizer uses when its options name none; None where senselab knows none."""
+    from senselab.audio.tasks.speech_to_text.api import _QWEN_ASR_PREFIXES  # noqa: PLC0415
+    from senselab.audio.tasks.speech_to_text.qwen import _DEFAULT_FORCED_ALIGNER  # noqa: PLC0415
+
+    return _DEFAULT_FORCED_ALIGNER if model.startswith(_QWEN_ASR_PREFIXES) else None
+
 
 def _validate_recognizers(recognizers: Any) -> None:  # noqa: ANN401 -- parsed YAML
     """Reject an ``asr.recognizers`` list PREPROCESS could not run."""
@@ -235,10 +246,20 @@ def _validate_recognizers(recognizers: Any) -> None:  # noqa: ANN401 -- parsed Y
                 raise ValueError(f"{where} needs a {key}")
         if entry.get("timestamps") not in RECOGNIZER_TIMESTAMPS:
             raise ValueError(f"{where}.timestamps must be one of {RECOGNIZER_TIMESTAMPS}")
+        if not str(entry["name"]).startswith(RECOGNIZER_PREFIX):
+            raise ValueError(f"{where}.name must start with {RECOGNIZER_PREFIX!r}, so it names no other measurement")
         if (entry["timestamps"] == "bundled_aligner") != bool(entry.get("timestamp_model")):
             raise ValueError(f"{where}: timestamp_model is given exactly when timestamps is bundled_aligner")
-        if not isinstance(entry.get("options") or {}, dict):
+        options = entry.get("options") or {}
+        if not isinstance(options, dict):
             raise ValueError(f"{where}.options must be a mapping")
+        if entry.get("timestamp_model"):
+            aligner = options.get("forced_aligner") or _default_aligner(str(entry["model"]))
+            if aligner != entry["timestamp_model"]:
+                raise ValueError(
+                    f"{where}: timestamp_model {entry['timestamp_model']!r} is not the aligner the recognizer uses "
+                    f"({aligner!r}); name it in options.forced_aligner"
+                )
         names.append(str(entry["name"]))
     if len(set(names)) != len(names):
         raise ValueError(f"asr.recognizers names a recognizer twice: {names}")
