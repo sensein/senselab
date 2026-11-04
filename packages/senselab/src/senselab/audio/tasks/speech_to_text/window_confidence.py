@@ -1,11 +1,11 @@
 """Token confidence of a CrisperWhisper decode: each window's final ids, scored from the decode's own computation.
 
-`capture_windows` records the ids each window finally emits and, on ct2, the encoder output its decode used.
-On transformers, `capture_decodes` records the log-probabilities of every `generate` call and `spliced_block`
-reads a window's from them. On ct2, `ct2_window_logits` gives the raw logits of a window's ids from one decoder pass
-over the recorded encoder output, and `window_confidence` scores them, one block per window; `capture_windows`
-scores each window as soon as it is final, so one or two encoder outputs are held at a time. `torch`, `numpy` and
-`ctranslate2` are imported only where logits are scored, so importing this module loads no framework.
+`capture_windows` records the ids each window finally emits. On transformers, `capture_decodes` records the raw
+logits of every `generate` call from the output head and `spliced_block` reads a window's from them. On ct2,
+`capture_windows` also records the encoder output of each window's decode and scores the window as soon as it is
+final (`ct2_window_logits`, one decoder pass on that output, through `window_confidence`), so one or two encoder
+outputs are held at a time. `torch`, `numpy` and `ctranslate2` are imported only where logits are scored, so
+importing this module loads no framework.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from senselab.audio.tasks.speech_to_text.token_confidence import (
-    generate_with_logits,
     logprob_block,
     token_confidence_from_logits,
     word_prefix,
@@ -62,8 +61,8 @@ class Window:
 class Decode:
     """One `generate` call: its encoder input, decoder prefix and generated ids, and the log-probabilities it saw.
 
-    `own[k]` is the log-probability of `generated[k]`; `tail`, when the call has a step past its ids, is the
-    log-probability row of that step over the vocabulary.
+    `own[k]` is the log-probability of `generated[k]`; `tail`, when the call has a step past its returned ids (an
+    end token the result leaves out), is the log-probability row of that step over the vocabulary.
     """
 
     features: Any
@@ -86,19 +85,19 @@ def capture_windows(
     engine: Any,  # noqa: ANN401 - a crisperwhisper engine
     score: Callable[[Window], list[float]] | None = None,
 ) -> Iterator[list[Window]]:
-    """Wrap the `DECODES`, `REPLACES` and (if present) `SEGMENT` of `engine` for the block, recording each window.
+    """Wrap the `DECODES` and `REPLACES` of `engine` (and, with `score`, its `SEGMENT`), recording each window.
 
-    A decode records a window, with the encoder output of its first `SEGMENT` call on its own prompt; a `REPLACES`
-    call on the same `features` and prompt replaces that window's ids and keeps its encoder output (coverage
-    fallback, early-EOT recovery). With `score`, a window is scored and its encoder output released as soon as a
-    decode on other features starts, and the rest at the end of the block; a window replaced after it was scored
-    is scored again, on its mel. Yields the windows in decode order. The wrappers return what the caller would
-    have received and are removed on exit.
+    A decode records a window (with `score`, also the encoder output of its first `SEGMENT` call on its own prompt);
+    a `REPLACES` call on the same `features` and prompt replaces that window's ids and keeps its encoder output
+    (coverage fallback, early-EOT recovery). With `score`, a window is scored and its encoder output released as
+    soon as a decode on other features starts, and the rest at the end of the block; a window replaced after it
+    was scored is scored again, on its mel. Yields the windows in decode order. The wrappers return what the caller
+    would have received and are removed on exit.
     """
     recorder = _Recorder(score)
     wrappers: dict[str, Callable[[Callable[..., Any]], Callable[..., Any]]] = dict.fromkeys(DECODES, recorder.decode)
     wrappers[REPLACES] = recorder.replacement
-    if callable(getattr(engine, SEGMENT, None)):
+    if score is not None and callable(getattr(engine, SEGMENT, None)):
         wrappers[SEGMENT] = recorder.segment
     with _patched(engine, wrappers):
         yield recorder.windows
@@ -185,30 +184,72 @@ def _patched(target: Any, wrappers: dict[str, Callable[[Callable[..., Any]], Cal
 
 @contextlib.contextmanager
 def capture_decodes(model: Any) -> Iterator[Capture]:  # noqa: ANN401 - a transformers model
-    """Wrap `model.generate` for the block (`generate_with_logits`), recording every call as a `Decode`."""
+    """Record every `model.generate` call of the block as a `Decode`, leaving the call and its result unchanged.
+
+    A forward hook on the output head (`get_output_embeddings`) keeps, during a `generate` call only, the raw
+    logits of each step's last position. A call is recorded when its batch is one and its steps are its returned
+    ids, or its ids and one more (an end token the result leaves out). A model without a head or `generate` records
+    nothing.
+    """
     capture = Capture()
-
-    def _record(args: tuple[Any, ...], kwargs: dict[str, Any], result: Any) -> None:  # noqa: ANN401 - a ModelOutput
-        import torch  # noqa: PLC0415 - torch loads only where logits are scored
-
-        started = time.perf_counter()
-        features = args[0] if args else kwargs.get("input_features")
-        given = kwargs.get("decoder_input_ids")
-        prefix = [] if given is None else [int(t) for t in given[0].tolist()]
-        sequence = [int(t) for t in result.sequences[0].tolist()]
-        generated = sequence[len(prefix) :] if sequence[: len(prefix)] == prefix else sequence
-        steps = len(result.logits)
-        mine = min(len(generated), steps)
-        if steps:
-            logprobs = torch.log_softmax(torch.stack([row[0] for row in result.logits]).float(), dim=-1)
-            at = torch.tensor(generated[:mine], dtype=torch.long, device=logprobs.device)
-            own = logprobs[torch.arange(mine, device=logprobs.device), at].tolist()
-            tail = logprobs[mine].cpu() if steps > mine else None
-            capture.decodes.append(Decode(features, prefix, generated[:mine], own, tail))
-        capture.scoring_s += time.perf_counter() - started
-
-    with generate_with_logits(model, _record):
+    head = model.get_output_embeddings() if callable(getattr(model, "get_output_embeddings", None)) else None
+    if head is None or not callable(getattr(model, "generate", None)):
         yield capture
+        return
+    steps: list[Any] | None = None
+
+    def _hook(module: Any, inputs: Any, output: Any) -> None:  # noqa: ANN401 - a torch module and tensors
+        if steps is not None:
+            steps.append(output[:, -1].detach().clone())
+
+    def _generate(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 - passthrough
+        nonlocal steps
+        steps = []
+        try:
+            result = original(*args, **kwargs)
+        finally:
+            rows, steps = steps, None
+        started = time.perf_counter()
+        decode = _decode_of(args, kwargs, result, rows)
+        if decode is not None:
+            capture.decodes.append(decode)
+        capture.scoring_s += time.perf_counter() - started
+        return result
+
+    original = model.generate
+    had_own = "generate" in vars(model)
+    handle = head.register_forward_hook(_hook)
+    model.generate = _generate
+    try:
+        yield capture
+    finally:
+        handle.remove()
+        if had_own:
+            model.generate = original
+        else:
+            del model.generate
+
+
+def _decode_of(args: tuple[Any, ...], kwargs: dict[str, Any], result: Any, rows: list[Any]) -> Decode | None:  # noqa: ANN401
+    import torch  # noqa: PLC0415 - torch loads only where logits are scored
+
+    sequences = getattr(result, "sequences", result)
+    if not rows or not isinstance(sequences, torch.Tensor) or sequences.shape[0] != 1:
+        return None
+    if any(row.shape[0] != 1 for row in rows):
+        return None
+    given = kwargs.get("decoder_input_ids")
+    prefix = [] if given is None else [int(t) for t in given[0].tolist()]
+    sequence = [int(t) for t in sequences[0].tolist()]
+    generated = sequence[len(prefix) :] if sequence[: len(prefix)] == prefix else sequence
+    if len(rows) - len(generated) not in (0, 1):
+        return None
+    logprobs = torch.log_softmax(torch.cat(rows).float(), dim=-1)
+    at = torch.tensor(generated, dtype=torch.long, device=logprobs.device)
+    own = logprobs[torch.arange(len(generated), device=logprobs.device), at].tolist()
+    tail = logprobs[-1].cpu() if len(rows) > len(generated) else None
+    features = args[0] if args else kwargs.get("input_features")
+    return Decode(features, prefix, generated, own, tail)
 
 
 def spliced_block(

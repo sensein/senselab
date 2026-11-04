@@ -11,6 +11,7 @@ from senselab.audio.tasks.speech_to_text.token_confidence import word_prefix
 from senselab.audio.tasks.speech_to_text.window_confidence import (
     Decode,
     Window,
+    capture_decodes,
     capture_windows,
     ct2_window_logits,
     spliced_block,
@@ -124,28 +125,58 @@ class CT2Model:
         return numpy.stack([row(state + ids[: i + 1]) for i in range(len(ids))])[None]
 
 
+class Head:
+    """An output head: the `row` logits after a prefix, `(1, 1, vocab)`, shown to its forward hooks like a module."""
+
+    def __init__(self) -> None:
+        """Hold no hooks."""
+        self.hooks: list[Any] = []
+        self.registered = 0
+
+    def register_forward_hook(self, hook: Any) -> Any:  # noqa: ANN401
+        """Add `hook`; the handle removes it."""
+        self.hooks.append(hook)
+        self.registered += 1
+        return type("Handle", (), {"remove": lambda _: self.hooks.remove(hook)})()
+
+    def __call__(self, prefix: list[int]) -> Any:  # noqa: ANN401
+        """Return the logits after `prefix` and show them to the hooks."""
+        torch = importlib.import_module("torch")
+        out = torch.from_numpy(row(prefix))[None, None]
+        for hook in list(self.hooks):
+            hook(self, (prefix,), out)
+        return out
+
+
 class HFModel:
-    """A transformers Whisper: `generate` follows a script and returns `row` logits; a forward is teacher forcing."""
+    """A transformers Whisper in HF's shapes: `generate` follows a script, running the head once per step.
+
+    Without `return_dict_in_generate` it returns the ids without the prefix and without a final end token; with it,
+    `sequences` is the prefix, the ids and the end token. A forward is teacher forcing.
+    """
 
     def __init__(self) -> None:
         """Record nothing yet."""
-        self.script: list[tuple[list[int], bool]] = []
-        self.flags: list[bool] = []
+        self.script: list[list[int]] = []
+        self.kwargs: list[dict[str, Any]] = []
         self.fed: list[list[int]] = []
+        self.head = Head()
+
+    def get_output_embeddings(self) -> Head:
+        """Return the output head."""
+        return self.head
 
     def generate(self, features: object, decoder_input_ids: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-        """Return the next scripted ids after the prefix, with one logits row per step (and one past them if asked)."""
+        """Run the head over each step of the next scripted ids and return them in HF's shape."""
         torch = importlib.import_module("torch")
-        ids, extra = self.script.pop(0)
+        ids = self.script.pop(0)
         prefix = decoder_input_ids[0].tolist()
-        self.flags.append(bool(kwargs.get("output_logits")))
-        sequences = torch.tensor([prefix + ids])
-        if not kwargs.get("return_dict_in_generate"):
-            return sequences
-        logits = tuple(torch.from_numpy(row(prefix + ids[:k]))[None] for k in range(len(ids) + extra))
-        if not kwargs.get("output_logits"):
-            logits = ()
-        return type("Out", (), {"sequences": sequences, "logits": logits, "cross_attentions": ()})()
+        self.kwargs.append(kwargs)
+        for k in range(len(ids)):
+            self.head(prefix + ids[:k])
+        if kwargs.get("return_dict_in_generate"):
+            return type("Out", (), {"sequences": torch.tensor([prefix + ids]), "cross_attentions": ()})()
+        return torch.tensor([ids[:-1] if ids[-1:] == [EOT] else ids])
 
     def __call__(self, input_features: object, decoder_input_ids: Any, use_cache: bool) -> Any:  # noqa: ANN401
         """Teacher-force `decoder_input_ids`: one `row` per position."""
@@ -173,11 +204,14 @@ class Engine:
     def _segment(self, encoded: object, prompt: list[int], **kwargs: Any) -> tuple[str, list[int]]:  # noqa: ANN401
         return "state", list(self._planned.pop(0))
 
-    def _generate(self, features: object, prefix: list[int], ids: list[int], extra: bool = False) -> list[int]:
+    def _generate(self, features: object, prefix: list[int], ids: list[int], as_dict: bool = False) -> list[int]:
         torch = importlib.import_module("torch")
-        self.model.script.append((ids, extra))
-        out = self.model.generate(features, decoder_input_ids=torch.tensor([prefix]), max_new_tokens=8)
-        return [int(t) for t in out[0].tolist()[len(prefix) :]]
+        self.model.script.append(ids)
+        out = self.model.generate(
+            features, decoder_input_ids=torch.tensor([prefix]), max_new_tokens=8, return_dict_in_generate=as_dict
+        )
+        seq = [int(t) for t in (out.sequences if as_dict else out)[0].tolist()]
+        return seq[len(prefix) :] if seq[: len(prefix)] == prefix else seq
 
     def _decode(self, features: object, prompt: list[int], segments: list[list[int]]) -> list[int]:
         if self.kind == "ct2":
@@ -187,9 +221,9 @@ class Engine:
             if len(segments) > 1:
                 ids = ids[:KEEP] + self.generate_greedy_with_attention(encoded, prompt + ids[:KEEP])[1]
             return ids
-        ids = self._generate(features, prompt, segments[0])
+        ids = self._generate(features, prompt, segments[0], as_dict=True)
         if len(segments) > 1:
-            ids = ids[:KEEP] + self._generate(features, prompt + ids[:KEEP], segments[1])
+            ids = ids[:KEEP] + self._generate(features, prompt + ids[:KEEP], segments[1], as_dict=True)
         return ids
 
     def generate_with_repair(self, features: object, prompt_tokens: list[int], **kwargs: Any) -> list[int]:  # noqa: ANN401
@@ -206,12 +240,12 @@ class Engine:
         return self._decode(features, prompt_tokens, self.plan), "attention"
 
     def generate_sampled(self, features: object, prompt_tokens: list[int]) -> list[int]:
-        """Return a sampled decode: `GEN`; a ct2 sample runs outside the captured calls."""
+        """Return a sampled decode of `GEN`: on ct2 outside the captured calls, on transformers a plain call."""
         return list(GEN) if self.kind == "ct2" else self._generate(features, prompt_tokens, GEN)
 
     def greedy_stops_and_decode(self, features: object, prompt_tokens: list[int]) -> list[int]:
-        """Return a decode past the early stop, without its end token; transformers gives a step past the ids."""
-        return GEN[:-1] if self.kind == "ct2" else self._generate(features, prompt_tokens, GEN[:-1], extra=True)
+        """Return a decode past the early stop, without its end token (a plain transformers call strips it)."""
+        return GEN[:-1] if self.kind == "ct2" else self._generate(features, prompt_tokens, GEN)
 
     def cross_attention_for_tokens(self, features: object, prompt_tokens: list[int], gen_ids: list[int]) -> str:
         """Return the attention of `gen_ids`."""
@@ -236,7 +270,7 @@ class CrisperWhisper:
             ids = [*engine.greedy_stops_and_decode(features, PROMPT), EOT]
         if engine.case in ("fallback", "recovery"):
             assert engine.cross_attention_for_tokens(features, PROMPT, ids) == "recaptured"
-        assert ids == GEN
+        assert ids in (GEN, GEN[:-1])
         return self._result()
 
 
@@ -257,9 +291,9 @@ def _transcribe(kind: str, case: str, merged: bool = False, confidence: bool = T
 def test_confidence_is_of_the_final_ids_from_the_decodes_own_computation(kind: str, case: str) -> None:
     """Both engines score the window's final ids to the teacher-forced values, with no second encoder pass.
 
-    transformers reads them from the logits of the decode's own calls (a repair spliced at the rewind, a recovery's
-    end token from the step past its ids) and teacher-forces nothing; ct2 runs one decoder pass on the encoder
-    output its decode made.
+    transformers reads them from the output head's logits of the decode's own calls (a repair spliced at the
+    rewind, a recovery's end token from the step its plain call leaves out) and teacher-forces nothing; ct2 runs
+    one decoder pass on the encoder output its decode made.
     """
     pytest.importorskip("torch")
     decoded, model = _transcribe(kind, case)
@@ -270,7 +304,8 @@ def test_confidence_is_of_the_final_ids_from_the_decodes_own_computation(kind: s
     if kind == "ct2":
         assert model.encodes == 1 and model.fed == [("Encoded", PROMPT), GEN[:-1]]
     else:
-        assert model.fed == [] and all(model.flags)
+        assert model.fed == [] and model.head.registered == 1 and not model.head.hooks
+        assert not any("output_logits" in kwargs for kwargs in model.kwargs)
 
 
 @pytest.mark.env
@@ -416,7 +451,13 @@ def test_windows_keep_decode_order_their_encoder_output_and_the_engine_is_left_a
     pytest.importorskip("torch")
     engine = Engine("ct2", "fallback")
     first, second = object(), object()
-    with capture_windows(engine) as windows:
+    seen: list[Any] = []
+
+    def score(window: Window) -> list[float]:
+        seen.append(window.encoded)
+        return [0.0] * len(window.ids)
+
+    with capture_windows(engine, score) as windows:
         assert engine.generate_with_repair(first, PROMPT) == DECODED["fallback"][0]
         assert engine.generate_with_repair_and_attention(second, [4], max_length=8) == (
             DECODED["fallback"][0],
@@ -427,8 +468,9 @@ def test_windows_keep_decode_order_their_encoder_output_and_the_engine_is_left_a
         (first, PROMPT, GEN),
         (second, [4], DECODED["fallback"][0]),
     ]
-    assert [type(w.encoded).__name__ for w in windows] == ["Encoded", "Encoded"]
-    assert windows[0].encoded.features is first
+    assert [type(e).__name__ for e in seen] == ["Encoded", "Encoded", "NoneType"]
+    assert seen[0].features is first and seen[1].features is second
+    assert [w.encoded for w in windows] == [None, None]
     assert engine.generate_greedy_with_attention == engine._segment
 
 
@@ -437,7 +479,13 @@ def test_two_modes_on_shared_features_are_two_windows() -> None:
     """Two prompts decoded on one `features` stay two windows; a replacement updates only its own prompt's."""
     engine = Engine("ct2", "fallback")
     shared, verbatim, intended = object(), [4, 0], [4, 1]
-    with capture_windows(engine) as windows:
+    seen: list[Any] = []
+
+    def score(window: Window) -> list[float]:
+        seen.append(window.encoded)
+        return [0.0] * len(window.ids)
+
+    with capture_windows(engine, score) as windows:
         engine.generate_with_repair(shared, verbatim)
         engine.generate_with_repair(shared, intended)
         engine.cross_attention_for_tokens(shared, intended, GEN)
@@ -445,7 +493,7 @@ def test_two_modes_on_shared_features_are_two_windows() -> None:
         (shared, verbatim, DECODED["fallback"][0]),
         (shared, intended, GEN),
     ]
-    assert windows[0].encoded is not windows[1].encoded
+    assert len(seen) == 2 and seen[0] is not None and seen[0] is not seen[1]
 
 
 @pytest.mark.env
@@ -483,7 +531,7 @@ def test_confidence_off_records_and_scores_nothing(kind: str) -> None:
     """Off asks no call for logits and runs no decoder pass, leaving every confidence none; on is the scored decode."""
     pytest.importorskip("torch")
     off, model = _transcribe(kind, "clean", confidence=False)
-    assert model.fed == [] and not any(getattr(model, "flags", []))
+    assert model.fed == [] and getattr(model, "head", Head()).registered == 0
     assert off.mean is None and set(off.confidences) <= {None} and off.confidence_s == 0.0 and off.windows == 1
     assert off.encode_reused == 0
     on, _ = _transcribe(kind, "clean")
@@ -568,3 +616,86 @@ def test_a_window_replaced_after_it_was_scored_is_scored_again_on_its_mel() -> N
         engine.cross_attention_for_tokens(first, PROMPT, GEN)
     assert scored == ["encoded", "encoded", "mel"]
     assert [(w.ids, w.reused, w.encoded) for w in windows] == [(GEN, False, None), (DECODED["fallback"][0], True, None)]
+
+
+@pytest.mark.env
+def test_ct2_with_confidence_off_wraps_no_segment_and_holds_no_encoder_output() -> None:
+    """Off records only ids: the segment call is not wrapped and no window keeps an encoder output."""
+    pytest.importorskip("torch")
+    model = ManyWindows("ct2", "clean")
+    model._engine.model = CountingCT2Model()
+    CountedEncoded.live = CountedEncoded.peak = 0
+    decoded = _library("ct2", model).transcribe(numpy.zeros(160), "en", 8, False)
+    assert CountedEncoded.peak <= 1 and CountedEncoded.live == 0 and model._engine.model.fed == []
+    assert decoded.windows == ManyWindows.WINDOWS and decoded.encode_reused == 0
+    engine = Engine("ct2", "clean")
+    with capture_windows(engine) as windows:
+        assert engine.generate_greedy_with_attention == engine._segment
+        engine.generate_with_repair_and_attention(object(), PROMPT)
+    assert [w.encoded for w in windows] == [None]
+
+
+def _tiny_whisper() -> Any:  # noqa: ANN401 - a randomly initialised transformers Whisper
+    transformers = pytest.importorskip("transformers")
+    torch = importlib.import_module("torch")
+    torch.manual_seed(0)
+    config = transformers.WhisperConfig(
+        d_model=16,
+        encoder_layers=1,
+        decoder_layers=1,
+        encoder_attention_heads=2,
+        decoder_attention_heads=2,
+        encoder_ffn_dim=32,
+        decoder_ffn_dim=32,
+        max_source_positions=8,
+        max_target_positions=64,
+        num_mel_bins=80,
+    )
+    return transformers.WhisperForConditionalGeneration(config).eval()
+
+
+@pytest.mark.env
+@pytest.mark.parametrize("as_dict", [False, True])
+def test_a_real_whisper_generate_returns_the_same_and_its_steps_are_recorded(as_dict: bool) -> None:
+    """Wrapped and unwrapped calls return the same; each id is scored from HF's own raw logits of that step.
+
+    A plain call returns the ids without the prompt or the end token; its end token's step is the `tail`.
+    """
+    torch = pytest.importorskip("torch")
+    model = _tiny_whisper()
+    transformers = importlib.import_module("transformers")
+    eos = model.generation_config.eos_token_id
+
+    class EndAt:
+        def __call__(self, input_ids: Any, scores: Any) -> Any:  # noqa: ANN401
+            if input_ids.shape[1] - len(prompt) < 3:
+                return scores
+            ended = torch.full_like(scores, float("-inf"))
+            ended[:, eos] = 0.0
+            return ended
+
+    prompt = [50258, 50259, 50360, 50364]
+    features = torch.randn(1, 80, 16)
+    asked = {"decoder_input_ids": torch.tensor([prompt]), "max_new_tokens": 8, "return_dict_in_generate": as_dict}
+
+    def generate(**extra: Any) -> Any:  # noqa: ANN401
+        processors = transformers.LogitsProcessorList([EndAt()])
+        with torch.no_grad():
+            return model.generate(features, logits_processor=processors, **{**asked, **extra})
+
+    bare = generate()
+    with capture_decodes(model) as capture:
+        wrapped = generate()
+    assert torch.equal(wrapped.sequences, bare.sequences) if as_dict else torch.equal(wrapped, bare)
+    reference = generate(return_dict_in_generate=True, output_logits=True)
+    logprobs = torch.log_softmax(torch.stack([step[0] for step in reference.logits]).float(), dim=-1)
+    ids = reference.sequences[0, len(prompt) :].tolist()
+    assert ids[-1] == eos and len(reference.logits) == len(ids)
+    [decode] = capture.decodes
+    assert decode.prefix == prompt and decode.features is features
+    assert decode.generated == (ids if as_dict else ids[:-1])
+    assert decode.own == pytest.approx(logprobs[range(len(decode.generated)), decode.generated].tolist(), abs=1e-5)
+    if as_dict:
+        assert decode.tail is None
+    else:
+        assert float(decode.tail[eos]) == pytest.approx(float(logprobs[-1, eos]), abs=1e-5)
