@@ -287,6 +287,9 @@ stored output in an `@1` form is recomputed after its store entry is removed (Ph
 ratio. A stored metric output is recomputed. A `benchmark-result@1` `result.json` is refused with
 `BenchmarkResultRetired`; the suite is run again to write `benchmark-result@2`.
 
+`transcript@1` is retired likewise (Phase 3 Task 4a): `Transcript` of `transcript@2` declares the extent its spans lie
+within. A stored transcript output is recomputed; a hand-built timed transcript gains an `extent`.
+
 - `pii-review-vllm` lock (1.x `redaction_review_vllm`): not ported; superseded by `Env.server("vllm-server")` (Task 17b).
 
 ## Retired store formats

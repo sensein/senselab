@@ -376,3 +376,12 @@ profile formats (`tolerance@`, `tolerance-observations@`, `tolerance-coverage@`)
   `BenchmarkResultRetired`.
 - Data formats list (2026-11-02 amendment): adds `metric@2.0`, a kernel value's wire form, and `benchmark-result@2.0`,
   a benchmark run's `result.json`.
+
+## Amendment 2026-11-03: transcript extent (Phase 3 Task 4a)
+
+- `transcript@1.0` → `transcript@2.0`: `Transcript` adds `extent`, a `Span` (R-188, P3-56). A transcript with a timed
+  span declares it, and every span lies inside it on its clock. Non-additive for a reader that checks spans, so a major.
+  `transcript@1` is retired and refused with `WireFormatRetired`. `comparison@1.0` keys `transcript@1` becomes
+  `transcript@2`, adding `extent` (optional), `extent.start_ns` and `extent.end_ns` (close, `time_ns`) and
+  `extent.clock_id` (exact).
+- Data formats list (2026-11-02 amendment): `transcript@1.0` is replaced by `transcript@2.0`.

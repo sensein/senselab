@@ -1207,6 +1207,20 @@ them. A ruling that changes an ADR decision takes effect only through the dated 
 - **P3-55** ruling: A split whose summed denominator is 0 has no defined value: the aggregate is absent (None), unless
   the metric declares an empty-case value (`Metric.empty_value`). Span F1 declares 1.0, since nothing expected and nothing
   found is perfect agreement; error rates such as WER and DER declare none, since 1.0 would mean total error.
+- **P3-56** ruling: A transcript's extent is `extent: Span | None`, the stretch of the recording it covers. A timed span
+  lies inside it, on its clock, both bounds checked, so `rebind` moves the extent with the spans. A transcript with no
+  span may declare none (a reference transcript has no audio).
+- **P3-57** ruling: A backend's minimum input is the shortest audio its front end or receptive field takes, in ns from
+  the model's input rate: crisperwhisper and the Whisper `transformers` backend 400 samples at 16 kHz, the Whisper STFT
+  window, n_fft 400 (25 ms); pyannote 991 samples, the receptive field of
+  the segmentation SincNet and convolutions (61.9375 ms, pinned to the loaded model by an env test); speechbrain 640
+  samples, the 5 frames the ECAPA encoder's widest dilated convolution needs, at hop 160 (40 ms).
+- **P3-58** ruling: A long-form segment's confidence is scored over the ids of the words the window merge keeps, counted
+  from the library's per-window chunk text. When the chunks do not match the captured windows, or the kept-word and
+  word counts disagree, the mean and the word confidences are both None: confidence is an optional measurement. Word
+  confidences are grouped per window, so a window's first piece without a leading space does not join the previous
+  window's last word. The request key `_diagnostics` is reserved (as `_fault` is): it adds a `diagnostics` output,
+  the number of windows decoded and of chunks the library reported, so a real-weights test can assert that they match.
 
 **Low pre-flight findings not changed, with reasons.** None remains open: each low finding is fixed in its task or
 covered by a ruling above (X17 by P3-2, X18 by P3-40, X19 in Task 2, X20 in Task 0, X21 in Task 0 Step 2, X22 by P3-49,
