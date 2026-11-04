@@ -20,11 +20,14 @@ from typing import Any, Callable, Mapping
 
 import pytest
 import torch
+import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage import run as run_module
 from senselab.audio.workflows.triage import vocabulary as vocabulary_module
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.dataset_profile import DatasetDataMissing
+from senselab.audio.workflows.triage.dataset_profile import require_dataset_values as real_require_dataset_values
 from senselab.audio.workflows.triage.identity import (
     PARTICIPANT_KEY,
     SESSION_KEY,
@@ -65,6 +68,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     RunStatus,
     Triage,
 )
+from senselab.audio.workflows.triage.workflow import OFF_IN_WORKFLOW, STAGE_NAMES
 from senselab.utils.prov_store import ProvStore
 
 
@@ -663,12 +667,13 @@ class TestConditionalExecution:
         assert result.ran["AIRWAY"] is RunState.SKIPPED
         assert result.ran["SPEECH"] is RunState.COMPLETED
 
-    def test_the_branch_table_names_exactly_the_branches_the_vocabulary_declares(self) -> None:
-        """A branch in the table the vocabulary does not name runs where nothing routed it."""
+    def test_the_call_table_holds_every_branch_and_nothing_but_stages(self) -> None:
+        """A call under a name the stage table lacks would never run; a branch without a call is ``NO_NODE``."""
         source = inspect.getsource(run_module.drive_decisions)
-        table = source.split("branches: dict[str, Callable[[], BranchResult]] = {", 1)[1].split("}", 1)[0]
-        named = set(re.findall(r'"([A-Z]+)": lambda:', table))
-        assert named == set(BRANCHES) == {"AIRWAY", "SPEECH", "VOICE"}
+        table = source.split("calls: dict[str, Callable[[], Any]] = {", 1)[1].split("\n    }\n", 1)[0]
+        named = set(re.findall(r'^        "([A-Za-z_]+)":', table, re.MULTILINE))
+        assert named & set(BRANCHES) == set(BRANCHES) == {"AIRWAY", "SPEECH", "VOICE"}
+        assert named <= set(STAGE_NAMES)
         assert "DDK" not in named
 
     def test_a_declared_syllable_family_runs_speech_and_no_second_branch(
@@ -729,6 +734,8 @@ class TestConditionalExecution:
     ) -> None:
         """The ``NO_NODE`` arm survives its last real occupant: a fifth branch is a record."""
         monkeypatch.setattr(run_module, "BRANCHES", (*BRANCHES, "FUTURE"))
+        at = STAGE_NAMES.index("VOICE") + 1
+        monkeypatch.setattr(run_module, "STAGE_NAMES", (*STAGE_NAMES[:at], "FUTURE", *STAGE_NAMES[at:]))
         graph(routed=("SPEECH",))
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.ran["FUTURE"] is RunState.SKIPPED
@@ -815,6 +822,92 @@ class TestConditionalExecution:
         assert any(
             "routing failed; branch execution was withheld" in reason.why for reason in result.file_verdict.reasons
         )
+
+
+def _workflow(tmp_path: Path, *off: str) -> TriageConfig:
+    """The packaged configuration with ``off`` left out of its workflow."""
+    override = tmp_path / "workflow.yaml"
+    override.write_text(yaml.safe_dump({"workflow": {"stages": [name for name in STAGE_NAMES if name not in off]}}))
+    return load_triage_config(override)
+
+
+class TestTheWorkflow:
+    """A stage the workflow leaves off is never called and is recorded as off (plan step 11)."""
+
+    @pytest.fixture(autouse=True)
+    def _any_task_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Skip the start check: B2AI's task list names every branch; the refusal has its own test below."""
+        monkeypatch.setattr(run_module, "require_dataset_values", lambda values: None)
+
+    def test_the_start_check_refuses_a_task_list_naming_an_off_branch(
+        self, graph: Callable[..., list[str]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """B2AI's breathing tasks under a workflow without AIRWAY: refused before any node runs."""
+        monkeypatch.setattr(run_module, "require_dataset_values", real_require_dataset_values)
+        calls = graph()
+        with pytest.raises(DatasetDataMissing, match="its branch AIRWAY is off"):
+            run_triage(tmp_path / "recording.wav", tmp_path / "out", _workflow(tmp_path, "AIRWAY"))
+        assert calls == []
+
+    def test_a_stage_left_off_is_not_called_and_says_why(self, graph: Callable[..., list[str]], tmp_path: Path) -> None:
+        """VOICE and QUALITY off: every other stage runs in its order, and those two are skipped as off."""
+        calls = graph()
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", _workflow(tmp_path, "VOICE", "QUALITY"))
+        assert tuple(calls) == tuple(name for name in GRAPH if name not in {"VOICE", "QUALITY"})
+        for name in ("VOICE", "QUALITY"):
+            assert result.ran[name] is RunState.SKIPPED
+            assert result.nodes[name].note == OFF_IN_WORKFLOW
+        assert result.ran["SPEECH"] is RunState.COMPLETED
+        log = json.loads((result.run_dir / "run.json").read_text())
+        assert log["notes"]["VOICE"] == OFF_IN_WORKFLOW
+
+    def test_a_branch_routing_asked_for_but_left_off_raises_no_silence_ground(
+        self, graph: Callable[..., list[str]], tmp_path: Path
+    ) -> None:
+        """Routing wanted AIRWAY; the dataset does not run it, so "asked to run and never ran" is no flag."""
+        graph(routed=("AIRWAY", "SPEECH"))
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", _workflow(tmp_path, "AIRWAY"))
+        assert result.file_verdict is not None
+        assert not any("AIRWAY was asked to run" in reason.why for reason in result.file_verdict.reasons)
+
+    def test_without_quality_its_join_is_no_uncomputed_reading(
+        self, graph: Callable[..., list[str]], tmp_path: Path
+    ) -> None:
+        """QUALITY off: the join it would write is not expected, so its absence sends nothing to review."""
+        graph()
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", _workflow(tmp_path, "QUALITY"))
+        assert result.file_verdict is not None
+        assert not any("quality_join" in reason.why for reason in result.file_verdict.reasons)
+
+    def test_without_speech_redact_and_review_are_off_and_nothing_is_released(
+        self, graph: Callable[..., list[str]], tmp_path: Path
+    ) -> None:
+        """No transcript, so no redaction and no review; the release stays undecided rather than as-is."""
+        calls = graph(routed=("SPEECH",), pii=True)
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", _workflow(tmp_path, "SPEECH"))
+        assert {"SPEECH", "REDACT", "REVIEW"}.isdisjoint(calls)
+        assert result.nodes["REDACT"].note == result.nodes["REVIEW"].note == f"{OFF_IN_WORKFLOW}: needs SPEECH"
+        assert result.file_verdict is not None
+        assert result.file_verdict.release is not Release.AS_IS
+
+    def test_a_declared_task_whose_branch_is_off_records_why_it_has_no_extent(
+        self, graph: Callable[..., list[str]], tmp_path: Path
+    ) -> None:
+        """A breath task under a workflow without AIRWAY names the workflow as the reason in the store."""
+        graph(routed=("SPEECH",), routing_outcome="none")
+        result = run_triage(
+            tmp_path / "sub-a_ses-1_task-breath-sounds.wav",
+            tmp_path / "out",
+            _workflow(tmp_path, "AIRWAY"),
+            AudioHints(task="breath-sounds"),
+        )
+        store = ProvStore.read_jsonl(result.store_path)
+        absent = [
+            e.attributes
+            for e in store.entities("measurement")
+            if e.attributes.get("name") == "task_extent_absent" and not store.is_invalidated(e.id)
+        ]
+        assert [(a["branch"], a["why"]) for a in absent] == [("AIRWAY", OFF_IN_WORKFLOW)]
 
 
 class TestNodeErrorsAreCaptured:

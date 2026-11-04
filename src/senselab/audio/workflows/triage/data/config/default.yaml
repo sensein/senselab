@@ -135,6 +135,30 @@ phonation_spans:
   formant_window_s: 0.025              # Praat's window_length for the formant track
   formant_preemphasis_hz: 50.0         # Praat's pre-emphasis frequency
 
+# The speech recognizers the consensus transcript is built over (plan step 11c), each run over `plain` in this order.
+# `name` is the measurement it writes and its source in the consensus; `timestamps` is how its word times are taken:
+# `native` from the recognizer itself, `bundled_aligner` from the aligner it bundles, which `timestamp_model` records
+# (a recognizer's own option chooses it: Qwen3-ASR's `forced_aligner`); `options` go to the recognizer. The consensus
+# takes any number of them; one is enough to run. A profile replaces the whole list.
+asr:
+  recognizers:
+    - name: asr_crisperwhisper
+      model: nyralabs/CrisperWhisper2.0_turbo
+      revision: main                   # resolved to an immutable commit at load; the agent records that SHA
+      timestamps: native
+    - name: asr_qwen
+      model: Qwen/Qwen3-ASR-1.7B
+      revision: main
+      timestamps: bundled_aligner
+      timestamp_model: Qwen/Qwen3-ForcedAligner-0.6B
+      options: {return_timestamps: true}
+
+# The AudioSet sound-event classifier PREPROCESS and TAXONOMY read. Another checkpoint must carry AudioSet's label set,
+# which data/classifier_ontology maps.
+ast:
+  model: MIT/ast-finetuned-audioset-10-10-0.4593
+  revision: main                       # resolved to an immutable commit at load; the agent records that SHA
+
 # Vocabularies read off the consensus transcript.
 words:
   # Cough-like renderings a recognizer emits as ordinary words; PREPROCESS brackets each one. One
@@ -568,6 +592,9 @@ second_opinion:
 # `plain`. Both the enhancement and the residual are written and classified; no energy-fraction
 # gate decides whether either is produced.
 residual:
+  enhancer:                            # the 16 kHz speech-enhancement model the residual is taken against
+    model: alibabasglab/FRCRN_SE_16K
+    revision: main                     # resolved to an immutable commit at load; the agent records that SHA
   max_lag_ms: 200.0                    # cross-correlation search half-window against the enhanced output
   bands_hz: [[0, 200], [200, 1000], [1000, 4000], [4000, 8000]]  # band split the residual is reported over
 
@@ -578,6 +605,12 @@ task_audio:
 # The presentation form the summary is written in.
 report:
   format: pdf                          # pdf or png
+
+# The stages a run drives (workflow.py, plan step 11). A stage left off is recorded skipped, "off in this workflow",
+# and a stage that needs it is skipped too; its profile values are not asked for. ADMIT, PREPROCESS, SESSION,
+# BACKGROUND, TAXONOMY, routing and VERDICT may not be left off. A profile replaces the whole list.
+workflow:
+  stages: [ADMIT, PREPROCESS, SESSION, BACKGROUND, TAXONOMY, routing, AIRWAY, SPEECH, VOICE, QUALITY, COHORT, REDACT, REVIEW, SECOND_OPINION, VERDICT]
 
 # Per data file, the values a profile's config or a run's override changes in senselab's packaged value files, merged
 # key by key (dataset_profile.data_values): {breath_pattern.yaml: {train: {distance_s: 0.5}}}. A profile may equally

@@ -8,6 +8,9 @@
 #         d  per task
 #   unit, means, fit: what the value is and how a dataset sets it (the template writes them beside each blank).
 #   required: false where the value switches a feature off or nothing reads it yet, so it may stay empty.
+#   stages: the stages that read the value, where only stages a workflow may leave off do (workflow.py); a required
+#         value is asked for only when one of them runs. No stages: read whatever runs. Assigned by the stage that
+#         owns the file or section (plan step 11d); where unsure, left without, so a run is asked for more, never less.
 version: 1
 values:
   asr_degenerate.yaml:
@@ -269,312 +272,364 @@ values:
   - path: ["measure", "autocorr_min"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "correlation (0-1)"
     means: "Envelope autocorrelation peak needed for a breathing rhythm, read only once breath events are found."
     fit: "Tuned by listening to labelled recordings: whether breathing is heard; the reference value is a pilot setting chosen from breath anatomy and checked on 23 listened breath recordings; rhythm alone is not evidence since silent recordings reached 0.56-0.86, not fitted to labels."
   - path: ["measure", "event_trim_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "A breath event's span is the frames within this of its own peak; affects display and extent only."
     fit: "Tuned by listening to labelled recordings: where a breath event's audible span ends; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["measure", "flatness_band_hz"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "Hz range [min, max]"
     means: "Frequency band over which spectral flatness separates noise-like breath from harmonic voice."
     fit: "Tuned by listening to labelled recordings: whether breathing is heard; the reference value is a pilot setting chosen from breath anatomy and checked on 23 listened breath recordings; breath turbulence sits low and above 150 Hz excludes hum and handling rumble, not fitted to labels."
   - path: ["measure", "flatness_min"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "fraction (0-1)"
     means: "Spectral flatness at or above which a frame is noise-like breath rather than voice."
     fit: "Tuned by listening to labelled recordings: whether breathing is heard; the reference value is a pilot setting chosen from breath anatomy and checked on 23 listened breath recordings; 0.08 separated breath from voice on the labelled set, not fitted to labels."
   - path: ["measure", "interval_share_min"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "fraction (0-1)"
     means: "Share of event onset intervals that must fall in the breathing-cycle range to read a rhythm."
     fit: "Tuned by listening to labelled recordings: whether breathing is heard; the reference value is a pilot setting chosen from breath anatomy and checked on 23 listened breath recordings, not fitted to labels."
   - path: ["measure", "merge_gap_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Gap across which active frames merge into one breath event."
     fit: "Tuned by listening to labelled recordings: whether breathing is heard; the reference value is a pilot setting chosen from breath anatomy and checked on 23 listened breath recordings; the design notes it wants revisiting with labels, not fitted to labels."
   - path: ["measure", "rise_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Level over the recording's own 10th-percentile envelope at which a frame is active."
     fit: "Tuned by listening to labelled recordings: whether breathing is heard; the reference value is a pilot setting chosen from breath anatomy and checked on 23 listened breath recordings; a relative level, no absolute dBFS, not fitted to labels."
   - path: ["modulation", "active_rise_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Broadband envelope level over its floor that bounds the active span used by the modulation reading."
     fit: "Tuned by listening to labelled recordings: how much of a breath recording holds activity; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["modulation", "min_duration_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Shortest recording or task extent on which the breathing-modulation reading is taken."
     fit: "Tuned by listening to labelled recordings: how long a span a modulation reading needs; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["modulation", "reference_band_hz"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "Hz range [min, max] (modulation frequency)"
     means: "Modulation-frequency band that breathing-rate and syllabic-rate modulation are referenced to."
     fit: "Tuned by listening to labelled recordings: breathing versus speech modulation; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["review", "cycle_cv_min"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "coefficient of variation"
     means: "Breathing-cycle variation at or above which a train counts as irregular for the low-confidence flag."
     fit: "Tuned by listening to labelled recordings: which kept breath recordings are uncertain enough to review; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["review", "irregular_rise_db_max"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "An irregular breath train whose rise is at or under this is flagged low-confidence."
     fit: "Tuned by listening to labelled recordings: which kept breath recordings are uncertain enough to review; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["review", "min_phases"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "count"
     means: "Fewest breath phases a train needs to avoid the low-confidence flag."
     fit: "Tuned by listening to labelled recordings: which kept breath recordings are uncertain enough to review; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["review", "weak_rise_db_max"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "A breath train whose rise is at or under this is flagged low-confidence as weak."
     fit: "Tuned by listening to labelled recordings: which kept breath recordings are uncertain enough to review; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "band_edges_hz"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "list of Hz"
     means: "Subband edges over which the breath train's envelopes are computed."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "burst_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s range [min, max]"
     means: "Shortest and longest duration of one breath burst."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "coherence_min"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "fraction (0-1)"
     means: "Share of subbands that must rise together for a breath burst."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "coherence_window_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Window within which subbands must rise together for a breath burst."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "continue_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "The breath extent runs on to a following speech onset standing this far over the floor."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "distance_quick_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Least spacing between breath bursts in a task that asks for quick breaths."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "distance_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Least spacing between breath bursts in every other breath task."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "edge_min_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Shortest edge phase (raised at the file's start or still raised at its end) that counts."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "envelope_smooth_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Moving-mean window on the combined robust-z breath envelope."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "flatness_min"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "fraction (0-1)"
     means: "Least spectral flatness a breath burst must show to count as noise-like breath."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "floor_percentile"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "percentile"
     means: "Percentile of the raw broadband level taken as the breath train's floor."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "fs_mod"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "Hz"
     means: "Sampling rate of the breath train's subband envelopes."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "gap_cycles"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "count (half-cycles)"
     means: "Gap, in breathing half-cycles, beyond which bursts start a new run (or gap_min_s if larger)."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "gap_min_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Gap beyond which breath bursts start a new run (or gap_cycles if larger)."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "noise_percentile"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "percentile"
     means: "Per-bin percentile used as the stationary noise estimate before breath detection."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "noise_subtract"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "fraction (0-1)"
     means: "Share of the stationary noise estimate subtracted from each bin."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "pad_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Padding each side of the breath train's hull in the task extent."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "prominence_min"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "robust-z units"
     means: "Least prominence of a breath burst in the combined envelope."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "prominence_range_frac"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "fraction (0-1)"
     means: "Alternative prominence floor as a share of the envelope's 5th-95th percentile range; the larger applies."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "rise_floor_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Least peak level of a breath burst over the broadband floor."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "rise_z"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "robust-z units"
     means: "Rise within the coherence window for a subband to count as rising."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "smooth_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Moving-median window applied to each subband level before breath bursts are found."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "speech_bridge_cycles"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "count (breathing cycles)"
     means: "Speech splits the breath train only where the gap across it exceeds this many cycles."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "speech_gap_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Longest gap between lexical words inside one speech run."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "speech_link_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Lexical words and voiced runs this close chain into one speech segment."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "speech_words_min"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "count"
     means: "Lexical words in one run that make it speech able to split the breath train."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "steady_f0_cv_max"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "coefficient of variation"
     means: "Largest pitch variation of a sustained vocalisation such as a voiced exhale."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "steady_min_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Shortest sustained vocalisation recognised inside a breath train."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "steady_strength_min"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "fraction (0-1, pitch strength)"
     means: "Pitch strength a frame needs to belong to a sustained vocalisation."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "template_corr_min"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "correlation (0-1)"
     means: "Least correlation with the burst template for a weaker burst to stand."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "tonal_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Level over neighbouring noise at which a frequency bin is a tonal line and left out."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "tonal_halfwidth_bins"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "count (frequency bins)"
     means: "Half-width of the neighbourhood a tonal line is tested against."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "voice_gap_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Voiced runs this close are joined into one run."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "voiced_max"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "fraction (0-1)"
     means: "Largest share of a breath burst's frames that may be voiced."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "weak_prominence_frac"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "fraction (0-1)"
     means: "Weaker bursts down to this share of the prominence floor stand if they fit the template."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["train", "word_spread_max_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "A word its recognizers place further apart than this is held at its consensus extent."
     fit: "Tuned by listening to labelled recordings: where the breath bursts are and how many phases the participant breathed; the reference profile carries a value fitted on adult clinical speech."
   - path: ["veto", "active_fraction_min"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "fraction (0-1)"
     means: "Active span over the task extent below which a found breath is vetoed as too little activity."
     fit: "Tuned by listening to labelled recordings: whether a found breath is real breathing; the reference profile carries a value fitted on adult clinical speech."
   - path: ["veto", "speech_words_min"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "count"
     means: "Speech words inside the task extent at or above which a found breath is vetoed as speech."
     fit: "Tuned by listening to labelled recordings: whether a found breath is really speech; the reference profile carries a value fitted on adult clinical speech."
@@ -582,96 +637,112 @@ values:
   - path: ["checks", "recording_duration_outlier", "duration_ratio_max"]
     kind: a
     required: true
+    stages: [COHORT]
     unit: "ratio (x family median)"
     means: "Recording longer than this multiple of its task's median duration is a duration outlier when task extent is small."
     fit: "Your review policy: how many times its task's median duration a recording may run before, with little task extent, it goes to review."
   - path: ["checks", "recording_duration_outlier", "extent_fraction_min"]
     kind: a
     required: true
+    stages: [COHORT]
     unit: "fraction (0-1)"
     means: "Task-extent share of a long recording below which it counts as a duration outlier."
     fit: "Your review policy: how little of an over-long recording the task may cover before it goes to review."
   - path: ["comparison", "cosine_min", "default"]
     kind: c
     required: true
+    stages: [COHORT]
     unit: "cosine"
     means: "Cosine between a recording's pooled speaker embedding and the enrollment below which it is another speaker."
     fit: "Tuned against labelled recordings (measured, not by listening): which speech pools are the participant's own voice; the reference profile carries a value fitted on adult clinical speech."
   - path: ["comparison", "cosine_min", "task_text"]
     kind: a
     required: false
+    stages: [COHORT]
     unit: "cosine"
     means: "Speaker-match cut for tasks whose target pool is short read task text; empty records the cosine without flagging."
     fit: "Your review policy: whether a speaker comparison over short read task text may flag, and at what cosine; leave empty to record it only."
   - path: ["comparison", "pooled_min_s"]
     kind: c
     required: true
+    stages: [COHORT]
     unit: "s"
     means: "Least pooled speech duration for a speaker comparison; a shorter pool is not measured."
     fit: "Tuned by listening to labelled recordings: how much speech speaker identification needs; the reference profile carries a value fitted on adult clinical speech."
   - path: ["condition", "clipped_fraction_min"]
     kind: b
     required: true
+    stages: [COHORT]
     unit: "fraction (0-1)"
     means: "Share of a participant's or session's recordings holding clip spans at or above which it is marked clipped."
     fit: "Tukey upper fence (Q3 + 1.5 IQR) of the per-participant share of recordings with clip spans over a pilot corpus."
   - path: ["condition", "hot_rms_dbfs_min"]
     kind: b
     required: true
+    stages: [COHORT]
     unit: "dBFS"
     means: "Participant or session median RMS level at or above which its recordings are marked too hot."
     fit: "Tukey upper fence (Q3 + 1.5 IQR) of the per-participant median whole-file RMS over a pilot corpus."
   - path: ["condition", "shift_level_db_min"]
     kind: b
     required: true
+    stages: [COHORT]
     unit: "dB"
     means: "Session median level this far from the participant's other sessions marks a recording-condition shift."
     fit: "Tukey upper fence (Q3 + 1.5 IQR) of |session median level - other sessions' median| over the multi-session participants of a pilot corpus."
   - path: ["condition", "shift_snr_db_min"]
     kind: b
     required: true
+    stages: [COHORT]
     unit: "dB"
     means: "Session median envelope SNR this far from the participant's other sessions marks a recording-condition shift."
     fit: "Tukey upper fence (Q3 + 1.5 IQR) of |session median SNR - other sessions' median| over the multi-session participants of a pilot corpus."
   - path: ["enrollment", "leave_one_out_min"]
     kind: c
     required: true
+    stages: [COHORT]
     unit: "count"
     means: "Enrolling recordings needed before one falling under the match cut against the rest is left out."
     fit: "Tuned by listening to labelled recordings: when an enrolling recording is a different speaker; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["enrollment", "single_speaker_recordings_min"]
     kind: c
     required: true
+    stages: [COHORT]
     unit: "count"
     means: "Single-speaker recordings in a session at which only those recordings enroll the participant's voice."
     fit: "Tuned by listening to labelled recordings: which recordings are safe to enroll a voice from; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["non_target_voice", "cosine_min"]
     kind: c
     required: true
+    stages: [COHORT]
     unit: "cosine"
     means: "Cosine at or above which two non-matching speech pools are the same other voice."
     fit: "Tuned against labelled recordings (measured, not by listening): which non-matching pools are one other speaker; the reference profile carries a value fitted on adult clinical speech."
   - path: ["non_target_voice", "recurring_min"]
     kind: c
     required: true
+    stages: [COHORT]
     unit: "count"
     means: "Recordings a cluster of non-target speech must span to be a recurring other voice."
     fit: "Tuned by listening to labelled recordings: when another voice recurs across a participant's recordings; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["participant", "consistency_cosine_min"]
     kind: b
     required: true
+    stages: [COHORT]
     unit: "cosine"
     means: "Session-to-other-sessions enrollment cosine below which the session's speaker is inconsistent."
     fit: "Tukey lower fence (Q1 - 1.5 IQR) of the session-versus-other-sessions enrollment cosine over a pilot corpus; not fitted against labels."
   - path: ["shared_nonmatch", "fraction_min"]
     kind: b
     required: true
+    stages: [COHORT]
     unit: "fraction (0-1)"
     means: "Share of a participant's compared recordings with a speaker non-match at which the non-match counts as shared."
     fit: "Tukey upper fence (Q3 + 1.5 IQR) of the per-participant non-match share over participants with any non-match in a pilot corpus."
   - path: ["speech", "score_min"]
     kind: c
     required: true
+    stages: [COHORT]
     unit: "score (0-1)"
     means: "Speech-label score at which a region the enhancer removed counts as speech."
     fit: "Tuned by listening to labelled recordings: which removed regions hold speech (set as background_speech speech_min); no derivation written; the reference profile carries the value set on adult clinical speech."
@@ -709,42 +780,49 @@ values:
   - path: ["pii", "name_words_max"]
     kind: a
     required: true
+    stages: [SPEECH]
     unit: "count (words)"
     means: "Word count above which a name, place or organisation finding is narrowed to its proper nouns."
     fit: "Your redaction policy: how many words a name, place or organisation finding may hold before only its proper nouns are masked."
   - path: ["quality", "disruption_clipped_s_max"]
     kind: c
     required: false
+    stages: [QUALITY]
     unit: "s"
     means: "Clipped seconds a span may carry and still pass quality; read by no code yet."
     fit: "Tuned by listening to labelled recordings: how much clipping a usable span may carry; unset (no value measured, so it stays off while empty): needs labelled quality verdicts, and the gate is unimplemented."
   - path: ["quality", "disruption_dropout_s_max"]
     kind: c
     required: false
+    stages: [QUALITY]
     unit: "s"
     means: "Dropout seconds a span may carry and still pass quality; read by no code yet."
     fit: "Tuned by listening to labelled recordings: how much dropout a usable span may carry; unset (no value measured, so it stays off while empty): needs labelled quality verdicts, and the gate is unimplemented."
   - path: ["quality", "pesq_floor"]
     kind: c
     required: false
+    stages: [QUALITY]
     unit: "PESQ score (about 1-4.5)"
     means: "PESQ estimate below which a span fails on quality; read by no code yet."
     fit: "Tuned by listening to labelled recordings: which spans are too degraded to use; unset (no value measured, so it stays off while empty): needs labelled quality verdicts, and the gate is unimplemented."
   - path: ["quality", "stoi_floor"]
     kind: c
     required: false
+    stages: [QUALITY]
     unit: "STOI (0-1)"
     means: "STOI estimate below which a span fails on quality; read by no code yet."
     fit: "Tuned by listening to labelled recordings: which spans are too degraded to use; unset (no value measured, so it stays off while empty): needs labelled quality verdicts, and the gate is unimplemented."
   - path: ["redaction", "fill"]
     kind: a
     required: true
+    stages: [REDACT]
     unit: "category name (silence, noise, bleep)"
     means: "What replaces redacted audio: silence, noise or a bleep tone."
     fit: "Your release policy: whether redacted audio is replaced by silence, noise or a bleep."
   - path: ["redaction", "name_approvals"]
     kind: a
     required: true
+    stages: [REDACT]
     unit: "mapping (recording stem -> list of names)"
     means: "Person names a human reviewer approved for release, per recording."
     fit: "Your review record: which person names a human approved for release in which recordings (empty approves none)."
@@ -763,36 +841,42 @@ values:
   - path: ["speech", "nontarget", "d_to_r_db"]
     kind: c
     required: false
+    stages: [SPEECH]
     unit: "dB"
     means: "Direct-to-reverberant ratio difference from the target that marks a diarized speaker as non-target."
     fit: "Tuned by listening to labelled recordings: which diarized voices are not the participant; unset (no value measured, so it stays off while empty): all three proximity thresholds are owed; until then the legs are reported only."
   - path: ["speech", "nontarget", "level_db"]
     kind: c
     required: false
+    stages: [SPEECH]
     unit: "dB"
     means: "Level difference from the target that marks a diarized speaker as non-target."
     fit: "Tuned by listening to labelled recordings: which diarized voices are not the participant; unset (no value measured, so it stays off while empty): all three proximity thresholds are owed; until then the legs are reported only."
   - path: ["speech", "nontarget", "tilt_db_per_octave"]
     kind: c
     required: false
+    stages: [SPEECH]
     unit: "dB/octave"
     means: "Spectral-tilt difference from the target that marks a diarized speaker as non-target."
     fit: "Tuned by listening to labelled recordings: which diarized voices are not the participant; unset (no value measured, so it stays off while empty): all three proximity thresholds are owed; until then the legs are reported only."
   - path: ["speech", "secondary_exclusive_min_s"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "s"
     means: "Exclusive second-voice time in a task extent under which that voice holds no turn."
     fit: "Tuned by listening to labelled recordings: whether a second voice really speaks in the task; the reference profile carries a value fitted on adult clinical speech."
   - path: ["speech", "speech_test_si_sdr_floor"]
     kind: c
     required: false
+    stages: [SPEECH]
     unit: "dB"
     means: "SQUIM SI-SDR floor in the vote on whether a span is speech; empty leaves YAMNet coverage deciding."
     fit: "Tuned by listening to labelled recordings: which spans are speech; unset (no value measured, so it stays off while empty): SQUIM thresholds over speech spans are unmeasured."
   - path: ["speech", "speech_test_stoi_floor"]
     kind: c
     required: false
+    stages: [SPEECH]
     unit: "STOI (0-1)"
     means: "SQUIM STOI floor in the vote on whether a span is speech; empty leaves YAMNet coverage deciding."
     fit: "Tuned by listening to labelled recordings: which spans are speech; unset (no value measured, so it stays off while empty): SQUIM thresholds over speech spans are unmeasured."
@@ -907,12 +991,14 @@ values:
   - path: ["verdict", "cohort_conditions"]
     kind: a
     required: false
+    stages: [REVIEW]
     unit: "category name (cohort_conditions file)"
     means: "Names the list of health conditions the study recruits for; empty supplies none."
     fit: "Your study design: the conditions your cohort recruits for, supplied as a cohort_conditions file in your profile."
   - path: ["verdict", "condition_categories"]
     kind: a
     required: true
+    stages: [REVIEW]
     unit: "list of labels (PII categories)"
     means: "PII categories treated as a health condition: never masked and never withholding a release."
     fit: "Your redaction policy: which detected categories name a health condition and are released unmasked."
@@ -985,30 +1071,35 @@ values:
   - path: ["verdict", "llm_contradiction_flags"]
     kind: a
     required: true
+    stages: [REVIEW]
     unit: "boolean"
     means: "Whether an LLM reading that flags a transcript but names no words sends the recording to review."
     fit: "Your review policy: whether a reviewer reading that flags but names no words sends the recording to review."
   - path: ["verdict", "llm_instructions_spoken_flags"]
     kind: a
     required: true
+    stages: [REVIEW]
     unit: "boolean"
     means: "Whether an LLM reading quoting task instructions spoken in the recording sends it to review."
     fit: "Your review policy: whether instructions heard spoken in a recording send it to review."
   - path: ["verdict", "llm_redaction_withholds"]
     kind: a
     required: true
+    stages: [REVIEW]
     unit: "boolean"
     means: "Whether an LLM reading of transcript residue withholds a recording the redaction step passed."
     fit: "Your release policy: whether a reviewer reading of leftover transcript text can withhold a recording redaction passed."
   - path: ["verdict", "llm_reset_redactions"]
     kind: a
     required: true
+    stages: [REVIEW]
     unit: "boolean"
     means: "Whether an LLM reading's release entries unmask exactly the words they name."
     fit: "Your redaction policy: whether a reviewer reading may unmask the words it names as safe."
   - path: ["verdict", "llm_second_speaker_flags"]
     kind: a
     required: true
+    stages: [REVIEW]
     unit: "boolean"
     means: "Whether an LLM reading that heard more than one speaker sends the recording to review."
     fit: "Your review policy: whether a reviewer reading of more than one speaker sends the recording to review."
@@ -1027,18 +1118,21 @@ values:
   - path: ["verdict", "second_opinion_confident_no"]
     kind: c
     required: true
+    stages: [SECOND_OPINION]
     unit: "probability (0-1)"
     means: "Second-opinion model probability at or under which its 'no' is confident enough to count as disagreement."
     fit: "Tuned by listening to labelled recordings: when the second-opinion model is right against the reviewer; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["verdict", "second_opinion_confident_yes"]
     kind: c
     required: true
+    stages: [SECOND_OPINION]
     unit: "probability (0-1)"
     means: "Second-opinion model probability at or above which its 'yes' is confident enough to count as disagreement."
     fit: "Tuned by listening to labelled recordings: when the second-opinion model is right against the reviewer; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["verdict", "second_opinion_disagreement_flags"]
     kind: a
     required: true
+    stages: [SECOND_OPINION]
     unit: "boolean"
     means: "Whether a confident second-opinion disagreement with the reviewer sends the recording to review."
     fit: "Your review policy: whether a confident second-opinion disagreement with the reviewer sends the recording to review."
@@ -1063,18 +1157,21 @@ values:
   - path: ["voice", "f0_range_by_population"]
     kind: c
     required: false
+    stages: [VOICE]
     unit: "Hz range per age and sex group"
     means: "Pitch range per declared age and sex group, replacing the per-recording derived range."
     fit: "Tuned by listening to labelled recordings: pitch range by population; unset (no value measured, so it stays off while empty): owed a fit per population; while empty each recording's range is derived from its own audio."
   - path: ["voice", "f0_range_ratio_max"]
     kind: c
     required: false
+    stages: [VOICE]
     unit: "ratio (F0 max / F0 min)"
     means: "Widest F0 range ratio a configuration may hold; wider is refused as a vacuous period-doubling test."
     fit: "Tuned by listening to labelled recordings: when a pitch range is too wide to test period doubling; unset (no value measured, so it stays off while empty): nobody has fixed the bound."
   - path: ["voice", "task_duration_ranges"]
     kind: d
     required: false
+    stages: [VOICE]
     unit: "s range per task"
     means: "Expected duration range per declared voice task; a production outside it is flagged."
     fit: "Per task in your task list: the duration range each voice task should produce; empty, since no corpus has established it."
@@ -1136,162 +1233,189 @@ values:
   - path: ["extent", "post_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Padding after the last cough event in the cough-task extent."
     fit: "Tuned by listening to labelled recordings: where the cough task begins and ends; the reference profile carries a value fitted on adult clinical speech."
   - path: ["extent", "pre_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Padding before the first cough onset in the cough-task extent."
     fit: "Tuned by listening to labelled recordings: where the cough task begins and ends; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "attach_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "A weaker rise this soon after a cough onset is that cough's second phase or tail."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "band_rise_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Rise a single frequency band needs to count toward cross-band coherence."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "coherence_min"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "fraction (0-1)"
     means: "Share of bands rising together at or above which a rise is broadband."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "floor_percentile"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "percentile"
     means: "Percentile of non-silent frames taken as the recording's floor for cough detection."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "gap_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Pre-onset level over the floor at or under which a rise is a new cough, not a continuation."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "gap_lookback_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Window before an onset over which the pre-onset level is read."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "inhale_bridge_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Longest quiet gap allowed inside one preparatory inhale before a cough."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "inhale_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Level over the floor a preparatory inhale must hold; stationary background does not."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "inhale_extend_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Once found, an inhale's start runs back while it stays this far over the floor."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "inhale_gap_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "A preparatory inhale ending this close before an onset belongs to that cough."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "inhale_max_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Furthest back before the onset a preparatory inhale may start."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "inhale_min_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Shortest preparatory inhale that is attached to the following cough onset."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "min_event_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Shortest duration a cough event must last to be counted as a cough."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "min_gap_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Least spacing in time between two cough onset candidates in one recording."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "peak_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Peak over the floor, within the peak window after an onset, that a cough must reach."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "peak_window_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Window after an onset within which the cough's peak is read."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "restart_rise_fraction"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "fraction (0-1)"
     means: "A rise at least this share of the previous onset's starts a new cough at any level."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "rise_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Broadband rise, in dB over the recording's floor, that marks a candidate cough onset."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "rise_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Window over which a candidate cough onset's rise is measured."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "smooth_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Per-band moving-median window applied before cough onset detection."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "tail_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "A cough event lasts while its level stays this far over the floor."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "train_drop_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Onsets more than this below the median onset peak are left out of the cough train."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["measure", "word_pad_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "A cough onset this close to a speech word is speech, not a cough."
     fit: "Tuned by listening to labelled recordings: where each cough begins and how many coughs there are; the reference profile carries a value fitted on adult clinical speech."
   - path: ["review", "coherence_margin"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "fraction (0-1)"
     means: "Coherence offset, raised and lowered, that tests whether a cough decision is low-confidence."
     fit: "Tuned by listening to labelled recordings: which cough decisions are uncertain enough to review; the reference profile carries a value fitted on adult clinical speech."
   - path: ["review", "rise_margin_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Rise offset, raised and lowered, that tests whether a cough decision is low-confidence."
     fit: "Tuned by listening to labelled recordings: which cough decisions are uncertain enough to review; the reference profile carries a value fitted on adult clinical speech."
@@ -1311,6 +1435,7 @@ values:
   - path: ["second_opinion_not_free_withholds"]
     kind: a
     required: true
+    stages: [SECOND_OPINION]
     unit: "boolean"
     means: "Whether a confident second-opinion 'not identifier-free' holds a release when the reviewer or a mask corroborates it."
     fit: "Your release policy: whether a corroborated second-opinion 'not identifier-free' holds the release."
@@ -1386,120 +1511,140 @@ values:
   - path: ["abut_s"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "s"
     means: "A quality finding this close to a task span counts as touching it."
     fit: "Tuned by listening to labelled recordings: whether a fault touches the task; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["capture", "level_rel_db_max"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "dB"
     means: "Level relative to the session's active level at or under which, with no task event, nothing was captured."
     fit: "Tuned by listening to labelled recordings: whether a recording captured anything; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["faults", "clip", "decides"]
     kind: a
     required: true
+    stages: [QUALITY]
     unit: "boolean"
     means: "Whether a clip touching a task span sends the recording to review."
     fit: "Your review policy: whether clipping inside a task sends the recording to review."
   - path: ["faults", "clip", "min_s"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "s"
     means: "Shortest clip touching a task span that sends the recording to review."
     fit: "Tuned by listening to labelled recordings: whether a clip spoils the task; the reference profile carries a value fitted on adult clinical speech."
   - path: ["faults", "discontinuity", "decides"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "boolean"
     means: "Whether a signal discontinuity touching a task span sends the recording to review."
     fit: "Tuned by listening to labelled recordings: whether a discontinuity spoils the task; the reference profile carries a value fitted on adult clinical speech (off: no label names a discontinuity, so it is reported only)."
   - path: ["faults", "discontinuity", "min_s"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "s"
     means: "Shortest discontinuity touching a task span that sends the recording to review."
     fit: "Tuned by listening to labelled recordings: how long a discontinuity must be to matter; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["faults", "dropout", "decides"]
     kind: a
     required: true
+    stages: [QUALITY]
     unit: "boolean"
     means: "Whether a dropout touching a task span sends the recording to review."
     fit: "Your review policy: whether a dropout inside a task sends the recording to review."
   - path: ["faults", "dropout", "min_s"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "s"
     means: "Shortest dropout touching a task span that sends the recording to review."
     fit: "Tuned by listening to labelled recordings: whether a dropout spoils the task; the reference profile carries a value fitted on adult clinical speech."
   - path: ["faults", "gate", "decides"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "boolean"
     means: "Whether a recorder noise-gate dead stretch touching a task span sends the recording to review."
     fit: "Tuned by listening to labelled recordings: whether a noise-gated stretch spoils the task; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["faults", "gate", "min_s"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "s"
     means: "Shortest noise-gate dead stretch touching a task span that counts."
     fit: "Tuned by listening to labelled recordings: how long a gated stretch must be to matter; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["faults", "shutoff", "abut_s"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "s"
     means: "A shutoff starting this soon after a task span ends counts as cutting the task."
     fit: "Tuned by listening to labelled recordings: whether a shutoff cut the task (set as voice_phonation shutoff.gap_s); no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["faults", "shutoff", "before_s"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "s"
     means: "Window before a level drop that is read to tell whether the signal was sounding."
     fit: "Tuned by listening to labelled recordings: whether the signal was sounding when it cut off; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["faults", "shutoff", "decides"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "boolean"
     means: "Whether a shutoff that cut a task sends the recording to review."
     fit: "Tuned by listening to labelled recordings: whether a shutoff spoils the task; the reference profile carries a value fitted on adult clinical speech (on, for the event kinds in event_kinds)."
   - path: ["faults", "shutoff", "event_kinds"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "list of labels (task event kinds)"
     means: "Task event kinds for which a shutoff sends the recording to review."
     fit: "Tuned by listening to labelled recordings: which task kinds a shutoff spoils; the reference profile carries a value fitted on adult clinical speech (a held phonation with a shutoff was flagged; coughs with one were heard as fine)."
   - path: ["faults", "shutoff", "min_s"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "s"
     means: "Shortest shutoff run read by the quality join."
     fit: "Tuned by listening to labelled recordings: how long a shutoff must be (set as background_model shutoff.min_s); no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["faults", "shutoff", "sounding_db"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "dB"
     means: "Level over the floor just before a drop showing that the drop cut a sounding task."
     fit: "Tuned by listening to labelled recordings: whether a drop cut a sounding task; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["interference", "impulse", "decides"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "boolean"
     means: "Whether an impulse (click, knock) over a task span sends the recording to review."
     fit: "Tuned by listening to labelled recordings: whether an impulse spoils the task; unfitted: the reference profile carries a placeholder set on adult clinical speech (off: a task's own breath or cough onset reads as an impulse too)."
   - path: ["streams", "decides"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "list of labels (task event kinds)"
     means: "Event kinds for which raw-versus-enhanced stream disagreement sends the recording to review."
     fit: "Tuned by listening to labelled recordings: whether stream disagreement marks a bad task; the reference profile carries a value fitted on adult clinical speech."
   - path: ["streams", "lost_fraction"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "fraction (0-1)"
     means: "Share of raw-stream task events lost on the enhanced stream that counts as disagreement."
     fit: "Tuned by listening to labelled recordings: whether the enhanced stream disagrees with the raw one; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["streams", "snr_low_db"]
     kind: c
     required: true
+    stages: [QUALITY]
     unit: "dB"
     means: "Level over its stream's floor a task event needs to stand on that stream."
     fit: "Tuned by listening to labelled recordings: which task events stand on a stream; the reference profile carries a value fitted on adult clinical speech (set as task_events decision.snr_low_db, a grid fit)."
@@ -1564,114 +1709,133 @@ values:
   - path: ["breath", "gap_cycles"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "count (breathing cycles)"
     means: "With a breathing rhythm found, gaps up to this many cycles stay inside the task's event cluster."
     fit: "Tuned by listening to labelled recordings: which breath events belong to the task; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["breath", "gap_min_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Least inner gap of the dominant breath cluster when no rhythm is found."
     fit: "Tuned by listening to labelled recordings: which breath events belong to the task; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["breath", "recover_voiced_max"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "fraction (0-1)"
     means: "Largest voiced share of a region the rhythm prior may recover as a breath phase."
     fit: "Tuned by listening to labelled recordings: which unmatched regions are missed breaths; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["cough", "gap_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Longest gap between coughs inside the dominant cough cluster."
     fit: "Tuned by listening to labelled recordings: which coughs belong to the task; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["ddk", "cycle_band_hz"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "Hz range [min, max] (modulation frequency)"
     means: "Band in which the cycle-rhythm prior is read, for syllable-sequence tasks only."
     fit: "Tuned by listening to labelled recordings: the repetition rate of syllable sequences; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["ddk", "events_min", "cycle"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "count"
     means: "Clear cycle events a present decision needs in a syllable-sequence task."
     fit: "Tuned by listening to labelled recordings: whether the syllable task was performed; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["ddk", "events_min", "syllable"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "count"
     means: "Clear syllable events a present decision needs in a syllable-repetition task."
     fit: "Tuned by listening to labelled recordings: whether the syllable task was performed; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["ddk", "gap_s"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "s"
     means: "Longest inner gap of the dominant syllable cluster; the extent runs first event to last."
     fit: "Tuned by listening to labelled recordings: which syllables belong to the task; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["ddk", "identity_absent_max"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "score (0-1)"
     means: "Median phoneme identity under which the activity is something else and the syllable task is absent."
     fit: "Tuned by listening to labelled recordings: whether the sounds are the asked syllables; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["ddk", "identity_min"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "score (0-1)"
     means: "Median phoneme identity a present decision needs; under it the identity is ambiguous."
     fit: "Tuned by listening to labelled recordings: whether the sounds are the asked syllables; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["ddk", "identity_pad_s"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "s"
     means: "Posteriorgram frames are read this far either side of an event to score its phoneme identity."
     fit: "Tuned by listening to labelled recordings: which frames belong to a syllable; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["ddk", "nucleus_prominence_db"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "dB"
     means: "Height a syllable nucleus must stand over the troughs either side."
     fit: "Tuned by listening to labelled recordings: where each syllable is; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["ddk", "nucleus_spacing_s"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "s"
     means: "Least spacing between syllable nuclei, which sets the fastest syllable rate read."
     fit: "Tuned by listening to labelled recordings: where each syllable is; the reference value is reasoned as 12.5 syllables a second, not fitted to labels."
   - path: ["ddk", "rhythm_agreement"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "ratio (factor)"
     means: "The rhythm's period is used where it lies within this factor of the syllables' own cycle period."
     fit: "Tuned by listening to labelled recordings: whether the rhythm and the syllables agree; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["ddk", "rhythm_prominence_min_db"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "dB"
     means: "Modulation-peak prominence over the spectrum that makes a syllable-repetition rhythm."
     fit: "Tuned by listening to labelled recordings: whether a syllable rhythm is present (set as rhythm.prominence_min_db); no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["ddk", "skip_log"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "log cost"
     means: "Log cost of each syllable-template position the alignment deletes."
     fit: "Tuned by listening to labelled recordings: how well the sounds follow the asked syllable sequence; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["ddk", "syllable_max_s"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "s"
     means: "Longest syllable; a longer stretch with no trough is another activity."
     fit: "Tuned by listening to labelled recordings: where each syllable is; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["ddk", "syllable_min_s"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "s"
     means: "Shortest duration a syllable may have in a syllable-repetition train."
     fit: "Tuned by listening to labelled recordings: where each syllable is; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["ddk", "unvoiced_db"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "dB"
     means: "Level reduction applied to unvoiced frames so voicing troughs split syllable nuclei."
     fit: "Tuned by listening to labelled recordings: where each syllable is; unfitted: the reference profile carries a placeholder set on adult clinical speech."
@@ -1732,12 +1896,14 @@ values:
   - path: ["inhale", "back_max_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Furthest the task extent runs back before the first event to take in a preparatory inhale."
     fit: "Tuned by listening to labelled recordings: where the task begins; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["inhale", "margin_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Level over the floor a preparatory inhale stands, when tracing the extent back."
     fit: "Tuned by listening to labelled recordings: where the task begins (marked to refit with decision.snr_low_db); no derivation written; the reference profile carries the value set on adult clinical speech."
@@ -1756,12 +1922,14 @@ values:
   - path: ["rhythm", "prominence_min_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Modulation-peak prominence that makes a breathing rhythm; it groups and recovers phases, never decides."
     fit: "Tuned by listening to labelled recordings: whether a breathing rhythm is present; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["voice", "gap_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Longest gap between holds inside the dominant voice cluster (reported only)."
     fit: "Tuned by listening to labelled recordings: which holds belong to the voice task; no derivation written; the reference profile carries the value set on adult clinical speech."
@@ -1769,12 +1937,14 @@ values:
   - path: ["atypical", "cough_event_s_max"]
     kind: b
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Median cough-event length above which an attempted cough task is atypical."
     fit: "97.5th percentile of the per-recording median cough-event duration over a pilot corpus's cough recordings."
   - path: ["atypical", "ddk_rate_hz"]
     kind: b
     required: true
+    stages: [SPEECH]
     unit: "Hz range [min, max] (syllables per second)"
     means: "Syllable-rate range outside which an attempted syllable-repetition task is atypical."
     fit: "2.5th to 97.5th percentile of the syllable rate over a pilot corpus's syllable-repetition recordings."
@@ -1799,150 +1969,175 @@ values:
   - path: ["continuity", "enabled"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "boolean"
     means: "Whether an interrupted vowel's extent is carried across further runs by pitch continuity."
     fit: "Tuned by listening to labelled recordings: whether continuity extents are better; the reference profile carries a value fitted on adult clinical speech (switched on after its listen stratum was labelled better or ok)."
   - path: ["continuity", "gap_max_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Furthest a further voiced run may lie from the extent and still be taken in."
     fit: "Tuned by listening to labelled recordings: which further runs continue the vowel; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["continuity", "runs_max"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "count"
     means: "Most further voiced runs continuity takes in on each side."
     fit: "Tuned by listening to labelled recordings: which further runs continue the vowel; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["continuity", "semitones"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "semitones"
     means: "Median-pitch distance from the core within which a further run continues the vowel."
     fit: "Tuned by listening to labelled recordings: which further runs continue the vowel; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["continuity", "tail_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "A run continuity takes in ends this long after its last voiced frame."
     fit: "Tuned by listening to labelled recordings: where a continued vowel ends; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["continuity", "voiced_min_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Least voicing a further run must hold to be taken in by continuity."
     fit: "Tuned by listening to labelled recordings: which further runs continue the vowel; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["count_in", "enabled"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "boolean"
     means: "Whether a voice task's declared count-in is included in its extent."
     fit: "Tuned by listening to labelled recordings: whether count-in extents are better; the reference profile carries a value fitted on adult clinical speech (switched on after its listen stratum was labelled better or ok)."
   - path: ["count_in", "gap_max_s"]
     kind: b
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Longest gap between the count-in's end and phonation onset for the count-in to join the extent."
     fit: "About the 99th percentile of the count-in-end to phonation-onset gap over a pilot corpus's voice recordings with a count-in."
   - path: ["edges", "bridge_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "A dip under the edge margin this short does not end a breath extent's edge."
     fit: "Tuned by listening to labelled recordings: where a breath extent's edge ends; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["edges", "enabled"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "boolean"
     means: "Whether a breath extent's first and last events run out to their envelope's boundary."
     fit: "Tuned by listening to labelled recordings: whether edge-extended breath extents are better; the reference profile carries a value fitted on adult clinical speech (switched on after its listen stratum was labelled better or ok)."
   - path: ["edges", "margin_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Broadband level over the stationary floor still counted as part of an edge event."
     fit: "Tuned by listening to labelled recordings: where a breath extent's edge ends; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["edges", "max_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Furthest a breath extent's edge may move outward."
     fit: "Tuned by listening to labelled recordings: where a breath extent's edge ends; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["growth", "cross_speech"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "boolean"
     means: "Whether breath and cough extent growth may cross speech while breathing continues."
     fit: "Tuned by listening to labelled recordings: whether growth across speech gives better extents; the reference profile carries a value fitted on adult clinical speech (switched on after its listen stratum was labelled better or ok)."
   - path: ["growth", "diarized_turn_min_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "A diarized speaker turn at least this long stops extent growth."
     fit: "Tuned by listening to labelled recordings: where speech ends extent growth (set as COHORT's min_run_s); no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["growth", "enabled"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "boolean"
     means: "Whether breath and cough extents grow outward from the task's event cluster."
     fit: "Tuned by listening to labelled recordings: whether grown extents are better; the reference profile carries a value fitted on adult clinical speech (switched on after its listen stratum was labelled better or ok)."
   - path: ["growth", "gap_floor_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Floor on the cluster's median onset interval used for extent growth."
     fit: "Tuned by listening to labelled recordings: how far a breath or cough extent grows; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["growth", "k"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "multiplier (x median onset interval)"
     means: "Gap, as a multiple of the cluster's median onset interval, up to which extent growth continues."
     fit: "Tuned by listening to labelled recordings: how far a breath or cough extent grows; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["modulation", "enabled"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "boolean"
     means: "Whether the envelope-modulation breath-event detector runs beside the breath type test."
     fit: "Tuned by listening to labelled recordings: whether modulation-detected breath events help; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["modulation", "margin_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Envelope at a breathing lobe's peak must stand this far over the floor."
     fit: "Tuned by listening to labelled recordings: which breathing lobes are events (set as inhale.margin_db); no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["modulation", "prominence_db"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "dB"
     means: "Prominence a breathing-band envelope lobe needs to be a breath event."
     fit: "Tuned by listening to labelled recordings: which breathing lobes are events; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["modulation", "rate_hz"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "Hz"
     means: "Rate at which the mean band envelope is read for the modulation detector."
     fit: "Tuned by listening to labelled recordings: the breathing envelope's time resolution; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["parts", "enabled"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "boolean"
     means: "Whether a voice task done in several separate phonations is spanned whole."
     fit: "Tuned by listening to labelled recordings: whether whole-task voice extents are better; the reference profile carries a value fitted on adult clinical speech (switched on after its listen stratum was labelled better or ok)."
   - path: ["parts", "gap_max_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Furthest apart separate phonation parts may lie and still be one task."
     fit: "Tuned by listening to labelled recordings: which separate phonations are parts of one task; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["parts", "hold_min_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Least voicing a further run needs to be a part of the voice task."
     fit: "Tuned by listening to labelled recordings: which separate phonations are parts of one task; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["parts", "voiced_fraction_min"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "fraction (0-1)"
     means: "Least voiced share of a further run for it to be a part of the voice task."
     fit: "Tuned by listening to labelled recordings: which separate phonations are parts of one task; no derivation written; the reference profile carries the value set on adult clinical speech."
@@ -1955,30 +2150,35 @@ values:
   - path: ["trim", "airway", "pad_s"]
     kind: c
     required: true
+    stages: [AIRWAY]
     unit: "s"
     means: "Padding beyond the first and last events of a breath or cough extent."
     fit: "Tuned by listening to labelled recordings: where a breath or cough task begins and ends (set as cough_pattern extent); no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["trim", "ddk", "agreed_run_min"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "count (words)"
     means: "A run of this many agreed non-task words cuts a syllable train."
     fit: "Tuned by listening to labelled recordings: where speech interrupts a syllable train (set as task_content agreed_run_min); no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["trim", "ddk", "edge_duration_ratio"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "ratio (x median event)"
     means: "An edge event longer than this multiple of the train's median event is not part of the train."
     fit: "Tuned by listening to labelled recordings: where a syllable train begins and ends; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["trim", "ddk", "kept_share_min"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "fraction (0-1)"
     means: "A speech split of a syllable train stands only where its kept piece holds this share of the events."
     fit: "Tuned by listening to labelled recordings: where speech interrupts a syllable train; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["trim", "ddk", "margin_intervals"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "count (median onset intervals)"
     means: "Median onset intervals a trimmed syllable-train edge keeps beyond its last event."
     fit: "Tuned by listening to labelled recordings: where a syllable train ends; the reference profile carries a value fitted on adult clinical speech."
@@ -1991,6 +2191,7 @@ values:
   - path: ["trim", "voice", "onset_voiced_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Phonation onset is the first voiced stretch at least this long."
     fit: "Tuned by listening to labelled recordings: where a voice task begins; no derivation written; the reference profile carries the value set on adult clinical speech."
@@ -2005,18 +2206,21 @@ values:
   - path: ["phrase_words_min"]
     kind: a
     required: true
+    stages: [SPEECH]
     unit: "count (words)"
     means: "Lexical words, including a closed-class word, that make an utterance a phrase rather than an item."
     fit: "Your review policy: how many words, with a function word, make a list response a phrase."
   - path: ["utterance_gap_s"]
     kind: c
     required: true
+    stages: [SPEECH]
     unit: "s"
     means: "Pause between two consensus words at least this long ends an utterance."
     fit: "Tuned by listening to labelled recordings: where one utterance ends (set by owner decision); no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["words_min"]
     kind: a
     required: true
+    stages: [SPEECH]
     unit: "count (words)"
     means: "Speech words outside the task's content in a non-lexical task at which speech in the task is raised."
     fit: "Your review policy: how many stray words in a breath or voice task mark speech in the task."
@@ -2031,270 +2235,315 @@ values:
   - path: ["band_hz"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "Hz range [min, max]"
     means: "Frequency band in which the phonation frame level is read."
     fit: "Tuned by listening to labelled recordings: where phonation is; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["break_min_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Shortest fall below phonation level that counts as a break between holds."
     fit: "Tuned by listening to labelled recordings: where a hold breaks; unfitted: the reference profile carries a placeholder set on adult clinical speech."
   - path: ["extent_min_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Phonation extent shorter than this counts as no phonation."
     fit: "Tuned by listening to labelled recordings: whether any phonation was captured; the reference profile carries a value fitted on adult clinical speech."
   - path: ["f0", "fold_semitones"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "semitones"
     means: "Deviation from the running-median pitch that folds a frame by an octave."
     fit: "Tuned by listening to labelled recordings: where the pitch track jumps an octave; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["f0", "fold_window_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Window of the running-median pitch a stray octave frame folds toward."
     fit: "Tuned by listening to labelled recordings: where the pitch track jumps an octave; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["f0", "harmonics"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "count"
     means: "Harmonics of each parity compared in the octave check."
     fit: "Tuned by listening to labelled recordings: where the pitch track jumps an octave; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["f0", "octave_db"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "dB"
     means: "Odd-against-even harmonic level difference that moves the pitch estimate an octave."
     fit: "Tuned by listening to labelled recordings: where the pitch track jumps an octave; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["f0", "range_hz"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "Hz range [min, max]"
     means: "Pitch search range on the plain stream for voice tasks."
     fit: "Tuned by listening to labelled recordings: the pitch track of voice tasks; the reference value is a design range of about 50-1600 Hz, not fitted to labels."
   - path: ["f0", "spread_window_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Window over which the pitch-spread annotation is read."
     fit: "Tuned by listening to labelled recordings: pitch steadiness; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["floor_smooth_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Moving-average window whose quietest value is the phonation floor."
     fit: "Tuned by listening to labelled recordings: where the background floor is; the reference profile carries a value fitted on adult clinical speech."
   - path: ["glide", "jump_max_semitones"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "semitones"
     means: "Frame-to-frame pitch jump treated as a discontinuity rather than glide travel."
     fit: "Tuned by listening to labelled recordings: how far a glide travelled; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["glide", "range_min_semitones"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "semitones"
     means: "Pitch travel in the declared direction that counts as a glide."
     fit: "Tuned by listening to labelled recordings: whether a glide travelled far enough; unfitted: the reference profile carries a placeholder set on adult clinical speech (to refit on the labels)."
   - path: ["glide", "smoothing_frames"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "count (frames)"
     means: "Running-median width, in frames, applied to the semitone pitch track of a glide."
     fit: "Tuned by listening to labelled recordings: how far a glide travelled; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["glide", "voiced_min_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Voiced time under which no glide is measurable."
     fit: "Tuned by listening to labelled recordings: whether a glide can be measured; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["hum", "disagreement_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Raw-versus-enhanced extent edge difference that sends a hum-affected recording to review."
     fit: "Tuned by listening to labelled recordings: whether hum moved the extent; the reference profile carries a value fitted on adult clinical speech."
   - path: ["hum", "enhanced_drop_db"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "dB"
     means: "Enhanced stream this far under raw supports a nothing-captured reading."
     fit: "Tuned by listening to labelled recordings: whether a recording holds only hum; the reference profile carries a value fitted on adult clinical speech (held on the hum-only listened recordings)."
   - path: ["hum", "harmonics_max"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "count"
     means: "Multiples of each mains frequency read by the hum guard."
     fit: "Tuned by listening to labelled recordings: which recordings carry mains hum; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["hum", "line_db"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "dB"
     means: "Level a mains line must stand over its neighbourhood to count."
     fit: "Tuned by listening to labelled recordings: which recordings carry mains hum; the reference profile carries a value fitted on adult clinical speech."
   - path: ["hum", "lines_min"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "count"
     means: "Mains lines that must stand out to fire the hum guard."
     fit: "Tuned by listening to labelled recordings: which recordings carry mains hum; the reference profile carries a value fitted on adult clinical speech."
   - path: ["hum", "lock_fraction_min"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "fraction (0-1)"
     means: "Share of voiced frames within tolerance of a mains multiple that fires the hum guard."
     fit: "Tuned by listening to labelled recordings: which recordings carry mains hum; the reference profile carries a value fitted on adult clinical speech."
   - path: ["hum", "neighbourhood_hz"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "Hz range [near, far]"
     means: "Frequency offsets either side of a mains line over which its neighbourhood is read."
     fit: "Tuned by listening to labelled recordings: which recordings carry mains hum; the reference profile carries a value fitted on adult clinical speech."
   - path: ["hum", "tolerance_hz"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "Hz"
     means: "How close a pitch frame is to a mains multiple to be dropped when hum is found."
     fit: "Tuned by listening to labelled recordings: which pitch frames are hum; the reference profile carries a value fitted on adult clinical speech."
   - path: ["inhale", "gap_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Longest gap between a preparatory inhale and phonation onset."
     fit: "Tuned by listening to labelled recordings: where a voice task begins; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["inhale", "max_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Furthest before phonation onset a preparatory inhale may start."
     fit: "Tuned by listening to labelled recordings: where a voice task begins; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["inhale", "min_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Shortest preparatory inhale before phonation that is attached to the voice extent."
     fit: "Tuned by listening to labelled recordings: where a voice task begins; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["inhale", "rise_db"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "dB"
     means: "Level over the floor a preparatory inhale reaches, as in the cough measure."
     fit: "Tuned by listening to labelled recordings: where a voice task begins; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["merge_db"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "dB"
     means: "Level over the floor at which a further run merges into the extent as a hold."
     fit: "Tuned by listening to labelled recordings: which further runs are holds; the reference profile carries a value fitted on adult clinical speech."
   - path: ["merge_gap_max_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Longest gap a further hold merges across into the extent."
     fit: "Tuned by listening to labelled recordings: which further runs are holds; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["merge_voiced_fraction_min"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "fraction (0-1)"
     means: "Voiced share at which a further run merges into the extent as a hold."
     fit: "Tuned by listening to labelled recordings: which further runs are holds; the reference profile carries a value fitted on adult clinical speech."
   - path: ["phonation_db"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "dB"
     means: "Level over the floor at which a frame counts as phonation."
     fit: "Tuned by listening to labelled recordings: where phonation is; the reference value is a design setting of subband energy 10 dB over the floor, not fitted to labels."
   - path: ["review", "floor_margin_db"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "dB"
     means: "Strict and lenient offsets on phonation_db that test whether a voice decision is low-confidence."
     fit: "Tuned by listening to labelled recordings: which voice decisions are uncertain enough to review; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["review", "glide_margin_semitones"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "semitones"
     means: "Strict and lenient offsets on the glide bound that test whether a glide decision is low-confidence."
     fit: "Tuned by listening to labelled recordings: which glide decisions are uncertain enough to review; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["segment_min_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Shortest voiced run that merges into the extent as a further hold."
     fit: "Tuned by listening to labelled recordings: which further runs are holds; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["shutoff", "below_floor_db"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "dB"
     means: "Depth under the live-frame floor at which a frame counts as dead."
     fit: "Tuned by listening to labelled recordings: whether the recorder cut off during the task; the reference profile carries a value fitted on adult clinical speech (read off a listened shutoff (click, decay, flat plateau under the room noise))."
   - path: ["shutoff", "bridge_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Longest gap across which dead runs are joined."
     fit: "Tuned by listening to labelled recordings: whether the recorder cut off during the task; the reference profile carries a value fitted on adult clinical speech (read off a listened shutoff (click, decay, flat plateau under the room noise))."
   - path: ["shutoff", "drop_db"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "dB"
     means: "Level fall within drop_s that makes the entry into a dead stretch abrupt."
     fit: "Tuned by listening to labelled recordings: whether the recorder cut off during the task; the reference profile carries a value fitted on adult clinical speech (read off a listened shutoff (click, decay, flat plateau under the room noise))."
   - path: ["shutoff", "drop_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Time within which the level must fall for an abrupt shutoff."
     fit: "Tuned by listening to labelled recordings: whether the recorder cut off during the task; the reference profile carries a value fitted on adult clinical speech (read off a listened shutoff (click, decay, flat plateau under the room noise))."
   - path: ["shutoff", "flat_db"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "dB"
     means: "Largest 10th-to-90th percentile level spread of a dead stretch."
     fit: "Tuned by listening to labelled recordings: whether the recorder cut off during the task; the reference profile carries a value fitted on adult clinical speech (read off a listened shutoff (click, decay, flat plateau under the room noise))."
   - path: ["shutoff", "flat_window_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Window over which a dead stretch's flatness is read."
     fit: "Tuned by listening to labelled recordings: whether the recorder cut off during the task; the reference profile carries a value fitted on adult clinical speech (read off a listened shutoff (click, decay, flat plateau under the room noise))."
   - path: ["shutoff", "gap_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "A shutoff this soon after the phonation extent ends cut the task."
     fit: "Tuned by listening to labelled recordings: whether a shutoff cut the voice task; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["shutoff", "min_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Shortest dead run that counts as a shutoff."
     fit: "Tuned by listening to labelled recordings: whether the recorder cut off during the task; the reference profile carries a value fitted on adult clinical speech (read off a listened shutoff (click, decay, flat plateau under the room noise))."
   - path: ["speech", "run_min_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "Shortest voiced run outside the extent that is reported."
     fit: "Tuned by listening to labelled recordings: speech around a voice task; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["speech", "voiced_fraction_min"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "fraction (0-1)"
     means: "Voiced share at which a run outside the extent is speech-like."
     fit: "Tuned by listening to labelled recordings: speech around a voice task; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["speech_word_max_s"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "s"
     means: "A transcript word held longer than this is the vowel transcribed, not speech."
     fit: "Tuned by listening to labelled recordings: which words are the vowel and which are speech; the reference profile carries a value fitted on adult clinical speech (separated the count-in from the vowel on every listened prolonged-vowel recording)."
   - path: ["voiced_rise_db"]
     kind: c
     required: true
+    stages: [VOICE]
     unit: "dB"
     means: "Level over the floor a voiced frame needs to count as phonation."
     fit: "Tuned by listening to labelled recordings: whether voicing is phonation or room noise; the reference profile carries a value fitted on adult clinical speech."

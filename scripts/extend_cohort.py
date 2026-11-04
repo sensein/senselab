@@ -526,7 +526,7 @@ def run_apply(args: argparse.Namespace) -> dict[str, Any]:
         The task's summary.
     """
     started = time.time()
-    config = driver_config(args)
+    config = driver_config(args, stage="COHORT")
     settings = enrollment_config(config)
     artefact, quantiles_ref = None, None
     if args.quantiles is not None:

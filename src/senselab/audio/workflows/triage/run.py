@@ -59,6 +59,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     RunState,
     release_value,
 )
+from senselab.audio.workflows.triage.workflow import STAGE_NAMES, off_notes
 from senselab.utils.prov_store import ProvStore
 from senselab.utils.subprocess_venv import record_venv_use
 
@@ -333,8 +334,10 @@ def drive_decisions(
 ) -> dict[str, Path]:
     """Run BACKGROUND, TAXONOMY, routing, the routed branches, QUALITY, COHORT and REDACT over a preprocessed store.
 
-    Every input is the store and the sidecars under ``run_dir``, so the caller may be a graph pass
-    that has just run PREPROCESS or a driver replaying over a finished run. A branch routing
+    The stages are driven in :data:`~senselab.audio.workflows.triage.workflow.STAGES` order, each through its call in
+    the table below. Every input is the store and the sidecars under ``run_dir``, so the caller may be a graph pass
+    that has just run PREPROCESS or a driver replaying over a finished run. A stage the workflow leaves off (noted
+    :data:`~senselab.audio.workflows.triage.workflow.OFF_IN_WORKFLOW`, plan step 11), a branch routing
     declined, one no node implements (noted :data:`NO_NODE`) and one withheld by a critical failure
     (noted :data:`WITHHELD_CRITICAL`) are all recorded ``SKIPPED`` and never called. A branch that
     did not complete and owns the declared family gets a ``task_extent_absent`` finding from
@@ -355,61 +358,84 @@ def drive_decisions(
     Returns:
         REDACT's released pair, empty unless it cleared one.
     """
-    _attempt(
-        outcomes,
-        BACKGROUND_NODE,
-        lambda: write_background(
+    off = off_notes(config.values)
+    routed_runs: set[str] = set()
+    withheld: str | None = None
+    artifacts: dict[str, Path] = {}
+
+    def _routing() -> NodeResult:
+        nonlocal withheld
+        result = routing(store, None, config, hint, run_dir=run_dir)
+        if result is not None:  # None is recorded by _attempt as "routing returned no result"
+            routed_runs.update(result.runs)
+            withheld = WITHHELD_CRITICAL if result.critical else None
+        return result
+
+    def _redact() -> NodeResult:
+        result = redact(
+            store,
+            _SOURCE_STREAM,
+            config,
+            hint,
+            run_dir=run_dir,
+            artifacts_dir=artifacts_dir,
+            task_family=declared_task_family(store),
+        )
+        if result is not None:
+            artifacts.update(result.artifacts)
+        return result
+
+    calls: dict[str, Callable[[], Any]] = {
+        BACKGROUND_NODE: lambda: write_background(
             store,
             run_dir,
             clips=[span.extent for span in clip_spans(store, _SOURCE_STREAM) if span.extent is not None],
         ),
-    )
-    _attempt(outcomes, "TAXONOMY", lambda: taxonomy(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir))
-    routed = _attempt(outcomes, "routing", lambda: routing(store, None, config, hint, run_dir=run_dir))
-    selected = set(routed.runs) if routed is not None else set()
-    withheld = WITHHELD_CRITICAL if routed is not None and routed.critical else None
-    branches: dict[str, Callable[[], BranchResult]] = {
+        "TAXONOMY": lambda: taxonomy(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
+        "routing": _routing,
         "AIRWAY": lambda: airway(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
         "SPEECH": lambda: speech(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir, enrollment=enrollment),
         "VOICE": lambda: voice(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
+        QUALITY: lambda: quality(store, _SOURCE_STREAM, config, hint, run_dir=run_dir),
+        COHORT_NODE: lambda: write_cohort_unavailable(store),
+        "REDACT": _redact,
+        REVIEW_NODE: lambda: review(store, config, hint),
     }
-    for branch in BRANCHES:
-        call = branches.get(branch)
-        if call is None:
-            outcomes[branch] = NodeOutcome(node=branch, state=RunState.SKIPPED, note=NO_NODE)
-        elif branch in selected:
-            _attempt(outcomes, branch, call)
+
+    def _held(name: str) -> NodeOutcome | None:
+        """The outcome of a stage that is not called on this recording, or None when it is called."""
+        if name in off:
+            return NodeOutcome(node=name, state=RunState.SKIPPED, note=off[name])
+        if name == SECOND_OPINION:
+            return NodeOutcome(node=name, state=RunState.SKIPPED, note=SECOND_OPINION_DRIVER)
+        if name not in calls:
+            return NodeOutcome(node=name, state=RunState.SKIPPED, note=NO_NODE)
+        if name in BRANCHES and name not in routed_runs:
+            return NodeOutcome(node=name, state=RunState.SKIPPED, note=withheld)
+        if name == "REDACT" and not ("SPEECH" in routed_runs and _speech_found_pii(store)):
+            return NodeOutcome(node=name, state=RunState.SKIPPED)
+        return None
+
+    driven = STAGE_NAMES[STAGE_NAMES.index(BACKGROUND_NODE) : STAGE_NAMES.index("VERDICT")]
+    last_branch = [name for name in driven if name in BRANCHES][-1]
+    for name in driven:
+        held = _held(name)
+        if held is not None:
+            outcomes[name] = held
         else:
-            outcomes[branch] = NodeOutcome(node=branch, state=RunState.SKIPPED, note=withheld)
-    family = declared_task_family(store)
-    for branch in BRANCHES:
-        outcome = outcomes[branch]
-        if outcome.state is not RunState.COMPLETED:
-            record_unrun_owner(
-                store, branch, family, outcome.note or outcome.error or outcome.state.value, signal=_CONDITIONED_STREAM
-            )
-    _attempt(outcomes, QUALITY, lambda: quality(store, _SOURCE_STREAM, config, hint, run_dir=run_dir))
-    _attempt(outcomes, COHORT_NODE, lambda: write_cohort_unavailable(store))
-    if "SPEECH" in selected and _speech_found_pii(store):
-        redacted = _attempt(
-            outcomes,
-            "REDACT",
-            lambda: redact(
-                store,
-                _SOURCE_STREAM,
-                config,
-                hint,
-                run_dir=run_dir,
-                artifacts_dir=artifacts_dir,
-                task_family=declared_task_family(store),
-            ),
-        )
-        artifacts = dict(redacted.artifacts) if redacted is not None else {}
-    else:
-        outcomes["REDACT"] = NodeOutcome(node="REDACT", state=RunState.SKIPPED)
-        artifacts = {}
-    _attempt(outcomes, REVIEW_NODE, lambda: review(store, config, hint))
-    outcomes[SECOND_OPINION] = NodeOutcome(node=SECOND_OPINION, state=RunState.SKIPPED, note=SECOND_OPINION_DRIVER)
+            _attempt(outcomes, name, calls[name])
+        if name == last_branch:
+            family = declared_task_family(store)
+            for branch in BRANCHES:
+                outcome = outcomes[branch]
+                if outcome.state is not RunState.COMPLETED:
+                    record_unrun_owner(
+                        store,
+                        branch,
+                        family,
+                        outcome.note or outcome.error or outcome.state.value,
+                        signal=_CONDITIONED_STREAM,
+                    )
     return artifacts
 
 

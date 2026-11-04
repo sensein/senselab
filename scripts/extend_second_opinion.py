@@ -523,7 +523,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     try:
-        config = driver_config(args)
+        config = driver_config(args, stage="SECOND_OPINION")
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2

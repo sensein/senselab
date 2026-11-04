@@ -125,6 +125,7 @@ from senselab.audio.workflows.triage.run import (
 from senselab.audio.workflows.triage.task_catalogue import task_attributes, task_from_attributes
 from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, QUALITY, REDACTION_LLM_ANNOTATION
 from senselab.audio.workflows.triage.word_arbitration import arbitrate_words
+from senselab.audio.workflows.triage.workflow import require_stage
 from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
 from senselab.utils.prov_store import CHECKSUM_KEY, MTIME_KEY, SIZE_KEY, Entity, ProvStore, file_digest
 from senselab.utils.subprocess_venv import record_venv_use
@@ -296,7 +297,7 @@ def add_config_arguments(parser: argparse.ArgumentParser, *, allow_profile_chang
         )
 
 
-def driver_config(args: argparse.Namespace, *, require_values: bool = True) -> TriageConfig:
+def driver_config(args: argparse.Namespace, *, require_values: bool = True, stage: str | None = None) -> TriageConfig:
     """The configuration a driver's :func:`add_config_arguments` options name.
 
     Args:
@@ -304,14 +305,19 @@ def driver_config(args: argparse.Namespace, *, require_values: bool = True) -> T
         require_values: Refuse, before anything runs, a profile that leaves a value a run needs empty
             (:func:`~senselab.audio.workflows.triage.dataset_profile.require_dataset_values`); False for a driver
             that reads no stage's values (the identity check).
+        stage: The stage the driver writes, refused where the workflow leaves it off
+            (:func:`~senselab.audio.workflows.triage.workflow.require_stage`).
 
     Returns:
         The configuration, with the profile active where one was named.
 
     Raises:
         DatasetDataMissing: Where ``require_values`` and the profile lacks a value a run needs.
+        ValueError: Where ``stage`` is off in the workflow.
     """
     config = load_triage_config(args.config, profile=args.profile)
+    if stage is not None:
+        require_stage(config.values, stage)
     if require_values:
         require_dataset_values(config.values)
     return config

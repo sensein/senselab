@@ -166,6 +166,52 @@ class TestOverrides:
             load_triage_config(override)
 
 
+class TestNamedModels:
+    """The model choices PREPROCESS once fixed in code are settings (plan step 11c)."""
+
+    def test_the_defaults_are_the_models_triage_has_always_run(self) -> None:
+        """B2AI's runs are unchanged: the two recognizers, AST and FRCRN, at the same refs."""
+        cfg = load_triage_config()
+        recognizers = cfg.require("asr.recognizers")
+        assert [(r["name"], r["model"], r["timestamps"]) for r in recognizers] == [
+            ("asr_crisperwhisper", "nyralabs/CrisperWhisper2.0_turbo", "native"),
+            ("asr_qwen", "Qwen/Qwen3-ASR-1.7B", "bundled_aligner"),
+        ]
+        assert recognizers[1]["timestamp_model"] == "Qwen/Qwen3-ForcedAligner-0.6B"
+        assert recognizers[1]["options"] == {"return_timestamps": True}
+        assert cfg.require("ast.model") == "MIT/ast-finetuned-audioset-10-10-0.4593"
+        assert cfg.require("residual.enhancer.model") == "alibabasglab/FRCRN_SE_16K"
+
+    def test_one_recognizer_is_a_valid_list(self, tmp_path: Path) -> None:
+        """A profile replaces the whole list; the consensus runs over what is left."""
+        override = tmp_path / "o.yaml"
+        override.write_text(
+            "asr:\n  recognizers:\n    - {name: asr_child, model: org/child-asr, revision: main, timestamps: native}\n"
+        )
+        assert [r["name"] for r in load_triage_config(override).require("asr.recognizers")] == ["asr_child"]
+
+    @pytest.mark.parametrize(
+        ("recognizers", "match"),
+        [
+            ("[]", "at least one"),
+            ("[{name: a, model: m, revision: main, timestamps: guessed}]", "timestamps"),
+            ("[{name: a, model: m, revision: main, timestamps: bundled_aligner}]", "timestamp_model"),
+            ("[{name: a, model: m, revision: main, timestamps: native, lang: en}]", "unknown keys"),
+            (
+                "[{name: a, model: m, revision: main, timestamps: native}, "
+                "{name: a, model: n, revision: main, timestamps: native}]",
+                "twice",
+            ),
+        ],
+    )
+    def test_a_list_preprocess_could_not_run_is_refused(self, tmp_path: Path, recognizers: str, match: str) -> None:
+        """Refused at load, not as a failed block on the first recording."""
+        override = tmp_path / "o.yaml"
+        override.write_text(f"asr:\n  recognizers: {recognizers}\n")
+        with pytest.raises(ValueError, match=match):
+            load_triage_config(override)
+
+
 class TestDatasetProfileLayer:
     """A profile's override sits between the packaged file and a run's, and its files enter the hash."""
 
