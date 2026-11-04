@@ -3,6 +3,7 @@
 from unittest.mock import Mock
 
 import pytest
+import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_to_text import huggingface as huggingface_asr_module
@@ -180,3 +181,32 @@ def test_transcribe_audio_with_wrong_sampling_rate(
     # Create a mock stereo audio sample
     with pytest.raises(ValueError, match="Incorrect sampling rate."):
         transcribe_audios(audios=[mono_audio_sample], model=hf_model, device=cpu_cuda_device)
+
+
+def test_pasketti_word_routes_to_qwen_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """drivendata/pasketti-word (a Qwen3-ASR fine-tune) takes the Qwen3-ASR route with its timestamp kwargs."""
+    from senselab.audio.tasks.speech_to_text.qwen import QwenASR
+
+    captured: dict = {}
+
+    def fake(audios: list, model: HFModel, device: object = None, **kw: object) -> list:
+        captured.update(model=model.path_or_uri, kw=kw)
+        return ["ok"]
+
+    monkeypatch.setattr(QwenASR, "transcribe_with_qwen", fake)
+    model = HFModel(path_or_uri="drivendata/pasketti-word", revision="main")
+    lang = Language(language_code="en")
+    audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000)
+    out = transcribe_audios([audio], model=model, language=lang, return_timestamps=True)
+    assert out == ["ok"]
+    assert captured["model"] == "drivendata/pasketti-word"
+    assert captured["kw"]["return_timestamps"] is True
+    assert captured["kw"]["language"] == lang.name
+
+
+def test_pasketti_word_prefix_listed() -> None:
+    """The Qwen route prefixes include pasketti-word and still the Qwen3-ASR family."""
+    from senselab.audio.tasks.speech_to_text import api as asr_api
+
+    assert "drivendata/pasketti-word" in asr_api._QWEN_ASR_PREFIXES
+    assert "Qwen/Qwen3-ASR" in asr_api._QWEN_ASR_PREFIXES

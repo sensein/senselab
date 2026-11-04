@@ -30,7 +30,10 @@ _CANARY_PREFIXES = ("nvidia/canary-",)
 # Alibaba Qwen3-ASR prefix — route to a separate Qwen subprocess venv
 # (qwen.py) that uses Alibaba's qwen-asr Python wrapper plus the optional
 # Qwen3-ForcedAligner companion for word-level timestamps.
-_QWEN_ASR_PREFIXES = ("Qwen/Qwen3-ASR",)
+# DrivenData's pasketti-word (child-speech ASR, a full fine-tune of Qwen3-ASR-1.7B, BigCode OpenRAIL-M)
+# has the same architecture and is loaded by the same wrapper, so it takes the same route; it has no
+# timestamps of its own, so its word times come from the same companion forced aligner.
+_QWEN_ASR_PREFIXES = ("Qwen/Qwen3-ASR", "drivendata/pasketti-word")
 
 # CrisperWhisper 2.0 prefix — route to a separate CT2 subprocess venv
 # (crisperwhisper.py) using the `crisperwhisper` package. Verbatim transcription
