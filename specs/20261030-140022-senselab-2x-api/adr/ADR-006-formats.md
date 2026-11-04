@@ -404,3 +404,17 @@ profile formats (`tolerance@`, `tolerance-observations@`, `tolerance-coverage@`)
   file content roots) and value digests, never from paths or sidecars, so moving the root leaves the digest unchanged.
   Ids are root-relative POSIX paths in NFC. A reader of `input-manifest@1` ignores fields added in a later minor, and a
   manifest of a later minor has no digest under a 1.0 reader (rulings P3-14, P3-15, P3-16).
+
+## Amendment 2026-11-04: the logical plan (Phase 3 Task 7)
+
+- Data format `logical-plan@1.0`: `{format, graph: graph@1.0, models: {node: ResolvedModel | null},
+  profile_slices: {node: {slice: "profile:<64hex>"}}, manifest_digest: <64hex>, bind: {input: record input},
+  reuse: "exact" | "equivalent" | "tolerant"}`; `models` and `profile_slices` name exactly the graph's nodes. A
+  document, not a port value. No hardware, env, device, batch, partition, backend or profile digest (ADR-004).
+- Identity tag `logical-plan@1`: `identity_digest("logical-plan@1", fields)` over every field but `format`; it is the
+  run id (ruling P3-17). The graph enters as the `graph@1` digest of its nodes without `model`, with params completed
+  by their defaults; each model enters as its key identity (hub id and commit, or the weights digest; no reference
+  text, source path or license). A plan (or graph) of a later minor has no hash under a 1.0 reader.
+- Identity tag `profile-slice@1`: a declared profile slice's identity is `"profile:" + identity_digest("profile-slice@1",
+  <slice value>)`. A task declares slices as `run.<path>` (run config settings) or `dataset.<path>` (dataset profile);
+  only declared slices are read (I-1).
