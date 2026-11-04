@@ -161,9 +161,11 @@ def _decode(worker: Any, name: str, samples: Any, params: dict[str, Any], confid
 
 
 def _git_head() -> str | None:
+    """Return the commit of the checkout the imported `senselab` package is in, which is the code measured."""
+    package = Path(importlib.import_module("senselab").__file__ or "").parent
     try:
         return subprocess.run(
-            ["git", "-C", str(Path(__file__).parent), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+            ["git", "-C", str(package), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return None
