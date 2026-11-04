@@ -395,3 +395,12 @@ profile formats (`tolerance@`, `tolerance-observations@`, `tolerance-coverage@`)
   closed.
 - Identity tag `graph@1`: the digest of a graph's canonical JSON without `format` (nodes sorted by id, edges by source,
   target and kind). A graph of a later minor has no digest under a `graph@1.0` reader (rulings P3-12, P3-13, P3-50).
+
+## Amendment 2026-11-04: the input manifest (Phase 3 Task 6)
+
+- Data format `input-manifest@1.0`: `{format, rows: [{id, entities: {name: value}, inputs: {port: "content:<64hex>" |
+  "output:<64hex>"}}]}`, rows sorted by id, ids unique. A document, not a port value.
+- Identity tag `input-manifest@1`: `identity_digest("input-manifest@1", {"rows": rows})`, from content stamps (chunked
+  file content roots) and value digests, never from paths or sidecars, so moving the root leaves the digest unchanged.
+  Ids are root-relative POSIX paths in NFC. A reader of `input-manifest@1` ignores fields added in a later minor, and a
+  manifest of a later minor has no digest under a 1.0 reader (rulings P3-14, P3-15, P3-16).
