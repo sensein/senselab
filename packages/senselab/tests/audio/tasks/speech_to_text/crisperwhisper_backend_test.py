@@ -1,7 +1,5 @@
 """The `crisperwhisper` backend of `speech_to_text`: its engines, model, faults and the isolated worker's imports."""
 
-import importlib
-import importlib.util
 import json
 from pathlib import Path
 from typing import Any
@@ -26,6 +24,7 @@ from senselab_core.runtime.keys import Call, Placement, build_key
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile, NoBackend, resolve_execution
 from senselab_core.testing.contracts import BASE_CONTEXT, contract_cases
+from senselab_core.testing.librispeech import long_form
 from senselab_core.testing.workers import RealWorkers, run_alone
 from senselab_worker.fake import FAULT_KEY
 from senselab_worker.faults import ContentFault, FaultClass, ResourceFault
@@ -239,17 +238,12 @@ def test_edge_inputs_with_real_weights(real_worker: RealWorkers, engine: str) ->
 
 
 MANIFEST = Path(__file__).parents[6] / "benchmarks" / "manifests" / "librispeech-test-clean.yaml"
-BENCHMARK = MANIFEST.parents[1] / "crisperwhisper_confidence_cost.py"
 
 
 def _long_speech() -> Audio:
-    """Return the cost benchmark's long-form item, fetched through the data cache (`$SENSELAB_DATA_CACHE`)."""
-    spec = importlib.util.spec_from_file_location("confidence_cost", BENCHMARK)
-    assert spec is not None and spec.loader is not None
-    script = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(script)
+    """Return the long-form item, fetched through the data cache (`$SENSELAB_DATA_CACHE`)."""
     archive = fetch(DataManifest.load(MANIFEST), cache_root=default_cache_root())["test-clean.tar.gz"]
-    return Audio.from_array(script.long_form(archive, script.LONG_FORM_SECONDS)[None, :], cw.EXPECTED_RATE)
+    return Audio.from_array(long_form(archive)[None, :], cw.EXPECTED_RATE)
 
 
 @pytest.mark.env

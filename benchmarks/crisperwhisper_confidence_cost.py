@@ -6,8 +6,8 @@ the data cache, `$SENSELAB_DATA_CACHE`) in the `orcd` profile's `crisperwhisper`
 true and false after one warm-up decode. The times are the worker's own (`_diagnostics`): `decode_s` is the library
 decode, `confidence_s` the confidence pass, `engine_build_s` the one-off engine load. Writes `confidence-cost@1`.
 
-`--transcript --engine E --device D --out FILE` writes the transcript and diagnostics of one long-form item (the
-first utterances of the first test-clean chapter over `LONG_FORM_SECONDS`); `--compare A B` judges two such files
+`--transcript --engine E --device D --out FILE` writes the transcript and diagnostics of one long-form item
+(`senselab_core.testing.librispeech.long_form`); `--compare A B` judges two such files
 by the packaged `transcript@2` comparison and run-config thresholds.
 """
 
@@ -30,7 +30,6 @@ from typing import Any
 FORMAT = "confidence-cost@1"
 MANIFEST = Path(__file__).resolve().parent / "manifests" / "librispeech-test-clean.yaml"
 RATE = 16_000
-LONG_FORM_SECONDS = 35
 ENGINES = ("ct2", "transformers")
 DEVICES = ("cpu", "cuda")
 
@@ -92,29 +91,6 @@ def summarize(items: Sequence[dict[str, Any]]) -> dict[str, Any]:
         **_shares(items),
         "by_duration": terciles,
     }
-
-
-def long_form(archive: Path, seconds: float) -> Any:  # noqa: ANN401 - a numpy array
-    """Return the first consecutive utterances of the first chapter of the test-clean `archive` over `seconds`."""
-    soundfile = importlib.import_module("soundfile")
-    numpy = importlib.import_module("numpy")
-    chapter, parts = None, []
-    with tarfile.open(archive, "r|gz") as tar:
-        for member in tar:
-            if not member.name.endswith(".flac"):
-                continue
-            if chapter is None:
-                chapter = Path(member.name).parent
-            if Path(member.name).parent != chapter:
-                break
-            handle = tar.extractfile(member)
-            assert handle is not None  # noqa: S101 - a flac member is a file
-            samples, rate = soundfile.read(io.BytesIO(handle.read()), dtype="float32")
-            assert rate == RATE, (member.name, rate)  # noqa: S101 - LibriSpeech is 16 kHz
-            parts.append(samples)
-            if sum(len(p) for p in parts) > seconds * rate:
-                return numpy.concatenate(parts)
-    raise ValueError(f"the first chapter of test-clean holds less than {seconds} s")
 
 
 def select_items(archive: Path, count: int) -> list[tuple[str, Any]]:
@@ -179,12 +155,12 @@ def _archive() -> Path:
 
 
 def long_form_transcript(engine: str, device: str) -> dict[str, Any]:
-    """Return the transcript and diagnostics of the `LONG_FORM_SECONDS` long-form item, confidence on."""
+    """Return the transcript and diagnostics of the long-form item, confidence on."""
     profiles = importlib.import_module("senselab_core.runtime.profiles")
     workers = importlib.import_module("senselab_core.testing.workers")
     audio_module = importlib.import_module("senselab_core.kernel.signals")
     wire = importlib.import_module("senselab_core.kernel.wire").wire_form
-    samples = long_form(_archive(), LONG_FORM_SECONDS)
+    samples = importlib.import_module("senselab_core.testing.librispeech").long_form(_archive())
     item = {"id": "long", "inputs": {"audio": wire(audio_module.Audio.from_array(samples[None, :], RATE))}}
     params = {"language": None, "timestamps": "word", "backend_params": {"engine": engine}, "_diagnostics": True}
     real = workers.RealWorkers(profiles.ExecutionProfile.load("orcd"), device)
