@@ -18,7 +18,6 @@ files:
   cohort_stage.yaml: cohort_stage.yaml
   decision_reasons.yaml: decision_reasons.yaml
   detector_profile: detector_profile
-  discard_contested.yaml: discard_contested.yaml
   discard_replaced_task.yaml: discard_replaced_task.yaml
   evaluation: evaluation
   quality_join.yaml: quality_join.yaml

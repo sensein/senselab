@@ -24,7 +24,7 @@ from scipy.signal import find_peaks
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.background_speech import background_speech_parameters
 from senselab.audio.workflows.triage.breath_pattern import SPECTROGRAM, _in_script, _moving_median, _sidecar
-from senselab.audio.workflows.triage.dataset_profile import data_path, data_values
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.nodes.common import lexical_words, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
 from senselab.audio.workflows.triage.task_events import (
@@ -130,7 +130,7 @@ def _section(name: str) -> dict[str, Any]:
     return dict(data_values("cough_pattern.yaml")[name])
 
 
-@functools.cache
+@profile_cache
 def cough_parameters() -> CoughParameters:
     """The ``measure`` parameters of ``data/cough_pattern.yaml``.
 
@@ -144,7 +144,7 @@ def cough_parameters() -> CoughParameters:
     )
 
 
-@functools.cache
+@profile_cache
 def cough_extent_parameters() -> CoughExtentParameters:
     """The ``extent`` parameters of ``data/cough_pattern.yaml``.
 
@@ -154,7 +154,7 @@ def cough_extent_parameters() -> CoughExtentParameters:
     return CoughExtentParameters(**{key: float(value) for key, value in _section("extent").items()})
 
 
-@functools.cache
+@profile_cache
 def cough_review_parameters() -> CoughReviewParameters:
     """The ``review`` parameters of ``data/cough_pattern.yaml``.
 

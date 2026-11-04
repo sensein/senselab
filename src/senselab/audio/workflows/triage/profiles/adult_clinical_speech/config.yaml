@@ -1,16 +1,5 @@
-# The triage workflow configuration. One file, versioned.
-#
-# No number appears in the code. A value here is either declared -- with its derivation written
-# down -- or `null`, meaning nobody has measured it and reading it raises. There is no third state:
-# a default chosen to make a signature tidy is an unmeasured decision with a public interface.
-#
-# Each section and key below carries a short description of what it governs. The measurements, the
-# failures that drove each choice and the rejected alternatives live in
-# `specs/20260817-triage-workflow-dag/config-derivations.md`, keyed by these same section names.
-# They used to sit here in a `derivation:` key, which was a config *value* rather than a comment:
-# the loader hashes the merged mapping, so 50 kB of English was inside `config_hash` and correcting
-# a word of it made two behaviourally identical runs report different identities. `config_hash` now
-# names the parameters. These `#` comments are not hashed, so they can be corrected freely.
+# The adult_clinical_speech reference profile's config values: the detector tuning and model cut-offs it carries,
+# merged over senselab's packaged triage config. Derivations: specs/20260817-triage-workflow-dag/config-derivations.md.
 spans:
   min_separation_ms: 30                # merge proposals closer than this; must track transition_window_ms
   continuity_cut_percentile: 5.0       # lowest N% of continuity-trace samples BY RANK are the change points

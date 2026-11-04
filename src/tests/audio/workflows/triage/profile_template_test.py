@@ -41,9 +41,13 @@ class TestTheTemplate:
         assert profile.name == "new-dataset" and profile.base is not None
         manifest = yaml.safe_load((root / "profile.yaml").read_text())
         assert manifest["extends"] == REFERENCE_PROFILE
-        assert set(REQUIRED_DATASET_PATHS) <= set(manifest["files"])
+        files = set(manifest["files"])
+        assert {"tasks.yaml", "airway_event_tokens.yaml", "time_release.yaml"} <= files
+        assert "discard_contested.yaml" not in files, "the reference profile supplies it, so it is inherited"
+        assert set(REQUIRED_DATASET_PATHS) <= files | {"discard_contested.yaml"}
         missing = missing_dataset_values(load_triage_config(profile=root).values)
-        assert len([item for item in missing if " " in item]) == 39
+        assert "tasks.yaml tasks (the task list names no task)" in missing
+        assert len([item for item in missing if item.split()[0] != "tasks.yaml"]) == 39, "the dataset files' values too"
 
     def test_each_blank_carries_its_kind(self, tmp_path: Path) -> None:
         """A dataset reads, beside each blank, how it is set."""
@@ -65,3 +69,27 @@ class TestTheTemplate:
         assert manifest["name"] == "my-adult-study"
         assert manifest["provenance"]["copied_from_profile"] == "bridge2ai-voice-adult"
         assert (root / "tasks.yaml").is_file()
+
+    def test_extending_a_complete_profile_asks_for_nothing_and_hides_none_of_its_files(self, tmp_path: Path) -> None:
+        """No skeleton overrides a dataset file the base already supplies (review finding 2)."""
+        root = write_template(tmp_path / "on-b2ai", name="b2ai-variant", extends=B2AI_TRIAGE_PROFILE)
+        assert not (root / "tasks.yaml").exists()
+        assert values_to_supply(B2AI_TRIAGE_PROFILE) == {}
+        assert missing_dataset_values(load_triage_config(profile=root).values) == []
+
+    def test_a_relative_base_is_recorded_so_the_profile_loads_from_anywhere(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A path given relative to the caller's directory is written absolute (review finding 3)."""
+        base = write_template(tmp_path / "base", name="base")
+        monkeypatch.chdir(tmp_path)
+        root = write_template(tmp_path / "sub" / "child", name="child", extends="base")
+        assert Path(yaml.safe_load((root / "profile.yaml").read_text())["extends"]).is_absolute()
+        monkeypatch.chdir(tmp_path / "sub")
+        assert load_profile(root).base is not None and load_profile(root).base.root == base.resolve()
+
+    def test_a_bad_base_writes_nothing(self, tmp_path: Path) -> None:
+        """An unknown base is refused before the directory is made (review finding 9)."""
+        with pytest.raises(ValueError, match="ships no profile"):
+            write_template(tmp_path / "new", name="x", extends="senselab:children")
+        assert not (tmp_path / "new").exists()

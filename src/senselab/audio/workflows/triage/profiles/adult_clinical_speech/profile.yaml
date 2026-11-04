@@ -17,6 +17,7 @@ files:
   breath_pattern.yaml: breath_pattern.yaml
   cohort_stage.yaml: cohort_stage.yaml
   cough_pattern.yaml: cough_pattern.yaml
+  discard_contested.yaml: discard_contested.yaml
   discard_replaced_task.yaml: discard_replaced_task.yaml
   quality_join.yaml: quality_join.yaml
   session_background.yaml: session_background.yaml

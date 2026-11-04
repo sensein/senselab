@@ -24,6 +24,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     missing_dataset_values,
     profile_values,
     require_dataset_values,
+    run_data,
 )
 from tests.conftest import B2AI_TRIAGE_PROFILE
 
@@ -266,6 +267,8 @@ class TestSenselabShipsNoFittedValue:
     def test_every_profile_value_is_empty_in_senselab(self) -> None:
         """Senselab's packaged files and config leave each listed value empty, so no run inherits one unknowingly."""
         for relative, entries in profile_values().items():
+            if not (PACKAGED_DATA / relative).is_file():
+                continue  # a dataset file senselab does not package at all
             document = yaml.safe_load((PACKAGED_DATA / relative).read_text()) or {}
             shipped = [entry["path"] for entry in entries if self._value(document, entry["path"]) is not None]
             assert shipped == [], relative
@@ -304,7 +307,6 @@ class TestSenselabShipsNoFittedValue:
         values = [item for item in missing if " " in item]
         assert {item.split()[0] for item in missing if " " not in item} == {
             "airway_event_tokens.yaml",
-            "discard_contested.yaml",
             "tasks.yaml",
             "time_release.yaml",
         }
@@ -347,3 +349,59 @@ class TestSenselabShipsNoFittedValue:
         root = _profile(tmp_path / "p", {"name": "d", "version": "1", "extends": "senselab:children"})
         with pytest.raises(ValueError, match="ships no profile"):
             load_profile(root)
+
+
+class TestTheReviewFixes:
+    """Step-5 review findings 1, 5, 6, 7 and 8."""
+
+    def test_a_run_may_not_change_a_file_no_loader_merges(self, tmp_path: Path) -> None:
+        """The task list is read whole; a run's change to it would be dropped while the hash claimed it."""
+        override = tmp_path / "run.yaml"
+        override.write_text("data:\n  tasks.yaml:\n    tasks: {}\n")
+        with pytest.raises(ValueError, match="no loader merges"):
+            load_triage_config(override)
+        load_triage_config()
+
+    def test_a_profile_config_may_not_carry_a_data_section(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """A profile changes data files by supplying them, so the chain's order holds."""
+        root = _profile(
+            tmp_path / "p",
+            {"name": "d", "version": "1", "config": "config.yaml"},
+            {"config.yaml": "data:\n  task_speech.yaml:\n    words_min: 1\n"},
+        )
+        with pytest.raises(ValueError, match="not through a `data:` section"):
+            load_triage_config(profile=root)
+
+    def test_a_refused_profile_switch_leaves_the_run_data_as_it_was(self, tmp_path: Path) -> None:
+        """Activating another profile fails before the new run data is installed."""
+        before = run_data()
+        other = _profile(tmp_path / "other", {"name": "other", "version": "1"})
+        override = tmp_path / "run.yaml"
+        override.write_text("data:\n  task_extent.yaml:\n    trim:\n      ddk:\n        kept_share_min: 0.7\n")
+        with pytest.raises(RuntimeError, match="already active"):
+            load_triage_config(override, profile=other)
+        assert run_data() == before
+
+    def test_an_empty_task_list_is_refused(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """Every recording's task would be unknown (review finding 1)."""
+        from senselab.audio.workflows.triage.profile_template import write_template  # noqa: PLC0415
+
+        root = write_template(tmp_path / "new", name="new")
+        assert "tasks.yaml tasks (the task list names no task)" in missing_dataset_values(
+            load_triage_config(profile=root).values
+        )
+
+    def test_a_datasets_newer_disagreement_profile_is_read(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """The newest dated file across senselab and the chain wins, merged over senselab's of that date if any."""
+        from senselab.audio.workflows.triage.routing_analysis.gate_matrix import (
+            load_disagreement_profile,  # noqa: PLC0415
+        )
+
+        root = _profile(
+            tmp_path / "p",
+            {"name": "d", "version": "1", "files": {"disagreement_profile": "dp"}},
+            {"dp/2099-01-01.yaml": "schema_version: '1'\nnear_threshold_band: 0.4\n"},
+        )
+        activate_profile(load_profile(root))
+        load_disagreement_profile.cache_clear()
+        assert load_disagreement_profile()["near_threshold_band"] == 0.4

@@ -461,8 +461,7 @@ def _lab_profile(root: Path) -> Path:
     write_template(root, name="lab-corpus")
     (root / "tasks.yaml").write_text(LAB_TASKS)
     (root / "airway_event_tokens.yaml").write_text("version: 3\ncough: [cough]\n")
-    for name in ("discard_contested.yaml", "time_release.yaml"):
-        shutil.copy(B2AI_PROFILE / name, root / name)
+    shutil.copy(B2AI_PROFILE / "time_release.yaml", root / "time_release.yaml")
     for relative, entries in values_to_supply().items():
         target = root / ("config.yaml" if relative == "config/default.yaml" else relative)
         document = yaml.safe_load(target.read_text()) or {}

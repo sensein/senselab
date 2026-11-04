@@ -27,7 +27,10 @@ from senselab.audio.workflows.triage.dataset_profile import (
     MANIFEST,
     PACKAGED_DATA,
     REQUIRED_DATASET_PATHS,
+    SENSELAB_PROFILE,
+    DatasetDataMissing,
     data_values,
+    load_profile,
     profile_values,
 )
 
@@ -74,7 +77,10 @@ def values_to_supply(extends: str | Path | None = REFERENCE_PROFILE) -> dict[str
         config = load_triage_config(profile=extends) if extends is not None else load_triage_config()
         out: dict[str, list[dict[str, Any]]] = {}
         for relative, entries in profile_values().items():
-            document = config.values if relative == CONFIG_FILE else data_values(relative)
+            try:
+                document = config.values if relative == CONFIG_FILE else data_values(relative)
+            except DatasetDataMissing:
+                document = {}  # a dataset file the base does not supply: every value of it is the new profile's
             blank = [e for e in entries if e.get("required") and _lookup(document, list(e["path"])) is None]
             if blank:
                 out[relative] = blank
@@ -120,12 +126,26 @@ def _emit(entries: list[dict[str, Any]]) -> Iterator[str]:
     yield from walk(tree, 0)
 
 
+def _absolute(reference: str | Path | None, relative_to: Path | None = None) -> str | None:
+    """A profile reference as the new profile records it: ``senselab:<name>`` unchanged, a path made absolute."""
+    if reference is None:
+        return None
+    text = str(reference)
+    if text.startswith(SENSELAB_PROFILE):
+        return text
+    path = Path(text)
+    if not path.is_absolute() and relative_to is not None:
+        path = relative_to / path
+    return str(path.resolve())
+
+
 def write_template(
     out: str | Path,
     *,
     name: str,
     extends: str | Path | None = REFERENCE_PROFILE,
     start_from: str | Path | None = None,
+    supply: Mapping[str, list[dict[str, Any]]] | None = None,
 ) -> Path:
     """Write a new dataset's profile with every value it must still supply blank, each beside its entry.
 
@@ -133,36 +153,48 @@ def write_template(
         out: The new profile's directory; it must not exist yet.
         name: The new profile's name.
         extends: The profile it builds on: senselab's reference profile by default, another ``senselab:<name>`` or
-            a directory, or None to supply every value itself.
+            a directory (recorded as an absolute path), or None to supply every value itself.
         start_from: Copy this profile directory instead (a dataset that starts from another's values); the copy is
-            renamed and records where it came from.
+            renamed, records where it came from, and keeps building on what the original built on.
+        supply: :func:`values_to_supply` for ``extends``, where the caller has it already.
 
     Returns:
         The profile directory.
 
     Raises:
         FileExistsError: If ``out`` exists.
+        ValueError: If ``extends`` names no profile; nothing is written then.
     """
     root = Path(out)
     if root.exists():
         raise FileExistsError(f"{root} exists; a template is written into a new directory")
     written = datetime.date.today().isoformat()
     if start_from is not None:
-        shutil.copytree(Path(start_from), root)
+        source = Path(start_from).resolve()
+        load_profile(source)
+        shutil.copytree(source, root)
         manifest = yaml.safe_load((root / MANIFEST).read_text()) or {}
         copied = manifest.get("name")
         manifest["name"] = name
         manifest["version"] = "0"
-        manifest["provenance"] = {"copied_from": str(start_from), "copied_from_profile": copied, "on": written}
+        if manifest.get("extends"):
+            manifest["extends"] = _absolute(manifest["extends"], relative_to=source)
+        manifest["provenance"] = {"copied_from": str(source), "copied_from_profile": copied, "on": written}
         (root / MANIFEST).write_text(yaml.safe_dump(manifest, sort_keys=False))
         return root
+    reference = _absolute(extends)
+    base = load_profile(reference) if reference is not None else None
+    blanks = values_to_supply(reference) if supply is None else supply
     root.mkdir(parents=True)
     files: dict[str, str] = {}
     for relative in REQUIRED_DATASET_PATHS:
-        shutil.copy(TEMPLATE_DIR / relative, root / relative)
+        skeleton = TEMPLATE_DIR / relative
+        if (base is not None and base.resolve(relative) is not None) or not skeleton.is_file():
+            continue
+        shutil.copy(skeleton, root / relative)
         files[relative] = relative
     config = None
-    for relative, entries in values_to_supply(extends).items():
+    for relative, entries in blanks.items():
         target = root / ("config.yaml" if relative == CONFIG_FILE else relative)
         target.parent.mkdir(parents=True, exist_ok=True)
         header = [
@@ -176,8 +208,8 @@ def write_template(
             top = relative.split("/")[0]
             files[top] = top
     manifest: dict[str, Any] = {"name": name, "version": "0"}
-    if extends is not None:
-        manifest["extends"] = str(extends)
+    if reference is not None:
+        manifest["extends"] = reference
     manifest["provenance"] = {"template": "senselab triage profile template", "written": written}
     if config is not None:
         manifest["config"] = config

@@ -41,8 +41,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     extends = None if str(args.extends).lower() == "none" else args.extends
     try:
-        root = write_template(args.out, name=args.name, extends=extends, start_from=args.start_from)
-        blank = sum(len(entries) for entries in values_to_supply(extends).values()) if args.start_from is None else None
+        supply = values_to_supply(extends) if args.start_from is None else None
+        root = write_template(args.out, name=args.name, extends=extends, start_from=args.start_from, supply=supply)
+        blank = sum(len(entries) for entries in supply.values()) if supply is not None else None
     except (FileExistsError, ValueError, OSError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2

@@ -358,6 +358,42 @@ _RUN_DATA: dict[str, Any] = {}
 _RUN_DATA_DIGEST = ""
 
 
+RUN_DATA_DATASET_FILES = frozenset({"airway_event_tokens.yaml", "discard_contested.yaml", "time_release.yaml"})
+"""The dataset files read through :func:`data_values`, so a run's ``data`` section can change their values. The
+task list, cohort conditions, lexicons and detector profiles are read whole, and a run changes them only through its
+profile."""
+
+
+def check_run_data(data: Mapping[str, Any] | None) -> dict[str, Any]:
+    """A run's ``data`` section, checked: every file it names is one :func:`data_values` reads.
+
+    Args:
+        data: ``{data path: mapping}``, or None.
+
+    Returns:
+        The section, as ``{data path: mapping}``.
+
+    Raises:
+        ValueError: If a path names a file whose values no loader merges (a run's change to it would be dropped while
+            the config hash claimed it), or its values are not a mapping.
+    """
+    held = {str(relative): values for relative, values in (data or {}).items()}
+    for relative, values in held.items():
+        parts = PurePosixPath(relative).parts
+        top = parts[0] if parts else ""
+        merged = top in MERGED_PATHS or top in REPLACED_PATHS
+        if not relative.endswith((".yaml", ".yml")) or not (merged or relative in RUN_DATA_DATASET_FILES):
+            raise ValueError(
+                f"the run's data section names {relative!r}, whose values no loader merges; it may name the value "
+                f"files of {sorted(MERGED_PATHS | REPLACED_PATHS)} and {sorted(RUN_DATA_DATASET_FILES)}"
+            )
+        if len(parts) > 1 and not (PACKAGED_DATA / relative).is_file():
+            raise ValueError(f"the run's data section names {relative!r}, which senselab does not package")
+        if not isinstance(values, Mapping):
+            raise ValueError(f"the run's data section for {relative!r} is not a mapping")
+    return held
+
+
 def set_run_data(data: Mapping[str, Any] | None) -> None:
     """Set the run's ``data`` section: per data path, the values the run changes (:func:`data_values`).
 
@@ -366,19 +402,10 @@ def set_run_data(data: Mapping[str, Any] | None) -> None:
             empty clears it.
 
     Raises:
-        ValueError: If a path is not one a profile may supply (:data:`SUPPLIABLE_PATHS`), or its values are not a
-            mapping.
+        ValueError: As :func:`check_run_data`; nothing is changed then.
     """
     global _RUN_DATA, _RUN_DATA_DIGEST
-    held = {str(relative): values for relative, values in (data or {}).items()}
-    for relative, values in held.items():
-        top = PurePosixPath(relative).parts[0] if relative else ""
-        if top not in SUPPLIABLE_PATHS or not relative.endswith((".yaml", ".yml")):
-            raise ValueError(
-                f"the run's data section names {relative!r}; it may name the YAML files of {sorted(SUPPLIABLE_PATHS)}"
-            )
-        if not isinstance(values, Mapping):
-            raise ValueError(f"the run's data section for {relative!r} is not a mapping")
+    held = check_run_data(data)
     _RUN_DATA = held
     _RUN_DATA_DIGEST = hashlib.sha256(repr(sorted(held.items())).encode()).hexdigest() if held else ""
 
@@ -413,6 +440,7 @@ def merge_values(base: Any, over: Any, *, where: str, fixed: frozenset[str] = fr
         if top and (key in _VERSION_KEYS or key in fixed):
             if key in base and value != base[key]:
                 raise ValueError(f"{here} is fixed: {base[key]!r} may not become {value!r}")
+            out[key] = base.get(key, value)
             continue
         if key not in base:
             if base:
@@ -449,7 +477,8 @@ def data_values(relative: str) -> Any:  # noqa: ANN401 -- a YAML document
     top = parts[0] if parts else ""
     run = _RUN_DATA.get(relative)
     if top in MERGED_PATHS:
-        values = _load(PACKAGED_DATA / relative)
+        packaged = PACKAGED_DATA / relative
+        values = _load(packaged) if packaged.is_file() else {}
         fixed = FIXED_KEYS.get(relative, frozenset())
         for layer in _ACTIVE.chain() if _ACTIVE is not None else ():
             supplied = layer.supplies(relative)
@@ -556,9 +585,14 @@ def missing_dataset_values(config_values: Mapping[str, Any]) -> list[str]:
         except DatasetDataMissing:
             missing.append(relative)
     for relative, paths in required_profile_values().items():
-        document = config_values if relative == CONFIG_FILE else data_values(relative)
+        try:
+            document = config_values if relative == CONFIG_FILE else data_values(relative)
+        except DatasetDataMissing:
+            continue  # the file itself is listed missing above
         where = "config" if relative == CONFIG_FILE else relative
         missing += [f"{where} {'.'.join(path)}" for path in paths if _lookup(document, path) is None]
+    if "tasks.yaml" not in missing and not (data_values("tasks.yaml").get("tasks") or {}):
+        missing.append("tasks.yaml tasks (the task list names no task)")
     return missing
 
 

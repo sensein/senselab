@@ -30,6 +30,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     DatasetProfile,
     activate_profile,
     active_profile,
+    check_run_data,
     load_profile,
     set_run_data,
 )
@@ -248,15 +249,22 @@ def load_triage_config(
     values = yaml.safe_load(_DEFAULT.read_text())
     for layer in loaded.chain() if loaded is not None else ():
         if layer.config is not None:
-            values = _merge(values, yaml.safe_load(layer.config.read_text()) or {})
+            layer_values = yaml.safe_load(layer.config.read_text()) or {}
+            if layer_values.get(DATA_SECTION):
+                raise ValueError(
+                    f"{layer.config}: a profile changes data files by supplying them, not through a `data:` section, "
+                    "which is a run's (it would apply after every profile's files, out of the chain's order)"
+                )
+            values = _merge(values, layer_values)
     if override is not None:
         values = _merge(values, yaml.safe_load(Path(override).read_text()) or {})
     _validate(values)
     hashed = json.dumps(values, sort_keys=True, default=str)
-    set_run_data(values.get(DATA_SECTION))
+    run_data = check_run_data(values.get(DATA_SECTION))
     if loaded is not None:
         activate_profile(loaded)
         hashed += f"\0profile\0{loaded.name}\0{loaded.version}\0{loaded.digest}"
+    set_run_data(run_data)
     digest = hashlib.sha256(hashed.encode()).hexdigest()[:16]
     return TriageConfig(
         name=values["name"], version=int(values["version"]), config_hash=digest, values=values, profile=loaded

@@ -29,7 +29,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import yaml
 
-from senselab.audio.workflows.triage.dataset_profile import PACKAGED_DATA, data_values, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import PACKAGED_DATA, active_profile, data_values, profile_cache
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures, value_stats
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     AT_LEAST,
@@ -78,18 +78,26 @@ DECIDING_CLASSES: tuple[str, ...] = tuple(member.value for member in Deciding)
 
 
 def _bundled_profile_path() -> Path:
-    """The newest bundled disagreement profile.
+    """The newest dated disagreement profile senselab or the active dataset profile chain holds.
 
     Returns:
-        The last dated profile in the bundled directory.
+        The file of that date: the profile chain's nearest copy where one supplies it, else senselab's.
 
     Raises:
-        FileNotFoundError: If the package ships no profile.
+        FileNotFoundError: If neither holds one.
     """
-    bundled = sorted((PACKAGED_DATA / "disagreement_profile").glob("*.yaml"))
-    if not bundled:
-        raise FileNotFoundError(f"no disagreement profile in {PACKAGED_DATA / 'disagreement_profile'}")
-    return bundled[-1]
+    folders = [PACKAGED_DATA / "disagreement_profile"]
+    profile = active_profile()
+    folders += [
+        supplied
+        for layer in (profile.chain() if profile else ())
+        if (supplied := layer.supplies("disagreement_profile"))
+    ]
+    names = sorted({path.name for folder in folders if folder.is_dir() for path in folder.glob("*.yaml")})
+    if not names:
+        raise FileNotFoundError(f"no disagreement profile in {[str(folder) for folder in folders]}")
+    found = profile.resolve(f"disagreement_profile/{names[-1]}") if profile else None
+    return found if found is not None and found.is_file() else PACKAGED_DATA / "disagreement_profile" / names[-1]
 
 
 @profile_cache

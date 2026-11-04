@@ -10,21 +10,9 @@
 # and its `number_words`; initial_letter: its `letter`), and `repetition_allowed` where the category's own instruction
 # permits saying an item twice (Letters, Numbers: senselab's REPETITION_ALLOWED_CATEGORIES before step 4). The ten are
 # B2AI's questionnaire field random_item_generation_category, as its phenotype table spells them.
-# `traits` (step 5a; each moved from a senselab list that named these tasks):
-#   defines_a_cue_word      productive-vocabulary: its stimulus is a cue word the participant defines (stimulus.residue.cue_families)
-#   model_speaker_allowed   "you can have someone else say the sentence first and you just repeat it after them"
-#                           (verdict.model_speaker_families)
-#   quiet_to_the_classifier owner, 2026-09-29: quiet breathing the classifier does not hear is no flag
-#                           (verdict.hint_mismatch_exempt_families)
-#   quick_breaths           the quick-breath tasks, read at breath_pattern.yaml distance_quick_s (train.quick_families)
-#   spans_the_recording     the buttercup word spans the recording: its syllable train is never trimmed
-#                           (task_extent.yaml trim.ddk.exclude_families)
-# Breath and cough tasks are decided on detected events of their own kind, as the profile's
-# airway_event_requirements.yaml listed them until step 5a: derivation owner, 2026-10-05, after listening to ten
-# breath recordings with gain-lifted copies and HeAR/YAMNet readings ("yes do fix 1", "discard quiet ones");
-# breath then on the breathing-pattern measure (specs/20261005-breathing-pattern/design.md), cough on the
-# cough-onset measure (2026-10-06, specs/20261006-cough-pattern/design.md). Word tasks whose entry names a lexicon
-# or categories read them (stimulus.task_lexicons), and tasks with categories are open-vocabulary (owner, 2026-10-10).
+# `traits` (step 5a) name what an entry says about its task beyond its description (task_catalogue.TRAITS).
+# Why each task carries its traits, and the airway and word-task rules that replaced per-task lists:
+# specs/20261022-triage-dataset-profile/plan.md, step 5, section 1.
 # Moved unchanged from senselab's packaged tables (step 4 of specs/20261022-triage-dataset-profile/plan.md).
 x-number-words: &number_words [zero, one, two, three, four, five, six, seven, eight, nine, ten, eleven, twelve, thirteen,
   fourteen, fifteen, sixteen, seventeen, eighteen, nineteen, twenty, thirty, forty, fifty, sixty, seventy, eighty,
