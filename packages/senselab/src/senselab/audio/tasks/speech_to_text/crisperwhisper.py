@@ -222,11 +222,13 @@ class Library:
         import soundfile  # noqa: PLC0415 - loads in the engine only
 
         from senselab.audio.tasks.speech_to_text.token_confidence import (  # noqa: PLC0415 - as above
+            logprob_block,
             merge_confidence_blocks,
             word_confidences,
         )
         from senselab.audio.tasks.speech_to_text.window_confidence import (  # noqa: PLC0415 - as above
             Capture,
+            Window,
             capture_decodes,
             capture_windows,
             ct2_window_logits,
@@ -238,10 +240,20 @@ class Library:
         engine = self.model._engine
         special = {int(i) for i in engine.all_special_ids} or None
         logits_of_decode = confidence and self.engine == "transformers"
+        capture = Capture()
+
+        def score(window: Window) -> list[float]:
+            began = time.perf_counter()
+            [block] = window_confidence(engine, [window], ct2_window_logits, special)
+            capture.scoring_s += time.perf_counter() - began
+            return list(block["token_logprob"])
+
+        score_now = score if confidence and not logits_of_decode else None
         started = time.perf_counter()
         with contextlib.ExitStack() as stack, tempfile.TemporaryDirectory(prefix="senselab-crisperwhisper-") as scratch:
-            capture = stack.enter_context(capture_decodes(engine.model)) if logits_of_decode else Capture()
-            windows = stack.enter_context(capture_windows(engine))
+            if logits_of_decode:
+                capture = stack.enter_context(capture_decodes(engine.model))
+            windows = stack.enter_context(capture_windows(engine, score_now))
             wav = Path(scratch) / "audio.wav"
             soundfile.write(str(wav), samples, EXPECTED_RATE, subtype="FLOAT")
             result = self.model.transcribe(
@@ -270,8 +282,8 @@ class Library:
             blocks = [b for b in spliced if b is not None] if all(b is not None for b in spliced) else []
             encode_reused = len(blocks)
         elif confidence:
-            blocks = window_confidence(engine, scored_windows, ct2_window_logits, special)
-            encode_reused = sum(w.encoded is not None for w in scored_windows)
+            blocks = [logprob_block(w.ids, w.token_logprob or [], special) for w in scored_windows]
+            encode_reused = sum(w.reused for w in scored_windows)
         words = [(str(w.word or w.text), float(w.start), float(w.end)) for w in getattr(result, "words", None) or []]
         confidences: list[float | None] = [None] * len(words)
         mean = None

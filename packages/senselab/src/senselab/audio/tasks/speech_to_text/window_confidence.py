@@ -3,7 +3,8 @@
 `capture_windows` records the ids each window finally emits and, on ct2, the encoder output its decode used.
 On transformers, `capture_decodes` records the log-probabilities of every `generate` call and `spliced_block`
 reads a window's from them. On ct2, `ct2_window_logits` gives the raw logits of a window's ids from one decoder pass
-over the recorded encoder output, and `window_confidence` scores them, one block per window. `torch`, `numpy` and
+over the recorded encoder output, and `window_confidence` scores them, one block per window; `capture_windows`
+scores each window as soon as it is final, so one or two encoder outputs are held at a time. `torch`, `numpy` and
 `ctranslate2` are imported only where logits are scored, so importing this module loads no framework.
 """
 
@@ -43,12 +44,18 @@ SEGMENT = "generate_greedy_with_attention"
 
 @dataclass(frozen=True)
 class Window:
-    """One decoded window: its encoder input, its prompt, the ids it emits, and its decode's encoder output if seen."""
+    """One decoded window: its encoder input, its prompt, the ids it emits, and its decode's encoder output if seen.
+
+    Once scored, `token_logprob` holds the log-probability of each id, `encoded` is released, and `reused` says
+    whether the score read the decode's encoder output.
+    """
 
     features: Any
     prompt_tokens: list[int]
     ids: list[int]
     encoded: Any = None
+    token_logprob: list[float] | None = None
+    reused: bool = False
 
 
 @dataclass
@@ -75,62 +82,89 @@ class Capture:
 
 
 @contextlib.contextmanager
-def capture_windows(engine: Any) -> Iterator[list[Window]]:  # noqa: ANN401 - a crisperwhisper engine
+def capture_windows(
+    engine: Any,  # noqa: ANN401 - a crisperwhisper engine
+    score: Callable[[Window], list[float]] | None = None,
+) -> Iterator[list[Window]]:
     """Wrap the `DECODES`, `REPLACES` and (if present) `SEGMENT` of `engine` for the block, recording each window.
 
     A decode records a window, with the encoder output of its first `SEGMENT` call on its own prompt; a `REPLACES`
     call on the same `features` and prompt replaces that window's ids and keeps its encoder output (coverage
-    fallback, early-EOT recovery). Yields the windows in decode order. The wrappers return what the caller would
+    fallback, early-EOT recovery). With `score`, a window is scored and its encoder output released as soon as a
+    decode on other features starts, and the rest at the end of the block; a window replaced after it was scored
+    is scored again, on its mel. Yields the windows in decode order. The wrappers return what the caller would
     have received and are removed on exit.
     """
-    windows: list[Window] = []
-    index: dict[tuple[int, tuple[int, ...]], int] = {}
-    segments: list[tuple[Any, list[int]]] = []
+    recorder = _Recorder(score)
+    wrappers: dict[str, Callable[[Callable[..., Any]], Callable[..., Any]]] = dict.fromkeys(DECODES, recorder.decode)
+    wrappers[REPLACES] = recorder.replacement
+    if callable(getattr(engine, SEGMENT, None)):
+        wrappers[SEGMENT] = recorder.segment
+    with _patched(engine, wrappers):
+        yield recorder.windows
+        recorder.settle()
 
-    def _record(features: Any, prompt_tokens: Sequence[int], ids: Sequence[int], encoded: Any) -> None:  # noqa: ANN401
+
+class _Recorder:
+    """The state of `capture_windows`: the windows, their index by features and prompt, and those not yet scored."""
+
+    def __init__(self, score: Callable[[Window], list[float]] | None) -> None:
+        self.score = score
+        self.windows: list[Window] = []
+        self.index: dict[tuple[int, tuple[int, ...]], int] = {}
+        self.segments: list[tuple[Any, list[int]]] = []
+        self.pending: list[int] = []
+
+    def record(self, features: Any, prompt_tokens: Sequence[int], ids: Sequence[int], encoded: Any) -> None:  # noqa: ANN401
         key = (id(features), tuple(int(t) for t in prompt_tokens))
-        if key in index:
-            old = windows[index[key]]
-            windows[index[key]] = replace(
-                old, ids=[int(t) for t in ids], encoded=encoded if old.encoded is None else old.encoded
-            )
+        given = [int(t) for t in ids]
+        at = self.index.setdefault(key, len(self.windows))
+        if at == len(self.windows):
+            self.windows.append(Window(features, list(key[1]), given, encoded))
+        elif self.windows[at].token_logprob is None:
+            old = self.windows[at]
+            self.windows[at] = replace(old, ids=given, encoded=encoded if old.encoded is None else old.encoded)
         else:
-            index[key] = len(windows)
-            windows.append(Window(features, list(key[1]), [int(t) for t in ids], encoded))
+            self.windows[at] = replace(self.windows[at], ids=given, token_logprob=None, reused=False)
+        if at not in self.pending:
+            self.pending.append(at)
 
-    def _decode(original: Callable[..., Any]) -> Callable[..., Any]:
+    def settle(self, keep: Any = None) -> None:  # noqa: ANN401 - the features whose windows stay open
+        if self.score is None:
+            return
+        for at in [at for at in self.pending if self.windows[at].features is not keep]:
+            window = self.windows[at]
+            logprob = self.score(window) if window.ids else []
+            self.windows[at] = replace(window, encoded=None, token_logprob=logprob, reused=window.encoded is not None)
+            self.pending.remove(at)
+
+    def decode(self, original: Callable[..., Any]) -> Callable[..., Any]:
         def call(features: Any, prompt_tokens: Sequence[int], *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-            segments.clear()
+            self.settle(keep=features)
+            self.segments.clear()
             result = original(features, prompt_tokens, *args, **kwargs)
             prompt = [int(t) for t in prompt_tokens]
-            encoded = next((enc for enc, p in segments if p == prompt), None)
-            segments.clear()
-            _record(features, prompt, result[0] if isinstance(result, tuple) else result, encoded)
+            encoded = next((enc for enc, p in self.segments if p == prompt), None)
+            self.segments.clear()
+            self.record(features, prompt, result[0] if isinstance(result, tuple) else result, encoded)
             return result
 
         return call
 
-    def _replace(original: Callable[..., Any]) -> Callable[..., Any]:
+    def replacement(self, original: Callable[..., Any]) -> Callable[..., Any]:
         def call(features: Any, prompt_tokens: Sequence[int], gen_ids: Sequence[int]) -> Any:  # noqa: ANN401
             result = original(features, prompt_tokens, gen_ids)
-            _record(features, prompt_tokens, gen_ids, None)
+            self.record(features, prompt_tokens, gen_ids, None)
             return result
 
         return call
 
-    def _segment(original: Callable[..., Any]) -> Callable[..., Any]:
+    def segment(self, original: Callable[..., Any]) -> Callable[..., Any]:
         def call(encoded: Any, prompt: Sequence[int], *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-            segments.append((encoded, [int(t) for t in prompt]))
+            self.segments.append((encoded, [int(t) for t in prompt]))
             return original(encoded, prompt, *args, **kwargs)
 
         return call
-
-    wrappers: dict[str, Callable[[Callable[..., Any]], Callable[..., Any]]] = {name: _decode for name in DECODES}
-    wrappers[REPLACES] = _replace
-    if callable(getattr(engine, SEGMENT, None)):
-        wrappers[SEGMENT] = _segment
-    with _patched(engine, wrappers):
-        yield windows
 
 
 @contextlib.contextmanager
@@ -233,9 +267,10 @@ def surviving_windows(
     """
     if len(kept_words) != len(windows):
         raise ValueError(f"{len(kept_words)} kept-word counts for {len(windows)} windows")
+    cut = [word_prefix(w.ids, kept, decode, special_token_ids) for w, kept in zip(windows, kept_words)]
     return [
-        replace(w, ids=w.ids[: word_prefix(w.ids, kept, decode, special_token_ids)])
-        for w, kept in zip(windows, kept_words)
+        replace(w, ids=w.ids[:n], token_logprob=None if w.token_logprob is None else w.token_logprob[:n])
+        for w, n in zip(windows, cut)
     ]
 
 

@@ -313,14 +313,14 @@ def test_a_window_no_call_covers_is_not_spliced() -> None:
 @pytest.mark.env
 @pytest.mark.parametrize("kind", ["ct2", "transformers"])
 def test_overlap_dropped_ids_not_scored(kind: str) -> None:
-    """Ids of words the window merge drops are not scored, in the mean or in any word's confidence."""
+    """Ids of words the window merge drops are not in the mean or in any word's confidence."""
     pytest.importorskip("torch")
     decoded, model = _transcribe(kind, "clean", merged=True)
     lp = teacher_logprob(PROMPT, GEN)
     assert decoded.mean == pytest.approx(float(numpy.exp(numpy.mean(lp[:2]))), rel=1e-5)
     assert decoded.confidences == pytest.approx([float(numpy.exp(lp[0] + lp[1]))], rel=1e-5)
     if kind == "ct2":
-        assert model.fed == [("Encoded", PROMPT), GEN[:1]]
+        assert model.fed == [("Encoded", PROMPT), GEN[:-1]]
     assert (decoded.windows, decoded.chunks) == (1, 1)
 
 
@@ -361,8 +361,7 @@ def test_a_multi_window_result_without_matching_chunks_is_unscored(kind: str) ->
     pytest.importorskip("torch")
     library = _library(kind, TwoWindows(kind, "clean"))
     decoded = library.transcribe(numpy.zeros(160), "en", 8, True)
-    assert decoded.mean is None and decoded.confidences == [None, None]
-    assert library.model._engine.model.fed == []
+    assert decoded.mean is None and decoded.confidences == [None, None] and decoded.encode_reused == 0
 
 
 @pytest.mark.env
@@ -489,3 +488,83 @@ def test_confidence_off_records_and_scores_nothing(kind: str) -> None:
     assert off.encode_reused == 0
     on, _ = _transcribe(kind, "clean")
     assert on.mean is not None and on.words == off.words and on.confidence_s > 0.0
+
+
+class CountedEncoded(Encoded):
+    """An encoder output that counts how many are alive."""
+
+    live = 0
+    peak = 0
+
+    def __init__(self, features: object) -> None:
+        """Count one more alive."""
+        super().__init__(features)
+        CountedEncoded.live += 1
+        CountedEncoded.peak = max(CountedEncoded.peak, CountedEncoded.live)
+
+    def __del__(self) -> None:
+        """Count one fewer alive."""
+        CountedEncoded.live -= 1
+
+
+class CountingCT2Model(CT2Model):
+    """A ct2 Whisper whose encoder outputs count themselves."""
+
+    def encode(self, features: object) -> Encoded:
+        """Count one encoder pass and return a counted output."""
+        self.encodes += 1
+        return CountedEncoded(features)
+
+
+class ManyWindows(CrisperWhisper):
+    """A long-form library model of `WINDOWS` windows, each decoding `hello there` and kept whole by the merge."""
+
+    WINDOWS = 12
+
+    def transcribe(self, path: str, **kwargs: Any) -> Result:  # noqa: ANN401
+        """Decode every window, the first replaced by fallback, and return the merged words and chunks."""
+        for n in range(self.WINDOWS):
+            features = object()
+            self._engine.generate_with_repair_and_attention(features, PROMPT, max_length=8)
+            if n == 0:
+                self._engine.cross_attention_for_tokens(features, PROMPT, GEN)
+
+        class Merged(Result):
+            words = [Word(w, 0.0, 0.1) for _ in range(ManyWindows.WINDOWS) for w in ("hello", "there")]
+            chunks: list[Chunk] = [Chunk("hello there") for _ in range(ManyWindows.WINDOWS)]
+
+        return Merged()
+
+
+@pytest.mark.env
+def test_ct2_holds_at_most_two_encoder_outputs_however_many_windows() -> None:
+    """Each window is scored once its ids are final and its encoder output released, so few are ever alive."""
+    pytest.importorskip("torch")
+    model = ManyWindows("ct2", "clean")
+    model._engine.model = CountingCT2Model()
+    CountedEncoded.live = CountedEncoded.peak = 0
+    decoded = _library("ct2", model).transcribe(numpy.zeros(160), "en", 8, True)
+    _, words = _expected()
+    assert decoded.confidences == pytest.approx(words * ManyWindows.WINDOWS, rel=1e-5)
+    assert decoded.encode_reused == ManyWindows.WINDOWS and model._engine.model.encodes == ManyWindows.WINDOWS
+    assert CountedEncoded.peak <= 2 and CountedEncoded.live == 0
+
+
+@pytest.mark.env
+def test_a_window_replaced_after_it_was_scored_is_scored_again_on_its_mel() -> None:
+    """A replacement that arrives once the encoder output is released rescores that window from its mel."""
+    pytest.importorskip("torch")
+    engine = Engine("ct2", "fallback")
+    first, second = object(), object()
+    scored: list[str] = []
+
+    def score(window: Window) -> list[float]:
+        scored.append("encoded" if window.encoded is not None else "mel")
+        return [0.0] * len(window.ids)
+
+    with capture_windows(engine, score) as windows:
+        engine.generate_with_repair_and_attention(first, PROMPT)
+        engine.generate_with_repair_and_attention(second, PROMPT)
+        engine.cross_attention_for_tokens(first, PROMPT, GEN)
+    assert scored == ["encoded", "encoded", "mel"]
+    assert [(w.ids, w.reused, w.encoded) for w in windows] == [(GEN, False, None), (DECODED["fallback"][0], True, None)]
