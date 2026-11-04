@@ -1,4 +1,4 @@
-"""`tasks`, `describe` and `models`: discovery over the declarations and the catalogue."""
+"""`tasks`, `describe`, `models` and `validate`: discovery and graph checks over the declarations and the catalogue."""
 
 from collections.abc import Mapping
 from typing import Any
@@ -7,6 +7,8 @@ from pydantic import BaseModel
 from pydantic.json_schema import GenerateJsonSchema
 from senselab_core.kernel.declare import REGISTRY, Registry, TaskSpec, json_schema, kernel_types
 from senselab_core.kernel.formats import Formatted
+from senselab_core.kernel.graph import Graph, GraphIssue
+from senselab_core.kernel.graph import validate as validate_graph
 from senselab_core.kernel.identity import TEXT_IDENTITY_FORMS, text_identity_fields
 from senselab_core.runtime.call import env_license, input_binding, input_model, packaged
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
@@ -257,3 +259,16 @@ def _default_model(task: str, catalogue: Catalogue) -> str | None:
     except UnknownModel:
         return None
     return f"{entry.id}@{entry.revision}"
+
+
+def validate(graph: Graph | str | Mapping[str, Any], registry: Registry = REGISTRY) -> list[GraphIssue]:
+    """Return the issues of a graph, given as a `Graph`, its JSON text or its JSON mapping; empty when it is valid.
+
+    Raises:
+        pydantic.ValidationError: if the JSON is not a `graph@1` document.
+    """
+    if isinstance(graph, str):
+        graph = Graph.model_validate_json(graph)
+    elif not isinstance(graph, Graph):
+        graph = Graph.model_validate(graph)
+    return validate_graph(graph, registry)

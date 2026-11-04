@@ -64,6 +64,7 @@ from senselab_core.kernel.declare import (
     TaskSpec,
 )
 from senselab_core.kernel.formats import Formatted
+from senselab_core.kernel.graph import Edge, Graph, GraphIssue, Node
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ModelRef, ResolvedModel
 from senselab_core.kernel.license import License
 from senselab_core.kernel.results import (
@@ -1030,5 +1031,29 @@ def _register_comparison_samples() -> None:
     )
 
 
+def _register_graph_samples() -> None:
+    nodes = (
+        Node(id="e", task="speech.embed", task_version="1", params={"w": 2}, backend_params={"b": {"n": [1]}}),
+        Node(id="p", task="speech.pool", task_version="1", model="org/m@main"),
+    )
+    edges = (Edge(source="input.clips", target="e.audio", kind="map"), Edge(source="e.v", target="p.vs", kind="gather"))
+    register_samples(Node, lambda: nodes, invalid_updates=[{"id": "a.b"}, {"task": ""}, {"params": [1]}])
+    register_samples(Edge, lambda: edges, invalid_updates=[{"kind": "route"}, {"source": "a"}])
+    register_samples(
+        Graph,
+        lambda: [Graph(inputs={"clips": "list[Audio]"}, nodes=nodes, edges=edges, outputs={"v": "p.v"}), Graph()],
+        invalid_updates=[{"format": "graph@2.0"}, {"nodes": (nodes[0], nodes[0])}, {"inputs": {"x": "list["}}],
+    )
+    register_samples(
+        GraphIssue,
+        lambda: [
+            GraphIssue(code="cycle", node="a", port=None, message="nodes ['a'] form a cycle"),
+            GraphIssue(code="unknown_port", node=None, port="x", message="the graph declares no input 'x'"),
+        ],
+        invalid_updates=[{"code": "other"}, {"message": ""}],
+    )
+
+
 _register_kernel_samples()
+_register_graph_samples()
 _register_runtime_samples()

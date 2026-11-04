@@ -19,9 +19,10 @@ import pytest
 import senselab_core.runtime.fake_backend as fake
 from pydantic import Field
 from senselab._api.call import ERROR_CODES, ApiError, api_error
-from senselab._api.describe import JSON_FORM, PORT_FORMS, describe, models, tasks
+from senselab._api.describe import JSON_FORM, PORT_FORMS, describe, models, tasks, validate
 from senselab._api.packaged import CATALOGUE, register
 from senselab_core.kernel.declare import REGISTRY, BackendSpec, Env, Registry, TaskParams, TaskSpec, kernel_types
+from senselab_core.kernel.graph import Graph
 from senselab_core.kernel.identity import TEXT_IDENTITY_FORMS
 from senselab_core.kernel.results import TextSpans, Transcript
 from senselab_core.kernel.signals import Audio, PlainText
@@ -377,11 +378,12 @@ def test_error_envelope_shape(generated: ModuleType) -> None:
 
 @pytest.mark.logic
 def test_facade_exposes_discovery_and_the_generated_names() -> None:
-    """`sl.tasks`, `sl.describe` and `sl.models` are the discovery functions; `__all__` adds the generated names."""
+    """`sl.tasks`, `sl.describe`, `sl.models` and `sl.validate` are the facade; `__all__` adds the generated names."""
     from senselab._api import generated  # noqa: PLC0415
 
     assert senselab.tasks is tasks and senselab.describe is describe and senselab.models is models
-    assert senselab.__all__ == ["describe", "models", "tasks", *generated.__all__]
+    assert senselab.validate is validate
+    assert senselab.__all__ == ["describe", "models", "tasks", "validate", *generated.__all__]
 
 
 @pytest.mark.logic
@@ -727,3 +729,18 @@ def test_a_failed_plugin_that_imported_senselab_leaves_its_declarations_to_the_r
     )
     run = _child(tmp_path, {"aaa_plug": plugin}, script, then=_SENSELAB_ENTRY)
     assert run.stdout.splitlines() == ["first PackageLoadError", "second True True"], run.stderr
+
+
+@pytest.mark.logic
+def test_validate_takes_a_graph_its_json_or_its_mapping() -> None:
+    """`sl.validate` reports the same issues for a `Graph`, its JSON text and its JSON mapping."""
+    document = {
+        "format": "graph@1.0",
+        "inputs": {"clips": "list[Audio]"},
+        "nodes": [{"id": "e", "task": "speech.embed", "task_version": "2"}],
+        "edges": [{"source": "input.clips", "target": "e.audio"}],
+    }
+    issues = senselab.validate(document, _registry())
+    assert [(i.code, i.node, i.port) for i in issues] == [("unmapped_list", "e", "audio")]
+    assert senselab.validate(json.dumps(document), _registry()) == issues
+    assert senselab.validate(Graph.model_validate(document), _registry()) == issues

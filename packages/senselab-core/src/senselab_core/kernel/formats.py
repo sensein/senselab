@@ -45,6 +45,9 @@ PARITY_OUTPUTS_FORMAT = "parity-outputs@4.0"
 PARITY_COMPARISON_FORMAT = "parity-comparison@1.0"
 """The format of one parity decision and the thresholds it was made under, `parity_reference.py compare`."""
 
+GRAPH_FORMAT = "graph@1.0"
+"""The format of a graph document, task nodes joined by plain, `map` and `gather` edges (ADR-001)."""
+
 FormatTag = Annotated[str, StringConstraints(pattern=FORMAT_PATTERN)]
 """`<name>@<major>.<minor>`."""
 
