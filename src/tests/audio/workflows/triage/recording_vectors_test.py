@@ -11,6 +11,7 @@ import pytest
 import soundfile
 
 from senselab.audio.workflows.triage import recording_vectors as rv
+from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.identity import FROM_HINT, FROM_STEM, RecordingIdentity, identity_of
 from senselab.audio.workflows.triage.nodes import figure as figure_module
 from senselab.audio.workflows.triage.vocabulary import BRANCHES, Release, Triage
@@ -187,7 +188,7 @@ def build_recording(
     samples = int(duration_s * sampling_rate)
     lines: list[str] = []
 
-    declared = (identity or identity_of(stem)).as_attributes() if with_identity else {}
+    declared = (identity or identity_from_name(stem)).as_attributes() if with_identity else {}
     lines.append(
         _entity("stream-rec", "stream", [0.0, duration_s], name="recording", sampling_rate=sampling_rate, **declared)
     )
@@ -513,7 +514,7 @@ def test_a_refused_recording_s_identity_is_read_from_admits_activity(tmp_path: P
     run_root = build_recording(tmp_path, with_identity=False)
     store = run_root / "run" / "store.jsonl"
     lines = [line for line in store.read_text().splitlines() if '"stream-rec"' not in line]
-    parameters = {"audio_file": "/data/x.wav", **identity_of("sub-z9_ses-y8_task-x").as_attributes()}
+    parameters = {"audio_file": "/data/x.wav", **identity_from_name("sub-z9_ses-y8_task-x").as_attributes()}
     lines.append(json.dumps({"record": "activity", "node": "ADMIT", "step": None, "parameters": parameters}))
     store.write_text("\n".join(lines) + "\n")
     row = rv.extract(run_root, tmp_path)

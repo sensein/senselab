@@ -30,10 +30,11 @@ from functools import partial
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from senselab.audio.workflows.triage.b2ai_hints import task_id_of
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
 from senselab.audio.workflows.triage.label_membership import LabelMembership
-from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
+from senselab.audio.workflows.triage.routing_analysis.families import task_family
 from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
     extract_features,

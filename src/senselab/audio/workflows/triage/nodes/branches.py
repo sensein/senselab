@@ -50,7 +50,7 @@ NOT_SEPARABLE_BY_THIS_DESIGN = "NOT_SEPARABLE_BY_THIS_DESIGN"
 """The value of a measurement the design states no viable approach for."""
 
 UNKNOWN_TASK = "unknown"
-"""What :func:`~...routing_analysis.families.task_id_of` returns for a stem carrying no task."""
+"""The task id of a recording that declares no task (:data:`~...routing_analysis.families.UNKNOWN_TASK`)."""
 
 RECORDING_STREAM = "recording"
 """The stream entity ADMIT writes, whose ``path`` is the only in-store carrier of the declaration."""

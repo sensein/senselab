@@ -18,37 +18,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Sequence, cast, get_args
 
-PROV_TYPE = Literal[
-    "span",
-    "word",
-    "speaker",
-    "interval",
-    "measurement",
-    "kind",
-    "stream",
-    "pii",
-    "verdict",
-    "branch_report",
-    "assertion",
-    "target_match",
-    "branch_decision",
-    "enrollment",
-    "artifact",
-]
-"""Every entity type the store understands.
+CORE_PROV_TYPES = ("artifact",)
+"""The entity types the store itself defines; every other type is registered by the code that writes it.
 
 ``artifact`` is a file set identified by its content alone: it may carry a checksum without a
 ``path``, for callers whose file names must not be recorded. See
 ``specs/20261007-reproduce-driver/design.md``.
-
-``branch_report`` is what a node that reports rather than decides writes: the four triage branches
-and QUALITY. It carries task conformance and deviations and no outcome, which is why it is not a
-``verdict``: a reader folding verdicts must not pick up a decision no branch made.
-
-``kind`` is **historical**: TAXONOMY's evidence fold wrote it until 2026-09-13 and nothing writes it
-now. It stays here because this vocabulary is the *reader's*, and the store is append-only: a reader
-that refuses a record it previously wrote makes finished runs unopenable. The writer's vocabulary may
-shrink; this one may not. See ``specs/20260912-ruleset-in-pipeline/design.md``.
 """
 AGENT_TYPE = Literal["model", "software"]
 ENVIRONMENT_KIND = Literal["host", "venv"]
@@ -65,7 +40,33 @@ SIZE_KEY = "size_bytes"
 MTIME_KEY = "mtime_ns"
 PATH_KEY = "path"
 _READ_CHUNK = 1 << 20
-_PROV_TYPES = frozenset(get_args(PROV_TYPE))
+_PROV_TYPES: set[str] = set(CORE_PROV_TYPES)
+_PROV_TYPE_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def register_prov_types(names: Sequence[str]) -> None:
+    """Let the store write and read back entities of these types; a workflow registers its own when it loads.
+
+    Registering a type twice is harmless. A type is never unregistered: the store is append-only, and a reader that
+    refuses a type it once accepted would make finished stores unopenable.
+
+    Args:
+        names: The type names, lowercase identifiers.
+
+    Raises:
+        ValueError: If a name is not a lowercase identifier.
+    """
+    bad = [name for name in names if not (isinstance(name, str) and _PROV_TYPE_NAME.fullmatch(name))]
+    if bad:
+        raise ValueError(f"entity types are lowercase identifiers: {bad}")
+    _PROV_TYPES.update(names)
+
+
+def registered_prov_types() -> frozenset[str]:
+    """Every entity type the store accepts now: :data:`CORE_PROV_TYPES` and every registered one."""
+    return frozenset(_PROV_TYPES)
+
+
 _AGENT_TYPES = frozenset(get_args(AGENT_TYPE))
 _ENVIRONMENT_KINDS = frozenset(get_args(ENVIRONMENT_KIND))
 _RELATIONS = frozenset(get_args(RELATION))
@@ -122,7 +123,7 @@ class Entity:
     """Something the graph believes exists."""
 
     id: str
-    prov_type: PROV_TYPE
+    prov_type: str
     extent: tuple[float, float] | None
     attributes: dict[str, Any] = field(default_factory=dict)
 
@@ -324,11 +325,12 @@ class ProvStore:
         self._environments: dict[str, Environment] = {}
         self._relations: list[tuple[RELATION, str, str]] = []
 
-    def entity(self, *, prov_type: PROV_TYPE, extent: tuple[float, float] | None, attributes: dict[str, Any]) -> str:
+    def entity(self, *, prov_type: str, extent: tuple[float, float] | None, attributes: dict[str, Any]) -> str:
         """Add an entity.
 
         Args:
-            prov_type: What sort of thing it is.
+            prov_type: What sort of thing it is: :data:`CORE_PROV_TYPES` or a type registered with
+                :func:`register_prov_types`.
             extent: ``(start, end)`` in seconds, or None for something without one.
             attributes: Whatever describes it.
 
@@ -336,10 +338,12 @@ class ProvStore:
             Its id.
 
         Raises:
-            ValueError: If the attributes carry both a checksum and a reason it is missing, a
-                malformed digest, an empty reason, or either without a ``path`` on an entity other
+            ValueError: If the type is not registered, or the attributes carry both a checksum and a reason it
+                is missing, a malformed digest, an empty reason, or either without a ``path`` on an entity other
                 than an ``artifact``.
         """
+        if prov_type not in _PROV_TYPES:
+            raise ValueError(f"unregistered entity type {prov_type!r}; register it with register_prov_types")
         _check_entity_attributes(prov_type, attributes)
         eid = f"{prov_type}-{_digest([self.run_id, prov_type, extent, attributes])}"
         self._entities[eid] = Entity(id=eid, prov_type=prov_type, extent=extent, attributes=dict(attributes))
@@ -505,7 +509,7 @@ class ProvStore:
         """Return one environment."""
         return self._environments[environment_id]
 
-    def entities(self, prov_type: PROV_TYPE | None = None) -> list[Entity]:
+    def entities(self, prov_type: str | None = None) -> list[Entity]:
         """Return entities, optionally of one type."""
         return [e for e in self._entities.values() if prov_type is None or e.prov_type == prov_type]
 
@@ -616,7 +620,7 @@ class ProvStore:
         _write_atomically(Path(path), ("\n".join(lines) + "\n").encode("utf-8"))
 
     @classmethod
-    def read_jsonl(cls, path: str | Path, run_id: str = "read") -> "ProvStore":
+    def read_jsonl(cls, path: str | Path, run_id: str = "read", *, any_type: bool = False) -> "ProvStore":
         """Read a store back, holding every record to the write-time invariants.
 
         Relations pass through the same membership check as the relation methods, so a file carrying
@@ -626,6 +630,8 @@ class ProvStore:
         Args:
             path: The JSONL file to read.
             run_id: The run id of the returned store.
+            any_type: Read entities of any type, registered or not: for a reader that converts a store and
+                decides nothing from it (the BEP-028 export), so it opens any workflow's store without loading it.
 
         Returns:
             The reconstructed store.
@@ -654,7 +660,7 @@ class ProvStore:
                     f"{where}: {kind} record missing keys {missing}, carrying unexpected keys {unexpected}: {line!r}"
                 )
             if kind == "entity":
-                if rec["prov_type"] not in _PROV_TYPES:
+                if not any_type and rec["prov_type"] not in _PROV_TYPES:
                     raise ValueError(f"{where}: entity {rec['id']!r} has unknown prov_type {rec['prov_type']!r}")
                 try:
                     _check_entity_attributes(rec["prov_type"], rec["attributes"])

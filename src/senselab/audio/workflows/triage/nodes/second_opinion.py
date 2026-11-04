@@ -23,6 +23,7 @@ from senselab.audio.workflows.triage.nodes.branches import declared_task_family
 from senselab.audio.workflows.triage.nodes.common import find_measurement, mint_live, software_agent
 from senselab.audio.workflows.triage.nodes.redact import fold_mask_plan, shipped_texts, transcript_texts
 from senselab.audio.workflows.triage.nodes.review import PII_SCAN_MISSING_FAILURE, bypass_reason, task_context
+from senselab.audio.workflows.triage.review_inputs import review_policy
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
     PII_SCAN_MISSING,
@@ -37,7 +38,7 @@ from senselab.text.tasks.decision_model.second_opinion import (
     SecondOpinion,
     ask_second_opinion,
 )
-from senselab.text.tasks.pii_detection.redaction_review import redaction_policy_text, task_guidance_digest
+from senselab.text.tasks.pii_detection.redaction_review import redaction_policy_text
 from senselab.utils.prov_store import ProvStore
 from senselab.utils.tasks.cached_inference import (
     result_cache_key,
@@ -130,8 +131,8 @@ def opinion_cache_key(original: str, masked: str, context: Mapping[str, Any], pi
         commit_sha=pin.blob_digest,
         params={
             "question_set_version": QUESTION_SET_VERSION,
-            "task_guidance": task_guidance_digest(),
-            "redaction_policy": hashlib.sha256(redaction_policy_text().encode("utf-8")).hexdigest(),
+            "task_guidance": review_policy().guidance_digest,
+            "redaction_policy": hashlib.sha256(redaction_policy_text(review_policy()).encode("utf-8")).hexdigest(),
             "seed": int(seed),
             "config": pin.config_digest,
             "manifest": pin.manifest_digest,
@@ -232,7 +233,7 @@ def second_opinion(
             failure = "no decision-model server was held for this read"
         else:
             try:
-                opinion = ask_second_opinion(ask, original, context, masked)
+                opinion = ask_second_opinion(ask, original, context, masked, review_policy())
             except (OSError, ValueError, RuntimeError) as error:
                 failure = f"{type(error).__name__}: {error}"
             if opinion is not None:

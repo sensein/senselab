@@ -64,12 +64,16 @@ DATASET_PATHS = frozenset(
         "detector_profile",
         "discard_contested.yaml",
         "evaluation",
+        "redaction_policy.yaml",
+        "review_policy.txt",
+        "task_guidance.yaml",
         "task_lexicon",
         "tasks.yaml",
         "time_release.yaml",
     }
 )
-"""Data paths only a dataset profile supplies; senselab ships no copy."""
+"""Data paths only a dataset profile supplies; senselab ships no copy (``redaction_policy.yaml``, the redaction word
+lists, comes with the reference profile ``adult_clinical_speech``)."""
 
 MERGED_PATHS = frozenset(
     {
@@ -260,7 +264,7 @@ def load_profile(directory: str | Path, *, _seen: tuple[Path, ...] = ()) -> Data
         target = root / _relative(source, f"{manifest_path} files.{relative}")
         if not target.exists():
             raise ValueError(f"{manifest_path}: {relative!r} names {target}, which does not exist")
-        expect_dir = not relative.endswith((".yaml", ".yml", ".json", ".parquet"))
+        expect_dir = not relative.endswith((".yaml", ".yml", ".json", ".parquet", ".txt"))
         if target.is_dir() != expect_dir:
             raise ValueError(f"{manifest_path}: {relative!r} must be {'a directory' if expect_dir else 'a file'}")
         files[relative] = target
@@ -526,10 +530,34 @@ def profile_cache(func: Callable[..., _R]) -> Callable[..., _R]:
 REQUIRED_DATASET_PATHS = (
     "airway_event_tokens.yaml",
     "discard_contested.yaml",
+    "redaction_policy.yaml",
     "tasks.yaml",
     "time_release.yaml",
 )
-"""Dataset paths every run reads; a profile must supply them."""
+"""Dataset paths every run reads; a profile must supply them. The verdict folds the redaction mask plan whatever
+runs, so the redaction word lists are among them."""
+
+TEMPLATE_MARKER = b"TEMPLATE:"
+"""What a template's text file begins with until a dataset writes its own; the start check refuses it."""
+
+STAGE_DATASET_PATHS: Mapping[str, tuple[str, ...]] = {
+    "review_policy.txt": ("REVIEW", "SECOND_OPINION"),
+    "task_guidance.yaml": ("REVIEW", "SECOND_OPINION"),
+}
+"""Dataset paths only some stages read, and which: a run needs one only when one of its stages runs (step 6b)."""
+
+
+def stage_dataset_paths(running: Collection[str]) -> tuple[str, ...]:
+    """The dataset paths of :data:`STAGE_DATASET_PATHS` a run driving ``running`` needs.
+
+    Args:
+        running: The stages the run drives.
+
+    Returns:
+        The paths one of whose stages runs, in the table's order.
+    """
+    return tuple(path for path, stages in STAGE_DATASET_PATHS.items() if any(stage in running for stage in stages))
+
 
 PROFILE_VALUES_FILE = "profile_values.yaml"
 """The packaged list of every value senselab leaves to a dataset profile, its kind and whether a run needs it."""
@@ -603,12 +631,16 @@ def missing_dataset_values(config_values: Mapping[str, Any]) -> list[str]:
     missing = []
     off = off_notes(config_values)
     running = frozenset(stage for stage in STAGE_NAMES if stage not in off)
-    for relative in REQUIRED_DATASET_PATHS:
+    for relative in (*REQUIRED_DATASET_PATHS, *stage_dataset_paths(running)):
         try:
-            if not data_path(relative).exists():
-                missing.append(f"{relative} (the profile lists it, but the file is absent)")
+            path = data_path(relative)
         except DatasetDataMissing:
             missing.append(relative)
+            continue
+        if not path.exists():
+            missing.append(f"{relative} (the profile lists it, but the file is absent)")
+        elif path.is_file() and path.read_bytes().startswith(TEMPLATE_MARKER):
+            missing.append(f"{relative} (still the template: write your own)")
     for relative, paths in required_profile_values(running).items():
         try:
             document = config_values if relative == CONFIG_FILE else data_values(relative)

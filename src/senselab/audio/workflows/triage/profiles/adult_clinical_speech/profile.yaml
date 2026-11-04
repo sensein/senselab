@@ -20,6 +20,7 @@ files:
   discard_contested.yaml: discard_contested.yaml
   discard_replaced_task.yaml: discard_replaced_task.yaml
   quality_join.yaml: quality_join.yaml
+  redaction_policy.yaml: redaction_policy.yaml
   session_background.yaml: session_background.yaml
   speaker_vector_profile: speaker_vector_profile
   task_content.yaml: task_content.yaml

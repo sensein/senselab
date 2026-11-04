@@ -66,6 +66,7 @@ from senselab.audio.workflows.triage.extend import (
     read_manifest,
     read_store,
     refold_verdict,
+    require_recorded_identity,
     run_root_of,
     source_of,
     take_slice,
@@ -138,6 +139,7 @@ def refold_one(
     """
     try:
         store = read_store(run_root)
+        require_recorded_identity(store, run_root)
     except (OSError, ValueError) as error:
         return {"status": ERROR, NODE: describe_exception(error)}
     try:

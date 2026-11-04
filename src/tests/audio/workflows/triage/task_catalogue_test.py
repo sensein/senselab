@@ -13,13 +13,14 @@ import yaml
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage import task_catalogue
+from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import (
     DatasetDataMissing,
     deactivate_profile,
     missing_dataset_values,
 )
-from senselab.audio.workflows.triage.identity import identity_from_stem, identity_of
+from senselab.audio.workflows.triage.identity import identity_of
 from senselab.audio.workflows.triage.identity_check import TASK_NOT_DESCRIBED, IdentityRecord, check_identities
 from senselab.audio.workflows.triage.live_evidence import declared_task_of
 from senselab.audio.workflows.triage.nodes import branches
@@ -461,6 +462,7 @@ def _lab_profile(root: Path) -> Path:
     write_template(root, name="lab-corpus")
     (root / "tasks.yaml").write_text(LAB_TASKS)
     (root / "airway_event_tokens.yaml").write_text("version: 3\ncough: [cough]\n")
+    (root / "review_policy.txt").write_text("LAB POLICY. Remove every name and every date.\n\n")
     shutil.copy(B2AI_PROFILE / "time_release.yaml", root / "time_release.yaml")
     for relative, entries in values_to_supply().items():
         target = root / ("config.yaml" if relative == "config/default.yaml" else relative)
@@ -555,8 +557,8 @@ class TestADatasetThatIsNotB2AI:
                 IdentityRecord(
                     stem,
                     f"/lab/{stem}.wav",
-                    identity_of(stem, hint),
-                    identity_from_stem(stem),
+                    identity_of(hint),
+                    identity_from_name(stem),
                     task=resolved.name,
                     task_source=resolved.source,
                 )

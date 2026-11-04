@@ -9,7 +9,16 @@ from typing import cast, get_args
 
 import pytest
 
-from senselab.utils.prov_store import PROV_TYPE, Activity, Agent, Entity, ProvStore
+from senselab.utils.prov_store import (
+    CORE_PROV_TYPES,
+    Activity,
+    Agent,
+    Entity,
+    ProvStore,
+    register_prov_types,
+    registered_prov_types,
+)
+from tests.utils.conftest import STORE_TEST_TYPES
 
 
 def _store() -> ProvStore:
@@ -360,23 +369,36 @@ class TestRoundTrip:
         with pytest.raises(ValueError, match="banana"):
             ProvStore.read_jsonl(path)
 
-    @pytest.mark.parametrize("prov_type", sorted(get_args(PROV_TYPE)))
-    def test_every_readable_entity_type_round_trips(self, prov_type: str, tmp_path: Path) -> None:
-        """The reader's vocabulary is what makes a finished run openable, so none of it may be dropped.
-
-        Parametrised over the whole :data:`PROV_TYPE` literal rather than over a hand-picked list:
-        a type retired from the writer must stay retired from the writer alone. ``kind`` is the case
-        this guards — TAXONOMY's evidence fold wrote it into every store of the 62,578-recording
-        corpus until 2026-09-13, nothing writes it now, and dropping it from the literal made
-        ``read_jsonl`` refuse every one of those stores.
-        """
+    @pytest.mark.parametrize("prov_type", [*CORE_PROV_TYPES, *STORE_TEST_TYPES])
+    def test_every_registered_entity_type_round_trips(self, prov_type: str, tmp_path: Path) -> None:
+        """A type the store defines or a caller registered is written and read back unchanged."""
         s = _store()
-        entity = s.entity(prov_type=cast(PROV_TYPE, prov_type), extent=None, attributes={"state": "uncertain"})
+        entity = s.entity(prov_type=prov_type, extent=None, attributes={"state": "uncertain"})
         path = tmp_path / "prov.jsonl"
         s.write_jsonl(path)
         back = ProvStore.read_jsonl(path)
         assert back.get_entity(entity).prov_type == prov_type
         assert back._entities == s._entities
+
+    def test_an_unregistered_type_is_refused_on_write(self) -> None:
+        """A misspelled type fails where it is written, not when the store is next opened."""
+        with pytest.raises(ValueError, match="unregistered entity type 'spann'"):
+            _store().entity(prov_type="spann", extent=None, attributes={})
+
+    def test_an_unregistered_type_is_refused_on_read_unless_any_type_is_asked_for(self, tmp_path: Path) -> None:
+        """A store of another workflow's types opens for a converter (any_type) and nowhere else."""
+        path = tmp_path / "prov.jsonl"
+        line = {"record": "entity", "id": "segment-0", "prov_type": "segment", "extent": None, "attributes": {}}
+        path.write_text(json.dumps(line) + "\n")
+        with pytest.raises(ValueError, match="unknown prov_type 'segment'"):
+            ProvStore.read_jsonl(path)
+        assert ProvStore.read_jsonl(path, any_type=True).get_entity("segment-0").prov_type == "segment"
+
+    def test_a_type_name_is_a_lowercase_identifier(self) -> None:
+        """Registering a malformed name is refused, so the reader's check stays meaningful."""
+        with pytest.raises(ValueError, match="lowercase identifiers"):
+            register_prov_types(["Segment"])
+        assert "artifact" in registered_prov_types()
 
 
 class TestReadBackValidation:

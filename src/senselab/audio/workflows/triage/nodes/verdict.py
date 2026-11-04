@@ -111,6 +111,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
     quote_tokens,
 )
 from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
+from senselab.audio.workflows.triage.prov_types import TRIAGE_PROV_TYPE
 from senselab.audio.workflows.triage.quality_join import QUALITY_JOIN
 from senselab.audio.workflows.triage.task_catalogue import LEXICAL_SPEECH_KIND, SYLLABLE_PATTERNS, is_kind
 from senselab.audio.workflows.triage.task_extent import STIMULUS_EXTENT_CHECK, task_extent_parameters
@@ -158,7 +159,7 @@ from senselab.audio.workflows.triage.vocabulary import (
 )
 from senselab.audio.workflows.triage.vocabulary import QUALITY as QUALITY_NODE
 from senselab.audio.workflows.triage.workflow import off_notes
-from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
+from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "VERDICT"
 
@@ -245,7 +246,7 @@ def _branch_report_from_entity(entity: Entity) -> BranchReport:
     )
 
 
-def _live_latest(store: ProvStore, prov_type: PROV_TYPE, key: Callable[[Entity], str]) -> list[Entity]:
+def _live_latest(store: ProvStore, prov_type: TRIAGE_PROV_TYPE, key: Callable[[Entity], str]) -> list[Entity]:
     """Entities of one type under the store's shared rule, one per key.
 
     An invalidated entity is never read, and of the survivors sharing a key the latest write wins.

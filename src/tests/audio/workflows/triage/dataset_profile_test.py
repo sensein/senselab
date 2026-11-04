@@ -310,6 +310,8 @@ class TestSenselabShipsNoFittedValue:
         values = [item for item in missing if " " in item]
         assert {item.split()[0] for item in missing if " " not in item} == {
             "airway_event_tokens.yaml",
+            "review_policy.txt",
+            "task_guidance.yaml",
             "tasks.yaml",
             "time_release.yaml",
         }

@@ -25,6 +25,7 @@ import yaml  # type: ignore[import-untyped]
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage import run as run_module
 from senselab.audio.workflows.triage import vocabulary as vocabulary_module
+from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import DatasetDataMissing
 from senselab.audio.workflows.triage.dataset_profile import require_dataset_values as real_require_dataset_values
@@ -1135,12 +1136,12 @@ class TestTheEntityPath:
     )
     def test_it_reads_the_subject_and_session_entities(self, stem: str, expected: tuple[str, ...]) -> None:
         """With no hint, the stem's entities place the run: a label may contain hyphens, an empty one is none."""
-        assert entity_subdir(identity_of(stem)) == (Path(*expected) if expected else Path("."))
+        assert entity_subdir(identity_from_name(stem)) == (Path(*expected) if expected else Path("."))
 
     def test_a_declared_identity_places_the_run_whatever_the_stem(self) -> None:
         """A hint's participant and session are the folders, as declared."""
         hint = AudioHints(metadata={PARTICIPANT_KEY: "P7", SESSION_KEY: "visit-2"})
-        assert entity_subdir(identity_of("recording-0042", hint)) == Path("P7", "visit-2")
+        assert entity_subdir(identity_of(hint)) == Path("P7", "visit-2")
 
     def test_a_label_that_cannot_name_a_folder_is_refused(self) -> None:
         """A slash would place the run outside its participant's folder."""
@@ -1149,7 +1150,7 @@ class TestTheEntityPath:
 
     def test_a_stem_carrying_neither_entity_stays_flat(self, tmp_path: Path) -> None:
         """A non-BIDS filename lands directly under the out dir."""
-        layout = prepare_run_layout(tmp_path / "out", "recording", identity_of("recording"))
+        layout = prepare_run_layout(tmp_path / "out", "recording", identity_from_name("recording"))
         assert layout.entity_dir == tmp_path / "out"
         assert layout.root.parent == tmp_path / "out"
 
@@ -1157,7 +1158,7 @@ class TestTheEntityPath:
         """``entity_dir`` is the run root's parent, and every directory exists."""
         out_dir = tmp_path / "out"
         stem = "sub-SUBJ01_ses-SES01_task-ka"
-        layout = prepare_run_layout(out_dir, stem, identity_of(stem))
+        layout = prepare_run_layout(out_dir, stem, identity_from_name(stem))
         assert layout.entity_dir == out_dir / "sub-SUBJ01" / ("ses-SES01")
         assert layout.root.parent == layout.entity_dir
         assert layout.root.name.startswith(f"{stem}_")
@@ -1168,8 +1169,8 @@ class TestTheEntityPath:
         """The collision suffix applies to the leaf; the shared parents are reused, not refused."""
         out_dir = tmp_path / "out"
         stem = "sub-01_ses-02_task-vowel"
-        first = prepare_run_layout(out_dir, stem, identity_of(stem))
-        second = prepare_run_layout(out_dir, stem, identity_of(stem))
+        first = prepare_run_layout(out_dir, stem, identity_from_name(stem))
+        second = prepare_run_layout(out_dir, stem, identity_from_name(stem))
         assert first.entity_dir == second.entity_dir
         assert first.root != second.root
 
@@ -1179,7 +1180,8 @@ class TestTheEntityPath:
         """A whole run lands under ``out/sub-.../ses-...``, not as a direct child of ``out``."""
         graph()
         out_dir = tmp_path / "out"
-        result = run_triage(tmp_path / "sub-01_ses-02_task-vowel.wav", out_dir, config)
+        hint = AudioHints(metadata={PARTICIPANT_KEY: "sub-01", SESSION_KEY: "ses-02"})
+        result = run_triage(tmp_path / "sub-01_ses-02_task-vowel.wav", out_dir, config, hint)
         assert result.run_dir.parent.parent == out_dir / "sub-01" / "ses-02"
         assert [p.name for p in out_dir.iterdir()] == ["sub-01"]
 

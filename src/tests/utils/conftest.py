@@ -10,6 +10,13 @@ import httpx
 # multiprocessing child re-importing a test module.
 from huggingface_hub.errors import HfHubHTTPError
 
+from senselab.utils.prov_store import register_prov_types
+
+STORE_TEST_TYPES = ("assertion", "measurement", "span", "speaker", "stream", "target_match", "verdict", "word")
+"""The entity types the store's own tests write. The store defines only ``artifact``; a workflow registers the rest
+(plan step 6c), so these tests register the ones they use rather than loading triage."""
+register_prov_types(STORE_TEST_TYPES)
+
 # Global variables for file paths
 CHA_TALK_BANK_PATH = os.path.abspath(r"src/tests/data_for_testing/childes_clinical_eng_poler_match_166.cha")
 

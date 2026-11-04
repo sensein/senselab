@@ -26,7 +26,7 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
-from senselab.audio.workflows.triage.b2ai_hints import read_sidecars
+from senselab.audio.workflows.triage.b2ai_hints import read_sidecars, task_id_of
 from senselab.audio.workflows.triage.extend import source_of
 from senselab.audio.workflows.triage.identity import participant_group
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS, expected_names
@@ -41,7 +41,7 @@ from senselab.audio.workflows.triage.recording_vectors import (
     view_identity,
 )
 from senselab.audio.workflows.triage.residue import is_content_word
-from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
+from senselab.audio.workflows.triage.routing_analysis.families import task_family
 from senselab.utils import fastio
 
 PII_LABEL = "pii"

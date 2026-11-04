@@ -45,6 +45,7 @@ from senselab.audio.workflows.triage.extend import (
     logged,
     read_manifest,
     read_store,
+    require_recorded_identity,
     run_root_of,
     take_slice,
     write_store,
@@ -135,10 +136,11 @@ def measure_one(run_root: Path, config: TriageConfig, *, stem: str, out_root: Pa
     try:
         target = mirror_run_root(run_root, out_root) if out_root is not None else run_root
         store = read_store(target)
+        require_recorded_identity(store, target)
     except (OSError, ValueError) as error:
         return {"status": ERROR, NODE: describe_exception(error)}
     try:
-        outcome = measure_task_squim(store, config, run_dir=target / RUN_SUBDIR, stem=stem)
+        outcome = measure_task_squim(store, config, run_dir=target / RUN_SUBDIR)
     except (OSError, ValueError, LookupError, RuntimeError) as error:
         return {"status": ERROR, NODE: describe_exception(error)}
     if outcome.changed:

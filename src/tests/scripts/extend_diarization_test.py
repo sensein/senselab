@@ -23,6 +23,7 @@ from senselab.audio.workflows.triage.nodes.common import find_measurement, path_
 from senselab.audio.workflows.triage.nodes.preprocess import diarization_measurement
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import seed_recorded_identity
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_diarization.py"
@@ -95,6 +96,7 @@ def _seed_run(
     grid = np.arange(int(seconds * SR)) / SR
 
     store = ProvStore(run_id=root.name)
+    seed_recorded_identity(store, root.name)
     agent = software_agent(store)
     activity = store.activity(node="PREPROCESS", step="residual", parameters={})
     store.was_associated_with(activity, agent)

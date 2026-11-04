@@ -21,8 +21,10 @@ files:
   discard_replaced_task.yaml: discard_replaced_task.yaml
   evaluation: evaluation
   quality_join.yaml: quality_join.yaml
+  review_policy.txt: review_policy.txt
   session_background.yaml: session_background.yaml
   task_extent.yaml: task_extent.yaml
+  task_guidance.yaml: task_guidance.yaml
   task_lexicon: task_lexicon
   task_minimum_duration.yaml: task_minimum_duration.yaml
   task_speech.yaml: task_speech.yaml

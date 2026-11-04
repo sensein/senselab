@@ -12,12 +12,12 @@ from senselab.utils.prov_store import (
     CHECKSUM_KEY,
     CHECKSUM_UNRESOLVED_KEY,
     MTIME_KEY,
-    PROV_TYPE,
     SIZE_KEY,
     ProvStore,
     file_attributes,
     file_digest,
 )
+from tests.utils.conftest import STORE_TEST_TYPES
 
 
 def test_digest_matches_hashlib(tmp_path: Path) -> None:
@@ -98,8 +98,8 @@ def test_an_artifact_checksum_needs_no_path(tmp_path: Path, attributes: dict[str
     assert ProvStore.read_jsonl(path).get_entity(eid).attributes == {"role": "input", **attributes}
 
 
-@pytest.mark.parametrize("prov_type", sorted(set(get_args(PROV_TYPE)) - {"artifact"}))
-def test_every_other_type_still_needs_a_path_for_its_checksum(prov_type: PROV_TYPE) -> None:
+@pytest.mark.parametrize("prov_type", STORE_TEST_TYPES)
+def test_every_other_type_still_needs_a_path_for_its_checksum(prov_type: str) -> None:
     """Only an artifact is exempt; any other entity's checksum must still say which file it describes."""
     store = ProvStore(run_id="r")
     with pytest.raises(ValueError, match="naming the file"):

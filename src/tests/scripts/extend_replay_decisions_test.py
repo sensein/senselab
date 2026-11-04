@@ -25,6 +25,7 @@ import soundfile as sf
 from senselab.audio.data_structures import Audio, AudioHints, ExpectedSpeech
 from senselab.audio.data_structures.audio_hints import SpeakerEmbeddingProvenance, TargetSpeakerEmbedding
 from senselab.audio.workflows.triage import extend as extend_module
+from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.background_model import write_view_arrays
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.extend import (
@@ -58,7 +59,15 @@ from senselab.audio.workflows.triage.hint_record import (
     hint_digest,
 )
 from senselab.audio.workflows.triage.hint_record import expected_speech_digest as prompts_digest
-from senselab.audio.workflows.triage.identity import declared_task_id, identity_of, recording_entity
+from senselab.audio.workflows.triage.identity import (
+    DECLARED_FROM,
+    DECLARED_PARTICIPANT,
+    DECLARED_SESSION,
+    DECLARED_TASK_ID,
+    declared_task_id,
+    identity_of,
+    recording_entity,
+)
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.common import find_measurement, software_agent, write_stream, write_verdict
 from senselab.audio.workflows.triage.nodes.preprocess import STIMULUS_MEASUREMENT, write_stimulus_alignment
@@ -295,7 +304,7 @@ def test_mirror_run_root_is_writable_and_reads_through_to_the_finished_run(tmp_p
     (root / "run" / "derivatives" / "yamnet_scores.json").write_text("[]", encoding="utf-8")
     out_root = tmp_path / "replayed"
 
-    mirrored = cli.mirror_run_root(root, out_root, identity_of("sub-01_ses-01_task-x"))
+    mirrored = cli.mirror_run_root(root, out_root, identity_from_name("sub-01_ses-01_task-x"))
 
     assert mirrored.parent == out_root / "sub-01" / "ses-01"
     assert not (mirrored / "run" / "derivatives").is_symlink()
@@ -313,7 +322,7 @@ def test_a_stream_a_replayed_node_writes_is_never_a_link_into_the_finished_run(t
     root = tmp_path / "finished" / "sub-01_ses-01_task-x_20260920-030808"
     _seed_run(root)
 
-    mirrored = cli.mirror_run_root(root, tmp_path / "replayed", identity_of("sub-01_ses-01_task-x"))
+    mirrored = cli.mirror_run_root(root, tmp_path / "replayed", identity_from_name("sub-01_ses-01_task-x"))
 
     links = {path.name for path in (mirrored / "run" / "streams").iterdir()}
     assert links == {"enhanced.flac", "plain.flac"}, "only the streams a replay reads may be linked"
@@ -325,7 +334,7 @@ def test_a_replayed_redact_write_leaves_the_finished_tree_byte_identical(tmp_pat
     _seed_run(root)
     before = {path.name: path.read_bytes() for path in sorted((root / "run" / "streams").iterdir()) if path.is_file()}
 
-    mirrored = cli.mirror_run_root(root, tmp_path / "replayed", identity_of("sub-01_ses-01_task-x"))
+    mirrored = cli.mirror_run_root(root, tmp_path / "replayed", identity_from_name("sub-01_ses-01_task-x"))
     for stem in ("redacted", "separated_0"):
         write_stream(Audio(waveform=_samples()[None, :] * 0.5, sampling_rate=SR), mirrored / "run", stem)
 
@@ -343,7 +352,7 @@ def test_the_derivatives_a_replay_rewrites_leave_the_finished_tree_byte_identica
     np.savez(finished / "stimulus_alignment.npz", marker=np.array([2]))
     before = {path.name: path.read_bytes() for path in sorted(finished.iterdir())}
 
-    mirrored = cli.mirror_run_root(root, tmp_path / "replayed", identity_of("sub-01_ses-01_task-x"))
+    mirrored = cli.mirror_run_root(root, tmp_path / "replayed", identity_from_name("sub-01_ses-01_task-x"))
     store = ProvStore(run_id="replayed")
     frames = SimpleNamespace(times_s=np.arange(3.0), band_db=np.zeros((3, 2)), level_db=np.zeros(3))
     floor = SimpleNamespace(
@@ -371,7 +380,7 @@ def test_a_mirror_whose_derivatives_link_the_whole_directory_is_rebuilt(tmp_path
     old.mkdir(parents=True)
     (old / "derivatives").symlink_to(finished)
 
-    mirrored = cli.mirror_run_root(root, tmp_path / "replayed", identity_of("sub-01_ses-01_task-x"))
+    mirrored = cli.mirror_run_root(root, tmp_path / "replayed", identity_from_name("sub-01_ses-01_task-x"))
     reading = SimpleNamespace(
         frames=SimpleNamespace(times_s=np.arange(3.0), band_db=np.zeros((3, 2)), level_db=np.zeros(3)),
         floor=SimpleNamespace(band_db=np.zeros(2), own_db=np.zeros(2), residual_db=None, source="q", quiet_s=1.0),
@@ -405,8 +414,8 @@ def test_mirror_run_root_is_idempotent(tmp_path: Path) -> None:
     _seed_run(root)
     out_root = tmp_path / "replayed"
 
-    first = cli.mirror_run_root(root, out_root, identity_of("sub-01_ses-01_task-x"))
-    second = cli.mirror_run_root(root, out_root, identity_of("sub-01_ses-01_task-x"))
+    first = cli.mirror_run_root(root, out_root, identity_from_name("sub-01_ses-01_task-x"))
+    second = cli.mirror_run_root(root, out_root, identity_from_name("sub-01_ses-01_task-x"))
 
     assert first == second
     assert (second / "run" / "streams" / "enhanced.flac").is_symlink()
@@ -715,6 +724,23 @@ class TestTheReplayChecksTheRunsRecord:
         none = check_replay_inputs(store, root, load_triage_config(), hint=None, hint_given=False, no_hint=True)
         assert none.hint is None
 
+    def test_a_run_recording_no_identity_is_refused_unless_the_hint_declares_one(self, tmp_path: Path) -> None:
+        """--no-hint would record an identity declaring nothing, which every later pass accepts (step-6 review 2)."""
+        root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+        _seed_run(root, hint=HINT_COUGH)
+        store = read_store(root)
+        for stream in store.entities("stream"):
+            for key in (DECLARED_PARTICIPANT, DECLARED_SESSION, DECLARED_TASK_ID, DECLARED_FROM):
+                stream.attributes.pop(key, None)
+        for activity in store.activities("ADMIT"):
+            for key in (DECLARED_PARTICIPANT, DECLARED_SESSION, DECLARED_TASK_ID, DECLARED_FROM):
+                activity.parameters.pop(key, None)
+        with pytest.raises(ReplayRefused, match="records no identity"):
+            check_replay_inputs(store, root, load_triage_config(), hint=None, hint_given=False, no_hint=True)
+        declaring = AudioHints(metadata={"participant_id": "sub-01", "session_id": "ses-01", "task_token": "x"})
+        given = check_replay_inputs(store, root, load_triage_config(), hint=declaring, hint_given=True)
+        assert given.hint_from == HINT_GIVEN
+
     def test_a_given_hint_that_differs_is_accepted_and_named(self, tmp_path: Path) -> None:
         """The caller's correction wins; the fields it moved are recorded."""
         root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
@@ -848,11 +874,11 @@ class TestTheRecordAReplayWrites:
             assert recording_entity(store) is not None
         assert declared_task_id(store) == "rainbow-passage"
 
-    def test_the_identity_is_read_off_the_file_admit_was_given(self) -> None:
-        """ADMIT records the resolved path; the stem it read was the one it was given."""
+    def test_without_a_hint_nothing_is_read_off_the_file_admit_was_given(self) -> None:
+        """A replay without a hint records an identity declaring nothing, whatever the file was called (step 6a)."""
         store = self._store("/bids/sub-01_ses-01_task-loudness-1.wav", "/exports/platform-0042.wav")
         record_replayed_hint(store, None, software="s")
-        assert declared_task_id(store) == "loudness-1"
+        assert declared_task_id(store) == "unknown"
 
 
 class TestTheRecordingCheckReadsTheStatFirst:
@@ -883,11 +909,11 @@ class TestTheRecordingCheckReadsTheStatFirst:
 
 
 def test_an_out_root_mirror_is_placed_where_the_replay_leaves_the_identity() -> None:
-    """A given hint's identity places it; else the recorded one; else, for a run recording none, the stem's."""
+    """A given hint's identity places it; else the recorded one; else, for a run recording none, nothing declared."""
     stem = "sub-01_ses-01_task-x"
     hint = AudioHints(metadata={"participant_id": "sub-02", "session_id": "ses-05"})
     moved = cli.replay_identity(None, stem, hint, hint_given=True)
     assert (moved.participant, moved.session) == ("sub-02", "ses-05")
-    assert cli.replay_identity(None, stem, None, hint_given=False) == identity_of(stem)
-    recorded = identity_of(stem, hint)
+    assert cli.replay_identity(None, stem, None, hint_given=False) == identity_of(None)
+    recorded = identity_of(hint)
     assert cli.replay_identity(recorded, stem, None, hint_given=False) == recorded
