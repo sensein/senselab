@@ -97,6 +97,7 @@ class _Sidecars:
             for candidate in sorted(directory.glob("*.json")):
                 parsed = parse_name(candidate.stem)
                 if parsed is not None:
+                    _checked(self._root, candidate.relative_to(self._root).as_posix(), candidate)
                     found.append((parsed[0], parsed[1], len(parsed[0]), candidate))
             self._levels[directory] = found
         return self._levels[directory]
@@ -126,7 +127,8 @@ def _placed(parts: tuple[str, ...], entities: Mapping[str, str]) -> bool:
 def _scan(root: Path, extensions: tuple[str, ...]) -> dict[str, Path]:
     """Return the files of `extensions` of the raw tree by their normalised name, after checking the links read."""
     found: dict[str, Path] = {}
-    links: list[Path] = [root / "participants.tsv"] if (root / "participants.tsv").exists() else []
+    table = root / "participants.tsv"
+    links: list[Path] = [table] if table.is_symlink() or table.exists() else []
     for directory, dirs, files in os.walk(root):
         here = Path(directory)
         top = here == root

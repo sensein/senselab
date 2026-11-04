@@ -138,3 +138,16 @@ def test_bids_malformed_sidecar_refused(tmp_path: Path) -> None:
     (root / "task-read_audio.json").write_text("[1]", encoding="utf-8")
     with pytest.raises(BidsError, match="task-read_audio.json"):
         bids_dataset(root)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("name", ["task-read_audio.json", "participants.tsv"])
+def test_bids_metadata_link_out_of_root_refused(tmp_path: Path, name: str) -> None:
+    """A sidecar or participants table linked from outside the root is refused, as an audio file is."""
+    root = make_tree(tmp_path / "bids")
+    outside = tmp_path / "outside"
+    outside.write_text("{}" if name.endswith("json") else "participant_id\tage\n", encoding="utf-8")
+    (root / name).unlink()
+    os.symlink(outside, root / name)
+    with pytest.raises(BidsError, match="links outside"):
+        bids_dataset(root)
