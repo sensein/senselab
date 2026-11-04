@@ -13,7 +13,7 @@
         "limits": {
             "budget_s": 700,
             "measured_s": 229.67,
-            "derivation": "Slowest limits test of the `(env or limits) and model` selection on a CPU node: crisperwhisper edge inputs with the transformers engine, 229.67 s (ORCD job 27822081 at 1448c4a1; 227.16 s as the slowest of job 27820309 at 41cf7964; H100 job 27822086 at most 29.62 s). Budget is three times the CPU measurement rounded up to 100 s, so load on a shared node does not fail a passing test while a hang still ends in minutes."
+            "derivation": "Slowest limits test of the `(env or limits) and model` selection on a CPU node: crisperwhisper edge inputs with the transformers engine, 229.67 s (ORCD job 27822081 at 1448c4a1; 227.16 s as the slowest of job 27820309 at 41cf7964; H100 job 27822086 at most 29.62 s). Budget is three times the CPU measurement rounded up to 100 s, so load on a shared node does not fail a passing test while a hang still ends in minutes. The cold full `env or limits` selection at 7e82d161 agrees: CPU job 27825439, 132 passed in 1476 s, slowest test 225.20 s (the same edge-input test); H100 job 27825595, 138 passed in 897.85 s, slowest 163.15 s (a vllm server attestation test). The 700 s budget is 3.1 times the slowest CPU test (229.67 s over all runs), so it is kept."
         },
         "usecase": {
             "budget_s": 900,
@@ -23,7 +23,7 @@
         "env": {
             "budget_s": 600,
             "measured_s": 173.72,
-            "derivation": "Slowest env test of the same selection on a CPU node: crisperwhisper content-fault isolation with the transformers engine, 173.72 s (ORCD job 27822081 at 1448c4a1; H100 job 27822086 at most 29.62 s). Budget is three times the CPU measurement rounded up to 100 s, as for limits."
+            "derivation": "Slowest env test of the same selection on a CPU node: crisperwhisper content-fault isolation with the transformers engine, 173.72 s (ORCD job 27822081 at 1448c4a1; H100 job 27822086 at most 29.62 s). Budget is three times the CPU measurement rounded up to 100 s, as for limits. The cold full selection's slowest tests (CPU 225.20 s, H100 163.15 s) are not env tests of this tier's CPU maximum; 600 s is 3.5 times the slowest env measurement (173.72 s) and 2.7 times the slowest test of any tier in the full selection, so it is kept."
         }
     }
 }
