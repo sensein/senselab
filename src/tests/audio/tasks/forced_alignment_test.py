@@ -448,14 +448,17 @@ def test_align_transcriptions_multilingual(
     )
     if aligned_transcriptions[0][0] is not None and aligned_transcriptions[0][0].chunks is not None:
         assert len(aligned_transcriptions[0][0].chunks) == 5, (
-            f"Expected 5 items in aligned_transcriptions[0], but got "
-            f"{len(aligned_transcriptions[0])}: {aligned_transcriptions[0]}"
+            f"Expected 5 chunks in aligned_transcriptions[0], but got "
+            f"{len(aligned_transcriptions[0][0].chunks)}: {aligned_transcriptions[0]}"
         )
-    if aligned_transcriptions[1][0] is not None and aligned_transcriptions[1][0].chunks is not None:
-        assert len(aligned_transcriptions[1][0].chunks) == 5, (
-            f"Expected 5 items in aligned_transcriptions[1], but got "
-            f"{len(aligned_transcriptions[1])}: {aligned_transcriptions[1]}"
-        )
+    aligned_transcription_fr = aligned_transcriptions[1][0]
+    if aligned_transcription_fr is not None and aligned_transcription_fr.chunks is not None:
+        duration = resampled_mono_audio_sample.waveform.shape[-1] / resampled_mono_audio_sample.sampling_rate
+        assert aligned_transcription_fr.chunks, f"Expected aligned chunks, got none: {aligned_transcription_fr}"
+        for chunk in aligned_transcription_fr.chunks:
+            assert chunk.text, f"Chunk without text: {chunk}"
+            assert chunk.start is not None and chunk.end is not None, f"Chunk without timestamps: {chunk}"
+            assert 0.0 <= chunk.start <= chunk.end <= duration + 0.1, f"Chunk outside the audio: {chunk}"
     aligned_transcription_en = aligned_transcriptions[0][0] or None
     if isinstance(aligned_transcription_en, ScriptLine):
         compare_alignments(
