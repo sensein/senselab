@@ -42,10 +42,10 @@ class RealWorkers:
     on `cuda` when the host has a GPU, else `cpu`.
     """
 
-    def __init__(self, profile: ExecutionProfile) -> None:
-        """Start nothing yet."""
+    def __init__(self, profile: ExecutionProfile, device: str | None = None) -> None:
+        """Start nothing yet; `device` defaults to `cuda` when the host has a GPU, else `cpu`."""
         self.profile = profile
-        self.device = "cuda" if probe_hardware().gpus else "cpu"
+        self.device = device or ("cuda" if probe_hardware().gpus else "cpu")
         self.started: list[WorkerClient] = []
         self.serving = False
 

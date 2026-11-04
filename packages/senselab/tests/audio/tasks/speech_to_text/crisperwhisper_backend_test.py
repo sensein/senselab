@@ -16,15 +16,17 @@ from senselab.audio.tasks.speech_to_text import (
 )
 from senselab.audio.tasks.speech_to_text.crisperwhisper_backend import CrisperWhisperParams
 from senselab.audio.tasks.speech_to_text.whisper_frontend import MIN_INPUT_NS
-from senselab_core.kernel.declare import REGISTRY
+from senselab_core.kernel.declare import REGISTRY, BackendSpec, Env, TaskParams, TaskSpec
+from senselab_core.kernel.identity import ExecutionContext
 from senselab_core.kernel.results import Transcript
 from senselab_core.kernel.signals import Audio
 from senselab_core.kernel.wire import from_wire_form, wire_form
 from senselab_core.runtime.fetch import DataManifest, default_cache_root, fetch
 from senselab_core.runtime.hardware import HardwareInfo
+from senselab_core.runtime.keys import Call, Placement, build_key
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile, NoBackend, resolve_execution
-from senselab_core.testing.contracts import contract_cases
+from senselab_core.testing.contracts import BASE_CONTEXT, contract_cases
 from senselab_core.testing.workers import RealWorkers, run_alone
 from senselab_worker.fake import FAULT_KEY
 from senselab_worker.faults import ContentFault, FaultClass, ResourceFault
@@ -289,3 +291,29 @@ def test_confidence_is_a_declared_backend_param_that_defaults_on() -> None:
     state = cw.load({"stub": True, "device": "cpu"})
     params = {**PARAMS, "backend_params": {"confidence": False}}
     assert "outputs" in cw.handle(state, [_item("a", _tone())], params)[0]
+
+
+@pytest.mark.logic
+def test_confidence_off_and_on_never_share_a_logical_key() -> None:
+    """Everything else equal, `confidence` false and true build different keys."""
+    task = TaskSpec(name="t", version="1", kind="transform", inputs={"audio": "Audio"}, outputs={}, params=TaskParams)
+    backend = BackendSpec(
+        task="t",
+        name="crisperwhisper",
+        version="1",
+        stack="crisperwhisper",
+        env=Env.host(),
+        devices=("cpu",),
+        batch_invariant=True,
+        worker=cw.WORKER_MODULE,
+        load_stub={},
+        params=CrisperWhisperParams,
+    )
+    call = Call(task=task, params=TaskParams(), inputs={"audio": "content:" + "a" * 64})
+    context = ExecutionContext.model_validate(BASE_CONTEXT)
+
+    def digest(confidence: bool) -> str:
+        placement = Placement(backend=backend, backend_params=CrisperWhisperParams(confidence=confidence), device="cpu")
+        return build_key(call, placement, context).digest()
+
+    assert digest(True) != digest(False)

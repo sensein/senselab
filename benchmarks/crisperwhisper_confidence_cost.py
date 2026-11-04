@@ -40,19 +40,36 @@ def _stats(values: Sequence[float]) -> dict[str, float]:
     return {"median": statistics.median(values), "p90": _percentile(values, 0.9), "mean": statistics.fmean(values)}
 
 
-def summarize(items: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    """Return per-window statistics and the confidence share of decoding from per-item records.
+def _shares(items: Sequence[dict[str, Any]]) -> dict[str, float]:
+    decode = sum(i["on"]["decode_s"] for i in items)
+    confidence = sum(i["on"]["confidence_s"] for i in items)
+    off = sum(i["off"]["decode_s"] for i in items)
+    total = decode + confidence
+    return {
+        "share_of_decode": confidence / decode,
+        "share_of_total": confidence / total,
+        "share_by_difference": (total - off) / total,
+    }
 
-    Each item holds `on` and `off`, each `{"windows", "decode_s", "confidence_s"}`. Per window values divide an item's
-    seconds by its windows. `share_of_decode` is the confidence seconds over the decode and confidence seconds of the
-    `on` runs; `share_by_difference` is the extra total time of `on` over `off`, over the total time of `on`.
-    Items without a window are left out of the per-window values.
+
+def summarize(items: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Return per-window statistics and the confidence shares from per-item records.
+
+    Each item holds `duration_s` and `on` and `off`, each `{"windows", "decode_s", "confidence_s"}`. Per window values
+    divide an item's seconds by its windows. Over the `on` runs, `share_of_decode` is confidence seconds over
+    decode seconds and `share_of_total` is confidence seconds over decode plus confidence seconds;
+    `share_by_difference` is the extra total time of `on` over `off`, over the total time of `on`. `by_duration`
+    gives the same shares for the terciles of `duration_s` (shortest, middle, longest). Items without a window are
+    left out of the per-window values.
     """
     timed = [i for i in items if i["on"]["windows"] > 0 and i["off"]["windows"] > 0]
-    on_decode = sum(i["on"]["decode_s"] for i in items)
-    on_confidence = sum(i["on"]["confidence_s"] for i in items)
-    off_decode = sum(i["off"]["decode_s"] for i in items)
-    on_total = on_decode + on_confidence
+    ordered = sorted(items, key=lambda i: i["duration_s"])
+    cut = [len(ordered) * k // 3 for k in range(4)]
+    terciles = {
+        name: {"items": len(part), "duration_s": [part[0]["duration_s"], part[-1]["duration_s"]], **_shares(part)}
+        for name, part in zip(("short", "middle", "long"), (ordered[cut[k] : cut[k + 1]] for k in range(3)))
+        if part
+    }
     return {
         "items": len(items),
         "windows": sum(i["on"]["windows"] for i in items),
@@ -62,9 +79,13 @@ def summarize(items: Sequence[dict[str, Any]]) -> dict[str, Any]:
             "decode_off": _stats([i["off"]["decode_s"] / i["off"]["windows"] for i in timed]),
             "total_on": _stats([(i["on"]["decode_s"] + i["on"]["confidence_s"]) / i["on"]["windows"] for i in timed]),
         },
-        "total_s": {"decode_on": on_decode, "confidence_on": on_confidence, "decode_off": off_decode},
-        "share_of_decode": on_confidence / on_total,
-        "share_by_difference": (on_total - off_decode) / on_total,
+        "total_s": {
+            "decode_on": sum(i["on"]["decode_s"] for i in items),
+            "confidence_on": sum(i["on"]["confidence_s"] for i in items),
+            "decode_off": sum(i["off"]["decode_s"] for i in items),
+        },
+        **_shares(items),
+        "by_duration": terciles,
     }
 
 
@@ -133,8 +154,7 @@ def measure(engine: str, device: str, count: int) -> dict[str, Any]:
     archive = fetch.fetch(fetch.DataManifest.load(MANIFEST), cache_root=fetch.default_cache_root())["test-clean.tar.gz"]
     chosen = select_items(Path(archive), count + 1)
     warmup, measured = chosen[0], chosen[1:]
-    real = workers.RealWorkers(profiles.ExecutionProfile.load("orcd"))
-    real.device = device
+    real = workers.RealWorkers(profiles.ExecutionProfile.load("orcd"), device)
     backend = next(b for b in call.packaged().registry.backends("speech_to_text") if b.name == "crisperwhisper")
     entry = call.packaged().catalogue.backend_entry(backend)
     params: dict[str, Any] = {
@@ -180,11 +200,17 @@ def measure(engine: str, device: str, count: int) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> None:
     """Parse the command line, measure, and write the document to `--out`."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--engine", choices=ENGINES, required=True)
-    parser.add_argument("--device", choices=DEVICES, required=True)
+    parser.add_argument("--engine", choices=ENGINES)
+    parser.add_argument("--device", choices=DEVICES)
     parser.add_argument("--items", type=int, default=50)
-    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--out", type=Path)
+    parser.add_argument("--summarize", type=Path, help="print the summary of an existing result file and exit")
     args = parser.parse_args(argv)
+    if args.summarize:
+        print(json.dumps(summarize(json.loads(args.summarize.read_text())["items"]), indent=2))
+        return
+    if not (args.engine and args.device and args.out):
+        parser.error("--engine, --device and --out are required unless --summarize")
     document = measure(args.engine, args.device, args.items)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(document, indent=2) + "\n")
