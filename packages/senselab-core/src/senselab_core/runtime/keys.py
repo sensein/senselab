@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from senselab_core.kernel.declare import BackendParams, BackendSpec, TaskParams, TaskSpec, key_for
 from senselab_core.kernel.identity import (
@@ -12,6 +12,7 @@ from senselab_core.kernel.identity import (
     ProfileSliceIdentity,
     ResolvedModel,
 )
+from senselab_core.kernel.plan import slice_identity
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,35 @@ class Call:
     inputs: Mapping[str, InputIdentity]
     model: ResolvedModel | None = None
     profile_slices: Mapping[str, ProfileSliceIdentity] = field(default_factory=dict)
+
+
+class MissingProfileSlice(LookupError):
+    """A task declares a profile slice that neither the run config's settings nor the dataset profile holds."""
+
+
+def profile_slices(
+    task: TaskSpec, settings: Mapping[str, Any], dataset_profile: Mapping[str, Any] | None = None
+) -> dict[str, ProfileSliceIdentity]:
+    """Return each profile slice `task` declares, by name, keyed by the identity of its value (`slice_identity`).
+
+    A `run.<path>` slice is cut from `settings`, a `dataset.<path>` one from `dataset_profile`, following the dotted
+    path one mapping key per part. Nothing else of either mapping is read.
+
+    Raises:
+        MissingProfileSlice: a declared slice's path is absent.
+    """
+    sources: dict[str, Mapping[str, Any] | None] = {"run": settings, "dataset": dataset_profile}
+    cut: dict[str, ProfileSliceIdentity] = {}
+    for name in task.profile_slices:
+        source, *path = name.split(".")
+        value: Any = sources[source]
+        for part in path:
+            if not isinstance(value, Mapping) or part not in value:
+                given = "no dataset profile" if sources[source] is None else f"no {part!r} under {source}"
+                raise MissingProfileSlice(f"{task.name!r} reads profile slice {name!r}; there is {given}")
+            value = value[part]
+        cut[name] = slice_identity(value)
+    return cut
 
 
 SINGLE_ITEM = "single"

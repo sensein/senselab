@@ -27,7 +27,14 @@ import senselab_core.kernel.results  # noqa: F401 - importing it defines the res
 import senselab_core.kernel.time  # noqa: F401 - importing it defines the time types
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap
 from senselab_core.kernel.formats import Formatted
-from senselab_core.kernel.identity import InputIdentity, LogicalKey, Params, ProfileSliceIdentity, ResolvedModel
+from senselab_core.kernel.identity import (
+    InputIdentity,
+    LogicalKey,
+    Params,
+    ProfileSliceIdentity,
+    ResolvedModel,
+    SliceName,
+)
 from senselab_core.kernel.signals import Recording, RegularSeries, Text
 
 TaskKind = Literal["transform", "fit"]
@@ -172,9 +179,10 @@ Constraint = Annotated[InputsAgree | ParamsOrdered, Field(discriminator="kind")]
 
 
 class TaskSpec(Frozen):
-    """A declared task: its name and version, kind, typed ports, params model and constraints.
+    """A declared task: its name and version, kind, typed ports, params model, constraints and profile slices.
 
     `inputs` and `outputs` map port names to kernel type names. `constraints` name only declared ports and params.
+    `profile_slices` names the profile slices a call of the task reads; each enters its key by identity.
     """
 
     name: NonEmptyStr
@@ -184,6 +192,7 @@ class TaskSpec(Frozen):
     outputs: StrMap
     params: type[TaskParams]
     constraints: tuple[Constraint, ...] = ()
+    profile_slices: tuple[SliceName, ...] = ()
 
     @model_validator(mode="after")
     def _constraints_name_declared_things(self) -> "TaskSpec":
@@ -471,12 +480,13 @@ def kernel_types() -> dict[str, type]:
 C = TypeVar("C", bound=type)
 
 
-def task(  # noqa: PLR0913 - a task declares its name, version, kind, constraints and registry
+def task(  # noqa: PLR0913 - a task declares its name, version, kind, constraints, slices and registry
     *,
     name: str,
     version: str,
     kind: TaskKind,
     constraints: tuple[Constraint, ...] = (),
+    profile_slices: tuple[str, ...] = (),
     registry: Registry | None = None,
 ) -> Callable[[C], C]:
     """Set the decorated class's `spec` to its `TaskSpec`, and declare it in `registry` when one is given.
@@ -499,6 +509,7 @@ def task(  # noqa: PLR0913 - a task declares its name, version, kind, constraint
             outputs=_port_types(cls, "outputs"),
             params=getattr(cls, "Params", TaskParams),
             constraints=constraints,
+            profile_slices=profile_slices,
         )
         if registry is not None:
             registry.add_task(spec)

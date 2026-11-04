@@ -51,6 +51,9 @@ GRAPH_FORMAT = "graph@1.0"
 INPUT_MANIFEST_FORMAT = "input-manifest@1.0"
 """The format of an input manifest: each record of a dataset with the content identity of every input it binds."""
 
+LOGICAL_PLAN_FORMAT = "logical-plan@1.0"
+"""The format of a logical plan: a graph with its pinned models, profile slices, manifest digest and reuse policy."""
+
 FormatTag = Annotated[str, StringConstraints(pattern=FORMAT_PATTERN)]
 """`<name>@<major>.<minor>`."""
 

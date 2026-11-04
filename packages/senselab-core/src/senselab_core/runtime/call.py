@@ -58,13 +58,13 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import SAMPLING, EquivalenceEvidence, EvidenceSide, sampled
 from senselab_core.runtime.hardware import HardwareInfo, numerics_class, probe_hardware
 from senselab_core.runtime.in_process import InProcessWorker
-from senselab_core.runtime.keys import Call, Placement, build_key, request_components
+from senselab_core.runtime.keys import Call, Placement, build_key, profile_slices, request_components
 from senselab_core.runtime.launch import launch
 from senselab_core.runtime.licenses import LicensePolicy, LockRecords, backend_license
 from senselab_core.runtime.models import resolve
 from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
-from senselab_core.runtime.revision import PROCESS_RESOLVER, cache_root, run_id
+from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver, cache_root, run_id
 from senselab_core.runtime.store import ResultStore, StoredResult, agent_record, context_record, key_record
 from senselab_core.runtime.store import output_identity as store_output_identity
 from senselab_core.runtime.vllm_server import (
@@ -156,13 +156,15 @@ class RunConfig:
 
     `verify` is the fraction of cross-context hits recomputed and compared under `thresholds` (`Thresholds.load`,
     the packaged run config's unless a user's is merged over it). `licenses` is the user's license policy; with None
-    no call is refused for its license.
+    no call is refused for its license. `settings` holds the values tasks read, from which a task's `run.<path>`
+    profile slices are cut (`keys.profile_slices`).
     """
 
     reuse: ReusePolicy = DEFAULT_REUSE_POLICY
     verify: float = 0.0
     licenses: LicensePolicy | None = None
     thresholds: Thresholds = field(default_factory=Thresholds.load)
+    settings: Mapping[str, Any] = field(default_factory=lambda: FrozenMapping({}))
 
     def __post_init__(self) -> None:
         """Refuse a `verify` outside [0, 1]."""
@@ -395,7 +397,8 @@ def run_call(
         env_license=code_license,
     )
     identities = {port: identity for port, (identity, _, _) in bound.items()}
-    key = build_key(Call(task=spec, params=call.params, inputs=identities, model=model), placement, context)
+    keyed = Call(spec, call.params, identities, model, profile_slices(spec, run.settings))
+    key = build_key(keyed, placement, context)
     anchors = _anchors(value for _, value, _ in bound.values())
     looked = datetime.now(timezone.utc)
     hit = _hit(store, key, context, run)
@@ -593,19 +596,42 @@ def placement_of(task: str, model: ModelRef | None, execution: ExecutionProfile)
 def _resolve_model(
     spec: TaskSpec, ref: ModelRef | None, profile: ExecutionProfile, catalogue: Catalogue
 ) -> tuple[ResolvedModel | None, CatalogueEntry | None]:
-    """Return the model `ref` resolves to and the catalogue entry of that `(id, revision)`, None off every pin."""
+    """Return `pin_model` under the profile's network policy, its source allowlist checked before resolving."""
+    return pin_model(
+        spec.name,
+        ref,
+        catalogue,
+        resolver=replace(PROCESS_RESOLVER, network=profile.network),
+        admit=lambda model_id: profile.check_source(model_id, catalogue),
+    )
+
+
+def pin_model(
+    task: str,
+    ref: ModelRef | None,
+    catalogue: Catalogue,
+    *,
+    resolver: Resolver = PROCESS_RESOLVER,
+    admit: Callable[[str], None] | None = None,
+) -> tuple[ResolvedModel | None, CatalogueEntry | None]:
+    """Return the model `ref` resolves to and the catalogue entry of that `(id, revision)`, None off every pin.
+
+    A catalogue model at its catalogue revision is the catalogue's pin, with no lookup; any other is `resolve()`d
+    through `resolver`, and a hub model's id is first given to `admit`, which raises to refuse it. With `ref` None the
+    task's catalogue default is used, and a task without one has no model.
+    """
     if ref is None:
         try:
-            default = catalogue.default(spec.name)
+            default = catalogue.default(task)
         except UnknownModel:
             return None, None
         ref = default.ref
     entry = next((e for e in catalogue.entries if e.id == ref.id), None) if ref.source == "hf" else None
     if entry is not None and ref.ref == entry.revision:
         return ResolvedModel(ref=ref, identity=entry.revision, license=entry.license), entry
-    if ref.source == "hf":
-        profile.check_source(ref.id, catalogue)
-    resolved = resolve(ref, resolver=replace(PROCESS_RESOLVER, network=profile.network))
+    if ref.source == "hf" and admit is not None:
+        admit(ref.id)
+    resolved = resolve(ref, resolver=resolver)
     if entry is None or resolved.identity != entry.revision:
         return resolved, None
     return resolved.model_copy(update={"license": entry.license}), entry

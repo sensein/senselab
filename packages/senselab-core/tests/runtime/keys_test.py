@@ -5,7 +5,8 @@ from dataclasses import replace
 import pytest
 from senselab_core.kernel.declare import BackendParams, BackendSpec, Env, TaskParams, TaskSpec
 from senselab_core.kernel.identity import ExecutionContext
-from senselab_core.runtime.keys import Call, Placement, build_key
+from senselab_core.kernel.plan import slice_identity
+from senselab_core.runtime.keys import Call, MissingProfileSlice, Placement, build_key, profile_slices
 from senselab_core.testing.contracts import BASE_CONTEXT
 
 TASK = TaskSpec(name="t", version="1", kind="transform", inputs={"audio": "Audio"}, outputs={}, params=TaskParams)
@@ -71,3 +72,18 @@ def test_key_ignores_context_through_builder() -> None:
     assert build_key(CALL, replace(placement, device="cuda"), other).digest() == key.digest()
     with pytest.raises(TypeError, match="ExecutionContext"):
         build_key(CALL, placement, BASE_CONTEXT)  # type: ignore[arg-type]
+
+
+@pytest.mark.logic
+def test_declared_slices_reach_the_key_by_identity() -> None:
+    """A task's declared slices are cut by dotted path, keyed by identity, and enter the key; nothing else is read."""
+    reads = TASK.model_copy(update={"profile_slices": ("run.agg.name", "dataset.lexicon")})
+    cut = profile_slices(reads, {"agg": {"name": "mean"}, "x": 1}, {"lexicon": ["a"], "y": 2})
+    assert cut == {"run.agg.name": slice_identity("mean"), "dataset.lexicon": slice_identity(["a"])}
+    assert profile_slices(reads, {"agg": {"name": "mean"}}, {"lexicon": ["a"]}) == cut
+    key = build_key(replace(CALL, profile_slices=cut), _placement(), CONTEXT)
+    assert dict(key.profile_slices) == cut
+    with pytest.raises(MissingProfileSlice, match="no dataset profile"):
+        profile_slices(reads, {"agg": {"name": "mean"}})
+    with pytest.raises(MissingProfileSlice, match="'name'"):
+        profile_slices(reads, {"agg": {}}, {"lexicon": []})

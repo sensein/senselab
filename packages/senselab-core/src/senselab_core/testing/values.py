@@ -68,6 +68,7 @@ from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.graph import Edge, Graph, GraphIssue, Node
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ModelRef, ResolvedModel
 from senselab_core.kernel.license import License
+from senselab_core.kernel.plan import LogicalPlan, slice_identity
 from senselab_core.kernel.results import (
     Annotation,
     Embedding,
@@ -1087,7 +1088,34 @@ def _register_dataset_samples() -> None:
     )
 
 
+def _register_plan_samples() -> None:
+    node = Node(id="n", task="t.score", task_version="1", backend_params={"b": {"beam": 2}})
+    graph = Graph(inputs={"x": "list[json]"}, nodes=(node,), edges=(Edge(source="input.x", target="n.x", kind="map"),))
+    model = ResolvedModel(ref=ModelRef.parse(f"org/m@{_COMMIT}"), identity=_COMMIT, license=_license())
+    register_samples(
+        LogicalPlan,
+        lambda: [
+            LogicalPlan(
+                graph=graph,
+                models={"n": model},
+                profile_slices={"n": {"dataset.lexicon": slice_identity(["a"])}},
+                manifest_digest="ab" * 32,
+                bind={"x": "utterance"},
+                reuse="exact",
+            ),
+            LogicalPlan(graph=Graph(), models={}, profile_slices={}, manifest_digest="cd" * 32, reuse="equivalent"),
+        ],
+        invalid_updates=[
+            {"format": "logical-plan@2.0"},
+            {"models": {"z": None}},
+            {"reuse": "loose"},
+            {"manifest_digest": ""},
+        ],
+    )
+
+
 _register_kernel_samples()
 _register_graph_samples()
 _register_dataset_samples()
+_register_plan_samples()
 _register_runtime_samples()

@@ -60,6 +60,10 @@ InputIdentity = ContentIdentity | OutputIdentity
 ProfileSliceIdentity = Annotated[str, StringConstraints(pattern=r"^profile:[0-9a-f]{64}$")]
 """The identity of a profile slice a call reads: `profile:` and a 64-hex digest."""
 
+SliceName = Annotated[str, StringConstraints(pattern=r"^(run|dataset)(\.[A-Za-z_][A-Za-z0-9_-]*)+$")]
+"""A profile slice a task reads: `run.<path>` in the run config's settings or `dataset.<path>` in the dataset
+profile, `<path>` a dotted key path."""
+
 
 class UnpinnedModel(ValueError):
     """A model whose identity does not pin its weights was asked for a key identity."""
