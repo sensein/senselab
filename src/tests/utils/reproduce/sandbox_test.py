@@ -496,3 +496,96 @@ def test_a_nested_user_namespace_cannot_make_a_read_only_root_writable(tmp_path:
     assert res["remount_rw"] is False and res["bind_rw"] is False
     assert res["write_root"] is False and res["write_bound"] is False
     assert not (root / "escape-root").exists() and not (other / "escape-bound").exists()
+
+
+def _mountinfo(*mounts: tuple[str, str]) -> bytes:
+    return b"".join(
+        f"{i} 1 0:{i} / {path} rw,relatime - {fstype} none rw\n".encode() for i, (path, fstype) in enumerate(mounts, 30)
+    )
+
+
+def _run_sweep(
+    monkeypatch: pytest.MonkeyPatch,
+    mounts: list[tuple[str, str]],
+    refuse: dict[str, int],
+    unreachable: tuple[str, ...] = (),
+) -> tuple[list[str], str | None]:
+    """Execute `SWEEP` against a fake mount table; `refuse` maps a mount point to the errno its remount fails with.
+
+    Returns the mount points it tried to remount, and its fatal message (None when it finished cleanly).
+    """
+    import builtins
+    import io
+    import types
+
+    tried: list[str] = []
+    errno_box = [0]
+
+    class _Mount:
+        argtypes: list[Any] = []
+
+        def __call__(self, _src: Any, path: bytes, *_rest: Any) -> int:
+            tried.append(path.decode())
+            errno_box[0] = refuse.get(path.decode(), 0)
+            return -1 if errno_box[0] else 0
+
+    fake_ctypes = types.SimpleNamespace(
+        CDLL=lambda *a, **k: types.SimpleNamespace(mount=_Mount()),
+        c_char_p=bytes,
+        c_ulong=int,
+        c_void_p=int,
+        get_errno=lambda: errno_box[0],
+    )
+    real_open, real_stat = builtins.open, __import__("os").stat
+
+    def fake_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+        if file == "/proc/self/mountinfo":
+            return io.BytesIO(_mountinfo(*mounts))
+        return real_open(file, *args, **kwargs)
+
+    def fake_stat(path: Any, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(path, bytes) and path.decode() in unreachable:
+            raise PermissionError(13, "denied")
+        return real_stat("/" if isinstance(path, bytes) else path, *args, **kwargs)
+
+    monkeypatch.setitem(sys.modules, "ctypes", fake_ctypes)
+    monkeypatch.setattr(builtins, "open", fake_open)
+    monkeypatch.setattr("os.stat", fake_stat)
+    monkeypatch.setattr(sys, "argv", ["sweep", ",".join(sorted(sandbox.PSEUDO_FS))])
+    err = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", err)
+    try:
+        exec(compile(sandbox.SWEEP, "sweep", "exec"), {"__name__": "sweep"})  # noqa: S102
+    except SystemExit as exc:
+        assert exc.code == 1
+        return tried, err.getvalue()
+    return tried, None
+
+
+def test_sweep_skips_host_mounts_under_proc(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Host submounts under ``/proc/`` are covered by the fresh ``/proc``: never remounted, never fatal."""
+    mounts = [("/", "xfs"), ("/proc/sys/kernel/random/boot_id", "tmpfs"), ("/procfoo", "xfs")]
+    tried, fatal = _run_sweep(monkeypatch, mounts, {"/proc/sys/kernel/random/boot_id": 1})
+    assert fatal is None
+    assert tried == ["/", "/procfoo"]
+
+
+def test_sweep_skips_a_remount_refused_with_eacces_on_an_unreachable_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EACCES on a mount point the process cannot even stat means it is unreachable, so it is skipped."""
+    mounts = [("/", "xfs"), ("/root/.ssh", "xfs")]
+    tried, fatal = _run_sweep(monkeypatch, mounts, {"/root/.ssh": 13}, unreachable=("/root/.ssh",))
+    assert fatal is None and tried == ["/", "/root/.ssh"]
+
+
+def test_sweep_stays_fatal_for_eacces_on_a_reachable_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EACCES on a path the process can stat is a real refusal."""
+    _, fatal = _run_sweep(monkeypatch, [("/", "xfs"), ("/data", "xfs")], {"/data": 13})
+    assert fatal is not None and "xfs" in fatal and sandbox.SWEEP_REFUSED in fatal
+
+
+def test_sweep_stays_fatal_for_other_errors_even_on_an_unreachable_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only EACCES is excused; EPERM on a non-pseudo mount outside ``/proc/`` is fatal, pseudo types still pass."""
+    _, fatal = _run_sweep(monkeypatch, [("/", "xfs"), ("/x", "tmpfs")], {"/x": 1}, unreachable=("/x",))
+    assert fatal is not None and "tmpfs" in fatal
+    tried, fatal = _run_sweep(monkeypatch, [("/", "xfs"), ("/sys", "sysfs")], {"/sys": 1})
+    assert fatal is None and tried == ["/", "/sys"]
