@@ -663,26 +663,67 @@ DDK rate band from r36's 2.5th-97.5th percentiles, the per-task response medians
 rounded the count-in gap up to 3.0 s from a 2.9 s percentile); on the
 made-up dataset it writes a profile its run accepts.
 
-## Step 11 — a workflow defined by configuration (added 2026-11-03; after step 5; walkthrough first)
+## Step 11 — stages on and off, models by name (light version, agreed 2026-11-04; before step 7)
 
-**What it is for.** Steps 1-5 make what triage reads a dataset's (its tasks, its tuned values, its policy), but not
-the shape of the workflow: every recording goes through the same stages (ADMIT, PREPROCESS, routing, the SPEECH,
-VOICE and AIRWAY branches, REDACT, the corpus passes, COHORT, VERDICT), and a dataset can only switch a few features
-off with policy flags. So the values a dataset must supply follow B2AI's workflow, not the stages it runs: the
-made-up lab corpus of step 4, which has no DDK task and no recruited conditions, still has to set DDK and cohort
-values (found in step 5c). The question is how far the workflow itself becomes configuration:
-1. *Stages on and off.* A profile or run names the stages it runs; each profile value names the stage that reads it
-   (`data/profile_values.yaml` gains `stage:`), and a value is required only where its stage runs.
-2. *Named components.* A stage's implementation is chosen by name (a breath detector, a classifier, a recognizer
-   ensemble), so a dataset can swap one without forking senselab.
-3. *A dataset's own graph.* The stages and their order are configuration (a node registry; listed under "Not in
-   scope" in `design.md` until now).
+**What it is for.** Steps 1-5 make what triage reads a dataset's, but not which stages run or which models they use:
+the made-up lab corpus of step 4, with no breathing tasks and no recruited conditions, still has to supply AIRWAY and
+cohort values (found in step 5c), and a pediatric dataset cannot swap the adult speech recognizers without editing
+senselab. This step gives a dataset those two choices and nothing more; the larger modular redesign is a separate
+effort (`specs/20261104-triage-modular-design/design.md`, decision 3).
 
-Depth 1 is the proposal to start from; 2 and 3 are weighed in the walkthrough, against what a second dataset would
-need. The step is designed topic by topic with the user before any code, as steps 3-5 were.
+**11a — the stage table.** `run.py` drives a table of stages, each with its name, its call, the stages it needs and
+whether a workflow may leave it off, instead of hand-written calls. The order and the calls are unchanged, so a run
+writes the same store. ADMIT, PREPROCESS, SESSION, BACKGROUND, TAXONOMY, routing and VERDICT may not be off: every
+later stage and the verdict read them. AIRWAY, SPEECH, VOICE, QUALITY, COHORT, REDACT, REVIEW and SECOND_OPINION may.
+REDACT and REVIEW need SPEECH; SECOND_OPINION needs REVIEW.
 
-**Checks (to be settled in the walkthrough).** B2AI, running every stage, is unchanged; the made-up lab corpus runs
-without its unused stages and is not asked for their values.
+**11b — `workflow.stages`.** A config setting lists the stages that run; senselab's default lists all of them. A stage
+left off is recorded `skipped` with the note "off in this workflow", the same way an unrouted branch is recorded now;
+a stage whose need is off is skipped with "off in this workflow: needs SPEECH". A list that leaves off a stage that may
+not be off, or names an unknown stage, is refused before the run. The release stays conservative without new rules:
+with SPEECH off a recording with words has no transcript, so the verdict releases nothing (`no_transcript`), and with
+REDACT off a recording where PII was found is withheld (`redaction_owed`). Replay (`drive_decisions`) reads the same
+setting, and the corpus pass for a stage that is off (`extend_cohort`, `extend_quality`, `extend_llm_review`,
+`extend_second_opinion`) refuses to run.
+
+**11c — models by name.** Six model roles are already settings (the diarizer, the second diarizer, the speaker
+embedding, the separator, the PII detectors, the LLM reviewer and second opinion). The ones still fixed in code
+become settings with today's values as senselab's defaults:
+- `asr.recognizers`: the list of speech recognizers, each with a name, model, revision, how it times words and its
+  options; the consensus transcript is already built over however many there are, so one recognizer or three work;
+- `ast.model` and `ast.revision`: the AudioSet sound-event classifier (a checkpoint with the same label set);
+- `residual.enhancer`: the enhancement model the background residual is taken against.
+YAMNet, HeAR, the phonetic posteriorgram and SQUIM stay fixed: senselab has one implementation of each, so another
+model is a new component, not a setting (deferred with the modular design).
+
+**11d — values follow stages.** Each `data/profile_values.yaml` entry gains `stages:`, the optional stages that read
+it; an entry without it is read whatever runs. A required value is required only when one of its stages runs, so the
+start-of-run check and the template ask only for what the workflow reads. Assigned by the stage that owns the file
+or section (breathing and cough → AIRWAY, phonation → VOICE, speaker, DDK, PII and task speech → SPEECH, redaction →
+REDACT, cohort → COHORT, quality → QUALITY, the reviewer's flags → REVIEW, the second opinion's → SECOND_OPINION);
+where the verdict reads a value of an optional stage it must cope with the stage being off, which the 11e run checks.
+
+**11e — checks.** B2AI, running every stage, is unchanged: 5 paired fresh runs, the 192-run replay, and the baseline
+values check, as in 5e; the suite as a SLURM job. A profile extending the reference with AIRWAY, VOICE, QUALITY and
+COHORT off, and their values left blank, is accepted by the start-of-run check, and a run of it over recordings of
+each task kind completes with those stages skipped and the others' decisions unchanged.
+
+**Results (2026-11-04, branch `refactor/triage-workflow` off 6e546cfe6, evidence in
+`triage_env_2026_10_22/s11/`).**
+- B2AI unchanged: 5 paired fresh runs, same decisions and every store entity the same once entity ids (derived from
+  the run id) are normalized, as in 5e; the 192-run replay, 192/192 entity-identical and the same decisions; the
+  baseline values, unchanged except the six new keys (`asr.recognizers`, `ast.model`/`revision`,
+  `residual.enhancer.model`/`revision`, `workflow.stages`).
+- The speech-only profile (B2AI's, with AIRWAY, VOICE, QUALITY and COHORT off, their cohort and quality files removed,
+  SPEECH tasks only) passes the start check with nothing missing; over the DDK, Rainbow Passage and free-speech
+  recordings it completes with the four stages skipped as off, and each decision (pass, as is, same reasons) is the
+  full workflow's.
+- Found by that run and fixed: the verdict expected QUALITY's join whenever a background reading existed, so with
+  QUALITY off every recording went to review (user, 2026-11-04: option (a), a stage left off leaves no uncomputed
+  reading); and a config naming a cohort-conditions list the profile lacks failed VERDICT on every recording, now
+  refused by the start check. `verdict.cohort_conditions` is read for the reviewer's condition quotes, so its stage
+  is REVIEW, not COHORT.
+- Suite: 4,339 passed, 20 skipped (job 27899647).
 
 ## After this plan
 
@@ -691,5 +732,8 @@ without its unused stages and is not asked for their values.
   names a dataset's tasks.
 - **Fitting the rest programmatically:** step 10 fits the statistics of a pilot run; fitting the listened detector
   values (kind (c)) needs labelled recordings and train/test split support in senselab, a follow-up issue.
+- **A modular triage** (`specs/20261104-triage-modular-design/design.md`): stage descriptors and a workflow spec,
+  sub-workflows, corpus passes as workflows, PREPROCESS as tasks, the verdict as a fold, the explicit settings
+  context; weighed against pydra. A separate effort after step 11's light version.
 - **A shared store of dataset profiles** (user, 2026-11-03): a separate project where datasets publish and copy
   profiles. Out of scope until there is a second dataset.
