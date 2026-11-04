@@ -11,6 +11,7 @@ from senselab.audio.tasks.speech_to_text.token_confidence import word_prefix
 from senselab.audio.tasks.speech_to_text.window_confidence import (
     Decode,
     Window,
+    _decode_of,
     capture_decodes,
     capture_windows,
     ct2_window_logits,
@@ -126,7 +127,7 @@ class CT2Model:
 
 
 class Head:
-    """An output head: the `row` logits after a prefix, `(1, 1, vocab)`, shown to its forward hooks like a module."""
+    """An output head: the `row` logits after a prefix, `(1, query, vocab)`, shown to its hooks."""
 
     def __init__(self) -> None:
         """Hold no hooks."""
@@ -139,10 +140,10 @@ class Head:
         self.registered += 1
         return type("Handle", (), {"remove": lambda _: self.hooks.remove(hook)})()
 
-    def __call__(self, prefix: list[int]) -> Any:  # noqa: ANN401
-        """Return the logits after `prefix` and show them to the hooks."""
+    def __call__(self, prefix: list[int], query: int = 1) -> Any:  # noqa: ANN401
+        """Return the logits after `prefix` over `query` positions and show them to the hooks."""
         torch = importlib.import_module("torch")
-        out = torch.from_numpy(row(prefix))[None, None]
+        out = torch.from_numpy(row(prefix)).expand(query, -1)[None]
         for hook in list(self.hooks):
             hook(self, (prefix,), out)
         return out
@@ -173,7 +174,7 @@ class HFModel:
         prefix = decoder_input_ids[0].tolist()
         self.kwargs.append(kwargs)
         for k in range(len(ids)):
-            self.head(prefix + ids[:k])
+            self.head(prefix + ids[:k], len(prefix) if k == 0 else 1)
         if kwargs.get("return_dict_in_generate"):
             return type("Out", (), {"sequences": torch.tensor([prefix + ids]), "cross_attentions": ()})()
         return torch.tensor([ids[:-1] if ids[-1:] == [EOT] else ids])
@@ -633,6 +634,31 @@ def test_ct2_with_confidence_off_wraps_no_segment_and_holds_no_encoder_output() 
         assert engine.generate_greedy_with_attention == engine._segment
         engine.generate_with_repair_and_attention(object(), PROMPT)
     assert [w.encoded for w in windows] == [None]
+
+
+def _fake_steps(lengths: list[int]) -> tuple[Any, list[tuple[Any, int]], Any]:  # noqa: ANN401 - torch tensors
+    torch = pytest.importorskip("torch")
+    rows = [torch.randn(1, VOCAB) for _ in lengths]
+    return torch, list(zip(rows, lengths, strict=True)), torch.tensor([PROMPT + [1, 2]])
+
+
+@pytest.mark.contract
+def test_a_prefill_row_then_single_step_rows_are_scored() -> None:
+    """The first captured row is the prefill and each later row is one decode step: the decode is scored."""
+    torch, steps, sequences = _fake_steps([len(PROMPT), 1, 1])
+    decode = _decode_of((), {"decoder_input_ids": torch.tensor([PROMPT])}, sequences, steps)
+    assert decode is not None
+    assert decode.prefix == PROMPT and decode.generated == [1, 2]
+    logprobs = torch.log_softmax(torch.cat([row for row, _ in steps]).float(), dim=-1)
+    assert decode.own == pytest.approx([float(logprobs[0, 1]), float(logprobs[1, 2])])
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("lengths", [[len(PROMPT), len(PROMPT), 1], [1, 1, 1], [len(PROMPT), 1, 3]])
+def test_a_captured_row_that_is_not_the_prefill_or_one_step_leaves_the_decode_unscored(lengths: list[int]) -> None:
+    """A second prefill-length row, a first row that is not the prefill, or a later wide row yields no decode."""
+    torch, steps, sequences = _fake_steps(lengths)
+    assert _decode_of((), {"decoder_input_ids": torch.tensor([PROMPT])}, sequences, steps) is None
 
 
 def _tiny_whisper(language: str | None) -> Any:  # noqa: ANN401 - a randomly initialised transformers Whisper

@@ -196,11 +196,11 @@ def capture_decodes(model: Any) -> Iterator[Capture]:  # noqa: ANN401 - a transf
     if head is None or not callable(getattr(model, "generate", None)):
         yield capture
         return
-    steps: list[Any] | None = None
+    steps: list[tuple[Any, int]] | None = None
 
     def _hook(module: Any, inputs: Any, output: Any) -> None:  # noqa: ANN401 - a torch module and tensors
         if steps is not None:
-            steps.append(output[:, -1].detach().clone())
+            steps.append((output[:, -1].detach().clone(), int(output.shape[1])))
 
     def _generate(original: Callable[..., Any]) -> Callable[..., Any]:
         def call(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 - passthrough
@@ -241,16 +241,24 @@ def capture_decodes(model: Any) -> Iterator[Capture]:  # noqa: ANN401 - a transf
         handle.remove()
 
 
-def _decode_of(args: tuple[Any, ...], kwargs: dict[str, Any], result: Any, rows: list[Any]) -> Decode | None:  # noqa: ANN401
+def _decode_of(
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    result: Any,  # noqa: ANN401
+    steps: list[tuple[Any, int]],
+) -> Decode | None:
     import torch  # noqa: PLC0415 - torch loads only where logits are scored
 
     sequences = getattr(result, "sequences", result)
-    if not rows or not isinstance(sequences, torch.Tensor) or sequences.shape[0] != 1:
+    if not steps or not isinstance(sequences, torch.Tensor) or sequences.shape[0] != 1:
         return None
+    rows = [row for row, _ in steps]
     if any(row.shape[0] != 1 for row in rows):
         return None
     given = kwargs.get("decoder_input_ids")
     prefix = [] if given is None else [int(t) for t in given[0].tolist()]
+    if steps[0][1] != len(prefix) or any(length != 1 for _, length in steps[1:]):
+        return None
     sequence = [int(t) for t in sequences[0].tolist()]
     generated = sequence[len(prefix) :] if sequence[: len(prefix)] == prefix else sequence
     if len(rows) - len(generated) not in (0, 1):
