@@ -347,6 +347,17 @@ create `packages/senselab/tests/data/tier_budgets.yaml`; tests.
   of decoding, a follow task exposes the encoder output from the library and scores from it; otherwise the row closes
   with the measurement. Spec commit; push.
 
+### Task 4c: CrisperWhisper confidence from the decode's own logits (R-202)
+
+**Model:** opus implements; opus reviews. **Tier:** logic local; env and limits on ORCD. **Implements:** R-202 (follow
+task of R-196's measurement). **Depends on:** Task 4b.
+
+- [ ] **Step 1:** expose the encoder output and the per-step logits of the final decode of each window from the
+  library (both engines), and compute token and word confidences from them; the teacher-forcing pass goes.
+- [ ] **Step 2:** the confidences equal the teacher-forced ones within the comparison thresholds on the Task 4a
+  long-form item; re-measure with `benchmarks/crisperwhisper_confidence_cost.py` on CPU and H100 (ruling P3-59);
+  record the share in R-202.
+
 ### Task 5: The graph document (`graph@1.0`)
 
 **Model:** opus implements (graph format); fresh opus reviews. **Tier:** logic, contract. **Implements:** ADR-001,
@@ -1193,6 +1204,9 @@ them. A ruling that changes an ADR decision takes effect only through the dated 
   part only. Delivered as #906 (closures only) and four follow-up pydra PRs: a version-neutral AST encoding with
   docstring stripping; global values and the tiers; the dependency record and the `consistent` default; `version=`
   with the source guard.
+- **P3-59** ruling: Task 4b's CPU timing runs non-exclusive on the private CPU node (an exclusive node exceeds the
+  group's CPU cap, and the general partition's exclusive start was 11 days out); the decision reads the on/off share,
+  which alternation within one job keeps robust to contention; absolute times are upper bounds; node load is recorded.
 - **P3-49** ruling: The spike and Task 9b assert that no `_result.pklz` is written; `_job.pklz` may remain until B2
   and D2 land, and its absence is not claimed in Phase 3.
 - **P3-50** ruling: A node's `backend_params` are keyed by backend name; only the placed backend's entry reaches its
