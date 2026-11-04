@@ -635,7 +635,8 @@ def test_ct2_with_confidence_off_wraps_no_segment_and_holds_no_encoder_output() 
     assert [w.encoded for w in windows] == [None]
 
 
-def _tiny_whisper() -> Any:  # noqa: ANN401 - a randomly initialised transformers Whisper
+def _tiny_whisper(language: str | None) -> Any:  # noqa: ANN401 - a randomly initialised transformers Whisper
+    """A random-init Whisper with CrisperWhisper's multilingual generation config; no `language` detects one."""
     transformers = pytest.importorskip("transformers")
     torch = importlib.import_module("torch")
     torch.manual_seed(0)
@@ -651,18 +652,30 @@ def _tiny_whisper() -> Any:  # noqa: ANN401 - a randomly initialised transformer
         max_target_positions=64,
         num_mel_bins=80,
     )
-    return transformers.WhisperForConditionalGeneration(config).eval()
+    model = transformers.WhisperForConditionalGeneration(config).eval()
+    generation = model.generation_config
+    generation.lang_to_id = {"<|en|>": 50259, "<|de|>": 50261}
+    generation.task_to_id = {"transcribe": 50360, "translate": 50359}
+    generation.is_multilingual = True
+    generation.no_timestamps_token_id = 50364
+    generation.forced_decoder_ids = None
+    generation.language = language
+    return model
 
 
 @pytest.mark.env
+@pytest.mark.parametrize("language", [None, "en"])
 @pytest.mark.parametrize("as_dict", [False, True])
-def test_a_real_whisper_generate_returns_the_same_and_its_steps_are_recorded(as_dict: bool) -> None:
+def test_a_real_whisper_generate_returns_the_same_and_its_steps_are_recorded(
+    as_dict: bool, language: str | None
+) -> None:
     """Wrapped and unwrapped calls return the same; each id is scored from HF's own raw logits of that step.
 
-    A plain call returns the ids without the prompt or the end token; its end token's step is the `tail`.
+    A plain call returns the ids without the prompt or the end token; its end token's step is the `tail`. Without a
+    language, `generate` first detects one, and that forward is not a step.
     """
     torch = pytest.importorskip("torch")
-    model = _tiny_whisper()
+    model = _tiny_whisper(language)
     transformers = importlib.import_module("transformers")
     eos = model.generation_config.eos_token_id
 

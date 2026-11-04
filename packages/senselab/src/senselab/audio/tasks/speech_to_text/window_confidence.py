@@ -186,10 +186,10 @@ def _patched(target: Any, wrappers: dict[str, Callable[[Callable[..., Any]], Cal
 def capture_decodes(model: Any) -> Iterator[Capture]:  # noqa: ANN401 - a transformers model
     """Record every `model.generate` call of the block as a `Decode`, leaving the call and its result unchanged.
 
-    A forward hook on the output head (`get_output_embeddings`) keeps, during a `generate` call only, the raw
-    logits of each step's last position. A call is recorded when its batch is one and its steps are its returned
-    ids, or its ids and one more (an end token the result leaves out). A model without a head or `generate` records
-    nothing.
+    A forward hook on the output head (`get_output_embeddings`) keeps, during a `generate` call and outside its
+    `detect_language`, the raw logits of each step's last position. A call is recorded when its batch is one and
+    its steps are its returned ids, or its ids and one more (an end token the result leaves out). A model without a
+    head or `generate` records nothing.
     """
     capture = Capture()
     head = model.get_output_embeddings() if callable(getattr(model, "get_output_embeddings", None)) else None
@@ -202,32 +202,43 @@ def capture_decodes(model: Any) -> Iterator[Capture]:  # noqa: ANN401 - a transf
         if steps is not None:
             steps.append(output[:, -1].detach().clone())
 
-    def _generate(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 - passthrough
-        nonlocal steps
-        steps = []
-        try:
-            result = original(*args, **kwargs)
-        finally:
-            rows, steps = steps, None
-        started = time.perf_counter()
-        decode = _decode_of(args, kwargs, result, rows)
-        if decode is not None:
-            capture.decodes.append(decode)
-        capture.scoring_s += time.perf_counter() - started
-        return result
+    def _generate(original: Callable[..., Any]) -> Callable[..., Any]:
+        def call(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 - passthrough
+            nonlocal steps
+            steps = []
+            try:
+                result = original(*args, **kwargs)
+            finally:
+                rows, steps = steps, None
+            started = time.perf_counter()
+            decode = _decode_of(args, kwargs, result, rows)
+            if decode is not None:
+                capture.decodes.append(decode)
+            capture.scoring_s += time.perf_counter() - started
+            return result
 
-    original = model.generate
-    had_own = "generate" in vars(model)
+        return call
+
+    def _unrecorded(original: Callable[..., Any]) -> Callable[..., Any]:
+        def call(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 - passthrough
+            nonlocal steps
+            paused, steps = steps, None
+            try:
+                return original(*args, **kwargs)
+            finally:
+                steps = paused
+
+        return call
+
+    wrappers: dict[str, Callable[[Callable[..., Any]], Callable[..., Any]]] = {"generate": _generate}
+    if callable(getattr(model, "detect_language", None)):
+        wrappers["detect_language"] = _unrecorded
     handle = head.register_forward_hook(_hook)
-    model.generate = _generate
     try:
-        yield capture
+        with _patched(model, wrappers):
+            yield capture
     finally:
         handle.remove()
-        if had_own:
-            model.generate = original
-        else:
-            del model.generate
 
 
 def _decode_of(args: tuple[Any, ...], kwargs: dict[str, Any], result: Any, rows: list[Any]) -> Decode | None:  # noqa: ANN401
