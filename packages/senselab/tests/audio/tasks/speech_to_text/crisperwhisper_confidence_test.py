@@ -241,6 +241,55 @@ def test_a_word_count_that_disagrees_with_the_kept_words_leaves_the_mean_unscore
     assert decoded.mean is None and decoded.confidences == [None, None]
 
 
+class LongFormEngine(Engine):
+    """Two windows: the first decodes `hello there`, the second `llo there` with no leading space on its first piece."""
+
+    def generate_with_repair_and_attention(
+        self,
+        features: object,
+        prompt_tokens: list[int],
+        **kwargs: Any,  # noqa: ANN401
+    ) -> tuple[list[int], str]:
+        """Return the next window's decode."""
+        self.calls = getattr(self, "calls", 0) + 1
+        return ([1, 2, 3, EOT] if self.calls == 1 else [2, 3, EOT]), "attention"
+
+
+class LongFormLibrary(CrisperWhisper):
+    """A long-form library model: window one keeps only `hello`, window two, the final one, is whole."""
+
+    def __init__(self) -> None:
+        """Build the two-window engine."""
+        self._engine = LongFormEngine("ct2", "clean")
+
+    def transcribe(self, path: str, **kwargs: Any) -> Result:  # noqa: ANN401
+        """Decode two windows and return the words and chunks the merge keeps."""
+        for _ in range(2):
+            self._engine.generate_with_repair_and_attention(object(), PROMPT, max_length=8)
+
+        class Merged(Result):
+            words = [Word("hello", 0.0, 0.4), Word("llo", 0.5, 0.6), Word("there", 0.6, 0.9)]
+            chunks: list[Chunk] = [Chunk("hello"), Chunk("llo there")]
+
+        return Merged()
+
+
+@pytest.mark.env
+def test_a_non_final_window_is_cut_at_the_merge_and_each_window_is_grouped_alone() -> None:
+    """Words past the merge's cut are not scored, and a window's first piece without a space starts its own word."""
+    pytest.importorskip("torch")
+    library = cw.Library.__new__(cw.Library)
+    library.engine, library.model = "ct2", LongFormLibrary()
+    decoded = library.transcribe(numpy.zeros(160), "en", 8)
+    shifted = LOGITS - LOGITS.max(axis=1, keepdims=True)
+    lp = shifted - numpy.log(numpy.exp(shifted).sum(axis=1, keepdims=True))
+    first, second = lp[[0, 1], [1, 2]], lp[[0, 1], [2, 3]]
+    assert decoded.confidences == pytest.approx(
+        [float(numpy.exp(first.sum())), float(numpy.exp(second[0])), float(numpy.exp(second[1]))], rel=1e-5
+    )
+    assert decoded.mean == pytest.approx(float(numpy.exp((first.mean() + second.mean()) / 2)), rel=1e-5)
+
+
 @pytest.mark.logic
 def test_windows_keep_decode_order_and_the_engine_is_left_as_it_was() -> None:
     """A replacement updates its own window in place; the wrappers pass results through and are removed on exit."""

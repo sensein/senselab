@@ -250,9 +250,12 @@ class Library:
         mean = None
         if blocks:
             merged = merge_confidence_blocks(blocks)
-            scored = (
-                word_confidences(merged["tokens"], merged["token_logprob"], decode, special) if merged["tokens"] else []
-            )
+            scored = [
+                c
+                for block in blocks
+                if block["tokens"]
+                for c in word_confidences(block["tokens"], block["token_logprob"], decode, special)
+            ]
             if len(scored) == len(words) and (not kept or sum(kept) == len(words)):
                 confidences = list(scored)
                 mean = None if merged["avg_logprob"] is None else math.exp(merged["avg_logprob"])
