@@ -524,7 +524,7 @@ def _run_sweep(
     class _Mount:
         argtypes: list[Any] = []
 
-        def __call__(self, _src: Any, path: bytes, *_rest: Any) -> int:
+        def __call__(self, _src: Any, path: bytes, *_rest: Any) -> int:  # noqa: ANN401
             tried.append(path.decode())
             errno_box[0] = refuse.get(path.decode(), 0)
             return -1 if errno_box[0] else 0
@@ -538,12 +538,12 @@ def _run_sweep(
     )
     real_open, real_stat = builtins.open, __import__("os").stat
 
-    def fake_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+    def fake_open(file: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         if file == "/proc/self/mountinfo":
             return io.BytesIO(_mountinfo(*mounts))
         return real_open(file, *args, **kwargs)
 
-    def fake_stat(path: Any, *args: Any, **kwargs: Any) -> Any:
+    def fake_stat(path: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         if isinstance(path, bytes) and path.decode() in unreachable:
             raise PermissionError(13, "denied")
         return real_stat("/" if isinstance(path, bytes) else path, *args, **kwargs)
