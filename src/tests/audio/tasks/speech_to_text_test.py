@@ -194,7 +194,7 @@ def test_pasketti_word_routes_to_qwen_backend(monkeypatch: pytest.MonkeyPatch) -
         return ["ok"]
 
     monkeypatch.setattr(QwenASR, "transcribe_with_qwen", fake)
-    model = HFModel(path_or_uri="drivendata/pasketti-word", revision="main")
+    model: HFModel = HFModel(path_or_uri="drivendata/pasketti-word", revision="main")
     lang = Language(language_code="en")
     audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000)
     out = transcribe_audios([audio], model=model, language=lang, return_timestamps=True)
