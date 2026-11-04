@@ -73,14 +73,20 @@ class LogicalPlan(Formatted):
 def plan_hash(plan: LogicalPlan) -> str:
     """Return `identity_digest("logical-plan@1", fields)`, the run id, over every field but `format`.
 
-    The graph enters as its `graph_digest`.
+    The graph enters as the `graph_digest` of its nodes without their `model` references, and each model as its
+    `key_identity()` (hub repo and commit, or the weights digest), so neither the reference text, the source path nor
+    the license reaches the hash.
 
     Raises:
         ValueError: if the plan, or its graph, declares a later minor than this reader's.
+        UnpinnedModel: if a model is not pinned.
     """
     if later_minor(LOGICAL_PLAN_FORMAT, plan.format):
         raise ValueError(
             f"a {plan.format} plan has fields a {LOGICAL_PLAN_FORMAT} reader does not hold; it has no hash"
         )
-    form: dict[str, Any] = plan.model_dump(mode="json", exclude={"format", "graph"})
-    return identity_digest(PLAN_HASH_TAG, {**form, "graph": graph_digest(plan.graph)})
+    nodes = tuple(n.model_copy(update={"model": None}) for n in plan.graph.nodes)
+    bare = plan.graph.model_copy(update={"nodes": nodes})
+    pins = {n: None if m is None else m.key_identity().model_dump(mode="json") for n, m in plan.models.items()}
+    form: dict[str, Any] = plan.model_dump(mode="json", exclude={"format", "graph", "models"})
+    return identity_digest(PLAN_HASH_TAG, {**form, "models": pins, "graph": graph_digest(bare)})

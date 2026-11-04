@@ -26,9 +26,10 @@ from senselab_worker.canonical import jcs_dumps
 from senselab_worker.model_cache import ModelCache, ModelKey
 
 from senselab_core.kernel import prov as kprov
-from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, value_digest
+from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, thawed, value_digest
 from senselab_core.kernel.declare import (
     REGISTRY,
+    BackendParams,
     BackendSpec,
     DuplicateDeclaration,
     Registry,
@@ -43,6 +44,7 @@ from senselab_core.kernel.identity import (
     LogicalKey,
     ModelRef,
     OutputIdentity,
+    Params,
     ResolvedModel,
     ReusePolicy,
     text_identity_fields,
@@ -100,7 +102,8 @@ class TaskCall(BaseModel):
     Built from a mapping (`{task, inputs, params, model, backend_params}`, the one call shape), `params` is
     validated against the declared task's params, `model` is parsed from its reference string and an absent
     `task_version` is the declared one; tasks are looked up in the validation context's `registry`, else the
-    packaged one. `backend_params` are held as given and validated against the backend `run_call` chooses.
+    packaged one. `backend_params` maps a backend name to that backend's params, held as given; only the entry of the
+    backend `run_call` chooses is read, and validated against it (no entry is that backend's defaults).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
@@ -110,7 +113,9 @@ class TaskCall(BaseModel):
     inputs: Inputs
     params: TaskParams
     model: ModelRef | None = None
-    backend_params: Inputs = FrozenMapping({})
+    backend_params: Annotated[Mapping[str, Params], AfterValidator(FrozenMapping), PlainSerializer(thawed)] = (
+        FrozenMapping({})
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -167,9 +172,10 @@ class RunConfig:
     settings: Mapping[str, Any] = field(default_factory=lambda: FrozenMapping({}))
 
     def __post_init__(self) -> None:
-        """Refuse a `verify` outside [0, 1]."""
+        """Refuse a `verify` outside [0, 1], and hold `settings` read-only."""
         if not 0.0 <= self.verify <= 1.0:
             raise ValueError(f"verify is a fraction in [0, 1], got {self.verify}")
+        object.__setattr__(self, "settings", FrozenMapping(dict(self.settings)))
 
 
 @dataclass(frozen=True)
@@ -386,7 +392,7 @@ def run_call(
     model, hardware, placement = _place(spec, call.model, profile)
     backend = placement.backend
     code_license = _code_license(run, backend, model)
-    placement = replace(placement, backend_params=backend.params.model_validate(dict(call.backend_params)))
+    placement = replace(placement, backend_params=_placed_params(call, backend))
     bound = _bound(spec, call)
     env = packaged().open_env(backend, profile)
     expected = _expected(backend, env, model) if backend.env.kind == "server" else None
@@ -432,6 +438,11 @@ def run_call(
         *_execution(key, context, profile, identities, output_identity, started, attributes),
     )
     return Result(decoded, output_identity, key, context, placement, None)
+
+
+def _placed_params(call: TaskCall, backend: BackendSpec) -> BackendParams:
+    """Return the call's entry for `backend` validated against its params; no entry is its defaults."""
+    return backend.params.model_validate(dict(call.backend_params.get(backend.name, {})))
 
 
 def _host_fields(

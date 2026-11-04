@@ -5,7 +5,7 @@ builds the input manifest, so the plan and its hash are the same on every host.
 """
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from senselab_core.kernel.dataset import Dataset, InputManifest, ManifestRow
@@ -25,6 +25,15 @@ CALL_NODE = "call"
 _LIST = re.compile(r"^list\[(.+)\]$")
 
 
+class RecordBinding(ValueError):
+    """A graph over a dataset whose inputs are not one record list fed by `map` edges; `ports` names its inputs."""
+
+    def __init__(self, ports: tuple[str, ...], message: str) -> None:
+        """Hold the graph's input `ports` and name them in the message."""
+        super().__init__(f"graph inputs {list(ports)}: {message}")
+        self.ports = ports
+
+
 class InvalidGraph(ValueError):
     """A graph `validate` finds issues in; `issues` holds them."""
 
@@ -39,7 +48,7 @@ def one_node_graph(call: TaskCall, registry: Registry) -> Graph:
 
     The node is `call`; the graph input of the first declared input port is `list[T]` and joined by a `map` edge,
     every other is `T` and joined by a plain edge, and each output port is a graph output of the same name. The
-    call's `backend_params`, when given, are the entry of every backend declared for the task.
+    node holds the call's params, its per-backend `backend_params` and its model reference as given.
     """
     spec = registry.spec(call.task)
     ports = list(spec.inputs.items())
@@ -48,24 +57,34 @@ def one_node_graph(call: TaskCall, registry: Registry) -> Graph:
         Edge(source=f"input.{port}", target=f"{CALL_NODE}.{port}", kind="map" if i == 0 else "plain")
         for i, (port, _) in enumerate(ports)
     )
-    backend_params = (
-        {b.name: dict(call.backend_params) for b in registry.backends(spec.name)} if call.backend_params else {}
-    )
     node = Node(
         id=CALL_NODE,
         task=call.task,
         task_version=call.task_version,
         params=call.params.model_dump(mode="json"),
-        backend_params=backend_params,
+        backend_params=call.backend_params,
         model=None if call.model is None else str(call.model),
     )
     outputs = {port: f"{CALL_NODE}.{port}" for port in spec.outputs}
     return Graph(inputs=inputs, nodes=(node,), edges=edges, outputs=outputs)
 
 
-def _item_type(port_type: str) -> str:
-    listed = _LIST.match(port_type)
-    return listed[1] if listed else port_type
+def _record_port(graph: Graph) -> tuple[str, str]:
+    """Return the one graph input a dataset's records bind, and the type each record gives it.
+
+    Raises:
+        RecordBinding: the graph has no input or more than one, or its input is not a `list[T]` every edge of which
+            is a `map` edge.
+    """
+    ports = tuple(sorted(graph.inputs))
+    if len(ports) != 1:
+        raise RecordBinding(ports, "a graph over a dataset has exactly one input, the record list")
+    port = ports[0]
+    listed = _LIST.match(graph.inputs[port])
+    kinds = {e.kind for e in graph.edges if e.source == f"input.{port}"}
+    if listed is None or kinds != {"map"}:
+        raise RecordBinding(ports, f"the record list is a list[T] fed only by map edges, got {graph.inputs[port]}")
+    return port, listed[1]
 
 
 def _manifest(
@@ -75,7 +94,8 @@ def _manifest(
     if dataset is not None:
         if call is not None and call.inputs:
             raise ValueError("a call planned over a dataset takes its inputs from the records; it gives none itself")
-        return build_manifest(dataset, {port: _item_type(t) for port, t in graph.inputs.items()}, bind=bind)
+        port, item = _record_port(graph)
+        return build_manifest(dataset, {port: item}, bind=bind)
     if bind:
         raise ValueError("bind names the record inputs of a dataset; there is no dataset")
     if call is None or spec is None:
@@ -88,15 +108,29 @@ def _manifest(
     return InputManifest(rows=(ManifestRow(id=ITEM_ID, entities={}, inputs=identities),))
 
 
-def _pinned(spec: TaskSpec, node: Node, catalogue: Catalogue, resolver: Resolver) -> ResolvedModel | None:
+def _completed(graph: Graph, registry: Registry) -> Graph:
+    """Return `graph` with each node's params validated against its task and completed with their defaults.
+
+    Raises:
+        pydantic.ValidationError, InconsistentInputs: as `TaskCall.parse_params`.
+    """
+    nodes = tuple(
+        n.model_copy(update={"params": TaskCall.parse_params(n.task, n.params, registry).model_dump(mode="json")})
+        for n in graph.nodes
+    )
+    return graph.model_copy(update={"nodes": nodes})
+
+
+def _pinned(
+    spec: TaskSpec, node: Node, catalogue: Catalogue, resolver: Resolver, admit: Callable[[str], None] | None
+) -> ResolvedModel | None:
     """Return the node's model pinned: a hub model's reference names the commit its identity is.
 
     Raises:
         UnpinnedModel: the model's identity does not pin its weights.
     """
-    model, _ = pin_model(
-        spec.name, None if node.model is None else ModelRef.parse(node.model), catalogue, resolver=resolver
-    )
+    ref = None if node.model is None else ModelRef.parse(node.model)
+    model, _ = pin_model(spec.name, ref, catalogue, resolver=resolver, admit=admit)
     if model is None:
         return None
     model.key_identity()
@@ -114,20 +148,24 @@ def resolve(  # noqa: PLR0913 - the target and records, then keyword-only resolu
     dataset_profile: Mapping[str, Any] | None = None,
     bind: Mapping[str, str] | None = None,
     resolver: Resolver = PROCESS_RESOLVER,
+    admit: Callable[[str], None] | None = None,
 ) -> tuple[LogicalPlan, InputManifest]:
     """Return the logical plan of `target` over `dataset`, and the input manifest whose digest it holds.
 
     A task call becomes `one_node_graph`; without a dataset its own inputs are the one record, `call`. Each node's
-    model is the catalogue's pin, or `resolve()`d through `resolver` (the task's catalogue default when the node names
-    none); each node's declared profile slices are cut from `config.settings` and `dataset_profile`
-    (`keys.profile_slices`). `bind` maps graph inputs to the record inputs they read (`build_manifest`). The plan's
-    reuse policy is `config.reuse`.
+    params are completed with their declared defaults. Each node's model is the catalogue's pin, or `resolve()`d
+    through `resolver` once `admit` (a source allowlist, raising to refuse) accepts its hub id; a node naming none
+    takes the task's catalogue default. Each node's declared profile slices are cut from `config.settings` and
+    `dataset_profile` (`keys.profile_slices`). Over a dataset the graph has one input, the record list, and `bind`
+    maps it to the record input it reads (`build_manifest`). The plan's reuse policy is `config.reuse`. Models and
+    slices are resolved before any input is read.
 
     Raises:
         InvalidGraph: the graph has issues against the packaged registry.
-        ValueError: the records do not bind the graph's inputs, or a call over a dataset gives inputs itself.
+        RecordBinding: over a dataset, the graph's inputs are not one record list fed by `map` edges.
+        ValueError: the records do not bind the graph's input, or a call over a dataset gives inputs itself.
         MissingProfileSlice: a declared profile slice is absent.
-        UnpinnedModel, RevisionResolutionError, ModelResolutionError: a model cannot be pinned.
+        UnpinnedModel, RevisionResolutionError, ModelResolutionError: a model cannot be pinned; or what `admit` raises.
     """
     registry, catalogue = packaged().registry, packaged().catalogue
     call = target if isinstance(target, TaskCall) else None
@@ -136,12 +174,15 @@ def resolve(  # noqa: PLR0913 - the target and records, then keyword-only resolu
     issues = validate(graph, registry)
     if issues:
         raise InvalidGraph(issues)
-    manifest = _manifest(graph, dataset, call, spec, bind or {})
+    graph = _completed(graph, registry)
     specs = {n.id: registry.spec(n.task) for n in graph.nodes}
+    models = {n.id: _pinned(specs[n.id], n, catalogue, resolver, admit) for n in graph.nodes}
+    slices = {n.id: profile_slices(specs[n.id], config.settings, dataset_profile) for n in graph.nodes}
+    manifest = _manifest(graph, dataset, call, spec, bind or {})
     plan = LogicalPlan(
         graph=graph,
-        models={n.id: _pinned(specs[n.id], n, catalogue, resolver) for n in graph.nodes},
-        profile_slices={n.id: profile_slices(specs[n.id], config.settings, dataset_profile) for n in graph.nodes},
+        models=models,
+        profile_slices=slices,
         manifest_digest=manifest.digest(),
         bind=bind or {},
         reuse=config.reuse,

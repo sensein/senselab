@@ -6,15 +6,24 @@ import pytest
 from pydantic import ValidationError
 from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.kernel.identity import ModelRef, ResolvedModel, ReusePolicy
+from senselab_core.kernel.license import License
 from senselab_core.kernel.plan import LogicalPlan, plan_hash, slice_identity
+from senselab_core.runtime.licenses import license_record
 
 COMMIT = "a" * 40
 MANIFEST = "b" * 64
 
 
-def _graph(params: dict[str, Any] | None = None, backend_params: dict[str, Any] | None = None) -> Graph:
+def _graph(
+    params: dict[str, Any] | None = None, backend_params: dict[str, Any] | None = None, model: str | None = None
+) -> Graph:
     node = Node(
-        id="n", task="t.score", task_version="1", params=params or {"w": 1}, backend_params=backend_params or {}
+        id="n",
+        task="t.score",
+        task_version="1",
+        params=params or {"w": 1},
+        backend_params=backend_params or {},
+        model=model,
     )
     return Graph(
         inputs={"text": "list[json]"},
@@ -24,8 +33,12 @@ def _graph(params: dict[str, Any] | None = None, backend_params: dict[str, Any] 
     )
 
 
-def _model(commit: str = COMMIT) -> ResolvedModel:
-    return ResolvedModel(ref=ModelRef.parse(f"org/m@{commit}"), identity=commit)
+def _model(commit: str = COMMIT, ref: str | None = None, **fields: Any) -> ResolvedModel:  # noqa: ANN401
+    return ResolvedModel(ref=ModelRef.parse(f"org/m@{ref or commit}"), identity=commit, **fields)
+
+
+def _license(date: str) -> License:
+    return license_record("MIT", source="card", verified={"date": date, "how": "hf-card"}, gated=False)
 
 
 def _plan(**update: Any) -> LogicalPlan:  # noqa: ANN401 - field overrides
@@ -60,6 +73,57 @@ def test_plan_hash_changes_with_each_logical_field(field: str, value: object) ->
     """Every logical field reaches the hash; the plan alone does not change it."""
     assert plan_hash(_plan()) == plan_hash(_plan())
     assert plan_hash(_plan(**{field: value})) != plan_hash(_plan())
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"graph": _graph(model="org/m@main"), "models": {"n": _model(ref="main")}},
+        {"graph": _graph(model=f"org/m@{COMMIT}")},
+        {"models": {"n": _model(license=_license("2026-11-01"))}},
+        {"models": {"n": _model(license=_license("2026-11-02"))}},
+    ],
+    ids=["ref-main-same-commit", "ref-text-in-graph", "license", "license-date"],
+)
+def test_plan_hash_ignores_reference_text_and_license(update: dict[str, Any]) -> None:
+    """Only a model's pinned identity reaches the hash: not its reference text nor its license."""
+    assert plan_hash(_plan(**update)) == plan_hash(_plan())
+
+
+@pytest.mark.logic
+def test_local_model_moved_keeps_the_hash() -> None:
+    """A local model at another path, with the same weights, keeps the hash."""
+    weights = "d" * 64
+
+    def local(path: str) -> LogicalPlan:
+        model = ResolvedModel(ref=ModelRef.parse(f"local:{path}"), identity=weights)
+        return _plan(graph=_graph(model=f"local:{path}"), models={"n": model})
+
+    assert plan_hash(local("/laptop/m")) == plan_hash(local("/cluster/scratch/m"))
+    assert plan_hash(local("/laptop/m")) != plan_hash(_plan())
+
+
+@pytest.mark.logic
+def test_plan_hash_ignores_mapping_and_edge_order() -> None:
+    """Models, slices and edges given in another order hash the same."""
+    nodes = (Node(id="a", task="t", task_version="1"), Node(id="b", task="t", task_version="1"))
+    inputs = {"x": "list[json]", "y": "list[json]"}
+    edges = (Edge(source="input.x", target="a.x", kind="map"), Edge(source="input.y", target="b.y", kind="map"))
+    one = Graph(inputs=inputs, nodes=nodes, edges=edges)
+    two = Graph(inputs=inputs, nodes=nodes, edges=tuple(reversed(edges)))
+    slices = {"a": {"run.k": slice_identity(1)}, "b": {}}
+    first = _plan(graph=one, models={"a": _model(), "b": None}, profile_slices=slices, bind={})
+    second = _plan(graph=two, models={"b": None, "a": _model()}, profile_slices=dict(reversed(slices.items())), bind={})
+    assert plan_hash(first) == plan_hash(second)
+
+
+@pytest.mark.logic
+def test_later_minor_graph_in_a_plan_has_no_hash() -> None:
+    """A 1.0 plan holding a later-minor graph is refused a hash through the graph's digest."""
+    graph = Graph.model_validate({**_graph().model_dump(mode="json"), "format": "graph@1.1"})
+    with pytest.raises(ValueError, match=r"graph@1\.1"):
+        plan_hash(_plan(graph=graph))
 
 
 @pytest.mark.logic

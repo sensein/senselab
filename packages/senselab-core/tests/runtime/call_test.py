@@ -16,6 +16,7 @@ import pytest
 import senselab_core.runtime.call as call_module
 import senselab_core.runtime.fake_backend as fake
 import soundfile
+from pydantic import ValidationError
 from senselab_core.kernel import prov
 from senselab_core.kernel._base import Frozen
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
@@ -315,11 +316,15 @@ def test_profile_digest_recorded_not_keyed(store: ResultStore) -> None:
 
 @pytest.mark.logic
 def test_backend_params_reach_the_key_and_are_validated(store: ResultStore) -> None:
-    """Backend params are validated against the chosen backend; an unknown one is refused before anything runs."""
-    call = TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "x"}, "backend_params": {"beam": 2}})
+    """Only the chosen backend's entry is validated against it; an unknown param is refused before anything runs."""
+    call = TaskCall.model_validate(
+        {"task": TASK.name, "inputs": {"text": "x"}, "backend_params": {"fake-alpha": {"beam": 2}}}
+    )
     with pytest.raises(ValueError, match="beam"):
         run_call(call, execution=_profile("alpha"), store=store)
     assert _activities(store) == []
+    with pytest.raises(ValidationError):
+        TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "x"}, "backend_params": {"beam": 2}})
 
 
 @pytest.mark.logic

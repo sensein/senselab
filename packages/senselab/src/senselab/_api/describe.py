@@ -132,7 +132,8 @@ def _envelope(
             "params": _params_note(spec),
             "model": "optional; `org/name@revision`, `url:<url>#sha256=<hex>` or `local:<path>`; None or omitted takes "
             "`default_model`",
-            "backend_params": "optional; the params of the chosen backend, per `backend_params`; default {}",
+            "backend_params": "optional; backend name to that backend's params, per `backend_params`; only the chosen "
+            "backend's entry is read (none: its defaults); default {}",
         },
         "model": {"allowed": model_ids, "default": default_model},
         "backend": {

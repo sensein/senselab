@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 import senselab_core.runtime.fake_backend as fake
+from pydantic import ValidationError
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.graph import Graph
 from senselab_core.kernel.identity import ReusePolicy
@@ -16,9 +17,9 @@ from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.keys import MissingProfileSlice
-from senselab_core.runtime.planner import CALL_NODE, InvalidGraph, resolve
+from senselab_core.runtime.planner import CALL_NODE, InvalidGraph, RecordBinding, resolve
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.revision import Resolver
+from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver
 
 TOY = "toyorg/toy"
 PIN = "a" * 40
@@ -62,8 +63,12 @@ def _backend(name: str, task: TaskSpec) -> BackendSpec:
     )
 
 
+PAIR = SCORE.model_copy(
+    update={"name": "planner_test.pair", "inputs": {"a": "json", "b": "json"}, "outputs": {"pair": "json"}}
+)
+
 REGISTRY = Registry()
-for _task in (SCORE, READS):
+for _task in (SCORE, READS, PAIR):
     REGISTRY.add_task(_task)
 REGISTRY.add_backend(_backend("alpha", SCORE))
 REGISTRY.add_backend(_backend("beta", SCORE))
@@ -128,7 +133,7 @@ SETTINGS = {"aggregator": "mean", "other": 1}
 def test_resolve_takes_no_execution_input() -> None:
     """`resolve` has no execution profile, hardware or placement parameter."""
     names = set(inspect.signature(resolve).parameters)
-    assert names == {"target", "dataset", "config", "dataset_profile", "bind", "resolver"}
+    assert names == {"target", "dataset", "config", "dataset_profile", "bind", "resolver", "admit"}
     assert not names & {"execution", "profile", "hardware", "placement", "device", "backend"}
 
 
@@ -166,7 +171,8 @@ def test_ref_resolved_to_commit_in_plan(tmp_path: Path) -> None:
     model = plan.models[CALL_NODE]
     assert model is not None and model.identity == PIN and model.ref.ref == PIN and seen == [("otherorg/m", "main")]
     again, _ = resolve(call, _records("x"), config=RunConfig(), resolver=_resolver(tmp_path / "3", {"main": PIN}))
-    assert plan_hash(again) == plan_hash(plan)
+    pinned, _ = resolve(_call(model=f"otherorg/m@{PIN}"), _records("x"), config=RunConfig())
+    assert plan_hash(again) == plan_hash(pinned) == plan_hash(plan)
     moved, _ = resolve(call, _records("x"), config=RunConfig(), resolver=_resolver(tmp_path / "2", {"main": MOVED}))
     assert plan_hash(moved) != plan_hash(plan)
 
@@ -209,15 +215,109 @@ def test_undeclared_profile_key_perturbation_leaves_plan(profile: dict[str, Any]
 
 
 @pytest.mark.logic
-def test_call_backend_params_are_held_for_every_backend_it_may_be_placed_on() -> None:
-    """A call's backend params become the entry of each backend declared for its task."""
-    plan, _ = resolve(_call(backend_params={"beam": 2}), _records("x"), config=RunConfig())
-    assert {k: dict(v) for k, v in plan.graph.nodes[0].backend_params.items()} == {
-        "alpha": {"beam": 2},
-        "beta": {"beam": 2},
-    }
-    bare, _ = resolve(_call(), _records("x"), config=RunConfig())
-    assert dict(bare.graph.nodes[0].backend_params) == {}
+def test_call_backend_params_are_held_per_backend_as_given() -> None:
+    """A call's backend params are keyed by backend name and reach the node unchanged; a flat entry is refused."""
+    plan, _ = resolve(_call(backend_params={"beta": {"beam": 2}}), _records("x"), config=RunConfig())
+    assert {k: dict(v) for k, v in plan.graph.nodes[0].backend_params.items()} == {"beta": {"beam": 2}}
+    with pytest.raises(ValidationError):
+        _call(backend_params={"beam": 2})
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("given", [{}, {"alpha": {"beam": 2}}], ids=["none", "alpha"])
+def test_installed_backends_never_reach_the_plan(given: dict[str, Any]) -> None:
+    """Installing a backend for the task, or removing one, leaves the plan hash unchanged."""
+    base, _ = resolve(_call(backend_params=given), _records("x"), config=RunConfig())
+    for change in ("add", "remove"):
+        registry = Registry()
+        registry.restore(REGISTRY.snapshot())
+        if change == "add":
+            registry.add_backend(_backend("gamma", SCORE))
+            other = registry
+        else:
+            other = Registry()
+            for task in (SCORE, READS, PAIR):
+                other.add_task(task)
+            other.add_backend(_backend("alpha", SCORE))
+        previous = use_packaged(Packaged(CATALOGUE, _no_env, other))
+        try:
+            changed, _ = resolve(_call(backend_params=given), _records("x"), config=RunConfig())
+        finally:
+            use_packaged(previous)
+        assert plan_hash(changed) == plan_hash(base), change
+
+
+@pytest.mark.logic
+def test_node_params_are_completed_with_defaults() -> None:
+    """`{}` and the explicit default hash the same, and a call hashes as its hand-written graph."""
+    call_plan, _ = resolve(_call(), _records("x"), config=RunConfig())
+
+    def written(params: dict[str, Any]) -> Graph:
+        return Graph.model_validate(
+            {
+                "inputs": {"text": "list[json]"},
+                "nodes": [{"id": CALL_NODE, "task": SCORE.name, "task_version": "1", "params": params}],
+                "edges": [{"source": "input.text", "target": "call.text", "kind": "map"}],
+                "outputs": {"value": "call.value"},
+            }
+        )
+
+    empty, _ = resolve(written({}), _records("x"), config=RunConfig())
+    explicit, _ = resolve(written({"w": 1}), _records("x"), config=RunConfig())
+    assert dict(empty.graph.nodes[0].params) == {"w": 1}
+    assert plan_hash(empty) == plan_hash(explicit) == plan_hash(call_plan)
+    other, _ = resolve(written({"w": 2}), _records("x"), config=RunConfig())
+    assert plan_hash(other) != plan_hash(empty)
+
+
+@pytest.mark.logic
+def test_more_than_one_record_bound_input_is_refused() -> None:
+    """Over a dataset, a graph has one input, the record list fed by map edges; anything else names its ports."""
+    with pytest.raises(RecordBinding) as raised:
+        resolve(_call(PAIR), _records("x"), config=RunConfig())
+    assert raised.value.ports == ("a", "b")
+    plain = Graph.model_validate(
+        {
+            "inputs": {"text": "json"},
+            "nodes": [{"id": "n", "task": SCORE.name, "task_version": "1"}],
+            "edges": [{"source": "input.text", "target": "n.text"}],
+        }
+    )
+    with pytest.raises(RecordBinding, match="text"):
+        resolve(plain, _records("x"), config=RunConfig())
+    single, manifest = resolve(_call(PAIR, inputs={"a": 1, "b": 2}), None, config=RunConfig())
+    assert set(manifest.rows[0].inputs) == {"a", "b"} and single.manifest_digest == manifest.digest()
+
+
+@pytest.mark.logic
+def test_refused_source_raises_before_any_lookup(tmp_path: Path) -> None:
+    """`admit` sees each hub model before it is resolved; a refusal raises and the hub is never asked."""
+    seen: list[tuple[str, str]] = []
+
+    def admit(model_id: str) -> None:
+        raise PermissionError(f"{model_id} is not an allowed source")
+
+    with pytest.raises(PermissionError, match="otherorg/m"):
+        resolve(
+            _call(model="otherorg/m@main"),
+            _records("x"),
+            config=RunConfig(),
+            resolver=_resolver(tmp_path, {"main": PIN}, seen),
+            admit=admit,
+        )
+    assert seen == []
+    plan, _ = resolve(_call(), _records("x"), config=RunConfig(), admit=admit)
+    assert plan.models[CALL_NODE] is not None
+
+
+@pytest.mark.logic
+def test_execution_settings_leave_the_plan(tmp_path: Path) -> None:
+    """Verify sampling, thresholds and the resolver's network policy never reach the plan."""
+    base, _ = resolve(_call(), _records("x"), config=RunConfig())
+    offline = Resolver(cache_dir=tmp_path, cache_root=tmp_path, network="offline")
+    for config, resolver in ((RunConfig(verify=0.5), PROCESS_RESOLVER), (RunConfig(), offline)):
+        other, _ = resolve(_call(), _records("x"), config=config, resolver=resolver)
+        assert plan_hash(other) == plan_hash(base)
 
 
 @pytest.mark.logic
