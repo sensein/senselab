@@ -16,7 +16,15 @@ import numpy
 import pytest
 import soundfile
 from pydantic import ValidationError
-from senselab_core.kernel.signals import Audio, ChannelInfo, Recording, RegularGroup, StaleSource, audio_channels
+from senselab_core.kernel.signals import (
+    Audio,
+    ChannelInfo,
+    Recording,
+    RegularGroup,
+    StaleSource,
+    UndecodableSource,
+    audio_channels,
+)
 from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER, open_audio, source_group, stamp
 from senselab_worker.digest import identity_digest
@@ -100,10 +108,10 @@ def test_file_group_refuses_a_layout_the_file_does_not_have(tmp_path: Path) -> N
 
 @pytest.mark.logic
 def test_open_audio_refuses_a_file_that_is_not_audio(tmp_path: Path) -> None:
-    """A file soundfile cannot parse raises its typed error."""
+    """A file soundfile cannot parse raises the kernel `UndecodableSource`."""
     p = tmp_path / "x.wav"
     p.write_bytes(b"not audio at all")
-    with pytest.raises(soundfile.LibsndfileError):
+    with pytest.raises(UndecodableSource):
         open_audio(p)
 
 
@@ -402,3 +410,12 @@ def test_stamp_pins_channel_layout(tmp_path: Path) -> None:
     assert decoded.source_stamp == restamped and decoded.channels == named
     with pytest.raises(ValidationError, match="channel layout"):
         RegularGroup(channels=group.channels, sampling_rate=RATE, source=p, source_stamp=restamped)
+
+
+@pytest.mark.logic
+def test_non_audio_file_is_undecodable_source(tmp_path: Path) -> None:
+    """A non-audio file named as a sound file is an `UndecodableSource`, not a libsndfile error."""
+    p = tmp_path / "x.wav"
+    p.write_text("hello")
+    with pytest.raises(UndecodableSource):
+        stamp(p)

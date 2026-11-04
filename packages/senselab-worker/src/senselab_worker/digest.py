@@ -49,6 +49,7 @@ IDENTITY_TAGS: frozenset[str] = frozenset(
         "vllm-config@1",
         "source@1",
         "graph@1",
+        "input-manifest@1",
     }
 )
 """The registered tags of `identity_digest`; no tag is a prefix of another."""

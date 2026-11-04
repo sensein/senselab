@@ -22,6 +22,7 @@ from senselab_core.kernel.signals import (
     RegularGroup,
     SourceStamp,
     StaleSource,
+    UndecodableSource,
     audio_channels,
 )
 
@@ -115,7 +116,11 @@ def _opened(
         after = os.fstat(raw.fileno())
         if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (st.st_size, st.st_mtime_ns, st.st_ctime_ns):
             raise StaleSource(f"{path} changed while it was read")
-        with soundfile.SoundFile(raw) as f:
+        try:
+            sound = soundfile.SoundFile(raw)
+        except soundfile.LibsndfileError as exc:
+            raise UndecodableSource(f"{path} is not a sound file: {exc}") from exc
+        with sound as f:
             if channels is not None and len(channels) != f.channels:
                 raise ValueError(f"{len(channels)} channels declared, {f.channels} channels in the file")
             stamp = SourceStamp(
@@ -147,7 +152,8 @@ def stamp(
 
     Raises:
         StaleSource: if the file changed while it was read.
-        soundfile.LibsndfileError: if the file is not a sound file.
+        UndecodableSource: if the file is not a sound file.
+        UndecodableSource: if the file is not a sound file.
         ValueError: if `channels` is not as many as the file's.
     """
     with _opened(path, chunk_size, channels) as (_, taken, ctime_ns):
@@ -310,7 +316,7 @@ def open_audio(path: str | os.PathLike[str]) -> Audio:
 
     Raises:
         StaleSource: if the file changed while it was read.
-        soundfile.LibsndfileError: if the file is not a sound file.
+        UndecodableSource: if the file is not a sound file.
     """
     taken = stamp(path)
     return Audio.from_group(source_group(taken.channels, taken.sampling_rate, path, taken))

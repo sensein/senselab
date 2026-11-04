@@ -73,6 +73,10 @@ class StaleSource(RuntimeError):
     """A source file no longer matches the stamp recorded when it was opened."""
 
 
+class UndecodableSource(ValueError):
+    """A source file is not in a format the reader decodes."""
+
+
 Hex64 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
 
