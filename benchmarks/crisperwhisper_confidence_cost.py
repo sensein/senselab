@@ -5,6 +5,10 @@ decodes `--items` LibriSpeech test-clean utterances (the `--items` smallest sha2
 the data cache, `$SENSELAB_DATA_CACHE`) in the `orcd` profile's `crisperwhisper` worker, each with `confidence`
 true and false after one warm-up decode. The times are the worker's own (`_diagnostics`): `decode_s` is the library
 decode, `confidence_s` the confidence pass, `engine_build_s` the one-off engine load. Writes `confidence-cost@1`.
+
+`--transcript --engine E --device D --out FILE` writes the transcript and diagnostics of one long-form item (the
+first utterances of the first test-clean chapter over `LONG_FORM_SECONDS`); `--compare A B` judges two such files
+by the packaged `transcript@2` comparison and run-config thresholds.
 """
 
 import argparse
@@ -26,6 +30,7 @@ from typing import Any
 FORMAT = "confidence-cost@1"
 MANIFEST = Path(__file__).resolve().parent / "manifests" / "librispeech-test-clean.yaml"
 RATE = 16_000
+LONG_FORM_SECONDS = 35
 ENGINES = ("ct2", "transformers")
 DEVICES = ("cpu", "cuda")
 
@@ -89,6 +94,29 @@ def summarize(items: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def long_form(archive: Path, seconds: float) -> Any:  # noqa: ANN401 - a numpy array
+    """Return the first consecutive utterances of the first chapter of the test-clean `archive` over `seconds`."""
+    soundfile = importlib.import_module("soundfile")
+    numpy = importlib.import_module("numpy")
+    chapter, parts = None, []
+    with tarfile.open(archive, "r|gz") as tar:
+        for member in tar:
+            if not member.name.endswith(".flac"):
+                continue
+            if chapter is None:
+                chapter = Path(member.name).parent
+            if Path(member.name).parent != chapter:
+                break
+            handle = tar.extractfile(member)
+            assert handle is not None  # noqa: S101 - a flac member is a file
+            samples, rate = soundfile.read(io.BytesIO(handle.read()), dtype="float32")
+            assert rate == RATE, (member.name, rate)  # noqa: S101 - LibriSpeech is 16 kHz
+            parts.append(samples)
+            if sum(len(p) for p in parts) > seconds * rate:
+                return numpy.concatenate(parts)
+    raise ValueError(f"the first chapter of test-clean holds less than {seconds} s")
+
+
 def select_items(archive: Path, count: int) -> list[tuple[str, Any]]:
     """Return the `count` flac members of the test-clean `archive` with the smallest name sha256, as pairs."""
     soundfile = importlib.import_module("soundfile")
@@ -141,18 +169,64 @@ def _git_head() -> str | None:
         return None
 
 
+def _archive() -> Path:
+    fetch = importlib.import_module("senselab_core.runtime.fetch")
+    return Path(
+        fetch.fetch(fetch.DataManifest.load(MANIFEST), cache_root=fetch.default_cache_root())["test-clean.tar.gz"]
+    )
+
+
+def long_form_transcript(engine: str, device: str) -> dict[str, Any]:
+    """Return the transcript and diagnostics of the `LONG_FORM_SECONDS` long-form item, confidence on."""
+    profiles = importlib.import_module("senselab_core.runtime.profiles")
+    workers = importlib.import_module("senselab_core.testing.workers")
+    audio_module = importlib.import_module("senselab_core.kernel.signals")
+    wire = importlib.import_module("senselab_core.kernel.wire").wire_form
+    samples = long_form(_archive(), LONG_FORM_SECONDS)
+    item = {"id": "long", "inputs": {"audio": wire(audio_module.Audio.from_array(samples[None, :], RATE))}}
+    params = {"language": None, "timestamps": "word", "backend_params": {"engine": engine}, "_diagnostics": True}
+    real = workers.RealWorkers(profiles.ExecutionProfile.load("orcd"), device)
+    try:
+        [result] = real("speech_to_text", "crisperwhisper").run([item], params)
+    finally:
+        real.close()
+    if "error" in result:
+        raise RuntimeError(f"the long-form item failed: {result['error']}")
+    return {
+        "engine": engine,
+        "device": device,
+        "senselab_head": _git_head(),
+        "transcript": result["outputs"]["transcript"],
+        "diagnostics": result["outputs"]["diagnostics"],
+    }
+
+
+def compare_transcripts(expected: Path, actual: Path) -> dict[str, Any]:
+    """Return whether two `long_form_transcript` files agree under the packaged comparison, and how they differ."""
+    compare = importlib.import_module("senselab_core.runtime.compare")
+    a, b = (json.loads(path.read_text()) for path in (expected, actual))
+    result = compare.compare(
+        {"transcript": a["transcript"]}, {"transcript": b["transcript"]}, compare.Thresholds.load()
+    )
+    gaps = [d.absolute for d in result.differences if d.absolute is not None]
+    return {
+        "agree": result.agree,
+        "heads": [a.get("senselab_head"), b.get("senselab_head")],
+        "differences": [d.model_dump(mode="json") for d in result.differences],
+        "largest_absolute": max(gaps, default=None),
+    }
+
+
 def measure(engine: str, device: str, count: int) -> dict[str, Any]:
     """Run the measurement on `engine` and `device` and return the `confidence-cost@1` document."""
     hardware = importlib.import_module("senselab_core.runtime.hardware")
-    fetch = importlib.import_module("senselab_core.runtime.fetch")
     profiles = importlib.import_module("senselab_core.runtime.profiles")
     workers = importlib.import_module("senselab_core.testing.workers")
     call = importlib.import_module("senselab_core.runtime.call")
     host = hardware.probe_hardware()
     if device == "cuda" and not host.gpus:
         raise SystemExit("--device cuda on a host with no GPU")
-    archive = fetch.fetch(fetch.DataManifest.load(MANIFEST), cache_root=fetch.default_cache_root())["test-clean.tar.gz"]
-    chosen = select_items(Path(archive), count + 1)
+    chosen = select_items(_archive(), count + 1)
     warmup, measured = chosen[0], chosen[1:]
     real = workers.RealWorkers(profiles.ExecutionProfile.load("orcd"), device)
     backend = next(b for b in call.packaged().registry.backends("speech_to_text") if b.name == "crisperwhisper")
@@ -205,12 +279,23 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--items", type=int, default=50)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--summarize", type=Path, help="print the summary of an existing result file and exit")
+    parser.add_argument("--transcript", action="store_true", help="write the long-form item's transcript to --out")
+    parser.add_argument("--compare", type=Path, nargs=2, help="compare two --transcript files and exit")
     args = parser.parse_args(argv)
     if args.summarize:
         print(json.dumps(summarize(json.loads(args.summarize.read_text())["items"]), indent=2))
         return
+    if args.compare:
+        print(json.dumps(compare_transcripts(*args.compare), indent=2))
+        return
     if not (args.engine and args.device and args.out):
         parser.error("--engine, --device and --out are required unless --summarize")
+    if args.transcript:
+        document = long_form_transcript(args.engine, args.device)
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(document, indent=2) + "\n")
+        print(json.dumps(document["diagnostics"], indent=2))
+        return
     document = measure(args.engine, args.device, args.items)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(document, indent=2) + "\n")

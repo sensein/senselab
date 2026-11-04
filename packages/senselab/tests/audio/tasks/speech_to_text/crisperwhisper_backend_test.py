@@ -1,9 +1,8 @@
 """The `crisperwhisper` backend of `speech_to_text`: its engines, model, faults and the isolated worker's imports."""
 
 import importlib
-import io
+import importlib.util
 import json
-import tarfile
 from pathlib import Path
 from typing import Any
 
@@ -239,33 +238,17 @@ def test_edge_inputs_with_real_weights(real_worker: RealWorkers, engine: str) ->
 
 
 MANIFEST = Path(__file__).parents[6] / "benchmarks" / "manifests" / "librispeech-test-clean.yaml"
-LONG_FORM_SECONDS = 35
+BENCHMARK = MANIFEST.parents[1] / "crisperwhisper_confidence_cost.py"
 
 
 def _long_speech() -> Audio:
-    """Return consecutive LibriSpeech test-clean utterances of one chapter, over `LONG_FORM_SECONDS`, as one audio.
-
-    The archive is fetched through the data cache (`$SENSELAB_DATA_CACHE`) by its hash-pinned manifest.
-    """
-    soundfile = importlib.import_module("soundfile")
+    """Return the cost benchmark's long-form item, fetched through the data cache (`$SENSELAB_DATA_CACHE`)."""
+    spec = importlib.util.spec_from_file_location("confidence_cost", BENCHMARK)
+    assert spec is not None and spec.loader is not None
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
     archive = fetch(DataManifest.load(MANIFEST), cache_root=default_cache_root())["test-clean.tar.gz"]
-    chapter, parts = None, []
-    with tarfile.open(archive, "r|gz") as tar:
-        for member in tar:
-            if not member.name.endswith(".flac"):
-                continue
-            if chapter is None:
-                chapter = Path(member.name).parent
-            if Path(member.name).parent != chapter:
-                break
-            handle = tar.extractfile(member)
-            assert handle is not None
-            samples, rate = soundfile.read(io.BytesIO(handle.read()), dtype="float32")
-            assert rate == cw.EXPECTED_RATE
-            parts.append(samples)
-            if sum(len(p) for p in parts) > LONG_FORM_SECONDS * rate:
-                return Audio.from_array(numpy.concatenate(parts)[None, :], rate)
-    raise AssertionError("the first chapter of test-clean holds less than the long-form length")
+    return Audio.from_array(script.long_form(archive, script.LONG_FORM_SECONDS)[None, :], cw.EXPECTED_RATE)
 
 
 @pytest.mark.env
