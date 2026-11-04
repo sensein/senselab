@@ -17,7 +17,7 @@ import datetime
 import shutil
 import textwrap
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Collection, Iterator, Mapping
 
 import yaml  # type: ignore[import-untyped]
 
@@ -31,8 +31,10 @@ from senselab.audio.workflows.triage.dataset_profile import (
     DatasetDataMissing,
     data_values,
     load_profile,
+    needed,
     profile_values,
 )
+from senselab.audio.workflows.triage.workflow import STAGE_NAMES, check_stages, listed_stages, running_stages
 
 TEMPLATE_DIR = PACKAGED_DATA / "profile_template"
 """Skeletons of the dataset files every run reads (:data:`~senselab.audio.workflows.triage.dataset_profile.
@@ -58,11 +60,15 @@ def _lookup(document: Any, path: list[str]) -> Any:  # noqa: ANN401 -- a YAML va
     return document
 
 
-def values_to_supply(extends: str | Path | None = REFERENCE_PROFILE) -> dict[str, list[dict[str, Any]]]:
+def values_to_supply(
+    extends: str | Path | None = REFERENCE_PROFILE, *, off: Collection[str] = ()
+) -> dict[str, list[dict[str, Any]]]:
     """The required profile values a dataset must supply when it builds on ``extends``.
 
     Args:
         extends: The profile the new one extends (``senselab:<name>`` or a directory), or None for none.
+        off: Stages the new profile's workflow leaves off, beside those ``extends`` already does; a value only they
+            read is not asked for.
 
     Returns:
         ``{data file: [entry, ...]}``, each entry as ``data/profile_values.yaml`` gives it; the configuration's
@@ -75,13 +81,14 @@ def values_to_supply(extends: str | Path | None = REFERENCE_PROFILE) -> dict[str
     dataset_profile.deactivate_profile()
     try:
         config = load_triage_config(profile=extends) if extends is not None else load_triage_config()
+        running = running_stages(_with_off(config.values, off))
         out: dict[str, list[dict[str, Any]]] = {}
         for relative, entries in profile_values().items():
             try:
                 document = config.values if relative == CONFIG_FILE else data_values(relative)
             except DatasetDataMissing:
                 document = {}  # a dataset file the base does not supply: every value of it is the new profile's
-            blank = [e for e in entries if e.get("required") and _lookup(document, list(e["path"])) is None]
+            blank = [e for e in entries if needed(e, running) and _lookup(document, list(e["path"])) is None]
             if blank:
                 out[relative] = blank
         return out
@@ -90,6 +97,20 @@ def values_to_supply(extends: str | Path | None = REFERENCE_PROFILE) -> dict[str
         dataset_profile.set_run_data(run_data)
         if before is not None:
             dataset_profile.activate_profile(before)
+
+
+def _with_off(config_values: Mapping[str, Any], off: Collection[str]) -> dict[str, Any]:
+    """The configuration with ``off`` also left out of its workflow.
+
+    Raises:
+        ValueError: If ``off`` names a stage that is not one, or one that may not be off.
+    """
+    listed = [stage for stage in listed_stages(config_values) if stage not in set(off)]
+    unknown = sorted(set(off) - set(STAGE_NAMES))
+    if unknown:
+        raise ValueError(f"{unknown} are not triage stages; the stages are {STAGE_NAMES}")
+    check_stages(listed)
+    return {**config_values, "workflow": {**(config_values.get("workflow") or {}), "stages": listed}}
 
 
 def _comment(entry: Mapping[str, Any]) -> str:
@@ -126,6 +147,26 @@ def _emit(entries: list[dict[str, Any]]) -> Iterator[str]:
     yield from walk(tree, 0)
 
 
+def _workflow_lines(reference: str | None, off: Collection[str]) -> list[str]:
+    """The ``workflow`` section a template's config carries when its workflow leaves stages off."""
+    from senselab.audio.workflows.triage.config import load_triage_config  # noqa: PLC0415
+
+    before, run_data = dataset_profile.active_profile(), dataset_profile.run_data()
+    try:
+        config = load_triage_config(profile=reference) if reference is not None else load_triage_config()
+        listed = _with_off(config.values, off)["workflow"]["stages"]
+    finally:
+        dataset_profile.deactivate_profile()
+        dataset_profile.set_run_data(run_data)
+        if before is not None:
+            dataset_profile.activate_profile(before)
+    return [
+        f"# The stages this dataset runs; {', '.join(sorted(off))} are off, and no value only they read is asked for.",
+        "workflow:",
+        f"  stages: [{', '.join(listed)}]",
+    ]
+
+
 def _absolute(reference: str | Path | None, relative_to: Path | None = None) -> str | None:
     """A profile reference as the new profile records it: ``senselab:<name>`` unchanged, a path made absolute."""
     if reference is None:
@@ -146,6 +187,7 @@ def write_template(
     extends: str | Path | None = REFERENCE_PROFILE,
     start_from: str | Path | None = None,
     supply: Mapping[str, list[dict[str, Any]]] | None = None,
+    off: Collection[str] = (),
 ) -> Path:
     """Write a new dataset's profile with every value it must still supply blank, each beside its entry.
 
@@ -156,7 +198,9 @@ def write_template(
             a directory (recorded as an absolute path), or None to supply every value itself.
         start_from: Copy this profile directory instead (a dataset that starts from another's values); the copy is
             renamed, records where it came from, and keeps building on what the original built on.
-        supply: :func:`values_to_supply` for ``extends``, where the caller has it already.
+        supply: :func:`values_to_supply` for ``extends`` and ``off``, where the caller has it already.
+        off: Stages the new profile's workflow leaves off: its config lists the rest under ``workflow.stages``, and
+            a value only those stages read is not asked for. Not with ``start_from``.
 
     Returns:
         The profile directory.
@@ -165,6 +209,8 @@ def write_template(
         FileExistsError: If ``out`` exists.
         ValueError: If ``extends`` names no profile; nothing is written then.
     """
+    if off and start_from is not None:
+        raise ValueError("off writes a new template; a copy (start_from) keeps the original's workflow")
     root = Path(out)
     if root.exists():
         raise FileExistsError(f"{root} exists; a template is written into a new directory")
@@ -184,7 +230,8 @@ def write_template(
         return root
     reference = _absolute(extends)
     base = load_profile(reference) if reference is not None else None
-    blanks = values_to_supply(reference) if supply is None else supply
+    blanks = values_to_supply(reference, off=off) if supply is None else supply
+    workflow = _workflow_lines(reference, off) if off else []
     root.mkdir(parents=True)
     files: dict[str, str] = {}
     for relative in REQUIRED_DATASET_PATHS:
@@ -201,12 +248,19 @@ def write_template(
             f"# {name}: the values of senselab's {relative} this dataset supplies (template written {written}).",
             "# Fill in every blank; a run refuses a profile that leaves a required value empty, naming it.",
         ]
-        target.write_text("\n".join([*header, *_emit(entries)]) + "\n")
+        lines = list(_emit(entries))
+        if relative == CONFIG_FILE:
+            lines, workflow = [*workflow, *lines], []
+        target.write_text("\n".join([*header, *lines]) + "\n")
         if relative == CONFIG_FILE:
             config = "config.yaml"
         else:
             top = relative.split("/")[0]
             files[top] = top
+    if workflow:  # no config value was blank: the workflow is the config's only content
+        header = [f"# {name}: the senselab configuration this dataset changes (template written {written})."]
+        (root / "config.yaml").write_text("\n".join([*header, *workflow]) + "\n")
+        config = "config.yaml"
     manifest: dict[str, Any] = {"name": name, "version": "0"}
     if reference is not None:
         manifest["extends"] = reference

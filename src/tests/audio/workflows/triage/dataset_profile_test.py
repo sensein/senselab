@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +23,12 @@ from senselab.audio.workflows.triage.dataset_profile import (
     deactivate_profile,
     load_profile,
     missing_dataset_values,
+    needed,
     profile_values,
     require_dataset_values,
     run_data,
 )
+from senselab.audio.workflows.triage.workflow import OPTIONAL_STAGES, STAGE_NAMES
 from tests.conftest import B2AI_TRIAGE_PROFILE
 
 
@@ -405,3 +408,55 @@ class TestTheReviewFixes:
         activate_profile(load_profile(root))
         load_disagreement_profile.cache_clear()
         assert load_disagreement_profile()["near_threshold_band"] == 0.4
+
+
+class TestValuesFollowTheWorkflow:
+    """A value only an off stage reads is not asked for (plan step 11d)."""
+
+    def test_every_stage_a_value_names_may_be_off(self) -> None:
+        """A value of a stage that always runs carries no ``stages``: it is always needed."""
+        named = {
+            stage for entries in profile_values().values() for entry in entries for stage in entry.get("stages") or ()
+        }
+        assert named and named <= OPTIONAL_STAGES
+
+    def test_a_value_is_needed_only_when_one_of_its_stages_runs(self) -> None:
+        """No stages: whatever runs; with stages: only where one of them does."""
+        entry = {"path": ["x"], "required": True, "stages": ["AIRWAY", "VOICE"]}
+        assert needed(entry, None) and needed(entry, {"VOICE"}) and not needed(entry, {"SPEECH"})
+        assert needed({"path": ["x"], "required": True}, frozenset())
+        assert not needed({"path": ["x"], "required": False}, None)
+
+    def test_a_task_whose_branch_is_off_is_refused_by_name(self, tmp_path: Path) -> None:
+        """B2AI's breathing tasks under a workflow without AIRWAY: the start check names each one."""
+        override = tmp_path / "run.yaml"
+        stages = [name for name in STAGE_NAMES if name != "AIRWAY"]
+        override.write_text(yaml.safe_dump({"workflow": {"stages": stages}}))
+        missing = missing_dataset_values(load_triage_config(override).values)
+        refused = [item for item in missing if item.startswith("tasks.yaml task ")]
+        assert refused and all("its branch AIRWAY is off in this workflow" in item for item in refused)
+        assert not missing_dataset_values(load_triage_config().values)
+
+    def test_a_named_cohort_list_the_profile_lacks_is_refused_before_the_run(self, tmp_path: Path) -> None:
+        """Found by the step-11 speech-only run: VERDICT failed on every recording instead of the run refusing."""
+        override = tmp_path / "run.yaml"
+        override.write_text("verdict:\n  cohort_conditions: no_such_list\n")
+        assert "cohort_conditions/no_such_list.yaml (config verdict.cohort_conditions names it)" in (
+            missing_dataset_values(load_triage_config(override).values)
+        )
+
+    def test_a_value_every_run_reads_names_no_stage(self) -> None:
+        """redaction.fill is read when the release is settled, after VERDICT, whatever runs (step-11 review 1)."""
+        [fill] = [e for e in profile_values()["config/default.yaml"] if e["path"] == ["redaction", "fill"]]
+        assert not fill.get("stages")
+
+    def test_a_listed_task_list_that_is_absent_is_named_not_raised(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """tasks.yaml goes after the profile loaded (loading refuses it sooner): the start check names it (review 6)."""
+        root = tmp_path / "p"
+        shutil.copytree(B2AI_TRIAGE_PROFILE, root)
+        config = load_triage_config(profile=root)
+        (root / "tasks.yaml").unlink()
+        missing = missing_dataset_values(config.values)
+        assert "tasks.yaml (the profile lists it, but the file is absent)" in missing

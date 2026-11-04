@@ -93,3 +93,26 @@ class TestTheTemplate:
         with pytest.raises(ValueError, match="ships no profile"):
             write_template(tmp_path / "new", name="x", extends="senselab:children")
         assert not (tmp_path / "new").exists()
+
+    def test_stages_left_off_are_not_asked_for(self) -> None:
+        """A lab corpus without breathing or phonation tasks, cohorts or a quality join supplies fewer values."""
+        off = ("AIRWAY", "VOICE", "COHORT", "QUALITY")
+        asked = values_to_supply(off=off)
+        stages = {stage for entries in asked.values() for entry in entries for stage in entry.get("stages") or ()}
+        assert stages.isdisjoint(off)
+        assert sum(len(entries) for entries in asked.values()) < 39
+
+    def test_the_written_workflow_loads_and_the_start_check_asks_only_for_what_runs(self, tmp_path: Path) -> None:
+        """The template's config lists the stages that run; the run is asked for no value of the others."""
+        off = ("AIRWAY", "VOICE", "COHORT", "QUALITY")
+        root = write_template(tmp_path / "lab", name="lab", off=off)
+        values = load_triage_config(profile=root).values
+        assert set(off).isdisjoint(values["workflow"]["stages"])
+        missing = missing_dataset_values(values)
+        asked = sum(len(entries) for entries in values_to_supply(off=off).values())
+        assert len([item for item in missing if item.split()[0] != "tasks.yaml"]) == asked
+
+    def test_a_copy_keeps_its_own_workflow(self, tmp_path: Path) -> None:
+        """Copying a profile and leaving stages off at once is refused; the copy is edited instead."""
+        with pytest.raises(ValueError, match="start_from"):
+            write_template(tmp_path / "copy", name="copy", start_from=B2AI_TRIAGE_PROFILE, off=("AIRWAY",))

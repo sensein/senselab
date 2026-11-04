@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Callable, Literal, Mapping, Sequence, TypeVar
+from typing import Any, Callable, Collection, Literal, Mapping, Sequence, TypeVar
 
 from senselab.audio.workflows.triage.cohort_fold import (
     COHORT_ANNOTATION_KEYS,
@@ -54,25 +54,11 @@ from senselab.audio.workflows.triage.task_catalogue import (
     has_trait,
 )
 from senselab.audio.workflows.triage.task_extent import COMPLETE as EXTENT_COMPLETE
+from senselab.audio.workflows.triage.workflow import STAGE_NAMES
 
-GRAPH_ORDER = (
-    "ADMIT",
-    "PREPROCESS",
-    "SESSION",
-    "BACKGROUND",
-    "TAXONOMY",
-    "routing",
-    "AIRWAY",
-    "SPEECH",
-    "VOICE",
-    "QUALITY",
-    "COHORT",
-    "REDACT",
-    "REVIEW",
-    "SECOND_OPINION",
-    "VERDICT",
-)
-"""The nodes the runner drives, in the order it drives them. VERDICT folds the fourteen before it.
+GRAPH_ORDER = STAGE_NAMES
+"""The nodes the runner drives, in the order it drives them: the stage table's (``workflow.STAGES``). VERDICT folds
+the fourteen before it.
 
 SECOND_OPINION reads the final mask plan -- REVIEW's reading folded with the policy and the task's exemptions --
 so it follows REVIEW; ``scripts/extend_second_opinion.py`` drives it over finished stores.
@@ -3335,6 +3321,7 @@ def fold_file_verdict(
     ran: Mapping[str, RunState],
     hint_claims: Mapping[str, bool] | None,
     route_state: str | None,
+    off_stages: Collection[str] = frozenset(),
     declared_family: str | None = None,
     redaction: RedactionEvidence | None = None,
     llm_redaction: Mapping[str, Any] | None = None,
@@ -3373,6 +3360,8 @@ def fold_file_verdict(
             ``hints`` and flags.
         route_state: What the ruleset made of the whole recording, or None when ``routing`` wrote no
             evaluation.
+        off_stages: The stages the workflow leaves off (``workflow.off_notes``); a branch among them raises no
+            silence, mismatch or hint ground, since routing asked for a stage the dataset does not run.
         declared_family: The task family the recording declares, or None. Every conformance
             ground is read against it, under ``policy.conformance_flags_by_family``.
         redaction: What the store says about whether this recording carried anything redactable —
@@ -3809,6 +3798,8 @@ def fold_file_verdict(
     for why, key in cohort_annotations(cohort, corroborated=corroborated):
         annotate(COHORT_NODE, why, key)
     for branch in branches_seen:
+        if branch in off_stages:
+            continue  # the workflow leaves it off: routing's wish for it is no ground
         decision = branch_decisions.get(branch)
         reported = by_branch.get(branch)
         kind = reported.kind if reported is not None else None

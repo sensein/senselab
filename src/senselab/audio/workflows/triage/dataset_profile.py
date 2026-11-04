@@ -40,9 +40,11 @@ import functools
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Mapping, TypeVar
+from typing import Any, Callable, Collection, Mapping, TypeVar
 
 import yaml  # type: ignore[import-untyped]
+
+from senselab.audio.workflows.triage.workflow import STAGE_NAMES, WORKFLOW_SETTING, off_notes
 
 PACKAGED_DATA = Path(__file__).parent / "data"
 """The packaged data directory: the engine files and the defaulted files."""
@@ -548,14 +550,35 @@ def profile_values() -> dict[str, list[dict[str, Any]]]:
     return dict((yaml.safe_load((PACKAGED_DATA / PROFILE_VALUES_FILE).read_text()) or {}).get("values") or {})
 
 
-def required_profile_values() -> dict[str, tuple[tuple[str, ...], ...]]:
+def needed(entry: Mapping[str, Any], running: Collection[str] | None) -> bool:
+    """Whether a run that drives ``running`` needs a profile value.
+
+    Args:
+        entry: The value's entry in :data:`PROFILE_VALUES_FILE`.
+        running: The stages the run drives (``workflow.running_stages``), or None for every stage.
+
+    Returns:
+        True when the entry is required and names no stage, or names one that runs.
+    """
+    if not entry.get("required"):
+        return False
+    stages = entry.get("stages") or ()
+    return running is None or not stages or any(stage in running for stage in stages)
+
+
+def required_profile_values(
+    running: Collection[str] | None = None,
+) -> dict[str, tuple[tuple[str, ...], ...]]:
     """The profile values a run needs, by data file, each as its key path.
+
+    Args:
+        running: The stages the run drives; a value whose ``stages`` are all off is not needed. None: every stage.
 
     Returns:
         ``{data file: (key path, ...)}``; the configuration's under :data:`CONFIG_FILE`.
     """
     return {
-        relative: tuple(tuple(str(part) for part in entry["path"]) for entry in entries if entry.get("required"))
+        relative: tuple(tuple(str(part) for part in entry["path"]) for entry in entries if needed(entry, running))
         for relative, entries in profile_values().items()
     }
 
@@ -578,21 +601,37 @@ def missing_dataset_values(config_values: Mapping[str, Any]) -> list[str]:
         One description per missing value; empty when the run has everything it needs.
     """
     missing = []
+    off = off_notes(config_values)
+    running = frozenset(stage for stage in STAGE_NAMES if stage not in off)
     for relative in REQUIRED_DATASET_PATHS:
         try:
             if not data_path(relative).exists():
                 missing.append(f"{relative} (the profile lists it, but the file is absent)")
         except DatasetDataMissing:
             missing.append(relative)
-    for relative, paths in required_profile_values().items():
+    for relative, paths in required_profile_values(running).items():
         try:
             document = config_values if relative == CONFIG_FILE else data_values(relative)
         except DatasetDataMissing:
             continue  # the file itself is listed missing above
         where = "config" if relative == CONFIG_FILE else relative
         missing += [f"{where} {'.'.join(path)}" for path in paths if _lookup(document, path) is None]
-    if "tasks.yaml" not in missing and not (data_values("tasks.yaml").get("tasks") or {}):
-        missing.append("tasks.yaml tasks (the task list names no task)")
+    cohort = (config_values.get("verdict") or {}).get("cohort_conditions")
+    if cohort:
+        try:
+            named = data_path("cohort_conditions") / f"{cohort}.yaml"
+        except DatasetDataMissing:
+            named = None
+        if named is None or not named.is_file():
+            missing.append(f"cohort_conditions/{cohort}.yaml (config verdict.cohort_conditions names it)")
+    if not any(item == "tasks.yaml" or item.startswith("tasks.yaml (") for item in missing):
+        tasks = data_values("tasks.yaml").get("tasks") or {}
+        if not tasks:
+            missing.append("tasks.yaml tasks (the task list names no task)")
+        for name, entry in tasks.items():
+            branch = entry.get("branch") if isinstance(entry, Mapping) else None
+            if branch in off:
+                missing.append(f"tasks.yaml task {name}: its branch {branch} is {off[branch]} ({WORKFLOW_SETTING})")
     return missing
 
 

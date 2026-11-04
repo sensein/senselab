@@ -25,7 +25,6 @@ from senselab.audio.workflows.triage.nodes.gates import (
     conformance_gate_names,
     load_gate_bounds,
 )
-from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
 from senselab.audio.workflows.triage.nodes.verdict import reading_absences
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
@@ -34,6 +33,10 @@ SR = 16000
 
 FAKE_PPGS_SHA = "0123456789abcdef0123456789abcdef01234567"
 """The commit the stubbed ppgs resolution reports."""
+
+CRISPERWHISPER_ID = "nyralabs/CrisperWhisper2.0_turbo"
+QWEN_ID = "Qwen/Qwen3-ASR-1.7B"
+"""The recognizers senselab's default configuration lists (``asr.recognizers``); a test holds them to it."""
 
 
 class _FakeModel:
@@ -146,9 +149,7 @@ def _stub_models(
         """One objective-head dict per input."""
         return [{"stoi": 0.91, "pesq": 1.8, "si_sdr": 7.5} for _ in audios]
 
-    monkeypatch.setattr(preprocess_module, "_crisperwhisper_model", lambda: _FakeModel(CRISPERWHISPER_ID))
-    monkeypatch.setattr(preprocess_module, "_qwen_model", lambda: _FakeModel(QWEN_ID))
-    monkeypatch.setattr(preprocess_module, "_ast_model", lambda: _FakeModel(preprocess_module.AST_ID))
+    monkeypatch.setattr(preprocess_module, "_hf_model", lambda model_id, revision: _FakeModel(model_id))
     monkeypatch.setattr(preprocess_module, "classify_audios", fake_classify)
     monkeypatch.setattr(preprocess_module, "detect_health_acoustic_events", fake_hear)
     monkeypatch.setattr(preprocess_module, "transcribe_audios", fake_transcribe)
@@ -175,7 +176,6 @@ def _stub_models(
         """FRCRN returning its input unchanged, so the residual block runs without the real model."""
         return list(audios)
 
-    monkeypatch.setattr(preprocess_module, "_frcrn_model", lambda: _FakeModel("alibabasglab/FRCRN_SE_16K"))
     monkeypatch.setattr(preprocess_module, "enhance_audios", enhance or fake_enhance)
 
 
