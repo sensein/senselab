@@ -1,6 +1,7 @@
 """The BIDS adapter: entities, sidecars, ignored files, collisions and links."""
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ def test_bids_entities_parsed_once(tmp_path: Path) -> None:
         "run": "1",
         "datatype": "audio",
         "suffix": "audio",
+        "extension": ".wav",
     }
     assert list(first.inputs) == ["audio"]
     assert dict(first.sidecar) == {"age": "30", "Instruction": "read", "Gain": 2}
@@ -40,17 +42,31 @@ def test_bids_ignores_non_bids_files(tmp_path: Path) -> None:
     assert len(list(bids_dataset(tmp_path / "bids", suffix="other").records())) == 0
 
 
+def _listing(monkeypatch: pytest.MonkeyPatch, root: Path, names: list[str]) -> None:
+    """Make the walk of `root` report one `sub-01/audio` directory holding `names`."""
+    resolved = root.resolve()
+
+    def walk(top: Path, **_: object) -> Iterator[tuple[str, list[str], list[str]]]:
+        yield str(resolved), ["sub-01"], []
+        yield str(resolved / "sub-01"), ["audio"], []
+        yield str(resolved / "sub-01" / "audio"), [], names
+
+    monkeypatch.setattr(os, "walk", walk)
+
+
 @pytest.mark.logic
-def test_bids_caseless_collision_refused(tmp_path: Path) -> None:
-    """Two files differing only in case are refused."""
-    root = make_tree(tmp_path / "bids")
-    write_audio(root / "sub-02" / "sub-02_task-a_audio.wav", 5)
-    write_audio(root / "sub-02" / "SUB-02_task-a_audio.wav", 6)
-    names = {p.name for p in (root / "sub-02").iterdir()}
-    if len(names & {"sub-02_task-a_audio.wav", "SUB-02_task-a_audio.wav"}) < 2:
-        pytest.skip("the file system folds case")
+@pytest.mark.parametrize(
+    "names",
+    [
+        ["sub-01_task-a_audio.wav", "SUB-01_task-a_audio.wav"],
+        ["sub-01_task-caf\u00e9_audio.wav", "sub-01_task-cafe\u0301_audio.wav"],
+    ],
+)
+def test_bids_caseless_collision_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, names: list[str]) -> None:
+    """Names differing only in case or Unicode form are refused, on any file system."""
+    _listing(monkeypatch, tmp_path, names)
     with pytest.raises(BidsCollision):
-        bids_dataset(root)
+        bids_dataset(tmp_path)
 
 
 @pytest.mark.logic
@@ -61,4 +77,64 @@ def test_bids_symlink_out_of_root_refused(tmp_path: Path) -> None:
     write_audio(outside, 7)
     os.symlink(outside, root / "sub-02" / "sub-02_task-b_audio.wav")
     with pytest.raises(BidsError, match="links outside"):
+        bids_dataset(root)
+
+
+@pytest.mark.logic
+def test_bids_looping_or_dangling_link_refused(tmp_path: Path) -> None:
+    """A link to itself or to nothing is a `BidsError`."""
+    root = make_tree(tmp_path / "bids")
+    link = root / "sub-02" / "ses-1" / "audio" / "sub-02_ses-1_task-b_audio.wav"
+    os.symlink(link.name, link)
+    with pytest.raises(BidsError, match="broken or looping"):
+        bids_dataset(root)
+    link.unlink()
+    os.symlink("missing.wav", link)
+    with pytest.raises(BidsError, match="broken or looping"):
+        bids_dataset(root)
+
+
+@pytest.mark.logic
+def test_bids_reads_the_raw_tree_only(tmp_path: Path) -> None:
+    """Derivatives, sourcedata and dot directories are not read, and a link out of one does not refuse the tree."""
+    root = make_tree(tmp_path / "bids")
+    write_audio(root / "derivatives" / "p" / "sub-01" / "audio" / "sub-01_desc-x_audio.wav", 11)
+    write_audio(root / ".hidden" / "sub-01" / "audio" / "sub-01_task-h_audio.wav", 12)
+    os.symlink(tmp_path, root / "derivatives" / "out")
+    assert len(list(bids_dataset(root).records())) == 4
+
+
+@pytest.mark.logic
+def test_bids_datatype_follows_the_grammar_position(tmp_path: Path) -> None:
+    """A grammar-named file outside `sub-*/[ses-*/]<datatype>/` is ignored; labels must match the directories."""
+    root = make_tree(tmp_path / "bids")
+    write_audio(root / "task-read_audio.wav", 1)
+    write_audio(root / "sub-01" / "sub-01_task-x_audio.wav", 2)
+    write_audio(root / "sub-02" / "audio" / "sub-03_task-x_audio.wav", 3)
+    write_audio(root / "sub-02" / "audio" / "sub-02_task-x_audio.WAV", 4)
+    data = bids_dataset(root)
+    assert isinstance(data, BidsDataset)
+    assert data.ignored == 4
+    assert {r.entities["datatype"] for r in data.records()} == {"audio"}
+    assert len(list(bids_dataset(root).records())) == 5
+
+
+@pytest.mark.logic
+def test_bids_ids_do_not_depend_on_creation_order(tmp_path: Path) -> None:
+    """Two trees with the same files created in opposite orders give the same records."""
+    names = [f"sub-0{i}/audio/sub-0{i}_task-t_audio.wav" for i in (1, 2, 3)]
+    for tree, order in (("a", names), ("b", names[::-1])):
+        for i, name in enumerate(order):
+            write_audio(tmp_path / tree / name, i)
+    one = [r.id for r in bids_dataset(tmp_path / "a").records()]
+    two = [r.id for r in bids_dataset(tmp_path / "b").records()]
+    assert one == two == sorted(names)
+
+
+@pytest.mark.logic
+def test_bids_malformed_sidecar_refused(tmp_path: Path) -> None:
+    """A sidecar that is not a JSON object is a `BidsError` naming the file."""
+    root = make_tree(tmp_path / "bids")
+    (root / "task-read_audio.json").write_text("[1]", encoding="utf-8")
+    with pytest.raises(BidsError, match="task-read_audio.json"):
         bids_dataset(root)

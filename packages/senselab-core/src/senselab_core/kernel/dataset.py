@@ -6,10 +6,9 @@ every input a graph binds; `InputManifest.digest` identifies it and does not dep
 """
 
 from collections.abc import Iterator, Mapping, Sequence
-from pathlib import Path
-from typing import Annotated, Any, ClassVar, Protocol
+from typing import Annotated, ClassVar, Protocol
 
-from pydantic import AfterValidator, PlainSerializer, StringConstraints, model_validator
+from pydantic import AfterValidator, JsonValue, PlainSerializer, StringConstraints, model_validator
 from senselab_worker.digest import identity_digest
 
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr
@@ -23,10 +22,6 @@ RecordId = Annotated[str, StringConstraints(min_length=1)]
 """A record's id, stable across runs: the root-relative POSIX path of a BIDS file, the given id in memory."""
 
 
-def _frozen(value: Mapping[str, Any]) -> FrozenMapping[str, Any]:
-    return FrozenMapping(value)
-
-
 class FileInput(Frozen):
     """An input read from a file: `path` is POSIX text relative to the dataset root, or as given without a root."""
 
@@ -34,9 +29,9 @@ class FileInput(Frozen):
 
 
 class ValueInput(Frozen):
-    """An input given as a JSON value."""
+    """An input given as a value: a path as text for a port read from a file, or the value itself."""
 
-    value: Any
+    value: JsonValue
 
 
 InputRef = FileInput | ValueInput
@@ -50,17 +45,16 @@ class Record(Frozen):
     """
 
     id: RecordId
-    entities: Annotated[Mapping[str, str], AfterValidator(_frozen), PlainSerializer(dict)] = FrozenMapping({})
-    inputs: Annotated[Mapping[str, InputRef], AfterValidator(_frozen), PlainSerializer(dict)] = FrozenMapping({})
+    entities: Annotated[Mapping[str, str], AfterValidator(FrozenMapping), PlainSerializer(dict)] = FrozenMapping({})
+    inputs: Annotated[Mapping[str, InputRef], AfterValidator(FrozenMapping), PlainSerializer(dict)] = FrozenMapping({})
     sidecar: Params = FrozenMapping({})
 
 
 class Dataset(Protocol):
-    """Records a graph runs over. `root` is the directory its `FileInput` paths are relative to, or None."""
+    """Records a graph runs over."""
 
-    @property
-    def root(self) -> Path | None:
-        """The directory file inputs are relative to."""
+    def locate(self, path: str) -> str:
+        """Return the file system path of a `FileInput.path` of this dataset."""
         ...
 
     def records(self) -> Iterator[Record]:
@@ -76,7 +70,7 @@ class Dataset(Protocol):
         ...
 
     def shard(self, by: str, index: int, count: int) -> "Dataset":
-        """Return shard `index` of `count`: the sorted values of entity `by` dealt round-robin, a value never split.
+        """Return shard `index` of `count`: the records whose entity `by` hashes to `index`, a value never split.
 
         Raises:
             ValueError: if `index` is outside `[0, count)` or a record has no entity `by`.
@@ -88,8 +82,8 @@ class ManifestRow(Frozen):
     """One record of a manifest: its id, its entities and the identity of each bound input."""
 
     id: RecordId
-    entities: Annotated[Mapping[str, str], AfterValidator(_frozen), PlainSerializer(dict)]
-    inputs: Annotated[Mapping[str, InputIdentity], AfterValidator(_frozen), PlainSerializer(dict)]
+    entities: Annotated[Mapping[str, str], AfterValidator(FrozenMapping), PlainSerializer(dict)]
+    inputs: Annotated[Mapping[str, InputIdentity], AfterValidator(FrozenMapping), PlainSerializer(dict)]
 
 
 class InputManifest(Formatted):

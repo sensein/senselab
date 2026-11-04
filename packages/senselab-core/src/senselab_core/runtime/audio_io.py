@@ -33,6 +33,10 @@ DECODER = f"soundfile {soundfile.__version__}, libsndfile {soundfile.__libsndfil
 """The decoder `open_audio` reads with, as an execution context records it."""
 
 
+_DECODE_ERROR_CODES = frozenset({1, 3, 4})
+"""The libsndfile codes of a file that is not decodable: unrecognised format, malformed, unsupported encoding."""
+
+
 class Memo:
     """A thread-safe mapping that keeps at most `maxsize` entries, evicting the least recently used.
 
@@ -119,6 +123,8 @@ def _opened(
         try:
             sound = soundfile.SoundFile(raw)
         except soundfile.LibsndfileError as exc:
+            if exc.code not in _DECODE_ERROR_CODES:
+                raise
             raise UndecodableSource(f"{path} is not a sound file: {exc}") from exc
         with sound as f:
             if channels is not None and len(channels) != f.channels:
@@ -152,7 +158,6 @@ def stamp(
 
     Raises:
         StaleSource: if the file changed while it was read.
-        UndecodableSource: if the file is not a sound file.
         UndecodableSource: if the file is not a sound file.
         ValueError: if `channels` is not as many as the file's.
     """

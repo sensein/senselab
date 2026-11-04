@@ -54,6 +54,7 @@ from senselab_worker.canonical import canonical_npy_bytes
 import senselab_core.kernel
 import senselab_core.runtime
 from senselab_core.kernel._base import Frozen, FrozenMapping, digest_of
+from senselab_core.kernel.dataset import FileInput, InputManifest, ManifestRow, Record, ValueInput
 from senselab_core.kernel.declare import (
     BackendSpec,
     Env,
@@ -1054,6 +1055,39 @@ def _register_graph_samples() -> None:
     )
 
 
+def _register_dataset_samples() -> None:
+    identity = "content:" + "ab" * 32
+    rows = (
+        ManifestRow(id="a", entities={"sub": "01"}, inputs={"audio": identity}),
+        ManifestRow(id="b", entities={}, inputs={"audio": "output:" + "cd" * 32}),
+    )
+    register_samples(
+        FileInput,
+        lambda: [FileInput(path="sub-01/audio/a.wav"), FileInput(path="b.wav")],
+        invalid_updates=[{"path": ""}],
+    )
+    register_samples(
+        ValueInput,
+        lambda: [ValueInput(value=1), ValueInput(value={"k": [1, "x"]})],
+        invalid_updates=[{"value": {1, 2}}],
+    )
+    register_samples(
+        Record,
+        lambda: [
+            Record(id="a", entities={"sub": "01"}, inputs={"audio": FileInput(path="a.wav")}, sidecar={"age": "3"}),
+            Record(id="b", inputs={"n": ValueInput(value=2)}),
+        ],
+        invalid_updates=[{"id": ""}, {"entities": {"sub": 1}}],
+    )
+    register_samples(ManifestRow, lambda: list(rows), invalid_updates=[{"id": ""}, {"inputs": {"audio": "content:zz"}}])
+    register_samples(
+        InputManifest,
+        lambda: [InputManifest(rows=rows), InputManifest()],
+        invalid_updates=[{"format": "input-manifest@2.0"}, {"rows": tuple(reversed(rows))}],
+    )
+
+
 _register_kernel_samples()
 _register_graph_samples()
+_register_dataset_samples()
 _register_runtime_samples()

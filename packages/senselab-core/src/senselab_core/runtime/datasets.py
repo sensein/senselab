@@ -14,8 +14,9 @@ from senselab_core.kernel.dataset import (
     Record,
     ValueInput,
 )
+from senselab_core.kernel.declare import kernel_types
 from senselab_core.kernel.identity import InputIdentity
-from senselab_core.runtime.audio_io import open_audio
+from senselab_core.runtime.call import bind_input
 
 
 class RecordSet:
@@ -33,10 +34,9 @@ class RecordSet:
             raise ValueError(f"record ids repeat: {sorted({i for i in ids if ids.count(i) > 1})}")
         self._root = root
 
-    @property
-    def root(self) -> Path | None:
-        """The directory file inputs are relative to."""
-        return self._root
+    def locate(self, path: str) -> str:
+        """Return the file system path of a `FileInput.path`: under the root, or as given without one."""
+        return path if self._root is None else str(self._root / path)
 
     def records(self) -> Iterator[Record]:
         """Yield the records sorted by id."""
@@ -57,7 +57,10 @@ class RecordSet:
         return RecordSet(kept, self._root)
 
     def shard(self, by: str, index: int, count: int) -> Dataset:
-        """Return shard `index` of `count`: the sorted values of entity `by` dealt round-robin, a value never split.
+        """Return shard `index` of `count`: the records whose entity `by` hashes to `index`, a value never split.
+
+        Membership depends on a record's own `by` value and `count` only, so it commutes with `filter` and a
+        record added to the dataset moves no other.
 
         Raises:
             ValueError: if `index` is outside `[0, count)` or a record has no entity `by`.
@@ -67,9 +70,12 @@ class RecordSet:
         missing = [r.id for r in self._records if by not in r.entities]
         if missing:
             raise ValueError(f"records {missing[:3]} have no entity {by!r}; a shard is closed under {by!r}")
-        values = sorted({r.entities[by] for r in self._records})
-        mine = {v for i, v in enumerate(values) if i % count == index}
-        return RecordSet([r for r in self._records if r.entities[by] in mine], self._root)
+        kept = [
+            r
+            for r in self._records
+            if int(value_digest("shard", {"by": by, "value": r.entities[by]}), 16) % count == index
+        ]
+        return RecordSet(kept, self._root)
 
 
 def _ref(value: Any) -> InputRef:  # noqa: ANN401 - a row's input is any JSON value or a path
@@ -101,32 +107,35 @@ def from_records(rows: Iterable[Mapping[str, Any]], *, id_key: str = "id") -> Da
     return RecordSet(records)
 
 
-def _identity(root: Path | None, ref: InputRef) -> InputIdentity:
-    if isinstance(ref, ValueInput):
-        return "content:" + value_digest("json", {"value": ref.value})
-    path = Path(ref.path) if root is None else root / ref.path
-    return open_audio(path).identity
+def build_manifest(
+    dataset: Dataset, ports: Mapping[str, str], *, bind: Mapping[str, str] | None = None
+) -> InputManifest:
+    """Return the manifest of `dataset` for a graph whose inputs are `ports`, as port name to port type.
 
-
-def build_manifest(dataset: Dataset, ports: Mapping[str, str]) -> InputManifest:
-    """Return the manifest of `dataset`: each record's identity of the input `ports[port]` it names, per port.
-
-    A file input is stamped (its bytes hashed in chunks) and its identity is the recording's; a value input's is
-    the digest of its JSON.
+    Each port binds to the record input of the same name; `bind[port]` names another input instead (for BIDS, a
+    suffix). A file input is read as `bind_input` reads a path for the port's type, so its identity is the one a
+    run keys on and comes from the file's content.
 
     Raises:
-        ValueError: if a record has no input named for a port.
+        ValueError: if a record has no input for a port, or a file input is bound to a port type not read from a path.
     """
+    chosen = bind or {}
     rows = []
     for record in dataset.records():
-        missing = sorted(key for key in ports.values() if key not in record.inputs)
-        if missing:
-            raise ValueError(f"record {record.id!r} has no input {missing}")
-        rows.append(
-            ManifestRow(
-                id=record.id,
-                entities=record.entities,
-                inputs={port: _identity(dataset.root, record.inputs[key]) for port, key in ports.items()},
-            )
-        )
+        identities: dict[str, InputIdentity] = {}
+        for port, port_type in ports.items():
+            ref = record.inputs.get(chosen.get(port, port))
+            if ref is None:
+                raise ValueError(
+                    f"record {record.id!r} has no input for port {port!r} (looked for {chosen.get(port, port)!r}); "
+                    f"it has {sorted(record.inputs)}"
+                )
+            if isinstance(ref, FileInput):
+                if port_type not in kernel_types() or port_type == "Text":
+                    raise ValueError(f"port {port!r} is a {port_type}, which is not read from a file")
+                value: object = dataset.locate(ref.path)
+            else:
+                value = ref.value
+            identities[port] = bind_input(port, port_type, value)[0]
+        rows.append(ManifestRow(id=record.id, entities=record.entities, inputs=identities))
     return InputManifest(rows=tuple(rows))

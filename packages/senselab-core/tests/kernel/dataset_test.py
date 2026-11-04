@@ -30,18 +30,33 @@ def test_record_ids_stable_across_walk_order() -> None:
 
 @pytest.mark.logic
 def test_shard_closed_under_subject() -> None:
-    """A shard by `sub` never splits a subject; every record lands in one shard; a bad shard is refused."""
+    """A shard by `sub` never splits a subject; a bad shard is refused."""
     data = from_records(_rows(list(range(6))))
-    shards = [{r.id for r in data.shard("sub", i, 2).records()} for i in range(2)]
-    assert shards[0] | shards[1] == {f"r{i}" for i in range(6)}
-    assert not shards[0] & shards[1]
-    for shard in shards:
-        assert {int(i[1:]) // 2 for i in shard} <= {0, 1, 2}
-        assert all({f"r{2 * s}", f"r{2 * s + 1}"} <= shard for s in {int(i[1:]) // 2 for i in shard})
+    shards = [{r.id for r in data.shard("sub", i, 3).records()} for i in range(3)]
+    assert sorted(i for shard in shards for i in shard) == [f"r{i}" for i in range(6)]
+    for subject in range(3):
+        holders = [shard for shard in shards if {f"r{2 * subject}", f"r{2 * subject + 1}"} & shard]
+        assert len(holders) == 1
+        assert {f"r{2 * subject}", f"r{2 * subject + 1}"} <= holders[0]
     with pytest.raises(ValueError, match="not a shard"):
-        data.shard("sub", 2, 2)
+        data.shard("sub", 3, 3)
     with pytest.raises(ValueError, match="no entity"):
         data.shard("ses", 0, 2)
+
+
+@pytest.mark.logic
+def test_shard_membership_stable_and_commutes_with_filter() -> None:
+    """Adding a subject moves no other; filtering before or after sharding gives the same records."""
+    rows = [
+        {"id": f"r{i}", "entities": {"sub": f"s{i // 2}", "task": "ab"[i % 2]}, "inputs": {"n": i}} for i in range(12)
+    ]
+    full, fewer = from_records(rows), from_records(rows[2:])
+    for index in range(3):
+        kept = {r.id for r in full.shard("sub", index, 3).records()} - {"r0", "r1"}
+        assert kept == {r.id for r in fewer.shard("sub", index, 3).records()}
+        one = [r.id for r in full.filter(task="a").shard("sub", index, 3).records()]
+        two = [r.id for r in full.shard("sub", index, 3).filter(task="a").records()]
+        assert one == two
 
 
 @pytest.mark.logic
