@@ -1,4 +1,4 @@
-"""The sections of an execution profile that size and pace a run: resource classes, substrate, pool, faults, timeouts.
+"""The sections of an execution profile that size and pace a run: classes, substrate, pool, leases, faults, timeouts.
 
 Each is a `Frozen` value the profile holds; `ExecutionProfile` checks that each resource class's name matches its
 device.
@@ -79,6 +79,13 @@ class PoolSettings(Frozen):
     poll_s: PositiveSeconds
     lease_renew_fraction: Annotated[float, Field(gt=0, lt=1)]
     segment_items: PositiveInt
+
+
+class JobLease(Frozen):
+    """How a running job's lease is kept: its stale bound in seconds, and the share of that between renewals."""
+
+    stale_after_s: PositiveSeconds
+    renew_fraction: Annotated[float, Field(gt=0, lt=1)]
 
 
 class FaultBudgets(Frozen):

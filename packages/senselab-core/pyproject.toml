@@ -9,6 +9,9 @@ description = "Framework-free core of senselab: data model, kernel and runtime."
 license = "Apache-2.0"
 requires-python = ">=3.11"
 
+[project.optional-dependencies]
+pydra = ["pydra"]
+
 [dependency-groups]
 test = [
   "pytest",

@@ -42,7 +42,7 @@ _LIST = re.compile(r"^list\[(.+)\]$")
 
 
 class RecordBinding(ValueError):
-    """A graph over a dataset whose inputs are not one record list fed by `map` edges; `ports` names its inputs."""
+    """A graph over a dataset whose inputs the records and the broadcast values do not bind; `ports` names them."""
 
     def __init__(self, ports: tuple[str, ...], message: str) -> None:
         """Hold the graph's input `ports` and name them in the message."""
@@ -85,35 +85,61 @@ def one_node_graph(call: TaskCall, registry: Registry) -> Graph:
     return Graph(inputs=inputs, nodes=(node,), edges=edges, outputs=outputs)
 
 
-def _record_port(graph: Graph) -> tuple[str, str]:
-    """Return the one graph input a dataset's records bind, and the type each record gives it.
+def _record_ports(graph: Graph) -> tuple[dict[str, str], dict[str, str]]:
+    """Return the graph inputs a dataset's records bind, with the type each record gives, and the broadcast inputs.
+
+    A record-bound input is a `list[T]` every edge of which is a `map` edge; every record gives each one, so they are
+    zipped by record. Every other input is broadcast: one value, given once, for every element.
 
     Raises:
-        RecordBinding: the graph has no input or more than one, or its input is not a `list[T]` every edge of which
-            is a `map` edge.
+        RecordBinding: no input is record-bound, or a `list[T]` input is fed by both `map` and other edges.
     """
-    ports = tuple(sorted(graph.inputs))
-    if len(ports) != 1:
-        raise RecordBinding(ports, "a graph over a dataset has exactly one input, the record list")
-    port = ports[0]
-    listed = _LIST.match(graph.inputs[port])
-    kinds = {e.kind for e in graph.edges if e.source == f"input.{port}"}
-    if listed is None or kinds != {"map"}:
-        raise RecordBinding(ports, f"the record list is a list[T] fed only by map edges, got {graph.inputs[port]}")
-    return port, listed[1]
+    record: dict[str, str] = {}
+    broadcast: dict[str, str] = {}
+    for port, declared in sorted(graph.inputs.items()):
+        listed = _LIST.match(declared)
+        kinds = {e.kind for e in graph.edges if e.source == f"input.{port}"}
+        if listed is not None and kinds == {"map"}:
+            record[port] = listed[1]
+        elif "map" in kinds:
+            raise RecordBinding((port,), f"a record list is fed only by map edges, got {sorted(kinds)}")
+        else:
+            broadcast[port] = declared
+    if not record:
+        raise RecordBinding(tuple(sorted(graph.inputs)), "a graph over a dataset maps at least one list[T] input")
+    return record, broadcast
 
 
-def _manifest(
-    graph: Graph, dataset: Dataset | None, call: TaskCall | None, spec: TaskSpec | None, bind: Mapping[str, str]
+def _manifest(  # noqa: PLR0913 - the graph and what binds its inputs
+    graph: Graph,
+    dataset: Dataset | None,
+    call: TaskCall | None,
+    spec: TaskSpec | None,
+    bind: Mapping[str, str],
+    inputs: Mapping[str, object],
 ) -> InputManifest:
-    """Return the manifest of the records `graph` runs over: the dataset's, or the call's one record."""
+    """Return the manifest of the records `graph` runs over: the dataset's, or the call's one record.
+
+    Over a dataset each row holds its record's identity for every record-bound input and the broadcast identity of
+    every other input.
+    """
     if dataset is not None:
         if call is not None and call.inputs:
             raise ValueError("a call planned over a dataset takes its inputs from the records; it gives none itself")
-        port, item = _record_port(graph)
-        return build_manifest(dataset, {port: item}, bind=bind)
-    if bind:
-        raise ValueError("bind names the record inputs of a dataset; there is no dataset")
+        record, broadcast = _record_ports(graph)
+        if set(inputs) != set(broadcast):
+            raise RecordBinding(
+                tuple(sorted(broadcast)), f"the broadcast inputs are given once as inputs; got {sorted(inputs)}"
+            )
+        if set(bind) - set(record):
+            raise RecordBinding(tuple(sorted(set(bind) - set(record))), "bind names record-bound inputs only")
+        shared = {port: bind_input(port, kind, inputs[port])[0] for port, kind in broadcast.items()}
+        rows = build_manifest(dataset, record, bind=bind).rows
+        return InputManifest(
+            rows=tuple(ManifestRow(id=r.id, entities=r.entities, inputs={**r.inputs, **shared}) for r in rows)
+        )
+    if bind or inputs:
+        raise ValueError("bind and inputs name the inputs of a graph over a dataset; there is no dataset")
     if call is None or spec is None:
         if graph.inputs:
             raise ValueError(f"the graph has inputs {sorted(graph.inputs)}; they are bound from a dataset's records")
@@ -163,6 +189,7 @@ def resolve(  # noqa: PLR0913 - the target and records, then keyword-only resolu
     config: RunConfig,
     dataset_profile: Mapping[str, Any] | None = None,
     bind: Mapping[str, str] | None = None,
+    inputs: Mapping[str, object] | None = None,
     resolver: Resolver = PROCESS_RESOLVER,
     admit: Callable[[str], None] | None = None,
 ) -> tuple[LogicalPlan, InputManifest]:
@@ -172,14 +199,17 @@ def resolve(  # noqa: PLR0913 - the target and records, then keyword-only resolu
     params are completed with their declared defaults. Each node's model is the catalogue's pin, or `resolve()`d
     through `resolver` once `admit` (a source allowlist, raising to refuse) accepts its hub id; a node naming none
     takes the task's catalogue default. Each node's declared profile slices are cut from `config.settings` and
-    `dataset_profile` (`keys.profile_slices`). Over a dataset the graph has one input, the record list, and `bind`
-    maps it to the record input it reads (`build_manifest`). The plan's reuse policy is `config.reuse`. Models and
-    slices are resolved before any input is read.
+    `dataset_profile` (`keys.profile_slices`). Over a dataset each `list[T]` input fed only by `map` edges is bound
+    from every record, zipped by record, and `bind` maps such an input to the record input it reads
+    (`build_manifest`); every other input is broadcast to every element, its one value given in `inputs`. The plan's
+    reuse policy is `config.reuse`. Models and slices are resolved before any input is read.
 
     Raises:
         InvalidGraph: the graph has issues against the packaged registry.
-        RecordBinding: over a dataset, the graph's inputs are not one record list fed by `map` edges.
-        ValueError: the records do not bind the graph's input, or a call over a dataset gives inputs itself.
+        RecordBinding: over a dataset, no input is a record list fed only by `map` edges, a list is fed by both
+            kinds, `inputs` does not give exactly the broadcast inputs, or `bind` names another input.
+        ValueError: the records do not bind the graph's inputs, a call over a dataset gives inputs itself, or `bind`
+            or `inputs` is given without a dataset.
         MissingProfileSlice: a declared profile slice is absent.
         UnpinnedModel, RevisionResolutionError, ModelResolutionError: a model cannot be pinned; or what `admit` raises.
     """
@@ -194,7 +224,7 @@ def resolve(  # noqa: PLR0913 - the target and records, then keyword-only resolu
     specs = {n.id: registry.spec(n.task) for n in graph.nodes}
     models = {n.id: _pinned(specs[n.id], n, catalogue, resolver, admit) for n in graph.nodes}
     slices = {n.id: profile_slices(specs[n.id], config.settings, dataset_profile) for n in graph.nodes}
-    manifest = _manifest(graph, dataset, call, spec, bind or {})
+    manifest = _manifest(graph, dataset, call, spec, bind or {}, inputs or {})
     plan = LogicalPlan(
         graph=graph,
         models=models,
@@ -231,6 +261,7 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
     dataset_profile: Mapping[str, Any] | None = None,
     execution: ExecutionProfile | None = None,
     bind: Mapping[str, str] | None = None,
+    inputs: Mapping[str, object] | None = None,
     hardware: HardwareInfo | None = None,
 ) -> Plan:
     """Return `target` over `dataset` resolved (`resolve`) and placed under `execution` on this host.
@@ -259,6 +290,7 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
         config=config,
         dataset_profile=dataset_profile,
         bind=bind,
+        inputs=inputs,
         resolver=replace(PROCESS_RESOLVER, network=profile.network),
         admit=lambda model_id: profile.check_source(model_id, catalogue),
     )

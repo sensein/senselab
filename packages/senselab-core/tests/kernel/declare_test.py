@@ -354,6 +354,24 @@ def test_task_ports_may_name_protocols() -> None:
 
 
 @pytest.mark.logic
+def test_task_ports_may_name_lists_of_kernel_types() -> None:
+    """A port may name `list[T]` of a kernel value type, so a gather feeds a declared task; nested lists are refused."""
+    registry = Registry()
+
+    @task(name="t.pool", version="1", kind="transform", registry=registry)
+    class _Pool:
+        inputs = {"embeddings": list[Embedding]}
+        outputs = {"pooled": Embedding}
+
+    assert _Pool.spec.inputs == {"embeddings": "list[Embedding]"}  # type: ignore[attr-defined]
+    for bad in (list[int], list[list[Embedding]], list):
+        with pytest.raises(TypeError, match="embeddings"):
+            task(name="t.bad", version="1", kind="transform")(
+                type("_T", (), {"inputs": {"embeddings": bad}, "outputs": {"e": Embedding}})
+            )
+
+
+@pytest.mark.logic
 @pytest.mark.parametrize(
     "ports",
     [

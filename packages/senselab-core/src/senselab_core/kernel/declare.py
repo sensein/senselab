@@ -494,10 +494,12 @@ def task(  # noqa: PLR0913 - a task declares its name, version, kind, constraint
     A package declares such classes in the registry its `register` is given, with `declare_module`.
 
     The class holds `inputs` and `outputs`, each mapping port names to kernel value types (a port protocol, a
-    `Recording` or a `Formatted` result), and may hold `Params`, a `TaskParams` subclass (`TaskParams` when absent).
+    `Recording` or a `Formatted` result) or to `list[T]` of one, and may hold `Params`, a `TaskParams` subclass
+    (`TaskParams` when absent).
 
     Raises:
-        TypeError: if `inputs` or `outputs` is missing or maps a port to anything but a kernel value type.
+        TypeError: if `inputs` or `outputs` is missing or maps a port to anything but a kernel value type or a list
+            of one.
     """
 
     def declare(cls: C) -> C:
@@ -519,22 +521,30 @@ def task(  # noqa: PLR0913 - a task declares its name, version, kind, constraint
     return declare
 
 
+def _port_type(t: object) -> str | None:
+    """Return the port type name of `t`, a kernel value type or `list[T]` of one, or None for anything else."""
+    if typing.get_origin(t) is list:
+        (item,) = typing.get_args(t) or (None,)
+        named = _port_type(item)
+        return None if named is None or named.startswith("list[") else f"list[{named}]"
+    if (
+        isinstance(t, type)
+        and (t in PORT_PROTOCOLS or issubclass(t, (Recording, Formatted)))
+        and getattr(t, "port_value", True)
+    ):
+        return t.__name__
+    return None
+
+
 def _port_types(cls: type, ports: str) -> dict[str, str]:
     declared = getattr(cls, ports, None)
     if not isinstance(declared, Mapping):
         raise TypeError(f"task class {cls.__qualname__} must map {ports} port names to kernel value types")
-    bad = {
-        p: t
-        for p, t in declared.items()
-        if not (
-            isinstance(t, type)
-            and (t in PORT_PROTOCOLS or issubclass(t, (Recording, Formatted)))
-            and getattr(t, "port_value", True)
-        )
-    }
+    named = {p: _port_type(t) for p, t in declared.items()}
+    bad = sorted(p for p, n in named.items() if n is None)
     if bad:
-        raise TypeError(f"{cls.__qualname__}.{ports}: ports {sorted(bad)} are not kernel value types")
-    return {p: t.__name__ for p, t in declared.items()}
+        raise TypeError(f"{cls.__qualname__}.{ports}: ports {bad} are not kernel value types or lists of one")
+    return {p: n for p, n in named.items() if n is not None}
 
 
 def backend(*, name: str, version: str, registry: Registry | None = None, **fields: Any) -> Callable[[C], C]:  # noqa: ANN401

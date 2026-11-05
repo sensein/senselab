@@ -28,6 +28,7 @@ def _registry() -> Registry:
         ("speech.pool", {"embeddings": "list[Embedding]"}, {"embedding": "Embedding"}),
         ("signal.describe", {"series": "RegularSeries"}, {"note": "Annotation"}),
         ("speech.fit_space", {"first": "Audio", "second": "Audio"}, {"events": "Events"}),
+        ("speech.score", {"audio": "Audio", "pool": "list[Embedding]"}, {"note": "Annotation"}),
     ):
         registry.add_task(
             TaskSpec(name=name, version="1", kind="transform", inputs=inputs, outputs=outputs, params=TaskParams)
@@ -76,6 +77,24 @@ def test_map_then_gather_is_valid_and_gather_needs_a_map() -> None:
     assert _codes(unmapped) == [("gather_without_map", "p", "embeddings")]
     not_a_list = _graph({"clip": "Audio"}, [_node("e", "speech.embed")], [("input.clip", "e.audio", "map")])
     assert _codes(not_a_list) == [("type_mismatch", "e", "audio")]
+
+
+@pytest.mark.logic
+def test_a_gather_into_a_mapped_node_is_nested_fan_out() -> None:
+    """A gather into a node a map edge also targets is `nested_fan_out`; into an unmapped node it is valid."""
+    edges = [("input.clips", "e.audio", "map"), ("e.embedding", "s.pool", "gather")]
+    nested = _graph(
+        {"clips": "list[Audio]"},
+        [_node("e", "speech.embed"), _node("s", "speech.score")],
+        [*edges, ("input.clips", "s.audio", "map")],
+    )
+    assert _codes(nested) == [("nested_fan_out", "s", "pool")]
+    once = _graph(
+        {"clips": "list[Audio]", "clip": "Audio"},
+        [_node("e", "speech.embed"), _node("s", "speech.score")],
+        [*edges, ("input.clip", "s.audio", "plain")],
+    )
+    assert _codes(once) == []
 
 
 @pytest.mark.logic

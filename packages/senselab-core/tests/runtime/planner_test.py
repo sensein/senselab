@@ -148,7 +148,7 @@ SETTINGS = {"aggregator": "mean", "other": 1}
 def test_resolve_takes_no_execution_input() -> None:
     """`resolve` has no execution profile, hardware or placement parameter."""
     names = set(inspect.signature(resolve).parameters)
-    assert names == {"target", "dataset", "config", "dataset_profile", "bind", "resolver", "admit"}
+    assert names == {"target", "dataset", "config", "dataset_profile", "bind", "inputs", "resolver", "admit"}
     assert not names & {"execution", "profile", "hardware", "placement", "device", "backend"}
 
 
@@ -286,11 +286,11 @@ def test_node_params_are_completed_with_defaults() -> None:
 
 
 @pytest.mark.logic
-def test_more_than_one_record_bound_input_is_refused() -> None:
-    """Over a dataset, a graph has one input, the record list fed by map edges; anything else names its ports."""
+def test_a_graph_over_a_dataset_needs_a_record_list_and_its_broadcast_values() -> None:
+    """Over a dataset a graph maps at least one record list; each other input is broadcast, given once in `inputs`."""
     with pytest.raises(RecordBinding) as raised:
         resolve(_call(PAIR), _records("x"), config=RunConfig())
-    assert raised.value.ports == ("a", "b")
+    assert raised.value.ports == ("b",)
     plain = Graph.model_validate(
         {
             "inputs": {"text": "json"},
@@ -300,8 +300,41 @@ def test_more_than_one_record_bound_input_is_refused() -> None:
     )
     with pytest.raises(RecordBinding, match="text"):
         resolve(plain, _records("x"), config=RunConfig())
+    with pytest.raises(RecordBinding, match="b"):
+        resolve(_call(PAIR), _records("x"), config=RunConfig(), bind={"b": "text"}, inputs={"b": 2})
+    with pytest.raises(ValueError, match="no dataset"):
+        resolve(_call(PAIR, inputs={"a": 1, "b": 2}), None, config=RunConfig(), inputs={"b": 2})
     single, manifest = resolve(_call(PAIR, inputs={"a": 1, "b": 2}), None, config=RunConfig())
     assert set(manifest.rows[0].inputs) == {"a", "b"} and single.manifest_digest == manifest.digest()
+
+
+@pytest.mark.logic
+def test_record_bound_inputs_are_zipped_and_the_rest_broadcast() -> None:
+    """Two record lists are read from each record, row by row; a broadcast input has one identity in every row."""
+    graph = Graph.model_validate(
+        {
+            "inputs": {"first": "list[json]", "second": "list[json]", "both": "json"},
+            "nodes": [
+                {"id": "f", "task": SCORE.name, "task_version": "1"},
+                {"id": "s", "task": SCORE.name, "task_version": "1"},
+                {"id": "p", "task": PAIR.name, "task_version": "1"},
+            ],
+            "edges": [
+                {"source": "input.first", "target": "f.text", "kind": "map"},
+                {"source": "input.second", "target": "s.text", "kind": "map"},
+                {"source": "f.value", "target": "p.a"},
+                {"source": "input.both", "target": "p.b"},
+            ],
+        }
+    )
+    records = from_records({"id": f"r{i}", "inputs": {"first": f"one-{i}", "second": f"two-{i}"}} for i in range(3))
+    logical, manifest = resolve(graph, records, config=RunConfig(), inputs={"both": 7})
+    rows = [dict(r.inputs) for r in manifest.rows]
+    assert len({r["both"] for r in rows}) == 1 and len({(r["first"], r["second"]) for r in rows}) == 3
+    _, other = resolve(graph, records, config=RunConfig(), inputs={"both": 8})
+    assert other.digest() != manifest.digest() and logical.manifest_digest == manifest.digest()
+    with pytest.raises(RecordBinding, match="both"):
+        resolve(graph, records, config=RunConfig())
 
 
 @pytest.mark.logic

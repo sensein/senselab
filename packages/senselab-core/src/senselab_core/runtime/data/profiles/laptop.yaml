@@ -47,6 +47,10 @@ pool:
   poll_s: 30
   lease_renew_fraction: 0.33
   segment_items: 10000
+# A running job's lease: seconds after which another process breaks it, and the share of that between renewals.
+lease:
+  stale_after_s: 300
+  renew_fraction: 0.33
 # Retries per fault class before an item fails or its env is reported broken.
 faults:
   content_attempts: 2

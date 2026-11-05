@@ -1,7 +1,8 @@
 """The graph document `graph@1.0`: task nodes joined by plain, `map` and `gather` edges, and its checks.
 
 A graph is data: it is built from JSON (`Graph.model_validate_json`), checked against a registry with `validate`,
-ordered with `order` and identified by `graph_digest`. `graph_schema` is its published JSON Schema.
+ordered with `order`, its per-element nodes named by `mapped_nodes`, and identified by `graph_digest`. `graph_schema`
+is its published JSON Schema.
 """
 
 import heapq
@@ -48,6 +49,7 @@ IssueCode = Literal[
     "type_mismatch",
     "unmapped_list",
     "gather_without_map",
+    "nested_fan_out",
     "cycle",
     "unbound_input",
 ]
@@ -187,7 +189,7 @@ class _Check:
         return declared[port]
 
 
-def _mapped(graph: Graph) -> set[str]:
+def mapped_nodes(graph: Graph) -> set[str]:
     """The nodes that run once per element: a `map` edge's targets and every node a plain edge from one reaches."""
     mapped = {split(e.target)[0] for e in graph.edges if e.kind == "map"}
     grown = True
@@ -280,7 +282,7 @@ def _cycles(graph: Graph) -> list[list[str]]:
 
 
 def _check_declarations(check: _Check, registry: Registry) -> None:
-    """Report graph inputs of no known port type, and nodes more than one `map` edge targets."""
+    """Report graph inputs of no known port type, nodes more than one `map` edge targets, and gathers into them."""
     known = set(kernel_types()) | {t for s in registry.tasks() for t in (*s.inputs.values(), *s.outputs.values())}
     for name, declared in check.graph.inputs.items():
         listed = _LIST.match(declared)
@@ -290,13 +292,17 @@ def _check_declarations(check: _Check, registry: Registry) -> None:
     maps = [split(e.target)[0] for e in check.graph.edges if e.kind == "map"]
     for node_id in sorted({n for n in maps if maps.count(n) > 1}):
         check.issue("type_mismatch", node_id, None, f"node {node_id!r}: more than one map edge targets it")
+    gathered = {split(e.target) for e in check.graph.edges if e.kind == "gather"}
+    for node_id, port in sorted(t for t in gathered if t[0] in set(maps)):
+        message = f"{node_id}.{port}: a gather edge feeds a node a map edge also targets"
+        check.issue("nested_fan_out", node_id, port, message)
 
 
 def validate(graph: Graph, registry: Registry) -> list[GraphIssue]:
     """Return every issue of `graph` against the tasks declared in `registry`; an empty list is a valid graph."""
     check = _Check(graph, registry)
     _check_declarations(check, registry)
-    mapped = _mapped(graph)
+    mapped = mapped_nodes(graph)
     for edge in graph.edges:
         _check_edge(check, edge, mapped)
     bound = {e.target for e in graph.edges}

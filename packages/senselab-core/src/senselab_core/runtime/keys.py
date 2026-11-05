@@ -146,11 +146,7 @@ class Placement:
 
 
 def build_key(call: Call, placement: Placement, context: ExecutionContext) -> LogicalKey:
-    """Return the logical key of running `call` under `placement`; `context` never reaches it.
-
-    The key holds the backend's name and version, its params, and the batch formation and chunk grid
-    the backend declares output-affecting; no other placement field: never the device, env root, reason, resource
-    class, batch size or partition.
+    """Return the logical key of running `call` under `placement` (`call_key`); `context` never reaches it.
 
     Raises:
         TypeError: if `context` is not an `ExecutionContext`.
@@ -158,6 +154,19 @@ def build_key(call: Call, placement: Placement, context: ExecutionContext) -> Lo
     """
     if not isinstance(context, ExecutionContext):
         raise TypeError(f"context must be an ExecutionContext, got {type(context).__name__}")
+    return call_key(call, placement)
+
+
+def call_key(call: Call, placement: Placement) -> LogicalKey:
+    """Return the logical key of running `call` under `placement`.
+
+    The key holds the backend's name and version, its params, and the batch formation and chunk grid
+    the backend declares output-affecting; no other placement field: never the device, env root, reason, resource
+    class, batch size or partition.
+
+    Raises:
+        ValueError, UnpinnedModel, pydantic.ValidationError: as `key_for`.
+    """
     declared = placement.backend.output_affecting
     return key_for(
         call.task,

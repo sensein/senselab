@@ -2,9 +2,9 @@
 
 A profile holds stack preferences per task, device preference, env roots, the torch index override, the model-source
 allowlist, the model-cache budget, the retry policy, the network policy, the resource classes, the substrate, the
-pool, fault budgets, worker timeouts and service settings. `ExecutionProfile.load` deep-merges a user mapping or YAML
-file over a packaged profile (`laptop`, `orcd`). A profile is recorded with each result through `canonical_digest`
-and never reaches a key.
+pool, job leases, fault budgets, worker timeouts and service settings. `ExecutionProfile.load` deep-merges a user
+mapping or YAML file over a packaged profile (`laptop`, `orcd`). A profile is recorded with each result through
+`canonical_digest` and never reaches a key.
 """
 
 import difflib
@@ -32,6 +32,7 @@ from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.execution_settings import (
     FaultBudgets,
+    JobLease,
     PoolSettings,
     ResourceClass,
     ServiceSettings,
@@ -108,6 +109,7 @@ class ExecutionProfile(Formatted):
         resource_classes: The worker classes a node is placed on, by name (`cpu`, `gpu:<type>`, `mps`, `svc:<id>`).
         substrate: What starts workers: `local` processes or `slurm` jobs.
         pool: How pool workers claim, yield and renew.
+        lease: How the graph runner's engine keeps a running job's lease.
         faults: The retry budget of each fault class.
         timeouts: A worker's load and request timeouts.
         services: When an idle service exits.
@@ -126,6 +128,7 @@ class ExecutionProfile(Formatted):
     resource_classes: Mapping[NonEmptyStr, ResourceClass]
     substrate: SubstrateSpec
     pool: PoolSettings
+    lease: JobLease
     faults: FaultBudgets
     timeouts: Timeouts
     services: ServiceSettings
@@ -205,6 +208,7 @@ _SECTIONS: Mapping[str, type[Frozen]] = {
     "retry": RetryPolicy,
     "substrate": SubstrateSpec,
     "pool": PoolSettings,
+    "lease": JobLease,
     "faults": FaultBudgets,
     "timeouts": Timeouts,
     "services": ServiceSettings,

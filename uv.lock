@@ -492,6 +492,15 @@ wheels = [
 ]
 
 [[package]]
+name = "ci-info"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f1/05/7880d5714b2e1c4c2f2ccbd04b2e2bdcd3753d91d5e925b3a91af25970db/ci_info-0.4.0.tar.gz", hash = "sha256:34d5a18726b3780abdf985234b871ac33124d64dd8e294870b8cc5b410c18418", size = 6862, upload-time = "2026-02-02T14:25:47.313Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/12/d5/27742bf24dde737fe05e6fba615d9aa1bf95f4dda258a45cf97eb403366e/ci_info-0.4.0-py2.py3-none-any.whl", hash = "sha256:204e8ef60cb70270eefb2b3035fe6acc78a186dbbcb02f8f4f051cb20a6fbb8d", size = 6316, upload-time = "2026-02-02T14:25:46.235Z" },
+]
+
+[[package]]
 name = "click"
 version = "8.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -776,6 +785,19 @@ wheels = [
 ]
 
 [[package]]
+name = "etelemetry"
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ci-info" },
+    { name = "packaging" },
+    { name = "requests" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/83/27/f997c9da0e179986fadd6c8474d16743f1b3697c129c2fcd1e739cd038c2/etelemetry-0.3.1-py3-none-any.whl", hash = "sha256:a64f09bcd55cbfa5684e4d9fb6d1d6a018ab99d2ea28e638435c4c26e6814a6b", size = 6416, upload-time = "2023-10-13T15:13:16.067Z" },
+]
+
+[[package]]
 name = "execnet"
 version = "2.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -800,6 +822,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/20/b5/23b216d9d985a956623b6bd12d4086b60f0059b27799f23016af04a74ea1/fastjsonschema-2.21.2.tar.gz", hash = "sha256:b1eb43748041c880796cd077f1a07c3d94e93ae84bba5ed36800a33554ae05de", size = 374130, upload-time = "2025-08-14T18:49:36.666Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/a8/20d0723294217e47de6d9e2e40fd4a9d2f7c4b6ef974babd482a59743694/fastjsonschema-2.21.2-py3-none-any.whl", hash = "sha256:1c797122d0a86c5cace2e54bf4e819c36223b552017172f32c5c024a6b77e463", size = 24024, upload-time = "2025-08-14T18:49:34.776Z" },
+]
+
+[[package]]
+name = "fileformats"
+version = "0.22.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cd/34/266ce0a89aa49f41384bfe9fdaac1dde035f582b056b4b70bb393f22f6b0/fileformats-0.22.5.tar.gz", hash = "sha256:6f12820bf281fd427146db717898995e57b639d78f3d5a361bbcd4168517aa93", size = 121189, upload-time = "2026-11-04T23:00:12.993Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6d/52/4875486ffc968ffba5c3a57cb65322e6d8f8b6553bde5c0edd5d277ba303/fileformats-0.22.5-py3-none-any.whl", hash = "sha256:99603bdb4bf5fde9c45a443f9ac7426a5e3aa33175e191379a5218125c6f2cf1", size = 152177, upload-time = "2026-11-04T23:00:11.171Z" },
 ]
 
 [[package]]
@@ -2991,6 +3025,21 @@ wheels = [
 ]
 
 [[package]]
+name = "pydra"
+version = "1.0a13.dev204+gc8541fc56"
+source = { git = "https://github.com/nipype/pydra?rev=c8541fc5604d6917e6d418279f0f443d4bab8328#c8541fc5604d6917e6d418279f0f443d4bab8328" }
+dependencies = [
+    { name = "attrs" },
+    { name = "click" },
+    { name = "cloudpickle" },
+    { name = "etelemetry" },
+    { name = "fileformats" },
+    { name = "filelock" },
+    { name = "packaging" },
+    { name = "platformdirs" },
+]
+
+[[package]]
 name = "pygments"
 version = "2.20.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3757,6 +3806,7 @@ wheels = [
 name = "senselab"
 source = { editable = "." }
 dependencies = [
+    { name = "pydra" },
     { name = "senselab-core" },
     { name = "senselab-worker" },
 ]
@@ -3816,6 +3866,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "pydra", git = "https://github.com/nipype/pydra?rev=c8541fc5604d6917e6d418279f0f443d4bab8328" },
     { name = "senselab-core", editable = "packages/senselab-core" },
     { name = "senselab-worker", editable = "packages/senselab-worker" },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.4" },
@@ -3878,6 +3929,11 @@ dependencies = [
     { name = "soundfile" },
 ]
 
+[package.optional-dependencies]
+pydra = [
+    { name = "pydra" },
+]
+
 [package.dev-dependencies]
 test = [
     { name = "grimp" },
@@ -3898,10 +3954,12 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.23" },
     { name = "packaging" },
     { name = "pydantic", specifier = ">=2,<3" },
+    { name = "pydra", marker = "extra == 'pydra'", git = "https://github.com/nipype/pydra?rev=c8541fc5604d6917e6d418279f0f443d4bab8328" },
     { name = "pyyaml" },
     { name = "senselab-worker", editable = "packages/senselab-worker" },
     { name = "soundfile", specifier = ">=0.12" },
 ]
+provides-extras = ["pydra"]
 
 [package.metadata.requires-dev]
 test = [

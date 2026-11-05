@@ -36,6 +36,7 @@ Contracts per type:
 import copy
 import functools
 import importlib
+import importlib.util
 import io
 import operator
 import pickle
@@ -147,11 +148,22 @@ def registered_types() -> set[type[Frozen]]:
     return set(_SAMPLES)
 
 
+OPTIONAL_MODULES: Mapping[str, str] = {"senselab_core.runtime.execution.runner": "pydra"}
+"""Modules that import an optional extra, by module, with the distribution they need."""
+
+
+def importable(module: str) -> bool:
+    """Whether `module` can be imported here: every module but one whose optional extra is not installed."""
+    needed = OPTIONAL_MODULES.get(module)
+    return needed is None or importlib.util.find_spec(needed) is not None
+
+
 def frozen_types() -> list[type[Frozen]]:
-    """Return every `Frozen` subclass defined under `SCANNED_PACKAGES`, after importing all their modules."""
+    """Return every `Frozen` subclass defined under `SCANNED_PACKAGES`, after importing all their importable modules."""
     for package in (senselab_core.kernel, senselab_core.runtime):
         for module in pkgutil.walk_packages(package.__path__, package.__name__ + "."):
-            importlib.import_module(module.name)
+            if importable(module.name):
+                importlib.import_module(module.name)
     found: list[type[Frozen]] = []
     pending = list(Frozen.__subclasses__())
     while pending:

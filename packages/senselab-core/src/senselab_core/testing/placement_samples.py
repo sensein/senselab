@@ -7,6 +7,7 @@ from senselab_core.kernel.license import License, LicenseSet
 from senselab_core.kernel.placement import Cost, NodePlacement, PlanPlacement
 from senselab_core.runtime.execution_settings import (
     FaultBudgets,
+    JobLease,
     PoolSettings,
     ResourceClass,
     ServiceSettings,
@@ -143,6 +144,10 @@ def _register_settings(register: Register) -> None:
                 PoolSettings(quantum_items=1, quantum_s=1, poll_s=0.5, lease_renew_fraction=0.5, segment_items=1),
             ],
             [{"lease_renew_fraction": 1.0}, {"quantum_items": 0}],
+        ),
+        JobLease: (
+            [JobLease(stale_after_s=300, renew_fraction=0.33), JobLease(stale_after_s=0.5, renew_fraction=0.9)],
+            [{"stale_after_s": 0}, {"renew_fraction": 1.0}, {"renew_fraction": 0}],
         ),
         FaultBudgets: (
             [

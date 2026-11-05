@@ -9,7 +9,7 @@ from dataclasses import replace
 
 from senselab_core.kernel.declare import Registry, TaskSpec
 from senselab_core.kernel.graph import Edge, Node
-from senselab_core.kernel.identity import InputIdentity, ReusePolicy, gather_identity
+from senselab_core.kernel.identity import InputIdentity, LogicalKey, ReusePolicy, gather_identity
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.call import Result, RunConfig, TaskCall, bind_input, packaged
 from senselab_core.runtime.execution.executor import (
@@ -25,7 +25,7 @@ from senselab_core.runtime.execution.executor import (
 from senselab_core.runtime.execution.job import Completed, Failed, Job, JobOutcome, Upstream, execute
 from senselab_core.runtime.execution.outputs import anchors_of
 from senselab_core.runtime.execution.workers import WorkerSet
-from senselab_core.runtime.keys import Call, Placement
+from senselab_core.runtime.keys import Call, Placement, call_key, request_components, request_size
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import cache_root
@@ -71,25 +71,28 @@ def _source(edge: Edge) -> tuple[str, str]:
     return node, port
 
 
-def node_fragment(
+def node_fragment(  # noqa: PLR0913 - the plan and admission, then keyword-only selections
     placed: Plan,
     admission: Admission,
     node: str | None = None,
     *,
     upstream: Mapping[str, Sequence[ResultRef]] | None = None,
+    elements: Sequence[tuple[int, ...]] | None = None,
 ) -> PlanFragment:
-    """Return the fragment of every job of `node` (the plan's one node when None) under `admission`.
+    """Return the fragment of the jobs of `node` (the plan's one node when None) under `admission`.
 
     A node fed by a graph input has one job per manifest record, its element the record's index when a `map` edge
-    feeds it. A node fed only by upstream nodes has one job per element of their per-element results (one job when
-    every edge into it is a `gather`), `upstream` giving each upstream node's results. An element reads the upstream
-    result of the same element, or of the unmapped one; a `gather` edge reads every element's result, in element
-    order, as one `gather:` input.
+    feeds it; an unmapped node fed only by broadcast inputs has one job. A node fed only by upstream nodes has one job
+    per element of their per-element results (one job when every edge into it is a `gather`), `upstream` giving each
+    upstream node's results. An element reads its own record and the upstream result of the same element, or of the
+    unmapped one; a `gather` edge reads every element's result, in element order, as one `gather:` input. `elements`
+    selects some of the node's jobs; None selects every one.
 
     Raises:
         ValueError: `node` is None and the plan has more than one node; the admission is of another plan; an
             upstream node's results are not given, are missing an element or hold a failure; the manifest holds no
-            record, or more than one for an unmapped node.
+            record, or records that differ in a broadcast input of an unmapped node; `elements` names a job the
+            node lacks.
     """
     graph = placed.logical.graph
     if node is None:
@@ -101,26 +104,22 @@ def node_fragment(
     feeds = {e.target.split(".", 1)[1]: e for e in graph.edges if e.target.split(".", 1)[0] == node}
     given = {p: _source(e)[1] for p, e in feeds.items() if _source(e)[0] == "input"}
     results = {p: _results(node, _source(e)[0], upstream or {}) for p, e in feeds.items() if _source(e)[0] != "input"}
+    every = _elements(node, placed, {feeds[p].kind for p in given}, given, results, feeds)
+    chosen = every if elements is None else [tuple(e) for e in elements]
+    if not set(chosen) <= set(every):
+        raise ValueError(f"node {node!r} has elements {every}; {sorted(set(chosen) - set(every))} are not among them")
     rows = placed.manifest.rows
-    if given:
-        mapped = any(feeds[p].kind == "map" for p in given)
-        if not rows or (not mapped and len(rows) > 1):
-            raise ValueError(f"node {node!r} has {len(rows)} records; a fragment holds one job per record")
-        elements: list[tuple[int, ...]] = [(i,) if mapped else () for i in range(len(rows))]
-    else:
-        per_element = [refs for p, refs in results.items() if feeds[p].kind != "gather"]
-        elements = sorted({element for refs in per_element for element in refs}) if per_element else [()]
     inputs: list[dict[str, str]] = []
     read: dict[str, UpstreamRef] = {}
     gathers: dict[str, tuple[str, ...]] = {}
-    for i, element in enumerate(elements):
-        entry: dict[str, str] = {p: rows[i].inputs[g] for p, g in given.items()}
+    for element in chosen:
+        entry: dict[str, str] = {p: rows[element[0] if element else 0].inputs[g] for p, g in given.items()}
         for port, refs in results.items():
             source_port = _source(feeds[port])[1]
-            chosen = (
+            picked = (
                 [refs[e] for e in sorted(refs)] if feeds[port].kind == "gather" else [refs.get(element, refs.get(()))]
             )
-            stored = [_stored(node, element, port, source_port, ref) for ref in chosen]
+            stored = [_stored(node, element, port, source_port, ref) for ref in picked]
             read.update({ref.identity(): ref for ref in stored})
             if feeds[port].kind == "gather":
                 ordered = tuple(ref.identity() for ref in stored)
@@ -133,12 +132,34 @@ def node_fragment(
         plan_hash=placed.hash,
         node=node,
         admission=admission.id,
-        jobs=tuple(JobRef(plan_hash=placed.hash, node=node, element=e) for e in elements),
+        jobs=tuple(JobRef(plan_hash=placed.hash, node=node, element=e) for e in chosen),
         inputs=tuple(inputs),
         upstream=read,
         gathered=gathers,
         placement=placed.placement.nodes[node],
     )
+
+
+def _elements(  # noqa: PLR0913 - the node, its plan and what feeds it
+    node: str,
+    placed: Plan,
+    kinds: set[str],
+    given: Mapping[str, str],
+    results: Mapping[str, Mapping[tuple[int, ...], ResultRef]],
+    feeds: Mapping[str, Edge],
+) -> list[tuple[int, ...]]:
+    """Return every element of `node`: a record's index per record when a `map` edge feeds it, else per upstream."""
+    rows = placed.manifest.rows
+    if "map" in kinds:
+        if not rows:
+            raise ValueError(f"node {node!r} is mapped over a manifest of no record")
+        return [(i,) for i in range(len(rows))]
+    per_element = [refs for p, refs in results.items() if feeds[p].kind != "gather"]
+    if per_element:
+        return sorted({element for refs in per_element for element in refs})
+    if given and (not rows or len({tuple(rows[i].inputs[g] for g in given.values()) for i in range(len(rows))}) > 1):
+        raise ValueError(f"node {node!r} has {len(rows)} records; an unmapped node reads one value of each input")
+    return [()]
 
 
 def _stored(node: str, element: tuple[int, ...], port: str, source_port: str, ref: ResultRef | None) -> UpstreamRef:
@@ -179,6 +200,36 @@ def placement_of_record(record: NodePlacement, spec: TaskSpec, registry: Registr
         batch_size=record.batch_size,
         partition=record.partition,
     )
+
+
+def _node_call(placed: Plan, node_id: str, registry: Registry) -> Call:
+    """Return the call node `node_id` of `placed` makes, its params parsed, before any input is bound.
+
+    Raises:
+        ValueError: the plan has no such node, or names another version of its task than the declared one.
+    """
+    nodes = {n.id: n for n in placed.logical.graph.nodes}
+    if node_id not in nodes:
+        raise ValueError(f"plan {placed.hash} has no node {node_id!r}")
+    node = nodes[node_id]
+    spec = registry.spec(node.task)
+    if node.task_version != spec.version:
+        raise ValueError(f"{node.task!r} is declared at version {spec.version!r}, not {node.task_version!r}")
+    params = TaskCall.parse_params(node.task, node.params, registry)
+    return Call(spec, params, {}, placed.logical.models[node_id], placed.logical.profile_slices[node_id])
+
+
+def job_key(placed: Plan, node: str, inputs: Mapping[str, InputIdentity]) -> LogicalKey:
+    """Return the logical key `execute` gives the job of `node` of `placed` that reads `inputs`.
+
+    Raises:
+        ValueError: as `placement_of_record`, or the plan has no such node.
+    """
+    registry = packaged().registry
+    call = replace(_node_call(placed, node, registry), inputs=dict(inputs))
+    placement = placement_of_record(placed.placement.nodes[node], call.task, registry)
+    size = request_size(placement.backend, placement.batch_size)
+    return call_key(call, replace(placement, **request_components(placement.backend, size)))
 
 
 class InProcess:
@@ -353,23 +404,17 @@ class InProcess:
     def _jobs(self, fragment: PlanFragment) -> tuple[list[Job], Placement]:
         """Return the jobs of `fragment` with their graph-input values and upstream inputs, and its placement."""
         placed, values = self._held(fragment)
+        registry = packaged().registry
+        base = _node_call(placed, fragment.node, registry)
         nodes = {n.id: n for n in placed.logical.graph.nodes}
-        if fragment.node not in nodes:
-            raise ValueError(f"plan {fragment.plan_hash} has no node {fragment.node!r}")
-        node, registry = nodes[fragment.node], packaged().registry
-        spec = registry.spec(node.task)
-        if node.task_version != spec.version:
-            raise ValueError(f"{node.task!r} is declared at version {spec.version!r}, not {node.task_version!r}")
-        params = TaskCall.parse_params(node.task, node.params, registry)
-        base = Call(spec, params, {}, placed.logical.models[node.id], placed.logical.profile_slices[node.id])
         edges = placed.logical.graph.edges
-        feeds = {e.target.split(".", 1)[1]: _source(e) for e in edges if e.target.split(".", 1)[0] == node.id}
+        feeds = {e.target.split(".", 1)[1]: _source(e) for e in edges if e.target.split(".", 1)[0] == fragment.node}
         jobs = []
         for ref, identities in zip(fragment.jobs, fragment.inputs, strict=True):
             held, upstream = {}, {}
             for port, identity in identities.items():
                 if port not in feeds:
-                    raise ValueError(f"{ref} names input {port!r}, which no edge of node {node.id!r} feeds")
+                    raise ValueError(f"{ref} names input {port!r}, which no edge of node {fragment.node!r} feeds")
                 if feeds[port][0] != "input":
                     upstream[port] = _upstream_input(fragment, identity, feeds[port], nodes, registry)
                 elif identity in values:
@@ -378,7 +423,7 @@ class InProcess:
                     raise ValueError(f"no value is admitted for input {port!r} of {ref}")
             call = replace(base, inputs=dict(identities))
             jobs.append(Job(ref, call, held, anchors_of(held.values()), upstream))
-        return jobs, placement_of_record(fragment.placement, spec, registry)
+        return jobs, placement_of_record(fragment.placement, base.task, registry)
 
     def _held(self, fragment: PlanFragment) -> tuple[Plan, dict[InputIdentity, object]]:
         """Return the plan and graph-input values of the admission `fragment` names.

@@ -174,3 +174,17 @@ forbidden_modules =
 allow_indirect_imports = True
 ignore_imports =
     senselab_core.runtime.config -> yaml
+
+[importlinter:contract:one-pydra-importer]
+name = only senselab_core.runtime.execution.runner imports pydra
+type = forbidden
+source_modules =
+    senselab_worker
+    senselab_core
+    senselab
+    benchmarks
+forbidden_modules =
+    pydra
+allow_indirect_imports = True
+ignore_imports =
+    senselab_core.runtime.execution.runner -> pydra
