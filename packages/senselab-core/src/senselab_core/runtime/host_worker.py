@@ -13,7 +13,7 @@ from senselab_worker.serve import call_handle
 from senselab_core.runtime.worker_client import WorkerFatal, item_error
 
 
-class InProcessWorker:
+class HostWorker:
     """`Env.host`: the backend module's `handle` called in this process, its state held in a `ModelCache`.
 
     `run` returns what `WorkerClient.run` returns for the same module, `init`, items and params, except that values

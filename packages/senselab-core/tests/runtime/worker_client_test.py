@@ -25,7 +25,7 @@ from lifecycle_probes_fixture import alive, gate, group_alive, interpreter, list
 from senselab_core.kernel.declare import Env
 from senselab_core.runtime import worker_client
 from senselab_core.runtime.fake_backend import FAKE as FAKE_SPEC
-from senselab_core.runtime.in_process import InProcessWorker
+from senselab_core.runtime.host_worker import HostWorker
 from senselab_core.runtime.worker_client import (
     DEFAULT_GRACES,
     ConcurrentUse,
@@ -1217,7 +1217,7 @@ def test_host_and_isolated_share_handle(array_parent: Path) -> None:
     isolated = FAKE_SPEC.model_copy(update={"env": Env.isolated("fake")})
     items = [{"id": i, "inputs": {"payload": i, "signal": numpy.arange(4.0)}} for i in "abc"]
     params = {"salt": "s", FAULT_KEY: {"fail_items": ["b"], "oom_items": ["c"]}}
-    host = InProcessWorker(
+    host = HostWorker(
         FAKE_SPEC.worker, init=dict(FAKE_SPEC.load_stub), key=FAKE_KEY, cache=ModelCache(1), size_of=_one_byte
     )
     with WorkerClient(PYTHON, isolated.worker, init=dict(isolated.load_stub), array_parent=array_parent) as w:
@@ -1235,56 +1235,56 @@ def test_host_and_isolated_share_handle(array_parent: Path) -> None:
 
 
 @pytest.mark.logic
-def test_in_process_model_loaded_once_across_calls() -> None:
+def test_host_worker_model_loaded_once_across_calls() -> None:
     """In process, calls and clients sharing a cache and key load the backend once."""
     from backends import counting_backend_fixture as counting  # noqa: PLC0415 - the module records loads
 
     counting.LOADS.clear()
     cache = ModelCache(1)
     for _ in range(2):
-        worker = InProcessWorker(COUNTING, init={}, key=FAKE_KEY, cache=cache, size_of=_one_byte)
+        worker = HostWorker(COUNTING, init={}, key=FAKE_KEY, cache=cache, size_of=_one_byte)
         worker.run([{"id": "a", "inputs": {}}], {})
         worker.run([{"id": "b", "inputs": {}}], {})
     assert counting.LOADS == [{}]
 
 
 @pytest.mark.logic
-def test_in_process_reloads_an_evicted_model() -> None:
+def test_host_worker_reloads_an_evicted_model() -> None:
     """A run whose state was evicted by another model loads it again."""
     from backends import counting_backend_fixture as counting  # noqa: PLC0415 - the module records loads
 
     counting.LOADS.clear()
     cache = ModelCache(1)
-    first = InProcessWorker(COUNTING, init={"device": "cpu"}, key=FAKE_KEY, cache=cache, size_of=_one_byte)
-    InProcessWorker(COUNTING, init={}, key=("fake", "d" * 40, "cpu", "float32"), cache=cache, size_of=_one_byte)
+    first = HostWorker(COUNTING, init={"device": "cpu"}, key=FAKE_KEY, cache=cache, size_of=_one_byte)
+    HostWorker(COUNTING, init={}, key=("fake", "d" * 40, "cpu", "float32"), cache=cache, size_of=_one_byte)
     assert first.run([{"id": "a", "inputs": {}}], {})[0]["outputs"]["value"] == _value({}, {})
     assert counting.LOADS == [{"device": "cpu"}, {}, {"device": "cpu"}]
 
 
 @pytest.mark.logic
 @pytest.mark.parametrize(("module", "init"), [("no_such_backend_module", {}), (FAKE, {"unknown": 1})])
-def test_in_process_load_failure_is_worker_fatal(module: str, init: dict[str, Any]) -> None:
+def test_host_worker_load_failure_is_worker_fatal(module: str, init: dict[str, Any]) -> None:
     """An import or load failure is `WorkerFatal`, as a worker reports it, and nothing is cached."""
     cache = ModelCache(1)
     with pytest.raises(WorkerFatal):
-        InProcessWorker(module, init=init, key=FAKE_KEY, cache=cache, size_of=_one_byte)
+        HostWorker(module, init=init, key=FAKE_KEY, cache=cache, size_of=_one_byte)
     assert cache.keys() == []
 
 
 @pytest.mark.logic
-def test_in_process_refuses_a_ref_and_reserved_init() -> None:
+def test_host_worker_refuses_a_ref_and_reserved_init() -> None:
     """A ref as the model identity, or `array_dir` in `init`, is refused before anything loads."""
     cache = ModelCache(1)
     with pytest.raises(ValueError, match="never a ref"):
-        InProcessWorker(FAKE, init={}, key=("fake", "main", "cpu", "float32"), cache=cache, size_of=_one_byte)
+        HostWorker(FAKE, init={}, key=("fake", "main", "cpu", "float32"), cache=cache, size_of=_one_byte)
     with pytest.raises(ValueError, match="reserved"):
-        InProcessWorker(FAKE, init={"array_dir": "/x"}, key=FAKE_KEY, cache=cache, size_of=_one_byte)
+        HostWorker(FAKE, init={"array_dir": "/x"}, key=FAKE_KEY, cache=cache, size_of=_one_byte)
     assert cache.keys() == []
 
 
 @pytest.mark.logic
-def test_in_process_malformed_request_is_value_error() -> None:
+def test_host_worker_malformed_request_is_value_error() -> None:
     """A malformed request is a `ValueError`, as from `WorkerClient.run`."""
-    worker = InProcessWorker(FAKE, init={}, key=FAKE_KEY, cache=ModelCache(1), size_of=_one_byte)
+    worker = HostWorker(FAKE, init={}, key=FAKE_KEY, cache=ModelCache(1), size_of=_one_byte)
     with pytest.raises(ValueError, match="malformed request"):
         worker.run([{"inputs": {}}], {})

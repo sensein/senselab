@@ -10,7 +10,7 @@ from senselab_core.kernel.identity import ModelRef, ResolvedModel
 from senselab_core.kernel.license import License
 from senselab_core.runtime.call import packaged, start_server_worker, stop_servers
 from senselab_core.runtime.hardware import probe_hardware
-from senselab_core.runtime.in_process import InProcessWorker
+from senselab_core.runtime.host_worker import HostWorker
 from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.worker_client import WorkerClient
@@ -27,7 +27,7 @@ def mit_lock_records(backend: BackendSpec) -> Mapping[str, License | None]:  # n
 
 
 def run_alone(
-    worker: WorkerClient | InProcessWorker, items: Mapping[str, dict[str, Any]], params: dict[str, Any]
+    worker: WorkerClient | HostWorker, items: Mapping[str, dict[str, Any]], params: dict[str, Any]
 ) -> dict[str, Any]:
     """Run each item of `items` alone and return the outputs of those that succeed, by name.
 
@@ -59,7 +59,7 @@ class RealWorkers:
         self.started: list[WorkerClient] = []
         self.serving = False
 
-    def __call__(self, task: str, name: str) -> WorkerClient | InProcessWorker:
+    def __call__(self, task: str, name: str) -> WorkerClient | HostWorker:
         """Stop the workers started before, then return a started worker of backend `name` of `task`.
 
         Faults are injected per request, by `params["_fault"]`.

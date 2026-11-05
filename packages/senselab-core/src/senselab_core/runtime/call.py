@@ -59,7 +59,7 @@ from senselab_core.runtime.compare import Thresholds, compare
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import SAMPLING, EquivalenceEvidence, EvidenceSide, sampled
 from senselab_core.runtime.hardware import HardwareInfo, numerics_class, probe_hardware
-from senselab_core.runtime.in_process import InProcessWorker
+from senselab_core.runtime.host_worker import HostWorker
 from senselab_core.runtime.keys import Call, Placement, build_key, profile_slices, request_components
 from senselab_core.runtime.launch import launch
 from senselab_core.runtime.licenses import LicensePolicy, LockRecords, backend_license
@@ -780,7 +780,7 @@ def host_hardware() -> HardwareInfo:
     return probe_hardware()
 
 
-_POOL: dict[tuple[str, ...], InProcessWorker | WorkerClient] = {}
+_POOL: dict[tuple[str, ...], HostWorker | WorkerClient] = {}
 _HELD: dict[tuple[str, ...], threading.Lock] = {}
 _CACHES: dict[int | None, ModelCache] = {}
 _POOL_LOCK = threading.Lock()
@@ -855,9 +855,9 @@ def _server(
         return server
 
 
-def _server_worker(backend: BackendSpec, init: dict[str, Any], server: VllmServer) -> InProcessWorker:
+def _server_worker(backend: BackendSpec, init: dict[str, Any], server: VllmServer) -> HostWorker:
     """Return the in-process worker of a server backend, given `server` in its init."""
-    return InProcessWorker(
+    return HostWorker(
         backend.worker,
         init={**init, "server": server},
         key=(backend.name, init["model"]["identity"], init["device"], PRECISION),
@@ -868,7 +868,7 @@ def _server_worker(backend: BackendSpec, init: dict[str, Any], server: VllmServe
 
 def start_server_worker(
     backend: BackendSpec, env: EnvHandle, model: ResolvedModel, profile: ExecutionProfile, init: dict[str, Any]
-) -> InProcessWorker:
+) -> HostWorker:
     """Return the worker `run_call` would run a server backend on: in this process, over its attested running server.
 
     Raises:
@@ -899,7 +899,7 @@ def _execute(  # noqa: PLR0913 - the call and everything placing it
     params = {**call.params.model_dump(mode="json"), "backend_params": placement.backend_params.model_dump(mode="json")}
     if backend.env.kind != "host":
         inputs = {port: wire_form(v, READER) if isinstance(v, Frozen) else v for port, v in inputs.items()}
-    held: contextlib.AbstractContextManager[InProcessWorker | WorkerClient] = (
+    held: contextlib.AbstractContextManager[HostWorker | WorkerClient] = (
         contextlib.nullcontext(_server_worker(backend, init, server))
         if server is not None
         else _checked_out(backend, env, init, model, profile)
@@ -939,7 +939,7 @@ def _decoded(spec: TaskSpec, outputs: Mapping[str, object]) -> dict[str, object]
 @contextlib.contextmanager
 def _checked_out(
     backend: BackendSpec, env: EnvHandle, init: dict[str, Any], model: ResolvedModel | None, profile: ExecutionProfile
-) -> Iterator[InProcessWorker | WorkerClient]:
+) -> Iterator[HostWorker | WorkerClient]:
     """Hold the pooled worker for this backend, env, init and (in process) budget or (isolated) network; others wait.
 
     A dead pooled worker is closed and replaced.
@@ -952,7 +952,7 @@ def _checked_out(
         held = _HELD.setdefault(pool_key, threading.Lock())
     with held:
         worker = _POOL.get(pool_key)
-        if not (isinstance(worker, InProcessWorker) or (worker is not None and worker.alive)):
+        if not (isinstance(worker, HostWorker) or (worker is not None and worker.alive)):
             if worker is not None:
                 worker.close()
             worker = _new_worker(backend, env, init, model, profile)
@@ -963,7 +963,7 @@ def _checked_out(
 
 def _new_worker(
     backend: BackendSpec, env: EnvHandle, init: dict[str, Any], model: ResolvedModel | None, profile: ExecutionProfile
-) -> InProcessWorker | WorkerClient:
+) -> HostWorker | WorkerClient:
     if backend.env.kind != "host":
         return WorkerClient(
             env.python,
@@ -976,7 +976,7 @@ def _new_worker(
     budget = profile.model_cache_budget_bytes
     identity = model.identity if model is not None else value_digest("backend", {"name": backend.name})
     key: ModelKey = (backend.name, identity, init["device"], PRECISION)
-    return InProcessWorker(
+    return HostWorker(
         backend.worker, init=init, key=key, cache=_cache(budget), size_of=_size_of(backend.worker, budget)
     )
 
