@@ -13,17 +13,22 @@ from senselab.audio.workflows.triage.identity import (
     DECLARED_RECORDING_ID,
     DECLARED_TARGET_SPEAKER,
     DECLARED_TASK_ID,
+    FROM_CORPUS_PATH,
     FROM_HINT,
     FROM_STEM,
     IDENTITY_FROM_KEY,
     PARTICIPANT_KEY,
+    RECORDING_ID_COLUMN,
+    RECORDING_ID_FIELD,
     RECORDING_ID_KEY,
+    ROW_TARGET_SPEAKER,
     SESSION_KEY,
     TASK_TOKEN_KEY,
     IdentityLabelError,
     ManifestWithoutIdentity,
     MultipleTargetSpeakers,
     RecordingIdentity,
+    corpus_path_recorded,
     declared_session_key,
     declared_task_id,
     identity_columns,
@@ -292,3 +297,29 @@ class TestTargetSpeakerAndRecordingId:
         bids = identity_of(AudioHints(metadata={RECORDING_ID_KEY: "sub-a_task-x"}), stem="sub-a_task-x")
         assert bids.recording_id is None and DECLARED_RECORDING_ID not in bids.as_attributes()
         assert bids.id_of("sub-a_task-x") == "sub-a_task-x"
+
+    def test_a_recorded_id_says_where_it_came_from(self) -> None:
+        """Review of step 9: a replay is given no corpus root, so only an id read off the corpus path is kept."""
+        declared = identity_of(AudioHints(metadata={RECORDING_ID_KEY: "r-1"}), stem="recording")
+        flat = identity_of(None, stem="recording", corpus_path="p01/s2/recording.wav")
+        assert declared.sources[RECORDING_ID_FIELD] == FROM_HINT and corpus_path_recorded(declared) is None
+        assert flat.sources[RECORDING_ID_FIELD] == FROM_CORPUS_PATH
+        assert corpus_path_recorded(identity_from_attributes(flat.as_attributes())) == "p01/s2/recording.wav"
+        assert RECORDING_ID_FIELD not in identity_of(None, stem="recording").sources
+
+    def test_a_row_carries_its_target_speaker_and_recording_id(self) -> None:
+        """Review of step 9: the table's columns rebuild both; an id equal to the stem is none."""
+        row = {"stem": "recording", "participant": "p01", "session": "s2", "task": "x", "task_from": "hint"}
+        identity = row_identity({**row, ROW_TARGET_SPEAKER: "p01:child", RECORDING_ID_COLUMN: "p01/s2/recording.wav"})
+        assert identity is not None and identity.target_speaker == "p01:child"
+        assert identity.id_of("recording") == "p01/s2/recording.wav"
+        same = row_identity({**row, RECORDING_ID_COLUMN: "recording"})
+        assert same is not None and same.recording_id is None
+
+    def test_a_row_naming_another_target_speaker_disagrees_with_the_record(self) -> None:
+        """Review of step 9: a stale manifest is refused rather than enrolled under the wrong voice."""
+        hint = AudioHints(metadata={PARTICIPANT_KEY: "p01"}, target_speakers=[TargetSpeaker(id="p01:child")])
+        recorded = identity_of(hint)
+        assert identity_disagreement(identity_of(AudioHints(metadata={PARTICIPANT_KEY: "p01"})), recorded) == [
+            "target_speaker"
+        ]

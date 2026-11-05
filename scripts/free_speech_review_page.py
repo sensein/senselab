@@ -2452,7 +2452,7 @@ const STATE_WHY={masked:'masked in the released copy',
   unmasked_by_approval:'a person\\'s name a human approved for release',
   detected:'a detector marked it and no mask covers it, so it is shown'};
 const TRIM_WHY={p:'only the padding reached it',n:'it is not a content word'};
-const KIND_WHY={cohort:'a condition the study recruits for',other:'a condition outside the study\\'s cohorts'};
+const KIND_WHY={recruited:'a condition the study recruits for',other:'a condition the study does not recruit for'};
 const POLICY_WHY={date:'a date element the policy always masks',age:'an age the policy always masks',
   place:'a place below a country the policy always masks',
   person:'a person\\'s name, masked until a human approves its release',

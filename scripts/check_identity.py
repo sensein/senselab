@@ -52,9 +52,11 @@ from senselab.audio.workflows.triage.extend import (
     load_hints,
 )
 from senselab.audio.workflows.triage.identity import (
+    RECORDING_ID_COLUMN,
     ROW_PARTICIPANT,
     ROW_SESSION,
     ROW_SOURCES,
+    ROW_TARGET_SPEAKER,
     ROW_TASK,
     IdentityLabelError,
     RecordingIdentity,
@@ -85,6 +87,10 @@ TABLE_COLUMNS = ("stem", "run_dir", ROW_PARTICIPANT, ROW_SESSION, ROW_TASK, *ROW
 TASK_COLUMNS = (DECLARED_TASK_COLUMN, DECLARED_TASK_SOURCE_COLUMN)
 """The declared-task columns, read where the table has them (schema 31 on); a table without them is one whose runs
 record no task."""
+
+SPEAKER_AND_ID_COLUMNS = (ROW_TARGET_SPEAKER, RECORDING_ID_COLUMN)
+"""The target-speaker and recording-id columns, read where the table has them (step 9); a table without them is
+one whose recordings are keyed by their stems."""
 
 PRIVATE_FILE_MODE = 0o600
 SHOWN_PER_CHECK = 5
@@ -210,7 +216,8 @@ def records_after_run(table: Path, read_name: Callable[[str], RecordingIdentity]
     missing = [column for column in TABLE_COLUMNS if column not in present]
     if missing:
         raise ValueError(f"{table} carries no {', '.join(missing)}; rebuild it from a current corpus pass")
-    rows = pq.read_table(table, columns=[*TABLE_COLUMNS, *(c for c in TASK_COLUMNS if c in present)]).to_pylist()
+    optional = [c for c in (*TASK_COLUMNS, *SPEAKER_AND_ID_COLUMNS) if c in present]
+    rows = pq.read_table(table, columns=[*TABLE_COLUMNS, *optional]).to_pylist()
     records: list[IdentityRecord] = []
     for row in rows:
         stem = str(row.get("stem") or "")

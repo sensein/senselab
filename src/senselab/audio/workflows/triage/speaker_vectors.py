@@ -69,10 +69,10 @@ AGGREGATOR = "recording_equal_spherical_mean"
 EMBEDDING_DIM = 192
 
 TABLE_COLUMNS = ("participant", "session", "task", "stem", "run_dir")
+"""The corpus-table columns this module reads (``recording_vectors.parquet``)."""
 
 TARGET_SPEAKER_COLUMN = "target_speaker"
 """The corpus-table column naming a declared target speaker; a table from before plan step 9 has none."""
-"""The corpus-table columns this module reads (``recording_vectors.parquet``)."""
 
 _PROFILE_PATH = Path(__file__).parent / "data" / "speaker_vector_profile" / "2026-09-22.yaml"
 _PROFILE_VERSION = "1"

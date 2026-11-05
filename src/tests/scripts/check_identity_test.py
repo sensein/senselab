@@ -303,6 +303,19 @@ class TestAfterARun:
         (finding,) = _report(out)["findings"]
         assert (finding["check"], finding["key"]) == (TASK_NOT_DESCRIBED, "(no task recorded)")
 
+    def test_two_recordings_sharing_a_stem_under_their_own_ids_are_no_duplicate(self, tmp_path: Path) -> None:
+        """Review of step 9: the after-run check keys runs by the table's recording id, not the stem."""
+        rows = [
+            {**_row("rec", "p01/s2/r", "p01", "s2", "rainbow-passage"), "recording_id": "p01/s2/rec.wav"},
+            {**_row("rec", "p02/s1/r", "p02", "s1", "rainbow-passage"), "recording_id": "p02/s1/rec.wav"},
+        ]
+        path = tmp_path / "ids.parquet"
+        names = (*rows[0],)
+        pq.write_table(pa.table({n: pa.array([r[n] for r in rows], type=pa.string()) for n in names}), path)
+        out = tmp_path / "report.json"
+        assert cli.main(["--table", str(path), "--out", str(out)]) == 0
+        assert not _report(out)["counts"].get(DUPLICATE_STEM)
+
     def test_a_table_without_identity_columns_is_exit_2(self, tmp_path: Path) -> None:
         """A corpus table from before identity columns cannot be checked; rebuild it."""
         path = tmp_path / "old.parquet"

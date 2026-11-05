@@ -1295,6 +1295,33 @@ class TestCli:
         cli = _cli()
         assert cli.main([str(tmp_path / "absent.wav")]) == 2
 
+    def test_an_identity_that_cannot_be_resolved_is_refused_before_anything_runs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Review of step 9: two target speakers, or a recording outside ``--corpus-root``, exit 2 with no run."""
+        cli = _cli()
+        source = tmp_path / "recording.wav"
+        source.write_bytes(b"")
+        hint_file = tmp_path / "hint.yaml"
+        hint_file.write_text("target_speakers: [{id: a}, {id: b}]\n")
+        monkeypatch.setattr(cli, "run_triage", lambda *a, **k: pytest.fail("ran"))
+        assert cli.main([str(source), "--hint", str(hint_file)]) == 2
+        assert cli.main([str(source), "--corpus-root", str(tmp_path / "elsewhere")]) == 2
+
+    def test_the_corpus_path_follows_no_symbolic_link(self, tmp_path: Path) -> None:
+        """Review of step 9: a git-annex corpus's id is the path under its root, not the content object's."""
+        root = tmp_path / "dataset"
+        content = tmp_path / "annex" / "objects" / "KEY"
+        content.parent.mkdir(parents=True)
+        content.write_bytes(b"")
+        link = root / "p01" / "s2" / "recording.wav"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(content)
+        assert run_module.corpus_path_of(link, root) == "p01/s2/recording.wav"
+        assert run_module.corpus_path_of(root / "p01" / ".." / "p01" / "s2" / "recording.wav", root) == (
+            "p01/s2/recording.wav"
+        )
+
     def test_it_has_no_per_knob_flags(self) -> None:
         """Every option is a path; every value lives in a file (the config, or a dataset profile)."""
         cli = _cli()

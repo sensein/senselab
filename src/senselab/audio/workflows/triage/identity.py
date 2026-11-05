@@ -62,14 +62,21 @@ FROM_STEM = "stem"
 """Where a field of the identity came from: declared in the hint, or read off the file name (by the hint builder;
 a store from before step 6a records it for triage's own reading)."""
 
+FROM_CORPUS_PATH = "corpus_path"
+"""Where a recording id came from when no hint declared it: the recording's path under the corpus root (step 9b)."""
+
+RECORDING_ID_FIELD = "recording_id"
+"""The :attr:`RecordingIdentity.sources` key a recorded id's source is kept under."""
+
 ROW_PARTICIPANT = "participant"
 ROW_SESSION = "session"
 ROW_TASK = "task"
 ROW_TARGET_SPEAKER = "target_speaker"
+"""The corpus-table and manifest columns a recording's identity travels in."""
+
 RECORDING_ID_COLUMN = "recording_id"
 """The corpus-table column of a recording's corpus-unique id (plan step 9b): the one recorded, else its stem; the
 tables and review pages join on it, the stem being a label."""
-"""The corpus-table and manifest columns a recording's identity travels in."""
 
 ROW_SOURCES = {"participant": "participant_from", "session": "session_from", "task_id": "task_from"}
 """The column each identity field's source travels in, keyed by :class:`RecordingIdentity` field."""
@@ -104,7 +111,8 @@ class RecordingIdentity:
         session: The session, e.g. ``ses-02``, or None where nothing names one.
         task_id: The lower-cased task id with its trailing index, or :data:`UNKNOWN_TASK`.
         sources: :data:`FROM_HINT` or :data:`FROM_STEM` for each of ``participant``, ``session`` and ``task_id``
-            that was declared; a field nothing declared has no entry.
+            that was declared; a field nothing declared has no entry. A recorded id's source, :data:`FROM_HINT` or
+            :data:`FROM_CORPUS_PATH`, is under :data:`RECORDING_ID_FIELD`.
         target_speaker: The declared target speaker's id, or None where the target is the participant (plan step 9a).
         recording_id: The recording's corpus-unique id, or None where it is the file stem (plan step 9b):
             :meth:`id_of` gives the id either way.
@@ -214,20 +222,42 @@ def identity_of(
     if source not in (FROM_HINT, FROM_STEM):
         raise ValueError(f"hint metadata {IDENTITY_FROM_KEY} is {source!r}; it is {FROM_HINT!r} or {FROM_STEM!r}")
     declared = {"participant": participant, "session": session, "task_id": token}
+    sources = {field: source for field, value in declared.items() if value}
+    recording_id, id_source = _recording_id(hint, stem, corpus_path)
+    if id_source is not None:
+        sources[RECORDING_ID_FIELD] = id_source
     return RecordingIdentity(
         participant=check_label(participant, "participant"),
         session=check_label(session, "session"),
         task_id=token.lower() if token else UNKNOWN_TASK,
-        sources={field: source for field, value in declared.items() if value},
+        sources=sources,
         target_speaker=declared_target_speaker(hint),
-        recording_id=_recording_id(hint, stem, corpus_path),
+        recording_id=recording_id,
     )
 
 
-def _recording_id(hint: AudioHints | None, stem: str | None, corpus_path: str | None) -> str | None:
-    """The id to record: the hint's, else the corpus-relative path; None where that is the stem or neither exists."""
-    declared = _declared(hint, RECORDING_ID_KEY) or corpus_path
-    return None if declared is None or declared == stem else declared
+def _recording_id(
+    hint: AudioHints | None, stem: str | None, corpus_path: str | None
+) -> tuple[str | None, str | None]:
+    """The id to record and its source: the hint's, else the corpus-relative path; ``(None, None)`` where that is
+    the stem or neither exists."""
+    declared = _declared(hint, RECORDING_ID_KEY)
+    found, source = (declared, FROM_HINT) if declared else (corpus_path, FROM_CORPUS_PATH)
+    return (None, None) if found is None or found == stem else (found, source)
+
+
+def corpus_path_recorded(identity: RecordingIdentity | None) -> str | None:
+    """The recording id an identity read from the corpus path, which a replay cannot read again, or None.
+
+    Args:
+        identity: A recorded identity, or None.
+
+    Returns:
+        The id where its source is :data:`FROM_CORPUS_PATH`; None where it was declared, is the stem, or is absent.
+    """
+    if identity is None or identity.sources.get(RECORDING_ID_FIELD) != FROM_CORPUS_PATH:
+        return None
+    return identity.recording_id
 
 
 def declared_target_speaker(hint: AudioHints | None) -> str | None:
@@ -414,12 +444,14 @@ def row_identity(row: Mapping[str, Any]) -> RecordingIdentity | None:
     sources = {name: str(row[column]) for name, column in ROW_SOURCES.items() if _label(row.get(column))}
     if not sources and not _label(row.get(ROW_TASK)):
         return None
+    recording_id = _label(row.get(RECORDING_ID_COLUMN))
     return RecordingIdentity(
         participant=_label(row.get(ROW_PARTICIPANT)),
         session=_label(row.get(ROW_SESSION)),
         task_id=_label(row.get(ROW_TASK)) or UNKNOWN_TASK,
         sources=sources,
         target_speaker=_label(row.get(ROW_TARGET_SPEAKER)),
+        recording_id=None if recording_id == row.get("stem") else recording_id,
     )
 
 
@@ -518,9 +550,11 @@ def identity_disagreement(row: RecordingIdentity | None, recorded: RecordingIden
         recorded: The run's recorded identity (:func:`recorded_identity`), or None where it records none.
 
     Returns:
-        ``participant``, ``session`` and/or ``task_id``, in that order; ``recorded identity`` where either side
-        has none. Empty when they agree.
+        ``participant``, ``session``, ``task_id`` and/or ``target_speaker``, in that order (a row from a table that
+        carries no ``target_speaker`` column names none, so it disagrees with a run that declared one: rebuild the
+        manifest); ``recorded identity`` where either side has none. Empty when they agree.
     """
     if row is None or recorded is None:
         return ["recorded identity"]
-    return [name for name in ("participant", "session", "task_id") if getattr(row, name) != getattr(recorded, name)]
+    fields = ("participant", "session", "task_id", "target_speaker")
+    return [name for name in fields if getattr(row, name) != getattr(recorded, name)]

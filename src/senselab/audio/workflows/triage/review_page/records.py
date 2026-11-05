@@ -17,7 +17,13 @@ import numpy as np
 
 from senselab.audio.workflows.triage.decision_tables import decision_rows, item_group
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
-from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, StoreView, read_store
+from senselab.audio.workflows.triage.recording_vectors import (
+    RUN_SUBDIR,
+    STORE_NAME,
+    StoreView,
+    read_store,
+    view_identity,
+)
 from senselab.audio.workflows.triage.review_page.spectrogram import pack, quantised_levels, settings
 from senselab.utils.portable_audio_io import read_audio
 
@@ -310,6 +316,7 @@ def review_record(run_root: Path, root: Path, speech: SpeechReader | None = None
         return None
     decision, evidence = rows
     view = read_store(run_root / RUN_SUBDIR / STORE_NAME)
+    identity = view_identity(view)
     recording = view.last("stream", name="recording")
     spec, spec_stream = spectrogram_of(view, run_root)
     family = decision.get("declared_family")
@@ -317,7 +324,7 @@ def review_record(run_root: Path, root: Path, speech: SpeechReader | None = None
     start, end = decision.get("extent_start_s"), decision.get("extent_end_s")
     return {
         "stem": decision["stem"],
-        "recording_id": decision.get("recording_id") or decision["stem"],
+        "recording_id": identity.id_of(decision["stem"]) if identity is not None else decision["stem"],
         "participant": decision["participant"],
         "session": decision["session"],
         "task": decision["task"],

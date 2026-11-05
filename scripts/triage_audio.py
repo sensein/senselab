@@ -66,7 +66,8 @@ import yaml  # type: ignore[import-untyped]
 from senselab.audio.data_structures import AudioHints, SpeakerEmbeddingProvenance
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.enrollment import Enrollment
-from senselab.audio.workflows.triage.run import run_triage
+from senselab.audio.workflows.triage.identity import identity_of
+from senselab.audio.workflows.triage.run import corpus_path_of, run_triage
 from senselab.audio.workflows.triage.vocabulary import RunState, release_value
 
 DEFAULT_OUT_DIR = Path("artifacts/triage")
@@ -238,6 +239,11 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as error:
             print(f"ERROR: invalid hint {args.hint}: {error}", file=sys.stderr)
             return 2
+    try:
+        identity_of(hint, stem=args.audio.stem, corpus_path=corpus_path_of(args.audio, args.corpus_root))
+    except ValueError as error:
+        print(f"ERROR: the recording's identity could not be resolved: {error}", file=sys.stderr)
+        return 2
     enrollment = None
     if args.enrollment is not None:
         try:

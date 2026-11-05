@@ -8,6 +8,7 @@ completed, was skipped or raised, and hands that mapping to VERDICT. See
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -522,7 +523,8 @@ def corpus_path_of(source: Path, corpus_root: Path | None) -> str | None:
         corpus_root: The corpus's root, or None.
 
     Returns:
-        The relative path (``p01/s2/recording.wav``), or None.
+        The relative path (``p01/s2/recording.wav``), or None. Symbolic links are not followed, so a git-annex or
+        DataLad corpus gives the path under the root, not the content object's.
 
     Raises:
         ValueError: If ``source`` is not under ``corpus_root``.
@@ -530,7 +532,7 @@ def corpus_path_of(source: Path, corpus_root: Path | None) -> str | None:
     if corpus_root is None:
         return None
     try:
-        return Path(source).resolve().relative_to(Path(corpus_root).resolve()).as_posix()
+        return Path(os.path.abspath(source)).relative_to(Path(os.path.abspath(corpus_root))).as_posix()
     except ValueError as error:
         raise ValueError(f"{source} is not under the corpus root {corpus_root}") from error
 

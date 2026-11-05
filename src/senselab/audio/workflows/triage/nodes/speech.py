@@ -24,6 +24,7 @@ from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
 import torch
+from pydantic import ValidationError
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.disruptions.api import detect_disruptions
@@ -1731,6 +1732,42 @@ def declared_enrollment(hint: AudioHints | None) -> Optional[Enrollment]:
     )
 
 
+def choose_enrollment(
+    hint: AudioHints | None, given: Optional[Enrollment], params: BranchParams
+) -> tuple[Optional[Enrollment], Optional[str]]:
+    """The target voice SPEECH compares speakers against, and a note on the choice.
+
+    A declared voice outranks the enrollment given (plan step 9a), where it can be used: one that is not a valid
+    vector, or that the probe would refuse (another model or commit, or none resolved), leaves the enrollment
+    given as the target, and the note says why.
+
+    Args:
+        hint: What the recording was declared to contain, or None.
+        given: The enrollment the caller estimated, or None.
+        params: The operating points, naming the probe model.
+
+    Returns:
+        The enrollment (the declared voice, the one given, or None) and the note, None where nothing needs one.
+
+    Raises:
+        MultipleTargetSpeakers: If the hint declares more than one target speaker.
+    """
+    try:
+        declared = declared_enrollment(hint)
+    except ValidationError as error:
+        reason = f"the hint's declared voice is not a valid embedding ({error.error_count()} errors)"
+        return given, reason + (", so the enrollment given is the target" if given is not None else "")
+    if declared is None:
+        return given, None
+    if given is None:
+        return declared, None
+    model = params.setting("speech.enrollment_model", dict)
+    refusal = None if model is None else declared.refusal_against(str(model["model_id"]), str(model["revision"]))
+    if refusal is not None:
+        return given, f"the hint's declared voice cannot be compared ({refusal}), so the enrollment given is the target"
+    return declared, "the hint declares the target speaker's voice, which outranks the enrollment given"
+
+
 def speech(  # noqa: C901 — the branch's nine steps, in design order
     store: ProvStore,
     source: str,
@@ -1752,7 +1789,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             ``enrollment`` (plan step 9a); ``targeted_speaker_count`` is not read as evidence.
         run_dir: The run directory sidecar paths are relative to.
         enrollment: The target speaker's enrollment, estimated across the subject's recordings; a declared voice
-            outranks it.
+            outranks it where it can be used (:func:`choose_enrollment`).
 
     Returns:
         The verdict, and the view over every element this branch authored or asserted over.
@@ -1761,10 +1798,9 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         LookupError: If a stream this branch needs, or the consensus transcript, is absent.
         ValueError: If a key this branch requires has no value and no enrollment was supplied.
     """
-    declared = declared_enrollment(hint)
-    outranked = declared is not None and enrollment is not None
-    enrollment = declared if declared is not None else enrollment
     params = branch_params(config)
+    given = enrollment
+    enrollment, choice_note = choose_enrollment(hint, given, params)
     values = _required(params, enrollment)
 
     software = software_agent(store)
@@ -1798,8 +1834,8 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     for word in words:
         store.used(transcript, word.id)
 
-    if declared is not None and outranked:
-        notes.append("the hint declares the target speaker's voice, which outranks the enrollment given")
+    if choice_note is not None:
+        notes.append(choice_note)
 
     # The expectation: one mode or the other, chosen from the declared family. It runs before this
     # branch proposes anything, and before the no-lexical exit below.
@@ -2339,7 +2375,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             extent=None,
             attributes={
                 "subject_id": enrollment.subject_id,
-                **({"from": ENROLLMENT_DECLARED} if enrollment is declared else {}),
+                **({"from": ENROLLMENT_DECLARED} if enrollment is not given else {}),
                 "model_id": enrollment.provenance.model_id,
                 "model_commit_sha": enrollment.provenance.model_commit_sha,
                 "unresolved_reason": enrollment.provenance.unresolved_reason,

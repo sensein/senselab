@@ -66,10 +66,14 @@ from senselab.audio.workflows.triage.hint_record import (
 from senselab.audio.workflows.triage.hint_record import expected_speech_digest as prompts_digest
 from senselab.audio.workflows.triage.identity import (
     ADMIT_NODE,
+    DECLARED_RECORDING_ID,
+    DECLARED_TARGET_SPEAKER,
     MultipleTargetSpeakers,
     RecordingIdentity,
     admit_record,
+    corpus_path_recorded,
     identity_disagreement,
+    identity_from_attributes,
     identity_of,
     recorded_identity,
     recording_entity,
@@ -1314,7 +1318,8 @@ def record_replayed_hint(store: ProvStore, hint: AudioHints | None, *, software:
 
     The identity is the hint's (:func:`~senselab.audio.workflows.triage.identity.identity_of`); nothing is read off
     a file name (plan step 6a). :func:`check_replay_inputs` has already refused a run that records no identity and
-    a hint that declares none.
+    a hint that declares none. A target speaker or recording id the replay's hint no longer declares is dropped,
+    but for an id ADMIT read off the corpus path, which a replay is not given and keeps (plan step 9b).
 
     Args:
         store: The run's store.
@@ -1327,9 +1332,11 @@ def record_replayed_hint(store: ProvStore, hint: AudioHints | None, *, software:
     entity = recording_entity(store)
     if entity is None:
         return None
+    corpus_path = corpus_path_recorded(identity_from_attributes(entity.attributes))
+    kept = {k: v for k, v in entity.attributes.items() if k not in (DECLARED_TARGET_SPEAKER, DECLARED_RECORDING_ID)}
     attributes = {
-        **entity.attributes,
-        **identity_of(hint, stem=_admitted_stem(store, entity)).as_attributes(),
+        **kept,
+        **identity_of(hint, stem=_admitted_stem(store, entity), corpus_path=corpus_path).as_attributes(),
         **hint_attributes(hint),
         **task_attributes(hint),
         "replaces": entity.id,

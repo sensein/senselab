@@ -3709,3 +3709,39 @@ def test_a_declared_voice_is_the_enrollment_and_a_hint_without_one_gives_none() 
     assert enrollment is not None and enrollment.subject_id == "sub-07:child" and enrollment.vector == [0.6, 0.8]
     assert declared_enrollment(AudioHints(target_speakers=[TargetSpeaker(id="sub-07:child")])) is None
     assert declared_enrollment(None) is None
+
+
+def test_a_declared_voice_the_probe_cannot_use_leaves_the_enrollment_given() -> None:
+    """Review of step 9: another model, or no valid vector, keeps the estimated enrollment and says why."""
+    from senselab.audio.data_structures import (
+        AudioHints,
+        SpeakerEmbeddingProvenance,
+        TargetSpeaker,
+        TargetSpeakerEmbedding,
+    )
+    from senselab.audio.workflows.triage.enrollment import Enrollment
+    from senselab.audio.workflows.triage.nodes.speech import choose_enrollment
+
+    COMMIT = "a" * 40
+
+    class _Params:
+        def setting(self, key: str, kind: type) -> Any:  # noqa: ANN401
+            return {"model_id": "m", "revision": COMMIT}
+
+    def hint(vector: list[float], model_id: str) -> AudioHints:
+        provenance = SpeakerEmbeddingProvenance(model_id=model_id, model_commit_sha=COMMIT)
+        voice = TargetSpeakerEmbedding(vector=vector, provenance=provenance)
+        return AudioHints(target_speakers=[TargetSpeaker(id="sub-07:child", embedding=voice)])
+
+    params: Any = _Params()
+    estimated = SpeakerEmbeddingProvenance(model_id="m", model_commit_sha=COMMIT)
+    given = Enrollment(subject_id="sub-07", vector=[1.0, 0.0], provenance=estimated)
+    chosen, note = choose_enrollment(hint([0.6, 0.8], "m"), given, params)
+    assert chosen is not None and chosen.subject_id == "sub-07:child" and note is not None and "outranks" in note
+    chosen, note = choose_enrollment(hint([0.6, 0.8], "other"), given, params)
+    assert chosen is given and note is not None and "cannot be compared" in note
+    chosen, note = choose_enrollment(hint([], "m"), given, params)
+    assert chosen is given and note is not None and "not a valid embedding" in note
+    chosen, note = choose_enrollment(hint([0.6, 0.8], "m"), None, params)
+    assert chosen is not None and chosen.subject_id == "sub-07:child" and note is None
+    assert choose_enrollment(None, given, params) == (given, None)

@@ -307,3 +307,22 @@ def test_a_listen_set_naming_a_labelled_participant_is_refused(
     allowed = ["--allow-labelled", "rec-22a,P23", "--ignore-unknown-labelled"]
     assert script.main([*argv, "--exclude-labelled", str(labels), *allowed]) == 0
     assert (tmp_path / "page").exists()
+
+
+def test_a_record_carries_the_recording_id_its_run_recorded(tmp_path: Path) -> None:
+    """Review of step 9: a listening sheet keyed by recording id finds the run that recorded it."""
+    from senselab.audio.workflows.triage.identity import DECLARED_RECORDING_ID
+
+    corpus = tmp_path / "corpus"
+    store = fixtures._run_root(corpus) / "run" / "store.jsonl"
+    lines = []
+    for line in store.read_text().splitlines():
+        record = json.loads(line)
+        if record.get("record") == "entity" and (record.get("attributes") or {}).get("name") == "recording":
+            record["attributes"][DECLARED_RECORDING_ID] = "p01/s2/recording.wav"
+        lines.append(json.dumps(record))
+    store.write_text("\n".join(lines) + "\n")
+    extract = tmp_path / "review.jsonl"
+    script.extract(corpus, extract, 1)
+    (record,) = script.load(extract)
+    assert record["recording_id"] == "p01/s2/recording.wav" and record["stem"] == fixtures.STEM

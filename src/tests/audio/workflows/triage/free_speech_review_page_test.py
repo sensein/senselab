@@ -2129,3 +2129,12 @@ def test_the_language_comes_from_the_recording_sidecar(tmp_path: Path) -> None:
     (run_root / "run" / "run.json").write_text(json.dumps({"source": str(wav)}))
     assert page.recording_language(run_root) == "es-419"
     assert page.recording_language(tmp_path / "missing") == ""
+
+
+def test_every_condition_kind_has_its_explanation_on_the_page() -> None:
+    """Review of step 9: the page explains each kind a ledger condition carries, ``recruited`` among them."""
+    from senselab.audio.workflows.triage.recruited_conditions import CONDITION_KINDS
+
+    found = re.search(r"const KIND_WHY=\{([^}]*)\}", page._SCRIPT)
+    assert found is not None
+    assert set(re.findall(r"(\w+):'", found.group(1))) == set(CONDITION_KINDS)
