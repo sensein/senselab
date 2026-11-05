@@ -3,12 +3,13 @@
 import atexit
 import itertools
 import threading
+import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 
 from senselab_core.kernel.declare import Registry, TaskSpec
-from senselab_core.kernel.graph import Edge
-from senselab_core.kernel.identity import InputIdentity, ReusePolicy
+from senselab_core.kernel.graph import Edge, Node
+from senselab_core.kernel.identity import InputIdentity, ReusePolicy, gather_identity
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.call import Result, RunConfig, TaskCall, bind_input, packaged
 from senselab_core.runtime.execution.executor import (
@@ -80,8 +81,10 @@ def node_fragment(
     """Return the fragment of every job of `node` (the plan's one node when None) under `admission`.
 
     A node fed by a graph input has one job per manifest record, its element the record's index when a `map` edge
-    feeds it. A node fed only by upstream nodes has one job per element of their results, `upstream` giving each
-    upstream node's results; an element reads the upstream result of the same element, or of the unmapped one.
+    feeds it. A node fed only by upstream nodes has one job per element of their per-element results (one job when
+    every edge into it is a `gather`), `upstream` giving each upstream node's results. An element reads the upstream
+    result of the same element, or of the unmapped one; a `gather` edge reads every element's result, in element
+    order, as one `gather:` input.
 
     Raises:
         ValueError: `node` is None and the plan has more than one node; the admission is of another plan; an
@@ -105,18 +108,26 @@ def node_fragment(
             raise ValueError(f"node {node!r} has {len(rows)} records; a fragment holds one job per record")
         elements: list[tuple[int, ...]] = [(i,) if mapped else () for i in range(len(rows))]
     else:
-        elements = sorted({element for refs in results.values() for element in refs})
+        per_element = [refs for p, refs in results.items() if feeds[p].kind != "gather"]
+        elements = sorted({element for refs in per_element for element in refs}) if per_element else [()]
     inputs: list[dict[str, str]] = []
     read: dict[str, UpstreamRef] = {}
+    gathers: dict[str, tuple[str, ...]] = {}
     for i, element in enumerate(elements):
         entry: dict[str, str] = {p: rows[i].inputs[g] for p, g in given.items()}
         for port, refs in results.items():
-            ref = refs.get(element, refs.get(()))
-            if ref is None or ref.output_identity is None:
-                raise ValueError(f"node {node!r} element {element} has no upstream result for input {port!r}")
-            stored = UpstreamRef(key_digest=ref.key_digest, outputs=ref.output_identity, port=_source(feeds[port])[1])
-            entry[port] = stored.identity()
-            read[stored.identity()] = stored
+            source_port = _source(feeds[port])[1]
+            chosen = (
+                [refs[e] for e in sorted(refs)] if feeds[port].kind == "gather" else [refs.get(element, refs.get(()))]
+            )
+            stored = [_stored(node, element, port, source_port, ref) for ref in chosen]
+            read.update({ref.identity(): ref for ref in stored})
+            if feeds[port].kind == "gather":
+                ordered = tuple(ref.identity() for ref in stored)
+                entry[port] = gather_identity(ordered)
+                gathers[entry[port]] = ordered
+            else:
+                entry[port] = stored[0].identity()
         inputs.append(entry)
     return PlanFragment(
         plan_hash=placed.hash,
@@ -125,8 +136,16 @@ def node_fragment(
         jobs=tuple(JobRef(plan_hash=placed.hash, node=node, element=e) for e in elements),
         inputs=tuple(inputs),
         upstream=read,
+        gathered=gathers,
         placement=placed.placement.nodes[node],
     )
+
+
+def _stored(node: str, element: tuple[int, ...], port: str, source_port: str, ref: ResultRef | None) -> UpstreamRef:
+    """Return where port `source_port` of the upstream result `ref` is stored, refusing a missing result."""
+    if ref is None or ref.output_identity is None:
+        raise ValueError(f"node {node!r} element {element} has no upstream result for input {port!r}")
+    return UpstreamRef(key_digest=ref.key_digest, outputs=ref.output_identity, port=source_port)
 
 
 def _results(node: str, source: str, upstream: Mapping[str, Sequence[ResultRef]]) -> dict[tuple[int, ...], ResultRef]:
@@ -203,15 +222,17 @@ class InProcess:
             raise ValueError(f"plan {placed.hash} was placed under another execution profile than this executor's")
         if ReusePolicy(placed.logical.reuse) is not self.run.reuse:
             raise ValueError(f"plan {placed.hash} reuses under {placed.logical.reuse}, not {self.run.reuse.value}")
-        admission = Admission(id=f"admission-{next(self._ids)}", plan_hash=placed.hash)
+        admission = Admission(id=f"admission-{uuid.uuid4().hex}", plan_hash=placed.hash)
         with self._lock:
             self._admissions[admission.id] = (placed, dict(values))
         return admission
 
     def release(self, admission: Admission) -> None:
-        """Let go of `admission` and its values."""
+        """Let go of `admission` and its values; an admission of another plan, or not held, is ignored."""
         with self._lock:
-            self._admissions.pop(admission.id, None)
+            held = self._admissions.get(admission.id)
+            if held is not None and held[0].hash == admission.plan_hash:
+                del self._admissions[admission.id]
 
     def submit(self, fragment: PlanFragment) -> Handle:
         """Run every job of `fragment` and return its handle, whose status is then `done`.
@@ -331,12 +352,7 @@ class InProcess:
 
     def _jobs(self, fragment: PlanFragment) -> tuple[list[Job], Placement]:
         """Return the jobs of `fragment` with their graph-input values and upstream inputs, and its placement."""
-        with self._lock:
-            if fragment.admission not in self._admissions:
-                raise ValueError(f"admission {fragment.admission} is not held by this executor")
-            placed, values = self._admissions[fragment.admission]
-        if placed.hash != fragment.plan_hash:
-            raise ValueError(f"admission {fragment.admission} is of plan {placed.hash}, not {fragment.plan_hash}")
+        placed, values = self._held(fragment)
         nodes = {n.id: n for n in placed.logical.graph.nodes}
         if fragment.node not in nodes:
             raise ValueError(f"plan {fragment.plan_hash} has no node {fragment.node!r}")
@@ -352,12 +368,10 @@ class InProcess:
         for ref, identities in zip(fragment.jobs, fragment.inputs, strict=True):
             held, upstream = {}, {}
             for port, identity in identities.items():
-                source, source_port = feeds[port]
-                if source != "input":
-                    stored = fragment.upstream[identity]
-                    if stored.port != source_port:
-                        raise ValueError(f"input {port!r} of {ref} reads port {source_port!r}, not {stored.port!r}")
-                    upstream[port] = Upstream(stored, registry.spec(nodes[source].task).outputs[source_port])
+                if port not in feeds:
+                    raise ValueError(f"{ref} names input {port!r}, which no edge of node {node.id!r} feeds")
+                if feeds[port][0] != "input":
+                    upstream[port] = _upstream_input(fragment, identity, feeds[port], nodes, registry)
                 elif identity in values:
                     held[port] = values[identity]
                 else:
@@ -365,3 +379,37 @@ class InProcess:
             call = replace(base, inputs=dict(identities))
             jobs.append(Job(ref, call, held, anchors_of(held.values()), upstream))
         return jobs, placement_of_record(fragment.placement, spec, registry)
+
+    def _held(self, fragment: PlanFragment) -> tuple[Plan, dict[InputIdentity, object]]:
+        """Return the plan and graph-input values of the admission `fragment` names.
+
+        Raises:
+            ValueError: the admission is not held, or is of another plan.
+        """
+        with self._lock:
+            if fragment.admission not in self._admissions:
+                raise ValueError(f"admission {fragment.admission} is not held by this executor")
+            placed, values = self._admissions[fragment.admission]
+        if placed.hash != fragment.plan_hash:
+            raise ValueError(f"admission {fragment.admission} is of plan {placed.hash}, not {fragment.plan_hash}")
+        return placed, values
+
+
+def _upstream_input(
+    fragment: PlanFragment,
+    identity: str,
+    source: tuple[str, str],
+    nodes: Mapping[str, Node],
+    registry: Registry,
+) -> Upstream:
+    """Return the upstream input `identity` of `fragment`, read from port `source` (node, port) of the graph.
+
+    Raises:
+        ValueError: a stored element is of another port than the edge's.
+    """
+    node, port = source
+    stored = tuple(fragment.upstream[e] for e in fragment.gathered.get(identity, (identity,)))
+    if any(s.port != port for s in stored):
+        raise ValueError(f"input {identity} reads port {port!r} of node {node!r}, and is stored from another")
+    task = nodes[node].task
+    return Upstream(stored, task, registry.spec(task).outputs[port], gathered=identity in fragment.gathered)

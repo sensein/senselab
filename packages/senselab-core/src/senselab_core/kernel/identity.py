@@ -1,7 +1,7 @@
 """Identity v2: model references, logical keys, execution context and reuse policy (ADR-002, P-38)."""
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Annotated, Any, Literal, assert_never
@@ -54,13 +54,21 @@ def text_identity_fields(model: type[BaseModel]) -> tuple[str, ...]:
 OutputIdentity = Annotated[str, StringConstraints(pattern=r"^output:[0-9a-f]{64}$")]
 """The identity of a stored result's outputs: `output:` and a 64-hex digest."""
 
-InputIdentity = ContentIdentity | OutputIdentity
-"""What a logical key's input names: source content or one output port of an upstream job."""
+GatherIdentity = Annotated[str, StringConstraints(pattern=r"^gather:[0-9a-f]{64}$")]
+"""The identity of a gathered input: `gather:` and the digest of its elements' port identities, in element order."""
+
+InputIdentity = ContentIdentity | OutputIdentity | GatherIdentity
+"""What a logical key's input names: source content, one output port of an upstream job, or a gather of such ports."""
 
 
 def port_output_identity(key_digest: str, port: str) -> OutputIdentity:
     """Return the identity of output `port` of the job keyed `key_digest` (identity tag `port-output@1`)."""
     return "output:" + identity_digest("port-output@1", {"key": key_digest, "port": port})
+
+
+def gather_identity(elements: Sequence[str]) -> GatherIdentity:
+    """Return the identity of a gathered input over `elements`, port output identities in element order."""
+    return "gather:" + identity_digest("port-gather@1", list(elements))
 
 
 ProfileSliceIdentity = Annotated[str, StringConstraints(pattern=r"^profile:[0-9a-f]{64}$")]

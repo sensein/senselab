@@ -16,8 +16,8 @@ from senselab_core.runtime.audio_io import open_audio
 from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.execution.executor import FaultRecord, JobRef
-from senselab_core.runtime.execution.job import Completed, Failed, Job, JobOutcome, execute
+from senselab_core.runtime.execution.executor import FaultRecord, JobRef, UpstreamRef
+from senselab_core.runtime.execution.job import Completed, Failed, Job, JobOutcome, Upstream, execute
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.fake_backend import EchoParams
 from senselab_core.runtime.keys import Call, Placement, request_components, request_size
@@ -35,6 +35,7 @@ TASK = TaskSpec(
     outputs={"value": "sha256"},
     params=EchoParams,
 )
+CHAIN_TASK = TASK.model_copy(update={"name": "engine_test.chain", "inputs": {"value": "sha256"}})
 AUDIO_TASK = TASK.model_copy(update={"name": "engine_test.identify", "inputs": {"audio": "Audio"}})
 SIZES = "backends.sizes_backend_fixture"
 _TYPED = {
@@ -64,10 +65,11 @@ def _backend(name: str, task: TaskSpec = TASK, **fields: Any) -> BackendSpec:  #
 INVARIANT = _backend("invariant")
 BATCHED = _backend("batched", batch_invariant=False, output_affecting=("batch_formation",))
 IDENTIFY = _backend("identify", AUDIO_TASK)
+CHAIN = _backend("chain", CHAIN_TASK)
 REGISTRY = Registry()
-for _task in (TASK, AUDIO_TASK):
+for _task in (TASK, AUDIO_TASK, CHAIN_TASK):
     REGISTRY.add_task(_task)
-for _backend_spec in (INVARIANT, BATCHED, IDENTIFY):
+for _backend_spec in (INVARIANT, BATCHED, IDENTIFY, CHAIN):
     REGISTRY.add_backend(_backend_spec)
 
 
@@ -192,3 +194,36 @@ def test_rewritten_input_is_stale_at_run(tmp_path: Path, sizes: list[int]) -> No
     path.unlink()
     [gone] = _execute(jobs, IDENTIFY, store)
     assert isinstance(gone, Failed) and (gone.failure.type, gone.failure.fault) == ("StaleSource", "content")
+
+
+@pytest.mark.logic
+def test_a_bad_upstream_fails_only_its_element(tmp_path: Path, sizes: list[int]) -> None:
+    """Of three siblings, one reads a port its entry lacks and one an entry the store lacks: only those two fail."""
+    store = ResultStore(tmp_path)
+    [upstream] = _completed(_execute(_jobs("a"), INVARIANT, store))
+    key, outputs = upstream.result.key.digest(), upstream.result.output_identity
+    refs = [
+        UpstreamRef(key_digest=key, outputs=outputs, port="value"),
+        UpstreamRef(key_digest=key, outputs=outputs, port="missing"),
+        UpstreamRef(key_digest=key, outputs="output:" + "0" * 64, port="value"),
+    ]
+    jobs = [
+        Job(
+            JobRef(plan_hash="0" * 64, node="b", element=(i,)),
+            Call(CHAIN_TASK, EchoParams(), {"value": ref.identity()}),
+            {},
+            upstream={"value": Upstream((ref,), TASK.name, "sha256")},
+        )
+        for i, ref in enumerate(refs)
+    ]
+    sizes.clear()
+    good, wrong, missing = _execute(jobs, CHAIN, store, batch_size=3)
+    assert isinstance(good, Completed) and good.result.outputs["value"] == upstream.result.outputs["value"]
+    assert isinstance(wrong, Failed) and (wrong.failure.fault, wrong.failure.gap, wrong.failure.charged) == (
+        "content",
+        False,
+        True,
+    )
+    assert isinstance(missing, Failed) and missing.failure.type == "UpstreamMissing"
+    assert (missing.failure.fault, missing.failure.gap, missing.failure.charged) == ("infrastructure", True, False)
+    assert sizes == [1]

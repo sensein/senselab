@@ -30,6 +30,7 @@ from senselab_core.kernel.identity import (
     ModelRef,
     OutputIdentity,
     ReusePolicy,
+    gather_identity,
     member_key,
     port_output_identity,
 )
@@ -46,7 +47,7 @@ from senselab_core.runtime.compare import Thresholds
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import SAMPLING
-from senselab_core.runtime.execution.executor import JobRef, PlanFragment, Status
+from senselab_core.runtime.execution.executor import JobRef, PlanFragment, ResultRef, Status
 from senselab_core.runtime.execution.in_process import CallFailed, InProcess, node_fragment, process_workers
 from senselab_core.runtime.execution.job import Completed, Job, lost_race
 from senselab_core.runtime.execution.outputs import AmbiguousClock, OutputTypeMismatch
@@ -126,6 +127,7 @@ TRIALS_TASK = TaskSpec(
 )
 OVERLAP_TASK = TRIALS_TASK.model_copy(update={"name": "call_test.overlap", "inputs": {"label": "json"}})
 CHAIN_TASK = TASK.model_copy(update={"name": "call_test.chain", "inputs": {"value": "sha256"}})
+GATHER_TASK = TASK.model_copy(update={"name": "call_test.gather", "inputs": {"values": "list[sha256]"}})
 TWO_PORTS_TASK = TASK.model_copy(update={"name": "call_test.two_ports", "outputs": {"x": "sha256", "y": "sha256"}})
 
 
@@ -155,6 +157,7 @@ TASKS = (
     OVERLAP_TASK,
     CHAIN_TASK,
     TWO_PORTS_TASK,
+    GATHER_TASK,
     fake.ECHO,
 )
 for _task in TASKS:
@@ -181,6 +184,7 @@ TEST_REGISTRY.add_backend(_backend("clocked", "dsp", Env.host(), CLOCKED_TASK, "
 TEST_REGISTRY.add_backend(_backend("trials", "dsp", Env.host(), TRIALS_TASK, "backends.trials_backend_fixture"))
 TEST_REGISTRY.add_backend(_backend("overlap", "dsp", Env.host(), OVERLAP_TASK, "backends.overlap_backend_fixture"))
 TEST_REGISTRY.add_backend(_backend("chain", "dsp", Env.host(), CHAIN_TASK, "backends.sizes_backend_fixture"))
+TEST_REGISTRY.add_backend(_backend("gather", "dsp", Env.host(), GATHER_TASK, "backends.sizes_backend_fixture"))
 TEST_REGISTRY.add_backend(
     _backend("two-ports", "dsp", Env.host(), TWO_PORTS_TASK, "backends.two_ports_backend_fixture")
 )
@@ -321,6 +325,12 @@ def test_one_activity_per_call(store: ResultStore) -> None:
     _in_process(_call("one"), execution=_profile("alpha"), store=store, run=RunConfig(reuse=ReusePolicy.EXACT))
     assert len(_activities(store)) == 2
     assert _executions(store) == [execution]
+
+
+def _task_of(activity: prov.Record) -> str:
+    key = prov.literal_value(activity.node()["senselab:logicalKey"])
+    assert isinstance(key, dict)
+    return str(key["task"])
 
 
 def _result_id(store: ResultStore) -> str:
@@ -922,6 +932,10 @@ def test_two_node_graph_run_by_hand_reads_upstream_outputs_from_the_store(store:
     served = [o.result for o in downstream if isinstance(o, Completed)]
     assert [r.outputs["value"] for r in served] == [str(r.outputs["value"]) for r in computed]
     assert [r.key.inputs["value"] for r in served] == [port_output_identity(r.key.digest(), "value") for r in computed]
+    used = [json.dumps(a.node()["prov:used"]) for a in _executions(store) if _task_of(a) == CHAIN_TASK.name]
+    assert len(used) == 2 and all(sum(r.output_identity in u for u in used) == 1 for r in computed)
+    generated = {json.dumps(a.node()["prov:generated"]) for a in _executions(store) if _task_of(a) == TASK.name}
+    assert all(any(r.output_identity in g for g in generated) for r in computed)
     executor.release(admission)
 
 
@@ -975,3 +989,42 @@ def test_an_output_identity_names_one_port(store: ResultStore) -> None:
         executor.release(admission)
     assert served["x"].key != served["y"].key
     assert (served["x"].outputs["value"], served["y"].outputs["value"]) == ("x:v", "y:v")
+
+
+def _gathered_run(executor: InProcess, texts: tuple[str, ...]) -> tuple[list[ResultRef], Result]:
+    """Run `a` mapped over `texts`, then `b` gathering every element of `a`; return a's results and b's result."""
+    graph = Graph(
+        inputs={"text": "list[json]"},
+        nodes=(Node(id="a", task=TASK.name, task_version="1"), Node(id="b", task=GATHER_TASK.name, task_version="1")),
+        edges=(
+            Edge(source="input.text", target="a.text", kind="map"),
+            Edge(source="a.value", target="b.values", kind="gather"),
+        ),
+        outputs={"value": "b.value"},
+    )
+    records = [Record(id=f"r{i}", inputs={"text": ValueInput(value=t)}) for i, t in enumerate(texts)]
+    placed = plan(graph, RecordSet(records), config=executor.run, execution=executor.profile)
+    admission = executor.admit(placed, {bind_input("text", "json", t)[0]: t for t in texts})
+    refs = list(executor.results(executor.submit(node_fragment(placed, admission, "a"))))
+    fragment = node_fragment(placed, admission, "b", upstream={"a": refs})
+    assert PlanFragment.model_validate_json(fragment.model_dump_json()) == fragment
+    [outcome] = executor.outcomes(executor.submit(fragment))
+    executor.release(admission)
+    assert isinstance(outcome, Completed) and fragment.jobs[0].element == ()
+    return refs, outcome.result
+
+
+@pytest.mark.logic
+def test_a_gathered_input_reads_every_element_in_order(store: ResultStore) -> None:
+    """B gathers A's three elements: it reads all three values in order, and its key names each element and order."""
+    executor = InProcess(store=store, profile=_profile("alpha"), workers=WORKERS)
+    refs, gathered = _gathered_run(executor, ("one", "two", "three"))
+    ports = [port_output_identity(r.key_digest, "value") for r in sorted(refs, key=lambda r: r.job.element)]
+    assert gathered.key.inputs["values"] == gather_identity(ports)
+    assert gather_identity(list(reversed(ports))) != gather_identity(ports)
+    a_values = [executor.store.outputs_of(r.key_digest, str(r.output_identity)) for r in refs]
+    assert gathered.outputs["value"] == str([v["value"] for v in a_values if v is not None])
+    _, changed = _gathered_run(executor, ("one", "two", "four"))
+    assert changed.key != gathered.key
+    used = [json.dumps(a.node()["prov:used"]) for a in _executions(store) if _task_of(a) == GATHER_TASK.name]
+    assert len(used) == 2 and any(all(str(r.output_identity) in u for r in refs) for u in used)

@@ -10,7 +10,13 @@ from senselab_worker.faults import FaultClass
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, thawed
 from senselab_core.kernel.formats import PLAN_FRAGMENT_FORMAT, FormatTag, Formatted
 from senselab_core.kernel.graph import NodeId
-from senselab_core.kernel.identity import InputIdentity, OutputIdentity, port_output_identity
+from senselab_core.kernel.identity import (
+    GatherIdentity,
+    InputIdentity,
+    OutputIdentity,
+    gather_identity,
+    port_output_identity,
+)
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.planner import Plan
 
@@ -100,7 +106,17 @@ def _upstream_form(v: Mapping[str, UpstreamRef]) -> dict[str, object]:
 
 
 Upstream = Annotated[Mapping[OutputIdentity, UpstreamRef], AfterValidator(_upstream), PlainSerializer(_upstream_form)]
-"""Each `output:` input identity a fragment's jobs read, with where the port's value is stored."""
+"""Each `output:` identity a fragment's jobs read, alone or gathered, with where the port's value is stored."""
+
+
+def _gathered(v: Mapping[str, tuple[str, ...]]) -> Mapping[str, tuple[str, ...]]:
+    return FrozenMapping(v)
+
+
+Gathered = Annotated[
+    Mapping[GatherIdentity, tuple[OutputIdentity, ...]], AfterValidator(_gathered), PlainSerializer(thawed)
+]
+"""Each `gather:` input identity a fragment's jobs read, with its elements' port identities in element order."""
 
 
 class Admission(Frozen):
@@ -115,8 +131,9 @@ class PlanFragment(Formatted):
 
     `inputs` holds one mapping per job, in the order of `jobs`; every job names `plan_hash` and `node`. `admission`
     names the admission whose graph-input values the jobs read; `upstream` gives, for each `output:` input
-    identity (one port of one upstream job, `port_output_identity`), where that port's value is stored. `attempt`
-    counts the submissions of these jobs.
+    identity (one port of one upstream job, `port_output_identity`), where that port's value is stored; `gathered`
+    gives, for each `gather:` input identity, its elements' port identities in element order, each in `upstream`.
+    `attempt` counts the submissions of these jobs.
     """
 
     format: FormatTag = PLAN_FRAGMENT_FORMAT
@@ -127,6 +144,7 @@ class PlanFragment(Formatted):
     jobs: Annotated[tuple[JobRef, ...], Field(min_length=1)]
     inputs: tuple[JobInputs, ...]
     upstream: Upstream = FrozenMapping({})
+    gathered: Gathered = FrozenMapping({})
     placement: NodePlacement
     attempt: Annotated[int, Field(ge=1)] = 1
 
@@ -138,7 +156,12 @@ class PlanFragment(Formatted):
             raise ValueError("a fragment names each job once")
         if any((j.plan_hash, j.node) != (self.plan_hash, self.node) for j in self.jobs):
             raise ValueError(f"every job of the fragment is of plan {self.plan_hash} node {self.node!r}")
-        read = {i for inputs in self.inputs for i in inputs.values() if i.startswith("output:")}
+        named = {i for inputs in self.inputs for i in inputs.values()}
+        if {i for i in named if i.startswith("gather:")} != set(self.gathered):
+            raise ValueError(f"gathered names {sorted(self.gathered)}; the jobs read other gathers")
+        if any(gather_identity(elements) != g for g, elements in self.gathered.items()):
+            raise ValueError("a gather identity is the identity of its elements in order")
+        read = {i for i in named if i.startswith("output:")} | {e for es in self.gathered.values() for e in es}
         if read != set(self.upstream):
             raise ValueError(f"upstream names {sorted(self.upstream)}; the jobs read {sorted(read)}")
         if any(identity != ref.identity() for identity, ref in self.upstream.items()):

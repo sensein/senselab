@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 
+from senselab_core.kernel.identity import gather_identity
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.execution.executor import (
     Admission,
@@ -20,6 +21,7 @@ _INPUT = "content:" + "cd" * 32
 _OUTPUT = "output:" + "ef" * 32
 _STORED = UpstreamRef(key_digest=_PLAN, outputs="output:" + "12" * 32, port="value")
 _PORT = _STORED.identity()
+_GATHER = gather_identity([_PORT])
 
 
 def _placement() -> NodePlacement:
@@ -68,6 +70,16 @@ def register_execution_samples(register: Register) -> None:
             PlanFragment(
                 plan_hash=_PLAN,
                 node="n",
+                admission="admission-2",
+                jobs=jobs[:1],
+                inputs=({"xs": _GATHER},),
+                upstream={_PORT: _STORED},
+                gathered={_GATHER: (_PORT,)},
+                placement=_placement(),
+            ),
+            PlanFragment(
+                plan_hash=_PLAN,
+                node="n",
                 admission="admission-1",
                 jobs=jobs[:1],
                 inputs=({},),
@@ -82,6 +94,7 @@ def register_execution_samples(register: Register) -> None:
             {"jobs": ()},
             {"admission": ""},
             {"upstream": {_OUTPUT: _STORED}},
+            {"gathered": {"gather:" + "0" * 64: (_PORT,)}},
         ],
     )
     register(

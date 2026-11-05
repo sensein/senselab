@@ -1,7 +1,7 @@
 """What a job records: its execution activity and agent, a reuse's attributes, and verify-sampling evidence."""
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 
 from senselab_core.kernel import prov as kprov
@@ -77,12 +77,12 @@ def execution_records(  # noqa: PLR0913 - one execution's records
     key: LogicalKey,
     context: ExecutionContext,
     profile: ExecutionProfile,
-    inputs: Mapping[str, InputIdentity],
+    used: Sequence[tuple[str, InputIdentity]],
     output: OutputIdentity,
     started: datetime,
     attributes: Mapping[str, object],
 ) -> tuple[kprov.Record, kprov.Record]:
-    """Return the execution's agent and its activity, which used the inputs and generated the output.
+    """Return the execution's agent and its activity, which used each `(port, entity)` and generated the output.
 
     `attributes` are recorded on the activity beside the key, the context and the profile's digest.
     """
@@ -95,7 +95,7 @@ def execution_records(  # noqa: PLR0913 - one execution's records
             "senselab:context": context_record(context),
             "senselab:executionProfile": profile.canonical_digest(),
         },
-        used=[kprov.Usage(identity, port=port) for port, identity in inputs.items()],
+        used=[kprov.Usage(identity, port=port) for port, identity in used],
         generated=[kprov.Generation(output)],
         associations=[kprov.Association(agent.id, node_id=key.task)],
         started=started,

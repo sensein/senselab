@@ -14,9 +14,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from senselab_worker import WIRE_VERSION
-from senselab_worker.faults import InfrastructureFault, error_record
+from senselab_worker.faults import error_record
 
 from senselab_core.kernel import prov as kprov
+from senselab_core.kernel.declare import InconsistentInputs
 from senselab_core.kernel.identity import ExecutionContext, InputIdentity, LogicalKey, OutputIdentity, ReusePolicy
 from senselab_core.kernel.license import License
 from senselab_core.kernel.signals import Recording, StaleSource
@@ -25,7 +26,17 @@ from senselab_core.runtime.call import Result, RunConfig, env_license, host_hard
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import sampled
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef, UpstreamRef
-from senselab_core.runtime.execution.outputs import Anchors, anchors_of, as_stored, as_wire, decoded, read_port, rebound
+from senselab_core.runtime.execution.outputs import (
+    AmbiguousClock,
+    Anchors,
+    OutputTypeMismatch,
+    anchors_of,
+    as_stored,
+    as_wire,
+    decoded,
+    read_port,
+    rebound,
+)
 from senselab_core.runtime.execution.records import execution_records, reuse_attributes, unlicensed, verify
 from senselab_core.runtime.execution.records import verify_attributes as verify_settings
 from senselab_core.runtime.execution.workers import PRECISION, WorkerSet, expected_of
@@ -42,10 +53,15 @@ from senselab_core.runtime.vocabulary import core_vocabulary
 
 @dataclass(frozen=True)
 class Upstream:
-    """An input that is one port of an upstream job's output: where it is stored, and the port's declared type."""
+    """An input read from upstream jobs' outputs: where each element is stored, the source task and port type.
 
-    ref: UpstreamRef
+    A gathered input reads every ref, in order, as one list; any other reads its one ref.
+    """
+
+    refs: tuple[UpstreamRef, ...]
+    task: str
     declared: str
+    gathered: bool = False
 
 
 @dataclass(frozen=True)
@@ -61,10 +77,6 @@ class Job:
     values: Mapping[str, object]
     anchors: Anchors = ()
     upstream: Mapping[str, Upstream] = field(default_factory=dict)
-
-
-class UpstreamMissing(InfrastructureFault):
-    """An upstream output a job reads is not in the result store."""
 
 
 @dataclass(frozen=True)
@@ -195,22 +207,37 @@ def _code_license(run: RunConfig, placement: Placement, call: Call) -> License |
 
 
 def _resolved(job: Job, store: ResultStore) -> tuple[Job, FaultRecord | None]:
-    """Return `job` with each upstream input read from `store` and its constraints checked, or its failure.
+    """Return `job` with each upstream input read from `store` and its constraints checked, or the job's failure.
+
+    An upstream entry missing from the store is an infrastructure gap; an entry that lacks its port, holds a value
+    not of its declared type, or gives inputs that break the task's constraints is a content fault of this job.
 
     Raises:
-        InconsistentInputs: the inputs contradict a constraint the task declares.
-        AmbiguousClock: two recording inputs of one content carry different anchors.
+        InconsistentInputs, AmbiguousClock: a job with no upstream input breaks a constraint or carries one content
+            on two clocks.
     """
     values = dict(job.values)
-    for port, up in job.upstream.items():
-        ref = up.ref
-        outputs = store.outputs_of(ref.key_digest, ref.outputs)
-        if outputs is None or ref.port not in outputs:
-            missing = UpstreamMissing(f"input {port!r} reads port {ref.port!r} of {ref.outputs}, not in the store")
-            return job, FaultRecord.of(error_record(missing))
-        values[port] = read_port(ref.outputs, ref.port, up.declared, outputs[ref.port])
-    job.call.task.check_inputs(values)
-    return replace(job, values=values, anchors=anchors_of(values.values())), None
+    try:
+        for port, up in job.upstream.items():
+            read = []
+            for ref in up.refs:
+                outputs = store.outputs_of(ref.key_digest, ref.outputs)
+                if outputs is None:
+                    message = f"input {port!r} reads {ref.outputs}, which the store does not hold"
+                    return job, FaultRecord(
+                        fault="infrastructure", type="UpstreamMissing", message=message, gap=True, charged=False
+                    )
+                if ref.port not in outputs:
+                    raise OutputTypeMismatch(f"input {port!r} reads port {ref.port!r}, which {ref.outputs} lacks")
+                read.append(read_port(up.task, ref.port, up.declared, outputs[ref.port]))
+            values[port] = read if up.gathered else read[0]
+        job.call.task.check_inputs(values)
+        anchors = anchors_of(values.values())
+    except (OutputTypeMismatch, InconsistentInputs, AmbiguousClock) as exc:
+        if not job.upstream:
+            raise
+        return job, FaultRecord(fault="content", type=type(exc).__name__, message=str(exc), gap=False, charged=True)
+    return replace(job, values=values, anchors=anchors), None
 
 
 def _stale(job: Job) -> FaultRecord | None:
@@ -381,7 +408,7 @@ def _record(  # noqa: PLR0913 - one sent item and where its result goes
         if lost is not None:
             return Completed(job.ref, lost)
         output_identity = store_output_identity(outputs)
-    _provenance(store, key, context, profile, job.call.inputs, output_identity, started, attributes)
+    _provenance(store, key, context, profile, _used(job), output_identity, started, attributes)
     return Completed(job.ref, Result(read, output_identity, key, context, placement, None))
 
 
@@ -390,12 +417,21 @@ def _provenance(  # noqa: PLR0913 - one execution's records
     key: LogicalKey,
     context: ExecutionContext,
     profile: ExecutionProfile,
-    inputs: Mapping[str, InputIdentity],
+    used: Sequence[tuple[str, InputIdentity]],
     output: OutputIdentity,
     started: datetime,
     attributes: Mapping[str, object],
 ) -> None:
     store.provenance.add(
-        *(kprov.entity(i, core_vocabulary()) for i in inputs.values()),
-        *execution_records(key, context, profile, inputs, output, started, attributes),
+        *(kprov.entity(i, core_vocabulary()) for i in dict.fromkeys(i for _, i in used)),
+        *execution_records(key, context, profile, used, output, started, attributes),
     )
+
+
+def _used(job: Job) -> list[tuple[str, InputIdentity]]:
+    """Return what a job's execution used, by port: each graph input, and each upstream entry it read."""
+    used: list[tuple[str, InputIdentity]] = []
+    for port, identity in job.call.inputs.items():
+        up = job.upstream.get(port)
+        used += [(port, identity)] if up is None else [(port, ref.outputs) for ref in up.refs]
+    return used
