@@ -8,7 +8,8 @@ and how it is rounded. :func:`fit_values` computes every one from the table ``re
 (:data:`~senselab.audio.workflows.triage.dataset_profile.FITTED_FILE`).
 
 The order for a new dataset: a pilot run (a profile with ``pilot: true`` may leave these values empty), the COHORT
-pass, the corpus table, the fit, then a replay of the pilot so its verdicts read the fitted values.
+pass, the corpus table, the fit, the COHORT pass again, then a replay of the pilot so its verdicts read the fitted
+values (``scripts/fit_profile.py`` lists the steps).
 """
 
 from __future__ import annotations
@@ -44,10 +45,10 @@ OPERATORS: Mapping[str, Callable[[Any, Any], bool]] = {
     "lt": lambda cell, value: cell < value,
     "le": lambda cell, value: cell <= value,
 }
+"""The comparisons a method's ``where`` filter may use."""
 
 Row = Mapping[str, Any]
 """One corpus-table row, as ``pyarrow.Table.to_pylist`` gives it."""
-"""The comparisons a method's ``where`` filter may use."""
 
 
 @dataclass(frozen=True)

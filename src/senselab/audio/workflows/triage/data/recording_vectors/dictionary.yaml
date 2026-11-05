@@ -1810,9 +1810,10 @@ columns:
     units: words/s
     description: Lexical consensus words per second of the response.
     computation: >-
-      The live consensus words that are neither bracketed nor degenerate, divided by `gate_response_min_s`
-      (the hull of the lexical words; 4 decimals).
-    source: [recording_vectors.py:_lexical_words_per_s]
+      The live consensus words that are neither bracketed, degenerate nor unconfirmed and are no filler
+      (`residue.is_non_lexical`), as the replaced-task rule counts talk, divided by `gate_response_min_s` (the hull of
+      the lexical words; 4 decimals).
+    source: [recording_vectors.py:_lexical_words_per_s, task_speech.py:task_speech_of]
     null_means: No consensus transcript, or no response duration.
 
 families:

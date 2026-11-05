@@ -40,7 +40,7 @@ import functools
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Collection, Mapping, TypeVar
+from typing import Any, Callable, Collection, Mapping, Sequence, TypeVar
 
 import yaml  # type: ignore[import-untyped]
 
@@ -50,6 +50,7 @@ PACKAGED_DATA = Path(__file__).parent / "data"
 """The packaged data directory: the engine files and the defaulted files."""
 
 MANIFEST = "profile.yaml"
+"""The file that makes a directory a dataset profile."""
 
 FITTED_FILE = "fitted.yaml"
 """The file in a profile that ``scripts/fit_profile.py`` writes: the corpus statistics fitted on a pilot run and what
@@ -57,7 +58,6 @@ they were fitted on (plan step 10). Its values sit above the profile it extends 
 
 PILOT_KEY = "pilot"
 """The manifest key that marks a profile as a pilot: its corpus statistics (kind b) may be empty (plan step 10)."""
-"""The file that makes a directory a dataset profile."""
 
 PACKAGED_PROFILES = Path(__file__).parent / "profiles"
 """Profiles senselab ships, opt-in and by name: a profile builds on one with ``extends: senselab:<name>``."""
@@ -466,7 +466,14 @@ def run_data() -> dict[str, Any]:
     return dict(_RUN_DATA)
 
 
-def merge_values(base: Any, over: Any, *, where: str, fixed: frozenset[str] = frozenset()) -> Any:  # noqa: ANN401
+def merge_values(
+    base: Any,  # noqa: ANN401
+    over: Any,  # noqa: ANN401
+    *,
+    where: str,
+    fixed: frozenset[str] = frozenset(),
+    open_mappings: frozenset[str] = frozenset(),
+) -> Any:  # noqa: ANN401
     """Merge a value file's override over its packaged values, key by key.
 
     Args:
@@ -474,6 +481,8 @@ def merge_values(base: Any, over: Any, *, where: str, fixed: frozenset[str] = fr
         over: The override at this level.
         where: ``<file>:<dotted key>`` of this level, for messages.
         fixed: Top-level keys that may not change (:data:`FIXED_KEYS`).
+        open_mappings: ``<file>:<dotted key>`` of mappings keyed by task family, which take keys the lower layers
+            lack (:func:`open_mappings`).
 
     Returns:
         The merged values. A list or a scalar is replaced whole; a mapping is merged.
@@ -494,12 +503,27 @@ def merge_values(base: Any, over: Any, *, where: str, fixed: frozenset[str] = fr
             out[key] = base.get(key, value)
             continue
         if key not in base:
-            if base:
+            if base and where not in open_mappings:
                 raise ValueError(f"{here} is not a key senselab's file has; an override may not introduce keys")
             out[key] = value
             continue
-        out[key] = merge_values(base[key], value, where=here)
+        out[key] = merge_values(base[key], value, where=here, open_mappings=open_mappings)
     return out
+
+
+@functools.lru_cache(maxsize=None)
+def open_mappings() -> frozenset[str]:
+    """The value mappings keyed by task family (a fitted method's ``by``), which a profile may add families to.
+
+    Returns:
+        ``<file>:<dotted key>`` of each, e.g. ``discard_replaced_task.yaml:short_response.family_median_s``.
+    """
+    return frozenset(
+        f"{relative}:{'.'.join(str(part) for part in entry['path'])}"
+        for relative, entries in profile_values().items()
+        for entry in entries
+        if isinstance(entry.get("method"), Mapping) and entry["method"].get("by")
+    )
 
 
 def _load(path: Path) -> Any:  # noqa: ANN401 -- a YAML document
@@ -531,14 +555,18 @@ def data_values(relative: str) -> Any:  # noqa: ANN401 -- a YAML document
     if top in MERGED_PATHS:
         packaged = PACKAGED_DATA / relative
         values = _load(packaged) if packaged.is_file() else {}
-        fixed = FIXED_KEYS.get(relative, frozenset())
+        fixed, opened = FIXED_KEYS.get(relative, frozenset()), open_mappings()
         for layer in _ACTIVE.chain() if _ACTIVE is not None else ():
             if relative in layer.fitted:
-                values = merge_values(values, layer.fitted[relative], where=f"{relative}:", fixed=fixed)
+                values = merge_values(
+                    values, layer.fitted[relative], where=f"{relative}:", fixed=fixed, open_mappings=opened
+                )
             supplied = layer.supplies(relative)
             if supplied is not None:
-                values = merge_values(values, _load(supplied), where=f"{relative}:", fixed=fixed)
-        return merge_values(values, run, where=f"{relative}:", fixed=fixed) if run is not None else values
+                values = merge_values(values, _load(supplied), where=f"{relative}:", fixed=fixed, open_mappings=opened)
+        if run is None:
+            return values
+        return merge_values(values, run, where=f"{relative}:", fixed=fixed, open_mappings=opened)
     if top in REPLACED_PATHS:
         return run if run is not None else _load(data_path(relative))
     if top in DATASET_PATHS:
@@ -682,18 +710,27 @@ def unfitted_values(running: Collection[str] | None = None) -> list[str]:
         return []
     out = []
     for relative, entries in profile_values().items():
-        if relative == CONFIG_FILE:
+        wanted = [entry for entry in entries if entry.get("kind") == FITTED_KIND and needed(entry, running)]
+        if relative == CONFIG_FILE or not wanted:
             continue
-        for entry in entries:
-            if entry.get("kind") != FITTED_KIND or not needed(entry, running):
-                continue
+        document = data_values(relative)
+        for entry in wanted:
             path = tuple(str(part) for part in entry["path"])
-            if _lookup(data_values(relative), path) is None:
+            if lookup_value(document, path) is None:
                 out.append(f"{relative} {'.'.join(path)}")
     return out
 
 
-def _lookup(node: Any, path: tuple[str, ...]) -> Any:  # noqa: ANN401 -- a YAML value
+def lookup_value(node: Any, path: Sequence[str]) -> Any:  # noqa: ANN401 -- a YAML value
+    """The value at a key path in a YAML document, or None where any key is missing.
+
+    Args:
+        node: The document.
+        path: The keys from its top.
+
+    Returns:
+        The value, or None.
+    """
     for part in path:
         if not isinstance(node, Mapping) or part not in node:
             return None
@@ -730,7 +767,7 @@ def missing_dataset_values(config_values: Mapping[str, Any]) -> list[str]:
         except DatasetDataMissing:
             continue  # the file itself is listed missing above
         where = "config" if relative == CONFIG_FILE else relative
-        missing += [f"{where} {'.'.join(path)}" for path in paths if _lookup(document, path) is None]
+        missing += [f"{where} {'.'.join(path)}" for path in paths if lookup_value(document, path) is None]
     recruited = (config_values.get("verdict") or {}).get("recruited_conditions")
     if recruited:
         try:

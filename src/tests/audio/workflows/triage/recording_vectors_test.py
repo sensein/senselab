@@ -1524,3 +1524,15 @@ def test_the_word_rate_is_the_lexical_words_over_the_response(tmp_path: Path) ->
     view = rv.read_store(build_recording(tmp_path) / "run" / "store.jsonl")
     assert rv._lexical_words_per_s(view, 2.0) == 1.0
     assert rv._lexical_words_per_s(view, None) is None
+
+
+def test_the_word_rate_counts_no_filler_and_no_unconfirmed_word(tmp_path: Path) -> None:
+    """Review of step 10: the rate counts words as the replaced-task rule counts talk."""
+    run_root = build_recording(tmp_path)
+    store = run_root / "run" / "store.jsonl"
+    extra = [
+        _entity("word-2", "word", [1.5, 1.7], index=2, text="um", outcome="agreement"),
+        _entity("word-3", "word", [1.8, 2.0], index=3, text="there", outcome="insertion", unconfirmed=True),
+    ]
+    store.write_text(store.read_text() + "\n".join(extra) + "\n")
+    assert rv._lexical_words_per_s(rv.read_store(store), 2.0) == 1.0

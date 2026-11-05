@@ -747,7 +747,7 @@ values:
     stages: [COHORT]
     unit: "fraction (0-1)"
     means: "Share of a participant's compared recordings with a speaker non-match at which the non-match counts as shared."
-    fit: "Tukey upper fence (Q3 + 1.5 IQR) of the per-participant non-match share over participants with any non-match in a pilot corpus."
+    fit: "Tukey upper fence (Q3 + 1.5 IQR) of the per-participant non-match share over a pilot corpus's participants with any non-match and at least shared_nonmatch.recordings_min compared recordings (as B2AI's was fitted; the rule itself needs recordings_min non-matching ones)."
     method: {column: cohort_participant_nonmatch_fraction, per: participant, statistic: tukey_upper, decimals: 3, clamp: [0, 1], where: [{column: cohort_participant_nonmatch_fraction, op: gt, value: 0}, {column: cohort_participant_compared_n, op: ge, setting: [shared_nonmatch, recordings_min]}]}
   - path: ["speech", "score_min"]
     kind: c

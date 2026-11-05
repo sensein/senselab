@@ -119,3 +119,44 @@ def test_a_fit_is_refused_over_an_earlier_one_and_over_an_older_table(no_profile
     deactivate_profile()
     old = _table(tmp_path / "old.parquet", _rows(), ["participant", "session", "declared_family"])
     assert cli.main([str(old), "--profile", str(root), "--out", str(tmp_path / "other.yaml")]) == 2
+
+
+def test_a_blank_the_profile_writes_is_named_as_hiding_the_fit(
+    no_profile: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review of step 10: an explicit blank in the profile's own file wins over the fit, and the driver says so."""
+    root = _profile(tmp_path / "lab", {"task_extent.yaml": "count_in:\n  gap_max_s:\n"})
+    assert cli.main([str(_table(tmp_path / "rv.parquet", _rows())), "--profile", str(root)]) == 0
+    line = next(line for line in capsys.readouterr().out.splitlines() if "count_in.gap_max_s" in line)
+    assert "hides the fit" in line
+
+
+def test_a_fit_written_elsewhere_is_named_as_not_read(
+    no_profile: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--out`` somewhere else writes a file the profile does not load, and the driver says so."""
+    root = _profile(tmp_path / "lab")
+    out = tmp_path / "elsewhere.yaml"
+    assert cli.main([str(_table(tmp_path / "rv.parquet", _rows())), "--profile", str(root), "--out", str(out)]) == 0
+    assert out.is_file() and not (root / "fitted.yaml").exists()
+    assert "the profile reads none of these" in capsys.readouterr().out
+
+
+def test_an_unreadable_table_is_refused_not_raised(no_profile: None, tmp_path: Path) -> None:
+    """Review of step 10: a missing table, or one that is not parquet, exits 2."""
+    root = _profile(tmp_path / "lab")
+    assert cli.main([str(tmp_path / "absent.parquet"), "--profile", str(root)]) == 2
+    deactivate_profile()
+    junk = tmp_path / "junk.parquet"
+    junk.write_text("not a table")
+    assert cli.main([str(junk), "--profile", str(root)]) == 2
+
+
+def test_a_broken_fit_is_replaced_with_force_and_kept_aside(no_profile: None, tmp_path: Path) -> None:
+    """Review of step 10: --force refits over a fitted.yaml the profile cannot load, keeping it as .previous."""
+    root = _profile(tmp_path / "lab")
+    (root / "fitted.yaml").write_text("values: [not, a, mapping\n")
+    assert cli.main([str(_table(tmp_path / "rv.parquet", _rows())), "--profile", str(root), "--force"]) == 0
+    assert (root / "fitted.yaml.previous").read_text().startswith("values: [not")
+    deactivate_profile()
+    assert load_profile(root).fitted["task_extent.yaml"]["count_in"]["gap_max_s"] is not None

@@ -29,6 +29,13 @@ import numpy as np
 import pyarrow as pa
 import yaml  # type: ignore[import-untyped]
 
+from senselab.audio.workflows.triage.cohort_fold import (
+    CHECKS,
+    COHORT_READING,
+    CONDITION,
+    CONSISTENCY_CHECK_NAME,
+    PARTICIPANT_NONMATCH,
+)
 from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.identity import (
     ADMIT_NODE,
@@ -41,6 +48,7 @@ from senselab.audio.workflows.triage.identity import (
     identity_from_attributes,
 )
 from senselab.audio.workflows.triage.recruited_conditions import CONDITION_KINDS, DIAGNOSES_KEY, ledger_value
+from senselab.audio.workflows.triage.residue import is_non_lexical
 from senselab.audio.workflows.triage.task_catalogue import ResolvedTask, task_from_attributes
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD, standing_task_extents
 from senselab.utils import fastio
@@ -1103,14 +1111,15 @@ def evaluation_bounds() -> dict[str, Any]:
     return dict(yaml.safe_load(path.read_text(encoding="utf-8")))
 
 
-COHORT_READING_NAME = "cohort_reading"
+COHORT_READING_NAME = COHORT_READING
 COUGH_READING_NAME = "airway_cough_reading"
 DDK_READING_NAME = "ddk_task_reading"
 PHONATION_READING_NAME = "voice_phonation_reading"
 """The readings the fit columns copy: COHORT's, AIRWAY's cough, SPEECH's syllable task and VOICE's phonation (the
-names their writers give them; ``recording_vectors_test`` checks they agree)."""
+names their writers give them; the last three are spelled here, since their modules load the branches, and
+``recording_vectors_test`` checks they agree)."""
 
-CONSISTENCY_CHECK = "session_speaker_consistency"
+CONSISTENCY_CHECK = CONSISTENCY_CHECK_NAME
 """The COHORT check whose cosine ``cohort_session_consistency_cosine`` copies."""
 
 FIT_COLUMNS = (
@@ -1136,8 +1145,7 @@ def _block(value: Any) -> Mapping[str, Any]:  # noqa: ANN401 -- a stored attribu
 
 
 def _shift(own: Any, other: Any, key: str) -> float | None:  # noqa: ANN401 -- stored blocks
-    """A session's summary less the other sessions', each a stored 2-decimal median; the difference is not rounded
-    again, as B2AI's fit took it (``cohort_fold.condition_shift`` rounds it for its own comparison)."""
+    """A session's summary less the other sessions': two stored 2-decimal medians, the difference not rounded again."""
     if not isinstance(own, Mapping) or not isinstance(other, Mapping):
         return None
     a, b = own.get(key), other.get(key)
@@ -1157,10 +1165,10 @@ def _fit_columns(view: StoreView) -> dict[str, Any]:
     """
     cohort = view.last("measurement", name=COHORT_READING_NAME)
     reading = _block(cohort.attributes if cohort is not None else None)
-    condition = _block(reading.get("condition"))
+    condition = _block(reading.get(CONDITION))
     participant = _block(condition.get("participant"))
-    nonmatch = _block(reading.get("participant_nonmatch"))
-    consistency = _block(_block(reading.get("checks")).get(CONSISTENCY_CHECK))
+    nonmatch = _block(reading.get(PARTICIPANT_NONMATCH))
+    consistency = _block(_block(reading.get(CHECKS)).get(CONSISTENCY_CHECK))
     compared = [c for c in consistency.get("comparisons") or () if isinstance(c, Mapping)]
     cosine = compared[0].get("value") if compared else consistency.get("cosine")
 
@@ -1199,14 +1207,25 @@ def _fit_columns(view: StoreView) -> dict[str, Any]:
 
 
 def _lexical_words_per_s(view: StoreView, response_s: Any) -> float | None:  # noqa: ANN401 -- a table value
-    """Lexical consensus words per second of the response (``gate_response_min_s``), or None without one."""
+    """Lexical consensus words per second of the response (``gate_response_min_s``), or None without one.
+
+    The words are those the replaced-task rule counts as talk (``task_speech.task_speech_of``): neither bracketed,
+    degenerate nor unconfirmed, and no filler (:func:`~senselab.audio.workflows.triage.residue.is_non_lexical`).
+    """
     if (
         not isinstance(response_s, (int, float))
         or not response_s
         or view.last("measurement", name="consensus_transcript") is None
     ):
         return None
-    lexical = [e for e in view.live("word") if not e.attributes.get("bracketed") and not e.attributes.get("degenerate")]
+    lexical = [
+        e
+        for e in view.live("word")
+        if not e.attributes.get("bracketed")
+        and not e.attributes.get("degenerate")
+        and not e.attributes.get("unconfirmed")
+        and not is_non_lexical(str(e.attributes.get("text") or ""))
+    ]
     return round(len(lexical) / float(response_s), 4)
 
 

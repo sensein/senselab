@@ -66,9 +66,23 @@ class TestTheTemplate:
         root = write_template(tmp_path / "new", name="new-dataset")
         text = (root / "cohort_stage.yaml").read_text()
         assert (
-            "[compute from your own recordings: leave blank, run a pilot, then scripts/fit_profile.py fits it]" in text
+            "[compute from your own recordings: left commented out; run a pilot, then scripts/fit_profile.py fits it]"
+            in text
         )
         assert "clipped_fraction_min:" in text
+
+    def test_a_fit_fills_what_the_template_left_for_it(self, tmp_path: Path) -> None:
+        """Review of step 10: the template leaves the corpus statistics commented out, so fitted.yaml supplies them."""
+        from senselab.audio.workflows.triage.dataset_profile import data_values, deactivate_profile
+
+        root = write_template(tmp_path / "new", name="new-dataset")
+        assert "count_in" not in (yaml.safe_load((root / "task_extent.yaml").read_text()) or {})
+        fitted = {"values": {"task_extent.yaml": {"count_in": {"gap_max_s": 2.4}}}}
+        (root / "fitted.yaml").write_text(yaml.safe_dump(fitted))
+        load_triage_config(profile=root)
+        assert data_values("task_extent.yaml")["count_in"]["gap_max_s"] == 2.4
+        assert "task_extent.yaml count_in.gap_max_s" not in unfitted_values()
+        deactivate_profile()
 
     def test_an_existing_directory_is_refused(self, tmp_path: Path) -> None:
         """A template never writes over a profile."""

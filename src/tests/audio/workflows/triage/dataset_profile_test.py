@@ -532,6 +532,26 @@ class TestAPilotAndItsFit:
         )
         assert load_profile(root).digest != before, "a refit changes the profile's digest"
 
+    def test_a_fitted_family_the_profile_below_lacks_is_added(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """Review of step 10: a per-family median a base profile does not list is a new family, not a typo."""
+        base = _profile(
+            tmp_path / "base",
+            {"name": "base", "version": "0", "files": {"discard_replaced_task.yaml": "d.yaml"}},
+            {"d.yaml": "short_response:\n  family_median_s:\n    story: 40.0\n"},
+        )
+        fitted = {"values": {"discard_replaced_task.yaml": {"short_response": {"family_median_s": {"chat": 20.0}}}}}
+        child = _profile(
+            tmp_path / "child",
+            {"name": "child", "version": "0", "extends": str(base)},
+            {"fitted.yaml": yaml.safe_dump(fitted)},
+        )
+        activate_profile(load_profile(child))
+        medians = data_values("discard_replaced_task.yaml")["short_response"]["family_median_s"]
+        assert medians == {"story": 40.0, "chat": 20.0}
+        deactivate_profile()
+
     def test_a_fitted_file_naming_no_value_file_is_refused(self, without_triage_profile: None, tmp_path: Path) -> None:
         """A fit writes only senselab's value files, never the task list."""
         root = _profile(
