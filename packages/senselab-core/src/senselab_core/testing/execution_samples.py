@@ -3,13 +3,23 @@
 from collections.abc import Callable
 
 from senselab_core.kernel.placement import NodePlacement
-from senselab_core.runtime.execution.executor import Admission, FaultRecord, Handle, JobRef, PlanFragment, ResultRef
+from senselab_core.runtime.execution.executor import (
+    Admission,
+    FaultRecord,
+    Handle,
+    JobRef,
+    PlanFragment,
+    ResultRef,
+    UpstreamRef,
+)
 
 Register = Callable[..., None]
 
 _PLAN = "ab" * 32
 _INPUT = "content:" + "cd" * 32
 _OUTPUT = "output:" + "ef" * 32
+_STORED = UpstreamRef(key_digest=_PLAN, outputs="output:" + "12" * 32, port="value")
+_PORT = _STORED.identity()
 
 
 def _placement() -> NodePlacement:
@@ -51,8 +61,8 @@ def register_execution_samples(register: Register) -> None:
                 node="n",
                 admission="admission-0",
                 jobs=jobs,
-                inputs=({"x": _INPUT}, {"x": _OUTPUT}),
-                upstream={_OUTPUT: _PLAN},
+                inputs=({"x": _INPUT}, {"x": _PORT}),
+                upstream={_PORT: _STORED},
                 placement=_placement(),
             ),
             PlanFragment(
@@ -71,7 +81,7 @@ def register_execution_samples(register: Register) -> None:
             {"attempt": 0},
             {"jobs": ()},
             {"admission": ""},
-            {"upstream": {_OUTPUT: "k"}},
+            {"upstream": {_OUTPUT: _STORED}},
         ],
     )
     register(
@@ -81,6 +91,11 @@ def register_execution_samples(register: Register) -> None:
             ResultRef(job=jobs[1], key_digest=_PLAN, failure=faults[0]),
         ],
         invalid_updates=[{"key_digest": "k"}, {"output_identity": _OUTPUT, "failure": faults[0].model_dump()}],
+    )
+    register(
+        UpstreamRef,
+        lambda: [_STORED, UpstreamRef(key_digest="cd" * 32, outputs=_OUTPUT, port="spans")],
+        invalid_updates=[{"key_digest": "k"}, {"outputs": _INPUT}, {"port": ""}],
     )
     register(
         Admission,

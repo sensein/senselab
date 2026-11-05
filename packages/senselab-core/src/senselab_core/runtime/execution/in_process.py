@@ -19,6 +19,7 @@ from senselab_core.runtime.execution.executor import (
     PlanFragment,
     ResultRef,
     Status,
+    UpstreamRef,
 )
 from senselab_core.runtime.execution.job import Completed, Failed, Job, JobOutcome, Upstream, execute
 from senselab_core.runtime.execution.outputs import anchors_of
@@ -105,15 +106,17 @@ def node_fragment(
         elements: list[tuple[int, ...]] = [(i,) if mapped else () for i in range(len(rows))]
     else:
         elements = sorted({element for refs in results.values() for element in refs})
-    inputs, read = [], {}
+    inputs: list[dict[str, str]] = []
+    read: dict[str, UpstreamRef] = {}
     for i, element in enumerate(elements):
         entry: dict[str, str] = {p: rows[i].inputs[g] for p, g in given.items()}
         for port, refs in results.items():
             ref = refs.get(element, refs.get(()))
             if ref is None or ref.output_identity is None:
                 raise ValueError(f"node {node!r} element {element} has no upstream result for input {port!r}")
-            entry[port] = ref.output_identity
-            read[ref.output_identity] = ref.key_digest
+            stored = UpstreamRef(key_digest=ref.key_digest, outputs=ref.output_identity, port=_source(feeds[port])[1])
+            entry[port] = stored.identity()
+            read[stored.identity()] = stored
         inputs.append(entry)
     return PlanFragment(
         plan_hash=placed.hash,
@@ -351,9 +354,10 @@ class InProcess:
             for port, identity in identities.items():
                 source, source_port = feeds[port]
                 if source != "input":
-                    declared = registry.spec(nodes[source].task).outputs[source_port]
-                    key = fragment.upstream[identity]
-                    upstream[port] = Upstream(identity, key, source_port, declared)
+                    stored = fragment.upstream[identity]
+                    if stored.port != source_port:
+                        raise ValueError(f"input {port!r} of {ref} reads port {source_port!r}, not {stored.port!r}")
+                    upstream[port] = Upstream(stored, registry.spec(nodes[source].task).outputs[source_port])
                 elif identity in values:
                     held[port] = values[identity]
                 else:

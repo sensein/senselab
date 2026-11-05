@@ -55,7 +55,13 @@ OutputIdentity = Annotated[str, StringConstraints(pattern=r"^output:[0-9a-f]{64}
 """The identity of a stored result's outputs: `output:` and a 64-hex digest."""
 
 InputIdentity = ContentIdentity | OutputIdentity
-"""What a logical key's input names: source content or an upstream output."""
+"""What a logical key's input names: source content or one output port of an upstream job."""
+
+
+def port_output_identity(key_digest: str, port: str) -> OutputIdentity:
+    """Return the identity of output `port` of the job keyed `key_digest` (identity tag `port-output@1`)."""
+    return "output:" + identity_digest("port-output@1", {"key": key_digest, "port": port})
+
 
 ProfileSliceIdentity = Annotated[str, StringConstraints(pattern=r"^profile:[0-9a-f]{64}$")]
 """The identity of a profile slice a call reads: `profile:` and a 64-hex digest."""

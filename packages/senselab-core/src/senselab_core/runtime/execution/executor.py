@@ -10,7 +10,7 @@ from senselab_worker.faults import FaultClass
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, thawed
 from senselab_core.kernel.formats import PLAN_FRAGMENT_FORMAT, FormatTag, Formatted
 from senselab_core.kernel.graph import NodeId
-from senselab_core.kernel.identity import InputIdentity, OutputIdentity
+from senselab_core.kernel.identity import InputIdentity, OutputIdentity, port_output_identity
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.planner import Plan
 
@@ -79,12 +79,28 @@ class FaultRecord(Frozen):
         )
 
 
-def _upstream(v: Mapping[str, str]) -> Mapping[str, str]:
+class UpstreamRef(Frozen):
+    """Where an `output:` input is stored: the upstream job's key digest, its entry's output identity, and the port."""
+
+    key_digest: Hex64
+    outputs: OutputIdentity
+    port: NonEmptyStr
+
+    def identity(self) -> OutputIdentity:
+        """Return the input identity of this port (`port_output_identity`)."""
+        return port_output_identity(self.key_digest, self.port)
+
+
+def _upstream(v: Mapping[str, UpstreamRef]) -> Mapping[str, UpstreamRef]:
     return FrozenMapping(v)
 
 
-Upstream = Annotated[Mapping[OutputIdentity, Hex64], AfterValidator(_upstream), PlainSerializer(thawed)]
-"""Each upstream output identity a fragment's jobs read, with the digest of the key it is stored under."""
+def _upstream_form(v: Mapping[str, UpstreamRef]) -> dict[str, object]:
+    return {k: ref.model_dump(mode="json") for k, ref in v.items()}
+
+
+Upstream = Annotated[Mapping[OutputIdentity, UpstreamRef], AfterValidator(_upstream), PlainSerializer(_upstream_form)]
+"""Each `output:` input identity a fragment's jobs read, with where the port's value is stored."""
 
 
 class Admission(Frozen):
@@ -99,7 +115,8 @@ class PlanFragment(Formatted):
 
     `inputs` holds one mapping per job, in the order of `jobs`; every job names `plan_hash` and `node`. `admission`
     names the admission whose graph-input values the jobs read; `upstream` gives, for each `output:` input
-    identity, the digest of the key its outputs are stored under. `attempt` counts the submissions of these jobs.
+    identity (one port of one upstream job, `port_output_identity`), where that port's value is stored. `attempt`
+    counts the submissions of these jobs.
     """
 
     format: FormatTag = PLAN_FRAGMENT_FORMAT
@@ -124,6 +141,8 @@ class PlanFragment(Formatted):
         read = {i for inputs in self.inputs for i in inputs.values() if i.startswith("output:")}
         if read != set(self.upstream):
             raise ValueError(f"upstream names {sorted(self.upstream)}; the jobs read {sorted(read)}")
+        if any(identity != ref.identity() for identity, ref in self.upstream.items()):
+            raise ValueError("an upstream identity is the identity of its key digest and port")
         return self
 
 

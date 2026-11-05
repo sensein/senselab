@@ -31,6 +31,7 @@ from senselab_core.kernel.identity import (
     OutputIdentity,
     ReusePolicy,
     member_key,
+    port_output_identity,
 )
 from senselab_core.kernel.license import License
 from senselab_core.kernel.results import Intervals, Metric, Transcript, TranscriptNode, Trials
@@ -125,6 +126,7 @@ TRIALS_TASK = TaskSpec(
 )
 OVERLAP_TASK = TRIALS_TASK.model_copy(update={"name": "call_test.overlap", "inputs": {"label": "json"}})
 CHAIN_TASK = TASK.model_copy(update={"name": "call_test.chain", "inputs": {"value": "sha256"}})
+TWO_PORTS_TASK = TASK.model_copy(update={"name": "call_test.two_ports", "outputs": {"x": "sha256", "y": "sha256"}})
 
 
 def _backend(name: str, stack: str, env: Env, task: TaskSpec = TASK, worker: str = fake.WORKER_MODULE) -> BackendSpec:
@@ -143,7 +145,18 @@ def _backend(name: str, stack: str, env: Env, task: TaskSpec = TASK, worker: str
 
 
 TEST_REGISTRY = Registry()
-TASKS = (TASK, AUDIO_TASK, PAIR_TASK, CLOCKED_TASK, TRANSCRIBE_TASK, TRIALS_TASK, OVERLAP_TASK, CHAIN_TASK, fake.ECHO)
+TASKS = (
+    TASK,
+    AUDIO_TASK,
+    PAIR_TASK,
+    CLOCKED_TASK,
+    TRANSCRIBE_TASK,
+    TRIALS_TASK,
+    OVERLAP_TASK,
+    CHAIN_TASK,
+    TWO_PORTS_TASK,
+    fake.ECHO,
+)
 for _task in TASKS:
     TEST_REGISTRY.add_task(_task)
 TEST_REGISTRY.add_backend(_backend("fake-alpha", "alpha", Env.host()))
@@ -168,6 +181,9 @@ TEST_REGISTRY.add_backend(_backend("clocked", "dsp", Env.host(), CLOCKED_TASK, "
 TEST_REGISTRY.add_backend(_backend("trials", "dsp", Env.host(), TRIALS_TASK, "backends.trials_backend_fixture"))
 TEST_REGISTRY.add_backend(_backend("overlap", "dsp", Env.host(), OVERLAP_TASK, "backends.overlap_backend_fixture"))
 TEST_REGISTRY.add_backend(_backend("chain", "dsp", Env.host(), CHAIN_TASK, "backends.sizes_backend_fixture"))
+TEST_REGISTRY.add_backend(
+    _backend("two-ports", "dsp", Env.host(), TWO_PORTS_TASK, "backends.two_ports_backend_fixture")
+)
 TEST_REGISTRY.add_backend(_backend("counting", "counting", Env.host(), fake.ECHO, "backends.counting_backend_fixture"))
 
 CATALOGUE = Catalogue.load(
@@ -899,12 +915,13 @@ def test_two_node_graph_run_by_hand_reads_upstream_outputs_from_the_store(store:
     refs = list(executor.results(upstream))
     fragment = node_fragment(placed, admission, "b", upstream={"a": refs})
     assert PlanFragment.model_validate_json(fragment.model_dump_json()) == fragment
-    assert dict(fragment.upstream) == {r.output_identity: r.key_digest for r in refs}
+    stored = {port_output_identity(r.key_digest, "value"): (r.key_digest, r.output_identity, "value") for r in refs}
+    assert {i: (u.key_digest, u.outputs, u.port) for i, u in fragment.upstream.items()} == stored
     downstream = executor.outcomes(executor.submit(fragment))
     computed = [o.result for o in executor.outcomes(upstream) if isinstance(o, Completed)]
     served = [o.result for o in downstream if isinstance(o, Completed)]
     assert [r.outputs["value"] for r in served] == [str(r.outputs["value"]) for r in computed]
-    assert [r.key.inputs["value"] for r in served] == [r.output_identity for r in computed]
+    assert [r.key.inputs["value"] for r in served] == [port_output_identity(r.key.digest(), "value") for r in computed]
     executor.release(admission)
 
 
@@ -925,3 +942,36 @@ def test_two_profiles_in_one_process_load_one_model_once(store: ResultStore) -> 
         result = InProcess(store=store, profile=profile, workers=held).call(call)
         assert result.placement.backend.name == "counting" and result.reused is None
     assert len(loads) == 1
+
+
+@pytest.mark.logic
+def test_an_output_identity_names_one_port(store: ResultStore) -> None:
+    """Two graphs feed one downstream port from the two ports of one upstream job: two keys, each port's own value."""
+    executor = InProcess(store=store, profile=_profile(), workers=WORKERS)
+    records = RecordSet([Record(id="r", inputs={"text": ValueInput(value="v")})])
+    served = {}
+    for port in ("x", "y"):
+        graph = Graph(
+            inputs={"text": "list[json]"},
+            nodes=(
+                Node(id="a", task=TWO_PORTS_TASK.name, task_version="1"),
+                Node(id="b", task=CHAIN_TASK.name, task_version="1"),
+            ),
+            edges=(
+                Edge(source="input.text", target="a.text", kind="map"),
+                Edge(source=f"a.{port}", target="b.value", kind="plain"),
+            ),
+            outputs={"value": "b.value"},
+        )
+        placed = plan(graph, records, config=executor.run, execution=executor.profile)
+        admission = executor.admit(placed, {bind_input("text", "json", "v")[0]: "v"})
+        [upstream] = executor.results(executor.submit(node_fragment(placed, admission, "a")))
+        [outcome] = executor.outcomes(
+            executor.submit(node_fragment(placed, admission, "b", upstream={"a": [upstream]}))
+        )
+        assert isinstance(outcome, Completed)
+        assert outcome.result.key.inputs["value"] == port_output_identity(upstream.key_digest, port)
+        served[port] = outcome.result
+        executor.release(admission)
+    assert served["x"].key != served["y"].key
+    assert (served["x"].outputs["value"], served["y"].outputs["value"]) == ("x:v", "y:v")

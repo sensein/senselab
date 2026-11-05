@@ -24,7 +24,7 @@ from senselab_core.runtime import audio_io
 from senselab_core.runtime.call import Result, RunConfig, env_license, host_hardware, packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import sampled
-from senselab_core.runtime.execution.executor import FaultRecord, JobRef
+from senselab_core.runtime.execution.executor import FaultRecord, JobRef, UpstreamRef
 from senselab_core.runtime.execution.outputs import Anchors, anchors_of, as_stored, as_wire, decoded, read_port, rebound
 from senselab_core.runtime.execution.records import execution_records, reuse_attributes, unlicensed, verify
 from senselab_core.runtime.execution.records import verify_attributes as verify_settings
@@ -42,11 +42,9 @@ from senselab_core.runtime.vocabulary import core_vocabulary
 
 @dataclass(frozen=True)
 class Upstream:
-    """An input that is an upstream node's output: its output identity, its key's digest, and the port and its type."""
+    """An input that is one port of an upstream job's output: where it is stored, and the port's declared type."""
 
-    identity: OutputIdentity
-    key_digest: str
-    port: str
+    ref: UpstreamRef
     declared: str
 
 
@@ -205,11 +203,12 @@ def _resolved(job: Job, store: ResultStore) -> tuple[Job, FaultRecord | None]:
     """
     values = dict(job.values)
     for port, up in job.upstream.items():
-        outputs = store.outputs_of(up.key_digest, up.identity)
-        if outputs is None or up.port not in outputs:
-            missing = UpstreamMissing(f"input {port!r} reads {up.identity}, which the store does not hold")
+        ref = up.ref
+        outputs = store.outputs_of(ref.key_digest, ref.outputs)
+        if outputs is None or ref.port not in outputs:
+            missing = UpstreamMissing(f"input {port!r} reads port {ref.port!r} of {ref.outputs}, not in the store")
             return job, FaultRecord.of(error_record(missing))
-        values[port] = read_port(up.identity, up.port, up.declared, outputs[up.port])
+        values[port] = read_port(ref.outputs, ref.port, up.declared, outputs[ref.port])
     job.call.task.check_inputs(values)
     return replace(job, values=values, anchors=anchors_of(values.values())), None
 
