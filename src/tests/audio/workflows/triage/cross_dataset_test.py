@@ -348,3 +348,41 @@ def test_the_condition_reads_level_and_the_clip_detectors_spans_off_the_store() 
     store.entity(prov_type="span", extent=(1.0, 1.25), attributes={"family": "clip"})
     store.entity(prov_type="span", extent=(3.0, 3.5), attributes={"family": "amplitude"})
     assert condition_readings(store, None) == {"rms_dbfs": -12.5, "clipped_s": 0.25, "snr_db": None}
+
+
+def test_a_pilot_records_the_consistency_cosine_and_flags_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Plan step 10: with the bound unfitted the cosine is recorded for the fit, and no session is inconsistent."""
+    from senselab.audio.workflows.triage import cohort_stage
+    from senselab.audio.workflows.triage.cohort_stage import CONSISTENCY_UNSET, UNAVAILABLE
+
+    monkeypatch.setattr(cohort_stage, "consistency_bound", lambda: None)
+    reading = _inconsistent(0.0)["sub-a_ses-3"][0]
+    block = reading["checks"][CONSISTENCY_CHECK]
+    assert (block["status"], block["reason"]) == (UNAVAILABLE, CONSISTENCY_UNSET)
+    assert isinstance(block["cosine"], float)
+    assert KEY_SESSION_SPEAKER_INCONSISTENT not in [key for _, key in cohort_grounds(reading)]
+
+
+def test_a_bound_a_pilot_has_not_fitted_reads_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Plan step 10: an unfitted condition or non-match bound flags no recording, rather than raising."""
+    unfitted = {
+        "condition": {
+            "hot_rms_dbfs_min": None,
+            "clipped_fraction_min": None,
+            "shift_level_db_min": None,
+            "shift_snr_db_min": None,
+        },
+        "shared_nonmatch": {"recordings_min": 3, "fraction_min": None},
+    }
+    monkeypatch.setattr(cohort_fold, "_parameters", lambda: unfitted)
+    hot = {CONDITION: {"participant": {"rms_dbfs_median": -1.0, "clipped_fraction": 1.0}}}
+    assert hot_or_clipped(hot) is False
+    moved = {
+        CONDITION: {
+            "session": {"rms_dbfs_median": -10.0, "snr_db_median": 40.0},
+            "other_sessions": {"rms_dbfs_median": -40.0, "snr_db_median": 5.0},
+        }
+    }
+    assert (condition_shift(moved) or {}).get("explained") is False
+    shared = {PARTICIPANT_NONMATCH: {"recordings_nonmatch_n": 5, "nonmatch_fraction": 0.9}}
+    assert shared_nonmatch(shared) is False

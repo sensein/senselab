@@ -3,7 +3,8 @@
 A dataset that wants triage needs a profile (plan step 5): its task list, its policy, the statistics of its own
 recordings and its per-task values, and, unless it builds on a profile that carries them, the detector tuning.
 :func:`write_template` writes that profile with each value the dataset must still supply left empty, preceded by its
-entry in ``data/profile_values.yaml``: what it means, its unit, and how a dataset sets it. By default the template
+entry in ``data/profile_values.yaml``: what it means, its unit, and how a dataset sets it; a corpus statistic (kind b)
+is written commented out, for ``scripts/fit_profile.py`` to fill in ``fitted.yaml``. By default the template
 extends senselab's reference profile (``senselab:adult_clinical_speech``), so only the dataset's own values are
 asked for; ``extends=None`` asks for every value, and ``start_from`` copies another dataset's profile instead.
 
@@ -26,6 +27,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     CONFIG_FILE,
     MANIFEST,
     PACKAGED_DATA,
+    PILOT_KEY,
     REQUIRED_DATASET_PATHS,
     SENSELAB_PROFILE,
     DatasetDataMissing,
@@ -46,7 +48,7 @@ REFERENCE_PROFILE = "senselab:adult_clinical_speech"
 
 KIND_LABELS = {
     "a": "decide: your dataset's policy",
-    "b": "compute from your own recordings (a pilot run)",
+    "b": "compute from your own recordings: left commented out; run a pilot, then scripts/fit_profile.py fits it",
     "c": "tune by listening or labelled recordings",
     "d": "per task in your task list",
 }
@@ -124,7 +126,12 @@ def _comment(entry: Mapping[str, Any]) -> str:
 
 
 def _emit(entries: list[dict[str, Any]]) -> Iterator[str]:
-    """YAML lines nesting each entry's path, its value blank, its comment on the line above."""
+    """YAML lines nesting each entry's path, its value blank, its comment on the line above.
+
+    A corpus statistic (kind ``b``) is written commented out: ``scripts/fit_profile.py`` fills it in ``fitted.yaml``,
+    which a blank in the profile's own file would override. A mapping holding only such values is commented out too,
+    so it does not blank the profile it extends.
+    """
     tree: dict[str, Any] = {}
     for entry in entries:
         node = tree
@@ -133,17 +140,29 @@ def _emit(entries: list[dict[str, Any]]) -> Iterator[str]:
             node = node.setdefault(part, {})
         node[last] = entry
 
+    def is_entry(node: Any) -> bool:  # noqa: ANN401 -- a tree node
+        return isinstance(node, Mapping) and "path" in node and "kind" in node
+
+    def active(node: Any) -> bool:  # noqa: ANN401 -- a tree node
+        if is_entry(node):
+            return node.get("kind") != dataset_profile.FITTED_KIND
+        return any(active(child) for child in node.values())
+
     def walk(node: Mapping[str, Any], depth: int) -> Iterator[str]:
         pad = "  " * depth
         for key, child in node.items():
             name = yaml.safe_dump(key, default_style=None).strip().removesuffix("...").strip()
-            if isinstance(child, Mapping) and "path" in child and "kind" in child:
+            off = "" if active(child) else "# "
+            if is_entry(child):
                 for line in textwrap.wrap(_comment(child), width=max(40, 116 - len(pad))):
                     yield f"{pad}# {line}"
-                yield f"{pad}{name}:"
+                yield f"{pad}{off}{name}:"
             else:
-                yield f"{pad}{name}:"
-                yield from walk(child, depth + 1)
+                yield f"{pad}{off}{name}:"
+                yield from (
+                    line if not off or line.lstrip().startswith("#") else f"{pad}# {line[len(pad) :]}"
+                    for line in walk(child, depth + 1)
+                )
 
     yield from walk(tree, 0)
 
@@ -267,7 +286,7 @@ def write_template(
         header = [f"# {name}: the senselab configuration this dataset changes (template written {written})."]
         (root / "config.yaml").write_text("\n".join([*header, *workflow]) + "\n")
         config = "config.yaml"
-    manifest: dict[str, Any] = {"name": name, "version": "0"}
+    manifest: dict[str, Any] = {"name": name, "version": "0", PILOT_KEY: True}
     if reference is not None:
         manifest["extends"] = reference
     manifest["provenance"] = {"template": "senselab triage profile template", "written": written}
@@ -276,7 +295,10 @@ def write_template(
     manifest["files"] = dict(sorted(files.items()))
     head = (
         f"# The {name} dataset profile, written from senselab's template. Fill in tasks.yaml and every blank value;\n"
-        "# each blank carries what it means and how to set it.\n"
+        "# each blank carries what it means and how to set it. It starts as a pilot (pilot: true): a run may leave\n"
+        "# the values computed from your own recordings (kind b) out. Run a pilot, the COHORT pass and the corpus\n"
+        "# table, then scripts/fit_profile.py writes them into fitted.yaml; run the COHORT pass again, replay the\n"
+        "# pilot and remove pilot: true.\n"
     )
     (root / MANIFEST).write_text(head + yaml.safe_dump(manifest, sort_keys=False))
     return root

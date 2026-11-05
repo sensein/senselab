@@ -21,4 +21,4 @@ lexical:                           # lexical speech, less the word tasks read fo
 
 short_response:                    # free-response families: a response under fraction_max of the family median
   fraction_max:                         # profile value (data/profile_values.yaml)
-  family_median_s: {}              # dataset profile: median response per family (B2AI: r36 medians)
+  family_median_s:                 # profile value (data/profile_values.yaml): median response per family

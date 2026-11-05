@@ -1437,3 +1437,102 @@ def test_no_speaker_reading_leaves_the_agreement_null(one_row: dict[str, Any]) -
     """No speaker reading leaves the agreement null."""
     assert one_row["ms_agreement"] is None
     assert one_row["ms_signals"] is None
+
+
+# ------------------------------------------------------------------------------- the fit columns (plan step 10)
+
+
+def test_the_fit_columns_name_the_readings_their_writers_write() -> None:
+    """The reading names the table copies are the ones COHORT, AIRWAY, SPEECH and VOICE give them."""
+    from senselab.audio.workflows.triage.cohort_fold import COHORT_READING, CONSISTENCY_CHECK_NAME
+    from senselab.audio.workflows.triage.ddk_task import DDK_READING
+    from senselab.audio.workflows.triage.nodes.airway_task import COUGH_READING
+    from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
+
+    assert (rv.COHORT_READING_NAME, rv.CONSISTENCY_CHECK) == (COHORT_READING, CONSISTENCY_CHECK_NAME)
+    assert (rv.COUGH_READING_NAME, rv.DDK_READING_NAME, rv.PHONATION_READING_NAME) == (
+        COUGH_READING,
+        DDK_READING,
+        PHONATION_READING,
+    )
+    assert set(rv.FIT_COLUMNS) <= set(rv.schema().names)
+
+
+def test_the_fit_columns_copy_the_readings_a_fit_reads(tmp_path: Path) -> None:
+    """COHORT's participant and session readings, the median cough, the syllable rate and the count-in gap."""
+    run_root = build_recording(tmp_path)
+    store = run_root / "run" / "store.jsonl"
+    condition = {
+        "participant": {"rms_dbfs_median": -20.5, "clipped_fraction": 0.25},
+        "session": {"rms_dbfs_median": -18.0, "snr_db_median": 30.0},
+        "other_sessions": {"rms_dbfs_median": -21.0, "snr_db_median": 25.5},
+    }
+    extra = [
+        _entity(
+            "m-cohort",
+            "measurement",
+            None,
+            name="cohort_reading",
+            condition=condition,
+            participant_nonmatch={"recordings_compared_n": 4, "recordings_nonmatch_n": 1, "nonmatch_fraction": 0.25},
+            checks={"session_speaker_consistency": {"status": "measured", "comparisons": [{"value": 0.8123}]}},
+        ),
+        _entity(
+            "m-cough",
+            "measurement",
+            None,
+            name="airway_cough_reading",
+            reading={"evidence": {"events": [{"start_s": 0.1, "end_s": 0.4}, {"start_s": 1.0, "end_s": 1.5}]}},
+        ),
+        _entity(
+            "m-ddk",
+            "measurement",
+            None,
+            name="ddk_task_reading",
+            decision="absent",
+            annotations={"syllable_rate_hz": 5.5},
+        ),
+        json.dumps(
+            {
+                "record": "entity",
+                "id": "m-voice",
+                "prov_type": "measurement",
+                "extent": None,
+                "attributes": {"name": "voice_phonation_reading", "count_in": [0.9, 3.2], "extent": {"start_s": 4.8}},
+            }
+        ),
+    ]
+    store.write_text(store.read_text() + "\n".join(extra) + "\n")
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    assert (row["cohort_participant_rms_dbfs_median"], row["cohort_participant_clipped_fraction"]) == (-20.5, 0.25)
+    assert (row["cohort_session_level_shift_db"], row["cohort_session_snr_shift_db"]) == (3.0, 4.5)
+    assert row["cohort_session_consistency_cosine"] == 0.8123
+    assert (row["cohort_participant_nonmatch_fraction"], row["cohort_participant_compared_n"]) == (0.25, 4)
+    assert row["cough_event_s_median"] == pytest.approx(0.4)
+    assert (row["ddk_syllable_rate_hz"], row["ddk_task_found"]) == (5.5, False)
+    assert row["count_in_gap_s"] == pytest.approx(1.6)
+
+
+def test_a_recording_without_those_readings_has_null_fit_columns(one_row: dict[str, Any]) -> None:
+    """No COHORT pass, no cough, syllable or voice reading: every fit column but the word rate is null."""
+    assert all(one_row[name] is None for name in rv.FIT_COLUMNS if name != "lexical_words_per_s")
+
+
+def test_the_word_rate_is_the_lexical_words_over_the_response(tmp_path: Path) -> None:
+    """Two lexical words over a two-second response read one word a second; no response reads none."""
+    view = rv.read_store(build_recording(tmp_path) / "run" / "store.jsonl")
+    assert rv._lexical_words_per_s(view, 2.0) == 1.0
+    assert rv._lexical_words_per_s(view, None) is None
+
+
+def test_the_word_rate_counts_no_filler_and_no_unconfirmed_word(tmp_path: Path) -> None:
+    """Review of step 10: the rate counts words as the replaced-task rule counts talk."""
+    run_root = build_recording(tmp_path)
+    store = run_root / "run" / "store.jsonl"
+    extra = [
+        _entity("word-2", "word", [1.5, 1.7], index=2, text="um", outcome="agreement"),
+        _entity("word-3", "word", [1.8, 2.0], index=3, text="there", outcome="insertion", unconfirmed=True),
+    ]
+    store.write_text(store.read_text() + "\n".join(extra) + "\n")
+    assert rv._lexical_words_per_s(rv.read_store(store), 2.0) == 1.0

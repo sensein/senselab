@@ -1044,7 +1044,8 @@ def voice_task_extent(
 
     Returns:
         The reading with ``task_extent``, ``count_in`` and ``check``. The count-in joins the extent where it
-        starts before the phonation and ends at most ``count_in.gap_max_s`` before its start (an overlap is
+        starts before the phonation and ends at most ``count_in.gap_max_s`` before its start (none joins in a pilot
+        run, which has not fitted it; an overlap is
         taken in). Too narrow where a count-in lies outside the extent, or a reachable run outside it holds
         ``completeness.voice_hold_min_s`` of voicing within ``continuity.semitones`` of the extent's F0; too wide
         where the extent starts over ``completeness.onset_tolerance_s`` before the phonation onset.
@@ -1057,6 +1058,7 @@ def voice_task_extent(
         count_in is not None
         and enabled("count_in", x)
         and count_in[0] < start
+        and x["count_in"].get("gap_max_s") is not None
         and start - count_in[1] <= float(x["count_in"]["gap_max_s"])
     ):
         start = min(start, count_in[0])

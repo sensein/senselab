@@ -7,8 +7,10 @@ background:                        # r37 round 2: the task's events against the 
   enabled: false                   # read beside the other rules; off until its own listen stratum is labelled
 non_lexical:                       # airway, voice, and the lexical families read as a voice task
   free_speech_words_per_s: 2.03    # median consensus words per second over free-speech, picture-description and open-response recordings, r36
+                                   # deliberate difference from fit (plan.md, step 10)
 short_response:                    # free-response families: a response under fraction_max of the family median
   family_median_s:                 # median gate response_min_s reading per family, r36 (n in brackets)
+                                   # deliberate difference from fit (plan.md, step 10)
     cinderella-story: 91.92        # [258]
     free-speech: 26.75             # [3073]
     free-speech-v2: 25.89          # [2119]

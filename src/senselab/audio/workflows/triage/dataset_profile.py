@@ -40,7 +40,7 @@ import functools
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Collection, Mapping, TypeVar
+from typing import Any, Callable, Collection, Mapping, Sequence, TypeVar
 
 import yaml  # type: ignore[import-untyped]
 
@@ -51,6 +51,13 @@ PACKAGED_DATA = Path(__file__).parent / "data"
 
 MANIFEST = "profile.yaml"
 """The file that makes a directory a dataset profile."""
+
+FITTED_FILE = "fitted.yaml"
+"""The file in a profile that ``scripts/fit_profile.py`` writes: the corpus statistics fitted on a pilot run and what
+they were fitted on (plan step 10). Its values sit above the profile it extends and below the profile's own files."""
+
+PILOT_KEY = "pilot"
+"""The manifest key that marks a profile as a pilot: its corpus statistics (kind b) may be empty (plan step 10)."""
 
 PACKAGED_PROFILES = Path(__file__).parent / "profiles"
 """Profiles senselab ships, opt-in and by name: a profile builds on one with ``extends: senselab:<name>``."""
@@ -139,6 +146,9 @@ class DatasetProfile:
         provenance: Whatever the profile says about where its values came from.
         digest: Hash of the manifest, of every byte of every file it supplies, and of the profile it extends.
         base: The profile it builds on (``extends``), or None.
+        pilot: Whether the manifest marks it a pilot (:data:`PILOT_KEY`): its corpus statistics may be empty until
+            ``scripts/fit_profile.py`` fits them.
+        fitted: The values its :data:`FITTED_FILE` holds, by data file; empty where it has none.
     """
 
     name: str
@@ -149,6 +159,8 @@ class DatasetProfile:
     provenance: Mapping[str, Any] = field(default_factory=dict)
     digest: str = ""
     base: "DatasetProfile | None" = None
+    pilot: bool = False
+    fitted: Mapping[str, Any] = field(default_factory=dict)
 
     def supplies(self, relative: str) -> Path | None:
         """Where this profile itself, not the one it extends, supplies a data path, or None.
@@ -278,7 +290,13 @@ def load_profile(directory: str | Path, *, _seen: tuple[Path, ...] = ()) -> Data
         if not isinstance(manifest["extends"], str):
             raise ValueError(f"{manifest_path}: extends names one profile, senselab:<name> or a path")
         base = load_profile(profile_directory(manifest["extends"], relative_to=root), _seen=(*_seen, root))
+    pilot = manifest.get(PILOT_KEY, False)
+    if not isinstance(pilot, bool):
+        raise ValueError(f"{manifest_path}: {PILOT_KEY} is true or false, got {pilot!r}")
+    fitted = load_fitted(root / FITTED_FILE)
     hasher = hashlib.sha256(manifest_path.read_bytes())
+    if (root / FITTED_FILE).is_file():
+        hasher.update(b"\0fitted\0" + hashlib.sha256((root / FITTED_FILE).read_bytes()).hexdigest().encode())
     if base is not None:
         hasher.update(f"\0extends\0{base.name}\0{base.version}\0{base.digest}".encode())
     for relative in sorted(files):
@@ -295,7 +313,34 @@ def load_profile(directory: str | Path, *, _seen: tuple[Path, ...] = ()) -> Data
         provenance=dict(manifest.get("provenance") or {}),
         digest=hasher.hexdigest()[:16],
         base=base,
+        pilot=pilot,
+        fitted=fitted,
     )
+
+
+def load_fitted(path: Path) -> dict[str, Any]:
+    """The values a profile's :data:`FITTED_FILE` holds, by data file.
+
+    Args:
+        path: The file; it need not exist.
+
+    Returns:
+        ``{data file: values}``; empty where the file is absent.
+
+    Raises:
+        ValueError: If the file holds no ``values`` mapping, or names a data file that is not a value file
+            (:data:`MERGED_PATHS`).
+    """
+    if not path.is_file():
+        return {}
+    document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    values = document.get("values") if isinstance(document, Mapping) else None
+    if not isinstance(values, Mapping):
+        raise ValueError(f"{path} must hold a values mapping, by data file")
+    for relative, held in values.items():
+        if relative not in MERGED_PATHS or not isinstance(held, Mapping):
+            raise ValueError(f"{path}: {relative!r} is not a value file a fit writes ({sorted(MERGED_PATHS)})")
+    return {str(relative): dict(held) for relative, held in values.items()}
 
 
 _ACTIVE: DatasetProfile | None = None
@@ -421,7 +466,14 @@ def run_data() -> dict[str, Any]:
     return dict(_RUN_DATA)
 
 
-def merge_values(base: Any, over: Any, *, where: str, fixed: frozenset[str] = frozenset()) -> Any:  # noqa: ANN401
+def merge_values(
+    base: Any,  # noqa: ANN401
+    over: Any,  # noqa: ANN401
+    *,
+    where: str,
+    fixed: frozenset[str] = frozenset(),
+    open_mappings: frozenset[str] = frozenset(),
+) -> Any:  # noqa: ANN401
     """Merge a value file's override over its packaged values, key by key.
 
     Args:
@@ -429,6 +481,8 @@ def merge_values(base: Any, over: Any, *, where: str, fixed: frozenset[str] = fr
         over: The override at this level.
         where: ``<file>:<dotted key>`` of this level, for messages.
         fixed: Top-level keys that may not change (:data:`FIXED_KEYS`).
+        open_mappings: ``<file>:<dotted key>`` of mappings keyed by task family, which take keys the lower layers
+            lack (:func:`open_mappings`).
 
     Returns:
         The merged values. A list or a scalar is replaced whole; a mapping is merged.
@@ -449,12 +503,27 @@ def merge_values(base: Any, over: Any, *, where: str, fixed: frozenset[str] = fr
             out[key] = base.get(key, value)
             continue
         if key not in base:
-            if base:
+            if base and where not in open_mappings:
                 raise ValueError(f"{here} is not a key senselab's file has; an override may not introduce keys")
             out[key] = value
             continue
-        out[key] = merge_values(base[key], value, where=here)
+        out[key] = merge_values(base[key], value, where=here, open_mappings=open_mappings)
     return out
+
+
+@functools.lru_cache(maxsize=None)
+def open_mappings() -> frozenset[str]:
+    """The value mappings keyed by task family (a fitted method's ``by``), which a profile may add families to.
+
+    Returns:
+        ``<file>:<dotted key>`` of each, e.g. ``discard_replaced_task.yaml:short_response.family_median_s``.
+    """
+    return frozenset(
+        f"{relative}:{'.'.join(str(part) for part in entry['path'])}"
+        for relative, entries in profile_values().items()
+        for entry in entries
+        if isinstance(entry.get("method"), Mapping) and entry["method"].get("by")
+    )
 
 
 def _load(path: Path) -> Any:  # noqa: ANN401 -- a YAML document
@@ -468,8 +537,9 @@ def data_values(relative: str) -> Any:  # noqa: ANN401 -- a YAML document
         relative: A path under ``data/``, e.g. ``breath_pattern.yaml`` or ``speaker_vector_profile/2026-09-22.yaml``.
 
     Returns:
-        For a value file (:data:`MERGED_PATHS`), the packaged values with each profile's copy merged over them,
-        the profile it extends first, then the run's ``data`` section (:func:`merge_values`); for a replaced file,
+        For a value file (:data:`MERGED_PATHS`), the packaged values with each profile's fitted values
+        (:data:`FITTED_FILE`) and then its own copy merged over them, the profile it extends first, then the run's
+        ``data`` section (:func:`merge_values`); for a replaced file,
         the nearest profile's copy whole where one supplies it, else the packaged file, and the run's section whole
         where it names one; for a dataset path, the nearest profile's copy with the run's section merged over it;
         for any other file, the packaged
@@ -485,12 +555,18 @@ def data_values(relative: str) -> Any:  # noqa: ANN401 -- a YAML document
     if top in MERGED_PATHS:
         packaged = PACKAGED_DATA / relative
         values = _load(packaged) if packaged.is_file() else {}
-        fixed = FIXED_KEYS.get(relative, frozenset())
+        fixed, opened = FIXED_KEYS.get(relative, frozenset()), open_mappings()
         for layer in _ACTIVE.chain() if _ACTIVE is not None else ():
+            if relative in layer.fitted:
+                values = merge_values(
+                    values, layer.fitted[relative], where=f"{relative}:", fixed=fixed, open_mappings=opened
+                )
             supplied = layer.supplies(relative)
             if supplied is not None:
-                values = merge_values(values, _load(supplied), where=f"{relative}:", fixed=fixed)
-        return merge_values(values, run, where=f"{relative}:", fixed=fixed) if run is not None else values
+                values = merge_values(values, _load(supplied), where=f"{relative}:", fixed=fixed, open_mappings=opened)
+        if run is None:
+            return values
+        return merge_values(values, run, where=f"{relative}:", fixed=fixed, open_mappings=opened)
     if top in REPLACED_PATHS:
         return run if run is not None else _load(data_path(relative))
     if top in DATASET_PATHS:
@@ -578,40 +654,83 @@ def profile_values() -> dict[str, list[dict[str, Any]]]:
     return dict((yaml.safe_load((PACKAGED_DATA / PROFILE_VALUES_FILE).read_text()) or {}).get("values") or {})
 
 
-def needed(entry: Mapping[str, Any], running: Collection[str] | None) -> bool:
+FITTED_KIND = "b"
+"""The kind of a profile value computed from the dataset's own recordings, which a pilot run leaves empty."""
+
+
+def needed(entry: Mapping[str, Any], running: Collection[str] | None, *, pilot: bool = False) -> bool:
     """Whether a run that drives ``running`` needs a profile value.
 
     Args:
         entry: The value's entry in :data:`PROFILE_VALUES_FILE`.
         running: The stages the run drives (``workflow.running_stages``), or None for every stage.
+        pilot: Whether the run's profile is a pilot, which needs no corpus statistic (:data:`FITTED_KIND`).
 
     Returns:
-        True when the entry is required and names no stage, or names one that runs.
+        True when the entry is required and names no stage, or names one that runs; for a pilot, never for a
+        corpus statistic.
     """
-    if not entry.get("required"):
+    if not entry.get("required") or (pilot and entry.get("kind") == FITTED_KIND):
         return False
     stages = entry.get("stages") or ()
     return running is None or not stages or any(stage in running for stage in stages)
 
 
 def required_profile_values(
-    running: Collection[str] | None = None,
+    running: Collection[str] | None = None, *, pilot: bool = False
 ) -> dict[str, tuple[tuple[str, ...], ...]]:
     """The profile values a run needs, by data file, each as its key path.
 
     Args:
         running: The stages the run drives; a value whose ``stages`` are all off is not needed. None: every stage.
+        pilot: Whether the run's profile is a pilot (:func:`needed`).
 
     Returns:
         ``{data file: (key path, ...)}``; the configuration's under :data:`CONFIG_FILE`.
     """
     return {
-        relative: tuple(tuple(str(part) for part in entry["path"]) for entry in entries if needed(entry, running))
+        relative: tuple(
+            tuple(str(part) for part in entry["path"]) for entry in entries if needed(entry, running, pilot=pilot)
+        )
         for relative, entries in profile_values().items()
     }
 
 
-def _lookup(node: Any, path: tuple[str, ...]) -> Any:  # noqa: ANN401 -- a YAML value
+def unfitted_values(running: Collection[str] | None = None) -> list[str]:
+    """The corpus statistics a pilot run leaves empty: ``<data file> <dotted key path>`` each.
+
+    Args:
+        running: The stages the run drives, or None for every stage.
+
+    Returns:
+        Every required corpus statistic (:data:`FITTED_KIND`) a run would need that the active profile leaves
+        empty; empty where the profile is no pilot or has them all.
+    """
+    if _ACTIVE is None or not _ACTIVE.pilot:
+        return []
+    out = []
+    for relative, entries in profile_values().items():
+        wanted = [entry for entry in entries if entry.get("kind") == FITTED_KIND and needed(entry, running)]
+        if relative == CONFIG_FILE or not wanted:
+            continue
+        document = data_values(relative)
+        for entry in wanted:
+            path = tuple(str(part) for part in entry["path"])
+            if lookup_value(document, path) is None:
+                out.append(f"{relative} {'.'.join(path)}")
+    return out
+
+
+def lookup_value(node: Any, path: Sequence[str]) -> Any:  # noqa: ANN401 -- a YAML value
+    """The value at a key path in a YAML document, or None where any key is missing.
+
+    Args:
+        node: The document.
+        path: The keys from its top.
+
+    Returns:
+        The value, or None.
+    """
     for part in path:
         if not isinstance(node, Mapping) or part not in node:
             return None
@@ -641,13 +760,14 @@ def missing_dataset_values(config_values: Mapping[str, Any]) -> list[str]:
             missing.append(f"{relative} (the profile lists it, but the file is absent)")
         elif path.is_file() and path.read_bytes().startswith(TEMPLATE_MARKER):
             missing.append(f"{relative} (still the template: write your own)")
-    for relative, paths in required_profile_values(running).items():
+    pilot = _ACTIVE is not None and _ACTIVE.pilot
+    for relative, paths in required_profile_values(running, pilot=pilot).items():
         try:
             document = config_values if relative == CONFIG_FILE else data_values(relative)
         except DatasetDataMissing:
             continue  # the file itself is listed missing above
         where = "config" if relative == CONFIG_FILE else relative
-        missing += [f"{where} {'.'.join(path)}" for path in paths if _lookup(document, path) is None]
+        missing += [f"{where} {'.'.join(path)}" for path in paths if lookup_value(document, path) is None]
     recruited = (config_values.get("verdict") or {}).get("recruited_conditions")
     if recruited:
         try:
