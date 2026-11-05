@@ -21,6 +21,7 @@ from senselab_core.kernel.declare import InconsistentInputs
 from senselab_core.kernel.identity import ExecutionContext, InputIdentity, LogicalKey, OutputIdentity, ReusePolicy
 from senselab_core.kernel.license import License
 from senselab_core.kernel.signals import Recording, StaleSource
+from senselab_core.kernel.wire import WireFormatRetired
 from senselab_core.runtime import audio_io
 from senselab_core.runtime.call import Result, RunConfig, env_license, host_hardware, packaged
 from senselab_core.runtime.envs import EnvHandle
@@ -206,11 +207,16 @@ def _code_license(run: RunConfig, placement: Placement, call: Call) -> License |
     return code
 
 
+def _upstream_gap(kind: str, message: str) -> FaultRecord:
+    return FaultRecord(fault="infrastructure", type=kind, message=message, gap=True, charged=False)
+
+
 def _resolved(job: Job, store: ResultStore) -> tuple[Job, FaultRecord | None]:
     """Return `job` with each upstream input read from `store` and its constraints checked, or the job's failure.
 
-    An upstream entry missing from the store is an infrastructure gap; an entry that lacks its port, holds a value
-    not of its declared type, or gives inputs that break the task's constraints is a content fault of this job.
+    An upstream entry missing from the store, or stored in a retired wire format, is an infrastructure gap; an entry
+    that lacks its port, holds a value not of its declared type, or gives inputs that break the task's constraints
+    is a content fault of this job.
 
     Raises:
         InconsistentInputs, AmbiguousClock: a job with no upstream input breaks a constraint or carries one content
@@ -223,13 +229,17 @@ def _resolved(job: Job, store: ResultStore) -> tuple[Job, FaultRecord | None]:
             for ref in up.refs:
                 outputs = store.outputs_of(ref.key_digest, ref.outputs)
                 if outputs is None:
-                    message = f"input {port!r} reads {ref.outputs}, which the store does not hold"
-                    return job, FaultRecord(
-                        fault="infrastructure", type="UpstreamMissing", message=message, gap=True, charged=False
+                    return job, _upstream_gap(
+                        "UpstreamMissing", f"input {port!r} reads {ref.outputs}, which the store does not hold"
                     )
                 if ref.port not in outputs:
                     raise OutputTypeMismatch(f"input {port!r} reads port {ref.port!r}, which {ref.outputs} lacks")
-                read.append(read_port(up.task, ref.port, up.declared, outputs[ref.port]))
+                try:
+                    read.append(read_port(up.task, ref.port, up.declared, outputs[ref.port]))
+                except WireFormatRetired as exc:
+                    if not job.upstream:
+                        raise
+                    return job, _upstream_gap("WireFormatRetired", f"input {port!r} reads {ref.outputs}: {exc}")
             values[port] = read if up.gathered else read[0]
         job.call.task.check_inputs(values)
         anchors = anchors_of(values.values())

@@ -11,7 +11,7 @@ import pytest
 import soundfile
 from pydantic import ValidationError
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskSpec
-from senselab_core.kernel.identity import ReusePolicy
+from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ReusePolicy
 from senselab_core.runtime.audio_io import open_audio
 from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
@@ -226,4 +226,53 @@ def test_a_bad_upstream_fails_only_its_element(tmp_path: Path, sizes: list[int])
     )
     assert isinstance(missing, Failed) and missing.failure.type == "UpstreamMissing"
     assert (missing.failure.fault, missing.failure.gap, missing.failure.charged) == ("infrastructure", True, False)
+    assert sizes == [1]
+
+
+@pytest.mark.logic
+def test_a_retired_upstream_entry_fails_only_its_element_as_a_gap(tmp_path: Path, sizes: list[int]) -> None:
+    """Of two siblings, one reads an upstream entry stored in a retired wire format: it fails as a gap, uncharged."""
+    store = ResultStore(tmp_path)
+    [upstream] = _completed(_execute(_jobs("a"), INVARIANT, store))
+    key = LogicalKey(
+        task=TASK.name,
+        task_version="1",
+        backend="b",
+        backend_version="1",
+        model=None,
+        params={},
+        backend_params={},
+        inputs={"text": "content:" + "1" * 64},
+    )
+    context = ExecutionContext(
+        env_lock="lock",
+        env_license=None,
+        platform="linux",
+        wheel_set="wheels",
+        numerics={"device": "cpu", "precision": "fp32"},
+        decoder=None,
+        driver={},
+        host="node1",
+        protocol="p1",
+        model_source="hf",
+    )
+    old = store.put(key, {"value": {"format": "metric@1.0"}}, context)
+    refs = [
+        UpstreamRef(key_digest=upstream.result.key.digest(), outputs=upstream.result.output_identity, port="value"),
+        UpstreamRef(key_digest=key.digest(), outputs=old, port="value"),
+    ]
+    jobs = [
+        Job(
+            JobRef(plan_hash="0" * 64, node="b", element=(i,)),
+            Call(CHAIN_TASK, EchoParams(), {"value": ref.identity()}),
+            {},
+            upstream={"value": Upstream((ref,), TASK.name, "sha256" if i == 0 else "Metric")},
+        )
+        for i, ref in enumerate(refs)
+    ]
+    sizes.clear()
+    good, retired = _execute(jobs, CHAIN, store, batch_size=2)
+    assert isinstance(good, Completed)
+    assert isinstance(retired, Failed) and retired.failure.type == "WireFormatRetired"
+    assert (retired.failure.fault, retired.failure.gap, retired.failure.charged) == ("infrastructure", True, False)
     assert sizes == [1]
