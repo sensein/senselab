@@ -849,6 +849,27 @@ pilot and says how to fit it.
   required corpus statistics and lists them unfitted (`profile_template_test`), and `fit_profile_test` fits a
   pilot table into such a profile, which then reads the fitted values. A pilot run, fit and replay over real
   recordings of a second dataset was not run: there is no second corpus.
+- Review (2026-11-05, high effort, on bc6ea7fb3; findings checked by verifiers): nine confirmed, one rejected for
+  the fitted values (8). Fixed:
+  - 1: the template wrote each corpus statistic as a blank in the profile's own file, which hid the fit; it now
+    writes them commented out (and a mapping holding only them), so fitted.yaml supplies them.
+  - 2: the consistency outcome is decided when COHORT runs and the replay skips COHORT, so the order is now: pilot,
+    COHORT, table, fit, COHORT again, replay.
+  - 3: the word rate counts words as the replaced-task rule counts talk (no unconfirmed word, no filler). B2AI's task
+    list marks productive-vocabulary free-response, which pulls the fitted rate down (on r37, counting as before this fix:
+    2.07 with it, 2.16 without); left as the task list says, B2AI keeping its own 2.03.
+  - 4: the driver names a value as winning only where the profile's own file or the run's data section writes it,
+    names an own blank as hiding the fit, and says when --out writes a file the profile does not read.
+  - 5: a fitted per-family mapping may add families a lower profile's mapping lacks.
+  - 6: a missing or unreadable table, a malformed profile and a profile without a task list exit 2; the write is
+    atomic; --force sets an unloadable fitted.yaml aside as fitted.yaml.previous.
+  - 7: the shared non-match fit keeps B2AI's population (participants with recordings_min compared recordings); its
+    method text now says so and that the rule counts non-matching recordings (13 participants on r36, too few to fence).
+  - 8: no fitted input reads the voice extent; the driver notes that a pilot's count-ins stay outside it until the
+    replay.
+  - 9: B2AI's markers say only "deliberate difference from fit (plan.md, step 10)"; the reasons are above.
+  - 10: misplaced docstrings fixed; the table code uses COHORT's own reading names; unfitted values read each file
+    once.
 
 ## Step 11 — stages on and off, models by name (light version, agreed 2026-11-04; before step 7)
 
