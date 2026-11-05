@@ -1069,6 +1069,46 @@ class ResultStore:
             self.record_reuse(key, context, hit, started)
         return hit
 
+    def outputs_of(self, key_digest: str, identity: OutputIdentity) -> dict[str, object] | None:
+        """Return the stored outputs of output identity `identity` under the key of digest `key_digest`, or None.
+
+        Every committed context of the key is read, as `get` reads it, until one holds those outputs.
+
+        Raises:
+            StoreUnavailable: an entry could not be read.
+        """
+        try:
+            root = self._open_root(create=False)
+        except FileNotFoundError:
+            return None
+        except OSError as err:
+            raise storage_fault(err, self.root) from err
+        with root:
+            try:
+                base_dir = root.walk(STORE_DIR, key_digest[:2], key_digest, aside=lambda: self._quarantine_dir(root))
+            except (FileNotFoundError, WrongKindError):
+                return None
+            except OSError as err:
+                raise storage_fault(err, self.root / STORE_DIR / key_digest[:2] / key_digest) from err
+            with base_dir:
+                base = base_dir.path
+                try:
+                    names = sorted(n for n in base_dir.listdir() if _is_fingerprint(n))
+                except OSError as err:
+                    raise storage_fault(err, base) from err
+                for name in names:
+                    entry = base / name
+                    read = self._readable(
+                        base,
+                        key_digest,
+                        name,
+                        functools.partial(_read_result, entry, digest=key_digest, fingerprint=name),
+                        [],
+                    )
+                    if read is not None and read[0] == identity:
+                        return read[1]
+        return None
+
     def _get_in(
         self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy, base_dir: StorageDir
     ) -> StoredResult | None:

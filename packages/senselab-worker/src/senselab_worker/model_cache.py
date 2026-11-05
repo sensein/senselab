@@ -19,7 +19,7 @@ class ModelCache:
     """Backend state keyed by `ModelKey`, holding at most `budget_bytes` by the sizes `size_of` reports.
 
     One instance serves a process: the host's in-process backends or a worker's. Loads are serialised under a
-    reentrant lock, so a loader may read the cache.
+    reentrant lock, so a loader may read the cache. The size of every key ever loaded is kept, one int per key.
     """
 
     def __init__(self, budget_bytes: int) -> None:

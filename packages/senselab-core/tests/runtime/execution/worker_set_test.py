@@ -53,6 +53,22 @@ def test_worker_set_bounded_and_evicts_idle() -> None:
         WorkerSet(0)
 
 
+@pytest.mark.logic
+def test_least_recently_used_idle_worker_goes_first_and_a_tighter_bound_evicts() -> None:
+    """Under a bound of two the least recently used idle worker is evicted; tightening evicts down to the new bound."""
+    workers = WorkerSet(2)
+    a, b, c = _host("a"), _host("b"), _host("c")
+    held = {}
+    for backend in (a, b, a, c):
+        with workers.checkout(backend, ENV, None, device="cpu", profile=PROFILE) as worker:
+            held[backend.name] = worker
+    assert workers.pooled() == [held["a"], held["c"]]
+    workers.tighten(3)
+    assert workers.bound == 2
+    workers.tighten(1)
+    assert workers.bound == 1 and workers.pooled() == [held["c"]]
+
+
 @pytest.mark.contract
 def test_evicted_worker_process_is_closed() -> None:
     """An isolated worker evicted beyond the bound is closed; the one kept is still alive."""
@@ -93,7 +109,7 @@ def _attestation(model: ResolvedModel) -> Attestation:
 
 @pytest.mark.logic
 def test_server_start_lock_per_env_and_model() -> None:
-    """A server's start leases its env, backend and model alone: another model starts while it starts."""
+    """A server's start leases its env, backend and model alone: another model starts while it starts, once."""
     first, second = _model("a" * 40), _model("b" * 40)
     second_started = threading.Event()
     starts: list[str] = []
@@ -118,7 +134,7 @@ def test_server_start_lock_per_env_and_model() -> None:
         except BaseException as exc:  # noqa: BLE001 - every failure is reported by the assertion
             failures.append(exc)
 
-    threads = [threading.Thread(target=serve, args=(m,)) for m in (first, second)]
+    threads = [threading.Thread(target=serve, args=(m,)) for m in (first, second, second)]
     for thread in threads:
         thread.start()
     for thread in threads:

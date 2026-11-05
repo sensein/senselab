@@ -12,6 +12,7 @@ from senselab_core.kernel.formats import PLAN_FRAGMENT_FORMAT, FormatTag, Format
 from senselab_core.kernel.graph import NodeId
 from senselab_core.kernel.identity import InputIdentity, OutputIdentity
 from senselab_core.kernel.placement import NodePlacement
+from senselab_core.runtime.planner import Plan
 
 Hex64 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
@@ -43,7 +44,8 @@ FaultName = Annotated[Literal["content", "resource", "infrastructure"], BeforeVa
 class FaultRecord(Frozen):
     """A job's failure: its fault class, the exception's type and message, whether it is a gap, whether it is charged.
 
-    A gap fault, one the fallback table classified, is never charged against a fault budget.
+    Only a content fault that is not a gap is charged against the item's retry budget; a resource or infrastructure
+    fault re-places the job, and a gap fault, one the fallback table classified, is never charged.
     """
 
     fault: FaultName
@@ -53,9 +55,9 @@ class FaultRecord(Frozen):
     charged: bool
 
     @model_validator(mode="after")
-    def _check_gap(self) -> "FaultRecord":
-        if self.gap and self.charged:
-            raise ValueError("a gap fault is never charged")
+    def _check_charged(self) -> "FaultRecord":
+        if self.charged and (self.gap or self.fault != FaultClass.CONTENT.value):
+            raise ValueError("only a content fault that is not a gap is charged")
         return self
 
     @property
@@ -65,29 +67,49 @@ class FaultRecord(Frozen):
 
     @classmethod
     def of(cls, error: Mapping[str, Any]) -> "FaultRecord":
-        """Return the record of a worker's error object (`error_record`): charged exactly when it is not a gap."""
+        """Return the record of a worker's error object (`error_record`): charged for a content fault, not a gap."""
         gap = bool(error.get("gap", True))
+        fault = FaultClass(error["fault"])
         return cls(
-            fault=FaultClass(error["fault"]).value,
+            fault=fault.value,
             type=str(error["type"]),
             message=str(error.get("message", "")),
             gap=gap,
-            charged=not gap,
+            charged=fault is FaultClass.CONTENT and not gap,
         )
 
 
-class PlanFragment(Formatted):
-    """A `plan-fragment@1.0` document: jobs of one node of one plan, their input identities, the placement, the attempt.
+def _upstream(v: Mapping[str, str]) -> Mapping[str, str]:
+    return FrozenMapping(v)
 
-    `inputs` holds one mapping per job, in the order of `jobs`; every job names `plan_hash` and `node`.
+
+Upstream = Annotated[Mapping[OutputIdentity, Hex64], AfterValidator(_upstream), PlainSerializer(thawed)]
+"""Each upstream output identity a fragment's jobs read, with the digest of the key it is stored under."""
+
+
+class Admission(Frozen):
+    """A plan admitted to an executor, with the values of its graph inputs, as the executor names it."""
+
+    id: NonEmptyStr
+    plan_hash: Hex64
+
+
+class PlanFragment(Formatted):
+    """A `plan-fragment@1.0` document: jobs of one node of one admitted plan, their input identities, the placement.
+
+    `inputs` holds one mapping per job, in the order of `jobs`; every job names `plan_hash` and `node`. `admission`
+    names the admission whose graph-input values the jobs read; `upstream` gives, for each `output:` input
+    identity, the digest of the key its outputs are stored under. `attempt` counts the submissions of these jobs.
     """
 
     format: FormatTag = PLAN_FRAGMENT_FORMAT
     port_value: ClassVar[bool] = False
     plan_hash: Hex64
     node: NodeId
+    admission: NonEmptyStr
     jobs: Annotated[tuple[JobRef, ...], Field(min_length=1)]
     inputs: tuple[JobInputs, ...]
+    upstream: Upstream = FrozenMapping({})
     placement: NodePlacement
     attempt: Annotated[int, Field(ge=1)] = 1
 
@@ -99,18 +121,10 @@ class PlanFragment(Formatted):
             raise ValueError("a fragment names each job once")
         if any((j.plan_hash, j.node) != (self.plan_hash, self.node) for j in self.jobs):
             raise ValueError(f"every job of the fragment is of plan {self.plan_hash} node {self.node!r}")
+        read = {i for inputs in self.inputs for i in inputs.values() if i.startswith("output:")}
+        if read != set(self.upstream):
+            raise ValueError(f"upstream names {sorted(self.upstream)}; the jobs read {sorted(read)}")
         return self
-
-    def inputs_of(self, job: JobRef) -> Mapping[str, InputIdentity]:
-        """Return the input identities of `job`.
-
-        Raises:
-            KeyError: `job` is not in this fragment.
-        """
-        try:
-            return self.inputs[self.jobs.index(job)]
-        except ValueError:
-            raise KeyError(job) from None
 
 
 class ResultRef(Frozen):
@@ -144,7 +158,17 @@ class Status(str, Enum):
 
 
 class Executor(Protocol):
-    """Runs plan fragments: `submit` one, follow it by `status`, stop it by `cancel`, read its jobs by `results`."""
+    """Runs plan fragments of admitted plans: `admit` a plan, `submit` its fragments, follow, stop and read them.
+
+    An admission holds the values of the plan's graph inputs by content identity, until it is released; an
+    `output:` input is read from the result store. Two admissions of one plan are independent.
+    """
+
+    def admit(self, plan: Plan, values: Mapping[InputIdentity, object]) -> Admission:
+        """Hold `plan` and the value of each graph-input identity its fragments name, and return the admission."""
+
+    def release(self, admission: Admission) -> None:
+        """Let go of `admission` and its values."""
 
     def submit(self, fragment: PlanFragment) -> Handle:
         """Take `fragment` and return its handle."""

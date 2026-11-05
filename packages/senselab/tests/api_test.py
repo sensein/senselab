@@ -670,7 +670,7 @@ def test_a_call_failure_carries_its_fault_class_in_the_envelope_code() -> None:
     """A failed call maps to `<fault>_fault`, whatever the class of the backend's own exception."""
     codes = {
         fault: api_error(  # type: ignore[union-attr]
-            CallFailed(FaultRecord(fault=fault, type="X", message="m", gap=False, charged=True))
+            CallFailed(FaultRecord(fault=fault, type="X", message="m", gap=False, charged=fault == "content"))
         ).envelope.code
         for fault in ("content", "resource", "infrastructure")
     }

@@ -9,12 +9,12 @@ stored.
 import platform
 import sysconfig
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
 
 from senselab_worker import WIRE_VERSION
-from senselab_worker.faults import error_record
+from senselab_worker.faults import InfrastructureFault, error_record
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.identity import ExecutionContext, InputIdentity, LogicalKey, OutputIdentity, ReusePolicy
@@ -25,7 +25,7 @@ from senselab_core.runtime.call import Result, RunConfig, env_license, host_hard
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import sampled
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef
-from senselab_core.runtime.execution.outputs import Anchors, as_stored, as_wire, decoded, rebound
+from senselab_core.runtime.execution.outputs import Anchors, anchors_of, as_stored, as_wire, decoded, read_port, rebound
 from senselab_core.runtime.execution.records import execution_records, reuse_attributes, unlicensed, verify
 from senselab_core.runtime.execution.records import verify_attributes as verify_settings
 from senselab_core.runtime.execution.workers import PRECISION, WorkerSet, expected_of
@@ -41,16 +41,32 @@ from senselab_core.runtime.vocabulary import core_vocabulary
 
 
 @dataclass(frozen=True)
+class Upstream:
+    """An input that is an upstream node's output: its output identity, its key's digest, and the port and its type."""
+
+    identity: OutputIdentity
+    key_digest: str
+    port: str
+    declared: str
+
+
+@dataclass(frozen=True)
 class Job:
     """One job: its reference, the call keyed for it, its input values by port and the anchors its outputs re-bind to.
 
-    `call.inputs` holds the identity of each value in `values`.
+    `call.inputs` holds the identity of each input; `values` holds the value of each graph input, and `upstream`
+    names each input read from the result store, which `execute` resolves.
     """
 
     ref: JobRef
     call: Call
     values: Mapping[str, object]
     anchors: Anchors = ()
+    upstream: Mapping[str, Upstream] = field(default_factory=dict)
+
+
+class UpstreamMissing(InfrastructureFault):
+    """An upstream output a job reads is not in the result store."""
 
 
 @dataclass(frozen=True)
@@ -95,13 +111,17 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
 
     Each job is keyed (`build_key`) under the formation of the request it is sent in and served from `store` under
     `run.reuse`, unless its env's license is refused or it is a sampled cross-context hit (`run.verify`), which is
-    recomputed and compared before anything is stored. A file-backed input is checked against its stamp
-    (`audio_io.check`) before its job is keyed; a stale one fails the job. The jobs not served are sent in requests of
-    `request_size` items through `workers`; each item's outputs are stored, and each execution writes one activity
-    associated with its agent (the model's source included). An item the backend fails gives `Failed`.
+    recomputed and compared before anything is stored. An upstream input is read from `store` by its output
+    identity, and the inputs are checked against the task's constraints. A file-backed input is checked against its
+    stamp (`audio_io.check`) before its job is keyed; a stale or missing one fails the job. The jobs not served are
+    sent in requests of `request_size` items through `workers`; each item's outputs are stored, and each execution
+    writes one activity associated with its agent (the model's source included). An item the backend fails gives
+    `Failed`.
 
     Raises:
         ValueError: the jobs are not of one call; a server backend has no model.
+        InconsistentInputs: a job's inputs contradict a constraint the task declares.
+        AmbiguousClock: two recording inputs of one job's content carry different anchors.
         LicenseRefused: `run.licenses` refuses the license of the backend's env or of the model.
         VllmStartError, LeaseTimeout, LeaseUnavailable, AttestationMismatch: a server backend's server did not start.
         OutputTypeMismatch: an output of a kernel-typed port is not a wire form of its declared type.
@@ -119,9 +139,10 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     keyed = replace(placement, **request_components(backend, size))
     outcomes: dict[int, JobOutcome] = {}
     pending: list[_Pending] = []
-    for index, job in enumerate(jobs):
+    for index, given in enumerate(jobs):
+        job, unread = _resolved(given, store)
         context = _context(keyed, env, expected, profile, job, code_license)
-        stale = _stale(job)
+        stale = unread or _stale(job)
         key = build_key(job.call, keyed, context)
         if stale is not None:
             outcomes[index] = Failed(job.ref, key.digest(), stale)
@@ -175,8 +196,26 @@ def _code_license(run: RunConfig, placement: Placement, call: Call) -> License |
     return code
 
 
+def _resolved(job: Job, store: ResultStore) -> tuple[Job, FaultRecord | None]:
+    """Return `job` with each upstream input read from `store` and its constraints checked, or its failure.
+
+    Raises:
+        InconsistentInputs: the inputs contradict a constraint the task declares.
+        AmbiguousClock: two recording inputs of one content carry different anchors.
+    """
+    values = dict(job.values)
+    for port, up in job.upstream.items():
+        outputs = store.outputs_of(up.key_digest, up.identity)
+        if outputs is None or up.port not in outputs:
+            missing = UpstreamMissing(f"input {port!r} reads {up.identity}, which the store does not hold")
+            return job, FaultRecord.of(error_record(missing))
+        values[port] = read_port(up.identity, up.port, up.declared, outputs[up.port])
+    job.call.task.check_inputs(values)
+    return replace(job, values=values, anchors=anchors_of(values.values())), None
+
+
 def _stale(job: Job) -> FaultRecord | None:
-    """Return the failure of a job one of whose file-backed inputs no longer matches its stamp, else None."""
+    """Return the content fault of a job one of whose file-backed inputs no longer matches its stamp, else None."""
     for value in job.values.values():
         for group in value.groups.values() if isinstance(value, Recording) else ():
             source, stamp = getattr(group, "source", None), getattr(group, "source_stamp", None)
@@ -184,8 +223,10 @@ def _stale(job: Job) -> FaultRecord | None:
                 continue
             try:
                 audio_io.check(stamp, source)
-            except (StaleSource, OSError) as exc:
+            except StaleSource as exc:
                 return FaultRecord.of(error_record(exc))
+            except OSError as exc:
+                return FaultRecord.of(error_record(StaleSource(f"{source} cannot be read: {exc.strerror or exc}")))
     return None
 
 

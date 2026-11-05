@@ -94,12 +94,25 @@ def worker_init(device: str, model: ResolvedModel | None) -> dict[str, Any]:
     return init
 
 
+_CACHES: dict[int | None, ModelCache] = {}
+_CACHES_LOCK = threading.Lock()
+
+
+def process_cache(budget: int | None) -> ModelCache:
+    """Return this process's model cache of `budget` bytes (None for no budget), made on first use."""
+    with _CACHES_LOCK:
+        if budget not in _CACHES:
+            _CACHES[budget] = ModelCache(budget if budget is not None else 2**63 - 1)
+        return _CACHES[budget]
+
+
 class WorkerSet:
     """The pooled workers of a process, one per backend, env, init and budget or network, and the servers.
 
     At most `bound` pooled workers are kept: once more exist, the least recently used idle ones are closed. A
-    worker is held by one job at a time. A server is started once per (env, backend, model); its start holds a lease
-    of that triple alone, so starts of other servers proceed.
+    worker is held by one job at a time. Host workers keep their state in this process's model cache of their budget
+    (`process_cache`), shared by every set. A server is started once per (env, backend, model); its start holds a
+    lease of that triple alone, so starts of other servers proceed. Servers are not counted in the bound.
     """
 
     def __init__(self, bound: int, *, start_server: ServerStart = start_vllm) -> None:
@@ -116,9 +129,20 @@ class WorkerSet:
         self._pool: collections.OrderedDict[tuple[str, ...], Worker] = collections.OrderedDict()
         self._held: dict[tuple[str, ...], threading.Lock] = {}
         self._busy: collections.Counter[tuple[str, ...]] = collections.Counter()
-        self._caches: dict[int | None, ModelCache] = {}
         self._servers: dict[tuple[str, str, str], Server] = {}
         self._leases: dict[tuple[str, str, str], threading.Lock] = {}
+
+    def tighten(self, bound: int) -> None:
+        """Lower the bound to `bound` when that is lower, closing the idle workers beyond it; a higher one is ignored.
+
+        Raises:
+            ValueError: `bound` is below 1.
+        """
+        if bound < 1:
+            raise ValueError(f"a worker set holds at least one worker, got bound {bound}")
+        with self._lock:
+            self.bound = min(self.bound, bound)
+        self._evict()
 
     def pooled(self) -> list[Worker]:
         """Return the pooled workers, least recently used first."""
@@ -164,6 +188,8 @@ class WorkerSet:
         finally:
             with self._lock:
                 self._busy[key] -= 1
+                if self._busy[key] == 0:
+                    del self._busy[key]
             self._evict()
 
     def _worker(  # noqa: PLR0913 - the pool key and what a new worker is built from
@@ -221,14 +247,8 @@ class WorkerSet:
         identity = model.identity if model is not None else value_digest("backend", {"name": backend.name})
         key: ModelKey = (backend.name, identity, init["device"], PRECISION)
         return HostWorker(
-            backend.worker, init=init, key=key, cache=self._cache(budget), size_of=_size_of(backend.worker, budget)
+            backend.worker, init=init, key=key, cache=process_cache(budget), size_of=_size_of(backend.worker, budget)
         )
-
-    def _cache(self, budget: int | None) -> ModelCache:
-        with self._lock:
-            if budget not in self._caches:
-                self._caches[budget] = ModelCache(budget if budget is not None else 2**63 - 1)
-            return self._caches[budget]
 
     def server(
         self,
@@ -251,14 +271,14 @@ class WorkerSet:
             lease = self._leases.setdefault(key, threading.Lock())
         with lease:
             with self._lock:
-                server = self._servers.pop(key, None)
+                server = self._servers.get(key)
             if server is not None:
                 try:
                     server.context_fields()
-                    with self._lock:
-                        self._servers[key] = server
                     return server
                 except StaleAttestation:
+                    with self._lock:
+                        self._servers.pop(key, None)
                     server.stop()
             server = self._start(backend, env, model, profile)
             if server.attestation != expected:

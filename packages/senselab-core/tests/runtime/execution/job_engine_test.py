@@ -20,12 +20,12 @@ from senselab_core.runtime.execution.executor import FaultRecord, JobRef
 from senselab_core.runtime.execution.job import Completed, Failed, Job, JobOutcome, execute
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.fake_backend import EchoParams
-from senselab_core.runtime.keys import Call, Placement, request_components
+from senselab_core.runtime.keys import Call, Placement, request_components, request_size
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.workers import mit_lock_records
-from senselab_worker.faults import ContentFault, error_record
+from senselab_worker.faults import ContentFault, FaultClass, InfrastructureFault, ResourceFault, error_record
 
 TASK = TaskSpec(
     name="engine_test.score",
@@ -37,6 +37,11 @@ TASK = TaskSpec(
 )
 AUDIO_TASK = TASK.model_copy(update={"name": "engine_test.identify", "inputs": {"audio": "Audio"}})
 SIZES = "backends.sizes_backend_fixture"
+_TYPED = {
+    FaultClass.CONTENT: ContentFault,
+    FaultClass.RESOURCE: ResourceFault,
+    FaultClass.INFRASTRUCTURE: InfrastructureFault,
+}
 
 
 def _backend(name: str, task: TaskSpec = TASK, **fields: Any) -> BackendSpec:  # noqa: ANN401 - BackendSpec fields
@@ -118,6 +123,9 @@ def test_request_components_match_request_sent(tmp_path: Path, sizes: list[int])
     assert [o.result.placement.batch_formation for o in outcomes] == ["items:2", "items:2", "single"]
     assert {o.result.key.batch_formation for o in outcomes} == {None}
     assert request_components(INVARIANT, 1)["batch_formation"] == "single"
+    assert (request_size(INVARIANT, 5), request_size(BATCHED, 5)) == (5, 1)
+    with pytest.raises(ValueError, match="at least one item"):
+        request_size(INVARIANT, 0)
 
 
 @pytest.mark.logic
@@ -145,13 +153,23 @@ def test_failure_never_stored(tmp_path: Path, sizes: list[int]) -> None:
 
 
 @pytest.mark.logic
-def test_gap_fault_record_never_charged(tmp_path: Path, sizes: list[int]) -> None:
-    """A fault the fallback table classified is a gap and is not charged; a typed fault is charged."""
-    gap = FaultRecord.of(error_record(ValueError("untyped")))
-    typed = FaultRecord.of(error_record(ContentFault("typed")))
-    assert (gap.gap, gap.charged, typed.gap, typed.charged) == (True, False, False, True)
-    with pytest.raises(ValidationError, match="never charged"):
-        FaultRecord(fault="content", type="ValueError", message="m", gap=True, charged=True)
+@pytest.mark.parametrize("fault", list(FaultClass))
+def test_gap_fault_record_never_charged(fault: FaultClass) -> None:
+    """Only a typed content fault is charged: a resource, an infrastructure or a gap fault never is."""
+    typed = FaultRecord.of(error_record(_TYPED[fault]("typed")))
+    gap = FaultRecord.of({"type": "ValueError", "fault": fault.value, "message": "untyped", "gap": True})
+    assert (typed.fault_class, typed.gap, typed.charged) == (fault, False, fault is FaultClass.CONTENT)
+    assert (gap.gap, gap.charged) == (True, False)
+    with pytest.raises(ValidationError, match="only a content fault"):
+        FaultRecord(fault=fault, type="X", message="m", gap=True, charged=True)
+    if fault is not FaultClass.CONTENT:
+        with pytest.raises(ValidationError, match="only a content fault"):
+            FaultRecord(fault=fault, type="X", message="m", gap=False, charged=True)
+
+
+@pytest.mark.logic
+def test_an_untyped_failure_is_a_gap_and_not_charged(tmp_path: Path, sizes: list[int]) -> None:
+    """An item that fails with an untyped exception is an infrastructure gap, never charged."""
     [failed] = _execute(_jobs("gap"), INVARIANT, ResultStore(tmp_path))
     assert isinstance(failed, Failed) and (failed.failure.fault, failed.failure.gap) == ("infrastructure", True)
     assert not failed.failure.charged and sizes == [1]
@@ -169,4 +187,8 @@ def test_rewritten_input_is_stale_at_run(tmp_path: Path, sizes: list[int]) -> No
     store = ResultStore(tmp_path / "store")
     [failed] = _execute(jobs, IDENTIFY, store)
     assert isinstance(failed, Failed) and failed.failure.type == "StaleSource"
+    assert (failed.failure.fault_class, failed.failure.gap, failed.failure.charged) == (FaultClass.CONTENT, False, True)
     assert sizes == [] and store.provenance.activities() == []
+    path.unlink()
+    [gone] = _execute(jobs, IDENTIFY, store)
+    assert isinstance(gone, Failed) and (gone.failure.type, gone.failure.fault) == ("StaleSource", "content")

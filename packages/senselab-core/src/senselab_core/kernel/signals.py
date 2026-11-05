@@ -21,6 +21,7 @@ from pydantic import (
 )
 from senselab_worker.canonical import canonical_text
 from senselab_worker.digest import identity_digest
+from senselab_worker.faults import ContentFault
 
 from senselab_core.kernel._base import (
     ArrayForm,
@@ -69,8 +70,8 @@ SourcePath = Annotated[NonEmptyStr, BeforeValidator(lambda v: v.as_posix() if is
 """A sound file's path as posix text; a `PurePath` is accepted and held as its `as_posix()`."""
 
 
-class StaleSource(RuntimeError):
-    """A source file no longer matches the stamp recorded when it was opened."""
+class StaleSource(ContentFault, RuntimeError):
+    """A source file no longer matches the stamp recorded when it was opened, or is gone: a content fault."""
 
 
 class UndecodableSource(ValueError):

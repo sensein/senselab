@@ -19,7 +19,9 @@ import soundfile
 from pydantic import ValidationError
 from senselab_core.kernel import prov
 from senselab_core.kernel._base import Frozen
+from senselab_core.kernel.dataset import Record, ValueInput
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
+from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.kernel.identity import (
     NO_EQUIVALENCE,
     Equivalence,
@@ -36,14 +38,15 @@ from senselab_core.kernel.signals import Audio, PlainText
 from senselab_core.kernel.time import Span, TimeAnchor
 from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime.audio_io import DECODER
-from senselab_core.runtime.call import Packaged, Result, RunConfig, TaskCall, use_packaged
+from senselab_core.runtime.call import Packaged, Result, RunConfig, TaskCall, bind_input, use_packaged
 from senselab_core.runtime.call import packaged as packaged_now
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.compare import Thresholds
+from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import SAMPLING
 from senselab_core.runtime.execution.executor import JobRef, PlanFragment, Status
-from senselab_core.runtime.execution.in_process import CallFailed, InProcess, node_fragment
+from senselab_core.runtime.execution.in_process import CallFailed, InProcess, node_fragment, process_workers
 from senselab_core.runtime.execution.job import Completed, Job, lost_race
 from senselab_core.runtime.execution.outputs import AmbiguousClock, OutputTypeMismatch
 from senselab_core.runtime.execution.records import verify_attributes
@@ -121,6 +124,7 @@ TRIALS_TASK = TaskSpec(
     params=fake.EchoParams,
 )
 OVERLAP_TASK = TRIALS_TASK.model_copy(update={"name": "call_test.overlap", "inputs": {"label": "json"}})
+CHAIN_TASK = TASK.model_copy(update={"name": "call_test.chain", "inputs": {"value": "sha256"}})
 
 
 def _backend(name: str, stack: str, env: Env, task: TaskSpec = TASK, worker: str = fake.WORKER_MODULE) -> BackendSpec:
@@ -139,7 +143,8 @@ def _backend(name: str, stack: str, env: Env, task: TaskSpec = TASK, worker: str
 
 
 TEST_REGISTRY = Registry()
-for _task in (TASK, AUDIO_TASK, PAIR_TASK, CLOCKED_TASK, TRANSCRIBE_TASK, TRIALS_TASK, OVERLAP_TASK, fake.ECHO):
+TASKS = (TASK, AUDIO_TASK, PAIR_TASK, CLOCKED_TASK, TRANSCRIBE_TASK, TRIALS_TASK, OVERLAP_TASK, CHAIN_TASK, fake.ECHO)
+for _task in TASKS:
     TEST_REGISTRY.add_task(_task)
 TEST_REGISTRY.add_backend(_backend("fake-alpha", "alpha", Env.host()))
 TEST_REGISTRY.add_backend(
@@ -162,6 +167,8 @@ TEST_REGISTRY.add_backend(_backend("pair", "dsp", Env.host(), PAIR_TASK, "backen
 TEST_REGISTRY.add_backend(_backend("clocked", "dsp", Env.host(), CLOCKED_TASK, "backends.clocked_backend_fixture"))
 TEST_REGISTRY.add_backend(_backend("trials", "dsp", Env.host(), TRIALS_TASK, "backends.trials_backend_fixture"))
 TEST_REGISTRY.add_backend(_backend("overlap", "dsp", Env.host(), OVERLAP_TASK, "backends.overlap_backend_fixture"))
+TEST_REGISTRY.add_backend(_backend("chain", "dsp", Env.host(), CHAIN_TASK, "backends.sizes_backend_fixture"))
+TEST_REGISTRY.add_backend(_backend("counting", "counting", Env.host(), fake.ECHO, "backends.counting_backend_fixture"))
 
 CATALOGUE = Catalogue.load(
     f"""
@@ -829,15 +836,13 @@ def test_lost_race_records_the_unlicensed_allowance(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_fragment_is_a_document_and_results_reference_each_job(store: ResultStore) -> None:
-    """A one-node plan's fragment round-trips as JSON; once its plan is admitted, each job's result is referenced."""
+    """A one-node plan's fragment round-trips as JSON; under its admission, each job's result is referenced."""
     executor = InProcess(store=store, profile=_profile("alpha"), workers=WORKERS)
     placed = plan(_call("doc"), config=executor.run, execution=executor.profile)
-    fragment = node_fragment(placed)
+    admission = executor.admit(placed, {bind_input("text", "json", "doc")[0]: "doc"})
+    fragment = node_fragment(placed, admission)
     assert PlanFragment.model_validate_json(fragment.model_dump_json()) == fragment
     assert fragment.jobs == (JobRef(plan_hash=placed.hash, node="call", element=(0,)),)
-    with pytest.raises(ValueError, match="not admitted"):
-        executor.submit(fragment)
-    executor.admit(placed, {fragment.inputs[0]["text"]: "doc"})
     handle = executor.submit(fragment)
     assert executor.status(handle) is Status.DONE
     [ref] = executor.results(handle)
@@ -845,6 +850,78 @@ def test_fragment_is_a_document_and_results_reference_each_job(store: ResultStor
     assert isinstance(outcome, Completed) and ref.job == fragment.jobs[0] and ref.failure is None
     assert ref.output_identity == outcome.result.output_identity
     assert ref.key_digest == outcome.result.key.digest()
-    executor.release(placed.hash)
-    with pytest.raises(ValueError, match="not admitted"):
+    executor.release(admission)
+    with pytest.raises(ValueError, match="not held"):
         executor.submit(fragment)
+
+
+@pytest.mark.logic
+def test_two_admissions_of_one_plan_keep_their_own_values(store: ResultStore) -> None:
+    """One content admitted twice under two anchors: each admission's job is served on its own anchor's clock."""
+    standalone = Audio.from_array(numpy.zeros(1600, dtype=numpy.float32), 16000)
+    session = Audio(groups=standalone.groups, anchor=TimeAnchor(clock_id="session-7", absolute_start_ns=5))
+    executor = InProcess(store=store, profile=_profile(), workers=WORKERS)
+    call = TaskCall.model_validate({"task": CLOCKED_TASK.name, "inputs": {"audio": standalone}})
+    placed = plan(call, config=executor.run, execution=executor.profile)
+    first = executor.admit(placed, {standalone.identity: session})
+    second = executor.admit(placed, {standalone.identity: standalone})
+    clocks = []
+    for admission in (first, second):
+        [outcome] = executor.outcomes(executor.submit(node_fragment(placed, admission)))
+        assert isinstance(outcome, Completed)
+        spans = outcome.result.outputs["spans"]
+        clocks.append(spans.clock_id if isinstance(spans, Intervals) else None)
+    assert clocks == ["session-7", standalone.identity]
+    executor.release(first)
+    [outcome] = executor.outcomes(executor.submit(node_fragment(placed, second)))
+    assert isinstance(outcome, Completed)
+
+
+@pytest.mark.logic
+def test_two_node_graph_run_by_hand_reads_upstream_outputs_from_the_store(store: ResultStore) -> None:
+    """Node A is submitted, then node B with A's output identities, which `execute` reads from the store."""
+    executor = InProcess(store=store, profile=_profile("alpha"), workers=WORKERS)
+    graph = Graph(
+        inputs={"text": "list[json]"},
+        nodes=(Node(id="a", task=TASK.name, task_version="1"), Node(id="b", task=CHAIN_TASK.name, task_version="1")),
+        edges=(
+            Edge(source="input.text", target="a.text", kind="map"),
+            Edge(source="a.value", target="b.value", kind="plain"),
+        ),
+        outputs={"value": "b.value"},
+    )
+    records = [Record(id=f"r{i}", inputs={"text": ValueInput(value=t)}) for i, t in enumerate(("one", "two"))]
+    placed = plan(graph, RecordSet(records), config=executor.run, execution=executor.profile)
+    admission = executor.admit(placed, {bind_input("text", "json", t)[0]: t for t in ("one", "two")})
+    with pytest.raises(ValueError, match="give its results"):
+        node_fragment(placed, admission, "b")
+    upstream = executor.submit(node_fragment(placed, admission, "a"))
+    refs = list(executor.results(upstream))
+    fragment = node_fragment(placed, admission, "b", upstream={"a": refs})
+    assert PlanFragment.model_validate_json(fragment.model_dump_json()) == fragment
+    assert dict(fragment.upstream) == {r.output_identity: r.key_digest for r in refs}
+    downstream = executor.outcomes(executor.submit(fragment))
+    computed = [o.result for o in executor.outcomes(upstream) if isinstance(o, Completed)]
+    served = [o.result for o in downstream if isinstance(o, Completed)]
+    assert [r.outputs["value"] for r in served] == [str(r.outputs["value"]) for r in computed]
+    assert [r.key.inputs["value"] for r in served] == [r.output_identity for r in computed]
+    executor.release(admission)
+
+
+@pytest.mark.logic
+def test_two_profiles_in_one_process_load_one_model_once(store: ResultStore) -> None:
+    """Profiles of two bounds share the process's worker set and model cache: the model is loaded once."""
+    loads = importlib.import_module("backends.counting_backend_fixture").LOADS
+    loads.clear()
+    small = _profile(stack_preferences={fake.ECHO.name: ["counting"]})
+    large = _profile(
+        stack_preferences={fake.ECHO.name: ["counting"]}, resource_classes={"gpu": {"device": "cuda", "max_workers": 9}}
+    )
+    workers = process_workers(small)
+    assert process_workers(large) is workers
+    assert workers.bound <= sum(c.max_workers for c in small.resource_classes.values())
+    for i, (profile, held) in enumerate(((small, None), (large, None), (large, WorkerSet(1)))):
+        call = TaskCall.model_validate({"task": fake.ECHO.name, "inputs": {"payload": {"i": i}}})
+        result = InProcess(store=store, profile=profile, workers=held).call(call)
+        assert result.placement.backend.name == "counting" and result.reused is None
+    assert len(loads) == 1

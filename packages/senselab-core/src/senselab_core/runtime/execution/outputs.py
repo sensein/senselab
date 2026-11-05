@@ -53,23 +53,33 @@ def decoded(spec: TaskSpec, outputs: Mapping[str, object]) -> dict[str, object]:
         OutputTypeMismatch: an output of a kernel-typed port is not a wire form of its declared type.
         WireFormatRetired: a stored output is in a retired wire format.
     """
-    types = kernel_types()
     out = dict(outputs)
     for port, declared in spec.outputs.items():
-        if declared not in types or port not in outputs:
-            continue
-        form = outputs[port]
-        try:
-            value = from_wire_form(form) if isinstance(form, Mapping) else form
-        except WireFormatRetired:
-            raise
-        except ValueError as exc:
-            raise OutputTypeMismatch(f"output {port!r} of {spec.name!r} is not a wire form: {exc}") from exc
-        if not isinstance(value, types[declared]):
-            found = form.get("format") if isinstance(form, Mapping) else type(form).__name__
-            raise OutputTypeMismatch(f"output {port!r} of {spec.name!r} is declared {declared}, got {found}")
-        out[port] = value
+        if port in outputs:
+            out[port] = read_port(spec.name, port, declared, outputs[port])
     return out
+
+
+def read_port(task: str, port: str, declared: str, form: object) -> object:
+    """Return the value of output `port` of `task`, declared `declared`: a kernel type read from its wire form.
+
+    Raises:
+        OutputTypeMismatch: the port is kernel-typed and `form` is not a wire form of its declared type.
+        WireFormatRetired: `form` is in a retired wire format.
+    """
+    types = kernel_types()
+    if declared not in types:
+        return form
+    try:
+        value = from_wire_form(form) if isinstance(form, Mapping) else form
+    except WireFormatRetired:
+        raise
+    except ValueError as exc:
+        raise OutputTypeMismatch(f"output {port!r} of {task!r} is not a wire form: {exc}") from exc
+    if not isinstance(value, types[declared]):
+        found = form.get("format") if isinstance(form, Mapping) else type(form).__name__
+        raise OutputTypeMismatch(f"output {port!r} of {task!r} is declared {declared}, got {found}")
+    return value
 
 
 def as_wire(values: Mapping[str, object]) -> dict[str, object]:

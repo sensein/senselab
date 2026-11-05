@@ -3,15 +3,24 @@
 import atexit
 import itertools
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 
 from senselab_core.kernel.declare import Registry, TaskSpec
+from senselab_core.kernel.graph import Edge
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.call import Result, RunConfig, TaskCall, bind_input, packaged
-from senselab_core.runtime.execution.executor import FaultRecord, Handle, JobRef, PlanFragment, ResultRef, Status
-from senselab_core.runtime.execution.job import Completed, Failed, Job, JobOutcome, execute
+from senselab_core.runtime.execution.executor import (
+    Admission,
+    FaultRecord,
+    Handle,
+    JobRef,
+    PlanFragment,
+    ResultRef,
+    Status,
+)
+from senselab_core.runtime.execution.job import Completed, Failed, Job, JobOutcome, Upstream, execute
 from senselab_core.runtime.execution.outputs import anchors_of
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.keys import Call, Placement
@@ -30,56 +39,102 @@ class CallFailed(RuntimeError):
         self.failure = failure
 
 
-_WORKER_SETS: dict[int, WorkerSet] = {}
-_WORKER_SETS_LOCK = threading.Lock()
+_PROCESS: list[WorkerSet] = []
+_PROCESS_LOCK = threading.Lock()
 
 
 def process_workers(profile: ExecutionProfile) -> WorkerSet:
-    """Return this process's worker set bounded by `profile`: the workers its resource classes keep alive at once.
+    """Return this process's one worker set, bounded by the workers `profile`'s resource classes keep alive at once.
 
-    One set exists per bound; every set is closed at exit.
+    The first profile sets the bound; a later profile with a smaller bound tightens it (`WorkerSet.tighten`), and a
+    larger one leaves it. The set is closed at exit.
     """
     bound = sum(c.max_workers for c in profile.resource_classes.values())
-    with _WORKER_SETS_LOCK:
-        if bound not in _WORKER_SETS:
-            _WORKER_SETS[bound] = WorkerSet(bound)
-        return _WORKER_SETS[bound]
+    with _PROCESS_LOCK:
+        if not _PROCESS:
+            _PROCESS.append(WorkerSet(bound))
+        workers = _PROCESS[0]
+    workers.tighten(bound)
+    return workers
 
 
 @atexit.register
-def _close_worker_sets() -> None:
-    for workers in _WORKER_SETS.values():
+def _close_process_workers() -> None:
+    for workers in _PROCESS:
         workers.close()
 
 
-def node_fragment(placed: Plan, node: str | None = None) -> PlanFragment:
-    """Return the fragment of every job of `node` (the plan's one node when None), one per manifest record.
+def _source(edge: Edge) -> tuple[str, str]:
+    node, _, port = edge.source.partition(".")
+    return node, port
 
-    The node's every input is a graph input; a `map` edge makes a job's element its record's index.
+
+def node_fragment(
+    placed: Plan,
+    admission: Admission,
+    node: str | None = None,
+    *,
+    upstream: Mapping[str, Sequence[ResultRef]] | None = None,
+) -> PlanFragment:
+    """Return the fragment of every job of `node` (the plan's one node when None) under `admission`.
+
+    A node fed by a graph input has one job per manifest record, its element the record's index when a `map` edge
+    feeds it. A node fed only by upstream nodes has one job per element of their results, `upstream` giving each
+    upstream node's results; an element reads the upstream result of the same element, or of the unmapped one.
 
     Raises:
-        ValueError: `node` is None and the plan has more than one node; an input of the node is another node's
-            output; the manifest holds no record, or more than one for an unmapped node.
+        ValueError: `node` is None and the plan has more than one node; the admission is of another plan; an
+            upstream node's results are not given, are missing an element or hold a failure; the manifest holds no
+            record, or more than one for an unmapped node.
     """
     graph = placed.logical.graph
     if node is None:
         if len(graph.nodes) != 1:
             raise ValueError(f"the plan has nodes {sorted(n.id for n in graph.nodes)}; name the node")
         node = graph.nodes[0].id
+    if admission.plan_hash != placed.hash:
+        raise ValueError(f"admission {admission.id} is of plan {admission.plan_hash}, not {placed.hash}")
     feeds = {e.target.split(".", 1)[1]: e for e in graph.edges if e.target.split(".", 1)[0] == node}
-    if any(not e.source.startswith("input.") for e in feeds.values()):
-        raise ValueError(f"node {node!r} reads another node's output; the plan runner builds its jobs")
-    mapped = any(e.kind == "map" for e in feeds.values())
+    given = {p: _source(e)[1] for p, e in feeds.items() if _source(e)[0] == "input"}
+    results = {p: _results(node, _source(e)[0], upstream or {}) for p, e in feeds.items() if _source(e)[0] != "input"}
     rows = placed.manifest.rows
-    if not rows or (not mapped and len(rows) > 1):
-        raise ValueError(f"node {node!r} has {len(rows)} records; a fragment holds one job per record")
+    if given:
+        mapped = any(feeds[p].kind == "map" for p in given)
+        if not rows or (not mapped and len(rows) > 1):
+            raise ValueError(f"node {node!r} has {len(rows)} records; a fragment holds one job per record")
+        elements: list[tuple[int, ...]] = [(i,) if mapped else () for i in range(len(rows))]
+    else:
+        elements = sorted({element for refs in results.values() for element in refs})
+    inputs, read = [], {}
+    for i, element in enumerate(elements):
+        entry: dict[str, str] = {p: rows[i].inputs[g] for p, g in given.items()}
+        for port, refs in results.items():
+            ref = refs.get(element, refs.get(()))
+            if ref is None or ref.output_identity is None:
+                raise ValueError(f"node {node!r} element {element} has no upstream result for input {port!r}")
+            entry[port] = ref.output_identity
+            read[ref.output_identity] = ref.key_digest
+        inputs.append(entry)
     return PlanFragment(
         plan_hash=placed.hash,
         node=node,
-        jobs=tuple(JobRef(plan_hash=placed.hash, node=node, element=(i,) if mapped else ()) for i in range(len(rows))),
-        inputs=tuple({port: row.inputs[e.source.split(".", 1)[1]] for port, e in feeds.items()} for row in rows),
+        admission=admission.id,
+        jobs=tuple(JobRef(plan_hash=placed.hash, node=node, element=e) for e in elements),
+        inputs=tuple(inputs),
+        upstream=read,
         placement=placed.placement.nodes[node],
     )
+
+
+def _results(node: str, source: str, upstream: Mapping[str, Sequence[ResultRef]]) -> dict[tuple[int, ...], ResultRef]:
+    """Return the results of upstream node `source` by element, refusing a missing node or a failed element."""
+    if source not in upstream:
+        raise ValueError(f"node {node!r} reads node {source!r}; give its results")
+    refs = {r.job.element: r for r in upstream[source]}
+    failed = sorted(e for e, r in refs.items() if r.failure is not None)
+    if failed:
+        raise ValueError(f"node {source!r} failed elements {failed}; the runner fails their descendants")
+    return refs
 
 
 def placement_of_record(record: NodePlacement, spec: TaskSpec, registry: Registry) -> Placement:
@@ -107,7 +162,8 @@ def placement_of_record(record: NodePlacement, spec: TaskSpec, registry: Registr
 class InProcess:
     """An `Executor` whose `submit` runs a fragment's jobs through `execute` in this process, before returning.
 
-    A fragment is submitted once its plan, and the value of each input identity its jobs name, are `admit`ted.
+    A fragment is submitted under an admission of its plan (`admit`), which holds the value of each graph-input
+    identity its jobs name; an upstream input is read from the store.
     Jobs are sent in requests of the placement's batch size (one item per request for a backend that is not
     batch-invariant). `None` means the packaged default: the store under `cache_root()/results`, the `laptop`
     profile, `RunConfig()` and this process's worker set for the profile (`process_workers`).
@@ -127,13 +183,15 @@ class InProcess:
         self.store = store if store is not None else ResultStore(cache_root() / "results")
         self.workers = workers if workers is not None else process_workers(self.profile)
         self._lock = threading.Lock()
-        self._plans: dict[str, tuple[Plan, dict[InputIdentity, object], int]] = {}
+        self._admissions: dict[str, tuple[Plan, dict[InputIdentity, object]]] = {}
         self._outcomes: dict[str, list[JobOutcome]] = {}
         self._status: dict[str, Status] = {}
         self._ids = itertools.count()
 
-    def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> None:
-        """Hold `placed` and the values of the input identities its fragments name, until as many `release`s.
+    def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:
+        """Hold `placed` and the values of the graph-input identities its fragments name, until `release`.
+
+        Each admission is its own: two admissions of one plan never share or replace each other's values.
 
         Raises:
             ValueError: the plan was placed under another profile, or resolved under another reuse policy.
@@ -142,30 +200,28 @@ class InProcess:
             raise ValueError(f"plan {placed.hash} was placed under another execution profile than this executor's")
         if ReusePolicy(placed.logical.reuse) is not self.run.reuse:
             raise ValueError(f"plan {placed.hash} reuses under {placed.logical.reuse}, not {self.run.reuse.value}")
+        admission = Admission(id=f"admission-{next(self._ids)}", plan_hash=placed.hash)
         with self._lock:
-            _, held, count = self._plans.get(placed.hash, (placed, {}, 0))
-            self._plans[placed.hash] = (placed, {**held, **values}, count + 1)
+            self._admissions[admission.id] = (placed, dict(values))
+        return admission
 
-    def release(self, plan_hash: str) -> None:
-        """Drop one `admit` of the plan `plan_hash`; its values are let go with the last."""
+    def release(self, admission: Admission) -> None:
+        """Let go of `admission` and its values."""
         with self._lock:
-            placed, held, count = self._plans.pop(plan_hash)
-            if count > 1:
-                self._plans[plan_hash] = (placed, held, count - 1)
+            self._admissions.pop(admission.id, None)
 
     def submit(self, fragment: PlanFragment) -> Handle:
         """Run every job of `fragment` and return its handle, whose status is then `done`.
 
         Raises:
-            ValueError: the fragment's plan is not admitted, names a node it lacks or an input with no value, or its
-                placement names an undeclared backend; and as `execute`.
-            InconsistentInputs: a job's inputs contradict a constraint the task declares.
-            AmbiguousClock: two recording inputs of one content carry different anchors.
+            ValueError: the fragment's admission is not held or is of another plan, names a node the plan lacks or a
+                graph input with no value, or its placement names an undeclared backend; and as `execute`.
+            InconsistentInputs, AmbiguousClock: as `execute`.
             LicenseRefused, VllmStartError, LeaseTimeout, LeaseUnavailable, AttestationMismatch, OutputTypeMismatch,
                 WireFormatRetired, WorkerFatal, WorkerLost, ProtocolError: as `execute`.
         """
         jobs, placement = self._jobs(fragment)
-        handle = Handle(id=f"in-process-{next(self._ids)}")
+        handle = Handle(id=f"fragment-{next(self._ids)}")
         with self._lock:
             self._status[handle.id] = Status.RUNNING
         try:
@@ -259,23 +315,25 @@ class InProcess:
             backend_params=call.backend_params,
         )
         placed = plan(bound_call, config=self.run, execution=self.profile)
-        self.admit(placed, dict(bound.values()))
+        admission = self.admit(placed, dict(bound.values()))
         try:
-            handle = self.submit(node_fragment(placed))
+            handle = self.submit(node_fragment(placed, admission))
             [outcome] = self.outcomes(handle)
             self.forget(handle)
         finally:
-            self.release(placed.hash)
+            self.release(admission)
         if isinstance(outcome, Failed):
             raise CallFailed(outcome.failure)
         return outcome.result
 
     def _jobs(self, fragment: PlanFragment) -> tuple[list[Job], Placement]:
-        """Return the jobs of `fragment` with their values, and its placement."""
+        """Return the jobs of `fragment` with their graph-input values and upstream inputs, and its placement."""
         with self._lock:
-            if fragment.plan_hash not in self._plans:
-                raise ValueError(f"plan {fragment.plan_hash} is not admitted to this executor")
-            placed, values, _ = self._plans[fragment.plan_hash]
+            if fragment.admission not in self._admissions:
+                raise ValueError(f"admission {fragment.admission} is not held by this executor")
+            placed, values = self._admissions[fragment.admission]
+        if placed.hash != fragment.plan_hash:
+            raise ValueError(f"admission {fragment.admission} is of plan {placed.hash}, not {fragment.plan_hash}")
         nodes = {n.id: n for n in placed.logical.graph.nodes}
         if fragment.node not in nodes:
             raise ValueError(f"plan {fragment.plan_hash} has no node {fragment.node!r}")
@@ -284,15 +342,22 @@ class InProcess:
         if node.task_version != spec.version:
             raise ValueError(f"{node.task!r} is declared at version {spec.version!r}, not {node.task_version!r}")
         params = TaskCall.parse_params(node.task, node.params, registry)
-        model, slices = placed.logical.models[node.id], placed.logical.profile_slices[node.id]
-        base = Call(spec, params, {}, model, slices)
+        base = Call(spec, params, {}, placed.logical.models[node.id], placed.logical.profile_slices[node.id])
+        edges = placed.logical.graph.edges
+        feeds = {e.target.split(".", 1)[1]: _source(e) for e in edges if e.target.split(".", 1)[0] == node.id}
         jobs = []
-        for ref in fragment.jobs:
-            identities = fragment.inputs_of(ref)
-            missing = sorted(port for port, identity in identities.items() if identity not in values)
-            if missing:
-                raise ValueError(f"no value is admitted for inputs {missing} of {ref}")
-            held = {port: values[identity] for port, identity in identities.items()}
-            spec.check_inputs(held)
-            jobs.append(Job(ref, replace(base, inputs=dict(identities)), held, anchors_of(held.values())))
+        for ref, identities in zip(fragment.jobs, fragment.inputs, strict=True):
+            held, upstream = {}, {}
+            for port, identity in identities.items():
+                source, source_port = feeds[port]
+                if source != "input":
+                    declared = registry.spec(nodes[source].task).outputs[source_port]
+                    key = fragment.upstream[identity]
+                    upstream[port] = Upstream(identity, key, source_port, declared)
+                elif identity in values:
+                    held[port] = values[identity]
+                else:
+                    raise ValueError(f"no value is admitted for input {port!r} of {ref}")
+            call = replace(base, inputs=dict(identities))
+            jobs.append(Job(ref, call, held, anchors_of(held.values()), upstream))
         return jobs, placement_of_record(fragment.placement, spec, registry)

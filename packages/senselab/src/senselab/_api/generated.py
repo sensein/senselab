@@ -105,7 +105,7 @@ class SpeechToText(ConfiguredTask):
         self,
         audio: Audio | str | PathLike[str],
     ) -> Result:
-        """Run this task on the inputs on `InProcess` and return its one result."""
+        """Run this task on the inputs with `InProcess` and return its one result."""
         return self._run(
             {
                 "audio": audio,
@@ -186,7 +186,7 @@ class Diarize(ConfiguredTask):
         self,
         audio: Audio | str | PathLike[str],
     ) -> Result:
-        """Run this task on the inputs on `InProcess` and return its one result."""
+        """Run this task on the inputs with `InProcess` and return its one result."""
         return self._run(
             {
                 "audio": audio,
@@ -254,7 +254,7 @@ class SpeakerEmbeddings(ConfiguredTask):
         self,
         audio: Audio | str | PathLike[str],
     ) -> Result:
-        """Run this task on the inputs on `InProcess` and return its one result."""
+        """Run this task on the inputs with `InProcess` and return its one result."""
         return self._run(
             {
                 "audio": audio,
@@ -327,7 +327,7 @@ class PiiSpans(ConfiguredTask):
         self,
         text: Text | str | PathLike[str],
     ) -> Result:
-        """Run this task on the inputs on `InProcess` and return its one result."""
+        """Run this task on the inputs with `InProcess` and return its one result."""
         return self._run(
             {
                 "text": text,
@@ -400,7 +400,7 @@ class Resample(ConfiguredTask):
         self,
         series: RegularSeries | str | PathLike[str],
     ) -> Result:
-        """Run this task on the inputs on `InProcess` and return its one result."""
+        """Run this task on the inputs with `InProcess` and return its one result."""
         return self._run(
             {
                 "series": series,
@@ -474,7 +474,7 @@ class Wer(ConfiguredTask):
         reference: Transcript | str | PathLike[str],
         hypothesis: Transcript | str | PathLike[str],
     ) -> Result:
-        """Run this task on the inputs on `InProcess` and return its one result."""
+        """Run this task on the inputs with `InProcess` and return its one result."""
         return self._run(
             {
                 "reference": reference,
@@ -554,7 +554,7 @@ class Der(ConfiguredTask):
         reference: Intervals | str | PathLike[str],
         hypothesis: Intervals | str | PathLike[str],
     ) -> Result:
-        """Run this task on the inputs on `InProcess` and return its one result."""
+        """Run this task on the inputs with `InProcess` and return its one result."""
         return self._run(
             {
                 "reference": reference,
@@ -622,7 +622,7 @@ class Eer(ConfiguredTask):
         self,
         trials: Trials | str | PathLike[str],
     ) -> Result:
-        """Run this task on the inputs on `InProcess` and return its one result."""
+        """Run this task on the inputs with `InProcess` and return its one result."""
         return self._run(
             {
                 "trials": trials,
@@ -687,7 +687,7 @@ class SpanF1(ConfiguredTask):
         reference: TextSpans | str | PathLike[str],
         hypothesis: TextSpans | str | PathLike[str],
     ) -> Result:
-        """Run this task on the inputs on `InProcess` and return its one result."""
+        """Run this task on the inputs with `InProcess` and return its one result."""
         return self._run(
             {
                 "reference": reference,
@@ -754,7 +754,7 @@ class ResampleError(ConfiguredTask):
         reference: RegularSeries | str | PathLike[str],
         hypothesis: RegularSeries | str | PathLike[str],
     ) -> Result:
-        """Run this task on the inputs on `InProcess` and return its one result."""
+        """Run this task on the inputs with `InProcess` and return its one result."""
         return self._run(
             {
                 "reference": reference,
