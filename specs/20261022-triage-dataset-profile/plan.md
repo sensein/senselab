@@ -696,22 +696,69 @@ suite as a SLURM job.
 
 - The 59 triage test files that name B2AI tasks load the fixture profile.
 
-## Step 9 — speakers, recordings and corpus inputs (framing review, 2026-10-30)
+## Step 9 — speakers, recordings and corpus inputs (agreed 2026-11-04)
 
-- **Target speaker.** Enrollment, `speaker_vectors` and the cohort treat the participant as the speaker. That holds
-  for adults recording themselves, not where a caregiver speaks for a child (the pediatric profile), nor for
-  clinician-prompted or conversational data. "Target speaker" names whose voice the task asks for; it defaults to the
-  participant and may be declared otherwise. `hint.target_speaker` exists, but the speech branch ignores it
-  (`nodes/speech.py:1753`). The participant stays the unit of consent, leakage and grouping.
-- **Recording id.** The stem is the run folder's name and the review pages' join key. It is unique only because BIDS
-  puts sub, ses and task in it; a flat `p01/s2/recording.wav` collides. The recording id becomes the source path
-  relative to the corpus root, or a declared id; the stem is a display label.
-- **Corpus-pass inputs on the replay marker.** The marker is the config hash, commit and hint digest. BACKGROUND and
-  VERDICT also read the session floor and the cohort readings, which `extend_session_floor` and `extend_cohort` write
-  without touching it, so rerunning those and then replaying returns PRESENT. The marker gains a digest of those
-  inputs. [UNVERIFIED — how `--force` is set in practice.]
-- **"Cohort" names two things:** the COHORT corpus stage (`cohort_stage.py`) and the recruited study cohort
-  (`cohort.py`, `verdict.cohort_conditions`). One is renamed.
+**What it is for.** Four assumptions that hold for B2AI's recordings and not for other datasets': that the participant
+is the voice a task asks for, that a file's stem is unique, that a replay's marker covers every input it reads, and
+that "cohort" means one thing. Walked through topic by topic with the user on 2026-11-04.
+
+**9a — target speaker.** (a) The participant is whose recording it is, the unit of consent, grouping and leakage;
+the target speaker is whose voice the task asks for, and defaults to the participant (B2AI unchanged). (b) A hint may
+declare its target speakers as a list, each with an id, an optional role (participant, examiner, partner, caregiver)
+and an optional voice vector; the default is one entry, the participant. Enrollment (`speaker_vectors`) and COHORT
+group by the target speaker's id, which is the participant's unless declared. The engine accepts exactly one target
+and refuses more, saying multi-speaker interactions are not supported yet (user: "list now, record multi-speaker as
+a later item"). (c) SPEECH uses a declared voice vector, which wins over the enrollment, and records which it used;
+today `hint.target_speaker` is ignored (`nodes/speech.py:1760`).
+
+**9b — recording id.** (a) Each recording has an id unique in its corpus: the hint's declared `recording_id`, else
+its path relative to the `--corpus-root` a driver is given (user: "corpus-root fallback is fine"), else its stem;
+B2AI's hint builder declares its stem, so every B2AI key is unchanged. (b) ADMIT records it with the identity; the
+corpus table gains a `recording_id` column, and the triage table, the review pages, the replay diff and the manifests
+join on it; the stem is a display label. (c) The identity check refuses a repeated recording id (today it reports a
+repeated stem). (d) Run folders keep `<stem>_<stamp>` under participant and session.
+
+**9c — the replay marker.** (a) The marker also records a fingerprint of the session-floor and cohort readings the
+replay folded, so a replay after `extend_session_floor` or `extend_cohort` reran replays again; both passes are
+confirmed not to touch the marker. (b) A marker from before this records none and does not match, so each such run is
+replayed once more (option i, CPU only). How the release runs set `--force` is [UNVERIFIED — assumption]; the
+evidence jobs set it only through `FORCE` (`item8/replay.sbatch:27`).
+
+**9d — "cohort".** (a) The recruited study cohort is renamed "recruited conditions": `cohort.py` to
+`recruited_conditions.py`, `verdict.cohort_conditions` to `verdict.recruited_conditions`, the profile folder
+`cohort_conditions/` to `recruited_conditions/`, B2AI's profile with them. The COHORT stage keeps its name, which
+every store records. (b) The ledger's condition label becomes `recruited` (was `cohort`), readers accepting `cohort`
+in older stores (option i): B2AI's ledger entries for listed conditions differ in that value, its decisions do not.
+
+**Checks.** B2AI unchanged, as in 5e, 11e and 6: 5 paired fresh runs and the 192-run replay identical (entity ids
+normalized), but for the ledger's condition label (9d) and the marker's new fingerprint (9c), each listed; the
+baseline values check; the suite as a SLURM job. A flat-named corpus (`p01/s2/recording.wav`) keeps its recordings
+apart in the tables; a hint declaring two target speakers is refused; a replay after `extend_cohort` reran replays.
+
+**Results (2026-11-04, branch `refactor/triage-speakers` off 252941fc6, evidence in `triage_env_2026_10_22/s9/`).**
+- B2AI unchanged but for the renamed ledger keys: in the 5 paired fresh runs and all 192 replay copies, exactly one
+  entity per recording differs, the newest PII ledger, and only in four key names (`cohort_diagnoses` to
+  `recruited_diagnoses`, `counts.cohort_condition_n` to `counts.recruited_condition_n`), each with the same value
+  (entity ids normalized). Decisions are the same, and so are the reviewer readings each side reused or must read
+  again (59 needing a reread, 133 with none, on both).
+- The `recruited` label value itself was not exercised: no newest ledger in either set lists a condition. The two
+  replay copies whose earlier ledgers list one (anxiety) keep `cohort` there, as history should, and the replay's
+  own ledger lists none on both sides. The reading of older stores is covered by
+  `recruited_conditions_test.py::test_a_store_from_before_the_rename_reads_under_the_new_names`.
+- Replay marker: all 192 new-side stores carry `corpus_inputs` on the marker, none on the base side. The marker is
+  an activity, so the entity comparison does not see it.
+- Baseline values: identical to step 6's except the renamed setting (`verdict.cohort_conditions` to
+  `verdict.recruited_conditions`, same value `bridge2ai_voice_adult_2026-09-04`).
+- Suite: 4,380 passed, 20 skipped (triage and scripts) on the snapshot; on the working tree, triage, scripts, text
+  and utils gave 6,634 passed with the same 12 failures under `src/tests/text` and `src/tests/utils` as the base tree.
+- Deviation from 9b(a), same outcome: B2AI's hint builder does not declare `recording_id`. The id is recorded only
+  when it differs from the stem, so B2AI's stores gain no attribute and its keys stay its stems.
+- The checks above are unit tests: `identity_test.py::test_the_recording_id_is_declared_else_the_corpus_path_else_the_stem`,
+  `identity_check_test.py::test_a_repeated_recording_id_is_refused_before_a_run_and_reported_after`,
+  `identity_test.py::test_more_than_one_target_is_refused`, and
+  `extend_replay_decisions_test.py::test_a_marker_matches_only_the_corpus_readings_it_left`.
+- Found while building it: the first version applied a declared voice after SPEECH read its enrollment settings, so
+  the tests raised a KeyError (`enrollment_model_id`); the declared voice is now applied first, before any evidence ran.
 
 ## Step 10 — values fitted from a pilot run (added 2026-11-03; after step 5)
 
@@ -798,5 +845,12 @@ each task kind completes with those stages skipped and the others' decisions unc
 - **A modular triage** (`specs/20261104-triage-modular-design/design.md`): stage descriptors and a workflow spec,
   sub-workflows, corpus passes as workflows, PREPROCESS as tasks, the verdict as a fold, the explicit settings
   context; weighed against pydra. A separate effort after step 11's light version.
+- **Multi-speaker interactions** (user, 2026-11-04): dyadic and conversational recordings, where more than one voice
+  is expected. Step 9 shapes the target-speaker declaration as a list and refuses more than one; making triage read
+  interactions (which voices are expected, each one's task conformance, consent and release per person) is its own
+  walkthrough.
+- **senselab alpha's resampler** (#632, c4bb902b7, 2026-11-04): `resample_audios` now band-limits with a Kaiser sinc
+  filter, which PREPROCESS uses; merging alpha into the stack changes every resampled stream, so it needs its own
+  evidence run.
 - **A shared store of dataset profiles** (user, 2026-11-03): a separate project where datasets publish and copy
   profiles. Out of scope until there is a second dataset.
