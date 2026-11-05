@@ -48,6 +48,10 @@ local: a laptop starts its pool workers as processes on itself.
 
 Not measured; each value is the starting point the scale ladder revises. quantum_items 100 and quantum_s 300: a worker yields to an older queue after a hundred items or five minutes, whichever comes first, so a model load is paid at most once per quantum of work. poll_s 30: the 1.x reproduce controller's poll interval; a worker whose queues stay empty for three polls exits. lease_renew_fraction 0.33: the 1.x work pool's rule that a heartbeat is at most a third of the lease, so two missed renewals still leave the lease live. segment_items 10000: an index segment rolls at the largest scale point the ladder runs (10^4 items), so a plan of that size reads one segment.
 
+### laptop.lease
+
+Not measured until Task 16, which measures the store root's attribute delay that bounds both values. stale_after_s 300: five times the NFS client's default maximum attribute-cache time (acregmax and acdirmax, 60 s), so a beat directory a live holder made is seen well inside the bound on a shared root. renew_fraction 0.33: the 1.x work pool's rule that a heartbeat is at most a third of the lease, so two missed renewals still leave the lease live. Read by `PydraRunner` for pydra's job leases (P3-53); the pin at c8541fc5 has no `LeaseSettings` yet (Task 45), so the values are held and not yet passed.
+
 ### laptop.faults
 
 content_attempts 2: the 1.x work pool's DEFAULT_MAX_ATTEMPTS, an item failing for its content twice goes to dead/. infrastructure_replacements 6: the 1.x work pool's DEFAULT_MAX_INTERRUPTS, releases and reaps allowed before an env is reported broken. resource_replacements 0: one per larger memory class the profile lists, and a laptop lists none, so a resource fault fails at once.
@@ -105,6 +109,10 @@ slurm: workers are Slurm jobs submitted per resource class. qos_cpu_cap null: th
 ### orcd.pool
 
 Not measured; each value is the starting point the scale ladder revises. quantum_items 100 and quantum_s 300: a worker yields to an older queue after a hundred items or five minutes, whichever comes first, so a model load is paid at most once per quantum of work. poll_s 30: the 1.x reproduce controller's poll interval; a worker whose queues stay empty for three polls exits. lease_renew_fraction 0.33: the 1.x work pool's rule that a heartbeat is at most a third of the lease, so two missed renewals still leave the lease live. segment_items 10000: an index segment rolls at the largest scale point the ladder runs (10^4 items), so a plan of that size reads one segment.
+
+### orcd.lease
+
+Not measured until Task 16, which measures the store root's attribute delay that bounds both values. stale_after_s 300: five times the NFS client's default maximum attribute-cache time (acregmax and acdirmax, 60 s), so a beat directory a live holder made is seen well inside the bound on a shared root. renew_fraction 0.33: the 1.x work pool's rule that a heartbeat is at most a third of the lease, so two missed renewals still leave the lease live. Read by `PydraRunner` for pydra's job leases (P3-53); the pin at c8541fc5 has no `LeaseSettings` yet (Task 45), so the values are held and not yet passed.
 
 ### orcd.faults
 
