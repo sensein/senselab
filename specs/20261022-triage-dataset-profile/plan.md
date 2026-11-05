@@ -776,18 +776,79 @@ apart in the tables; a hint declaring two target speakers is refused; a replay a
   B2AI takes the unchanged paths, so the evidence was not rerun. Suite: 6,645 passed, the same 12 failures under
   `src/tests/text` and `src/tests/utils` as the base tree (job 27984791).
 
-## Step 10 — values fitted from a pilot run (added 2026-11-03; after step 5)
+## Step 10 — values fitted from a pilot run (added 2026-11-03; agreed 2026-11-05)
 
-**What it is for.** The values of kind (b) are statistics of a dataset's own recordings: a percentile of a reading, a
-fence around a distribution, a per-task median. They need no listening, so a dataset should not have to work them
-out by hand. A `fit` command reads a pilot corpus's table (the corpus table a first run writes) and writes those
-values into the dataset's profile, recording what it read and when. The values the step-5 entries name as (b) are its
-scope; the procedure for each is the derivation the B2AI value records today (e.g. the cohort condition fences, the
-DDK rate band from r36's 2.5th-97.5th percentiles, the per-task response medians).
+**What it is for.** Triage flags some recordings as unusual for their dataset: a cough much longer than the
+dataset's coughs, a participant louder than almost every other, a session much noisier than that participant's
+others. Each needs a number that depends on the dataset: B2AI's cough cut-off is 1.877 s because 97.5% of its
+coughs are shorter. Eleven profile values are of this kind (kind b). Until this step a second dataset had to supply
+all eleven before triage would run, and B2AI's came from one-off analyses that mostly survive only in a scratch
+folder. A `fit` command computes them from a first run's corpus table, the way B2AI's were computed. It changes
+nothing for B2AI; it is what makes the reference profile usable by another dataset. Walked through with the user on
+2026-11-05 (user: "just finish step 10 if we think it is actually a useful functionality").
 
-**Checks.** On the B2AI corpus table the command reproduces B2AI's (b) values at their recorded precision (B2AI
-rounded the count-in gap up to 3.0 s from a 2.9 s percentile); on the
-made-up dataset it writes a profile its run accepts.
+**10a — a pilot run** (option a). A profile with `pilot: true` in its manifest may leave its corpus statistics
+empty. The start check does not ask for them; each check that reads one is skipped (a COHORT bound flags nothing,
+the count-in joins no extent, the replaced-task rule's non-lexical part reads no talk, an atypical bound reads
+nothing), and the consistency check records its cosine for the fit. The run record says `pilot: true` and lists
+the values it left unfitted. After the fit the pilot runs are replayed (CPU only), and `pilot: true` comes out.
+None of these values feeds a reading the fit reads, so one pilot, one fit and one replay settle it.
+
+**10b — the inputs are corpus-table columns** (option a). The table (schema 32) gains: COHORT's participant median
+level and clipped share, the session's level and SNR shift from the other sessions, the session consistency cosine,
+the participant's non-match share and compared count (each repeated on the group's recordings), the median cough
+event, the syllable rate and whether the syllable task was found, the count-in-to-phonation gap, and lexical words
+per second of the response. `fit` reads only the table. The order: pilot run, COHORT pass, corpus table, fit,
+replay.
+
+**10c — each value's method is written once** (agreed). Each kind-b entry in `data/profile_values.yaml` carries a
+`method`: the column, one value per recording, session or participant, filters, the statistic (median, percentile,
+percentile band, Tukey fence with k = 1.5) and the rounding. `fit.py` follows only that. Four of B2AI's values do
+not follow a clean method: the count-in limit (p99 2.9 s, rounded up by hand to 3.0), the cough cut-off (pooled over
+every cough task though its note said "its family's"; the note is corrected), the DDK band (only recordings where the
+task was found; now written into the method), and the free-speech word rate and per-task response medians (no
+script, and a description that cannot be literally true). B2AI keeps its numbers, each marked in its profile as a
+deliberate difference (option i). The per-task response medians gain a profile-values entry, so a new dataset's
+template asks for them.
+
+**10d — the check** (option a): (1) *method*: fit.py's calculation, over the r36 readings the original analyses read
+(COHORT `--readings-out` over r36, and the r37 extent measure over r36), against B2AI's values; (2) *whole chain*:
+the corpus table rebuilt from the release tree's r37 runs (read only; written to scratch), `fit` run on it, each value
+listed beside B2AI's with the r36-to-r37 difference; and the made-up dataset's template profile as a pilot.
+
+**10e — fitted.yaml** (option a). `scripts/fit_profile.py` writes the profile's `fitted.yaml`: the values, nested by
+data file, with what they were fitted on (table, sha256, rows, schema, senselab version, date) and each value's count.
+It sits above the profile it extends and below the profile's own files, so a value a dataset sets itself (B2AI's
+3.0) wins, and a refit rewrites only `fitted.yaml`. The driver lists each value the profile sets itself beside the
+fit. A refit needs `--force`; a table older than the fit columns is refused. The template writes a new profile as a
+pilot and says how to fit it.
+
+**Results (2026-11-05, branch `refactor/triage-fit` off 732231a18, evidence in `triage_env_2026_10_22/s10/`).**
+- Method, over the r36 readings: fit.py reproduces B2AI's value exactly for the loudness bound (-9.343, n = 1,527
+  participants), both session-shift bounds (17.783, 15.117; 351 sessions), the consistency floor (0.63; 313
+  sessions), the shared non-match share (0.169; 214 participants) and the DDK band ([2.235, 7.692]; 7,815
+  recordings); the count-in limit fits 2.9 (n = 1,232), B2AI's deliberate 3.0. The clipped share fits 0.0 here: those
+  readings carry an older clip reading, which B2AI's analysis replaced with the r36 table's (unreadable to us). The
+  cough cut-off, word rate and response medians are not in those readings. A first run found the shift bounds 0.001
+  off: the new column rounded the shift before the fence; it no longer does.
+- Whole chain: the corpus table rebuilt from the release tree's 62,550 r37 runs (64 slices, read only; no release
+  file changed), then `fit_profile.py` with B2AI's profile, written to scratch. Identical to B2AI: the cough cut-off
+  (1.877; 2,643), the DDK band, and, with participant and session filled from the B2AI stems (the r37 runs predate the
+  identity record), the clipped share (0.475), the loudness bound, both shift bounds and the consistency floor. The
+  count-in limit fits 2.9. r37 differs from r36 on three: the shared non-match share 0.182 (108 participants; r36's
+  readings give 0.169), the free-speech word rate 2.07 (B2AI 2.03), and three of nine response medians (free-speech
+  26.77 vs 26.75, free-speech-v2 25.87 vs 25.89, story-recall-v2 73.59 vs 73.38; every count equals B2AI's). The fit
+  also gives productive-vocabulary a median (5.19), a free-response task B2AI's list leaves out. B2AI keeps all its
+  values; the driver lists each as the profile's own, which wins.
+- B2AI unchanged: 5 paired fresh runs and the 192-run replay, every store entity identical (ids normalized), the
+  same decisions and replay rows, the same reviewer readings reused and reread (59 / 133); the baseline values
+  identical to step 9's. Suite: 6,677 passed, 34 skipped; the 12 failures under `src/tests/text` and
+  `src/tests/utils` fail on the base tree too (job 28009253). mypy over the touched files: two errors, both on the base
+  tree (`profile_template.py:271`, `run.py:187`).
+- Made-up dataset: the template writes a pilot profile, whose start check asks for every value but the ten
+  required corpus statistics and lists them unfitted (`profile_template_test`), and `fit_profile_test` fits a
+  pilot table into such a profile, which then reads the fitted values. A pilot run, fit and replay over real
+  recordings of a second dataset was not run: there is no second corpus.
 
 ## Step 11 — stages on and off, models by name (light version, agreed 2026-11-04; before step 7)
 
