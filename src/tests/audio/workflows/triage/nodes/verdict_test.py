@@ -1095,9 +1095,9 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         assert (condition["texts"], condition["state"], condition["condition_kind"]) == (
             ["essential", "tremors"],
             "released_condition",
-            "cohort",
+            "recruited",
         )
-        assert ledger.attributes["cohort_diagnoses"] == ["essential_tremor"]
+        assert ledger.attributes["recruited_diagnoses"] == ["essential_tremor"]
 
     def test_a_condition_inside_a_detector_mask_is_released(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path

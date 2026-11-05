@@ -64,7 +64,7 @@ def test_a_listen_set_renders_only_its_stems_with_their_checks(tmp_path: Path, c
     script.extract(corpus, extract, 1)
     header, line = extract.read_text().splitlines()[:2]
     other = json.loads(line)
-    other["stem"] = "sub-ffff_ses-02_task-harvard-sentences"
+    other["stem"] = other["recording_id"] = "sub-ffff_ses-02_task-harvard-sentences"
     extract.write_text("\n".join([header, line, json.dumps(other)]) + "\n")
     listed = tmp_path / "extent_check_listen.tsv"
     listed.write_text(

@@ -317,6 +317,7 @@ def review_record(run_root: Path, root: Path, speech: SpeechReader | None = None
     start, end = decision.get("extent_start_s"), decision.get("extent_end_s")
     return {
         "stem": decision["stem"],
+        "recording_id": decision.get("recording_id") or decision["stem"],
         "participant": decision["participant"],
         "session": decision["session"],
         "task": decision["task"],

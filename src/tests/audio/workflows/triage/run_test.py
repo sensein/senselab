@@ -224,7 +224,13 @@ def _fakes(
             raise RuntimeError(f"{node} could not run")
 
     def _admit(
-        store: ProvStore, source: str | Path, config: TriageConfig, hint: AudioHints | None = None, *, run_dir: Path
+        store: ProvStore,
+        source: str | Path,
+        config: TriageConfig,
+        hint: AudioHints | None = None,
+        *,
+        run_dir: Path,
+        corpus_path: str | None = None,
     ) -> AdmitResult:
         _record("ADMIT")
         entity_id, verdict = _conclude(store, "ADMIT", admit_outcome, None)
@@ -1294,7 +1300,7 @@ class TestCli:
         cli = _cli()
         parser = cli.build_parser()
         options = {action.dest for action in parser._actions if action.dest != "help"}
-        assert options == {"audio", "out", "config", "profile", "hint", "enrollment"}
+        assert options == {"audio", "out", "config", "profile", "hint", "enrollment", "corpus_root"}
 
     def test_a_hints_table_is_refused_rather_than_read_as_an_empty_hint(self, tmp_path: Path) -> None:
         """AudioHints ignores unknown keys, so a filename-keyed hints table validated to may_contain=[].

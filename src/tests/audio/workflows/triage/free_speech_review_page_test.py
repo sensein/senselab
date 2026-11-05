@@ -1746,8 +1746,10 @@ def test_the_marks_are_the_ledgers_spans_each_with_its_state(tmp_path: Path) -> 
         (["DATE_TIME"], "detected", [4, 5]),
     ]
     assert row["f"][1]["nm"] == 1
-    assert (row["f"][2]["kd"], row["f"][2]["dx"]) == ("cohort", "essential_tremor")
-    assert (row["hk"], row["nq"], row["np"]) == ("cohort", 1, ["Alice"])
+    assert (row["f"][2]["kd"], row["f"][2]["dx"]) == ("recruited", "essential_tremor")
+    assert (row["hk"], row["nq"], row["np"]) == ("recruited", 1, ["Alice"]), (
+        "an old store's 'cohort' reads as recruited"
+    )
     card = page.recording_html(row)
     assert 'data-nq="awaiting"' in card
     text = card[card.index('<p class="text">') : card.index("</p>", card.index('<p class="text">'))]
@@ -1835,7 +1837,7 @@ def test_a_condition_over_a_detector_mask_is_released(tmp_path: Path) -> None:
     card = page.recording_html(row)
     text = card[card.index('<p class="text">') : card.index("</p>", card.index('<p class="text">'))]
     assert 'class="pii u-red"' not in text
-    assert 'data-kd="cohort"' in text and 'data-dx="parkinsons_disease"' in text
+    assert 'data-kd="recruited"' in text and 'data-dx="parkinsons_disease"' in text
 
 
 def test_a_word_two_detectors_mark_differently_is_two_single_category_marks(tmp_path: Path) -> None:
@@ -1953,10 +1955,10 @@ def test_a_card_carries_no_explanation_of_its_status() -> None:
 
 
 def test_the_condition_filter_separates_the_study_s_conditions() -> None:
-    """The rail offers the cohort conditions apart from every other, as a filter rather than as text."""
+    """The rail offers the recruited conditions apart from every other, as a filter rather than as text."""
     assert '<select id="hkf">' in page._DOCUMENT
     assert "r.dataset.hk===hk" in page._SCRIPT
-    assert [value for value, _ in page.CONDITION_SECTIONS] == ["cohort", "other", "none"]
+    assert [value for value, _ in page.CONDITION_SECTIONS] == ["recruited", "other", "none"]
 
 
 def test_both_themes_define_every_colour_and_the_toggle_is_wired() -> None:

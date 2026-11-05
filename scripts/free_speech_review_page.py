@@ -40,6 +40,14 @@ from senselab.audio.workflows.triage.recording_vectors import (
     stem_of,
     view_identity,
 )
+from senselab.audio.workflows.triage.recruited_conditions import (
+    DIAGNOSES_KEY,
+    DIAGNOSIS_KEY,
+    OTHER,
+    RECRUITED,
+    condition_kind_of,
+    ledger_value,
+)
 from senselab.audio.workflows.triage.residue import is_content_word
 from senselab.audio.workflows.triage.routing_analysis.families import task_family
 from senselab.utils import fastio
@@ -346,8 +354,8 @@ def word_states(ledger: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
                 "o": [],
             }
     for condition in (ledger or {}).get("conditions") or ():
-        kind = str(condition.get("condition_kind") or "")
-        diagnosis = str(condition.get("cohort_diagnosis") or "")
+        kind = condition_kind_of(condition.get("condition_kind"))
+        diagnosis = str(ledger_value(condition, DIAGNOSIS_KEY) or "")
         for word_id in condition.get("word_ids") or ():
             held = states.get(str(word_id))
             if held is None:
@@ -789,7 +797,7 @@ def recording_record(run_root: Path, families: frozenset[str] | None) -> dict[st
         "res": residue,
         "led": None if ledger is None else dict((ledger.get("counts") or {})),
         "hk": condition_kind(ledger),
-        "cd": [] if ledger is None else [str(name) for name in ledger.get("cohort_diagnoses") or ()],
+        "cd": [] if ledger is None else [str(name) for name in ledger_value(ledger, DIAGNOSES_KEY) or ()],
         "nq": int(bool(((ledger or {}).get("counts") or {}).get("person_name_masked_n"))),
         "np": [] if ledger is None else [str(text) for text in ledger.get("name_release_proposed") or ()],
         "ss": None if stream is None else {"src": stream["src"], "n": stream["n"]},
@@ -813,18 +821,18 @@ def recording_record(run_root: Path, families: frozenset[str] | None) -> dict[st
 
 
 def condition_kind(ledger: Mapping[str, Any] | None) -> str | None:
-    """Which kind of condition the reviewer listed: ``other`` where any is outside the cohorts, else ``cohort``.
+    """Which kind of condition the reviewer listed: ``other`` where any is not recruited, else ``recruited``.
 
     Args:
         ledger: The ``pii_ledger`` attributes, or None.
 
     Returns:
-        ``other``, ``cohort``, or None where the ledger lists no condition.
+        ``other``, ``recruited``, or None where the ledger lists no condition.
     """
-    kinds = {str(condition.get("condition_kind") or "") for condition in (ledger or {}).get("conditions") or ()}
+    kinds = {condition_kind_of(condition.get("condition_kind")) for condition in (ledger or {}).get("conditions") or ()}
     if not kinds:
         return None
-    return "other" if "other" in kinds else "cohort"
+    return OTHER if OTHER in kinds else RECRUITED
 
 
 def tristate(value: Any) -> int:  # noqa: ANN401 -- a store attribute is any type
@@ -1659,7 +1667,7 @@ LEGEND_HTML = "\n".join(
 """The legend: three colours."""
 
 CONDITION_SECTIONS = (
-    ("cohort", "lists a study cohort condition"),
+    (RECRUITED, "lists a condition the study recruits for"),
     ("other", "lists another condition"),
     ("none", "lists no condition"),
 )

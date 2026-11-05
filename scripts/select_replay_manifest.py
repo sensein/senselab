@@ -98,6 +98,7 @@ def main() -> int:
                 json.dumps(
                     {
                         "stem": row["stem"],
+                        **({"recording_id": row["recording_id"]} if "recording_id" in row else {}),
                         "enhanced": str(args.out_root / str(row["run_dir"]) / "run" / "streams" / "enhanced.flac"),
                         "declared_family": _null(row["declared_family"]),
                         "verdict": row["verdict"],

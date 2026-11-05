@@ -986,13 +986,13 @@ values:
     unit: "s"
     means: "Longest amplitude span at or above which a recording routes to voice as held phonation."
     fit: "Tuned against labelled recordings (measured, not by listening): which recordings are voice tasks; the reference profile carries a value fitted on adult clinical speech."
-  - path: ["verdict", "cohort_conditions"]
+  - path: ["verdict", "recruited_conditions"]
     kind: a
     required: false
     stages: [REVIEW]
-    unit: "category name (cohort_conditions file)"
+    unit: "category name (recruited_conditions file)"
     means: "Names the list of health conditions the study recruits for; empty supplies none."
-    fit: "Your study design: the conditions your cohort recruits for, supplied as a cohort_conditions file in your profile."
+    fit: "Your study design: the conditions your study recruits for, supplied as a recruited_conditions file in your profile."
   - path: ["verdict", "condition_categories"]
     kind: a
     required: true

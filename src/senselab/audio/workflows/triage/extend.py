@@ -22,6 +22,7 @@ See ``specs/20260912-extend-reprocessed-outputs/design.md`` and
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -39,6 +40,7 @@ from senselab.audio.tasks.classification.yamnet import SpanTooShortForYAMNet
 from senselab.audio.tasks.features_extraction.ppg import PpgsPosteriorgramUnavailable
 from senselab.audio.tasks.phonation.api import F0RangeUnavailable
 from senselab.audio.tasks.speech_to_text.crisperwhisper import CrisperWhisperDecoderPositionsExceeded
+from senselab.audio.workflows.triage.cohort_fold import COHORT_READING
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.consensus import (
     Rebracketed,
@@ -54,6 +56,7 @@ from senselab.audio.workflows.triage.hint_record import (
     HINT,
     NO_HINT,
     TARGET_SPEAKER,
+    carries_voice,
     changed_fields,
     hint_attributes,
     hint_digest,
@@ -63,6 +66,7 @@ from senselab.audio.workflows.triage.hint_record import (
 from senselab.audio.workflows.triage.hint_record import expected_speech_digest as prompts_digest
 from senselab.audio.workflows.triage.identity import (
     ADMIT_NODE,
+    MultipleTargetSpeakers,
     RecordingIdentity,
     admit_record,
     identity_disagreement,
@@ -71,6 +75,7 @@ from senselab.audio.workflows.triage.identity import (
     recording_entity,
     row_identity,
 )
+from senselab.audio.workflows.triage.nodes.background import SESSION_FLOOR
 from senselab.audio.workflows.triage.nodes.branches import declared_task_family
 from senselab.audio.workflows.triage.nodes.common import (
     REMINT,
@@ -771,10 +776,39 @@ def replay_run_id(run_root: Path, config_hash: str, commit: str | None = None) -
     return f"{run_root.name}+replay-{config_hash}{suffix}"
 
 
+CORPUS_INPUTS = (SESSION_FLOOR, COHORT_READING)
+"""The readings corpus passes write (``extend_session_floor``, ``extend_cohort``) that a replay folds."""
+
+CORPUS_INPUTS_KEY = "corpus_inputs"
+"""The marker parameter recording :func:`corpus_inputs_digest` as the replay left the store."""
+
+
+def corpus_inputs_digest(store: ProvStore) -> str:
+    """A fingerprint of the corpus-pass readings a replay folds: the live session floor and cohort readings.
+
+    Args:
+        store: The run's store.
+
+    Returns:
+        The sha256 over each live reading's name, attributes and extent, in a fixed order.
+    """
+    rows = sorted(
+        json.dumps({"attributes": entity.attributes, "extent": entity.extent}, sort_keys=True, default=str)
+        for entity in live_entities(store, "measurement")
+        if entity.attributes.get("name") in CORPUS_INPUTS
+    )
+    return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
+
+
 def find_replay_marker(
-    store: ProvStore, config_hash: str, commit: str | None = None, hint_digest: str | None = None
+    store: ProvStore,
+    config_hash: str,
+    commit: str | None = None,
+    hint_digest: str | None = None,
+    *,
+    corpus_inputs: str | None = None,
 ) -> str | None:
-    """The marker a replay under this configuration, code and hint already wrote into this store, if any.
+    """The marker a replay under this configuration, code, hint and corpus readings already wrote, if any.
 
     Args:
         store: The run's store.
@@ -783,6 +817,10 @@ def find_replay_marker(
         hint_digest: The replaying hint's digest
             (:func:`~senselab.audio.workflows.triage.hint_record.hint_digest`). None matches a marker of any
             hint; a marker that records no hint digest matches only None.
+        corpus_inputs: :func:`corpus_inputs_digest` of the store now. Where given, a marker matches only if it
+            recorded the same, so a replay after ``extend_session_floor`` or ``extend_cohort`` reran replays again;
+            a marker from before plan step 9 recorded none and does not match (it is replayed once more). None
+            does not compare them.
 
     Returns:
         The marker activity's id, or None when this store has not been replayed under all of them.
@@ -791,6 +829,8 @@ def find_replay_marker(
         if activity.step != REPLAY_MARKER_STEP or activity.parameters.get("config_hash") != config_hash:
             continue
         if commit is not None and activity.parameters.get("commit") != commit:
+            continue
+        if corpus_inputs is not None and activity.parameters.get(CORPUS_INPUTS_KEY) != corpus_inputs:
             continue
         if hint_digest is None or activity.parameters.get("hint_digest") == hint_digest:
             return activity.id
@@ -1241,13 +1281,17 @@ def check_replay_inputs(
         raise ReplayRefused("this store records no hint; pass --hints to rebuild it, or --no-hint to run without one")
     elif recorded_hint_digest(store) == NO_HINT:
         held, hint_from = None, HINT_RECORDED
-    elif isinstance(attributes.get(HINT), Mapping) and attributes[HINT].get(TARGET_SPEAKER) is not None:
+    elif isinstance(attributes.get(HINT), Mapping) and carries_voice(attributes[HINT]):
         raise ReplayRefused(
-            "the recorded hint carried a target speaker, which is stored only as a digest; pass --hints"
+            "the recorded hint carried a target speaker's voice, which is stored only as a digest; pass --hints"
         )
     else:
         held, hint_from = recorded_hint(store), HINT_RECORDED
-    if recorded_identity(store) is None and not identity_of(held).sources:
+    try:
+        declared = identity_of(held)
+    except MultipleTargetSpeakers as error:
+        raise ReplayRefused(str(error)) from error
+    if recorded_identity(store) is None and not declared.sources:
         raise ReplayRefused(
             "this run records no identity and the hint it would replay with declares none, so it would record an "
             "identity declaring nothing (senselab reads no file name, plan step 6a): pass the dataset's --hints"
@@ -1256,6 +1300,13 @@ def check_replay_inputs(
     if changed and not allow_hint_change:
         raise ReplayRefused(f"the hint differs from the recorded one ({', '.join(changed)}); replay the run instead")
     return ReplayInputs(hint=held, hint_from=hint_from, changed=changed, audio=audio, profile=profile)
+
+
+def _admitted_stem(store: ProvStore, entity: Entity) -> str:
+    """The stem of the file ADMIT was given, which a recording's id is recorded against (plan step 9b)."""
+    admitted = [a for a in store.activities(ADMIT_NODE) if a.parameters.get("audio_file")]
+    source = admitted[-1].parameters["audio_file"] if admitted else entity.attributes.get("path")
+    return Path(str(source or "")).stem
 
 
 def record_replayed_hint(store: ProvStore, hint: AudioHints | None, *, software: str) -> str | None:
@@ -1278,7 +1329,7 @@ def record_replayed_hint(store: ProvStore, hint: AudioHints | None, *, software:
         return None
     attributes = {
         **entity.attributes,
-        **identity_of(hint).as_attributes(),
+        **identity_of(hint, stem=_admitted_stem(store, entity)).as_attributes(),
         **hint_attributes(hint),
         **task_attributes(hint),
         "replaces": entity.id,
@@ -1683,6 +1734,7 @@ def replay_decisions(
             "retired": len(retired),
             **(inputs.marker_parameters() if inputs is not None else {"hint_digest": hint_digest(hint)}),
             "identity_change": identity_change,
+            CORPUS_INPUTS_KEY: corpus_inputs_digest(store),
         },
     )
     store.was_associated_with(marker, software)

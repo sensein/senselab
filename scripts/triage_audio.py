@@ -90,6 +90,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("audio", type=Path, help="Input audio file (.wav, .flac, .mp3, ...)")
     parser.add_argument(
+        "--corpus-root",
+        type=Path,
+        default=None,
+        help="The corpus's root: the recording's path under it is its id where the hint declares none",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=DEFAULT_OUT_DIR,
@@ -243,7 +249,7 @@ def main(argv: list[str] | None = None) -> int:
     profile = f", profile {config.profile.name} {config.profile.version}" if config.profile is not None else ""
     print(f"Config: {config.name} v{config.version}{profile} ({config.config_hash})")
     print(f"Input:  {args.audio}")
-    result = run_triage(args.audio, args.out, config, hint=hint, enrollment=enrollment)
+    result = run_triage(args.audio, args.out, config, hint=hint, enrollment=enrollment, corpus_root=args.corpus_root)
 
     print(f"Run:    {result.run_dir}")
     print(f"Store:  {result.store_path}")

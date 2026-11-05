@@ -52,8 +52,8 @@ class TestSenselabShipsNoDatasetData:
 
     def test_without_a_profile_a_dataset_path_raises(self, without_triage_profile: None) -> None:
         """A loader asking for dataset data with no profile gets an error naming the path."""
-        with pytest.raises(DatasetDataMissing, match="cohort_conditions"):
-            data_path("cohort_conditions/anything.yaml")
+        with pytest.raises(DatasetDataMissing, match="recruited_conditions"):
+            data_path("recruited_conditions/anything.yaml")
 
     def test_without_a_profile_a_defaulted_file_is_packaged(self, without_triage_profile: None) -> None:
         """A defaulted file falls back to senselab's copy."""
@@ -81,13 +81,13 @@ class TestLoading:
         """A supplied directory resolves inside the profile; so does a supplied file."""
         root = _profile(
             tmp_path / "p",
-            {"name": "demo", "version": 1, "files": {"task_extent.yaml": "te.yaml", "cohort_conditions": "cc"}},
+            {"name": "demo", "version": 1, "files": {"task_extent.yaml": "te.yaml", "recruited_conditions": "cc"}},
             {"te.yaml": "a: 1\n", "cc/demo.yaml": "conditions: {}\n"},
         )
         profile = load_profile(root)
         assert (profile.name, profile.version) == ("demo", "1")
         assert profile.resolve("task_extent.yaml") == root / "te.yaml"
-        assert profile.resolve("cohort_conditions/demo.yaml") == root / "cc/demo.yaml"
+        assert profile.resolve("recruited_conditions/demo.yaml") == root / "cc/demo.yaml"
         assert profile.resolve("task_speech.yaml") is None
 
     def test_the_digest_follows_every_supplied_byte(self, without_triage_profile: None, tmp_path: Path) -> None:
@@ -110,7 +110,7 @@ class TestLoading:
             {".": "t.yaml"},
             {"task_extent.yaml": "../t.yaml"},
             {"task_extent.yaml": "missing.yaml"},
-            {"cohort_conditions": "t.yaml"},  # a file where a directory belongs
+            {"recruited_conditions": "t.yaml"},  # a file where a directory belongs
         ],
     )
     def test_a_path_a_profile_cannot_supply_is_refused(
@@ -442,8 +442,8 @@ class TestValuesFollowTheWorkflow:
     def test_a_named_cohort_list_the_profile_lacks_is_refused_before_the_run(self, tmp_path: Path) -> None:
         """Found by the step-11 speech-only run: VERDICT failed on every recording instead of the run refusing."""
         override = tmp_path / "run.yaml"
-        override.write_text("verdict:\n  cohort_conditions: no_such_list\n")
-        assert "cohort_conditions/no_such_list.yaml (config verdict.cohort_conditions names it)" in (
+        override.write_text("verdict:\n  recruited_conditions: no_such_list\n")
+        assert "recruited_conditions/no_such_list.yaml (config verdict.recruited_conditions names it)" in (
             missing_dataset_values(load_triage_config(override).values)
         )
 

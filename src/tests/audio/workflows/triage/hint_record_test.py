@@ -143,3 +143,15 @@ class TestReadingTheRecordBack:
         store = ProvStore(run_id="empty")
         assert recorded_hint_digest(store) is None
         assert changed_fields(store, None) is None
+
+
+def test_a_declared_target_speakers_voice_is_stored_only_as_its_digest() -> None:
+    """Plan step 9a: a ``target_speakers`` entry's embedding is reduced as ``target_speaker`` is."""
+    from senselab.audio.data_structures import TargetSpeaker
+    from senselab.audio.workflows.triage.hint_record import HINT, carries_voice, hint_attributes
+
+    hint = AudioHints(target_speakers=[TargetSpeaker(id="sub-07:child", embedding=_speaker([0.6, 0.8]))])
+    stored = hint_attributes(hint)[HINT]
+    assert "vector" not in stored["target_speakers"][0]["embedding"]
+    assert stored["target_speakers"][0]["embedding"]["vector_dim"] == 2
+    assert carries_voice(stored) and not carries_voice(hint_attributes(AudioHints())[HINT])

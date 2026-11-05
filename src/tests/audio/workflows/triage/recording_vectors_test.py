@@ -1193,11 +1193,13 @@ def test_the_ledger_columns_count_every_state(tmp_path: Path) -> None:
     row = rv.extract(run_root, tmp_path)
     assert row is not None
     assert (row["masks_n"], row["masks_final_n"], row["task_words_n"]) == (2, 1, 7)
-    assert (row["conditions_n"], row["cohort_condition_n"], row["other_condition_n"]) == (1, 1, 0)
+    assert (row["conditions_n"], row["recruited_condition_n"], row["other_condition_n"]) == (1, 1, 0)
     assert (row["policy_version"], row["language"], row["policy_masks_n"]) == (7, "es", 1)
     assert (row["released_condition_n"], row["released_kinship_n"], row["locked_person_n"]) == (1, 2, 1)
     assert (row["person_name_masked_n"], row["redact_by_kind_n"]) == (1, 1)
-    assert row["cohort_diagnoses"] == ["parkinsons_disease"]
+    assert row["recruited_diagnoses"] == ["parkinsons_disease"], (
+        "a ledger from before plan step 9 reads under its old keys"
+    )
     assert (row["masked_n"], row["unmasked_by_reviewer_n"], row["unmasked_by_trim_n"]) == (1, 1, 2)
     assert row["proposed_by_reviewer_n"] == 2
     assert (row["released_by_kind_n"], row["released_by_kind_categories"]) == (3, ["DATE_TIME"])
@@ -1216,7 +1218,7 @@ def test_no_ledger_leaves_every_ledger_column_null(tmp_path: Path) -> None:
         "conditions_n",
         "policy_version",
         "person_name_masked_n",
-        "cohort_diagnoses",
+        "recruited_diagnoses",
     ):
         assert row[column] is None
 

@@ -16,6 +16,7 @@ import pytest
 from senselab.audio.workflows.triage.identity import FROM_HINT, FROM_STEM
 from senselab.audio.workflows.triage.identity_check import (
     DUPLICATE_IDENTITY,
+    DUPLICATE_RECORDING_ID,
     DUPLICATE_STEM,
     NO_RECORDED_IDENTITY,
     SESSION_UNDER_TWO_PARTICIPANTS,
@@ -188,7 +189,7 @@ class TestBeforeARun:
         assert cli.main(["--recordings", str(listing), "--hints", str(hints), "--out", str(out)]) == 1
         counts = _report(out)["counts"]
         assert counts[UNREADABLE_IDENTITY] == 1
-        assert counts[DUPLICATE_STEM] == 1, "clip_one is in /a and /b"
+        assert counts[DUPLICATE_RECORDING_ID] == 1, "clip_one is in /a and /b: two files, one id (plan step 9b)"
         assert counts[DUPLICATE_IDENTITY] == 1, "unnamed recordings are keyed by stem, and clip_one is twice"
         assert counts[TASK_NOT_DESCRIBED] == 1, "no hint declares a task"
 

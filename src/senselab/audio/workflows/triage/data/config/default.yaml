@@ -345,7 +345,7 @@ verdict:
   llm_redaction_withholds:             # profile value (data/profile_values.yaml)
   llm_reset_redactions:                # profile value (data/profile_values.yaml)
   condition_categories:                # profile value (data/profile_values.yaml)
-  cohort_conditions:   # profile value (data/profile_values.yaml)
+  recruited_conditions:   # profile value (data/profile_values.yaml)
   person_name_review_flags:            # profile value (data/profile_values.yaml)
   trim_protected_categories:                                # profile value (data/profile_values.yaml)
   llm_second_speaker_flags:            # profile value (data/profile_values.yaml)

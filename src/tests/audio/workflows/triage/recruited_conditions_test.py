@@ -1,10 +1,16 @@
-"""The study's cohort conditions, read from the packaged profile, against phrases the r6 reviewer wrote."""
+"""The study's recruited conditions, read from the dataset profile, against phrases the r6 reviewer wrote."""
 
 from __future__ import annotations
 
 import pytest
 
-from senselab.audio.workflows.triage.cohort import COHORT, OTHER, load_cohort_profile
+from senselab.audio.workflows.triage.recruited_conditions import (
+    OTHER,
+    RECRUITED,
+    condition_kind_of,
+    ledger_value,
+    load_recruited_conditions,
+)
 
 PROFILE = "bridge2ai_voice_adult_2026-09-04"
 
@@ -33,11 +39,11 @@ PROFILE = "bridge2ai_voice_adult_2026-09-04"
         ("tos crónica", "unexplained_chronic_cough"),
     ],
 )
-def test_a_cohort_diagnosis_is_recognised(text: str, diagnosis: str) -> None:
+def test_a_recruited_diagnosis_is_recognised(text: str, diagnosis: str) -> None:
     """The study's own diagnoses, their spellings in the transcripts, and treatments the release ties to them."""
-    profile = load_cohort_profile(PROFILE)
+    profile = load_recruited_conditions(PROFILE)
     assert profile.diagnosis(text) == diagnosis
-    assert profile.kind(text) == COHORT
+    assert profile.kind(text) == RECRUITED
 
 
 @pytest.mark.parametrize(
@@ -53,18 +59,27 @@ def test_a_cohort_diagnosis_is_recognised(text: str, diagnosis: str) -> None:
         "had a big growth on the side of my thyroid",
     ],
 )
-def test_a_condition_outside_the_cohorts_is_other(text: str) -> None:
+def test_a_condition_outside_the_recruited_ones_is_other(text: str) -> None:
     """Conditions the release names no diagnosis file for, including a joint cyst and a thyroid growth."""
-    assert load_cohort_profile(PROFILE).kind(text) == OTHER
+    assert load_recruited_conditions(PROFILE).kind(text) == OTHER
 
 
-def test_every_diagnosis_file_of_the_release_is_a_cohort_except_control() -> None:
+def test_every_diagnosis_file_of_the_release_is_recruited_except_control() -> None:
     """The profile's entries are the release's phenotype/diagnosis/ files, control excluded."""
-    names = {name for name, _ in load_cohort_profile(PROFILE).conditions}
+    names = {name for name, _ in load_recruited_conditions(PROFILE).conditions}
     assert len(names) == 20 and "control" not in names
 
 
 def test_an_unknown_profile_is_refused() -> None:
-    """A mistyped name is an error, not an empty cohort."""
+    """A mistyped name is an error, not an empty list."""
     with pytest.raises(FileNotFoundError):
-        load_cohort_profile("no-such-study")
+        load_recruited_conditions("no-such-study")
+
+
+def test_a_store_from_before_the_rename_reads_under_the_new_names() -> None:
+    """Plan step 9: ``cohort`` was the recruited kind, and its keys were ``cohort_*``; both still read."""
+    assert condition_kind_of("cohort") == RECRUITED and condition_kind_of(OTHER) == OTHER
+    old = {"cohort_diagnoses": ["essential_tremor"], "counts": {"cohort_condition_n": 2}}
+    assert ledger_value(old, "recruited_diagnoses") == ["essential_tremor"]
+    assert ledger_value(old["counts"], "recruited_condition_n") == 2
+    assert ledger_value({"recruited_diagnoses": []}, "recruited_diagnoses") == []

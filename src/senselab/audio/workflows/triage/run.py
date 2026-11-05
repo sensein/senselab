@@ -514,12 +514,34 @@ def _write_log(path: Path, source: Path, config: TriageConfig, result: TriageRun
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
+def corpus_path_of(source: Path, corpus_root: Path | None) -> str | None:
+    """A recording's path relative to its corpus's root, as a POSIX string, or None without a root.
+
+    Args:
+        source: The recording.
+        corpus_root: The corpus's root, or None.
+
+    Returns:
+        The relative path (``p01/s2/recording.wav``), or None.
+
+    Raises:
+        ValueError: If ``source`` is not under ``corpus_root``.
+    """
+    if corpus_root is None:
+        return None
+    try:
+        return Path(source).resolve().relative_to(Path(corpus_root).resolve()).as_posix()
+    except ValueError as error:
+        raise ValueError(f"{source} is not under the corpus root {corpus_root}") from error
+
+
 def run_triage(
     source: Path,
     out_dir: Path,
     config: TriageConfig,
     hint: AudioHints | None = None,
     enrollment: Enrollment | None = None,
+    corpus_root: Path | None = None,
 ) -> TriageRunResult:
     """Triage one recording: the whole graph, one store, one fresh run directory.
 
@@ -533,20 +555,32 @@ def run_triage(
         config: The triage configuration.
         hint: What the recording was declared to contain, if anything.
         enrollment: The target speaker's enrollment, handed to SPEECH when the caller supplied one.
+        corpus_root: The corpus's root: the recording's path relative to it is its id where the hint declares none
+            (plan step 9b); without one, and without a declared id, the id is the file stem.
 
     Returns:
         The file verdict, the per-node outcomes and errors, the run's paths, REDACT's released pair
         and REPORT's two products.
+
+    Raises:
+        ValueError: If ``source`` is not under ``corpus_root``.
     """
     require_dataset_values(config.values)
     source = Path(source)
     resolve_task(hint)
-    layout = prepare_run_layout(Path(out_dir), source.stem, identity_of(hint))
+    corpus_path = corpus_path_of(source, corpus_root)
+    layout = prepare_run_layout(
+        Path(out_dir), source.stem, identity_of(hint, stem=source.stem, corpus_path=corpus_path)
+    )
     store = ProvStore(run_id=layout.root.name)
     outcomes: dict[str, NodeOutcome] = {}
 
     with record_venv_use() as used_venvs:
-        admitted = _attempt(outcomes, "ADMIT", lambda: admit(store, source, config, hint, run_dir=layout.run_dir))
+        admitted = _attempt(
+            outcomes,
+            "ADMIT",
+            lambda: admit(store, source, config, hint, run_dir=layout.run_dir, corpus_path=corpus_path),
+        )
         measurable = (
             admitted is not None and admitted.verdict.outcome is not Outcome.FAIL and admitted.audio is not None
         )

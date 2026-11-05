@@ -47,7 +47,6 @@ import yaml
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
-from senselab.audio.workflows.triage.cohort import COHORT, CONDITION_KINDS, OTHER, load_cohort_profile
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.nodes.branches import (
@@ -69,6 +68,14 @@ from senselab.audio.workflows.triage.nodes.common import (
     word_hull,
     write_stream,
     write_verdict,
+)
+from senselab.audio.workflows.triage.recruited_conditions import (
+    CONDITION_KINDS,
+    DIAGNOSES_KEY,
+    DIAGNOSIS_KEY,
+    OTHER,
+    RECRUITED,
+    load_recruited_conditions,
 )
 from senselab.audio.workflows.triage.residue import is_content_word, is_name_homograph, is_proper_form
 from senselab.audio.workflows.triage.review_inputs import lexicon_version, redaction_lexicon
@@ -864,7 +871,7 @@ def fold_mask_plan(
         padding_ms=padding_ms(config),
         condition_categories=policy.condition_categories,
         protected_categories=policy.trim_protected_categories,
-        cohort_conditions=policy.cohort_conditions,
+        recruited_conditions=policy.recruited_conditions,
         lexicon=task_lexicon(config, declared_task_family(store), hint),
         language=None if hint is None else str(hint.metadata.get("language") or "") or None,
         name_approvals=name_approvals(config, recording_stem(store)),
@@ -1529,9 +1536,10 @@ class ConditionSpan:
         why: The reviewer's one-sentence reason.
         word_ids: Every word it names, over every place it occurs.
         texts: Their surfaces.
-        condition_kind: :data:`~senselab.audio.workflows.triage.cohort.COHORT` where it names a condition the
-            study recruits for, :data:`~senselab.audio.workflows.triage.cohort.OTHER` otherwise.
-        cohort_diagnosis: The cohort diagnosis its text matches; empty where none does.
+        condition_kind: :data:`~senselab.audio.workflows.triage.recruited_conditions.RECRUITED` where it names a
+            condition the study recruits for, :data:`~senselab.audio.workflows.triage.recruited_conditions.OTHER`
+            otherwise.
+        recruited_diagnosis: The recruited diagnosis its text matches; empty where none does.
     """
 
     text: str
@@ -1539,7 +1547,7 @@ class ConditionSpan:
     word_ids: tuple[str, ...]
     texts: tuple[str, ...]
     condition_kind: str
-    cohort_diagnosis: str = ""
+    recruited_diagnosis: str = ""
 
 
 @dataclass(frozen=True)
@@ -1819,7 +1827,7 @@ class MaskPlan:
                     "texts": list(condition.texts),
                     "state": RELEASED_CONDITION,
                     "condition_kind": condition.condition_kind,
-                    "cohort_diagnosis": condition.cohort_diagnosis,
+                    DIAGNOSIS_KEY: condition.recruited_diagnosis,
                 }
                 for condition in self.conditions
             ],
@@ -1891,8 +1899,8 @@ class MaskPlan:
                 },
             },
             "categories": {state: self.categories(state) for state in WORD_STATES},
-            "cohort_diagnoses": sorted(
-                {condition.cohort_diagnosis for condition in self.conditions if condition.cohort_diagnosis}
+            DIAGNOSES_KEY: sorted(
+                {condition.recruited_diagnosis for condition in self.conditions if condition.recruited_diagnosis}
             ),
         }
 
@@ -2341,7 +2349,7 @@ def mask_plan(
     padding_ms: int,
     condition_categories: Sequence[str] = ("CONDITION",),
     protected_categories: Sequence[str] = (),
-    cohort_conditions: str | None = None,
+    recruited_conditions: str | None = None,
     lexicon: TaskLexicon | None = None,
     language: str | None = None,
     name_approvals: Sequence[str] = (),
@@ -2389,8 +2397,8 @@ def mask_plan(
             as a reading written before conditions had their own part carries them.
         protected_categories: Upper-cased detector categories under which a marked word written as a
             proper noun counts as content: the trim never releases it.
-        cohort_conditions: The cohort profile a condition's text is read against, as
-            ``verdict.cohort_conditions``; every condition is ``other`` where None.
+        recruited_conditions: The recruited-conditions list a condition's text is read against, as
+            ``verdict.recruited_conditions``; every condition is ``other`` where None.
         lexicon: The declared family's task lexicon; a word inside one of its phrases is task content
             no mask covers. Where None, the family's declared names, compared exactly.
         language: The language the recording declares (its sidecar's ``language``), or None.
@@ -2539,7 +2547,7 @@ def mask_plan(
         hits = _place_substring(quote, residue)
         return hits, (PLACED_SUBSTRING if hits else "")
 
-    profile = load_cohort_profile(cohort_conditions) if cohort_conditions else None
+    profile = load_recruited_conditions(recruited_conditions) if recruited_conditions else None
     condition_quotes = [
         (str(item.get("text") or ""), str(item.get("why") or ""))
         for item in reading.get("conditions") or ()
@@ -2556,8 +2564,8 @@ def mask_plan(
                 why=why,
                 word_ids=tuple(word.id for word in hits),
                 texts=tuple(text_of(word) for word in hits),
-                condition_kind=COHORT if diagnosis else OTHER,
-                cohort_diagnosis=diagnosis or "",
+                condition_kind=RECRUITED if diagnosis else OTHER,
+                recruited_diagnosis=diagnosis or "",
             )
         )
         condition_ids.update(word.id for word in hits)

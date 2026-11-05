@@ -14,7 +14,7 @@ provenance:
 config: config.yaml
 files:
   airway_event_tokens.yaml: airway_event_tokens.yaml
-  cohort_conditions: cohort_conditions
+  recruited_conditions: recruited_conditions
   cohort_stage.yaml: cohort_stage.yaml
   decision_reasons.yaml: decision_reasons.yaml
   detector_profile: detector_profile

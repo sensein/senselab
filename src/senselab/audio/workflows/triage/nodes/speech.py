@@ -40,6 +40,7 @@ from senselab.audio.workflows.triage.consensus import is_bracketed
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.finding_placement import cut as cut_to_kind
 from senselab.audio.workflows.triage.finding_placement import locate, match_key
+from senselab.audio.workflows.triage.identity import PARTICIPANT_KEY, declared_target_speaker
 from senselab.audio.workflows.triage.nodes.branches import (
     BRANCH_FAMILY,
     DETECT_GROUP,
@@ -1695,6 +1696,41 @@ def detect_speech(store: ProvStore, params: BranchParams) -> Result:
 # --------------------------------------------------------------------- the node
 
 
+ENROLLMENT_DECLARED = "declared"
+"""``from`` on an enrollment entity that is a hint's declared voice; an estimated enrollment records no ``from``."""
+
+
+def declared_enrollment(hint: AudioHints | None) -> Optional[Enrollment]:
+    """The target speaker's voice a hint declares, as an enrollment, or None where it declares none.
+
+    The one ``target_speakers`` entry's embedding, else the hint's ``target_speaker``; the subject is the declared
+    target's id, else the participant the hint names.
+
+    Args:
+        hint: What the recording was declared to contain, or None.
+
+    Returns:
+        The enrollment, or None.
+
+    Raises:
+        MultipleTargetSpeakers: If the hint declares more than one target speaker.
+    """
+    if hint is None:
+        return None
+    target = declared_target_speaker(hint)
+    embedding = hint.target_speakers[0].embedding if hint.target_speakers else None
+    embedding = embedding or hint.target_speaker
+    if embedding is None:
+        return None
+    subject = target or str((hint.metadata or {}).get(PARTICIPANT_KEY) or "declared")
+    return Enrollment(
+        subject_id=subject,
+        vector=list(embedding.vector),
+        provenance=embedding.provenance,
+        distribution=embedding.distribution,
+    )
+
+
 def speech(  # noqa: C901 — the branch's nine steps, in design order
     store: ProvStore,
     source: str,
@@ -1711,10 +1747,12 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             classifier windows.
         source: The store-held stream name, ``"plain"``.
         config: The triage configuration.
-        hint: What the recording was declared to contain. Neither ``target_speaker`` nor
-            ``targeted_speaker_count`` is read as evidence.
+        hint: What the recording was declared to contain. A declared target speaker's voice (its
+            ``target_speakers`` entry's embedding, else ``target_speaker``) is the target, in place of
+            ``enrollment`` (plan step 9a); ``targeted_speaker_count`` is not read as evidence.
         run_dir: The run directory sidecar paths are relative to.
-        enrollment: The target speaker's enrollment, estimated across the subject's recordings.
+        enrollment: The target speaker's enrollment, estimated across the subject's recordings; a declared voice
+            outranks it.
 
     Returns:
         The verdict, and the view over every element this branch authored or asserted over.
@@ -1723,6 +1761,9 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         LookupError: If a stream this branch needs, or the consensus transcript, is absent.
         ValueError: If a key this branch requires has no value and no enrollment was supplied.
     """
+    declared = declared_enrollment(hint)
+    outranked = declared is not None and enrollment is not None
+    enrollment = declared if declared is not None else enrollment
     params = branch_params(config)
     values = _required(params, enrollment)
 
@@ -1757,11 +1798,8 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     for word in words:
         store.used(transcript, word.id)
 
-    if hint is not None and hint.target_speaker is not None:
-        notes.append(
-            "this branch identifies the target by enrollment, not by hint.target_speaker, "
-            "which was supplied and is not read"
-        )
+    if declared is not None and outranked:
+        notes.append("the hint declares the target speaker's voice, which outranks the enrollment given")
 
     # The expectation: one mode or the other, chosen from the declared family. It runs before this
     # branch proposes anything, and before the no-lexical exit below.
@@ -2301,6 +2339,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             extent=None,
             attributes={
                 "subject_id": enrollment.subject_id,
+                **({"from": ENROLLMENT_DECLARED} if enrollment is declared else {}),
                 "model_id": enrollment.provenance.model_id,
                 "model_commit_sha": enrollment.provenance.model_commit_sha,
                 "unresolved_reason": enrollment.provenance.unresolved_reason,

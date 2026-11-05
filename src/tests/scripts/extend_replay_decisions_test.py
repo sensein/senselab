@@ -31,6 +31,7 @@ from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.extend import (
     AUDIO_UNVERIFIED,
     AUDIO_VERIFIED,
+    CORPUS_INPUTS_KEY,
     DECISION_SUPERSEDED,
     HINT_GIVEN,
     HINT_RECORDED,
@@ -40,6 +41,7 @@ from senselab.audio.workflows.triage.extend import (
     ReplayInputs,
     ReplayRefused,
     check_replay_inputs,
+    corpus_inputs_digest,
     find_replay_marker,
     live_decisions,
     read_store,
@@ -448,7 +450,13 @@ def test_a_run_already_carrying_this_configurations_marker_is_skipped(tmp_path: 
     marker = store.activity(
         node=REPLAY_NODE,
         step=REPLAY_MARKER_STEP,
-        parameters={"config_hash": config.config_hash, "commit": None, "retired": 0, "hint_digest": NO_HINT},
+        parameters={
+            "config_hash": config.config_hash,
+            "commit": None,
+            "retired": 0,
+            "hint_digest": NO_HINT,
+            CORPUS_INPUTS_KEY: corpus_inputs_digest(store),
+        },
     )
     store.write_jsonl(root / "run" / "store.jsonl")
     before = (root / "run" / "store.jsonl").read_text()
@@ -628,7 +636,13 @@ def test_force_replays_a_run_that_already_carries_the_marker(tmp_path: Path, mon
     store.activity(
         node=REPLAY_NODE,
         step=REPLAY_MARKER_STEP,
-        parameters={"config_hash": config.config_hash, "commit": None, "retired": 0, "hint_digest": NO_HINT},
+        parameters={
+            "config_hash": config.config_hash,
+            "commit": None,
+            "retired": 0,
+            "hint_digest": NO_HINT,
+            CORPUS_INPUTS_KEY: corpus_inputs_digest(store),
+        },
     )
     store.write_jsonl(root / "run" / "store.jsonl")
     monkeypatch.setattr(cli, "replay_decisions", _stub_replay({}))
@@ -917,3 +931,27 @@ def test_an_out_root_mirror_is_placed_where_the_replay_leaves_the_identity() -> 
     assert cli.replay_identity(None, stem, None, hint_given=False) == identity_of(None)
     recorded = identity_of(hint)
     assert cli.replay_identity(recorded, stem, None, hint_given=False) == recorded
+
+
+def test_a_marker_matches_only_the_corpus_readings_it_left() -> None:
+    """A replay after extend_cohort reran replays again; a marker from before plan step 9 matches nothing."""
+    from senselab.audio.workflows.triage.cohort_fold import COHORT_READING
+    from senselab.audio.workflows.triage.extend import (
+        CORPUS_INPUTS_KEY,
+        REPLAY_MARKER_STEP,
+        REPLAY_NODE,
+        corpus_inputs_digest,
+        find_replay_marker,
+    )
+
+    store = ProvStore(run_id="marker")
+    left = corpus_inputs_digest(store)
+    marker = store.activity(
+        node=REPLAY_NODE, step=REPLAY_MARKER_STEP, parameters={"config_hash": "c", CORPUS_INPUTS_KEY: left}
+    )
+    assert find_replay_marker(store, "c", corpus_inputs=corpus_inputs_digest(store)) == marker
+    store.entity(prov_type="measurement", extent=None, attributes={"name": COHORT_READING, "value": 1})
+    assert find_replay_marker(store, "c", corpus_inputs=corpus_inputs_digest(store)) is None
+    old = ProvStore(run_id="old")
+    old.activity(node=REPLAY_NODE, step=REPLAY_MARKER_STEP, parameters={"config_hash": "c"})
+    assert find_replay_marker(old, "c", corpus_inputs=corpus_inputs_digest(old)) is None

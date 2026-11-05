@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -11,6 +12,7 @@ from senselab.audio.workflows.triage.identity import FROM_HINT, RecordingIdentit
 from senselab.audio.workflows.triage.identity_check import (
     CHECK_LEVELS,
     DUPLICATE_IDENTITY,
+    DUPLICATE_RECORDING_ID,
     DUPLICATE_STEM,
     NO_RECORDED_IDENTITY,
     REFUSE,
@@ -292,3 +294,17 @@ def test_a_task_repeated_outside_any_session_is_no_duplicate(scope: str) -> None
         scope,
     )
     assert report.counts[DUPLICATE_IDENTITY] == 0
+
+
+def test_a_repeated_recording_id_is_refused_before_a_run_and_reported_after() -> None:
+    """Two flat-named files both called ``recording`` collide; one recording run twice is listed (step 9b)."""
+    flat = [
+        IdentityRecord("recording", "/c/p01/s2/recording.wav", RecordingIdentity("p01", "s2", "x", {}), None),
+        IdentityRecord("recording", "/c/p02/s1/recording.wav", RecordingIdentity("p02", "s1", "x", {}), None),
+    ]
+    before = check_identities(flat, session_scope="participant", before_run=True)
+    assert before.refused and before.counts[DUPLICATE_RECORDING_ID] == 1
+    ided = [IdentityRecord(r.stem, r.location, replace(r.identity, recording_id=r.location[3:]), None) for r in flat]
+    assert not check_identities(ided, session_scope="participant", before_run=True).counts[DUPLICATE_RECORDING_ID]
+    after = check_identities(flat, session_scope="participant")
+    assert after.counts[DUPLICATE_STEM] == 1 and not after.counts[DUPLICATE_RECORDING_ID]

@@ -24,7 +24,7 @@ A dataset profile is a directory holding ``profile.yaml`` and the files it suppl
     provenance: {...}                # optional, free-form: what the values were fitted on
     config: config.yaml              # optional: a config override, merged between the packaged config and a run's
     files:                           # data path -> path relative to the profile directory
-      cohort_conditions: cohort_conditions
+      recruited_conditions: recruited_conditions
       task_extent.yaml: task_extent.yaml
 
 :func:`activate_profile` makes a profile the one :func:`data_path` reads from. Loaders cache what they read under
@@ -60,7 +60,7 @@ SENSELAB_PROFILE = "senselab:"
 DATASET_PATHS = frozenset(
     {
         "airway_event_tokens.yaml",
-        "cohort_conditions",
+        "recruited_conditions",
         "detector_profile",
         "discard_contested.yaml",
         "evaluation",
@@ -648,14 +648,14 @@ def missing_dataset_values(config_values: Mapping[str, Any]) -> list[str]:
             continue  # the file itself is listed missing above
         where = "config" if relative == CONFIG_FILE else relative
         missing += [f"{where} {'.'.join(path)}" for path in paths if _lookup(document, path) is None]
-    cohort = (config_values.get("verdict") or {}).get("cohort_conditions")
-    if cohort:
+    recruited = (config_values.get("verdict") or {}).get("recruited_conditions")
+    if recruited:
         try:
-            named = data_path("cohort_conditions") / f"{cohort}.yaml"
+            named = data_path("recruited_conditions") / f"{recruited}.yaml"
         except DatasetDataMissing:
             named = None
         if named is None or not named.is_file():
-            missing.append(f"cohort_conditions/{cohort}.yaml (config verdict.cohort_conditions names it)")
+            missing.append(f"recruited_conditions/{recruited}.yaml (config verdict.recruited_conditions names it)")
     if not any(item == "tasks.yaml" or item.startswith("tasks.yaml (") for item in missing):
         tasks = data_values("tasks.yaml").get("tasks") or {}
         if not tasks:
