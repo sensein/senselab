@@ -172,3 +172,95 @@ the fallback graph layer behind the same `Executor` protocol (`design.md` §4.9)
 - the ProvStore schema and BEP028 export;
 - the placement policy and the memory admission tables;
 - site profiles.
+
+## 6. The job engine (Phase 3 Task 9)
+
+`run_call` is removed (P2-16, P3-25). Its body is `runtime.execution.job.execute`, which every executor calls;
+`InProcess` is the executor that runs a fragment in the calling process, and `InProcess.call` is the one-node plan a
+configured task submits. What `run_call`'s docstring carried as reasons, and the reasons for the engine's own choices,
+are recorded here (R-200).
+
+- **Model pinning.** A catalogue model at its catalogue revision is the catalogue's pin, read without a lookup, so a
+  call on the default model needs no network and the license comes from the reviewed catalogue entry. Any other model
+  is `resolve()`d. The planner then rewrites a hub reference to its commit, so the plan names exactly what is loaded.
+- **One worker per model.** A worker process loads one model; host backends share one `ModelCache` per budget, so two
+  tasks on one model share the weights. The pool is keyed by backend, env, init and budget (host) or network
+  (isolated): a worker started under another budget lacks that budget's sizing, and a worker started offline must not
+  serve an online run.
+- **Server attestation without a start.** A server backend's context carries the attestation its env lock, model and
+  settings declare, computed without starting the server. A store hit therefore needs no server; the server starts on
+  the first job the store does not serve, and a started server must attest exactly what was declared, or the job
+  raises `AttestationMismatch` rather than record a context that is not the one that ran.
+- **One activity per execution.** An execution writes one PROV activity associated with its agent (env lock, license
+  and `senselab:modelSource` included, R-110), recording the key, the context and the profile's digest. A store hit
+  writes no execution; the store records the reuse. Every activity records `senselab:verifyFraction`,
+  `senselab:verifySampling` and `senselab:verifyThresholds`, so a reader can tell what verification the run asked for.
+- **Lost commit race.** When `put` finds that another writer committed different outputs first, the job is served
+  that entry as a reuse and writes no execution: the store keeps one entry per key, and the provenance must name the
+  entry that is kept. The license rule applies to that entry as to any hit.
+- **Outputs on identity clocks.** Outputs are stored on the clocks their recording inputs' identities name and served
+  re-bound to the caller's anchors, so the key holds no anchor and one entry serves one content under every anchor.
+  Two recording inputs of one content under two anchors are refused (`AmbiguousClock`): there is no single clock to
+  re-bind to.
+- **Kernel types as wire forms.** An output on a port declared as a kernel type is stored as its wire form and
+  returned as the kernel value, so the store is readable without the backend and a wrong type is refused
+  (`OutputTypeMismatch`) before anything is stored.
+- **Verify sampling.** A cross-context hit in the sampled fraction `run.verify` is not served: it is recomputed and
+  compared under the run's thresholds before anything is stored. The comparison is recorded as
+  `EquivalenceEvidence`; a disagreement splits the store's class and is logged by path, never by value, because the
+  values may be participant data.
+- **Licenses.** Only the run's license policy refuses a license. A refused env or model license raises before any env
+  opens. A result from a refused env is never served, and a result whose context records no env license is recomputed
+  unless the policy allows unlicensed hits; a reuse so allowed records `senselab:unlicensedReuse`, on every hit path
+  including the lost race.
+- **The key is the request sent (R-187, P3-51).** A key holds the batch formation of the request a job is actually
+  sent in (`request_components(backend, request_size)`: `single` for one item, `items:<n>` otherwise) and the
+  backend's chunk grid. A backend that is not batch-invariant is sent one item per request until keyed buckets exist
+  (Task 18), so its key is always `single`; an invariant backend's multi-item formation is placement only, because
+  it does not declare `batch_formation` output-affecting.
+- **File-backed inputs are checked at run (R-121, executor part).** A file-backed input is checked against its stamp
+  (`audio_io.check`) before its job is keyed; a rewritten or vanished file fails that job with `StaleSource`, a typed
+  content fault (charged, never re-placed, since re-placing cannot make the file match), and nothing is sent or
+  stored. A stamp this process took is checked by `stat` alone, so the check costs
+  nothing for an input opened in this process.
+- **Failures are run-scoped (P3-26).** A failed item gives `Failed(FaultRecord)` beside its request's completed items
+  and is never stored, so a later run retries it. Only a typed content fault is charged against the item's retry
+  budget; a resource or infrastructure fault re-places the job uncharged, and a gap fault, one the fallback table
+  classified, is never charged (ADR-009), because its class is a guess.
+- **Bounded workers (R-167, R-166).** The worker set keeps at most the profile's workers alive at once (the summed
+  `max_workers` of its resource classes); beyond that the least recently used idle worker is closed, and a held worker
+  never is. A process has one worker set: the first profile sets its bound, a later profile with a smaller bound
+  tightens it, and a larger one does not loosen it. Host model caches are per process and per budget, shared by
+  every worker set, so two profiles in one process load a model once. A server start holds a lease of its (env,
+  backend, model) only, so a slow start (up to the startup timeout) blocks no other server. Servers are not counted in
+  the bound and are not evicted; they stop when the set is closed.
+- **Model cache (R-160).** A key loaded before, whose size is known, evicts what it needs before its loader runs, so
+  the peak is the budget rather than old plus new; a first load still loads and then evicts, since its size is unknown
+  until it is loaded. The cache lock is reentrant and `used_bytes` is read under it. The in-process input copy R-160
+  also names is not done: in-process backends still receive the caller's values.
+- **Plan fragments are documents.** `plan-fragment@1.0` holds identities, never values or pickled objects, so a fragment
+  can cross a process or a scheduler. `admit` is part of the `Executor` protocol: it holds a plan and the values of its
+  graph-input identities, and returns an admission (a unique id) that each fragment names, so two admissions of
+  one plan (one content under two anchors, say) never replace each other's values. An `output:` input is read from the result
+  store inside `execute`, through what the fragment records for it (`upstream`), so a runner deals in
+  identities only and a node fed by an upstream node is a fragment like any other. A substrate executor reads graph
+  inputs from the records instead of an admission's values.
+- **An `output:` input names one port.** A downstream input's identity is `port_output_identity(upstream key
+  digest, port)`, identity tag `port-output@1`, so two edges from different ports of one upstream job into one
+  downstream port key differently. The fragment's `upstream` records, for each such identity, the upstream key
+  digest, the stored entry's output identity (which context's outputs to read) and the port; `execute` reads that
+  entry from the store and takes the port's value. Which context computed the upstream entry never reaches the
+  downstream key, as a context never reaches any key.
+- **A gathered input names every element, in order.** A `gather` edge's input identity is `gather:` and
+  `identity_digest("port-gather@1", [element port identities in element order])`, so changing any element or the
+  order changes the downstream key. The fragment's `gathered` maps it to the ordered element identities, each of
+  which `upstream` maps to its stored entry; `execute` reads them into one list in element order.
+- **Upstream reads are recorded.** An execution that reads an upstream input records `prov:used` of the stored
+  entry's output entity (the one the upstream activity generated) on the downstream port, once per element for a
+  gathered input, so the PROV graph links each downstream activity to the upstream execution it read.
+- **A bad upstream fails one element.** An upstream entry missing from the store fails that job alone as an
+  infrastructure gap (re-placed, not charged); an entry that lacks the port, holds a value not of its declared type,
+  or gives inputs that break the task's constraints fails that job alone as a content fault. Its siblings complete.
+- **Servers are per worker set.** A second `WorkerSet` (such as a test's own) starts its own server for a key the
+  process set already serves, and a `close()` racing a `server()` may hand back a stopped server. Neither arises with
+  the one process set `process_workers` returns.

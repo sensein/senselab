@@ -456,3 +456,24 @@ profile formats (`tolerance@`, `tolerance-observations@`, `tolerance-coverage@`)
   carrying one is refused (`UnknownProfileKey`), and each key's derivation is in `config-derivations.md`, with a
   one-line `#` comment per key in the YAML. `plan(hardware=...)` places under a given hardware probe and never enters
   the plan hash. A license union that cannot be formed raises `LicenseConflict`, naming the node.
+
+## Amendment 2026-11-05: plan fragments (Phase 3 Task 9)
+
+- **`plan-fragment@1.0`** (new). Jobs of one node of one admitted plan: `{format, plan_hash: <64hex>, node: NodeId,
+  admission: <executor's admission id>, jobs: [JobRef{plan_hash, node, element: [int >= 0]}], inputs: [{port:
+  "content:<64hex>" | "output:<64hex>"}] (one per job, in the order of jobs), upstream: {"output:<64hex>":
+  UpstreamRef{key_digest, outputs: <the stored entry's output identity>, port}} (exactly the output identities the
+  jobs read, alone or gathered, each equal to its ref's port identity), gathered: {"gather:<64hex>":
+  ["output:<64hex>", ...]} (each gather input the jobs read, with its element port identities in element order),
+  placement: NodePlacement (`placement@1.0`'s node record),
+  attempt: int >= 1}`. Every job names the fragment's plan hash and node, once. Identities only, never values or
+  pickled objects. Not an identity: no identity tag; the plan hash is unchanged. `port_value: false`. Results come
+  back as `ResultRef{job, key_digest, output_identity | failure: FaultRecord{fault, type, message, gap, charged}}`;
+  `charged` is true only for a typed content fault that is not a gap. Results and failures are run-scoped and a
+  failure is never stored (ruling P3-26).
+- Identity tag `port-output@1` (new): an `output:` input identity names one output port of one upstream job,
+  `"output:" + identity_digest("port-output@1", {"key": <upstream key digest>, "port": <port>})`. The upstream
+  execution context never enters it.
+- Identity tag `port-gather@1` (new): a gathered input's identity is `"gather:" + identity_digest("port-gather@1",
+  [<element port-output identities, in element order>])`. A logical key's input is now `content:`, `output:` or
+  `gather:` and 64 hex digits.
