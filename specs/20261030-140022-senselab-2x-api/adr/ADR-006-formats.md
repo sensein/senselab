@@ -418,3 +418,41 @@ profile formats (`tolerance@`, `tolerance-observations@`, `tolerance-coverage@`)
 - Identity tag `profile-slice@1`: a declared profile slice's identity is `"profile:" + identity_digest("profile-slice@1",
   <slice value>)`. A task declares slices as `run.<path>` (run config settings) or `dataset.<path>` (dataset profile);
   only declared slices are read (I-1).
+
+## Amendment 2026-11-05: placement, profiles, catalogue, resource tables (Phase 3 Task 8)
+
+- **`placement@1.0`** (new). A plan's placement document: `profile_digest` (the canonical digest of the execution
+  profile placed under); `nodes: {node id -> NodePlacement{backend, backend_version, backend_params, stack, env (host
+  | <kind>:<name>), device, batch_size, resource_class, partition, env_root, why}}`; `env_builds` (the `<kind>:<name>`
+  envs not yet built); `licenses: {node id -> LicenseSet{records: {subject -> License | null}}}`, the node's own env and
+  model licenses unioned with every upstream node's; and `cost: Cost{wall_s, gpu_hours, download_bytes, unmeasured}`.
+  A figure is null when a node or model it needs has no resource table, and is never estimated. Placement never enters
+  an identity: `build_key` reads none of `device`, `env_root`, `why`, `resource_class`, `batch_size` or `partition`,
+  and the plan hash is the `logical-plan@1.0` hash. No identity tag. `port_value: false`.
+- **`execution-profile@2.0`** (major; `execution-profile@1` retired, refused with `ProfileFormatRetired`). Adds, each
+  with a derivation in `config-derivations.md`: `resource_classes: {name -> ResourceClass{device, gpu_type, cpus,
+  mem_bytes, time_s, partition, gres, max_workers, memory_cap_bytes}}`, where a name is `cpu`, `mps`, `gpu`,
+  `gpu:<type>` or `svc:<id>`, optionally `:<variant>`, and must match the class's device and GPU type;
+  `substrate{kind: local | slurm, qos_cpu_cap, exclude_nodes}`; `pool{quantum_items, quantum_s, poll_s,
+  lease_renew_fraction, segment_items}`; `faults{content_attempts, infrastructure_replacements,
+  resource_replacements}`; `timeouts{load_s, request_s}` (null for no bound, passed to the worker client); and
+  `services{idle_exit_s}`. All the 1.0 keys are kept. Migration: rewrite the file as 2.0. Migrating one is not reading
+  it.
+- **`catalogue@2.0`** (major; `catalogue@1` retired, refused with `CatalogueFormatRetired`). An entry is `{id, revision,
+  tasks, backends, stacks, license, default_for}`, and the inline `resources` field is dropped. Measured resources are
+  `resource-table@1.0` files joined to entries by `(id, revision)`. A catalogue file holds no tables. Migration: drop
+  each entry's `resources`.
+- **`resource-table@1.0`** (new). A generated file `data/resources/<task>/<backend>.yaml`, never hand-edited:
+  `{task, backend, rows: [{id, revision, download_bytes, classes: {resource class -> {load_s, peak_memory_bytes,
+  s_per_input_s}}, measured: {sha (40-hex), jobs}}]}`. `id` and `revision` are both null for a backend without a model.
+  A row's model must be pinned by a catalogue entry serving that task and backend. A table's path must match its task
+  and backend. `port_value: false`.
+- **`senselab-vocab@1.4`** (minor, additive). Adds `senselab:unlicensedReuse` (domain `senselab:Reuse`, range
+  `xsd:boolean`): the stored result served records no env license, and the run's license policy allowed it.
+- **`context@4`** (identity tag; replaces `context@3`). The context fingerprint adds whether an env license is
+  recorded, so a recompute after a refused unlicensed hit gets its own slot. Logical keys and the plan hash are
+  unchanged; every stored entry is recomputed once.
+- Execution profiles carry no derivation prose: the loader neither requires nor reads `derivations`, an override
+  carrying one is refused (`UnknownProfileKey`), and each key's derivation is in `config-derivations.md`, with a
+  one-line `#` comment per key in the YAML. `plan(hardware=...)` places under a given hardware probe and never enters
+  the plan hash. A license union that cannot be formed raises `LicenseConflict`, naming the node.
