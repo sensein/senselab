@@ -45,7 +45,7 @@ from senselab.audio.workflows.triage.task_catalogue import ResolvedTask, task_fr
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD, standing_task_extents
 from senselab.utils import fastio
 
-SCHEMA_VERSION = 31
+SCHEMA_VERSION = 32
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -1103,6 +1103,113 @@ def evaluation_bounds() -> dict[str, Any]:
     return dict(yaml.safe_load(path.read_text(encoding="utf-8")))
 
 
+COHORT_READING_NAME = "cohort_reading"
+COUGH_READING_NAME = "airway_cough_reading"
+DDK_READING_NAME = "ddk_task_reading"
+PHONATION_READING_NAME = "voice_phonation_reading"
+"""The readings the fit columns copy: COHORT's, AIRWAY's cough, SPEECH's syllable task and VOICE's phonation (the
+names their writers give them; ``recording_vectors_test`` checks they agree)."""
+
+CONSISTENCY_CHECK = "session_speaker_consistency"
+"""The COHORT check whose cosine ``cohort_session_consistency_cosine`` copies."""
+
+FIT_COLUMNS = (
+    "cohort_participant_rms_dbfs_median",
+    "cohort_participant_clipped_fraction",
+    "cohort_session_level_shift_db",
+    "cohort_session_snr_shift_db",
+    "cohort_session_consistency_cosine",
+    "cohort_participant_nonmatch_fraction",
+    "cohort_participant_compared_n",
+    "cough_event_s_median",
+    "ddk_syllable_rate_hz",
+    "ddk_task_found",
+    "count_in_gap_s",
+    "lexical_words_per_s",
+)
+"""The columns ``scripts/fit_profile.py`` fits a profile's corpus statistics from (plan step 10)."""
+
+
+def _block(value: Any) -> Mapping[str, Any]:  # noqa: ANN401 -- a stored attribute
+    """A stored mapping, or an empty one where the attribute is absent or not a mapping."""
+    return value if isinstance(value, Mapping) else {}
+
+
+def _shift(own: Any, other: Any, key: str) -> float | None:  # noqa: ANN401 -- stored blocks
+    """A session's summary less the other sessions', each a stored 2-decimal median; the difference is not rounded
+    again, as B2AI's fit took it (``cohort_fold.condition_shift`` rounds it for its own comparison)."""
+    if not isinstance(own, Mapping) or not isinstance(other, Mapping):
+        return None
+    a, b = own.get(key), other.get(key)
+    return None if a is None or b is None else float(a) - float(b)
+
+
+def _fit_columns(view: StoreView) -> dict[str, Any]:
+    """The readings a profile's corpus statistics are fitted from, one recording's (plan step 10).
+
+    Args:
+        view: The store.
+
+    Returns:
+        Every :data:`FIT_COLUMNS` column but ``lexical_words_per_s``: COHORT's participant and session readings
+        (repeated on each of their recordings), the median cough event, the syllable rate and whether the syllable
+        task was found, and the gap from a voice task's count-in to its phonation; None where the store has none.
+    """
+    cohort = view.last("measurement", name=COHORT_READING_NAME)
+    reading = _block(cohort.attributes if cohort is not None else None)
+    condition = _block(reading.get("condition"))
+    participant = _block(condition.get("participant"))
+    nonmatch = _block(reading.get("participant_nonmatch"))
+    consistency = _block(_block(reading.get("checks")).get(CONSISTENCY_CHECK))
+    compared = [c for c in consistency.get("comparisons") or () if isinstance(c, Mapping)]
+    cosine = compared[0].get("value") if compared else consistency.get("cosine")
+
+    cough = view.last("measurement", name=COUGH_READING_NAME)
+    events = (((cough.attributes.get("reading") or {}).get("evidence") or {}).get("events") or ()) if cough else ()
+    durations = [float(e["end_s"]) - float(e["start_s"]) for e in events if isinstance(e, Mapping)]
+
+    ddk = view.last("measurement", name=DDK_READING_NAME)
+    rate = ((ddk.attributes.get("annotations") or {}).get("syllable_rate_hz")) if ddk is not None else None
+
+    phonation = view.last("measurement", name=PHONATION_READING_NAME)
+    count_in = phonation.attributes.get("count_in") if phonation is not None else None
+    extent = phonation.attributes.get("extent") if phonation is not None else None
+    gap = (
+        round(float(extent["start_s"]) - float(count_in[1]), 3)
+        if isinstance(count_in, (list, tuple)) and len(count_in) == 2 and isinstance(extent, Mapping)
+        else None
+    )
+    return {
+        "cohort_participant_rms_dbfs_median": _number(participant.get("rms_dbfs_median")),
+        "cohort_participant_clipped_fraction": _number(participant.get("clipped_fraction")),
+        "cohort_session_level_shift_db": _shift(
+            condition.get("session"), condition.get("other_sessions"), "rms_dbfs_median"
+        ),
+        "cohort_session_snr_shift_db": _shift(
+            condition.get("session"), condition.get("other_sessions"), "snr_db_median"
+        ),
+        "cohort_session_consistency_cosine": _number(cosine),
+        "cohort_participant_nonmatch_fraction": _number(nonmatch.get("nonmatch_fraction")),
+        "cohort_participant_compared_n": nonmatch.get("recordings_compared_n"),
+        "cough_event_s_median": round(float(np.median(durations)), 4) if durations else None,
+        "ddk_syllable_rate_hz": _number(rate),
+        "ddk_task_found": None if ddk is None else ddk.attributes.get("decision") != "absent",
+        "count_in_gap_s": gap,
+    }
+
+
+def _lexical_words_per_s(view: StoreView, response_s: Any) -> float | None:  # noqa: ANN401 -- a table value
+    """Lexical consensus words per second of the response (``gate_response_min_s``), or None without one."""
+    if (
+        not isinstance(response_s, (int, float))
+        or not response_s
+        or view.last("measurement", name="consensus_transcript") is None
+    ):
+        return None
+    lexical = [e for e in view.live("word") if not e.attributes.get("bracketed") and not e.attributes.get("degenerate")]
+    return round(len(lexical) / float(response_s), 4)
+
+
 def _extent_columns(view: StoreView, duration_s: float | None) -> dict[str, Any]:
     """Where the task sits in the recording, and how much could be trimmed around it.
 
@@ -1480,6 +1587,8 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
     row.update(clip)
     row.update(_quality_columns(run_dir, view, clip))
     row.update(_multi_speaker_columns(view, decision, row.get("secondary_extent_s")))
+    row.update(_fit_columns(view))
+    row["lexical_words_per_s"] = _lexical_words_per_s(view, row.get("gate_response_min_s"))
     if anomalies is not None:
         for name in readings:
             if name not in MEASUREMENTS:
@@ -1815,6 +1924,18 @@ def _fields() -> list[pa.Field]:
         pa.field("pii_category", pa.list_(pa.string())),
         pa.field("branch_lanes", pa.binary()),
         pa.field("branch_lane_role", pa.list_(pa.string())),
+        pa.field("cohort_participant_rms_dbfs_median", pa.float64()),
+        pa.field("cohort_participant_clipped_fraction", pa.float64()),
+        pa.field("cohort_session_level_shift_db", pa.float64()),
+        pa.field("cohort_session_snr_shift_db", pa.float64()),
+        pa.field("cohort_session_consistency_cosine", pa.float64()),
+        pa.field("cohort_participant_nonmatch_fraction", pa.float64()),
+        pa.field("cohort_participant_compared_n", pa.int32()),
+        pa.field("cough_event_s_median", pa.float64()),
+        pa.field("ddk_syllable_rate_hz", pa.float64()),
+        pa.field("ddk_task_found", pa.bool_()),
+        pa.field("count_in_gap_s", pa.float64()),
+        pa.field("lexical_words_per_s", pa.float64()),
     ]
     return fields
 

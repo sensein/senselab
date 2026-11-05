@@ -174,7 +174,7 @@ def replaced_task(inputs: ReplacedTaskInputs, params: Mapping[str, Any] | None =
         if drowned is not None:
             return drowned
         block = p[RULE_NON_LEXICAL]
-        if not inputs.duration_s or inputs.talk_words_n is None:
+        if not inputs.duration_s or inputs.talk_words_n is None or block.get("free_speech_words_per_s") is None:
             return None
         talk = float(inputs.talk_words_n) / float(inputs.duration_s) / float(block["free_speech_words_per_s"])
         weak = inputs.task_mismatch or (

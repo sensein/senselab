@@ -7,6 +7,11 @@
 #            adult_clinical_speech profile carries a set fitted on Bridge2AI-Voice adult
 #         d  per task
 #   unit, means, fit: what the value is and how a dataset sets it (the template writes them beside each blank).
+#   method: for a kind-b value, how scripts/fit_profile.py computes it from a pilot run's corpus table (fit.py):
+#         the column; one value per recording, session or participant (`per`); an optional `where` filter, task
+#         filter (`tasks`, matched against the task list's `expects`) and `absolute`; the statistic (median,
+#         percentile at `q`, percentile_band at `q: [low, high]`, tukey_upper / tukey_lower with k = 1.5); `by`
+#         for one value per task family; `clamp`; and the decimals it is rounded to.
 #   required: false where the value switches a feature off or nothing reads it yet, so it may stay empty.
 #   stages: the stages that read the value, where only stages a workflow may leave off do (workflow.py); a required
 #         value is asked for only when one of them runs. No stages: read whatever runs.
@@ -675,6 +680,7 @@ values:
     unit: "fraction (0-1)"
     means: "Share of a participant's or session's recordings holding clip spans at or above which it is marked clipped."
     fit: "Tukey upper fence (Q3 + 1.5 IQR) of the per-participant share of recordings with clip spans over a pilot corpus."
+    method: {column: cohort_participant_clipped_fraction, per: participant, statistic: tukey_upper, decimals: 3}
   - path: ["condition", "hot_rms_dbfs_min"]
     kind: b
     required: true
@@ -682,6 +688,7 @@ values:
     unit: "dBFS"
     means: "Participant or session median RMS level at or above which its recordings are marked too hot."
     fit: "Tukey upper fence (Q3 + 1.5 IQR) of the per-participant median whole-file RMS over a pilot corpus."
+    method: {column: cohort_participant_rms_dbfs_median, per: participant, statistic: tukey_upper, decimals: 3}
   - path: ["condition", "shift_level_db_min"]
     kind: b
     required: true
@@ -689,6 +696,7 @@ values:
     unit: "dB"
     means: "Session median level this far from the participant's other sessions marks a recording-condition shift."
     fit: "Tukey upper fence (Q3 + 1.5 IQR) of |session median level - other sessions' median| over the multi-session participants of a pilot corpus."
+    method: {column: cohort_session_level_shift_db, per: session, absolute: true, statistic: tukey_upper, decimals: 3}
   - path: ["condition", "shift_snr_db_min"]
     kind: b
     required: true
@@ -696,6 +704,7 @@ values:
     unit: "dB"
     means: "Session median envelope SNR this far from the participant's other sessions marks a recording-condition shift."
     fit: "Tukey upper fence (Q3 + 1.5 IQR) of |session median SNR - other sessions' median| over the multi-session participants of a pilot corpus."
+    method: {column: cohort_session_snr_shift_db, per: session, absolute: true, statistic: tukey_upper, decimals: 3}
   - path: ["enrollment", "leave_one_out_min"]
     kind: c
     required: true
@@ -731,6 +740,7 @@ values:
     unit: "cosine"
     means: "Session-to-other-sessions enrollment cosine below which the session's speaker is inconsistent."
     fit: "Tukey lower fence (Q1 - 1.5 IQR) of the session-versus-other-sessions enrollment cosine over a pilot corpus; not fitted against labels."
+    method: {column: cohort_session_consistency_cosine, per: session, statistic: tukey_lower, decimals: 2}
   - path: ["shared_nonmatch", "fraction_min"]
     kind: b
     required: true
@@ -738,6 +748,7 @@ values:
     unit: "fraction (0-1)"
     means: "Share of a participant's compared recordings with a speaker non-match at which the non-match counts as shared."
     fit: "Tukey upper fence (Q3 + 1.5 IQR) of the per-participant non-match share over participants with any non-match in a pilot corpus."
+    method: {column: cohort_participant_nonmatch_fraction, per: participant, statistic: tukey_upper, decimals: 3, clamp: [0, 1], where: [{column: cohort_participant_nonmatch_fraction, op: gt, value: 0}, {column: cohort_participant_compared_n, op: ge, setting: [shared_nonmatch, recordings_min]}]}
   - path: ["speech", "score_min"]
     kind: c
     required: true
@@ -1492,7 +1503,8 @@ values:
     required: true
     unit: "words per second"
     means: "Typical speaking rate, used as the reference rate for talk outside a task."
-    fit: "Median consensus words per second over a pilot corpus's free-speech, picture-description and open-response recordings."
+    fit: "Median lexical consensus words per second of the response over a pilot corpus's free-response recordings (the task list's free_response pattern)."
+    method: {column: lexical_words_per_s, per: recording, statistic: median, decimals: 2, tasks: {pattern: free_response}}
   - path: ["non_lexical", "talk_fraction_min"]
     kind: c
     required: true
@@ -1505,6 +1517,13 @@ values:
     unit: "fraction (0-1, of the family median)"
     means: "A free response shorter than this share of its task's median length is a short response."
     fit: "Tuned by listening to labelled recordings: whether a free response is too short to be the task; no derivation written; the reference profile carries the value set on adult clinical speech."
+  - path: ["short_response", "family_median_s"]
+    kind: b
+    required: false
+    unit: "s, by task family"
+    means: "Each free-response task's median response length, against which a short response is measured; a task without one is not read."
+    fit: "Median of the response length (the gate response_min_s reading) per task family over a pilot corpus's free-response recordings."
+    method: {column: gate_response_min_s, per: recording, statistic: median, decimals: 2, by: declared_family, tasks: {pattern: free_response}}
   quality_join.yaml:
   - path: ["abut_s"]
     kind: c
@@ -1938,14 +1957,16 @@ values:
     stages: [AIRWAY]
     unit: "s"
     means: "Median cough-event length above which an attempted cough task is atypical."
-    fit: "97.5th percentile of the per-recording median cough-event duration over a pilot corpus's cough recordings."
+    fit: "97.5th percentile of the per-recording median cough-event duration over a pilot corpus's cough recordings, every cough task pooled."
+    method: {column: cough_event_s_median, per: recording, statistic: percentile, q: 97.5, decimals: 3}
   - path: ["atypical", "ddk_rate_hz"]
     kind: b
     required: true
     stages: [SPEECH]
     unit: "Hz range [min, max] (syllables per second)"
     means: "Syllable-rate range outside which an attempted syllable-repetition task is atypical."
-    fit: "2.5th to 97.5th percentile of the syllable rate over a pilot corpus's syllable-repetition recordings."
+    fit: "2.5th to 97.5th percentile of the syllable rate over a pilot corpus's syllable-repetition recordings where the task was found."
+    method: {column: ddk_syllable_rate_hz, per: recording, statistic: percentile_band, q: [2.5, 97.5], decimals: 3, where: [{column: ddk_task_found, op: eq, value: true}]}
   - path: ["completeness", "onset_tolerance_s"]
     kind: c
     required: true
@@ -2019,7 +2040,8 @@ values:
     stages: [VOICE]
     unit: "s"
     means: "Longest gap between the count-in's end and phonation onset for the count-in to join the extent."
-    fit: "About the 99th percentile of the count-in-end to phonation-onset gap over a pilot corpus's voice recordings with a count-in."
+    fit: "99th percentile of the count-in-end to phonation-onset gap over a pilot corpus's voice recordings with a count-in (an overlap counts as a negative gap)."
+    method: {column: count_in_gap_s, per: recording, statistic: percentile, q: 99, decimals: 3}
   - path: ["edges", "bridge_s"]
     kind: c
     required: true

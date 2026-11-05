@@ -13,6 +13,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     load_profile,
     missing_dataset_values,
     profile_values,
+    unfitted_values,
 )
 from senselab.audio.workflows.triage.profile_template import REFERENCE_PROFILE, values_to_supply, write_template
 from tests.conftest import B2AI_TRIAGE_PROFILE
@@ -56,13 +57,17 @@ class TestTheTemplate:
         assert "tasks.yaml tasks (the task list names no task)" in missing
         assert "review_policy.txt (still the template: write your own)" in missing
         values = [item for item in missing if item.split()[0] not in {"tasks.yaml", "review_policy.txt"}]
-        assert len(values) == 39, "the dataset files' values too"
+        unfitted = unfitted_values()
+        assert len(values) + len(unfitted) == 39, "the dataset files' values too"
+        assert manifest["pilot"] is True and len(unfitted) == 10, "a pilot is not asked for its corpus statistics"
 
     def test_each_blank_carries_its_kind(self, tmp_path: Path) -> None:
         """A dataset reads, beside each blank, how it is set."""
         root = write_template(tmp_path / "new", name="new-dataset")
         text = (root / "cohort_stage.yaml").read_text()
-        assert "[compute from your own recordings (a pilot run)]" in text
+        assert (
+            "[compute from your own recordings: leave blank, run a pilot, then scripts/fit_profile.py fits it]" in text
+        )
         assert "clipped_fraction_min:" in text
 
     def test_an_existing_directory_is_refused(self, tmp_path: Path) -> None:
@@ -118,7 +123,7 @@ class TestTheTemplate:
         values = load_triage_config(profile=root).values
         assert set(off).isdisjoint(values["workflow"]["stages"])
         missing = missing_dataset_values(values)
-        asked = sum(len(entries) for entries in values_to_supply(off=off).values())
+        asked = sum(1 for entries in values_to_supply(off=off).values() for entry in entries if entry["kind"] != "b")
         assert len([item for item in missing if item.split()[0] not in {"tasks.yaml", "review_policy.txt"}]) == asked
 
     def test_without_review_the_reviewers_files_are_neither_written_nor_asked_for(self, tmp_path: Path) -> None:

@@ -1730,6 +1730,91 @@ columns:
     source: [recording_vectors.py:_branch_lanes, recording_vectors.py:role_kind]
     null_means: As `branch_lanes`.
 
+  # The readings scripts/fit_profile.py fits a profile's corpus statistics from (plan step 10). COHORT's
+  # participant and session readings are repeated on each of their recordings; the fit takes one per group.
+  cohort_participant_rms_dbfs_median:
+    units: dBFS
+    description: The participant's median whole-file RMS level over their recordings, as COHORT read it.
+    computation: The `condition.participant.rms_dbfs_median` of the recording's live `cohort_reading` (2 decimals).
+    source: [recording_vectors.py:_fit_columns, cohort_stage.py:condition_summary]
+    null_means: No COHORT reading (no corpus pass ran), or the reading has none for this scope.
+  cohort_participant_clipped_fraction:
+    units: fraction (0-1)
+    description: The share of the participant's recordings holding a clip span, as COHORT read it.
+    computation: The `condition.participant.clipped_fraction` of the recording's live `cohort_reading` (4 decimals).
+    source: [recording_vectors.py:_fit_columns, cohort_stage.py:condition_summary]
+    null_means: No COHORT reading (no corpus pass ran), or the reading has none for this scope.
+  cohort_session_level_shift_db:
+    units: dB
+    description: The session's median RMS level less the participant's other sessions' (signed).
+    computation: >-
+      `condition.session.rms_dbfs_median` less `condition.other_sessions.rms_dbfs_median` of the live
+      `cohort_reading` (two 2-decimal medians; the difference is not rounded again).
+    source: [recording_vectors.py:_fit_columns, cohort_fold.py:condition_shift]
+    null_means: No COHORT reading (no corpus pass ran), or the reading has none for this scope. A participant with one declared session has no other sessions.
+  cohort_session_snr_shift_db:
+    units: dB
+    description: The session's median envelope SNR less the participant's other sessions' (signed).
+    computation: As `cohort_session_level_shift_db`, over `snr_db_median`.
+    source: [recording_vectors.py:_fit_columns, cohort_fold.py:condition_shift]
+    null_means: As `cohort_session_level_shift_db`.
+  cohort_session_consistency_cosine:
+    units: cosine
+    description: The session's speaker enrollment against the participant's other sessions'.
+    computation: >-
+      The `session_speaker_consistency` check of the live `cohort_reading`: its comparison's value, or, where
+      the bound is unset (a pilot run), the `cosine` it records.
+    source: [recording_vectors.py:_fit_columns, cohort_stage.py:consistency_check]
+    null_means: No COHORT reading (no corpus pass ran), or the reading has none for this scope. Under two enrolled sessions, or a session that did not enroll, there is no cosine.
+  cohort_participant_nonmatch_fraction:
+    units: fraction (0-1)
+    description: The share of the participant's compared recordings holding a speaker non-match.
+    computation: The `participant_nonmatch.nonmatch_fraction` of the live `cohort_reading` (4 decimals).
+    source: [recording_vectors.py:_fit_columns, cohort_stage.py:participant_nonmatch]
+    null_means: No COHORT reading (no corpus pass ran), or the reading has none for this scope. None of the participant's recordings was compared.
+  cohort_participant_compared_n:
+    units: count
+    description: How many of the participant's recordings were compared against their enrollment.
+    computation: The `participant_nonmatch.recordings_compared_n` of the live `cohort_reading`.
+    source: [recording_vectors.py:_fit_columns, cohort_stage.py:participant_nonmatch]
+    null_means: No COHORT reading (no corpus pass ran), or the reading has none for this scope.
+  cough_event_s_median:
+    units: s
+    description: The median duration of the cough events AIRWAY found.
+    computation: >-
+      The median `end_s - start_s` of the `reading.evidence.events` of the live `airway_cough_reading`
+      (4 decimals), the duration VERDICT's atypical check reads.
+    source: [recording_vectors.py:_fit_columns, nodes/verdict.py:atypical_readings]
+    null_means: No cough reading, or one with no event.
+  ddk_syllable_rate_hz:
+    units: Hz
+    description: The syllable rate of the syllable-repetition task, as VERDICT's atypical check reads it.
+    computation: The `annotations.syllable_rate_hz` of the live `ddk_task_reading`.
+    source: [recording_vectors.py:_fit_columns, nodes/verdict.py:atypical_readings]
+    null_means: No syllable-task reading, or one with no rate.
+  ddk_task_found:
+    units: none
+    description: Whether the syllable-task reading found the task (its decision is not `absent`).
+    computation: The live `ddk_task_reading`'s `decision` is not `absent`.
+    source: [recording_vectors.py:_fit_columns, nodes/verdict.py:atypical_readings]
+    null_means: No syllable-task reading.
+  count_in_gap_s:
+    units: s
+    description: From the end of a voice task's count-in to the start of its phonation (negative where they overlap).
+    computation: >-
+      The live `voice_phonation_reading`'s `extent.start_s` less the end of its `count_in` (3 decimals), the
+      gap VOICE compares with `count_in.gap_max_s`.
+    source: [recording_vectors.py:_fit_columns, voice_phonation.py:voice_task_extent]
+    null_means: No phonation reading, or no count-in or phonation extent placed.
+  lexical_words_per_s:
+    units: words/s
+    description: Lexical consensus words per second of the response.
+    computation: >-
+      The live consensus words that are neither bracketed nor degenerate, divided by `gate_response_min_s`
+      (the hull of the lexical words; 4 decimals).
+    source: [recording_vectors.py:_lexical_words_per_s]
+    null_means: No consensus transcript, or no response duration.
+
 families:
   measurement:
     about: >-

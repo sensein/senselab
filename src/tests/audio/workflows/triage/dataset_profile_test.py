@@ -462,3 +462,82 @@ class TestValuesFollowTheWorkflow:
         (root / "tasks.yaml").unlink()
         missing = missing_dataset_values(config.values)
         assert "tasks.yaml (the profile lists it, but the file is absent)" in missing
+
+
+class TestAPilotAndItsFit:
+    """Plan step 10: a pilot leaves its corpus statistics empty; fitted.yaml supplies them, under its own files."""
+
+    def _reference(self) -> list[str]:
+        config = load_triage_config(profile="senselab:adult_clinical_speech")
+        missing = missing_dataset_values(config.values)
+        deactivate_profile()
+        return missing
+
+    def test_a_pilot_is_not_asked_for_its_corpus_statistics_and_lists_them_unfitted(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """The same profile, marked a pilot, is asked for every value but the kind-b ones, which it names."""
+        from senselab.audio.workflows.triage.dataset_profile import FITTED_KIND, unfitted_values
+
+        kind_b = {
+            f"{relative} {'.'.join(entry['path'])}"
+            for relative, entries in profile_values().items()
+            for entry in entries
+            if entry.get("kind") == FITTED_KIND and entry.get("required")
+        }
+        asked = set(self._reference())
+        assert kind_b <= asked
+        root = _profile(tmp_path / "p", {"name": "lab", "version": "0", "extends": "senselab:adult_clinical_speech"})
+        manifest = yaml.safe_load((root / "profile.yaml").read_text())
+        (root / "profile.yaml").write_text(yaml.safe_dump({**manifest, "pilot": True}))
+        config = load_triage_config(profile=root)
+        assert set(missing_dataset_values(config.values)) == asked - kind_b
+        assert set(unfitted_values()) == kind_b
+        deactivate_profile()
+
+    def test_a_pilot_flag_that_is_not_true_or_false_is_refused(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """``pilot: yes please`` is a typo, not a pilot."""
+        root = _profile(tmp_path / "p", {"name": "lab", "version": "0", "pilot": "yes please"})
+        with pytest.raises(ValueError, match="pilot is true or false"):
+            load_profile(root)
+
+    def test_fitted_values_sit_over_the_base_and_under_the_profiles_own_files(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """A fitted count-in gap is read; a value the profile writes itself wins over its fitted one."""
+        fitted = {
+            "values": {"task_extent.yaml": {"count_in": {"gap_max_s": 2.9}, "atypical": {"cough_event_s_max": 1.5}}}
+        }
+        root = _profile(
+            tmp_path / "p",
+            {
+                "name": "lab",
+                "version": "0",
+                "extends": "senselab:adult_clinical_speech",
+                "files": {"task_extent.yaml": "task_extent.yaml"},
+            },
+            {"task_extent.yaml": "count_in:\n  gap_max_s: 3.0\n", "fitted.yaml": yaml.safe_dump(fitted)},
+        )
+        profile = load_profile(root)
+        before = profile.digest
+        activate_profile(profile)
+        values = data_values("task_extent.yaml")
+        assert values["count_in"]["gap_max_s"] == 3.0, "the profile's own value wins"
+        assert values["atypical"]["cough_event_s_max"] == 1.5, "the fitted value fills what the profile leaves"
+        deactivate_profile()
+        (root / "fitted.yaml").write_text(
+            yaml.safe_dump({"values": {"task_extent.yaml": {"atypical": {"cough_event_s_max": 1.6}}}})
+        )
+        assert load_profile(root).digest != before, "a refit changes the profile's digest"
+
+    def test_a_fitted_file_naming_no_value_file_is_refused(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """A fit writes only senselab's value files, never the task list."""
+        root = _profile(
+            tmp_path / "p",
+            {"name": "lab", "version": "0"},
+            {"fitted.yaml": yaml.safe_dump({"values": {"tasks.yaml": {}}})},
+        )
+        with pytest.raises(ValueError, match="not a value file a fit writes"):
+            load_profile(root)

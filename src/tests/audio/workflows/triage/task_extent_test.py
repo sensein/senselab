@@ -199,6 +199,13 @@ class TestVoice:
         assert on.task_extent == (0.88, 11.6) and on.check["status"] == COMPLETE
         assert off.task_extent is None and off.check["status"] == TOO_NARROW
 
+    def test_a_pilot_without_a_fitted_gap_takes_no_count_in(self) -> None:
+        """Plan step 10: with ``count_in.gap_max_s`` unfitted the count-in stays out of the extent."""
+        unfitted = _on(count_in=True)
+        unfitted["count_in"]["gap_max_s"] = None
+        read = voice_task_extent(self._reading(), (0.88, 3.39), unfitted)
+        assert read.task_extent is None and read.check["status"] == TOO_NARROW
+
     def test_a_count_in_inside_the_extent_stays_out_of_the_speaker_comparison(self) -> None:
         """A3: a voice family's target pool is empty, so a count-in inside its extent is compared with nothing."""
         from senselab.audio.workflows.triage.cohort_stage import TARGET_NONE, target_rule

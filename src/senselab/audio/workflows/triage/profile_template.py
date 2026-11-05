@@ -26,6 +26,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     CONFIG_FILE,
     MANIFEST,
     PACKAGED_DATA,
+    PILOT_KEY,
     REQUIRED_DATASET_PATHS,
     SENSELAB_PROFILE,
     DatasetDataMissing,
@@ -46,7 +47,7 @@ REFERENCE_PROFILE = "senselab:adult_clinical_speech"
 
 KIND_LABELS = {
     "a": "decide: your dataset's policy",
-    "b": "compute from your own recordings (a pilot run)",
+    "b": "compute from your own recordings: leave blank, run a pilot, then scripts/fit_profile.py fits it",
     "c": "tune by listening or labelled recordings",
     "d": "per task in your task list",
 }
@@ -267,7 +268,7 @@ def write_template(
         header = [f"# {name}: the senselab configuration this dataset changes (template written {written})."]
         (root / "config.yaml").write_text("\n".join([*header, *workflow]) + "\n")
         config = "config.yaml"
-    manifest: dict[str, Any] = {"name": name, "version": "0"}
+    manifest: dict[str, Any] = {"name": name, "version": "0", PILOT_KEY: True}
     if reference is not None:
         manifest["extends"] = reference
     manifest["provenance"] = {"template": "senselab triage profile template", "written": written}
@@ -276,7 +277,9 @@ def write_template(
     manifest["files"] = dict(sorted(files.items()))
     head = (
         f"# The {name} dataset profile, written from senselab's template. Fill in tasks.yaml and every blank value;\n"
-        "# each blank carries what it means and how to set it.\n"
+        "# each blank carries what it means and how to set it. It starts as a pilot (pilot: true): a run may leave\n"
+        "# the values computed from your own recordings (kind b) blank. Run a pilot, the COHORT pass and the corpus\n"
+        "# table, then scripts/fit_profile.py writes them into fitted.yaml; replay the pilot and remove pilot: true.\n"
     )
     (root / MANIFEST).write_text(head + yaml.safe_dump(manifest, sort_keys=False))
     return root
