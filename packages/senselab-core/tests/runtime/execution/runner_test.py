@@ -18,6 +18,7 @@ from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_pack
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution.events import EventLog, read_events
 from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status
 from senselab_core.runtime.execution.in_process import InProcess, node_fragment
 from senselab_core.runtime.execution.workers import WorkerSet
@@ -92,6 +93,7 @@ class Recording:
 
     def __init__(self, store: ResultStore, profile: ExecutionProfile = PROFILE) -> None:
         """Run on an `InProcess` executor over `store` under `profile`."""
+        self.store = store
         self.inner = InProcess(store=store, profile=profile, run=RunConfig(), workers=WORKERS)
         self.fragments: list[PlanFragment] = []
         self.telemetry: list[str | None] = []
@@ -157,12 +159,12 @@ def _run(
     placed: Plan, values: Mapping[str, object], tmp_path: Path, profile: ExecutionProfile = PROFILE, **kw: object
 ) -> tuple[Any, Recording, list[Any]]:
     executor = Recording(ResultStore(tmp_path / "store"), profile)
-    events: list[Any] = []
+    events = EventLog(tmp_path / "run")
     work = tmp_path / "pydra"
     status = runner.PydraRunner(profile=profile, work_dir=work).run_plan(
         placed, executor, values=values, events=events, **kw
     )
-    return status, executor, events
+    return status, executor, read_events(tmp_path / "run")
 
 
 CHAINED = [("a", SCORE), ("b", CHAIN)]
@@ -190,7 +192,7 @@ def test_map_node_submits_one_fragment_per_batch(tmp_path: Path) -> None:
     """Five records at batch size 2: each mapped node is sent as fragments of 2, 2 and 1 jobs, every element once."""
     placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": f"t{i}"} for i in range(5)])
     status, executor, _ = _run(_batched(placed, 2), values, tmp_path)
-    assert executor.sizes("a") == [2, 2, 1]
+    assert sorted(executor.sizes("a")) == [1, 2, 2]
     assert sum(executor.sizes("b")) == 5 and max(executor.sizes("b")) <= 2
     assert status.done and [r.job.element for r in status.results["b"]] == [(i,) for i in range(5)]
 
@@ -218,8 +220,8 @@ def test_errored_element_fails_only_its_descendants(tmp_path: Path) -> None:
     assert [r.job.element for r in status.results["b"]] == [(0,), (2,)] and status.blocked["b"] == ((1,),)
     assert len(status.results["c"]) == 3 and status.blocked["c"] == ()
     assert status.blocked["d"] == ((1,),) and status.blocked["g"] == ((),) and not status.done
-    blocked = {(e.job.node, e.job.element) for e in events if e.kind == "blocked"}
-    assert blocked == {("b", (1,)), ("d", (1,)), ("g", ())}
+    assert {(e.node, e.job.element) for e in events if e.kind == "failed" and e.job} == {("a", (1,))}
+    assert {(n, e) for n, elements in status.blocked.items() for e in elements} == {("b", (1,)), ("d", (1,)), ("g", ())}
 
 
 @pytest.mark.contract
@@ -330,7 +332,7 @@ def test_an_executor_error_is_raised_after_the_run(tmp_path: Path) -> None:
     executor = Refusing(ResultStore(tmp_path / "store"))
     with pytest.raises(LookupError, match="refused"):
         runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
-            placed, executor, values=values, events=[]
+            placed, executor, values=values, events=EventLog(tmp_path / "events")
         )
     assert executor.sizes("a") == [1, 1]
 
@@ -433,7 +435,7 @@ def test_a_cancellation_beside_a_failed_element_propagates(tmp_path: Path) -> No
     executor = Cancelling(ResultStore(tmp_path / "store"))
     with pytest.raises(asyncio.CancelledError) as raised:
         runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
-            placed, executor, values=values, events=[]
+            placed, executor, values=values, events=EventLog(tmp_path / "events")
         )
     assert type(raised.value.__cause__).__name__ == "WorkflowError" and executor.sizes("a") == [1, 1]
 
@@ -448,3 +450,33 @@ def test_compile_plan_refuses_a_map_over_a_node_output() -> None:
     with pytest.raises(UnmappedOutput, match="has no identity yet") as raised:
         runner.compile_plan(unplanned)
     assert (raised.value.node, raised.value.source) == ("a", "g.value")
+
+
+@pytest.mark.contract
+def test_a_run_logs_each_job_queued_started_and_finished(tmp_path: Path) -> None:
+    """Every job of a two-node chain is logged `queued`, `started` and `finished` with its key and placement."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "two")])
+    status, _, events = _run(placed, values, tmp_path)
+    for node in ("a", "b"):
+        for element in ((0,), (1,)):
+            kinds = [e.kind for e in events if e.node == node and e.job is not None and e.job.element == element]
+            assert kinds == ["queued", "started", "finished"]
+    finished = [e for e in events if e.kind == "finished"]
+    assert {e.key for e in finished} == {r.key_digest for refs in status.results.values() for r in refs}
+    assert all(e.output is not None and e.placement_digest is not None and e.env == "host" for e in finished)
+
+
+@pytest.mark.contract
+def test_a_set_cancel_sends_no_further_fragment(tmp_path: Path) -> None:
+    """Cancelled before the run, no fragment reaches the executor and the run raises `RunCancelled`."""
+    import threading  # noqa: PLC0415
+
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "two")])
+    executor = Recording(ResultStore(tmp_path / "store"))
+    cancel = threading.Event()
+    cancel.set()
+    with pytest.raises(runner.RunCancelled):
+        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
+            placed, executor, values=values, events=EventLog(tmp_path / "run"), cancel=cancel
+        )
+    assert executor.fragments == []

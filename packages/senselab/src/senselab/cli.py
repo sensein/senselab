@@ -1,4 +1,4 @@
-"""The ``senselab`` command line: ``data fetch`` from core and ``bench run``."""
+"""The ``senselab`` command line: ``data fetch``, ``status`` and ``explain`` from core, and ``bench run``."""
 
 import argparse
 import importlib.util
@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
 
-from senselab_core.cli import mount_data
+from senselab_core.cli import mount_data, mount_runs
 from senselab_core.runtime.fetch import FetchError, default_cache_root
 from senselab_core.runtime.profiles import DEFAULT_PROFILE, ExecutionProfile
 from senselab_core.runtime.revision import cache_root
@@ -90,6 +90,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="senselab")
     groups = parser.add_subparsers(dest="group", required=True)
     mount_data(groups)
+    mount_runs(groups)
     _mount_bench(groups)
     return parser
 

@@ -7,13 +7,13 @@ logical plan under an execution profile on this host (`runtime.placement`), givi
 
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
-from typing import Any
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any
 
-from senselab_core.kernel.dataset import Dataset, InputManifest, ManifestRow
+from senselab_core.kernel.dataset import Dataset, InputManifest, ManifestRow, Record
 from senselab_core.kernel.declare import Registry, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, GraphIssue, Node, validate
-from senselab_core.kernel.identity import ModelRef, ResolvedModel
+from senselab_core.kernel.identity import InputIdentity, ModelRef, ResolvedModel
 from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan, plan_hash
 from senselab_core.runtime.call import (
@@ -27,13 +27,17 @@ from senselab_core.runtime.call import (
     pin_model,
 )
 from senselab_core.runtime.catalogue import Catalogue
-from senselab_core.runtime.datasets import build_manifest
+from senselab_core.runtime.datasets import bound_manifest
 from senselab_core.runtime.explain import explain
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import profile_slices
 from senselab_core.runtime.placement import check_caps, check_licenses, node_licenses, place_nodes, plan_cost
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver
+
+if TYPE_CHECKING:
+    from senselab_core.runtime.execution.executor import Executor
+    from senselab_core.runtime.execution.run import Run
 
 CALL_NODE = "call"
 """The id of the one node a task call is planned as."""
@@ -86,19 +90,21 @@ class InvalidGraph(ValueError):
         self.issues = issues
 
 
-def one_node_graph(call: TaskCall, registry: Registry) -> Graph:
+def one_node_graph(call: TaskCall, registry: Registry, *, every_port: bool = False) -> Graph:
     """Return the one-node graph of `call`: its first input port mapped over the record list, the rest per record.
 
     The node is `call`; the graph input of the first declared input port is `list[T]` and joined by a `map` edge,
-    every other is `T` and joined by a plain edge, and each output port is a graph output of the same name. The
+    every other is `T` and joined by a plain edge, and each output port is a graph output of the same name. With
+    `every_port`, every input port is a `list[T]` joined by a `map` edge, so each record binds every port. The
     node holds the call's params, its per-backend `backend_params` and its model reference as given.
     """
     spec = registry.spec(call.task)
     ports = list(spec.inputs.items())
-    inputs = {port: f"list[{kind}]" if i == 0 else kind for i, (port, kind) in enumerate(ports)}
+    mapped = [every_port or i == 0 for i in range(len(ports))]
+    inputs = {port: f"list[{kind}]" if m else kind for m, (port, kind) in zip(mapped, ports, strict=True)}
     edges = tuple(
-        Edge(source=f"input.{port}", target=f"{CALL_NODE}.{port}", kind="map" if i == 0 else "plain")
-        for i, (port, _) in enumerate(ports)
+        Edge(source=f"input.{port}", target=f"{CALL_NODE}.{port}", kind="map" if m else "plain")
+        for m, (port, _) in zip(mapped, ports, strict=True)
     )
     node = Node(
         id=CALL_NODE,
@@ -144,11 +150,11 @@ def _manifest(  # noqa: PLR0913 - the graph and what binds its inputs
     spec: TaskSpec | None,
     bind: Mapping[str, str],
     inputs: Mapping[str, object],
-) -> InputManifest:
-    """Return the manifest of the records `graph` runs over: the dataset's, or the call's one record.
+) -> tuple[InputManifest, dict[InputIdentity, object], tuple[Record, ...]]:
+    """Return the manifest of the records `graph` runs over, the value of each input identity and the records.
 
-    Over a dataset each row holds its record's identity for every record-bound input and the broadcast identity of
-    every other input.
+    The records are the dataset's, or the call's one. Over a dataset each row holds its record's identity for every
+    record-bound input and the broadcast identity of every other input.
     """
     if dataset is not None:
         if call is not None and call.inputs:
@@ -160,21 +166,27 @@ def _manifest(  # noqa: PLR0913 - the graph and what binds its inputs
             )
         if set(bind) - set(record):
             raise RecordBinding(tuple(sorted(set(bind) - set(record))), "bind names record-bound inputs only")
-        shared = {port: bind_input(port, kind, inputs[port])[0] for port, kind in broadcast.items()}
-        rows = build_manifest(dataset, record, bind=bind).rows
-        return InputManifest(
-            rows=tuple(ManifestRow(id=r.id, entities=r.entities, inputs={**r.inputs, **shared}) for r in rows)
+        bound = {port: bind_input(port, kind, inputs[port]) for port, kind in broadcast.items()}
+        shared = {port: identity for port, (identity, _, _) in bound.items()}
+        built, values = bound_manifest(dataset, record, bind=bind)
+        values.update({identity: value for identity, value, _ in bound.values()})
+        manifest = InputManifest(
+            rows=tuple(ManifestRow(id=r.id, entities=r.entities, inputs={**r.inputs, **shared}) for r in built.rows)
         )
+        return manifest, values, tuple(dataset.records())
     if bind or inputs:
         raise ValueError("bind and inputs name the inputs of a graph over a dataset; there is no dataset")
     if call is None or spec is None:
         if graph.inputs:
             raise ValueError(f"the graph has inputs {sorted(graph.inputs)}; they are bound from a dataset's records")
-        return InputManifest()
+        return InputManifest(), {}, ()
     if set(call.inputs) != set(spec.inputs):
         raise ValueError(f"{call.task!r} takes inputs {sorted(spec.inputs)}; the call gives {sorted(call.inputs)}")
-    identities = {port: bind_input(port, spec.inputs[port], value)[0] for port, value in call.inputs.items()}
-    return InputManifest(rows=(ManifestRow(id=ITEM_ID, entities={}, inputs=identities),))
+    bound = {port: bind_input(port, spec.inputs[port], value) for port, value in call.inputs.items()}
+    identities = {port: identity for port, (identity, _, _) in bound.items()}
+    values = {identity: value for identity, value, _ in bound.values()}
+    manifest = InputManifest(rows=(ManifestRow(id=ITEM_ID, entities={}, inputs=identities),))
+    return manifest, values, (Record(id=ITEM_ID),)
 
 
 def _completed(graph: Graph, registry: Registry) -> Graph:
@@ -209,6 +221,16 @@ def _pinned(
     return ResolvedModel(ref=ref, identity=model.identity, license=model.license)
 
 
+@dataclass(frozen=True)
+class Resolved:
+    """A resolved plan with what it runs over: its input manifest, the value of each input identity, the records."""
+
+    logical: LogicalPlan
+    manifest: InputManifest
+    values: Mapping[InputIdentity, object]
+    records: tuple[Record, ...]
+
+
 def resolve(  # noqa: PLR0913 - the target and records, then keyword-only resolution inputs
     target: Graph | TaskCall,
     dataset: Dataset | None,
@@ -221,6 +243,34 @@ def resolve(  # noqa: PLR0913 - the target and records, then keyword-only resolu
     admit: Callable[[str], None] | None = None,
 ) -> tuple[LogicalPlan, InputManifest]:
     """Return the logical plan of `target` over `dataset`, and the input manifest whose digest it holds.
+
+    See `resolve_bound`, which also returns the input values and records.
+    """
+    found = resolve_bound(
+        target,
+        dataset,
+        config=config,
+        dataset_profile=dataset_profile,
+        bind=bind,
+        inputs=inputs,
+        resolver=resolver,
+        admit=admit,
+    )
+    return found.logical, found.manifest
+
+
+def resolve_bound(  # noqa: PLR0913 - as `resolve`
+    target: Graph | TaskCall,
+    dataset: Dataset | None,
+    *,
+    config: RunConfig,
+    dataset_profile: Mapping[str, Any] | None = None,
+    bind: Mapping[str, str] | None = None,
+    inputs: Mapping[str, object] | None = None,
+    resolver: Resolver = PROCESS_RESOLVER,
+    admit: Callable[[str], None] | None = None,
+) -> Resolved:
+    """Return the logical plan of `target` over `dataset`, its input manifest, input values and records.
 
     A task call becomes `one_node_graph`; without a dataset its own inputs are the one record, `call`. Each node's
     params are completed with their declared defaults. Each node's model is the catalogue's pin, or `resolve()`d
@@ -253,7 +303,7 @@ def resolve(  # noqa: PLR0913 - the target and records, then keyword-only resolu
     specs = {n.id: registry.spec(n.task) for n in graph.nodes}
     models = {n.id: _pinned(specs[n.id], n, catalogue, resolver, admit) for n in graph.nodes}
     slices = {n.id: profile_slices(specs[n.id], config.settings, dataset_profile) for n in graph.nodes}
-    manifest = _manifest(graph, dataset, call, spec, bind or {}, inputs or {})
+    manifest, values, records = _manifest(graph, dataset, call, spec, bind or {}, inputs or {})
     plan = LogicalPlan(
         graph=graph,
         models=models,
@@ -262,17 +312,52 @@ def resolve(  # noqa: PLR0913 - the target and records, then keyword-only resolu
         bind=bind or {},
         reuse=config.reuse,
     )
-    return plan, manifest
+    return Resolved(plan, manifest, values, records)
+
+
+class ExecutorUnavailable(RuntimeError):
+    """The executor a profile's substrate needs is not available yet; `needs` names it."""
+
+    def __init__(self, substrate: str, needs: str) -> None:
+        """Name the substrate and the executor it needs."""
+        super().__init__(
+            f"the {substrate!r} substrate runs on {needs}, which is not available; pass an executor to run"
+        )
+        self.substrate = substrate
+        self.needs = needs
 
 
 @dataclass(frozen=True)
 class Plan:
-    """A placed plan: the logical plan and its manifest, its placement, and its hash, the run id (`plan_hash`)."""
+    """A placed plan: the logical plan and its manifest, its placement, and its hash, the run id (`plan_hash`).
+
+    Beside the documents it holds what running it needs, none of which is part of its identity: the execution
+    profile and run config it was placed under, the value of each input identity and the records it runs over.
+    """
 
     logical: LogicalPlan
     manifest: InputManifest
     placement: PlanPlacement
     hash: str
+    execution: ExecutionProfile | None = field(default=None, compare=False, repr=False)
+    config: RunConfig | None = field(default=None, compare=False, repr=False)
+    values: Mapping[InputIdentity, object] = field(default_factory=dict, compare=False, repr=False)
+    records: tuple[Record, ...] = field(default=(), compare=False, repr=False)
+
+    def run(self, executor: "Executor | None" = None) -> "Run":
+        """Start this plan on `executor` and return its `Run`, which runs in the background.
+
+        `None` means `InProcess` over the result store under `cache_root()/results`, under the plan's own profile and
+        run config, when the profile's substrate is local.
+
+        Raises:
+            ExecutorUnavailable: no executor is given and the profile's substrate is `slurm`, which runs on `Pool`.
+            ValueError: as `Executor.admit`.
+            MissingExtra: the `pydra` extra is not installed.
+        """
+        from senselab_core.runtime.execution.run import start  # noqa: PLC0415 - run imports this module
+
+        return start(self, executor)
 
     def explain(self) -> str:
         """Return, per node, the backend, stack, env, device, batch, resource class, partition, licenses and reason.
@@ -313,7 +398,7 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
     config = config if config is not None else RunConfig()
     profile = execution if execution is not None else ExecutionProfile.load()
     registry, catalogue = packaged().registry, packaged().catalogue
-    logical, manifest = resolve(
+    found = resolve_bound(
         target,
         dataset,
         config=config,
@@ -323,6 +408,7 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
         resolver=replace(PROCESS_RESOLVER, network=profile.network),
         admit=lambda model_id: profile.check_source(model_id, catalogue),
     )
+    logical = found.logical
     placed = place_nodes(logical, profile, hardware or host_hardware(), registry, catalogue)
     licenses = node_licenses(logical, placed, env_license)
     check_licenses(config.licenses, licenses)
@@ -341,4 +427,13 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
         licenses=licenses,
         cost=plan_cost(logical, placed, catalogue),
     )
-    return Plan(logical=logical, manifest=manifest, placement=placement, hash=plan_hash(logical))
+    return Plan(
+        logical=logical,
+        manifest=found.manifest,
+        placement=placement,
+        hash=plan_hash(logical),
+        execution=profile,
+        config=config,
+        values=found.values,
+        records=found.records,
+    )

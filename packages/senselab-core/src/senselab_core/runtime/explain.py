@@ -21,7 +21,8 @@ def _licenses(found: LicenseSet) -> str:
     return ", ".join(f"{s} {'no record' if r is None else r.expression}" for s, r in found.records.items()) or "none"
 
 
-def _node(node_id: str, task: str, placement: PlanPlacement) -> str:
+def node_line(node_id: str, task: str, placement: PlanPlacement) -> str:
+    """Return one node's backend, stack, env, device, batch, resource class, partition, licenses, cost and reason."""
     placed: NodePlacement = placement.nodes[node_id]
     cost = "unmeasured" if node_id in placement.cost.unmeasured else "measured"
     return (
@@ -40,5 +41,5 @@ def explain(plan_hash: str, logical: LogicalPlan, placement: PlanPlacement) -> s
         f"envs to build: {builds}",
         f"cost: {_cost(placement.cost)}",
     ]
-    lines += [_node(n.id, n.task, placement) for n in logical.graph.nodes if n.id in placement.nodes]
+    lines += [node_line(n.id, n.task, placement) for n in logical.graph.nodes if n.id in placement.nodes]
     return "\n".join(lines)

@@ -25,7 +25,7 @@ from senselab_core.runtime.revision import (
     RECORD_ATTEMPTS,
     Resolver,
     RevisionResolutionError,
-    choose_run_id,
+    choose_attempt_id,
     get_cached_commit_hash,
     manifest_key,
     manifest_path,
@@ -69,13 +69,13 @@ def _isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 _RUN_ID_TWICE = """
 import json, os
-from senselab_core.runtime.revision import run_id
-print(json.dumps([run_id(), run_id(), os.environ["SENSELAB_RUN_ID"]]))
+from senselab_core.runtime.revision import attempt_id
+print(json.dumps([attempt_id(), attempt_id(), os.environ["SENSELAB_RUN_ID"]]))
 """
 
 
 def _run_id_in_a_fresh_process(**environ: str) -> list[str]:
-    """`run_id()` twice and the exported `SENSELAB_RUN_ID`, in a fresh interpreter whose run variables are `environ`."""
+    """`attempt_id()` twice and the exported `SENSELAB_RUN_ID`, in a fresh interpreter with run variables `environ`."""
     base = {k: v for k, v in os.environ.items() if k not in ("SENSELAB_RUN_ID", "SLURM_ARRAY_JOB_ID", "SLURM_JOB_ID")}
     proc = subprocess.run(
         [sys.executable, "-c", _RUN_ID_TWICE],
@@ -100,13 +100,13 @@ def test_run_id_is_generated_once_and_exported() -> None:
 @pytest.mark.logic
 def test_run_id_is_inherited_when_already_set() -> None:
     """A pre-set SENSELAB_RUN_ID is reused rather than replaced with a fresh UUID."""
-    assert choose_run_id({"SENSELAB_RUN_ID": "job-12345"}) == "job-12345"
+    assert choose_attempt_id({"SENSELAB_RUN_ID": "job-12345"}) == "job-12345"
 
 
 @pytest.mark.logic
 def test_run_id_falls_back_to_the_slurm_job_id() -> None:
     """Without SENSELAB_RUN_ID, a Slurm job shares one manifest via its job id, not one per process."""
-    assert choose_run_id({"SLURM_JOB_ID": "778899"}) == "778899"
+    assert choose_attempt_id({"SLURM_JOB_ID": "778899"}) == "778899"
     assert _run_id_in_a_fresh_process(SLURM_JOB_ID="778899") == ["778899"] * 3, (
         "the chosen id must be exported for subprocesses"
     )
@@ -115,13 +115,13 @@ def test_run_id_falls_back_to_the_slurm_job_id() -> None:
 @pytest.mark.logic
 def test_run_id_prefers_the_array_job_id_so_an_array_shares_one_manifest() -> None:
     """SLURM_ARRAY_JOB_ID (shared by the whole array) wins over per-task SLURM_JOB_ID."""
-    assert choose_run_id({"SLURM_ARRAY_JOB_ID": "112233", "SLURM_JOB_ID": "112240"}) == "112233"
+    assert choose_attempt_id({"SLURM_ARRAY_JOB_ID": "112233", "SLURM_JOB_ID": "112240"}) == "112233"
 
 
 @pytest.mark.logic
 def test_explicit_run_id_wins_over_slurm() -> None:
     """An explicit SENSELAB_RUN_ID still takes precedence over any Slurm identity."""
-    assert choose_run_id({"SENSELAB_RUN_ID": "explicit", "SLURM_ARRAY_JOB_ID": "112233"}) == "explicit"
+    assert choose_attempt_id({"SENSELAB_RUN_ID": "explicit", "SLURM_ARRAY_JOB_ID": "112233"}) == "explicit"
 
 
 @pytest.mark.logic
@@ -489,7 +489,7 @@ SET_ASIDE_FORMS = ["0123456789abcdef0123456789abcdef", "0" * 32, "f" * 32, uuid.
 def test_a_run_id_of_the_set_aside_form_is_refused(tmp_path: Path, run: str) -> None:
     """A run id that a collector would read as a set-aside object is refused before anything is read or written."""
     with pytest.raises(ValueError, match="set-aside"):
-        choose_run_id({"SENSELAB_RUN_ID": run})
+        choose_attempt_id({"SENSELAB_RUN_ID": run})
     for call in (
         lambda: record_resolution("org/m", "main", SHA_A, run=run, root=tmp_path),
         lambda: read_manifest(run, root=tmp_path),
@@ -505,7 +505,7 @@ def test_run_id_over_name_max_refused(tmp_path: Path) -> None:
     """A run id longer than one path component can hold is a `ValueError` before any I/O, never a raw `OSError`."""
     run = "x" * (NAME_MAX + 1)
     with pytest.raises(ValueError, match=str(NAME_MAX)):
-        choose_run_id({"SENSELAB_RUN_ID": run})
+        choose_attempt_id({"SENSELAB_RUN_ID": run})
     for call in (
         lambda: record_resolution("org/m", "main", SHA_A, run=run, root=tmp_path),
         lambda: read_manifest(run, root=tmp_path),

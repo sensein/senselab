@@ -371,12 +371,13 @@ def test_error_envelope_shape(generated: ModuleType) -> None:
 
 @pytest.mark.logic
 def test_facade_exposes_discovery_and_the_generated_names() -> None:
-    """`sl.tasks`, `sl.describe`, `sl.models` and `sl.validate` are the facade; `__all__` adds the generated names."""
+    """The discovery functions and the run facade are exported; `__all__` adds the generated names."""
     from senselab._api import generated  # noqa: PLC0415
 
     assert senselab.tasks is tasks and senselab.describe is describe and senselab.models is models
     assert senselab.validate is validate
-    assert senselab.__all__ == ["describe", "models", "tasks", "validate", *generated.__all__]
+    facade = ["Dataset", "describe", "models", "plan", "resume", "run", "tasks", "use", "validate"]
+    assert senselab.__all__ == [*facade, *generated.__all__]
 
 
 @pytest.mark.logic

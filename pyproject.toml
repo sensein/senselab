@@ -73,7 +73,8 @@ test = [
   "jsonschema",
   "hypothesis",
   "pyld>=3",
-  "scipy>=1.11"
+  "scipy>=1.11",
+  "pandas"
 ]
 docs = [
   "pdoc~=16.0"

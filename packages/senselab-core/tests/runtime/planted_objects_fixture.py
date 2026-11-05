@@ -387,12 +387,12 @@ def probe_run_id(scratch: str, run: str) -> dict[str, Any]:
 
 
 def probe_environment_run_id(scratch: str, run: str) -> str:
-    """Return the error `run_id()` raises when SENSELAB_RUN_ID is `run`."""
+    """Return the error `attempt_id()` raises when SENSELAB_RUN_ID is `run`."""
     from senselab_core.runtime import revision
 
     os.environ["SENSELAB_CACHE"] = str(Path(scratch) / "cache")
     os.environ["SENSELAB_RUN_ID"] = run
-    return _outcome(revision.run_id)[0]
+    return _outcome(revision.attempt_id)[0]
 
 
 def probe_run_manifest_modes(scratch: str, umask: str) -> dict[str, Any]:

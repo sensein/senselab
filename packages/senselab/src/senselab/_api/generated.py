@@ -23,10 +23,12 @@ from collections.abc import Mapping
 from os import PathLike
 from senselab._api.call import ConfiguredTask, UNSET
 from senselab.text.tasks.pii_spans.profile import PiiProfile
+from senselab_core.kernel.dataset import Dataset
 from senselab_core.kernel.identity import ModelRef
 from senselab_core.kernel.results import Intervals, TextSpans, Transcript, Trials
 from senselab_core.kernel.signals import Audio, RegularSeries, Text
 from senselab_core.runtime.call import Result, TaskCall
+from senselab_core.runtime.execution.run import ResultSet
 from typing import Any, Literal
 
 __all__ = [
@@ -112,6 +114,15 @@ class SpeechToText(ConfiguredTask):
             },
         )
 
+    def map(
+        self,
+        dataset: Dataset,
+        *,
+        bind: Mapping[str, str] | None = None,
+    ) -> ResultSet:
+        """Run this task on every record of the dataset and return its `ResultSet`; `bind` names record inputs."""
+        return self._map(dataset, bind)
+
 
 def speech_to_text(
     audio: Audio | str | PathLike[str],
@@ -193,6 +204,15 @@ class Diarize(ConfiguredTask):
             },
         )
 
+    def map(
+        self,
+        dataset: Dataset,
+        *,
+        bind: Mapping[str, str] | None = None,
+    ) -> ResultSet:
+        """Run this task on every record of the dataset and return its `ResultSet`; `bind` names record inputs."""
+        return self._map(dataset, bind)
+
 
 def diarize(
     audio: Audio | str | PathLike[str],
@@ -260,6 +280,15 @@ class SpeakerEmbeddings(ConfiguredTask):
                 "audio": audio,
             },
         )
+
+    def map(
+        self,
+        dataset: Dataset,
+        *,
+        bind: Mapping[str, str] | None = None,
+    ) -> ResultSet:
+        """Run this task on every record of the dataset and return its `ResultSet`; `bind` names record inputs."""
+        return self._map(dataset, bind)
 
 
 def speaker_embeddings(
@@ -334,6 +363,15 @@ class PiiSpans(ConfiguredTask):
             },
         )
 
+    def map(
+        self,
+        dataset: Dataset,
+        *,
+        bind: Mapping[str, str] | None = None,
+    ) -> ResultSet:
+        """Run this task on every record of the dataset and return its `ResultSet`; `bind` names record inputs."""
+        return self._map(dataset, bind)
+
 
 def pii_spans(
     text: Text | str | PathLike[str],
@@ -406,6 +444,15 @@ class Resample(ConfiguredTask):
                 "series": series,
             },
         )
+
+    def map(
+        self,
+        dataset: Dataset,
+        *,
+        bind: Mapping[str, str] | None = None,
+    ) -> ResultSet:
+        """Run this task on every record of the dataset and return its `ResultSet`; `bind` names record inputs."""
+        return self._map(dataset, bind)
 
 
 def resample(
@@ -481,6 +528,15 @@ class Wer(ConfiguredTask):
                 "hypothesis": hypothesis,
             },
         )
+
+    def map(
+        self,
+        dataset: Dataset,
+        *,
+        bind: Mapping[str, str] | None = None,
+    ) -> ResultSet:
+        """Run this task on every record of the dataset and return its `ResultSet`; `bind` names record inputs."""
+        return self._map(dataset, bind)
 
 
 def wer(
@@ -562,6 +618,15 @@ class Der(ConfiguredTask):
             },
         )
 
+    def map(
+        self,
+        dataset: Dataset,
+        *,
+        bind: Mapping[str, str] | None = None,
+    ) -> ResultSet:
+        """Run this task on every record of the dataset and return its `ResultSet`; `bind` names record inputs."""
+        return self._map(dataset, bind)
+
 
 def der(
     reference: Intervals | str | PathLike[str],
@@ -629,6 +694,15 @@ class Eer(ConfiguredTask):
             },
         )
 
+    def map(
+        self,
+        dataset: Dataset,
+        *,
+        bind: Mapping[str, str] | None = None,
+    ) -> ResultSet:
+        """Run this task on every record of the dataset and return its `ResultSet`; `bind` names record inputs."""
+        return self._map(dataset, bind)
+
 
 def eer(
     trials: Trials | str | PathLike[str],
@@ -694,6 +768,15 @@ class SpanF1(ConfiguredTask):
                 "hypothesis": hypothesis,
             },
         )
+
+    def map(
+        self,
+        dataset: Dataset,
+        *,
+        bind: Mapping[str, str] | None = None,
+    ) -> ResultSet:
+        """Run this task on every record of the dataset and return its `ResultSet`; `bind` names record inputs."""
+        return self._map(dataset, bind)
 
 
 def span_f1(
@@ -761,6 +844,15 @@ class ResampleError(ConfiguredTask):
                 "hypothesis": hypothesis,
             },
         )
+
+    def map(
+        self,
+        dataset: Dataset,
+        *,
+        bind: Mapping[str, str] | None = None,
+    ) -> ResultSet:
+        """Run this task on every record of the dataset and return its `ResultSet`; `bind` names record inputs."""
+        return self._map(dataset, bind)
 
 
 def resample_error(

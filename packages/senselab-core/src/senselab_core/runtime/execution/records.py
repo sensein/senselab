@@ -10,7 +10,7 @@ from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.compare import Thresholds, compare
 from senselab_core.runtime.equivalence import SAMPLING, EquivalenceEvidence, EvidenceSide
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.revision import run_id
+from senselab_core.runtime.revision import attempt_id
 from senselab_core.runtime.store import ResultStore, StoredResult, agent_record, context_record, key_record
 from senselab_core.runtime.vocabulary import core_vocabulary
 
@@ -59,7 +59,7 @@ def verify(  # noqa: PLR0913 - the hit, its recomputation and the thresholds jud
         current=current,
         mismatched=comparison.differences,
         thresholds=comparison.thresholds,
-        run=run_id(),
+        run=attempt_id(),
     )
     store.add_evidence(evidence)
     if not comparison.agree:

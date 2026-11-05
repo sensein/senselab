@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 from senselab_core.kernel.identity import gather_identity
 from senselab_core.kernel.placement import NodePlacement
+from senselab_core.runtime.execution.events import BrokenEnv, Event
 from senselab_core.runtime.execution.executor import (
     Admission,
     FaultRecord,
@@ -116,3 +117,44 @@ def register_execution_samples(register: Register) -> None:
         invalid_updates=[{"id": ""}, {"plan_hash": "p"}],
     )
     register(Handle, lambda: [Handle(id="fragment-0"), Handle(id="fragment-1")], invalid_updates=[{"id": ""}])
+    register_event_samples(register, jobs, faults)
+
+
+def register_event_samples(register: Register, jobs: tuple[JobRef, ...], faults: tuple[FaultRecord, ...]) -> None:
+    """Register the samples of the run events and the broken envs, which name `jobs` and `faults`."""
+    broken = faults[1]
+    register(
+        Event,
+        lambda: [
+            Event(kind="queued", node="n", job=jobs[0], key=_PLAN, t_ns=1),
+            Event(
+                kind="finished",
+                node="n",
+                job=jobs[1],
+                key=_PLAN,
+                attempt=2,
+                placement_digest="12" * 32,
+                env="host",
+                output=_OUTPUT,
+                t_ns=2,
+            ),
+            Event(kind="failed", node="n", job=jobs[0], fault="content", failure=faults[0], t_ns=3),
+            Event(kind="cache_hit", node="n", job=jobs[1], reuse="equivalent", output=_OUTPUT, t_ns=4),
+            Event(kind="verify", node="n", t_ns=5),
+        ],
+        invalid_updates=[
+            {"format": "run-event@2.0"},
+            {"kind": "other"},
+            {"attempt": 0},
+            {"t_ns": -1},
+            {"fault": "resource"},
+            {"reuse": "other"},
+            {"key": "k"},
+            {"placement_digest": "x"},
+        ],
+    )
+    register(
+        BrokenEnv,
+        lambda: [BrokenEnv(env="venv:a", fault=broken, failures=6), BrokenEnv(env="venv:b", fault=broken, failures=9)],
+        invalid_updates=[{"env": ""}, {"failures": 0}],
+    )

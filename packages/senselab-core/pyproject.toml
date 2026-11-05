@@ -10,6 +10,7 @@ license = "Apache-2.0"
 requires-python = ">=3.11"
 
 [project.optional-dependencies]
+pandas = ["pandas"]
 pydra = ["pydra"]
 
 [dependency-groups]

@@ -7,6 +7,7 @@ from typing import Any, ClassVar, Self
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 from senselab_core.kernel._base import FrozenMapping, NonEmptyStr
+from senselab_core.kernel.dataset import Dataset
 from senselab_core.kernel.declare import (
     REGISTRY,
     DeclaredParams,
@@ -23,6 +24,7 @@ from senselab_core.kernel.wire import WireFormatRetired
 from senselab_core.runtime.call import Result, TaskCall
 from senselab_core.runtime.execution.in_process import CallFailed, InProcess
 from senselab_core.runtime.execution.outputs import AmbiguousClock, OutputTypeMismatch
+from senselab_core.runtime.execution.run import ResultSet
 from senselab_core.runtime.keys import MissingProfileSlice
 from senselab_core.runtime.licenses import LicenseRefused
 from senselab_core.runtime.locks import LeaseTimeout, LeaseUnavailable
@@ -239,6 +241,23 @@ class ConfiguredTask:
             if envelope is None:
                 raise
             raise envelope from error
+
+    def _map(self, dataset: Dataset, bind: Mapping[str, str] | None) -> ResultSet:
+        from senselab._api.facade import map_over  # noqa: PLC0415 - the facade imports this module
+
+        return map_over(self, dataset, bind)
+
+    def _task_call(self) -> TaskCall:
+        """Return the call of this task with no inputs, to be bound from a dataset's records."""
+        spec = self.spec
+        return TaskCall(
+            task=spec.name,
+            task_version=spec.version,
+            inputs={},
+            params=self._params,
+            model=self._model,
+            backend_params=self._backend_params,
+        )
 
     def _call(self, inputs: Mapping[str, Any]) -> TaskCall:
         spec = self.spec

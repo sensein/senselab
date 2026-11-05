@@ -76,8 +76,8 @@ def run_component(run: str) -> str:
     return run
 
 
-def choose_run_id(environ: Mapping[str, str]) -> str:
-    """Return the run id `environ` names: `SENSELAB_RUN_ID`, else `SLURM_ARRAY_JOB_ID`, `SLURM_JOB_ID` or a UUID4.
+def choose_attempt_id(environ: Mapping[str, str]) -> str:
+    """Return the attempt id `environ` names: `SENSELAB_RUN_ID`, else `SLURM_ARRAY_JOB_ID`, `SLURM_JOB_ID` or a UUID4.
 
     Raises:
         ValueError: the chosen id is refused by `run_component`.
@@ -95,15 +95,15 @@ def choose_run_id(environ: Mapping[str, str]) -> str:
 
 
 @functools.cache
-def run_id() -> str:
-    """Return this process's run id (`choose_run_id` of the environment), chosen once and exported.
+def attempt_id() -> str:
+    """Return this process's attempt id (`choose_attempt_id` of the environment), chosen once and exported.
 
     It is exported as `SENSELAB_RUN_ID` so subprocesses inherit it.
 
     Raises:
         ValueError: the chosen id is refused by `run_component`.
     """
-    chosen = choose_run_id(os.environ)
+    chosen = choose_attempt_id(os.environ)
     os.environ["SENSELAB_RUN_ID"] = chosen
     return chosen
 
@@ -145,7 +145,7 @@ def _open_runs(root: Optional[Path], policy: Optional[StorePolicy] = None) -> St
 
 def _run_name(run: Optional[str]) -> str:
     """Return the directory name of run `run` (this run's when None), refused by `run_component` before any I/O."""
-    return run_component(run_id() if run is None else run)
+    return run_component(attempt_id() if run is None else run)
 
 
 def _parse_manifest(data: Optional[bytes], where: Path) -> dict[str, str]:

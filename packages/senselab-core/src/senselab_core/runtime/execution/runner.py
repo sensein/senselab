@@ -13,11 +13,12 @@ import asyncio
 import contextlib
 import os
 import re
+import threading
 import typing
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any
 
 from pydra.compose import python, workflow
 from pydra.engine.result import Result
@@ -29,12 +30,12 @@ from pydra.workers.base import Worker
 
 from senselab_core.kernel.graph import Edge, fan_out_issues, mapped_nodes, order, split
 from senselab_core.kernel.identity import InputIdentity, gather_identity, port_output_identity
+from senselab_core.runtime.execution.events import EventKind, EventLog, run_dir_of
 from senselab_core.runtime.execution.executor import Admission, Executor, FaultRecord, JobRef, ResultRef
 from senselab_core.runtime.execution.in_process import job_key, node_fragment
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.planner import Plan, check_mapped_outputs
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.revision import cache_root
 
 RECORDS = "records"
 """The pydra node split over the manifest's rows; every mapped node reads its row from it."""
@@ -55,25 +56,12 @@ class ElementFailed(RuntimeError):
         self.failure = failure
 
 
-@dataclass(frozen=True)
-class JobEvent:
-    """What became of one job: `finished` or `failed` as its executor reported, or `blocked` by a failed upstream."""
-
-    kind: Literal["finished", "failed", "blocked"]
-    job: JobRef
-    key_digest: str | None = None
-    failure: FaultRecord | None = None
-
-
-class EventLog(Protocol):
-    """Where a run's job events are appended, in the order they happen."""
-
-    def append(self, event: JobEvent) -> None:
-        """Record `event`."""
+class RunCancelled(RuntimeError):
+    """The run was cancelled: a job not yet sent to the executor was not sent."""
 
 
 @dataclass(frozen=True)
-class RunStatus:
+class RunOutcome:
     """A finished run: each node's results in element order, and the elements a failed upstream element blocked."""
 
     plan_hash: str
@@ -309,12 +297,55 @@ class _Run:
     executor: Executor
     store: SenselabStore
     events: EventLog
+    cancel: threading.Event
     pending: dict[str, list[tuple[Any, tuple[int, ...], asyncio.Future[ResultRef]]]] = field(default_factory=dict)
     scheduled: set[str] = field(default_factory=set)
     results: dict[str, dict[tuple[int, ...], ResultRef]] = field(default_factory=dict)
     errors: list[BaseException] = field(default_factory=list)
     sending: set[asyncio.Task[None]] = field(default_factory=set)
     element_failures: set[str] = field(default_factory=set)
+
+    def dispatch(
+        self, node: str, batch: list[tuple[Any, tuple[int, ...], Any]], settle: Callable[[ResultRef], object]
+    ) -> None:
+        """Send the jobs of `batch` as one fragment and pass each result to `settle`, as the executor gives it.
+
+        Raises:
+            RunCancelled: the run was cancelled before the fragment was sent.
+        """
+        if self.cancel.is_set():
+            raise RunCancelled(f"run {self.placed.hash} was cancelled before node {node!r} was sent")
+        elements = [element for _, element, _ in batch]
+        fragment = node_fragment(
+            self.placed, self.admission, node, upstream=_upstream(self.placed, node, batch), elements=elements
+        )
+        for element in elements:
+            self.log("started", node, element)
+        for ref in self.executor.results(self.executor.submit(fragment)):
+            settle(ref)
+
+    def log(  # noqa: PLR0913 - the fields of an event
+        self,
+        kind: EventKind,
+        node: str,
+        element: tuple[int, ...],
+        *,
+        key: str | None = None,
+        failure: FaultRecord | None = None,
+        output: str | None = None,
+    ) -> None:
+        """Append the event of `kind` for the job of `node` at `element`, with the node's placement and env."""
+        placement = self.placed.placement.nodes[node]
+        self.events.record(
+            kind,
+            node,
+            job=JobRef(plan_hash=self.placed.hash, node=node, element=element),
+            key=key,
+            placement_digest=placement.canonical_digest(),
+            failure=failure,
+            env=placement.env,
+            output=output,
+        )
 
 
 def _element(placed: Plan, node: str, job: Any) -> tuple[int, ...]:  # noqa: ANN401 - a pydra job
@@ -375,7 +406,9 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
     async def _submit(self, run: _Run, node: str, job: Any) -> ResultRef:  # noqa: ANN401 - a pydra job
         loop = asyncio.get_running_loop()
         future: asyncio.Future[ResultRef] = loop.create_future()
-        run.pending.setdefault(node, []).append((job, _element(run.placed, node, job), future))
+        element = _element(run.placed, node, job)
+        run.pending.setdefault(node, []).append((job, element, future))
+        run.log("queued", node, element, key=job.checksum)
         if len(run.pending[node]) >= run.placed.placement.nodes[node].batch_size:
             self._flush(run, node)
         elif node not in run.scheduled:
@@ -401,19 +434,18 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
 
         def settle(ref: ResultRef) -> None:
             run.results.setdefault(node, {})[ref.job.element] = ref
-            kind: Literal["finished", "failed"] = "finished" if ref.failure is None else "failed"
-            run.events.append(JobEvent(kind, ref.job, ref.key_digest, ref.failure))
+            run.log(
+                "finished" if ref.failure is None else "failed",
+                node,
+                ref.job.element,
+                key=ref.key_digest,
+                failure=ref.failure,
+                output=ref.output_identity,
+            )
             futures[ref.job.element].set_result(ref)
 
-        def submit() -> None:
-            fragment = node_fragment(
-                run.placed, run.admission, node, upstream=_upstream(run.placed, node, batch), elements=list(futures)
-            )
-            for ref in run.executor.results(run.executor.submit(fragment)):
-                loop.call_soon_threadsafe(settle, ref)
-
         try:
-            await asyncio.to_thread(submit)
+            await asyncio.to_thread(run.dispatch, node, batch, lambda ref: loop.call_soon_threadsafe(settle, ref))
         except Exception as error:  # noqa: BLE001 - every waiting job is failed with it, and the run re-raises it
             run.errors.append(error)
         except BaseException as signal:
@@ -453,7 +485,7 @@ class PydraRunner:
         self.lease: JobLease = self.profile.lease
         self.work_dir = work_dir
 
-    def run_plan(
+    def run_plan(  # noqa: PLR0913 - the plan, its executor and values, then keyword-only run inputs
         self,
         placed: Plan,
         executor: Executor,
@@ -461,22 +493,25 @@ class PydraRunner:
         values: Mapping[InputIdentity, object],
         events: EventLog,
         store: SenselabStore | None = None,
-    ) -> RunStatus:
+        cancel: threading.Event | None = None,
+    ) -> RunOutcome:
         """Run every job of `placed` through `executor`, admitted with `values`, and return what became of each.
 
-        A failed element fails only its descendants, which are reported `blocked`; every other element runs.
-        `store` holds the run's completion records; None means a fresh one under the work directory.
+        A failed element fails only its descendants, which are reported `blocked`; every other element runs. Each
+        job's `queued`, `started` and `finished` or `failed` event is appended to `events`. Once `cancel` is set no
+        further fragment is sent: running fragments finish and the run raises `RunCancelled`.
 
         Raises:
             ValueError: as `compile_plan`, or as `executor.admit`.
+            RunCancelled: `cancel` was set before every fragment was sent.
             WorkflowError: pydra errored a job other than an element the executor failed, or named no job.
             BaseException: an exception pydra raised its `WorkflowError` over, such as a cancellation.
             Exception: the first error an executor call raised, or a result it did not give, after the run.
         """
-        root = self.work_dir if self.work_dir is not None else cache_root() / "runs" / placed.hash / "pydra"
+        root = self.work_dir if self.work_dir is not None else run_dir_of(placed.hash) / "pydra"
         store = store if store is not None else SenselabStore(root)
         admission = executor.admit(placed, values)
-        run = _Run(placed, admission, executor, store, events)
+        run = _Run(placed, admission, executor, store, events, cancel if cancel is not None else threading.Event())
         classes = sorted({p.resource_class for p in placed.placement.nodes.values()})
         workers = {name: ExecutorWorker(run_state=run, resource_class=name) for name in classes}
         try:
@@ -500,7 +535,7 @@ class PydraRunner:
                 raise
         finally:
             executor.release(admission)
-        return _status(placed, run)
+        return _outcome(placed, run)
 
 
 def _errored_job(entry: str) -> str | None:
@@ -525,8 +560,8 @@ def _no_telemetry() -> Iterator[None]:
         os.environ.pop(NO_TELEMETRY, None)
 
 
-def _status(placed: Plan, run: _Run) -> RunStatus:
-    """Return the run's status; each element given no result is `blocked`, and appended to the events as such."""
+def _outcome(placed: Plan, run: _Run) -> RunOutcome:
+    """Return the run's outcome; each element given no result is `blocked`."""
     mapped = mapped_nodes(placed.logical.graph)
     rows = len(placed.manifest.rows)
     results, blocked = {}, {}
@@ -535,13 +570,11 @@ def _status(placed: Plan, run: _Run) -> RunStatus:
         got = run.results.get(node, {})
         results[node] = tuple(got[e] for e in every if e in got)
         blocked[node] = tuple(e for e in every if e not in got)
-        for element in blocked[node]:
-            run.events.append(JobEvent("blocked", JobRef(plan_hash=placed.hash, node=node, element=element)))
-    return RunStatus(placed.hash, results, blocked)
+    return RunOutcome(placed.hash, results, blocked)
 
 
 def run_plan(
     placed: Plan, executor: Executor, *, values: Mapping[InputIdentity, object], events: EventLog
-) -> RunStatus:
+) -> RunOutcome:
     """Run `placed` through `executor` on a `PydraRunner` under the packaged default profile."""
     return PydraRunner().run_plan(placed, executor, values=values, events=events)

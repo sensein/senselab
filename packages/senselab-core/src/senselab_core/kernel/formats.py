@@ -60,6 +60,9 @@ PLACEMENT_FORMAT = "placement@1.0"
 PLAN_FRAGMENT_FORMAT = "plan-fragment@1.0"
 """The format of a plan fragment: jobs of one node of a plan, their input identities, the placement and the attempt."""
 
+RUN_EVENT_FORMAT = "run-event@1.0"
+"""The format of one run event, a line of `<run>/events/<writer>.jsonl`: a job's state change and its fault."""
+
 EXECUTION_PROFILE_FORMAT = "execution-profile@2.0"
 """The format of an execution profile, `runtime/data/profiles/<name>.yaml` or a user's override."""
 RETIRED_EXECUTION_PROFILE_FORMATS = frozenset({"execution-profile@1"})

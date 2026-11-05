@@ -122,6 +122,8 @@ def _render_task(spec: TaskSpec, imports: _Imports) -> tuple[str, str, str]:
         ("senselab._api.call", "ConfiguredTask"),
         ("senselab_core.runtime.call", "Result"),
         ("senselab_core.runtime.call", "TaskCall"),
+        ("senselab_core.kernel.dataset", "Dataset"),
+        ("senselab_core.runtime.execution.run", "ResultSet"),
         ("senselab._api.call", "UNSET"),
         ("senselab_core.kernel.identity", "ModelRef"),
         ("collections.abc", "Mapping"),
@@ -170,6 +172,12 @@ def _render_task(spec: TaskSpec, imports: _Imports) -> tuple[str, str, str]:
         "        return self._run(",
         *_dict_arg(ports, "            "),
         "        )",
+        "",
+        *_signature(
+            "def map", ["self", "dataset: Dataset"], ["bind: Mapping[str, str] | None = None"], "ResultSet", "    "
+        ),
+        '        """Run this task on every record of the dataset and return its `ResultSet`; `bind` names record inputs."""',
+        "        return self._map(dataset, bind)",
         "",
         "",
         *_signature(f"def {func}", data, [model, *params, backend], "Result"),
