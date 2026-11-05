@@ -1,0 +1,172 @@
+"""`execute`: requests as the backend's batch invariance allows, keys of the request sent, failures never stored."""
+
+import importlib
+import platform
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import numpy
+import pytest
+import soundfile
+from pydantic import ValidationError
+from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskSpec
+from senselab_core.kernel.identity import ReusePolicy
+from senselab_core.runtime.audio_io import open_audio
+from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_packaged
+from senselab_core.runtime.catalogue import Catalogue
+from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution.executor import FaultRecord, JobRef
+from senselab_core.runtime.execution.job import Completed, Failed, Job, JobOutcome, execute
+from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.fake_backend import EchoParams
+from senselab_core.runtime.keys import Call, Placement, request_components
+from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.store import ResultStore
+from senselab_core.testing.interpreter import source_tree_python
+from senselab_core.testing.workers import mit_lock_records
+from senselab_worker.faults import ContentFault, error_record
+
+TASK = TaskSpec(
+    name="engine_test.score",
+    version="1",
+    kind="transform",
+    inputs={"text": "json"},
+    outputs={"value": "sha256"},
+    params=EchoParams,
+)
+AUDIO_TASK = TASK.model_copy(update={"name": "engine_test.identify", "inputs": {"audio": "Audio"}})
+SIZES = "backends.sizes_backend_fixture"
+
+
+def _backend(name: str, task: TaskSpec = TASK, **fields: Any) -> BackendSpec:  # noqa: ANN401 - BackendSpec fields
+    return BackendSpec(
+        **{
+            "task": task.name,
+            "name": name,
+            "version": "1",
+            "stack": name,
+            "env": Env.host(),
+            "devices": ("cpu",),
+            "batch_invariant": True,
+            "worker": SIZES,
+            "load_stub": {},
+            **fields,
+        }
+    )
+
+
+INVARIANT = _backend("invariant")
+BATCHED = _backend("batched", batch_invariant=False, output_affecting=("batch_formation",))
+IDENTIFY = _backend("identify", AUDIO_TASK)
+REGISTRY = Registry()
+for _task in (TASK, AUDIO_TASK):
+    REGISTRY.add_task(_task)
+for _backend_spec in (INVARIANT, BATCHED, IDENTIFY):
+    REGISTRY.add_backend(_backend_spec)
+
+
+def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+    return EnvHandle(source_tree_python(), platform.python_version(), "1" * 64, "2" * 64, None)
+
+
+@pytest.fixture(autouse=True)
+def packaged() -> Iterator[None]:
+    """The engine reads this module's registry, opens every env as this interpreter, locked to MIT code."""
+    previous = use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, REGISTRY, mit_lock_records))
+    yield
+    use_packaged(previous)
+
+
+@pytest.fixture
+def sizes() -> list[int]:
+    """The sizes of the requests the fixture backend is sent in this test."""
+    recorded: list[int] = importlib.import_module(SIZES).SIZES
+    recorded.clear()
+    return recorded
+
+
+def _jobs(*texts: str, task: TaskSpec = TASK) -> list[Job]:
+    jobs = []
+    for i, text in enumerate(texts):
+        port = next(iter(task.inputs))
+        identity, value, _ = bind_input(port, task.inputs[port], text)
+        ref = JobRef(plan_hash="0" * 64, node="n", element=(i,))
+        jobs.append(Job(ref, Call(task, EchoParams(), {port: identity}), {port: value}))
+    return jobs
+
+
+def _execute(jobs: list[Job], backend: BackendSpec, store: ResultStore, batch_size: int = 1) -> list[JobOutcome]:
+    placement = Placement(backend=backend, backend_params=backend.params(), device="cpu", batch_size=batch_size)
+    workers = WorkerSet(1)
+    try:
+        return execute(jobs, placement, store=store, run=RunConfig(), profile=ExecutionProfile.load(), workers=workers)
+    finally:
+        workers.close()
+
+
+def _completed(outcomes: list[JobOutcome]) -> list[Completed]:
+    assert all(isinstance(o, Completed) for o in outcomes), outcomes
+    return [o for o in outcomes if isinstance(o, Completed)]
+
+
+@pytest.mark.logic
+def test_request_components_match_request_sent(tmp_path: Path, sizes: list[int]) -> None:
+    """An invariant backend is sent requests of the batch size; each result names the formation it was sent in."""
+    outcomes = _completed(_execute(_jobs("a", "b", "c"), INVARIANT, ResultStore(tmp_path), batch_size=2))
+    assert sizes == [2, 1]
+    assert [o.result.placement.batch_formation for o in outcomes] == ["items:2", "items:2", "single"]
+    assert {o.result.key.batch_formation for o in outcomes} == {None}
+    assert request_components(INVARIANT, 1)["batch_formation"] == "single"
+
+
+@pytest.mark.logic
+def test_noninvariant_backend_sent_single_until_buckets(tmp_path: Path, sizes: list[int]) -> None:
+    """A backend that is not batch-invariant is sent one item per request whatever the batch size, keyed `single`."""
+    outcomes = _completed(_execute(_jobs("a", "b", "c"), BATCHED, ResultStore(tmp_path), batch_size=4))
+    assert sizes == [1, 1, 1]
+    assert {o.result.key.batch_formation for o in outcomes} == {"single"}
+    with pytest.raises(ValueError, match="one item per request"):
+        request_components(BATCHED, 2)
+
+
+@pytest.mark.logic
+def test_failure_never_stored(tmp_path: Path, sizes: list[int]) -> None:
+    """A failed item is `Failed` beside its request's completed items; nothing of it is stored or recorded."""
+    store = ResultStore(tmp_path)
+    ok, failed = _execute(_jobs("a", "fail"), INVARIANT, store, batch_size=2)
+    assert sizes == [2] and isinstance(ok, Completed) and isinstance(failed, Failed)
+    assert (failed.failure.fault, failed.failure.type, failed.failure.charged) == ("content", "ContentFault", True)
+    [activity] = store.provenance.activities()
+    assert activity.node()["prov:generated"] == [{"@id": ok.result.output_identity}]
+    again = _execute(_jobs("a", "fail"), INVARIANT, store, batch_size=2)
+    assert isinstance(again[0], Completed) and again[0].result.reused is ReusePolicy.EXACT
+    assert isinstance(again[1], Failed) and sizes == [2, 1]
+
+
+@pytest.mark.logic
+def test_gap_fault_record_never_charged(tmp_path: Path, sizes: list[int]) -> None:
+    """A fault the fallback table classified is a gap and is not charged; a typed fault is charged."""
+    gap = FaultRecord.of(error_record(ValueError("untyped")))
+    typed = FaultRecord.of(error_record(ContentFault("typed")))
+    assert (gap.gap, gap.charged, typed.gap, typed.charged) == (True, False, False, True)
+    with pytest.raises(ValidationError, match="never charged"):
+        FaultRecord(fault="content", type="ValueError", message="m", gap=True, charged=True)
+    [failed] = _execute(_jobs("gap"), INVARIANT, ResultStore(tmp_path))
+    assert isinstance(failed, Failed) and (failed.failure.fault, failed.failure.gap) == ("infrastructure", True)
+    assert not failed.failure.charged and sizes == [1]
+
+
+@pytest.mark.logic
+def test_rewritten_input_is_stale_at_run(tmp_path: Path, sizes: list[int]) -> None:
+    """A file-backed input rewritten after it was opened fails its job before anything is sent or stored."""
+    path = tmp_path / "tone.wav"
+    soundfile.write(path, numpy.zeros(160, dtype=numpy.float32), 16000)
+    audio = open_audio(path)
+    ref = JobRef(plan_hash="0" * 64, node="n", element=(0,))
+    jobs = [Job(ref, Call(AUDIO_TASK, EchoParams(), {"audio": audio.identity}), {"audio": audio})]
+    soundfile.write(path, numpy.ones(160, dtype=numpy.float32) * 0.5, 16000)
+    store = ResultStore(tmp_path / "store")
+    [failed] = _execute(jobs, IDENTIFY, store)
+    assert isinstance(failed, Failed) and failed.failure.type == "StaleSource"
+    assert sizes == [] and store.provenance.activities() == []

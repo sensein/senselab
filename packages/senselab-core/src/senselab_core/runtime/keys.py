@@ -57,19 +57,41 @@ def profile_slices(
 
 
 SINGLE_ITEM = "single"
-"""The batch formation of a request holding one item, the only request `run_call` sends."""
+"""The batch formation of a request holding one item."""
 
 
 class RequestComponents(TypedDict):
-    """The batch formation and chunk grid of the requests `run_call` sends a backend."""
+    """The batch formation and chunk grid of a request sent to a backend."""
 
     batch_formation: str
     chunk_grid: str | None
 
 
-def request_components(backend: BackendSpec) -> RequestComponents:
-    """Return the batch formation and chunk grid of the requests `run_call` sends `backend`."""
-    return {"batch_formation": SINGLE_ITEM, "chunk_grid": backend.chunk_grid}
+def request_size(backend: BackendSpec, batch_size: int) -> int:
+    """Return the items per request `backend` is sent under a placement of `batch_size`: 1 unless it is batch-invariant.
+
+    Raises:
+        ValueError: `batch_size` is below 1.
+    """
+    if batch_size < 1:
+        raise ValueError(f"a request holds at least one item, got batch size {batch_size}")
+    return batch_size if backend.batch_invariant else 1
+
+
+def request_components(backend: BackendSpec, request_size: int) -> RequestComponents:
+    """Return the batch formation and chunk grid of a request of `request_size` items sent to `backend`.
+
+    One item is `single`, `n` items `items:<n>`; the chunk grid is the backend's.
+
+    Raises:
+        ValueError: `request_size` is below 1, or above 1 for a backend that is not batch-invariant.
+    """
+    if request_size < 1:
+        raise ValueError(f"a request holds at least one item, got {request_size}")
+    if request_size > 1 and not backend.batch_invariant:
+        raise ValueError(f"backend {backend.name!r} is not batch-invariant and is sent one item per request")
+    formation = SINGLE_ITEM if request_size == 1 else f"items:{request_size}"
+    return {"batch_formation": formation, "chunk_grid": backend.chunk_grid}
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,4 @@
-"""The benchmark harness: suites run through `run_call`, scored by metric tasks, written as `benchmark-result@2`.
+"""The benchmark harness: suites run on `InProcess`, scored by metric tasks, written as `benchmark-result@2`.
 
 A suite (`suites/<name>.yaml`, `benchmark-suite@1.0`) lists benchmarks; each names a data manifest in `manifests/`
 (`data-manifest@2.0`, fetched by `senselab_core.runtime.fetch`, the engine behind `senselab data fetch`), an adapter
@@ -35,8 +35,9 @@ from senselab_core.kernel.formats import (
 from senselab_core.kernel.identity import ExecutionContext
 from senselab_core.kernel.results import Embedding, Intervals, Metric, TextSpans, Transcript, TranscriptNode, Trials
 from senselab_core.kernel.signals import PlainText
-from senselab_core.runtime.call import CallFailed, Result, TaskCall, placement_of, run_call
+from senselab_core.runtime.call import Result, TaskCall, placement_of
 from senselab_core.runtime.config import ConfigError, load_yaml
+from senselab_core.runtime.execution.in_process import CallFailed, InProcess
 from senselab_core.runtime.fetch import DataManifest, fetch
 from senselab_core.runtime.profiles import ExecutionProfile, NoDevice
 from senselab_core.runtime.store import ResultStore
@@ -459,7 +460,7 @@ class Suite:
 
 
 class CallRecord(Frozen):
-    """One `run_call` of a row: the task, its logical key digest, the context fingerprint, backend and output."""
+    """One call of a row: the task, its logical key digest, the context fingerprint, backend and output."""
 
     task: NonEmptyStr
     key: NonEmptyStr
@@ -580,6 +581,7 @@ def _run_benchmark(  # noqa: PLR0913 - the benchmark and everything it runs unde
     records: dict[str, CallRecord] = {}
     outputs: dict[str, Mapping[str, Any]] = {}
     rows: list[Row] = []
+    executor = InProcess(store=store, profile=execution)
     for item in items:
         if item.fault is not None:
             rows.append(Row(label=item.id, split=item.split, fault=item.fault))
@@ -588,9 +590,9 @@ def _run_benchmark(  # noqa: PLR0913 - the benchmark and everything it runs unde
             {"task": bench.task, "inputs": item.inputs, "params": bench.params, "model": bench.model}
         )
         try:
-            result = run_call(call, execution=execution, store=store)
+            result = executor.call(call)
         except CallFailed as err:
-            rows.append(Row(label=item.id, split=item.split, fault=_fault_text(err.error)))
+            rows.append(Row(label=item.id, split=item.split, fault=_fault_text(err.failure.model_dump(mode="json"))))
             continue
         outputs[item.id] = result.outputs
         records[item.id] = _record(bench.task, result)
@@ -600,9 +602,10 @@ def _run_benchmark(  # noqa: PLR0913 - the benchmark and everything it runs unde
             {"task": bench.metric, "inputs": scoring.inputs, "params": bench.metric_params}
         )
         try:
-            scored = run_call(metric_call, execution=execution, store=store)
+            scored = executor.call(metric_call)
         except CallFailed as err:
-            rows.append(Row(label=scoring.label, split=scoring.split, fault=_fault_text(err.error)))
+            fault = _fault_text(err.failure.model_dump(mode="json"))
+            rows.append(Row(label=scoring.label, split=scoring.split, fault=fault))
             continue
         metric: Metric = scored.outputs["metric"]  # type: ignore[assignment]
         contexts[scored.context.fingerprint()] = scored.context
@@ -647,7 +650,7 @@ def run_suite(  # noqa: PLR0913 - the suite and where everything it reads and wr
 
     Raises:
         SuiteError: a benchmark names an adapter or a manifest that does not exist.
-        As `fetch` and `run_call`, but a call the backend fails (`CallFailed`) is recorded as a row's fault.
+        As `fetch` and `InProcess.call`, but a call the backend fails (`CallFailed`) is recorded as a row's fault.
     """
     log_each_warning_once()
     run = out / run_id

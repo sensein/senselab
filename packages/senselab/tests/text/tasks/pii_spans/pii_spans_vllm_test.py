@@ -21,8 +21,10 @@ from senselab.text.tasks.pii_spans import vllm as worker
 from senselab_core.kernel.declare import REGISTRY, Registry
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
 from senselab_core.kernel.results import TextSpans
-from senselab_core.runtime.call import CallFailed, Packaged, TaskCall, close_workers, run_call, use_packaged
+from senselab_core.runtime.call import Packaged, Result, TaskCall, use_packaged
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution.in_process import CallFailed, InProcess
+from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
@@ -46,6 +48,21 @@ GPU_HOST = HardwareInfo(
 )
 ANSWER = '{"spans": [{"quote": "555-0100", "category": "CONTACT", "score": 0.9}]}'
 TEXT = "Call me on 555-0100 today."
+
+
+WORKERS = WorkerSet(4)
+"""The worker set, and so the servers, every call of this module runs on."""
+
+
+@pytest.fixture(autouse=True)
+def _stop_workers() -> Iterator[None]:
+    """Stop every worker and server a test started."""
+    yield
+    WORKERS.close()
+
+
+def _run(call: TaskCall, *, execution: ExecutionProfile, store: ResultStore) -> Result:
+    return InProcess(store=store, profile=execution, workers=WORKERS).call(call)
 
 
 def _profile(tmp_path: Path, *stacks: str, name: str = "laptop") -> ExecutionProfile:
@@ -154,14 +171,14 @@ def test_stack_switch_by_profile(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_run_call_serves_spans_through_the_server_and_records_its_attestation(
+def test_call_serves_spans_through_the_server_and_records_its_attestation(
     served: Registry,  # noqa: ARG001 - the fixture's effect
     fake_env: EnvHandle,
     tmp_path: Path,
 ) -> None:
     """A `vllm` call returns the answer's spans, and its context carries what an identical server attests."""
     profile = _profile(tmp_path, "vllm")
-    first = run_call(_call(), execution=profile, store=ResultStore(tmp_path / "results"))
+    first = _run(_call(), execution=profile, store=ResultStore(tmp_path / "results"))
     spans = _spans(first.outputs)
     assert [TEXT[a:b] for a, b in zip(spans.start, spans.end, strict=True)] == ["555-0100"]
     assert spans.label.tolist() == ["CONTACT"] and spans.score is not None and numpy.allclose(spans.score, [0.9])
@@ -171,12 +188,12 @@ def test_run_call_serves_spans_through_the_server_and_records_its_attestation(
         assert first.context.driver == server.context_fields()["driver"]
         assert server.attestation.config_digest == config_digest(CONFIG.settings)
     assert first.context.driver["model_identity"] == ENTRY.revision and first.context.driver["engine"] == "vllm"
-    second = run_call(_call(), execution=profile, store=ResultStore(tmp_path / "results"))
+    second = _run(_call(), execution=profile, store=ResultStore(tmp_path / "results"))
     assert second.reused is not None and second.context == first.context
 
 
 @pytest.mark.logic
-def test_run_call_fails_the_item_when_the_answer_is_not_spans(
+def test_call_fails_the_item_when_the_answer_is_not_spans(
     served: Registry,  # noqa: ARG001 - the fixture's effect
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -184,8 +201,8 @@ def test_run_call_fails_the_item_when_the_answer_is_not_spans(
     """A server answer that is not the span object asked for is the item's content fault."""
     _knob(tmp_path, FAKE_VLLM_CONTENT="I cannot help with that.")
     with pytest.raises(CallFailed) as raised:
-        run_call(_call(), execution=_profile(tmp_path, "vllm"), store=ResultStore(tmp_path / "results"))
-    assert raised.value.error["fault"] is FaultClass.CONTENT
+        _run(_call(), execution=_profile(tmp_path, "vllm"), store=ResultStore(tmp_path / "results"))
+    assert raised.value.failure.fault_class is FaultClass.CONTENT
 
 
 @pytest.mark.logic
@@ -224,7 +241,7 @@ def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract c
 @pytest.mark.model
 @pytest.mark.network
 def test_pii_spans_vllm_on_the_h100_finds_spans_and_bounds_edge_inputs(tmp_path: Path) -> None:
-    """Through `run_call` on the orcd profile the served pinned model covers a name and a number, attested.
+    """On `InProcess` under the orcd profile the served pinned model covers a name and a number, attested.
 
     Empty, non-BMP and long texts each give spans inside the text or a typed fault.
     """
@@ -232,13 +249,13 @@ def test_pii_spans_vllm_on_the_h100_finds_spans_and_bounds_edge_inputs(tmp_path:
     store = ResultStore(tmp_path / "results")
 
     def run(text: str) -> Any:  # noqa: ANN401
-        return run_call(_call_of(text), execution=profile, store=store)
+        return _run(_call_of(text), execution=profile, store=store)
 
     text = "My name is Margaret Hollis and you can reach me on 617-555-0142."
     try:
         _served_spans_and_edges(run, text)
     finally:
-        close_workers()
+        WORKERS.close()
 
 
 def _served_spans_and_edges(run: Any, text: str) -> None:  # noqa: ANN401
@@ -251,7 +268,7 @@ def _served_spans_and_edges(run: Any, text: str) -> None:  # noqa: ANN401
         try:
             out = _spans(run(content).outputs)
         except CallFailed as failed:
-            assert failed.error["fault"] in (FaultClass.CONTENT, FaultClass.RESOURCE), failed.error
+            assert failed.failure.fault_class in (FaultClass.CONTENT, FaultClass.RESOURCE), failed.failure
         else:
             assert out.length == len(content)
             assert all(0 <= a <= b <= out.length for a, b in zip(out.start, out.end, strict=True))
@@ -262,14 +279,14 @@ def _call_of(text: str) -> TaskCall:
 
 
 @pytest.mark.logic
-def test_close_workers_stops_the_server_run_call_started(
+def test_closing_the_worker_set_stops_the_server_it_started(
     served: Registry,  # noqa: ARG001 - the fixture's effect
     tmp_path: Path,
 ) -> None:
-    """`close_workers` stops the server's process group, so the card is free for the next server."""
-    run_call(_call(), execution=_profile(tmp_path, "vllm"), store=ResultStore(tmp_path / "results"))
+    """Closing the worker set stops the server's process group, so the card is free for the next server."""
+    _run(_call(), execution=_profile(tmp_path, "vllm"), store=ResultStore(tmp_path / "results"))
     (record,) = [json.loads(p.read_text()) for p in (tmp_path / "fake").glob("*.json")]
-    close_workers()
+    WORKERS.close()
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         try:
@@ -277,7 +294,7 @@ def test_close_workers_stops_the_server_run_call_started(
         except ProcessLookupError:
             return
         time.sleep(0.1)
-    pytest.fail("the server's process group outlived close_workers")
+    pytest.fail("the server's process group outlived closing the worker set")
 
 
 @pytest.mark.logic
@@ -315,14 +332,14 @@ def test_a_store_hit_starts_no_server_and_a_mismatching_attestation_refuses(
 ) -> None:
     """The context holds the declared attestation, so a hit needs no server; a started server must attest it."""
     profile, store = _profile(tmp_path, "vllm"), ResultStore(tmp_path / "results")
-    run_call(_call(), execution=profile, store=store)
+    _run(_call(), execution=profile, store=store)
     assert _starts(tmp_path) == 1
     (tmp_path / "fake2").mkdir()
     _knob(tmp_path, FAKE_VLLM_DIR=str(tmp_path / "fake2"))
     served.opened.append(_make_env(tmp_path, "env2"))  # type: ignore[attr-defined]
-    assert run_call(_call(), execution=profile, store=store).reused is not None
+    assert _run(_call(), execution=profile, store=store).reused is not None
     assert not list((tmp_path / "fake2").glob("*.json"))
     _knob(tmp_path, FAKE_VLLM_VERSION="9.9.9")
     served.opened.append(_make_env(tmp_path, "env3"))  # type: ignore[attr-defined]
     with pytest.raises(AttestationMismatch, match="9.9.9"):
-        run_call(_call_of("Call 555-0199."), execution=profile, store=store)
+        _run(_call_of("Call 555-0199."), execution=profile, store=store)

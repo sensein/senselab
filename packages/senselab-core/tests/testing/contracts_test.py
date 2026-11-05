@@ -126,7 +126,7 @@ def test_a_defective_task_fails_its_case(task: dict[str, Any], case: str) -> Non
     ids=["batch_dependent_undeclared", "chunk_grid_without_producer"],
 )
 def test_an_output_affecting_component_needs_a_producer(backend: dict[str, Any]) -> None:
-    """A batch-dependent backend declares its batch formation, and a declared chunk grid is one run_call can name."""
+    """A batch-dependent backend declares its batch formation, and a declared chunk grid has a producer."""
     case = _case(_registry({}, backend), "fake::output_affecting_produced")
     with pytest.raises(AssertionError):
         case()

@@ -1,4 +1,4 @@
-"""The generated task API, `describe` and `models`: drift, calls run through `run_call`, schemas, discovery, errors."""
+"""The generated task API, `describe` and `models`: drift, calls run on `InProcess`, schemas, discovery, errors."""
 
 import importlib.util
 import inspect
@@ -26,19 +26,11 @@ from senselab_core.kernel.graph import Graph
 from senselab_core.kernel.identity import TEXT_IDENTITY_FORMS
 from senselab_core.kernel.results import TextSpans, Transcript
 from senselab_core.kernel.signals import Audio, PlainText
-from senselab_core.runtime.call import (
-    CallFailed,
-    Packaged,
-    Result,
-    TaskCall,
-    bind_input,
-    input_binding,
-    packaged,
-    run_call,
-    use_packaged,
-)
+from senselab_core.runtime.call import Packaged, Result, TaskCall, bind_input, input_binding, packaged, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution.executor import FaultRecord
+from senselab_core.runtime.execution.in_process import CallFailed, InProcess
 from senselab_core.runtime.licenses import backend_license, packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.testing.workers import mit_lock_records
@@ -206,7 +198,7 @@ entries:
 
 @pytest.fixture
 def fake_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """`run_call` reads the toy catalogue, opens every env as this interpreter and stores under `tmp_path`."""
+    """The executor reads the toy catalogue, opens every env as this interpreter and stores under `tmp_path`."""
     monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path))
     previous = use_packaged(Packaged(TOY_CATALOGUE, _this_interpreter, lock_records=mit_lock_records))
     yield
@@ -223,14 +215,14 @@ def _echo_namespace() -> dict[str, Any]:
 
 @pytest.mark.logic
 def test_function_equals_configured_call(fake_stack: None) -> None:  # noqa: ARG001 - the fixture's effect
-    """`echo(x, **params)` is exactly `Echo(**params)(x)`, which is `run_call` of `Echo(**params).call(x)`."""
+    """`echo(x, **params)` is exactly `Echo(**params)(x)`, which is `InProcess().call(Echo(**params).call(x))`."""
     namespace = _echo_namespace()
     echo, cls = namespace["echo"], namespace["Echo"]
     configured = cls(salt="s")
     assert isinstance(configured.call({"x": 1}), TaskCall)
     result = echo({"x": 1}, salt="s")
     assert isinstance(result, Result)
-    for again in (configured({"x": 1}), run_call(configured.call({"x": 1}))):
+    for again in (configured({"x": 1}), InProcess().call(configured.call({"x": 1}))):
         assert (again.outputs, again.output_identity, again.key) == (result.outputs, result.output_identity, result.key)
     assert result.output_identity != echo({"x": 1}, salt="t").output_identity
     assert configured.call({"x": 1}).params.salt == "s"
@@ -246,7 +238,7 @@ def test_call_from_describe_alone(fake_stack: None) -> None:  # noqa: ARG001 - t
         "inputs": {port: {"text": "hello"} for port in document["inputs"]["required"]},
         "params": params,
     }
-    result = run_call(TaskCall.model_validate(json.loads(json.dumps(call))))
+    result = InProcess().call(TaskCall.model_validate(json.loads(json.dumps(call))))
     assert set(result.outputs) == set(document["outputs"]["required"])
     assert result.placement.backend.stack in document["stacks"]
 
@@ -265,8 +257,8 @@ def test_describe_lists_catalogue_models() -> None:
 
 
 @pytest.mark.logic
-def test_packaged_catalogue_is_what_run_call_and_models_read() -> None:
-    """Importing `senselab` hands `run_call` the packaged catalogue, which `models()` lists."""
+def test_packaged_catalogue_is_what_the_runtime_and_models_read() -> None:
+    """Importing `senselab` hands the runtime the packaged catalogue, which `models()` lists."""
     assert packaged().catalogue is CATALOGUE
     assert [m["id"] for m in models("speech_to_text")] == [
         e.id for e in CATALOGUE.entries if "speech_to_text" in e.tasks
@@ -389,7 +381,7 @@ def test_facade_exposes_discovery_and_the_generated_names() -> None:
 
 @pytest.mark.logic
 def test_describe_states_each_backends_env_license() -> None:
-    """Each backend in `describe` states the license its env lock's records derive, the same `run_call` records."""
+    """Each backend in `describe` states the license its env lock's records derive, the same a call records."""
     records, registry = packaged_lock_records("senselab"), Registry()
     previous = use_packaged(register(registry))
     try:
@@ -549,7 +541,7 @@ def test_run_calls_reports_one_line_per_call_and_fails_on_any(
 
 @pytest.mark.logic
 def test_a_fresh_process_finds_the_packaged_tasks_without_importing_senselab() -> None:
-    """`packaged()` loads the `senselab.packages` entry points itself, so `run_call` needs no `import senselab`."""
+    """`packaged()` loads the `senselab.packages` entry points itself, so a call needs no `import senselab`."""
     code = "from senselab_core.runtime.call import packaged; print(sorted(packaged().registry._tasks))"
     run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True, timeout=120)  # noqa: S603
     assert "'wer'" in run.stdout and "'speech_to_text'" in run.stdout
@@ -661,14 +653,14 @@ def test_a_load_that_fails_after_declaring_is_rolled_back_and_retried_cleanly(tm
 
 
 def _documented_errors() -> list[str]:
-    raises = (run_call.__doc__ or "").split("Raises:")[1]
+    raises = (InProcess.call.__doc__ or "").split("Raises:")[1]
     names = [n for line in raises.splitlines() if ":" in line for n in line.split(":")[0].split(",")]
     return [n.strip() for n in names]
 
 
 @pytest.mark.contract
-def test_every_error_run_call_documents_has_an_envelope_code() -> None:
-    """Each exception class in `run_call`'s `Raises:` section is a row of the error-code table."""
+def test_every_error_a_call_documents_has_an_envelope_code() -> None:
+    """Each exception class in `InProcess.call`'s `Raises:` section is a row of the error-code table."""
     table = {kind.__name__ for kind, _, _ in ERROR_CODES} | {"CallFailed"}
     assert set(_documented_errors()) <= table, sorted(set(_documented_errors()) - table)
 
@@ -677,7 +669,9 @@ def test_every_error_run_call_documents_has_an_envelope_code() -> None:
 def test_a_call_failure_carries_its_fault_class_in_the_envelope_code() -> None:
     """A failed call maps to `<fault>_fault`, whatever the class of the backend's own exception."""
     codes = {
-        fault: api_error(CallFailed({"type": "X", "fault": fault, "message": "m"})).envelope.code  # type: ignore[union-attr]
+        fault: api_error(  # type: ignore[union-attr]
+            CallFailed(FaultRecord(fault=fault, type="X", message="m", gap=False, charged=True))
+        ).envelope.code
         for fault in ("content", "resource", "infrastructure")
     }
     assert codes == {"content": "content_fault", "resource": "resource_fault", "infrastructure": "infrastructure_fault"}

@@ -100,7 +100,7 @@ def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHan
 
 @pytest.fixture(autouse=True)
 def packaged() -> Iterator[None]:
-    """`run_call` reads the toy registry (and `wer`) and opens every env as this interpreter."""
+    """The executor reads the toy registry (and `wer`) and opens every env as this interpreter."""
     previous = use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, _registry(), mit_lock_records))
     yield
     use_packaged(previous)

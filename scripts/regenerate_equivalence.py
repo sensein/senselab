@@ -1,6 +1,6 @@
 """Sample verify evidence into a result store, and regenerate `runtime/data/equivalence.yaml` from stores' evidence.
 
-`sample` runs the held-out items of one suite benchmark through `run_call` under `--reuse` and `--verify`, compared
+`sample` runs the held-out items of one suite benchmark on `InProcess` under `--reuse` and `--verify`, compared
 under the thresholds of `--config` (a run config merged over the packaged one), against `--store`, and prints how many
 calls executed, were reused and were verified. `regenerate` reads the `equivalence-evidence@4.0` records of every
 store named and writes `equivalence@3.0`; the table is never hand-edited.
@@ -39,7 +39,8 @@ def regenerate(stores: Sequence[Path], out: Path) -> Path:
 
 def _sample_cli(args: argparse.Namespace) -> None:
     from senselab_core.kernel.identity import ReusePolicy  # noqa: PLC0415 - only a real run needs the runtime
-    from senselab_core.runtime.call import RunConfig, TaskCall, run_call  # noqa: PLC0415
+    from senselab_core.runtime.call import RunConfig, TaskCall  # noqa: PLC0415
+    from senselab_core.runtime.execution.in_process import InProcess  # noqa: PLC0415
     from senselab_core.runtime.compare import Thresholds  # noqa: PLC0415
     from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415
 
@@ -49,9 +50,10 @@ def _sample_cli(args: argparse.Namespace) -> None:
     profile = ExecutionProfile.load(args.execution)
     run = RunConfig(reuse=ReusePolicy(args.reuse), verify=args.verify, thresholds=Thresholds.load(args.config))
     executed = reused = 0
+    executor = InProcess(store=store, profile=profile, run=run)
     for item in items:
         call = TaskCall.model_validate({"task": bench.task, "inputs": dict(item.inputs), "params": bench.params})
-        result = run_call(call, execution=profile, run=run, store=store)
+        result = executor.call(call)
         executed += result.reused is None
         reused += result.reused is not None
     evidence = store.evidence()

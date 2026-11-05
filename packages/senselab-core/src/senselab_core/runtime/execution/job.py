@@ -1,0 +1,361 @@
+"""The one job engine: jobs keyed, served from the result store or sent to a worker, stored and recorded (`execute`).
+
+A key holds the batch formation of the request a job is actually sent in (`request_components`); a backend that is
+not batch-invariant is sent one item per request. A stored result is served under the run's reuse policy unless its
+env's license is refused, and a sampled cross-context hit is recomputed and compared instead. A failure is never
+stored.
+"""
+
+import platform
+import sysconfig
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
+from typing import Any
+
+from senselab_worker import WIRE_VERSION
+from senselab_worker.faults import error_record
+
+from senselab_core.kernel import prov as kprov
+from senselab_core.kernel.identity import ExecutionContext, InputIdentity, LogicalKey, OutputIdentity, ReusePolicy
+from senselab_core.kernel.license import License
+from senselab_core.kernel.signals import Recording, StaleSource
+from senselab_core.runtime import audio_io
+from senselab_core.runtime.call import Result, RunConfig, env_license, host_hardware, packaged
+from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.equivalence import sampled
+from senselab_core.runtime.execution.executor import FaultRecord, JobRef
+from senselab_core.runtime.execution.outputs import Anchors, as_stored, as_wire, decoded, rebound
+from senselab_core.runtime.execution.records import execution_records, reuse_attributes, unlicensed, verify
+from senselab_core.runtime.execution.records import verify_attributes as verify_settings
+from senselab_core.runtime.execution.workers import PRECISION, WorkerSet, expected_of
+from senselab_core.runtime.hardware import numerics_class
+from senselab_core.runtime.keys import Call, Placement, build_key, request_components, request_size
+from senselab_core.runtime.launch import launch
+from senselab_core.runtime.network import network_variables
+from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.store import ResultStore, StoredResult
+from senselab_core.runtime.store import output_identity as store_output_identity
+from senselab_core.runtime.vllm_server import Attestation, attested_fields, server_launch, server_variables
+from senselab_core.runtime.vocabulary import core_vocabulary
+
+
+@dataclass(frozen=True)
+class Job:
+    """One job: its reference, the call keyed for it, its input values by port and the anchors its outputs re-bind to.
+
+    `call.inputs` holds the identity of each value in `values`.
+    """
+
+    ref: JobRef
+    call: Call
+    values: Mapping[str, object]
+    anchors: Anchors = ()
+
+
+@dataclass(frozen=True)
+class Completed:
+    """A job that gave a result, executed or served."""
+
+    ref: JobRef
+    result: Result
+
+
+@dataclass(frozen=True)
+class Failed:
+    """A job that failed, with its key's digest; nothing of it is stored."""
+
+    ref: JobRef
+    key_digest: str
+    failure: FaultRecord
+
+
+JobOutcome = Completed | Failed
+"""What one job gave."""
+
+
+@dataclass(frozen=True)
+class _Pending:
+    index: int
+    job: Job
+    context: ExecutionContext
+    hit: StoredResult | None
+
+
+def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only run inputs
+    jobs: Sequence[Job],
+    placement: Placement,
+    *,
+    store: ResultStore,
+    run: RunConfig,
+    profile: ExecutionProfile,
+    workers: WorkerSet,
+) -> list[JobOutcome]:
+    """Run `jobs`, all of one call but their inputs, under `placement`, and return one outcome per job, in order.
+
+    Each job is keyed (`build_key`) under the formation of the request it is sent in and served from `store` under
+    `run.reuse`, unless its env's license is refused or it is a sampled cross-context hit (`run.verify`), which is
+    recomputed and compared before anything is stored. A file-backed input is checked against its stamp
+    (`audio_io.check`) before its job is keyed; a stale one fails the job. The jobs not served are sent in requests of
+    `request_size` items through `workers`; each item's outputs are stored, and each execution writes one activity
+    associated with its agent (the model's source included). An item the backend fails gives `Failed`.
+
+    Raises:
+        ValueError: the jobs are not of one call; a server backend has no model.
+        LicenseRefused: `run.licenses` refuses the license of the backend's env or of the model.
+        VllmStartError, LeaseTimeout, LeaseUnavailable, AttestationMismatch: a server backend's server did not start.
+        OutputTypeMismatch: an output of a kernel-typed port is not a wire form of its declared type.
+        WireFormatRetired: a stored output is in a retired wire format.
+        WorkerFatal, WorkerLost, ProtocolError: as the worker reports them.
+    """
+    if not jobs:
+        return []
+    call = _one_call(jobs)
+    backend = placement.backend
+    code_license = _code_license(run, placement, call)
+    env = packaged().open_env(backend, profile)
+    expected = expected_of(backend, env, call.model) if backend.env.kind == "server" else None
+    size = request_size(backend, placement.batch_size)
+    keyed = replace(placement, **request_components(backend, size))
+    outcomes: dict[int, JobOutcome] = {}
+    pending: list[_Pending] = []
+    for index, job in enumerate(jobs):
+        context = _context(keyed, env, expected, profile, job, code_license)
+        stale = _stale(job)
+        key = build_key(job.call, keyed, context)
+        if stale is not None:
+            outcomes[index] = Failed(job.ref, key.digest(), stale)
+            continue
+        served, hit = _serve(store, key, context, run, job, keyed)
+        if served is not None:
+            outcomes[index] = Completed(job.ref, served)
+        else:
+            pending.append(_Pending(index, job, context, hit))
+    for start in range(0, len(pending), size):
+        chunk = pending[start : start + size]
+        sent = replace(placement, **request_components(backend, len(chunk)))
+        began = datetime.now(timezone.utc)
+        results = _send([p.job for p in chunk], sent, env, profile, workers, expected)
+        for item, result in zip(chunk, results):
+            outcomes[item.index] = _record(item, result, sent, store, run, profile, began)
+    return [outcomes[i] for i in range(len(jobs))]
+
+
+def _one_call(jobs: Sequence[Job]) -> Call:
+    """Return the call every job shares but for its inputs.
+
+    Raises:
+        ValueError: two jobs differ in task, params, model or profile slices.
+    """
+    head = jobs[0].call
+    for job in jobs[1:]:
+        c = job.call
+        if (c.task, c.params, c.model, dict(c.profile_slices)) != (
+            head.task,
+            head.params,
+            head.model,
+            dict(head.profile_slices),
+        ):
+            raise ValueError(f"the jobs of one execution are of one call; {job.ref} differs from {jobs[0].ref}")
+    return head
+
+
+def _code_license(run: RunConfig, placement: Placement, call: Call) -> License | None:
+    """Return the code license of the backend's env, once `run.licenses`, when given, accepts it and the model's.
+
+    Raises:
+        LicenseRefused: the policy refuses the env's or the model's license.
+    """
+    backend = placement.backend
+    code = env_license(backend)
+    if run.licenses is not None:
+        run.licenses.check(f"the env of backend {backend.name!r}", code)
+        if call.model is not None:
+            run.licenses.check(f"model {call.model.ref}", call.model.license)
+    return code
+
+
+def _stale(job: Job) -> FaultRecord | None:
+    """Return the failure of a job one of whose file-backed inputs no longer matches its stamp, else None."""
+    for value in job.values.values():
+        for group in value.groups.values() if isinstance(value, Recording) else ():
+            source, stamp = getattr(group, "source", None), getattr(group, "source_stamp", None)
+            if source is None or stamp is None:
+                continue
+            try:
+                audio_io.check(stamp, source)
+            except (StaleSource, OSError) as exc:
+                return FaultRecord.of(error_record(exc))
+    return None
+
+
+def _decoder(job: Job) -> str | None:
+    """Return the decoder a job's file-backed inputs are read by, or None when none is file-backed."""
+    for value in job.values.values():
+        if isinstance(value, Recording) and any(getattr(g, "source", None) is not None for g in value.groups.values()):
+            return audio_io.DECODER
+    return None
+
+
+def _context(  # noqa: PLR0913 - every input a context records
+    placement: Placement,
+    env: EnvHandle,
+    expected: Attestation | None,
+    profile: ExecutionProfile,
+    job: Job,
+    code_license: License | None,
+) -> ExecutionContext:
+    """Return the context a job runs in: its env, attestation, network, host, decoder, model source and license."""
+    model = job.call.model
+    return ExecutionContext(
+        **_env_fields(placement, env, expected, network_variables(profile.network)),
+        platform=sysconfig.get_platform(),
+        numerics=numerics_class(host_hardware(), placement.device, PRECISION),
+        decoder=_decoder(job),
+        host=platform.node(),
+        protocol=f"wire@{WIRE_VERSION}",
+        model_source=None if model is None else model.ref.source,
+        env_license=code_license,
+    )
+
+
+def _env_fields(
+    placement: Placement, env: EnvHandle, expected: Attestation | None, declared: Mapping[str, str]
+) -> dict[str, Any]:
+    """Return the env's context fields: with the attestation of a server, the launch digest of any worker process.
+
+    `declared` are the variables the profile sets on every process it starts.
+    """
+    backend = placement.backend
+    if expected is not None:
+        assert backend.server is not None
+        variables = {**server_variables(backend.server.settings), **declared}
+        return attested_fields(env, expected, server_launch(env, variables))
+    fields = env.context_fields()
+    if backend.env.kind == "host":
+        return fields
+    return {**fields, "driver": {**fields["driver"], "launch_env": launch(env.python, declared).digest}}
+
+
+def _license_admits(run: RunConfig, hit: StoredResult) -> bool:
+    """Whether `hit` may be served: its context records an env license `run.licenses` accepts.
+
+    A result whose context records no env license is refused unless `run.licenses` allows unlicensed hits.
+    """
+    recorded = hit.context.env_license
+    if recorded is None:
+        return run.licenses is not None and run.licenses.allow_unlicensed_hits
+    return run.licenses is None or run.licenses.refusal("", recorded) is None
+
+
+def _serve(  # noqa: PLR0913 - the job's store, key, context and run, and what serving needs
+    store: ResultStore,
+    key: LogicalKey,
+    context: ExecutionContext,
+    run: RunConfig,
+    job: Job,
+    placement: Placement,
+) -> tuple[Result | None, StoredResult | None]:
+    """Return the job's result served from `store`, recording the reuse, or None and the sampled hit to verify."""
+    looked = datetime.now(timezone.utc)
+    hit = store.get(key, context, run.reuse, record=False)
+    if hit is None or not _license_admits(run, hit):
+        return None, None
+    if hit.policy_used is not ReusePolicy.EXACT and sampled(run.verify, key.digest(), hit.context, context):
+        return None, hit
+    store.record_reuse(key, context, hit, looked, reuse_attributes(run, hit))
+    return served(job, hit, key, placement), None
+
+
+def served(job: Job, hit: StoredResult, key: LogicalKey, placement: Placement) -> Result:
+    """Return a stored result as the job's result, its outputs decoded and re-bound to the job's anchors."""
+    outputs = rebound(decoded(job.call.task, hit.outputs), job.anchors)
+    return Result(outputs, hit.output_identity, key, hit.context, placement, hit.policy_used)
+
+
+def lost_race(  # noqa: PLR0913 - the job's store, key, context and run, and what serving needs
+    store: ResultStore,
+    key: LogicalKey,
+    context: ExecutionContext,
+    run: RunConfig,
+    attributes: Mapping[str, object],
+    job: Job,
+    placement: Placement,
+) -> Result | None:
+    """Serve the entry another writer committed first, recording the reuse; None when its license refuses it.
+
+    Raises:
+        RuntimeError: the committed entry cannot be read back.
+    """
+    committed = store.get(key, context, ReusePolicy.EXACT, record=False)
+    if committed is None:
+        raise RuntimeError(f"the entry another writer committed for {key.task!r} could not be read back")
+    if not _license_admits(run, committed):
+        return None
+    store.record_reuse(key, context, committed, datetime.now(timezone.utc), {**attributes, **unlicensed(committed)})
+    return served(job, committed, key, placement)
+
+
+def _send(  # noqa: PLR0913 - the request's jobs and everything placing it
+    jobs: Sequence[Job],
+    placement: Placement,
+    env: EnvHandle,
+    profile: ExecutionProfile,
+    workers: WorkerSet,
+    expected: Attestation | None,
+) -> list[dict[str, Any]]:
+    """Send `jobs` as one request to the backend's worker, with the task params and `backend_params` beside them.
+
+    A host worker is handed kernel values as they are; an isolated or server one, their wire forms.
+    """
+    backend, call = placement.backend, jobs[0].call
+    params = {**call.params.model_dump(mode="json"), "backend_params": placement.backend_params.model_dump(mode="json")}
+    host = backend.env.kind == "host"
+    items = [{"id": str(i), "inputs": dict(j.values) if host else as_wire(j.values)} for i, j in enumerate(jobs)]
+    held = workers.checkout(backend, env, call.model, device=placement.device, profile=profile, expected=expected)
+    with held as worker:
+        return worker.run(items, params)
+
+
+def _record(  # noqa: PLR0913 - one sent item and where its result goes
+    item: _Pending,
+    result: Mapping[str, Any],
+    placement: Placement,
+    store: ResultStore,
+    run: RunConfig,
+    profile: ExecutionProfile,
+    started: datetime,
+) -> JobOutcome:
+    """Return a sent item's outcome: its outputs stored and recorded, a lost race served, or its failure."""
+    job, context = item.job, item.context
+    key = build_key(job.call, placement, context)
+    if "error" in result:
+        return Failed(job.ref, key.digest(), FaultRecord.of(result["error"]))
+    read, outputs = as_stored(job.call.task, as_wire(result["outputs"]), job.anchors)
+    attributes = verify_settings(run)
+    if item.hit is not None:
+        attributes["senselab:verifies"] = verify(store, key, item.hit, context, outputs, run.thresholds)
+    output_identity = store.put(key, outputs, context)
+    if output_identity != store_output_identity(outputs):
+        lost = lost_race(store, key, context, run, attributes, job, placement)
+        if lost is not None:
+            return Completed(job.ref, lost)
+        output_identity = store_output_identity(outputs)
+    _provenance(store, key, context, profile, job.call.inputs, output_identity, started, attributes)
+    return Completed(job.ref, Result(read, output_identity, key, context, placement, None))
+
+
+def _provenance(  # noqa: PLR0913 - one execution's records
+    store: ResultStore,
+    key: LogicalKey,
+    context: ExecutionContext,
+    profile: ExecutionProfile,
+    inputs: Mapping[str, InputIdentity],
+    output: OutputIdentity,
+    started: datetime,
+    attributes: Mapping[str, object],
+) -> None:
+    store.provenance.add(
+        *(kprov.entity(i, core_vocabulary()) for i in inputs.values()),
+        *execution_records(key, context, profile, inputs, output, started, attributes),
+    )

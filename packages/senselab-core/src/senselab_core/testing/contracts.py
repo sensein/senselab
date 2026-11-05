@@ -283,9 +283,9 @@ def _backend_cases(
 
 
 def _output_affecting_produced(task: TaskSpec, backend: BackendSpec) -> None:
-    produced: dict[str, object] = dict(request_components(backend))
+    produced: dict[str, object] = dict(request_components(backend, 1))
     missing = [c for c in backend.output_affecting if produced[c] is None]
-    assert not missing, f"{backend.name!r} declares {missing} output-affecting, and run_call produces no value for it"
+    assert not missing, f"{backend.name!r} declares {missing} output-affecting, and no request produces a value for it"
     assert backend.batch_invariant or "batch_formation" in backend.output_affecting, (
         f"{backend.name!r} is not batch-invariant and does not declare batch_formation output-affecting"
     )

@@ -101,6 +101,7 @@ from senselab_core.runtime.fetch import DataFile, DataManifest
 from senselab_core.runtime.profiles import Envs, ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.storage import StorePolicy
+from senselab_core.testing.execution_samples import register_execution_samples
 from senselab_core.testing.placement_samples import register_placement_samples, resource_table
 
 Case = Callable[[], None]
@@ -1134,3 +1135,4 @@ _register_dataset_samples()
 _register_plan_samples()
 _register_runtime_samples()
 register_placement_samples(register_samples, _license())
+register_execution_samples(register_samples)

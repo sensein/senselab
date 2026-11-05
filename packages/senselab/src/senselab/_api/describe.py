@@ -194,7 +194,7 @@ def _model(entry: CatalogueEntry) -> dict[str, Any]:
 def models(task: str | None = None, catalogue: Catalogue | None = None) -> list[dict[str, Any]]:
     """Return the catalogue's models as `{id, revision, tasks, backends, stacks, license}`, in catalogue order.
 
-    With `task`, only the models serving it. `catalogue` is the one `run_call` reads when None.
+    With `task`, only the models serving it. `catalogue` is the packaged one when None.
     """
     entries = (catalogue or packaged().catalogue).entries
     return [_model(e) for e in entries if task is None or task in e.tasks]
@@ -211,13 +211,13 @@ def describe(name: str, registry: Registry = REGISTRY, catalogue: Catalogue | No
     they cover, `callable`, the generated `{class, function}` names, `models` (as `models(name)` gives them, licenses
     included) and `constraints` (the relations between inputs or between params that a call must satisfy, as data) and
     `default_model`, the catalogue default as `id@revision` (None for a task with none). `catalogue` is
-    the one `run_call` reads when None.
+    the packaged one when None.
 
     The function and the class run the task on the inputs, given as positional data in the form each port's
     description states (an object, a file path or the text itself; a port that is not a kernel type takes a JSON
     value). The one call shape of
     the CLI and JSON, `{task, inputs, params, model, backend_params}`, validates as a `TaskCall` and runs with
-    `run_call`.
+    `InProcess.call`.
 
     Raises:
         ApiError: `unknown_task`, with the closest declared names.

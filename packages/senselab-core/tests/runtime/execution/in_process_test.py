@@ -1,4 +1,4 @@
-"""`run_call`: placement by profile, store reuse, one activity per call, model source and profile digest recorded."""
+"""`InProcess`: placement by profile, store reuse, one activity per call, model source and profile digest recorded."""
 
 import dataclasses
 import importlib
@@ -36,23 +36,21 @@ from senselab_core.kernel.signals import Audio, PlainText
 from senselab_core.kernel.time import Span, TimeAnchor
 from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime.audio_io import DECODER
-from senselab_core.runtime.call import (
-    AmbiguousClock,
-    CallFailed,
-    OutputTypeMismatch,
-    Packaged,
-    Result,
-    RunConfig,
-    TaskCall,
-    run_call,
-    use_packaged,
-)
+from senselab_core.runtime.call import Packaged, Result, RunConfig, TaskCall, use_packaged
 from senselab_core.runtime.call import packaged as packaged_now
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.compare import Thresholds
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import SAMPLING
+from senselab_core.runtime.execution.executor import JobRef, PlanFragment, Status
+from senselab_core.runtime.execution.in_process import CallFailed, InProcess, node_fragment
+from senselab_core.runtime.execution.job import Completed, Job, lost_race
+from senselab_core.runtime.execution.outputs import AmbiguousClock, OutputTypeMismatch
+from senselab_core.runtime.execution.records import verify_attributes
+from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.keys import Call
 from senselab_core.runtime.licenses import LicensePolicy, LicenseRefused, license_record
+from senselab_core.runtime.planner import plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.worker_client import ConcurrentUse, WorkerClient
@@ -195,9 +193,31 @@ def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHan
     )
 
 
+WORKERS = WorkerSet(4)
+"""The worker set every call of this module runs on; closed after each test."""
+
+
+def _in_process(
+    call: TaskCall,
+    *,
+    store: ResultStore,
+    execution: ExecutionProfile | None = None,
+    run: RunConfig | None = None,
+) -> Result:
+    """Run `call` on an `InProcess` executor over `store`, under `execution` and `run`, on `WORKERS`."""
+    return InProcess(store=store, profile=execution, run=run, workers=WORKERS).call(call)
+
+
+@pytest.fixture(autouse=True)
+def workers() -> Iterator[None]:
+    """Every worker and server a test starts is stopped after it."""
+    yield
+    WORKERS.close()
+
+
 @pytest.fixture(autouse=True)
 def packaged() -> Iterator[None]:
-    """`run_call` reads the toy catalogue and registry, opens every env as this interpreter, each locked to MIT code."""
+    """The executor reads the toy catalogue and registry, opens every env as this interpreter, locked to MIT code."""
     records = {"pkg": _record("MIT")}
     previous = use_packaged(Packaged(CATALOGUE, _this_interpreter, TEST_REGISTRY, lambda _: records))
     yield
@@ -241,7 +261,7 @@ def test_catalogue_metadata_binds_to_the_pinned_revision() -> None:
 @pytest.mark.logic
 def test_declared_batch_formation_and_chunk_grid_are_produced(store: ResultStore) -> None:
     """A backend declaring batch formation and chunk grid runs, keyed by one-item requests on its chunk grid."""
-    result = run_call(_call(), execution=_profile("batched"), store=store)
+    result = _in_process(_call(), execution=_profile("batched"), store=store)
     assert (result.key.batch_formation, result.key.chunk_grid) == ("single", "whole-item")
 
 
@@ -249,8 +269,8 @@ def test_declared_batch_formation_and_chunk_grid_are_produced(store: ResultStore
 def test_stack_switch_by_profile(store: ResultStore) -> None:
     """Changing `stack_preferences` alone changes the backend and the recorded key, never the call or output ports."""
     call = _call()
-    alpha = run_call(call, execution=_profile("alpha"), store=store)
-    beta = run_call(call, execution=_profile("beta"), store=store)
+    alpha = _in_process(call, execution=_profile("alpha"), store=store)
+    beta = _in_process(call, execution=_profile("beta"), store=store)
     assert (alpha.placement.backend.stack, beta.placement.backend.stack) == ("alpha", "beta")
     assert (alpha.key.backend, beta.key.backend) == ("fake-alpha", "fake-beta")
     assert alpha.outputs.keys() == beta.outputs.keys() == set(TASK.outputs)
@@ -261,21 +281,21 @@ def test_stack_switch_by_profile(store: ResultStore) -> None:
 @pytest.mark.logic
 def test_second_call_hits_store(store: ResultStore) -> None:
     """The same call again is served from the store, with the outputs and identity the first one stored."""
-    first = run_call(_call(salt="s"), execution=_profile("alpha"), store=store)
-    second = run_call(_call(salt="s"), execution=_profile("alpha"), store=store)
+    first = _in_process(_call(salt="s"), execution=_profile("alpha"), store=store)
+    second = _in_process(_call(salt="s"), execution=_profile("alpha"), store=store)
     assert (first.reused, second.reused) == (None, ReusePolicy.EXACT)
     assert second.output_identity == first.output_identity and second.outputs == first.outputs
-    assert run_call(_call(salt="t"), execution=_profile("alpha"), store=store).reused is None
+    assert _in_process(_call(salt="t"), execution=_profile("alpha"), store=store).reused is None
 
 
 @pytest.mark.logic
 def test_one_activity_per_call(store: ResultStore) -> None:
     """An execution writes one activity and a store hit only the store's reuse activity, never a second execution."""
-    run_call(_call("one"), execution=_profile("alpha"), store=store)
+    _in_process(_call("one"), execution=_profile("alpha"), store=store)
     [execution] = _activities(store)
     assert "senselab:Reuse" not in execution.types()
     assert execution.node()["prov:generated"] == [{"@id": _result_id(store)}]
-    run_call(_call("one"), execution=_profile("alpha"), store=store, run=RunConfig(reuse=ReusePolicy.EXACT))
+    _in_process(_call("one"), execution=_profile("alpha"), store=store, run=RunConfig(reuse=ReusePolicy.EXACT))
     assert len(_activities(store)) == 2
     assert _executions(store) == [execution]
 
@@ -288,7 +308,7 @@ def _result_id(store: ResultStore) -> str:
 @pytest.mark.logic
 def test_model_source_recorded(store: ResultStore) -> None:
     """The context's `model_source` is how the weights were reached; the agent names the model at its pin."""
-    result = run_call(_call(), execution=_profile("alpha"), store=store)
+    result = _in_process(_call(), execution=_profile("alpha"), store=store)
     assert result.context.model_source == "hf"
     assert result.key.model is not None and (result.key.model.id, result.key.model.identity) == (TOY, REVISION)
     [agent] = store.provenance.agents()
@@ -296,7 +316,7 @@ def test_model_source_recorded(store: ResultStore) -> None:
     assert prov.literal_value(agent.node()["senselab:envLock"]) == result.context.env_lock
     [execution] = _executions(store)
     assert execution.node()["prov:wasAssociatedWith"] == [{"@id": agent.id}]
-    modelless = run_call(
+    modelless = _in_process(
         TaskCall.model_validate({"task": fake.ECHO.name, "inputs": {"payload": {"x": 1}}}),
         execution=_profile(),
         store=store,
@@ -308,8 +328,8 @@ def test_model_source_recorded(store: ResultStore) -> None:
 def test_profile_digest_recorded_not_keyed(store: ResultStore) -> None:
     """Each execution records its profile's digest; a profile that changes no placement changes no key."""
     plain, retrying = _profile("alpha"), _profile("alpha", retry={"attempts": 5})
-    first = run_call(_call(), execution=plain, store=store, run=RunConfig(reuse=ReusePolicy.EXACT))
-    second = run_call(_call(), execution=retrying, store=store, run=RunConfig(reuse=ReusePolicy.EXACT))
+    first = _in_process(_call(), execution=plain, store=store, run=RunConfig(reuse=ReusePolicy.EXACT))
+    second = _in_process(_call(), execution=retrying, store=store, run=RunConfig(reuse=ReusePolicy.EXACT))
     assert first.key == second.key and second.reused is ReusePolicy.EXACT
     [execution] = _executions(store)
     assert prov.literal_value(execution.node()["senselab:executionProfile"]) == plain.canonical_digest()
@@ -322,7 +342,7 @@ def test_backend_params_reach_the_key_and_are_validated(store: ResultStore) -> N
         {"task": TASK.name, "inputs": {"text": "x"}, "backend_params": {"fake-alpha": {"beam": 2}}}
     )
     with pytest.raises(ValueError, match="beam"):
-        run_call(call, execution=_profile("alpha"), store=store)
+        _in_process(call, execution=_profile("alpha"), store=store)
     assert _activities(store) == []
     with pytest.raises(ValidationError):
         TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "x"}, "backend_params": {"beam": 2}})
@@ -333,17 +353,17 @@ def test_backend_fault_raises_call_failed(store: ResultStore) -> None:
     """An item the backend fails raises `CallFailed` with its fault class; nothing is stored or recorded."""
     call = TaskCall.model_validate({"task": fake.ECHO.name, "inputs": {"payload": float("nan")}})
     with pytest.raises(CallFailed) as info:
-        run_call(call, execution=_profile(), store=store)
-    assert info.value.error["fault"].value == "content"
+        _in_process(call, execution=_profile(), store=store)
+    assert info.value.failure.fault == "content"
     assert _activities(store) == [] and store.provenance.entities() == []
 
 
 @pytest.mark.contract
 def test_isolated_worker_equals_host(store: ResultStore) -> None:
     """An isolated backend runs in a pooled worker process and gives the host backend's outputs."""
-    host = run_call(_call("same"), execution=_profile("alpha"), store=store)
-    isolated = run_call(_call("same"), execution=_profile("isolated"), store=store)
-    again = run_call(_call("other"), execution=_profile("isolated"), store=store)
+    host = _in_process(_call("same"), execution=_profile("alpha"), store=store)
+    isolated = _in_process(_call("same"), execution=_profile("isolated"), store=store)
+    again = _in_process(_call("other"), execution=_profile("isolated"), store=store)
     assert isolated.outputs == host.outputs and isolated.key != host.key
     assert again.reused is None and again.outputs != isolated.outputs
 
@@ -358,8 +378,8 @@ def test_isolated_worker_reads_audio_by_its_wire_form(store: ResultStore, tmp_pa
         TaskCall.model_validate({"task": AUDIO_TASK.name, "inputs": {"audio": a}})
         for a in (str(path), Audio.from_array(numpy.array([0.25, -0.5], dtype=numpy.float32), 16000))
     ]
-    results = [run_call(c, execution=profile, store=store) for c in calls]
-    call_module.close_workers()
+    results = [_in_process(c, execution=profile, store=store) for c in calls]
+    WORKERS.close()
     assert all(r.placement.backend.name == "fake-audio" and r.reused is None for r in results)
     assert results[0].outputs != results[1].outputs
 
@@ -378,14 +398,14 @@ def test_isolated_outputs_are_read_as_their_declared_types(store: ResultStore) -
         outputs_json = json.dumps({"transcript": wire_form(output)})
         params = {"outputs_json": outputs_json}
         call = TaskCall.model_validate({"task": TRANSCRIBE_TASK.name, "inputs": {"text": text}, "params": params})
-        return run_call(call, execution=profile, store=store)
+        return _in_process(call, execution=profile, store=store)
 
     fresh, hit = transcribe(transcript, "a"), transcribe(transcript, "a")
     assert fresh.outputs == hit.outputs == {"transcript": transcript} and hit.reused is not None
     assert fresh.key.inputs == {"text": PlainText(content="a").identity}
     with pytest.raises(OutputTypeMismatch, match="metric@2.0"):
         transcribe(Metric(name="wer", value=0.1, unit="1", items=1), "b")
-    call_module.close_workers()
+    WORKERS.close()
     assert len(_executions(store)) == 1
 
 
@@ -393,7 +413,7 @@ def test_isolated_outputs_are_read_as_their_declared_types(store: ResultStore) -
 def test_array_outputs_are_stored_and_read_back(store: ResultStore) -> None:
     """A host backend's `Trials` output is stored with its arrays and read back equal from the store."""
     call = TaskCall.model_validate({"task": TRIALS_TASK.name, "inputs": {"text": "pairs"}})
-    fresh, hit = (run_call(call, execution=_profile(), store=store) for _ in range(2))
+    fresh, hit = (_in_process(call, execution=_profile(), store=store) for _ in range(2))
     assert isinstance(fresh.outputs["trials"], Trials) and fresh.reused is None and hit.reused is not None
     assert hit.outputs == fresh.outputs and hit.output_identity == fresh.output_identity
 
@@ -411,16 +431,16 @@ def test_call_shape_validates_against_the_declaration() -> None:
 @pytest.mark.contract
 def test_dead_pooled_worker_is_closed_and_replaced(store: ResultStore) -> None:
     """A pooled worker that died is closed, its array directory removed, and a new one runs the next call."""
-    run_call(_call("first"), execution=_profile("isolated"), store=store)
-    [old] = [w for w in call_module._POOL.values() if isinstance(w, WorkerClient) and w.alive]
+    _in_process(_call("first"), execution=_profile("isolated"), store=store)
+    [old] = [w for w in WORKERS.pooled() if isinstance(w, WorkerClient) and w.alive]
     os.kill(int(old.hello["pid"]), signal.SIGKILL)
     deadline = time.monotonic() + 10
     while old.alive and time.monotonic() < deadline:
         time.sleep(0.05)
     assert not old.alive
-    result = run_call(_call("second"), execution=_profile("isolated"), store=store)
+    result = _in_process(_call("second"), execution=_profile("isolated"), store=store)
     assert result.reused is None
-    assert not old.array_dir.exists() and old not in call_module._POOL.values()
+    assert not old.array_dir.exists() and old not in WORKERS.pooled()
 
 
 @pytest.mark.logic
@@ -435,7 +455,7 @@ def test_concurrent_calls_take_turns_on_a_pooled_worker(store: ResultStore) -> N
     def call(text: str) -> None:
         start.wait()
         try:
-            run_call(TaskCall.model_validate({"task": OVERLAP_TASK.name, "inputs": {"label": text}}), store=store)
+            _in_process(TaskCall.model_validate({"task": OVERLAP_TASK.name, "inputs": {"label": text}}), store=store)
         except Exception as exc:  # noqa: BLE001 - every failure is reported by the assertion
             failures.append(exc)
 
@@ -456,9 +476,9 @@ def test_concurrent_use_of_a_worker_client_is_an_infrastructure_fault() -> None:
 @pytest.mark.logic
 def test_budget_enters_the_host_pool(store: ResultStore) -> None:
     """A host worker pooled under one cache budget is not reused under another, whose sizing it lacks."""
-    run_call(_call("budget"), execution=_profile("alpha"), store=store)
+    _in_process(_call("budget"), execution=_profile("alpha"), store=store)
     with pytest.raises(ValueError, match="state_bytes"):
-        run_call(_call("budget-2"), execution=_profile("alpha", model_cache_budget_bytes=10), store=store)
+        _in_process(_call("budget-2"), execution=_profile("alpha", model_cache_budget_bytes=10), store=store)
 
 
 @pytest.mark.logic
@@ -467,9 +487,9 @@ def test_decoder_recorded_when_a_path_is_decoded(store: ResultStore, tmp_path: P
     path = tmp_path / "tone.wav"
     soundfile.write(path, numpy.zeros(160, dtype=numpy.float32), 16000)
     call = TaskCall.model_validate({"task": AUDIO_TASK.name, "inputs": {"audio": str(path)}})
-    result = run_call(call, execution=_profile(), store=store)
+    result = _in_process(call, execution=_profile(), store=store)
     assert result.context.decoder == DECODER
-    assert run_call(_call(), execution=_profile("alpha"), store=store).context.decoder is None
+    assert _in_process(_call(), execution=_profile("alpha"), store=store).context.decoder is None
 
 
 class _BeatenToCommit(ResultStore):
@@ -484,7 +504,7 @@ class _BeatenToCommit(ResultStore):
 def test_lost_commit_race_serves_the_committed_entry(tmp_path: Path) -> None:
     """When another writer committed first, the call returns that entry as a reuse and writes no execution."""
     store = _BeatenToCommit(tmp_path / "store")
-    result = run_call(_call("race"), execution=_profile("alpha"), store=store)
+    result = _in_process(_call("race"), execution=_profile("alpha"), store=store)
     assert result.outputs == {"value": "the other writer's"} and result.reused is ReusePolicy.EXACT
     assert _executions(store) == [] and len(_activities(store)) == 1
 
@@ -500,7 +520,7 @@ def test_rebound_equals_reclocked_compute(store: ResultStore, tmp_path: Path) ->
 
     def detect(audio: Audio, into: ResultStore = store) -> Result:
         call = TaskCall.model_validate({"task": CLOCKED_TASK.name, "inputs": {"audio": audio}})
-        return run_call(call, execution=_profile(), store=into)
+        return _in_process(call, execution=_profile(), store=into)
 
     under_session, alone, session_again = detect(session), detect(standalone), detect(session)
     assert (under_session.reused, alone.reused is not None, session_again.reused is not None) == (None, True, True)
@@ -523,7 +543,7 @@ def test_one_content_under_two_anchors_is_refused(store: ResultStore) -> None:
     session = Audio(groups=audio.groups, anchor=TimeAnchor(clock_id="session-7", absolute_start_ns=None))
     call = TaskCall.model_validate({"task": PAIR_TASK.name, "inputs": {"first": audio, "second": session}})
     with pytest.raises(AmbiguousClock, match=audio.identity):
-        run_call(call, execution=_profile(), store=store)
+        _in_process(call, execution=_profile(), store=store)
     assert _activities(store) == []
 
 
@@ -532,7 +552,7 @@ GPU = {"device_kind": "cuda", "precision": "default", "gpu_architecture": "sm_90
 
 def _elsewhere(tmp_path: Path, value: object, equivalence: Equivalence = NO_EQUIVALENCE) -> tuple[Result, ResultStore]:
     """Return a call's result here, and a store holding `value` for its key computed on a GPU instead."""
-    here = run_call(_call("v"), execution=_profile("alpha"), store=ResultStore(tmp_path / "here"))
+    here = _in_process(_call("v"), execution=_profile("alpha"), store=ResultStore(tmp_path / "here"))
     gpu = ExecutionContext.model_validate({**here.context.model_dump(), "numerics": GPU})
     store = ResultStore(tmp_path / "there", equivalence=equivalence)
     store.put(here.key, {"value": value}, gpu)
@@ -553,9 +573,9 @@ def _class(here: Result) -> Equivalence:
 def test_unmeasured_equivalent_is_exact(tmp_path: Path) -> None:
     """With no class, `equivalent` serves no other context's result; a measured class of the two numerics does."""
     here, store = _elsewhere(tmp_path, "from the gpu")
-    assert run_call(_call("v"), execution=_profile("alpha"), store=store).reused is None
+    assert _in_process(_call("v"), execution=_profile("alpha"), store=store).reused is None
     _, measured = _elsewhere(tmp_path / "m", "from the gpu", _class(here))
-    served = run_call(_call("v"), execution=_profile("alpha"), store=measured)
+    served = _in_process(_call("v"), execution=_profile("alpha"), store=measured)
     assert served.reused is ReusePolicy.EQUIVALENT and served.outputs == {"value": "from the gpu"}
 
 
@@ -565,12 +585,12 @@ def test_another_env_lock_is_served_only_when_the_run_asks_for_what_is_available
 
     The `equivalent` store holds a class measured within the caller's lock, which does not reach the other lock.
     """
-    here = run_call(_call("v"), execution=_profile("alpha"), store=ResultStore(tmp_path / "here"))
+    here = _in_process(_call("v"), execution=_profile("alpha"), store=ResultStore(tmp_path / "here"))
     other = ExecutionContext.model_validate({**here.context.model_dump(), "env_lock": "another-lock"})
     for policy in ReusePolicy:
         store = ResultStore(tmp_path / policy.value, equivalence=_class(here))
         store.put(here.key, {"value": "from another lock"}, other)
-        served = run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(policy))
+        served = _in_process(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(policy))
         assert served.reused is (ReusePolicy.TOLERANT if policy is ReusePolicy.TOLERANT else None), policy
     assert served.context.env_lock == "another-lock" and served.outputs == {"value": "from another lock"}
     locks = {a.id: prov.literal_value(a.node()["senselab:envLock"]) for a in store.provenance.agents()}
@@ -586,10 +606,11 @@ def test_verify_agreement_adds_evidence(tmp_path: Path) -> None:
     """A sampled cross-context hit is recomputed and, agreeing, adds evidence with its thresholds; `verify: 0` none."""
     here, _ = _elsewhere(tmp_path, None)
     _, store = _elsewhere(tmp_path / "s", here.outputs["value"])
-    served = run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(ReusePolicy.TOLERANT))
+    served = _in_process(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(ReusePolicy.TOLERANT))
     assert served.reused is ReusePolicy.TOLERANT and store.evidence() == []
     _, store = _elsewhere(tmp_path / "t", here.outputs["value"])
-    verified = run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(ReusePolicy.TOLERANT, 1.0))
+    run = RunConfig(ReusePolicy.TOLERANT, 1.0)
+    verified = _in_process(_call("v"), execution=_profile("alpha"), store=store, run=run)
     assert verified.reused is None and verified.outputs == here.outputs
     [evidence] = store.evidence()
     assert evidence.agree and (evidence.backend, evidence.key) == ("fake-alpha", here.key.digest())
@@ -602,7 +623,7 @@ def test_verify_disagreement_splits_class(tmp_path: Path, caplog: pytest.LogCapt
     """A sampled hit that differs is recorded as disagreeing, splits the store's class and is logged."""
     here, _ = _elsewhere(tmp_path, None)
     _, store = _elsewhere(tmp_path / "s", "not what the cpu computes", _class(here))
-    result = run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(verify=1.0))
+    result = _in_process(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(verify=1.0))
     assert result.reused is None and result.outputs == here.outputs
     [evidence] = store.evidence()
     assert not evidence.agree and [d.path for d in evidence.mismatched] == ["value"]
@@ -616,7 +637,7 @@ def test_verify_compares_under_the_run_configs_thresholds(tmp_path: Path) -> Non
     """A recomputation within the packaged `embedding` bound agrees; under a run config's tighter bound it differs."""
     call = TaskCall.model_validate({"task": TRIALS_TASK.name, "inputs": {"text": "pairs"}})
     here_store = ResultStore(tmp_path / "here")
-    here = run_call(call, execution=_profile(), store=here_store)
+    here = _in_process(call, execution=_profile(), store=here_store)
     stored = here_store.get(here.key, here.context, ReusePolicy.EXACT, record=False)
     assert stored is not None
     form = dict(stored.outputs["trials"])  # type: ignore[call-overload]
@@ -630,7 +651,7 @@ def test_verify_compares_under_the_run_configs_thresholds(tmp_path: Path) -> Non
     ):
         store = ResultStore(tmp_path / name)
         store.put(here.key, nudged, gpu)
-        assert run_call(call, execution=_profile(), store=store, run=run).reused is None
+        assert _in_process(call, execution=_profile(), store=store, run=run).reused is None
         [found[name]] = store.evidence()
         [execution] = _activities(store)
         assert prov.literal_value(execution.node()["senselab:verifyThresholds"]) == run.thresholds.canonical_digest()
@@ -650,7 +671,7 @@ def test_sampled_hit_records_an_execution_not_a_reuse(tmp_path: Path) -> None:
     """A sampled hit records one execution naming its evidence; a served hit one reuse; both record the fraction."""
     here, store = _elsewhere(tmp_path, None)
     _, store = _elsewhere(tmp_path / "s", here.outputs["value"])
-    run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(ReusePolicy.TOLERANT, 1.0))
+    _in_process(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(ReusePolicy.TOLERANT, 1.0))
     [execution] = _activities(store)
     [evidence] = store.evidence()
     node = execution.node()
@@ -659,7 +680,7 @@ def test_sampled_hit_records_an_execution_not_a_reuse(tmp_path: Path) -> None:
     assert prov.literal_value(node["senselab:verifyFraction"]) == 1.0
     assert prov.literal_value(node["senselab:verifySampling"]) == SAMPLING
     _, store = _elsewhere(tmp_path / "t", here.outputs["value"])
-    run_call(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(ReusePolicy.TOLERANT, 0.0))
+    _in_process(_call("v"), execution=_profile("alpha"), store=store, run=RunConfig(ReusePolicy.TOLERANT, 0.0))
     [reuse] = _activities(store)
     assert "senselab:Reuse" in reuse.types() and "senselab:verifies" not in reuse.node()
     assert prov.literal_value(reuse.node()["senselab:verifyFraction"]) == 0.0
@@ -690,11 +711,11 @@ def licensed() -> Iterator[None]:
 @pytest.mark.usefixtures("licensed")
 def test_the_env_license_is_recorded_on_the_context_and_its_agent(store: ResultStore) -> None:
     """A result's context and agent carry its env's license; a reuse names that agent as the one that computed it."""
-    result = run_call(_call(), execution=_profile("alpha"), store=store)
+    result = _in_process(_call(), execution=_profile("alpha"), store=store)
     assert result.context.env_license is not None and result.context.env_license.expression == "Apache-2.0 AND MPL-2.0"
     [agent] = store.provenance.agents()
     assert prov.literal_value(agent.node()["senselab:license"]) == result.context.env_license.model_dump(mode="json")
-    assert run_call(_call(), execution=_profile("alpha"), store=store).reused is ReusePolicy.EXACT
+    assert _in_process(_call(), execution=_profile("alpha"), store=store).reused is ReusePolicy.EXACT
     [reuse] = [a.node() for a in _activities(store) if "senselab:Reuse" in a.types()]
     assert prov.literal_value(reuse["senselab:storedAgent"]) == agent.id
 
@@ -709,17 +730,17 @@ def test_only_a_users_license_policy_refuses_a_call(store: ResultStore) -> None:
         (LicensePolicy(allow=frozenset({"apache-2.0", "mpl-2.0"})), "model"),
     ]:
         with pytest.raises(LicenseRefused, match=subject):
-            run_call(_call(), execution=_profile("alpha"), store=store, run=RunConfig(licenses=policy))
+            _in_process(_call(), execution=_profile("alpha"), store=store, run=RunConfig(licenses=policy))
     assert _activities(store) == []
     allowed = RunConfig(licenses=LicensePolicy(allow=frozenset({"MIT", "Apache-2.0", "MPL-2.0"})))
-    assert run_call(_call(), execution=_profile("alpha"), store=store, run=allowed).reused is None
+    assert _in_process(_call(), execution=_profile("alpha"), store=store, run=allowed).reused is None
 
 
 @pytest.mark.logic
 @pytest.mark.usefixtures("licensed")
 def test_a_policy_never_serves_a_result_from_an_env_it_refuses(tmp_path: Path) -> None:
     """Under `tolerant` a stored result from a GPL env is served, unless the run's policy refuses GPL."""
-    here = run_call(_call("v"), execution=_profile("alpha"), store=ResultStore(tmp_path / "here"))
+    here = _in_process(_call("v"), execution=_profile("alpha"), store=ResultStore(tmp_path / "here"))
     gpl = ExecutionContext.model_validate(
         {**here.context.model_dump(), "numerics": GPU, "env_license": _record("GPL-3.0-only")}
     )
@@ -728,12 +749,12 @@ def test_a_policy_never_serves_a_result_from_an_env_it_refuses(tmp_path: Path) -
         store = ResultStore(tmp_path / str(policy))
         store.put(here.key, {"value": "from a GPL env"}, gpl)
         run = RunConfig(ReusePolicy.TOLERANT, licenses=policy)
-        assert run_call(_call("v"), execution=_profile("alpha"), store=store, run=run).reused is reused
+        assert _in_process(_call("v"), execution=_profile("alpha"), store=store, run=run).reused is reused
 
 
 def _stored_from(tmp_path: Path, name: str, env_license: License | None) -> tuple[Result, ResultStore]:
     """A store holding the toy call's result computed in this context but with `env_license` recorded."""
-    here = run_call(_call("v"), execution=_profile("alpha"), store=ResultStore(tmp_path / "here"))
+    here = _in_process(_call("v"), execution=_profile("alpha"), store=ResultStore(tmp_path / "here"))
     stored = ExecutionContext.model_validate({**here.context.model_dump(), "env_license": env_license})
     store = ResultStore(tmp_path / name)
     store.put(here.key, {"value": f"stored {name}"}, stored)
@@ -744,10 +765,10 @@ def _stored_from(tmp_path: Path, name: str, env_license: License | None) -> tupl
 def test_policy_refuses_tainted_hit(tmp_path: Path) -> None:
     """A stored result whose env is licensed as the policy refuses is recomputed, not served; others are served."""
     _, store = _stored_from(tmp_path, "nc", _record("CC-BY-NC-4.0"))
-    assert run_call(_call("v"), execution=_profile("alpha"), store=store).reused is ReusePolicy.EXACT
+    assert _in_process(_call("v"), execution=_profile("alpha"), store=store).reused is ReusePolicy.EXACT
     _, store = _stored_from(tmp_path, "nc-refused", _record("CC-BY-NC-4.0"))
     run = RunConfig(licenses=LicensePolicy(refuse=frozenset({"CC-BY-NC-4.0"})))
-    result = run_call(_call("v"), execution=_profile("alpha"), store=store, run=run)
+    result = _in_process(_call("v"), execution=_profile("alpha"), store=store, run=run)
     assert result.reused is None and result.outputs != {"value": "stored nc-refused"}
 
 
@@ -756,7 +777,7 @@ def test_hit_without_env_license_refused_by_default(tmp_path: Path) -> None:
     """A stored result whose context records no env license is recomputed under no policy and under a plain one."""
     for i, run in enumerate((RunConfig(), RunConfig(licenses=LicensePolicy()))):
         _, store = _stored_from(tmp_path / str(i), "unlicensed", None)
-        result = run_call(_call("v"), execution=_profile("alpha"), store=store, run=run)
+        result = _in_process(_call("v"), execution=_profile("alpha"), store=store, run=run)
         assert result.reused is None and result.context.env_license is not None
         assert [a for a in _activities(store) if "senselab:Reuse" in a.types()] == []
 
@@ -766,12 +787,12 @@ def test_policy_allowing_unlicensed_hit_is_recorded(tmp_path: Path) -> None:
     """A policy allowing unlicensed hits serves one and its reuse records the allowance; a licensed hit records none."""
     _, store = _stored_from(tmp_path, "unlicensed", None)
     run = RunConfig(ReusePolicy.TOLERANT, licenses=LicensePolicy(allow_unlicensed_hits=True))
-    served = run_call(_call("v"), execution=_profile("alpha"), store=store, run=run)
+    served = _in_process(_call("v"), execution=_profile("alpha"), store=store, run=run)
     assert served.reused is ReusePolicy.TOLERANT and served.outputs == {"value": "stored unlicensed"}
     [reuse] = [a.node() for a in _activities(store) if "senselab:Reuse" in a.types()]
     assert prov.literal_value(reuse["senselab:unlicensedReuse"]) is True
     _, licensed = _stored_from(tmp_path / "l", "licensed", _record("MIT"))
-    assert run_call(_call("v"), execution=_profile("alpha"), store=licensed, run=run).reused is ReusePolicy.EXACT
+    assert _in_process(_call("v"), execution=_profile("alpha"), store=licensed, run=run).reused is ReusePolicy.EXACT
     [reuse] = [a.node() for a in _activities(licensed) if "senselab:Reuse" in a.types()]
     assert "senselab:unlicensedReuse" not in reuse
 
@@ -780,9 +801,9 @@ def test_policy_allowing_unlicensed_hit_is_recorded(tmp_path: Path) -> None:
 def test_recomputed_unlicensed_hit_is_served_next_time(tmp_path: Path) -> None:
     """A result with no recorded env license is recomputed once; the licensed recomputation serves the next call."""
     _, store = _stored_from(tmp_path, "unlicensed", None)
-    first = run_call(_call("v"), execution=_profile("alpha"), store=store)
+    first = _in_process(_call("v"), execution=_profile("alpha"), store=store)
     assert first.reused is None and first.outputs != {"value": "stored unlicensed"}
-    second = run_call(_call("v"), execution=_profile("alpha"), store=store)
+    second = _in_process(_call("v"), execution=_profile("alpha"), store=store)
     assert second.reused is ReusePolicy.EXACT and second.outputs == first.outputs
 
 
@@ -794,16 +815,36 @@ def test_lost_race_records_the_unlicensed_allowance(tmp_path: Path) -> None:
     store = ResultStore(tmp_path / "race")
     store.put(here.key, {"value": "the other writer's"}, unlicensed)
     allowed = RunConfig(licenses=LicensePolicy(allow_unlicensed_hits=True))
+    job = Job(JobRef(plan_hash="0" * 64, node="call"), Call(TASK, fake.EchoParams(), {}), {})
     args = (store, here.key, unlicensed)
-    served = call_module._lost_race(TASK, *args, allowed, _verify_attrs(allowed), here.placement, [])
+    served = lost_race(*args, allowed, verify_attributes(allowed), job, here.placement)
     assert served is not None and served.outputs == {"value": "the other writer's"}
     [reuse] = [a.node() for a in _activities(store) if "senselab:Reuse" in a.types()]
     assert prov.literal_value(reuse["senselab:unlicensedReuse"]) is True
-    assert call_module._lost_race(TASK, *args, RunConfig(), _verify_attrs(RunConfig()), here.placement, []) is None
+    assert lost_race(*args, RunConfig(), verify_attributes(RunConfig()), job, here.placement) is None
     use_packaged(dataclasses.replace(packaged_now(), lock_records=None))
-    computed = run_call(_call("race"), execution=_profile("alpha"), store=_BeatenToCommit(tmp_path / "refused"))
+    computed = _in_process(_call("race"), execution=_profile("alpha"), store=_BeatenToCommit(tmp_path / "refused"))
     assert computed.reused is None and computed.outputs != {"value": "the other writer's"}
 
 
-def _verify_attrs(run: RunConfig) -> dict[str, object]:
-    return call_module._verify_attributes(run)
+@pytest.mark.logic
+def test_fragment_is_a_document_and_results_reference_each_job(store: ResultStore) -> None:
+    """A one-node plan's fragment round-trips as JSON; once its plan is admitted, each job's result is referenced."""
+    executor = InProcess(store=store, profile=_profile("alpha"), workers=WORKERS)
+    placed = plan(_call("doc"), config=executor.run, execution=executor.profile)
+    fragment = node_fragment(placed)
+    assert PlanFragment.model_validate_json(fragment.model_dump_json()) == fragment
+    assert fragment.jobs == (JobRef(plan_hash=placed.hash, node="call", element=(0,)),)
+    with pytest.raises(ValueError, match="not admitted"):
+        executor.submit(fragment)
+    executor.admit(placed, {fragment.inputs[0]["text"]: "doc"})
+    handle = executor.submit(fragment)
+    assert executor.status(handle) is Status.DONE
+    [ref] = executor.results(handle)
+    [outcome] = executor.outcomes(handle)
+    assert isinstance(outcome, Completed) and ref.job == fragment.jobs[0] and ref.failure is None
+    assert ref.output_identity == outcome.result.output_identity
+    assert ref.key_digest == outcome.result.key.digest()
+    executor.release(placed.hash)
+    with pytest.raises(ValueError, match="not admitted"):
+        executor.submit(fragment)

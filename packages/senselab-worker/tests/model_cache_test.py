@@ -48,6 +48,24 @@ def test_cache_evicts_under_budget() -> None:
 
 
 @pytest.mark.logic
+def test_model_cache_evicts_before_load() -> None:
+    """A key whose size is known evicts what it needs before its loader runs, and the loader may read the cache."""
+    cache = ModelCache(10)
+    a, b = _key(backend="a"), _key(backend="b")
+    seen: list[tuple[list[tuple[str, str, str, str]], int]] = []
+
+    def load() -> object:
+        seen.append((cache.keys(), cache.used_bytes))
+        return {}
+
+    cache.get_or_load(a, load, lambda _: 6)
+    cache.get_or_load(b, load, lambda _: 6)
+    assert cache.keys() == [b] and seen[1] == ([a], 6)
+    cache.get_or_load(a, load, lambda _: 6)
+    assert seen[2] == ([], 0) and cache.keys() == [a]
+
+
+@pytest.mark.logic
 def test_oversize_model_is_resource_fault_and_evicts_nothing() -> None:
     """A state larger than the whole budget is a `ResourceFault`; the cached entries stay."""
     cache = ModelCache(4)

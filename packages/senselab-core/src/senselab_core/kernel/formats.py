@@ -57,6 +57,9 @@ LOGICAL_PLAN_FORMAT = "logical-plan@1.0"
 PLACEMENT_FORMAT = "placement@1.0"
 """The format of a plan's placement: each node's backend, env, device, batch, resource class, licenses and cost."""
 
+PLAN_FRAGMENT_FORMAT = "plan-fragment@1.0"
+"""The format of a plan fragment: jobs of one node of a plan, their input identities, the placement and the attempt."""
+
 EXECUTION_PROFILE_FORMAT = "execution-profile@2.0"
 """The format of an execution profile, `runtime/data/profiles/<name>.yaml` or a user's override."""
 RETIRED_EXECUTION_PROFILE_FORMATS = frozenset({"execution-profile@1"})

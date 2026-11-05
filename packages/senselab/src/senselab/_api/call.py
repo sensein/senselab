@@ -1,4 +1,4 @@
-"""The base of every generated task class and the error envelope; a configured task runs through `run_call`."""
+"""The base of every generated task class and the error envelope; a configured task runs on `InProcess`."""
 
 import difflib
 from collections.abc import Iterable, Mapping
@@ -18,11 +18,16 @@ from senselab_core.kernel.declare import (
     kernel_types,
 )
 from senselab_core.kernel.identity import ModelRef
+from senselab_core.kernel.license import LicenseConflict
 from senselab_core.kernel.wire import WireFormatRetired
-from senselab_core.runtime.call import AmbiguousClock, CallFailed, OutputTypeMismatch, Result, TaskCall, run_call
+from senselab_core.runtime.call import Result, TaskCall
+from senselab_core.runtime.execution.in_process import CallFailed, InProcess
+from senselab_core.runtime.execution.outputs import AmbiguousClock, OutputTypeMismatch
+from senselab_core.runtime.keys import MissingProfileSlice
 from senselab_core.runtime.licenses import LicenseRefused
 from senselab_core.runtime.locks import LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.models import ModelResolutionError
+from senselab_core.runtime.placement import BackendParamsMismatch, MemoryCapExceeded
 from senselab_core.runtime.profiles import NoBackend, NoDevice, UnlistedSource
 from senselab_core.runtime.vllm_server import AttestationMismatch, VllmStartError
 from senselab_core.runtime.worker_client import WorkerFatal, WorkerLost
@@ -77,6 +82,10 @@ ERROR_CODES: tuple[tuple[type[Exception], str, str], ...] = (
     (NoBackend, "no_backend", "choose a model with a backend, or one the execution profile allows"),
     (NoDevice, "no_device", "make a device the backend supports available, or change the execution profile"),
     (ModelResolutionError, "model_resolution_failed", "check the model reference and the network, then retry"),
+    (BackendParamsMismatch, "invalid_backend_params", "give params only for a declared backend, as it declares them"),
+    (LicenseConflict, "license_conflict", "one subject has two license records; report the catalogue"),
+    (MemoryCapExceeded, "memory_cap_exceeded", "raise the resource class's memory cap, or choose a smaller model"),
+    (MissingProfileSlice, "missing_profile_slice", "set the run settings or dataset profile value the task reads"),
     (VllmStartError, "server_start_failed", "see the server log; retry once the host has the resources it needs"),
     (AttestationMismatch, "attestation_mismatch", "start the server as the backend declares it"),
     (LeaseTimeout, "resource_busy", "retry when the other holder of the resource has finished"),
@@ -91,7 +100,7 @@ ERROR_CODES: tuple[tuple[type[Exception], str, str], ...] = (
     ),
     (ValueError, "invalid_call", "see the message for the value to correct"),
 )
-"""Each error `run_call` documents, with its envelope code and fix; the first row an error is an instance of wins."""
+"""Each error `InProcess.call` documents, with its envelope code and fix; the first row an instance matches wins."""
 
 _FAULT_FIX = {
     FaultClass.CONTENT: "the backend rejected the input; correct or replace it",
@@ -101,9 +110,9 @@ _FAULT_FIX = {
 
 
 def api_error(error: Exception) -> ApiError | None:
-    """Return the `ApiError` for an error `run_call` documents, or None when it documents none such."""
+    """Return the `ApiError` for an error `InProcess.call` documents, or None when it documents none such."""
     if isinstance(error, CallFailed):
-        fault = FaultClass(error.error.get("fault", FaultClass.INFRASTRUCTURE))
+        fault = error.failure.fault_class
         return ApiError(f"{fault.value}_fault", str(error), _FAULT_FIX[fault])
     for kind, code, fix in ERROR_CODES:
         if isinstance(error, kind):
@@ -224,7 +233,7 @@ class ConfiguredTask:
     def _run(self, inputs: Mapping[str, Any]) -> Result:
         call = self._call(inputs)
         try:
-            return run_call(call)
+            return InProcess().call(call)
         except Exception as error:
             envelope = api_error(error)
             if envelope is None:
