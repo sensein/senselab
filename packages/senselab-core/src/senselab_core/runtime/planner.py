@@ -50,6 +50,33 @@ class RecordBinding(ValueError):
         self.ports = ports
 
 
+class UnmappedOutput(ValueError):
+    """A `map` over a node's list output, which is not run: one item of a stored list output has no identity yet.
+
+    `node` is the node the map feeds and `source` the output it reads.
+    """
+
+    def __init__(self, node: str, source: str) -> None:
+        """Name the node and the output it maps over."""
+        super().__init__(
+            f"node {node!r} maps over {source}, a node's list output; one item of a stored list output has no "
+            "identity yet, so such a map is not run"
+        )
+        self.node = node
+        self.source = source
+
+
+def check_mapped_outputs(graph: Graph) -> None:
+    """Refuse a `map` over a node's output; a map reads a graph input.
+
+    Raises:
+        UnmappedOutput: a `map` edge reads a node's output.
+    """
+    for e in graph.edges:
+        if e.kind == "map" and not e.source.startswith("input."):
+            raise UnmappedOutput(e.target.split(".", 1)[0], e.source)
+
+
 class InvalidGraph(ValueError):
     """A graph `validate` finds issues in; `issues` holds them."""
 
@@ -206,6 +233,7 @@ def resolve(  # noqa: PLR0913 - the target and records, then keyword-only resolu
 
     Raises:
         InvalidGraph: the graph has issues against the packaged registry.
+        UnmappedOutput: a `map` edge reads a node's output.
         RecordBinding: over a dataset, no input is a record list fed only by `map` edges, a list is fed by both
             kinds, `inputs` does not give exactly the broadcast inputs, or `bind` names another input.
         ValueError: the records do not bind the graph's inputs, a call over a dataset gives inputs itself, or `bind`
@@ -220,6 +248,7 @@ def resolve(  # noqa: PLR0913 - the target and records, then keyword-only resolu
     issues = validate(graph, registry)
     if issues:
         raise InvalidGraph(issues)
+    check_mapped_outputs(graph)
     graph = _completed(graph, registry)
     specs = {n.id: registry.spec(n.task) for n in graph.nodes}
     models = {n.id: _pinned(specs[n.id], n, catalogue, resolver, admit) for n in graph.nodes}
@@ -273,7 +302,7 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
     `None` means `RunConfig()`, the `laptop` profile and this host's probed hardware (`host_hardware`).
 
     Raises:
-        InvalidGraph, RecordBinding, ValueError, MissingProfileSlice, UnpinnedModel: as `resolve`.
+        InvalidGraph, UnmappedOutput, RecordBinding, ValueError, MissingProfileSlice, UnpinnedModel: as `resolve`.
         UnlistedSource: a model's organisation is not an allowed source.
         BackendParamsMismatch: a node's backend params name an undeclared backend, or its placed backend rejects them.
         NoBackend, NoDevice: no backend or resource class runs a node; the error names the node.

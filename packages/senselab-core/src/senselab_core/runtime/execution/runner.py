@@ -32,7 +32,7 @@ from senselab_core.kernel.identity import InputIdentity, gather_identity, port_o
 from senselab_core.runtime.execution.executor import Admission, Executor, FaultRecord, JobRef, ResultRef
 from senselab_core.runtime.execution.in_process import job_key, node_fragment
 from senselab_core.runtime.execution_settings import JobLease
-from senselab_core.runtime.planner import Plan
+from senselab_core.runtime.planner import Plan, check_mapped_outputs
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import cache_root
 
@@ -238,12 +238,14 @@ def compile_plan(placed: Plan) -> Any:  # noqa: ANN401 - a pydra workflow task
     reads a copy of its source combined over `records.row`. Each node carries its resource class as a routing tag.
 
     Raises:
-        ValueError: the graph has a fan-out `fan_out_issues` refuses.
+        ValueError: the graph has a nested fan-out (`fan_out_issues`).
+        UnmappedOutput: a `map` edge reads a node's output (`check_mapped_outputs`).
     """
     graph = placed.logical.graph
     refused = fan_out_issues(graph)
     if refused:
         raise ValueError("; ".join(i.message for i in refused))
+    check_mapped_outputs(graph)
     mapped = mapped_nodes(placed.logical.graph)
     classes = {n.id: _node_class(placed, n.id) for n in graph.nodes}
     records = python.define(
@@ -414,6 +416,11 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
             await asyncio.to_thread(submit)
         except Exception as error:  # noqa: BLE001 - every waiting job is failed with it, and the run re-raises it
             run.errors.append(error)
+        except BaseException as signal:
+            for future in futures.values():
+                if not future.done():
+                    future.set_exception(signal)
+            raise
         missing = [element for element, future in futures.items() if not future.done()]
         if missing and not run.errors:
             run.errors.append(RuntimeError(f"the executor gave node {node!r} no result for elements {missing}"))
@@ -462,7 +469,8 @@ class PydraRunner:
 
         Raises:
             ValueError: as `compile_plan`, or as `executor.admit`.
-            WorkflowError: pydra errored a job other than an element the executor failed.
+            WorkflowError: pydra errored a job other than an element the executor failed, or named no job.
+            BaseException: an exception pydra raised its `WorkflowError` over, such as a cancellation.
             Exception: the first error an executor call raised, or a result it did not give, after the run.
         """
         root = self.work_dir if self.work_dir is not None else cache_root() / "runs" / placed.hash / "pydra"
@@ -486,7 +494,9 @@ class PydraRunner:
         except WorkflowError as error:
             if run.errors:
                 raise run.errors[0] from error
-            if not all(_errored_job(entry) in run.element_failures for entry in error.errors):
+            if error.__context__ is not None:
+                raise error.__context__ from error
+            if not (error.errors and all(_errored_job(entry) in run.element_failures for entry in error.errors)):
                 raise
         finally:
             executor.release(admission)

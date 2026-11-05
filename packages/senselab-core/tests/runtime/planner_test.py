@@ -24,7 +24,7 @@ from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.keys import MissingProfileSlice
 from senselab_core.runtime.licenses import LicensePolicy, LicenseRefused, license_record
 from senselab_core.runtime.placement import BackendParamsMismatch, MemoryCapExceeded, place_nodes, plan_cost
-from senselab_core.runtime.planner import CALL_NODE, InvalidGraph, RecordBinding, plan, resolve
+from senselab_core.runtime.planner import CALL_NODE, InvalidGraph, RecordBinding, UnmappedOutput, plan, resolve
 from senselab_core.runtime.profiles import ExecutionProfile, NoDevice
 from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver
 from senselab_core.testing.placement_samples import resource_table
@@ -76,11 +76,12 @@ PAIR = SCORE.model_copy(
 )
 
 TAIL = SCORE.model_copy(update={"name": "planner_test.tail", "outputs": {"tail": "json"}})
+SPLIT = SCORE.model_copy(update={"name": "planner_test.split", "outputs": {"items": "list[json]"}})
 GPU_ONLY = SCORE.model_copy(update={"name": "planner_test.gpu", "outputs": {"on_gpu": "json"}})
 ISOLATED = SCORE.model_copy(update={"name": "planner_test.isolated", "outputs": {"boxed": "json"}})
 
 REGISTRY = Registry()
-for _task in (SCORE, READS, PAIR, TAIL, GPU_ONLY, ISOLATED):
+for _task in (SCORE, READS, PAIR, TAIL, GPU_ONLY, ISOLATED, SPLIT):
     REGISTRY.add_task(_task)
 REGISTRY.add_backend(_backend("alpha", SCORE))
 REGISTRY.add_backend(_backend("beta", SCORE))
@@ -581,3 +582,26 @@ def test_backend_params_mismatch_at_plan_time() -> None:
     with pytest.raises(BackendParamsMismatch, match="declares no backend 'delta'") as raised:
         _plan(_call(backend_params={"delta": {}}), _records("x"))
     assert raised.value.backend == "delta"
+
+
+@pytest.mark.logic
+def test_a_map_over_a_node_output_is_refused_at_plan_time() -> None:
+    """A valid graph mapping a node's list output does not plan: one item of a stored list output has no identity."""
+    graph = Graph.model_validate(
+        {
+            "inputs": {"text": "list[json]", "seed": "json"},
+            "nodes": [
+                {"id": "s", "task": SPLIT.name, "task_version": "1"},
+                {"id": "n", "task": SCORE.name, "task_version": "1"},
+                {"id": "m", "task": SCORE.name, "task_version": "1"},
+            ],
+            "edges": [
+                {"source": "input.seed", "target": "s.text"},
+                {"source": "s.items", "target": "n.text", "kind": "map"},
+                {"source": "input.text", "target": "m.text", "kind": "map"},
+            ],
+        }
+    )
+    with pytest.raises(UnmappedOutput, match="has no identity yet") as raised:
+        resolve(graph, _records("x"), config=RunConfig(), bind={"text": "text"}, inputs={"seed": 1})
+    assert (raised.value.node, raised.value.source) == ("n", "s.items")

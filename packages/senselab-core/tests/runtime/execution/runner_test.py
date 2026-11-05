@@ -1,5 +1,6 @@
 """`PydraRunner`: a placed plan run through an `Executor`, batched, per element, keyed by senselab (fake stack)."""
 
+import asyncio
 import dataclasses
 import os
 import platform
@@ -21,7 +22,7 @@ from senselab_core.runtime.execution.executor import Admission, Handle, PlanFrag
 from senselab_core.runtime.execution.in_process import InProcess, node_fragment
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.licenses import license_record
-from senselab_core.runtime.planner import Plan, plan
+from senselab_core.runtime.planner import Plan, UnmappedOutput, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.interpreter import source_tree_python
@@ -413,3 +414,37 @@ def test_the_pinned_pydra_takes_no_lease_settings() -> None:
     store = pytest.importorskip("pydra.engine.store")
     assert not hasattr(store, "LeaseSettings")
     assert runner.PydraRunner(profile=PROFILE).lease == PROFILE.lease
+
+
+class Cancelling(Recording):
+    """A `Recording` executor whose `submit` raises `asyncio.CancelledError` for node `b`."""
+
+    def submit(self, fragment: PlanFragment) -> Handle:
+        """Raise a cancellation for node `b`; submit any other fragment."""
+        if fragment.node == "b":
+            raise asyncio.CancelledError
+        return super().submit(fragment)
+
+
+@pytest.mark.contract
+def test_a_cancellation_beside_a_failed_element_propagates(tmp_path: Path) -> None:
+    """Element 1 of `a` fails and `b`'s submission is cancelled: the cancellation propagates, not a run status."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "fail")])
+    executor = Cancelling(ResultStore(tmp_path / "store"))
+    with pytest.raises(asyncio.CancelledError) as raised:
+        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
+            placed, executor, values=values, events=[]
+        )
+    assert type(raised.value.__cause__).__name__ == "WorkflowError" and executor.sizes("a") == [1, 1]
+
+
+@pytest.mark.logic
+def test_compile_plan_refuses_a_map_over_a_node_output() -> None:
+    """A map over a node's list output is refused before pydra sees it, naming the node and the output."""
+    placed, _ = _plan(_graph(GATHERED, GATHER_EDGES, text="list[json]"), [{"text": "one"}])
+    graph = placed.logical.graph
+    mapped = graph.model_copy(update={"edges": (*graph.edges, Edge(source="g.value", target="a.extra", kind="map"))})
+    unplanned = dataclasses.replace(placed, logical=placed.logical.model_copy(update={"graph": mapped}))
+    with pytest.raises(UnmappedOutput, match="has no identity yet") as raised:
+        runner.compile_plan(unplanned)
+    assert (raised.value.node, raised.value.source) == ("a", "g.value")

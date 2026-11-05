@@ -1,7 +1,7 @@
 """The graph document `graph@1.0`: task nodes joined by plain, `map` and `gather` edges, and its checks.
 
 A graph is data: it is built from JSON (`Graph.model_validate_json`), checked against a registry with `validate`,
-ordered with `order`, its per-element nodes named by `mapped_nodes`, its unrun fan-outs by `fan_out_issues`, and
+ordered with `order`, its per-element nodes named by `mapped_nodes`, its nested fan-outs by `fan_out_issues`, and
 identified by `graph_digest`. `graph_schema` is its published JSON Schema.
 """
 
@@ -50,7 +50,6 @@ IssueCode = Literal[
     "unmapped_list",
     "gather_without_map",
     "nested_fan_out",
-    "output_fan_out",
     "cycle",
     "unbound_input",
 ]
@@ -283,11 +282,10 @@ def _cycles(graph: Graph) -> list[list[str]]:
 
 
 def fan_out_issues(graph: Graph) -> list[GraphIssue]:
-    """Return the fan-outs `graph@1.0` does not run: each is reported on the port it feeds.
+    """Return the nested fan-outs of `graph`, each reported on the port it feeds.
 
     A `gather` into a node that runs once per element (`mapped_nodes`) and a `map` over a mapped node's output are
-    `nested_fan_out`; a `map` over an unmapped node's output is `output_fan_out`. Several `map` edges from graph
-    inputs into one node are valid: the record lists zip per record.
+    `nested_fan_out`. Several `map` edges from graph inputs into one node are valid: the record lists zip per record.
     """
     mapped = mapped_nodes(graph)
     issues = []
@@ -298,8 +296,6 @@ def fan_out_issues(graph: Graph) -> list[GraphIssue]:
             code, message = "nested_fan_out", f"{where}: a gather feeds {node!r}, which runs once per element"
         elif e.kind == "map" and source in mapped:
             code, message = "nested_fan_out", f"{where}: a map over {source!r}, which runs once per element"
-        elif e.kind == "map" and source != INPUT:
-            code, message = "output_fan_out", f"{where}: a map reads a graph input, not a node's output"
         else:
             continue
         issues.append(GraphIssue(code=code, node=node, port=port, message=message))

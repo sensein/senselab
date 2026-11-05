@@ -105,11 +105,11 @@ def test_a_gather_into_a_mapped_node_is_nested_fan_out() -> None:
 
 
 @pytest.mark.logic
-def test_a_map_over_a_node_output_is_refused() -> None:
-    """A map over an unmapped node's output is `output_fan_out`; over a mapped node's output, `nested_fan_out`."""
+def test_a_map_over_a_mapped_node_output_is_nested() -> None:
+    """A map over an unmapped node's list output is a valid graph; over a mapped node's output, `nested_fan_out`."""
     nodes = [_node("c", "speech.chunk"), _node("e", "speech.embed")]
     unmapped = _graph({"clip": "Audio"}, nodes, [("input.clip", "c.audio", "plain"), ("c.clips", "e.audio", "map")])
-    assert _codes(unmapped) == [("output_fan_out", "e", "audio")]
+    assert _codes(unmapped) == []
     mapped = _graph({"clips": "list[Audio]"}, nodes, [("input.clips", "c.audio", "map"), ("c.clips", "e.audio", "map")])
     assert _codes(mapped) == [("nested_fan_out", "e", "audio")]
 
