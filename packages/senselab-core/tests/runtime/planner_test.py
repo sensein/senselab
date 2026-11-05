@@ -338,6 +338,25 @@ def test_record_bound_inputs_are_zipped_and_the_rest_broadcast() -> None:
 
 
 @pytest.mark.logic
+def test_two_record_lists_into_one_node_are_bound_per_row() -> None:
+    """One node mapped over two record lists reads both from each record's row."""
+    graph = Graph.model_validate(
+        {
+            "inputs": {"first": "list[json]", "second": "list[json]"},
+            "nodes": [{"id": "p", "task": PAIR.name, "task_version": "1"}],
+            "edges": [
+                {"source": "input.first", "target": "p.a", "kind": "map"},
+                {"source": "input.second", "target": "p.b", "kind": "map"},
+            ],
+        }
+    )
+    records = from_records({"id": f"r{i}", "inputs": {"first": f"f{i}", "second": f"s{i}"}} for i in range(2))
+    _, manifest = resolve(graph, records, config=RunConfig())
+    assert [set(r.inputs) for r in manifest.rows] == [{"first", "second"}] * 2
+    assert len({r.inputs["first"] for r in manifest.rows} | {r.inputs["second"] for r in manifest.rows}) == 4
+
+
+@pytest.mark.logic
 def test_refused_source_raises_before_any_lookup(tmp_path: Path) -> None:
     """`admit` sees each hub model before it is resolved; a refusal raises and the hub is never asked."""
     seen: list[tuple[str, str]] = []

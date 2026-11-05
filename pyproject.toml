@@ -87,6 +87,10 @@ benchmarks = [
   "scipy>=1.11"
 ]
 
+[tool.uv]
+# Exact versions held for transitive dependencies of the root distribution.
+constraint-dependencies = ["fileformats==0.22.3"]
+
 [tool.uv.workspace]
 members = ["packages/senselab-*"]
 

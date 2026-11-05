@@ -18,6 +18,7 @@ members = [
     "senselab-core",
     "senselab-worker",
 ]
+constraints = [{ name = "fileformats", specifier = "==0.22.3" }]
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -826,14 +827,14 @@ wheels = [
 
 [[package]]
 name = "fileformats"
-version = "0.22.5"
+version = "0.22.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cd/34/266ce0a89aa49f41384bfe9fdaac1dde035f582b056b4b70bb393f22f6b0/fileformats-0.22.5.tar.gz", hash = "sha256:6f12820bf281fd427146db717898995e57b639d78f3d5a361bbcd4168517aa93", size = 121189, upload-time = "2026-11-04T23:00:12.993Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c1/d6/8d99531d1ed06e57c7882dcc6b4d50b20133300f7e1673d831f65ae5fdc0/fileformats-0.22.3.tar.gz", hash = "sha256:52a6dced01349030483c4f93939694cd0d8b586557711430a33389ce31818755", size = 120810, upload-time = "2026-10-21T03:20:41.554Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6d/52/4875486ffc968ffba5c3a57cb65322e6d8f8b6553bde5c0edd5d277ba303/fileformats-0.22.5-py3-none-any.whl", hash = "sha256:99603bdb4bf5fde9c45a443f9ac7426a5e3aa33175e191379a5218125c6f2cf1", size = 152177, upload-time = "2026-11-04T23:00:11.171Z" },
+    { url = "https://files.pythonhosted.org/packages/56/ff/e25bcdec07dca5ff231066d585ffc8c3a1b30ac82cf4efd67ea5a56ce69d/fileformats-0.22.3-py3-none-any.whl", hash = "sha256:24c61768003b2e673bbb87398fb2722b5cf34f15e54009672c73980209ad20fb", size = 151719, upload-time = "2026-10-21T03:20:40.089Z" },
 ]
 
 [[package]]

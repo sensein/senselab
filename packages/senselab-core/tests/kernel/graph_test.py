@@ -29,6 +29,7 @@ def _registry() -> Registry:
         ("signal.describe", {"series": "RegularSeries"}, {"note": "Annotation"}),
         ("speech.fit_space", {"first": "Audio", "second": "Audio"}, {"events": "Events"}),
         ("speech.score", {"audio": "Audio", "pool": "list[Embedding]"}, {"note": "Annotation"}),
+        ("speech.chunk", {"audio": "Audio"}, {"clips": "list[Audio]"}),
     ):
         registry.add_task(
             TaskSpec(name=name, version="1", kind="transform", inputs=inputs, outputs=outputs, params=TaskParams)
@@ -89,12 +90,28 @@ def test_a_gather_into_a_mapped_node_is_nested_fan_out() -> None:
         [*edges, ("input.clips", "s.audio", "map")],
     )
     assert _codes(nested) == [("nested_fan_out", "s", "pool")]
+    through_plain = _graph(
+        {"clips": "list[Audio]"},
+        [_node("e", "speech.embed"), _node("d", "speech.diarize"), _node("s", "speech.score")],
+        [*edges, ("input.clips", "d.audio", "map"), ("d.segments", "s.audio", "plain")],
+    )
+    assert ("nested_fan_out", "s", "pool") in _codes(through_plain)
     once = _graph(
         {"clips": "list[Audio]", "clip": "Audio"},
         [_node("e", "speech.embed"), _node("s", "speech.score")],
         [*edges, ("input.clip", "s.audio", "plain")],
     )
     assert _codes(once) == []
+
+
+@pytest.mark.logic
+def test_a_map_over_a_node_output_is_refused() -> None:
+    """A map over an unmapped node's output is `output_fan_out`; over a mapped node's output, `nested_fan_out`."""
+    nodes = [_node("c", "speech.chunk"), _node("e", "speech.embed")]
+    unmapped = _graph({"clip": "Audio"}, nodes, [("input.clip", "c.audio", "plain"), ("c.clips", "e.audio", "map")])
+    assert _codes(unmapped) == [("output_fan_out", "e", "audio")]
+    mapped = _graph({"clips": "list[Audio]"}, nodes, [("input.clips", "c.audio", "map"), ("c.clips", "e.audio", "map")])
+    assert _codes(mapped) == [("nested_fan_out", "e", "audio")]
 
 
 @pytest.mark.logic
@@ -271,13 +288,13 @@ def test_an_input_type_must_name_a_port_type() -> None:
 
 
 @pytest.mark.logic
-def test_two_map_edges_into_one_node_are_refused() -> None:
-    """A node with two `map` edges has no defined fan-out and is a `type_mismatch` on the node."""
+def test_two_record_lists_map_into_one_node() -> None:
+    """Two `map` edges from graph inputs into one node are valid: the record lists zip per record."""
     nodes = [_node("s", "speech.fit_space")]
     graph = _graph(
         {"a": "list[Audio]", "b": "list[Audio]"}, nodes, [("input.a", "s.first", "map"), ("input.b", "s.second", "map")]
     )
-    assert _codes(graph) == [("type_mismatch", "s", None)]
+    assert _codes(graph) == []
 
 
 @pytest.mark.logic

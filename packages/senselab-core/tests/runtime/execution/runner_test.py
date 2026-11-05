@@ -1,6 +1,7 @@
 """`PydraRunner`: a placed plan run through an `Executor`, batched, per element, keyed by senselab (fake stack)."""
 
 import dataclasses
+import os
 import platform
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
@@ -9,8 +10,8 @@ from typing import Any
 import pytest
 from senselab_core.kernel.dataset import Record, ValueInput
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
-from senselab_core.kernel.graph import Edge, Graph, Node
-from senselab_core.kernel.identity import InputIdentity, ReusePolicy, gather_identity, port_output_identity
+from senselab_core.kernel.graph import Edge, Graph, Node, fan_out_issues
+from senselab_core.kernel.identity import InputIdentity, gather_identity, port_output_identity
 from senselab_core.kernel.license import License
 from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
@@ -38,9 +39,10 @@ SCORE = TaskSpec(
 CHAIN = SCORE.model_copy(update={"name": "runner_test.chain", "inputs": {"value": "sha256"}})
 GATHER = SCORE.model_copy(update={"name": "runner_test.gather", "inputs": {"values": "list[sha256]"}})
 PAIR = SCORE.model_copy(update={"name": "runner_test.pair", "inputs": {"left": "sha256", "right": "json"}})
+TWIN = SCORE.model_copy(update={"name": "runner_test.twin", "inputs": {"first": "json", "second": "json"}})
 
 REGISTRY = Registry()
-for _task in (SCORE, CHAIN, GATHER, PAIR):
+for _task in (SCORE, CHAIN, GATHER, PAIR, TWIN):
     REGISTRY.add_task(_task)
     REGISTRY.add_backend(
         BackendSpec(
@@ -87,10 +89,11 @@ def packaged() -> Iterator[None]:
 class Recording:
     """An `Executor` over `InProcess` that records each fragment it is given, in order."""
 
-    def __init__(self, store: ResultStore) -> None:
-        """Run on an `InProcess` executor over `store`."""
-        self.inner = InProcess(store=store, profile=PROFILE, run=RunConfig(), workers=WORKERS)
+    def __init__(self, store: ResultStore, profile: ExecutionProfile = PROFILE) -> None:
+        """Run on an `InProcess` executor over `store` under `profile`."""
+        self.inner = InProcess(store=store, profile=profile, run=RunConfig(), workers=WORKERS)
         self.fragments: list[PlanFragment] = []
+        self.telemetry: list[str | None] = []
 
     def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:
         """Admit through `InProcess`."""
@@ -101,8 +104,9 @@ class Recording:
         self.inner.release(admission)
 
     def submit(self, fragment: PlanFragment) -> Handle:
-        """Record `fragment` and submit it."""
+        """Record `fragment` and the telemetry opt-out it is submitted under, and submit it."""
         self.fragments.append(fragment)
+        self.telemetry.append(os.environ.get("NO_ET"))
         return self.inner.submit(fragment)
 
     def status(self, handle: Handle) -> Status:
@@ -130,11 +134,16 @@ def _graph(nodes: Sequence[tuple[str, TaskSpec]], edges: Sequence[tuple[str, str
     )
 
 
-def _plan(graph: Graph, rows: Sequence[Mapping[str, str]], **broadcast: str) -> tuple[Plan, dict[str, object]]:
-    """Return `graph` planned over records of `rows`, and the admitted value of each input identity."""
+def _plan(
+    graph: Graph,
+    rows: Sequence[Mapping[str, str]],
+    broadcast: Mapping[str, str] | None = None,
+    profile: ExecutionProfile = PROFILE,
+) -> tuple[Plan, dict[str, object]]:
+    """Return `graph` planned over records of `rows` under `profile`, and the admitted value of each input identity."""
     records = [Record(id=f"r{i}", inputs={k: ValueInput(value=v) for k, v in r.items()}) for i, r in enumerate(rows)]
-    placed = plan(graph, RecordSet(records), config=RunConfig(), execution=PROFILE, inputs=broadcast or None)
-    given = [*(v for r in rows for v in r.values()), *broadcast.values()]
+    placed = plan(graph, RecordSet(records), config=RunConfig(), execution=profile, inputs=broadcast or None)
+    given = [*(v for r in rows for v in r.values()), *(broadcast or {}).values()]
     return placed, {bind_input("x", "json", v)[0]: v for v in given}
 
 
@@ -143,11 +152,13 @@ def _batched(placed: Plan, size: int) -> Plan:
     return dataclasses.replace(placed, placement=placed.placement.model_copy(update={"nodes": nodes}))
 
 
-def _run(placed: Plan, values: Mapping[str, object], tmp_path: Path, **kw: object) -> tuple[Any, Recording, list[Any]]:
-    executor = Recording(ResultStore(tmp_path / "store"))
+def _run(
+    placed: Plan, values: Mapping[str, object], tmp_path: Path, profile: ExecutionProfile = PROFILE, **kw: object
+) -> tuple[Any, Recording, list[Any]]:
+    executor = Recording(ResultStore(tmp_path / "store"), profile)
     events: list[Any] = []
     work = tmp_path / "pydra"
-    status = runner.PydraRunner(profile=PROFILE, work_dir=work).run_plan(
+    status = runner.PydraRunner(profile=profile, work_dir=work).run_plan(
         placed, executor, values=values, events=events, **kw
     )
     return status, executor, events
@@ -157,6 +168,20 @@ CHAINED = [("a", SCORE), ("b", CHAIN)]
 GATHERED = [("a", SCORE), ("g", GATHER)]
 GATHER_EDGES = [("input.text", "a.text", "map"), ("a.value", "g.values", "gather")]
 CHAIN_EDGES = [("input.text", "a.text", "map"), ("a.value", "b.value", "plain")]
+ZIPPED = _graph(
+    [("a", SCORE), ("d", PAIR), ("e", PAIR)],
+    [
+        ("input.text", "a.text", "map"),
+        ("a.value", "d.left", "plain"),
+        ("input.other", "d.right", "map"),
+        ("a.value", "e.left", "plain"),
+        ("input.both", "e.right", "plain"),
+    ],
+    text="list[json]",
+    other="list[json]",
+    both="json",
+)
+ZIPPED_ROWS = [{"text": f"t{i}", "other": f"o{i}"} for i in range(3)]
 
 
 @pytest.mark.contract
@@ -199,20 +224,7 @@ def test_errored_element_fails_only_its_descendants(tmp_path: Path) -> None:
 @pytest.mark.contract
 def test_record_bound_inputs_zip_and_a_broadcast_input_reaches_every_element(tmp_path: Path) -> None:
     """`d` reads its record's `other` beside `a`'s same element; the broadcast `both` is one identity everywhere."""
-    graph = _graph(
-        [("a", SCORE), ("d", PAIR), ("e", PAIR)],
-        [
-            ("input.text", "a.text", "map"),
-            ("a.value", "d.left", "plain"),
-            ("input.other", "d.right", "map"),
-            ("a.value", "e.left", "plain"),
-            ("input.both", "e.right", "plain"),
-        ],
-        text="list[json]",
-        other="list[json]",
-        both="json",
-    )
-    placed, values = _plan(graph, [{"text": f"t{i}", "other": f"o{i}"} for i in range(3)], both="shared")
+    placed, values = _plan(ZIPPED, ZIPPED_ROWS, {"both": "shared"})
     status, executor, _ = _run(placed, values, tmp_path)
     assert status.done and len(status.results["d"]) == 3
     inputs = {(f.node, j.element): i for f in executor.fragments for j, i in zip(f.jobs, f.inputs, strict=True)}
@@ -246,14 +258,25 @@ def test_an_empty_map_gathers_to_the_empty_list(tmp_path: Path) -> None:
 
 
 @pytest.mark.contract
-def test_pydra_checksum_equals_logical_key(tmp_path: Path) -> None:
-    """Every leaf job pydra recorded is checksummed by the key digest the executor computed for it."""
-    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "two")])
-    store = runner.SenselabStore(tmp_path / "records", runner.SenselabReuse(ReusePolicy(placed.logical.reuse)))
+@pytest.mark.parametrize(
+    ("graph", "rows", "broadcast", "jobs"),
+    [
+        (_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "one"}, {"text": "two"}], {}, 4),
+        (_graph(GATHERED, GATHER_EDGES, text="list[json]"), [{"text": "one"}, {"text": "two"}], {}, 3),
+        (ZIPPED, ZIPPED_ROWS, {"both": "shared"}, 9),
+    ],
+    ids=["plain", "gather", "zip_and_broadcast"],
+)
+def test_pydra_checksum_equals_logical_key(
+    graph: Graph, rows: list[dict[str, str]], broadcast: dict[str, str], jobs: int, tmp_path: Path
+) -> None:
+    """Every leaf job pydra recorded, plain, gathered, zipped or broadcast, is keyed as the executor keyed it."""
+    placed, values = _plan(graph, rows, broadcast)
+    store = runner.SenselabStore(tmp_path / "records")
     status, _, _ = _run(placed, values, tmp_path, store=store)
     keys = {r.key_digest for refs in status.results.values() for r in refs}
     leaves = {c for c in store.checksums() if not c.startswith(("records-", "plan-"))}
-    assert len(keys) == 4 and leaves == keys
+    assert status.done and len(keys) == jobs and leaves == keys
 
 
 @pytest.mark.contract
@@ -268,14 +291,25 @@ def test_no_result_pickle_written(tmp_path: Path) -> None:
 def test_inprocess_and_pool_give_same_store(tmp_path: Path) -> None:
     """The runner over `InProcess` stores the keys and outputs a node-by-node run by hand stores."""
     placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "two")])
-    status, _, _ = _run(placed, values, tmp_path / "run")
+    status, executor, _ = _run(placed, values, tmp_path / "run")
     by_hand = InProcess(store=ResultStore(tmp_path / "hand"), profile=PROFILE, run=RunConfig(), workers=WORKERS)
     admission = by_hand.admit(placed, values)
     upstream = list(by_hand.results(by_hand.submit(node_fragment(placed, admission, "a"))))
     downstream = list(by_hand.results(by_hand.submit(node_fragment(placed, admission, "b", upstream={"a": upstream}))))
     by_hand.release(admission)
     ran = {(r.key_digest, r.output_identity) for refs in status.results.values() for r in refs}
-    assert ran == {(r.key_digest, r.output_identity) for r in (*upstream, *downstream)}
+    assert ran == {(r.key_digest, r.output_identity) for r in (*upstream, *downstream)} and status.done
+    for key, identity in ran:
+        assert identity is not None
+        stored = executor.inner.store.outputs_of(key, identity)
+        assert stored is not None and stored == by_hand.store.outputs_of(key, identity)
+    assert len(_entries(executor.inner.store.root)) == 4
+    assert _entries(executor.inner.store.root) == _entries(by_hand.store.root)
+
+
+def _entries(root: Path) -> set[str]:
+    """Return the committed entries under a result store's root, as `<key digest>/<context fingerprint>`."""
+    return {f"{p.parent.name}/{p.name}" for p in root.glob("*/*/*/*") if p.is_dir() and len(p.parent.name) == 64}
 
 
 class Refusing(Recording):
@@ -298,3 +332,84 @@ def test_an_executor_error_is_raised_after_the_run(tmp_path: Path) -> None:
             placed, executor, values=values, events=[]
         )
     assert executor.sizes("a") == [1, 1]
+
+
+@pytest.mark.contract
+def test_two_record_lists_zip_within_one_node(tmp_path: Path) -> None:
+    """One node mapped over two record lists runs one job per record, each reading its own row of both."""
+    graph = _graph(
+        [("t", TWIN)],
+        [("input.first", "t.first", "map"), ("input.second", "t.second", "map")],
+        first="list[json]",
+        second="list[json]",
+    )
+    placed, values = _plan(graph, [{"first": f"f{i}", "second": f"s{i}"} for i in range(3)])
+    status, executor, _ = _run(placed, values, tmp_path)
+    assert status.done and executor.sizes("t") == [1, 1, 1]
+    inputs = {j.element: i for f in executor.fragments for j, i in zip(f.jobs, f.inputs, strict=True)}
+    rows = placed.manifest.rows
+    assert all(inputs[(i,)] == {"first": rows[i].inputs["first"], "second": rows[i].inputs["second"]} for i in range(3))
+
+
+_STORE: Any = runner.SenselabStore
+
+
+class LosingC(_STORE):  # type: ignore[misc]
+    """A completion store that cannot record the results of node `c`."""
+
+    def record(self, checksum: str, result: Any) -> None:  # noqa: ANN401 - a pydra result
+        """Raise for a result of node `c`; record any other."""
+        ref = getattr(result.outputs, "ref", None)
+        if isinstance(ref, Mapping) and ref.get("job", {}).get("node") == "c":
+            raise OSError("the record of c is lost")
+        super().record(checksum, result)
+
+
+@pytest.mark.contract
+def test_an_unrelated_pydra_error_raises_beside_a_failed_element(tmp_path: Path) -> None:
+    """Element 1 of `a` fails and, unrelated, every job of `c` errors in pydra: the run raises, not reports."""
+    graph = _graph(
+        [("a", SCORE), ("c", SCORE)],
+        [("input.text", "a.text", "map"), ("input.other", "c.text", "map")],
+        text="list[json]",
+        other="list[json]",
+    )
+    placed, values = _plan(graph, [{"text": t, "other": f"o-{t}"} for t in ("one", "fail")])
+    with pytest.raises(Exception, match="n_c") as raised:
+        _run(placed, values, tmp_path, store=LosingC(tmp_path / "records"))
+    assert type(raised.value).__name__ == "WorkflowError"
+    status, _, _ = _run(placed, values, tmp_path / "again")
+    assert status.blocked == {"a": (), "c": ()} and not status.done
+
+
+@pytest.mark.contract
+def test_a_run_makes_no_telemetry_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Under an offline profile, pydra's version check is opted out for the run, and the opt-out is gone after."""
+    monkeypatch.delenv("NO_ET", raising=False)
+    offline = ExecutionProfile.load("laptop", {"devices": ["cpu"], "network": "offline"})
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "one"}], profile=offline)
+    status, executor, _ = _run(placed, values, tmp_path, profile=offline)
+    assert status.done and executor.telemetry == ["1", "1"] and "NO_ET" not in os.environ
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "extra", [Edge(source="input.text", target="g.extra", kind="map"), Edge(source="a.value", target="g.extra")]
+)
+def test_compile_plan_refuses_a_gather_into_a_mapped_node(extra: Edge) -> None:
+    """A gather into a node mapped directly or through a plain edge: `compile_plan` refuses it as `validate` does."""
+    placed, _ = _plan(_graph(GATHERED, GATHER_EDGES, text="list[json]"), [{"text": "one"}])
+    nested = placed.logical.graph.model_copy(update={"edges": (*placed.logical.graph.edges, extra)})
+    [issue] = fan_out_issues(nested)
+    assert (issue.code, issue.node, issue.port) == ("nested_fan_out", "g", "values")
+    unplanned = dataclasses.replace(placed, logical=placed.logical.model_copy(update={"graph": nested}))
+    with pytest.raises(ValueError, match="runs once per element"):
+        runner.compile_plan(unplanned)
+
+
+@pytest.mark.logic
+def test_the_pinned_pydra_takes_no_lease_settings() -> None:
+    """The profile's job lease is held, not passed: the pinned pydra has no `LeaseSettings`; this fails once it does."""
+    store = pytest.importorskip("pydra.engine.store")
+    assert not hasattr(store, "LeaseSettings")
+    assert runner.PydraRunner(profile=PROFILE).lease == PROFILE.lease

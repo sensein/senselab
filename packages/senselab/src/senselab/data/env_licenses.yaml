@@ -395,11 +395,11 @@ envs:
       version: 0.3.1
     fileformats:
       expression: Apache-2.0
-      source: fileformats 0.22.5 classifier
+      source: fileformats 0.22.3 classifier
       verified:
         date: '2026-11-04'
         how: classifier
-      version: 0.22.5
+      version: 0.22.3
     filelock:
       expression: MIT
       source: filelock 3.29.0 License-Expression

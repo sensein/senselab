@@ -10,7 +10,9 @@ batch size (`node_fragment`) and raises on a failed element, so pydra fails only
 """
 
 import asyncio
-import copy
+import contextlib
+import os
+import re
 import typing
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -25,17 +27,8 @@ from pydra.utils.resources import ComputeResources
 from pydra.utils.routing import tag_router
 from pydra.workers.base import Worker
 
-from senselab_core.kernel.graph import Edge, mapped_nodes, order, split
-from senselab_core.kernel.identity import (
-    NO_EQUIVALENCE,
-    Equivalence,
-    ExecutionContext,
-    InputIdentity,
-    ReusePolicy,
-    acceptable,
-    gather_identity,
-    port_output_identity,
-)
+from senselab_core.kernel.graph import Edge, fan_out_issues, mapped_nodes, order, split
+from senselab_core.kernel.identity import InputIdentity, gather_identity, port_output_identity
 from senselab_core.runtime.execution.executor import Admission, Executor, FaultRecord, JobRef, ResultRef
 from senselab_core.runtime.execution.in_process import job_key, node_fragment
 from senselab_core.runtime.execution_settings import JobLease
@@ -49,8 +42,8 @@ RECORD_FIELD = "row"
 """The records node's input, a row index; `records.row` is the split every gather combines over."""
 REF = "ref"
 """The one output of every compiled node: the job's `ResultRef` as JSON (the row index, for the records node)."""
-SENSELAB = "senselab"
-"""The key of a pydra context under which a completion record carries its senselab context and backend."""
+NO_TELEMETRY = "NO_ET"
+"""The environment variable whose presence stops pydra's version check from fetching anything."""
 
 
 class ElementFailed(RuntimeError):
@@ -94,48 +87,22 @@ class RunStatus:
         return not failed and not any(self.blocked.values())
 
 
-class SenselabReuse:
-    """pydra's `ReusePolicy` for completion records: `acceptable` under the run's policy on their senselab contexts.
-
-    A record whose pydra context carries no senselab context (`SENSELAB`) is reused only in its own context's slot.
-    """
-
-    def __init__(self, policy: ReusePolicy, equivalence: Equivalence = NO_EQUIVALENCE) -> None:
-        """Accept under `policy`, with the measured `equivalence` classes."""
-        self.policy = policy
-        self.equivalence = equivalence
-
-    def accept(self, stored: Mapping[str, Any], current: Mapping[str, Any], task: object) -> bool:  # noqa: ARG002
-        """Whether a record from `stored` serves `current`: both carry a senselab context `acceptable` admits."""
-        a, b = stored.get(SENSELAB), current.get(SENSELAB)
-        if not isinstance(a, Mapping) or not isinstance(b, Mapping):
-            return False
-        return acceptable(
-            ExecutionContext.model_validate(a["context"]),
-            ExecutionContext.model_validate(b["context"]),
-            self.policy,
-            backend=str(a["backend"]),
-            equivalence=self.equivalence,
-        )
-
-
 class SenselabStore:
     """pydra's `ResultStore` over one run: completion records in memory by checksum and context slot, never pickled.
 
     A job's results live in senselab's store, which the executor serves under the run's reuse policy; this store
-    holds what pydra reads to resolve a downstream input and to mark a job done. `cache_root` holds only the leases
-    and the workflow job's own files.
+    holds what pydra reads to resolve a downstream input and to mark a job done, and `lookup` returns a record of its
+    own context's slot only. `cache_root` holds only the leases and the workflow job's own files.
     """
 
-    def __init__(self, cache_root: Path, reuse: SenselabReuse) -> None:
-        """Hold the run's records under `cache_root`, reusing another slot's record when `reuse` accepts it."""
+    def __init__(self, cache_root: Path) -> None:
+        """Hold the run's records under `cache_root`."""
         self.cache_root = Path(cache_root)
-        self.reuse = reuse
         self._records: dict[str, dict[str, Result]] = {}
 
     def __getstate__(self) -> dict[str, Any]:
-        """Return the state a pickled job carries: the root and policy, never the records."""
-        return {"cache_root": self.cache_root, "reuse": self.reuse, "_records": {}}
+        """Return the state a pickled job carries: the root, never the records."""
+        return {"cache_root": self.cache_root, "_records": {}}
 
     def cache_dir(self, checksum: str, context: Mapping[str, Any]) -> Path:
         """Return the directory of the job `checksum` in `context`."""
@@ -145,20 +112,11 @@ class SenselabStore:
         self,
         checksum: str,
         context: Mapping[str, Any],
-        task: object,
+        task: object,  # noqa: ARG002
         stored: list[tuple[Path, Mapping[str, Any]]] | None = None,  # noqa: ARG002
     ) -> Result | None:
-        """Return the record of `checksum` in `context`'s slot, or of another slot `reuse` accepts; None if none."""
-        slots = self._records.get(checksum, {})
-        own = slots.get(context_key(context))
-        if own is not None:
-            return own
-        for result in slots.values():
-            if self.reuse.accept(result.context, context, task):
-                reused = copy.copy(result)
-                reused.cross_context, reused.reused_in = True, dict(context)
-                return reused
-        return None
+        """Return the record of `checksum` in `context`'s slot, or None."""
+        return self._records.get(checksum, {}).get(context_key(context))
 
     def stored_contexts(self, checksum: str) -> Iterator[tuple[Path, Mapping[str, Any]]]:
         """Yield the slot and context of each record of `checksum`."""
@@ -280,11 +238,12 @@ def compile_plan(placed: Plan) -> Any:  # noqa: ANN401 - a pydra workflow task
     reads a copy of its source combined over `records.row`. Each node carries its resource class as a routing tag.
 
     Raises:
-        ValueError: a `map` edge reads a node's output rather than a graph input.
+        ValueError: the graph has a fan-out `fan_out_issues` refuses.
     """
     graph = placed.logical.graph
-    if any(e.kind == "map" and split(e.source)[0] != "input" for e in graph.edges):
-        raise ValueError("a map edge reads a graph input; a fan-out over a node's output is not run")
+    refused = fan_out_issues(graph)
+    if refused:
+        raise ValueError("; ".join(i.message for i in refused))
     mapped = mapped_nodes(placed.logical.graph)
     classes = {n.id: _node_class(placed, n.id) for n in graph.nodes}
     records = python.define(
@@ -353,6 +312,7 @@ class _Run:
     results: dict[str, dict[tuple[int, ...], ResultRef]] = field(default_factory=dict)
     errors: list[BaseException] = field(default_factory=list)
     sending: set[asyncio.Task[None]] = field(default_factory=set)
+    element_failures: set[str] = field(default_factory=set)
 
 
 def _element(placed: Plan, node: str, job: Any) -> tuple[int, ...]:  # noqa: ANN401 - a pydra job
@@ -393,7 +353,12 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
         if node is None:
             outputs: object = {RECORD_FIELD: int(job.task.row)}
         else:
-            outputs = (await self._submit(run, node, job)).model_dump(mode="json")
+            try:
+                outputs = (await self._submit(run, node, job)).model_dump(mode="json")
+            except ElementFailed:
+                index = job.state_index
+                run.element_failures.add(job.name if index is None else f"{job.name}({index})")
+                raise
         result = Result(
             outputs=job.task.Outputs(**{REF: outputs}),
             runtime=None,
@@ -472,7 +437,7 @@ def _upstream(placed: Plan, node: str, batch: list[tuple[Any, tuple[int, ...], A
 class PydraRunner:
     """Runs placed plans through an `Executor`: pydra expands the graph and orders its jobs (on `raise_at_end`).
 
-    `lease` is the profile's job-lease setting; it is handed to pydra's lease settings once the pinned pydra has them.
+    `lease` is the profile's job-lease setting; it is held and not passed to pydra.
     """
 
     def __init__(self, *, profile: ExecutionProfile | None = None, work_dir: Path | None = None) -> None:
@@ -497,37 +462,57 @@ class PydraRunner:
 
         Raises:
             ValueError: as `compile_plan`, or as `executor.admit`.
-            WorkflowError: pydra failed a job, and the executor failed no element.
+            WorkflowError: pydra errored a job other than an element the executor failed.
             Exception: the first error an executor call raised, or a result it did not give, after the run.
         """
         root = self.work_dir if self.work_dir is not None else cache_root() / "runs" / placed.hash / "pydra"
-        store = store if store is not None else SenselabStore(root, SenselabReuse(ReusePolicy(placed.logical.reuse)))
+        store = store if store is not None else SenselabStore(root)
         admission = executor.admit(placed, values)
         run = _Run(placed, admission, executor, store, events)
         classes = sorted({p.resource_class for p in placed.placement.nodes.values()})
         workers = {name: ExecutorWorker(run_state=run, resource_class=name) for name in classes}
         try:
-            with Submitter(
-                store=store,
-                worker=ExecutorWorker(run_state=run),
-                workers=workers,
-                router=tag_router({name: name for name in classes}),
-                on_error="raise_at_end",
-            ) as submitter:
+            with (
+                _no_telemetry(),
+                Submitter(
+                    store=store,
+                    worker=ExecutorWorker(run_state=run),
+                    workers=workers,
+                    router=tag_router({name: name for name in classes}),
+                    on_error="raise_at_end",
+                ) as submitter,
+            ):
                 submitter(compile_plan(placed), raise_errors=True)
         except WorkflowError as error:
             if run.errors:
                 raise run.errors[0] from error
-            if not _failed(run):
+            if not all(_errored_job(entry) in run.element_failures for entry in error.errors):
                 raise
         finally:
             executor.release(admission)
         return _status(placed, run)
 
 
-def _failed(run: _Run) -> bool:
-    """Whether the executor failed any element of the run."""
-    return any(r.failure is not None for refs in run.results.values() for r in refs.values())
+def _errored_job(entry: str) -> str | None:
+    """Return the job an entry of a `WorkflowError` names as having raised, or None for any other entry."""
+    found = _ERRORED.match(entry)
+    return found[1] if found is not None else None
+
+
+_ERRORED = re.compile(r"^Job '([^']+)', (?!inputs could not be resolved)")
+
+
+@contextlib.contextmanager
+def _no_telemetry() -> Iterator[None]:
+    """Set `NO_TELEMETRY` for the block, unless it is already set, and remove it after."""
+    if NO_TELEMETRY in os.environ:
+        yield
+        return
+    os.environ[NO_TELEMETRY] = "1"
+    try:
+        yield
+    finally:
+        os.environ.pop(NO_TELEMETRY, None)
 
 
 def _status(placed: Plan, run: _Run) -> RunStatus:
